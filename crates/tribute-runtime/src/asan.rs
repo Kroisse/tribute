@@ -8,11 +8,14 @@
 //!
 //! - **Heap buffer overflow/underflow**: Red zones (32 bytes) around each allocation
 //!   are checked at deallocation time for corruption.
-//! - **Use-after-free (probabilistic)**: Freed memory is filled with poison bytes
-//!   and kept in a quarantine queue before actual deallocation.
-//! - **Double-free**: Detected via allocation metadata tracking.
+//! - **Use-after-free**: Freed memory is filled with poison bytes and kept in a
+//!   quarantine queue before actual deallocation.
+//! - **Double-free**: Detected through the region table.
+//! - **Invalid access at the access site**: Compiled code calls
+//!   [`__tribute_asan_load`] or [`__tribute_asan_store`] before each memory
+//!   access; the region table classifies the address range.
 
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, VecDeque};
 use core::alloc::Layout;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -84,6 +87,7 @@ unsafe fn quarantine_push(base: *mut u8, total_size: usize) {
     // Evict oldest entries when over budget
     while QUARANTINE_TOTAL.load(Ordering::Relaxed) > QUARANTINE_MAX {
         if let Some(old) = q.pop_front() {
+            unsafe { regions() }.remove(&(old.base as usize));
             if let Ok(layout) = Layout::from_size_align(old.total_size, ALLOC_ALIGN) {
                 unsafe { alloc::alloc::dealloc(old.base, layout) };
             }
@@ -95,8 +99,131 @@ unsafe fn quarantine_push(base: *mut u8, total_size: usize) {
 }
 
 // =============================================================================
+// Region table
+// =============================================================================
+
+/// One block this allocator handed out: both red zones and the payload.
+#[derive(Clone, Copy)]
+struct Region {
+    /// Payload size the caller asked for.
+    payload: usize,
+    /// The block was freed and is held in the quarantine.
+    freed: bool,
+}
+
+impl Region {
+    fn total(self) -> usize {
+        REDZONE_SIZE + self.payload + REDZONE_SIZE
+    }
+}
+
+/// Live and quarantined blocks by base address (start of the left red zone).
+///
+/// Safety: see [`QuarantineState`].
+struct RegionState {
+    table: UnsafeCell<BTreeMap<usize, Region>>,
+}
+
+unsafe impl Sync for RegionState {}
+
+static REGIONS: RegionState = RegionState {
+    table: UnsafeCell::new(BTreeMap::new()),
+};
+
+unsafe fn regions() -> &'static mut BTreeMap<usize, Region> {
+    unsafe { &mut *REGIONS.table.get() }
+}
+
+/// What an access of `size` bytes at `addr` touches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Access {
+    /// Inside a live payload, or memory this allocator does not own.
+    Valid,
+    /// Overlaps a red zone of a live allocation.
+    HeapBufferOverflow,
+    /// Overlaps a block held in the quarantine.
+    HeapUseAfterFree,
+}
+
+/// Classify an access against the region table.
+pub(crate) fn classify(addr: usize, size: usize) -> Access {
+    let Some(end) = addr.checked_add(size) else {
+        return Access::Valid;
+    };
+    if size == 0 {
+        return Access::Valid;
+    }
+    // The last block that starts before the access ends is the only one the
+    // access can overlap, since blocks are disjoint.
+    let Some((&base, &region)) = (unsafe { regions() }).range(..end).next_back() else {
+        return Access::Valid;
+    };
+    if base + region.total() <= addr {
+        return Access::Valid;
+    }
+    if region.freed {
+        return Access::HeapUseAfterFree;
+    }
+    let payload = base + REDZONE_SIZE;
+    if payload <= addr && end <= payload + region.payload {
+        Access::Valid
+    } else {
+        Access::HeapBufferOverflow
+    }
+}
+
+// =============================================================================
 // Error reporting
 // =============================================================================
+
+struct BufWriter<'b> {
+    buf: &'b mut [u8],
+    pos: usize,
+}
+
+impl core::fmt::Write for BufWriter<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        let remaining = self.buf.len() - self.pos;
+        let to_copy = bytes.len().min(remaining);
+        self.buf[self.pos..self.pos + to_copy].copy_from_slice(&bytes[..to_copy]);
+        self.pos += to_copy;
+        Ok(())
+    }
+}
+
+/// Write a formatted report to stderr and abort.
+fn report(args: core::fmt::Arguments<'_>) -> ! {
+    use core::fmt::Write;
+
+    // Use a stack buffer for formatting (no_std compatible)
+    let mut buf = [0u8; 256];
+    let mut w = BufWriter {
+        buf: &mut buf,
+        pos: 0,
+    };
+    let _ = w.write_fmt(args);
+    let len = w.pos;
+    write_stderr(&buf[..len]);
+
+    unsafe extern "C" {
+        fn abort() -> !;
+    }
+    unsafe { abort() }
+}
+
+/// Check one access made by compiled code and abort with a report if it
+/// touches a red zone or freed memory.
+fn check_access(addr: usize, size: usize, kind: &str) {
+    let error = match classify(addr, size) {
+        Access::Valid => return,
+        Access::HeapBufferOverflow => "heap-buffer-overflow",
+        Access::HeapUseAfterFree => "heap-use-after-free",
+    };
+    report(format_args!(
+        "==ERROR: TributeASan: {error} on address {addr:#x}\n  {kind} of size {size}\n"
+    ));
+}
 
 /// Write an error message to stderr using raw syscall (no_std compatible).
 fn write_stderr(msg: &[u8]) {
@@ -115,50 +242,9 @@ fn write_stderr(msg: &[u8]) {
 
 /// Report a red zone violation and abort.
 fn report_redzone_corruption(side: &str, offset: usize, expected: u8, actual: u8) -> ! {
-    // Use a stack buffer for formatting (no_std compatible)
-    let mut buf = [0u8; 256];
-    let msg = format_redzone_error(&mut buf, side, offset, expected, actual);
-    write_stderr(msg);
-
-    unsafe extern "C" {
-        fn abort() -> !;
-    }
-    unsafe { abort() }
-}
-
-/// Format a red zone error message into a stack buffer.
-fn format_redzone_error<'a>(
-    buf: &'a mut [u8; 256],
-    side: &str,
-    offset: usize,
-    expected: u8,
-    actual: u8,
-) -> &'a [u8] {
-    use core::fmt::Write;
-
-    struct BufWriter<'b> {
-        buf: &'b mut [u8],
-        pos: usize,
-    }
-
-    impl<'b> Write for BufWriter<'b> {
-        fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            let bytes = s.as_bytes();
-            let remaining = self.buf.len() - self.pos;
-            let to_copy = bytes.len().min(remaining);
-            self.buf[self.pos..self.pos + to_copy].copy_from_slice(&bytes[..to_copy]);
-            self.pos += to_copy;
-            Ok(())
-        }
-    }
-
-    let mut w = BufWriter { buf, pos: 0 };
-    let _ = write!(
-        w,
-        "==ERROR: TributeASan: heap-buffer-overflow\n  {} redzone corrupted at byte {} (expected 0x{:02X}, got 0x{:02X})\n",
-        side, offset, expected, actual,
-    );
-    &w.buf[..w.pos]
+    report(format_args!(
+        "==ERROR: TributeASan: heap-buffer-overflow\n  {side} redzone corrupted at byte {offset} (expected 0x{expected:02X}, got 0x{actual:02X})\n"
+    ))
 }
 
 // =============================================================================
@@ -227,6 +313,14 @@ pub unsafe fn alloc(size: usize) -> *mut u8 {
     // Fill right red zone
     unsafe { core::ptr::write_bytes(payload.add(size), MAGIC_REDZONE, REDZONE_SIZE) };
 
+    unsafe { regions() }.insert(
+        base as usize,
+        Region {
+            payload: size,
+            freed: false,
+        },
+    );
+
     payload
 }
 
@@ -253,6 +347,16 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
 
     let base = unsafe { ptr.sub(REDZONE_SIZE) };
 
+    if let Some(region) = unsafe { regions() }.get_mut(&(base as usize)) {
+        if region.freed {
+            report(format_args!(
+                "==ERROR: TributeASan: attempting double-free on address {:#x}\n",
+                ptr as usize
+            ));
+        }
+        region.freed = true;
+    }
+
     // Check red zone integrity
     unsafe { check_redzone(base, REDZONE_SIZE, "left") };
     unsafe { check_redzone(ptr.add(size), REDZONE_SIZE, "right") };
@@ -262,6 +366,18 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
 
     // Move to quarantine instead of immediately freeing
     unsafe { quarantine_push(base, total) };
+}
+
+/// Check a read of `size` bytes at `addr` before compiled code performs it.
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_asan_load(addr: *const u8, size: u64) {
+    check_access(addr as usize, size as usize, "READ");
+}
+
+/// Check a write of `size` bytes at `addr` before compiled code performs it.
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_asan_store(addr: *const u8, size: u64) {
+    check_access(addr as usize, size as usize, "WRITE");
 }
 
 // =============================================================================
@@ -281,6 +397,7 @@ mod tests {
 
     /// Reset quarantine state for test isolation.
     unsafe fn reset_quarantine() {
+        unsafe { regions() }.clear();
         unsafe { *QUARANTINE.queue.get() = Some(VecDeque::new()) };
         QUARANTINE_TOTAL.store(0, Ordering::Relaxed);
     }
@@ -385,6 +502,63 @@ mod tests {
                 QUARANTINE_TOTAL.load(Ordering::Relaxed)
                     <= QUARANTINE_MAX + alloc_size + 2 * REDZONE_SIZE
             );
+        }
+
+        ASAN_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_asan_classifies_accesses_by_region() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        ASAN_ENABLED.store(true, Ordering::SeqCst);
+        unsafe { reset_quarantine() };
+
+        unsafe {
+            let live = alloc(16) as usize;
+            // The whole payload, and a zero-width access at its end, are valid.
+            assert_eq!(classify(live, 16), Access::Valid);
+            assert_eq!(classify(live + 8, 8), Access::Valid);
+            assert_eq!(classify(live + 16, 0), Access::Valid);
+            // Either red zone, or an access that straddles one, overflows.
+            assert_eq!(classify(live - 1, 1), Access::HeapBufferOverflow);
+            assert_eq!(classify(live + 16, 1), Access::HeapBufferOverflow);
+            assert_eq!(classify(live + 12, 8), Access::HeapBufferOverflow);
+            assert_eq!(
+                classify(live - REDZONE_SIZE - 4, 8),
+                Access::HeapBufferOverflow
+            );
+            // Memory this allocator never handed out is not its concern.
+            let local = 0u64;
+            assert_eq!(classify(&raw const local as usize, 8), Access::Valid);
+
+            let freed = alloc(24);
+            dealloc(freed, 24);
+            let freed = freed as usize;
+            assert_eq!(classify(freed, 8), Access::HeapUseAfterFree);
+            assert_eq!(classify(freed + 23, 1), Access::HeapUseAfterFree);
+            assert_eq!(classify(freed - 8, 8), Access::HeapUseAfterFree);
+
+            dealloc(live as *mut u8, 16);
+            assert_eq!(classify(live, 16), Access::HeapUseAfterFree);
+        }
+
+        ASAN_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_asan_forgets_regions_evicted_from_quarantine() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        ASAN_ENABLED.store(true, Ordering::SeqCst);
+        unsafe { reset_quarantine() };
+
+        unsafe {
+            let first = alloc(1024);
+            dealloc(first, 1024);
+            assert!(regions().contains_key(&(first as usize - REDZONE_SIZE)));
+            for _ in 0..(QUARANTINE_MAX / 1024 + 2) {
+                dealloc(alloc(1024), 1024);
+            }
+            assert_eq!(regions().len(), quarantine().len());
         }
 
         ASAN_ENABLED.store(false, Ordering::SeqCst);
