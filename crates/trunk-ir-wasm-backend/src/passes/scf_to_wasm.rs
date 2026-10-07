@@ -168,13 +168,22 @@ pub fn validate_lowerable_switches(ctx: &IrContext, module: Module) -> Result<()
 
 /// Validated data for a resultless `scf.switch` that this target can lower.
 ///
-/// Wasm branch conditions and the available concrete comparison operations are
-/// `i32`, so other source switch shapes remain for an earlier or richer
-/// lowering rather than being partially rewritten here.
+/// Wasm compares integers natively only as `i32` or `i64`, so the discriminant
+/// must be `core.i32` or `core.i64` and every case value must be representable
+/// in the discriminant's type. Other source switch shapes remain for an
+/// earlier or richer lowering rather than being partially rewritten here.
 struct ScfSwitchArms {
     discriminant: ValueRef,
-    cases: Vec<(i32, RegionRef)>,
+    width: SwitchWidth,
+    cases: Vec<(i64, RegionRef)>,
     default: Option<RegionRef>,
+}
+
+/// The Wasm integer type a switch compares its discriminant in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SwitchWidth {
+    I32,
+    I64,
 }
 
 struct ScfSwitchShape {
@@ -188,7 +197,7 @@ enum SwitchLoweringReason {
     MalformedShape,
     UnsupportedDiscriminantType(String),
     NonIntegerCaseAttribute,
-    CaseValueOutsideI32Range,
+    CaseValueOutsideRange(SwitchWidth),
 }
 
 impl std::fmt::Display for SwitchLoweringReason {
@@ -198,22 +207,31 @@ impl std::fmt::Display for SwitchLoweringReason {
             Self::UnsupportedDiscriminantType(ty) => {
                 write!(
                     f,
-                    "unsupported discriminant type `{ty}`; expected `core.i32`"
+                    "unsupported discriminant type `{ty}`; expected `core.i32` or `core.i64`"
                 )
             }
             Self::NonIntegerCaseAttribute => {
                 write!(f, "case attribute `value` must be an integer")
             }
-            Self::CaseValueOutsideI32Range => {
+            Self::CaseValueOutsideRange(SwitchWidth::I32) => {
                 write!(f, "case integer value is outside the i32 range")
+            }
+            Self::CaseValueOutsideRange(SwitchWidth::I64) => {
+                write!(f, "case integer value is outside the i64 range")
             }
         }
     }
 }
 
-fn is_i32(ctx: &IrContext, value: ValueRef) -> bool {
-    let ty = ctx.get_type(ctx.value_ty(value));
-    ty.dialect == core::DIALECT_NAME() && ty.name == "i32"
+fn switch_width(ctx: &IrContext, value: ValueRef) -> Option<SwitchWidth> {
+    let ty = ctx.value_ty(value);
+    if core::I32::matches(ctx, ty) {
+        Some(SwitchWidth::I32)
+    } else if core::I64::matches(ctx, ty) {
+        Some(SwitchWidth::I64)
+    } else {
+        None
+    }
 }
 
 /// Validate the complete declarative switch container before rewriting any
@@ -275,24 +293,28 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
 
 fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweringReason> {
     let shape = switch_shape(ctx, op).ok_or(SwitchLoweringReason::MalformedShape)?;
-    if !is_i32(ctx, shape.discriminant) {
+    let Some(width) = switch_width(ctx, shape.discriminant) else {
         let ty = ctx.get_type(ctx.value_ty(shape.discriminant));
         return Err(SwitchLoweringReason::UnsupportedDiscriminantType(format!(
             "{}.{}",
             ty.dialect, ty.name
         )));
-    }
+    };
     let mut cases = Vec::with_capacity(shape.cases.len());
     for (value, body) in shape.cases {
         let Attribute::Int(value) = value else {
             return Err(SwitchLoweringReason::NonIntegerCaseAttribute);
         };
-        let value =
-            i32::try_from(value).map_err(|_| SwitchLoweringReason::CaseValueOutsideI32Range)?;
+        let value = match width {
+            SwitchWidth::I32 => i32::try_from(value).map(i64::from).ok(),
+            SwitchWidth::I64 => i64::try_from(value).ok(),
+        }
+        .ok_or(SwitchLoweringReason::CaseValueOutsideRange(width))?;
         cases.push((value, body));
     }
     Ok(ScfSwitchArms {
         discriminant: shape.discriminant,
+        width,
         cases,
         default: shape.default,
     })
@@ -391,24 +413,46 @@ impl RewritePattern for ScfSwitchPattern {
         }
 
         let discriminant = arms.discriminant;
+        let discriminant_ty = ctx.value_ty(discriminant);
+        let condition_ty = core::I32::type_ref(ctx);
         let case_count = arms.cases.len();
         let mut next = arms
             .default
             .unwrap_or_else(|| region_with_ops(ctx, loc, vec![]));
         let mut outer_ops = None;
         for (index, (value, body)) in arms.cases.into_iter().rev().enumerate() {
-            let case = wasm_dialect::I32Const::operands()
-                .value(value)
-                .results(ctx.value_ty(discriminant))
-                .build(ctx, loc);
-            let matches = wasm_dialect::I32Eq::operands(discriminant, case.result(ctx))
-                .results(ctx.value_ty(discriminant))
-                .build(ctx, loc);
-            let branch = wasm_dialect::If::operands(matches.result(ctx))
+            let (case, matches) = match arms.width {
+                SwitchWidth::I32 => {
+                    let value = i32::try_from(value)
+                        .expect("i32 switch case values are validated before lowering");
+                    let case = wasm_dialect::I32Const::operands()
+                        .value(value)
+                        .results(discriminant_ty)
+                        .build(ctx, loc);
+                    let case_value = case.result(ctx);
+                    let matches = wasm_dialect::I32Eq::operands(discriminant, case_value)
+                        .results(condition_ty)
+                        .build(ctx, loc);
+                    (case.op_ref(), matches.op_ref())
+                }
+                SwitchWidth::I64 => {
+                    let case = wasm_dialect::I64Const::operands()
+                        .value(value)
+                        .results(discriminant_ty)
+                        .build(ctx, loc);
+                    let case_value = case.result(ctx);
+                    let matches = wasm_dialect::I64Eq::operands(discriminant, case_value)
+                        .results(condition_ty)
+                        .build(ctx, loc);
+                    (case.op_ref(), matches.op_ref())
+                }
+            };
+            let condition = ctx.op_result(matches, 0);
+            let branch = wasm_dialect::If::operands(condition)
                 .results(result_types.clone())
                 .regions(body, next)
                 .build(ctx, loc);
-            let ops = vec![case.op_ref(), matches.op_ref(), branch.op_ref()];
+            let ops = vec![case, matches, branch.op_ref()];
             if index + 1 == case_count {
                 outer_ops = Some(ops);
             } else {
@@ -868,6 +912,80 @@ mod tests {
     }
 
     #[test]
+    fn lowers_i64_switch_cases_with_i64_comparisons() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @main(%choice: core.i64) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = -1} {
+        scf.yield
+      }
+      scf.case {value = 4294967296} {
+        scf.yield
+      }
+      scf.default {
+        scf.yield
+      }
+    }
+    func.return
+  }
+}"#,
+        );
+
+        assert_no_scf_switch_wrappers(&output);
+        assert!(!output.contains("wasm.i32_eq"), "{output}");
+        assert_eq!(output.matches("wasm.i64_eq").count(), 2, "{output}");
+        assert!(
+            output.find("wasm.i64_const {value = -1}")
+                < output.find("wasm.i64_const {value = 4294967296}"),
+            "case dispatch order changed: {output}"
+        );
+        for line in output.lines().filter(|line| line.contains("wasm.i64_eq")) {
+            assert!(
+                line.ends_with(": core.i32"),
+                "i64 comparison yields i32: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn lowered_i64_switch_emits_a_valid_module() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func {sym_name = "choose", type = wasm.func_sig<(core.i64) -> (core.i32)>} {
+    ^entry(%choice: core.i64):
+      scf.switch %choice {
+        scf.case {value = 4294967296} {
+          %one = wasm.i32_const {value = 1} : core.i32
+          wasm.return %one
+        }
+        scf.default {
+          scf.yield
+        }
+      }
+      %zero = wasm.i32_const {value = 0} : core.i32
+      wasm.return %zero
+  }
+}"#,
+        );
+        lower(
+            &mut ctx,
+            module,
+            TypeConverter::new(),
+            &mut Default::default(),
+        )
+        .expect("i64 switch should lower to wasm");
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("lowered i64 switch must emit")
+            .bytes;
+        wasmparser::Validator::new()
+            .validate_all(&bytes)
+            .expect("lowered i64 switch must validate");
+    }
+
+    #[test]
     fn lowers_nested_proper_tail_switch_arms() {
         let output = lower_text(
             r#"core.module @test {
@@ -940,9 +1058,9 @@ mod tests {
                 "malformed resultless switch shape",
             ),
             (
-                "rejects shape valid non i32 switch without mutating",
+                "rejects shape valid narrow integer switch without mutating",
                 r#"core.module @test {
-  func.func @main(%cond: core.i1, %choice: core.i64) -> core.nil {
+  func.func @main(%cond: core.i1, %choice: core.i16) -> core.nil {
     scf.switch %choice {
       scf.case {value = 0} {
         scf.if %cond : core.nil {
@@ -957,7 +1075,7 @@ mod tests {
     func.return
   }
 }"#,
-                "unsupported discriminant type `core.i64`; expected `core.i32`",
+                "unsupported discriminant type `core.i16`; expected `core.i32` or `core.i64`",
             ),
             (
                 "rejects shape valid out of range case without mutating",
@@ -971,6 +1089,19 @@ mod tests {
   }
 }"#,
                 "case integer value is outside the i32 range",
+            ),
+            (
+                "rejects out of range i64 case without mutating",
+                r#"core.module @test {
+  func.func @main(%choice: core.i64) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 9223372036854775808} { scf.yield }
+      scf.default { scf.yield }
+    }
+    func.return
+  }
+}"#,
+                "case integer value is outside the i64 range",
             ),
             (
                 "rejects non integer case attribute without mutating",
