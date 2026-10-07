@@ -1439,8 +1439,9 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   것은 exact physical signature의 일부로 표현한다. 그래서 직접 정의와
   exact indirect signature 모두에서 같은 계약을 읽을 수 있다. 인코딩은 signature의
   [타입 매개변수 속성](#타입-매개변수-속성) `tribute.ownership = "consumed"`이며,
-  경계가 물리 CPS callable의 모든 입력에 붙인다. 표시가 없는 managed 매개변수는
-  retained 계약을 가진다.
+  경계가 module 내부 물리 callable의 모든 입력에 붙인다. Platform `abi`를 가진
+  callable은 표시를 받지 않는다. 표시가 없는 managed 매개변수는 retained 계약을
+  가진다.
 - **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 명시적
   [runtime layout 식별자](#runtime-layout-식별자)로 구별한다. Struct 이름, field
   모양, `arrayref` 같은 erased heap 형상을 provenance로 쓰지 않는다.
