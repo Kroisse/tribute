@@ -372,6 +372,8 @@ Array:  [length: i64] [elements...]
 - **Allocator:** `__tribute_alloc`은 payload 앞뒤에 red zone을 두고,
   `__tribute_dealloc`은 red zone 훼손을 검사한 뒤 block을 poison해 quarantine에
   넣는다. Runtime은 살아 있는 할당과 quarantine된 block의 주소 범위를 기록한다.
+  이 기록은 여러 thread가 공유하며, 할당, 해제와 접근 검사는 lock 하나로 이를
+  읽고 쓴다.
 - **접근 검사:** 생성된 code의 모든 `clif.load`, `clif.store`, `clif.atomic_rmw`
   앞에 runtime 검사 호출을 둔다. 호출은 실제 접근 주소(operand 주소에 `offset`을
   더한 값)와 byte 단위 접근 폭을 넘긴다. Load는 `__tribute_asan_load`를, store와
