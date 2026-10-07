@@ -406,10 +406,11 @@ Each RC-managed physical parameter has one exact entry mode:
 Module 내부의 모든 physical callable은 호출 규약과 무관하게 매개변수에 `consumed`를
 쓴다. 어떤 내부 callable이든 proper tail transfer의 target이 될 수 있기 때문이다
 ([cranelift-backend.md](cranelift-backend.md#꼬리-호출-규약)). Platform `abi`를 가진
-callable은 platform 계약을 유지하며 표시를 받지 않는다. The
-representation/ABI boundary records this in the exact physical signature as the
-per-parameter attribute `tribute.ownership = "consumed"` on every input, because
-it owns the physical callable convention. The marker is inert
+callable은 platform 계약을 유지하며 표시를 받지 않는다.
+
+The representation/ABI boundary records this in the exact physical signature as
+the per-parameter attribute `tribute.ownership = "consumed"` on every input,
+because it owns the physical callable convention. The marker is inert
 on a parameter the typed managed-reference contract does not select: unmanaged
 parameters have no RC action. Only `consumed` is encoded; a managed parameter
 without the marker has the `retained` callable contract, and `borrowed` is an
