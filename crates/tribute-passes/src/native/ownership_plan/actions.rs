@@ -178,8 +178,13 @@ impl<'a> ActionPlanner<'a> {
             }
         }
         // The block start releases a value for every predecessor, so a
-        // predecessor that no longer holds it would release it twice.
-        if holders.values().any(|&count| count != predecessors.len()) {
+        // predecessor that no longer holds it would release it twice. The
+        // function entry is such a predecessor of the entry block, and a
+        // block that redefines the value is entered before it holds one.
+        let defs = &self.liveness.defs[&block];
+        if holders.iter().any(|(value, &count)| {
+            count != predecessors.len() || block == self.facts.cfg().entry() || defs.contains(value)
+        }) {
             return Err(OwnershipPlanError::new(
                 "managed value dies on a control-flow edge whose successor has another predecessor",
             ));

@@ -1870,6 +1870,36 @@ fn value_dying_on_an_edge_into_a_shared_successor_is_rejected() {
 }
 
 #[test]
+fn value_dying_on_a_back_edge_to_the_entry_block_is_rejected() {
+    // The function entry reaches `^entry` without the value, so a release at
+    // its start would run before the first definition.
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  func.func @sink(%value: !BoxRef) attributes {type = func.func_sig<(!BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    func.unreachable
+  }
+  func.func @restart() -> core.nil {
+    ^entry:
+      %child = adt.ref_null {type = !ChildRef} : !ChildRef
+      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %again = adt.ref_is_null %child : core.i1
+      cf.cond_br %again [^back, ^use]
+    ^back:
+      cf.cond_br %again [^entry, ^use]
+    ^use:
+      func.call %value {callee = @sink}
+      func.return
+  }
+}"#,
+        "dies on a control-flow edge whose successor has another predecessor",
+    );
+}
+
+#[test]
 fn cfg_accepts_conditional_branch_with_duplicate_successors() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
