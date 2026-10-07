@@ -72,6 +72,7 @@ pub(super) fn logical_evaluation_control_class<'db>(
         ExprKind::Handle { .. } => EvaluationControlClass::Cps,
         ExprKind::Lambda { .. } => EvaluationControlClass::Direct,
         ExprKind::Resume { .. } => EvaluationControlClass::Cps,
+        ExprKind::Become { call } => logical_evaluation_control_class(ctx, call),
         ExprKind::Call { callee, args } => {
             let call = if is_cps_call_expr(ctx, expr) {
                 EvaluationControlClass::Cps

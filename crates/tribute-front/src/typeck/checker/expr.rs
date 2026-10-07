@@ -448,6 +448,13 @@ impl<'db> TypeChecker<'db> {
                 // Use a new scope for lambda parameters so they don't leak out
                 ctx.push_scope();
                 ctx.enter_lambda();
+                ctx.push_callable_result(match &mode {
+                    Mode::Check(expected) => match expected.kind(self.db()) {
+                        TypeKind::Func { result, .. } => Some(*result),
+                        _ => None,
+                    },
+                    Mode::Infer => None,
+                });
                 let (lambda_evidence, outer_evidence) = ctx.evidence.enter_callable(None);
 
                 // Bind lambda parameters in the new scope
@@ -473,6 +480,7 @@ impl<'db> TypeChecker<'db> {
                 // by the contextual callable contract. An infer-only local
                 // lambda therefore stays closed when its body is pure.
                 let accumulated = ctx.current_effect();
+                let become_result = ctx.pop_callable_result();
                 ctx.pop_scope();
                 ctx.evidence.restore(outer_evidence);
                 let resume_effect = ctx.exit_lambda();
@@ -530,15 +538,24 @@ impl<'db> TypeChecker<'db> {
                     );
                 }
 
+                // A `become` in an inferred lambda fixes the lambda's result
+                // type, which the body's other results then flow into.
+                let inferred_result = match become_result {
+                    Some(result) => {
+                        ctx.constrain_coerce(body_ty, result, body.id);
+                        result
+                    }
+                    None => body_ty,
+                };
                 let result_ty = match mode {
                     Mode::Check(expected) => match expected.kind(self.db()) {
                         TypeKind::Func { result, .. } => {
                             ctx.constrain_coerce(body_ty, *result, body.id);
                             *result
                         }
-                        _ => body_ty,
+                        _ => inferred_result,
                     },
-                    Mode::Infer => body_ty,
+                    Mode::Infer => inferred_result,
                 };
                 let lambda_type = ctx.func_type_with_convention(
                     param_types,
@@ -705,6 +722,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Resume { arg, local_id } => {
                 self.infer_resume_type_with_ctx(ctx, expr.id, arg, *local_id)
             }
+            ExprKind::Become { call } => self.infer_become_type_with_ctx(ctx, expr.id, call),
             ExprKind::Error => ctx.error_type(),
         };
 
@@ -825,6 +843,21 @@ impl<'db> TypeChecker<'db> {
         } else {
             ctx.fresh_type_var()
         }
+    }
+
+    /// Type `become call`: the call's own type, which must equal the result
+    /// type of the enclosing callable.
+    fn infer_become_type_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        become_id: NodeId,
+        call: &Expr<ResolvedRef<'db>>,
+    ) -> Type<'db> {
+        let call_ty = self.infer_expr_type_with_ctx(ctx, call);
+        if let Some(result) = ctx.become_result_type() {
+            ctx.constrain_eq_at(call_ty, result, become_id, ConstraintOriginKind::Expression);
+        }
+        call_ty
     }
 
     fn infer_expr_type_with_ctx(
@@ -998,6 +1031,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Resume { arg, local_id } => {
                 self.infer_resume_type_with_ctx(ctx, expr.id, arg, *local_id)
             }
+            ExprKind::Become { call } => self.infer_become_type_with_ctx(ctx, expr.id, call),
             ExprKind::Tuple(elems) => {
                 let elem_tys = elems
                     .iter()
@@ -1277,7 +1311,7 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    fn report_type_error(&self, node: NodeId, message: String) {
+    pub(super) fn report_type_error(&self, node: NodeId, message: String) {
         Diagnostic::new(
             message,
             self.get_span(node),
@@ -2253,6 +2287,24 @@ impl<'db> TypeChecker<'db> {
                     body: converted_body,
                     handlers,
                 }
+            }
+            ExprKind::Become { call } => {
+                let converted = self.check_expr_with_ctx(ctx, call, Mode::Infer);
+                if let ExprKind::MethodCall { .. } = &*call.kind {
+                    match &*converted.kind {
+                        ExprKind::Call { callee, .. } => {
+                            if let ExprKind::Var(TypedRef {
+                                resolved: ResolvedRef::Function { id },
+                                ..
+                            }) = &*callee.kind
+                            {
+                                self.check_become_callee(expr_id, *id);
+                            }
+                        }
+                        _ => ctx.record_become_method_operand(call.id),
+                    }
+                }
+                ExprKind::Become { call: converted }
             }
             ExprKind::Resume { arg, local_id } => ExprKind::Resume {
                 arg: self.check_expr_with_ctx(ctx, arg, Mode::Infer),

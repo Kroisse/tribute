@@ -12,7 +12,7 @@ use itertools::Itertools;
 /// as identifiers.
 pub const KEYWORDS: &[&str] = &[
     "fn", "op", "do", "let", "const", "struct", "enum", "ability", "mod", "pub", "use", "extern",
-    "case", "handle", "resume", "if", "as",
+    "case", "handle", "resume", "become", "if", "as",
 ];
 
 /// Keywords spelled like type identifiers.

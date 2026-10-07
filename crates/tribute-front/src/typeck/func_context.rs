@@ -170,6 +170,15 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Continuation effect rows captured while checking active lambdas.
     lambda_resume_effects: Vec<Option<EffectRow<'db>>>,
 
+    /// Result types of the enclosing callables, innermost last. A `become`
+    /// call must produce exactly this type. An inferred lambda has no result
+    /// type until its body is checked, so its entry is created on demand.
+    callable_results: Vec<Option<Type<'db>>>,
+
+    /// `become` operands written as method calls. Their callee is known only
+    /// after method selection, which may be deferred until solving.
+    become_method_operands: Vec<NodeId>,
+
     /// Stack of handle expression contexts.
     ///
     /// Pushed during the infer phase of a handle expression and
@@ -255,6 +264,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             current_effect: EffectRow::pure(db),
             effect_contract: None,
             lambda_resume_effects: Vec::new(),
+            callable_results: Vec::new(),
+            become_method_operands: Vec::new(),
             handle_ctx_stack: Vec::new(),
             resolved_methods: HashMap::default(),
             deferred_methods: Vec::new(),
@@ -1047,6 +1058,39 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.lambda_resume_effects
             .pop()
             .expect("lambda resume effect stack must be balanced")
+    }
+
+    /// Enter a callable whose result type is `result`, or not yet known.
+    pub(crate) fn push_callable_result(&mut self, result: Option<Type<'db>>) {
+        self.callable_results.push(result);
+    }
+
+    /// Leave the innermost callable, returning the result type a `become`
+    /// in it required, if any.
+    pub(crate) fn pop_callable_result(&mut self) -> Option<Type<'db>> {
+        self.callable_results
+            .pop()
+            .expect("callable result stack must be balanced")
+    }
+
+    /// The result type of the innermost callable, which a `become` call must
+    /// produce.
+    pub(crate) fn become_result_type(&mut self) -> Option<Type<'db>> {
+        if self.callable_results.last()?.is_none() {
+            let fresh = self.fresh_type_var();
+            *self.callable_results.last_mut()? = Some(fresh);
+        }
+        *self.callable_results.last()?
+    }
+
+    pub(crate) fn record_become_method_operand(&mut self, node: NodeId) {
+        if !self.become_method_operands.contains(&node) {
+            self.become_method_operands.push(node);
+        }
+    }
+
+    pub(crate) fn take_become_method_operands(&mut self) -> Vec<NodeId> {
+        std::mem::take(&mut self.become_method_operands)
     }
 
     /// Record the continuation row selected by a resume in the active lambda.

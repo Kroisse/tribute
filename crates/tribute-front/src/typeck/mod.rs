@@ -420,6 +420,10 @@ pub struct PreludeExports<'db> {
     #[returns(deref)]
     pub function_types: Vec<(FuncDefId<'db>, TypeScheme<'db>)>,
 
+    /// Functions declared `extern`, sorted by fully qualified name.
+    #[returns(deref)]
+    pub extern_functions: Vec<FuncDefId<'db>>,
+
     /// Constructor type schemes keyed by CtorId.
     #[returns(deref)]
     pub constructor_types: Vec<(CtorId<'db>, TypeScheme<'db>)>,

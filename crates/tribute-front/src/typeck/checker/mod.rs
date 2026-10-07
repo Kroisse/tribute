@@ -23,6 +23,7 @@
 //! - `diagnostics`: Source-oriented rendering of inference failures
 //! - `expr`: Expression type checking - uses FunctionInferenceContext
 
+mod become_check;
 mod collect;
 mod diagnostics;
 mod exhaustiveness;
@@ -342,6 +343,7 @@ impl<'db> TypeChecker<'db> {
         PreludeExports::new(
             self.db(),
             self.env.export_function_types_with_ids(),
+            self.env.export_extern_functions(),
             self.env.export_constructor_types(),
             self.env.export_type_defs(),
             self.env.export_struct_fields(),

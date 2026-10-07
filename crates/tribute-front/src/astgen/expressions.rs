@@ -122,6 +122,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
         // === Handle expression ===
         "handle_expression" => lower_handle_expr(ctx, node),
         "resume_expression" => lower_resume_expr(ctx, node),
+        "become_expression" => lower_become_expr(ctx, node),
 
         // === Parenthesized ===
         "parenthesized_expression" => {
@@ -765,6 +766,17 @@ fn lower_resume_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
         arg,
         local_id: None,
     }
+}
+
+fn lower_become_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
+    let call = match node.child_by_field_name("call") {
+        Some(call) => lower_expr(ctx, call),
+        None => Expr {
+            id: ctx.fresh_id_with_span(&node),
+            kind: Box::new(ExprKind::Error),
+        },
+    };
+    ExprKind::Become { call }
 }
 
 fn lower_argument_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Expr<UnresolvedName>> {
