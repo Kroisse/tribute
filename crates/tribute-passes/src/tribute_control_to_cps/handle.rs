@@ -93,143 +93,6 @@ impl Converter<'_> {
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
-    pub(super) fn build_one_shot_wrapper(
-        &mut self,
-        raw_continuation: ValueRef,
-        input_type: TypeRef,
-        answer_type: TypeRef,
-        location: Location,
-    ) -> Result<(Vec<OpRef>, ValueRef), TributeControlToCpsError> {
-        let i1_type = self
-            .ctx
-            .intern_type(TypeDataBuilder::new("core", "i1").build());
-        let state_name = self.frames.fresh_helper("one_shot_state");
-        let state_name = self.ctx.intern_symbol_text(&state_name);
-        let state_type = adt::struct_type(
-            self.ctx,
-            state_name,
-            [("consumed", i1_type)],
-            AttributeMap::new(),
-        )
-        .as_type_ref();
-        let not_consumed = arith::Const::operands()
-            .value(Attribute::Int(0))
-            .results(i1_type)
-            .build(self.ctx, location);
-        let state = adt::StructNew::operands([not_consumed.result(self.ctx)])
-            .r#type(state_type)
-            .results(state_type)
-            .build(self.ctx, location);
-
-        let evidence_type = self.evidence_type();
-        let frame_type = self.frames.frame_type(self.ctx, answer_type);
-        let anyref = self.anyref_type();
-        // The dispatcher ABI is existential only at this boundary. Keep the
-        // captured continuation exact, recover this operation's declared input,
-        // then transfer in proper tail position.
-        let block = make_block(self.ctx, location, &[evidence_type, frame_type, anyref]);
-        let args = self.ctx.block_args(block).to_vec();
-        let input = if type_is(self.ctx, input_type, "core", "nil") {
-            // Nil has no physical payload: its exact resumption receives the
-            // canonical unit instead of an erased runtime value.
-            let unit = core::NilValue::operands().build(self.ctx, location);
-            self.ctx.push_op(block, unit.op_ref());
-            unit.result(self.ctx)
-        } else if type_is(self.ctx, input_type, "adt", "typeref") {
-            // Dynamic effect values recover nominal references only through
-            // their declared type, preserving the typed ownership boundary.
-            let recovered = adt::RefCast::operands(args[2])
-                .r#type(input_type)
-                .results(input_type)
-                .build(self.ctx, location);
-            self.ctx.push_op(block, recovered.op_ref());
-            recovered.result(self.ctx)
-        } else {
-            let recovered = core::UnrealizedConversionCast::operands(args[2])
-                .results(input_type)
-                .build(self.ctx, location);
-            self.ctx.push_op(block, recovered.op_ref());
-            recovered.result(self.ctx)
-        };
-        let consumed = adt::StructGet::operands(state.result(self.ctx))
-            .r#type(state_type)
-            .field(0)
-            .results(i1_type)
-            .build(self.ctx, location);
-        self.ctx.push_op(block, consumed.op_ref());
-
-        let reject_block = make_block(self.ctx, location, &[]);
-        let unreachable = func::Unreachable::operands().build(self.ctx, location);
-        self.ctx.push_op(reject_block, unreachable.op_ref());
-        let reject_region = single_block_region(self.ctx, location, reject_block);
-
-        let enter_block = make_block(self.ctx, location, &[]);
-        let consumed_true = arith::Const::operands()
-            .value(Attribute::Int(1))
-            .results(i1_type)
-            .build(self.ctx, location);
-        self.ctx.push_op(enter_block, consumed_true.op_ref());
-        let mark = adt::StructSet::operands(state.result(self.ctx), consumed_true.result(self.ctx))
-            .r#type(state_type)
-            .field(0)
-            .build(self.ctx, location);
-        self.ctx.push_op(enter_block, mark.op_ref());
-        emit_cps_tail_call_indirect(
-            self.ctx,
-            enter_block,
-            location,
-            raw_continuation,
-            [args[0], args[1], input],
-        )?;
-        let enter_region = single_block_region(self.ctx, location, enter_block);
-
-        let never = self.never_type();
-        let guard = scf::If::operands(consumed.result(self.ctx))
-            .results(never)
-            .regions(reject_region, enter_region)
-            .build(self.ctx, location);
-        self.ctx.push_op(block, guard.op_ref());
-        let region = single_block_region(self.ctx, location, block);
-        let closure_type = tribute_core::calling_convention::cps_resume_type(
-            self.ctx,
-            evidence_type,
-            frame_type,
-            anyref,
-        );
-        let wrapper = closure_over(
-            self.ctx,
-            location,
-            region,
-            closure_type,
-            CallingConvention::Cps,
-        );
-        Ok((
-            vec![not_consumed.op_ref(), state.op_ref(), wrapper.op_ref()],
-            wrapper.result(self.ctx),
-        ))
-    }
-
-    pub(super) fn build_reject_continuation(
-        &mut self,
-        answer_type: TypeRef,
-        location: Location,
-    ) -> (OpRef, ValueRef) {
-        let evidence_type = self.evidence_type();
-        let frame_type = self.frames.frame_type(self.ctx, answer_type);
-        let anyref = self.anyref_type();
-        let block = make_block(self.ctx, location, &[evidence_type, frame_type, anyref]);
-        let unreachable = func::Unreachable::operands().build(self.ctx, location);
-        self.ctx.push_op(block, unreachable.op_ref());
-        let region = single_block_region(self.ctx, location, block);
-        let closure_type = cps_resume_type(self.ctx, evidence_type, frame_type, anyref);
-        let lambda = closure::Lambda::operands(std::iter::empty::<ValueRef>())
-            .results(closure_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
-        (lambda.op_ref(), lambda.result(self.ctx))
-    }
-
     pub(super) fn lower_general_perform(
         &mut self,
         source: OpRef,
@@ -248,22 +111,6 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let old_result = self.ctx.op_result(source, 0);
         let input_type = self.ctx.op_result_types(source)[0];
-        let continuation = if type_is(self.ctx, input_type, "core", "never") {
-            let (op, value) = self.build_reject_continuation(flow.answer_type, location);
-            self.ctx.push_op(block, op);
-            value
-        } else {
-            let (raw_op, raw) =
-                self.build_raw_resumption(rest, old_result, input_type, mapping, flow, location)?;
-            self.ctx.push_op(block, raw_op);
-            let converted_input = self.convert_type(input_type);
-            let (ops, one_shot) =
-                self.build_one_shot_wrapper(raw, converted_input, flow.answer_type, location)?;
-            for op in ops {
-                self.ctx.push_op(block, op);
-            }
-            one_shot
-        };
         let args: Vec<_> = self
             .ctx
             .op_operands(source)
@@ -290,15 +137,23 @@ impl Converter<'_> {
                 "general operation has no verified Dispatch boundary",
             )
         })?;
-        // The frame's dispatcher is the dispatcher of the nearest
-        // handle layer as it is installed now.
-        let frame_types = self.frames.frame_types(self.ctx, flow.answer_type);
-        let (_, dispatch) = unpack_frame(self.ctx, block, location, &frame_types, frame);
-        let perform = ability::Perform::operands(evidence, dispatch, continuation, args)
-            .ability_ref(ability_ref)
-            .op_name(op_name)
-            .build(self.ctx, location);
-        self.ctx.push_op(block, perform.op_ref());
+        let perform = if type_is(self.ctx, input_type, "core", "never") {
+            ability::Abort::operands(evidence, frame, args)
+                .ability_ref(ability_ref)
+                .op_name(op_name)
+                .build(self.ctx, location)
+                .op_ref()
+        } else {
+            let (raw_op, raw) =
+                self.build_raw_resumption(rest, old_result, input_type, mapping, flow, location)?;
+            self.ctx.push_op(block, raw_op);
+            ability::Perform::operands(evidence, frame, raw, args)
+                .ability_ref(ability_ref)
+                .op_name(op_name)
+                .build(self.ctx, location)
+                .op_ref()
+        };
+        self.ctx.push_op(block, perform);
         Ok(())
     }
 

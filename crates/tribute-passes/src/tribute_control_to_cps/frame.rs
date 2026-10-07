@@ -141,22 +141,10 @@ impl Converter<'_> {
             emit_cps_tail_call_indirect(self.ctx, block, location, void_exit, [evidence, frame])?;
             return Ok(());
         }
-        let exit_k = flow.exit_k.ok_or_else(|| {
-            TributeControlToCpsError::post_at(
-                location,
-                "structured region has no verified exit continuation",
-            )
-        })?;
-        let frame = self.frames.frame_types(self.ctx, flow.answer_type);
-        let (done, _) = unpack_frame(self.ctx, block, location, &frame, exit_k);
-        emit_cps_tail_call_indirect(
-            self.ctx,
-            block,
+        Err(TributeControlToCpsError::post_at(
             location,
-            done,
-            std::iter::empty::<ValueRef>(),
-        )?;
-        Ok(())
+            "zero-result structured exit has no suffix continuation",
+        ))
     }
 
     pub(super) fn build_void_suffix_continuation(

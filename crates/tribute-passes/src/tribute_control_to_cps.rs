@@ -25,7 +25,7 @@ use tribute_ir::dialect::{ability, closure, tribute_control, tribute_rt};
 use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{arith, core, func, scf};
+use trunk_ir::dialect::{core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};

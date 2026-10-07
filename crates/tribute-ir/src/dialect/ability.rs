@@ -10,28 +10,6 @@ use super::tribute_control::EvidenceStep;
 #[trunk_ir::dialect]
 mod ability {
 
-    /// Perform an ability operation with explicit evidence and a
-    /// ContinuationFrame-carrying continuation closure.
-    ///
-    /// The continuation closure captures the rest of the computation
-    /// after the effect point.
-    ///
-    /// ```text
-    /// ability.perform %evidence, %dispatch, %resume, [%args...]
-    ///   { ability_ref: core.ability_ref<{name = "State"}>, op_name: "get" }
-    /// ```
-    ///
-    /// This final form is resultless and lowers to `effect.dispatch_cps`.
-    fn perform(
-        ability_ref: Attr<Type>,
-        op_name: Attr<String>,
-        evidence: Value<_>,
-        dispatch: Value<_>,
-        resume: Value<_>,
-        values: Variadic<_>,
-    ) {
-    }
-
     /// Resultless proper-tail handler delimiter emitted by
     /// `tribute_control_to_cps`.
     ///
@@ -107,6 +85,22 @@ mod ability {
     ) {
         #[region(body)]
         {}
+    }
+
+    /// Perform a general operation through the frame's dispatcher.
+    ///
+    /// `resumption` is `(Evidence, frame, operation result) -> core.never`,
+    /// the rest of the computation with no one-shot check. Expanding the
+    /// operation adds the check.
+    #[verify]
+    fn perform<F: Frame>(
+        ability_ref: Attr<Type>,
+        op_name: Attr<String>,
+        evidence: Value<Evidence>,
+        frame: Value<F>,
+        resumption: Value<CpsClosure>,
+        values: Variadic<_>,
+    ) {
     }
 
     /// Perform an operation returning `core.never` through the frame's
@@ -264,7 +258,7 @@ impl CallableExitModel for Perform {
             Ok(())
         } else {
             Err(ControlFlowInterfaceError::new(
-                "ability.perform CallableExit has an invalid final CPS shape",
+                "ability.perform CallableExit has an invalid CPS shape",
             ))
         }
     }

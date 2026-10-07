@@ -136,7 +136,9 @@ fn operation_declarations(
         .collect()
 }
 
-fn assert_nested_resume_frames(printed: &str) {
+/// `converted` is the module after CPS conversion and `printed` after its
+/// frames are lowered.
+fn assert_nested_resume_frames(converted: &str, printed: &str) {
     // Each handle is installed in place, and again wherever a resumed
     // continuation rebuilds its layer.
     assert_eq!(
@@ -149,7 +151,11 @@ fn assert_nested_resume_frames(printed: &str) {
         4,
         "{printed}"
     );
-    assert_eq!(printed.matches("ability.perform").count(), 2, "{printed}");
+    assert_eq!(
+        converted.matches("ability.perform").count(),
+        2,
+        "{converted}"
+    );
     assert!(
         printed
             .matches("tribute.cps_continuation_frame_result")
@@ -166,11 +172,11 @@ fn assert_nested_resume_frames(printed: &str) {
         "suffixes and resumes must repack the handle-layer dispatcher with a new done target: {printed}"
     );
     assert!(
-        printed
+        converted
             .lines()
             .filter(|line| line.contains("ability.perform"))
             .all(|line| !line.contains(": core.i32")),
-        "final ability.perform must be resultless: {printed}"
+        "final ability.perform must be resultless: {converted}"
     );
     assert!(!printed.contains("tribute_control."), "{printed}");
 }
@@ -1223,7 +1229,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     lower_continuation_frames(&mut ctx, module).unwrap();
     let mut perform_resume = None;
     fn find_perform_resume(ctx: &IrContext, op: OpRef, found: &mut Option<ValueRef>) {
-        if let Ok(perform) = ability::Perform::from_op(ctx, op) {
+        if let Ok(perform) = effect::DispatchCps::from_op(ctx, op) {
             *found = Some(perform.resume(ctx));
         }
         for region in ctx.op_regions(op) {
@@ -1473,10 +1479,12 @@ fn textual_scf_branch_captures_only_the_selected_suffix() {
         &mut Default::default(),
     )
     .unwrap();
+    let converted = print_module(&ctx, module.op());
+    lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("scf.if"));
     assert!(printed.contains(" : core.never"));
-    assert!(printed.contains("ability.perform"));
+    assert!(converted.contains("ability.perform"));
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(printed.contains("arith.addi"));
     assert!(!printed.contains("tribute_control."));
@@ -1543,6 +1551,8 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
         &mut Default::default(),
     )
     .unwrap();
+    let converted = print_module(&ctx, module.op());
+    lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
     let scf_ifs: Vec<_> = printed
         .lines()
@@ -1557,7 +1567,11 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
         scf_ifs.iter().any(|line| line.contains(": core.never")),
         "{printed}"
     );
-    assert_eq!(printed.matches("ability.perform").count(), 2, "{printed}");
+    assert_eq!(
+        converted.matches("ability.perform").count(),
+        2,
+        "{converted}"
+    );
     assert!(printed.contains("func.call") && printed.contains("func.tail_call_indirect"));
     assert!(!printed.contains("tribute_control."));
 
@@ -2097,8 +2111,9 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
         &mut Default::default(),
     )
     .unwrap();
+    let converted = print_module(&ctx, module.op());
     lower_continuation_frames(&mut ctx, module).unwrap();
-    assert_nested_resume_frames(&print_module(&ctx, module.op()));
+    assert_nested_resume_frames(&converted, &print_module(&ctx, module.op()));
 }
 
 #[test]
@@ -2144,8 +2159,9 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
         &mut Default::default(),
     )
     .unwrap();
+    let converted = print_module(&ctx, module.op());
     lower_continuation_frames(&mut ctx, module).unwrap();
-    assert_nested_resume_frames(&print_module(&ctx, module.op()));
+    assert_nested_resume_frames(&converted, &print_module(&ctx, module.op()));
 }
 #[test]
 fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
@@ -2201,8 +2217,8 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     .unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     let mut perform = None;
-    fn find_perform(ctx: &IrContext, op: OpRef, found: &mut Option<ability::Perform>) {
-        if let Ok(candidate) = ability::Perform::from_op(ctx, op) {
+    fn find_perform(ctx: &IrContext, op: OpRef, found: &mut Option<effect::DispatchCps>) {
+        if let Ok(candidate) = effect::DispatchCps::from_op(ctx, op) {
             assert!(
                 found.replace(candidate).is_none(),
                 "expected one ability.perform"

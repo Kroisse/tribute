@@ -5,7 +5,8 @@
 //! `ability.suffix_frame` and `ability.exit` expand into the done adapter,
 //! dispatch adapter factory, and frame struct, or the transfer to the frame's
 //! `Done<R>`. `ability.handle` expands into the handle layer's factories and
-//! its `ability.handle_dispatch` delimiter.
+//! its `ability.handle_dispatch` delimiter, and `ability.perform` and
+//! `ability.abort` into `effect.dispatch_cps` through the frame's dispatcher.
 
 use std::cell::Cell;
 use std::ops::ControlFlow;
@@ -14,14 +15,14 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use tribute_core::calling_convention::cps_completion_type;
 use tribute_ir::continuation_frame;
-use tribute_ir::dialect::{ability, adt, effect, tribute_control};
+use tribute_ir::dialect::{ability, adt, effect, tribute_control, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{BlockRef, OpRef, TypeRef};
+use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, erase_op,
 };
@@ -29,6 +30,7 @@ use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_op};
 
 use crate::closure_lower::{TypeSubstitution, substitute_module_types_keeping_casts};
+use crate::lower_ability_perform::pack_payload;
 use crate::tribute_control_to_cps::{
     FrameTypes, LayerFrames, TributeControlToCpsError, build_dispatch_adapter_factory,
     build_done_adapter, emit_cps_tail_call_indirect, helper_symbol, make_block, pack_frame,
@@ -36,11 +38,13 @@ use crate::tribute_control_to_cps::{
 };
 
 mod handle_layer;
+mod perform;
 
 use handle_layer::{
     HandleLayer, HandlerArm, LayerValues, build_layer_resume_factory,
     build_local_dispatcher_factory, push_handle_dispatch, push_layer_frame,
 };
+use perform::{push_one_shot_resume, push_reject_resume};
 
 /// Pass-manager wrapper of [`lower_continuation_frames`].
 pub struct LowerContinuationFrames;
@@ -88,8 +92,8 @@ pub fn lower_continuation_frames(
     reject_abstract_frames(ctx, module)
 }
 
-/// Expands `ability.suffix_frame`, `ability.exit`, and `ability.handle`. A
-/// failure leaves the operation for [`reject_abstract_frames`] to report.
+/// Expands the abstract frame operations. A failure leaves the operation for
+/// [`reject_abstract_frames`] to report.
 struct ExpandFrameOperations {
     frames: HashMap<TypeRef, FrameTypes>,
     next_helper: Cell<u32>,
@@ -108,6 +112,15 @@ impl RewritePattern for ExpandFrameOperations {
             self.expand_exit(ctx, exit, rewriter).is_some()
         } else if let Ok(handle) = ability::Handle::from_op(ctx, op) {
             self.expand_handle(ctx, handle, rewriter).is_some()
+        } else if let Ok(perform) = ability::Perform::from_op(ctx, op) {
+            let resumption = Some(perform.resumption(ctx));
+            let values = perform.values(ctx).to_vec();
+            self.expand_dispatch(ctx, op, perform.frame(ctx), resumption, &values, rewriter)
+                .is_some()
+        } else if let Ok(abort) = ability::Abort::from_op(ctx, op) {
+            let values = abort.values(ctx).to_vec();
+            self.expand_dispatch(ctx, op, abort.frame(ctx), None, &values, rewriter)
+                .is_some()
         } else {
             false
         }
@@ -194,6 +207,52 @@ impl ExpandFrameOperations {
         ctx.remove_op_from_block(block, transfer);
         detach_into(ctx, block, rewriter);
         rewriter.replace_op(transfer);
+        Some(())
+    }
+
+    /// Replace `ability.perform` or `ability.abort` with `effect.dispatch_cps`
+    /// through the frame's dispatcher. A perform passes its raw resumption
+    /// behind a one-shot check, and an abort a resumption that traps.
+    fn expand_dispatch(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        frame: ValueRef,
+        resumption: Option<ValueRef>,
+        values: &[ValueRef],
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let location = ctx.op(op).location;
+        let evidence = ctx.op_operands(op)[0];
+        let ability_ref = ctx.op(op).attributes.get_type("ability_ref")?;
+        let op_name = ctx.op(op).attributes.get_string_ref("op_name")?;
+        let types = self.frame_of(ctx, ctx.value_ty(frame))?;
+        let block = make_block(ctx, location, &[]);
+        let resume = match resumption {
+            Some(raw) => {
+                let state = self.fresh_helper("one_shot_state");
+                push_one_shot_resume(ctx, block, location, &types, raw, &state).ok()?
+            }
+            None => push_reject_resume(ctx, block, location, &types),
+        };
+        let (_, dispatch) = unpack_frame(ctx, block, location, &types, frame);
+        detach_into(ctx, block, rewriter);
+        let anyref = tribute_rt::anyref(ctx).as_type_ref();
+        let payload = pack_payload(
+            ctx,
+            rewriter,
+            location,
+            ability_ref,
+            op_name,
+            values,
+            anyref,
+        );
+        let dispatch = effect::DispatchCps::operands(evidence, dispatch, resume, payload)
+            .ability_ref(ability_ref)
+            .op_name(op_name)
+            .answer_type(types.answer)
+            .build(ctx, location);
+        rewriter.replace_op(dispatch.op_ref());
         Some(())
     }
 
@@ -495,7 +554,9 @@ fn reject_abstract_frames(ctx: &IrContext, module: Module) -> Result<(), Tribute
         }
         let operation = ability::SuffixFrame::matches(ctx, op)
             || ability::Exit::matches(ctx, op)
-            || ability::Handle::matches(ctx, op);
+            || ability::Handle::matches(ctx, op)
+            || ability::Perform::matches(ctx, op)
+            || ability::Abort::matches(ctx, op);
         if (operation || mentions) && failure.is_none() {
             failure = Some(survived(ctx.op(op).location));
         }

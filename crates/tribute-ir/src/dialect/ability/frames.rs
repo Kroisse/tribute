@@ -8,7 +8,7 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 
-use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
+use super::{Frame, Handle, Perform, SuffixFrame, is_evidence_type_ref};
 use crate::dialect::tribute_control::{
     CALLING_CONVENTION_ATTR, CallingConvention, EvidencePlanSite, verify_evidence_plan,
 };
@@ -230,6 +230,22 @@ impl trunk_ir::ops::Verify for SuffixFrame {
             );
         }
         Ok(())
+    }
+}
+
+impl trunk_ir::ops::Verify for Perform {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        let frame = ctx.value_ty(self.frame(ctx));
+        let rest = cps_closure_rest(
+            ctx,
+            self.resumption(ctx),
+            frame,
+            "ability.perform resumption",
+        )?;
+        match rest {
+            [input] if !is_never(ctx, *input) => Ok(()),
+            _ => Err("ability.perform resumption must take one operation result".into()),
+        }
     }
 }
 
