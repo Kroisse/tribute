@@ -949,6 +949,278 @@ fn projection_of_a_written_layout_keeps_its_own_unit() {
     assert!(position(&|op| op == get) < acquire && acquire < replaced_release);
 }
 
+/// The single managed `adt.struct_get` of a fixture function: the operation,
+/// its borrowed result and the owner it reads.
+fn borrowed_projection(
+    ctx: &IrContext,
+    plan: &NativeOwnershipPlan,
+    name: &'static str,
+) -> (OpRef, ValueRef, ValueRef) {
+    let function = plan.function(&Symbol::new(name)).unwrap();
+    let body = ctx.op_region(function.operation(), 0).unwrap();
+    let mut gets = ctx.region(body).blocks.iter().flat_map(|&block| {
+        ctx.block(block).ops.iter().copied().filter(|&op| {
+            adt::StructGet::matches(ctx, op)
+                && plan.is_managed_type(ctx, ctx.op_result_types(op)[0])
+        })
+    });
+    let get = gets.next().expect("one managed projection");
+    assert!(gets.next().is_none(), "one managed projection");
+    assert!(
+        function.actions().iter().any(|action| {
+            action.kind == ActionKind::BorrowLoad && action.anchor == ActionAnchor::After(get)
+        }),
+        "{name} borrows its projection"
+    );
+    (get, ctx.op_result(get, 0), ctx.op_operands(get)[0])
+}
+
+fn has_action(
+    function: &FunctionOwnershipPlan,
+    kind: ActionKind,
+    value: ValueRef,
+    anchor: ActionAnchor,
+) -> bool {
+    function
+        .actions()
+        .iter()
+        .any(|action| action.kind == kind && action.value == value && action.anchor == anchor)
+}
+
+/// Position in `block` of the materialized retain or release of `value`.
+fn rc_position(ctx: &IrContext, block: BlockRef, retain: bool, value: ValueRef) -> usize {
+    use tribute_ir::dialect::tribute_rt::{Release, Retain};
+    ctx.block(block)
+        .ops
+        .iter()
+        .position(|&op| {
+            let matches = if retain {
+                Retain::matches(ctx, op)
+            } else {
+                Release::matches(ctx, op)
+            };
+            matches && ctx.op_operands(op) == [value]
+        })
+        .expect("materialized RC operation")
+}
+
+fn op_position(ctx: &IrContext, op: OpRef) -> (BlockRef, usize) {
+    let block = ctx.op(op).parent_block.unwrap();
+    let position = ctx.block(block).ops.iter().position(|&other| other == op);
+    (block, position.unwrap())
+}
+
+#[test]
+fn borrowed_projection_proper_tail_transfer_acquires_before_the_owner_dies() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  func.func @sink(%value: !ChildRef) attributes {type = func.func_sig<(!ChildRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    func.unreachable
+  }
+  func.func @sink_both(%owner: !BoxRef, %value: !ChildRef) attributes {type = func.func_sig<(!BoxRef {tribute.ownership = "consumed"}, !ChildRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    func.unreachable
+  }
+  func.func @owner_dies(%owner: !BoxRef) attributes {type = func.func_sig<(!BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+    func.tail_call %child {callee = @sink}
+  }
+  func.func @owner_moves(%owner: !BoxRef) attributes {type = func.func_sig<(!BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+    func.tail_call %owner, %child {callee = @sink_both}
+  }
+}"#,
+    );
+    let (get, child, owner) = borrowed_projection(&ctx, &plan, "owner_dies");
+    let (block, _) = op_position(&ctx, get);
+    let tail = *ctx.block(block).ops.last().unwrap();
+    let dies = plan.function(&Symbol::new("owner_dies")).unwrap();
+    assert!(has_action(
+        dies,
+        ActionKind::CopyAcquire,
+        child,
+        ActionAnchor::Before(tail)
+    ));
+    assert!(has_action(
+        dies,
+        ActionKind::TailTransfer,
+        child,
+        ActionAnchor::Before(tail)
+    ));
+    assert!(has_action(
+        dies,
+        ActionKind::FinalRelease,
+        owner,
+        ActionAnchor::Before(tail)
+    ));
+
+    let (moves_get, moves_child, moves_owner) = borrowed_projection(&ctx, &plan, "owner_moves");
+    let (moves_block, _) = op_position(&ctx, moves_get);
+    let moves_tail = *ctx.block(moves_block).ops.last().unwrap();
+    let moves = plan.function(&Symbol::new("owner_moves")).unwrap();
+    assert!(has_action(
+        moves,
+        ActionKind::CopyAcquire,
+        moves_child,
+        ActionAnchor::Before(moves_tail)
+    ));
+    assert!(has_action(
+        moves,
+        ActionKind::TailTransfer,
+        moves_owner,
+        ActionAnchor::Before(moves_tail)
+    ));
+    assert_eq!(count(moves, ActionKind::TailTransfer), 2);
+    assert_eq!(count(moves, ActionKind::FinalRelease), 0);
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    // The projection's unit exists before the owner that kept it alive is
+    // released, and nothing follows the proper-tail terminator.
+    assert!(rc_position(&ctx, block, true, child) < rc_position(&ctx, block, false, owner));
+    assert_eq!(ctx.block(block).ops.last(), Some(&tail));
+    assert!(rc_position(&ctx, moves_block, true, moves_child) < op_position(&ctx, moves_tail).1);
+    assert_eq!(ctx.block(moves_block).ops.last(), Some(&moves_tail));
+}
+
+#[test]
+fn borrowed_projection_ordinary_call_to_a_consumed_parameter_acquires_its_unit() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  func.func @sink(%value: !ChildRef) attributes {type = func.func_sig<(!ChildRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    func.unreachable
+  }
+  func.func @load(%child: !ChildRef) -> core.nil {
+    %owner = adt.struct_new %child {type = !Box} : !BoxRef
+    %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+    func.call %loaded {callee = @sink}
+    func.return
+  }
+}"#,
+    );
+    let (get, loaded, owner) = borrowed_projection(&ctx, &plan, "load");
+    let (block, get_position) = op_position(&ctx, get);
+    let call = ctx.block(block).ops[get_position + 1];
+    assert!(func::Call::matches(&ctx, call));
+    let function = plan.function(&Symbol::new("load")).unwrap();
+    assert!(has_action(
+        function,
+        ActionKind::CallAcquire,
+        loaded,
+        ActionAnchor::Before(call)
+    ));
+    assert!(has_action(
+        function,
+        ActionKind::FinalRelease,
+        owner,
+        ActionAnchor::After(call)
+    ));
+    assert!(
+        !function
+            .actions()
+            .iter()
+            .any(|action| action.kind == ActionKind::FinalRelease && action.value == loaded)
+    );
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    // The callee consumes the acquired unit; the caller's owner outlives the call.
+    let call_position = op_position(&ctx, call).1;
+    assert!(rc_position(&ctx, block, true, loaded) < call_position);
+    assert!(call_position < rc_position(&ctx, block, false, owner));
+}
+
+#[test]
+fn borrowed_projection_stored_in_an_aggregate_acquires_the_field_unit() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  !Capture = adt.struct<Capture(child: !ChildRef)>
+  !CaptureRef = adt.typeref<{name = "Capture"}>
+  func.func @capture(%child: !ChildRef) -> !CaptureRef {
+    %owner = adt.struct_new %child {type = !Box} : !BoxRef
+    %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+    %captured = adt.struct_new %loaded {type = !Capture} : !CaptureRef
+    func.return %captured
+  }
+}"#,
+    );
+    let (get, loaded, owner) = borrowed_projection(&ctx, &plan, "capture");
+    let (block, get_position) = op_position(&ctx, get);
+    let store = ctx.block(block).ops[get_position + 1];
+    assert!(adt::StructNew::matches(&ctx, store));
+    let function = plan.function(&Symbol::new("capture")).unwrap();
+    assert!(has_action(
+        function,
+        ActionKind::StoreAcquire,
+        loaded,
+        ActionAnchor::Before(store)
+    ));
+    assert!(has_action(
+        function,
+        ActionKind::FinalRelease,
+        owner,
+        ActionAnchor::After(store)
+    ));
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    // The stored field owns its unit before the owner it was read from dies.
+    let store_position = op_position(&ctx, store).1;
+    assert!(rc_position(&ctx, block, true, loaded) < store_position);
+    assert!(store_position < rc_position(&ctx, block, false, owner));
+}
+
+#[test]
+fn loop_carried_borrowed_projection_acquires_before_the_previous_owner_dies() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !NodeRef = adt.typeref<{name = "Node"}>
+  !Node = adt.struct<Node(next: !NodeRef)>
+  func.func @walk(%condition: core.i1, %tail: !NodeRef) -> core.nil {
+    ^entry:
+      %head = adt.struct_new %tail {type = !Node} : !NodeRef
+      cf.br %head [^loop]
+    ^loop(%current: !NodeRef):
+      %next = adt.struct_get %current {field = 0, type = !Node} : !NodeRef
+      cf.cond_br %condition [^latch, ^exit]
+    ^latch:
+      cf.br %next [^loop]
+    ^exit:
+      func.return
+  }
+}"#,
+    );
+    let (_, next, current) = borrowed_projection(&ctx, &plan, "walk");
+    let function = plan.function(&Symbol::new("walk")).unwrap();
+    let body = ctx.op_region(function.operation(), 0).unwrap();
+    let latch = ctx.region(body).blocks[2];
+    let back_edge = *ctx.block(latch).ops.last().unwrap();
+    assert!(has_action(
+        function,
+        ActionKind::CopyAcquire,
+        next,
+        ActionAnchor::Before(back_edge)
+    ));
+    assert!(has_action(
+        function,
+        ActionKind::FinalRelease,
+        current,
+        ActionAnchor::Before(back_edge)
+    ));
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    // The next iteration's owner holds its unit before this iteration's dies.
+    assert!(rc_position(&ctx, latch, true, next) < rc_position(&ctx, latch, false, current));
+}
+
 #[test]
 fn enum_release_leaves_the_size_to_the_descriptor() {
     let (mut ctx, module, plan) = build(
