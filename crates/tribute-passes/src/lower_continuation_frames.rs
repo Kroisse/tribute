@@ -6,14 +6,14 @@
 //! dispatch adapter factory, and frame struct, or the transfer to the frame's
 //! `Done<R>`.
 
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::ops::ControlFlow;
-use std::rc::Rc;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use tribute_core::calling_convention::cps_completion_type;
 use tribute_ir::continuation_frame;
-use tribute_ir::dialect::{ability, adt};
+use tribute_ir::dialect::{ability, adt, tribute_control};
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
@@ -23,10 +23,15 @@ use trunk_ir::refs::{BlockRef, OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, erase_op,
 };
+use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_op};
 
-use crate::closure_lower::substitute_module_types_keeping_casts;
-use crate::tribute_control_to_cps::{FrameExpander, FrameTypes, TributeControlToCpsError};
+use crate::closure_lower::{TypeSubstitution, substitute_module_types_keeping_casts};
+use crate::tribute_control_to_cps::{
+    FrameTypes, LayerFrames, TributeControlToCpsError, build_dispatch_adapter_factory,
+    build_done_adapter, emit_cps_tail_call_indirect, helper_symbol, make_block, pack_frame,
+    unpack_frame,
+};
 
 /// Pass-manager wrapper of [`lower_continuation_frames`].
 pub struct LowerContinuationFrames;
@@ -60,134 +65,180 @@ pub fn lower_continuation_frames(
         .and_then(|body| ctx.region(body).blocks.first().copied())
         .ok_or_else(|| TributeControlToCpsError::post_at(location, "module has no body block"))?;
 
-    select_frame_layouts(ctx, module);
-    let expander = Rc::new(RefCell::new(FrameExpander::new(
-        frame_types(ctx, location)?,
-        next_helper_index(ctx, module_block),
-    )));
-    let failure = Rc::new(RefCell::new(None));
-    PatternApplicator::new(TypeConverter::new())
-        .add_pattern(ExpandSuffixFrame {
-            expander: expander.clone(),
-            module_block,
-            failure: failure.clone(),
-        })
-        .add_pattern(ExpandExit {
-            expander,
-            module_block,
-            failure: failure.clone(),
+    let converter = frame_type_converter(ctx);
+    let identities = identity_casts(ctx, module);
+    substitute_module_types_keeping_casts(ctx, module, |ctx, ty| converter.convert_type(ctx, ty));
+    erase_new_identity_casts(ctx, module, &identities);
+
+    PatternApplicator::new(converter)
+        .add_pattern(ExpandFrameOperations {
+            frames: frame_types(ctx, location)?,
+            next_helper: Cell::new(next_helper_index(ctx, module_block)),
         })
         .apply_partial(ctx, module);
-    if let Some(error) = failure.take() {
-        return Err(error);
-    }
     reject_abstract_frames(ctx, module)
 }
 
-/// Replaces `ability.suffix_frame` with the frame it builds.
-struct ExpandSuffixFrame {
-    expander: Rc<RefCell<FrameExpander>>,
-    module_block: BlockRef,
-    failure: Rc<RefCell<Option<TributeControlToCpsError>>>,
+/// Expands `ability.suffix_frame` and `ability.exit`. A failure leaves the
+/// operation for [`reject_abstract_frames`] to report.
+struct ExpandFrameOperations {
+    frames: HashMap<TypeRef, FrameTypes>,
+    next_helper: Cell<u32>,
 }
 
-impl RewritePattern for ExpandSuffixFrame {
+impl RewritePattern for ExpandFrameOperations {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(suffix) = ability::SuffixFrame::from_op(ctx, op) else {
-            return false;
-        };
-        match self
-            .expander
-            .borrow_mut()
-            .suffix_frame(ctx, self.module_block, suffix)
-        {
-            Ok(expansion) => {
-                for built in expansion.body {
-                    rewriter.insert_op(built);
-                }
-                for helper in expansion.helpers {
-                    rewriter.add_module_op(helper);
-                }
-                rewriter.erase_op(expansion.frame.into_iter().collect());
-                true
-            }
-            Err(error) => {
-                self.failure.borrow_mut().get_or_insert(error);
-                false
-            }
+        if let Ok(suffix) = ability::SuffixFrame::from_op(ctx, op) {
+            self.expand_suffix_frame(ctx, suffix, rewriter).is_some()
+        } else if let Ok(exit) = ability::Exit::from_op(ctx, op) {
+            self.expand_exit(ctx, exit, rewriter).is_some()
+        } else {
+            false
         }
     }
 }
 
-/// Replaces `ability.exit` with the transfer to the frame's `Done<R>`.
-struct ExpandExit {
-    expander: Rc<RefCell<FrameExpander>>,
-    module_block: BlockRef,
-    failure: Rc<RefCell<Option<TributeControlToCpsError>>>,
-}
+impl ExpandFrameOperations {
+    fn frame_of(&self, ctx: &IrContext, frame: TypeRef) -> Option<FrameTypes> {
+        let answer = continuation_frame::result_type(ctx, frame)?;
+        self.frames.get(&answer).copied()
+    }
 
-impl RewritePattern for ExpandExit {
-    fn match_and_rewrite(
+    /// Replace `ability.suffix_frame` with the done adapter, the dispatch
+    /// adapter factory over the outer frame's dispatcher, and the frame that
+    /// holds both.
+    fn expand_suffix_frame(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        suffix: ability::SuffixFrame,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(exit) = ability::Exit::from_op(ctx, op) else {
-            return false;
-        };
-        match self
-            .expander
-            .borrow_mut()
-            .exit(ctx, self.module_block, exit)
-        {
-            Ok(mut expansion) => {
-                let transfer = expansion.body.pop().expect("an exit ends in a transfer");
-                rewriter.replace_with_prefix(expansion.body, transfer);
-                for helper in expansion.helpers {
-                    rewriter.add_module_op(helper);
-                }
-                true
-            }
-            Err(error) => {
-                self.failure.borrow_mut().get_or_insert(error);
-                false
-            }
-        }
+    ) -> Option<()> {
+        let location = ctx.op(suffix.op_ref()).location;
+        let evidence = suffix.evidence(ctx);
+        let outer = suffix.outer(ctx);
+        let continuation = suffix.continuation(ctx);
+        let plan = ctx
+            .op(suffix.op_ref())
+            .attributes
+            .get(tribute_control::EVIDENCE_PLAN_ATTR)
+            .cloned();
+        let value = self.frame_of(ctx, suffix.result_ty(ctx))?;
+        let boundary = self.frame_of(ctx, ctx.value_ty(outer))?;
+        let block = make_block(ctx, location, &[]);
+        let (done_op, done) =
+            build_done_adapter(ctx, value.answer, continuation, evidence, outer, location).ok()?;
+        ctx.push_op(block, done_op);
+        let (_, outer_dispatch) = unpack_frame(ctx, block, location, &boundary, outer);
+        let index = self.next_helper.replace(self.next_helper.get() + 1);
+        let symbol = helper_symbol("make_dispatch_adapter", index);
+        let frames = LayerFrames { value, boundary };
+        let factory =
+            build_dispatch_adapter_factory(ctx, location, symbol.clone(), &frames, plan).ok()?;
+        let evidence_type = ctx.value_ty(evidence);
+        let completion_type =
+            cps_completion_type(ctx, evidence_type, value.answer, boundary.abstract_frame);
+        let completion = core::UnrealizedConversionCast::operands(continuation)
+            .results(completion_type)
+            .build(ctx, location);
+        ctx.push_op(block, completion.op_ref());
+        let dispatch = func::Call::operands([completion.result(ctx), outer_dispatch])
+            .callee(symbol.into())
+            .results([value.dispatch])
+            .build(ctx, location);
+        tribute_core::set_calling_convention(
+            ctx,
+            dispatch.op_ref(),
+            tribute_core::CallingConvention::Direct,
+        );
+        ctx.push_op(block, dispatch.op_ref());
+        let frame = pack_frame(ctx, block, location, &value, done, dispatch.result(ctx));
+        detach_into(ctx, block, rewriter);
+        rewriter.add_module_op(factory);
+        rewriter.erase_op(vec![frame]);
+        Some(())
+    }
+
+    /// Replace `ability.exit` with the transfer to the frame's `Done<R>`.
+    fn expand_exit(
+        &self,
+        ctx: &mut IrContext,
+        exit: ability::Exit,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let location = ctx.op(exit.op_ref()).location;
+        let frame = exit.frame(ctx);
+        let value = exit.value(ctx);
+        let types = self.frame_of(ctx, ctx.value_ty(frame))?;
+        let block = make_block(ctx, location, &[]);
+        let (done, _) = unpack_frame(ctx, block, location, &types, frame);
+        let transfer = emit_cps_tail_call_indirect(ctx, block, location, done, [value]).ok()?;
+        ctx.remove_op_from_block(block, transfer);
+        detach_into(ctx, block, rewriter);
+        rewriter.replace_op(transfer);
+        Some(())
     }
 }
 
-/// Replace `ability.frame<R>` with the nominal frame reference of `R`.
+/// Hand the operations built into `block` to the rewriter, to be inserted
+/// where the replaced operation was.
+fn detach_into(ctx: &mut IrContext, block: BlockRef, rewriter: &mut PatternRewriter<'_>) {
+    for built in ctx.block(block).ops.clone() {
+        ctx.remove_op_from_block(block, built);
+        rewriter.insert_op(built);
+    }
+}
+
+/// The conversion of each `ability.frame<R>` to the nominal reference of its
+/// layout.
 ///
-/// A frame whose answer type mentions another frame waits for the inner one,
-/// since the layout is named by the substituted answer type. Casts that were
-/// identities before the substitution stay.
-fn select_frame_layouts(ctx: &mut IrContext, module: Module) {
-    let identities = identity_casts(ctx, module);
-    loop {
-        let layouts = frame_layouts(ctx);
-        let mut replaced = false;
-        substitute_module_types_keeping_casts(ctx, module, |ctx, ty| {
-            let answer = ability::Frame::from_type_ref(ctx, ty)?.result(ctx);
-            if type_mentions_frame(ctx, answer, &mut HashSet::default()) {
-                return None;
-            }
-            let name = layouts.get(&answer)?;
-            replaced = true;
-            Some(continuation_frame::ref_type(ctx, name.clone(), answer))
-        });
-        if !replaced {
-            break;
-        }
+/// The layout is named by the answer type after its own frames are
+/// converted, so an answer that mentions frames resolves them first.
+fn frame_type_converter(ctx: &mut IrContext) -> TypeConverter {
+    let names = frame_layouts(ctx);
+    let mut resolved = HashMap::default();
+    for &answer in names.keys() {
+        resolve_frame(ctx, answer, &names, &mut resolved);
     }
+    let replacements: HashMap<TypeRef, TypeRef> = resolved
+        .into_iter()
+        .map(|(answer, reference)| (ability::frame(ctx, answer).as_type_ref(), reference))
+        .collect();
+    let mut converter = TypeConverter::new();
+    converter.add_conversion(move |_, ty| replacements.get(&ty).copied());
+    converter
+}
+
+fn resolve_frame(
+    ctx: &mut IrContext,
+    answer: TypeRef,
+    names: &HashMap<TypeRef, String>,
+    resolved: &mut HashMap<TypeRef, TypeRef>,
+) -> Option<TypeRef> {
+    if let Some(&reference) = resolved.get(&answer) {
+        return Some(reference);
+    }
+    let name = names.get(&answer)?;
+    let converted = TypeSubstitution::new(ctx, |ctx, ty| {
+        let inner = ability::Frame::from_type_ref(ctx, ty)?.result(ctx);
+        resolve_frame(ctx, inner, names, &mut *resolved)
+    })
+    .convert_type(answer);
+    let reference = continuation_frame::ref_type(ctx, name.clone(), converted);
+    resolved.insert(answer, reference);
+    Some(reference)
+}
+
+/// Remove the casts the frame substitution turned into identities, keeping
+/// those that were identities before it.
+fn erase_new_identity_casts(ctx: &mut IrContext, module: Module, kept: &HashSet<OpRef>) {
     let mut casts = Vec::new();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
-        if !identities.contains(&op)
+        if !kept.contains(&op)
             && let Ok(cast) = core::UnrealizedConversionCast::from_op(ctx, op)
             && ctx.value_ty(cast.value(ctx)) == ctx.value_ty(cast.result(ctx))
         {
@@ -217,7 +268,7 @@ fn frame_layouts(ctx: &IrContext) -> HashMap<TypeRef, String> {
 /// The frame types of each registered layout.
 fn frame_types(
     ctx: &mut IrContext,
-    location: trunk_ir::types::Location,
+    location: Location,
 ) -> Result<HashMap<TypeRef, FrameTypes>, TributeControlToCpsError> {
     let mut frames = HashMap::default();
     for (answer, name) in frame_layouts(ctx) {
@@ -237,6 +288,7 @@ fn frame_types(
         frames.insert(
             answer,
             FrameTypes {
+                answer,
                 abstract_frame: reference,
                 reference,
                 layout,

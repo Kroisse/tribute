@@ -70,6 +70,7 @@ impl Converter<'_> {
         );
         let layout = continuation_frame::layout_type(self.ctx, name, answer, done, dispatch);
         let frame = FrameTypes {
+            answer,
             abstract_frame,
             reference,
             layout,

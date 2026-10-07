@@ -41,7 +41,7 @@ impl Converter<'_> {
         )?;
         let body_region = self.single_block_region(location, body_block);
         self.push_handle_dispatch(block, location, layer, values, args[0], body_region)?;
-        self.finish_rebound(location, layer.answer_type, block)
+        Ok(self.finish_rebound(location, layer.answer_type, block))
     }
 
     /// Call a handle's dispatcher factory for one installed layer.
@@ -249,11 +249,16 @@ impl Converter<'_> {
             // its completion behind.
             let completion_only = SuffixLayer {
                 value_type: layer.body_type,
-                boundary: layer.answer_type,
                 dispatch_factory: layer.passthrough_factory.clone(),
                 plan: None,
             };
-            self.build_suffix_rebound(location, &completion_only, args[1], args[0])?
+            self.build_suffix_rebound(
+                location,
+                &completion_only,
+                layer.answer_type,
+                args[1],
+                args[0],
+            )?
         };
         self.ctx.push_op(block, resume_op);
         let ret = func::Return::operands([resume]).build(self.ctx, location);
@@ -1128,18 +1133,17 @@ impl Converter<'_> {
                     .block_args(self.ctx.region(completion_source).blocks[0])[0],
             ),
         );
+        let dispatch_factory = self.fresh_helper("make_local_dispatch");
+        let (passthrough_factory, passthrough_op) =
+            self.build_dispatch_adapter_factory(location, completion_input, handle_answer, None)?;
+        self.ctx.push_op(self.module_block, passthrough_op);
         let layer = HandleLayer {
             source,
             arms: handler_arms,
             body_type: completion_input,
             answer_type: handle_answer,
-            dispatch_factory: self.fresh_helper("make_local_dispatch"),
-            passthrough_factory: self.build_dispatch_adapter_factory(
-                location,
-                completion_input,
-                handle_answer,
-                None,
-            )?,
+            dispatch_factory,
+            passthrough_factory,
             installed_resume_factory: self.fresh_helper("make_installed_resume"),
             passthrough_resume_factory: self.fresh_helper("make_passthrough_resume"),
         };

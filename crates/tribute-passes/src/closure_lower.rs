@@ -702,7 +702,7 @@ fn erase_identity_casts(ctx: &mut IrContext, module: Module) {
     }
 }
 
-struct TypeSubstitution<'a, F> {
+pub(crate) struct TypeSubstitution<'a, F> {
     ctx: &'a mut IrContext,
     substitute: F,
     cache: HashMap<TypeRef, TypeRef>,
@@ -710,7 +710,7 @@ struct TypeSubstitution<'a, F> {
 }
 
 impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> {
-    fn new(ctx: &'a mut IrContext, substitute: F) -> Self {
+    pub(crate) fn new(ctx: &'a mut IrContext, substitute: F) -> Self {
         Self {
             ctx,
             substitute,
@@ -719,7 +719,7 @@ impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<
         }
     }
 
-    fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
+    pub(crate) fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
         if let Some(&converted) = self.cache.get(&ty) {
             return converted;
         }
