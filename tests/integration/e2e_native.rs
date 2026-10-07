@@ -2577,6 +2577,45 @@ fn main() ->{Io} Nil {
     );
 }
 
+#[test]
+fn test_native_case_result_shares_a_value_used_afterwards() {
+    assert_native_output(
+        "case_result_shares_live_value.trb",
+        r#"
+enum Inner {
+    Value(Nat)
+    Empty
+}
+
+enum Flag {
+    Yes
+    No
+}
+
+fn read(inner: Inner) -> Nat {
+    case inner {
+        Value(value) -> value
+        Empty -> 0
+    }
+}
+
+fn merged(flag: Flag, inner: Inner, other: Inner) -> Nat {
+    let picked = case flag {
+        Yes -> inner
+        No -> other
+    }
+    read(inner) + read(picked)
+}
+
+fn main() -> Nil {
+    __tribute_print_nat(merged(Yes, Value(2), Value(3)))
+    __tribute_print_nat(merged(No, Value(2), Value(3)))
+}
+"#,
+        "4\n5",
+    );
+}
+
 // =========================================================================
 // String::empty() and Bytes::empty() tests
 // =========================================================================

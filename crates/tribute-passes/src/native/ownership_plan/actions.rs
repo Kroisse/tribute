@@ -134,7 +134,7 @@ impl<'a> ActionPlanner<'a> {
         let ops = &self.ir.block(block).ops;
         let mut transferred = HashSet::default();
         for &op in ops {
-            self.plan_operation(op, &mut transferred)?;
+            self.plan_operation(block, op, &mut transferred)?;
             if let Some(&result) = self.ir.op_results(op).first()
                 && self.borrowed.contains_key(&result)
             {
@@ -166,6 +166,7 @@ impl<'a> ActionPlanner<'a> {
 impl ActionPlanner<'_> {
     fn plan_operation(
         &mut self,
+        block: BlockRef,
         op: OpRef,
         transferred: &mut HashSet<ValueRef>,
     ) -> Result<(), OwnershipPlanError> {
@@ -295,7 +296,12 @@ impl ActionPlanner<'_> {
                 if is_managed_value(self.ir, transfer.destination, self.managed_layouts) {
                     let root = root_value(self.facts.aliases(), transfer.source);
                     let count = counts.entry(root).or_default();
-                    if *count > 0 || self.borrowed.contains_key(&root) {
+                    // A source that stays live after the branch keeps its
+                    // unit, so the destination needs one of its own.
+                    if *count > 0
+                        || self.borrowed.contains_key(&root)
+                        || self.liveness.live_out[&block].contains(&root)
+                    {
                         self.actions.push(OwnershipAction {
                             kind: ActionKind::CopyAcquire,
                             value: transfer.source,
