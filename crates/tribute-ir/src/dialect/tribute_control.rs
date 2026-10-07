@@ -109,6 +109,22 @@ mod tribute_control {
     ) -> Value<S::Result> {
     }
 
+    #[verify]
+    fn tail_call(
+        callee: Attr<SymbolRef>,
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+        args: Variadic<_>,
+    ) {
+    }
+
+    #[verify]
+    fn tail_call_indirect<S: FuncSig>(
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+        callee: Value<S>,
+        args: Values<S::Inputs>,
+    ) {
+    }
+
     fn r#return(value: Value<_>) {}
 
     // Direct-style control operations
@@ -403,6 +419,18 @@ impl trunk_ir::ops::Verify for CallIndirect {
     }
 }
 
+impl trunk_ir::ops::Verify for TailCall {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
+    }
+}
+
+impl trunk_ir::ops::Verify for TailCallIndirect {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
+    }
+}
+
 impl trunk_ir::ops::Verify for Resume {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
         verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
@@ -687,6 +715,20 @@ inventory::submit! {
 impl trunk_ir::op_interface::CallLikeModel for Call {}
 inventory::submit! {
     trunk_ir::op_interface::CallLikeOps::register::<Call>()
+}
+impl trunk_ir::op_interface::CallLikeModel for TailCall {}
+inventory::submit! {
+    trunk_ir::op_interface::CallLikeOps::register::<TailCall>()
+}
+
+// A source `become` ends its callable: the callee's result is the caller's.
+impl trunk_ir::op_interface::CallableExitModel for TailCall {}
+impl trunk_ir::op_interface::CallableExitModel for TailCallIndirect {}
+inventory::submit! {
+    trunk_ir::op_interface::CallableExitOps::register::<TailCall>()
+}
+inventory::submit! {
+    trunk_ir::op_interface::CallableExitOps::register::<TailCallIndirect>()
 }
 
 // These operations only create/refer to values and are safe for DCE.
@@ -1459,6 +1501,15 @@ fn validate_callable_body(
         "entry block argument",
         errors,
     );
+    if ctx
+        .block(block)
+        .ops
+        .last()
+        .is_some_and(|&last| is_tail_call(ctx, last))
+    {
+        // The tail call checks its own result against this callable.
+        return;
+    }
     if let Some(ret) = terminator(ctx, owner, block, "tribute_control", "return", errors)
         && ctx.op_operands(ret).len() == 1
         && ctx.value_ty(ctx.op_operands(ret)[0]) != result_ty
@@ -1590,6 +1641,116 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
             errors,
             "operand type does not match enclosing callable result",
         );
+    }
+}
+
+fn is_tail_call(ctx: &IrContext, op: OpRef) -> bool {
+    is_control_op(ctx, op, "tail_call") || is_control_op(ctx, op, "tail_call_indirect")
+}
+
+/// The source signature of the callable whose body contains `op`, or `None`
+/// when a handle or handler lies between them.
+fn tail_call_owner_signature(ctx: &IrContext, op: OpRef) -> Result<TypeRef, &'static str> {
+    let mut exit = op;
+    loop {
+        let Some(owner) = parent_op(ctx, exit) else {
+            return Err("must be inside a tribute_control.func or lambda body");
+        };
+        if is_control_op(ctx, owner, "func") {
+            return ctx
+                .op(owner)
+                .attributes
+                .get_type("type")
+                .ok_or("must be inside a tribute_control.func or lambda body");
+        }
+        if is_control_op(ctx, owner, "lambda") {
+            return ctx
+                .op_result_types(owner)
+                .first()
+                .copied()
+                .ok_or("must be inside a tribute_control.func or lambda body");
+        }
+        if is_control_op(ctx, owner, "handle") || is_control_op(ctx, owner, "handler") {
+            return Err("must not be inside a tribute_control.handle body or handler");
+        }
+        // A structured arm may end with a tail call only when the structured
+        // operation is a one-result `scf.if` whose value flows straight into
+        // its own block's terminator.
+        if !trunk_ir::dialect::scf::If::matches(ctx, owner) || ctx.op_results(owner).len() != 1 {
+            return Err("must be in tail position of its callable");
+        }
+        let Some(block) = ctx.op(owner).parent_block else {
+            return Err("must be inside a tribute_control.func or lambda body");
+        };
+        let ops = &ctx.block(block).ops;
+        let position = ops
+            .iter()
+            .position(|&candidate| candidate == owner)
+            .expect("an operation is listed in its parent block");
+        let mut rest = ops[position + 1..].iter().copied();
+        let terminator =
+            rest.find(|&candidate| !core::UnrealizedConversionCast::matches(ctx, candidate));
+        let Some(terminator) = terminator else {
+            return Err("must be in tail position of its callable");
+        };
+        if ops.last().copied() != Some(terminator) {
+            return Err("must be in tail position of its callable");
+        }
+        if is_control_op(ctx, terminator, "return") {
+            exit = terminator;
+            continue;
+        }
+        if trunk_ir::dialect::scf::Yield::matches(ctx, terminator) {
+            exit = owner;
+            continue;
+        }
+        return Err("must be in tail position of its callable");
+    }
+}
+
+fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    validate_return_or_yield_shape(ctx, op, errors);
+    let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
+        .into_iter()
+        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::default()));
+    if has_unresolved_type {
+        push_op_error(ctx, op, errors, "operands must be resolved");
+    }
+    let owner_ty = match tail_call_owner_signature(ctx, op) {
+        Ok(ty) => ty,
+        Err(message) => {
+            push_op_error(ctx, op, errors, message);
+            return;
+        }
+    };
+    if let Ok(call) = TailCallIndirect::from_op(ctx, op) {
+        let callee_ty = ctx.value_ty(call.callee(ctx));
+        let (Some((callee_result, _, _)), Some((owner_result, _, _))) = (
+            func_sig_parts(ctx, callee_ty),
+            func_sig_parts(ctx, owner_ty),
+        ) else {
+            return;
+        };
+        if callee_result != owner_result {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                "callee result type does not match enclosing callable result",
+            );
+        }
+        if let (Some(callee_cc), Some(owner_cc)) = (
+            func_sig_convention(ctx, callee_ty),
+            func_sig_convention(ctx, owner_ty),
+        ) && callee_cc > owner_cc
+        {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                "callee convention must not be stronger than the enclosing callable",
+            );
+        }
     }
 }
 
@@ -1912,6 +2073,7 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
         "lambda" => validate_lambda(ctx, op, errors),
         "call" => validate_call(ctx, op, errors),
         "return" => validate_return(ctx, op, errors),
+        "tail_call" | "tail_call_indirect" => validate_tail_call(ctx, op, errors),
         "perform" => validate_perform(ctx, op, errors),
         "handle" => validate_handle(ctx, op, errors),
         "handler" => validate_handler(ctx, op, errors),
@@ -2039,6 +2201,66 @@ fn validate_symbol_use(
                 "call result",
                 errors,
             );
+        } else if is_control_op(ctx, op, "tail_call") {
+            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref("callee") else {
+                return;
+            };
+            let Some(target) = funcs
+                .definitions_of(symbol)
+                .first()
+                .copied()
+                .filter(|&target| is_control_op(ctx, target, "func"))
+            else {
+                push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
+                return;
+            };
+            if ctx.op(target).attributes.get("abi").is_some() {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    format!("cannot tail call foreign function @{symbol}"),
+                );
+            }
+            let Some(target_ty) = ctx.op(target).attributes.get_type("type") else {
+                return;
+            };
+            let Some((result, params, _)) = func_sig_parts(ctx, target_ty) else {
+                return;
+            };
+            check_types_equal(
+                ctx,
+                op,
+                &value_types(ctx, ctx.op_operands(op)),
+                &params,
+                "tail call argument",
+                errors,
+            );
+            let Ok(owner_ty) = tail_call_owner_signature(ctx, op) else {
+                return;
+            };
+            if func_sig_parts(ctx, owner_ty)
+                .is_some_and(|(owner_result, _, _)| owner_result != result)
+            {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "callee result type does not match enclosing callable result",
+                );
+            }
+            if let (Some(callee_cc), Some(owner_cc)) = (
+                func_sig_convention(ctx, target_ty),
+                func_sig_convention(ctx, owner_ty),
+            ) && callee_cc > owner_cc
+            {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "callee convention must not be stronger than the enclosing callable",
+                );
+            }
         }
     }
 }
@@ -2748,7 +2970,8 @@ fn validate_callable_origins(
                     );
                 }
             }
-        } else if is_control_op(ctx, op, "call_indirect")
+        } else if (is_control_op(ctx, op, "call_indirect")
+            || is_control_op(ctx, op, "tail_call_indirect"))
             && let Some(callee) = ctx.op_operands(op).first().copied()
             && !callable_has_semantic_provenance(ctx, callee, &provenance, &mut HashSet::default())
         {
@@ -5164,6 +5387,52 @@ mod tests {
             messages(&result).contains("crosses into a different handler"),
             "{result}"
         );
+    }
+
+    #[test]
+    fn tail_call_arms_must_belong_to_a_one_result_if_in_tail_position() {
+        let validate_body = |body: &str| {
+            let (ctx, module) = parse_fixture(&format!(
+                r#"core.module @test {{
+  tribute_control.func @f(%n: core.i32) -> core.i32 convention(direct) {{
+    tribute_control.return %n
+  }}
+  tribute_control.func @g(%n: core.i32, %flag: core.i1) -> core.i32 convention(direct) {{
+{body}
+  }}
+}}"#
+            ));
+            messages(&validate_local(&ctx, module))
+        };
+
+        let tail_if = validate_body(
+            r#"    %value = scf.if %flag : core.i32 {
+      tribute_control.tail_call %n {callee = @f}
+    } {
+      scf.yield %n
+    }
+    tribute_control.return %value"#,
+        );
+        assert!(!tail_if.contains("tail position"), "{tail_if}");
+
+        let resultless_if = validate_body(
+            r#"    scf.if %flag {
+      tribute_control.tail_call %n {callee = @f}
+    } {
+      scf.yield
+    }
+    tribute_control.return %n"#,
+        );
+        assert!(resultless_if.contains("tail position"), "{resultless_if}");
+
+        let loop_arm = validate_body(
+            r#"    %value = scf.loop %n : core.i32 {
+    ^bb0(%i: core.i32):
+      tribute_control.tail_call %i {callee = @f}
+    }
+    tribute_control.return %value"#,
+        );
+        assert!(loop_arm.contains("tail position"), "{loop_arm}");
     }
 
     #[test]

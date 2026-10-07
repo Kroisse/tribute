@@ -25,8 +25,8 @@ use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::op_def::OpDef;
 use super::op_interface::{
-    BranchOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps, RegionSuccessor,
-    RegionValueTransfer,
+    BranchOps, CallableExitOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps,
+    RegionSuccessor, RegionValueTransfer,
 };
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
@@ -1132,6 +1132,13 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
                 _ => false,
             };
             if never_result && is_proper_tail_terminator(ctx, yield_op) {
+                continue;
+            }
+            // An arm may leave the callable instead of yielding; the result
+            // then comes from the arms that yield.
+            if !ctx.op_results(op).is_empty()
+                && CallableExitOps::exits_callable(ctx, yield_op).is_ok()
+            {
                 continue;
             }
             errors.push(operation_verifier_error(

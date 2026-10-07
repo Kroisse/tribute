@@ -227,7 +227,8 @@ impl RewritePattern for LowerClosureCallArena {
     }
 }
 
-/// Lower a convention-proven closure-valued proper tail transfer. Untagged
+/// Lower a convention-proven closure-valued proper tail transfer: a Cps
+/// transfer or a source `become` between value-returning callables. Untagged
 /// ordinary direct calls are handled separately.
 struct LowerClosureTailCallArena;
 
@@ -248,16 +249,14 @@ impl RewritePattern for LowerClosureTailCallArena {
         let Some(convention) = get_calling_convention(ctx, op) else {
             return false;
         };
-        if convention != CallingConvention::Cps
-            || physical_closure_type_for_callee(ctx, callee).is_none()
-        {
+        if physical_closure_type_for_callee(ctx, callee).is_none() {
             return false;
         }
 
         let location = ctx.op(op).location;
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-        let Some(results) = exact_tail_results(ctx, op, callee) else {
+        let Some(results) = exact_tail_results(ctx, op, callee, convention) else {
             return false;
         };
         let Some(contract) =
@@ -317,7 +316,15 @@ pub(crate) fn physical_closure_type_for_callee(
         .then_some(ty)
 }
 
-fn exact_tail_results(ctx: &IrContext, op: OpRef, callee: ValueRef) -> Option<Vec<TypeRef>> {
+/// The results of a closure tail transfer, when its callee's results are
+/// the enclosing function's: a Cps transfer leaves a Cps function, and a
+/// value transfer (source `become`) returns the callee's result as its own.
+fn exact_tail_results(
+    ctx: &IrContext,
+    op: OpRef,
+    callee: ValueRef,
+    convention: CallingConvention,
+) -> Option<Vec<TypeRef>> {
     let closure = physical_closure_type_for_callee(ctx, callee)?;
     let signature = closure::Closure::from_type_ref(ctx, closure)?.func_type(ctx);
     let exact = trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(ctx, op)?;
@@ -330,7 +337,8 @@ fn exact_tail_results(ctx: &IrContext, op: OpRef, callee: ValueRef) -> Option<Ve
         let owner = ctx.region(ctx.block(parent).parent_region?).parent_op?;
         if let Ok(function) = func::Func::from_op(ctx, owner) {
             let caller = func::FuncSig::from_type_ref(ctx, function.r#type(ctx))?;
-            return (get_calling_convention(ctx, owner) == Some(CallingConvention::Cps)
+            let caller_is_cps = get_calling_convention(ctx, owner) == Some(CallingConvention::Cps);
+            return ((convention == CallingConvention::Cps) == caller_is_cps
                 && caller.results(ctx) == results)
                 .then(|| results.to_vec());
         }
@@ -493,12 +501,10 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
                 && exact_physical_call_contract(ctx, callee, convention, args, &results, anyref)
                     .is_some()
         } else {
-            let Some(results) = exact_tail_results(ctx, op, callee) else {
+            let Some(results) = exact_tail_results(ctx, op, callee, convention) else {
                 return false;
             };
-            convention == CallingConvention::Cps
-                && exact_physical_call_contract(ctx, callee, convention, args, &results, anyref)
-                    .is_some()
+            exact_physical_call_contract(ctx, callee, convention, args, &results, anyref).is_some()
         }
     })
 }

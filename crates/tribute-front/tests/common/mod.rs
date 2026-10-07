@@ -309,6 +309,7 @@ fn collect_tdnr_summary<'db>(
                 collect_tdnr_summary(db, &handler.body, summary);
             }
         }
+        ExprKind::Become { call } => collect_tdnr_summary(db, call, summary),
         ExprKind::Resume { arg, .. } => collect_tdnr_summary(db, arg, summary),
         ExprKind::Tuple(elements) | ExprKind::List(elements) => {
             for element in elements {

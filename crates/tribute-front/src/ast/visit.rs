@@ -194,6 +194,7 @@ pub fn walk_expr<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(visitor: &mut T, exp
             }
         }
         ExprKind::Resume { arg, .. } => visitor.visit_expr(arg),
+        ExprKind::Become { call } => visitor.visit_expr(call),
         ExprKind::Tuple(elements) | ExprKind::List(elements) => {
             for element in elements {
                 visitor.visit_expr(element);
@@ -499,6 +500,7 @@ pub fn walk_expr_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, expr: &mut Exp
             }
         }
         ExprKind::Resume { arg, .. } => visitor.visit_expr_mut(arg),
+        ExprKind::Become { call } => visitor.visit_expr_mut(call),
         ExprKind::Tuple(elements) | ExprKind::List(elements) => {
             for element in elements {
                 visitor.visit_expr_mut(element);
