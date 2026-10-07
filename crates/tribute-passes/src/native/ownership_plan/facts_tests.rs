@@ -98,6 +98,62 @@ fn both_planner_modes_reuse_one_cached_fact_set() {
 }
 
 #[test]
+fn entry_contract_views_share_one_proof_and_keep_declared_borrows() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+  !R = adt.typeref<{name = "R"}>
+  !Layout = adt.struct<R(value: core.i32)>
+  func.func @foreign(%value: !R) -> core.i32 attributes {abi = "C"}
+  func.func @observe(%value: !R) -> core.i32 {
+    %result = func.call %value {callee = @foreign} : core.i32
+    func.return %result
+  }
+  func.func @escape(%value: !R) -> !R {
+    func.return %value
+  }
+}"#,
+    );
+    let mut cache = AnalysisCache::new();
+    let build = |cache: &mut AnalysisCache, elide_proven_borrowed_parameters| {
+        build_native_ownership_plan(
+            &ctx,
+            module,
+            NativeOwnershipPlanOptions {
+                elide_proven_borrowed_parameters,
+                elide_proven_field_borrows: false,
+            },
+            cache,
+        )
+        .expect("typed plan");
+        cache
+            .get_cached::<NativeEntryContracts>(&ctx, module.op())
+            .expect("entry contracts")
+    };
+    let contracts = build(&mut cache, false);
+    assert!(Arc::ptr_eq(&contracts, &build(&mut cache, true)));
+
+    let entries =
+        |elide, name: &'static str| contracts.view(elide)[&SymbolPath::from(name)].clone();
+    assert_eq!(entries(true, "observe"), [EntryOwnership::Borrowed]);
+    assert_eq!(entries(false, "observe"), [EntryOwnership::Retained]);
+    assert_eq!(entries(true, "escape"), [EntryOwnership::Retained]);
+    assert_eq!(entries(false, "escape"), [EntryOwnership::Retained]);
+    // A trusted declaration's borrow is its contract, not an elision.
+    assert_eq!(entries(true, "foreign"), [EntryOwnership::Borrowed]);
+    assert_eq!(entries(false, "foreign"), [EntryOwnership::Borrowed]);
+
+    // Entry contracts depend on the module facts.
+    cache.invalidate::<NativeOwnershipModuleFacts>(module.op());
+    assert!(
+        cache
+            .get_cached::<NativeEntryContracts>(&ctx, module.op())
+            .is_none()
+    );
+}
+
+#[test]
 fn repeated_lookups_reuse_facts_and_invalidation_recomputes_them() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, BORROW_FIXTURE);

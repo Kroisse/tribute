@@ -17,11 +17,8 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
-use trunk_ir::symbol_table::qualified_name;
-use trunk_ir::transforms::call_graph::{CallGraph, recursive_functions};
 use trunk_ir::walk::{WalkAction, walk_op};
 
-use crate::target_abi::{CONSUMED, OWNERSHIP_ATTR};
 use trunk_ir::{
     Attribute, BlockRef, OpRef, RegionRef, StringRef, Symbol, SymbolPath, TypeRef, ValueDef,
     ValueRef,
@@ -29,12 +26,15 @@ use trunk_ir::{
 
 mod actions;
 mod cfg;
+mod entry_contracts;
 mod facts;
 mod liveness;
 use actions::{
     ActionInputs, exact_into_raw_transfers, plan_function_actions, validate_result_contract,
 };
 use cfg::ValidatedFlatCfg;
+pub use entry_contracts::NativeEntryContracts;
+use entry_contracts::consumed_inputs;
 pub use facts::{NativeOwnershipFunctionFacts, NativeOwnershipModuleFacts};
 use liveness::BlockLiveness;
 pub use liveness::NativeManagedLiveness;
@@ -330,12 +330,12 @@ fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
     data.dialect == "tribute_rt" && data.name == "anyref"
 }
 
-/// Build the plan while reusing cached policy-neutral ownership flow facts.
+/// Build the plan while reusing cached policy-neutral ownership analyses.
 ///
 /// Callers inside one pipeline phase share an [`AnalysisCache`] so the module
-/// and function facts are computed once per target. The facts never depend on
-/// `options`; borrow elision and entry ownership stay policy decisions made
-/// here.
+/// facts, entry contracts, and function facts are computed once per target.
+/// The analyses never depend on `options`; borrow elision and entry ownership
+/// stay policy decisions made here by selecting a view.
 pub fn build_native_ownership_plan(
     ctx: &IrContext,
     module: Module,
@@ -347,25 +347,15 @@ pub fn build_native_ownership_plan(
         .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
     let definitions = module_facts.definitions();
     let managed_layouts = module_facts.managed_layouts().clone();
-    let closure_layout = collect_closure_layout(ctx, module, &managed_layouts)?;
-    let rtti_types = build_rtti_plan(ctx, module, &managed_layouts)?;
-    let entry_contracts = compute_entry_contracts(
-        ctx,
-        &analyses.require::<CallGraph>(ctx, module.op()),
-        definitions,
-        &managed_layouts,
-        options.elide_proven_borrowed_parameters,
-    )?;
+    let entry_contracts = analyses
+        .get::<NativeEntryContracts>(ctx, module.op())
+        .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
+    let entry_contracts = entry_contracts.view(options.elide_proven_borrowed_parameters);
 
     let mut functions = Vec::new();
-    for &op in module_facts.function_ops() {
-        let Ok(function) = func::Func::from_op(ctx, op) else {
-            continue;
-        };
-        let symbol =
-            qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::from(function.sym_name(ctx)));
+    for (symbol, op) in module_facts.functions() {
+        let op = *op;
         if let CallableBody::Declaration = ownership_callable_body(ctx, op)? {
-            validate_bodyless_signature(ctx, op, &managed_layouts)?;
             continue;
         }
         let facts = analyses
@@ -375,7 +365,7 @@ pub fn build_native_ownership_plan(
             .get::<NativeManagedLiveness>(ctx, op)
             .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
         let entries = entry_contracts
-            .get(&symbol)
+            .get(symbol)
             .cloned()
             .ok_or_else(|| OwnershipPlanError::new("defined function has no entry contract"))?;
         let actions = plan_function_actions(
@@ -385,13 +375,13 @@ pub fn build_native_ownership_plan(
                 liveness: liveness.view(options.elide_proven_field_borrows),
             },
             &entries,
-            &entry_contracts,
+            entry_contracts,
             definitions,
             &managed_layouts,
             options.elide_proven_field_borrows,
         )?;
         functions.push(FunctionOwnershipPlan {
-            symbol,
+            symbol: symbol.clone(),
             operation: op,
             entries,
             actions,
@@ -401,9 +391,9 @@ pub fn build_native_ownership_plan(
     let plan = NativeOwnershipPlan {
         module: module.op(),
         managed_layouts,
-        closure_layout,
+        closure_layout: module_facts.closure_layout(),
         functions,
-        rtti_types,
+        rtti_types: module_facts.rtti_types().to_vec(),
     };
     validate_plan(ctx, &plan)?;
     Ok(plan)
@@ -422,254 +412,157 @@ fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, O
     })
 }
 
+/// The layout allocated by `op` when it constructs a semantic closure.
+fn closure_allocation_layout(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
+    let new = adt::StructNew::from_op(ctx, op).ok()?;
+    let layout = new.r#type(ctx);
+    crate::closure_lower::is_closure_struct_type_ref(ctx, layout).then_some(layout)
+}
+
+fn unique_closure_layout(
+    allocations: impl IntoIterator<Item = TypeRef>,
+    managed_layouts: &HashSet<TypeRef>,
+) -> Result<Option<TypeRef>, OwnershipPlanError> {
+    let mut closure_layout = None;
+    for layout in allocations {
+        if !managed_layouts.contains(&layout) {
+            continue;
+        }
+        // The generated closure layout is an exact compiler ABI identity;
+        // more than one identity is stale plan input.
+        if closure_layout.is_some_and(|existing| existing != layout) {
+            return Err(OwnershipPlanError::new(
+                "semantic closure has ambiguous compiler-owned allocation layouts",
+            ));
+        }
+        closure_layout = Some(layout);
+    }
+    Ok(closure_layout)
+}
+
 fn collect_closure_layout(
     ctx: &IrContext,
     module: Module,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<Option<TypeRef>, OwnershipPlanError> {
-    let mut closure_layout = None;
-    let mut ambiguous = false;
+    let mut allocations = Vec::new();
     walk_module(ctx, module, |op| {
-        let Ok(new) = adt::StructNew::from_op(ctx, op) else {
-            return;
-        };
-        let layout = new.r#type(ctx);
-        if !crate::closure_lower::is_closure_struct_type_ref(ctx, layout) {
-            return;
-        }
-        if !managed_layouts.contains(&layout) {
-            return;
-        }
-        match closure_layout {
-            Some(existing) if existing != layout => {
-                // The generated closure layout is an exact compiler ABI
-                // identity; more than one identity is stale plan input.
-                ambiguous = true;
-            }
-            None => closure_layout = Some(layout),
-            Some(_) => {}
-        }
+        allocations.extend(closure_allocation_layout(ctx, op));
     });
-    if ambiguous {
-        return Err(OwnershipPlanError::new(
-            "semantic closure has ambiguous compiler-owned allocation layouts",
-        ));
-    }
-    Ok(closure_layout)
+    unique_closure_layout(allocations, managed_layouts)
 }
 
-fn collect_function_definitions(
-    ctx: &IrContext,
-    module_ops: &[OpRef],
-) -> Result<HashMap<SymbolPath, OpRef>, OwnershipPlanError> {
-    let mut definitions = HashMap::default();
-    for &op in module_ops {
-        let Ok(function) = func::Func::from_op(ctx, op) else {
-            continue;
-        };
-        // Direct callees name their targets by root-qualified path.
-        let symbol =
-            qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::from(function.sym_name(ctx)));
-        if definitions.insert(symbol.clone(), op).is_some() {
-            return Err(OwnershipPlanError::new(format!(
-                "duplicate function identity @{symbol}"
-            )));
+/// Collects the managed nominal layouts reachable from the operations of a
+/// module, then resolves every `adt.typeref` to its unique layout.
+#[derive(Default)]
+struct ManagedLayoutCollector {
+    layouts: HashSet<TypeRef>,
+    nominal_layouts: HashMap<StringRef, Vec<TypeRef>>,
+    typerefs: HashSet<TypeRef>,
+    pending_typerefs: Vec<TypeRef>,
+    visited_types: HashSet<TypeRef>,
+}
+
+impl ManagedLayoutCollector {
+    fn new(ctx: &IrContext) -> Self {
+        let mut collector = Self::default();
+        for &(_, ty) in ctx.type_aliases() {
+            collector.index_nominal_layout(ctx, ty);
         }
+        collector
     }
-    Ok(definitions)
-}
 
-fn collect_and_validate_managed_layouts(
-    ctx: &IrContext,
-    module: Module,
-) -> Result<HashSet<TypeRef>, OwnershipPlanError> {
-    let mut layouts = HashSet::default();
-    let mut nominal_layouts: HashMap<StringRef, Vec<TypeRef>> = HashMap::default();
-    let mut typerefs = HashSet::default();
-    let mut pending_typerefs = Vec::new();
-    for &(_, ty) in ctx.type_aliases() {
-        index_nominal_layout(ctx, ty, &mut nominal_layouts);
-    }
-    let mut visited_types = HashSet::default();
-    walk_module(ctx, module, |op| {
+    fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
         for &ty in ctx.op_result_types(op) {
-            collect_reachable_type_contract(
-                ctx,
-                ty,
-                &mut typerefs,
-                &mut pending_typerefs,
-                &mut nominal_layouts,
-                &mut layouts,
-                &mut visited_types,
-            );
+            self.visit_type(ctx, ty);
         }
         for &operand in ctx.op_operands(op) {
-            collect_reachable_type_contract(
-                ctx,
-                ctx.value_ty(operand),
-                &mut typerefs,
-                &mut pending_typerefs,
-                &mut nominal_layouts,
-                &mut layouts,
-                &mut visited_types,
-            );
+            self.visit_type(ctx, ctx.value_ty(operand));
         }
         for attribute in ctx.op(op).attributes.values() {
-            collect_reachable_attribute_type_contract(
-                ctx,
-                attribute,
-                &mut typerefs,
-                &mut pending_typerefs,
-                &mut nominal_layouts,
-                &mut layouts,
-                &mut visited_types,
-            );
+            self.visit_attribute(ctx, attribute);
         }
         for region in ctx.op_regions(op) {
             for block in ctx.region(region).blocks.iter().copied() {
                 for &argument in ctx.block_args(block) {
-                    collect_reachable_type_contract(
-                        ctx,
-                        ctx.value_ty(argument),
-                        &mut typerefs,
-                        &mut pending_typerefs,
-                        &mut nominal_layouts,
-                        &mut layouts,
-                        &mut visited_types,
-                    );
+                    self.visit_type(ctx, ctx.value_ty(argument));
                 }
             }
         }
         if let Ok(new) = adt::StructNew::from_op(ctx, op) {
             let layout = new.r#type(ctx);
             if get_struct_fields(ctx, layout).is_some() {
-                layouts.insert(layout);
+                self.layouts.insert(layout);
             }
         } else if let Ok(new) = adt::VariantNew::from_op(ctx, op) {
             let layout = new.r#type(ctx);
             if get_enum_variants(ctx, layout).is_some() {
-                layouts.insert(layout);
+                self.layouts.insert(layout);
             }
         }
-    });
+    }
 
-    while let Some(typeref) = pending_typerefs.pop() {
-        let Some(name) = ctx.get_type(typeref).attrs.get_string_ref("name") else {
-            return Err(OwnershipPlanError::new(
-                "adt.typeref lacks nominal identity",
-            ));
-        };
-        if !ctx.get_type(typeref).params.is_empty() {
-            return Err(OwnershipPlanError::new(format!(
-                "adt.typeref {:?} has unexpected parameters",
-                ctx.str(name)
-            )));
+    fn finish(mut self, ctx: &IrContext) -> Result<HashSet<TypeRef>, OwnershipPlanError> {
+        while let Some(typeref) = self.pending_typerefs.pop() {
+            let Some(name) = ctx.get_type(typeref).attrs.get_string_ref("name") else {
+                return Err(OwnershipPlanError::new(
+                    "adt.typeref lacks nominal identity",
+                ));
+            };
+            if !ctx.get_type(typeref).params.is_empty() {
+                return Err(OwnershipPlanError::new(format!(
+                    "adt.typeref {:?} has unexpected parameters",
+                    ctx.str(name)
+                )));
+            }
+            let Some(&[layout]) = self.nominal_layouts.get(&name).map(Vec::as_slice) else {
+                return Err(OwnershipPlanError::new(format!(
+                    "adt.typeref {:?} has no unique native layout",
+                    ctx.str(name)
+                )));
+            };
+            self.layouts.insert(layout);
+            self.visit_type(ctx, layout);
         }
-        if nominal_layouts
-            .get(&name)
-            .is_none_or(|layouts| layouts.len() != 1)
+        Ok(self.layouts)
+    }
+
+    fn index_nominal_layout(&mut self, ctx: &IrContext, ty: TypeRef) {
+        let data = ctx.get_type(ty);
+        if data.dialect == "adt"
+            && (matches!(data.name.as_str(), "struct" | "enum"))
+            && let Some(name) = data.attrs.get_string_ref("name")
         {
-            return Err(OwnershipPlanError::new(format!(
-                "adt.typeref {:?} has no unique native layout",
-                ctx.str(name)
-            )));
-        }
-        let layout = nominal_layouts[&name][0];
-        layouts.insert(layout);
-        collect_reachable_type_contract(
-            ctx,
-            layout,
-            &mut typerefs,
-            &mut pending_typerefs,
-            &mut nominal_layouts,
-            &mut layouts,
-            &mut visited_types,
-        );
-    }
-    Ok(layouts)
-}
-
-fn index_nominal_layout(
-    ctx: &IrContext,
-    ty: TypeRef,
-    nominal_layouts: &mut HashMap<StringRef, Vec<TypeRef>>,
-) {
-    let data = ctx.get_type(ty);
-    if data.dialect == "adt"
-        && (matches!(data.name.as_str(), "struct" | "enum"))
-        && let Some(name) = data.attrs.get_string_ref("name")
-    {
-        let layouts = nominal_layouts.entry(name).or_default();
-        if !layouts.contains(&ty) {
-            layouts.push(ty);
+            let layouts = self.nominal_layouts.entry(name).or_default();
+            if !layouts.contains(&ty) {
+                layouts.push(ty);
+            }
         }
     }
-}
 
-fn collect_reachable_type_contract(
-    ctx: &IrContext,
-    ty: TypeRef,
-    typerefs: &mut HashSet<TypeRef>,
-    pending_typerefs: &mut Vec<TypeRef>,
-    nominal_layouts: &mut HashMap<StringRef, Vec<TypeRef>>,
-    layouts: &mut HashSet<TypeRef>,
-    visited_types: &mut HashSet<TypeRef>,
-) {
-    if !visited_types.insert(ty) {
-        return;
+    fn visit_type(&mut self, ctx: &IrContext, ty: TypeRef) {
+        if !self.visited_types.insert(ty) {
+            return;
+        }
+        let data = ctx.get_type(ty);
+        self.index_nominal_layout(ctx, ty);
+        if (data.dialect == "adt") && (matches!(data.name.as_str(), "struct" | "enum")) {
+            self.layouts.insert(ty);
+        }
+        if data.dialect == "adt" && data.name == "typeref" && self.typerefs.insert(ty) {
+            self.pending_typerefs.push(ty);
+        }
+        for &parameter in &data.params {
+            self.visit_type(ctx, parameter);
+        }
+        for attribute in data.attrs.values() {
+            self.visit_attribute(ctx, attribute);
+        }
     }
-    let data = ctx.get_type(ty);
-    index_nominal_layout(ctx, ty, nominal_layouts);
-    if (data.dialect == "adt") && (matches!(data.name.as_str(), "struct" | "enum")) {
-        layouts.insert(ty);
-    }
-    if data.dialect == "adt" && data.name == "typeref" && typerefs.insert(ty) {
-        pending_typerefs.push(ty);
-    }
-    for &parameter in &data.params {
-        collect_reachable_type_contract(
-            ctx,
-            parameter,
-            typerefs,
-            pending_typerefs,
-            nominal_layouts,
-            layouts,
-            visited_types,
-        );
-    }
-    for attribute in data.attrs.values() {
-        collect_reachable_attribute_type_contract(
-            ctx,
-            attribute,
-            typerefs,
-            pending_typerefs,
-            nominal_layouts,
-            layouts,
-            visited_types,
-        );
-    }
-}
 
-fn collect_reachable_attribute_type_contract(
-    ctx: &IrContext,
-    attribute: &trunk_ir::Attribute,
-    typerefs: &mut HashSet<TypeRef>,
-    pending_typerefs: &mut Vec<TypeRef>,
-    nominal_layouts: &mut HashMap<StringRef, Vec<TypeRef>>,
-    layouts: &mut HashSet<TypeRef>,
-    visited_types: &mut HashSet<TypeRef>,
-) {
-    attribute.visit_types(&mut |ty| {
-        collect_reachable_type_contract(
-            ctx,
-            ty,
-            typerefs,
-            pending_typerefs,
-            nominal_layouts,
-            layouts,
-            visited_types,
-        );
-    });
+    fn visit_attribute(&mut self, ctx: &IrContext, attribute: &trunk_ir::Attribute) {
+        attribute.visit_types(&mut |ty| self.visit_type(ctx, ty));
+    }
 }
 
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
@@ -694,24 +587,16 @@ fn types_compatible(
                 || nominal_types_compatible(ctx, actual, expected)))
 }
 
+/// Plan the managed allocation descriptors, in first-allocation order.
 fn build_rtti_plan(
     ctx: &IrContext,
-    module: Module,
+    descriptors: impl IntoIterator<Item = (TypeRef, Option<StringRef>)>,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<Vec<RttiTypePlan>, OwnershipPlanError> {
-    let mut order = Vec::new();
     let mut seen = HashSet::default();
-    walk_module(ctx, module, |op| {
-        if let Some(descriptor) = allocation_descriptor(ctx, op)
-            && managed_layouts.contains(&descriptor.0)
-            && seen.insert(descriptor)
-        {
-            order.push(descriptor);
-        }
-    });
-
-    order
+    descriptors
         .into_iter()
+        .filter(|descriptor| managed_layouts.contains(&descriptor.0) && seen.insert(*descriptor))
         .map(|(ty, tag)| {
             let fields = build_field_kinds(ctx, ty, tag, managed_layouts)?;
             Ok(RttiTypePlan { ty, tag, fields })
@@ -749,211 +634,6 @@ fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) 
     // Pointers, code references, and runtime buffers that ownership does not
     // manage are raw: neither released nor followed.
     FieldKind::scalar(ctx, ty).unwrap_or(FieldKind::Raw)
-}
-
-fn compute_entry_contracts(
-    ctx: &IrContext,
-    call_graph: &CallGraph,
-    definitions: &HashMap<SymbolPath, OpRef>,
-    managed_layouts: &HashSet<TypeRef>,
-    elide_proven_borrowed_parameters: bool,
-) -> Result<HashMap<SymbolPath, Vec<EntryOwnership>>, OwnershipPlanError> {
-    let recursive = recursive_functions(call_graph);
-    let mut summaries = HashMap::default();
-    for (symbol, &op) in definitions {
-        let symbol = symbol.clone();
-        let entry = match ownership_callable_body(ctx, op)? {
-            CallableBody::Declaration => {
-                let signature = validate_bodyless_signature(ctx, op, managed_layouts)?;
-                let entries = bodyless_c_entry_contract(ctx, op, managed_layouts)?
-                    .unwrap_or_else(|| vec![EntryOwnership::Plain; signature.inputs(ctx).len()]);
-                summaries.insert(symbol, entries);
-                continue;
-            }
-            CallableBody::Definition { entry, .. } => entry,
-        };
-        let ineligible = recursive.contains(&symbol) || ctx.op(op).attributes.contains_key("abi");
-        let signature = ctx
-            .op(op)
-            .attributes
-            .get_type("type")
-            .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
-            .ok_or_else(|| OwnershipPlanError::new("function definition lacks exact signature"))?;
-        let consumed = consumed_inputs(ctx, signature)?;
-        if consumed.len() != ctx.block_args(entry).len() {
-            return Err(OwnershipPlanError::new(
-                "function entry arity differs from its exact signature",
-            ));
-        }
-        summaries.insert(
-            symbol,
-            ctx.block_args(entry)
-                .iter()
-                .zip(consumed)
-                .map(|(&parameter, consumed)| {
-                    if !is_managed_value(ctx, parameter, managed_layouts) {
-                        EntryOwnership::Plain
-                    } else if consumed {
-                        EntryOwnership::Consumed
-                    } else if ineligible || !elide_proven_borrowed_parameters {
-                        EntryOwnership::Retained
-                    } else {
-                        EntryOwnership::Borrowed
-                    }
-                })
-                .collect::<Vec<_>>(),
-        );
-    }
-
-    loop {
-        let mut changed = false;
-        for (symbol, &op) in definitions {
-            let symbol = symbol.clone();
-            let CallableBody::Definition {
-                region: body,
-                entry,
-            } = ownership_callable_body(ctx, op)?
-            else {
-                continue;
-            };
-            for (index, &parameter) in ctx.block_args(entry).iter().enumerate() {
-                if summaries[&symbol][index] == EntryOwnership::Borrowed
-                    && !value_is_borrowed(ctx, body, parameter, &summaries, &mut HashSet::default())
-                {
-                    summaries.get_mut(&symbol).unwrap()[index] = EntryOwnership::Retained;
-                    changed = true;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    Ok(summaries)
-}
-
-/// Native `extern "C"` declarations are the one trusted bodyless managed
-/// boundary. Their logical managed arguments are borrowed for the call; a
-/// logical managed result is a fresh owned value, as for every call result.
-fn bodyless_c_entry_contract(
-    ctx: &IrContext,
-    op: OpRef,
-    managed_layouts: &HashSet<TypeRef>,
-) -> Result<Option<Vec<EntryOwnership>>, OwnershipPlanError> {
-    if ctx.op(op).attributes.get_str(ctx, "abi") != Some("C") {
-        return Ok(None);
-    }
-    let signature = ctx
-        .op(op)
-        .attributes
-        .get_type("type")
-        .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
-        .ok_or_else(|| OwnershipPlanError::new("bodyless function lacks exact signature"))?;
-    Ok(Some(
-        signature
-            .inputs(ctx)
-            .iter()
-            .map(|&ty| {
-                if is_typed_managed_reference(ctx, ty, managed_layouts) {
-                    EntryOwnership::Borrowed
-                } else {
-                    EntryOwnership::Plain
-                }
-            })
-            .collect(),
-    ))
-}
-
-/// Which inputs of `signature` carry the `consumed` entry contract that the
-/// representation/ABI boundary records in the exact physical signature.
-///
-/// The marker is inert on unmanaged inputs; callers combine it with the typed
-/// managed-reference contract. Any other ownership value is rejected.
-fn consumed_inputs(
-    ctx: &IrContext,
-    signature: func::FuncSig,
-) -> Result<Vec<bool>, OwnershipPlanError> {
-    signature
-        .input_attrs(ctx)
-        .map(|attrs| match attrs.get(OWNERSHIP_ATTR) {
-            None => Ok(false),
-            Some(Attribute::String(mode)) if ctx.str(*mode) == CONSUMED => Ok(true),
-            Some(_) => Err(OwnershipPlanError::new(format!(
-                "unknown {OWNERSHIP_ATTR} parameter contract"
-            ))),
-        })
-        .collect()
-}
-
-fn value_is_borrowed(
-    ctx: &IrContext,
-    body: RegionRef,
-    value: ValueRef,
-    summaries: &HashMap<SymbolPath, Vec<EntryOwnership>>,
-    visiting: &mut HashSet<ValueRef>,
-) -> bool {
-    if !visiting.insert(value) {
-        return true;
-    }
-    ctx.uses(value).iter().all(|use_| {
-        let op = use_.user;
-        if ctx
-            .op(op)
-            .parent_block
-            .is_none_or(|block| ctx.block(block).parent_region != Some(body))
-        {
-            return false;
-        }
-        let index = use_.operand_index as usize;
-        if (adt::StructGet::matches(ctx, op)
-            || adt::VariantGet::matches(ctx, op)
-            || adt::VariantIs::matches(ctx, op)
-            || adt::RefIsNull::matches(ctx, op))
-            && index == 0
-        {
-            return true;
-        }
-        if (adt::RefCast::matches(ctx, op) || core::UnrealizedConversionCast::matches(ctx, op))
-            && index == 0
-            && ctx.op_results(op).len() == 1
-        {
-            return value_is_borrowed(ctx, body, ctx.op_result(op, 0), summaries, visiting);
-        }
-        if let Ok(call) = func::Call::from_op(ctx, op) {
-            return summaries
-                .get(call.callee(ctx))
-                .and_then(|entries| entries.get(index))
-                == Some(&EntryOwnership::Borrowed);
-        }
-        false
-    })
-}
-
-fn validate_bodyless_signature(
-    ctx: &IrContext,
-    op: OpRef,
-    managed_layouts: &HashSet<TypeRef>,
-) -> Result<func::FuncSig, OwnershipPlanError> {
-    let signature = ctx
-        .op(op)
-        .attributes
-        .get_type("type")
-        .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
-        .ok_or_else(|| OwnershipPlanError::new("bodyless function lacks exact signature"))?;
-    if ctx.op(op).attributes.get_str(ctx, "abi") == Some("C") {
-        return Ok(signature);
-    }
-    if signature
-        .inputs(ctx)
-        .iter()
-        .chain(signature.results(ctx))
-        .any(|&ty| is_typed_managed_reference(ctx, ty, managed_layouts))
-    {
-        return Err(OwnershipPlanError::new(
-            "bodyless native declaration exposes a managed reference",
-        ));
-    }
-    Ok(signature)
 }
 
 fn validate_function_contract(

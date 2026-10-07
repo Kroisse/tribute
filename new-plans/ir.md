@@ -336,7 +336,9 @@ pass, pass 검증기와 pass 바깥의 분석 소비자가 이를 공유한다. 
 Native ownership planning의 policy-neutral 입력은 `scf_to_cf` 이후,
 `func_to_clif` 이전 경계에서 fallible 분석이 소유한다. Module 범위 분석은
 module body, `func.func` 목록, 중복 없는 function 정의, 검증된 managed
-nominal layout을 담는다. Function 범위 분석은 그 module 분석에 의존하며,
+nominal layout, 유일한 semantic closure 할당 layout, 할당 순서의 RTTI
+descriptor를 담는다. Function 이름은 같은 module의 symbol table 분석이
+정한 root-qualified path다. Function 범위 분석은 그 module 분석에 의존하며,
 검증된 flat CFG, type erasure 이전의 managed 값, typed 계약에서 유도한
 exact managed alias root, 검증된 managed projection-owner 관계, liveness가
 소비하는 policy-neutral block use/definition 입력을 담는다. Alias root는
@@ -346,7 +348,9 @@ fail-closed로 거부하고 실패를 캐시하지 않는다.
 
 이 사실은 `NativeOwnershipPlanOptions`와 무관하게 동일하다. Borrow elision,
 entry ownership 같은 정책 선택은 사실을 소비하는 planner가 적용하며 사실의
-identity나 계산에 참여하지 않는다. 따라서 phase 범위 캐시는 정책-중립 사실만
+identity나 계산에 참여하지 않는다. Parameter-entry 계약도 module facts와
+call graph에 의존하는 module 범위 분석이 정책-중립으로 증명하고, planner는
+정책에 맞는 view를 고른다. 따라서 phase 범위 캐시는 정책-중립 사실만
 재사용하며, planner는 호출마다 그 사실 위에 정책 결정을 새로 적용한다.
 
 Native managed liveness는 정의된 `func.func`를 대상으로 하는 별도의 의존
