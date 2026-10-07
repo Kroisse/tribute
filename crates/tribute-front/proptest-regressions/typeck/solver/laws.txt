@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc fadf08c34f2d8bdd4e9f4dd418260eca206cf5e4129cbbfb80568d971dff8c86 # shrinks to (left, shuffled) = (RowShape { effects: [EffectShape { ability: 3, args: [Prim(Never), Named { nominal: 5, args: [] }] }, EffectShape { ability: 2, args: [Prim(Rune)] }], rest: Some(1001) }, RowShape { effects: [EffectShape { ability: 2, args: [Prim(Rune)] }, EffectShape { ability: 3, args: [Prim(Never), Named { nominal: 5, args: [] }] }], rest: Some(1001) }), right = RowShape { effects: [EffectShape { ability: 2, args: [UniVar(2)] }, EffectShape { ability: 4, args: [] }, EffectShape { ability: 3, args: [Prim(Never), UniVar(2)] }], rest: Some(1000) }
