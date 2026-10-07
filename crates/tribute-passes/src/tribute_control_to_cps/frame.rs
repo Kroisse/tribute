@@ -25,18 +25,6 @@ impl Converter<'_> {
         unpack_frame(self.ctx, block, location, &frame, frame_value)
     }
 
-    pub(super) fn pack_frame(
-        &mut self,
-        block: BlockRef,
-        location: Location,
-        answer: TypeRef,
-        done: ValueRef,
-        dispatch: ValueRef,
-    ) -> ValueRef {
-        let frame = self.frame_types(answer);
-        pack_frame(self.ctx, block, location, &frame, done, dispatch)
-    }
-
     pub(super) fn closure_over(
         &mut self,
         location: Location,
@@ -45,70 +33,6 @@ impl Converter<'_> {
         convention: CallingConvention,
     ) -> closure::Lambda {
         closure_over(self.ctx, location, region, closure_type, convention)
-    }
-
-    pub(super) fn build_done_adapter(
-        &mut self,
-        value_type: TypeRef,
-        completion: ValueRef,
-        evidence: ValueRef,
-        outer_frame: ValueRef,
-        location: Location,
-    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
-        build_done_adapter(
-            self.ctx,
-            value_type,
-            completion,
-            evidence,
-            outer_frame,
-            location,
-        )
-    }
-
-    pub(super) fn build_suffix_rebound(
-        &mut self,
-        location: Location,
-        layer: &SuffixLayer,
-        boundary: TypeRef,
-        resume_body: ValueRef,
-        completion: ValueRef,
-    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
-        let frames = self.layer_frames(layer.value_type, boundary);
-        build_suffix_rebound(self.ctx, location, layer, &frames, resume_body, completion)
-    }
-
-    /// Wrap a rebound resumption block into its `Resume` closure.
-    pub(super) fn finish_rebound(
-        &mut self,
-        location: Location,
-        boundary: TypeRef,
-        block: BlockRef,
-    ) -> (OpRef, ValueRef) {
-        let boundary = self.frame_types(boundary);
-        finish_rebound(self.ctx, location, &boundary, block)
-    }
-
-    /// Build the dispatch adapter factory of a suffix layer and return its
-    /// name and definition, which the caller places in the module.
-    pub(super) fn build_dispatch_adapter_factory(
-        &mut self,
-        location: Location,
-        value_type: TypeRef,
-        boundary: TypeRef,
-        plan: Option<Attribute>,
-    ) -> Result<(Symbol, OpRef), TributeControlToCpsError> {
-        let symbol = self.fresh_helper("make_dispatch_adapter");
-        let frames = self.layer_frames(value_type, boundary);
-        let factory =
-            build_dispatch_adapter_factory(self.ctx, location, symbol.clone(), &frames, plan)?;
-        Ok((symbol, factory))
-    }
-
-    fn layer_frames(&mut self, value_type: TypeRef, boundary: TypeRef) -> LayerFrames {
-        LayerFrames {
-            value: self.frame_types(value_type),
-            boundary: self.frame_types(boundary),
-        }
     }
 
     /// Build the frame a suffix continuation is entered through. `plan` is

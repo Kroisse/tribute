@@ -1082,7 +1082,7 @@ pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
         || (data.dialect == "ability"
             && matches!(
                 data.name.with_str(|name| name.to_owned()).as_str(),
-                "perform" | "handle_dispatch" | "exit"
+                "perform" | "handle_dispatch" | "exit" | "handle"
             ))
         || (data.dialect == "effect" && data.name == "dispatch_cps")
         || (data.dialect == "scf"
