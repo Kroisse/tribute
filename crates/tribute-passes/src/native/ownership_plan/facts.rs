@@ -8,23 +8,29 @@
 
 use super::*;
 use trunk_ir::analysis::{Analysis, AnalysisContext, AnalysisError};
+use trunk_ir::symbol_table::SymbolTable;
 
 /// Module-scope, policy-neutral facts shared by every defined function.
 ///
 /// The target is a `core.module` op. Function discovery, definition identity,
-/// and managed nominal layouts are validated once per module, so every
-/// function-scope analysis and every planner consumer reuses them.
+/// managed nominal layouts, and the allocation layouts derived from them are
+/// validated once per module in one traversal, so every function-scope
+/// analysis and every planner consumer reuses them. Functions are named by
+/// the module's [`SymbolTable`].
 pub struct NativeOwnershipModuleFacts {
-    function_ops: Vec<OpRef>,
+    functions: Vec<(SymbolPath, OpRef)>,
     definitions: HashMap<SymbolPath, OpRef>,
     managed_layouts: HashSet<TypeRef>,
+    closure_layout: Option<TypeRef>,
+    rtti_types: Vec<RttiTypePlan>,
     written_layouts: HashSet<TypeRef>,
 }
 
 impl NativeOwnershipModuleFacts {
-    /// Every `func.func` in document order, declarations included.
-    pub fn function_ops(&self) -> &[OpRef] {
-        &self.function_ops
+    /// Every `func.func` with its root-qualified name in document order,
+    /// declarations included.
+    pub fn functions(&self) -> &[(SymbolPath, OpRef)] {
+        &self.functions
     }
 
     /// Unique function symbol to its operation.
@@ -35,6 +41,16 @@ impl NativeOwnershipModuleFacts {
     /// Validated managed nominal layouts reachable from the module.
     pub fn managed_layouts(&self) -> &HashSet<TypeRef> {
         &self.managed_layouts
+    }
+
+    /// The unique managed layout that semantic closure allocations construct.
+    pub fn closure_layout(&self) -> Option<TypeRef> {
+        self.closure_layout
+    }
+
+    /// Managed allocation descriptors in first-allocation order.
+    pub fn rtti_types(&self) -> &[RttiTypePlan] {
+        &self.rtti_types
     }
 
     /// Whether any `adt.struct_set` in the module writes `layout`.
@@ -52,10 +68,11 @@ impl NativeOwnershipModuleFacts {
 
 impl Analysis for NativeOwnershipModuleFacts {
     fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-        let ir = ctx.ir();
-        let module = Module::new(ir, target)
+        let module = Module::new(ctx.ir(), target)
             .expect("native ownership module facts require a `core.module` target");
-        compute_module_facts(ir, module).map_err(|error| AnalysisError::new::<Self>(target, error))
+        let symbols = ctx.get::<SymbolTable>(target)?;
+        compute_module_facts(ctx.ir(), module, &symbols)
+            .map_err(|error| AnalysisError::new::<Self>(target, error))
     }
 }
 
@@ -152,32 +169,58 @@ pub(super) struct FlowEvent {
 fn compute_module_facts(
     ctx: &IrContext,
     module: Module,
+    symbols: &SymbolTable,
 ) -> Result<NativeOwnershipModuleFacts, OwnershipPlanError> {
     module
         .first_block(ctx)
         .ok_or_else(|| OwnershipPlanError::new("module has no body block"))?;
     let mut function_ops = Vec::new();
-    walk_module(ctx, module, |op| {
-        if func::Func::matches(ctx, op) {
-            function_ops.push(op);
-        }
-    });
-    // Reject malformed topology before entry-contract or call-graph analysis.
-    for &op in &function_ops {
-        ownership_callable_body(ctx, op)?;
-    }
-    let definitions = collect_function_definitions(ctx, &function_ops)?;
-    let managed_layouts = collect_and_validate_managed_layouts(ctx, module)?;
+    let mut layouts = ManagedLayoutCollector::new(ctx);
+    let mut closure_allocations = Vec::new();
+    let mut descriptors = Vec::new();
     let mut written_layouts = HashSet::default();
     walk_module(ctx, module, |op| {
         if let Ok(set) = adt::StructSet::from_op(ctx, op) {
             written_layouts.insert(set.r#type(ctx));
         }
+        if func::Func::matches(ctx, op) {
+            function_ops.push(op);
+        }
+        layouts.visit_op(ctx, op);
+        closure_allocations.extend(closure_allocation_layout(ctx, op));
+        descriptors.extend(allocation_descriptor(ctx, op));
     });
+    // Reject malformed topology before entry-contract or call-graph analysis.
+    for &op in &function_ops {
+        ownership_callable_body(ctx, op)?;
+    }
+    // Direct callees name their targets by root-qualified path.
+    let names = symbols
+        .all_definitions()
+        .map(|(name, op)| (op, name))
+        .collect::<HashMap<_, _>>();
+    let mut functions = Vec::with_capacity(function_ops.len());
+    let mut definitions = HashMap::default();
+    for op in function_ops {
+        let symbol = *names
+            .get(&op)
+            .ok_or_else(|| OwnershipPlanError::new("func.func has no symbol identity"))?;
+        if definitions.insert(symbol.clone(), op).is_some() {
+            return Err(OwnershipPlanError::new(format!(
+                "duplicate function identity @{symbol}"
+            )));
+        }
+        functions.push((symbol.clone(), op));
+    }
+    let managed_layouts = layouts.finish(ctx)?;
+    let closure_layout = unique_closure_layout(closure_allocations, &managed_layouts)?;
+    let rtti_types = build_rtti_plan(ctx, descriptors, &managed_layouts)?;
     Ok(NativeOwnershipModuleFacts {
-        function_ops,
+        functions,
         definitions,
         managed_layouts,
+        closure_layout,
+        rtti_types,
         written_layouts,
     })
 }

@@ -219,12 +219,21 @@ The RC implementation is divided into four stages:
 변경하지 않으며 `func_to_clif`와 native type erasure보다 먼저 실행한다.
 
 이 단계의 policy-neutral 사실 계산은 같은 경계의 fallible 분석이 소유한다.
-Module 범위 분석이 function 정의, 검증된 managed nominal layout과
-`adt.struct_set`이 쓰는 layout을, function 범위 분석이 flat CFG, managed 값,
+Module 범위 분석이 function 정의, 검증된 managed nominal layout,
+`adt.struct_set`이 쓰는 layout, semantic closure 할당 layout과 할당 순서의
+RTTI descriptor를, function 범위 분석이 flat CFG, managed 값,
 exact alias root, managed projection-owner 관계, 그중 borrow할 수 있는
 projection과 liveness 입력을 제공한다. 이 사실은 `NativeOwnershipPlanOptions`와
 무관하며 borrow elision과 entry ownership 정책은 사실을 소비하는 planner와
 action planner가 적용한다.
+
+Parameter-entry 계약은 module facts와 call graph에 의존하는 module 범위
+`NativeEntryContracts` 분석이 제공한다. 분석은 정의된 함수의 managed
+parameter가 borrow로만 쓰이는지를 항상 증명하고, 두 view로 결과를 낸다.
+`elide_proven_borrowed_parameters`만 view를 선택한다. 증명 view는 증명된
+parameter를 `Borrowed`로, 보수적 view는 같은 parameter를 `Retained`로 둔다.
+Bodyless `extern "C"` 선언의 `Borrowed`는 증명이 아닌 선언 계약이므로 두
+view에서 같다.
 
 Block별 `defs`, `live_in`, `live_out`은 function ownership facts에 의존하는
 `NativeManagedLiveness` 분석의 두 view가 제공한다. 보수적 view는 managed
