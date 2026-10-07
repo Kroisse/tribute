@@ -523,7 +523,7 @@ impl Converter<'_> {
                 self.tail_frame(source, flow)?,
             ];
             args.extend(source_args);
-            let transfer = self.emit_cps_tail_call_indirect(block, location, callee, args)?;
+            let transfer = emit_cps_tail_call_indirect(self.ctx, block, location, callee, args)?;
             carry_evidence_plan(self.ctx, source, transfer);
             return Ok(());
         }

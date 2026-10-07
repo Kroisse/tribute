@@ -266,7 +266,8 @@ impl Converter<'_> {
                 ));
             };
             let source_block = *source_block;
-            let converted_block = self.make_block(self.ctx.block(source_block).location, &[]);
+            let block_location = self.ctx.block(source_block).location;
+            let converted_block = make_block(self.ctx, block_location, &[]);
             let mut branch_mapping = mapping.clone();
             let branch_flow = Flow {
                 preserve_scf_yield: false,
@@ -280,7 +281,7 @@ impl Converter<'_> {
                 &mut branch_mapping,
                 &branch_flow,
             )?;
-            converted_regions.push(self.single_block_region(location, converted_block));
+            converted_regions.push(single_block_region(self.ctx, location, converted_block));
         }
         let [then_region, else_region] = converted_regions.as_slice() else {
             return Err(TributeControlToCpsError::post_op(
