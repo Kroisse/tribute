@@ -8,7 +8,6 @@
 //! its `ability.handle_dispatch` delimiter, and `ability.perform` and
 //! `ability.abort` into `effect.dispatch_cps` through the frame's dispatcher.
 
-use std::cell::Cell;
 use std::ops::ControlFlow;
 
 use rustc_hash::FxHashMap as HashMap;
@@ -34,7 +33,7 @@ mod handle_layer;
 mod perform;
 mod suffix_layer;
 
-use handle_layer::ExpandHandles;
+use handle_layer::{ExpandHandles, number_handles};
 use perform::ExpandDispatches;
 use suffix_layer::{ExpandSuffixFrames, build_dispatch_adapters};
 
@@ -92,7 +91,7 @@ pub fn lower_continuation_frames(
         .add_pattern(ExpandHandles {
             frames: frames.clone(),
             adapters,
-            next_handle: Cell::new(0),
+            handles: number_handles(ctx, module),
         })
         .add_pattern(ExpandDispatches { frames })
         .apply_partial(ctx, module);

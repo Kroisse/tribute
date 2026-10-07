@@ -1,7 +1,9 @@
 //! Builders of an installed handle layer: its dispatcher and resumption
 //! factories, resume tokens, marker dispatchers, and delimiter.
 
-use std::cell::Cell;
+use std::ops::ControlFlow;
+
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_core::calling_convention::{
     cps_closure_function_type, cps_resume_exact_type, cps_resume_type,
@@ -15,8 +17,9 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::rewrite::{Module, PatternRewriter, RewritePattern};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::walk::{WalkAction, walk_op};
 
 use super::suffix_layer::{
     DispatchAdapters, LayerFrames, SuffixLayer, build_done_adapter, build_suffix_rebound,
@@ -731,11 +734,24 @@ fn build_tail_dispatcher(
     Ok((lambda.op_ref(), lambda.result(ctx)))
 }
 
+/// Number the module's `ability.handle` operations in walk order. The number
+/// names a handle's factories.
+pub(super) fn number_handles(ctx: &IrContext, module: Module) -> HashMap<OpRef, u32> {
+    let mut handles = HashMap::default();
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        if ability::Handle::matches(ctx, op) {
+            handles.insert(op, handles.len() as u32);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    handles
+}
+
 /// Expands `ability.handle`.
 pub(super) struct ExpandHandles {
     pub(super) frames: FrameLayouts,
     pub(super) adapters: DispatchAdapters,
-    pub(super) next_handle: Cell<u32>,
+    pub(super) handles: HashMap<OpRef, u32>,
 }
 
 impl RewritePattern for ExpandHandles {
@@ -786,7 +802,7 @@ impl ExpandHandles {
             boundary: self.frames.of(ctx, ctx.value_ty(exit))?,
         };
         let passthrough_factory = self.adapters.factory(&frames, None)?;
-        let index = self.next_handle.replace(self.next_handle.get() + 1);
+        let index = *self.handles.get(&op)?;
         let layer = HandleLayer {
             arms,
             frames,
