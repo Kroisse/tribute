@@ -53,6 +53,35 @@ cast해서는 안 된다. 실제 source `Never` operation의 결과 타입과 �
 의미는 그대로 보존한다. 이 표현식 규칙은 logical CPS의 `core.never` 결과나
 target이 담당하는 물리적인 빈 결과 표현을 변경하지 않는다.
 
+### Source proper tail call의 적법화
+
+Source `become`인 [`tribute_control.tail_call`](ir.md#tribute_controltail_call)과
+[`tribute_control.tail_call_indirect`](ir.md#tribute_controltail_call_indirect)는
+`tribute_control_to_cps`가 모든 convention 조합에서 proper tail transfer로 바꾼다.
+Callee convention은 caller convention보다 강할 수 없으므로(`Direct < EvidenceDirect <
+Cps`, callee effect row는 caller row에 포함) 조합은 다음 셋이다:
+
+- **값을 반환하는 caller와 callee** (`Direct`/`EvidenceDirect` 사이): named target은
+  `func.tail_call`, callable value는 `func.tail_call_indirect`가 된다. Hidden
+  evidence operand는 일반 호출과 같은 `evidence_plan`과 `CallableAbi` 순서로
+  넣는다.
+- **`Cps` caller와 `Cps` callee:** 새 suffix frame을 만들지 않고 caller가 받은
+  `ContinuationFrame<R>`를 그대로 넘긴다. 호출 결과의 continuation은 caller의
+  continuation이다.
+- **`Cps` caller와 값을 반환하는 callee:** callee를 일반 호출한 뒤 결과를 caller의
+  `Done<R>`로 proper tail transfer한다. 값을 반환하는 callee는 `Cps` callable을 다시
+  부를 수 없으므로 이 조합이 더하는 stack 깊이는 callee 한 번의 실행으로 제한된다.
+
+`become`이 아닌 `Direct`/`EvidenceDirect` 호출은 꼬리 위치에 있어도 legalization이
+`func.call`과 `func.call_indirect`로 만든다. Target lowering은 최적화로 이 호출을
+`func.tail_call`/`func.tail_call_indirect`로 바꿀 수 있다. 조건은 호출 결과가 곧바로
+callable의 결과로 반환되어 호출 뒤에 RC 정리를 포함한 operation이 남지 않고, 두
+signature가 그 target의 proper tail transfer 조건을 만족하는 것이다. 이 변환은
+선택이며 의미를 바꾸지 않으므로 source는 이에 기대지 않는다. Target은 `func.tail_call`과 `func.tail_call_indirect`를
+proper tail transfer로 내린다. Native의 호출 규약과 소유권 조건은
+[cranelift-backend.md](cranelift-backend.md#꼬리-호출-규약)와
+[rc.md](rc.md#proper-tail-ownership-transfer)가 정한다.
+
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="pre-cps-callable-shape"></a>
 
@@ -102,8 +131,13 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   보존하므로 변환된 `func.call_indirect`는 그 converted closure contract에서 유도한 exact
   `signature`를 싣는다. environment는 여기서 아직 interpose하지 않는다.
 - `tribute_control.return`은 `Direct`/`EvidenceDirect`에서 `func.return`이 된다.
-  `Cps`에서는 ContinuationFrame의 `Done<R>`으로 `value`를 이전하며 뒤에
+  `Cps`에서는 `ability.exit`로 ContinuationFrame의 `Done<R>`에 `value`를 이전하며 뒤에
   `func.return`이나 result가 없다.
+
+이 변환의 출력에서 `ContinuationFrame<R>`는 불투명한 `ability.frame<R>` 타입이다.
+Frame을 만들고 소비하는 일은 [추상 frame 표면](#abstract-continuation-frames)의
+operation으로만 표현하며, frame의 `Done<R>`/`Dispatch<R>` 구성은
+`lower_continuation_frames`가 정한다.
 
 알려진 CPS target으로의 최종 이전은 `func.tail_call`, closure, continuation,
 ContinuationFrame의 `Done<R>`처럼 동적인 target으로의 이전은 `func.tail_call_indirect`를 사용한다.
@@ -146,8 +180,9 @@ builder를 재사용하되 `tribute_control` 전용 graph pattern은
 
 같은 legalization에서 각 `tribute_control.perform`을 typecheck된
 `operation_kind`에 따라 변환한다. `"fn"`은 suffix를 capture하지 않고
-`ability.call`을, `"op"`은 `ability.perform`과 필요한 `ability.handle_dispatch`
-표면을 만든다. 이 pass는 `effect.dispatch_*`나 `effect.extend`를 만들지 않는다.
+`ability.call`을, `"op"`은 `ability.perform`(source `op -> Never`에는
+`ability.abort`)을 만들고, `tribute_control.handle`은 `ability.handle`이 된다.
+이 pass는 `effect.dispatch_*`나 `effect.extend`를 만들지 않는다.
 이 결정은 `CallableAbi`에 encode하지 않으며 pass가 operation kind를 추론하거나
 변경해서는 안 된다.
 
@@ -169,11 +204,13 @@ operation을 왼쪽에서 오른쪽으로 소비한다:
   suffix를 capture하지 않고 `ability.call`을 만들며 반환된 operation result가
   일반 suffix로 흐른다. `"op"`이면 현재 suffix와 일치하는 dynamic handle
   boundary까지 선택된 모든 enclosing structured exit를 capture한 뒤
-  `ability.perform`을 만든다. 후속 `lower_ability_perform`이 각각
-  `effect.dispatch_tail`과 `effect.dispatch_cps`로 낮춘다. Operand packing은
-  이 lower 경계에서만 수행한다.
-  `op -> Never`에는 suffix를 capture하지 않는다.
-  기존 필수 ABI operand에는 zero-capture reject continuation을 공급한다.
+  그 suffix의 raw resumption을 받는 `ability.perform`을 만든다. 후속
+  `lower_ability_perform`이 `ability.call`을 `effect.dispatch_tail`로,
+  `lower_continuation_frames`가 `ability.perform`을 `effect.dispatch_cps`로 낮춘다.
+  Operand packing은 이 두 lower 경계에서만 수행한다.
+  `op -> Never`에는 suffix를 capture하지 않고 resumption이 없는 `ability.abort`를
+  만든다. `lower_continuation_frames`가 기존 필수 ABI operand에 zero-capture reject
+  continuation을 공급한다.
   Reject closure의 callable type은 canonical `Resume<R>`이며 다음과 같다.
 
   ```text
@@ -222,12 +259,12 @@ operation kind를 추론하거나 case, guard, short-circuit, nested handle 전�
 Affine `resume_token`의 type/placement는 operation-local verifier가, use-def와
 closure-capture를 지나는 single static ownership path는 whole-IR verifier가
 검사한다. Static SSA 검사는 capture된 closure의 반복 호출을 막지 못하므로
-conversion은 runtime consumed state를 만들고 두 번째 호출을 continuation
-재진입 전에 거부하거나 trap한다. Token은 post-CPS IR에 남지 않는다.
+`lower_continuation_frames`는 `ability.perform`의 raw resumption을 runtime consumed
+state로 감싸고 두 번째 호출을 continuation 재진입 전에 거부하거나 trap한다. Token은 post-CPS IR에 남지 않는다.
 
 Canonical `core.never`인 source `op -> Never`는 token과 source suffix
-continuation을 만들지 않는다. 기존 ABI에는 capture가 없고 body가
-`func.unreachable`인 typed reject continuation을 전달한다.
+continuation을 만들지 않는다. `ability.abort`를 펼칠 때 기존 ABI에는 capture가 없고
+body가 `func.unreachable`인 typed reject continuation을 전달한다.
 이 closure는 dispatch가 요구하는 canonical `Resume<R>` type을 정확히 사용한다.
 `anyref` formal은 읽지 않는다. Null, in-band sentinel, 임의의 `anyref`는
 대체할 수 없으며 호출되면 trap한다.
@@ -245,8 +282,9 @@ named pre-CPS boundary가 아니다.
 `tribute-control-post-cps` target과 Tribute type walk를 검증한다. 남은
 `tribute_control` operation 또는 `func_sig`/`resume_token` type은 source
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
-`func.*`/`closure.*`/`func.func_sig` graph와 logical `ability.*` dispatch 표면만
-남는다. `lower_closure_lambda`는 이 shared graph의 lambda를 추출하지만
+`func.*`/`closure.*`/`func.func_sig` graph, [추상 frame 표면](#abstract-continuation-frames),
+logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가 추상 frame
+표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph의 lambda를 추출하지만
 `closure.new`, `closure.func`, `closure.env`와 convention-proven closure type은
 target ABI validation까지 유지한다. `lower_ability_perform`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
@@ -295,6 +333,66 @@ CPS transfer가 `func.tail_call` 또는 `func.tail_call_indirect`로 끝나는�
 payload, closure environment와 dispatch closure field에 쓰는 일반 `anyref`는 이
 검사의 대상이 아니다.
 
+<!-- markdownlint-disable-next-line MD033 -->
+<a id="abstract-continuation-frames"></a>
+
+### 추상 frame 표면
+
+CPS legalization은 continuation의 **모양**만 정한다. 어느 suffix가 closure가 되는지,
+completion과 handler arm이 어떤 closure인지, 각 transfer가 어떤 evidence 선택을
+갖는지가 여기에 속한다. Frame이 operation을 바깥 handle로 전달하고 재개될 때 자기
+층을 다시 만드는 runtime 장치는 정하지 않는다. 그 사이의 계약이 `ability` dialect의
+추상 frame 표면이며, operation과 verifier 계약은
+[ir.md](ir.md#ability-continuation-frame-표면)를 따른다.
+
+| 표면 | 뜻 |
+| --- | --- |
+| `ability.frame<R>` | 답 타입이 `R`인 불투명한 `ContinuationFrame<R>` |
+| `ability.suffix_frame` | suffix completion으로 들어가는 frame. 바깥 frame을 감싼다 |
+| `ability.exit` | frame의 `Done<R>`로 값을 이전한다 |
+| `ability.handle` | handle 층을 설치하고 body에 그 층의 frame을 준다 |
+| `ability.perform`, `ability.abort` | frame의 dispatcher로 operation을 보낸다 |
+
+CPS legalization은 이 표면으로 다음을 표현한다.
+
+- CPS 직접·간접 호출, `resume`, 구조적 분기의 suffix는 `ability.suffix_frame`으로
+  감싼 frame을 받는다. 호출과 `resume`의 evidence 선택은 transfer와 그 frame에 같은
+  `evidence_plan`으로 싣는다. 구조적 분기의 frame에는 선택이 없다.
+- `Cps` callable, completion, 생성된 continuation은 `ability.frame<R>`를 받고, 값을
+  내보낼 때 `ability.exit`를 쓴다.
+- `tribute_control.handle`은 handle 뒤 suffix의 frame을 exit frame으로 하는
+  `ability.handle`이 된다. Completion과 handler arm closure, arm 표는 operand와
+  속성으로 넘긴다. Arm 안 `resume`이 handle 바깥 evidence를 고르는 선택
+  (`effect.outer`)도 CPS legalization이 `resume` transfer에 싣는다.
+- General `op`은 현재 frame과 raw resumption을 받는 `ability.perform`이 된다.
+
+`lower_continuation_frames`는 `tribute_control_to_cps` 바로 뒤에서 이 표면을 모두
+펼친다. 각 operation은 자기 operand와 속성만으로 펼치며 다른 frame이나 source IR을
+다시 보지 않는다.
+
+- `ability.frame<R>`는 `Done<R>`와 `Dispatch<R>`를 담은 nominal
+  `ContinuationFrame<R>` layout이 된다. Signature, closure type, block argument,
+  타입 속성을 함께 바꾼다. Layout 이름은 module을 걷는 순서로 정하며 의미를 갖지
+  않는다.
+- `ability.suffix_frame`은 [재개된 frame](#row-directed-evidence) 규칙의 suffix 층이다.
+  `Done`은 frame을 만든 evidence와 바깥 frame으로 suffix를 실행한다. `Dispatch`는
+  operation을 바깥 frame의 dispatcher로 넘기고, 재개되면 재개 시점의 evidence와
+  frame으로 이 층을 다시 만든 뒤 안쪽 계산에 선택을 적용한 evidence를 넘긴다.
+- `ability.handle`은 [dispatch 계층](#dispatch-layers)과
+  [`handle`](#handle-evidence-extension--handler-closures) 절의 장치를 만든다. Fresh
+  prompt, `fn` arm의 marker dispatcher, 층의 dispatcher와 그 factory, 설치된 층과
+  lambda에서 재개된 층의 resume factory, exact resume token, `ability.handle_dispatch`가
+  여기서 생긴다.
+- `ability.perform`은 raw resumption을 one-shot 상태로 감싸 erased `Resume<R>`로 만든 뒤
+  frame의 `Dispatch<R>`와 함께 [`effect.dispatch_cps`](#op-operation-continuation-dispatch)로
+  낮춘다. `ability.abort`는 reject continuation을 쓴다.
+- `ability.exit`는 frame의 `Done<R>`로 proper tail transfer한다.
+
+이 pass 뒤에는 `ability.frame` 타입과 추상 frame operation이 남지 않는다. 남는
+`ability.*`는 `ability.call`과 `ability.handle_dispatch`뿐이다. Target이 delimited
+control을 다른 runtime 장치로 구현한다면 이 pass 대신 자기 lowering으로 같은 표면을
+소비할 수 있다.
+
 ## 핵심 설계
 
 ### `fn` operation: direct dispatch
@@ -318,8 +416,9 @@ Convention이 없거나 slot/type이 잘못되면 lower하지 않고 ability bou
 
 ### `op` operation: continuation dispatch
 
-공통 lowering은 payload packing 전에 exact resume의 frame 입력과 frame metadata에서
-답 타입 `R`을 구하고 evidence·dispatch·resume의 연결을 검증한다.
+`lower_continuation_frames`는 `ability.perform`의 frame 타입 `ability.frame<R>`에서
+답 타입 `R`을 구하고, frame의 `Dispatch<R>`와 one-shot으로 감싼 resume을 꺼낸 뒤
+payload를 pack한다.
 
 ```text
 %product = pack %args into the canonical operation payload product
@@ -429,8 +528,8 @@ Native entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는
 
 ### `handle`: evidence extension + handler closures
 
-`handle` lowering은 두 종류의 dispatch closure를 만든다. Environment를 포함한
-물리적 입력은 다음과 같다:
+`lower_continuation_frames`는 `ability.handle`을 펼쳐 두 종류의 dispatch closure를
+만든다. Environment를 포함한 물리적 입력은 다음과 같다:
 
 - Handle 층의 dispatcher: `(Evidence, Environment, Resume, Prompt, AbilityId,
   OperationIndex, Payload) -> ()`. General `op` handler용이며 body의
@@ -641,11 +740,13 @@ marker를 복사해 `ev`의 같은 ability 위에 얹으며 복사본은 원본�
 
 ### `ability.handle_dispatch`
 
-`ability.handle_dispatch`는 runtime dispatch loop가 아니다. Effect 발생 시점에서
+`ability.handle_dispatch`는 `lower_continuation_frames`가 `ability.handle`과 handle
+층의 재개에서 만드는 delimiter이며 runtime dispatch loop가 아니다. Effect 발생 시점에서
 이미 handler closure로 tail-call되므로,
 `resolve_evidence`가 body의 evidence 인자를 명시적인 extended evidence로 대체한 뒤,
 `lower_handle_dispatch`는 resultless body를 바깥 block에 옮기고 delimiter를 제거한다.
-정상 완료와 resume하지 않는 handler exit의 transfer는 shared CPS legalization이 구성한다.
+정상 완료와 resume하지 않는 handler exit의 transfer는 shared CPS legalization과
+frame 펼치기가 구성한다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="shared-middle-end-pipeline"></a>
@@ -660,6 +761,7 @@ Callable/control과 effect 관련 pass의 순서는 다음과 같다:
 ```text
 ast_to_ir (tribute_control callable/control + ordinary value IR)
 → tribute_control_to_cps
+→ lower_continuation_frames
 → lower_closure_lambda
 → lower_ability_perform
 → resolve_evidence
@@ -677,8 +779,10 @@ ast_to_ir (tribute_control callable/control + ordinary value IR)
 → backend-ready verification
 ```
 
-`tribute_control_to_cps`의 출력은 physical `func.*`/`closure.*` callable 표면과
-logical `ability.*` dispatch 표면이다. Shared ability/evidence pass와 strict target
+`tribute_control_to_cps`의 출력은 physical `func.*`/`closure.*` callable 표면,
+추상 frame 표면, logical `ability.*` dispatch 표면이다. `lower_continuation_frames`의
+출력에는 추상 frame 표면 대신 nominal frame layout, frame closure, `effect.dispatch_cps`,
+`ability.handle_dispatch`가 있다. Shared ability/evidence pass와 strict target
 ABI validation은 convention-proven `closure.closure` callable type을 그대로
 소비한다. 그 뒤 경계 안에서 closure operation과 모든 type-bearing storage
 surface를 canonical `_closure` layout으로 함께 바꾸고 target evidence/runtime

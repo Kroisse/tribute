@@ -9,7 +9,7 @@ impl Converter<'_> {
         mapping: &mut HashMap<ValueRef, ValueRef>,
     ) -> Result<OpRef, TributeControlToCpsError> {
         let data = self.ctx.op(source);
-        if data.dialect == Symbol::new("tribute_control") {
+        if data.dialect == "tribute_control" {
             return Err(TributeControlToCpsError::post_op(
                 source,
                 data.location,
@@ -51,7 +51,7 @@ impl Converter<'_> {
             builder = builder.attr(key, value);
         }
         for region in regions {
-            let converted = if dialect == Symbol::new("core") && name == Symbol::new("module") {
+            let converted = if dialect == "core" && name == "module" {
                 self.clone_module_region(region)?
             } else {
                 self.clone_plain_region(region, mapping)?
@@ -108,7 +108,7 @@ impl Converter<'_> {
                 for source_op in source_ops {
                     let converted = if tribute_control::Func::matches(self.ctx, source_op) {
                         self.convert_func(source_op)?
-                    } else if self.ctx.op(source_op).dialect == Symbol::new("tribute_control") {
+                    } else if self.ctx.op(source_op).dialect == "tribute_control" {
                         return Err(TributeControlToCpsError::one(
                             PRE_CPS_BOUNDARY,
                             Some(source_op),
@@ -180,7 +180,7 @@ impl Converter<'_> {
         self.ctx.op_regions(op).any(|region| {
             self.ctx.region(region).blocks.iter().copied().any(|block| {
                 self.ctx.block(block).ops.iter().copied().any(|child| {
-                    self.ctx.op(child).dialect == Symbol::new("tribute_control")
+                    self.ctx.op(child).dialect == "tribute_control"
                         || self.contains_tribute_control(child)
                 })
             })
@@ -393,10 +393,8 @@ impl Converter<'_> {
         for case in source_cases {
             let case_data = self.ctx.op(case);
             let case_location = case_data.location;
-            let is_case =
-                case_data.dialect == Symbol::new("scf") && case_data.name == Symbol::new("case");
-            let is_default =
-                case_data.dialect == Symbol::new("scf") && case_data.name == Symbol::new("default");
+            let is_case = case_data.dialect == "scf" && case_data.name == "case";
+            let is_default = case_data.dialect == "scf" && case_data.name == "default";
             if !is_case && !is_default {
                 return Err(TributeControlToCpsError::post_op(
                     case,

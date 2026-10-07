@@ -33,7 +33,6 @@ use tribute_ir::dialect::adt;
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
 use tribute_ir::runtime_layout;
-use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -70,8 +69,8 @@ pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
 /// runtime layout attribute.
 pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("adt")
-        && data.name == Symbol::new("struct")
+    data.dialect == "adt"
+        && data.name == "struct"
         && runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::CLOSURE)
 }
 
@@ -867,7 +866,6 @@ mod tests {
     }
 
     fn func_by_name(ctx: &IrContext, module: Module, name: &'static str) -> func::Func {
-        let name = Symbol::new(name);
         module
             .ops(ctx)
             .iter()
@@ -878,7 +876,6 @@ mod tests {
     }
 
     fn func_by_name_recursive(ctx: &IrContext, module: Module, name: &'static str) -> func::Func {
-        let name = Symbol::new(name);
         let mut found = None;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             if let Ok(func_op) = func::Func::from_op(ctx, op)

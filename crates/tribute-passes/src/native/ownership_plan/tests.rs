@@ -452,7 +452,7 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
     let transfer = plan
         .functions
         .iter_mut()
-        .find(|function| function.symbol == Symbol::new("install"))
+        .find(|function| function.symbol == "install")
         .expect("install ownership plan")
         .actions
         .iter_mut()
@@ -754,7 +754,7 @@ fn stale_grouped_into_raw_plan_fails_before_materialization() {
     let actions = &mut plan
         .functions
         .iter_mut()
-        .find(|function| function.symbol == Symbol::new("transfers"))
+        .find(|function| function.symbol == "transfers")
         .unwrap()
         .actions;
     let second = actions
@@ -1187,7 +1187,7 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
     let tail_index = plan
         .functions
         .iter()
-        .position(|function| function.symbol == Symbol::new("tail"))
+        .position(|function| function.symbol == "tail")
         .unwrap();
     let body = ctx
         .op_region(plan.functions[tail_index].operation, 0)
@@ -1950,9 +1950,7 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
         .types()
         .iter()
         .filter_map(|(ty, data)| {
-            (data.dialect == Symbol::new("adt")
-                && data.name == Symbol::new("struct")
-                && ty != plan.rtti_types()[0].ty)
+            (data.dialect == "adt" && data.name == "struct" && ty != plan.rtti_types()[0].ty)
                 .then_some(ty)
         })
         .collect::<Vec<_>>();

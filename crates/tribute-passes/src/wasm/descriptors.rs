@@ -13,7 +13,6 @@ use std::ops::ControlFlow;
 use tribute_ir::dialect::tribute_rtti::{
     self, FieldKind, allocation_descriptor, descriptor_field_types,
 };
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::Module;
@@ -68,14 +67,12 @@ pub fn declare(ctx: &mut IrContext, module: Module) {
 /// GC reference is dynamic.
 fn field_kind(ctx: &IrContext, ty: TypeRef) -> FieldKind {
     let data = ctx.get_type(ty);
-    if data.dialect == Symbol::new("adt")
-        || (data.dialect == Symbol::new("core") && data.name == Symbol::new("array"))
-    {
+    if data.dialect == "adt" || (data.dialect == "core" && data.name == "array") {
         return FieldKind::Managed;
     }
-    let dynamic = (data.dialect == Symbol::new("tribute_rt")
-        && (data.name == Symbol::new("anyref") || data.name == Symbol::new("intref")))
-        || (data.dialect == Symbol::new("wasm")
+    let dynamic = (data.dialect == "tribute_rt"
+        && (matches!(data.name.as_str(), "anyref" | "intref")))
+        || (data.dialect == "wasm"
             && data.name.with_str(|name| {
                 matches!(
                     name,

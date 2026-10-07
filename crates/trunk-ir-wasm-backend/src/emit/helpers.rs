@@ -254,9 +254,9 @@ pub(crate) fn type_to_valtype(
         }))
     } else if is_type(ctx, ty, "wasm", "func_sig") {
         Ok(ValType::Ref(RefType::FUNCREF))
-    } else if ctx.get_type(ty).dialect == Symbol::new("wasm") {
+    } else if ctx.get_type(ty).dialect == "wasm" {
         let name = ctx.get_type(ty).name.clone();
-        if name == Symbol::new("structref") {
+        if name == "structref" {
             Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -264,11 +264,11 @@ pub(crate) fn type_to_valtype(
                     ty: AbstractHeapType::Struct,
                 },
             }))
-        } else if name == Symbol::new("funcref") {
+        } else if name == "funcref" {
             Ok(ValType::Ref(RefType::FUNCREF))
-        } else if name == Symbol::new("anyref") {
+        } else if name == "anyref" {
             Ok(ValType::Ref(RefType::ANYREF))
-        } else if name == Symbol::new("i31ref") {
+        } else if name == "i31ref" {
             Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -276,7 +276,7 @@ pub(crate) fn type_to_valtype(
                     ty: AbstractHeapType::I31,
                 },
             }))
-        } else if name == Symbol::new("arrayref") {
+        } else if name == "arrayref" {
             Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -359,7 +359,7 @@ pub(crate) fn attr_heap_type(
         Some(Attribute::String(name)) => symbol_to_abstract_heap_type(ctx.str(*name)),
         Some(Attribute::Type(ty)) => {
             let data = ctx.get_type(*ty);
-            if data.dialect == Symbol::new("wasm") {
+            if data.dialect == "wasm" {
                 let name = data.name.clone();
                 name.with_str(symbol_to_abstract_heap_type)
             } else {

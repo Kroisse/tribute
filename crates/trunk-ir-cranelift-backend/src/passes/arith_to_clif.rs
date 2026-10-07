@@ -11,6 +11,7 @@
 //! - `arith.{sitofp,uitofp,fptosi,fptoui}` -> `clif.fcvt_{from,to}_{sint,uint}`
 //! - `arith.{extf,truncf}` -> `clif.{fpromote,fdemote}`
 
+use trunk_ir::StringArg;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::clif;
@@ -22,7 +23,6 @@ use trunk_ir::rewrite::{
     TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
-use trunk_ir::{StringArg, Symbol};
 
 /// Lower arith dialect to clif dialect.
 pub fn lower(
@@ -180,7 +180,7 @@ impl RewritePattern for ArithBinOpPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.dialect != Symbol::new("arith") {
+        if data.dialect != "arith" {
             return false;
         }
 
@@ -194,57 +194,57 @@ impl RewritePattern for ArithBinOpPattern {
         let loc = ctx.op(op).location;
         let name = data.name.clone();
 
-        let new_op = if name == Symbol::new("addi") {
+        let new_op = if name == "addi" {
             clif::Iadd::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("addf") {
+        } else if name == "addf" {
             clif::Fadd::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("subi") {
+        } else if name == "subi" {
             clif::Isub::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("subf") {
+        } else if name == "subf" {
             clif::Fsub::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("muli") {
+        } else if name == "muli" {
             clif::Imul::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("mulf") {
+        } else if name == "mulf" {
             clif::Fmul::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("divsi") {
+        } else if name == "divsi" {
             clif::Sdiv::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("divui") {
+        } else if name == "divui" {
             clif::Udiv::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("divf") {
+        } else if name == "divf" {
             clif::Fdiv::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("remsi") {
+        } else if name == "remsi" {
             clif::Srem::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("remui") {
+        } else if name == "remui" {
             clif::Urem::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
@@ -400,17 +400,12 @@ impl RewritePattern for ArithBitwisePattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.dialect != Symbol::new("arith") {
+        if data.dialect != "arith" {
             return false;
         }
 
         let name = data.name.clone();
-        let is_bitwise = name == Symbol::new("and")
-            || name == Symbol::new("or")
-            || name == Symbol::new("xor")
-            || name == Symbol::new("shl")
-            || name == Symbol::new("shr")
-            || name == Symbol::new("shru");
+        let is_bitwise = matches!(name.as_str(), "and" | "or" | "xor" | "shl" | "shr" | "shru");
         if !is_bitwise {
             return false;
         }
@@ -424,32 +419,32 @@ impl RewritePattern for ArithBitwisePattern {
         };
         let loc = ctx.op(op).location;
 
-        let new_op = if name == Symbol::new("and") {
+        let new_op = if name == "and" {
             clif::Band::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("or") {
+        } else if name == "or" {
             clif::Bor::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("xor") {
+        } else if name == "xor" {
             clif::Bxor::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("shl") {
+        } else if name == "shl" {
             clif::Ishl::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("shr") {
+        } else if name == "shr" {
             clif::Sshr::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == Symbol::new("shru") {
+        } else if name == "shru" {
             clif::Ushr::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)

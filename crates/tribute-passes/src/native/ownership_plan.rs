@@ -201,7 +201,7 @@ impl NativeOwnershipPlan {
             return Ok(ty);
         }
         let data = ctx.get_type(ty);
-        if data.dialect != Symbol::new("adt") || data.name != Symbol::new("typeref") {
+        if data.dialect != "adt" || data.name != "typeref" {
             return Err(OwnershipPlanError::new(format!(
                 "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
             )));
@@ -317,9 +317,8 @@ fn is_typed_managed_reference(
         return true;
     }
     let data = ctx.get_type(ty);
-    (data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref"))
-        || (data.dialect == Symbol::new("tribute_rt")
-            && (data.name == Symbol::new("anyref") || data.name == Symbol::new("intref")))
+    (data.dialect == "adt" && data.name == "typeref")
+        || (data.dialect == "tribute_rt" && (matches!(data.name.as_str(), "anyref" | "intref")))
 }
 
 fn is_managed_value(ctx: &IrContext, value: ValueRef, managed_layouts: &HashSet<TypeRef>) -> bool {
@@ -328,7 +327,7 @@ fn is_managed_value(ctx: &IrContext, value: ValueRef, managed_layouts: &HashSet<
 
 fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("anyref")
+    data.dialect == "tribute_rt" && data.name == "anyref"
 }
 
 /// Build the plan while reusing cached policy-neutral ownership flow facts.
@@ -596,8 +595,8 @@ fn index_nominal_layout(
     nominal_layouts: &mut HashMap<StringRef, Vec<TypeRef>>,
 ) {
     let data = ctx.get_type(ty);
-    if data.dialect == Symbol::new("adt")
-        && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
+    if data.dialect == "adt"
+        && (matches!(data.name.as_str(), "struct" | "enum"))
         && let Some(name) = data.attrs.get_string_ref("name")
     {
         let layouts = nominal_layouts.entry(name).or_default();
@@ -621,15 +620,10 @@ fn collect_reachable_type_contract(
     }
     let data = ctx.get_type(ty);
     index_nominal_layout(ctx, ty, nominal_layouts);
-    if (data.dialect == Symbol::new("adt"))
-        && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
-    {
+    if (data.dialect == "adt") && (matches!(data.name.as_str(), "struct" | "enum")) {
         layouts.insert(ty);
     }
-    if data.dialect == Symbol::new("adt")
-        && data.name == Symbol::new("typeref")
-        && typerefs.insert(ty)
-    {
+    if data.dialect == "adt" && data.name == "typeref" && typerefs.insert(ty) {
         pending_typerefs.push(ty);
     }
     for &parameter in &data.params {
@@ -681,7 +675,7 @@ fn collect_reachable_attribute_type_contract(
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
     let identity = |ty| {
         let data = ctx.get_type(ty);
-        (data.dialect == Symbol::new("adt")).then(|| data.attrs.get_string_ref("name"))?
+        (data.dialect == "adt").then(|| data.attrs.get_string_ref("name"))?
     };
     identity(left).is_some() && identity(left) == identity(right)
 }
@@ -744,8 +738,8 @@ fn build_field_kinds(
 fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) -> FieldKind {
     if is_typed_managed_reference(ctx, ty, managed_layouts) {
         let data = ctx.get_type(ty);
-        let dynamic = data.dialect == Symbol::new("tribute_rt")
-            && (data.name == Symbol::new("anyref") || data.name == Symbol::new("intref"));
+        let dynamic =
+            data.dialect == "tribute_rt" && (matches!(data.name.as_str(), "anyref" | "intref"));
         return if dynamic {
             FieldKind::Dynamic
         } else {
@@ -1132,8 +1126,8 @@ fn validate_into_raw_transfer_action(
     *source == action.value
         && ctx.value_ty(*source) == closure_layout
         && is_managed_value(ctx, *source, managed_layouts)
-        && result_ty.dialect == Symbol::new("core")
-        && result_ty.name == Symbol::new("ptr")
+        && result_ty.dialect == "core"
+        && result_ty.name == "ptr"
 }
 
 fn validate_into_raw_transfer_groups(

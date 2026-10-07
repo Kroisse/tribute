@@ -295,9 +295,9 @@ mod tests {
 
         let names = func_names(&db, source);
         assert_eq!(names.len(), 3);
-        assert!(names.iter().any(|n| *n == Symbol::new("foo")));
-        assert!(names.iter().any(|n| *n == Symbol::new("bar")));
-        assert!(names.iter().any(|n| *n == Symbol::new("baz")));
+        assert!(names.iter().any(|n| *n == "foo"));
+        assert!(names.iter().any(|n| *n == "bar"));
+        assert!(names.iter().any(|n| *n == "baz"));
     }
 
     #[test]
@@ -396,7 +396,7 @@ mod tests {
 
         let schemes = schemes.unwrap();
         assert!(
-            schemes.iter().any(|(name, _)| *name == Symbol::new("foo")),
+            schemes.iter().any(|(name, _)| *name == "foo"),
             "function_schemes should contain 'foo', got: {:?}",
             schemes
                 .iter()
@@ -578,7 +578,7 @@ fn explicit() ->{} Nil { Nil }
         let schemes = schemes.unwrap();
         let add = schemes
             .iter()
-            .find(|(name, _)| *name == Symbol::new("add"))
+            .find(|(name, _)| *name == "add")
             .expect("should have 'add' scheme");
 
         let body = add.1.body(&db);
@@ -600,7 +600,7 @@ fn explicit() ->{} Nil { Nil }
         let schemes = schemes.unwrap();
         let inc_scheme = schemes
             .iter()
-            .find(|(name, _)| *name == Symbol::new("inc"))
+            .find(|(name, _)| *name == "inc")
             .expect("should have 'inc' scheme");
 
         let body = inc_scheme.1.body(&db);
@@ -639,7 +639,7 @@ fn explicit() ->{} Nil { Nil }
         let schemes = schemes.unwrap();
         let apply = schemes
             .iter()
-            .find(|(name, _)| *name == Symbol::new("apply"))
+            .find(|(name, _)| *name == "apply")
             .expect("should have 'apply' scheme");
 
         // type_params should contain a and b (in declaration order)

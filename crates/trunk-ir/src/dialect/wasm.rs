@@ -611,9 +611,10 @@ impl FuncSig {
         self,
         ctx: &IrContext,
     ) -> impl Iterator<Item = (&Symbol, &Attribute)> {
-        ctx.get_type(self.0).attrs.iter().filter(|(key, _)| {
-            **key != Symbol::new(NUM_INPUTS_ATTR) && **key != Symbol::new(NUM_RESULTS_ATTR)
-        })
+        ctx.get_type(self.0)
+            .attrs
+            .iter()
+            .filter(|(key, _)| **key != NUM_INPUTS_ATTR && **key != NUM_RESULTS_ATTR)
     }
 
     pub fn remove_reserved_attrs(attrs: &mut AttributeMap) {

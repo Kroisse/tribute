@@ -2,7 +2,6 @@
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{wasm, wasm_gc};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -22,7 +21,7 @@ pub fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
 
 fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("wasm")
+    data.dialect == "wasm"
         && [
             "anyref",
             "eqref",
@@ -33,7 +32,7 @@ fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
             "externref",
         ]
         .into_iter()
-        .any(|name| data.name == Symbol::new(name))
+        .any(|name| data.name == name)
 }
 
 /// Module attribute listing the GC types that received user indices, in

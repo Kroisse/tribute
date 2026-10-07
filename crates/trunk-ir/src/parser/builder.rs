@@ -736,7 +736,7 @@ impl<'a> ArenaIrBuilder<'a> {
             .collect::<Result<_, _>>()?;
 
         // Build regions (inject func_params as entry block args for the first region)
-        let is_module = dialect == Symbol::new("core") && op_name == Symbol::new("module");
+        let is_module = dialect == "core" && op_name == "module";
         let mut regions = Vec::with_capacity(raw.regions.len());
         for (i, r) in raw.regions.iter().enumerate() {
             let extra_args = if i == 0 && !raw.func_params.is_empty() {

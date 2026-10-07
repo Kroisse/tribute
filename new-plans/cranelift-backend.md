@@ -281,6 +281,22 @@ Direct/EvidenceDirect Unit 결과와 살아 있는 nil SSA 값의 zero-width 처
 
 상세 내용은 [cps-effects.md](cps-effects.md)를 참조.
 
+### 꼬리 호출 규약
+
+Cranelift는 caller와 callee가 모두 `tail` 규약일 때만 `return_call`을 proper tail
+transfer로 만든다. Source [`become`](syntax.md#tail-call-become)은 module 내부의 어떤
+callable 사이에서도 쓸 수 있고 callable value의 target은 정적으로 열거할 수 없다.
+그래서 representation/ABI 경계는 module 내부의 모든 `Direct`/`EvidenceDirect`
+callable(정의, lambda, `func_ref` adapter)의 physical signature에도
+`call_conv = "tail"`을 붙이고, RC-managed parameter를 `consumed`로 기록한다
+([rc.md](rc.md#proper-tail-ownership-transfer)). 이 선택은 경계가 소유하며 호출
+지점의 형상에서 추론하지 않는다.
+
+외부 경계는 platform 규약을 유지한다. `abi` 속성이 있는 함수와 exported `main`이
+여기에 해당하며, 이 함수로는 proper tail transfer를 하지 않는다. 소스 `extern`
+함수가 `become`의 피연산자가 될 수 없는 이유다. Root entry bridge는 platform
+`main`에서 내부 worker를 일반 호출로 부른다.
+
 ---
 
 ## 메모리 관리: Reference Counting

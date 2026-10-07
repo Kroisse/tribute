@@ -637,7 +637,7 @@ mod tests {
             rewriter: &mut PatternRewriter<'_>,
         ) -> bool {
             let data = ctx.op(op);
-            if data.dialect != Symbol::new("test") || data.name != Symbol::new("source") {
+            if data.dialect != "test" || data.name != "source" {
                 return false;
             }
 

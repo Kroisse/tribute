@@ -384,8 +384,9 @@ evidence를 그대로 전달하거나 `mask`/`dup`한 값을 전달한다
 ([cps-effects.md](cps-effects.md#row-directed-evidence)). Handler arm은 handle을
 설치한 지점의 evidence로 실행한다.
 
-Source-logical `handle`은 shared legalization에서 explicit evidence 입력과 dispatch
-closure를 가진 `ability.handle_dispatch`가 된다. `resolve_evidence`는
+Source-logical `handle`은 shared legalization에서 추상 `ability.handle`이 되고,
+frame 펼치기에서 explicit evidence 입력과 dispatch closure를 가진
+`ability.handle_dispatch`가 된다. `resolve_evidence`는
 `effect.extend`로 확장한 evidence를 body에 전달하고, `lower_handle_dispatch`는
 사용이 치환된 body를 바깥 block으로 옮긴다. Runtime prompt stack이나 반환된
 suspended-operation 값을 검사하는 loop를 생성하지 않는다.
@@ -546,8 +547,9 @@ optimization도 exact callable contract, affine resume와 source operation kind�
 `tribute_control.handler`는 이 arm에 `resume_token`을 노출하지 않고, nested
 region을 포함한 arm body의 `tribute_control.resume`을 verifier가 거부한다.
 따라서 conversion은 source suffix를 캡처하지 않는다.
-`ability.perform`/`effect.dispatch_cps` ABI의 continuation operand에는 이미
-규정한 zero-capture reject continuation adapter를 전달한다.
+Conversion은 resumption 없는 `ability.abort`를 만들고, frame 펼치기가
+`effect.dispatch_cps` ABI의 continuation operand에 이미 규정한 zero-capture reject
+continuation adapter를 전달한다.
 
 ---
 
@@ -652,8 +654,9 @@ Ownership planning과 target emission은 [공통 callable 본문 구조](ir.md#c
 ### WASM / Native 공통: CPS Tail-Call Effect Handling
 
 Effect handling은 tail-call CPS로 구현한다.
-`lower_ability_perform`이 `ability.perform`과 `ability.call`을 target-independent
-`effect.dispatch_cps` / `effect.dispatch_tail` ABI operation으로 변환한다.
+`lower_continuation_frames`가 `ability.perform`을, `lower_ability_perform`이
+`ability.call`을 각각 target-independent `effect.dispatch_cps` /
+`effect.dispatch_tail` ABI operation으로 변환한다.
 `resolve_evidence`는 handler 설치를 `effect.extend`로 표현한다.
 `lower_handle_dispatch`는 evidence 인자의 모든 사용이 치환된 resultless body를
 바깥 block에 옮기고 delimiter를 제거한다. 정상 완료와 resume하지 않는 handler exit의
@@ -673,7 +676,7 @@ exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 �
 ```text
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
       → source-logical global DCE (산출물 컴파일)
-      → tribute_control_to_cps
+      → tribute_control_to_cps → lower_continuation_frames
       → lower_closure_lambda → lower_ability_perform
       → resolve_evidence → lower_handle_dispatch
       → effect ABI verification → target ABI validation
@@ -824,9 +827,10 @@ flowchart TB
 | `monomorphize`, lowering preparation | checked generic AST | 구체 AST instance와 함께 치환된 metadata |
 | `ast_to_ir` | prepared typed AST | source-logical `tribute_control`과 일반 value IR, struct 필드 함수(getter·setter·modifier) 정의; frontend |
 | source-logical `global_dce` | source-logical 함수 정의와 symbol 참조 | root에서 도달 가능한 정의와 모든 본문 없는 선언; 산출물 컴파일에서만, module-wide |
-| `tribute_control_to_cps` | validated source-logical callable/control | `func`/`closure`, proper tail transfer, explicit `ability.*`; atomic module conversion |
+| `tribute_control_to_cps` | validated source-logical callable/control | `func`/`closure`, proper tail transfer, 추상 frame 표면과 explicit `ability.*`; atomic module conversion |
+| `lower_continuation_frames` | 추상 frame 표면 | nominal frame layout, frame·dispatcher·resume closure, `effect.dispatch_cps`, `ability.handle_dispatch`; module-wide |
 | `lower_closure_lambda` | exact physical lambda contract | `func.func` + `closure.new`; module-wide extraction |
-| `lower_ability_perform` | `ability.perform`/`call` | packed payload + `effect.dispatch_*`; function-anchored |
+| `lower_ability_perform` | `ability.call` | packed payload + `effect.dispatch_tail`; function-anchored |
 | `resolve_evidence` | explicit handler delimiter | `effect.extend`와 body evidence 사용 치환 |
 | `lower_handle_dispatch` | evidence 사용이 치환된 resultless body | body splice와 delimiter 제거; function-anchored |
 | target ABI conversion | exact shared callable/dispatch/frame contracts | physical CPS signature와 root entry bridge |

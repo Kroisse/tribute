@@ -385,7 +385,6 @@ fn main() -> Nil {
 #[salsa_test]
 fn inline_module_definition_wins_over_an_imported_ability(db: &salsa::DatabaseImpl) {
     use tribute_front::ast::{Decl, TypeAnnotationKind};
-    use trunk_ir::Symbol;
 
     let source = SourceCst::from_source_str(
         db,
@@ -418,15 +417,13 @@ mod outer {
         })
         .and_then(|body| {
             body.iter().find_map(|decl| match decl {
-                Decl::Function(function) if function.name == Symbol::new("noop") => {
-                    function.effects.clone()
-                }
+                Decl::Function(function) if function.name == "noop" => function.effects.clone(),
                 _ => None,
             })
         })
         .expect("noop declares effects");
     assert!(
-        matches!(&effects[0].kind, TypeAnnotationKind::Named(name) if *name == Symbol::new("Tick")),
+        matches!(&effects[0].kind, TypeAnnotationKind::Named(name) if *name == "Tick"),
         "{effects:?}"
     );
 }

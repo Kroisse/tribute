@@ -21,7 +21,7 @@ A?          선택적 (0개 또는 1개)
 ### Keywords
 
 ```text
-fn op do let const struct enum ability mod pub use extern case handle resume as
+fn op do let const struct enum ability mod pub use extern case handle resume become as
 True False Nil
 pkg super self
 ```
@@ -48,12 +48,8 @@ type where in
   다음 문자로 둘을 구분한다.
 - 경로 키워드(`pkg`, `super`, `self`)는 raw identifier가 될 수 없다. 대문자로
   시작하는 키워드(`True`, `False`, `Nil`)도 raw 형식이 없다.
-- 새 구문에 필요한 키워드는 **contextual keyword**로 추가한다. 그 구문의 특정
-  위치에서만 키워드로 읽고 다른 곳에서는 식별자로 남기므로, 키워드를 추가해도
-  기존 코드가 깨지지 않는다. 예약어도 도입할 때 strict로 둘지 contextual로
-  바꿀지 정한다.
-- 새 strict 키워드가 필요해지면 그때 manifest 단위의 edition으로 도입한다.
-  Edition 이전의 코드는 그 단어를 raw identifier로 옮겨 쓸 수 있다.
+- Edition이 도입되기 전에는 새 키워드를 strict 키워드로 바로 추가한다. 그 단어를
+  식별자로 쓰던 코드는 raw identifier로 옮겨 쓴다.
 
 ### Operators
 
@@ -783,6 +779,7 @@ PrimaryExpr ::= Literal
               | CaseExpr
               | HandleExpr
               | ResumeExpr
+              | BecomeExpr
 
 ListExpr ::= '[' ExprList? ']'
 TupleExpr ::= '#(' ExprList ')'           // #(1, "hello", 3.14)
@@ -920,6 +917,70 @@ data
     .map(fn(x) x * 2)
     .fold(0, fn(a, b) a + b)
 ```
+
+### Tail Call (`become`)
+
+```ebnf
+BecomeExpr ::= 'become' Expression        // Expression은 인자 목록이 있는 호출
+```
+
+`become f(args)`는 `f(args)`를 호출하면서 현재 callable의 frame을 callee에게 넘기는
+proper tail transfer다. Callee가 돌려주는 값이 그대로 현재 callable의 결과가 되고,
+`become`으로 이어지는 호출이 몇 번 반복되어도 stack 사용량은 늘지 않는다. 루프 문법이
+없으므로 반복은 `become`으로 쓴다.
+
+```rust
+fn sum(n: Int, acc: Int) -> Int {
+    case n == +0 {
+        True -> acc
+        False -> become sum(n - +1, acc + +1)
+    }
+}
+
+fn is_even(n: Int) -> Bool {
+    case n == +0 {
+        True -> True
+        False -> become is_odd(n - +1)
+    }
+}
+
+fn is_odd(n: Int) -> Bool {
+    case n == +0 {
+        True -> False
+        False -> become is_even(n - +1)
+    }
+}
+```
+
+Proper tail call을 보장하는 것은 `become`뿐이다. `become`이 없는 꼬리 위치 호출은
+일반 호출의 의미를 가지며, 컴파일러는 최적화로 이를 tail transfer로 바꿀 수 있지만
+보장하지 않는다. 이 최적화는 target, 최적화 수준, RC 정리 여부에 따라 적용되거나
+적용되지 않는다. 반복 횟수에 제한이 없는 재귀는 `become`으로 써야 한다.
+
+다음 규칙을 어기면 컴파일 오류다. 진단은 보장할 수 없는 이유를 `become` 위치에서
+알려 준다.
+
+- **피연산자:** 인자 목록이 있는 함수 호출이어야 한다. Named function, qualified
+  path, UFCS, callable value(lambda, parameter, capture) 호출이 해당한다. 생성자,
+  ability operation, `resume`, `extern` 함수 호출은 피연산자가 될 수 없다. `extern`
+  함수는 foreign 호출 규약을 쓰므로 frame을 넘길 수 없다.
+- **위치:** `become` 식은 감싼 callable(`fn` 정의나 lambda)의 tail position에 있어야
+  한다. Tail position은 callable body block의 마지막 식, tail position에 있는 block의
+  마지막 식, tail position에 있는 `case`의 각 arm 결과 식이다. 그 밖의 위치(`let`
+  우변, 인자, 연산자 피연산자, `case` scrutinee와 guard)는 tail position이 아니다.
+  Lambda body의 tail position은 그 lambda에 대한 것이며 바깥 callable의 tail
+  position이 아니다.
+- **Handler:** `handle` body는 handler가 설치된 채 실행되므로 그 안은 tail position이
+  아니다. Handler arm(`do`, `fn`, `op`)의 결과는 handle 식의 값이나 resume 값이 되므로
+  역시 tail position이 아니다.
+- **타입:** 호출 결과 타입은 감싼 callable의 결과 타입과 같아야 하고, callee의 effect
+  row는 일반 호출처럼 감싼 callable의 effect row에 포함되어야 한다. `become` 식의
+  타입은 호출 결과 타입이다.
+
+인자는 일반 호출처럼 왼쪽에서 오른쪽으로 평가한다. 모든 인자를 평가한 뒤 현재
+callable의 지역 값을 정리하고 이전한다. 이 정리는 관찰할 수 없으므로 reference
+counting 같은 구현 세부는 `become`을 거부할 이유가 되지 않는다. 보장은 모든 호출
+규약과 target에 똑같이 적용된다.
 
 ### Binary Operators
 
@@ -1322,6 +1383,7 @@ fn main() ->{Io} Nil {
 | `a T::<> b`           | Qualified operator     |
 | `(+)`, `(T::<>)`      | Operator as function   |
 | `resume expr`         | Continuation 재개      |
+| `become f(x)`         | Proper tail call       |
 
 ### Patterns
 

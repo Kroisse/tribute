@@ -1,5 +1,12 @@
 //! Ability dialect — evidence-based handler dispatch.
 
+mod frames;
+
+pub use frames::{CpsClosure, HandlerBinding, OperationKind};
+
+use super::closure::Closure;
+use super::tribute_control::EvidenceStep;
+
 #[trunk_ir::dialect]
 mod ability {
 
@@ -56,6 +63,62 @@ mod ability {
     ///
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
     fn call(ability_ref: Attr<Type>, op_name: Attr<String>, values: Variadic<_>) -> Value<_> {}
+
+    // === Abstract continuation frames ===
+    //
+    // `tribute_control_to_cps` builds continuations through these operations
+    // and `lower_continuation_frames` expands them into frame layouts and
+    // closures.
+
+    /// Opaque `ContinuationFrame<Result>`: where a CPS computation delivers
+    /// its value and sends the operations it performs.
+    struct Frame<Result>;
+
+    /// Frame that enters `continuation` with a value, wrapping `outer`.
+    ///
+    /// `continuation` is `(Evidence, outer frame, value) -> core.never`. When
+    /// the frame is resumed, `evidence_plan` selects the evidence passed to
+    /// the resumed inner computation.
+    #[verify]
+    fn suffix_frame<F: Frame>(
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+        evidence: Value<Evidence>,
+        outer: Value<F>,
+        continuation: Value<CpsClosure>,
+    ) -> Value<impl Frame> {
+    }
+
+    /// Deliver `value` to the frame's completion.
+    fn exit<F: Frame>(frame: Value<F>, value: Value<F::Result>) {}
+
+    /// Install one layer of a handle around `body`, exiting to `exit`.
+    ///
+    /// `arms` holds one handler-arm closure per `handlers` entry, in the
+    /// same order. The body receives the extended evidence and the frame of
+    /// the installed layer, whose completion is `completion`.
+    #[verify]
+    fn handle<F: Frame>(
+        handlers: Attr<[HandlerBinding]>,
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+        evidence: Value<Evidence>,
+        exit: Value<F>,
+        completion: Value<CpsClosure>,
+        arms: Variadic<Closure>,
+    ) {
+        #[region(body)]
+        {}
+    }
+
+    /// Perform an operation returning `core.never` through the frame's
+    /// dispatcher, with no resumption.
+    fn abort<F: Frame>(
+        ability_ref: Attr<Type>,
+        op_name: Attr<String>,
+        evidence: Value<Evidence>,
+        frame: Value<F>,
+        values: Variadic<_>,
+    ) {
+    }
 }
 
 // === Hash-Based Dispatch ===
@@ -240,8 +303,21 @@ impl CallableExitModel for HandleDispatch {
     }
 }
 
+impl CallableExitModel for Exit {}
+
+impl CallableExitModel for Abort {}
+
+impl CallableExitModel for Handle {
+    fn allows_nested_regions(&self, _ctx: &trunk_ir::IrContext) -> bool {
+        true
+    }
+}
+
 inventory::submit! { CallableExitOps::register::<Perform>() }
 inventory::submit! { CallableExitOps::register::<HandleDispatch>() }
+inventory::submit! { CallableExitOps::register::<Exit>() }
+inventory::submit! { CallableExitOps::register::<Abort>() }
+inventory::submit! { CallableExitOps::register::<Handle>() }
 
 // === ADT Type Functions ===
 

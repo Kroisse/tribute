@@ -225,9 +225,9 @@ mod tests {
         let mut found_const = false;
         let _ = walk_region::<()>(&ctx, outer_region, &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == Symbol::new("func") && data.name == Symbol::new("func") {
+            if data.dialect == "func" && data.name == "func" {
                 ControlFlow::<(), _>::Continue(WalkAction::Skip)
-            } else if data.dialect == Symbol::new("arith") {
+            } else if data.dialect == "arith" {
                 found_const = true;
                 ControlFlow::Continue(WalkAction::Advance)
             } else {

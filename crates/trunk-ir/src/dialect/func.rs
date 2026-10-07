@@ -292,9 +292,10 @@ impl FuncSig {
         &self,
         ctx: &'a IrContext,
     ) -> impl Iterator<Item = (&'a Symbol, &'a Attribute)> {
-        ctx.get_type(self.0).attrs.iter().filter(|(key, _)| {
-            **key != Symbol::new(NUM_INPUTS_ATTR) && **key != Symbol::new(NUM_RESULTS_ATTR)
-        })
+        ctx.get_type(self.0)
+            .attrs
+            .iter()
+            .filter(|(key, _)| **key != NUM_INPUTS_ATTR && **key != NUM_RESULTS_ATTR)
     }
 
     /// Remove input/result count delimiters from owned function metadata before rebuilding it.
@@ -500,7 +501,7 @@ fn verify_typed_callee(
 ) -> Result<(), String> {
     let callee_ty = ctx.value_ty(callee);
     let data = ctx.get_type(callee_ty);
-    let func_ty = if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
+    let func_ty = if data.dialect == "closure" && data.name == "closure" {
         let [func_ty] = data.params.as_slice() else {
             return Err("callee closure type must contain exactly one function type".into());
         };
@@ -933,10 +934,7 @@ mod tests {
         assert_eq!(tail.call_conv(&ctx), Some(CallConv::Tail));
         assert_eq!(tail.inputs(&ctx), [i32_ty]);
         assert!(tail.results(&ctx).is_empty());
-        assert!(
-            tail.non_reserved_attrs(&ctx)
-                .any(|(key, _)| *key == Symbol::new("note"))
-        );
+        assert!(tail.non_reserved_attrs(&ctx).any(|(key, _)| *key == "note"));
         assert_eq!(tail.with_call_conv(&mut ctx, CallConv::Platform), platform);
     }
 

@@ -206,10 +206,8 @@ pub const STRUCT_NAME_ATTR: &str = "name";
 /// `name` type attribute.
 pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
     let data = ctx.get_type(ty);
-    let nominal = data.dialect == Symbol::new("adt")
-        && (data.name == Symbol::new("struct")
-            || data.name == Symbol::new("enum")
-            || data.name == Symbol::new("typeref"));
+    let nominal =
+        data.dialect == "adt" && (matches!(data.name.as_str(), "struct" | "enum" | "typeref"));
     nominal
         .then(|| data.attrs.get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
@@ -332,14 +330,15 @@ impl Struct {
         ctx.get_type(self.0)
             .param_attrs(index)
             .iter()
-            .filter(|(key, _)| **key != Symbol::new(STRUCT_NAME_ATTR))
+            .filter(|(key, _)| **key != STRUCT_NAME_ATTR)
     }
 
     /// The type attributes other than the name and the field attributes.
     pub fn extra_attrs(self, ctx: &IrContext) -> impl Iterator<Item = (&Symbol, &Attribute)> + '_ {
-        ctx.get_type(self.0).attrs.iter().filter(|(key, _)| {
-            **key != Symbol::new(STRUCT_NAME_ATTR) && **key != Symbol::new(PARAM_ATTRS_ATTR)
-        })
+        ctx.get_type(self.0)
+            .attrs
+            .iter()
+            .filter(|(key, _)| **key != STRUCT_NAME_ATTR && **key != PARAM_ATTRS_ATTR)
     }
 
     /// Each field as an owned `(name, type, attributes)` triple, for rebuilding
@@ -686,14 +685,14 @@ impl Enum {
         ctx.get_type(self.0)
             .attrs
             .iter()
-            .filter(|(key, _)| **key != Symbol::new(STRUCT_NAME_ATTR))
+            .filter(|(key, _)| **key != STRUCT_NAME_ATTR)
     }
 }
 
 /// The name of an `adt.variant` type.
 fn variant_name(ctx: &IrContext, variant: TypeRef) -> Option<StringRef> {
     let data = ctx.get_type(variant);
-    (data.dialect == Symbol::new("adt") && data.name == Symbol::new("variant"))
+    (data.dialect == "adt" && data.name == "variant")
         .then(|| data.attrs.get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
 }
@@ -807,7 +806,7 @@ fn write_enum_type(
             h.write_type(field_ty)?;
             let mut attrs = field_attrs
                 .iter()
-                .filter(|(key, _)| **key != Symbol::new(STRUCT_NAME_ATTR))
+                .filter(|(key, _)| **key != STRUCT_NAME_ATTR)
                 .peekable();
             if attrs.peek().is_some() {
                 h.write_char(' ')?;

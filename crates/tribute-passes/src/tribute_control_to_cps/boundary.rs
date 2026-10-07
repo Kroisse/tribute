@@ -98,7 +98,7 @@ enum TypeBoundary {
 
 pub(super) fn type_is(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
+    data.dialect == dialect && data.name == name
 }
 
 fn walk_attribute_types(
@@ -126,10 +126,9 @@ fn walk_type(
         TypeBoundary::Pre => {
             type_is(ctx, ty, "func", "func_sig")
                 || type_is(ctx, ty, "closure", "closure")
-                || data.dialect == Symbol::new("ability")
-                || data.dialect == Symbol::new("effect")
+                || matches!(data.dialect.as_str(), "ability" | "effect")
         }
-        TypeBoundary::Post => data.dialect == Symbol::new("tribute_control"),
+        TypeBoundary::Post => data.dialect == "tribute_control",
     };
     if forbidden {
         errors.push(format!(
@@ -213,8 +212,8 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let closure_ty = ctx.get_type(ctx.value_ty(value));
-        let valid = if closure_ty.dialect == Symbol::new("closure")
-            && closure_ty.name == Symbol::new("closure")
+        let valid = if closure_ty.dialect == "closure"
+            && closure_ty.name == "closure"
             && closure_ty.params.len() == 1
         {
             func::FuncSig::from_type_ref(ctx, closure_ty.params[0]).is_some_and(|function| {
@@ -298,12 +297,12 @@ fn verify_physical_callable_graph(
             .get_i64(CALLING_CONVENTION_ATTR)
             .ok()
             .flatten();
-        let requires_convention = (data.dialect == Symbol::new("func")
+        let requires_convention = (data.dialect == "func"
             && matches!(
                 data.name.with_str(|name| name.to_owned()).as_str(),
                 "func" | "call" | "call_indirect" | "tail_call" | "tail_call_indirect"
             ))
-            || (data.dialect == Symbol::new("closure")
+            || (data.dialect == "closure"
                 && matches!(
                     data.name.with_str(|name| name.to_owned()).as_str(),
                     "lambda" | "new"
@@ -318,7 +317,7 @@ fn verify_physical_callable_graph(
                 ),
             });
         }
-        if data.dialect == Symbol::new("func") && data.name == Symbol::new("tail_call") {
+        if data.dialect == "func" && data.name == "tail_call" {
             let Some(callee) = data.attributes.get_symbol_ref("callee") else {
                 failures.push(BoundaryFailure {
                     op: Some(op),
@@ -371,8 +370,8 @@ fn verify_physical_callable_graph(
                     message: "func.tail_call must preserve exact Cps metadata".into(),
                 });
             }
-        } else if data.dialect == Symbol::new("func")
-            && data.name == Symbol::new("tail_call_indirect")
+        } else if data.dialect == "func"
+            && data.name == "tail_call_indirect"
             && op_convention != Some(CallingConvention::Cps as i64)
         {
             failures.push(BoundaryFailure {
@@ -380,7 +379,7 @@ fn verify_physical_callable_graph(
                 location: Some(data.location),
                 message: "func.tail_call_indirect must carry exact Cps metadata".into(),
             });
-        } else if data.dialect == Symbol::new("func") && data.name == Symbol::new("call") {
+        } else if data.dialect == "func" && data.name == "call" {
             let callee = data.attributes.get_symbol_ref("callee");
             if let Some(callee) = callee {
                 match signatures.get(callee) {
@@ -397,8 +396,8 @@ fn verify_physical_callable_graph(
                     }),
                 }
             }
-        } else if data.dialect == Symbol::new("func")
-            && data.name == Symbol::new("call_indirect")
+        } else if data.dialect == "func"
+            && data.name == "call_indirect"
             && op_convention == Some(CallingConvention::Cps as i64)
         {
             failures.push(BoundaryFailure {
@@ -457,7 +456,7 @@ pub(super) fn verify_source_conversion_shapes(
                 "tribute-control-pre-cps is structured and forbids block successors",
             ));
         }
-        if data.dialect == Symbol::new("scf") && data.name == Symbol::new("switch") {
+        if data.dialect == "scf" && data.name == "switch" {
             let body_region =
                 ctx.op_regions(op).exactly_one().ok().filter(|_| {
                     ctx.op_operands(op).len() == 1 && ctx.op_result_types(op).is_empty()
@@ -467,10 +466,8 @@ pub(super) fn verify_source_conversion_shapes(
                 if let [body] = blocks.as_slice() {
                     for arm in ctx.block(*body).ops.iter().copied() {
                         let arm_data = ctx.op(arm);
-                        let is_case = arm_data.dialect == Symbol::new("scf")
-                            && arm_data.name == Symbol::new("case");
-                        let is_default = arm_data.dialect == Symbol::new("scf")
-                            && arm_data.name == Symbol::new("default");
+                        let is_case = arm_data.dialect == "scf" && arm_data.name == "case";
+                        let is_default = arm_data.dialect == "scf" && arm_data.name == "default";
                         if !is_case && !is_default {
                             failures.push(failure(
                                 ctx,
