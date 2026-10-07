@@ -14,7 +14,7 @@ use tribute_ir::continuation_frame;
 
 use tribute_core::calling_convention::{
     cps_closure_function_type, cps_completion_type, cps_done_type, cps_resume_exact_type,
-    cps_resume_type, physical_closure_function_type, physical_closure_type_with_environment_index,
+    physical_closure_function_type, physical_closure_type_with_environment_index,
 };
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallableAbi, CallingConvention, physical_closure_type,
@@ -25,7 +25,7 @@ use tribute_ir::dialect::{ability, closure, tribute_control, tribute_rt};
 use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{arith, core, func, scf};
+use trunk_ir::dialect::{core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
@@ -115,25 +115,6 @@ pub(crate) struct FrameTypes {
     pub(crate) layout: TypeRef,
     pub(crate) done: TypeRef,
     pub(crate) dispatch: TypeRef,
-}
-
-/// The frame types a suffix layer builds around: its own and the frame
-/// around it.
-#[derive(Clone, Copy)]
-pub(crate) struct LayerFrames {
-    pub(crate) value: FrameTypes,
-    pub(crate) boundary: FrameTypes,
-}
-
-/// A call, resume, or structured suffix layer of a continuation.
-#[derive(Clone)]
-pub(crate) struct SuffixLayer {
-    pub(crate) value_type: TypeRef,
-    /// Builds the dispatcher that rebuilds this layer when it is resumed.
-    pub(crate) dispatch_factory: Symbol,
-    /// The `evidence_plan` that selects the evidence of the computation the
-    /// layer continues.
-    pub(crate) plan: Option<Attribute>,
 }
 
 /// How a `resume` in the body of a handler arm reaches its continuation.

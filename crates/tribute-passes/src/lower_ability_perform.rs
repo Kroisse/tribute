@@ -1,18 +1,18 @@
-//! Lower `ability.perform` and `ability.call` operations to the effect ABI.
-//!
-//! In CPS-based effect handling, `ability.perform` carries an explicit
-//! continuation closure. This pass converts it to:
+//! Lower `ability.call` operations to the effect ABI.
 //!
 //! ```text
 //! // Input:
-//! ability.perform %evidence, %dispatch, %resume, [%args...]
+//! %result = ability.call [%args...]
 //!   { ability_ref: core.ability_ref<{name = "State"}>, op_name: "get" }
 //!
 //! // Output:
 //! %payload = pack %args into the canonical operation product
-//! effect.dispatch_cps %evidence, %dispatch, %resume, %payload
+//! %erased = effect.dispatch_tail %evidence, %payload
 //!   { ability_ref: core.ability_ref<{name = "State"}>, op_name: "get" }
 //! ```
+//!
+//! `lower_continuation_frames` lowers `ability.perform` and `ability.abort`
+//! with the same payload packing.
 //!
 //! Uses `PatternApplicator` for declarative op-level rewriting. This is an
 //! intermediate best-effort pass: the final `ability-lowered` boundary is
@@ -49,15 +49,14 @@ impl CommonTypes {
     }
 }
 
-/// Lower all currently legalizable `ability.perform` and `ability.call` ops.
+/// Lower all currently legalizable `ability.call` ops.
 ///
 /// Residual ability operations are allowed here and rejected at the final
 /// `ability-lowered` boundary.
 pub(crate) fn lower_ability_perform<S: RewriteScope>(ctx: &mut IrContext, scope: S) {
     let types = CommonTypes::new(ctx);
-    let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(LowerPerformPattern { types })
-        .add_pattern(LowerCallPattern { types });
+    let applicator =
+        PatternApplicator::new(TypeConverter::new()).add_pattern(LowerCallPattern { types });
     applicator.apply_partial(ctx, scope);
 }
 
@@ -79,69 +78,6 @@ impl Pass for LowerAbilityPerform {
     ) -> PassRunResult {
         lower_ability_perform(ctx, target);
         Ok(())
-    }
-}
-
-/// Pattern: final `ability.perform` → resultless `effect.dispatch_cps`.
-struct LowerPerformPattern {
-    types: CommonTypes,
-}
-
-impl RewritePattern for LowerPerformPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if ability::Perform::from_op(ctx, op).is_err() {
-            return false;
-        }
-
-        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-        if operands.len() < 3 || !ctx.op_result_types(op).is_empty() {
-            return false;
-        }
-
-        let location = ctx.op(op).location;
-        let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
-        let op_name = ctx.op(op).attributes.get_string_ref("op_name").unwrap();
-
-        // Operands: [evidence, exact dispatch, exact resume, ...values]
-        let evidence_val = operands[0];
-        let dispatch_val = operands[1];
-        let resume_val = operands[2];
-        let value_operands = &operands[3..];
-
-        let Ok(answer_type) =
-            crate::target_abi::dispatch_answer_type(ctx, evidence_val, dispatch_val, resume_val)
-        else {
-            return false;
-        };
-        let t = &self.types;
-
-        let shift_value_val = pack_payload(
-            ctx,
-            rewriter,
-            location,
-            ability_ref_type,
-            op_name,
-            value_operands,
-            t.anyref,
-        );
-
-        // === 3. Dispatch through the target-independent effect ABI ===
-        // Keep both control closures typed. Only the payload crosses the
-        // target-independent dynamic-storage boundary.
-        let dispatch_op =
-            effect::DispatchCps::operands(evidence_val, dispatch_val, resume_val, shift_value_val)
-                .ability_ref(ability_ref_type)
-                .op_name(op_name)
-                .answer_type(answer_type)
-                .build(ctx, location);
-        rewriter.insert_op(dispatch_op.op_ref());
-        rewriter.erase_op(vec![]);
-        true
     }
 }
 
@@ -219,7 +155,7 @@ impl RewritePattern for LowerCallPattern {
 // Helpers
 // ============================================================================
 
-fn pack_payload(
+pub(crate) fn pack_payload(
     ctx: &mut IrContext,
     rewriter: &mut PatternRewriter<'_>,
     location: trunk_ir::types::Location,
@@ -290,10 +226,7 @@ fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tribute_ir::continuation_frame;
-    use trunk_ir::Symbol;
     use trunk_ir::context::IrContext;
-    use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
@@ -305,113 +238,6 @@ mod tests {
     /// Build the canonical evidence type string for use in test IR.
     fn evidence_type_str() -> &'static str {
         "core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
-    }
-
-    fn attach_exact_perform_types(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
-        use tribute_core::calling_convention::*;
-        let answer = ctx.intern_type(
-            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
-        );
-        let evidence = ability::evidence_adt_type_ref(ctx);
-        let anyref = tribute_rt::anyref(ctx).as_type_ref();
-        let frame_name = "test_frame";
-        let frame = continuation_frame::ref_type(ctx, frame_name, answer);
-        let done = cps_done_type(ctx, answer);
-        let dispatch = cps_dispatch_type(ctx, evidence, frame, anyref, answer);
-        let resume =
-            func::FuncSig::from_type_ref(ctx, cps_closure_function_type(ctx, dispatch).unwrap())
-                .unwrap()
-                .inputs(ctx)[1];
-        let layout = continuation_frame::layout_type(ctx, frame_name, answer, done, dispatch);
-        ctx.register_type_alias(Symbol::new("test_frame"), layout);
-        let mut performs = Vec::new();
-        let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
-            if ability::Perform::matches(ctx, op) {
-                performs.push(op);
-            }
-            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
-        });
-        for op in performs {
-            for (value, ty) in [
-                (ctx.op_operands(op)[1], dispatch),
-                (ctx.op_operands(op)[2], resume),
-            ] {
-                let trunk_ir::refs::ValueDef::OpResult(producer, index) = ctx.value_def(value)
-                else {
-                    panic!("fixture constant")
-                };
-                ctx.set_op_result_type(producer, index, ty);
-            }
-        }
-    }
-
-    #[test]
-    fn test_lower_perform_basic() {
-        let mut ctx = IrContext::new();
-        init_common_types(&mut ctx);
-        let ev_ty = evidence_type_str();
-
-        let module = parse_test_module(
-            &mut ctx,
-            &format!(
-                r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> core.never {{
-    %dispatch = arith.const {{value = 0}} : tribute_rt.anyref
-    %resume = arith.const {{value = 1}} : tribute_rt.anyref
-    ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref<{{name = "State"}}>, op_name = "get"}}
-  }}
-}}"#
-            ),
-        );
-
-        attach_exact_perform_types(&mut ctx, module);
-        lower_ability_perform(&mut ctx, module);
-
-        let ir_text = print_module(&ctx, module.op());
-        assert!(!ir_text.contains("ability.perform"), "{ir_text}");
-        assert!(ir_text.contains("effect.dispatch_cps"), "{ir_text}");
-        assert!(!ir_text.contains(" -> tribute_rt.anyref"), "{ir_text}");
-        let mut reparsed = IrContext::new();
-        parse_test_module(&mut reparsed, &ir_text);
-    }
-
-    #[test]
-    fn test_lower_perform_with_args() {
-        let mut ctx = IrContext::new();
-        init_common_types(&mut ctx);
-        let ev_ty = evidence_type_str();
-
-        let module = parse_test_module(
-            &mut ctx,
-            &format!(
-                r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> core.never {{
-    %val = arith.const {{value = 42}} : core.i32
-    %dispatch = arith.const {{value = 0}} : tribute_rt.anyref
-    %resume = arith.const {{value = 1}} : tribute_rt.anyref
-    ability.perform %ev, %dispatch, %resume, %val {{ability_ref = core.ability_ref<{{name = "State"}}>, op_name = "set"}}
-  }}
-}}"#
-            ),
-        );
-
-        attach_exact_perform_types(&mut ctx, module);
-        lower_ability_perform(&mut ctx, module);
-
-        let ir_text = print_module(&ctx, module.op());
-        assert!(!ir_text.contains("ability.perform"), "{ir_text}");
-        assert!(ir_text.contains("effect.dispatch_cps"), "{ir_text}");
-        assert!(ir_text.contains("adt.struct_new"), "{ir_text}");
-        assert!(
-            ir_text.contains("(arg0: tribute_rt.anyref)"),
-            "payload fields must use the canonical dynamic storage contract:\n{ir_text}"
-        );
-        assert!(
-            ir_text.matches("core.unrealized_conversion_cast").count() >= 2,
-            "the argument and packed product must both retain explicit dynamic views:\n{ir_text}"
-        );
-        let mut reparsed = IrContext::new();
-        parse_test_module(&mut reparsed, &ir_text);
     }
 
     #[test]
@@ -506,51 +332,5 @@ mod tests {
         assert!(ir.contains("core.unrealized_conversion_cast"), "{ir}");
         let mut reparsed = IrContext::new();
         parse_test_module(&mut reparsed, &ir);
-    }
-
-    #[test]
-    fn test_lower_perform_no_evidence_skips_gracefully() {
-        let mut ctx = IrContext::new();
-        init_common_types(&mut ctx);
-
-        // Function without evidence parameter — should skip without panicking.
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @test_fn(%k: tribute_rt.anyref) -> core.never {
-    ability.perform %k {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get"}
-  }
-}"#,
-        );
-
-        // Should not panic; the perform op is left unchanged.
-        lower_ability_perform(&mut ctx, module);
-
-        let ir = print_module(&ctx, module.op());
-        assert!(
-            ir.contains("ability.perform"),
-            "perform op should remain unchanged when evidence is missing, got:\n{ir}"
-        );
-    }
-
-    #[test]
-    fn result_bearing_final_perform_is_unchanged() {
-        let mut ctx = IrContext::new();
-        init_common_types(&mut ctx);
-        let ev_ty = evidence_type_str();
-        let source = format!(
-            r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
-    %k = arith.const {{value = 0}} : tribute_rt.anyref
-    %result = ability.perform %ev, %k {{ability_ref = core.ability_ref<{{name = "State"}}>, op_name = "get"}} : tribute_rt.anyref
-    func.return %result
-  }}
-}}"#
-        );
-        let module = parse_test_module(&mut ctx, &source);
-        lower_ability_perform(&mut ctx, module);
-        let output = print_module(&ctx, module.op());
-        assert!(output.contains("ability.perform"), "{output}");
-        assert!(!output.contains("effect.dispatch_cps"), "{output}");
     }
 }

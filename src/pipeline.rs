@@ -43,10 +43,11 @@
 //!     │             functions skip CPS legalization)
 //!     ▼ tribute_control_to_cps → lower_continuation_frames →
 //!       lower_closure_lambda → intrinsic/list/io lowering
-//! Module (CPS callable contracts and explicit evidence)
+//! Module (CPS callable contracts, explicit evidence, and general
+//!         operations lowered to effect.dispatch_cps)
 //!     │
-//!     ▼ lower_ability_perform (CPS tail-call)
-//! Module (ability.perform/call lowered to effect.dispatch_*)
+//!     ▼ lower_ability_perform
+//! Module (ability.call lowered to effect.dispatch_tail)
 //!     │
 //!     ▼ resolve_evidence
 //! Module (handler evidence setup lowered to effect.extend)
@@ -933,7 +934,8 @@ fn shared_middle_end(
     structural_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     // CPS effect handling, function-local phase: lower_ability_perform produces
-    // explicit effect dispatches; evidence resolution then extends handler scopes.
+    // the tail-resumptive effect dispatches; evidence resolution then extends
+    // handler scopes.
     let mut ability_pm = PassManager::new();
     ability_pm
         .nest::<func_dialect::Func>()

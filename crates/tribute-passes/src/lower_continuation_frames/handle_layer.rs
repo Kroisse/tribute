@@ -15,10 +15,13 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
+use super::suffix_layer::{
+    LayerFrames, SuffixLayer, build_done_adapter, build_suffix_rebound, finish_rebound, pack_frame,
+    unpack_frame,
+};
 use crate::tribute_control_to_cps::{
-    LayerFrames, SuffixLayer, TributeControlToCpsError, build_done_adapter, build_suffix_rebound,
-    closure_over, emit_cps_tail_call_indirect, finish_rebound, make_block, pack_frame,
-    set_evidence_plan, single_block_region, unpack_frame,
+    TributeControlToCpsError, closure_over, emit_cps_tail_call_indirect, make_block,
+    set_evidence_plan, single_block_region,
 };
 
 /// One arm of a handle: the operation it handles and the closure it takes.

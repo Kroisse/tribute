@@ -8,7 +8,7 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 
-use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
+use super::{Frame, Handle, Perform, SuffixFrame, is_evidence_type_ref};
 use crate::dialect::tribute_control::{
     CALLING_CONVENTION_ATTR, CallingConvention, EvidencePlanSite, verify_evidence_plan,
 };
@@ -230,6 +230,22 @@ impl trunk_ir::ops::Verify for SuffixFrame {
             );
         }
         Ok(())
+    }
+}
+
+impl trunk_ir::ops::Verify for Perform {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        let frame = ctx.value_ty(self.frame(ctx));
+        let rest = cps_closure_rest(
+            ctx,
+            self.resumption(ctx),
+            frame,
+            "ability.perform resumption",
+        )?;
+        match rest {
+            [input] if !is_never(ctx, *input) => Ok(()),
+            _ => Err("ability.perform resumption must take one operation result".into()),
+        }
     }
 }
 
@@ -468,6 +484,56 @@ mod tests {
         let (reparsed, reparsed_module) = parse(&printed);
         assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
         assert_eq!(errors(&valid_handle()), "");
+    }
+
+    #[test]
+    fn perform_takes_the_frame_and_an_exact_resumption() {
+        let perform = |params: &str, resumption: &str| {
+            module(
+                params,
+                &format!(
+                    r#"    ability.perform %ev, %exit, {resumption}, %arg {{ability_ref = !state, op_name = "set"}}"#
+                ),
+            )
+        };
+        let valid = perform(", %k: !resume, %arg: core.i32", "%k");
+        let (ctx, parsed) = parse(&valid);
+        let printed = print_module(&ctx, parsed.op());
+        let (reparsed, reparsed_module) = parse(&printed);
+        assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
+        assert_eq!(errors(&valid), "");
+
+        const NEVER: &str = "closure.closure<func.func_sig<(!ev, !frame_i32, core.never) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>";
+        let cases = [
+            (
+                "resumption into another frame",
+                perform(", %other: !frame_nil, %k: !resume, %arg: core.i32", "%k")
+                    .replace("%ev, %exit, %k", "%ev, %other, %k"),
+                "must take the evidence and the frame of the answer first",
+            ),
+            (
+                "direct resumption",
+                perform(", %k: !fn_arm, %arg: core.i32", "%k"),
+                "`resumption`: expected CpsClosure",
+            ),
+            (
+                "resumption of an operation that returns never",
+                perform(&format!(", %k: {NEVER}, %arg: core.i32"), "%k"),
+                "must take one operation result",
+            ),
+            (
+                "resumption with resume tokens",
+                perform(", %k: !op_arm, %arg: core.i32", "%k"),
+                "must take one operation result",
+            ),
+        ];
+        for (name, text, expected) in cases {
+            let error = errors(&text);
+            assert!(
+                error.contains(expected),
+                "{name}: expected {expected:?}, got {error:?}"
+            );
+        }
     }
 
     #[test]
