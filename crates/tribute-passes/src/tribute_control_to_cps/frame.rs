@@ -1,10 +1,9 @@
-//! Continuation frames: the layouts and helper names a conversion allocates,
-//! suffix continuations and their frames, and the exits that transfer through
-//! a frame.
+//! Continuation frames: suffix continuations and their frames, and the exits
+//! that transfer through a frame.
 
 use super::*;
 
-impl FrameState {
+impl Converter<'_> {
     pub(super) fn fresh_helper(&mut self, prefix: &str) -> Symbol {
         let index = self.helper_index;
         self.helper_index += 1;
@@ -13,49 +12,10 @@ impl FrameState {
 
     /// The opaque `ability.frame<R>` that callables, completions, and
     /// resumptions take in the frame position.
-    pub(super) fn frame_type(&mut self, ctx: &mut IrContext, answer: TypeRef) -> TypeRef {
-        self.frame_types(ctx, answer);
-        ability::frame(ctx, answer).as_type_ref()
+    pub(super) fn frame_type(&mut self, answer: TypeRef) -> TypeRef {
+        ability::frame(self.ctx, answer).as_type_ref()
     }
 
-    /// The layout `lower_continuation_frames` gives `ability.frame<R>`,
-    /// registered on first use.
-    pub(super) fn frame_types(&mut self, ctx: &mut IrContext, answer: TypeRef) -> FrameTypes {
-        if let Some(frame) = self.layouts.get(&answer).copied() {
-            return frame;
-        }
-        // Number frames in order of first use. A `TypeRef` is an interner
-        // index, which changes with the types interned before this pass.
-        let name_text = format!("{}{}", continuation_frame::NAME_PREFIX, self.layouts.len());
-        let name = ctx.intern_str(&name_text);
-        let reference = continuation_frame::ref_type(ctx, name, answer);
-        let done = cps_done_type(ctx, answer);
-        let evidence = ability::evidence_adt_type_ref(ctx);
-        let anyref = tribute_rt::anyref(ctx).as_type_ref();
-        let i32 = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let abstract_frame = ability::frame(ctx, answer).as_type_ref();
-        let dispatch = tribute_core::calling_convention::cps_dispatch_type(
-            ctx,
-            evidence,
-            abstract_frame,
-            anyref,
-            i32,
-        );
-        let layout = continuation_frame::layout_type(ctx, name, answer, done, dispatch);
-        let frame = FrameTypes {
-            answer,
-            reference,
-            layout,
-            done,
-            dispatch,
-        };
-        self.layouts.insert(answer, frame);
-        self.layout_aliases.push((Symbol::new(&name_text), layout));
-        frame
-    }
-}
-
-impl Converter<'_> {
     /// Build the frame a suffix continuation is entered through. `plan` is
     /// the `evidence_plan` that selects the evidence of the computation the
     /// frame is passed to.
@@ -87,7 +47,7 @@ impl Converter<'_> {
             self.ctx.push_op(block, typed.op_ref());
             typed.result(self.ctx)
         };
-        let frame_type = self.frames.frame_type(self.ctx, value_type);
+        let frame_type = self.frame_type(value_type);
         let frame = ability::SuffixFrame::operands(evidence, outer, suffix)
             .results(frame_type)
             .build(self.ctx, location);
@@ -155,7 +115,7 @@ impl Converter<'_> {
         location: Location,
     ) -> Result<ValueRef, TributeControlToCpsError> {
         let evidence_type = self.evidence_type();
-        let frame_type = self.frames.frame_type(self.ctx, flow.answer_type);
+        let frame_type = self.frame_type(flow.answer_type);
         let block = make_block(self.ctx, location, &[evidence_type, frame_type]);
         let mut suffix_mapping = mapping.clone();
         let suffix_flow = Flow {
@@ -197,7 +157,7 @@ impl Converter<'_> {
     ) -> Result<ValueRef, TributeControlToCpsError> {
         let result_type = self.convert_type(result_type);
         let evidence_type = self.evidence_type();
-        let frame_type = self.frames.frame_type(self.ctx, flow.answer_type);
+        let frame_type = self.frame_type(flow.answer_type);
         let block = make_block(
             self.ctx,
             location,

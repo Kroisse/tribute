@@ -15,7 +15,7 @@ impl Converter<'_> {
         let source_arg = self.ctx.block_args(source_block)[0];
         let arg_type = self.convert_type(self.ctx.value_ty(source_arg));
         let evidence_type = self.evidence_type();
-        let frame_type = self.frames.frame_type(self.ctx, flow.answer_type);
+        let frame_type = self.frame_type(flow.answer_type);
         let block = make_block(self.ctx, location, &[evidence_type, frame_type, arg_type]);
         let mut body_mapping = mapping.clone();
         body_mapping.insert(source_arg, self.ctx.block_args(block)[2]);
@@ -60,7 +60,7 @@ impl Converter<'_> {
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
         let input_type = self.convert_type(input_type);
         let evidence_type = self.evidence_type();
-        let frame_type = self.frames.frame_type(self.ctx, flow.answer_type);
+        let frame_type = self.frame_type(flow.answer_type);
         let block = make_block(self.ctx, location, &[evidence_type, frame_type, input_type]);
         let resume_evidence = self.ctx.block_args(block)[0];
         let resume_frame = self.ctx.block_args(block)[1];
@@ -272,7 +272,7 @@ impl Converter<'_> {
         // resumes from a lambda.
         let mut params = vec![evidence_type];
         if general {
-            params.push(self.frames.frame_type(self.ctx, handle_answer));
+            params.push(self.frame_type(handle_answer));
         }
         let source_offset = params.len();
         params.extend_from_slice(&converted_args);
@@ -398,7 +398,7 @@ impl Converter<'_> {
         let outer_evidence = self.current_evidence(source, flow)?;
 
         let evidence_type = self.evidence_type();
-        let body_frame_type = self.frames.frame_type(self.ctx, completion_input);
+        let body_frame_type = self.frame_type(completion_input);
         let body_block = make_block(self.ctx, location, &[evidence_type, body_frame_type]);
         let extended_evidence = self.ctx.block_args(body_block)[0];
         let body_frame = self.ctx.block_args(body_block)[1];

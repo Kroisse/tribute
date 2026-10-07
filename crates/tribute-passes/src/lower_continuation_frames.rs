@@ -13,8 +13,9 @@ use std::ops::ControlFlow;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use tribute_core::calling_convention::{cps_dispatch_type, cps_done_type};
 use tribute_ir::continuation_frame;
-use tribute_ir::dialect::{ability, adt};
+use tribute_ir::dialect::{ability, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
@@ -25,11 +26,11 @@ use trunk_ir::refs::{BlockRef, OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::types::Location;
+use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::walk::{WalkAction, walk_op};
 
 use crate::closure_lower::{TypeSubstitution, substitute_module_types_keeping_casts};
-use crate::cps_builders::{FrameTypes, helper_symbol};
+use crate::cps_builders::helper_symbol;
 use crate::tribute_control_to_cps::TributeControlToCpsError;
 
 mod handle_layer;
@@ -56,8 +57,8 @@ impl Pass for LowerContinuationFrames {
     }
 }
 
-/// Replace the abstract frame surface of `module` with the frame layouts
-/// `tribute_control_to_cps` registered.
+/// Replace the abstract frame surface of `module` with nominal frame layouts
+/// and the operations that build and read them.
 pub fn lower_continuation_frames(
     ctx: &mut IrContext,
     module: Module,
@@ -68,12 +69,19 @@ pub fn lower_continuation_frames(
         .and_then(|body| ctx.region(body).blocks.first().copied())
         .ok_or_else(|| TributeControlToCpsError::post_at(location, "module has no body block"))?;
 
-    let replacements = frame_references(ctx);
+    let layouts = frame_layouts(ctx, module);
+    let replacements: HashMap<_, _> = layouts
+        .iter()
+        .map(|(frame, types)| (*frame, types.reference))
+        .collect();
     substitute_module_types_keeping_casts(ctx, module, |_, ty| replacements.get(&ty).copied());
 
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(ExpandFrameOperations {
-            frames: frame_types(ctx, location)?,
+            frames: layouts
+                .into_iter()
+                .map(|(_, types)| (types.answer, types))
+                .collect(),
             next_helper: Cell::new(next_helper_index(ctx, module_block)),
         })
         .apply_partial(ctx, module);
@@ -135,20 +143,59 @@ fn detach_into(ctx: &mut IrContext, block: BlockRef, rewriter: &mut PatternRewri
     }
 }
 
-/// The nominal reference of the layout of each `ability.frame<R>`.
+/// The types of the layout of one `ability.frame<R>`.
+#[derive(Clone, Copy)]
+struct FrameTypes {
+    /// The answer type `R` after the frames it mentions became references.
+    answer: TypeRef,
+    reference: TypeRef,
+    layout: TypeRef,
+    done: TypeRef,
+    dispatch: TypeRef,
+}
+
+/// Choose and register the layout of each `ability.frame<R>` of the module,
+/// keyed by that abstract type. Layouts are numbered in the order a walk of
+/// the module first meets their frames.
 ///
-/// The layout is named by the answer type after its own frames are
-/// converted, so an answer that mentions frames resolves them first.
-fn frame_references(ctx: &mut IrContext) -> HashMap<TypeRef, TypeRef> {
-    let names = frame_layouts(ctx);
+/// A layout holds the answer type after its own frames are converted, so an
+/// answer that mentions frames resolves them first.
+fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameTypes)> {
+    let answers = frame_answers(ctx, module);
+    let names: HashMap<TypeRef, String> = answers
+        .iter()
+        .enumerate()
+        .map(|(index, answer)| {
+            let name = format!("{}{index}", continuation_frame::NAME_PREFIX);
+            (*answer, name)
+        })
+        .collect();
+    let evidence = ability::evidence_adt_type_ref(ctx);
+    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let i32_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
     let mut resolved = HashMap::default();
-    for &answer in names.keys() {
-        resolve_frame(ctx, answer, &names, &mut resolved);
+    let mut layouts = Vec::with_capacity(answers.len());
+    for source_answer in answers {
+        let reference = resolve_frame(ctx, source_answer, &names, &mut resolved)
+            .expect("every collected answer has a name");
+        let answer = continuation_frame::result_type(ctx, reference)
+            .expect("a frame reference records its answer");
+        let name = &names[&source_answer];
+        let done = cps_done_type(ctx, answer);
+        let dispatch = cps_dispatch_type(ctx, evidence, reference, anyref, i32_type);
+        let name_ref = ctx.intern_str(name);
+        let layout = continuation_frame::layout_type(ctx, name_ref, answer, done, dispatch);
+        ctx.register_type_alias(Symbol::new(name), layout);
+        let types = FrameTypes {
+            answer,
+            reference,
+            layout,
+            done,
+            dispatch,
+        };
+        layouts.push((ability::frame(ctx, source_answer).as_type_ref(), types));
     }
-    resolved
-        .into_iter()
-        .map(|(answer, reference)| (ability::frame(ctx, answer).as_type_ref(), reference))
-        .collect()
+    layouts
 }
 
 fn resolve_frame(
@@ -171,50 +218,65 @@ fn resolve_frame(
     Some(reference)
 }
 
-/// The module's frame layouts: answer type to layout name.
-fn frame_layouts(ctx: &IrContext) -> HashMap<TypeRef, String> {
-    ctx.type_aliases()
-        .iter()
-        .filter(|(name, _)| name.as_str().starts_with(continuation_frame::NAME_PREFIX))
-        .filter_map(|(name, layout)| {
-            let answer = continuation_frame::result_type(ctx, *layout)?;
-            Some((answer, name.to_string()))
-        })
-        .collect()
+/// The answer types of the module's `ability.frame<R>` types, in the order a
+/// walk of the module first meets them: each operation's results, attributes,
+/// and block arguments, then the type aliases.
+fn frame_answers(ctx: &IrContext, module: Module) -> Vec<TypeRef> {
+    let mut seen = HashSet::default();
+    let mut answers = Vec::new();
+    for_each_module_type(ctx, module, &mut |ty| {
+        collect_frame_answers(ctx, ty, &mut seen, &mut answers);
+    });
+    answers
 }
 
-/// The frame types of each registered layout.
-fn frame_types(
-    ctx: &mut IrContext,
-    location: Location,
-) -> Result<HashMap<TypeRef, FrameTypes>, TributeControlToCpsError> {
-    let mut frames = HashMap::default();
-    for (answer, name) in frame_layouts(ctx) {
-        let layout = ctx
-            .type_alias_by_text(&name)
-            .expect("a listed frame layout is registered");
-        let fields = adt::Struct::from_type_ref(ctx, layout)
-            .map(|layout| layout.fields(ctx).collect::<Vec<_>>())
-            .unwrap_or_default();
-        let [("done", done), ("dispatch", dispatch)] = fields[..] else {
-            return Err(TributeControlToCpsError::post_at(
-                location,
-                format!("continuation frame layout {name} must hold done and dispatch"),
-            ));
-        };
-        let reference = continuation_frame::ref_type(ctx, name, answer);
-        frames.insert(
-            answer,
-            FrameTypes {
-                answer,
-                reference,
-                layout,
-                done,
-                dispatch,
-            },
-        );
+fn collect_frame_answers(
+    ctx: &IrContext,
+    ty: TypeRef,
+    seen: &mut HashSet<TypeRef>,
+    answers: &mut Vec<TypeRef>,
+) {
+    if !seen.insert(ty) {
+        return;
     }
-    Ok(frames)
+    if let Some(frame) = ability::Frame::from_type_ref(ctx, ty) {
+        answers.push(frame.result(ctx));
+    }
+    let data = ctx.get_type(ty);
+    for param in data.params.iter() {
+        collect_frame_answers(ctx, *param, seen, answers);
+    }
+    for (_, value) in data.attrs.iter() {
+        value.visit_types(&mut |inner| collect_frame_answers(ctx, inner, seen, answers));
+    }
+}
+
+/// Visit every type on a surface the type substitution rewrites: operation
+/// results and attributes, block arguments with their attributes, and type
+/// aliases.
+fn for_each_module_type(ctx: &IrContext, module: Module, visit: &mut impl FnMut(TypeRef)) {
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        for ty in ctx.op_result_types(op) {
+            visit(*ty);
+        }
+        for (_, value) in ctx.op(op).attributes.iter() {
+            value.visit_types(visit);
+        }
+        for region in ctx.op_regions(op) {
+            for block in ctx.region(region).blocks.iter() {
+                for arg in &ctx.block(*block).args {
+                    visit(arg.ty);
+                    for (_, value) in arg.attrs.iter() {
+                        value.visit_types(visit);
+                    }
+                }
+            }
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    for (_, ty) in ctx.type_aliases() {
+        visit(*ty);
+    }
 }
 
 fn type_mentions_frame(ctx: &IrContext, ty: TypeRef, seen: &mut HashSet<TypeRef>) -> bool {
@@ -311,7 +373,7 @@ fn reject_abstract_frames(ctx: &IrContext, module: Module) -> Result<(), Tribute
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tribute_ir::dialect::{effect, tribute_rt};
+    use tribute_ir::dialect::effect;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::types::Attribute;
 
@@ -325,55 +387,90 @@ mod tests {
         (ctx, module)
     }
 
-    fn unregistered_frame(ctx: &mut IrContext) -> TypeRef {
-        let answer = ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
+    fn frame_of_answer(ctx: &mut IrContext, answer: &str) -> TypeRef {
+        let answer = ctx.intern_type(TypeDataBuilder::new("core", answer).build());
         ability::frame(ctx, answer).as_type_ref()
+    }
+
+    fn layout_names(ctx: &IrContext) -> Vec<String> {
+        ctx.type_aliases()
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .filter(|name| name.starts_with(continuation_frame::NAME_PREFIX))
+            .collect()
     }
 
     #[test]
     fn a_module_without_frames_lowers() {
         let (mut ctx, module) = parse(MODULE);
         assert!(lower_continuation_frames(&mut ctx, module).is_ok());
+        assert!(layout_names(&ctx).is_empty());
     }
 
     #[test]
-    fn an_abstract_frame_in_a_type_alias_is_rejected() {
+    fn a_frame_in_a_type_alias_gets_a_layout() {
         let (mut ctx, module) = parse(MODULE);
-        let frame = unregistered_frame(&mut ctx);
+        let frame = frame_of_answer(&mut ctx, "i32");
         ctx.register_type_alias("orphan".into(), frame);
-        assert!(lower_continuation_frames(&mut ctx, module).is_err());
+        lower_continuation_frames(&mut ctx, module).unwrap();
+        let orphan = ctx.type_alias_by_text("orphan").unwrap();
+        assert!(continuation_frame::result_type(&ctx, orphan).is_some());
+        assert_eq!(layout_names(&ctx).len(), 1);
     }
 
     #[test]
-    fn an_abstract_frame_in_a_block_argument_attribute_is_rejected() {
+    fn a_frame_in_a_block_argument_attribute_gets_a_layout() {
         let (mut ctx, module) = parse(MODULE);
-        let frame = unregistered_frame(&mut ctx);
+        let frame = frame_of_answer(&mut ctx, "i32");
         let function = module.ops(&ctx)[0];
         let body = ctx.op_region(function, 0).expect("function body");
         let block = ctx.region(body).blocks[0];
         ctx.block_mut(block).args[0]
             .attrs
             .insert("frame", Attribute::Type(frame));
-        assert!(lower_continuation_frames(&mut ctx, module).is_err());
+        lower_continuation_frames(&mut ctx, module).unwrap();
+        let converted = ctx.block(block).args[0].attrs.get_type("frame").unwrap();
+        assert!(continuation_frame::result_type(&ctx, converted).is_some());
     }
 
     #[test]
-    fn a_handle_over_an_unregistered_frame_is_rejected() {
-        let (mut ctx, module) = parse(
-            r#"core.module @m {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !ev = core.array<!marker, {layout = "evidence"}>
-  !frame = ability.frame<core.i32>
-  !completion = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  func.func @run(%ev: !ev, %exit: !frame, %done: !completion) -> core.never {
-    ability.handle %ev, %exit, %done {handlers = []} {
-      ^body(%inner: !ev, %frame: !frame):
-        func.unreachable
-    }
-  }
-}"#,
-        );
-        assert!(lower_continuation_frames(&mut ctx, module).is_err());
+    fn layouts_are_numbered_in_module_walk_order() {
+        // A `TypeRef` is an interner index, which changes with the types
+        // interned before the pass and must not decide the numbering.
+        let answers = |unrelated_types: usize, first: &str, second: &str| {
+            let mut ctx = IrContext::new();
+            for index in 0..unrelated_types {
+                let name = ctx.string_attr(&format!("unrelated{index}"));
+                ctx.intern_type(
+                    TypeDataBuilder::new("test", "unrelated")
+                        .attr("name", name)
+                        .build(),
+                );
+            }
+            frame_of_answer(&mut ctx, second);
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @m {{
+  func.func @f(%a: ability.frame<core.{first}>, %b: ability.frame<core.{second}>) -> core.never {{
+    func.unreachable
+  }}
+}}"
+                ),
+            );
+            lower_continuation_frames(&mut ctx, module).unwrap();
+            [0, 1].map(|index| {
+                let name = format!("{}{index}", continuation_frame::NAME_PREFIX);
+                let layout = ctx
+                    .type_alias_by_text(&name)
+                    .expect("the layout is registered");
+                let answer = continuation_frame::result_type(&ctx, layout).unwrap();
+                ctx.get_type(answer).name.to_string()
+            })
+        };
+        assert_eq!(answers(0, "i32", "i64"), ["i32", "i64"]);
+        assert_eq!(answers(17, "i32", "i64"), ["i32", "i64"]);
+        assert_eq!(answers(0, "i64", "i32"), ["i64", "i32"]);
     }
 
     const TYPES: &str = r#"  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
@@ -383,33 +480,11 @@ mod tests {
   !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
   !nested = ability.frame<!resume>"#;
 
-    /// Parse a module over `TYPES` whose `@run` has `params` and `body`, and
-    /// register the layouts of `!frame` and `!nested` as the CPS pass does.
+    /// Parse a module over `TYPES` whose `@run` has `params` and `body`.
     fn frame_module(params: &str, body: &str) -> (IrContext, Module) {
-        let (mut ctx, module) = parse(&format!(
+        parse(&format!(
             "core.module @m {{\n{TYPES}\n  func.func @run(%ev: !ev{params}) -> core.never {{\n{body}\n  }}\n}}"
-        ));
-        let evidence = ability::evidence_adt_type_ref(&mut ctx);
-        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
-        let i32_type =
-            ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
-        let inner = ability::frame(&mut ctx, i32_type).as_type_ref();
-        let resume = tribute_core::calling_convention::cps_resume_exact_type(
-            &mut ctx, evidence, i32_type, inner,
-        );
-        for (index, answer) in [i32_type, resume].into_iter().enumerate() {
-            let name = format!("{}{index}", continuation_frame::NAME_PREFIX);
-            let frame = ability::frame(&mut ctx, answer).as_type_ref();
-            let done = tribute_core::calling_convention::cps_done_type(&mut ctx, answer);
-            let dispatch = tribute_core::calling_convention::cps_dispatch_type(
-                &mut ctx, evidence, frame, anyref, i32_type,
-            );
-            let name_ref = ctx.intern_str(&name);
-            let layout =
-                continuation_frame::layout_type(&mut ctx, name_ref, answer, done, dispatch);
-            ctx.register_type_alias(Symbol::new(&name), layout);
-        }
-        (ctx, module)
+        ))
     }
 
     fn lowered(params: &str, body: &str) -> String {
@@ -483,34 +558,11 @@ mod tests {
             1,
             "{printed}"
         );
-        // The outer layout is named by its answer after the inner frame in
-        // it became a reference to the inner layout.
-        assert!(
-            printed.contains(&format!("{}1", continuation_frame::NAME_PREFIX)),
-            "{printed}"
-        );
-    }
-
-    #[test]
-    fn frame_operations_over_an_unregistered_frame_are_rejected() {
-        const OTHER: &str = "ability.frame<core.i64>";
-        let cases = [
-            (
-                format!(", %f: {OTHER}, %v: core.i64"),
-                "    ability.exit %f, %v".to_string(),
-            ),
-            (
-                format!(", %f: {OTHER}, %arg: core.i32"),
-                r#"    ability.abort %ev, %f, %arg {ability_ref = !state, op_name = "fail"}"#
-                    .to_string(),
-            ),
-        ];
-        for (params, body) in cases {
-            let (mut ctx, module) = frame_module(&params, &body);
-            assert!(
-                lower_continuation_frames(&mut ctx, module).is_err(),
-                "{body}"
-            );
+        // Both frames get a layout, and `lowered` checked that the outer one
+        // no longer mentions the inner frame as an abstract type.
+        for index in 0..2 {
+            let name = format!("!{}{index} = ", continuation_frame::NAME_PREFIX);
+            assert!(printed.contains(&name), "{printed}");
         }
     }
 
