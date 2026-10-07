@@ -349,37 +349,98 @@ fn next_helper_index(ctx: &IrContext, module_block: BlockRef) -> u32 {
         .unwrap_or(0)
 }
 
-/// Fail if an abstract frame operation or type survived the expansion.
+/// Fail if an abstract frame operation or type survived the expansion, on any
+/// surface the type substitution rewrites: aliases, operation attributes and
+/// results, and block arguments with their attributes.
 fn reject_abstract_frames(ctx: &IrContext, module: Module) -> Result<(), TributeControlToCpsError> {
-    let mut failure = None;
     let mut seen = HashSet::default();
+    let mut mentions_frame = |ctx: &IrContext, ty: TypeRef| type_mentions_frame(ctx, ty, &mut seen);
+    let survived = |location| {
+        TributeControlToCpsError::post_at(
+            location,
+            "an abstract continuation frame survived lower_continuation_frames",
+        )
+    };
+    if ctx
+        .type_aliases()
+        .iter()
+        .any(|(_, ty)| mentions_frame(ctx, *ty))
+    {
+        return Err(survived(ctx.op(module.op()).location));
+    }
+    let mut failure = None;
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         let mut mentions = ctx
             .op_result_types(op)
             .iter()
-            .any(|ty| type_mentions_frame(ctx, *ty, &mut seen));
+            .any(|ty| mentions_frame(ctx, *ty));
         for (_, value) in ctx.op(op).attributes.iter() {
-            value.visit_types(&mut |ty| {
-                mentions = mentions || type_mentions_frame(ctx, ty, &mut seen);
-            });
+            value.visit_types(&mut |ty| mentions = mentions || mentions_frame(ctx, ty));
         }
         for region in ctx.op_regions(op) {
             for block in ctx.region(region).blocks.iter() {
-                mentions = mentions
-                    || ctx
-                        .block_args(*block)
-                        .iter()
-                        .any(|arg| type_mentions_frame(ctx, ctx.value_ty(*arg), &mut seen));
+                for arg in &ctx.block(*block).args {
+                    mentions = mentions || mentions_frame(ctx, arg.ty);
+                    for (_, value) in arg.attrs.iter() {
+                        value.visit_types(&mut |ty| mentions = mentions || mentions_frame(ctx, ty));
+                    }
+                }
             }
         }
         let operation = ability::SuffixFrame::matches(ctx, op) || ability::Exit::matches(ctx, op);
         if (operation || mentions) && failure.is_none() {
-            failure = Some(TributeControlToCpsError::post_at(
-                ctx.op(op).location,
-                "an abstract continuation frame survived lower_continuation_frames",
-            ));
+            failure = Some(survived(ctx.op(op).location));
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
     failure.map_or(Ok(()), Err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::types::Attribute;
+
+    const MODULE: &str = "core.module @m {
+  func.func @f(%x: core.i32) -> core.i32 { func.return %x }
+}";
+
+    fn parse(text: &str) -> (IrContext, Module) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        (ctx, module)
+    }
+
+    fn unregistered_frame(ctx: &mut IrContext) -> TypeRef {
+        let answer = ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
+        ability::frame(ctx, answer).as_type_ref()
+    }
+
+    #[test]
+    fn a_module_without_frames_lowers() {
+        let (mut ctx, module) = parse(MODULE);
+        assert!(lower_continuation_frames(&mut ctx, module).is_ok());
+    }
+
+    #[test]
+    fn an_abstract_frame_in_a_type_alias_is_rejected() {
+        let (mut ctx, module) = parse(MODULE);
+        let frame = unregistered_frame(&mut ctx);
+        ctx.register_type_alias("orphan".into(), frame);
+        assert!(lower_continuation_frames(&mut ctx, module).is_err());
+    }
+
+    #[test]
+    fn an_abstract_frame_in_a_block_argument_attribute_is_rejected() {
+        let (mut ctx, module) = parse(MODULE);
+        let frame = unregistered_frame(&mut ctx);
+        let function = module.ops(&ctx)[0];
+        let body = ctx.op_region(function, 0).expect("function body");
+        let block = ctx.region(body).blocks[0];
+        ctx.block_mut(block).args[0]
+            .attrs
+            .insert("frame", Attribute::Type(frame));
+        assert!(lower_continuation_frames(&mut ctx, module).is_err());
+    }
 }
