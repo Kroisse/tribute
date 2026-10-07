@@ -11,7 +11,7 @@ use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
-use super::suffix_layer::unpack_frame;
+use super::suffix_layer::frame_dispatch;
 use super::{FrameLayouts, FrameTypes, detach_into};
 use crate::cps_builders::{
     closure_over, emit_cps_tail_call_indirect, make_block, single_block_region,
@@ -215,7 +215,7 @@ impl ExpandDispatches {
             Some(raw) => push_one_shot_resume(ctx, block, location, &types, raw).ok()?,
             None => push_reject_resume(ctx, block, location, &types),
         };
-        let (_, dispatch) = unpack_frame(ctx, block, location, &types, frame);
+        let dispatch = frame_dispatch(ctx, block, location, &types, frame);
         detach_into(ctx, block, rewriter);
         let anyref = tribute_rt::anyref(ctx).as_type_ref();
         let payload = pack_payload(

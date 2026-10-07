@@ -23,7 +23,7 @@ use trunk_ir::walk::{WalkAction, walk_op};
 
 use super::suffix_layer::{
     DispatchAdapters, LayerFrames, SuffixLayer, build_done_adapter, build_suffix_rebound,
-    finish_rebound, pack_frame, unpack_frame,
+    finish_rebound, frame_dispatch, pack_frame,
 };
 use super::{FrameLayouts, detach_into};
 use crate::cps_builders::{
@@ -442,7 +442,7 @@ fn build_local_dispatcher_factory(
         prompt: args[2],
         arms: args[4..].to_vec(),
     };
-    let (_, parent_dispatch) = unpack_frame(ctx, block, location, &boundary, args[1]);
+    let parent_dispatch = frame_dispatch(ctx, block, location, &boundary, args[1]);
     let (dispatcher_op, dispatcher) = build_local_dispatcher_instance(
         ctx,
         location,
