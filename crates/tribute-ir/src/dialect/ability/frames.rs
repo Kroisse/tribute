@@ -1,12 +1,12 @@
 //! Verification of the abstract continuation frame operations.
 
 use rustc_hash::FxHashSet as HashSet;
+use trunk_ir::IrContext;
 use trunk_ir::dialect::core::Never;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
-use trunk_ir::{IrContext, Symbol};
 
 use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
 use crate::dialect::tribute_control::{
@@ -93,14 +93,11 @@ impl HandlerBinding {
     pub fn to_attribute(self, ctx: &mut IrContext) -> Attribute {
         let kind = ctx.string_attr(self.kind.keyword());
         let mut entries = AttributeMap::new();
+        entries.insert("ability_ref", Attribute::Type(self.ability_ref));
+        entries.insert("op_name", Attribute::String(self.op_name));
+        entries.insert("kind", kind);
         entries.insert(
-            Symbol::new("ability_ref"),
-            Attribute::Type(self.ability_ref),
-        );
-        entries.insert(Symbol::new("op_name"), Attribute::String(self.op_name));
-        entries.insert(Symbol::new("kind"), kind);
-        entries.insert(
-            Symbol::new("operation_result_type"),
+            "operation_result_type",
             Attribute::Type(self.operation_result_type),
         );
         Attribute::Dict(entries)
@@ -130,7 +127,7 @@ impl trunk_ir::attr_kind::AttrKind for HandlerBinding {
 
 fn is_ability_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref")
+    data.dialect == "core" && data.name == "ability_ref"
 }
 
 fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -140,7 +137,7 @@ fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
 /// The convention and function signature of a convention-proven closure type.
 fn closure_signature(ctx: &IrContext, ty: TypeRef) -> Option<(CallingConvention, func::FuncSig)> {
     let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
+    if data.dialect != "closure" || data.name != "closure" {
         return None;
     }
     let convention = match data.attrs.get(CALLING_CONVENTION_ATTR) {
