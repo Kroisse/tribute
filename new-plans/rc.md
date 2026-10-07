@@ -246,6 +246,12 @@ projection의 use를 owner의 use로도 반영한다. `elide_proven_field_borrow
 4. 모든 identity, signature, CFG, action target과 ordering을 검증한 뒤 하나의
    deterministic plan을 반환한다.
 
+Block argument로의 전달은 source의 unit을 destination으로 옮긴다. 옮길 unit은
+source마다 하나뿐이다. Source가 선택된 liveness view에서 branch 뒤에도 살아 있으면
+그 unit은 source에 남고, 같은 branch가 한 source를 여러 destination에 넘기면 첫
+destination만 unit을 받는다. Unit을 받지 못한 destination마다 branch 직전에 새
+unit을 획득한다.
+
 `adt.typeref`는 type 자체로 managed다. Native RC-header allocation을 표현하는
 검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
 contract로 분류한다. Evidence, function/code address, borrowed buffer,
