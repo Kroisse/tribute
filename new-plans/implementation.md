@@ -654,7 +654,7 @@ Ownership planning과 target emission은 [공통 callable 본문 구조](ir.md#c
 ### WASM / Native 공통: CPS Tail-Call Effect Handling
 
 Effect handling은 tail-call CPS로 구현한다.
-`lower_continuation_frames`가 `ability.perform`을, `lower_ability_perform`이
+`lower_continuation_frames`가 `ability.perform`을, `lower_ability_call`이
 `ability.call`을 각각 target-independent `effect.dispatch_cps` /
 `effect.dispatch_tail` ABI operation으로 변환한다.
 `resolve_evidence`는 handler 설치를 `effect.extend`로 표현한다.
@@ -677,7 +677,7 @@ exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 �
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
       → source-logical global DCE (산출물 컴파일)
       → tribute_control_to_cps → lower_continuation_frames
-      → lower_closure_lambda → lower_ability_perform
+      → lower_closure_lambda → lower_ability_call
       → resolve_evidence → lower_handle_dispatch
       → effect ABI verification → target ABI validation
       → CPS signature physicalization → root entry bridge composition
@@ -830,7 +830,7 @@ flowchart TB
 | `tribute_control_to_cps` | validated source-logical callable/control | `func`/`closure`, proper tail transfer, 추상 frame 표면과 explicit `ability.*`; atomic module conversion |
 | `lower_continuation_frames` | 추상 frame 표면 | nominal frame layout, frame·dispatcher·resume closure, `effect.dispatch_cps`, `ability.handle_dispatch`; module-wide |
 | `lower_closure_lambda` | exact physical lambda contract | `func.func` + `closure.new`; module-wide extraction |
-| `lower_ability_perform` | `ability.call` | packed payload + `effect.dispatch_tail`; function-anchored |
+| `lower_ability_call` | `ability.call` | packed payload + `effect.dispatch_tail`; function-anchored |
 | `resolve_evidence` | explicit handler delimiter | `effect.extend`와 body evidence 사용 치환 |
 | `lower_handle_dispatch` | evidence 사용이 치환된 resultless body | body splice와 delimiter 제거; function-anchored |
 | target ABI conversion | exact shared callable/dispatch/frame contracts | physical CPS signature와 root entry bridge |

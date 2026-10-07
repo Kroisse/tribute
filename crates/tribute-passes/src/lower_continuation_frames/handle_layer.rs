@@ -7,25 +7,27 @@ use tribute_core::calling_convention::{
 };
 use tribute_core::{CallingConvention, physical_closure_type, set_calling_convention};
 use tribute_ir::dialect::ability::{HandlerBinding, OperationKind};
-use tribute_ir::dialect::{ability, adt, tribute_rt};
+use tribute_ir::dialect::{ability, adt, effect, tribute_control, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::PatternRewriter;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 use super::suffix_layer::{
-    LayerFrames, SuffixLayer, build_done_adapter, build_suffix_rebound, finish_rebound, pack_frame,
-    unpack_frame,
+    LayerFrames, SuffixLayer, build_dispatch_adapter_factory, build_done_adapter,
+    build_suffix_rebound, finish_rebound, pack_frame, unpack_frame,
 };
-use crate::tribute_control_to_cps::{
-    TributeControlToCpsError, closure_over, emit_cps_tail_call_indirect, make_block,
-    set_evidence_plan, single_block_region,
+use super::{ExpandFrameOperations, detach_into};
+use crate::cps_builders::{
+    closure_over, emit_cps_tail_call_indirect, make_block, set_evidence_plan, single_block_region,
 };
+use crate::tribute_control_to_cps::TributeControlToCpsError;
 
 /// One arm of a handle: the operation it handles and the closure it takes.
-pub(super) struct HandlerArm {
+struct HandlerArm {
     binding: HandlerBinding,
     closure_type: TypeRef,
     /// The operation's parameters, followed by the source resume token of a
@@ -35,11 +37,7 @@ pub(super) struct HandlerArm {
 }
 
 impl HandlerArm {
-    pub(super) fn new(
-        ctx: &IrContext,
-        binding: HandlerBinding,
-        closure_type: TypeRef,
-    ) -> Option<Self> {
+    fn new(ctx: &IrContext, binding: HandlerBinding, closure_type: TypeRef) -> Option<Self> {
         let resumptive = binding.is_resumptive(ctx);
         let params = match binding.kind {
             OperationKind::Op => {
@@ -67,7 +65,7 @@ impl HandlerArm {
         })
     }
 
-    pub(super) fn is_resumptive(&self) -> bool {
+    fn is_resumptive(&self) -> bool {
         self.resumptive
     }
 
@@ -85,30 +83,30 @@ impl HandlerArm {
 
 /// The static description of one `ability.handle`, shared by every layer that
 /// installs it: the first installation and each rebuilt continuation layer.
-pub(super) struct HandleLayer {
-    pub(super) arms: Vec<HandlerArm>,
+struct HandleLayer {
+    arms: Vec<HandlerArm>,
     /// The frame of the body and the frame the handle exits to.
-    pub(super) frames: LayerFrames,
-    pub(super) completion_type: TypeRef,
+    frames: LayerFrames,
+    completion_type: TypeRef,
     /// The `evidence_plan` of each installation.
-    pub(super) plan: Option<Attribute>,
+    plan: Option<Attribute>,
     /// Builds the dispatcher of an installed layer.
-    pub(super) dispatch_factory: Symbol,
+    dispatch_factory: Symbol,
     /// Builds the dispatcher of a layer resumed from a lambda, which keeps
     /// only the handle's completion.
-    pub(super) passthrough_factory: Symbol,
+    passthrough_factory: Symbol,
     /// Builds the resumption that installs a layer again.
-    pub(super) installed_resume_factory: Symbol,
+    installed_resume_factory: Symbol,
     /// Builds the resumption of a layer resumed from a lambda.
-    pub(super) passthrough_resume_factory: Symbol,
+    passthrough_resume_factory: Symbol,
 }
 
 /// The values one installed layer of a handle runs with.
-pub(super) struct LayerValues {
-    pub(super) completion: ValueRef,
-    pub(super) prompt: ValueRef,
+struct LayerValues {
+    completion: ValueRef,
+    prompt: ValueRef,
     /// The handler arm closures, in `HandleLayer::arms` order.
-    pub(super) arms: Vec<ValueRef>,
+    arms: Vec<ValueRef>,
 }
 
 fn evidence_type(ctx: &mut IrContext) -> TypeRef {
@@ -195,7 +193,7 @@ fn build_handle_rebound(
 
 /// Build the frame of one installed layer: its `Done` enters the completion
 /// with `outer_evidence` and `exit_frame`, and its dispatcher is the layer's.
-pub(super) fn push_layer_frame(
+fn push_layer_frame(
     ctx: &mut IrContext,
     block: BlockRef,
     location: Location,
@@ -246,7 +244,7 @@ fn layer_ability_refs(layer: &HandleLayer) -> Vec<TypeRef> {
 /// dispatchers whose arms run with `outer_evidence`. For each handled
 /// instance, the marker's dispatcher runs its `fn` arms. General operations
 /// read only the marker's prompt and dispatch through the continuation frame.
-pub(super) fn push_handle_dispatch(
+fn push_handle_dispatch(
     ctx: &mut IrContext,
     block: BlockRef,
     location: Location,
@@ -284,7 +282,7 @@ pub(super) fn push_handle_dispatch(
 /// The function's parameters are `(completion, prompt, resume_body,
 /// arms...)` for a resumption that installs the layer again, and
 /// `(completion, resume_body)` for one resumed from a lambda.
-pub(super) fn build_layer_resume_factory(
+fn build_layer_resume_factory(
     ctx: &mut IrContext,
     location: Location,
     layer: &HandleLayer,
@@ -417,7 +415,7 @@ fn build_exact_handler_token(
 ///
 /// The factory's parameters are `(completion, exit_frame, prompt,
 /// outer_evidence, arms...)`.
-pub(super) fn build_local_dispatcher_factory(
+fn build_local_dispatcher_factory(
     ctx: &mut IrContext,
     location: Location,
     layer: &HandleLayer,
@@ -728,4 +726,99 @@ fn build_tail_dispatcher(
         CallingConvention::EvidenceDirect,
     );
     Ok((lambda.op_ref(), lambda.result(ctx)))
+}
+
+impl ExpandFrameOperations {
+    /// Replace `ability.handle` with the first installation of its layer:
+    /// the layer's factories, a fresh prompt, and the `ability.handle_dispatch`
+    /// whose body starts by building the layer's frame.
+    pub(super) fn expand_handle(
+        &self,
+        ctx: &mut IrContext,
+        handle: ability::Handle,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let op = handle.op_ref();
+        let location = ctx.op(op).location;
+        let evidence = handle.evidence(ctx);
+        let exit = handle.exit(ctx);
+        let completion = handle.completion(ctx);
+        let arm_values = handle.arms(ctx).to_vec();
+        let bindings: Vec<_> = handle.handlers(ctx).collect();
+        let [source_block] = ctx.region(handle.body(ctx)).blocks[..] else {
+            return None;
+        };
+        let [source_evidence, source_frame] = ctx.block_args(source_block)[..] else {
+            return None;
+        };
+        if bindings.len() != arm_values.len() {
+            return None;
+        }
+        let arms = bindings
+            .into_iter()
+            .zip(&arm_values)
+            .map(|(binding, arm)| HandlerArm::new(ctx, binding, ctx.value_ty(*arm)))
+            .collect::<Option<Vec<_>>>()?;
+        let frames = LayerFrames {
+            value: self.frame_of(ctx, ctx.value_ty(source_frame))?,
+            boundary: self.frame_of(ctx, ctx.value_ty(exit))?,
+        };
+        let layer = HandleLayer {
+            arms,
+            frames,
+            completion_type: ctx.value_ty(completion),
+            plan: ctx
+                .op(op)
+                .attributes
+                .get(tribute_control::EVIDENCE_PLAN_ATTR)
+                .cloned(),
+            dispatch_factory: self.fresh_helper("make_local_dispatch"),
+            passthrough_factory: self.fresh_helper("make_dispatch_adapter"),
+            installed_resume_factory: self.fresh_helper("make_installed_resume"),
+            passthrough_resume_factory: self.fresh_helper("make_passthrough_resume"),
+        };
+        let mut factories = vec![
+            build_dispatch_adapter_factory(
+                ctx,
+                location,
+                layer.passthrough_factory.clone(),
+                &frames,
+                None,
+            )
+            .ok()?,
+            build_local_dispatcher_factory(ctx, location, &layer).ok()?,
+            build_layer_resume_factory(ctx, location, &layer, true).ok()?,
+        ];
+        if layer.arms.iter().any(HandlerArm::is_resumptive) {
+            factories.push(build_layer_resume_factory(ctx, location, &layer, false).ok()?);
+        }
+
+        let block = make_block(ctx, location, &[]);
+        let prompt = effect::FreshPromptTag::operands().build(ctx, location);
+        ctx.push_op(block, prompt.op_ref());
+        let values = LayerValues {
+            completion,
+            prompt: prompt.result(ctx),
+            arms: arm_values,
+        };
+        let body_block = make_block(ctx, location, &[ctx.value_ty(source_evidence)]);
+        let frame =
+            push_layer_frame(ctx, body_block, location, &layer, &values, (evidence, exit)).ok()?;
+        for moved in ctx.block(source_block).ops.clone() {
+            ctx.remove_op_from_block(source_block, moved);
+            ctx.push_op(body_block, moved);
+        }
+        ctx.replace_all_uses(source_evidence, ctx.block_args(body_block)[0]);
+        ctx.replace_all_uses(source_frame, frame);
+        let body = single_block_region(ctx, location, body_block);
+        push_handle_dispatch(ctx, block, location, &layer, &values, evidence, body).ok()?;
+        let delimiter = *ctx.block(block).ops.last()?;
+        ctx.remove_op_from_block(block, delimiter);
+        detach_into(ctx, block, rewriter);
+        for factory in factories {
+            rewriter.add_module_op(factory);
+        }
+        rewriter.replace_op(delimiter);
+        Some(())
+    }
 }

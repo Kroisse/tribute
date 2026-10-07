@@ -46,7 +46,7 @@
 //! Module (CPS callable contracts, explicit evidence, and general
 //!         operations lowered to effect.dispatch_cps)
 //!     │
-//!     ▼ lower_ability_perform
+//!     ▼ lower_ability_call
 //! Module (ability.call lowered to effect.dispatch_tail)
 //!     │
 //!     ▼ resolve_evidence
@@ -933,13 +933,13 @@ fn shared_middle_end(
     let mut structural_pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
     structural_pm.run(&mut ctx, core_module, &mut analyses)?;
 
-    // CPS effect handling, function-local phase: lower_ability_perform produces
+    // CPS effect handling, function-local phase: lower_ability_call produces
     // the tail-resumptive effect dispatches; evidence resolution then extends
     // handler scopes.
     let mut ability_pm = PassManager::new();
     ability_pm
         .nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform);
+        .add_pass(tribute_passes::lower_ability_call::LowerAbilityCall);
     ability_pm.with_debug_verifier();
     ability_pm.run(&mut ctx, core_module, &mut analyses)?;
 

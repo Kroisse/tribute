@@ -13,8 +13,8 @@ use std::ops::ControlFlow;
 use tribute_ir::continuation_frame;
 
 use tribute_core::calling_convention::{
-    cps_closure_function_type, cps_completion_type, cps_done_type, cps_resume_exact_type,
-    physical_closure_function_type, physical_closure_type_with_environment_index,
+    cps_completion_type, cps_done_type, cps_resume_exact_type, physical_closure_function_type,
+    physical_closure_type_with_environment_index,
 };
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallableAbi, CallingConvention, physical_closure_type,
@@ -24,7 +24,7 @@ use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, closure, tribute_control, tribute_rt};
 use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
-use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
@@ -34,7 +34,6 @@ use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
 
-mod adapters;
 mod boundary;
 mod callable;
 mod frame;
@@ -44,7 +43,7 @@ mod structured;
 mod tests;
 mod types;
 
-pub(crate) use adapters::*;
+use crate::cps_builders::*;
 pub use boundary::*;
 
 /// Carry a source call's, resume's, or handle's evidence selection to the
@@ -60,15 +59,6 @@ fn evidence_plan_of(ctx: &IrContext, source: OpRef) -> Option<Attribute> {
         .attributes
         .get(tribute_control::EVIDENCE_PLAN_ATTR)
         .cloned()
-}
-
-/// Put a selection on the operation that passes the evidence it selects.
-pub(crate) fn set_evidence_plan(ctx: &mut IrContext, target: OpRef, plan: Option<Attribute>) {
-    if let Some(plan) = plan {
-        ctx.op_mut(target)
-            .attributes
-            .insert(tribute_control::EVIDENCE_PLAN_ATTR, plan);
-    }
 }
 
 fn convert_convention(convention: tribute_control::CallingConvention) -> CallingConvention {
@@ -105,16 +95,6 @@ struct FrameState {
     layouts: HashMap<TypeRef, FrameTypes>,
     layout_aliases: Vec<(Symbol, TypeRef)>,
     helper_index: u32,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct FrameTypes {
-    /// The answer type `R` of the frame.
-    pub(crate) answer: TypeRef,
-    pub(crate) reference: TypeRef,
-    pub(crate) layout: TypeRef,
-    pub(crate) done: TypeRef,
-    pub(crate) dispatch: TypeRef,
 }
 
 /// How a `resume` in the body of a handler arm reaches its continuation.

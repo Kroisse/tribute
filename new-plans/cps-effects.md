@@ -218,7 +218,7 @@ operation을 왼쪽에서 오른쪽으로 소비한다:
   일반 suffix로 흐른다. `"op"`이면 현재 suffix와 일치하는 dynamic handle
   boundary까지 선택된 모든 enclosing structured exit를 capture한 뒤
   그 suffix의 raw resumption을 받는 `ability.perform`을 만든다. 후속
-  `lower_ability_perform`이 `ability.call`을 `effect.dispatch_tail`로,
+  `lower_ability_call`이 `ability.call`을 `effect.dispatch_tail`로,
   `lower_continuation_frames`가 `ability.perform`을 `effect.dispatch_cps`로 낮춘다.
   Operand packing은 이 두 lower 경계에서만 수행한다.
   `op -> Never`에는 suffix를 capture하지 않고 resumption이 없는 `ability.abort`를
@@ -299,7 +299,7 @@ location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가 추상 frame
 표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph의 lambda를 추출하지만
 `closure.new`, `closure.func`, `closure.env`와 convention-proven closure type은
-target ABI validation까지 유지한다. `lower_ability_perform`,
+target ABI validation까지 유지한다. `lower_ability_call`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
 target pipeline의 closure storage finalization과 Native/Wasm evidence pass가
 backend ABI로 제거한다.
@@ -419,7 +419,7 @@ control을 다른 runtime 장치로 구현한다면 이 pass 대신 자기 lower
   { ability_ref = core.ability_ref<{name = "Logger"}>, op_name = "log" }
 ```
 
-`lower_ability_perform`은 enclosing callable의 exact `EvidenceDirect`/`Cps`
+`lower_ability_call`은 enclosing callable의 exact `EvidenceDirect`/`Cps`
 convention과 `CallableAbi`가 정한 첫 evidence parameter를 확인한다. Evidence와
 같은 타입인 다른 parameter를 찾거나 본문에서 hidden input을 추론하지 않는다.
 Convention이 없거나 slot/type이 잘못되면 lower하지 않고 ability boundary에서
@@ -776,7 +776,7 @@ ast_to_ir (tribute_control callable/control + ordinary value IR)
 → tribute_control_to_cps
 → lower_continuation_frames
 → lower_closure_lambda
-→ lower_ability_perform
+→ lower_ability_call
 → resolve_evidence
 → lower_handle_dispatch
 → effect ABI verification

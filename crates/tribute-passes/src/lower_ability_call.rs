@@ -18,7 +18,6 @@
 //! intermediate best-effort pass: the final `ability-lowered` boundary is
 //! established by `LowerHandleDispatch` after evidence resolution.
 
-use tribute_ir::dialect::adt;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
@@ -28,14 +27,14 @@ use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
 };
-use trunk_ir::types::StringRef;
 
+use crate::effect_dispatch::pack_payload;
 use tribute_core::calling_convention::CLOSURE_ENVIRONMENT_INDEX_ATTR;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_rt;
 
-/// Cached common type references used by the perform lowering pattern.
+/// Cached common type references used by the call lowering pattern.
 #[derive(Clone, Copy)]
 struct CommonTypes {
     anyref: TypeRef,
@@ -53,21 +52,21 @@ impl CommonTypes {
 ///
 /// Residual ability operations are allowed here and rejected at the final
 /// `ability-lowered` boundary.
-pub(crate) fn lower_ability_perform<S: RewriteScope>(ctx: &mut IrContext, scope: S) {
+pub(crate) fn lower_ability_call<S: RewriteScope>(ctx: &mut IrContext, scope: S) {
     let types = CommonTypes::new(ctx);
     let applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(LowerCallPattern { types });
     applicator.apply_partial(ctx, scope);
 }
 
-/// PassManager-friendly wrapper for [`lower_ability_perform`].
-pub struct LowerAbilityPerform;
+/// PassManager-friendly wrapper for [`lower_ability_call`].
+pub struct LowerAbilityCall;
 
-impl Pass for LowerAbilityPerform {
+impl Pass for LowerAbilityCall {
     type Target = func::Func;
 
     fn name(&self) -> &'static str {
-        "lower-ability-perform"
+        "lower-ability-call"
     }
 
     fn run(
@@ -76,7 +75,7 @@ impl Pass for LowerAbilityPerform {
         target: func::Func,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        lower_ability_perform(ctx, target);
+        lower_ability_call(ctx, target);
         Ok(())
     }
 }
@@ -155,44 +154,6 @@ impl RewritePattern for LowerCallPattern {
 // Helpers
 // ============================================================================
 
-pub(crate) fn pack_payload(
-    ctx: &mut IrContext,
-    rewriter: &mut PatternRewriter<'_>,
-    location: trunk_ir::types::Location,
-    ability_ref: TypeRef,
-    op_name: StringRef,
-    values: &[ValueRef],
-    anyref: TypeRef,
-) -> ValueRef {
-    let payload_type = ability::operation_payload_type_ref(
-        ctx,
-        ability_ref,
-        op_name,
-        values.iter().map(|_| anyref),
-    );
-    let dynamic_values = values
-        .iter()
-        .map(|&value| {
-            let cast = core::UnrealizedConversionCast::operands(value)
-                .results(anyref)
-                .build(ctx, location);
-            let result = cast.result(ctx);
-            rewriter.insert_op(cast.op_ref());
-            result
-        })
-        .collect::<Vec<_>>();
-    let payload = adt::StructNew::operands(dynamic_values)
-        .r#type(payload_type)
-        .results(payload_type)
-        .build(ctx, location);
-    rewriter.insert_op(payload.op_ref());
-    let erased = core::UnrealizedConversionCast::operands(payload.result(ctx))
-        .results(anyref)
-        .build(ctx, location);
-    rewriter.insert_op(erased.op_ref());
-    erased.result(ctx)
-}
-
 /// Read the canonical evidence slot of the nearest callable with a declared ABI.
 ///
 /// A lifted closure whose type records environment index 0 stores that
@@ -259,7 +220,7 @@ mod tests {
             ),
         );
 
-        lower_ability_perform(&mut ctx, module);
+        lower_ability_call(&mut ctx, module);
 
         let ir_text = print_module(&ctx, module.op());
         assert!(!ir_text.contains("ability.call"), "{ir_text}");
@@ -300,7 +261,7 @@ mod tests {
                 ),
             );
             let before = print_module(&ctx, module.op());
-            lower_ability_perform(&mut ctx, module);
+            lower_ability_call(&mut ctx, module);
             assert_eq!(print_module(&ctx, module.op()), before);
             assert!(crate::lower_handle_dispatch::lower_handle_dispatch(&mut ctx, module).is_err());
         }
@@ -323,7 +284,7 @@ mod tests {
             ),
         );
 
-        lower_ability_perform(&mut ctx, module);
+        lower_ability_call(&mut ctx, module);
 
         let ir = print_module(&ctx, module.op());
         assert!(!ir.contains("ability.call"), "{ir}");

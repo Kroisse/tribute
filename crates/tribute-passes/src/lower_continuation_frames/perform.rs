@@ -3,18 +3,22 @@
 
 use tribute_core::calling_convention::{cps_closure_function_type, cps_resume_type};
 use tribute_core::{CallingConvention, set_calling_convention};
-use tribute_ir::dialect::{ability, adt, closure, tribute_rt};
+use tribute_ir::dialect::{ability, adt, closure, effect, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
 use trunk_ir::ops::DialectType;
-use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
+use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::PatternRewriter;
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
-use crate::tribute_control_to_cps::{
-    FrameTypes, TributeControlToCpsError, closure_over, emit_cps_tail_call_indirect, make_block,
-    single_block_region,
+use super::suffix_layer::unpack_frame;
+use super::{ExpandFrameOperations, detach_into};
+use crate::cps_builders::{
+    FrameTypes, closure_over, emit_cps_tail_call_indirect, make_block, single_block_region,
 };
+use crate::effect_dispatch::pack_payload;
+use crate::tribute_control_to_cps::TributeControlToCpsError;
 
 /// The block of a `Resume<R>` over `frame` and its closure type.
 fn resume_block(
@@ -32,7 +36,7 @@ fn resume_block(
 /// Wrap the raw resumption of an `ability.perform` into a `Resume<R>` that
 /// enters it once: a second call traps before the continuation is re-entered.
 /// The state struct is named `state_name`. The built operations go to `block`.
-pub(super) fn push_one_shot_resume(
+fn push_one_shot_resume(
     ctx: &mut IrContext,
     block: BlockRef,
     location: Location,
@@ -144,7 +148,7 @@ pub(super) fn push_one_shot_resume(
 
 /// Build the `Resume<R>` of an `ability.abort`: it captures nothing and traps
 /// when called. The built operation goes to `block`.
-pub(super) fn push_reject_resume(
+fn push_reject_resume(
     ctx: &mut IrContext,
     block: BlockRef,
     location: Location,
@@ -161,4 +165,52 @@ pub(super) fn push_reject_resume(
     set_calling_convention(ctx, lambda.op_ref(), CallingConvention::Cps);
     ctx.push_op(block, lambda.op_ref());
     lambda.result(ctx)
+}
+
+impl ExpandFrameOperations {
+    /// Replace `ability.perform` or `ability.abort` with `effect.dispatch_cps`
+    /// through the frame's dispatcher. A perform passes its raw resumption
+    /// behind a one-shot check, and an abort a resumption that traps.
+    pub(super) fn expand_dispatch(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        frame: ValueRef,
+        resumption: Option<ValueRef>,
+        values: &[ValueRef],
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let location = ctx.op(op).location;
+        let evidence = ctx.op_operands(op)[0];
+        let ability_ref = ctx.op(op).attributes.get_type("ability_ref")?;
+        let op_name = ctx.op(op).attributes.get_string_ref("op_name")?;
+        let types = self.frame_of(ctx, ctx.value_ty(frame))?;
+        let block = make_block(ctx, location, &[]);
+        let resume = match resumption {
+            Some(raw) => {
+                let state = self.fresh_helper("one_shot_state");
+                push_one_shot_resume(ctx, block, location, &types, raw, &state).ok()?
+            }
+            None => push_reject_resume(ctx, block, location, &types),
+        };
+        let (_, dispatch) = unpack_frame(ctx, block, location, &types, frame);
+        detach_into(ctx, block, rewriter);
+        let anyref = tribute_rt::anyref(ctx).as_type_ref();
+        let payload = pack_payload(
+            ctx,
+            rewriter,
+            location,
+            ability_ref,
+            op_name,
+            values,
+            anyref,
+        );
+        let dispatch = effect::DispatchCps::operands(evidence, dispatch, resume, payload)
+            .ability_ref(ability_ref)
+            .op_name(op_name)
+            .answer_type(types.answer)
+            .build(ctx, location);
+        rewriter.replace_op(dispatch.op_ref());
+        Some(())
+    }
 }

@@ -1,7 +1,39 @@
-//! Block, closure, and tail-transfer builders that `tribute_control_to_cps`
-//! and `lower_continuation_frames` share.
+//! Builders and frame layout types that `tribute_control_to_cps` and
+//! `lower_continuation_frames` share.
 
-use super::*;
+use rustc_hash::FxHashSet as HashSet;
+use tribute_core::calling_convention::cps_closure_function_type;
+use tribute_core::{CallingConvention, set_calling_convention};
+use tribute_ir::dialect::{closure, tribute_control};
+use trunk_ir::Symbol;
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::{core, func};
+use trunk_ir::ops::DialectType;
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::types::{Attribute, AttributeMap, Location};
+
+use crate::tribute_control_to_cps::TributeControlToCpsError;
+
+/// The types of the layout that `lower_continuation_frames` gives
+/// `ability.frame<R>`.
+#[derive(Clone, Copy)]
+pub(crate) struct FrameTypes {
+    /// The answer type `R` of the frame.
+    pub(crate) answer: TypeRef,
+    pub(crate) reference: TypeRef,
+    pub(crate) layout: TypeRef,
+    pub(crate) done: TypeRef,
+    pub(crate) dispatch: TypeRef,
+}
+
+/// Put a selection on the operation that passes the evidence it selects.
+pub(crate) fn set_evidence_plan(ctx: &mut IrContext, target: OpRef, plan: Option<Attribute>) {
+    if let Some(plan) = plan {
+        ctx.op_mut(target)
+            .attributes
+            .insert(tribute_control::EVIDENCE_PLAN_ATTR, plan);
+    }
+}
 
 pub(crate) fn make_block(ctx: &mut IrContext, location: Location, types: &[TypeRef]) -> BlockRef {
     ctx.create_block(BlockData {
