@@ -566,4 +566,156 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn handler_binding_round_trips_through_its_attribute() {
+        let mut ctx = IrContext::new();
+        let name = ctx.intern_str("State");
+        let state = ctx.intern_type(
+            trunk_ir::types::TypeDataBuilder::new("core", "ability_ref")
+                .attr("name", trunk_ir::types::Attribute::String(name))
+                .build(),
+        );
+        let never = ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "never").build());
+        let i32_ty = ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
+        let op_name = ctx.intern_str("get");
+        for (kind, result, resumptive) in [
+            (super::OperationKind::Op, i32_ty, true),
+            (super::OperationKind::Op, never, false),
+            (super::OperationKind::Fn, i32_ty, false),
+        ] {
+            let binding = super::HandlerBinding {
+                ability_ref: state,
+                op_name,
+                kind,
+                operation_result_type: result,
+            };
+            let attr =
+                <super::HandlerBinding as trunk_ir::attr_kind::AttrKind>::write(&mut ctx, binding);
+            let read = <super::HandlerBinding as trunk_ir::attr_kind::AttrKind>::read(&ctx, &attr);
+            assert_eq!(read, binding);
+            assert_eq!(read.is_resumptive(&ctx), resumptive);
+        }
+    }
+
+    #[test]
+    fn malformed_bindings_closures_and_bodies_are_rejected() {
+        const EXTRA: &str = r#"  !plain = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>>
+  !returning = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.i32>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+  !no_evidence = closure.closure<func.func_sig<(core.i32) -> core.i32>, {tribute.calling_convention = 1, tribute.closure_environment_index = 1}>
+  !bad_code = closure.closure<func.func_sig<(!ev) -> core.i32>, {tribute.calling_convention = 7, tribute.closure_environment_index = 1}>"#;
+        let with_extra = |params: &str, body: &str| {
+            module(params, body).replacen(TYPES, &format!("{TYPES}\n{EXTRA}"), 1)
+        };
+        let extra_arms = ", %plain: !plain, %returning: !returning, %no_evidence: !no_evidence, %bad_code: !bad_code, %value: core.i32";
+        let arms = format!("{ARMS}{extra_arms}");
+        let one = |kind: &str, result: &str, arm: &str| {
+            with_extra(&arms, &handle(&[binding(kind, "get", result)], arm, ""))
+        };
+        let raw_binding =
+            |entries: &str| with_extra(&arms, &handle(&[format!("{{{entries}}}")], ", %get", ""));
+        let body = |args: &str| {
+            with_extra(
+                &arms,
+                &format!(
+                    r#"    ability.handle %ev, %exit, %done {{handlers = []}} {{
+      ^body({args}):
+        func.unreachable
+    }}"#
+                ),
+            )
+        };
+        let cases = [
+            (
+                "plain closure arm",
+                one("op", "core.i32", ", %plain"),
+                "must be a closure with a calling convention",
+            ),
+            (
+                "unknown convention",
+                one("fn", "core.i32", ", %bad_code"),
+                "must be a closure with a calling convention",
+            ),
+            (
+                "non-closure fn arm",
+                one("fn", "core.i32", ", %value"),
+                "must be a closure with a calling convention",
+            ),
+            (
+                "returning cps arm",
+                one("op", "core.i32", ", %returning"),
+                "must return core.never",
+            ),
+            (
+                "fn arm without evidence",
+                one("fn", "core.i32", ", %no_evidence"),
+                "must take the evidence first",
+            ),
+            (
+                "completion of another value",
+                with_extra(
+                    &arms.replace("%done: !completion", "%done: !resume"),
+                    &handle(&[], "", ""),
+                ),
+                "completion must take the value of the body frame",
+            ),
+            (
+                "body without frame",
+                body("%inner: !ev"),
+                "must take the extended evidence and an ability.frame",
+            ),
+            (
+                "body with another evidence",
+                body("%inner: core.i32, %frame: !frame_nil"),
+                "must take the extended evidence",
+            ),
+            (
+                "binding with an extra entry",
+                raw_binding(
+                    r#"ability_ref = !state, extra = 1, kind = "op", op_name = "get", operation_result_type = core.i32"#,
+                ),
+                "must have exactly",
+            ),
+            (
+                "binding without an ability",
+                raw_binding(
+                    r#"ability_ref = core.i32, kind = "op", op_name = "get", operation_result_type = core.i32"#,
+                ),
+                "ability_ref must be a core.ability_ref",
+            ),
+            (
+                "binding with a numeric name",
+                raw_binding(
+                    r#"ability_ref = !state, kind = "op", op_name = 1, operation_result_type = core.i32"#,
+                ),
+                "op_name must be a string",
+            ),
+            (
+                "binding with a numeric kind",
+                raw_binding(
+                    r#"ability_ref = !state, kind = 1, op_name = "get", operation_result_type = core.i32"#,
+                ),
+                "kind must be fn or op",
+            ),
+            (
+                "binding without a result type",
+                raw_binding(
+                    r#"ability_ref = !state, kind = "op", op_name = "get", operation_result_type = 1"#,
+                ),
+                "operation_result_type must be a type",
+            ),
+            (
+                "binding that is not a dictionary",
+                with_extra(&arms, &handle(&["1".to_string()], ", %get", "")),
+                "must be a [Dict<any>] attribute",
+            ),
+        ];
+        for (name, text, expected) in cases {
+            let error = errors(&text);
+            assert!(
+                error.contains(expected),
+                "{name}: expected {expected:?}, got {error:?}"
+            );
+        }
+    }
 }
