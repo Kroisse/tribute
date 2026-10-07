@@ -637,7 +637,7 @@ fn guarded_arms_do_not_cover(db: &salsa::DatabaseImpl) {
         r#"
 fn pick(flag: Bool, enabled: Bool) -> Nat {
     case flag {
-        True if enabled -> 1
+        True && enabled -> 1
         False -> 0
     }
 }
@@ -726,8 +726,8 @@ fn pick(flag: Bool, n: Nat) -> Nat {
     case flag {
         True -> 1
         False -> 2
-        _ if n > 0 -> 3
-        True if n > 1 -> 4
+        _ && n > 0 -> 3
+        True && n > 1 -> 4
     }
 }
 "#;

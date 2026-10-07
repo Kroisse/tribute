@@ -608,7 +608,7 @@ fn count(flag: Bool, n: Nat) -> Nat {
     case flag {
         True -> 1
         False -> 2
-        _ if n > 0 -> 3
+        _ && n > 0 -> 3
     }
 }
 
@@ -616,7 +616,7 @@ fn wrap(flag: Bool, n: Nat) -> Option(Nat) {
     case flag {
         True -> Some(n)
         False -> None
-        _ if n > 0 -> Some(0)
+        _ && n > 0 -> Some(0)
     }
 }
 

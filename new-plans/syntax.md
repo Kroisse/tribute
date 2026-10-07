@@ -21,13 +21,13 @@ A?          선택적 (0개 또는 1개)
 ### Keywords
 
 ```text
-fn op do let const struct enum ability mod pub use extern case handle resume if as
+fn op do let const struct enum ability mod pub use extern case handle resume as
 True False Nil
 pkg super self
 ```
 
-**Note:** `if`는 guard 문법에서만 사용 (독립적인 if expression 없음). `pkg`,
-`super`, `self`는 경로의 첫 segment로 쓰는 경로 키워드다.
+**Note:** `if`는 키워드가 아니며 일반 식별자다. 조건 분기는 Bool에 대한 `case`로
+쓴다. `pkg`, `super`, `self`는 경로의 첫 segment로 쓰는 경로 키워드다.
 
 ### Reserved (향후 사용)
 
@@ -992,11 +992,14 @@ bits.bit_not  // ~bits (비트 부정)
 ```ebnf
 CaseExpr ::= 'case' Expression '{' CaseArm+ '}'
 
-CaseArm ::= Pattern '->' Expression           // guard 없음
-          | Pattern GuardedBranch+            // guard 하나 이상
-
-GuardedBranch ::= 'if' Expression '->' Expression
+CaseArm ::= Pattern ('&&' Expression)? '->' Expression
 ```
+
+`&&` 뒤 첫 `->` 앞까지 전체가 `Bool` guard 식이다. 따라서
+`Some(x) && x > 0 && x < 10 -> ..`의 guard는 `x > 0 && x < 10`이다. 같은
+패턴에 guard를 여러 줄로 잇는 문법은 없으며, 필요하면 `&&`로 조건을 합치거나
+arm을 나눈다. guard가 거짓이면 다음 arm으로 넘어가고, guard가 있는 arm은
+망라성에 기여하지 않는다. `|`는 향후 or-pattern을 위해 비워 둔다.
 
 **예시:**
 
@@ -1008,15 +1011,15 @@ case opt {
 
 // 단일 guard
 case value {
-    n if n > 0 -> "positive"
+    n && n > 0 -> "positive"
     _ -> "non-positive"
 }
 
-// 다중 guard (같은 패턴에 여러 조건)
+// 여러 조건은 &&로 합친다
 case value {
-    n if n > 0 -> "positive"
-      if n < 0 -> "negative"
-    _ -> "zero"
+    n && n > 0 && n < 10 -> "small"
+    n && n > 0 -> "large"
+    _ -> "non-positive"
 }
 
 case result {

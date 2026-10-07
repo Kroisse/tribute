@@ -22,7 +22,7 @@ fn get_age_with_rest(user: User) -> Int {
 
 fn describe(user: User) -> String {
     case user {
-        User { name, age } if age >= +18 -> "adult"
+        User { name, age } && age >= +18 -> "adult"
         User { name, age } -> "minor"
     }
 }
