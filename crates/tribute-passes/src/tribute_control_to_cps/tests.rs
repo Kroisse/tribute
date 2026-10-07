@@ -1,4 +1,5 @@
 use super::*;
+use tribute_ir::dialect::effect;
 use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
@@ -78,8 +79,14 @@ fn frame_names_do_not_depend_on_type_interning_order() {
         });
         let mut converter = Converter::new(&mut ctx, block, HashMap::default());
         answers.map(|answer| {
-            let frame = converter.frame_types(answer);
-            assert_eq!(converter.frame_types(answer).reference, frame.reference);
+            let frame = converter.frames.frame_types(converter.ctx, answer);
+            assert_eq!(
+                converter
+                    .frames
+                    .frame_types(converter.ctx, answer)
+                    .reference,
+                frame.reference
+            );
             tribute_ir::dialect::adt::nominal_name(converter.ctx, frame.reference)
                 .expect("frame reference is nominal")
                 .to_owned()
@@ -1213,6 +1220,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
         &mut Default::default(),
     )
     .unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
     let mut perform_resume = None;
     fn find_perform_resume(ctx: &IrContext, op: OpRef, found: &mut Option<ValueRef>) {
         if let Ok(perform) = ability::Perform::from_op(ctx, op) {
@@ -1364,6 +1372,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
         &mut Default::default(),
     )
     .unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
 
     let mut delimiters = Vec::new();
     fn collect_delimiters(ctx: &IrContext, op: OpRef, found: &mut Vec<OpRef>) {
@@ -1632,16 +1641,10 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
         .results(raw_type)
         .build(&mut ctx, location);
     let before = ctx.block(module_block).ops.clone();
-    let mut converter = Converter::new(&mut ctx, module_block, HashMap::default());
-
-    let error = converter
-        .emit_cps_tail_call_indirect(
-            module_block,
-            location,
-            raw.result(converter.ctx),
-            std::iter::empty(),
-        )
-        .unwrap_err();
+    let callee = raw.result(&ctx);
+    let error =
+        emit_cps_tail_call_indirect(&mut ctx, module_block, location, callee, std::iter::empty())
+            .unwrap_err();
 
     assert!(
         error
@@ -1649,10 +1652,7 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
             .contains("no exact provenance-bearing closure contract"),
         "{error}"
     );
-    assert_eq!(
-        converter.ctx.block(module_block).ops.as_slice(),
-        before.as_slice()
-    );
+    assert_eq!(ctx.block(module_block).ops.as_slice(), before.as_slice());
 }
 
 #[test]
@@ -1984,6 +1984,42 @@ fn raw_pointer_managed_masquerade_is_rejected_before_mutation() {
 }
 
 #[test]
+fn handles_stay_abstract_until_the_frames_are_lowered() {
+    let input = r#"core.module @test {
+  tribute_control.func @nested(%input: core.i32) -> core.i32 convention(cps) {
+    %outer = tribute_control.handle : core.i32 {
+      %inner = tribute_control.handle : core.i32 {
+        tribute_control.yield %input
+      } {
+        ^inner_completion(%value: core.i32):
+          tribute_control.yield %value
+      } {
+        ^inner_handlers:
+      }
+      tribute_control.yield %inner
+    } {
+      ^outer_completion(%value: core.i32):
+        tribute_control.yield %value
+    } {
+      ^outer_handlers:
+    }
+    tribute_control.return %outer
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    let printed = print_module(&ctx, module.op());
+    assert_eq!(printed.matches("ability.handle ").count(), 2, "{printed}");
+    assert!(!printed.contains("ability.handle_dispatch"), "{printed}");
+    assert!(!printed.contains("effect.fresh_prompt_tag"), "{printed}");
+    assert!(!printed.contains("adt.struct_new"), "{printed}");
+    lower_continuation_frames(&mut ctx, module).unwrap();
+    let printed = print_module(&ctx, module.op());
+    assert!(!printed.contains("ability.handle "), "{printed}");
+    assert!(!printed.contains("ability.frame"), "{printed}");
+}
+
+#[test]
 fn nested_textual_handles_keep_distinct_delimiters() {
     let input = r#"core.module @test {
   tribute_control.func @nested(%input: core.i32) -> core.i32 convention(cps) {
@@ -2008,6 +2044,7 @@ fn nested_textual_handles_keep_distinct_delimiters() {
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
     // Each handle is installed in place, and again in the layer a
     // resumed continuation rebuilds.
@@ -2060,6 +2097,7 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
         &mut Default::default(),
     )
     .unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
     assert_nested_resume_frames(&print_module(&ctx, module.op()));
 }
 
@@ -2106,6 +2144,7 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
         &mut Default::default(),
     )
     .unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
     assert_nested_resume_frames(&print_module(&ctx, module.op()));
 }
 #[test]
@@ -2288,6 +2327,7 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
         &mut Default::default(),
     )
     .unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("ability.call"));
     assert!(!printed.contains("ability.perform"));

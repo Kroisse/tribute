@@ -4,7 +4,8 @@
 //! `ability.frame<R>` becomes the nominal frame reference of `R`, and
 //! `ability.suffix_frame` and `ability.exit` expand into the done adapter,
 //! dispatch adapter factory, and frame struct, or the transfer to the frame's
-//! `Done<R>`.
+//! `Done<R>`. `ability.handle` expands into the handle layer's factories and
+//! its `ability.handle_dispatch` delimiter.
 
 use std::cell::Cell;
 use std::ops::ControlFlow;
@@ -13,7 +14,8 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use tribute_core::calling_convention::cps_completion_type;
 use tribute_ir::continuation_frame;
-use tribute_ir::dialect::{ability, adt, tribute_control};
+use tribute_ir::dialect::{ability, adt, effect, tribute_control};
+use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
@@ -30,7 +32,14 @@ use crate::closure_lower::{TypeSubstitution, substitute_module_types_keeping_cas
 use crate::tribute_control_to_cps::{
     FrameTypes, LayerFrames, TributeControlToCpsError, build_dispatch_adapter_factory,
     build_done_adapter, emit_cps_tail_call_indirect, helper_symbol, make_block, pack_frame,
-    unpack_frame,
+    single_block_region, unpack_frame,
+};
+
+mod handle_layer;
+
+use handle_layer::{
+    HandleLayer, HandlerArm, LayerValues, build_layer_resume_factory,
+    build_local_dispatcher_factory, push_handle_dispatch, push_layer_frame,
 };
 
 /// Pass-manager wrapper of [`lower_continuation_frames`].
@@ -79,8 +88,8 @@ pub fn lower_continuation_frames(
     reject_abstract_frames(ctx, module)
 }
 
-/// Expands `ability.suffix_frame` and `ability.exit`. A failure leaves the
-/// operation for [`reject_abstract_frames`] to report.
+/// Expands `ability.suffix_frame`, `ability.exit`, and `ability.handle`. A
+/// failure leaves the operation for [`reject_abstract_frames`] to report.
 struct ExpandFrameOperations {
     frames: HashMap<TypeRef, FrameTypes>,
     next_helper: Cell<u32>,
@@ -97,6 +106,8 @@ impl RewritePattern for ExpandFrameOperations {
             self.expand_suffix_frame(ctx, suffix, rewriter).is_some()
         } else if let Ok(exit) = ability::Exit::from_op(ctx, op) {
             self.expand_exit(ctx, exit, rewriter).is_some()
+        } else if let Ok(handle) = ability::Handle::from_op(ctx, op) {
+            self.expand_handle(ctx, handle, rewriter).is_some()
         } else {
             false
         }
@@ -107,6 +118,10 @@ impl ExpandFrameOperations {
     fn frame_of(&self, ctx: &IrContext, frame: TypeRef) -> Option<FrameTypes> {
         let answer = continuation_frame::result_type(ctx, frame)?;
         self.frames.get(&answer).copied()
+    }
+
+    fn fresh_helper(&self, prefix: &str) -> Symbol {
+        helper_symbol(prefix, self.next_helper.replace(self.next_helper.get() + 1))
     }
 
     /// Replace `ability.suffix_frame` with the done adapter, the dispatch
@@ -134,14 +149,13 @@ impl ExpandFrameOperations {
             build_done_adapter(ctx, value.answer, continuation, evidence, outer, location).ok()?;
         ctx.push_op(block, done_op);
         let (_, outer_dispatch) = unpack_frame(ctx, block, location, &boundary, outer);
-        let index = self.next_helper.replace(self.next_helper.get() + 1);
-        let symbol = helper_symbol("make_dispatch_adapter", index);
+        let symbol = self.fresh_helper("make_dispatch_adapter");
         let frames = LayerFrames { value, boundary };
         let factory =
             build_dispatch_adapter_factory(ctx, location, symbol.clone(), &frames, plan).ok()?;
         let evidence_type = ctx.value_ty(evidence);
         let completion_type =
-            cps_completion_type(ctx, evidence_type, value.answer, boundary.abstract_frame);
+            cps_completion_type(ctx, evidence_type, value.answer, boundary.reference);
         let completion = core::UnrealizedConversionCast::operands(continuation)
             .results(completion_type)
             .build(ctx, location);
@@ -180,6 +194,99 @@ impl ExpandFrameOperations {
         ctx.remove_op_from_block(block, transfer);
         detach_into(ctx, block, rewriter);
         rewriter.replace_op(transfer);
+        Some(())
+    }
+
+    /// Replace `ability.handle` with the first installation of its layer:
+    /// the layer's factories, a fresh prompt, and the `ability.handle_dispatch`
+    /// whose body starts by building the layer's frame.
+    fn expand_handle(
+        &self,
+        ctx: &mut IrContext,
+        handle: ability::Handle,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let op = handle.op_ref();
+        let location = ctx.op(op).location;
+        let evidence = handle.evidence(ctx);
+        let exit = handle.exit(ctx);
+        let completion = handle.completion(ctx);
+        let arm_values = handle.arms(ctx).to_vec();
+        let bindings: Vec<_> = handle.handlers(ctx).collect();
+        let [source_block] = ctx.region(handle.body(ctx)).blocks[..] else {
+            return None;
+        };
+        let [source_evidence, source_frame] = ctx.block_args(source_block)[..] else {
+            return None;
+        };
+        if bindings.len() != arm_values.len() {
+            return None;
+        }
+        let arms = bindings
+            .into_iter()
+            .zip(&arm_values)
+            .map(|(binding, arm)| HandlerArm::new(ctx, binding, ctx.value_ty(*arm)))
+            .collect::<Option<Vec<_>>>()?;
+        let frames = LayerFrames {
+            value: self.frame_of(ctx, ctx.value_ty(source_frame))?,
+            boundary: self.frame_of(ctx, ctx.value_ty(exit))?,
+        };
+        let layer = HandleLayer {
+            arms,
+            frames,
+            completion_type: ctx.value_ty(completion),
+            plan: ctx
+                .op(op)
+                .attributes
+                .get(tribute_control::EVIDENCE_PLAN_ATTR)
+                .cloned(),
+            dispatch_factory: self.fresh_helper("make_local_dispatch"),
+            passthrough_factory: self.fresh_helper("make_dispatch_adapter"),
+            installed_resume_factory: self.fresh_helper("make_installed_resume"),
+            passthrough_resume_factory: self.fresh_helper("make_passthrough_resume"),
+        };
+        let mut factories = vec![
+            build_dispatch_adapter_factory(
+                ctx,
+                location,
+                layer.passthrough_factory.clone(),
+                &frames,
+                None,
+            )
+            .ok()?,
+            build_local_dispatcher_factory(ctx, location, &layer).ok()?,
+            build_layer_resume_factory(ctx, location, &layer, true).ok()?,
+        ];
+        if layer.arms.iter().any(HandlerArm::is_resumptive) {
+            factories.push(build_layer_resume_factory(ctx, location, &layer, false).ok()?);
+        }
+
+        let block = make_block(ctx, location, &[]);
+        let prompt = effect::FreshPromptTag::operands().build(ctx, location);
+        ctx.push_op(block, prompt.op_ref());
+        let values = LayerValues {
+            completion,
+            prompt: prompt.result(ctx),
+            arms: arm_values,
+        };
+        let body_block = make_block(ctx, location, &[ctx.value_ty(source_evidence)]);
+        let frame =
+            push_layer_frame(ctx, body_block, location, &layer, &values, (evidence, exit)).ok()?;
+        for moved in ctx.block(source_block).ops.clone() {
+            ctx.remove_op_from_block(source_block, moved);
+            ctx.push_op(body_block, moved);
+        }
+        ctx.replace_all_uses(source_evidence, ctx.block_args(body_block)[0]);
+        ctx.replace_all_uses(source_frame, frame);
+        let body = single_block_region(ctx, location, body_block);
+        push_handle_dispatch(ctx, block, location, &layer, &values, evidence, body).ok()?;
+        let delimiter = *ctx.block(block).ops.last()?;
+        ctx.remove_op_from_block(block, delimiter);
+        detach_into(ctx, block, rewriter);
+        for factory in factories {
+            rewriter.add_module_op(factory);
+        }
+        rewriter.replace_op(delimiter);
         Some(())
     }
 }
@@ -285,7 +392,6 @@ fn frame_types(
             answer,
             FrameTypes {
                 answer,
-                abstract_frame: reference,
                 reference,
                 layout,
                 done,
@@ -387,7 +493,9 @@ fn reject_abstract_frames(ctx: &IrContext, module: Module) -> Result<(), Tribute
                 }
             }
         }
-        let operation = ability::SuffixFrame::matches(ctx, op) || ability::Exit::matches(ctx, op);
+        let operation = ability::SuffixFrame::matches(ctx, op)
+            || ability::Exit::matches(ctx, op)
+            || ability::Handle::matches(ctx, op);
         if (operation || mentions) && failure.is_none() {
             failure = Some(survived(ctx.op(op).location));
         }
@@ -441,6 +549,25 @@ mod tests {
         ctx.block_mut(block).args[0]
             .attrs
             .insert("frame", Attribute::Type(frame));
+        assert!(lower_continuation_frames(&mut ctx, module).is_err());
+    }
+
+    #[test]
+    fn a_handle_over_an_unregistered_frame_is_rejected() {
+        let (mut ctx, module) = parse(
+            r#"core.module @m {
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
+  !ev = core.array<!marker, {layout = "evidence"}>
+  !frame = ability.frame<core.i32>
+  !completion = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+  func.func @run(%ev: !ev, %exit: !frame, %done: !completion) -> core.never {
+    ability.handle %ev, %exit, %done {handlers = []} {
+      ^body(%inner: !ev, %frame: !frame):
+        func.unreachable
+    }
+  }
+}"#,
+        );
         assert!(lower_continuation_frames(&mut ctx, module).is_err());
     }
 }

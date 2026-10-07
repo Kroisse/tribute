@@ -90,7 +90,11 @@ impl Converter<'_> {
                 .into_iter()
                 .map(|ty| self.convert_type(ty))
                 .collect::<Vec<_>>();
-            let block = self.make_block(self.ctx.block(source_block).location, &source_arg_types);
+            let block = make_block(
+                self.ctx,
+                self.ctx.block(source_block).location,
+                &source_arg_types,
+            );
             let previous_module_block = self.module_block;
             self.module_block = block;
             let conversion = (|| {
@@ -152,7 +156,7 @@ impl Converter<'_> {
                 .into_iter()
                 .map(|ty| self.convert_type(ty))
                 .collect();
-            let block = self.make_block(self.ctx.block(source_block).location, &arg_types);
+            let block = make_block(self.ctx, self.ctx.block(source_block).location, &arg_types);
             for (old, new) in self
                 .ctx
                 .block_args(source_block)
@@ -262,7 +266,8 @@ impl Converter<'_> {
                 ));
             };
             let source_block = *source_block;
-            let converted_block = self.make_block(self.ctx.block(source_block).location, &[]);
+            let block_location = self.ctx.block(source_block).location;
+            let converted_block = make_block(self.ctx, block_location, &[]);
             let mut branch_mapping = mapping.clone();
             let branch_flow = Flow {
                 preserve_scf_yield: false,
@@ -276,7 +281,7 @@ impl Converter<'_> {
                 &mut branch_mapping,
                 &branch_flow,
             )?;
-            converted_regions.push(self.single_block_region(location, converted_block));
+            converted_regions.push(single_block_region(self.ctx, location, converted_block));
         }
         let [then_region, else_region] = converted_regions.as_slice() else {
             return Err(TributeControlToCpsError::post_op(
@@ -367,7 +372,7 @@ impl Converter<'_> {
                 .map(|ty| self.convert_type(ty))
                 .collect::<Vec<_>>();
             let converted_block =
-                self.make_block(self.ctx.block(*source_block).location, &arg_types);
+                make_block(self.ctx, self.ctx.block(*source_block).location, &arg_types);
             let mut branch_mapping = mapping.clone();
             for (old, new) in self
                 .ctx
@@ -415,7 +420,7 @@ impl Converter<'_> {
                 &mut branch_mapping,
                 &branch_flow,
             )?;
-            converted_regions.push(self.single_block_region(location, converted_block));
+            converted_regions.push(single_block_region(self.ctx, location, converted_block));
         }
         let [then_region, else_region] = converted_regions.as_slice() else {
             return Err(TributeControlToCpsError::post_op(
@@ -501,7 +506,7 @@ impl Converter<'_> {
                 "scf.switch body requires exactly one block",
             ));
         };
-        let switch_block = self.make_block(location, &[]);
+        let switch_block = make_block(self.ctx, location, &[]);
         let source_cases = self.ctx.block(*source_body_block).ops.clone();
         for case in source_cases {
             let case_data = self.ctx.op(case);
@@ -532,7 +537,7 @@ impl Converter<'_> {
                 ));
             };
             let source_case_ops = self.ctx.block(*source_case_block).ops.clone();
-            let converted_block = self.make_block(case_location, &[]);
+            let converted_block = make_block(self.ctx, case_location, &[]);
             let mut case_mapping = mapping.clone();
             let case_flow = Flow {
                 void_exit_k: Some(continuation),
@@ -545,7 +550,7 @@ impl Converter<'_> {
                 &mut case_mapping,
                 &case_flow,
             )?;
-            let converted_region = self.single_block_region(case_location, converted_block);
+            let converted_region = single_block_region(self.ctx, case_location, converted_block);
             let converted = if is_case {
                 let Some(case_value) = case_value else {
                     return Err(self.malformed_source(case, "scf.case requires a value attribute"));
@@ -563,7 +568,7 @@ impl Converter<'_> {
             };
             self.ctx.push_op(switch_block, converted);
         }
-        let switch_region = self.single_block_region(location, switch_block);
+        let switch_region = single_block_region(self.ctx, location, switch_block);
         let discriminant = self.ctx.op_operands(source)[0];
         let discriminant = mapping.get(&discriminant).copied().unwrap_or(discriminant);
         let lowered = scf::Switch::operands(discriminant)

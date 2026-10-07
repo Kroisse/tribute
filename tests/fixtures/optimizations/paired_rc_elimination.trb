@@ -1,4 +1,4 @@
-extern "C" fn __tribute_print_int(value: Int) -> Nil
+use std::io::{Io, print_line}
 
 ability State(s) {
     op get() -> s
@@ -19,6 +19,6 @@ fn run_state() -> Int {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_int(run_state())
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(run_state()))
 }

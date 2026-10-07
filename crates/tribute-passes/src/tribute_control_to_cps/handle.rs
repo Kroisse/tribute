@@ -1,137 +1,9 @@
-//! Conversion of `handle`: handler arms, the layers that install a handle,
-//! their dispatchers and resume tokens, and `perform` and `resume`.
+//! Conversion of `handle` into `ability.handle` with its completion and
+//! handler arms, and of `perform` and `resume`.
 
 use super::*;
 
 impl Converter<'_> {
-    /// Build the resumption of an installed handle layer.
-    ///
-    /// The evidence it is resumed with is the layer's outer evidence: the
-    /// completion and the arms run with it, and the handle is installed on it
-    /// again under the same prompt for the resumed computation.
-    pub(super) fn build_handle_rebound(
-        &mut self,
-        location: Location,
-        layer: &HandleLayer,
-        values: &LayerValues,
-        resume_body: ValueRef,
-    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
-        let evidence_type = self.evidence_type();
-        let anyref = self.anyref_type();
-        let boundary_frame = self.frame_type(layer.answer_type);
-        let block = self.make_block(location, &[evidence_type, boundary_frame, anyref]);
-        let args = self.ctx.block_args(block).to_vec();
-        let (done_op, done) = self.build_done_adapter(
-            layer.body_type,
-            values.completion,
-            args[0],
-            args[1],
-            location,
-        )?;
-        self.ctx.push_op(block, done_op);
-        let dispatch = self.call_dispatch_factory(block, location, layer, values, args[1], args[0]);
-        let frame = self.pack_frame(block, location, layer.body_type, done, dispatch);
-        let body_block = self.make_block(location, &[evidence_type]);
-        let body_evidence = self.ctx.block_args(body_block)[0];
-        self.emit_cps_tail_call_indirect(
-            body_block,
-            location,
-            resume_body,
-            [body_evidence, frame, args[2]],
-        )?;
-        let body_region = self.single_block_region(location, body_block);
-        self.push_handle_dispatch(block, location, layer, values, args[0], body_region)?;
-        Ok(self.finish_rebound(location, layer.answer_type, block))
-    }
-
-    /// Call a handle's dispatcher factory for one installed layer.
-    pub(super) fn call_dispatch_factory(
-        &mut self,
-        block: BlockRef,
-        location: Location,
-        layer: &HandleLayer,
-        values: &LayerValues,
-        exit_frame: ValueRef,
-        outer_evidence: ValueRef,
-    ) -> ValueRef {
-        let mut args = vec![values.completion, exit_frame, values.prompt, outer_evidence];
-        args.extend(values.arms.iter().copied());
-        let dispatch_type = self.frame_types(layer.body_type).dispatch;
-        let dispatch = func::Call::operands(args)
-            .callee(layer.dispatch_factory.clone().into())
-            .results([dispatch_type])
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
-        self.ctx.push_op(block, dispatch.op_ref());
-        dispatch.result(self.ctx)
-    }
-
-    /// The ability instances a handle handles, in first-arm order.
-    pub(super) fn layer_ability_refs(layer: &HandleLayer) -> Vec<TypeRef> {
-        let mut ability_refs = Vec::new();
-        for arm in &layer.arms {
-            if !ability_refs.contains(&arm.ability_ref) {
-                ability_refs.push(arm.ability_ref);
-            }
-        }
-        ability_refs
-    }
-
-    /// Build the marker dispatch closures of one installed layer: for each
-    /// handled instance, the `fn` dispatcher running its arms with
-    /// `outer_evidence`. General operations read only the marker's prompt and
-    /// dispatch through the continuation frame.
-    pub(super) fn build_marker_dispatchers(
-        &mut self,
-        block: BlockRef,
-        location: Location,
-        layer: &HandleLayer,
-        arm_values: &[ValueRef],
-        outer_evidence: ValueRef,
-    ) -> Result<Vec<ValueRef>, TributeControlToCpsError> {
-        let mut dispatchers = Vec::new();
-        for ability_ref in Self::layer_ability_refs(layer) {
-            let ability_arms: Vec<_> = layer
-                .arms
-                .iter()
-                .zip(arm_values)
-                .filter(|(arm, _)| arm.ability_ref == ability_ref && !arm.general)
-                .map(|(arm, value)| HandlerArmInfo {
-                    value: *value,
-                    ..arm.clone()
-                })
-                .collect();
-            let (tr_op, tr_value) =
-                self.build_tail_dispatcher(location, &ability_arms, outer_evidence)?;
-            self.ctx.push_op(block, tr_op);
-            dispatchers.push(tr_value);
-        }
-        Ok(dispatchers)
-    }
-
-    /// Install a handle layer: extend `outer_evidence` for `body`, with
-    /// marker dispatchers whose arms run with `outer_evidence`.
-    pub(super) fn push_handle_dispatch(
-        &mut self,
-        block: BlockRef,
-        location: Location,
-        layer: &HandleLayer,
-        values: &LayerValues,
-        outer_evidence: ValueRef,
-        body: RegionRef,
-    ) -> Result<(), TributeControlToCpsError> {
-        let dispatchers =
-            self.build_marker_dispatchers(block, location, layer, &values.arms, outer_evidence)?;
-        let dispatch =
-            ability::HandleDispatch::operands(outer_evidence, values.prompt, dispatchers)
-                .ability_refs(Self::layer_ability_refs(layer))
-                .regions(body)
-                .build(self.ctx, location);
-        carry_evidence_plan(self.ctx, layer.source, dispatch.op_ref());
-        self.ctx.push_op(block, dispatch.op_ref());
-        Ok(())
-    }
-
     pub(super) fn build_completion_continuation(
         &mut self,
         source_region: RegionRef,
@@ -143,8 +15,8 @@ impl Converter<'_> {
         let source_arg = self.ctx.block_args(source_block)[0];
         let arg_type = self.convert_type(self.ctx.value_ty(source_arg));
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(flow.answer_type);
-        let block = self.make_block(location, &[evidence_type, frame_type, arg_type]);
+        let frame_type = self.frames.frame_type(self.ctx, flow.answer_type);
+        let block = make_block(self.ctx, location, &[evidence_type, frame_type, arg_type]);
         let mut body_mapping = mapping.clone();
         body_mapping.insert(source_arg, self.ctx.block_args(block)[2]);
         let completion_flow = Flow {
@@ -165,9 +37,15 @@ impl Converter<'_> {
             &mut body_mapping,
             &completion_flow,
         )?;
-        let body = self.single_block_region(location, block);
+        let body = single_block_region(self.ctx, location, block);
         let closure_type = self.completion_type(arg_type, flow.answer_type);
-        let lambda = self.closure_over(location, body, closure_type, CallingConvention::Cps);
+        let lambda = closure_over(
+            self.ctx,
+            location,
+            body,
+            closure_type,
+            CallingConvention::Cps,
+        );
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
@@ -182,8 +60,8 @@ impl Converter<'_> {
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
         let input_type = self.convert_type(input_type);
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(flow.answer_type);
-        let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
+        let frame_type = self.frames.frame_type(self.ctx, flow.answer_type);
+        let block = make_block(self.ctx, location, &[evidence_type, frame_type, input_type]);
         let resume_evidence = self.ctx.block_args(block)[0];
         let resume_frame = self.ctx.block_args(block)[1];
         let resume_input = self.ctx.block_args(block)[2];
@@ -203,376 +81,15 @@ impl Converter<'_> {
             &mut body_mapping,
             &suffix_flow,
         )?;
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let closure_type = self.resumption_type(input_type, flow.answer_type);
-        let lambda = self.closure_over(location, region, closure_type, CallingConvention::Cps);
-        Ok((lambda.op_ref(), lambda.result(self.ctx)))
-    }
-
-    /// Build the function that makes a resumption of one handle's layer, so
-    /// every token and dispatcher of the handle shares one copy of it.
-    ///
-    /// The function's parameters are `(completion, prompt, resume_body,
-    /// arms...)` for a resumption that installs the layer again, and
-    /// `(completion, resume_body)` for one resumed from a lambda.
-    fn build_layer_resume_factory(
-        &mut self,
-        location: Location,
-        layer: &HandleLayer,
-        installed: bool,
-    ) -> Result<(), TributeControlToCpsError> {
-        let evidence_type = self.evidence_type();
-        let anyref = self.anyref_type();
-        let completion_type = self.completion_type(layer.body_type, layer.answer_type);
-        let body_frame = self.frame_type(layer.body_type);
-        let answer_frame = self.frame_type(layer.answer_type);
-        let resume_body_type = cps_resume_type(self.ctx, evidence_type, body_frame, anyref);
-        let resume_type = cps_resume_type(self.ctx, evidence_type, answer_frame, anyref);
-        let params = if installed {
-            let mut params = vec![completion_type, self.i32_type(), resume_body_type];
-            params.extend(layer.arms.iter().map(|arm| self.ctx.value_ty(arm.value)));
-            params
-        } else {
-            vec![completion_type, resume_body_type]
-        };
-        let block = self.make_block(location, &params);
-        let args = self.ctx.block_args(block).to_vec();
-        let (resume_op, resume) = if installed {
-            let values = LayerValues {
-                completion: args[0],
-                prompt: args[1],
-                arms: args[3..].to_vec(),
-            };
-            self.build_handle_rebound(location, layer, &values, args[2])?
-        } else {
-            // A resume in a lambda carries the lambda's evidence, whose
-            // handlers the resumed computation keeps: the layer leaves only
-            // its completion behind.
-            let completion_only = SuffixLayer {
-                value_type: layer.body_type,
-                dispatch_factory: layer.passthrough_factory.clone(),
-                plan: None,
-            };
-            self.build_suffix_rebound(
-                location,
-                &completion_only,
-                layer.answer_type,
-                args[1],
-                args[0],
-            )?
-        };
-        self.ctx.push_op(block, resume_op);
-        let ret = func::Return::operands([resume]).build(self.ctx, location);
-        self.ctx.push_op(block, ret.op_ref());
-        let region = self.single_block_region(location, block);
-        let symbol = if installed {
-            layer.installed_resume_factory.clone()
-        } else {
-            layer.passthrough_resume_factory.clone()
-        };
-        let factory_type = func::func_sig(self.ctx, params, [resume_type]).as_type_ref();
-        let factory = func::Func::operands()
-            .sym_name(self.ctx.intern_symbol_text(&symbol))
-            .r#type(factory_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, factory.op_ref(), CallingConvention::Direct);
-        self.ctx.push_op(self.module_block, factory.op_ref());
-        Ok(())
-    }
-
-    /// Call a handle's resumption factory for `resume_body`: the resumption
-    /// that installs the layer again, or the one resumed from a lambda.
-    fn call_layer_resume_factory(
-        &mut self,
-        block: BlockRef,
-        location: Location,
-        layer: &HandleLayer,
-        values: &LayerValues,
-        resume_body: ValueRef,
-        installed: bool,
-    ) -> ValueRef {
-        let (symbol, args) = if installed {
-            let mut args = vec![values.completion, values.prompt, resume_body];
-            args.extend(values.arms.iter().copied());
-            (layer.installed_resume_factory.clone(), args)
-        } else {
-            (
-                layer.passthrough_resume_factory.clone(),
-                vec![values.completion, resume_body],
-            )
-        };
-        let evidence_type = self.evidence_type();
-        let anyref = self.anyref_type();
-        let answer_frame = self.frame_type(layer.answer_type);
-        let resume_type = cps_resume_type(self.ctx, evidence_type, answer_frame, anyref);
-        let resume = func::Call::operands(args)
-            .callee(symbol.into())
-            .results([resume_type])
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, resume.op_ref(), CallingConvention::Direct);
-        self.ctx.push_op(block, resume.op_ref());
-        resume.result(self.ctx)
-    }
-
-    /// Build one resume token of a general arm: the exact-typed entry to a
-    /// resumption of its handle layer, made by the handle's factory when the
-    /// token is used.
-    fn build_exact_handler_token(
-        &mut self,
-        location: Location,
-        layer: &HandleLayer,
-        values: &LayerValues,
-        input_type: TypeRef,
-        resume_body: ValueRef,
-        installed: bool,
-    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
-        let answer_type = layer.answer_type;
-        let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(answer_type);
-        let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
-        let args = self.ctx.block_args(block).to_vec();
-        let anyref = self.anyref_type();
-        let erased_input = core::UnrealizedConversionCast::operands(args[2])
-            .results(anyref)
-            .build(self.ctx, location);
-        self.ctx.push_op(block, erased_input.op_ref());
-        let rebound =
-            self.call_layer_resume_factory(block, location, layer, values, resume_body, installed);
-        self.emit_cps_tail_call_indirect(
-            block,
-            location,
-            rebound,
-            [args[0], args[1], erased_input.result(self.ctx)],
-        )?;
-        let region = self.single_block_region(location, block);
-        let token_type = self.resumption_type(input_type, answer_type);
-        let lambda = self.closure_over(location, region, token_type, CallingConvention::Cps);
-        Ok((lambda.op_ref(), lambda.result(self.ctx)))
-    }
-
-    /// Build an immutable factory for the dispatcher of one handle. Each
-    /// installed layer of the handle calls it with the frame the handle exits
-    /// to and the layer's outer evidence, so the dispatcher's arms run with
-    /// the evidence and continuation of that layer.
-    ///
-    /// The factory's parameters are `(completion, exit_frame, prompt,
-    /// outer_evidence, arms...)`.
-    pub(super) fn build_local_dispatcher_factory(
-        &mut self,
-        location: Location,
-        layer: &HandleLayer,
-    ) -> Result<(), TributeControlToCpsError> {
-        let completion_type = self.completion_type(layer.body_type, layer.answer_type);
-        let i32_type = self.i32_type();
-        let evidence_type = self.evidence_type();
-        let exit_frame_type = self.frame_type(layer.answer_type);
-        let dispatch_type = self.frame_types(layer.body_type).dispatch;
-        let mut params = vec![completion_type, exit_frame_type, i32_type, evidence_type];
-        params.extend(layer.arms.iter().map(|arm| self.ctx.value_ty(arm.value)));
-        let factory_type = func::func_sig(self.ctx, params.clone(), [dispatch_type]).as_type_ref();
-        let factory_block = self.make_block(location, &params);
-        let factory_args = self.ctx.block_args(factory_block).to_vec();
-        let values = LayerValues {
-            completion: factory_args[0],
-            prompt: factory_args[2],
-            arms: factory_args[4..].to_vec(),
-        };
-        let (_, parent_dispatch) =
-            self.unpack_frame(factory_block, location, layer.answer_type, factory_args[1]);
-        let (dispatcher_op, dispatcher) = self.build_local_dispatcher_instance(
-            location,
-            layer,
-            &values,
-            factory_args[1],
-            parent_dispatch,
-            factory_args[3],
-        )?;
-        self.ctx.push_op(factory_block, dispatcher_op);
-        let ret = func::Return::operands([dispatcher]).build(self.ctx, location);
-        self.ctx.push_op(factory_block, ret.op_ref());
-        let region = self.single_block_region(location, factory_block);
-        let factory = func::Func::operands()
-            .sym_name(self.ctx.intern_symbol_text(&layer.dispatch_factory))
-            .r#type(factory_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, factory.op_ref(), CallingConvention::Direct);
-        self.ctx.push_op(self.module_block, factory.op_ref());
-        Ok(())
-    }
-
-    /// Build the dispatch of an operation this handle layer does not handle:
-    /// the operation goes to the parent dispatcher with a resumption that
-    /// installs this layer again.
-    pub(super) fn build_local_foreign_dispatch(
-        &mut self,
-        location: Location,
-        layer: &HandleLayer,
-        values: &LayerValues,
-        parent_dispatch: ValueRef,
-    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
-        let evidence_type = self.evidence_type();
-        let anyref = self.anyref_type();
-        let i32_type = self.i32_type();
-        let body_frame = self.frame_type(layer.body_type);
-        let resume_type = tribute_core::calling_convention::cps_resume_type(
+        let lambda = closure_over(
             self.ctx,
-            evidence_type,
-            body_frame,
-            anyref,
-        );
-        let block = self.make_block(
             location,
-            &[
-                evidence_type,
-                resume_type,
-                i32_type,
-                i32_type,
-                i32_type,
-                anyref,
-            ],
+            region,
+            closure_type,
+            CallingConvention::Cps,
         );
-        let args = self.ctx.block_args(block).to_vec();
-        let rebound = self.call_layer_resume_factory(block, location, layer, values, args[1], true);
-        self.emit_cps_tail_call_indirect(
-            block,
-            location,
-            parent_dispatch,
-            [args[0], rebound, args[2], args[3], args[4], args[5]],
-        )?;
-        let region = self.single_block_region(location, block);
-        let dispatch_type = self.frame_types(layer.body_type).dispatch;
-        let lambda = self.closure_over(location, region, dispatch_type, CallingConvention::Cps);
-        Ok((lambda.op_ref(), lambda.result(self.ctx)))
-    }
-
-    /// Build the dispatcher of one installed handle layer. A general
-    /// arm runs with the layer's outer evidence and exits to `exit_frame`.
-    pub(super) fn build_local_dispatcher_instance(
-        &mut self,
-        location: Location,
-        layer: &HandleLayer,
-        values: &LayerValues,
-        exit_frame: ValueRef,
-        parent_dispatch: ValueRef,
-        outer_evidence: ValueRef,
-    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
-        let evidence_type = self.evidence_type();
-        let anyref = self.anyref_type();
-        let i32_type = self.i32_type();
-        let body_frame = self.frame_type(layer.body_type);
-        let resume_type = tribute_core::calling_convention::cps_resume_type(
-            self.ctx,
-            evidence_type,
-            body_frame,
-            anyref,
-        );
-        let block = self.make_block(
-            location,
-            &[
-                evidence_type,
-                resume_type,
-                i32_type,
-                i32_type,
-                i32_type,
-                anyref,
-            ],
-        );
-        let args = self.ctx.block_args(block).to_vec();
-        let (foreign_op, foreign_dispatch) =
-            self.build_local_foreign_dispatch(location, layer, values, parent_dispatch)?;
-        self.ctx.push_op(block, foreign_op);
-        let switch_block = self.make_block(location, &[]);
-        let general_arms = layer
-            .arms
-            .iter()
-            .zip(&values.arms)
-            .filter(|(arm, _)| arm.general);
-        for (arm, &arm_value) in general_arms {
-            let case_block = self.make_block(location, &[]);
-            let same_prompt = arith::Cmpi::operands(args[2], values.prompt)
-                .predicate("eq")
-                .build(self.ctx, location);
-            self.ctx.push_op(case_block, same_prompt.op_ref());
-
-            let local_block = self.make_block(location, &[]);
-            let mut call_args = vec![outer_evidence, exit_frame];
-            call_args.extend(self.unpack_handler_payload(local_block, location, args[5], arm));
-            if arm.has_resume_token {
-                let input_type = *arm.params.last().expect("resumptive arm has a token");
-                let token_input = cps_closure_function_type(self.ctx, input_type)
-                    .and_then(|function| func::FuncSig::from_type_ref(self.ctx, function))
-                    .and_then(|function| function.inputs(self.ctx).get(2).copied())
-                    .ok_or_else(|| {
-                        TributeControlToCpsError::post_at(
-                            location,
-                            "handler resume token lacks an exact callable input",
-                        )
-                    })?;
-                // The source token resumes from a lambda; the second token
-                // resumes from the arm body, under this handle installed
-                // again on the arm's evidence at the resume.
-                for installed in [false, true] {
-                    let (token_op, token) = self.build_exact_handler_token(
-                        location,
-                        layer,
-                        values,
-                        token_input,
-                        args[1],
-                        installed,
-                    )?;
-                    self.ctx.push_op(local_block, token_op);
-                    call_args.push(token);
-                }
-            }
-            self.emit_cps_tail_call_indirect(local_block, location, arm_value, call_args)?;
-            let local_region = self.single_block_region(location, local_block);
-            let fallback_block = self.make_block(location, &[]);
-            self.emit_cps_tail_call_indirect(
-                fallback_block,
-                location,
-                foreign_dispatch,
-                [args[0], args[1], args[2], args[3], args[4], args[5]],
-            )?;
-            let fallback_region = self.single_block_region(location, fallback_block);
-            let never = self.never_type();
-            let choose = scf::If::operands(same_prompt.result(self.ctx))
-                .results(never)
-                .regions(local_region, fallback_region)
-                .build(self.ctx, location);
-            self.ctx.push_op(case_block, choose.op_ref());
-            let case_region = self.single_block_region(location, case_block);
-            let op_index = ability::compute_op_idx(
-                ability::ability_name(self.ctx, arm.ability_ref),
-                Some(self.ctx.str(arm.op_name)),
-            );
-            let case = scf::Case::operands()
-                .value(Attribute::Int(op_index as i128))
-                .regions(case_region)
-                .build(self.ctx, location);
-            self.ctx.push_op(switch_block, case.op_ref());
-        }
-        let default_block = self.make_block(location, &[]);
-        self.emit_cps_tail_call_indirect(
-            default_block,
-            location,
-            foreign_dispatch,
-            [args[0], args[1], args[2], args[3], args[4], args[5]],
-        )?;
-        let foreign_region = self.single_block_region(location, default_block);
-        let default = scf::Default::operands()
-            .regions(foreign_region)
-            .build(self.ctx, location);
-        self.ctx.push_op(switch_block, default.op_ref());
-        let switch_region = self.single_block_region(location, switch_block);
-        let switch = scf::Switch::operands(args[4])
-            .regions(switch_region)
-            .build(self.ctx, location);
-        self.ctx.push_op(block, switch.op_ref());
-        let region = self.single_block_region(location, block);
-        let dispatch_type = self.frame_types(layer.body_type).dispatch;
-        let lambda = self.closure_over(location, region, dispatch_type, CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
@@ -586,7 +103,7 @@ impl Converter<'_> {
         let i1_type = self
             .ctx
             .intern_type(TypeDataBuilder::new("core", "i1").build());
-        let state_name = self.fresh_helper("one_shot_state");
+        let state_name = self.frames.fresh_helper("one_shot_state");
         let state_name = self.ctx.intern_symbol_text(&state_name);
         let state_type = adt::struct_type(
             self.ctx,
@@ -605,12 +122,12 @@ impl Converter<'_> {
             .build(self.ctx, location);
 
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(answer_type);
+        let frame_type = self.frames.frame_type(self.ctx, answer_type);
         let anyref = self.anyref_type();
         // The dispatcher ABI is existential only at this boundary. Keep the
         // captured continuation exact, recover this operation's declared input,
         // then transfer in proper tail position.
-        let block = self.make_block(location, &[evidence_type, frame_type, anyref]);
+        let block = make_block(self.ctx, location, &[evidence_type, frame_type, anyref]);
         let args = self.ctx.block_args(block).to_vec();
         let input = if type_is(self.ctx, input_type, "core", "nil") {
             // Nil has no physical payload: its exact resumption receives the
@@ -641,12 +158,12 @@ impl Converter<'_> {
             .build(self.ctx, location);
         self.ctx.push_op(block, consumed.op_ref());
 
-        let reject_block = self.make_block(location, &[]);
+        let reject_block = make_block(self.ctx, location, &[]);
         let unreachable = func::Unreachable::operands().build(self.ctx, location);
         self.ctx.push_op(reject_block, unreachable.op_ref());
-        let reject_region = self.single_block_region(location, reject_block);
+        let reject_region = single_block_region(self.ctx, location, reject_block);
 
-        let enter_block = self.make_block(location, &[]);
+        let enter_block = make_block(self.ctx, location, &[]);
         let consumed_true = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_type)
@@ -657,13 +174,14 @@ impl Converter<'_> {
             .field(0)
             .build(self.ctx, location);
         self.ctx.push_op(enter_block, mark.op_ref());
-        self.emit_cps_tail_call_indirect(
+        emit_cps_tail_call_indirect(
+            self.ctx,
             enter_block,
             location,
             raw_continuation,
             [args[0], args[1], input],
         )?;
-        let enter_region = self.single_block_region(location, enter_block);
+        let enter_region = single_block_region(self.ctx, location, enter_block);
 
         let never = self.never_type();
         let guard = scf::If::operands(consumed.result(self.ctx))
@@ -671,14 +189,20 @@ impl Converter<'_> {
             .regions(reject_region, enter_region)
             .build(self.ctx, location);
         self.ctx.push_op(block, guard.op_ref());
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let closure_type = tribute_core::calling_convention::cps_resume_type(
             self.ctx,
             evidence_type,
             frame_type,
             anyref,
         );
-        let wrapper = self.closure_over(location, region, closure_type, CallingConvention::Cps);
+        let wrapper = closure_over(
+            self.ctx,
+            location,
+            region,
+            closure_type,
+            CallingConvention::Cps,
+        );
         Ok((
             vec![not_consumed.op_ref(), state.op_ref(), wrapper.op_ref()],
             wrapper.result(self.ctx),
@@ -691,12 +215,12 @@ impl Converter<'_> {
         location: Location,
     ) -> (OpRef, ValueRef) {
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(answer_type);
+        let frame_type = self.frames.frame_type(self.ctx, answer_type);
         let anyref = self.anyref_type();
-        let block = self.make_block(location, &[evidence_type, frame_type, anyref]);
+        let block = make_block(self.ctx, location, &[evidence_type, frame_type, anyref]);
         let unreachable = func::Unreachable::operands().build(self.ctx, location);
         self.ctx.push_op(block, unreachable.op_ref());
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let closure_type = cps_resume_type(self.ctx, evidence_type, frame_type, anyref);
         let lambda = closure::Lambda::operands(std::iter::empty::<ValueRef>())
             .results(closure_type)
@@ -768,7 +292,8 @@ impl Converter<'_> {
         })?;
         // The frame's dispatcher is the dispatcher of the nearest
         // handle layer as it is installed now.
-        let (_, dispatch) = self.unpack_frame(block, location, flow.answer_type, frame);
+        let frame_types = self.frames.frame_types(self.ctx, flow.answer_type);
+        let (_, dispatch) = unpack_frame(self.ctx, block, location, &frame_types, frame);
         let perform = ability::Perform::operands(evidence, dispatch, continuation, args)
             .ability_ref(ability_ref)
             .op_name(op_name)
@@ -826,7 +351,8 @@ impl Converter<'_> {
         let value = mapping.get(&value_source).copied().unwrap_or(value_source);
         let resume_frame =
             self.push_suffix_frame(source, rest, block, mapping, flow, plan.clone())?;
-        let transfer = self.emit_cps_tail_call_indirect(
+        let transfer = emit_cps_tail_call_indirect(
+            self.ctx,
             block,
             location,
             token,
@@ -841,7 +367,7 @@ impl Converter<'_> {
         source: OpRef,
         outer_mapping: &HashMap<ValueRef, ValueRef>,
         handle_answer: TypeRef,
-    ) -> Result<HandlerArmInfo, TributeControlToCpsError> {
+    ) -> Result<(closure::Lambda, ability::HandlerBinding), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
         let ability_ref = self
             .ctx
@@ -891,14 +417,14 @@ impl Converter<'_> {
         // resumes from a lambda.
         let mut params = vec![evidence_type];
         if general {
-            params.push(self.frame_type(handle_answer));
+            params.push(self.frames.frame_type(self.ctx, handle_answer));
         }
         let source_offset = params.len();
         params.extend_from_slice(&converted_args);
         if has_resume_token {
             params.push(*converted_args.last().expect("resumptive arm has a token"));
         }
-        let block = self.make_block(location, &params);
+        let block = make_block(self.ctx, location, &params);
         let block_args = self.ctx.block_args(block).to_vec();
         let mut mapping = outer_mapping.clone();
         for (old, new) in source_args
@@ -933,7 +459,7 @@ impl Converter<'_> {
             &mut mapping,
             &flow,
         )?;
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let result = if convention == CallingConvention::Cps {
             self.never_type()
         } else {
@@ -941,143 +467,18 @@ impl Converter<'_> {
         };
         let function = func::func_sig(self.ctx, params, [result]).as_type_ref();
         let closure_type = physical_closure_type(self.ctx, function, convention);
-        let lambda = self.closure_over(location, region, closure_type, convention);
-        Ok(HandlerArmInfo {
-            op: lambda.op_ref(),
-            value: lambda.result(self.ctx),
+        let lambda = closure_over(self.ctx, location, region, closure_type, convention);
+        let binding = ability::HandlerBinding {
             ability_ref,
             op_name,
-            general,
-            params: converted_args,
-            has_resume_token,
-        })
-    }
-
-    pub(super) fn unpack_handler_payload(
-        &mut self,
-        block: BlockRef,
-        location: Location,
-        payload: ValueRef,
-        arm: &HandlerArmInfo,
-    ) -> Vec<ValueRef> {
-        let value_params = if arm.has_resume_token {
-            &arm.params[..arm.params.len() - 1]
-        } else {
-            arm.params.as_slice()
+            kind: if general {
+                ability::OperationKind::Op
+            } else {
+                ability::OperationKind::Fn
+            },
+            operation_result_type: self.convert_type(operation_result),
         };
-        let anyref = self.anyref_type();
-        let payload_type = ability::operation_payload_type_ref(
-            self.ctx,
-            arm.ability_ref,
-            arm.op_name,
-            value_params.iter().map(|_| anyref),
-        );
-        let cast = core::UnrealizedConversionCast::operands(payload)
-            .results(payload_type)
-            .build(self.ctx, location);
-        self.ctx.push_op(block, cast.op_ref());
-        value_params
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(index, ty)| {
-                let get = adt::StructGet::operands(cast.result(self.ctx))
-                    .r#type(payload_type)
-                    .field(index as u32)
-                    .results(anyref)
-                    .build(self.ctx, location);
-                self.ctx.push_op(block, get.op_ref());
-                let recovered = core::UnrealizedConversionCast::operands(get.result(self.ctx))
-                    .results(ty)
-                    .build(self.ctx, location);
-                self.ctx.push_op(block, recovered.op_ref());
-                recovered.result(self.ctx)
-            })
-            .collect()
-    }
-
-    /// Build the marker's dispatcher for the `fn` arms of one ability
-    /// instance. The arms run with `outer_evidence`, the evidence of the
-    /// layer that installed the marker, not with the evidence of the
-    /// operation that reaches them.
-    pub(super) fn build_tail_dispatcher(
-        &mut self,
-        location: Location,
-        arms: &[HandlerArmInfo],
-        outer_evidence: ValueRef,
-    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
-        let evidence_type = self.evidence_type();
-        let anyref = self.anyref_type();
-        let i32_type = self.i32_type();
-        let params = vec![evidence_type, i32_type, anyref];
-        let block = self.make_block(location, &params);
-        let args = self.ctx.block_args(block).to_vec();
-        let (op_idx, payload) = (args[1], args[2]);
-
-        let switch_block = self.make_block(location, &[]);
-        for arm in arms {
-            let case_block = self.make_block(location, &[]);
-            let mut call_args = vec![outer_evidence];
-            call_args.extend(self.unpack_handler_payload(case_block, location, payload, arm));
-            let signature = physical_closure_function_type(
-                self.ctx,
-                self.ctx.value_ty(arm.value),
-                CallingConvention::EvidenceDirect,
-            )
-            .ok_or_else(|| {
-                TributeControlToCpsError::post_op(
-                    arm.op,
-                    location,
-                    "fn handler indirect callee has no exact provenance-bearing closure contract",
-                )
-            })?;
-            let call = func::CallIndirect::operands(arm.value, call_args)
-                .signature(signature)
-                .build(self.ctx, location);
-            set_calling_convention(self.ctx, call.op_ref(), CallingConvention::EvidenceDirect);
-            self.ctx.push_op(case_block, call.op_ref());
-            let erased = core::UnrealizedConversionCast::operands(call.result(self.ctx))
-                .results(anyref)
-                .build(self.ctx, location);
-            self.ctx.push_op(case_block, erased.op_ref());
-            let ret = func::Return::operands([erased.result(self.ctx)]).build(self.ctx, location);
-            self.ctx.push_op(case_block, ret.op_ref());
-            let case_region = self.single_block_region(location, case_block);
-            let op_index = ability::compute_op_idx(
-                ability::ability_name(self.ctx, arm.ability_ref),
-                Some(self.ctx.str(arm.op_name)),
-            );
-            let case = scf::Case::operands()
-                .value(Attribute::Int(op_index as i128))
-                .regions(case_region)
-                .build(self.ctx, location);
-            self.ctx.push_op(switch_block, case.op_ref());
-        }
-        let reject_block = self.make_block(location, &[]);
-        let unreachable = func::Unreachable::operands().build(self.ctx, location);
-        self.ctx.push_op(reject_block, unreachable.op_ref());
-        let reject_region = self.single_block_region(location, reject_block);
-        let default = scf::Default::operands()
-            .regions(reject_region)
-            .build(self.ctx, location);
-        self.ctx.push_op(switch_block, default.op_ref());
-        let switch_region = self.single_block_region(location, switch_block);
-        let switch = scf::Switch::operands(op_idx)
-            .regions(switch_region)
-            .build(self.ctx, location);
-        self.ctx.push_op(block, switch.op_ref());
-
-        let region = self.single_block_region(location, block);
-        let function = func::func_sig(self.ctx, params, [anyref]).as_type_ref();
-        let closure_type =
-            physical_closure_type(self.ctx, function, CallingConvention::EvidenceDirect);
-        let lambda = self.closure_over(
-            location,
-            region,
-            closure_type,
-            CallingConvention::EvidenceDirect,
-        );
-        Ok((lambda.op_ref(), lambda.result(self.ctx)))
+        Ok((lambda, binding))
     }
 
     pub(super) fn lower_handle(
@@ -1121,12 +522,14 @@ impl Converter<'_> {
             unreachable!("pre-CPS validation checked handle regions");
         };
         let handlers_block = self.ctx.region(handlers_region).blocks[0];
-        let mut handler_arms = Vec::new();
+        let mut arms = Vec::new();
+        let mut handlers = Vec::new();
         let source_handlers = self.ctx.block(handlers_block).ops.clone();
         for handler in source_handlers {
-            let arm = self.lower_handler_arm(handler, mapping, handle_answer)?;
-            self.ctx.push_op(block, arm.op);
-            handler_arms.push(arm);
+            let (arm, binding) = self.lower_handler_arm(handler, mapping, handle_answer)?;
+            self.ctx.push_op(block, arm.op_ref());
+            arms.push(arm.result(self.ctx));
+            handlers.push(binding);
         }
 
         let completion_input = self.convert_type(
@@ -1135,36 +538,15 @@ impl Converter<'_> {
                     .block_args(self.ctx.region(completion_source).blocks[0])[0],
             ),
         );
-        let dispatch_factory = self.fresh_helper("make_local_dispatch");
-        let (passthrough_factory, passthrough_op) =
-            self.build_dispatch_adapter_factory(location, completion_input, handle_answer, None)?;
-        self.ctx.push_op(self.module_block, passthrough_op);
-        let layer = HandleLayer {
-            source,
-            arms: handler_arms,
-            body_type: completion_input,
-            answer_type: handle_answer,
-            dispatch_factory,
-            passthrough_factory,
-            installed_resume_factory: self.fresh_helper("make_installed_resume"),
-            passthrough_resume_factory: self.fresh_helper("make_passthrough_resume"),
-        };
-        self.build_local_dispatcher_factory(location, &layer)?;
-        self.build_layer_resume_factory(location, &layer, true)?;
-        if layer.arms.iter().any(|arm| arm.has_resume_token) {
-            self.build_layer_resume_factory(location, &layer, false)?;
-        }
-        let arm_values: Vec<_> = layer.arms.iter().map(|arm| arm.value).collect();
-
         // The arms and the `do` arm run with the evidence the handle is
         // installed on, not with the body's extended evidence.
         let outer_evidence = self.current_evidence(source, flow)?;
 
         let evidence_type = self.evidence_type();
-        let prompt = effect::FreshPromptTag::operands().build(self.ctx, location);
-        self.ctx.push_op(block, prompt.op_ref());
-        let body_block = self.make_block(location, &[evidence_type]);
+        let body_frame_type = self.frames.frame_type(self.ctx, completion_input);
+        let body_block = make_block(self.ctx, location, &[evidence_type, body_frame_type]);
         let extended_evidence = self.ctx.block_args(body_block)[0];
+        let body_frame = self.ctx.block_args(body_block)[1];
         let mut body_mapping = mapping.clone();
         let outer_flow = Flow {
             convention: CallingConvention::Cps,
@@ -1180,7 +562,7 @@ impl Converter<'_> {
         // Inside the body, an enclosing arm's evidence is the evidence this
         // handle is installed on. A handle that handles nothing installs no
         // marker and leaves the evidence as it is.
-        let handled = Self::layer_ability_refs(&layer).first().copied();
+        let handled = handlers.first().map(|binding| binding.ability_ref);
         let body_arm = flow.arm.clone().map(|arm| ArmResume {
             evidence: match (arm.evidence, handled) {
                 (evidence, None) => evidence,
@@ -1198,37 +580,12 @@ impl Converter<'_> {
             &outer_flow,
             location,
         )?;
-        self.ctx.push_op(body_block, completion_op);
-        let (done_op, done) = self.build_done_adapter(
-            completion_input,
-            completion_k,
-            outer_evidence,
-            handle_frame,
-            location,
-        )?;
-        self.ctx.push_op(body_block, done_op);
-        let values = LayerValues {
-            completion: completion_k,
-            prompt: prompt.result(self.ctx),
-            arms: arm_values,
-        };
-        let local_dispatch = self.call_dispatch_factory(
-            body_block,
-            location,
-            &layer,
-            &values,
-            handle_frame,
-            outer_evidence,
-        );
-        // The body's frame carries the layer's dispatcher, as the frame of a
-        // rebuilt layer does.
-        let completion_frame =
-            self.pack_frame(body_block, location, completion_input, done, local_dispatch);
+        self.ctx.push_op(block, completion_op);
         let body_flow = Flow {
             arm: body_arm,
             evidence: Some(extended_evidence),
-            exit_k: Some(completion_frame),
-            root_exit_k: Some(completion_frame),
+            exit_k: Some(body_frame),
+            root_exit_k: Some(body_frame),
             answer_type: completion_input,
             ..outer_flow
         };
@@ -1240,15 +597,14 @@ impl Converter<'_> {
             &mut body_mapping,
             &body_flow,
         )?;
-        let body_region = self.single_block_region(location, body_block);
-        self.push_handle_dispatch(
-            block,
-            location,
-            &layer,
-            &values,
-            outer_evidence,
-            body_region,
-        )
+        let body_region = single_block_region(self.ctx, location, body_block);
+        let handle = ability::Handle::operands(outer_evidence, handle_frame, completion_k, arms)
+            .handlers(handlers)
+            .regions(body_region)
+            .build(self.ctx, location);
+        carry_evidence_plan(self.ctx, source, handle.op_ref());
+        self.ctx.push_op(block, handle.op_ref());
+        Ok(())
     }
 
     /// Convert a `fn` operation: an `ability.call` whose result flows to the

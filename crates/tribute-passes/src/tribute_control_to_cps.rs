@@ -21,7 +21,7 @@ use tribute_core::{
     set_calling_convention,
 };
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_rt};
+use tribute_ir::dialect::{ability, closure, tribute_control, tribute_rt};
 use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -31,7 +31,7 @@ use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionMode, ConversionTarget, Module};
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
-use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
 
 mod adapters;
@@ -63,7 +63,7 @@ fn evidence_plan_of(ctx: &IrContext, source: OpRef) -> Option<Attribute> {
 }
 
 /// Put a selection on the operation that passes the evidence it selects.
-fn set_evidence_plan(ctx: &mut IrContext, target: OpRef, plan: Option<Attribute>) {
+pub(crate) fn set_evidence_plan(ctx: &mut IrContext, target: OpRef, plan: Option<Attribute>) {
     if let Some(plan) = plan {
         ctx.op_mut(target)
             .attributes
@@ -90,25 +90,20 @@ struct CallableInfo {
     platform: bool,
 }
 
-#[derive(Clone)]
-struct HandlerArmInfo {
-    op: OpRef,
-    value: ValueRef,
-    ability_ref: TypeRef,
-    op_name: StringRef,
-    general: bool,
-    params: Vec<TypeRef>,
-    has_resume_token: bool,
-}
-
 struct Converter<'a> {
     ctx: &'a mut IrContext,
     module_block: BlockRef,
     /// Callables by root-qualified name across the whole module tree.
     funcs: HashMap<SymbolPath, CallableInfo>,
     converted_types: HashMap<TypeRef, TypeRef>,
-    frames: HashMap<TypeRef, FrameTypes>,
-    frame_layout_aliases: Vec<(Symbol, TypeRef)>,
+    frames: FrameState,
+}
+
+/// The frame layouts and helper names one conversion has allocated.
+#[derive(Default)]
+struct FrameState {
+    layouts: HashMap<TypeRef, FrameTypes>,
+    layout_aliases: Vec<(Symbol, TypeRef)>,
     helper_index: u32,
 }
 
@@ -116,33 +111,10 @@ struct Converter<'a> {
 pub(crate) struct FrameTypes {
     /// The answer type `R` of the frame.
     pub(crate) answer: TypeRef,
-    /// `ability.frame<R>`, the type frame values have until
-    /// `lower_continuation_frames` selects their layout.
-    pub(crate) abstract_frame: TypeRef,
     pub(crate) reference: TypeRef,
     pub(crate) layout: TypeRef,
     pub(crate) done: TypeRef,
     pub(crate) dispatch: TypeRef,
-}
-
-/// The static description of one `handle`, shared by every layer that
-/// installs it: the first installation and each rebuilt continuation layer.
-#[derive(Clone)]
-struct HandleLayer {
-    /// The source `handle`, which carries the installation's `evidence_plan`.
-    source: OpRef,
-    arms: Vec<HandlerArmInfo>,
-    body_type: TypeRef,
-    answer_type: TypeRef,
-    /// Builds the dispatcher of an installed layer.
-    dispatch_factory: Symbol,
-    /// Builds the dispatcher of a layer resumed from a lambda, which keeps
-    /// only the handle's completion.
-    passthrough_factory: Symbol,
-    /// Builds the resumption that installs a layer again.
-    installed_resume_factory: Symbol,
-    /// Builds the resumption of a layer resumed from a lambda.
-    passthrough_resume_factory: Symbol,
 }
 
 /// The frame types a suffix layer builds around: its own and the frame
@@ -156,21 +128,12 @@ pub(crate) struct LayerFrames {
 /// A call, resume, or structured suffix layer of a continuation.
 #[derive(Clone)]
 pub(crate) struct SuffixLayer {
-    value_type: TypeRef,
+    pub(crate) value_type: TypeRef,
     /// Builds the dispatcher that rebuilds this layer when it is resumed.
-    dispatch_factory: Symbol,
+    pub(crate) dispatch_factory: Symbol,
     /// The `evidence_plan` that selects the evidence of the computation the
     /// layer continues.
-    plan: Option<Attribute>,
-}
-
-/// The values one installed layer of a handle runs with.
-#[derive(Clone)]
-struct LayerValues {
-    completion: ValueRef,
-    prompt: ValueRef,
-    /// The handler arm closures, in `HandleLayer::arms` order.
-    arms: Vec<ValueRef>,
+    pub(crate) plan: Option<Attribute>,
 }
 
 /// How a `resume` in the body of a handler arm reaches its continuation.
@@ -246,9 +209,7 @@ impl<'a> Converter<'a> {
             module_block,
             funcs,
             converted_types: HashMap::default(),
-            frames: HashMap::default(),
-            frame_layout_aliases: Vec::new(),
-            helper_index: 0,
+            frames: FrameState::default(),
         }
     }
 
@@ -267,20 +228,6 @@ impl<'a> Converter<'a> {
             Some(self.ctx.op(source).location),
             message,
         )
-    }
-
-    fn fresh_helper(&mut self, prefix: &str) -> Symbol {
-        let index = self.helper_index;
-        self.helper_index += 1;
-        helper_symbol(prefix, index)
-    }
-
-    fn make_block(&mut self, location: Location, types: &[TypeRef]) -> BlockRef {
-        make_block(self.ctx, location, types)
-    }
-
-    fn single_block_region(&mut self, location: Location, block: BlockRef) -> RegionRef {
-        single_block_region(self.ctx, location, block)
     }
 
     fn current_evidence(
@@ -578,7 +525,7 @@ pub fn tribute_control_to_cps(
                 .iter()
                 .map(|(name, ty)| (name.clone(), converter.convert_type(*ty))),
         );
-        converted_aliases.extend(converter.frame_layout_aliases.iter().cloned());
+        converted_aliases.extend(converter.frames.layout_aliases.iter().cloned());
     }
     let new_region = ctx.create_region(RegionData {
         location: ctx.region(source_region).location,
