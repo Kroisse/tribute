@@ -11,7 +11,7 @@ use super::tribute_control::EvidenceStep;
 mod ability {
 
     /// Resultless proper-tail handler delimiter emitted by
-    /// `tribute_control_to_cps`.
+    /// `lower_continuation_frames`.
     ///
     /// `ability_refs` is ordered to match `dispatchers`: one `tr_dispatch_fn`
     /// per handled ability instance, which rejects when the instance has no
