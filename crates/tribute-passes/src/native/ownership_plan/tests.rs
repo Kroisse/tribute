@@ -1280,6 +1280,89 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
 }
 
 #[test]
+fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  func.func @sink(%value: !BoxRef) attributes {type = func.func_sig<(!BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    func.unreachable
+  }
+  func.func @observe(%child: !ChildRef) -> core.i32 {
+    %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
+    func.return %value
+  }
+  func.func @used_after(%child: !ChildRef) -> core.nil {
+    ^entry:
+      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      cf.br %value [^next]
+    ^next(%moved: !BoxRef):
+      func.call %value {callee = @sink}
+      func.return
+  }
+  func.func @projection_used_after(%child: !ChildRef) -> core.nil {
+    ^entry:
+      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+      cf.br %owner [^next]
+    ^next(%moved: !BoxRef):
+      %seen = func.call %loaded {callee = @observe} : core.i32
+      func.return
+  }
+  func.func @moved(%child: !ChildRef) -> core.nil {
+    ^entry:
+      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      cf.br %value [^next]
+    ^next(%moved: !BoxRef):
+      func.return
+  }
+}"#,
+    );
+    let branch_source = |name: &'static str| {
+        let function = plan.function(&Symbol::new(name)).unwrap();
+        let body = ctx.op_region(function.operation(), 0).unwrap();
+        let entry = ctx.region(body).blocks[0];
+        let branch = *ctx.block(entry).ops.last().unwrap();
+        (function, branch, ctx.op_operands(branch)[0])
+    };
+    // The source keeps its unit for the later use, or for the projection
+    // borrowed from it, so the block argument gets a unit of its own.
+    for name in ["used_after", "projection_used_after"] {
+        let (function, branch, source) = branch_source(name);
+        assert!(
+            function.actions().iter().any(|action| {
+                action.kind == ActionKind::CopyAcquire
+                    && action.value == source
+                    && action.anchor == ActionAnchor::Before(branch)
+            }),
+            "{name}"
+        );
+        assert_eq!(
+            function
+                .actions()
+                .iter()
+                .filter(|action| action.kind == ActionKind::FinalRelease && action.value == source)
+                .count(),
+            1,
+            "{name}"
+        );
+    }
+    // A source that dies at the branch moves its only unit.
+    let (moved, _, source) = branch_source("moved");
+    assert_eq!(count(moved, ActionKind::CopyAcquire), 0);
+    assert!(
+        !moved
+            .actions()
+            .iter()
+            .any(|action| action.kind == ActionKind::FinalRelease && action.value == source)
+    );
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+}
+
+#[test]
 fn cfg_accepts_conditional_branch_with_duplicate_successors() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
