@@ -166,7 +166,7 @@ ability Counter {
 fn sum(n: Int, acc: Int) ->{Counter} Int {
     case n == +0 {
         True -> acc
-        False -> sum(n - +1, acc + Counter::next())
+        False -> become sum(n - +1, acc + Counter::next())
     }
 }
 
@@ -179,6 +179,6 @@ fn main() ->{Io} Nil {
 }
 "#,
         stdin: b"",
-        wasm: WasmSupport::Unsupported("50000 iterations exhaust the default Wasm stack (#1145)"),
+        wasm: WasmSupport::Supported,
     },
 ];
