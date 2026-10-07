@@ -306,6 +306,11 @@ Evidence, function/code address, borrowed buffer, `core.ptr`, `core.array`는
 unmanaged다. 변환 결과가 pointer라는
 사실은 이 분류에 참여하지 않는다.
 
+Managed reference를 `core.ptr`로 보는 unrealized cast는 payload를 제자리에서 읽기
+위한 view이며 그 reference를 빌린다. View의 사용은 원래 값의 사용으로 세므로 owner는
+마지막 view 사용 뒤에 release된다. 반대로 `core.ptr`에서 managed reference를 받는
+cast의 결과는 unit 하나를 가진 새 owned 값이다.
+
 Residual structured region, stale nominal identity, malformed callable metadata,
 duplicate/conflicting action 또는 SSA remapping ambiguity는 plan 생성 전체를
 실패시킨다. 실패하기 전후의 input IR은 동일해야 한다.
