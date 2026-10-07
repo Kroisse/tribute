@@ -8,7 +8,6 @@
 //! its `ability.handle_dispatch` delimiter, and `ability.perform` and
 //! `ability.abort` into `effect.dispatch_cps` through the frame's dispatcher.
 
-use std::cell::Cell;
 use std::ops::ControlFlow;
 
 use rustc_hash::FxHashMap as HashMap;
@@ -19,23 +18,24 @@ use tribute_ir::dialect::{ability, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, func};
+use trunk_ir::dialect::core;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{BlockRef, OpRef, TypeRef};
-use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
-};
+use trunk_ir::refs::{BlockRef, TypeRef};
+use trunk_ir::rewrite::{Module, PatternApplicator, PatternRewriter, TypeConverter};
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::walk::{WalkAction, walk_op};
 
 use crate::closure_lower::{TypeSubstitution, substitute_module_types_keeping_casts};
-use crate::cps_builders::helper_symbol;
 use crate::tribute_control_to_cps::TributeControlToCpsError;
 
 mod handle_layer;
 mod perform;
 mod suffix_layer;
+
+use handle_layer::{ExpandHandles, number_handles};
+use perform::ExpandDispatches;
+use suffix_layer::{ExpandSuffixFrames, build_dispatch_adapters};
 
 /// Pass-manager wrapper of [`lower_continuation_frames`].
 pub struct LowerContinuationFrames;
@@ -76,61 +76,38 @@ pub fn lower_continuation_frames(
         .collect();
     substitute_module_types_keeping_casts(ctx, module, |_, ty| replacements.get(&ty).copied());
 
+    let frames = FrameLayouts(
+        layouts
+            .into_iter()
+            .map(|(_, types)| (types.answer, types))
+            .collect(),
+    );
+    let adapters = build_dispatch_adapters(ctx, module, module_block, &frames)?;
     PatternApplicator::new(TypeConverter::new())
-        .add_pattern(ExpandFrameOperations {
-            frames: layouts
-                .into_iter()
-                .map(|(_, types)| (types.answer, types))
-                .collect(),
-            next_helper: Cell::new(next_helper_index(ctx, module_block)),
+        .add_pattern(ExpandSuffixFrames {
+            frames: frames.clone(),
+            adapters: adapters.clone(),
         })
+        .add_pattern(ExpandHandles {
+            frames: frames.clone(),
+            adapters,
+            handles: number_handles(ctx, module),
+        })
+        .add_pattern(ExpandDispatches { frames })
         .apply_partial(ctx, module);
     reject_abstract_frames(ctx, module)
 }
 
-/// Expands the abstract frame operations. A failure leaves the operation for
-/// [`reject_abstract_frames`] to report.
-struct ExpandFrameOperations {
-    frames: HashMap<TypeRef, FrameTypes>,
-    next_helper: Cell<u32>,
-}
+/// The frame layouts of the module by answer type. The expansions read them
+/// and leave an operation they cannot expand for [`reject_abstract_frames`]
+/// to report.
+#[derive(Clone)]
+struct FrameLayouts(HashMap<TypeRef, FrameTypes>);
 
-impl RewritePattern for ExpandFrameOperations {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if let Ok(suffix) = ability::SuffixFrame::from_op(ctx, op) {
-            self.expand_suffix_frame(ctx, suffix, rewriter).is_some()
-        } else if let Ok(exit) = ability::Exit::from_op(ctx, op) {
-            self.expand_exit(ctx, exit, rewriter).is_some()
-        } else if let Ok(handle) = ability::Handle::from_op(ctx, op) {
-            self.expand_handle(ctx, handle, rewriter).is_some()
-        } else if let Ok(perform) = ability::Perform::from_op(ctx, op) {
-            let resumption = Some(perform.resumption(ctx));
-            let values = perform.values(ctx).to_vec();
-            self.expand_dispatch(ctx, op, perform.frame(ctx), resumption, &values, rewriter)
-                .is_some()
-        } else if let Ok(abort) = ability::Abort::from_op(ctx, op) {
-            let values = abort.values(ctx).to_vec();
-            self.expand_dispatch(ctx, op, abort.frame(ctx), None, &values, rewriter)
-                .is_some()
-        } else {
-            false
-        }
-    }
-}
-
-impl ExpandFrameOperations {
-    fn frame_of(&self, ctx: &IrContext, frame: TypeRef) -> Option<FrameTypes> {
+impl FrameLayouts {
+    fn of(&self, ctx: &IrContext, frame: TypeRef) -> Option<FrameTypes> {
         let answer = continuation_frame::result_type(ctx, frame)?;
-        self.frames.get(&answer).copied()
-    }
-
-    fn fresh_helper(&self, prefix: &str) -> Symbol {
-        helper_symbol(prefix, self.next_helper.replace(self.next_helper.get() + 1))
+        self.0.get(&answer).copied()
     }
 }
 
@@ -299,26 +276,6 @@ fn type_mentions_frame(ctx: &IrContext, ty: TypeRef, seen: &mut HashSet<TypeRef>
     mentioned
 }
 
-/// An index past every `__tribute_<prefix>_<index>` helper of the module, so
-/// helpers made here cannot collide with those of `tribute_control_to_cps`.
-fn next_helper_index(ctx: &IrContext, module_block: BlockRef) -> u32 {
-    ctx.block(module_block)
-        .ops
-        .iter()
-        .filter_map(|op| func::Func::from_op(ctx, *op).ok())
-        .filter_map(|function| {
-            let name = function.sym_name(ctx);
-            name.strip_prefix("__tribute_")?
-                .rsplit('_')
-                .next()?
-                .parse::<u32>()
-                .ok()
-        })
-        .map(|index| index + 1)
-        .max()
-        .unwrap_or(0)
-}
-
 /// Fail if an abstract frame operation or type survived the expansion, on any
 /// surface the type substitution rewrites: aliases, operation attributes and
 /// results, and block arguments with their attributes.
@@ -374,6 +331,7 @@ fn reject_abstract_frames(ctx: &IrContext, module: Module) -> Result<(), Tribute
 mod tests {
     use super::*;
     use tribute_ir::dialect::effect;
+    use trunk_ir::dialect::func;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::types::Attribute;
 
@@ -508,7 +466,7 @@ mod tests {
             "{printed}"
         );
         assert!(printed.contains("answer_type = core.i32"), "{printed}");
-        assert!(printed.contains("__tribute_one_shot_state_0"), "{printed}");
+        assert!(printed.contains("__tribute_one_shot_state"), "{printed}");
         // The wrapper marks the state consumed before it enters the raw
         // resumption, and traps when it is already consumed.
         assert_eq!(printed.matches("adt.struct_set").count(), 1, "{printed}");
@@ -564,6 +522,32 @@ mod tests {
             let name = format!("!{}{index} = ", continuation_frame::NAME_PREFIX);
             assert!(printed.contains(&name), "{printed}");
         }
+    }
+
+    #[test]
+    fn suffix_frames_of_one_shape_share_a_dispatch_adapter_factory() {
+        let printed = lowered(
+            ", %outer: !frame, %k: !resume",
+            r#"    %a = ability.suffix_frame %ev, %outer, %k : !frame
+    %b = ability.suffix_frame %ev, %outer, %k : !frame
+    %c = ability.suffix_frame %ev, %outer, %k {evidence_plan = [{mask = !state}]} : !frame
+    func.unreachable"#,
+        );
+        assert!(!printed.contains("ability.suffix_frame"), "{printed}");
+        // One factory for the two frames without a selection, one for the
+        // frame with it. A factory also calls itself to rebuild its layer.
+        let factories = printed
+            .matches("func.func @__tribute_make_dispatch_adapter_")
+            .count();
+        assert_eq!(factories, 2, "{printed}");
+        let calls = |index: usize| {
+            printed
+                .matches(&format!(
+                    "callee = @__tribute_make_dispatch_adapter_{index},"
+                ))
+                .count()
+        };
+        assert_eq!((calls(0), calls(1)), (3, 2), "{printed}");
     }
 
     #[test]

@@ -4,16 +4,15 @@
 use tribute_core::calling_convention::{cps_closure_function_type, cps_resume_type};
 use tribute_core::{CallingConvention, set_calling_convention};
 use tribute_ir::dialect::{ability, adt, closure, effect, tribute_rt};
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
-use trunk_ir::ops::DialectType;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::PatternRewriter;
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
 use super::suffix_layer::unpack_frame;
-use super::{ExpandFrameOperations, FrameTypes, detach_into};
+use super::{FrameLayouts, FrameTypes, detach_into};
 use crate::cps_builders::{
     closure_over, emit_cps_tail_call_indirect, make_block, single_block_region,
 };
@@ -35,14 +34,13 @@ fn resume_block(
 
 /// Wrap the raw resumption of an `ability.perform` into a `Resume<R>` that
 /// enters it once: a second call traps before the continuation is re-entered.
-/// The state struct is named `state_name`. The built operations go to `block`.
+/// The built operations go to `block`.
 fn push_one_shot_resume(
     ctx: &mut IrContext,
     block: BlockRef,
     location: Location,
     frame: &FrameTypes,
     raw_resumption: ValueRef,
-    state_name: &Symbol,
 ) -> Result<ValueRef, TributeControlToCpsError> {
     let input_type = cps_closure_function_type(ctx, ctx.value_ty(raw_resumption))
         .and_then(|function| func::FuncSig::from_type_ref(ctx, function))
@@ -54,7 +52,7 @@ fn push_one_shot_resume(
             )
         })?;
     let i1_type = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
-    let state_name = ctx.intern_symbol_text(state_name);
+    let state_name = ctx.intern_str("__tribute_one_shot_state");
     let state_type = adt::struct_type(
         ctx,
         state_name,
@@ -167,11 +165,38 @@ fn push_reject_resume(
     lambda.result(ctx)
 }
 
-impl ExpandFrameOperations {
+/// Expands `ability.perform` and `ability.abort`.
+pub(super) struct ExpandDispatches {
+    pub(super) frames: FrameLayouts,
+}
+
+impl RewritePattern for ExpandDispatches {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if let Ok(perform) = ability::Perform::from_op(ctx, op) {
+            let resumption = Some(perform.resumption(ctx));
+            let values = perform.values(ctx).to_vec();
+            self.expand_dispatch(ctx, op, perform.frame(ctx), resumption, &values, rewriter)
+                .is_some()
+        } else if let Ok(abort) = ability::Abort::from_op(ctx, op) {
+            let values = abort.values(ctx).to_vec();
+            self.expand_dispatch(ctx, op, abort.frame(ctx), None, &values, rewriter)
+                .is_some()
+        } else {
+            false
+        }
+    }
+}
+
+impl ExpandDispatches {
     /// Replace `ability.perform` or `ability.abort` with `effect.dispatch_cps`
     /// through the frame's dispatcher. A perform passes its raw resumption
     /// behind a one-shot check, and an abort a resumption that traps.
-    pub(super) fn expand_dispatch(
+    fn expand_dispatch(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
@@ -184,13 +209,10 @@ impl ExpandFrameOperations {
         let evidence = ctx.op_operands(op)[0];
         let ability_ref = ctx.op(op).attributes.get_type("ability_ref")?;
         let op_name = ctx.op(op).attributes.get_string_ref("op_name")?;
-        let types = self.frame_of(ctx, ctx.value_ty(frame))?;
+        let types = self.frames.of(ctx, ctx.value_ty(frame))?;
         let block = make_block(ctx, location, &[]);
         let resume = match resumption {
-            Some(raw) => {
-                let state = self.fresh_helper("one_shot_state");
-                push_one_shot_resume(ctx, block, location, &types, raw, &state).ok()?
-            }
+            Some(raw) => push_one_shot_resume(ctx, block, location, &types, raw).ok()?,
             None => push_reject_resume(ctx, block, location, &types),
         };
         let (_, dispatch) = unpack_frame(ctx, block, location, &types, frame);
