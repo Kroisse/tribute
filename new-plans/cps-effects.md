@@ -80,8 +80,10 @@ arm의 `scf.yield`)를 arm 안으로 복제해 이어 legalize하고, tail call�
 arm이 감싼 callable의 것을 그대로 쓴다.
 
 `Direct`/`EvidenceDirect` callable을 값으로 쓰려고 만드는 `func_ref` adapter는
-target 결과가 adapter 결과와 같으면 target을 `func.tail_call`로 부른다. Callable
-value를 통한 `become`도 adapter frame을 남기지 않는다.
+target이 platform `abi`를 유지하지 않고 target 결과가 adapter 결과와 같으면
+target을 `func.tail_call`로 부른다. 이 경우 callable value를 통한 `become`은
+adapter frame을 남기지 않는다. Platform `abi` target의 adapter는 일반 호출 뒤
+반환하므로 adapter frame 하나가 남는다.
 
 `become`이 아닌 `Direct`/`EvidenceDirect` 호출은 꼬리 위치에 있어도 legalization이
 `func.call`과 `func.call_indirect`로 만든다. Target lowering은 최적화로 이 호출을

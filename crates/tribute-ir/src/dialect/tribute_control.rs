@@ -1674,7 +1674,11 @@ fn tail_call_owner_signature(ctx: &IrContext, op: OpRef) -> Result<TypeRef, &'st
             return Err("must not be inside a tribute_control.handle body or handler");
         }
         // A structured arm may end with a tail call only when the structured
-        // operation's value flows straight into its own block's terminator.
+        // operation is a one-result `scf.if` whose value flows straight into
+        // its own block's terminator.
+        if !trunk_ir::dialect::scf::If::matches(ctx, owner) || ctx.op_results(owner).len() != 1 {
+            return Err("must be in tail position of its callable");
+        }
         let Some(block) = ctx.op(owner).parent_block else {
             return Err("must be inside a tribute_control.func or lambda body");
         };
@@ -5383,6 +5387,52 @@ mod tests {
             messages(&result).contains("crosses into a different handler"),
             "{result}"
         );
+    }
+
+    #[test]
+    fn tail_call_arms_must_belong_to_a_one_result_if_in_tail_position() {
+        let validate_body = |body: &str| {
+            let (ctx, module) = parse_fixture(&format!(
+                r#"core.module @test {{
+  tribute_control.func @f(%n: core.i32) -> core.i32 convention(direct) {{
+    tribute_control.return %n
+  }}
+  tribute_control.func @g(%n: core.i32, %flag: core.i1) -> core.i32 convention(direct) {{
+{body}
+  }}
+}}"#
+            ));
+            messages(&validate_local(&ctx, module))
+        };
+
+        let tail_if = validate_body(
+            r#"    %value = scf.if %flag : core.i32 {
+      tribute_control.tail_call %n {callee = @f}
+    } {
+      scf.yield %n
+    }
+    tribute_control.return %value"#,
+        );
+        assert!(!tail_if.contains("tail position"), "{tail_if}");
+
+        let resultless_if = validate_body(
+            r#"    scf.if %flag {
+      tribute_control.tail_call %n {callee = @f}
+    } {
+      scf.yield
+    }
+    tribute_control.return %n"#,
+        );
+        assert!(resultless_if.contains("tail position"), "{resultless_if}");
+
+        let loop_arm = validate_body(
+            r#"    %value = scf.loop %n : core.i32 {
+    ^bb0(%i: core.i32):
+      tribute_control.tail_call %i {callee = @f}
+    }
+    tribute_control.return %value"#,
+        );
+        assert!(loop_arm.contains("tail position"), "{loop_arm}");
     }
 
     #[test]
