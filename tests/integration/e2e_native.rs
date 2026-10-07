@@ -73,6 +73,41 @@ fn main() -> Nil {{
 }
 
 #[test]
+fn local_lambdas_that_need_cps_control_strengthen_their_callers() {
+    // Each lambda is called at a pure row, but its body calls a definition
+    // whose worker is Cps: a row-polymorphic function, a pure function that
+    // calls one, a field modifier, or another such lambda.
+    let output = compile_and_run_native(
+        "local_lambda_cps_callers.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct Name { text: String }
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn bang(s: String) -> String { app(s, fn(t) t <> "!") }
+fn text(name: Name) -> String { name.text }
+
+fn main() ->{Io} Nil {
+    let direct = fn(s: String) app(s, fn(t) t <> "!")
+    print_line(direct("row"))
+    let through_pure = fn(s: String) bang(s)
+    print_line(through_pure("pure"))
+    let nested = fn() direct("nested")
+    print_line(nested())
+    let modify = fn(n: Name) n.text::modify(fn(t) t <> "!")
+    print_line(text(modify(Name { text: "field" })))
+}
+"#,
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "row!\npure!\nnested!\nfield!\n"
+    );
+}
+
+#[test]
 fn named_direct_both_reaches_native_execution() {
     let source = format!(
         r#"{}

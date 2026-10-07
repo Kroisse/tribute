@@ -5,6 +5,7 @@
 
 use super::IrBuilder;
 use crate::ast::{CallingConvention, Expr, ExprKind, ResolvedRef, Stmt, TypeKind, TypedRef};
+use rustc_hash::FxHashSet as HashSet;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
 use trunk_ir::Symbol;
 use trunk_ir::refs::{TypeRef, ValueRef};
@@ -56,15 +57,22 @@ impl EvaluationControlClass {
     }
 }
 
+/// Classify the control `expr` needs from the callable that evaluates it.
+///
+/// `cps_locals` holds the callee nodes that call a local lambda through its
+/// original Cps value, whatever the callee's type at the call says.
 pub(super) fn logical_evaluation_control_class<'db>(
     ctx: &super::super::context::IrLoweringCtx<'db>,
     expr: &Expr<TypedRef<'db>>,
+    cps_locals: &HashSet<crate::ast::NodeId>,
 ) -> EvaluationControlClass {
+    let classify =
+        |expr: &Expr<TypedRef<'db>>| logical_evaluation_control_class(ctx, expr, cps_locals);
     let children = |children: &[Expr<TypedRef<'db>>]| {
         children
             .iter()
             .fold(EvaluationControlClass::Direct, |class, child| {
-                class.join(logical_evaluation_control_class(ctx, child))
+                class.join(classify(child))
             })
     };
 
@@ -72,15 +80,16 @@ pub(super) fn logical_evaluation_control_class<'db>(
         ExprKind::Handle { .. } => EvaluationControlClass::Cps,
         ExprKind::Lambda { .. } => EvaluationControlClass::Direct,
         ExprKind::Resume { .. } => EvaluationControlClass::Cps,
-        ExprKind::Become { call } => logical_evaluation_control_class(ctx, call),
+        ExprKind::Become { call } => classify(call),
         ExprKind::Call { callee, args } => {
-            let call = if is_cps_call_expr(ctx, expr) {
+            let call = if is_cps_call_expr(ctx, expr)
+                || matches!(&*callee.kind, ExprKind::Var(_) if cps_locals.contains(&callee.id))
+            {
                 EvaluationControlClass::Cps
             } else {
                 EvaluationControlClass::Direct
             };
-            call.join(logical_evaluation_control_class(ctx, callee))
-                .join(children(args))
+            call.join(classify(callee)).join(children(args))
         }
         ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
             children(args)
@@ -88,12 +97,10 @@ pub(super) fn logical_evaluation_control_class<'db>(
         ExprKind::Record { fields, spread, .. } => {
             let spread = spread
                 .as_ref()
-                .map_or(EvaluationControlClass::Direct, |spread| {
-                    logical_evaluation_control_class(ctx, spread)
-                });
-            fields.iter().fold(spread, |class, field| {
-                class.join(logical_evaluation_control_class(ctx, &field.value))
-            })
+                .map_or(EvaluationControlClass::Direct, classify);
+            fields
+                .iter()
+                .fold(spread, |class, field| class.join(classify(&field.value)))
         }
         ExprKind::Block { stmts, value } => {
             let statements = stmts
@@ -103,29 +110,21 @@ pub(super) fn logical_evaluation_control_class<'db>(
                         Stmt::Let { value, .. } => value,
                         Stmt::Expr { expr, .. } => expr,
                     };
-                    class.join(logical_evaluation_control_class(ctx, expr))
+                    class.join(classify(expr))
                 });
-            statements.join(logical_evaluation_control_class(ctx, value))
+            statements.join(classify(value))
         }
-        ExprKind::BinOp { lhs, rhs, .. } => logical_evaluation_control_class(ctx, lhs)
-            .join(logical_evaluation_control_class(ctx, rhs)),
-        ExprKind::Case { scrutinee, arms } => arms.iter().fold(
-            logical_evaluation_control_class(ctx, scrutinee),
-            |class, arm| {
+        ExprKind::BinOp { lhs, rhs, .. } => classify(lhs).join(classify(rhs)),
+        ExprKind::Case { scrutinee, arms } => {
+            arms.iter().fold(classify(scrutinee), |class, arm| {
                 let guard = arm
                     .guard
                     .as_ref()
-                    .map_or(EvaluationControlClass::Direct, |guard| {
-                        logical_evaluation_control_class(ctx, guard)
-                    });
-                class
-                    .join(guard)
-                    .join(logical_evaluation_control_class(ctx, &arm.body))
-            },
-        ),
-        ExprKind::MethodCall { receiver, args, .. } => {
-            logical_evaluation_control_class(ctx, receiver).join(children(args))
+                    .map_or(EvaluationControlClass::Direct, classify);
+                class.join(guard).join(classify(&arm.body))
+            })
         }
+        ExprKind::MethodCall { receiver, args, .. } => classify(receiver).join(children(args)),
         ExprKind::Var(_)
         | ExprKind::NatLit(_)
         | ExprKind::IntLit(_)

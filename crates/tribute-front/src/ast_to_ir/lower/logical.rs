@@ -49,6 +49,8 @@ struct Declarations<'db> {
     evidence_plans: SortedMap<crate::ast::NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     local_instances: SortedMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
     local_callables: local_callables::Plan<'db>,
+    /// The plan of each function, by its declaration, until it is lowered.
+    function_local_callables: HashMap<crate::ast::NodeId, local_callables::Plan<'db>>,
 }
 
 /// Fully typed semantic inputs for one source ability-operation call.
@@ -378,6 +380,7 @@ pub(super) fn lower_module<'db>(
         evidence_plans,
         local_instances,
         local_callables: local_callables::Plan::default(),
+        function_local_callables: HashMap::default(),
     };
     prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
     promote_definition_conventions_to_fixed_point(&mut ctx, &ast.decls, &mut String::new());
@@ -394,6 +397,15 @@ pub(super) fn lower_module<'db>(
     );
     prescan_struct_accessor_signatures(&mut ctx, ir, &ast.decls);
     prescan_source_functions(&mut ctx, &ast.decls);
+    if plan_local_callables(
+        &mut ctx,
+        ir,
+        &ast.decls,
+        &mut String::new(),
+        &mut declarations,
+    ) {
+        promote_definition_conventions_to_fixed_point(&mut ctx, &ast.decls, &mut String::new());
+    }
     let well_known_types = well_known_type_prescan.finish();
     for declaration in ast.decls {
         lower_decl(&mut ctx, ir, module_block, declaration, &mut declarations);
@@ -500,8 +512,11 @@ fn promote_definition_conventions_pass<'db>(
             Decl::Function(function) => {
                 let name = declaration_name(prefix, function.name.clone());
                 if ctx.function_calling_convention(&name) != Some(CallingConvention::Cps)
-                    && expr::logical_evaluation_control_class(ctx, &function.body)
-                        == expr::EvaluationControlClass::Cps
+                    && expr::logical_evaluation_control_class(
+                        ctx,
+                        &function.body,
+                        &HashSet::default(),
+                    ) == expr::EvaluationControlClass::Cps
                 {
                     ctx.register_definition_convention(name, CallingConvention::Cps);
                     *changed = true;
@@ -517,6 +532,59 @@ fn promote_definition_conventions_pass<'db>(
             _ => {}
         }
     }
+}
+
+/// Plan the local callables of every function, and strengthen the lambdas and
+/// functions that need Cps control because of a local call. A plan gives a
+/// pure use of a lambda its own instance where it can; a use it leaves alone
+/// reads the lambda as it was written, so its caller needs Cps control like
+/// the caller of a Cps definition. Returns whether a function was
+/// strengthened.
+fn plan_local_callables<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    ast: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+    declarations: &mut Declarations<'db>,
+) -> bool {
+    let mut changed = false;
+    for declaration in ast {
+        match declaration {
+            Decl::Function(function) => {
+                let name = declaration_name(prefix, function.name.clone());
+                let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
+                    continue;
+                };
+                let mut plan = local_callables::Plan::collect(
+                    ctx,
+                    ir,
+                    &function.body,
+                    declarations,
+                    scheme.type_params(ctx.db).len(),
+                );
+                let cps_calls = plan.settle_conventions(ctx, ir, &function.body, declarations);
+                if ctx.function_calling_convention(&name) != Some(CallingConvention::Cps)
+                    && expr::logical_evaluation_control_class(ctx, &function.body, &cps_calls)
+                        == expr::EvaluationControlClass::Cps
+                {
+                    ctx.register_definition_convention(name, CallingConvention::Cps);
+                    changed = true;
+                }
+                declarations
+                    .function_local_callables
+                    .insert(function.id, plan);
+            }
+            Decl::Module(module) => {
+                if let Some(body) = &module.body {
+                    let saved = crate::push_prefix(prefix, &module.name);
+                    changed |= plan_local_callables(ctx, ir, body, prefix, declarations);
+                    prefix.truncate(saved);
+                }
+            }
+            _ => {}
+        }
+    }
+    changed
 }
 
 impl<'db> TypedModule<'db> {
@@ -1091,13 +1159,18 @@ fn lower_function<'db>(
                 );
             }
         }
-        declarations.local_callables = local_callables::Plan::collect(
-            &mut scope,
-            ir,
-            &function.body,
-            declarations,
-            parent_type_parameters,
-        );
+        declarations.local_callables = declarations
+            .function_local_callables
+            .remove(&function.id)
+            .unwrap_or_else(|| {
+                local_callables::Plan::collect(
+                    &mut scope,
+                    ir,
+                    &function.body,
+                    declarations,
+                    parent_type_parameters,
+                )
+            });
         let value = lower_expr(
             &mut IrBuilder::new(&mut scope, ir, entry),
             function.body,
