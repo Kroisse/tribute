@@ -43,26 +43,54 @@ pub(super) struct SuffixLayer {
     pub(super) plan: Option<Attribute>,
 }
 
-pub(super) fn unpack_frame(
+/// Read the `Done<R>` of a frame.
+pub(super) fn frame_done(
     ctx: &mut IrContext,
     block: BlockRef,
     location: Location,
     frame: &FrameTypes,
     frame_value: ValueRef,
-) -> (ValueRef, ValueRef) {
-    let done = adt::StructGet::operands(frame_value)
-        .r#type(frame.layout)
-        .field(0)
-        .results(frame.done)
+) -> ValueRef {
+    frame_field(
+        ctx,
+        block,
+        location,
+        (frame.layout, 0, frame.done),
+        frame_value,
+    )
+}
+
+/// Read the `Dispatch<R>` of a frame.
+pub(super) fn frame_dispatch(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    location: Location,
+    frame: &FrameTypes,
+    frame_value: ValueRef,
+) -> ValueRef {
+    frame_field(
+        ctx,
+        block,
+        location,
+        (frame.layout, 1, frame.dispatch),
+        frame_value,
+    )
+}
+
+fn frame_field(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    location: Location,
+    (layout, index, field_type): (TypeRef, u32, TypeRef),
+    frame_value: ValueRef,
+) -> ValueRef {
+    let field = adt::StructGet::operands(frame_value)
+        .r#type(layout)
+        .field(index)
+        .results(field_type)
         .build(ctx, location);
-    ctx.push_op(block, done.op_ref());
-    let dispatch = adt::StructGet::operands(frame_value)
-        .r#type(frame.layout)
-        .field(1)
-        .results(frame.dispatch)
-        .build(ctx, location);
-    ctx.push_op(block, dispatch.op_ref());
-    (done.result(ctx), dispatch.result(ctx))
+    ctx.push_op(block, field.op_ref());
+    field.result(ctx)
 }
 
 pub(super) fn pack_frame(
@@ -129,7 +157,7 @@ pub(super) fn build_suffix_rebound(
     let (done_op, done) =
         build_done_adapter(ctx, value_type, completion, args[0], args[1], location)?;
     ctx.push_op(block, done_op);
-    let (_, outer_dispatch) = unpack_frame(ctx, block, location, &boundary, args[1]);
+    let outer_dispatch = frame_dispatch(ctx, block, location, &boundary, args[1]);
     let dispatch = func::Call::operands([completion, outer_dispatch])
         .callee(dispatch_factory.into())
         .results([value.dispatch])
@@ -359,7 +387,7 @@ impl ExpandSuffixFrames {
         let (done_op, done) =
             build_done_adapter(ctx, value.answer, continuation, evidence, outer, location).ok()?;
         ctx.push_op(block, done_op);
-        let (_, outer_dispatch) = unpack_frame(ctx, block, location, &boundary, outer);
+        let outer_dispatch = frame_dispatch(ctx, block, location, &boundary, outer);
         let frames = LayerFrames { value, boundary };
         let symbol = self.adapters.factory(&frames, plan)?;
         let evidence_type = ctx.value_ty(evidence);
@@ -397,7 +425,7 @@ impl ExpandSuffixFrames {
         let value = exit.value(ctx);
         let types = self.frames.of(ctx, ctx.value_ty(frame))?;
         let block = make_block(ctx, location, &[]);
-        let (done, _) = unpack_frame(ctx, block, location, &types, frame);
+        let done = frame_done(ctx, block, location, &types, frame);
         let transfer = emit_cps_tail_call_indirect(ctx, block, location, done, [value]).ok()?;
         ctx.remove_op_from_block(block, transfer);
         detach_into(ctx, block, rewriter);
