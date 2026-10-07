@@ -206,8 +206,8 @@ pub const STRUCT_NAME_ATTR: &str = "name";
 /// `name` type attribute.
 pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
     let data = ctx.get_type(ty);
-    let nominal = data.dialect == "adt"
-        && (data.name == "struct" || data.name == "enum" || data.name == "typeref");
+    let nominal =
+        data.dialect == "adt" && (matches!(data.name.as_str(), "struct" | "enum" | "typeref"));
     nominal
         .then(|| data.attrs.get_string_ref(STRUCT_NAME_ATTR))
         .flatten()

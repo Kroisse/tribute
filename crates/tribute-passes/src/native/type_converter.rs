@@ -237,9 +237,7 @@ fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
         return false;
     }
     // struct, enum, typeref, variant instance
-    data.name == "typeref"
-        || data.name == "struct"
-        || data.name == "enum"
+    matches!(data.name.as_str(), "typeref" | "struct" | "enum")
         || data.attrs.get_bool("is_variant") == Some(true)
 }
 

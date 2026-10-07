@@ -71,7 +71,7 @@ fn field_kind(ctx: &IrContext, ty: TypeRef) -> FieldKind {
         return FieldKind::Managed;
     }
     let dynamic = (data.dialect == "tribute_rt"
-        && (data.name == "anyref" || data.name == "intref"))
+        && (matches!(data.name.as_str(), "anyref" | "intref")))
         || (data.dialect == "wasm"
             && data.name.with_str(|name| {
                 matches!(

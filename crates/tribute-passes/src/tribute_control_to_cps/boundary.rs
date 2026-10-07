@@ -126,8 +126,7 @@ fn walk_type(
         TypeBoundary::Pre => {
             type_is(ctx, ty, "func", "func_sig")
                 || type_is(ctx, ty, "closure", "closure")
-                || data.dialect == "ability"
-                || data.dialect == "effect"
+                || matches!(data.dialect.as_str(), "ability" | "effect")
         }
         TypeBoundary::Post => data.dialect == "tribute_control",
     };

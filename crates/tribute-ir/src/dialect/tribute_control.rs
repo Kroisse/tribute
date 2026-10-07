@@ -883,7 +883,7 @@ fn parse_func<'a>(
     if has_duplicate_convention_attr(&attributes)
         || attributes
             .iter()
-            .any(|(key, _)| *key == "sym_name" || *key == "type")
+            .any(|(key, _)| matches!(key.as_ref(), "sym_name" | "type"))
     {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::new(),
@@ -1204,8 +1204,8 @@ fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
 
 fn is_unresolved_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    let unresolved_name = data.name == "var" || data.name == "infer" || data.name == "unresolved";
-    (data.dialect == "type" || data.dialect == "tribute") && unresolved_name
+    let unresolved_name = matches!(data.name.as_str(), "var" | "infer" | "unresolved");
+    (matches!(data.dialect.as_str(), "type" | "tribute")) && unresolved_name
 }
 
 fn contains_unresolved_type(ctx: &IrContext, ty: TypeRef, visiting: &mut HashSet<TypeRef>) -> bool {
@@ -2178,7 +2178,7 @@ fn canonical_nominal_layouts(
             }
             continue;
         }
-        if data.dialect != "adt" || !(data.name == "struct" || data.name == "enum") {
+        if data.dialect != "adt" || !(matches!(data.name.as_str(), "struct" | "enum")) {
             continue;
         }
         let Some(name) = data.attrs.get_string_ref("name") else {
@@ -2207,7 +2207,7 @@ fn canonical_nominal_layouts(
             .iter()
             .filter_map(|(ty, data)| {
                 (data.dialect == "adt"
-                    && (data.name == "struct" || data.name == "enum")
+                    && (matches!(data.name.as_str(), "struct" | "enum"))
                     && data.attrs.get_string_ref("name") == Some(name))
                 .then_some(ty)
             })

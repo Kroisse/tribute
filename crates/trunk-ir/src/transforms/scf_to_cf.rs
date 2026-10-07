@@ -153,7 +153,7 @@ fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
         return false;
     }
     let n = ctx.op(op).name.clone();
-    n == "if" || n == "loop" || n == "switch"
+    matches!(n.as_str(), "if" | "loop" | "switch")
 }
 
 /// Lower a terminal `scf.if : core.never` without creating a merge block.

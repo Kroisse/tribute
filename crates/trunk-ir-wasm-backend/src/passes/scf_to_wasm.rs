@@ -1281,8 +1281,7 @@ mod tests {
             let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
                 let data = ctx.op(op);
                 assert_ne!(data.dialect, "scf");
-                if data.dialect == "wasm"
-                    && (data.name == "if" || data.name == "block" || data.name == "loop")
+                if data.dialect == "wasm" && (matches!(data.name.as_str(), "if" | "block" | "loop"))
                 {
                     assert!(ctx.op_results(op).is_empty(), "{body}");
                     controls.push(data.name.to_string());
@@ -1467,7 +1466,7 @@ mod tests {
                 let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
                     let data = ctx.op(op);
                     if data.dialect == "wasm"
-                        && (data.name == "if" || data.name == "block" || data.name == "loop")
+                        && (matches!(data.name.as_str(), "if" | "block" | "loop"))
                     {
                         assert_eq!(ctx.op_result_types(op).len(), 1);
                         let result = ctx.get_type(ctx.op_result_types(op)[0]);

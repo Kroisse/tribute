@@ -318,7 +318,7 @@ fn is_typed_managed_reference(
     }
     let data = ctx.get_type(ty);
     (data.dialect == "adt" && data.name == "typeref")
-        || (data.dialect == "tribute_rt" && (data.name == "anyref" || data.name == "intref"))
+        || (data.dialect == "tribute_rt" && (matches!(data.name.as_str(), "anyref" | "intref")))
 }
 
 fn is_managed_value(ctx: &IrContext, value: ValueRef, managed_layouts: &HashSet<TypeRef>) -> bool {
@@ -596,7 +596,7 @@ fn index_nominal_layout(
 ) {
     let data = ctx.get_type(ty);
     if data.dialect == "adt"
-        && (data.name == "struct" || data.name == "enum")
+        && (matches!(data.name.as_str(), "struct" | "enum"))
         && let Some(name) = data.attrs.get_string_ref("name")
     {
         let layouts = nominal_layouts.entry(name).or_default();
@@ -620,7 +620,7 @@ fn collect_reachable_type_contract(
     }
     let data = ctx.get_type(ty);
     index_nominal_layout(ctx, ty, nominal_layouts);
-    if (data.dialect == "adt") && (data.name == "struct" || data.name == "enum") {
+    if (data.dialect == "adt") && (matches!(data.name.as_str(), "struct" | "enum")) {
         layouts.insert(ty);
     }
     if data.dialect == "adt" && data.name == "typeref" && typerefs.insert(ty) {
@@ -739,7 +739,7 @@ fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) 
     if is_typed_managed_reference(ctx, ty, managed_layouts) {
         let data = ctx.get_type(ty);
         let dynamic =
-            data.dialect == "tribute_rt" && (data.name == "anyref" || data.name == "intref");
+            data.dialect == "tribute_rt" && (matches!(data.name.as_str(), "anyref" | "intref"));
         return if dynamic {
             FieldKind::Dynamic
         } else {

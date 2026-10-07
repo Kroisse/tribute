@@ -617,12 +617,7 @@ impl RewritePattern for ArithBitwisePattern {
         }
 
         let name = data.name.clone();
-        let is_bitwise = name == "and"
-            || name == "or"
-            || name == "xor"
-            || name == "shl"
-            || name == "shr"
-            || name == "shru";
+        let is_bitwise = matches!(name.as_str(), "and" | "or" | "xor" | "shl" | "shr" | "shru");
 
         if !is_bitwise {
             return false;
@@ -638,7 +633,7 @@ impl RewritePattern for ArithBitwisePattern {
         };
         // A right shift moves the unspecified upper bits of a narrow integer
         // into the result.
-        if is_narrow(ctx, result_ty) && (name == "shr" || name == "shru") {
+        if is_narrow(ctx, result_ty) && (matches!(name.as_str(), "shr" | "shru")) {
             return false;
         }
         let Some(suffix) = type_suffix(ctx, result_ty) else {

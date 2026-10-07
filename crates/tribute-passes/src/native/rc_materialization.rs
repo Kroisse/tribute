@@ -169,9 +169,7 @@ fn allocation_size_for_type(
     // to an exact release function before deallocation. It is never a shallow
     // fallback and is not inferred from physical definitions.
     let data = ctx.get_type(ty);
-    if data.dialect == "tribute_rt"
-        && matches!(data.name.clone(), name if name == "anyref" || name == "intref")
-    {
+    if data.dialect == "tribute_rt" && matches!(data.name.as_str(), "anyref" | "intref") {
         return Ok(0);
     }
     let layout = plan.allocation_layout_for_type(ctx, ty)?;

@@ -670,8 +670,8 @@ pub(super) fn validate_result_contract(
     };
     let expected = *expected;
     let expected_data = ctx.get_type(expected);
-    let physically_empty = expected_data.dialect == "core"
-        && (expected_data.name == "nil" || expected_data.name == "never");
+    let physically_empty =
+        expected_data.dialect == "core" && (matches!(expected_data.name.as_str(), "nil" | "never"));
     if physically_empty {
         if values.is_empty() || matches!(values, [value] if ctx.value_ty(*value) == expected) {
             return Ok(());

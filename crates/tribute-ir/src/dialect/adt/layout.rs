@@ -61,7 +61,7 @@ pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
         (1, 1)
     } else if name == "i16" {
         (2, 2)
-    } else if name == "i32" || name == "i1" {
+    } else if matches!(name.as_str(), "i32" | "i1") {
         (4, 4)
     } else if name == "i64" {
         (8, 8)

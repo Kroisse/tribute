@@ -973,13 +973,9 @@ mod tests {
                 if data.dialect != wasm_gc_dialect::DIALECT_NAME() {
                     return None;
                 }
-                match data.name.clone() {
-                    name if name == "struct_new" || name == "struct_get" => {
-                        data.attributes.get_type("type")
-                    }
-                    name if name == "ref_test" || name == "ref_cast" => {
-                        data.attributes.get_type("target_type")
-                    }
+                match data.name.as_str() {
+                    "struct_new" | "struct_get" => data.attributes.get_type("type"),
+                    "ref_test" | "ref_cast" => data.attributes.get_type("target_type"),
                     _ => None,
                 }
             })
