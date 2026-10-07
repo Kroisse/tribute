@@ -24,7 +24,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, erase_op,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -32,19 +32,22 @@ use trunk_ir::walk::{WalkAction, walk_op};
 use crate::closure_lower::{TypeSubstitution, substitute_module_types_keeping_casts};
 use crate::lower_ability_perform::pack_payload;
 use crate::tribute_control_to_cps::{
-    FrameTypes, LayerFrames, TributeControlToCpsError, build_dispatch_adapter_factory,
-    build_done_adapter, emit_cps_tail_call_indirect, helper_symbol, make_block, pack_frame,
-    single_block_region, unpack_frame,
+    FrameTypes, TributeControlToCpsError, emit_cps_tail_call_indirect, helper_symbol, make_block,
+    single_block_region,
 };
 
 mod handle_layer;
 mod perform;
+mod suffix_layer;
 
 use handle_layer::{
     HandleLayer, HandlerArm, LayerValues, build_layer_resume_factory,
     build_local_dispatcher_factory, push_handle_dispatch, push_layer_frame,
 };
 use perform::{push_one_shot_resume, push_reject_resume};
+use suffix_layer::{
+    LayerFrames, build_dispatch_adapter_factory, build_done_adapter, pack_frame, unpack_frame,
+};
 
 /// Pass-manager wrapper of [`lower_continuation_frames`].
 pub struct LowerContinuationFrames;
@@ -79,9 +82,7 @@ pub fn lower_continuation_frames(
         .ok_or_else(|| TributeControlToCpsError::post_at(location, "module has no body block"))?;
 
     let replacements = frame_references(ctx);
-    let identities = identity_casts(ctx, module);
     substitute_module_types_keeping_casts(ctx, module, |_, ty| replacements.get(&ty).copied());
-    erase_new_identity_casts(ctx, module, &identities);
 
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(ExpandFrameOperations {
@@ -395,26 +396,6 @@ fn resolve_frame(
     Some(reference)
 }
 
-/// Remove the casts the frame substitution turned into identities, keeping
-/// those that were identities before it.
-fn erase_new_identity_casts(ctx: &mut IrContext, module: Module, kept: &HashSet<OpRef>) {
-    let mut casts = Vec::new();
-    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
-        if !kept.contains(&op)
-            && let Ok(cast) = core::UnrealizedConversionCast::from_op(ctx, op)
-            && ctx.value_ty(cast.value(ctx)) == ctx.value_ty(cast.result(ctx))
-        {
-            casts.push(cast);
-        }
-        ControlFlow::Continue(WalkAction::Advance)
-    });
-    for cast in casts {
-        let (input, result) = (cast.value(ctx), cast.result(ctx));
-        ctx.replace_all_uses(result, input);
-        erase_op(ctx, cast.op_ref());
-    }
-}
-
 /// The module's frame layouts: answer type to layout name.
 fn frame_layouts(ctx: &IrContext) -> HashMap<TypeRef, String> {
     ctx.type_aliases()
@@ -479,19 +460,6 @@ fn type_mentions_frame(ctx: &IrContext, ty: TypeRef, seen: &mut HashSet<TypeRef>
         });
     }
     mentioned
-}
-
-fn identity_casts(ctx: &IrContext, module: Module) -> HashSet<OpRef> {
-    let mut casts = HashSet::default();
-    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
-        if let Ok(cast) = core::UnrealizedConversionCast::from_op(ctx, op)
-            && ctx.value_ty(cast.value(ctx)) == ctx.value_ty(cast.result(ctx))
-        {
-            casts.insert(op);
-        }
-        ControlFlow::Continue(WalkAction::Advance)
-    });
-    casts
 }
 
 /// An index past every `__tribute_<prefix>_<index>` helper of the module, so
