@@ -750,7 +750,9 @@ tribute_control.tail_call_indirect %callee, %arg0, ...
 - **위치 규칙:** `tribute_control.tail_call`과 같다.
 - **의미:** callable value를 proper tail call한다.
 - **검증:** local verifier는 callee signature와 argument type, 위치 규칙, callee
-  result type과 감싼 callable result type의 일치를 검사한다.
+  result type과 감싼 callable result type의 일치, `evidence_plan` 형상을 검사한다.
+  Callee type의 convention은 감싼 callable의 convention보다 강할 수 없다. 선택이
+  effect row와 맞는지는 typechecking이 책임진다.
 - **소유권과 값 흐름:** `tribute_control.call_indirect`와 같이 environment,
   evidence, `ContinuationFrame<R>`는 operand가 아니다.
 - **위치:** `become` keyword와 indirect call을 포함한 source span이다.
@@ -759,8 +761,9 @@ tribute_control.tail_call_indirect %callee, %arg0, ...
 
 `evidence_plan`은 호출이 callee에게 넘길 evidence를 caller evidence에서 고르는
 선택이며 [type-inference.md](type-inference.md#호출의-evidence-선택)가 정한 값을
-typechecking 결과로 복사한다. `call`, `call_indirect`, `resume`, `handle`이 가질
-수 있다. `handle`의 선택은 body evidence를 만들기 전에 적용하며 `mask`만 담는다.
+typechecking 결과로 복사한다. `call`, `call_indirect`, `tail_call`,
+`tail_call_indirect`, `resume`, `handle`이 가질 수 있다. `handle`의 선택은 body
+evidence를 만들기 전에 적용하며 `mask`만 담는다.
 
 ```text
 {evidence_plan = [{mask = core.ability_ref<{name = "State", ...}>}, {dup = ...}]}

@@ -779,6 +779,7 @@ PrimaryExpr ::= Literal
               | CaseExpr
               | HandleExpr
               | ResumeExpr
+              | BecomeExpr
 
 ListExpr ::= '[' ExprList? ']'
 TupleExpr ::= '#(' ExprList ')'           // #(1, "hello", 3.14)
