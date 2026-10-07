@@ -297,7 +297,11 @@ fn is_ability_ref(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Check the shape of an operation's `evidence_plan`. Whether the selection
 /// matches the effect rows is typechecking's responsibility.
-fn verify_evidence_plan(ctx: &IrContext, op: OpRef, mask_only: bool) -> Result<(), String> {
+pub(crate) fn verify_evidence_plan(
+    ctx: &IrContext,
+    op: OpRef,
+    mask_only: bool,
+) -> Result<(), String> {
     let Some(plan) = ctx.op(op).attributes.get(EVIDENCE_PLAN_ATTR) else {
         return Ok(());
     };
