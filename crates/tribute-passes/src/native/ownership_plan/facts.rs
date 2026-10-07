@@ -18,6 +18,7 @@ pub struct NativeOwnershipModuleFacts {
     function_ops: Vec<OpRef>,
     definitions: HashMap<SymbolPath, OpRef>,
     managed_layouts: HashSet<TypeRef>,
+    written_layouts: HashSet<TypeRef>,
 }
 
 impl NativeOwnershipModuleFacts {
@@ -34,6 +35,18 @@ impl NativeOwnershipModuleFacts {
     /// Validated managed nominal layouts reachable from the module.
     pub fn managed_layouts(&self) -> &HashSet<TypeRef> {
         &self.managed_layouts
+    }
+
+    /// Whether any `adt.struct_set` in the module writes `layout`.
+    ///
+    /// A writer reaches its struct through casts and closure environments, so
+    /// the layout's nominal identity decides, not a particular value.
+    fn is_written_layout(&self, ctx: &IrContext, layout: TypeRef) -> bool {
+        self.written_layouts.contains(&layout)
+            || self
+                .written_layouts
+                .iter()
+                .any(|&written| nominal_types_compatible(ctx, written, layout))
     }
 }
 
@@ -56,6 +69,7 @@ pub struct NativeOwnershipFunctionFacts {
     managed: HashSet<ValueRef>,
     aliases: HashMap<ValueRef, ValueRef>,
     projection_owners: HashMap<ValueRef, ValueRef>,
+    borrowable_projection_owners: HashMap<ValueRef, ValueRef>,
     block_flow: HashMap<BlockRef, BlockFlowFacts>,
 }
 
@@ -81,6 +95,13 @@ impl NativeOwnershipFunctionFacts {
     /// Validated managed projection to its owning managed root.
     pub fn projection_owners(&self) -> &HashMap<ValueRef, ValueRef> {
         &self.projection_owners
+    }
+
+    /// The projections a temporary borrow may elide: those whose layout no
+    /// `adt.struct_set` in the module writes. A write releases the field's
+    /// previous value, so a projection of a written layout keeps its own unit.
+    pub fn borrowable_projection_owners(&self) -> &HashMap<ValueRef, ValueRef> {
+        &self.borrowable_projection_owners
     }
 
     /// Policy-neutral liveness inputs for one control-flow block.
@@ -147,10 +168,17 @@ fn compute_module_facts(
     }
     let definitions = collect_function_definitions(ctx, &function_ops)?;
     let managed_layouts = collect_and_validate_managed_layouts(ctx, module)?;
+    let mut written_layouts = HashSet::default();
+    walk_module(ctx, module, |op| {
+        if let Ok(set) = adt::StructSet::from_op(ctx, op) {
+            written_layouts.insert(set.r#type(ctx));
+        }
+    });
     Ok(NativeOwnershipModuleFacts {
         function_ops,
         definitions,
         managed_layouts,
+        written_layouts,
     })
 }
 
@@ -173,12 +201,18 @@ fn compute_function_facts(
     let mut managed = collect_managed_values(ctx, cfg.blocks(), managed_layouts);
     let aliases = build_aliases(ctx, cfg.blocks(), &mut managed, managed_layouts)?;
     let projection_owners = collect_borrowed_loads(ctx, cfg.blocks(), managed_layouts, &aliases)?;
+    let borrowable_projection_owners = projection_owners
+        .iter()
+        .filter(|&(&projection, _)| !reads_written_layout(ctx, module, projection))
+        .map(|(&projection, &owner)| (projection, owner))
+        .collect();
     let block_flow = collect_block_flow(ctx, &cfg, &managed, &aliases);
     Ok(NativeOwnershipFunctionFacts {
         cfg,
         managed,
         aliases,
         projection_owners,
+        borrowable_projection_owners,
         block_flow,
     })
 }
@@ -388,6 +422,19 @@ fn collect_borrowed_loads(
         }
     }
     Ok(borrowed)
+}
+
+/// Whether `projection` is an `adt.struct_get` result read from a layout the
+/// module writes. Enum layouts have no write operation.
+fn reads_written_layout(
+    ctx: &IrContext,
+    module: &NativeOwnershipModuleFacts,
+    projection: ValueRef,
+) -> bool {
+    let ValueDef::OpResult(op, _) = ctx.value_def(projection) else {
+        return false;
+    };
+    adt::StructGet::from_op(ctx, op).is_ok_and(|get| module.is_written_layout(ctx, get.r#type(ctx)))
 }
 
 fn validate_projection_contract(

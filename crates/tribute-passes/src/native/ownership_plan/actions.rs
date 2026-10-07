@@ -60,7 +60,7 @@ impl<'a> ActionPlanner<'a> {
         // The temporary-borrow policy selects which policy-neutral projection
         // facts participate; it never changes the facts themselves.
         let borrowed = if elide_proven_field_borrows {
-            facts.projection_owners().clone()
+            facts.borrowable_projection_owners().clone()
         } else {
             HashMap::default()
         };
