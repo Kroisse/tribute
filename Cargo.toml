@@ -14,7 +14,7 @@ cranelift-codegen = "0.135.2"
 cranelift-entity = "0.135.2"
 cranelift-frontend = "0.135.2"
 cranelift-module = "0.135.2"
-cranelift-object = "0.135.2"
+cranelift-object = "0.136.2"
 criterion = { package = "codspeed-criterion-compat", version = "5.0.2", default-features = false, features = ["cargo_bench_support"] }
 crossbeam-channel = "0.5.16"
 derive_more = { version = "2.0", features = ["display", "error", "from"] }
