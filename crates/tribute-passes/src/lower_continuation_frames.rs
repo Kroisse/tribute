@@ -29,7 +29,8 @@ use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_op};
 
 use crate::closure_lower::{TypeSubstitution, substitute_module_types_keeping_casts};
-use crate::tribute_control_to_cps::{FrameTypes, TributeControlToCpsError, helper_symbol};
+use crate::cps_builders::{FrameTypes, helper_symbol};
+use crate::tribute_control_to_cps::TributeControlToCpsError;
 
 mod handle_layer;
 mod perform;

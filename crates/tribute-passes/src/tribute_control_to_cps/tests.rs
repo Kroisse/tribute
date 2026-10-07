@@ -1,4 +1,5 @@
 use super::*;
+use tribute_core::calling_convention::cps_closure_function_type;
 use tribute_ir::dialect::effect;
 use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;

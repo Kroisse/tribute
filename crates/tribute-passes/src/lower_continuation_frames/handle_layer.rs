@@ -21,10 +21,10 @@ use super::suffix_layer::{
     build_suffix_rebound, finish_rebound, pack_frame, unpack_frame,
 };
 use super::{ExpandFrameOperations, detach_into};
-use crate::tribute_control_to_cps::{
-    TributeControlToCpsError, closure_over, emit_cps_tail_call_indirect, make_block,
-    set_evidence_plan, single_block_region,
+use crate::cps_builders::{
+    closure_over, emit_cps_tail_call_indirect, make_block, set_evidence_plan, single_block_region,
 };
+use crate::tribute_control_to_cps::TributeControlToCpsError;
 
 /// One arm of a handle: the operation it handles and the closure it takes.
 struct HandlerArm {
