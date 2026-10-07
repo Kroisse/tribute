@@ -1400,6 +1400,7 @@ fn native_lowering_passes(
         rc_lowering::RcLowering,
         rc_optimization::EliminatePairedRc,
         rtti::GenerateRtti,
+        sanitize_access::InstrumentMemoryAccesses,
         tribute_rt_to_clif::TributeRtToClif,
     };
 
@@ -1462,6 +1463,12 @@ fn native_lowering_passes(
         .add_pass(ReconcileUnrealizedCasts)
         // Lower RC operations (retain/release) to inline clif code.
         .add_pass(RcLowering);
+
+    // A sanitized build checks every access, including the refcount accesses
+    // RC lowering just produced.
+    if sanitize {
+        pm.add_pass(InstrumentMemoryAccesses);
+    }
 
     pm
 }
