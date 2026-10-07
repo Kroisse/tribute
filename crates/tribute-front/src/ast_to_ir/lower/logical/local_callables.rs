@@ -10,6 +10,13 @@ type Key<'db> = (NodeId, Type<'db>, TypeRef);
 pub(super) struct Plan<'db> {
     requests: HashMap<NodeId, Vec<Key<'db>>>,
     uses: HashMap<NodeId, Key<'db>>,
+    /// Uses of a let-bound lambda that read its original value, by the lambda
+    /// they read.
+    originals: HashMap<NodeId, NodeId>,
+    /// The lambda each planned binding instantiates.
+    lambdas: HashMap<NodeId, NodeId>,
+    /// The lambdas a `let` binds.
+    bound: HashSet<NodeId>,
 }
 
 impl<'db> Plan<'db> {
@@ -99,8 +106,12 @@ impl<'db> Plan<'db> {
                 }
             }
         }
-        let mut plan = Self::default();
+        let mut plan = Self {
+            bound: origins.values().map(|(_, lambda)| lambda.id).collect(),
+            ..Self::default()
+        };
         let mut unsupported = HashSet::default();
+        let mut lambda_uses = Vec::new();
         for expr in nodes {
             let ExprKind::Var(reference) = &*expr.kind else {
                 continue;
@@ -114,6 +125,8 @@ impl<'db> Plan<'db> {
             let Some((binding, lambda)) = origins.get(&id).copied() else {
                 continue;
             };
+            lambda_uses.push((expr.id, binding, lambda.id));
+            plan.lambdas.insert(binding, lambda.id);
             let Some(instance) = declarations.local_instances.get(&expr.id) else {
                 unsupported.insert(binding);
                 continue;
@@ -185,7 +198,107 @@ impl<'db> Plan<'db> {
         plan.requests
             .retain(|binding, _| !unsupported.contains(binding));
         plan.uses.retain(|_, key| !unsupported.contains(&key.0));
+        for (node, _, lambda) in lambda_uses {
+            if !plan.uses.contains_key(&node) {
+                plan.originals.insert(node, lambda);
+            }
+        }
         plan
+    }
+}
+
+impl<'db> Plan<'db> {
+    /// The uses that read the original value of a lambda whose convention is
+    /// Cps. A call through one is a Cps call even when the instance it was
+    /// checked at is pure.
+    fn cps_originals(&self, declarations: &Declarations<'db>) -> HashSet<NodeId> {
+        self.originals
+            .iter()
+            .filter(|(_, lambda)| {
+                declarations
+                    .lambda_signatures
+                    .get(lambda)
+                    .is_some_and(|signature| signature.convention == CallingConvention::Cps)
+            })
+            .map(|(node, _)| *node)
+            .collect()
+    }
+
+    /// Strengthen every let-bound lambda of `body` whose own body needs Cps
+    /// control, and stop planning a weaker instance of one. Returns the uses
+    /// that call a local lambda through its original Cps value.
+    ///
+    /// A lambda's signature gives the convention of its type, but its body
+    /// can need more: it may call a Cps definition, or another lambda here
+    /// that was strengthened. A lambda written where a weaker callable type
+    /// is expected keeps the convention of that type.
+    pub(super) fn settle_conventions(
+        &mut self,
+        ctx: &IrLoweringCtx<'db>,
+        ir: &IrContext,
+        body: &Expr<TypedRef<'db>>,
+        declarations: &mut Declarations<'db>,
+    ) -> HashSet<NodeId> {
+        let mut lambdas = Vec::new();
+        body.for_each(|expr| {
+            if let ExprKind::Lambda { body, .. } = &*expr.kind
+                && self.bound.contains(&expr.id)
+            {
+                lambdas.push((expr.id, body));
+            }
+        });
+        loop {
+            let cps_calls = self.cps_originals(declarations);
+            let mut changed = false;
+            for (lambda, lambda_body) in &lambdas {
+                if super::expr::logical_evaluation_control_class(ctx, lambda_body, &cps_calls)
+                    != super::expr::EvaluationControlClass::Cps
+                {
+                    continue;
+                }
+                if let Some(signature) = declarations.lambda_signatures.get_mut(lambda)
+                    && signature.convention != CallingConvention::Cps
+                {
+                    signature.convention = CallingConvention::Cps;
+                    changed = true;
+                }
+                changed |= self.drop_weaker_instances(ir, *lambda);
+            }
+            if !changed {
+                return cps_calls;
+            }
+        }
+    }
+
+    /// Stop planning the instances of `lambda` if one of them is not Cps, so
+    /// their uses read the lambda's original value.
+    fn drop_weaker_instances(&mut self, ir: &IrContext, lambda: NodeId) -> bool {
+        let bindings: Vec<_> = self
+            .requests
+            .iter()
+            .filter(|(binding, requests)| {
+                self.lambdas.get(binding) == Some(&lambda)
+                    && requests.iter().any(|key| {
+                        tribute_control::func_sig_convention(ir, key.2)
+                            != Some(tribute_control::CallingConvention::Cps)
+                    })
+            })
+            .map(|(binding, _)| *binding)
+            .collect();
+        for binding in &bindings {
+            self.requests.remove(binding);
+            let dropped: Vec<_> = self
+                .uses
+                .iter()
+                .filter(|(_, key)| key.0 == *binding)
+                .map(|(node, _)| *node)
+                .collect();
+            for node in dropped {
+                self.uses.remove(&node);
+                self.originals.insert(node, lambda);
+            }
+        }
+        !bindings.is_empty()
     }
 }
 

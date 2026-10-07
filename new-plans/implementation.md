@@ -480,6 +480,14 @@ effect-polymorphic `add`는 Direct worker를 가질 수 있으며, first-class f
 boundary에서는 contextual convention에 맞는 adapter를 사용한다. 명시적인 `->{}`도
 닫힌 빈 row이므로 Direct를 사용한다.
 
+`let`으로 묶인 람다도 정의처럼 다룬다. 람다의 convention은 callable type에서
+계산하되, 본문이 `Cps` 정의나 `Cps`인 다른 local 람다를 호출하면 `Cps`로 강화한다.
+Frontend는 닫힌 row로 쓰인 local 람다에 그 instance만의 값을 만들 수 있지만, 본문이
+`Cps` 제어를 요구하는 람다에는 더 약한 instance를 만들지 않는다. Instance를 만들지
+않은 사용은 원래 람다 값을 읽는다. 그 값이 `Cps`이면, 호출 지점에서 검사된 row가
+닫혀 있어도 호출하는 정의를 `Cps` 정의를 호출할 때와 같이 `Cps`로 강화한다. 더 약한
+callable type이 요구되는 자리에 직접 쓴 람다는 그 type의 convention을 유지한다.
+
 여기서 `Cps`는 source result를 직접 반환하지 않고 ContinuationFrame의 `Done<R>`으로
 전달한다는 논리적 convention이다. Lowering은 `core.never`를 empty-result proper tail
 transfer로 바꾸며 대체 carrier를 선택하지 않는다.

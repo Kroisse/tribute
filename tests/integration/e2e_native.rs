@@ -73,6 +73,53 @@ fn main() -> Nil {{
 }
 
 #[test]
+fn local_lambdas_that_need_cps_control_strengthen_their_callers() {
+    // Each lambda is called at a pure row, but its body calls a definition
+    // whose worker is Cps: a row-polymorphic function, a pure function that
+    // calls one, a field modifier, another such lambda, or a function
+    // declared later that is strengthened for the same reason.
+    let output = compile_and_run_native(
+        "local_lambda_cps_callers.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct Name { text: String }
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn bang(s: String) -> String { app(s, fn(t) t <> "!") }
+fn text(name: Name) -> String { name.text }
+
+fn before() -> String {
+    let call = fn(s: String) after(s)
+    call("order")
+}
+
+fn after(s: String) -> String {
+    let inner = fn(t: String) app(t, fn(u) u <> "!")
+    inner(s)
+}
+
+fn main() ->{Io} Nil {
+    print_line(before())
+    let direct = fn(s: String) app(s, fn(t) t <> "!")
+    print_line(direct("row"))
+    let through_pure = fn(s: String) bang(s)
+    print_line(through_pure("pure"))
+    let nested = fn() direct("nested")
+    print_line(nested())
+    let modify = fn(n: Name) n.text::modify(fn(t) t <> "!")
+    print_line(text(modify(Name { text: "field" })))
+}
+"#,
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "order!\nrow!\npure!\nnested!\nfield!\n"
+    );
+}
+
+#[test]
 fn named_direct_both_reaches_native_execution() {
     let source = format!(
         r#"{}

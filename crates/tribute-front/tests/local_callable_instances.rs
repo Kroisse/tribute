@@ -241,6 +241,32 @@ fn main() ->{} Int {
 }
 
 #[salsa_test]
+fn caller_of_an_original_cps_lambda_is_cps(db: &salsa::DatabaseImpl) {
+    // `g` is checked at a pure row in `main`, but its body calls the Cps
+    // worker of `app`, so no pure instance of it exists.
+    let source = SourceCst::from_source_str(
+        db,
+        "original_cps_lambda.trb",
+        r#"
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn main() ->{} Int {
+    let g = fn(n: Int) app(n, fn(m) m)
+    g(+1)
+}
+"#,
+    );
+    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let conventions: Vec<_> = ir
+        .lines()
+        .filter(|line| {
+            line.contains("tribute_control.func @main") || line.contains("tribute_control.lambda")
+        })
+        .map(|line| line.contains("convention(cps)"))
+        .collect();
+    assert_eq!(conventions, [true, true, true], "{ir}");
+}
+
+#[salsa_test]
 fn named_alias_adapts_for_indirect_consumer(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
