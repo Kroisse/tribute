@@ -319,6 +319,7 @@ fn is_typed_managed_reference(
     let data = ctx.get_type(ty);
     (data.dialect == "adt" && data.name == "typeref")
         || (data.dialect == "tribute_rt" && (matches!(data.name.as_str(), "anyref" | "intref")))
+        || (data.dialect == "core" && data.name == "bytes")
 }
 
 fn is_managed_value(ctx: &IrContext, value: ValueRef, managed_layouts: &HashSet<TypeRef>) -> bool {

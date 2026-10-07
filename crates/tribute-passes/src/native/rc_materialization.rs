@@ -172,6 +172,10 @@ fn allocation_size_for_type(
     if data.dialect == "tribute_rt" && matches!(data.name.as_str(), "anyref" | "intref") {
         return Ok(0);
     }
+    // A `Bytes` object is released by its reserved RTTI entry.
+    if data.dialect == "core" && data.name == "bytes" {
+        return Ok(0);
+    }
     let layout = plan.allocation_layout_for_type(ctx, ty)?;
     // Each variant of an enum has its own allocation size, so an enum value's
     // size is also resolved by its header RTTI.

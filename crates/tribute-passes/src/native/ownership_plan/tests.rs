@@ -1958,13 +1958,13 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
         r#"core.module @test {
   !Marker = adt.struct<EvidenceMarker(code: core.ptr)>
   !Evidence = core.array<!Marker>
-  func.func @raw(%raw: core.ptr, %bytes: core.bytes, %array: core.array<core.i32>, %evidence: !Evidence, %code: func.func_sig<() -> core.nil>) -> core.ptr {
+  func.func @raw(%raw: core.ptr, %array: core.array<core.i32>, %evidence: !Evidence, %code: func.func_sig<() -> core.nil>) -> core.ptr {
     func.return %raw
   }
 }"#,
     );
     let function = plan.function(&Symbol::new("raw")).unwrap();
-    assert_eq!(function.entries(), [EntryOwnership::Plain; 5]);
+    assert_eq!(function.entries(), [EntryOwnership::Plain; 4]);
     assert!(function.actions().is_empty());
     for ty in ctx
         .op(function.operation())
@@ -1976,6 +1976,59 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
     {
         assert!(!plan.is_managed_type(&ctx, *ty));
     }
+}
+
+#[test]
+fn bytes_is_a_managed_reference_with_its_own_units() {
+    let (ctx, _module, plan) = build(
+        r#"core.module @test {
+  !Leaf = adt.struct<Leaf(bytes: core.bytes)>
+  !LeafRef = adt.typeref<{name = "Leaf"}>
+  func.func @wrap(%raw: core.ptr) -> !LeafRef {
+    %bytes = core.unrealized_conversion_cast %raw : core.bytes
+    %leaf = adt.struct_new %bytes {type = !Leaf} : !LeafRef
+    func.return %leaf
+  }
+  func.func @read(%raw: core.ptr) -> core.i32 {
+    %bytes = core.unrealized_conversion_cast %raw : core.bytes
+    %view = core.unrealized_conversion_cast %bytes : core.ptr
+    %first = func.call %view {callee = @peek} : core.i32
+    %second = func.call %view {callee = @peek} : core.i32
+    func.return %second
+  }
+}"#,
+    );
+    let ops = |name: &'static str| ctx.block(function_blocks(&ctx, &plan, name)[0]).ops.clone();
+
+    // A `Bytes` received from a raw pointer is a fresh owned value: the field
+    // takes its own unit and the local one is released.
+    let wrap = plan.function(&Symbol::new("wrap")).unwrap();
+    let [cast, new, _] = ops("wrap")[..] else {
+        panic!("three-operation fixture")
+    };
+    let bytes = ctx.op_result(cast, 0);
+    assert!(plan.is_managed_type(&ctx, ctx.value_ty(bytes)));
+    assert!(has_action(
+        wrap,
+        ActionKind::StoreAcquire,
+        bytes,
+        ActionAnchor::Before(new)
+    ));
+    assert_eq!(final_releases(wrap, bytes), [ActionAnchor::After(new)]);
+    let leaf = plan
+        .rtti_types()
+        .iter()
+        .find(|entry| entry.ty == ctx.type_alias_by_text("Leaf").unwrap())
+        .unwrap();
+    assert_eq!(leaf.fields, [FieldKind::Managed]);
+
+    // A raw view borrows the value, so its last use keeps the owner live.
+    let read = plan.function(&Symbol::new("read")).unwrap();
+    let [cast, _, _, last, _] = ops("read")[..] else {
+        panic!("five-operation fixture")
+    };
+    let bytes = ctx.op_result(cast, 0);
+    assert_eq!(final_releases(read, bytes), [ActionAnchor::After(last)]);
 }
 
 #[test]

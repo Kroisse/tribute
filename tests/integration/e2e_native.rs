@@ -2728,6 +2728,44 @@ fn main() ->{Io} Nil {
     }
 }
 
+#[test]
+fn test_native_bytes_values_are_released_without_losing_shared_data() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+fn tail(bytes: Bytes) -> Bytes {
+    bytes.slice_or_panic(1, 3)
+}
+
+fn shown(bytes: Bytes) -> String {
+    String::from_bytes(bytes)
+}
+
+fn main() ->{Io} Nil {
+    let whole = b"abc"
+    print_line(shown(whole))
+    print_line(shown(tail(whole)))
+    let joined = Bytes::concat(b"ab", b"cd")
+    print_line(shown(joined))
+    print_line(shown(tail(joined)))
+    print_line(shown(tail(Bytes::concat(b"x", b"yz"))))
+}
+"#;
+    // Every `Bytes` object here is released; the sanitizer run reports a read
+    // of one that was released while a slice or a string still used it.
+    for output in [
+        compile_and_run_native("bytes_values_released.trb", source),
+        compile_and_run_native_asan("bytes_values_released_asan.trb", source),
+    ] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "stderr: {stderr}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "abc\nbc\nabcd\nbc\nyz"
+        );
+    }
+}
+
 // =========================================================================
 // String::empty() and Bytes::empty() tests
 // =========================================================================
