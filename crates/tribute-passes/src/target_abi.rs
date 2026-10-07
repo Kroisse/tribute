@@ -46,18 +46,18 @@ pub(crate) const OWNERSHIP_ATTR: &str = "tribute.ownership";
 pub(crate) const CONSUMED: &str = "consumed";
 
 /// The parameter attributes this boundary assigns to every input of a
-/// physical callable with `convention`.
+/// module-internal physical callable with `convention`.
 ///
-/// A physical Cps callable consumes every parameter; the marker is inert on
-/// unmanaged ones. Other conventions carry no ownership contract.
+/// Every module-internal callable may be the target of a proper tail
+/// transfer, so it consumes every parameter whatever its convention; the
+/// marker is inert on unmanaged ones. Callables with a platform `abi` keep
+/// the platform contract and take no marker.
 pub(crate) fn physical_parameter_attrs(
     ctx: &mut IrContext,
-    convention: CallingConvention,
+    _convention: CallingConvention,
 ) -> AttributeMap {
     let mut attrs = AttributeMap::new();
-    if convention == CallingConvention::Cps {
-        attrs.insert(OWNERSHIP_ATTR, ctx.string_attr(CONSUMED));
-    }
+    attrs.insert(OWNERSHIP_ATTR, ctx.string_attr(CONSUMED));
     attrs
 }
 
@@ -139,7 +139,15 @@ pub fn lower_cps_signatures_to_physical(
         if let Ok(function) = func::Func::from_op(converter.ctx, op) {
             let signature = function.r#type(converter.ctx);
             let convention = exact_convention(converter.ctx, op)?;
+            let platform = converter
+                .ctx
+                .op(op)
+                .attributes
+                .contains_key(Symbol::new("abi"));
             let converted = match convention {
+                Some(convention) if platform => {
+                    converter.convert_platform_callable(signature, convention)?
+                }
                 Some(convention) => converter.convert_callable(signature, convention)?,
                 None => converter.convert_embedded(signature)?,
             };
@@ -1147,12 +1155,10 @@ fn validate_transfers(
                         "target ABI: direct call result differs from callee signature",
                     ));
                 }
-            } else if convention != CallingConvention::Cps
-                || callable.single_result(ctx) != Some(never)
-                || !is_cps_never_caller(ctx, op, never)?
-            {
+            } else if !is_valid_tail_transfer(ctx, op, convention, callable, never)? {
                 return Err(TargetAbiError::new(
-                    "target ABI: direct tail call must be a Cps core.never transfer",
+                    "target ABI: direct tail call must be a Cps core.never transfer \
+                     or return the result of a value-returning caller",
                 ));
             }
             continue;
@@ -1221,12 +1227,10 @@ fn validate_transfers(
                     "target ABI: indirect call result differs from exact callable signature",
                 ));
             }
-        } else if convention != CallingConvention::Cps
-            || callable.single_result(ctx) != Some(never)
-            || !is_cps_never_caller(ctx, op, never)?
-        {
+        } else if !is_valid_tail_transfer(ctx, op, convention, callable, never)? {
             return Err(TargetAbiError::new(
-                "target ABI: indirect tail call must be a Cps core.never transfer",
+                "target ABI: indirect tail call must be a Cps core.never transfer \
+                 or return the result of a value-returning caller",
             ));
         }
     }
@@ -1246,6 +1250,44 @@ fn operands_match(ctx: &IrContext, operands: &[ValueRef], params: &[TypeRef]) ->
             .iter()
             .zip(params)
             .all(|(operand, expected)| ctx.value_ty(*operand) == *expected)
+}
+
+/// A tail transfer is a CPS `core.never` transfer, or a source `become`
+/// between value-returning callables whose callee result is the caller's.
+fn is_valid_tail_transfer(
+    ctx: &IrContext,
+    op: OpRef,
+    convention: CallingConvention,
+    callable: func::FuncSig,
+    never: TypeRef,
+) -> Result<bool, TargetAbiError> {
+    if convention == CallingConvention::Cps {
+        return Ok(
+            callable.single_result(ctx) == Some(never) && is_cps_never_caller(ctx, op, never)?
+        );
+    }
+    let caller = enclosing_function(ctx, op)?;
+    let caller_callable =
+        func::FuncSig::from_type_ref(ctx, caller.r#type(ctx)).ok_or_else(|| {
+            TargetAbiError::new("target ABI: enclosing function is not func.func_sig")
+        })?;
+    Ok(
+        exact_convention(ctx, caller.op_ref())? != Some(CallingConvention::Cps)
+            && caller_callable.results(ctx) == callable.results(ctx),
+    )
+}
+
+fn enclosing_function(ctx: &IrContext, op: OpRef) -> Result<func::Func, TargetAbiError> {
+    let mut current = Some(op);
+    while let Some(candidate) = current {
+        if let Ok(function) = func::Func::from_op(ctx, candidate) {
+            return Ok(function);
+        }
+        current = parent_op(ctx, candidate);
+    }
+    Err(TargetAbiError::new(
+        "target ABI: tail transfer has no enclosing function",
+    ))
 }
 
 fn is_cps_never_caller(ctx: &IrContext, op: OpRef, never: TypeRef) -> Result<bool, TargetAbiError> {
@@ -1422,7 +1464,7 @@ struct PhysicalTypeConverter<'a> {
     ctx: &'a mut IrContext,
     never: TypeRef,
     embedded: HashMap<TypeRef, TypeRef>,
-    callable: HashMap<(TypeRef, CallingConvention), TypeRef>,
+    callable: HashMap<(TypeRef, CallingConvention, bool), TypeRef>,
 }
 
 impl<'a> PhysicalTypeConverter<'a> {
@@ -1435,12 +1477,39 @@ impl<'a> PhysicalTypeConverter<'a> {
         }
     }
 
+    /// Physicalize a module-internal callable: it uses the `tail` machine
+    /// convention and consumes its parameters, so any internal callable can
+    /// be a proper tail transfer's target.
     fn convert_callable(
         &mut self,
         ty: TypeRef,
         convention: CallingConvention,
     ) -> Result<TypeRef, TargetAbiError> {
-        if let Some(&converted) = self.callable.get(&(ty, convention)) {
+        self.convert_callable_with(ty, convention, false)
+    }
+
+    /// Physicalize a callable with a platform `abi`, which keeps the
+    /// platform convention and parameter contract.
+    fn convert_platform_callable(
+        &mut self,
+        ty: TypeRef,
+        convention: CallingConvention,
+    ) -> Result<TypeRef, TargetAbiError> {
+        if convention == CallingConvention::Cps {
+            return Err(TargetAbiError::new(
+                "target ABI: a callable with a platform abi cannot be Cps",
+            ));
+        }
+        self.convert_callable_with(ty, convention, true)
+    }
+
+    fn convert_callable_with(
+        &mut self,
+        ty: TypeRef,
+        convention: CallingConvention,
+        platform: bool,
+    ) -> Result<TypeRef, TargetAbiError> {
+        if let Some(&converted) = self.callable.get(&(ty, convention, platform)) {
             return Ok(converted);
         }
         let callable = func::FuncSig::from_type_ref(self.ctx, ty).ok_or_else(|| {
@@ -1456,9 +1525,11 @@ impl<'a> PhysicalTypeConverter<'a> {
             .map(|(ty, attrs)| (ty, attrs.clone()))
             .collect();
         let mut inputs = self.convert_params(inputs)?;
-        let contract = physical_parameter_attrs(self.ctx, convention);
-        for (_, attrs) in &mut inputs {
-            attrs.extend(contract.clone());
+        if !platform {
+            let contract = physical_parameter_attrs(self.ctx, convention);
+            for (_, attrs) in &mut inputs {
+                attrs.extend(contract.clone());
+            }
         }
         // A physical Cps callable has no result, so the logical result's
         // parameter attributes are dropped with it.
@@ -1477,12 +1548,12 @@ impl<'a> PhysicalTypeConverter<'a> {
                 "target ABI: logical callable already carries a machine call_conv",
             ));
         }
-        if convention == CallingConvention::Cps {
+        if !platform {
             func::CallConv::Tail.set_in(self.ctx, &mut attrs);
         }
         let converted =
             func::func_sig_with_param_attrs(self.ctx, inputs, results, attrs).as_type_ref();
-        self.callable.insert((ty, convention), converted);
+        self.callable.insert((ty, convention, platform), converted);
         Ok(converted)
     }
 

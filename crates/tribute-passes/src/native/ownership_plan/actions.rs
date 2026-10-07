@@ -643,6 +643,11 @@ fn validate_call_contract(
             "call arguments differ from the exact callable signature",
         ));
     }
+    // A tail transfer has no result here: the callee returns its result to
+    // the caller's caller.
+    if func::TailCall::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op) {
+        return Ok(());
+    }
     validate_result_contract(
         ctx,
         ctx.op_results(op),
