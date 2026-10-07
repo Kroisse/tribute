@@ -1,14 +1,17 @@
 //! Native execution of the address sanitizer's access checks.
 //!
 //! Tribute source cannot express an invalid access, so these programs are
-//! written in the `clif` dialect and instrumented by the same pass a sanitized
-//! build runs.
+//! written in the `clif` dialect and instrumented by the same passes a
+//! sanitized build runs.
 
 use std::process::Output;
 
-use tribute_passes::native::sanitize_access::instrument_accesses;
+use tribute_passes::native::sanitize_access::{DeclareAccessChecks, InstrumentMemoryAccesses};
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::{clif, core};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::parser::parse_test_module;
+use trunk_ir::pass::PassManager;
 use trunk_ir_cranelift_backend::emit_module_to_native;
 
 use crate::common::NativeTestBinary;
@@ -36,7 +39,12 @@ fn run(body: &str, sanitize: bool) -> Output {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, &program(body));
     if sanitize {
-        instrument_accesses(&mut ctx, module).expect("module is instrumented");
+        let mut pm = PassManager::new();
+        pm.add_pass(DeclareAccessChecks);
+        pm.nest::<clif::Func>().add_pass(InstrumentMemoryAccesses);
+        let target = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        pm.run(&mut ctx, target, &mut Default::default())
+            .expect("module is instrumented");
     }
     let object = emit_module_to_native(&ctx, module).expect("module emits");
     NativeTestBinary::from_object_bytes(&object).run_with_stdin(&[])

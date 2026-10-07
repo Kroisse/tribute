@@ -217,21 +217,6 @@ fn declare_checks(ctx: &mut IrContext, module: Module) {
     }
 }
 
-/// Declare the runtime checks and instrument every `clif.func` of `module`.
-pub fn instrument_accesses(ctx: &mut IrContext, module: Module) -> Result<(), String> {
-    declare_checks(ctx, module);
-    let mut functions = Vec::new();
-    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
-        if let Ok(function) = clif::Func::from_op(ctx, op) {
-            functions.push(function);
-        }
-        ControlFlow::Continue(WalkAction::Advance)
-    });
-    functions
-        .into_iter()
-        .try_for_each(|function| instrument_function(ctx, function))
-}
-
 /// Declares the runtime access checks in the module.
 pub struct DeclareAccessChecks;
 
@@ -277,12 +262,21 @@ impl trunk_ir::pass::Pass for InstrumentMemoryAccesses {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
+    use trunk_ir::pass::{PassManager, PassResult};
     use trunk_ir::printer::print_module;
+
+    fn instrument(ctx: &mut IrContext, module: Module) -> PassResult {
+        let mut pm = PassManager::new();
+        pm.add_pass(DeclareAccessChecks);
+        pm.nest::<clif::Func>().add_pass(InstrumentMemoryAccesses);
+        let module = core::Module::from_op(ctx, module.op()).expect("core.module");
+        pm.run(ctx, module, &mut Default::default())
+    }
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        instrument_accesses(&mut ctx, module).expect("instrumentation");
+        instrument(&mut ctx, module).expect("instrumentation");
         print_module(&ctx, module.op())
     }
 
@@ -327,7 +321,7 @@ mod tests {
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &once);
-        instrument_accesses(&mut ctx, module).expect("instrumentation");
+        instrument(&mut ctx, module).expect("instrumentation");
         assert_eq!(print_module(&ctx, module.op()), once);
     }
 
@@ -343,7 +337,7 @@ mod tests {
   }
 }"#,
         );
-        let error = instrument_accesses(&mut ctx, module).unwrap_err();
+        let error = instrument(&mut ctx, module).unwrap_err().to_string();
         assert!(error.contains("no known width"), "{error}");
     }
 }
