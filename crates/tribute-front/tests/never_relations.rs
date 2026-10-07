@@ -8,7 +8,6 @@ use tribute_front::{
     SourceCst,
     ast::{Decl, ExprKind, Type, TypeKind},
 };
-use trunk_ir::Symbol;
 
 fn type_errors(db: &salsa::DatabaseImpl, name: &str, text: &str) -> Vec<String> {
     ast_pipeline_error_messages(db, SourceCst::from_source_str(db, name, text))
@@ -176,7 +175,7 @@ fn empty() -> List(a) { [] }
         matches!(
             mixed.kind(db),
             TypeKind::Named { name, args, .. }
-                if *name == Symbol::new("List")
+                if *name == "List"
                     && matches!(args.as_slice(), [arg] if matches!(arg.kind(db), TypeKind::Nat))
         ),
         "the non-Never list element must determine List(Nat), got {mixed}"
@@ -186,7 +185,7 @@ fn empty() -> List(a) { [] }
         matches!(
             empty.kind(db),
             TypeKind::Named { name, args, .. }
-                if *name == Symbol::new("List")
+                if *name == "List"
                     && matches!(args.as_slice(), [arg] if matches!(
                         arg.kind(db),
                         TypeKind::UniVar { .. }

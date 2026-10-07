@@ -105,8 +105,8 @@ fn declare_host_resources(
     }
 
     if let Some(import) = import
-        && (import.module(ctx) != Symbol::new(WASI_MODULE)
-            || import.name(ctx) != Symbol::new(FD_WRITE)
+        && (import.module(ctx) != WASI_MODULE
+            || import.name(ctx) != FD_WRITE
             || import.r#type(ctx) != import_ty)
     {
         return Err(incompatible(

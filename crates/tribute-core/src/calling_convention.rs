@@ -218,7 +218,7 @@ pub fn get_physical_closure_convention(
     closure: TypeRef,
 ) -> Option<CallingConvention> {
     let data = ctx.get_type(closure);
-    if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
+    if data.dialect != "closure" || data.name != "closure" {
         return None;
     }
     data.attrs
@@ -231,7 +231,7 @@ pub fn get_physical_closure_convention(
 /// Read the exact environment slot from a convention-proven closure type.
 pub fn get_physical_closure_environment_index(ctx: &IrContext, closure: TypeRef) -> Option<usize> {
     let data = ctx.get_type(closure);
-    if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
+    if data.dialect != "closure" || data.name != "closure" {
         return None;
     }
     data.attrs

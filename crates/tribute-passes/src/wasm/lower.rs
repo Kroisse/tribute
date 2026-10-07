@@ -7,7 +7,6 @@
 use std::fmt;
 
 use tracing::{error, warn};
-use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -251,7 +250,7 @@ fn check_all_wasm_dialect(ctx: &IrContext, module: Module) {
     for &block in ctx.region(body).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             let data = ctx.op(op);
-            if data.dialect == wasm_dialect::DIALECT_NAME() && data.name == Symbol::new("func") {
+            if data.dialect == wasm_dialect::DIALECT_NAME() && data.name == "func" {
                 check_function_body(ctx, op);
             }
         }
@@ -267,7 +266,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
         for &op in ctx.block(block).ops.iter() {
             let data = ctx.op(op);
             // Check for func.func or wasm.func operations
-            if data.dialect == func::DIALECT_NAME() && data.name == Symbol::new("func") {
+            if data.dialect == func::DIALECT_NAME() && data.name == "func" {
                 if let Some(fn_ty) = data.attributes.get_type("type") {
                     let Some(function) = func::FuncSig::from_type_ref(ctx, fn_ty) else {
                         continue;
@@ -284,7 +283,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
                 }
             } else if data.dialect == wasm_dialect::DIALECT_NAME()
-                && data.name == Symbol::new("func")
+                && data.name == "func"
                 && let Some(fn_ty) = data.attributes.get_type("type")
             {
                 let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty) else {
@@ -311,7 +310,7 @@ fn check_function_body(ctx: &IrContext, func_op: OpRef) {
         for &block in ctx.region(body_region).blocks.iter() {
             for &op in ctx.block(block).ops.iter() {
                 let dialect = ctx.op(op).dialect.clone();
-                if dialect != Symbol::new("wasm") {
+                if dialect != "wasm" {
                     error!(
                         "Found non-wasm operation in function body: {}.{}",
                         dialect,
@@ -398,11 +397,11 @@ impl WasmLowerer {
 
                 if data.dialect == wasm_dialect::DIALECT_NAME() {
                     // Track wasm module-level metadata
-                    if data.name == Symbol::new("memory") {
+                    if data.name == "memory" {
                         self.memory_plan.has_memory = true;
-                    } else if data.name == Symbol::new("export_memory") {
+                    } else if data.name == "export_memory" {
                         self.memory_plan.has_exported_memory = true;
-                    } else if data.name == Symbol::new("func") {
+                    } else if data.name == "func" {
                         self.scan_wasm_func(ctx, op);
                     }
                 }
@@ -839,8 +838,8 @@ mod tests {
 
         assert_eq!(error.boundary(), WASM_BACKEND_READY_BOUNDARY);
         assert_eq!(error.operations().len(), 1);
-        assert_eq!(error.operations()[0].dialect, Symbol::new("effect"));
-        assert_eq!(error.operations()[0].name, Symbol::new("dispatch_tail"));
+        assert_eq!(error.operations()[0].dialect, "effect");
+        assert_eq!(error.operations()[0].name, "dispatch_tail");
         assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
     }
 
@@ -878,11 +877,8 @@ mod tests {
             .expect_err("a remaining cast should fail the wasm emission boundary");
 
         assert_eq!(error.operations().len(), 1);
-        assert_eq!(error.operations()[0].dialect, Symbol::new("core"));
-        assert_eq!(
-            error.operations()[0].name,
-            Symbol::new("unrealized_conversion_cast")
-        );
+        assert_eq!(error.operations()[0].dialect, "core");
+        assert_eq!(error.operations()[0].name, "unrealized_conversion_cast");
         assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
     }
 

@@ -255,7 +255,7 @@ impl<'db> AbilityId<'db> {
 
     /// Resolve a fully-qualified source path through the builtin registry.
     pub fn from_resolved_path(db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
-        if qualified == Symbol::new("std::io::Io") {
+        if qualified == "std::io::Io" {
             Self::builtin_io(db)
         } else {
             Self::source(db, qualified)

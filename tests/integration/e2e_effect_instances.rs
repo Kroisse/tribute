@@ -5,7 +5,6 @@ use salsa_test_macros::salsa_test;
 use tribute::pipeline::{parse_and_lower_ast, prepare_frontend_for_lowering};
 use tribute_core::Diagnostic;
 use tribute_front::{SourceCst, ast::TypeKind};
-use trunk_ir::Symbol;
 
 const NESTED: &str = include_str!("../fixtures/three_abilities_nested.trb");
 
@@ -18,7 +17,7 @@ fn nested_writer_instance_is_concrete_before_erasure(db: &salsa::DatabaseImpl) {
     let main = typed
         .function_types(db)
         .iter()
-        .find(|(name, _)| *name == Symbol::new("main"))
+        .find(|(name, _)| *name == "main")
         .unwrap()
         .1;
     assert!(main.type_params(db).is_empty());
@@ -28,7 +27,7 @@ fn nested_writer_instance_is_concrete_before_erasure(db: &salsa::DatabaseImpl) {
             .function_instances
             .iter()
             .any(
-                |(_, instance)| instance.function.qualified(db) == Symbol::new("run_writer")
+                |(_, instance)| instance.function.qualified(db) == "run_writer"
                     && instance.type_arguments.len() == 2
                     && instance
                         .type_arguments
@@ -40,7 +39,7 @@ fn nested_writer_instance_is_concrete_before_erasure(db: &salsa::DatabaseImpl) {
     let writer = prepared
         .perform_operations(db)
         .iter()
-        .find(|(_, op)| op.ability.qualified(db) == Symbol::new("Writer"))
+        .find(|(_, op)| op.ability.qualified(db) == "Writer")
         .unwrap()
         .1
         .clone();

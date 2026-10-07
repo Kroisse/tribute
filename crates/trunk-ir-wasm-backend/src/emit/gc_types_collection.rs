@@ -104,7 +104,7 @@ fn register_type(
     // reference type elsewhere in the module. Builtin ABI mappings are seeded
     // separately and must not be inferred from individual operations.
     let data = ctx.get_type(ty);
-    if data.dialect == Symbol::new("wasm")
+    if data.dialect == "wasm"
         && [
             "anyref",
             "structref",
@@ -115,7 +115,7 @@ fn register_type(
             "eqref",
         ]
         .iter()
-        .any(|name| data.name == Symbol::new(name))
+        .any(|name| data.name == *name)
     {
         return;
     }

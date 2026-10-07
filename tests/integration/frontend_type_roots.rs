@@ -33,7 +33,7 @@ fn prepare_root<'db>(
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Struct(decl) if decl.name == Symbol::new("Packet") => Some(decl),
+            Decl::Struct(decl) if decl.name == "Packet" => Some(decl),
             _ => None,
         })
         .unwrap();
@@ -61,12 +61,12 @@ fn prepare_root<'db>(
     let mut metadata = typed.expression_types(db).clone();
     let (_, scheme) = functions
         .iter_mut()
-        .find(|(name, _)| *name == Symbol::new("marker"))
+        .find(|(name, _)| *name == "marker")
         .unwrap();
     let instance = &mut metadata
         .function_instances
         .iter_mut()
-        .find(|(_, instance)| instance.function.qualified(db) == Symbol::new("marker"))
+        .find(|(_, instance)| instance.function.qualified(db) == "marker")
         .unwrap()
         .1;
 
@@ -102,7 +102,7 @@ fn prepare_root<'db>(
             let (_, constructor) = constructors
                 .schemes
                 .iter_mut()
-                .find(|(id, _)| id.qualified(db) == Symbol::new("Packet"))
+                .find(|(id, _)| id.qualified(db) == "Packet")
                 .unwrap();
             *constructor = constructor.to_builder(db).row_unions(vec![union]).build(db);
         }
@@ -149,7 +149,7 @@ fn main() -> Nil { marker() }
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Struct(decl) if decl.name == Symbol::new("Packet$Nat") => Some(decl),
+            Decl::Struct(decl) if decl.name == "Packet$Nat" => Some(decl),
             _ => None,
         })
         .unwrap_or_else(|| panic!("{root:?} did not materialize Packet(Nat)"));
@@ -157,14 +157,14 @@ fn main() -> Nil { marker() }
     let marker = prepared
         .function_types(db)
         .iter()
-        .find(|(name, _)| *name == Symbol::new("marker"))
+        .find(|(name, _)| *name == "marker")
         .unwrap()
         .1;
     let instance = &prepared
         .expression_types(db)
         .function_instances
         .iter()
-        .find(|(_, instance)| instance.function.qualified(db) == Symbol::new("marker"))
+        .find(|(_, instance)| instance.function.qualified(db) == "marker")
         .unwrap()
         .1;
     let ty = match root {
@@ -177,7 +177,7 @@ fn main() -> Nil { marker() }
                 .constructor_types(db)
                 .schemes
                 .iter()
-                .find(|(id, _)| id.qualified(db) == Symbol::new("Packet"))
+                .find(|(id, _)| id.qualified(db) == "Packet")
                 .unwrap()
                 .1
                 .row_unions(db)[0]
@@ -196,7 +196,7 @@ fn main() -> Nil { marker() }
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Struct(decl) if decl.name == Symbol::new("Packet") => Some(decl),
+            Decl::Struct(decl) if decl.name == "Packet" => Some(decl),
             _ => None,
         })
         .unwrap();

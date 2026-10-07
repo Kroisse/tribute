@@ -122,8 +122,7 @@ fn materialize_nested_callable_value_types(
             func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op);
         let converted_attributes =
             convert_nested_callable_attributes(ctx, &attributes, converter, |key| {
-                (key == Symbol::new("type") && is_func)
-                    || (key == Symbol::new("signature") && is_indirect)
+                (key == "type" && is_func) || (key == "signature" && is_indirect)
             });
         if let Some(converted_attributes) = converted_attributes
             && converted_attributes != attributes

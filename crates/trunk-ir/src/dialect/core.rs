@@ -35,13 +35,12 @@ mod core {
 // verification and target lowering instead of comparing type names.
 // =========================================================================
 
-use crate::Symbol;
 use crate::refs::TypeRef;
 
 /// Parse a bare `core.<prefix>{N}` scalar type name.
 fn core_scalar_width(ctx: &IrContext, ty: TypeRef, prefix: char) -> Option<u32> {
     let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("core") || !data.params.is_empty() || !data.attrs.is_empty() {
+    if data.dialect != "core" || !data.params.is_empty() || !data.attrs.is_empty() {
         return None;
     }
     data.name.with_str(|s| {
@@ -177,8 +176,8 @@ impl ScalarLike {
     pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
         NumericLike::matches(ctx, ty) || {
             let data = ctx.get_type(ty);
-            data.dialect == Symbol::new("core")
-                && data.name == Symbol::new("ptr")
+            data.dialect == "core"
+                && data.name == "ptr"
                 && data.params.is_empty()
                 && data.attrs.is_empty()
         }

@@ -2201,9 +2201,7 @@ mod tests {
             .ops
             .iter()
             .copied()
-            .find(|&op| {
-                ctx.op(op).dialect == Symbol::new("func") && ctx.op(op).name == Symbol::new("func")
-            })
+            .find(|&op| ctx.op(op).dialect == "func" && ctx.op(op).name == "func")
             .expect("no func.func found");
 
         // Clone the body region

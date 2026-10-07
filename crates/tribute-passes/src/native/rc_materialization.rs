@@ -12,7 +12,7 @@ use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::{Module, TypeConverter};
-use trunk_ir::{BlockRef, OpRef, Symbol, TypeRef, ValueRef};
+use trunk_ir::{BlockRef, OpRef, TypeRef, ValueRef};
 
 use super::ownership_plan::{ActionAnchor, ActionKind, NativeOwnershipPlan, OwnershipPlanError};
 
@@ -169,8 +169,8 @@ fn allocation_size_for_type(
     // to an exact release function before deallocation. It is never a shallow
     // fallback and is not inferred from physical definitions.
     let data = ctx.get_type(ty);
-    if data.dialect == Symbol::new("tribute_rt")
-        && matches!(data.name.clone(), name if name == Symbol::new("anyref") || name == Symbol::new("intref"))
+    if data.dialect == "tribute_rt"
+        && matches!(data.name.clone(), name if name == "anyref" || name == "intref")
     {
         return Ok(0);
     }

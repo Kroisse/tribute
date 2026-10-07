@@ -53,6 +53,7 @@
 use tracing::warn;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
+use trunk_ir::StringRef;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -63,7 +64,6 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::TypeDataBuilder;
-use trunk_ir::{StringRef, Symbol};
 
 use rustc_hash::FxHashMap as HashMap;
 
@@ -86,7 +86,7 @@ fn canonical_enum_type(ctx: &IrContext, attr_ty: TypeRef) -> Option<TypeRef> {
 /// not fall back to structural or same-name equivalence here.
 fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
     let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("typeref") {
+    if data.dialect != "adt" || data.name != "typeref" {
         return None;
     }
     let name = data.attrs.get_str(ctx, "name")?;
@@ -98,7 +98,7 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
 /// Wasm physical representation.
 fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
-    if data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref") {
+    if data.dialect == "adt" && data.name == "typeref" {
         return ctx.intern_type(TypeDataBuilder::new("wasm", "structref").build());
     }
     ty
@@ -474,8 +474,8 @@ impl RewritePattern for VariantGetPattern {
             return false;
         }
         let operand_data = ctx.get_type(operand_ty);
-        if operand_data.dialect == Symbol::new("adt")
-            && operand_data.name == Symbol::new("typeref")
+        if operand_data.dialect == "adt"
+            && operand_data.name == "typeref"
             && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)
         {
             return false;
@@ -974,12 +974,10 @@ mod tests {
                     return None;
                 }
                 match data.name.clone() {
-                    name if name == Symbol::new("struct_new")
-                        || name == Symbol::new("struct_get") =>
-                    {
+                    name if name == "struct_new" || name == "struct_get" => {
                         data.attributes.get_type("type")
                     }
-                    name if name == Symbol::new("ref_test") || name == Symbol::new("ref_cast") => {
+                    name if name == "ref_test" || name == "ref_cast" => {
                         data.attributes.get_type("target_type")
                     }
                     _ => None,
@@ -1210,7 +1208,7 @@ mod tests {
         assert_eq!(lowered_result_types.len(), 3);
         assert!(lowered_result_types.iter().any(|&ty| {
             let data = ctx.get_type(ty);
-            data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
+            data.dialect == "core" && data.name == "i32"
         }));
         assert!(lowered_result_types.iter().any(|&ty| has_runtime_layout(
             &ctx,
@@ -1219,7 +1217,7 @@ mod tests {
         )));
         assert!(lowered_result_types.iter().any(|&ty| {
             let data = ctx.get_type(ty);
-            data.dialect == Symbol::new("wasm") && data.name == Symbol::new("structref")
+            data.dialect == "wasm" && data.name == "structref"
         }));
         assert_eq!(
             ctx.block(block)

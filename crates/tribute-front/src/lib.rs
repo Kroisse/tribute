@@ -74,5 +74,5 @@ pub fn push_prefix(prefix: &mut String, name: &Symbol) -> usize {
 
 /// Whether a declaration is the exact root program entrypoint.
 pub(crate) fn is_root_main(name: &Symbol, is_root_module: bool) -> bool {
-    is_root_module && *name == Symbol::new("main")
+    is_root_module && *name == "main"
 }

@@ -387,7 +387,7 @@ impl<'a> Verifier<'a> {
         let ctx = self.ctx;
         let data = ctx.get_type(ty);
         let mut found = Vec::new();
-        if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
+        if data.dialect == "closure" && data.name == "closure" {
             found.push((
                 ViolationKind::ForbiddenType {
                     dialect: data.dialect.to_string(),

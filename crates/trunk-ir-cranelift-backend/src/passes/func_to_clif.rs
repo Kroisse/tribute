@@ -625,7 +625,7 @@ mod tests {
         assert!(signature.inputs(&ctx) == [i64_ty] && signature.results(&ctx) == [i64_ty]);
         let Some(Attribute::List(evidence)) = signature
             .non_reserved_attrs(&ctx)
-            .find_map(|(key, value)| (*key == Symbol::new("evidence")).then_some(value))
+            .find_map(|(key, value)| (*key == "evidence").then_some(value))
         else {
             panic!("missing nested target contract");
         };

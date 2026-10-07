@@ -511,7 +511,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
         // --- adt.ref_null with evidence type → func.call @__tribute_evidence_empty ---
         // The root CPS bridge creates `adt.ref_null {type = evidence}` for empty evidence.
         // Without this, the null ptr gets unboxed via `clif.load` which dereferences null.
-        if dialect == Symbol::new("adt") && name == Symbol::new("ref_null") {
+        if dialect == "adt" && name == "ref_null" {
             let result_types = ctx.op_result_types(op).to_vec();
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
                 let old_result = ctx.op_result(op, 0);
@@ -527,7 +527,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
         }
 
         // --- adt.array_new with evidence type → func.call @__tribute_evidence_empty ---
-        if dialect == Symbol::new("adt") && name == Symbol::new("array_new") {
+        if dialect == "adt" && name == "array_new" {
             let result_types = ctx.op_result_types(op).to_vec();
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
                 // Evidence array_new must represent an empty evidence vector.

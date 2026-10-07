@@ -29,7 +29,6 @@
 //! | `core.ptr`  | 8    | 8         |
 //! | other       | 8    | 8         |
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::mem;
 use trunk_ir::ops::DialectType;
@@ -54,19 +53,19 @@ pub struct StructLayout {
 /// Unknown types default to pointer size (8 bytes) for safety.
 pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
     let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("core") {
+    if data.dialect != "core" {
         return (8, 8);
     }
     let name = data.name.clone();
-    if name == Symbol::new("i8") {
+    if name == "i8" {
         (1, 1)
-    } else if name == Symbol::new("i16") {
+    } else if name == "i16" {
         (2, 2)
-    } else if name == Symbol::new("i32") || name == Symbol::new("i1") {
+    } else if name == "i32" || name == "i1" {
         (4, 4)
-    } else if name == Symbol::new("i64") {
+    } else if name == "i64" {
         (8, 8)
-    } else if name == Symbol::new("f32") {
+    } else if name == "f32" {
         (4, 4)
     } else {
         // f64, ptr, and any unknown types default to 8-byte size/align

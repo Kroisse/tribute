@@ -32,10 +32,9 @@ pub fn ref_type(ctx: &mut IrContext, name: impl Into<StringArg>, result: TypeRef
 /// Read the result type only from an explicit frame reference or layout.
 pub fn result_type(ctx: &IrContext, frame: TypeRef) -> Option<TypeRef> {
     let data = ctx.get_type(frame);
-    (data.dialect == Symbol::new("adt")
-        && (data.name == Symbol::new("typeref") || data.name == Symbol::new("struct")))
-    .then(|| data.attrs.get_type(RESULT_ATTR))
-    .flatten()
+    (data.dialect == "adt" && (data.name == "typeref" || data.name == "struct"))
+        .then(|| data.attrs.get_type(RESULT_ATTR))
+        .flatten()
 }
 
 /// Make the exact immutable layout for [`ref_type`].

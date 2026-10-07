@@ -119,8 +119,8 @@ impl Converter<'_> {
             self.converted_types.insert(ty, converted);
             return converted;
         }
-        if data.dialect == Symbol::new("tribute_control")
-            && data.name == Symbol::new("resume_token")
+        if data.dialect == "tribute_control"
+            && data.name == "resume_token"
             && data.params.len() == 2
         {
             let input = self.convert_type(data.params[0]);

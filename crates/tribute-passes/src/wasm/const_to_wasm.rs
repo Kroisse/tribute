@@ -15,7 +15,6 @@ use std::fmt;
 use std::rc::Rc;
 
 use tribute_ir::dialect::adt;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
@@ -82,12 +81,12 @@ impl ConstCollector {
         let data = ctx.op(op);
 
         if data.dialect == adt::DIALECT_NAME() {
-            if data.name == Symbol::new("string_const") {
+            if data.name == "string_const" {
                 if let Some(s) = data.attributes.get_str(ctx, "value") {
                     self.has_string_consts = true;
                     self.collect_content(s.as_bytes());
                 }
-            } else if data.name == Symbol::new("bytes_const")
+            } else if data.name == "bytes_const"
                 && let Some(Attribute::Bytes(b)) = data.attributes.get("value")
             {
                 self.collect_content(b);
@@ -162,7 +161,7 @@ pub fn validate_for_wasm(
             return;
         };
         let ty = ctx.get_type(result_ty);
-        if ty.dialect != wasm_dialect::DIALECT_NAME() || ty.name != Symbol::new("anyref") {
+        if ty.dialect != wasm_dialect::DIALECT_NAME() || ty.name != "anyref" {
             result = Err(ConstValidationError::InvalidStringResultType {
                 actual: format!("{}.{}", ty.dialect, ty.name),
             });

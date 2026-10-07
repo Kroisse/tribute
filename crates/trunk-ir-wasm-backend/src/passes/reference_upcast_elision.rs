@@ -57,7 +57,7 @@ impl RewritePattern for ReferenceUpcastElisionPattern {
 
 fn is_abstract_gc_reference(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("wasm")
+    data.dialect == "wasm"
         && [
             Symbol::new("anyref"),
             Symbol::new("structref"),

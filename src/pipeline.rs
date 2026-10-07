@@ -3367,7 +3367,7 @@ fn main() -> Nil {}
         }
         assert_eq!(seen.len(), schemas.len());
         for (id, source_scheme) in &typed.constructor_types(db).schemes {
-            if id.qualified(db) == Symbol::new("Box") {
+            if id.qualified(db) == "Box" {
                 let retained = prepared
                     .constructor_types(db)
                     .schemes
