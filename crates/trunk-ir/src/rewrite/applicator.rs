@@ -12,7 +12,7 @@ use super::pattern::RewritePattern;
 use super::rewriter::{self, PatternRewriter};
 use super::type_converter::TypeConverter;
 use crate::context::{IrContext, Use};
-use crate::dialect::{core, func, wasm};
+use crate::dialect::{clif, core, func, wasm};
 use crate::ops::DialectOp;
 use crate::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 
@@ -42,6 +42,18 @@ impl RewriteScope for Module {
 }
 
 impl RewriteScope for func::Func {
+    type Regions = std::option::IntoIter<RegionRef>;
+
+    fn regions(self, ctx: &IrContext) -> Self::Regions {
+        ctx.op_region(self.op_ref(), 0).into_iter()
+    }
+
+    fn module_first_block(self, _ctx: &IrContext) -> Option<BlockRef> {
+        None
+    }
+}
+
+impl RewriteScope for clif::Func {
     type Regions = std::option::IntoIter<RegionRef>;
 
     fn regions(self, ctx: &IrContext) -> Self::Regions {

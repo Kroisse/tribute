@@ -30,4 +30,5 @@ mod native_multiway_branch;
 mod open_callback_evidence_root;
 mod optimization_conformance;
 mod salsa_integration;
+mod sanitizer_access_checks;
 mod wasm_compilation;

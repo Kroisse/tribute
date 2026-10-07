@@ -360,6 +360,43 @@ Array:  [length: i64] [elements...]
 
 ---
 
+## Sanitizer
+
+`--sanitize=address`는 native binary의 address sanitizer 전체를 켠다. 부분 모드는
+없으며, 끈 build에는 아래 계측이 들어가지 않는다.
+
+켠 build는 세 부분으로 이루어진다.
+
+- **초기화:** Native entrypoint가 다른 runtime 초기화보다 먼저 `__asan_init`을
+  부른다.
+- **Allocator:** `__tribute_alloc`은 payload 앞뒤에 red zone을 두고,
+  `__tribute_dealloc`은 red zone 훼손을 검사한 뒤 block을 poison해 quarantine에
+  넣는다. Runtime은 살아 있는 할당과 quarantine된 block의 주소 범위를 기록한다.
+  이 기록은 여러 thread가 공유하며, 할당, 해제와 접근 검사는 lock 하나로 이를
+  읽고 쓴다.
+- **접근 검사:** 생성된 code의 모든 `clif.load`, `clif.store`, `clif.atomic_rmw`
+  앞에 runtime 검사 호출을 둔다. 호출은 실제 접근 주소(operand 주소에 `offset`을
+  더한 값)와 byte 단위 접근 폭을 넘긴다. Load는 `__tribute_asan_load`를, store와
+  atomic read-modify-write는 `__tribute_asan_store`를 부른다.
+
+Runtime은 접근 범위를 다음 순서로 판정한다.
+
+1. 기록된 어느 block과도 겹치지 않으면 유효하다. Stack slot, `clif.data`, runtime이
+   직접 할당한 buffer가 여기에 속한다.
+2. Quarantine된 block과 겹치면 heap use-after-free다.
+3. 살아 있는 할당의 payload 안에 완전히 들어가면 유효하다.
+4. 그 밖에 살아 있는 할당과 겹치는 접근은 red zone을 건드리므로 heap buffer
+   overflow다.
+
+위반은 종류, 주소, 접근 폭과 읽기/쓰기 여부를 stderr에 쓰고 그 접근을 실행하기 전에
+process를 abort한다.
+
+접근 검사 pass는 native lowering의 마지막에, RC lowering이 refcount 접근을 만든
+뒤에 실행한다. Operation 하나를 그 자리에서 다시 쓰는 변환이며 pointer provenance,
+ownership, liveness를 읽지 않는다. Runtime 자체의 code는 계측하지 않는다.
+
+---
+
 ## Native I/O
 
 Shared `tribute_io.write`와 `tribute_io.read_line`은

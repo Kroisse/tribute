@@ -13,6 +13,7 @@
 //! - `tribute_rt_to_clif`: Lower `tribute_rt.box_*`/`unbox_*` to clif alloc + load/store
 //! - `rc_optimization`: Eliminate redundant local retain/release pairs
 //! - `rc_lowering`: Lower `tribute_rt.retain`/`release` to inline `clif.*` ops
+//! - `sanitize_access`: Check every memory access of a sanitized build
 
 pub mod adapt_closure_layout;
 pub mod adt_rc_header;
@@ -33,6 +34,7 @@ pub mod rc_lowering;
 pub mod rc_materialization;
 pub mod rc_optimization;
 pub mod rtti;
+pub mod sanitize_access;
 pub mod struct_to_mem;
 pub mod tribute_rt_to_clif;
 pub mod type_converter;
