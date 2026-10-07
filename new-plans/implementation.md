@@ -460,6 +460,11 @@ ability containing any op  → Cps
 open or otherwise unknown e → Cps
 ```
 
+마지막 줄의 `e`는 class가 정해지지 않은 row 변수다.
+[Convention class](generics.md#row-변수의-convention-class)를 가진 인스턴스 안에서는
+class 변수의 requirement가 그 인스턴스에 고정된 class다. 이는 open row 규칙을
+완화하는 것이 아니라, 규칙을 적용하기 전에 변수의 requirement를 확정하는 것이다.
+
 이 ability-level convention bound는 operation declaration의 source `fn`/`op`
 kind를 erase하지 않는다. Typechecking이 resolve된 operation에 kind를 저장하고
 frontend가 각 `tribute_control.perform.operation_kind`에 이를 복사한다.
@@ -529,10 +534,13 @@ fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
 
 `f`가 순수인지 effectful인지 컴파일 타임에 모를 수 있다. 전략:
 
-1. **열린 row는 Cps**: 구체화 전에는 더 강한 convention을 요구할 가능성을
-   배제할 수 없으므로 `ContinuationFrame<R>`를 포함하는 ABI를 사용한다
-2. **Evidence 전달**: effectful polymorphic 호출은 동일한 evidence를 전달한다.
-3. **Operation kind 보존**: 구체적인 `fn` operation call-site는 continuation을
+1. **Class 특수화**: `e`는 매개변수의 함수 타입에 나타나므로 class 변수다. 호출
+   지점의 row 인자가 정한 class마다 인스턴스를 만들고, `f`의 convention과 `map`의
+   worker convention을 그 class에서 정한다.
+2. **열린 row는 Cps**: class가 정해지지 않은 row 변수는 더 강한 convention을 요구할
+   가능성을 배제할 수 없으므로 `ContinuationFrame<R>`를 포함하는 ABI를 사용한다
+3. **Evidence 전달**: effectful polymorphic 호출은 동일한 evidence를 전달한다.
+4. **Operation kind 보존**: 구체적인 `fn` operation call-site는 continuation을
    capture하지 않고 `ability.call`을 사용한다.
 
 ### Operation kind와 dispatch
