@@ -1,0 +1,70 @@
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+enum Inner {
+    Value(Nat)
+    Empty
+}
+
+enum Outer {
+    Wrapped(Inner)
+    Missing
+}
+
+ability Ask {
+    op ask() -> Nat
+}
+
+ability Keep {
+    op keep(value: Inner) -> Nat
+}
+
+fn read(inner: Inner) -> Nat {
+    case inner {
+        Value(value) -> value
+        Empty -> 0
+    }
+}
+
+// The projection is read after the operation resumes, so it lives in the
+// continuation across the handler.
+fn across_resume(outer: Outer) ->{Ask} Nat {
+    case outer {
+        Wrapped(inner) -> Ask::ask() + read(inner)
+        Missing -> Ask::ask()
+    }
+}
+
+// The projection is handed to the handler and read again after it resumes.
+fn through_operation(outer: Outer) ->{Keep} Nat {
+    case outer {
+        Wrapped(inner) -> Keep::keep(inner) + read(inner)
+        Missing -> 0
+    }
+}
+
+fn resumed(outer: Outer) -> Nat {
+    handle across_resume(outer) {
+        do result { result }
+        op Ask::ask() { resume 5 }
+    }
+}
+
+fn kept(outer: Outer) -> Nat {
+    handle through_operation(outer) {
+        do result { result }
+        op Keep::keep(value) { resume read(value) }
+    }
+}
+
+// The handler drops the continuation that still holds the projection.
+fn aborted(outer: Outer) -> Nat {
+    handle through_operation(outer) {
+        do result { result }
+        op Keep::keep(value) { read(value) + 100 }
+    }
+}
+
+fn main() -> Nil {
+    let outer = Wrapped(Value(10))
+    __tribute_print_nat(resumed(outer) + kept(outer) + aborted(outer) + resumed(Missing))
+}
