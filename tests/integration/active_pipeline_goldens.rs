@@ -362,7 +362,7 @@ fn shared_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
     assert_shared_cps_contract(&ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(&ir_text, false));
     assert!(ir_text.contains("func.func @run_state"), "{ir_text}");
-    assert!(ir_text.contains("__tribute_one_shot_state_"), "{ir_text}");
+    assert!(ir_text.contains("__tribute_one_shot_state"), "{ir_text}");
 }
 
 #[salsa_test]
@@ -401,7 +401,7 @@ fn native_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
     let ir_text = native_pipeline_ir(db, "resumptive_op_native.trb", RESUMPTIVE_OP_SOURCE);
     assert_native_cps_root_contract(ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(ir_text, true));
-    assert!(ir_text.contains("__tribute_one_shot_state_"), "{ir_text}");
+    assert!(ir_text.contains("__tribute_one_shot_state"), "{ir_text}");
 }
 
 #[salsa_test]

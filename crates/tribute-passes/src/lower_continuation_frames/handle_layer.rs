@@ -1,6 +1,8 @@
 //! Builders of an installed handle layer: its dispatcher and resumption
 //! factories, resume tokens, marker dispatchers, and delimiter.
 
+use std::cell::Cell;
+
 use tribute_core::calling_convention::{
     cps_closure_function_type, cps_resume_exact_type, cps_resume_type,
     physical_closure_function_type,
@@ -11,18 +13,19 @@ use tribute_ir::dialect::{ability, adt, effect, tribute_control, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
-use trunk_ir::ops::DialectType;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::PatternRewriter;
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 use super::suffix_layer::{
-    LayerFrames, SuffixLayer, build_dispatch_adapter_factory, build_done_adapter,
-    build_suffix_rebound, finish_rebound, pack_frame, unpack_frame,
+    DispatchAdapters, LayerFrames, SuffixLayer, build_done_adapter, build_suffix_rebound,
+    finish_rebound, pack_frame, unpack_frame,
 };
-use super::{ExpandFrameOperations, detach_into};
+use super::{FrameLayouts, detach_into};
 use crate::cps_builders::{
-    closure_over, emit_cps_tail_call_indirect, make_block, set_evidence_plan, single_block_region,
+    closure_over, emit_cps_tail_call_indirect, helper_symbol, make_block, set_evidence_plan,
+    single_block_region,
 };
 use crate::tribute_control_to_cps::TributeControlToCpsError;
 
@@ -728,11 +731,30 @@ fn build_tail_dispatcher(
     Ok((lambda.op_ref(), lambda.result(ctx)))
 }
 
-impl ExpandFrameOperations {
+/// Expands `ability.handle`.
+pub(super) struct ExpandHandles {
+    pub(super) frames: FrameLayouts,
+    pub(super) adapters: DispatchAdapters,
+    pub(super) next_handle: Cell<u32>,
+}
+
+impl RewritePattern for ExpandHandles {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        ability::Handle::from_op(ctx, op)
+            .is_ok_and(|handle| self.expand_handle(ctx, handle, rewriter).is_some())
+    }
+}
+
+impl ExpandHandles {
     /// Replace `ability.handle` with the first installation of its layer:
     /// the layer's factories, a fresh prompt, and the `ability.handle_dispatch`
     /// whose body starts by building the layer's frame.
-    pub(super) fn expand_handle(
+    fn expand_handle(
         &self,
         ctx: &mut IrContext,
         handle: ability::Handle,
@@ -760,9 +782,11 @@ impl ExpandFrameOperations {
             .map(|(binding, arm)| HandlerArm::new(ctx, binding, ctx.value_ty(*arm)))
             .collect::<Option<Vec<_>>>()?;
         let frames = LayerFrames {
-            value: self.frame_of(ctx, ctx.value_ty(source_frame))?,
-            boundary: self.frame_of(ctx, ctx.value_ty(exit))?,
+            value: self.frames.of(ctx, ctx.value_ty(source_frame))?,
+            boundary: self.frames.of(ctx, ctx.value_ty(exit))?,
         };
+        let passthrough_factory = self.adapters.factory(&frames, None)?;
+        let index = self.next_handle.replace(self.next_handle.get() + 1);
         let layer = HandleLayer {
             arms,
             frames,
@@ -772,20 +796,12 @@ impl ExpandFrameOperations {
                 .attributes
                 .get(tribute_control::EVIDENCE_PLAN_ATTR)
                 .cloned(),
-            dispatch_factory: self.fresh_helper("make_local_dispatch"),
-            passthrough_factory: self.fresh_helper("make_dispatch_adapter"),
-            installed_resume_factory: self.fresh_helper("make_installed_resume"),
-            passthrough_resume_factory: self.fresh_helper("make_passthrough_resume"),
+            dispatch_factory: helper_symbol("make_local_dispatch", index),
+            passthrough_factory,
+            installed_resume_factory: helper_symbol("make_installed_resume", index),
+            passthrough_resume_factory: helper_symbol("make_passthrough_resume", index),
         };
         let mut factories = vec![
-            build_dispatch_adapter_factory(
-                ctx,
-                location,
-                layer.passthrough_factory.clone(),
-                &frames,
-                None,
-            )
-            .ok()?,
             build_local_dispatcher_factory(ctx, location, &layer).ok()?,
             build_layer_resume_factory(ctx, location, &layer, true).ok()?,
         ];
