@@ -1747,6 +1747,7 @@ fn value_dying_on_an_edge_is_released_at_the_successor_start() {
         panic!("four-block fixture")
     };
     let value = entry_value("one_arm");
+    let mut released_on_entry = vec![(*skip, value)];
     let call = ctx.block(*used).ops[0];
     let one_arm = plan.function(&Symbol::new("one_arm")).unwrap();
     assert_eq!(
@@ -1766,6 +1767,7 @@ fn value_dying_on_an_edge_is_released_at_the_successor_start() {
         panic!("six-block fixture")
     };
     let value = entry_value("nested");
+    released_on_entry.extend([(*inner_skip, value), (*outer_skip, value)]);
     let call = ctx.block(*used).ops[0];
     let nested = plan.function(&Symbol::new("nested")).unwrap();
     assert_eq!(
@@ -1783,6 +1785,7 @@ fn value_dying_on_an_edge_is_released_at_the_successor_start() {
         panic!("three-block fixture")
     };
     let value = entry_value("loop_exit");
+    released_on_entry.push((*exit, value));
     let loop_exit = plan.function(&Symbol::new("loop_exit")).unwrap();
     assert_eq!(
         final_releases(loop_exit, value),
@@ -1790,7 +1793,9 @@ fn value_dying_on_an_edge_is_released_at_the_successor_start() {
     );
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    assert_eq!(rc_position(&ctx, *exit, false, value), 0);
+    for (block, value) in released_on_entry {
+        assert_eq!(rc_position(&ctx, block, false, value), 0);
+    }
 }
 
 #[test]
