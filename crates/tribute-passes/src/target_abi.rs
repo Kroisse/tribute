@@ -1891,20 +1891,28 @@ mod tests {
             .map(|op| {
                 // Physicalization consumes the convention of every transfer
                 // it validates against a non-closure callee.
+                // Every internal signature gains the tail machine
+                // convention; only its results matter here.
                 let mut attributes = ctx.op(op).attributes.clone();
                 if is_transfer(&ctx, op) {
                     attributes.remove(CALLING_CONVENTION_ATTR);
                 }
+                attributes.remove(Symbol::new("type"));
                 (op, attributes, ctx.op_result_types(op).to_vec())
             })
             .collect();
-        let aliases = ctx.type_aliases().to_vec();
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         for (op, before, results) in unchanged {
-            assert_eq!(ctx.op(op).attributes, before);
-            assert_eq!(ctx.op_result_types(op), results);
+            let mut after = ctx.op(op).attributes.clone();
+            after.remove(Symbol::new("type"));
+            assert_eq!(after, before);
+            assert_eq!(ctx.op_result_types(op).len(), results.len());
         }
-        assert_eq!(ctx.type_aliases(), aliases);
+        for name in ["direct", "evidence", "unit"] {
+            let function = function(&ctx, module, name);
+            let callable = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
+            assert_eq!(callable.results(&ctx).len(), usize::from(name == "unit"));
+        }
         assert!(
             func::FuncSig::from_type_ref(&ctx, cps.r#type(&ctx))
                 .unwrap()

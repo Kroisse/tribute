@@ -1041,7 +1041,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.tail_call_indirect %callee, %value
   }
 }"#,
-            "tail_call_indirect must carry exact Cps metadata",
+            "func.tail_call_indirect must carry exact Direct, EvidenceDirect, or Cps metadata",
         ),
         (
             r#"core.module @test {

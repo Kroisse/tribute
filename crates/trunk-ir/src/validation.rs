@@ -1136,7 +1136,9 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
             }
             // An arm may leave the callable instead of yielding; the result
             // then comes from the arms that yield.
-            if CallableExitOps::exits_callable(ctx, yield_op).is_ok() {
+            if !ctx.op_results(op).is_empty()
+                && CallableExitOps::exits_callable(ctx, yield_op).is_ok()
+            {
                 continue;
             }
             errors.push(operation_verifier_error(
