@@ -12,7 +12,7 @@ use itertools::Itertools;
 /// as identifiers.
 pub const KEYWORDS: &[&str] = &[
     "fn", "op", "do", "let", "const", "struct", "enum", "ability", "mod", "pub", "use", "extern",
-    "case", "handle", "resume", "become", "if", "as",
+    "case", "handle", "resume", "become", "as",
 ];
 
 /// Keywords spelled like type identifiers.
@@ -98,6 +98,9 @@ mod tests {
         assert_eq!(source_name("type"), "r#type");
         assert_eq!(source_name("op"), "r#op");
         assert_eq!(source_name("foo"), "foo");
+        assert_eq!(source_name("become"), "r#become");
+        // `if` is an ordinary identifier.
+        assert_eq!(source_name("if"), "if");
         assert!(is_reserved("self"));
         assert!(is_reserved("True"));
         assert!(!needs_raw("self"));
