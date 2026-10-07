@@ -2582,8 +2582,10 @@ fn test_native_case_result_shares_a_value_used_afterwards() {
     assert_native_output(
         "case_result_shares_live_value.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Inner {
-    Value(Nat)
+    Value(Int)
     Empty
 }
 
@@ -2592,14 +2594,14 @@ enum Flag {
     No
 }
 
-fn read(inner: Inner) -> Nat {
+fn read(inner: Inner) -> Int {
     case inner {
         Value(value) -> value
-        Empty -> 0
+        Empty -> +0
     }
 }
 
-fn merged(flag: Flag, inner: Inner, other: Inner) -> Nat {
+fn merged(flag: Flag, inner: Inner, other: Inner) -> Int {
     let picked = case flag {
         Yes -> inner
         No -> other
@@ -2607,13 +2609,76 @@ fn merged(flag: Flag, inner: Inner, other: Inner) -> Nat {
     read(inner) + read(picked)
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(merged(Yes, Value(2), Value(3)))
-    __tribute_print_nat(merged(No, Value(2), Value(3)))
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(merged(Yes, Value(+2), Value(+3))))
+    print_line(Int::to_string(merged(No, Value(+2), Value(+3))))
 }
 "#,
         "4\n5",
     );
+}
+
+#[test]
+fn test_native_value_unused_on_some_paths_is_released_once() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+enum Inner {
+    Value(Int)
+    Empty
+}
+
+enum Flag {
+    Yes
+    No
+}
+
+fn read(inner: Inner) -> Int {
+    case inner {
+        Value(value) -> value
+        Empty -> +0
+    }
+}
+
+fn one_arm(flag: Flag, inner: Inner) -> Int {
+    case flag {
+        Yes -> read(inner)
+        No -> +0
+    }
+}
+
+fn nested(outer: Flag, flag: Flag, inner: Inner) -> Int {
+    case outer {
+        Yes -> case flag {
+            Yes -> read(inner)
+            No -> +1
+        }
+        No -> +2
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(one_arm(Yes, Value(+7))))
+    print_line(Int::to_string(one_arm(No, Value(+7))))
+    print_line(Int::to_string(one_arm(Yes, Empty)))
+    print_line(Int::to_string(nested(Yes, Yes, Value(+5))))
+    print_line(Int::to_string(nested(Yes, No, Value(+5))))
+    print_line(Int::to_string(nested(No, Yes, Value(+5))))
+}
+"#;
+    // The paths that do not read `inner` release it; the sanitizer run guards
+    // the paths that do against a second release.
+    for output in [
+        compile_and_run_native("value_unused_on_some_paths.trb", source),
+        compile_and_run_native_asan("value_unused_on_some_paths_asan.trb", source),
+    ] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "stderr: {stderr}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "7\n0\n0\n5\n1\n2"
+        );
+    }
 }
 
 // =========================================================================

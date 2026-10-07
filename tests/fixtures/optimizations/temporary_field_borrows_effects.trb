@@ -1,0 +1,70 @@
+use std::io::{Io, print_line}
+
+enum Inner {
+    Value(Int)
+    Empty
+}
+
+enum Outer {
+    Wrapped(Inner)
+    Missing
+}
+
+ability Ask {
+    op ask() -> Int
+}
+
+ability Keep {
+    op keep(value: Inner) -> Int
+}
+
+fn read(inner: Inner) -> Int {
+    case inner {
+        Value(value) -> value
+        Empty -> +0
+    }
+}
+
+// The projection is read after the operation resumes, so it lives in the
+// continuation across the handler.
+fn across_resume(outer: Outer) ->{Ask} Int {
+    case outer {
+        Wrapped(inner) -> Ask::ask() + read(inner)
+        Missing -> Ask::ask()
+    }
+}
+
+// The projection is handed to the handler and read again after it resumes.
+fn through_operation(outer: Outer) ->{Keep} Int {
+    case outer {
+        Wrapped(inner) -> Keep::keep(inner) + read(inner)
+        Missing -> +0
+    }
+}
+
+fn resumed(outer: Outer) -> Int {
+    handle across_resume(outer) {
+        do result { result }
+        op Ask::ask() { resume +5 }
+    }
+}
+
+fn kept(outer: Outer) -> Int {
+    handle through_operation(outer) {
+        do result { result }
+        op Keep::keep(value) { resume read(value) }
+    }
+}
+
+// The handler drops the continuation that still holds the projection.
+fn aborted(outer: Outer) -> Int {
+    handle through_operation(outer) {
+        do result { result }
+        op Keep::keep(value) { read(value) + +100 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let outer = Wrapped(Value(+10))
+    print_line(Int::to_string(resumed(outer) + kept(outer) + aborted(outer) + resumed(Missing)))
+}

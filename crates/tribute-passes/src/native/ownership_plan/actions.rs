@@ -158,8 +158,38 @@ impl<'a> ActionPlanner<'a> {
                 });
             }
         }
-        self.plan_final_releases(block, ops, &transferred);
-        Ok(())
+        self.plan_final_releases(block, ops, &transferred)
+    }
+
+    /// Owned values that die on every edge into `block`: live out of each
+    /// predecessor and not live into `block`.
+    fn values_dying_on_entry(&self, block: BlockRef) -> Result<Vec<ValueRef>, OwnershipPlanError> {
+        let predecessors = self.facts.cfg().predecessors(block);
+        let live_in = &self.liveness.live_in[&block];
+        let mut holders = HashMap::<ValueRef, usize>::default();
+        for predecessor in predecessors {
+            for &value in &self.liveness.live_out[predecessor] {
+                if self.owned.contains(&value)
+                    && !self.borrowed.contains_key(&value)
+                    && !live_in.contains(&value)
+                {
+                    *holders.entry(value).or_default() += 1;
+                }
+            }
+        }
+        // The block start releases a value for every predecessor, so a
+        // predecessor that no longer holds it would release it twice. The
+        // function entry is such a predecessor of the entry block, and a
+        // block that redefines the value is entered before it holds one.
+        let defs = &self.liveness.defs[&block];
+        if holders.iter().any(|(value, &count)| {
+            count != predecessors.len() || block == self.facts.cfg().entry() || defs.contains(value)
+        }) {
+            return Err(OwnershipPlanError::new(
+                "managed value dies on a control-flow edge whose successor has another predecessor",
+            ));
+        }
+        Ok(holders.into_keys().collect())
     }
 }
 
@@ -714,7 +744,8 @@ impl ActionPlanner<'_> {
         block: BlockRef,
         ops: &[OpRef],
         transferred: &HashSet<ValueRef>,
-    ) {
+    ) -> Result<(), OwnershipPlanError> {
+        let dying_on_entry = self.values_dying_on_entry(block)?;
         let mut last_use = HashMap::default();
         for (index, &op) in ops.iter().enumerate() {
             for &operand in self.ir.op_operands(op) {
@@ -749,9 +780,12 @@ impl ActionPlanner<'_> {
             }
         }
         let mut dying = dying.into_iter().collect::<Vec<_>>();
+        dying.extend(dying_on_entry.iter().copied());
         dying.sort_unstable_by_key(|value| self.definition_order[value]);
         for (destination, value) in dying.into_iter().enumerate() {
-            let anchor = if let Some(&index) = last_use.get(&value) {
+            let anchor = if dying_on_entry.contains(&value) {
+                ActionAnchor::BlockStart(block)
+            } else if let Some(&index) = last_use.get(&value) {
                 let op = ops[index];
                 if self.facts.cfg().is_terminator(op) {
                     ActionAnchor::Before(op)
@@ -772,5 +806,6 @@ impl ActionPlanner<'_> {
                 destination: destination as u32,
             });
         }
+        Ok(())
     }
 }

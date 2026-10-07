@@ -25,6 +25,8 @@ const TRUSTED_OWNERSHIP_FORWARDING: &str =
     include_str!("../fixtures/optimizations/trusted_ownership_forwarding.trb");
 const TEMPORARY_FIELD_BORROWS: &str =
     include_str!("../fixtures/optimizations/temporary_field_borrows.trb");
+const TEMPORARY_FIELD_BORROWS_EFFECTS: &str =
+    include_str!("../fixtures/optimizations/temporary_field_borrows_effects.trb");
 const BOXED_DYNAMIC_PRIMITIVES: &str = r#"
 extern "C" fn __tribute_print_int(value: Int) -> Nil
 extern "C" fn __tribute_print_float(value: Float) -> Nil
@@ -244,6 +246,29 @@ fn temporary_field_borrows_preserve_native_execution_with_sanitizer() {
         assert_eq!(preserved_stdout.trim(), "20");
         assert_eq!(elided_stdout.trim(), "20");
         assert_eq!(preserved.stdout, elided.stdout);
+    }
+}
+
+#[test]
+fn temporary_field_borrows_across_handlers_preserve_native_execution_with_sanitizer() {
+    for sanitize_address in [false, true] {
+        for policy in [
+            TemporaryBorrowPolicy::Preserve,
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        ] {
+            let output = compile_and_run_native_with_temporary_borrows(
+                "temporary_field_borrows_effects.trb",
+                TEMPORARY_FIELD_BORROWS_EFFECTS,
+                policy,
+                sanitize_address,
+            );
+            assert!(
+                output.status.success(),
+                "{policy:?} failed with sanitize_address={sanitize_address}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "150");
+        }
     }
 }
 
@@ -572,6 +597,35 @@ fn temporary_field_borrows_have_focused_before_after_ir(db: &salsa::DatabaseImpl
     assert!(before_retain > after_retain, "before RC ops:\n{before}");
     assert!(before_release > after_release, "before RC ops:\n{before}");
     assert_eq!(before_retain - after_retain, before_release - after_release);
+}
+
+#[salsa_test]
+fn temporary_field_borrows_across_handlers_elide_rc_operations(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "temporary_field_borrows_effects_snapshot.trb",
+        TEMPORARY_FIELD_BORROWS_EFFECTS,
+    );
+    let rc_ops = |stage, policy| {
+        let ir = dump_native_ir_at_stage(db, source, stage, temporary_borrow_options(policy))
+            .expect("temporary-borrow IR should be available");
+        focused_rc_ops(ir)
+    };
+    let before = rc_ops(
+        NativePipelineStage::AfterBorrowedParameterOptimization,
+        TemporaryBorrowPolicy::Preserve,
+    );
+    let after = rc_ops(
+        NativePipelineStage::AfterTemporaryBorrowOptimization,
+        TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+    );
+    let count = |ir: &str, operation: &str| ir.matches(operation).count();
+    let retains = count(&before, "tribute_rt.retain") - count(&after, "tribute_rt.retain");
+    let releases = count(&before, "tribute_rt.release") - count(&after, "tribute_rt.release");
+    assert!(retains > 0, "before RC ops:\n{before}");
+    // A projection that keeps its own unit is acquired once and released on
+    // each path that drops it, so more releases than retains disappear.
+    assert!(releases >= retains, "before RC ops:\n{before}");
 }
 
 #[test]

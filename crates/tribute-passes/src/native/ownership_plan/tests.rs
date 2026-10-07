@@ -1221,6 +1221,14 @@ fn loop_carried_borrowed_projection_acquires_before_the_previous_owner_dies() {
         current,
         ActionAnchor::Before(back_edge)
     ));
+    // Leaving the loop drops the iteration's owner on the exit edge.
+    let exit = ctx.region(body).blocks[3];
+    assert!(has_action(
+        function,
+        ActionKind::FinalRelease,
+        current,
+        ActionAnchor::BlockStart(exit)
+    ));
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
     // The next iteration's owner holds its unit before this iteration's dies.
@@ -1638,6 +1646,262 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
     );
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+}
+
+/// The blocks of a fixture function, in layout order.
+fn function_blocks(
+    ctx: &IrContext,
+    plan: &NativeOwnershipPlan,
+    name: &'static str,
+) -> trunk_ir::BlockList {
+    let function = plan.function(&Symbol::new(name)).unwrap();
+    let body = ctx.op_region(function.operation(), 0).unwrap();
+    ctx.region(body).blocks.clone()
+}
+
+fn final_releases(function: &FunctionOwnershipPlan, value: ValueRef) -> Vec<ActionAnchor> {
+    function
+        .actions()
+        .iter()
+        .filter(|action| action.kind == ActionKind::FinalRelease && action.value == value)
+        .map(|action| action.anchor)
+        .collect()
+}
+
+const EDGE_DEATHS: &str = r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  func.func @sink(%value: !BoxRef) attributes {type = func.func_sig<(!BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    func.unreachable
+  }
+  func.func @observe(%child: !ChildRef) -> core.i32 {
+    %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
+    func.return %value
+  }
+  func.func @one_arm(%condition: core.i1, %child: !ChildRef) -> core.nil {
+    ^entry:
+      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      cf.cond_br %condition [^use, ^skip]
+    ^use:
+      func.call %value {callee = @sink}
+      cf.br [^join]
+    ^skip:
+      cf.br [^join]
+    ^join:
+      func.return
+  }
+  func.func @nested(%outer: core.i1, %inner: core.i1, %child: !ChildRef) -> core.nil {
+    ^entry:
+      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      cf.cond_br %outer [^inside, ^outer_skip]
+    ^inside:
+      cf.cond_br %inner [^use, ^inner_skip]
+    ^use:
+      func.call %value {callee = @sink}
+      cf.br [^join]
+    ^inner_skip:
+      cf.br [^join]
+    ^outer_skip:
+      cf.br [^join]
+    ^join:
+      func.return
+  }
+  func.func @loop_exit(%condition: core.i1, %child: !ChildRef) -> core.nil {
+    ^entry:
+      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      cf.br [^loop]
+    ^loop:
+      func.call %value {callee = @sink}
+      cf.cond_br %condition [^loop, ^exit]
+    ^exit:
+      func.return
+  }
+  func.func @projection_one_arm(%condition: core.i1, %child: !ChildRef) -> core.nil {
+    ^entry:
+      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+      cf.cond_br %condition [^use, ^skip]
+    ^use:
+      %seen = func.call %loaded {callee = @observe} : core.i32
+      cf.br [^join]
+    ^skip:
+      cf.br [^join]
+    ^join:
+      func.return
+  }
+}"#;
+
+#[test]
+fn value_dying_on_an_edge_is_released_at_the_successor_start() {
+    let (mut ctx, module, plan) = build(EDGE_DEATHS);
+    let entry_value = |name: &'static str| {
+        let entry = function_blocks(&ctx, &plan, name)[0];
+        ctx.op_result(ctx.block(entry).ops[0], 0)
+    };
+
+    // One arm consumes the value; the other releases it on entry.
+    let blocks = function_blocks(&ctx, &plan, "one_arm");
+    let [_, used, skip, join] = blocks.as_slice() else {
+        panic!("four-block fixture")
+    };
+    let value = entry_value("one_arm");
+    let mut released_on_entry = vec![(*skip, value)];
+    let call = ctx.block(*used).ops[0];
+    let one_arm = plan.function(&Symbol::new("one_arm")).unwrap();
+    assert_eq!(
+        final_releases(one_arm, value),
+        [ActionAnchor::After(call), ActionAnchor::BlockStart(*skip)]
+    );
+    assert!(
+        !one_arm
+            .actions()
+            .iter()
+            .any(|action| action.anchor == ActionAnchor::BlockStart(*join))
+    );
+
+    // Each dead arm releases at its own start, at the depth where it diverges.
+    let blocks = function_blocks(&ctx, &plan, "nested");
+    let [_, _, used, inner_skip, outer_skip, _] = blocks.as_slice() else {
+        panic!("six-block fixture")
+    };
+    let value = entry_value("nested");
+    released_on_entry.extend([(*inner_skip, value), (*outer_skip, value)]);
+    let call = ctx.block(*used).ops[0];
+    let nested = plan.function(&Symbol::new("nested")).unwrap();
+    assert_eq!(
+        final_releases(nested, value),
+        [
+            ActionAnchor::After(call),
+            ActionAnchor::BlockStart(*inner_skip),
+            ActionAnchor::BlockStart(*outer_skip)
+        ]
+    );
+
+    // A value kept live around a loop is released where the loop is left.
+    let blocks = function_blocks(&ctx, &plan, "loop_exit");
+    let [_, _, exit] = blocks.as_slice() else {
+        panic!("three-block fixture")
+    };
+    let value = entry_value("loop_exit");
+    released_on_entry.push((*exit, value));
+    let loop_exit = plan.function(&Symbol::new("loop_exit")).unwrap();
+    assert_eq!(
+        final_releases(loop_exit, value),
+        [ActionAnchor::BlockStart(*exit)]
+    );
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    for (block, value) in released_on_entry {
+        assert_eq!(rc_position(&ctx, block, false, value), 0);
+    }
+}
+
+#[test]
+fn borrowed_projection_owner_dying_on_an_edge_follows_the_selected_liveness_view() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, EDGE_DEATHS);
+    let preserved = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions {
+            elide_proven_borrowed_parameters: false,
+            elide_proven_field_borrows: false,
+        },
+        &mut Default::default(),
+    )
+    .expect("preserved typed plan");
+    let elided = production_plan(&ctx, module).expect("elided typed plan");
+
+    let blocks = function_blocks(&ctx, &elided, "projection_one_arm");
+    let [entry, used, skip, _] = blocks.as_slice() else {
+        panic!("four-block fixture")
+    };
+    let owner = ctx.op_result(ctx.block(*entry).ops[0], 0);
+    let get = ctx.block(*entry).ops[1];
+    let loaded = ctx.op_result(get, 0);
+    let call = ctx.block(*used).ops[0];
+
+    // Borrowing keeps the owner live into the arm that reads the projection,
+    // so the owner dies after that read or on the edge into the other arm.
+    let elided = elided.function(&Symbol::new("projection_one_arm")).unwrap();
+    assert_eq!(
+        final_releases(elided, owner),
+        [ActionAnchor::After(call), ActionAnchor::BlockStart(*skip)]
+    );
+    assert!(final_releases(elided, loaded).is_empty());
+
+    // Without the borrow the projection owns a unit, and that unit is the one
+    // that dies on the edge.
+    let preserved = preserved
+        .function(&Symbol::new("projection_one_arm"))
+        .unwrap();
+    assert_eq!(final_releases(preserved, owner), [ActionAnchor::After(get)]);
+    assert_eq!(
+        final_releases(preserved, loaded),
+        [ActionAnchor::After(call), ActionAnchor::BlockStart(*skip)]
+    );
+}
+
+#[test]
+fn value_dying_on_an_edge_into_a_shared_successor_is_rejected() {
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  func.func @sink(%value: !BoxRef) attributes {type = func.func_sig<(!BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    func.unreachable
+  }
+  func.func @shared(%outer: core.i1, %inner: core.i1, %child: !ChildRef) -> core.nil {
+    ^entry:
+      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      cf.cond_br %outer [^inside, ^other]
+    ^inside:
+      cf.cond_br %inner [^join, ^use]
+    ^use:
+      func.call %value {callee = @sink}
+      cf.br [^join]
+    ^other:
+      cf.br [^join]
+    ^join:
+      func.return
+  }
+}"#,
+        "dies on a control-flow edge whose successor has another predecessor",
+    );
+}
+
+#[test]
+fn value_dying_on_a_back_edge_to_the_entry_block_is_rejected() {
+    // The function entry reaches `^entry` without the value, so a release at
+    // its start would run before the first definition.
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  func.func @sink(%value: !BoxRef) attributes {type = func.func_sig<(!BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    func.unreachable
+  }
+  func.func @restart() -> core.nil {
+    ^entry:
+      %child = adt.ref_null {type = !ChildRef} : !ChildRef
+      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %again = adt.ref_is_null %child : core.i1
+      cf.cond_br %again [^back, ^use]
+    ^back:
+      cf.cond_br %again [^entry, ^use]
+    ^use:
+      func.call %value {callee = @sink}
+      func.return
+  }
+}"#,
+        "dies on a control-flow edge whose successor has another predecessor",
+    );
 }
 
 #[test]

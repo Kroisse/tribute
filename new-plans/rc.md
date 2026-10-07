@@ -252,6 +252,16 @@ source마다 하나뿐이다. Source가 선택된 liveness view에서 branch 뒤
 destination만 unit을 받는다. Unit을 받지 못한 destination마다 branch 직전에 새
 unit을 획득한다.
 
+한 block 안에서 마지막으로 쓰이고 죽는 값은 그 사용 직후에, 사용이 terminator면 그
+직전에 release한다. Predecessor의 끝에서 살아 있지만 successor의 시작에서 살아 있지
+않은 값은 edge에서 죽으며 successor의 시작에서 release한다. 이 위치는 successor의
+모든 predecessor가 그 값을 살려 둔 채 끝날 때만 올바르다. 함수 진입은 entry block의
+predecessor이며 어떤 값도 갖고 있지 않다. 일부 predecessor만 값을 살려 두는 edge와,
+값을 다시 정의하는 block으로 들어가는 edge에는 release를 둘 자리가 없으므로 plan
+생성을 실패시킨다.
+`scf_to_cf`는 multi-successor branch의 target마다 그 branch만 predecessor로 갖는
+block을 만들므로 이런 edge를 만들지 않는다.
+
 `adt.typeref`는 type 자체로 managed다. Native RC-header allocation을 표현하는
 검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
 contract로 분류한다. Evidence, function/code address, borrowed buffer,
