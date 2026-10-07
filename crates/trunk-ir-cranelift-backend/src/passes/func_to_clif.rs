@@ -393,8 +393,11 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         let Some(callable) = clif::FuncSig::from_type_ref(ctx, signature) else {
             return false;
         };
+        let Some(caller_results) = enclosing_results(ctx, op, rewriter.type_converter()) else {
+            return false;
+        };
         if callable.call_conv(ctx) != Some(func::CallConv::Tail)
-            || !callable.results(ctx).is_empty()
+            || callable.results(ctx) != caller_results.as_slice()
             || !TailCallLike::is_resultless(&tail, ctx)
             || callable.inputs(ctx).len() != CallLike::call_args(&tail, ctx).len()
             || callable
@@ -419,6 +422,33 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         rewriter.replace_op(new_op);
         true
     }
+}
+
+/// The clif result types of the function enclosing `op`, which a proper
+/// tail transfer returns as its own.
+fn enclosing_results(
+    ctx: &mut IrContext,
+    op: OpRef,
+    converter: &TypeConverter,
+) -> Option<Vec<TypeRef>> {
+    let mut block = ctx.op(op).parent_block?;
+    let signature = loop {
+        let owner = ctx.region(ctx.block(block).parent_region?).parent_op?;
+        if let Ok(function) = func::Func::from_op(ctx, owner) {
+            let signature = function.r#type(ctx);
+            break convert_to_clif_func_type(ctx, signature, converter)?;
+        }
+        // The enclosing function may already be rewritten.
+        if let Ok(function) = clif::Func::from_op(ctx, owner) {
+            break function.r#type(ctx);
+        }
+        block = ctx.op(owner).parent_block?;
+    };
+    Some(
+        clif::FuncSig::from_type_ref(ctx, signature)?
+            .results(ctx)
+            .to_vec(),
+    )
 }
 
 /// Pattern: `func.unreachable` -> `clif.trap`
@@ -927,6 +957,19 @@ mod tests {
             error.to_string().contains("func.tail_call_indirect"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn value_tail_call_indirect_returns_the_callers_result() {
+        let output = run_pass(
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.i32 attributes {type = func.func_sig<(core.ptr, core.i32) -> core.i32, {call_conv = "tail"}>} {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32, {call_conv = "tail"}>}
+  }
+}"#,
+        );
+        assert!(output.contains("clif.return_call_indirect"), "{output}");
+        assert!(!output.contains("func.tail_call_indirect"), "{output}");
     }
 
     #[test]

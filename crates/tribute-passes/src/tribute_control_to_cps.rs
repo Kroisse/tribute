@@ -85,6 +85,9 @@ struct CallableInfo {
     convention: CallingConvention,
     source_result: TypeRef,
     source_params: Vec<TypeRef>,
+    /// Whether the callable keeps a platform `abi`, so no proper tail
+    /// transfer may target it.
+    platform: bool,
 }
 
 #[derive(Clone)]
@@ -485,6 +488,7 @@ fn collect_callable_graph(
                     convention: convert_convention(convention),
                     source_result: callable.result(ctx),
                     source_params: callable.inputs(ctx).to_vec(),
+                    platform: ctx.op(op).attributes.contains_key(Symbol::new("abi")),
                 },
             )
         })

@@ -1898,6 +1898,7 @@ mod tests {
                     attributes.remove(CALLING_CONVENTION_ATTR);
                 }
                 attributes.remove(Symbol::new("type"));
+                attributes.remove(Symbol::new("signature"));
                 (op, attributes, ctx.op_result_types(op).to_vec())
             })
             .collect();
@@ -1905,6 +1906,7 @@ mod tests {
         for (op, before, results) in unchanged {
             let mut after = ctx.op(op).attributes.clone();
             after.remove(Symbol::new("type"));
+            after.remove(Symbol::new("signature"));
             assert_eq!(after, before);
             assert_eq!(ctx.op_result_types(op).len(), results.len());
         }

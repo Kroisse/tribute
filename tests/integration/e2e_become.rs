@@ -70,14 +70,14 @@ fn test_become_callable_value_runs_in_constant_stack() {
     let code = format!(
         "{PRINT_NAT}{}",
         r#"
-fn step(f: fn(Nat, fn(Nat) -> Nat) -> Nat, n: Nat) -> Nat {
+fn step(f: fn(Nat, fn(Nat) ->{} Nat) ->{} Nat, n: Nat) -> Nat {
     case n {
         0 -> 7
         _ -> become f(n - 1, fn(m: Nat) -> Nat { become step(f, m) })
     }
 }
 
-fn apply(n: Nat, k: fn(Nat) -> Nat) -> Nat {
+fn apply(n: Nat, k: fn(Nat) ->{} Nat) -> Nat {
     become k(n)
 }
 
@@ -116,7 +116,7 @@ fn loop(n: Nat, acc: Nat) ->{Tick} Nat {
 fn main() ->{std::io::Io} Nil {
     let total = handle loop(100000, 0) {
         do result { result }
-        fn Tick::tick() { Nil }
+        op Tick::tick() { resume Nil }
     }
     print_nat(total)
 }

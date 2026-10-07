@@ -173,14 +173,26 @@ impl Converter<'_> {
             target_args.push(args[frame_offset]);
         }
         target_args.extend_from_slice(&args[source_offset..]);
+        let target_result = self.convert_type(target.source_result);
         if target.convention == CallingConvention::Cps {
             let tail = func::TailCall::operands(target_args)
                 .callee(target.symbol)
                 .build(self.ctx, location);
             set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
             self.ctx.push_op(block, tail.op_ref());
+        } else if result_convention != CallingConvention::Cps
+            && !target.platform
+            && adapter.results(self.ctx) == [target_result]
+        {
+            // A value adapter transfers its frame to the target, so a source
+            // `become` through the adapted callable value stays a proper
+            // tail call.
+            let tail = func::TailCall::operands(target_args)
+                .callee(target.symbol)
+                .build(self.ctx, location);
+            set_calling_convention(self.ctx, tail.op_ref(), target.convention);
+            self.ctx.push_op(block, tail.op_ref());
         } else {
-            let target_result = self.convert_type(target.source_result);
             let call = func::Call::operands(target_args)
                 .callee(target.symbol)
                 .results([target_result])

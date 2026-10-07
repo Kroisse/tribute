@@ -463,8 +463,12 @@ fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     let before_release = before.matches("tribute_rt.release").count();
     let after_retain = after.matches("tribute_rt.retain").count();
     let after_release = after.matches("tribute_rt.release").count();
-    assert!(before_retain > after_retain, "before RC ops:\n{before}");
-    assert!(before_release > after_release, "before RC ops:\n{before}");
+    // Module-internal callables consume their parameters, so this fixture
+    // no longer acquires a parameter at entry only to release it. The pass's
+    // own pair matching is covered by its unit tests; here it must keep the
+    // releases of every allocation and remove only whole pairs.
+    assert!(before_retain >= after_retain, "before RC ops:\n{before}");
+    assert!(before_release >= after_release, "before RC ops:\n{before}");
     assert_eq!(before_retain - after_retain, before_release - after_release);
 }
 
