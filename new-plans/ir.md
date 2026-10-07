@@ -232,9 +232,13 @@ continue after its enclosing structured region. It is not a generic
 terminator marker: `scf.yield`, `scf.break`, and `scf.continue` transfer within
 structured control flow and do not satisfy it. Dialects register only their
 verified callable exits, including ordinary `func.return`, proper tail
-transfers, and unreachable control flow. The typed model and its dynamic query
-are fallible. An unregistered operation, malformed registered operation, or
-query error is never evidence that a region is terminal.
+transfers, and unreachable control flow. An arm of a result-producing
+`scf.if` may end with a verified `CallableExit` instead of `scf.yield`; such
+an arm produces no value and the operation's results come from its yielding
+arms. Source `become` ends a tail-position arm this way. The typed model and
+its dynamic query are fallible. An unregistered operation, malformed
+registered operation, or query error is never evidence that a region is
+terminal.
 
 Structured-to-CFG lowering may use `CallableExit` only after preserving its
 own structural rules: the region must have one block, the exit must be that
