@@ -255,3 +255,41 @@ pub(crate) fn lower_cps_dispatch(
     .build(ctx, loc);
     rewriter.replace_op(tail.op_ref());
 }
+
+pub(crate) fn pack_payload(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    location: trunk_ir::types::Location,
+    ability_ref: TypeRef,
+    op_name: StringRef,
+    values: &[ValueRef],
+    anyref: TypeRef,
+) -> ValueRef {
+    let payload_type = ability::operation_payload_type_ref(
+        ctx,
+        ability_ref,
+        op_name,
+        values.iter().map(|_| anyref),
+    );
+    let dynamic_values = values
+        .iter()
+        .map(|&value| {
+            let cast = core::UnrealizedConversionCast::operands(value)
+                .results(anyref)
+                .build(ctx, location);
+            let result = cast.result(ctx);
+            rewriter.insert_op(cast.op_ref());
+            result
+        })
+        .collect::<Vec<_>>();
+    let payload = adt::StructNew::operands(dynamic_values)
+        .r#type(payload_type)
+        .results(payload_type)
+        .build(ctx, location);
+    rewriter.insert_op(payload.op_ref());
+    let erased = core::UnrealizedConversionCast::operands(payload.result(ctx))
+        .results(anyref)
+        .build(ctx, location);
+    rewriter.insert_op(erased.op_ref());
+    erased.result(ctx)
+}

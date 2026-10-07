@@ -4,13 +4,15 @@
 
 use tribute_core::calling_convention::{cps_completion_type, cps_done_type, cps_resume_type};
 use tribute_core::{CallingConvention, set_calling_convention};
-use tribute_ir::dialect::{ability, adt, tribute_rt};
+use tribute_ir::dialect::{ability, adt, tribute_control, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func;
+use trunk_ir::dialect::{core, func};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::PatternRewriter;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
+use super::{ExpandFrameOperations, detach_into};
 use crate::tribute_control_to_cps::{
     FrameTypes, TributeControlToCpsError, closure_over, emit_cps_tail_call_indirect, make_block,
     set_evidence_plan, single_block_region,
@@ -229,4 +231,79 @@ pub(super) fn build_dispatch_adapter_factory(
         .build(ctx, location);
     set_calling_convention(ctx, factory.op_ref(), CallingConvention::Direct);
     Ok(factory.op_ref())
+}
+
+impl ExpandFrameOperations {
+    /// Replace `ability.suffix_frame` with the done adapter, the dispatch
+    /// adapter factory over the outer frame's dispatcher, and the frame that
+    /// holds both.
+    pub(super) fn expand_suffix_frame(
+        &self,
+        ctx: &mut IrContext,
+        suffix: ability::SuffixFrame,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let location = ctx.op(suffix.op_ref()).location;
+        let evidence = suffix.evidence(ctx);
+        let outer = suffix.outer(ctx);
+        let continuation = suffix.continuation(ctx);
+        let plan = ctx
+            .op(suffix.op_ref())
+            .attributes
+            .get(tribute_control::EVIDENCE_PLAN_ATTR)
+            .cloned();
+        let value = self.frame_of(ctx, suffix.result_ty(ctx))?;
+        let boundary = self.frame_of(ctx, ctx.value_ty(outer))?;
+        let block = make_block(ctx, location, &[]);
+        let (done_op, done) =
+            build_done_adapter(ctx, value.answer, continuation, evidence, outer, location).ok()?;
+        ctx.push_op(block, done_op);
+        let (_, outer_dispatch) = unpack_frame(ctx, block, location, &boundary, outer);
+        let symbol = self.fresh_helper("make_dispatch_adapter");
+        let frames = LayerFrames { value, boundary };
+        let factory =
+            build_dispatch_adapter_factory(ctx, location, symbol.clone(), &frames, plan).ok()?;
+        let evidence_type = ctx.value_ty(evidence);
+        let completion_type =
+            cps_completion_type(ctx, evidence_type, value.answer, boundary.reference);
+        let completion = core::UnrealizedConversionCast::operands(continuation)
+            .results(completion_type)
+            .build(ctx, location);
+        ctx.push_op(block, completion.op_ref());
+        let dispatch = func::Call::operands([completion.result(ctx), outer_dispatch])
+            .callee(symbol.into())
+            .results([value.dispatch])
+            .build(ctx, location);
+        tribute_core::set_calling_convention(
+            ctx,
+            dispatch.op_ref(),
+            tribute_core::CallingConvention::Direct,
+        );
+        ctx.push_op(block, dispatch.op_ref());
+        let frame = pack_frame(ctx, block, location, &value, done, dispatch.result(ctx));
+        detach_into(ctx, block, rewriter);
+        rewriter.add_module_op(factory);
+        rewriter.erase_op(vec![frame]);
+        Some(())
+    }
+
+    /// Replace `ability.exit` with the transfer to the frame's `Done<R>`.
+    pub(super) fn expand_exit(
+        &self,
+        ctx: &mut IrContext,
+        exit: ability::Exit,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let location = ctx.op(exit.op_ref()).location;
+        let frame = exit.frame(ctx);
+        let value = exit.value(ctx);
+        let types = self.frame_of(ctx, ctx.value_ty(frame))?;
+        let block = make_block(ctx, location, &[]);
+        let (done, _) = unpack_frame(ctx, block, location, &types, frame);
+        let transfer = emit_cps_tail_call_indirect(ctx, block, location, done, [value]).ok()?;
+        ctx.remove_op_from_block(block, transfer);
+        detach_into(ctx, block, rewriter);
+        rewriter.replace_op(transfer);
+        Some(())
+    }
 }
