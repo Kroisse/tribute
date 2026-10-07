@@ -187,9 +187,11 @@ fn main() -> Nil {
 ```rust
 // 다형적 재귀 예시
 fn nest(a)(n: Int, x: a) -> ??? {
-    if n == 0 { x }
-    else { nest(n - 1, Pair(x, x)) }
-    //         ↑ nest<Pair<a, a>> 호출 (a가 아님!)
+    case n == 0 {
+        True -> x
+        False -> nest(n - 1, Pair(x, x))
+        //            ↑ nest<Pair<a, a>> 호출 (a가 아님!)
+    }
 }
 ```
 
@@ -207,8 +209,10 @@ fn nest(a)(n: Int, x: a) -> ??? {
 ```rust
 // 컴파일러가 자동으로 변환
 fn nest(n: Int, x: anyref) -> anyref {
-    if n == 0 { x }
-    else { nest(n - 1, box(Pair(unbox(x), unbox(x)))) }
+    case n == 0 {
+        True -> x
+        False -> nest(n - 1, box(Pair(unbox(x), unbox(x))))
+    }
 }
 ```
 

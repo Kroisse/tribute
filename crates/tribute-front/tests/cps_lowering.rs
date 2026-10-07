@@ -1208,7 +1208,7 @@ fn effectful() ->{Flag} Bool { Flag::read() }
 
 fn run(value: Bool) ->{Flag} Nat {
     case value {
-        True if effectful() -> 1
+        True && effectful() -> 1
         False -> 0
         True -> 2
     }
@@ -1938,14 +1938,14 @@ fn run() ->{Flag} Nat {
         do result { result }
         op State::get() {
             case True {
-                True if allowed() -> resume 1
+                True && allowed() -> resume 1
                 False -> resume 2
                 True -> resume 3
             }
         }
         op State::choose(pair, values) {
             case #(pair, values) {
-                #(#(left, right), [head, ..tail]) if allowed() -> resume left
+                #(#(left, right), [head, ..tail]) && allowed() -> resume left
                 _ -> resume 0
             }
         }

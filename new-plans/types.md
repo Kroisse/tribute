@@ -456,7 +456,7 @@ let User { name, age: user_age, .. } = user
 ```rust
 case user {
     User { name: "Admin", .. } -> "admin user"
-    User { age, .. } if age < 18 -> "minor"
+    User { age, .. } && age < 18 -> "minor"
     User { name, .. } -> "user: " <> name
 }
 

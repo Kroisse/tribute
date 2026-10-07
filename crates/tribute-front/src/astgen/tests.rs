@@ -964,12 +964,12 @@ fn test_case_with_wildcard() {
 }
 
 #[test]
-fn test_case_with_multiple_guarded_branches() {
+fn test_case_guard_chain_is_one_guard_expression() {
     let source = r#"
             fn main() -> Nil {
                 case value {
-                    _ if first -> 1
-                      if second -> 2
+                    x && first && second -> 1
+                    _ -> 2
                 }
             }
         "#;
@@ -984,20 +984,15 @@ fn test_case_with_multiple_guarded_branches() {
     let ExprKind::Case { arms, .. } = value.kind.as_ref() else {
         panic!("Expected case expression");
     };
-    assert_eq!(arms.len(), 2, "each guarded branch must become an arm");
-    for (arm, expected_guard, expected_body) in [(&arms[0], "first", 1), (&arms[1], "second", 2)] {
-        let Some(guard) = &arm.guard else {
-            panic!("guarded branch must retain its guard");
-        };
-        let ExprKind::Var(guard) = guard.kind.as_ref() else {
-            panic!("Expected guard variable");
-        };
-        assert_eq!(guard.name().to_string(), expected_guard);
-        let ExprKind::NatLit(body) = arm.body.kind.as_ref() else {
-            panic!("Expected Nat body");
-        };
-        assert_eq!(*body, expected_body);
-    }
+    assert_eq!(arms.len(), 2);
+    let Some(guard) = &arms[0].guard else {
+        panic!("guarded arm must retain its guard");
+    };
+    let ExprKind::BinOp { op, .. } = guard.kind.as_ref() else {
+        panic!("Expected the whole chain after the first `&&` as the guard");
+    };
+    assert_eq!(*op, crate::ast::BinOpKind::And);
+    assert!(arms[1].guard.is_none());
 }
 
 // =============================================================================

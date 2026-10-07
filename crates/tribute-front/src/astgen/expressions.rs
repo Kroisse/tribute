@@ -518,36 +518,20 @@ fn lower_case_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unresol
     ExprKind::Case { scrutinee, arms }
 }
 
-fn lower_case_arm(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Arm<UnresolvedName>> {
-    let Some(pattern_node) = node.child_by_field_name("pattern") else {
-        return vec![];
-    };
-    let direct_value = node.child_by_field_name("value");
+fn lower_case_arm(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<Arm<UnresolvedName>> {
+    let pattern_node = node.child_by_field_name("pattern")?;
+    let body_node = node.child_by_field_name("value")?;
     let pattern = lower_pattern(ctx, pattern_node);
+    let guard = node
+        .child_by_field_name("guard")
+        .map(|guard_node| lower_expr(ctx, guard_node));
 
-    if let Some(body_node) = direct_value {
-        return vec![Arm {
-            id: ctx.fresh_id_with_span(&node),
-            pattern,
-            guard: None,
-            body: lower_expr(ctx, body_node),
-        }];
-    }
-
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor)
-        .filter(|branch| branch.kind() == "guarded_branch")
-        .filter_map(|branch| {
-            let guard_node = branch.child_by_field_name("guard")?;
-            let body_node = branch.child_by_field_name("value")?;
-            Some(Arm {
-                id: ctx.fresh_id_with_span(&branch),
-                pattern: pattern.clone(),
-                guard: Some(lower_expr(ctx, guard_node)),
-                body: lower_expr(ctx, body_node),
-            })
-        })
-        .collect()
+    Some(Arm {
+        id: ctx.fresh_id_with_span(&node),
+        pattern,
+        guard,
+        body: lower_expr(ctx, body_node),
+    })
 }
 
 fn lower_lambda_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
