@@ -402,6 +402,18 @@ label만 있을 때에만 equality를 미룬다. 함수 검사가 끝날 때까�
 모호성을 정하지 않으면 그 equality는 오류이다. 해를 탐색해 고르지 않으며, 사용자가
 effect의 타입 인자를 적어 대응을 정한다.
 
+열린 row의 label 대응도 같은 규칙을 따른다. 상대 row에 후보가 하나뿐인 label은 그
+후보와 대응하고, 후보가 없는 label은 상대 tail에 남는다. 후보는 단일화를 시작할
+때의 치환으로 양방향 모두 센 뒤, 모은 대응의 타입 인자를 함께 단일화한다. 한
+label의 대응이 정한 타입 변수로 다른 label의 후보를 없애 그 label을 tail로 보내지
+않는다. 모은 대응이 한 타입 변수에 서로 다른 타입을 요구하면 그 단일화는 오류이다:
+
+```text
+unify({State(Int), Choice(Bool) | e₁}, {State(a), Choice(a) | e₂})
+// State(Int) ↔ State(a), Choice(Bool) ↔ Choice(a)
+// Error: a를 Int와 Bool로 동시에 정할 수 없다
+```
+
 Named row variables have declaration-scoped identity: repeated names share an
 identity and distinct names do not. Multiple row names denote their union.
 
