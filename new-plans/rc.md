@@ -306,24 +306,44 @@ into control flow and atomic operations by RC lowering.
   is used, its uses are replaced with the original pointer before erasing the
   pair. This optimization does not cross basic-block boundaries or chase
   aliases.
-- **Borrowed parameter elision:** Typed planning에서 managed
-  function parameter as borrowed only when every use is proven to remain within
-  the dynamic extent of the call. Loads through the parameter, comparisons,
-  and stores that use it only as the destination address are borrowed uses.
-  A chain of unrealized conversion casts is transparent only when every use of
-  its result is itself proven borrowed. Returning or storing the parameter as a
-  value, passing it to a call or branch, using it through any other alias or a
-  nested region, and every unknown operation are escapes. Closure, ability
-  handler, and continuation capture therefore preserve owned-parameter RC.
-  Analysis failure preserves the existing owned-parameter RC.
-  Calls remain escape barriers unless the call is direct and its callee has a
-  trusted ownership summary proving the corresponding parameter borrowed.
-  Indirect, external, unresolved, or otherwise unknown calls are always escape
-  barriers.
-  The callee must also have the ordinary synchronous caller-lifetime guarantee:
-  C ABI entry points, direct tail-call targets, and functions whose address
-  escapes are ineligible because their caller may not retain an owning frame
-  for the full invocation.
+- **Borrowed parameter elision:** Typed planning은 managed 매개변수의 모든 사용이
+  호출의 동적 범위 안에 머문다고 증명될 때만 그 매개변수를 borrowed로 분류한다.
+  Borrowed 매개변수는 다음 불변식을 따른다: callee가 매개변수를 쓸 수 있는 동안
+  그 referent는 caller 또는 조상 frame의 owned root에서 계속 도달 가능하다.
+  Ordinary direct call의 caller는 argument의 unit, 또는 argument가 파생된 root의
+  unit을 호출이 반환할 때까지 유지하므로 이 불변식을 제공한다.
+
+  Borrowed 사용은 다음뿐이다.
+
+  - 매개변수를 읽기 대상으로 삼는 `adt.struct_get`, `adt.variant_get`,
+    `adt.variant_is`, `adt.ref_is_null`.
+  - `adt.ref_cast`와 unrealized conversion cast. Cast result의 모든 사용이 다시
+    borrowed 사용일 때만 transparent하다.
+  - Direct `func.call`의 argument. Callee의 대응 매개변수가 borrowed summary를
+    가질 때만 해당한다.
+
+  그 밖의 모든 사용은 escape이며 retained를 선택한다. 값으로서의 return과 저장,
+  `adt.struct_set`의 대상, branch와 block argument 전달, indirect call과 tail
+  call, 다른 region에서의 사용, 알 수 없는 operation이 여기에 속한다. Closure,
+  ability handler, continuation capture는 저장이므로 escape다.
+
+  Summary는 direct call graph 위의 fixed point다. 후보 매개변수를 borrowed로 두고
+  시작해 escape를 찾을 때마다 retained로 내린다. 강등은 단조이고 매개변수 수가
+  유한하므로 종료하며, 남은 borrowed 매개변수는 모든 사용이 위 목록에 속한다.
+
+  후보가 되려면 정의가 caller의 동기적 lifetime 보장을 가져야 한다.
+
+  - Recursive SCC에 속한 정의의 매개변수는 후보가 아니다.
+  - `abi`를 가진 정의의 매개변수는 후보가 아니다. 그 caller는 호출 동안 owning
+    frame을 유지한다는 계약을 주지 않는다.
+  - [`consumed`](#proper-tail-ownership-transfer)로 표시된 매개변수는 후보가
+    아니다. Proper tail transfer의 target은 caller frame보다 오래 살 수 있다.
+    Representation/ABI 경계가 module 내부 callable의 모든 매개변수를 consumed로
+    기록하므로, 이 추론은 경계가 표시하지 않은 매개변수에만 적용된다.
+
+  Body가 없는 `extern "C"` 선언은 별도의 신뢰 경계다. 그 managed argument는 호출
+  동안 borrowed이고 managed 결과는 새 owned 값이다.
+
   For a proven borrowed parameter, RC insertion omits both the entry `retain`
   and every parameter `release`; this keeps acquisition and release decisions
   under one ownership proof instead of matching generated releases afterward.
@@ -385,16 +405,21 @@ Each RC-managed physical parameter has one exact entry mode:
   entry retain, and the callee must eventually release, return, or proper-tail
   transfer that unit.
 
-Physically empty CPS callables use `consumed` for their parameters. The
-representation/ABI boundary records this in the exact physical signature as the
-per-parameter attribute `tribute.ownership = "consumed"` on every input, because
-it physicalizes the CPS convention and owns that decision. The marker is inert
+Module 내부의 모든 physical callable은 호출 규약과 무관하게 매개변수에 `consumed`를
+쓴다. 어떤 내부 callable이든 proper tail transfer의 target이 될 수 있기 때문이다
+([cranelift-backend.md](cranelift-backend.md#꼬리-호출-규약)). Platform `abi`를 가진
+callable은 platform 계약을 유지하며 표시를 받지 않는다.
+
+The representation/ABI boundary records this in the exact physical signature as
+the per-parameter attribute `tribute.ownership = "consumed"` on every input,
+because it owns the physical callable convention. The marker is inert
 on a parameter the typed managed-reference contract does not select: unmanaged
 parameters have no RC action. Only `consumed` is encoded; a managed parameter
 without the marker has the `retained` callable contract, and `borrowed` is an
-optimization of module-local direct calls, never part of a signature. This is a
-native callable contract, not a conclusion inferred from a converted type, name,
-operand position, body shape, or calling-convention integer alone.
+optimization of module-local direct calls to unmarked parameters, never part of
+a signature. This is a native callable contract, not a conclusion inferred from
+a converted type, name, operand position, body shape, or calling-convention
+integer alone.
 
 An ordinary call to a retained parameter performs no caller-side RC operation:
 the caller keeps its own unit live across the call while the callee acquires
