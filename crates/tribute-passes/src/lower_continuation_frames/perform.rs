@@ -13,9 +13,9 @@ use trunk_ir::rewrite::PatternRewriter;
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
 use super::suffix_layer::unpack_frame;
-use super::{ExpandFrameOperations, detach_into};
+use super::{ExpandFrameOperations, FrameTypes, detach_into};
 use crate::cps_builders::{
-    FrameTypes, closure_over, emit_cps_tail_call_indirect, make_block, single_block_region,
+    closure_over, emit_cps_tail_call_indirect, make_block, single_block_region,
 };
 use crate::effect_dispatch::pack_payload;
 use crate::tribute_control_to_cps::TributeControlToCpsError;

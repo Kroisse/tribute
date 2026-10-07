@@ -10,10 +10,9 @@ use rustc_hash::FxHashSet as HashSet;
 use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;
-use tribute_ir::continuation_frame;
 
 use tribute_core::calling_convention::{
-    cps_completion_type, cps_done_type, cps_resume_exact_type, physical_closure_function_type,
+    cps_completion_type, cps_resume_exact_type, physical_closure_function_type,
     physical_closure_type_with_environment_index,
 };
 use tribute_core::{
@@ -86,14 +85,6 @@ struct Converter<'a> {
     /// Callables by root-qualified name across the whole module tree.
     funcs: HashMap<SymbolPath, CallableInfo>,
     converted_types: HashMap<TypeRef, TypeRef>,
-    frames: FrameState,
-}
-
-/// The frame layouts and helper names one conversion has allocated.
-#[derive(Default)]
-struct FrameState {
-    layouts: HashMap<TypeRef, FrameTypes>,
-    layout_aliases: Vec<(Symbol, TypeRef)>,
     helper_index: u32,
 }
 
@@ -170,7 +161,7 @@ impl<'a> Converter<'a> {
             module_block,
             funcs,
             converted_types: HashMap::default(),
-            frames: FrameState::default(),
+            helper_index: 0,
         }
     }
 
@@ -486,7 +477,6 @@ pub fn tribute_control_to_cps(
                 .iter()
                 .map(|(name, ty)| (name.clone(), converter.convert_type(*ty))),
         );
-        converted_aliases.extend(converter.frames.layout_aliases.iter().cloned());
     }
     let new_region = ctx.create_region(RegionData {
         location: ctx.region(source_region).location,

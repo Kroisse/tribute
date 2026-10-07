@@ -12,10 +12,9 @@ use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::PatternRewriter;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
-use super::{ExpandFrameOperations, detach_into};
+use super::{ExpandFrameOperations, FrameTypes, detach_into};
 use crate::cps_builders::{
-    FrameTypes, closure_over, emit_cps_tail_call_indirect, make_block, set_evidence_plan,
-    single_block_region,
+    closure_over, emit_cps_tail_call_indirect, make_block, set_evidence_plan, single_block_region,
 };
 use crate::tribute_control_to_cps::TributeControlToCpsError;
 

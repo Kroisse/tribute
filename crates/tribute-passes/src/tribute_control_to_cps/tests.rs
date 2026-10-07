@@ -61,49 +61,6 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
     }
 }
 
-#[test]
-fn frame_names_do_not_depend_on_type_interning_order() {
-    let frame_names = |unrelated_types: usize| {
-        let (mut ctx, module) =
-            parse("core.module @m { func.func @placeholder() { func.return } }");
-        let block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
-        for index in 0..unrelated_types {
-            let name = ctx.string_attr(&format!("unrelated{index}"));
-            ctx.intern_type(
-                trunk_ir::types::TypeDataBuilder::new("test", "unrelated")
-                    .attr("name", name)
-                    .build(),
-            );
-        }
-        let answers = ["i32", "i64"].map(|name| {
-            ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", name).build())
-        });
-        let mut converter = Converter::new(&mut ctx, block, HashMap::default());
-        answers.map(|answer| {
-            let frame = converter.frames.frame_types(converter.ctx, answer);
-            assert_eq!(
-                converter
-                    .frames
-                    .frame_types(converter.ctx, answer)
-                    .reference,
-                frame.reference
-            );
-            tribute_ir::dialect::adt::nominal_name(converter.ctx, frame.reference)
-                .expect("frame reference is nominal")
-                .to_owned()
-        })
-    };
-
-    assert_eq!(
-        frame_names(0),
-        [
-            "__tribute_continuation_frame_0",
-            "__tribute_continuation_frame_1"
-        ]
-    );
-    assert_eq!(frame_names(3), frame_names(0));
-}
-
 fn operation_declarations(
     ctx: &mut IrContext,
     operations: &[(&str, &str)],

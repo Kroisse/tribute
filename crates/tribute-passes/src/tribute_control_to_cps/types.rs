@@ -18,13 +18,13 @@ impl Converter<'_> {
 
     pub(super) fn resumption_type(&mut self, input: TypeRef, answer: TypeRef) -> TypeRef {
         let evidence = self.evidence_type();
-        let frame = self.frames.frame_type(self.ctx, answer);
+        let frame = self.frame_type(answer);
         cps_resume_exact_type(self.ctx, evidence, input, frame)
     }
 
     pub(super) fn completion_type(&mut self, value: TypeRef, answer: TypeRef) -> TypeRef {
         let evidence = self.evidence_type();
-        let frame = self.frames.frame_type(self.ctx, answer);
+        let frame = self.frame_type(answer);
         cps_completion_type(self.ctx, evidence, value, frame)
     }
 
@@ -147,10 +147,7 @@ impl Converter<'_> {
             .map(|(param, attrs)| (self.convert_type(param), self.convert_attr_map(&attrs)))
             .collect();
         let evidence = (self.evidence_type(), AttributeMap::new());
-        let frame = (
-            self.frames.frame_type(self.ctx, result),
-            AttributeMap::new(),
-        );
+        let frame = (self.frame_type(result), AttributeMap::new());
         let abi = CallableAbi::new(convention, params, (result, result_attrs));
         let params = abi.lowered_params(evidence, frame);
         let result = if convention == CallingConvention::Cps {
