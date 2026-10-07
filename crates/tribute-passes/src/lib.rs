@@ -19,6 +19,7 @@ pub mod io_lowering;
 pub mod list_intrinsics;
 pub mod lower_ability_perform;
 pub mod lower_closure_lambda;
+pub mod lower_continuation_frames;
 pub mod lower_handle_dispatch;
 pub mod native;
 pub mod resolve_evidence;

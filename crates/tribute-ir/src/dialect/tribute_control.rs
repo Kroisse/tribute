@@ -295,12 +295,25 @@ fn is_ability_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     data.dialect == "core" && data.name == "ability_ref"
 }
 
+/// The operation that carries an `evidence_plan`, which decides the steps it
+/// may hold.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EvidencePlanSite {
+    /// A source call or resume: no `outer` step.
+    Source,
+    /// A handle: `mask` steps only.
+    Handle,
+    /// An operation CPS legalization built from a source operation, which may
+    /// also select the evidence a handle was installed on.
+    Legalized,
+}
+
 /// Check the shape of an operation's `evidence_plan`. Whether the selection
 /// matches the effect rows is typechecking's responsibility.
 pub(crate) fn verify_evidence_plan(
     ctx: &IrContext,
     op: OpRef,
-    mask_only: bool,
+    site: EvidencePlanSite,
 ) -> Result<(), String> {
     let Some(plan) = ctx.op(op).attributes.get(EVIDENCE_PLAN_ATTR) else {
         return Ok(());
@@ -315,24 +328,28 @@ pub(crate) fn verify_evidence_plan(
         .iter()
         .map(|item| EvidenceStep::from_attribute(ctx, item))
         .collect::<Result<_, _>>()?;
-    if mask_only
+    if site == EvidencePlanSite::Handle
         && steps
             .iter()
             .any(|step| !matches!(step, EvidenceStep::Mask(_)))
     {
         return Err("a handle's evidence_plan may only mask".into());
     }
-    verify_evidence_steps(&steps, true)
+    verify_evidence_steps(&steps, true, site == EvidencePlanSite::Legalized)
 }
 
 /// Check one plan: an optional leading `select`, then the steps on ability
 /// instances, each instance changed in one way, then an optional `tails`
 /// whose plans follow the same rule without `tails` of their own.
-fn verify_evidence_steps(steps: &[EvidenceStep], tails_allowed: bool) -> Result<(), String> {
+fn verify_evidence_steps(
+    steps: &[EvidenceStep],
+    tails_allowed: bool,
+    outer_allowed: bool,
+) -> Result<(), String> {
     let mut seen = HashSet::default();
     for (index, step) in steps.iter().enumerate() {
         match step {
-            EvidenceStep::Outer(_) => {
+            EvidenceStep::Outer(_) if !outer_allowed => {
                 return Err("a source operation's evidence_plan may not use outer".into());
             }
             EvidenceStep::Select(_) if index != 0 => {
@@ -350,10 +367,12 @@ fn verify_evidence_steps(steps: &[EvidenceStep], tails_allowed: bool) -> Result<
             }
             EvidenceStep::Tails(plans) => {
                 for plan in plans {
-                    verify_evidence_steps(plan, false)?;
+                    verify_evidence_steps(plan, false, outer_allowed)?;
                 }
             }
-            EvidenceStep::Mask(instance) | EvidenceStep::Dup(instance) => {
+            EvidenceStep::Mask(instance)
+            | EvidenceStep::Dup(instance)
+            | EvidenceStep::Outer(instance) => {
                 if !seen.insert((*instance, false)) {
                     return Err(format!(
                         "evidence_plan names ability instance {instance} more than once"
@@ -374,25 +393,25 @@ fn verify_evidence_steps(steps: &[EvidenceStep], tails_allowed: bool) -> Result<
 
 impl trunk_ir::ops::Verify for Call {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_evidence_plan(ctx, self.op_ref(), false)
+        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
     }
 }
 
 impl trunk_ir::ops::Verify for CallIndirect {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_evidence_plan(ctx, self.op_ref(), false)
+        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
     }
 }
 
 impl trunk_ir::ops::Verify for Resume {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_evidence_plan(ctx, self.op_ref(), false)
+        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
     }
 }
 
 impl trunk_ir::ops::Verify for Handle {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_evidence_plan(ctx, self.op_ref(), true)
+        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Handle)
     }
 }
 

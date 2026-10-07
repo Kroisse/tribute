@@ -18,7 +18,7 @@ impl Converter<'_> {
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
         let evidence_type = self.evidence_type();
         let anyref = self.anyref_type();
-        let boundary_frame = self.frame_types(layer.answer_type).reference;
+        let boundary_frame = self.frame_type(layer.answer_type);
         let block = self.make_block(location, &[evidence_type, boundary_frame, anyref]);
         let args = self.ctx.block_args(block).to_vec();
         let (done_op, done) = self.build_done_adapter(
@@ -143,7 +143,7 @@ impl Converter<'_> {
         let source_arg = self.ctx.block_args(source_block)[0];
         let arg_type = self.convert_type(self.ctx.value_ty(source_arg));
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_types(flow.answer_type).reference;
+        let frame_type = self.frame_type(flow.answer_type);
         let block = self.make_block(location, &[evidence_type, frame_type, arg_type]);
         let mut body_mapping = mapping.clone();
         body_mapping.insert(source_arg, self.ctx.block_args(block)[2]);
@@ -181,7 +181,7 @@ impl Converter<'_> {
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
         let input_type = self.convert_type(input_type);
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_types(flow.answer_type).reference;
+        let frame_type = self.frame_type(flow.answer_type);
         let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
         let resume_evidence = self.ctx.block_args(block)[0];
         let resume_frame = self.ctx.block_args(block)[1];
@@ -223,8 +223,8 @@ impl Converter<'_> {
         let evidence_type = self.evidence_type();
         let anyref = self.anyref_type();
         let completion_type = self.completion_type(layer.body_type, layer.answer_type);
-        let body_frame = self.frame_types(layer.body_type).reference;
-        let answer_frame = self.frame_types(layer.answer_type).reference;
+        let body_frame = self.frame_type(layer.body_type);
+        let answer_frame = self.frame_type(layer.answer_type);
         let resume_body_type = cps_resume_type(self.ctx, evidence_type, body_frame, anyref);
         let resume_type = cps_resume_type(self.ctx, evidence_type, answer_frame, anyref);
         let params = if installed {
@@ -298,7 +298,7 @@ impl Converter<'_> {
         };
         let evidence_type = self.evidence_type();
         let anyref = self.anyref_type();
-        let answer_frame = self.frame_types(layer.answer_type).reference;
+        let answer_frame = self.frame_type(layer.answer_type);
         let resume_type = cps_resume_type(self.ctx, evidence_type, answer_frame, anyref);
         let resume = func::Call::operands(args)
             .callee(symbol.into())
@@ -323,7 +323,7 @@ impl Converter<'_> {
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
         let answer_type = layer.answer_type;
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_types(answer_type).reference;
+        let frame_type = self.frame_type(answer_type);
         let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
         let args = self.ctx.block_args(block).to_vec();
         let anyref = self.anyref_type();
@@ -360,7 +360,7 @@ impl Converter<'_> {
         let completion_type = self.completion_type(layer.body_type, layer.answer_type);
         let i32_type = self.i32_type();
         let evidence_type = self.evidence_type();
-        let exit_frame_type = self.frame_types(layer.answer_type).reference;
+        let exit_frame_type = self.frame_type(layer.answer_type);
         let dispatch_type = self.frame_types(layer.body_type).dispatch;
         let mut params = vec![completion_type, exit_frame_type, i32_type, evidence_type];
         params.extend(layer.arms.iter().map(|arm| self.ctx.value_ty(arm.value)));
@@ -409,7 +409,7 @@ impl Converter<'_> {
         let evidence_type = self.evidence_type();
         let anyref = self.anyref_type();
         let i32_type = self.i32_type();
-        let body_frame = self.frame_types(layer.body_type).reference;
+        let body_frame = self.frame_type(layer.body_type);
         let resume_type = tribute_core::calling_convention::cps_resume_type(
             self.ctx,
             evidence_type,
@@ -455,7 +455,7 @@ impl Converter<'_> {
         let evidence_type = self.evidence_type();
         let anyref = self.anyref_type();
         let i32_type = self.i32_type();
-        let body_frame = self.frame_types(layer.body_type).reference;
+        let body_frame = self.frame_type(layer.body_type);
         let resume_type = tribute_core::calling_convention::cps_resume_type(
             self.ctx,
             evidence_type,
@@ -599,7 +599,7 @@ impl Converter<'_> {
             .build(self.ctx, location);
 
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_types(answer_type).reference;
+        let frame_type = self.frame_type(answer_type);
         let anyref = self.anyref_type();
         // The dispatcher ABI is existential only at this boundary. Keep the
         // captured continuation exact, recover this operation's declared input,
@@ -685,7 +685,7 @@ impl Converter<'_> {
         location: Location,
     ) -> (OpRef, ValueRef) {
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_types(answer_type).reference;
+        let frame_type = self.frame_type(answer_type);
         let anyref = self.anyref_type();
         let block = self.make_block(location, &[evidence_type, frame_type, anyref]);
         let unreachable = func::Unreachable::operands().build(self.ctx, location);
@@ -885,7 +885,7 @@ impl Converter<'_> {
         // resumes from a lambda.
         let mut params = vec![evidence_type];
         if general {
-            params.push(self.frame_types(handle_answer).reference);
+            params.push(self.frame_type(handle_answer));
         }
         let source_offset = params.len();
         params.extend_from_slice(&converted_args);

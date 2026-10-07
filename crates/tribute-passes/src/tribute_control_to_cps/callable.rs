@@ -23,7 +23,7 @@ impl Converter<'_> {
             .map(|ty| self.convert_type(ty))
             .collect();
         let evidence = self.evidence_type();
-        let frame = self.frame_types(result).reference;
+        let frame = self.frame_type(result);
         let abi = CallableAbi::new(convention, source_param_types, result);
         let params = abi.lowered_params(evidence, frame);
         let body_source = self.ctx.op_region(source, 0).ok_or_else(|| {
@@ -286,7 +286,7 @@ impl Converter<'_> {
             .collect();
         let abi = CallableAbi::new(info.convention, source_params, source_result);
         let evidence_ty = self.evidence_type();
-        let frame_ty = self.frame_types(source_result).reference;
+        let frame_ty = self.frame_type(source_result);
         let params = abi.lowered_params(evidence_ty, frame_ty);
         let block = self.make_block(location, &params);
         let mut mapping = HashMap::default();

@@ -600,6 +600,17 @@ pub(crate) fn substitute_module_types(
     module: Module,
     substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
 ) {
+    substitute_module_types_keeping_casts(ctx, module, substitute);
+    erase_identity_casts(ctx, module);
+}
+
+/// [`substitute_module_types`] without removing the casts the replacement
+/// turns into identities.
+pub(crate) fn substitute_module_types_keeping_casts(
+    ctx: &mut IrContext,
+    module: Module,
+    substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
+) {
     let ops = collect_ops(ctx, module.op());
     let aliases = ctx.type_aliases().to_vec();
     let mut physicalizer = TypeSubstitution::new(ctx, substitute);
@@ -675,7 +686,6 @@ pub(crate) fn substitute_module_types(
     for (block, index, attrs) in block_attribute_updates {
         ctx.block_mut(block).args[index].attrs = attrs;
     }
-    erase_identity_casts(ctx, module);
 }
 
 /// Remove unrealized casts whose source already has the declared type.

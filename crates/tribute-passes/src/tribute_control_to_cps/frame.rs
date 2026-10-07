@@ -59,6 +59,15 @@ impl Converter<'_> {
         frame_value: ValueRef,
     ) -> (ValueRef, ValueRef) {
         let frame = self.frame_types(answer);
+        let frame_value = if self.ctx.value_ty(frame_value) == frame.reference {
+            frame_value
+        } else {
+            let cast = core::UnrealizedConversionCast::operands(frame_value)
+                .results(frame.reference)
+                .build(self.ctx, location);
+            self.ctx.push_op(block, cast.op_ref());
+            cast.result(self.ctx)
+        };
         let done = adt::StructGet::operands(frame_value)
             .r#type(frame.layout)
             .field(0)
@@ -88,7 +97,14 @@ impl Converter<'_> {
             .results(frame.reference)
             .build(self.ctx, location);
         self.ctx.push_op(block, packed.op_ref());
-        packed.result(self.ctx)
+        if frame.abstract_frame == frame.reference {
+            return packed.result(self.ctx);
+        }
+        let opaque = core::UnrealizedConversionCast::operands(packed.result(self.ctx))
+            .results(frame.abstract_frame)
+            .build(self.ctx, location);
+        self.ctx.push_op(block, opaque.op_ref());
+        opaque.result(self.ctx)
     }
 
     /// Build the closure of `region`, capturing the values it uses from
@@ -149,7 +165,7 @@ impl Converter<'_> {
         } = layer.clone();
         let evidence_type = self.evidence_type();
         let anyref = self.anyref_type();
-        let boundary_frame = self.frame_types(boundary).reference;
+        let boundary_frame = self.frame_type(boundary);
         let block = self.make_block(location, &[evidence_type, boundary_frame, anyref]);
         let args = self.ctx.block_args(block).to_vec();
         let (done_op, done) =
@@ -183,7 +199,7 @@ impl Converter<'_> {
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
         let evidence_type = self.evidence_type();
         let anyref = self.anyref_type();
-        let boundary_frame = self.frame_types(boundary).reference;
+        let boundary_frame = self.frame_type(boundary);
         let region = self.single_block_region(location, block);
         let resume_type = tribute_core::calling_convention::cps_resume_type(
             self.ctx,
@@ -217,7 +233,7 @@ impl Converter<'_> {
         .as_type_ref();
         let factory_block = self.make_block(location, &[completion_type, outer_dispatch_type]);
         let factory_args = self.ctx.block_args(factory_block).to_vec();
-        let value_frame = self.frame_types(value_type).reference;
+        let value_frame = self.frame_type(value_type);
         let resume_type = tribute_core::calling_convention::cps_resume_type(
             self.ctx,
             evidence_type,
@@ -300,13 +316,52 @@ impl Converter<'_> {
         let evidence = flow.evidence.ok_or_else(|| {
             TributeControlToCpsError::post_at(location, "CPS transfer has no verified evidence")
         })?;
+        let completion_type = self.completion_type(value_type, flow.answer_type);
+        let suffix = if self.ctx.value_ty(suffix) == completion_type {
+            suffix
+        } else {
+            let typed = core::UnrealizedConversionCast::operands(suffix)
+                .results(completion_type)
+                .build(self.ctx, location);
+            self.ctx.push_op(block, typed.op_ref());
+            typed.result(self.ctx)
+        };
+        let frame_type = self.frame_type(value_type);
+        let frame = ability::SuffixFrame::operands(evidence, outer, suffix)
+            .results(frame_type)
+            .build(self.ctx, location);
+        set_evidence_plan(self.ctx, frame.op_ref(), plan);
+        self.ctx.push_op(block, frame.op_ref());
+        Ok(frame.result(self.ctx))
+    }
+
+    /// Expand `ability.suffix_frame` into the frame the suffix is entered
+    /// through, pushing the operations to `block`.
+    pub(super) fn expand_suffix_frame(
+        &mut self,
+        block: BlockRef,
+        frame_op: ability::SuffixFrame,
+    ) -> Result<ValueRef, TributeControlToCpsError> {
+        let location = self.ctx.op(frame_op.op_ref()).location;
+        let evidence = frame_op.evidence(self.ctx);
+        let outer = frame_op.outer(self.ctx);
+        let suffix = frame_op.continuation(self.ctx);
+        let plan = evidence_plan_of(self.ctx, frame_op.op_ref());
+        let value_type = continuation_frame::result_type(self.ctx, frame_op.result_ty(self.ctx))
+            .ok_or_else(|| {
+                TributeControlToCpsError::post_at(location, "suffix frame has no frame result")
+            })?;
+        let answer_type = continuation_frame::result_type(self.ctx, self.ctx.value_ty(outer))
+            .ok_or_else(|| {
+                TributeControlToCpsError::post_at(location, "suffix frame has no outer frame")
+            })?;
         let (done_op, done) =
             self.build_done_adapter(value_type, suffix, evidence, outer, location)?;
         self.ctx.push_op(block, done_op);
-        let (_, outer_dispatch) = self.unpack_frame(block, location, flow.answer_type, outer);
+        let (_, outer_dispatch) = self.unpack_frame(block, location, answer_type, outer);
         let dispatch_factory =
-            self.build_dispatch_adapter_factory(location, value_type, flow.answer_type, plan)?;
-        let completion_type = self.completion_type(value_type, flow.answer_type);
+            self.build_dispatch_adapter_factory(location, value_type, answer_type, plan)?;
+        let completion_type = self.completion_type(value_type, answer_type);
         let typed_completion = core::UnrealizedConversionCast::operands(suffix)
             .results(completion_type)
             .build(self.ctx, location);
@@ -319,6 +374,24 @@ impl Converter<'_> {
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
         self.ctx.push_op(block, dispatch.op_ref());
         Ok(self.pack_frame(block, location, value_type, done, dispatch.result(self.ctx)))
+    }
+
+    /// Expand `ability.exit` into the transfer to the frame's `Done<R>`.
+    pub(super) fn expand_exit(
+        &mut self,
+        block: BlockRef,
+        exit: ability::Exit,
+    ) -> Result<(), TributeControlToCpsError> {
+        let location = self.ctx.op(exit.op_ref()).location;
+        let frame = exit.frame(self.ctx);
+        let value = exit.value(self.ctx);
+        let answer = continuation_frame::result_type(self.ctx, self.ctx.value_ty(frame))
+            .ok_or_else(|| {
+                TributeControlToCpsError::post_at(location, "exit has no frame operand")
+            })?;
+        let (done, _) = self.unpack_frame(block, location, answer, frame);
+        self.emit_cps_tail_call_indirect(block, location, done, [value])?;
+        Ok(())
     }
 
     pub(super) fn emit_exit(
@@ -335,8 +408,8 @@ impl Converter<'_> {
                     "CPS region has no verified exit continuation",
                 )
             })?;
-            let (done, _) = self.unpack_frame(block, location, flow.answer_type, exit_k);
-            self.emit_cps_tail_call_indirect(block, location, done, [value])?;
+            let exit = ability::Exit::operands(exit_k, value).build(self.ctx, location);
+            self.ctx.push_op(block, exit.op_ref());
         } else {
             let ret = func::Return::operands([value]).build(self.ctx, location);
             self.ctx.push_op(block, ret.op_ref());
@@ -385,7 +458,7 @@ impl Converter<'_> {
         location: Location,
     ) -> Result<ValueRef, TributeControlToCpsError> {
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_types(flow.answer_type).reference;
+        let frame_type = self.frame_type(flow.answer_type);
         let block = self.make_block(location, &[evidence_type, frame_type]);
         let mut suffix_mapping = mapping.clone();
         let suffix_flow = Flow {
@@ -421,7 +494,7 @@ impl Converter<'_> {
     ) -> Result<ValueRef, TributeControlToCpsError> {
         let result_type = self.convert_type(result_type);
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_types(flow.answer_type).reference;
+        let frame_type = self.frame_type(flow.answer_type);
         let block = self.make_block(location, &[evidence_type, frame_type, result_type]);
         let mut body_mapping = mapping.clone();
         body_mapping.insert(source_result, self.ctx.block_args(block)[2]);
