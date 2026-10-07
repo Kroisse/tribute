@@ -40,17 +40,14 @@ mod ability_v2 {
     #[verify]
     fn r#yield(value: Value<_>) {}
 
-    /// Invoke a `fn` operation. The handler result flows inline.
+    /// InvokeOp a `fn` operation. The handler result flows inline.
     #[verify]
-    fn call_target(ability_ref: Attr<Type>, op_name: Attr<String>, args: Variadic<_>) -> Value<_> {}
+    fn call_fn(ability_ref: Attr<Type>, op_name: Attr<String>, args: Variadic<_>) -> Value<_> {}
 
-    /// Invoke a general `op` operation whose handler may resume it.
+    /// InvokeOp a general `op` operation. The handler may resume it unless its
+    /// result is `core.never`.
     #[verify]
-    fn invoke(ability_ref: Attr<Type>, op_name: Attr<String>, args: Variadic<_>) -> Value<_> {}
-
-    /// Invoke an `op -> Never` operation. The handler never resumes it.
-    #[verify]
-    fn abort(ability_ref: Attr<Type>, op_name: Attr<String>, args: Variadic<_>) -> Value<Never> {}
+    fn invoke_op(ability_ref: Attr<Type>, op_name: Attr<String>, args: Variadic<_>) -> Value<_> {}
 
     /// Resume the computation a resumptive helper received the token of.
     #[verify]
@@ -359,7 +356,6 @@ impl trunk_ir::ops::Verify for Yield {
 fn verify_invocation(
     ctx: &IrContext,
     op: OpRef,
-    never: bool,
     required: CallingConvention,
 ) -> Result<(), String> {
     let data = ctx.op(op);
@@ -370,16 +366,12 @@ fn verify_invocation(
     {
         return Err("ability_ref must be a core.ability_ref type".into());
     }
-    let result_is_never = ctx
+    let returns_never = ctx
         .op_result_types(op)
         .first()
         .is_some_and(|&ty| is_never(ctx, ty));
-    if result_is_never != never {
-        return Err(if never {
-            "ability_v2.abort must return core.never".into()
-        } else {
-            "an operation returning core.never must use ability_v2.abort".into()
-        });
+    if returns_never && CallFn::matches(ctx, op) {
+        return Err("an operation returning core.never must use ability_v2.invoke_op".into());
     }
     match enclosing_convention(ctx, op) {
         Some(convention) if convention >= required => Ok(()),
@@ -412,21 +404,15 @@ fn enclosing_convention(ctx: &IrContext, op: OpRef) -> Option<CallingConvention>
     }
 }
 
-impl trunk_ir::ops::Verify for CallTarget {
+impl trunk_ir::ops::Verify for CallFn {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_invocation(ctx, self.op_ref(), false, CallingConvention::EvidenceDirect)
+        verify_invocation(ctx, self.op_ref(), CallingConvention::EvidenceDirect)
     }
 }
 
-impl trunk_ir::ops::Verify for Invoke {
+impl trunk_ir::ops::Verify for InvokeOp {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_invocation(ctx, self.op_ref(), false, CallingConvention::Cps)
-    }
-}
-
-impl trunk_ir::ops::Verify for Abort {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_invocation(ctx, self.op_ref(), true, CallingConvention::Cps)
+        verify_invocation(ctx, self.op_ref(), CallingConvention::Cps)
     }
 }
 
@@ -509,7 +495,7 @@ mod tests {
 
     #[test]
     fn scope_with_resumptive_helper_round_trips_and_verifies() {
-        let text = module_text(&get_binding("op"), &get_helper(), &invoke_body("invoke"));
+        let text = module_text(&get_binding("op"), &get_helper(), &invoke_body("invoke_op"));
         let (ctx, module) = parse(&text);
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
@@ -519,7 +505,7 @@ mod tests {
         assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
         for expected in [
             "ability_v2.scope",
-            "ability_v2.invoke",
+            "ability_v2.invoke_op",
             "ability_v2.resume",
             "ability_v2.yield",
         ] {
@@ -527,23 +513,23 @@ mod tests {
         }
     }
 
-    const ABORT_HELPER: &str = r#"    %fail = tribute_control.lambda(%reason: core.i32) -> core.i32 convention(cps) captures [] {
+    const NEVER_HELPER: &str = r#"    %fail = tribute_control.lambda(%reason: core.i32) -> core.i32 convention(cps) captures [] {
       tribute_control.return %reason
     }"#;
 
-    fn abort_binding() -> String {
+    fn never_binding() -> String {
         format!(
             r#", %fail {{handlers = [{{ability_ref = {STATE}, kind = "op", op_name = "fail", operation_result_type = core.never}}]}}"#
         )
     }
 
     #[test]
-    fn abort_helper_takes_no_token_and_returns_the_answer() {
+    fn never_helper_takes_no_token_and_returns_the_answer() {
         let body = format!(
-            r#"      %never = ability_v2.abort %value {{ability_ref = {STATE}, op_name = "fail"}} : core.never
+            r#"      %never = ability_v2.invoke_op %value {{ability_ref = {STATE}, op_name = "fail"}} : core.never
       ability_v2.yield %value"#
         );
-        let text = module_text(&abort_binding(), &format!("{DONE}\n{ABORT_HELPER}"), &body);
+        let text = module_text(&never_binding(), &format!("{DONE}\n{NEVER_HELPER}"), &body);
         assert_eq!(errors(&text), "");
     }
 
@@ -555,13 +541,13 @@ mod tests {
       tribute_control.return %value
     }}"#
         );
-        let text = module_text(&get_binding("fn"), &helper, &invoke_body("call_target"));
+        let text = module_text(&get_binding("fn"), &helper, &invoke_body("call_fn"));
         assert_eq!(errors(&text), "");
     }
 
     #[test]
     fn malformed_scopes_and_invocations_are_rejected() {
-        let op_body = invoke_body("invoke");
+        let op_body = invoke_body("invoke_op");
         let done_only = DONE.to_string();
         let cases: Vec<(&str, String, &str)> = vec![
             (
@@ -569,7 +555,7 @@ mod tests {
                 module_text(
                     &get_binding("fn"),
                     &get_helper(),
-                    &invoke_body("call_target"),
+                    &invoke_body("call_fn"),
                 ),
                 "must not use the cps convention",
             ),
@@ -590,7 +576,7 @@ mod tests {
             (
                 "Never helper with a resume token",
                 module_text(
-                    &abort_binding()
+                    &never_binding()
                         .replace("\"fail\"", "\"get\"")
                         .replace("%fail", "%get"),
                     &get_helper(),
@@ -647,23 +633,11 @@ mod tests {
                     &get_binding("op"),
                     &get_helper(),
                     &format!(
-                        r#"      %got = ability_v2.invoke {{ability_ref = {STATE}, op_name = "get"}} : core.i32
+                        r#"      %got = ability_v2.invoke_op {{ability_ref = {STATE}, op_name = "get"}} : core.i32
       tribute_control.return %got"#
                     ),
                 ),
                 "body must end with ability_v2.yield",
-            ),
-            (
-                "invoke of a Never operation",
-                module_text(
-                    &abort_binding(),
-                    &format!("{DONE}\n{ABORT_HELPER}"),
-                    &format!(
-                        r#"      %never = ability_v2.invoke %value {{ability_ref = {STATE}, op_name = "fail"}} : core.never
-      ability_v2.yield %value"#
-                    ),
-                ),
-                "an operation returning core.never must use ability_v2.abort",
             ),
             (
                 "yield outside a scope body",
@@ -680,12 +654,12 @@ mod tests {
                 "ability_v2.yield must terminate an ability_v2.scope body",
             ),
             (
-                "invoke in an evidence-direct callable",
+                "invoke_op in an evidence-direct callable",
                 module_text(&get_binding("op"), &get_helper(), &op_body).replace(
                     "-> core.i32 convention(cps) {",
                     "-> core.i32 convention(evidence_direct) {",
                 ),
-                "ability_v2.invoke requires an enclosing callable with at least the Cps convention",
+                "ability_v2.invoke_op requires an enclosing callable with at least the Cps convention",
             ),
             (
                 "invocation of a non-ability",
@@ -696,6 +670,107 @@ mod tests {
                 ),
                 "ability_ref must be a core.ability_ref type",
             ),
+            (
+                "fn helper returning another type",
+                module_text(
+                    &get_binding("fn"),
+                    &format!(
+                        r#"{DONE}
+    %get = tribute_control.lambda() -> core.i64 convention(evidence_direct) captures [] {{
+      %wide = arith.const {{value = 0}} : core.i64
+      tribute_control.return %wide
+    }}"#
+                    ),
+                    &invoke_body("call_fn"),
+                ),
+                "helper of fn operation get must return the operation result",
+            ),
+            (
+                "fn helper with a resume token",
+                module_text(
+                    &get_binding("fn"),
+                    &get_helper().replace("convention(cps) captures [%value]", "convention(evidence_direct) captures [%value]"),
+                    &invoke_body("call_fn"),
+                ),
+                "helper of fn operation get must not take a resume token",
+            ),
+            (
+                "op helper without the cps convention",
+                module_text(
+                    &get_binding("op"),
+                    &get_helper().replace("convention(cps) captures [%value]", "convention(evidence_direct) captures [%value]"),
+                    &op_body,
+                ),
+                "helper of op operation get must use the cps convention",
+            ),
+            (
+                "op helper returning another type",
+                module_text(
+                    &get_binding("op"),
+                    &format!(
+                        r#"{DONE}
+    %get = tribute_control.lambda(%token: tribute_control.resume_token<core.i32, core.i32>) -> core.i64 convention(cps) captures [] {{
+      %wide = arith.const {{value = 0}} : core.i64
+      tribute_control.return %wide
+    }}"#
+                    ),
+                    &op_body,
+                ),
+                "helper of op operation get must return the scope answer",
+            ),
+            (
+                "helper that is not a lambda",
+                module_text(&get_binding("op"), DONE, &op_body)
+                    .replace("@run(%value: core.i32)", "@run(%value: core.i32, %get: tribute_control.func_sig<(tribute_control.resume_token<core.i32, core.i32>) -> core.i32, {tribute.calling_convention = 2}>)"),
+                "ability_v2.scope helper must be a tribute_control.lambda",
+            ),
+            (
+                "call_fn of a Never operation",
+                module_text(
+                    &never_binding(),
+                    &format!("{DONE}\n{NEVER_HELPER}"),
+                    &format!(
+                        r#"      %never = ability_v2.call_fn %value {{ability_ref = {STATE}, op_name = "fail"}} : core.never
+      ability_v2.yield %value"#
+                    ),
+                ),
+                "an operation returning core.never must use ability_v2.invoke_op",
+            ),
+            (
+                "scope evidence_plan that duplicates",
+                module_text(
+                    &get_binding("op").replace(
+                        "]}",
+                        &format!("], evidence_plan = [{{dup = {STATE}}}]}}"),
+                    ),
+                    &get_helper(),
+                    &op_body,
+                ),
+                "a handle's evidence_plan may only mask",
+            ),
+            (
+                "binding with an unknown kind",
+                module_text(&get_binding("pure"), &get_helper(), &op_body),
+                "handlers kind must be fn or op",
+            ),
+            (
+                "binding without an operation result type",
+                module_text(
+                    &get_binding("op").replace(", operation_result_type = core.i32", ""),
+                    &get_helper(),
+                    &op_body,
+                ),
+                "handlers element must have exactly",
+            ),
+            (
+                "binding of a non-ability",
+                module_text(
+                    &get_binding("op").replace(STATE, "core.i32"),
+                    &get_helper(),
+                    &op_body,
+                ),
+                "handlers ability_ref must be a core.ability_ref type",
+            ),
         ];
         for (name, text, expected) in cases {
             let errors = errors(&text);
@@ -704,5 +779,30 @@ mod tests {
                 "{name}: missing `{expected}` in:\n{errors}\n\n{text}"
             );
         }
+    }
+
+    #[test]
+    fn handler_binding_round_trips_through_its_attribute() {
+        let mut ctx = IrContext::new();
+        let name = ctx.string_attr("State");
+        let ability_ref = ctx.intern_type(
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
+                .attr("name", name)
+                .build(),
+        );
+        let i32_ty = ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
+        let binding = HandlerBinding {
+            ability_ref,
+            op_name: ctx.intern_str("get"),
+            kind: OperationKind::Fn,
+            operation_result_type: i32_ty,
+        };
+        let attr = binding.to_attribute(&mut ctx);
+        assert_eq!(HandlerBinding::from_attribute(&ctx, &attr), Ok(binding));
+        assert_eq!(OperationKind::Op.keyword(), "op");
+        assert_eq!(
+            HandlerBinding::from_attribute(&ctx, &Attribute::Int(0)),
+            Err("handlers element must be a dictionary".to_string())
+        );
     }
 }

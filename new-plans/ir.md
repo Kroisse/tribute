@@ -1120,24 +1120,22 @@ than scanning types for a plausible replacement.
 completion은 `tribute_control.lambda` helper가 되고, operation 호출은 kind별
 operation이 된다. Continuation과 evidence 값은 아직 없으며 callable,
 callable type, `resume_token`은 `tribute_control`의 것을 그대로 쓴다.
-`ability_v2`가 소유하는 것은 아래 여섯 operation뿐이다.
+`ability_v2`가 소유하는 것은 아래 다섯 operation뿐이다.
 
 | Operation | 용도 |
 | ---- | ---- |
 | `ability_v2.scope` | helper 묶음을 설치하고 body 구간을 정한다 |
 | `ability_v2.yield` | scope body를 끝내고 값을 completion helper에 넘긴다 |
-| `ability_v2.call_target` | `fn` operation 호출 |
-| `ability_v2.invoke` | 결과를 돌려받는 general `op` 호출 |
-| `ability_v2.abort` | `op -> Never` 호출 |
+| `ability_v2.call_fn` | `fn` operation 호출 |
+| `ability_v2.invoke_op` | general `op` 호출. 결과가 `core.never`이면 resume하지 않는다 |
 | `ability_v2.resume` | resumptive helper가 받은 token 소비 |
 
 `elaborate_abilities`가 `tribute-control-pre-cps` 경계의 IR을 이 형태로 바꾼다.
 
 | 입력 | 출력 |
 | ---- | ---- |
-| `tribute_control.perform {operation_kind = "fn"}` | `call_target` |
-| `tribute_control.perform {operation_kind = "op"}`, 결과가 `Never`가 아님 | `invoke` |
-| `tribute_control.perform {operation_kind = "op"}`, 결과가 `Never` | `abort` |
+| `tribute_control.perform {operation_kind = "fn"}` | `call_fn` |
+| `tribute_control.perform {operation_kind = "op"}` | `invoke_op` |
 | `tribute_control.handler` | 같은 block argument를 parameter로 받는 helper lambda |
 | `tribute_control.handle`의 completion region | completion helper lambda |
 | `tribute_control.handle` | `scope`. Body region은 그대로 옮긴다 |
@@ -1211,25 +1209,27 @@ ability_v2.yield %value
   helper 안에서는 invalid이다. Value type이 completion helper의 입력이다.
 - `resume_token`은 yield할 수 없다.
 
-#### `ability_v2.call_target`, `invoke`, `abort`
+#### `ability_v2.call_fn`과 `invoke_op`
 
 ```text
-%i = ability_v2.call_target %arg... {ability_ref = !State, op_name = "get"} : I
-%i = ability_v2.invoke %arg... {ability_ref = !State, op_name = "get"} : I
-%n = ability_v2.abort %arg... {ability_ref = !Exn, op_name = "throw"} : core.never
+%i = ability_v2.call_fn %arg... {ability_ref = !State, op_name = "get"} : I
+%i = ability_v2.invoke_op %arg... {ability_ref = !State, op_name = "get"} : I
+%n = ability_v2.invoke_op %arg... {ability_ref = !Exn, op_name = "throw"} : core.never
 ```
 
 - **속성:** `ability_ref`(exact `core.ability_ref`)와 `op_name`.
-- **결과:** 하나. `abort`만 `core.never`를 결과로 가지며 `call_target`과 `invoke`의
-  결과는 `core.never`가 아니다.
-- **종결자:** 셋 다 아니다. `abort`도 `tribute_control.perform`처럼 `core.never`
-  결과를 둔 비종결자이므로 `scf` region의 종결 규칙을 바꾸지 않는다.
+- **결과:** 하나. `call_fn`의 결과는 `core.never`가 아니다. 결과가
+  `core.never`인 `invoke_op`는 `op -> Never` 호출이다.
+- **종결자:** 둘 다 아니다. `op -> Never` 호출도 `tribute_control.perform`처럼
+  `core.never` 결과를 둔 비종결자이므로 `scf` region의 종결 규칙을 바꾸지 않는다.
 - **의미:** 가장 위의 handler가 operation을 처리한다
-  ([cps-effects.md](cps-effects.md#evidence-lookup)). `call_target`의 handler
-  결과는 그대로 결과가 되고, `invoke`는 handler가 resume하면 그 값을 결과로
-  계속한다. `abort`는 계속하지 않는다.
-- **둘러싼 callable:** `call_target`은 `EvidenceDirect` 이상, `invoke`와 `abort`는
-  `Cps`인 callable 안에만 온다.
+  ([cps-effects.md](cps-effects.md#evidence-lookup)). `call_fn`은 `fn`
+  operation이며 handler 결과가 그대로 결과가 된다. `invoke_op`는 general `op`이며
+  handler가 resume하면 그 값을 결과로 계속한다. 결과가 `core.never`이면 계속하지
+  않는다. `fn`과 `op`은 선언이 정하고 호출 지점은 어느 handler가 받을지 모르므로
+  이 구분은 operation 이름으로 싣는다.
+- **둘러싼 callable:** `call_fn`은 `EvidenceDirect` 이상, `invoke_op`는 `Cps`인
+  callable 안에만 온다.
 - **위치:** source ability-operation call.
 
 #### `ability_v2.resume`

@@ -158,8 +158,8 @@ Root `main` delimiter와 external ABI 조합 책임은
 
 `elaborate_abilities`는 CPS legalization 전에 `handle`, `handler`, `perform`,
 `resume`을 [`ability_v2`](ir.md#해석된-직접형-ability-ability_v2)로 해석한다.
-Handler arm과 completion은 helper lambda가 되고, perform은 `operation_kind`와
-결과 type에 따라 `call_target`, `invoke`, `abort`로 나뉜다. 이 해석은 continuation을
+Handler arm과 completion은 helper lambda가 되고, perform은 `operation_kind`에
+따라 `call_fn`과 `invoke_op`로 나뉜다. 이 해석은 continuation을
 만들지 않으므로 그 결과에 직접형 최적화를 적용할 수 있다. 같은 함수 안에서 scope
 body가 그 scope의 operation을 호출하면 helper 호출로 바꾸는 것이 그 예다.
 
@@ -169,9 +169,8 @@ operation에 그대로 적용된다.
 
 | 해석된 operation | CPS legalization |
 | ---- | ---- |
-| `call_target` | `operation_kind = "fn"`인 perform과 같이 `ability.call` |
-| `invoke` | `operation_kind = "op"`인 perform과 같이 suffix를 capture한 `ability.perform` |
-| `abort` | `op -> Never` perform과 같이 zero-capture reject continuation |
+| `call_fn` | `operation_kind = "fn"`인 perform과 같이 `ability.call` |
+| `invoke_op` | `operation_kind = "op"`인 perform과 같이 suffix를 capture한 `ability.perform`. 결과가 `core.never`이면 zero-capture reject continuation |
 | `scope` | handle과 같은 delimiter. Helper는 handler arm, completion helper는 `do` arm으로 쓴다 |
 | `resume` | handler arm의 `resume`과 같다 |
 
