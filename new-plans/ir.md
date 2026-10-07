@@ -525,8 +525,9 @@ resolution을 검사하며 physical `func.func_sig`나 `closure.closure`를 comp
 `func.constant`, `func.unreachable`의 logical 복제는 없다. Named function value는
 `func_ref`가 표현한다. Source [`become`](syntax.md#tail-call-become)은
 `tribute_control.tail_call`/`tail_call_indirect`로 나타나며, 이 두 operation이
-`func.tail_call`/`func.tail_call_indirect`의 source-logical 짝이다. 표시 없는 호출은
-어떤 단계도 proper tail transfer로 바꾸지 않는다.
+`func.tail_call`/`func.tail_call_indirect`의 source-logical 짝이다. 표시 없는 호출을
+tail transfer로 바꾸는 것은 보장이 없는 최적화다
+([cps-effects.md](cps-effects.md#source-proper-tail-call의-적법화)).
 Legalization은 알려진 target에 `func.tail_call`, closure, continuation과 `done_k`
 target에 새 `func.tail_call_indirect`를 만들 수 있다.
 `func.constant`는 후속 physical closure lowering이 만들며 `func.unreachable`은

@@ -72,8 +72,12 @@ Cps`, callee effect row는 caller row에 포함) 조합은 다음 셋이다:
   `Done<R>`로 proper tail transfer한다. 값을 반환하는 callee는 `Cps` callable을 다시
   부를 수 없으므로 이 조합이 더하는 stack 깊이는 callee 한 번의 실행으로 제한된다.
 
-`become`이 아닌 `Direct`/`EvidenceDirect` 호출은 꼬리 위치에 있어도 `func.call`과
-`func.call_indirect`로 남는다. Target은 `func.tail_call`과 `func.tail_call_indirect`를
+`become`이 아닌 `Direct`/`EvidenceDirect` 호출은 꼬리 위치에 있어도 legalization이
+`func.call`과 `func.call_indirect`로 만든다. Target lowering은 최적화로 이 호출을
+`func.tail_call`/`func.tail_call_indirect`로 바꿀 수 있다. 조건은 호출 결과가 곧바로
+callable의 결과로 반환되어 호출 뒤에 RC 정리를 포함한 operation이 남지 않고, 두
+signature가 그 target의 proper tail transfer 조건을 만족하는 것이다. 이 변환은
+선택이며 의미를 바꾸지 않으므로 source는 이에 기대지 않는다. Target은 `func.tail_call`과 `func.tail_call_indirect`를
 proper tail transfer로 내린다. Native의 호출 규약과 소유권 조건은
 [cranelift-backend.md](cranelift-backend.md#꼬리-호출-규약)와
 [rc.md](rc.md#proper-tail-ownership-transfer)가 정한다.

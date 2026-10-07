@@ -48,12 +48,8 @@ type where in
   다음 문자로 둘을 구분한다.
 - 경로 키워드(`pkg`, `super`, `self`)는 raw identifier가 될 수 없다. 대문자로
   시작하는 키워드(`True`, `False`, `Nil`)도 raw 형식이 없다.
-- 새 구문에 필요한 키워드는 **contextual keyword**로 추가한다. 그 구문의 특정
-  위치에서만 키워드로 읽고 다른 곳에서는 식별자로 남기므로, 키워드를 추가해도
-  기존 코드가 깨지지 않는다. 예약어도 도입할 때 strict로 둘지 contextual로
-  바꿀지 정한다.
-- 새 strict 키워드가 필요해지면 그때 manifest 단위의 edition으로 도입한다.
-  Edition 이전의 코드는 그 단어를 raw identifier로 옮겨 쓸 수 있다.
+- Edition이 도입되기 전에는 새 키워드를 strict 키워드로 바로 추가한다. 그 단어를
+  식별자로 쓰던 코드는 raw identifier로 옮겨 쓴다.
 
 ### Operators
 
@@ -955,8 +951,10 @@ fn is_odd(n: Int) -> Bool {
 }
 ```
 
-`become`이 없는 호출은 꼬리 위치에 있어도 일반 호출이다. 컴파일러는 표시 없는 호출을
-꼬리 이전으로 바꾸지 않으므로 stack 사용량은 소스에 적힌 대로 정해진다.
+Proper tail call을 보장하는 것은 `become`뿐이다. `become`이 없는 꼬리 위치 호출은
+일반 호출의 의미를 가지며, 컴파일러는 최적화로 이를 tail transfer로 바꿀 수 있지만
+보장하지 않는다. 이 최적화는 target, 최적화 수준, RC 정리 여부에 따라 적용되거나
+적용되지 않는다. 반복 횟수에 제한이 없는 재귀는 `become`으로 써야 한다.
 
 다음 규칙을 어기면 컴파일 오류다. 진단은 보장할 수 없는 이유를 `become` 위치에서
 알려 준다.
