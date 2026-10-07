@@ -1,5 +1,6 @@
-//! Continuation frames: suffix continuations, the `Done` adapter and dispatch
-//! adapter of a suffix layer, and the exits that transfer through a frame.
+//! Continuation frames: the layouts and helper names a conversion allocates,
+//! suffix continuations and their frames, and the exits that transfer through
+//! a frame.
 
 use super::*;
 

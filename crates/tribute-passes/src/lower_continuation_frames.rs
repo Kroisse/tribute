@@ -548,4 +548,23 @@ mod tests {
             .insert("frame", Attribute::Type(frame));
         assert!(lower_continuation_frames(&mut ctx, module).is_err());
     }
+
+    #[test]
+    fn a_handle_over_an_unregistered_frame_is_rejected() {
+        let (mut ctx, module) = parse(
+            r#"core.module @m {
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
+  !ev = core.array<!marker, {layout = "evidence"}>
+  !frame = ability.frame<core.i32>
+  !completion = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+  func.func @run(%ev: !ev, %exit: !frame, %done: !completion) -> core.never {
+    ability.handle %ev, %exit, %done {handlers = []} {
+      ^body(%inner: !ev, %frame: !frame):
+        func.unreachable
+    }
+  }
+}"#,
+        );
+        assert!(lower_continuation_frames(&mut ctx, module).is_err());
+    }
 }
