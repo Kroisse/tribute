@@ -65,12 +65,12 @@ pub fn lower_continuation_frames(
         .and_then(|body| ctx.region(body).blocks.first().copied())
         .ok_or_else(|| TributeControlToCpsError::post_at(location, "module has no body block"))?;
 
-    let converter = frame_type_converter(ctx);
+    let replacements = frame_references(ctx);
     let identities = identity_casts(ctx, module);
-    substitute_module_types_keeping_casts(ctx, module, |ctx, ty| converter.convert_type(ctx, ty));
+    substitute_module_types_keeping_casts(ctx, module, |_, ty| replacements.get(&ty).copied());
     erase_new_identity_casts(ctx, module, &identities);
 
-    PatternApplicator::new(converter)
+    PatternApplicator::new(TypeConverter::new())
         .add_pattern(ExpandFrameOperations {
             frames: frame_types(ctx, location)?,
             next_helper: Cell::new(next_helper_index(ctx, module_block)),
@@ -193,24 +193,20 @@ fn detach_into(ctx: &mut IrContext, block: BlockRef, rewriter: &mut PatternRewri
     }
 }
 
-/// The conversion of each `ability.frame<R>` to the nominal reference of its
-/// layout.
+/// The nominal reference of the layout of each `ability.frame<R>`.
 ///
 /// The layout is named by the answer type after its own frames are
 /// converted, so an answer that mentions frames resolves them first.
-fn frame_type_converter(ctx: &mut IrContext) -> TypeConverter {
+fn frame_references(ctx: &mut IrContext) -> HashMap<TypeRef, TypeRef> {
     let names = frame_layouts(ctx);
     let mut resolved = HashMap::default();
     for &answer in names.keys() {
         resolve_frame(ctx, answer, &names, &mut resolved);
     }
-    let replacements: HashMap<TypeRef, TypeRef> = resolved
+    resolved
         .into_iter()
         .map(|(answer, reference)| (ability::frame(ctx, answer).as_type_ref(), reference))
-        .collect();
-    let mut converter = TypeConverter::new();
-    converter.add_conversion(move |_, ty| replacements.get(&ty).copied());
-    converter
+        .collect()
 }
 
 fn resolve_frame(
