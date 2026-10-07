@@ -219,6 +219,9 @@ impl ExpandFrameOperations {
         let [source_evidence, source_frame] = ctx.block_args(source_block)[..] else {
             return None;
         };
+        if bindings.len() != arm_values.len() {
+            return None;
+        }
         let arms = bindings
             .into_iter()
             .zip(&arm_values)
