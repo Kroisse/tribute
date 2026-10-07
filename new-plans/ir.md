@@ -795,8 +795,10 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
   Row 정보는 IR에 없으므로 선택의 옳고 그름은 typechecking이 책임진다.
 - CPS legalization은 선택을 바꾸지 않고 옮긴다. 호출과 `resume`의 선택은 그것이
   만든 evidence-taking `func.call`, `func.tail_call`, `func.call_indirect`,
-  `func.tail_call_indirect`에, `handle`의 선택은 `ability.handle_dispatch`에 같은
-  이름의 속성으로 둔다. Evidence를 받지 않는 callee로 가는 호출에는 옮기지 않는다.
+  `func.tail_call_indirect`와 그 suffix의 `ability.suffix_frame`에, `handle`의 선택은
+  `ability.handle`에 같은 이름의 속성으로 둔다. Evidence를 받지 않는 callee로 가는
+  호출에는 옮기지 않는다. Frame 펼치기는 frame operation의 선택을 층을 다시 만드는
+  transfer와 `ability.handle_dispatch`에 옮긴다.
   `resolve_evidence`가 이를 `effect.mask`/`effect.dup`/`effect.outer`와
   `effect.tail`/`effect.push`/`effect.with_tail`로 만든다
   ([cps-effects.md](cps-effects.md#row-directed-evidence)).
@@ -1053,16 +1055,79 @@ logical continuation으로 region을 lower한다:
    handler 사이에서 선택된 모든 structured frame에 다시 진입한다. Resume하지
    않고 완료하면 그 frame을 포기한다.
 
-CPS 변환 뒤 Cps callable은 `Evidence, ContinuationFrame<R>, source args`를 받고
+CPS 변환 뒤 Cps callable은 `Evidence, ability.frame<R>, source args`를 받고
 `core.never`로 끝난다. 생성된 completion과 exact resume도 Evidence와
-ContinuationFrame을 명시적으로 받는다. Resume은 동적 ContinuationFrame에서 handle
-층의 dispatcher를 불변 값으로 다시 만든 뒤 suffix와 nested handle을 계속 실행한다. 세 dispatch 계층의 정확한
-형상은 [cps-effects.md](cps-effects.md#dispatch-layers)를 따른다.
+`ability.frame<R>`를 명시적으로 받는다. `lower_continuation_frames`가 이 추상 frame을
+nominal `ContinuationFrame<R>`로 펼치며, 펼친 resume은 동적 frame에서 handle 층의
+dispatcher를 불변 값으로 다시 만든 뒤 suffix와 nested handle을 계속 실행한다. 세
+dispatch 계층의 정확한 형상은 [cps-effects.md](cps-effects.md#dispatch-layers)를 따른다.
 
 이 단일 region/suffix 규칙은 case arm과 guard, conditional, short-circuit
 오른쪽 항, nested handle body와 arm, resume path, 그리고 이들을 감싸는 strict
 work를 모두 다룬다. AST containment scan이나 construct-specific continuation
 convention은 dialect contract에 포함되지 않는다.
+
+#### `ability` continuation frame 표면
+
+CPS legalization과 frame 펼치기 사이의 계약이다. 펼치기의 의미와 pipeline 위치는
+[cps-effects.md](cps-effects.md#abstract-continuation-frames)를 따른다. 아래에서
+`Completion<X, R>`와 `ResumeExact<I, R>`는 frame 자리에 `ability.frame<R>`를 쓰는
+`Cps` closure `(Evidence, ability.frame<R>, X) -> core.never`와
+`(Evidence, ability.frame<R>, I) -> core.never`다.
+
+```text
+!ability.frame<R>
+%f = ability.suffix_frame %ev, %outer, %k {evidence_plan = [...]} : !ability.frame<V>
+ability.exit %f, %value
+ability.handle %outer_ev, %exit, %completion, %arm0, ... {handlers = [...]} {
+^body(%ev: Evidence, %f: !ability.frame<M>):
+  ...
+}
+ability.perform %ev, %f, %resumption, %arg0, ... {ability_ref = !State, op_name = "get"}
+ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
+```
+
+- **`ability.frame<R>`:** 타입 매개변수 `result`가 답 타입 `R`인 불투명 타입이다.
+  `Cps` callable의 `CallableAbi` frame parameter, completion, resumption이 이 타입을
+  쓴다. 구성 요소를 꺼내는 operation은 없다.
+- **`ability.suffix_frame`:** `ev`는 Evidence, `outer`는 `ability.frame<R>`, `k`는
+  `Completion<V, R>`이고 결과는 `ability.frame<V>`다. 선택적 `evidence_plan`은
+  [evidence 선택 속성](#evidence-선택-속성)의 문법을 따르며 재개된 안쪽 계산에 넘길
+  evidence를 고른다. 구조적 분기의 frame에는 없다.
+- **`ability.exit`:** `ability.frame<R>`와 `R` 타입 값 하나를 받는 결과 없는
+  terminator다. `Cps` callable, completion, 생성된 continuation 본문에만 온다.
+- **`ability.handle`:** 결과 없는 terminator이며 region 하나를 가진다. `outer_ev`는
+  handle을 설치한 지점의 Evidence, `exit`는 `ability.frame<R>`, `completion`은
+  `Completion<M, R>`다. 나머지 operand는 arm closure이고 `handlers`는 같은 순서의
+  arm 표다. 원소는 `ability_ref`(Type), `op_name`(String), `kind`(`"fn"` 또는
+  `"op"`), `operation_result_type`(Type)을 가진 dictionary이며 한
+  `(ability_ref, op_name)`은 한 번만 나온다. `I`가 `operation_result_type`일 때
+  `kind = "op"` arm은 다음 `Cps` closure이며, token 둘은 `I`가 `core.never`가 아닐
+  때만 있다.
+
+  ```text
+  (Evidence, ability.frame<R>, operation 인자..., [ResumeExact<I, R>, ResumeExact<I, R>])
+    -> core.never
+  ```
+
+  `kind = "fn"` arm은 `EvidenceDirect` closure `(Evidence, operation 인자...) -> I`다.
+  선택적 `evidence_plan`은 `mask`만 담는다. Body entry block은 확장된 Evidence와
+  `ability.frame<M>`를 받으며 모든 경로가 proper tail transfer나 `func.unreachable`로
+  끝난다.
+- **`ability.perform`:** Evidence, `ability.frame<R>`, raw `ResumeExact<I, R>`,
+  operation 인자를 받는 결과 없는 terminator다. `I`는 `core.never`가 아니다.
+  Resumption은 one-shot 검사가 없는 closure이며 그 검사는 펼치기가 더한다.
+- **`ability.abort`:** `ability.perform`에서 resumption을 뺀 형상이며 source
+  `op -> Never`에만 쓴다.
+- **검증:** Operation verifier는 위 타입 관계, frame과 closure의 `R` 일치, arm 표와
+  arm closure의 일치, closure의 calling convention을 검사한다. Terminator 위치와
+  enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다.
+- **소유권과 값 흐름:** 모든 operand는 일반 SSA use다. Frame 값은 불변이며 여러 번
+  쓸 수 있다. Resumption의 affine 사용은 펼치기가 runtime 상태로 강제한다.
+- **위치:** suffix와 frame operation은 그것을 만든 source operation의 span을, handle과
+  perform은 각 source `handle`/`perform`의 span을 쓴다.
+
+`lower_continuation_frames` 뒤에는 이 타입과 operation이 남지 않는다.
 
 `ability.*` represents effect evidence and handler dispatch. Ability operations
 are lowered through the effect pipeline; ability-related types may remain until
