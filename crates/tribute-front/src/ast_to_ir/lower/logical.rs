@@ -108,6 +108,15 @@ fn op(
     op
 }
 
+/// Whether lowering ended `block` with a source `become`. Such a block has
+/// already left its callable and takes no `return` or `yield`.
+fn ends_with_tail_call(ir: &IrContext, block: BlockRef) -> bool {
+    ir.block(block).ops.last().is_some_and(|&op| {
+        tribute_control::TailCall::matches(ir, op)
+            || tribute_control::TailCallIndirect::matches(ir, op)
+    })
+}
+
 /// Attach the typechecked evidence selection of the source node `node`.
 fn attach_evidence_plan<'db>(
     ctx: &IrLoweringCtx<'db>,
@@ -1093,16 +1102,18 @@ fn lower_function<'db>(
             &mut IrBuilder::new(&mut scope, ir, entry),
             function.body,
             declarations,
-        )
-        .expect("typechecked source expression failed logical IR lowering");
-        let value = IrBuilder::new(&mut scope, ir, entry).cast_if_needed(
-            location,
-            value,
-            signature.return_type,
         );
-        op(ir, entry, location, "return", |builder| {
-            builder.operand(value)
-        });
+        if value.is_some() || !ends_with_tail_call(ir, entry) {
+            let value = value.expect("typechecked source expression failed logical IR lowering");
+            let value = IrBuilder::new(&mut scope, ir, entry).cast_if_needed(
+                location,
+                value,
+                signature.return_type,
+            );
+            op(ir, entry, location, "return", |builder| {
+                builder.operand(value)
+            });
+        }
     }
     let body = ir.create_region(RegionData {
         location,
@@ -1518,8 +1529,10 @@ fn lower_expr<'db>(
                 callee,
                 args,
                 declarations,
+                CallPosition::Value,
             )
         }
+        ExprKind::Become { call } => lower_become(builder, location, call, declarations),
         ExprKind::Lambda { params, body } => {
             let signature = declarations
                 .lambda_signatures
@@ -1975,38 +1988,55 @@ fn build_case_arm_region<'db>(
         );
         let mut nested = IrBuilder::new(&mut scope, ir, block);
         if let Some(guard) = &arm.guard {
-            let condition = lower_expr(&mut nested, guard.clone(), declarations)?;
-            let then_region = build_case_body_region(
-                nested.ctx,
-                nested.ir,
-                location,
-                arm.body.clone(),
-                result_ty,
-                declarations,
-            )?;
-            let else_region = build_case_else_region(
-                nested.ctx,
-                nested.ir,
-                location,
-                scrutinee,
-                rest,
-                result_ty,
-                exhaustive,
-                declarations,
-            )?;
-            let branch = scf::If::operands(condition)
-                .results(result_ty)
-                .regions(then_region, else_region)
-                .build(nested.ir, location);
-            nested.ir.push_op(nested.block, branch.op_ref());
-            branch.result(nested.ir)
+            (|| {
+                let condition = lower_expr(&mut nested, guard.clone(), declarations)?;
+                let then_region = build_case_body_region(
+                    nested.ctx,
+                    nested.ir,
+                    location,
+                    arm.body.clone(),
+                    result_ty,
+                    declarations,
+                )?;
+                let else_region = build_case_else_region(
+                    nested.ctx,
+                    nested.ir,
+                    location,
+                    scrutinee,
+                    rest,
+                    result_ty,
+                    exhaustive,
+                    declarations,
+                )?;
+                let branch = scf::If::operands(condition)
+                    .results(result_ty)
+                    .regions(then_region, else_region)
+                    .build(nested.ir, location);
+                nested.ir.push_op(nested.block, branch.op_ref());
+                Some(branch.result(nested.ir))
+            })()
         } else {
-            lower_expr(&mut nested, arm.body.clone(), declarations)?
+            lower_expr(&mut nested, arm.body.clone(), declarations)
         }
     };
-    let value = IrBuilder::new(ctx, ir, block).cast_if_needed(location, value, result_ty);
-    let yield_op = scf::Yield::operands([value]).build(ir, location);
-    ir.push_op(block, yield_op.op_ref());
+    finish_case_region(ctx, ir, location, block, value, result_ty)
+}
+
+/// End a structured case region with its value, or leave it ended by a
+/// source `become`.
+fn finish_case_region(
+    ctx: &mut IrLoweringCtx<'_>,
+    ir: &mut IrContext,
+    location: Location,
+    block: BlockRef,
+    value: Option<ValueRef>,
+    result_ty: TypeRef,
+) -> Option<trunk_ir::refs::RegionRef> {
+    if value.is_some() || !ends_with_tail_call(ir, block) {
+        let value = IrBuilder::new(ctx, ir, block).cast_if_needed(location, value?, result_ty);
+        let yield_op = scf::Yield::operands([value]).build(ir, location);
+        ir.push_op(block, yield_op.op_ref());
+    }
     Some(ir.create_region(RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![block],
@@ -2028,15 +2058,8 @@ fn build_case_body_region<'db>(
         ops: Default::default(),
         parent_region: None,
     });
-    let value = lower_expr(&mut IrBuilder::new(ctx, ir, block), body, declarations)?;
-    let value = IrBuilder::new(ctx, ir, block).cast_if_needed(location, value, result_ty);
-    let yield_op = scf::Yield::operands([value]).build(ir, location);
-    ir.push_op(block, yield_op.op_ref());
-    Some(ir.create_region(RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![block],
-        parent_op: None,
-    }))
+    let value = lower_expr(&mut IrBuilder::new(ctx, ir, block), body, declarations);
+    finish_case_region(ctx, ir, location, block, value, result_ty)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2064,15 +2087,8 @@ fn build_case_else_region<'db>(
         arms,
         exhaustive,
         declarations,
-    )?;
-    let value = IrBuilder::new(ctx, ir, block).cast_if_needed(location, value, result_ty);
-    let yield_op = scf::Yield::operands([value]).build(ir, location);
-    ir.push_op(block, yield_op.op_ref());
-    Some(ir.create_region(RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![block],
-        parent_op: None,
-    }))
+    );
+    finish_case_region(ctx, ir, location, block, value, result_ty)
 }
 
 fn emit_bool(builder: &mut IrBuilder<'_, '_>, location: Location, value: bool) -> ValueRef {
@@ -2134,8 +2150,15 @@ pub(super) fn emit_named_call(
     name: Symbol,
     values: Vec<ValueRef>,
 ) -> ValueRef {
-    let call = named_call(builder, location, name, values);
+    let call = named_call(builder, location, name, values, CallPosition::Value);
     result(builder.ir, call)
+}
+
+/// Whether a source call produces a value or is the operand of `become`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CallPosition {
+    Value,
+    Tail,
 }
 
 fn named_call(
@@ -2143,6 +2166,7 @@ fn named_call(
     location: Location,
     name: Symbol,
     values: Vec<ValueRef>,
+    position: CallPosition,
 ) -> OpRef {
     let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
         .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
@@ -2156,14 +2180,96 @@ fn named_call(
         .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
         .collect();
     let symbol = builder.ctx.function_symbol(&name);
-    op(builder.ir, builder.block, location, "call", |builder| {
-        builder
-            .operands(values)
-            .result(signature.return_type)
-            .attr("callee", Attribute::SymbolRef(symbol.into()))
-    })
+    let callee = Attribute::SymbolRef(symbol.into());
+    match position {
+        CallPosition::Value => op(builder.ir, builder.block, location, "call", |builder| {
+            builder
+                .operands(values)
+                .result(signature.return_type)
+                .attr("callee", callee)
+        }),
+        CallPosition::Tail => op(
+            builder.ir,
+            builder.block,
+            location,
+            "tail_call",
+            |builder| builder.operands(values).attr("callee", callee),
+        ),
+    }
 }
 
+/// Emit an indirect call of `callable`, or end the block with a tail call.
+fn indirect_call(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    callable: ValueRef,
+    values: Vec<ValueRef>,
+    position: CallPosition,
+) -> OpRef {
+    let callable_ty = builder.ir.value_ty(callable);
+    let callable_signature = tribute_control::FuncSig::from_type_ref(builder.ir, callable_ty)
+        .unwrap_or_else(|| panic!("indirect call target is not a logical callable"));
+    let parameters = callable_signature.inputs(builder.ir).to_vec();
+    if values.len() != parameters.len() {
+        panic!("typechecked indirect call arity disagrees with logical callable");
+    }
+    let values: Vec<_> = values
+        .into_iter()
+        .zip(parameters.iter().copied())
+        .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
+        .collect();
+    match position {
+        CallPosition::Value => {
+            let call_result = callable_signature.result(builder.ir);
+            op(
+                builder.ir,
+                builder.block,
+                location,
+                "call_indirect",
+                |builder| {
+                    builder
+                        .operand(callable)
+                        .operands(values)
+                        .result(call_result)
+                },
+            )
+        }
+        CallPosition::Tail => op(
+            builder.ir,
+            builder.block,
+            location,
+            "tail_call_indirect",
+            |builder| builder.operand(callable).operands(values),
+        ),
+    }
+}
+
+/// Lower the operand of `become`. The tail call ends the current block, so
+/// no value continues from it.
+fn lower_become<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    call: Expr<TypedRef<'db>>,
+    declarations: &mut Declarations<'db>,
+) -> Option<ValueRef> {
+    let ExprKind::Call { callee, args } = *call.kind else {
+        // Typechecking has reported any other operand.
+        return Some(builder.emit_nil(location));
+    };
+    let result_ty = expr_type_for_id(builder, call.id);
+    lower_call(
+        builder,
+        location,
+        call.id,
+        result_ty,
+        callee,
+        args,
+        declarations,
+        CallPosition::Tail,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn lower_call<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
@@ -2172,6 +2278,7 @@ fn lower_call<'db>(
     callee: Expr<TypedRef<'db>>,
     args: Vec<Expr<TypedRef<'db>>>,
     declarations: &mut Declarations<'db>,
+    position: CallPosition,
 ) -> Option<ValueRef> {
     // A resolved variable callee is atomic. Any other callee expression is a
     // strict child and must be evaluated before the argument list.
@@ -2278,78 +2385,68 @@ fn lower_call<'db>(
             }
             ResolvedRef::Function { id } => {
                 let name = id.qualified(builder.ctx.db);
-                let call = named_call(builder, location, name.clone(), values);
-                attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
-                let value = result(builder.ir, call);
-                Some(builder.cast_if_needed(location, value, result_ty))
+                let call = named_call(builder, location, name.clone(), values, position);
+                finish_call(
+                    builder,
+                    location,
+                    call,
+                    call_id,
+                    result_ty,
+                    declarations,
+                    position,
+                )
             }
             ResolvedRef::Local { id, .. } => {
                 let callable = local_callables::lookup(builder.ctx, callee.id, declarations)
                     .or_else(|| builder.ctx.lookup(id))
                     .unwrap_or_else(|| panic!("missing logical callable binding for local {id:?}"));
-                let callable_ty = builder.ir.value_ty(callable);
-                let callable_signature =
-                    tribute_control::FuncSig::from_type_ref(builder.ir, callable_ty)
-                        .unwrap_or_else(|| panic!("local call target is not a logical callable"));
-                let parameters = callable_signature.inputs(builder.ir).to_vec();
-                if values.len() != parameters.len() {
-                    panic!("typechecked indirect call arity disagrees with logical callable");
-                }
-                values = values
-                    .into_iter()
-                    .zip(parameters.iter().copied())
-                    .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
-                    .collect();
-                let call_result = callable_signature.result(builder.ir);
-                let call = op(
-                    builder.ir,
-                    builder.block,
+                let call = indirect_call(builder, location, callable, values, position);
+                finish_call(
+                    builder,
                     location,
-                    "call_indirect",
-                    |builder| {
-                        builder
-                            .operand(callable)
-                            .operands(values)
-                            .result(call_result)
-                    },
-                );
-                attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
-                let value = result(builder.ir, call);
-                Some(builder.cast_if_needed(location, value, result_ty))
+                    call,
+                    call_id,
+                    result_ty,
+                    declarations,
+                    position,
+                )
             }
             _ => panic!("unsupported call target at source-logical boundary"),
         }
     } else {
         let callable = indirect_callee
             .expect("non-variable logical callee must be evaluated before its arguments");
-        let callable_ty = builder.ir.value_ty(callable);
-        let callable_signature = tribute_control::FuncSig::from_type_ref(builder.ir, callable_ty)
-            .unwrap_or_else(|| panic!("indirect call target is not a logical callable"));
-        let parameters = callable_signature.inputs(builder.ir).to_vec();
-        if values.len() != parameters.len() {
-            panic!("typechecked indirect call arity disagrees with logical callable");
-        }
-        values = values
-            .into_iter()
-            .zip(parameters.iter().copied())
-            .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
-            .collect();
-        let call_result = callable_signature.result(builder.ir);
-        let call = op(
-            builder.ir,
-            builder.block,
+        let call = indirect_call(builder, location, callable, values, position);
+        finish_call(
+            builder,
             location,
-            "call_indirect",
-            |builder| {
-                builder
-                    .operand(callable)
-                    .operands(values)
-                    .result(call_result)
-            },
-        );
-        attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
-        let value = result(builder.ir, call);
-        Some(builder.cast_if_needed(location, value, result_ty))
+            call,
+            call_id,
+            result_ty,
+            declarations,
+            position,
+        )
+    }
+}
+
+/// Attach a source call's evidence selection and produce its value, if it
+/// has one.
+fn finish_call<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    call: OpRef,
+    call_id: crate::ast::NodeId,
+    result_ty: TypeRef,
+    declarations: &Declarations<'db>,
+    position: CallPosition,
+) -> Option<ValueRef> {
+    attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
+    match position {
+        CallPosition::Value => {
+            let value = result(builder.ir, call);
+            Some(builder.cast_if_needed(location, value, result_ty))
+        }
+        CallPosition::Tail => None,
     }
 }
 
@@ -2420,15 +2517,17 @@ fn lower_lambda<'db>(
             &mut IrBuilder::new(&mut scope, builder.ir, entry),
             body,
             declarations,
-        )?;
-        let value = IrBuilder::new(&mut scope, builder.ir, entry).cast_if_needed(
-            location,
-            value,
-            result_type,
         );
-        op(builder.ir, entry, location, "return", |builder| {
-            builder.operand(value)
-        });
+        if value.is_some() || !ends_with_tail_call(builder.ir, entry) {
+            let value = IrBuilder::new(&mut scope, builder.ir, entry).cast_if_needed(
+                location,
+                value?,
+                result_type,
+            );
+            op(builder.ir, entry, location, "return", |builder| {
+                builder.operand(value)
+            });
+        }
     }
     let region = builder.ir.create_region(RegionData {
         location,
