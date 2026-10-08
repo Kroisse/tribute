@@ -64,7 +64,11 @@ impl Converter<'_> {
             arm: None,
             tail_join: None,
         };
-        self.convert_sequence(ops, 0, body, &mut mapping.clone(), &body_flow)?;
+        // The exit is conversion input only; it must not keep a use of the
+        // source result once the body is built, whether or not that succeeds.
+        let converted = self.convert_sequence(ops, 0, body, &mut mapping.clone(), &body_flow);
+        self.ctx.remove_op(exit.op_ref());
+        converted?;
         let region = single_block_region(self.ctx, location, body);
         let never = self.never_type();
         let function = func::func_sig(self.ctx, [evidence_type, frame_type], [never]).as_type_ref();
