@@ -514,12 +514,17 @@ semantic lowering 이후의 별도 IR optimization이다.
 - `Cps` callable의 호출. Class 없는 tail 때문에 `Cps`인 정의를 닫힌 row로 호출할 때
   생긴다
 
-**성립 조건.** Region 안의 계산이 요구하는 row는 그것을 둘러싼 callable의 row에
-포함된다. 그 callable이 `Cps`가 아니므로 이 row에는 `op`를 가진 ability도, class가
-없는 tail도 없다. 따라서 region 안에서 수행한 `op`는 모두 region 안의 handle이
-처리하고, 계산은 반드시 delimiter의 `Done<R>`에 도달한다. 재개하지 않는 arm의 이전
-대상도 region 안에 있는 handle의 exit다. Region 밖에서 잡은 continuation이 region을
-가로지르는 일은 없다.
+**성립 조건.** Region 전체가 바깥에 요구하는 row, 곧 안의 handle이 처리하고 남은
+row는 그것을 둘러싼 callable의 row에 포함된다. 그 callable이 `Cps`가 아니므로 이
+row에는 `op`를 가진 ability도, class가 없는 tail도 없다. 따라서 region 안에서 수행한
+`op`는 모두 region 안의 handle이 처리하고, 계산은 반드시 delimiter의 `Done<R>`에
+도달한다. 재개하지 않는 arm의 이전 대상도 region 안에 있는 handle의 exit다.
+
+**Delimiter를 벗어난 resumption.** Arm이 받은 resume token은 handle의 답에 담겨
+delimiter 밖으로 나갈 수 있다. 재개된 계산은 재개한 지점이 준 frame으로 handle 층을
+다시 만들고 그 frame에서 끝난다
+([재개된 frame](#row-directed-evidence)). 이미 끝난 delimiter의 frame으로 돌아가지
+않는다. Terminal `Done<R>`는 두 번째 쓰기에서 trap한다.
 
 **구성.** Delimiter는 다음을 소유한다.
 

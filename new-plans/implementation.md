@@ -450,13 +450,9 @@ requirement({A₁, ..., Aₙ | e})
 closed empty row `->{}`    → Direct
 fn-only or empty ability    → EvidenceDirect
 ability containing any op  → Cps
-open or otherwise unknown e → Cps
+unknown ability             → Cps
+tail e                      → 아래 tail 규칙
 ```
-
-마지막 줄의 `e`는 class가 정해지지 않은 row 변수다.
-[Convention class](generics.md#row-변수의-convention-class)를 가진 인스턴스 안에서는
-class 변수의 requirement가 그 인스턴스에 고정된 class다. 이는 open row 규칙을
-완화하는 것이 아니라, 규칙을 적용하기 전에 변수의 requirement를 확정하는 것이다.
 
 이 ability-level convention bound는 operation declaration의 source `fn`/`op`
 kind를 erase하지 않는다. Typechecking이 resolve된 operation에 kind를 저장하고
@@ -470,7 +466,7 @@ Effect annotation 생략은 closed-empty 추론이 아니다.
 fn(a) -> b ≡ fn(a) ->{e} b
 ```
 
-따라서 class가 없는 `e`를 가진 타입을 통한 **간접 호출**은 `Cps`다.
+따라서 class로 읽을 수 없는 `e`를 가진 타입을 통한 **간접 호출**은 `Cps`다.
 
 정의와 람다의 convention은 자신의 row에서 위 식으로 계산하며, 본문의 내용으로
 바뀌지 않는다. Row의 tail은 다음과 같이 읽는다.
@@ -480,6 +476,10 @@ class 변수인 tail                      → 그 인스턴스에 고정된 clas
 ability 인자에 나타나 class가 없는 tail → Cps
 그 밖의 tail                           → 요구 없음
 ```
+
+[Class 변수](generics.md#row-변수의-convention-class)의 requirement는 인스턴스가
+고정한다. Class가 전부 `Cps`인 인스턴스, 곧 특수화하지 않은 정의에서는 class 변수인
+tail이 `Cps`를 요구한다.
 
 마지막 줄은 생략된 annotation에서 생긴 tail 중 정의 안의 어떤 callable에도 닿지 않는
 것이다. 그런 tail은 정의의 코드를 바꾸지 않는다. 그러므로 effect-polymorphic `add`는
