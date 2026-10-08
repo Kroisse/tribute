@@ -120,8 +120,8 @@ tribute        -> tribute-front + tribute-passes
   Cps 정의, lambda, adapter, call, return, suffix, resume, handle에
   Evidence와 ContinuationFrame을 같은 callable contract로 전달한다.
 - Root `tribute` crate는 frontend emission과 shared conversion을 조합한다.
-  Target-independent root bridge는 completion cell과 terminal continuation의 추상
-  조합 계약만 정한다.
+  Target-independent [값 delimiter](cps-effects.md#값-delimiter)는 completion cell과
+  terminal continuation의 추상 조합 계약만 정한다.
 - 최종 계약에서 Native/Wasm signature lowering은 `core.never` CPS signature를
   target empty-result signature로 내린 뒤 external Direct/EvidenceDirect wrapper와
   결과 없는 ordinary call을 합성한다. 변환은 모든 callable과 transfer 계약을
@@ -412,21 +412,14 @@ Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 `Evidence
 
 ### Root entry
 
-Root `main`은 CPS delimiter이지만 `Cps` backend entry ABI가 아니다. Valid source
-residual contract는 pure 또는 `Io`이며 residual general effect는 frontend가
-거부한다. Frontend는 root body도 source-logical control로 emit한다. Shared
-conversion은 root worker가 Cps일 때 completion cell과 terminal
-`Done<R>`/`Dispatch<R>`를 담는 exact nominal `ContinuationFrame<R>`의 조합 계약을
-만든다.
+Root `main`은 `Cps` backend entry ABI가 아니다. Valid source residual contract는 pure
+또는 `Io`이며 residual general effect는 frontend가 거부한다. 그래서 root worker는
+`Direct` 또는 `EvidenceDirect`이고, 본문의 general effect는
+[값 delimiter](cps-effects.md#값-delimiter)가 처리한다.
 
-Root bridge 합성은 모든 root worker 앞에 매개변수 없는 Direct wrapper를 합성한다.
-Direct worker에는 입력을 넘기지 않고, EvidenceDirect worker에는 초기 evidence만
-넘긴다. Cps worker일 때는 target signature lowering이 worker의 `[core.never]`를
-`[]`로 바꾼 뒤에 합성한다. 이때 wrapper는 completion cell을 소유하고, 초기 evidence와
-cell을 capture한 frame으로 worker를 결과 없는 ordinary call로 호출한다.
-`Done<R>`가 cell을 쓴 뒤 proper-tail chain이 끝나면 wrapper는 cell의 source result를
-읽는다. Frame contract는 명시적 result/layout provenance로 검사하며 closure 이름,
-arity 또는 erased storage에서 추론하지 않는다. Nested-module `main`은 일반 함수다.
+Root bridge 합성은 root worker 앞에 매개변수 없는 Direct wrapper를 합성한다. Direct
+worker에는 입력을 넘기지 않고, EvidenceDirect worker에는 초기 evidence만 넘긴다.
+Nested-module `main`은 일반 함수다.
 
 논리적 CPS signature와 target physical signature는 구별한다:
 
@@ -477,21 +470,28 @@ Effect annotation 생략은 closed-empty 추론이 아니다.
 fn(a) -> b ≡ fn(a) ->{e} b
 ```
 
-따라서 이 타입을 통한 **간접 호출**은 열린 `e` 때문에 `Cps`다. 반면 named
-definition의 physical worker convention은 semantic function type과 별도로 기록한다.
-생략된 annotation으로부터 생긴 generalized tail은 worker requirement에 포함하지
-않고, body에서 발견된 concrete residual abilities의 상한만 사용한다. 그러므로
-effect-polymorphic `add`는 Direct worker를 가질 수 있으며, first-class function
-boundary에서는 contextual convention에 맞는 adapter를 사용한다. 명시적인 `->{}`도
-닫힌 빈 row이므로 Direct를 사용한다.
+따라서 class가 없는 `e`를 가진 타입을 통한 **간접 호출**은 `Cps`다.
 
-`let`으로 묶인 람다도 정의처럼 다룬다. 람다의 convention은 callable type에서
-계산하되, 본문이 `Cps` 정의나 `Cps`인 다른 local 람다를 호출하면 `Cps`로 강화한다.
-Frontend는 닫힌 row로 쓰인 local 람다에 그 instance만의 값을 만들 수 있지만, 본문이
-`Cps` 제어를 요구하는 람다에는 더 약한 instance를 만들지 않는다. Instance를 만들지
-않은 사용은 원래 람다 값을 읽는다. 그 값이 `Cps`이면, 호출 지점에서 검사된 row가
-닫혀 있어도 호출하는 정의를 `Cps` 정의를 호출할 때와 같이 `Cps`로 강화한다. 더 약한
-callable type이 요구되는 자리에 직접 쓴 람다는 그 type의 convention을 유지한다.
+정의와 람다의 convention은 자신의 row에서 위 식으로 계산하며, 본문의 내용으로
+바뀌지 않는다. Row의 tail은 다음과 같이 읽는다.
+
+```text
+class 변수인 tail                      → 그 인스턴스에 고정된 class
+ability 인자에 나타나 class가 없는 tail → Cps
+그 밖의 tail                           → 요구 없음
+```
+
+마지막 줄은 생략된 annotation에서 생긴 tail 중 정의 안의 어떤 callable에도 닿지 않는
+것이다. 그런 tail은 정의의 코드를 바꾸지 않는다. 그러므로 effect-polymorphic `add`는
+Direct이고, 명시적인 `->{}`도 닫힌 빈 row이므로 Direct다.
+
+정의가 `Cps`가 아니면 그 row에는 `op`를 가진 ability도 class 없는 tail도 없다.
+본문의 `handle`, `resume`, `Cps` 호출은
+[값 delimiter](cps-effects.md#값-delimiter) 안에서 실행한다. 호출자의 convention은
+호출 대상의 본문 때문에 달라지지 않는다.
+
+`let`으로 묶인 람다도 같은 규칙을 따른다. Frontend는 한 람다 식을 쓰이는
+convention마다 한 번씩 생성한다.
 
 여기서 `Cps`는 source result를 직접 반환하지 않고 ContinuationFrame의 `Done<R>`으로
 전달한다는 논리적 convention이다. Lowering은 `core.never`를 empty-result proper tail
@@ -524,6 +524,7 @@ concrete residual effect 없는 worker  → Direct
 명시적 빈 effect (fn(a) ->{} b)      → Direct
 Ambient/fn effect                    → EvidenceDirect
 General op/Throw effect              → Cps, effect point만 continuation 처리
+Cps가 아닌 정의 안의 handle          → 값 delimiter, 정의의 convention은 그대로
 ```
 
 ### Ability Polymorphism 처리
@@ -696,7 +697,8 @@ exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 �
       → lower_closure_lambda → lower_ability_call
       → resolve_evidence → lower_handle_dispatch
       → effect ABI verification → target ABI validation
-      → CPS signature physicalization → root entry bridge composition
+      → CPS signature physicalization
+      → value delimiter and root entry bridge composition
 
 WASM:   → lower_closures_in_func → evidence_to_wasm
         → finalize_closure_storage_layout → boundary exit verification

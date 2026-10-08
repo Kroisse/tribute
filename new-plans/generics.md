@@ -322,14 +322,24 @@ Effect row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실�
 변수의 **convention class**라 한다. Class는 기존 순서
 `Direct < EvidenceDirect < Cps`의 세 값 중 하나다.
 
-**Class 변수.** 정의의 스킴이 양화한 row 변수 중 매개변수 타입에 포함된 함수 타입의
-row에 나타나는 것이 class 변수다. 순서는 스킴의 row binder 순서를 따른다. 다음은
-class 변수가 아니다.
+**Class 변수.** 정의의 스킴이 양화한 row 변수 중 그 class가 정의의 코드를 바꾸는
+것이 class 변수다. 다음 가운데 하나에 해당하는 변수이며, 순서는 스킴의 row binder
+순서를 따른다.
 
-- 결과 타입이나 정의 자신의 row에만 나타나는 row 변수
-- 정의의 signature나 본문에서 ability 인자 안에 나타나는 row 변수. Ability
-  instance identity가 그 row를 포함하므로, handler와 perform 지점이 같은 callable
-  convention을 보아야 한다.
+- 매개변수 타입에 포함된 함수 타입의 row tail
+- 본문의 람다나 지역 callable 타입의 row tail
+- 본문이 참조하는 정의의 class 변수 자리에 넘기는 row의 tail
+
+마지막 조건은 참조되는 정의의 class 변수에 의존하므로, 모든 정의에 대한 최소
+고정점으로 정한다. 정의 자신의 row에만 나타나는 tail도 이 조건으로 class 변수가 될
+수 있다.
+
+정의의 signature나 본문에서 ability 인자 안에 나타나는 row 변수는 class 변수가
+아니다. Ability instance identity가 그 row를 포함하므로, handler와 perform 지점이
+같은 callable convention을 보아야 한다. 이런 변수의 class는 항상 `Cps`다.
+
+Compiler가 생성하는 정의도 같은 규칙을 따른다. 필드의 `modify`는 callback의 row
+변수를 class 변수로 가진다.
 
 **Class 인자.** 참조 지점의 class 인자는 checked instance가 기록한 row 인자에서
 계산한다. Callable 타입에서 역추론하지 않는다.
