@@ -25,24 +25,24 @@ Direct < EvidenceDirect < Cps
 
 Effect row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌지 않는다.
 
+Callable의 convention은 그 row만으로 정해진다
+([convention bound](implementation.md#effect-row-granularity-and-convention-bound)).
+본문에 `handle`이 있는지, 무엇을 호출하는지는 convention을 바꾸지 않는다. `Cps`가
+아닌 callable 안에서 CPS 제어가 필요한 계산은 [값 delimiter](#값-delimiter) 안에서
+실행하며, 그 결과는 일반 값이다.
+
 Local lambda의 convention도 typechecking이 확정한 effect row에서 계산한다. Lambda
 본문은 닫힌 빈 accumulator로 검사하고, 본문이 남긴 open row 또는 lambda를
-검사한 callable context의 open tail만 callable type에 남긴다. pure body와
-effect-free consumer의 lambda는 `Direct`가 될 수 있다. 반대로 반환되거나
-escaping 저장 위치에 들어가 open callable contract를 받거나, open-effect
-consumer가 요구하는 callback이면 open row를 유지하여 `Cps`가 된다. 본문이
-요구한 ability도 row에 남으며 그 ability의 convention lower bound를 적용한다.
-이 선택은 이미 생성된 Cps 값을 Direct로 바꾸는 후처리가 아니며,
-`calling_convention_for_effect_row`의 open-row ⇒ `Cps` 규칙을 완화하지 않는다.
-[Convention class](generics.md#row-변수의-convention-class)를 가진 인스턴스에서는
-class 변수의 requirement가 이미 확정되어 있으므로 이 규칙의 대상이 아니다.
+검사한 callable context의 open tail만 callable type에 남긴다. 본문이 요구한
+ability는 row에 남으며 그 ability의 convention lower bound를 적용한다. Row의 tail은
+람다를 둘러싼 정의의 [convention class](generics.md#row-변수의-convention-class)로
+읽는다. Class가 없는 tail만 `Cps`를 요구한다.
 
-지역 source lambda의 검사된 인스턴스와 실제 소비 worker의 callable parameter
-계약을 구별한다. 고정된 데이터 타입의 lambda는 원래 binding 위치에서 각 필요한
-인스턴스와 convention으로 생성한다. 이는 이미 생성된 Cps 값을 Direct로 cast하는
-것이 아니다. Named callable은 정확한 target identity를 가진 `func_ref`의 기존
-adapter를 사용하며, semantic use가 pure여도 소비 worker가 요구하는 더 강한
-convention을 보존한다.
+한 람다 식은 쓰이는 convention마다 한 번씩 생성한다. 이는 이미 생성된 Cps 값을
+Direct로 cast하는 것이 아니다. Named callable은 정확한 target identity를 가진
+`func_ref`의 adapter로 더 강한 convention의 자리에 들어간다. 정의가 더 약한
+convention의 자리에 들어가는 경우는 class 없는 tail 때문에 `Cps`인 정의를 닫힌 row로
+쓸 때뿐이다. 그 adapter는 [값 delimiter](#값-delimiter)로 worker를 호출한다.
 
 Lambda capture 목록은 생성된 body가 실제 사용하는 외부 SSA 값과 일치해야 한다.
 Named reference를 새 `func_ref`로 대체하여 사라진 capture는 제거하고, 남는 값은
@@ -201,7 +201,7 @@ builder를 재사용하되 `tribute_control` 전용 graph pattern은
 이 결정은 `CallableAbi`에 encode하지 않으며 pass가 operation kind를 추론하거나
 변경해서는 안 된다.
 
-Root `main` delimiter와 external ABI 조합 책임은
+Root `main`과 external ABI 조합 책임은
 [implementation.md](implementation.md#직접형-제어-소유권)을 따른다.
 
 ### 논리적 CPS 적법화
@@ -298,8 +298,9 @@ named pre-CPS boundary가 아니다.
 `tribute_control` operation 또는 `func_sig`/`resume_token` type은 source
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 `func.*`/`closure.*`/`func.func_sig` graph, [추상 frame 표면](#abstract-continuation-frames),
-logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가 추상 frame
-표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph의 lambda를 추출하지만
+logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가
+`ability.delimit`을 뺀 추상 frame 표면을 제거한 뒤 `lower_closure_lambda`가 이
+shared graph의 lambda를 추출하지만
 `closure.new`, `closure.func`, `closure.env`와 convention-proven closure type은
 target ABI validation까지 유지한다. `lower_ability_call`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
@@ -326,7 +327,7 @@ Closure tail lowering은 caller·callee·exact indirect signature의 전체 결�
 Continuation frame 타입의 `tribute.cps_continuation_frame_result`를 지우고,
 `func.func`의 `tribute.closure_environment_index`도 지운다. 물리 frame에서 `R`은
 `Done<R>`의 입력 타입이 나타내고, environment는 physical signature의 순서 있는
-입력이다. Root bridge 합성은 이렇게 물리화된 frame을 검증하며 frame answer
+입력이다. 값 delimiter 합성은 이렇게 물리화된 frame을 검증하며 frame answer
 provenance가 남아 있으면 거부한다. 물리화 이후에 합성되는 함수는 이 속성들을 기록하지 않는다.
 
 `tribute.calling_convention`도 operation 종류마다 마지막으로 읽는 단계가 소비하며,
@@ -367,6 +368,7 @@ completion과 handler arm이 어떤 closure인지, 각 transfer가 어떤 eviden
 | `ability.exit` | frame의 `Done<R>`로 값을 이전한다 |
 | `ability.handle` | handle 층을 설치하고 body에 그 층의 frame을 준다 |
 | `ability.perform`, `ability.abort` | frame의 dispatcher로 operation을 보낸다 |
+| `ability.delimit` | CPS region을 끝까지 실행하고 그 답을 값으로 낸다 |
 
 CPS legalization은 이 표면으로 다음을 표현한다.
 
@@ -380,6 +382,8 @@ CPS legalization은 이 표면으로 다음을 표현한다.
   속성으로 넘긴다. Arm 안 `resume`이 handle 바깥 evidence를 고르는 선택
   (`effect.outer`)도 CPS legalization이 `resume` transfer에 싣는다.
 - General `op`은 현재 frame과 raw resumption을 받는 `ability.perform`이 된다.
+- `Cps`가 아닌 flow 안의 `handle`, `resume`, `Cps` 호출은
+  [값 delimiter](#값-delimiter)인 `ability.delimit`의 region 안에 둔다.
 
 `lower_continuation_frames`는 `tribute_control_to_cps` 바로 뒤에서 이 표면을 모두
 펼친다. 각 operation은 자기 operand와 속성만으로 펼치며 다른 frame이나 source IR을
@@ -402,9 +406,10 @@ CPS legalization은 이 표면으로 다음을 표현한다.
   frame의 `Dispatch<R>`와 함께 [`effect.dispatch_cps`](#op-operation-continuation-dispatch)로
   낮춘다. `ability.abort`는 reject continuation을 쓴다.
 - `ability.exit`는 frame의 `Done<R>`로 proper tail transfer한다.
+- `ability.delimit`은 펼치지 않는다. Region이 받는 frame의 타입만 layout으로 바꾼다.
 
-이 pass 뒤에는 `ability.frame` 타입과 추상 frame operation이 남지 않는다. 남는
-`ability.*`는 `ability.call`과 `ability.handle_dispatch`뿐이다. Target이 delimited
+이 pass 뒤에는 `ability.frame` 타입이 남지 않는다. 남는 `ability.*`는
+`ability.call`, `ability.handle_dispatch`, `ability.delimit`뿐이다. Target이 delimited
 control을 다른 runtime 장치로 구현한다면 이 pass 대신 자기 lowering으로 같은 표면을
 소비할 수 있다.
 
@@ -497,38 +502,64 @@ Effect point 이후의 코드는 이미 `%continuation` closure 안에 있으므
 항상 tail-resumptive인지 분석하여 tail path로 최적화하는 작업은 표준 `"op"`
 semantic lowering 이후의 별도 IR optimization이다.
 
-### Root `main` delimiter
+### 값 delimiter
 
-Root `main`은 하나뿐인 target-independent CPS delimiter다. Source residual-effect
-계약은 기존 pure-or-`Io` entry를 유지하며 residual general effect는 backend 전에
+`Cps`가 아닌 callable은 `Done<R>`로 이전할 frame이 없다. 그 안에서 CPS 제어가 필요한
+계산은 **값 delimiter**가 감싼다. Delimiter는 CPS region을 끝까지 실행하고 그 답을
+일반 값으로 낸다.
+
+**대상.** `Direct` 또는 `EvidenceDirect` flow에서 다음 셋이 delimiter의 region이 된다.
+
+- `handle` 식
+- `resume`
+- `Cps` callable의 호출. Class 없는 tail 때문에 `Cps`인 정의를 닫힌 row로 호출할 때
+  생긴다
+
+**성립 조건.** Region 전체가 바깥에 요구하는 row, 곧 안의 handle이 처리하고 남은
+row는 그것을 둘러싼 callable의 row에 포함된다. 그 callable이 `Cps`가 아니므로 이
+row에는 `op`를 가진 ability도, class가 없는 tail도 없다. 따라서 region 안에서 수행한
+`op`는 모두 region 안의 handle이 처리하고, 계산은 반드시 delimiter의 `Done<R>`에
+도달한다. 재개하지 않는 arm의 이전 대상도 region 안에 있는 handle의 exit다.
+
+**Delimiter를 벗어난 resumption.** Arm이 받은 resume token은 handle의 답에 담겨
+delimiter 밖으로 나갈 수 있다. 재개된 계산은 재개한 지점이 준 frame으로 handle 층을
+다시 만들고 그 frame에서 끝난다
+([재개된 frame](#row-directed-evidence)). 이미 끝난 delimiter의 frame으로 돌아가지
+않는다. Terminal `Done<R>`는 두 번째 쓰기에서 trap한다.
+
+**구성.** Delimiter는 다음을 소유한다.
+
+- 답 타입 `R`의 completion cell
+- cell에 정확히 한 번 쓰는 terminal `Done<R>`
+- 도달할 수 없는 terminal `Dispatch<R>`. 도달하면 trap한다
+- 이 둘을 담은 exact `ContinuationFrame<R>`
+
+Region은 evidence와 이 frame을 받는다. Evidence는 `EvidenceDirect` flow에서는 그
+flow의 evidence이고, `Direct` flow에서는 target의 초기 evidence다. Region의 proper
+tail chain이 끝나면 delimiter는 cell을 읽어 `R` 값을 낸다.
+
+**단계별 책임.** `tribute_control_to_cps`가 `ability.delimit`을 만들고 region을
+CPS로 legalize한다. Frame 펼치기는 region의 frame 타입에 layout을 준다. CPS
+signature 물리화 뒤의 target ABI 경계가 cell, frame 생성, 결과 없는 ordinary call,
+cell 읽기를 합성한다. Frame contract는 명시적 result/layout provenance로 검사하며
+closure 이름, arity 또는 erased storage에서 추론하지 않는다. 이 adapter는
+answer-type polymorphism, trampoline, in-band sentinel 또는 control carrier가 아니다.
+
+**검증.** Post-CPS 검증은 `Cps`가 아닌 flow에 delimiter 밖의 CPS transfer가 있으면
+거부한다. Delimiter의 region이 요구하는 row에 `op` ability나 class 없는 tail이 있어도
+거부한다.
+
+**비용.** Delimiter를 지날 때마다 cell과 frame을 만들고, region은 native 호출
+하나의 깊이를 쓴다.
+
+### Root `main`
+
+Root `main`의 convention도 그 row에서 정해진다. Root `main`에 남을 수 있는 residual
+effect는 source 계약이 정하며, 그 밖의 residual general effect는 backend 전에
 거부한다. Nested module의 `main`은 일반 worker다.
 
-Frontend가 root `main`을 Cps로 승격하면 그 정의에 source result type을
-`tribute.root_source_result`로 기록한다. 이 속성이 root CPS 계약의 유일한 표식이며
-root bridge 합성이 소비한다. Root wrapper는 항상 매개변수 없는 Direct 함수이므로
-원래의 export 규약은 기록하지 않는다.
-
-Target-independent 경계는 root wrapper가 source result
-type의 completion cell과 이를 capture한 terminal `Done<R>` 및 terminal
-`Dispatch<R>`를 담은 정확한 `ContinuationFrame<R>`를 소유한다는 추상 조합
-계약만 정한다. Worker ABI의 두 번째 operand는 이 nominal frame이며 bare
-`done_k`로 대체하거나 closure storage/arity에서 복원하지 않는다. Shared IR에서
-CPS entry와 `done_k`의 result는 `core.never`이며,
-`func.tail_call`과 `func.tail_call_indirect` verifier도 caller/callee의
-`core.never` 일치를 검사한다.
-
-Target signature lowering이 CPS signature를 native/Wasm empty-result signature로
-바꾼 뒤 실제 wrapper와 결과 없는 ordinary call을 합성한다. Root `done_k`는 source
-result를 cell에 정확히 한 번 쓰고 terminal dispatch는 root 밖 general operation transfer를
-끝내며, wrapper는 이 둘을 immutable `ContinuationFrame<R>`로 materialize해 worker에
-전달한 뒤 proper-tail-call chain이 끝나면 cell을 읽어 source result로 반환한다.
-공통 `func.func_sig`와 `func.call`은 0개 또는 1개 결과를 지원한다. 논리 CPS
-producer는 `[core.never]`를 유지하고 물리화는 정확한 Cps 결과만 `[]`로 바꾼다.
-이 adapter는 answer-type polymorphism, trampoline, in-band sentinel 또는
-control carrier가 아니다.
-
-Root bridge 합성은 source `main`의 calling convention과 관계없이 그 함수를 하나의
-root worker로 바꾸고, hidden 매개변수가 없는 Direct wrapper `main`을 합성한다
+Root bridge 합성은 source `main`을 root worker로 바꾸고, hidden 매개변수가 없는
+Direct wrapper `main`을 합성한다
 ([진입점 계약](ir.md#representationabi-경계)). Wrapper는 worker 규약이 요구하는
 입력을 스스로 만든다.
 
@@ -536,7 +567,10 @@ root worker로 바꾸고, hidden 매개변수가 없는 Direct wrapper `main`을
 | --- | --- | --- |
 | `Direct` | 없음 | worker 결과 |
 | `EvidenceDirect` | target의 초기 evidence | worker 결과 |
-| `Cps` | 초기 evidence와 completion cell을 capture한 `ContinuationFrame<R>` | call이 돌아온 뒤 읽은 cell 값 |
+| `Cps` | [값 delimiter](#값-delimiter)의 evidence와 frame | delimiter의 값 |
+
+Root 계약이 허용한 general effect는 wrapper가 delimiter 안에 설치한 handle이
+처리한다. 그 handle 뒤에 남는 row가 delimiter의 성립 조건을 만족해야 한다.
 
 그래서 root마다 worker는 정확히 하나이고, wrapper는 export 규약을 보존하지 않는다.
 Native entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는다.

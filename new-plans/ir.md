@@ -1093,6 +1093,10 @@ ability.handle %outer_ev, %exit, %completion, %arm0, ... {handlers = [...]} {
 }
 ability.perform %ev, %f, %resumption, %arg0, ... {ability_ref = !State, op_name = "get"}
 ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
+%r = ability.delimit %ev {
+^body(%body_ev: Evidence, %f: !ability.frame<R>):
+  ...
+} : R
 ```
 
 - **`ability.frame<R>`:** 타입 매개변수 `result`가 답 타입 `R`인 불투명 타입이다.
@@ -1127,15 +1131,22 @@ ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
   Resumption은 one-shot 검사가 없는 closure이며 그 검사는 펼치기가 더한다.
 - **`ability.abort`:** `ability.perform`에서 resumption을 뺀 형상이며 source
   `op -> Never`에만 쓴다.
+- **`ability.delimit`:** [값 delimiter](cps-effects.md#값-delimiter)다. 결과 `R` 하나와
+  region 하나를 가진다. Evidence operand는 `EvidenceDirect` flow에서만 있고, `Direct`
+  flow에서는 없다. Body entry block은 Evidence와 `ability.frame<R>`를 받으며 모든
+  경로가 proper tail transfer나 `func.unreachable`로 끝난다. Terminator가 아니며
+  `Cps`가 아닌 flow에만 온다. Frame 펼치기 뒤에도 남고 target ABI 경계가 소비한다.
 - **검증:** Operation verifier는 위 타입 관계, frame과 closure의 `R` 일치, arm 표와
   arm closure의 일치, closure의 calling convention을 검사한다. Terminator 위치와
-  enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다.
+  enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다. `ability.delimit`을
+  제외한 operation은 `Cps` flow에만 온다.
 - **소유권과 값 흐름:** 모든 operand는 일반 SSA use다. Frame 값은 불변이며 여러 번
   쓸 수 있다. Resumption의 affine 사용은 펼치기가 runtime 상태로 강제한다.
 - **위치:** suffix와 frame operation은 그것을 만든 source operation의 span을, handle과
   perform은 각 source `handle`/`perform`의 span을 쓴다.
 
-`lower_continuation_frames` 뒤에는 이 타입과 operation이 남지 않는다.
+`lower_continuation_frames` 뒤에는 `ability.frame` 타입이 남지 않고, 위 operation
+가운데 `ability.delimit`만 남는다. `ability.delimit`은 target ABI 경계가 소비한다.
 
 `ability.*` represents effect evidence and handler dispatch. Ability operations
 are lowered through the effect pipeline; ability-related types may remain until
@@ -1453,7 +1464,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   없고 결과는 `Nil`이며 platform 규약을 따른다. Body는 root worker 호출 하나로 끝나고,
   모듈 안에서 이 `main`을 참조하는 곳은 없다. 원래 source `main`은 모든 calling
   convention에서 root worker가 되고, 모듈 안의 참조도 worker로 옮겨 간다. 초기
-  evidence와 CPS root frame처럼 source calling convention에 따라 달라지는 부분은
+  evidence와 값 delimiter처럼 source calling convention에 따라 달라지는 부분은
   bridge 합성이 소비한다. Target은 이 wrapper를 그 자리에서 target 진입점으로 바꾼다.
   이때 runtime 초기화, 종료 코드, sanitizer 초기화처럼 platform 고유 작업만 더하고,
   별도 진입 함수를 만들거나 `main`의 이름을 바꾸지 않는다.
@@ -1475,8 +1486,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   `closure.closure` type
 - Callable 결과로서의 `core.never`. 논리 CPS 결과는 물리 결과 목록 `[]`로 바뀐다.
 - 의미적 호출 규약과 제어 metadata: `tribute.calling_convention`,
-  `tribute.root_source_result`, `tribute.cps_continuation_frame_result`,
-  `tribute.closure_environment_index`
+  `tribute.cps_continuation_frame_result`, `tribute.closure_environment_index`
 - 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 effect row
 
 출구 이후에도 보존하는 것:
