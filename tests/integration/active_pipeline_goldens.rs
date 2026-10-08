@@ -72,12 +72,14 @@ fn assert_shared_cps_contract(ir_text: &str) {
     }
 }
 
-fn assert_native_cps_root_contract(ir_text: &str) {
+/// The root worker is not Cps: each `handle` runs under a value delimiter
+/// with its own terminal `Done` and `Dispatch`.
+fn assert_native_delimiter_contract(ir_text: &str) {
     for required in [
         continuation_frame::NAME_PREFIX,
         "func.func @__tribute_main",
-        "func.func @__tribute_done_k",
-        "func.func @__tribute_unhandled",
+        "func.func @__tribute_delimit_done_0",
+        "func.func @__tribute_delimit_unhandled_0",
         "func.tail_call_indirect",
         "callee = @__tribute_main",
     ] {
@@ -161,6 +163,22 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
                 "CPS functions must have logical Never results"
             );
         }
+        // The CPS code of a delimited handle is in the closures lifted out of
+        // the named functions, so every function counts.
+        if native {
+            let _ = walk_op::<()>(&ctx, op, &mut |nested| {
+                let data = ctx.op(nested);
+                if data.dialect == "func"
+                    && matches!(
+                        data.name.to_string().as_str(),
+                        "tail_call" | "tail_call_indirect"
+                    )
+                {
+                    cps_functions += 1;
+                }
+                ControlFlow::Continue(WalkAction::Advance)
+            });
+        }
         let name = function.sym_name(&ctx).to_string();
         if !matches!(
             name.as_str(),
@@ -175,6 +193,8 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
                 | "__tribute_main"
                 | "__tribute_done_k"
                 | "__tribute_unhandled"
+                | "__tribute_delimit_done_0"
+                | "__tribute_delimit_unhandled_0"
         ) {
             return ControlFlow::Continue(WalkAction::Skip);
         }
@@ -207,9 +227,6 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
                     data.name.to_string().as_str(),
                     "tail_call" | "tail_call_indirect"
                 ) {
-                    if native {
-                        cps_functions += 1;
-                    }
                     assert!(
                         ctx.op_result_types(nested).is_empty(),
                         "tail transfer has SSA results"
@@ -389,17 +406,16 @@ fn shared_pipeline_float_comparison_predicates(db: &salsa::DatabaseImpl) {
 }
 
 #[salsa_test]
-fn native_pipeline_direct_fn_ability_call_uses_cps_root_contract(db: &salsa::DatabaseImpl) {
+fn native_pipeline_direct_fn_ability_call_delimits_the_handle(db: &salsa::DatabaseImpl) {
     let ir_text = native_pipeline_ir(db, "direct_fn_native.trb", DIRECT_FN_SOURCE);
-    assert_native_cps_root_contract(ir_text);
+    assert_native_delimiter_contract(ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(ir_text, true));
-    assert!(ir_text.contains("func.func @run"), "{ir_text}");
 }
 
 #[salsa_test]
 fn native_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
     let ir_text = native_pipeline_ir(db, "resumptive_op_native.trb", RESUMPTIVE_OP_SOURCE);
-    assert_native_cps_root_contract(ir_text);
+    assert_native_delimiter_contract(ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(ir_text, true));
     assert!(ir_text.contains("__tribute_one_shot_state"), "{ir_text}");
 }
@@ -407,9 +423,8 @@ fn native_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn native_pipeline_mixed_nested_handler_boundary(db: &salsa::DatabaseImpl) {
     let ir_text = native_pipeline_ir(db, "mixed_nested_native.trb", MIXED_NESTED_SOURCE);
-    assert_native_cps_root_contract(ir_text);
+    assert_native_delimiter_contract(ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(ir_text, true));
-    assert!(ir_text.contains("func.func @run_all"), "{ir_text}");
 }
 
 #[salsa_test]

@@ -2847,3 +2847,23 @@ fn test_specialized_enum_payloads() {
         "43\n1",
     );
 }
+
+/// A lambda written where a pure callable is expected keeps the `Direct`
+/// convention and calls a Cps worker under a value delimiter.
+#[test]
+fn a_lambda_at_a_pure_callable_type_calls_a_cps_worker() {
+    assert_native_output(
+        "pure_lambda_calls_cps_worker.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+
+fn main() ->{Io} Nil {
+    print_line(twice(fn(s) app(s, fn(t) t <> "!"), "io"))
+}
+"#,
+        "io!!",
+    );
+}

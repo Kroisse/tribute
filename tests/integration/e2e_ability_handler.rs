@@ -1455,3 +1455,88 @@ fn main() ->{Io} Nil {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "abababab\nab\n");
 }
+
+const HANDLER_IN_A_PURE_FUNCTION: &str = r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Int
+}
+
+fn answer() ->{} Int {
+    handle Ask::ask() + Ask::ask() {
+        do value { value }
+        op Ask::ask() { resume +21 }
+    }
+}
+
+fn twice(f: fn() ->{} Int) ->{} Int { f() + f() }
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(twice(answer)))
+}
+"#;
+
+/// A function whose row is empty keeps the `Direct` convention when its body
+/// installs a handler, so it fits where a pure callable is expected.
+#[test]
+fn test_handler_in_a_pure_function_runs_under_a_value_delimiter() {
+    assert_native_output(
+        "handler_in_a_pure_function.trb",
+        HANDLER_IN_A_PURE_FUNCTION,
+        "84",
+    );
+}
+
+#[test]
+fn test_handler_in_a_pure_function_runs_under_a_value_delimiter_on_wasm() {
+    let output = crate::common::compile_and_run_wasm(
+        "handler_in_a_pure_function.trb",
+        HANDLER_IN_A_PURE_FUNCTION,
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "84\n");
+}
+
+/// A delimited handler runs another delimited function from its body and
+/// from an arm that does not resume.
+#[test]
+fn test_value_delimiters_nest() {
+    assert_native_output(
+        "nested_value_delimiters.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Int
+}
+
+ability Tell {
+    op tell(value: Int) -> Nil
+}
+
+fn inner() ->{} Int {
+    handle Ask::ask() * +2 {
+        do value { value }
+        op Ask::ask() { resume +10 }
+    }
+}
+
+fn outer() ->{} Int {
+    handle { Tell::tell(inner())  +1 } {
+        do value { value }
+        op Tell::tell(value) { value + inner() }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(outer()))
+}
+"#,
+        "40",
+    );
+}

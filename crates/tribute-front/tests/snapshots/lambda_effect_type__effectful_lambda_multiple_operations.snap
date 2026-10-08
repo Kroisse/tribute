@@ -6,7 +6,7 @@ core.module @test {
   !t0 = core.ability_ref<core.i32, {instance = "ability_2_5_State_3_int", name = "State"}>
   !t1 = tribute_control.func_sig<() -> core.i32, {tribute.calling_convention = 2}>
 
-  tribute_control.func @run_with_state(%0: !t1) -> core.i32 convention(cps) {
+  tribute_control.func @run_with_state(%0: !t1) -> core.i32 convention(direct) {
       %1 = tribute_control.handle : core.i32 {
           %2 = tribute_control.call_indirect %0 : core.i32
           tribute_control.yield %2
@@ -30,7 +30,7 @@ core.module @test {
       tribute_control.return %1
   }
   tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
-  tribute_control.func @main() -> core.i32 convention(cps) attributes {tribute.root_source_result = core.i32} {
+  tribute_control.func @main() -> core.i32 convention(direct) {
       %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
           %1 = tribute_control.perform {ability_ref = !t0, op_name = "get", operation_kind = "op"} : core.i32
           %2 = arith.const {value = 1} : core.i32
