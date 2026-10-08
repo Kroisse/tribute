@@ -11,7 +11,7 @@
 | 기본 전략          | Monomorphization                            | Type erasure, Dictionary passing |
 | 함수의 다형적 재귀 | Uniform representation (anyref)             | 에러로 거부                      |
 | 제네릭 타입        | 완전 monomorphization                       | Uniform representation           |
-| 효과 다형성        | Evidence passing + call-site specialization | 전면 monomorphization            |
+| 효과 다형성        | Evidence passing + convention class 특수화  | Row 전체의 monomorphization      |
 
 ---
 
@@ -95,6 +95,9 @@ Monomorph  Uniform Rep
 | 제네릭 함수            | **다형적 재귀** | Uniform representation |
 | Effect만 다형적인 함수 | -               | Evidence passing       |
 
+Effect row는 값으로 특수화하지 않는다. Row 변수가 요구하는 calling convention만
+[convention class](#row-변수의-convention-class)로 특수화한다.
+
 이 도식의 uniform representation 선택은 함수의 다형적 재귀에 적용한다.
 Nominal 타입의 의존 인스턴스 수집과 확장 한도는 아래의
 [Nominal 타입 수집과 재작성](#nominal-타입-수집과-재작성) 계약을 따른다.
@@ -135,6 +138,16 @@ map + [Int, Option(Int)]      → map$Int$Option$0$Int$1
 f + [List(Option(Int))]       → f$5$List$0$Option$0$Int$1$1
 apply + [fn(Int) -> Bool]     → apply$6$0$Int$1$Bool
 swap + [(Int, Bool)]          → swap$7$0$Int$Bool$1
+```
+
+[Convention class](#row-변수의-convention-class) 목록은 타입 인자 뒤에 `$9`와 class
+변수 순서대로 한 글자씩(`D`, `E`, `C`) 쓴다. 모든 class가 `Cps`이면 쓰지 않는다.
+
+```text
+map + [Int, Bool] + [Direct]          → map$Int$Bool$9D
+map + [Int, Bool] + [EvidenceDirect]  → map$Int$Bool$9E
+map + [Int, Bool] + [Cps]             → map$Int$Bool
+apply_twice + [] + [Direct]           → apply_twice$9D
 ```
 
 ### 알고리즘
@@ -297,9 +310,58 @@ ast_to_ir: IR lowering
 변환한다. 생성된 clone 내부의 참조가 새 인스턴스를 드러내면 같은 인스턴스 키를
 재사용하며 고정점까지 수집한다. 확장 한도를 넘으면 구조적 진단을 반환한다.
 
-타입 인자를 갖는 함수만 이 과정으로 특수화한다. Row만 다형적인 함수는 기존
-인스턴스 전달을 유지한다. 도달하지 않는 generic template은 허용하되, 도달하는
-함수 인스턴스나 ability 인자가 미해결이면 타입 erasure 전에 거부한다.
+타입 인자나 [class 변수](#row-변수의-convention-class)를 갖는 함수를 이 과정으로
+특수화한다. 둘 다 없는 함수는 정의 하나를 그대로 쓴다. 도달하지 않는 generic
+template은 허용하되, 도달하는 함수 인스턴스나 ability 인자가 미해결이면 타입 erasure
+전에 거부한다.
+
+### Row 변수의 convention class
+
+Effect row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실행 중 evidence로
+전달한다. 특수화하는 것은 row 변수가 요구하는 calling convention뿐이며, 이를 그
+변수의 **convention class**라 한다. Class는 기존 순서
+`Direct < EvidenceDirect < Cps`의 세 값 중 하나다.
+
+**Class 변수.** 정의의 스킴이 양화한 row 변수 중 매개변수 타입에 포함된 함수 타입의
+row에 나타나는 것이 class 변수다. 순서는 스킴의 row binder 순서를 따른다. 다음은
+class 변수가 아니다.
+
+- 결과 타입이나 정의 자신의 row에만 나타나는 row 변수
+- 정의의 signature나 본문에서 ability 인자 안에 나타나는 row 변수. Ability
+  instance identity가 그 row를 포함하므로, handler와 perform 지점이 같은 callable
+  convention을 보아야 한다.
+
+**Class 인자.** 참조 지점의 class 인자는 checked instance가 기록한 row 인자에서
+계산한다. Callable 타입에서 역추론하지 않는다.
+
+```text
+class({A₁, ..., Aₙ})     = requirement(A₁) ⊔ ... ⊔ requirement(Aₙ)
+class({A₁, ..., Aₙ | e}) = 위 값 ⊔ class(e)
+
+class(e) = 참조를 포함한 인스턴스가 e에 고정한 class   (e가 그 인스턴스의 class 변수)
+         = Cps                                          (그 밖의 row 변수)
+```
+
+`requirement`는 ability 단위의
+[convention bound](implementation.md#selective-transformation)다.
+
+**인스턴스.** 인스턴스 key는 `(선언, 타입 인자, class 인자)`다. Clone의 NodeId를
+구별하는 값도 타입 인자와 class 인자를 함께 반영한다. Class 인자가 모두 `Cps`인
+인스턴스는 class 특수화가 없는 정의와 같은 convention과 이름을 가진다.
+
+**인스턴스 안에서의 규칙.** 인스턴스는 class 변수에서 class로 가는 표를 가진다.
+Lowering이 row의 convention을 계산할 때 tail이 표에 있으면 그 class를 쓰고, 없으면
+열린 row의 규칙대로 `Cps`를 쓴다. 매개변수의 callable 타입, 그 callable의 호출,
+인스턴스 자신의 worker convention이 모두 이 표를 따른다. 따라서 호출자가 넘긴
+callable의 convention과 인스턴스가 기대하는 convention이 class 인자에서 함께
+정해진다.
+
+Class 특수화는 row를 스킴이나 metadata에 치환하지 않는다. 호출의 evidence 선택은
+typechecking이 원래 정의에 대해 계산한 것을 그대로 물려받으며 다시 계산하지 않는다.
+Evidence를 받지 않는 convention의 호출에는 선택을 싣지 않는다.
+
+Class 값은 셋뿐이므로 class 변수가 `n`개인 정의의 인스턴스는 타입 인자 조합마다
+최대 `3ⁿ`개다. 재귀가 새 class 인자를 만들어도 이 한도 안에서 고정점에 도달한다.
 
 ### Nominal 타입 수집과 재작성
 
@@ -375,8 +437,10 @@ establish declaration identity. Prelude merging, deferred
 method desugaring, and specialized AST cloning preserve the record. Clones
 substitute their enclosing type arguments into nested instance records.
 Effect-only type arguments participate in ordinary type specialization; open
-residual rows continue to use evidence passing. Unused generic templates are
-permitted, but incomplete reached instances fail before logical lowering.
+residual rows continue to use evidence passing, and the recorded row arguments
+select each instance's [convention classes](#row-변수의-convention-class).
+Unused generic templates are permitted, but incomplete reached instances fail
+before logical lowering.
 
 Function quantifiers cover the callable interface and retained semantic row
 relations. Inference variables occurring only in the checked body remain

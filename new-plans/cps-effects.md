@@ -34,6 +34,8 @@ consumer가 요구하는 callback이면 open row를 유지하여 `Cps`가 된다
 요구한 ability도 row에 남으며 그 ability의 convention lower bound를 적용한다.
 이 선택은 이미 생성된 Cps 값을 Direct로 바꾸는 후처리가 아니며,
 `calling_convention_for_effect_row`의 open-row ⇒ `Cps` 규칙을 완화하지 않는다.
+[Convention class](generics.md#row-변수의-convention-class)를 가진 인스턴스에서는
+class 변수의 requirement가 이미 확정되어 있으므로 이 규칙의 대상이 아니다.
 
 지역 source lambda의 검사된 인스턴스와 실제 소비 worker의 callable parameter
 계약을 구별한다. 고정된 데이터 타입의 lambda는 원래 binding 위치에서 각 필요한
