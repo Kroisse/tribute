@@ -553,10 +553,9 @@ answer-type polymorphism, trampoline, in-band sentinel 또는 control carrier가
 
 ### Root `main`
 
-Root `main`의 source residual-effect 계약은 pure 또는 `Io`이며 residual general
-effect는 backend 전에 거부한다. 따라서 root `main`의 convention은 `Direct` 또는
-`EvidenceDirect`다. 본문의 general effect는 [값 delimiter](#값-delimiter)가 처리한다.
-Nested module의 `main`은 일반 worker다.
+Root `main`의 convention도 그 row에서 정해진다. Root `main`에 남을 수 있는 residual
+effect는 source 계약이 정하며, 그 밖의 residual general effect는 backend 전에
+거부한다. Nested module의 `main`은 일반 worker다.
 
 Root bridge 합성은 source `main`을 root worker로 바꾸고, hidden 매개변수가 없는
 Direct wrapper `main`을 합성한다
@@ -567,6 +566,10 @@ Direct wrapper `main`을 합성한다
 | --- | --- | --- |
 | `Direct` | 없음 | worker 결과 |
 | `EvidenceDirect` | target의 초기 evidence | worker 결과 |
+| `Cps` | [값 delimiter](#값-delimiter)의 evidence와 frame | delimiter의 값 |
+
+Root 계약이 허용한 general effect는 wrapper가 delimiter 안에 설치한 handle이
+처리한다. 그 handle 뒤에 남는 row가 delimiter의 성립 조건을 만족해야 한다.
 
 그래서 root마다 worker는 정확히 하나이고, wrapper는 export 규약을 보존하지 않는다.
 Native entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는다.

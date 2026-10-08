@@ -412,13 +412,13 @@ Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 `Evidence
 
 ### Root entry
 
-Root `main`은 `Cps` backend entry ABI가 아니다. Valid source residual contract는 pure
-또는 `Io`이며 residual general effect는 frontend가 거부한다. 그래서 root worker는
-`Direct` 또는 `EvidenceDirect`이고, 본문의 general effect는
-[값 delimiter](cps-effects.md#값-delimiter)가 처리한다.
+Root `main`은 `Cps` backend entry ABI가 아니다. Root worker의 convention은 다른
+정의처럼 row에서 정해지고, residual effect가 root 계약을 벗어나면 frontend가
+거부한다.
 
 Root bridge 합성은 root worker 앞에 매개변수 없는 Direct wrapper를 합성한다. Direct
 worker에는 입력을 넘기지 않고, EvidenceDirect worker에는 초기 evidence만 넘긴다.
+Cps worker는 [값 delimiter](cps-effects.md#값-delimiter) 안에서 호출한다.
 Nested-module `main`은 일반 함수다.
 
 논리적 CPS signature와 target physical signature는 구별한다:

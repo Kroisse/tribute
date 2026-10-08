@@ -1463,7 +1463,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   없고 결과는 `Nil`이며 platform 규약을 따른다. Body는 root worker 호출 하나로 끝나고,
   모듈 안에서 이 `main`을 참조하는 곳은 없다. 원래 source `main`은 모든 calling
   convention에서 root worker가 되고, 모듈 안의 참조도 worker로 옮겨 간다. 초기
-  evidence처럼 source calling convention에 따라 달라지는 부분은
+  evidence와 값 delimiter처럼 source calling convention에 따라 달라지는 부분은
   bridge 합성이 소비한다. Target은 이 wrapper를 그 자리에서 target 진입점으로 바꾼다.
   이때 runtime 초기화, 종료 코드, sanitizer 초기화처럼 platform 고유 작업만 더하고,
   별도 진입 함수를 만들거나 `main`의 이름을 바꾸지 않는다.
