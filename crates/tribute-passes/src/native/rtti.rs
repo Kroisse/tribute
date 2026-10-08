@@ -1222,10 +1222,15 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         // The closure's release function releases only the env field, not
-        // func_ptr. The other release is the `Bytes` owner.
-        let release_count = output.matches("tribute_rt.release").count();
+        // func_ptr.
+        let index = tribute_rtti::Layout::declared_indices(&ctx, module)[&(closure_ty, None)];
+        let (_, release_fn) = output
+            .split_once(&format!("sym_name = \"__tribute_release_{index}\""))
+            .expect("closure release function");
+        let release_fn = release_fn.split("clif.func").next().unwrap();
+        let release_count = release_fn.matches("tribute_rt.release").count();
         assert_eq!(
-            release_count, 2,
+            release_count, 1,
             "only env should be released, not func_ptr"
         );
     }
