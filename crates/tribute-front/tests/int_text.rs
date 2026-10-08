@@ -256,6 +256,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
+            ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
             compiler_intrinsics: HashMap::default(),
         },
     )
@@ -284,6 +285,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: HashMap::default(),
+        row_classes: mono.row_classes,
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
@@ -358,6 +360,7 @@ fn lower_specialized_source(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
+            ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
             compiler_intrinsics: HashMap::default(),
         },
     )
@@ -386,6 +389,7 @@ fn lower_specialized_source(
         evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: HashMap::default(),
+        row_classes: mono.row_classes,
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
@@ -468,6 +472,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .collect(),
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: HashMap::default(),
+        row_classes: HashMap::default(),
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());

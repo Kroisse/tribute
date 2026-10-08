@@ -1,10 +1,13 @@
-use super::instance::InstanceKey;
+use super::instance::{InstanceKey, InstanceKeys};
 use super::nominal_index::NominalIndex;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use trunk_ir::Symbol;
 
-use crate::ast::visit::{RefSite, Refs, walk_module};
-use crate::ast::{FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef};
+use crate::ast::visit::{RefSite, Refs, walk_decl, walk_module};
+use crate::ast::{
+    Decl, FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
+};
 
 /// Collect all generic function instantiations from a typed module.
 ///
@@ -16,18 +19,31 @@ pub(super) fn collect_instantiations<'db>(
     module: &Module<TypedRef<'db>>,
     function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
     function_instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+    keys: &InstanceKeys<'db>,
 ) -> HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>> {
-    let mut collector = InstantiationCollector::new(db, function_types, function_instances);
-    walk_module(
-        &mut Refs(|site, node, value: &TypedRef<'db>| {
-            // Only a function reference in expression position is a call site.
-            if site == RefSite::Var {
-                collector.try_record(node, value);
-            }
-        }),
-        module,
-    );
+    let mut collector = InstantiationCollector::new(db, function_types, function_instances, keys);
+    for decl in &module.decls {
+        let enclosing = enclosing_instance(decl);
+        walk_decl(
+            &mut Refs(|site, node, value: &TypedRef<'db>| {
+                // Only a function reference in expression position is a call site.
+                if site == RefSite::Var {
+                    collector.try_record(node, value, enclosing);
+                }
+            }),
+            decl,
+        );
+    }
     collector.instantiations
+}
+
+/// The name under which a declaration's references look up the classes of
+/// their enclosing instance. Instances are root functions.
+pub(super) fn enclosing_instance<'a>(decl: &'a Decl<TypedRef<'_>>) -> Option<&'a Symbol> {
+    match decl {
+        Decl::Function(function) => Some(&function.name),
+        _ => None,
+    }
 }
 
 /// Extract concrete type arguments by walking the scheme body and concrete type
@@ -134,6 +150,7 @@ struct InstantiationCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
     schemes: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
     function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+    keys: &'a InstanceKeys<'db>,
     instantiations: HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
 }
 
@@ -142,6 +159,7 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
         db: &'db dyn salsa::Database,
         function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
         function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+        keys: &'a InstanceKeys<'db>,
     ) -> Self {
         let schemes = function_types
             .iter()
@@ -152,24 +170,30 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
             db,
             schemes,
             function_instances,
+            keys,
             instantiations: HashMap::default(),
         }
     }
 
-    fn try_record(&mut self, node_id: crate::ast::NodeId, typed_ref: &TypedRef<'db>) {
+    fn try_record(
+        &mut self,
+        node_id: crate::ast::NodeId,
+        typed_ref: &TypedRef<'db>,
+        enclosing: Option<&Symbol>,
+    ) {
         let ResolvedRef::Function { id } = &typed_ref.resolved else {
             return;
         };
-        let Some(scheme) = self.schemes.get(id) else {
+        if !self.schemes.contains_key(id) {
             return;
-        };
+        }
         let Some(instance) = self.function_instances.get(&node_id) else {
             return;
         };
         if instance.function != *id {
             return;
         }
-        let Some(key) = InstanceKey::of(self.db, *scheme, instance) else {
+        let Some(key) = self.keys.key(instance, enclosing) else {
             return;
         };
         if !key

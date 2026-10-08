@@ -11,16 +11,14 @@ use trunk_ir::Symbol;
 
 use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_module_mut};
 use crate::ast::{
-    CtorId, Decl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme,
-    TypedRef,
+    CtorId, Decl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypedRef,
 };
 
-use super::instance::InstanceKey;
+use super::instance::{InstanceKey, InstanceKeys};
 use super::mangle::mangle_type_name;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
-pub type RewriteMap<'db> =
-    HashMap<FuncDefId<'db>, (TypeScheme<'db>, Vec<(InstanceKey<'db>, Symbol)>)>;
+pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(InstanceKey<'db>, Symbol)>>;
 
 /// Type rewrite map: declaration identity → specialized argument/name pairs.
 pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
@@ -31,8 +29,9 @@ pub fn rewrite_module<'db>(
     module: &mut Module<TypedRef<'db>>,
     rewrite_map: &RewriteMap<'db>,
     instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    keys: &InstanceKeys<'db>,
 ) {
-    rewrite_decls(db, &mut module.decls, rewrite_map, instances);
+    rewrite_decls(db, &mut module.decls, rewrite_map, instances, keys);
 }
 
 /// Rewrite call sites in a list of declarations (e.g., specialized function bodies).
@@ -41,38 +40,42 @@ pub fn rewrite_decls<'db>(
     decls: &mut [Decl<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
     instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    keys: &InstanceKeys<'db>,
 ) {
-    let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
-        // Only a function reference in expression position is a call site.
-        if site == RefSite::Var
-            && let Some(callee) = specialized_callee(db, rewrite_map, instances, node, value)
-        {
-            *value = callee;
-        }
-    });
     for decl in decls {
+        let enclosing = super::collect::enclosing_instance(decl).cloned();
+        let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
+            // Only a function reference in expression position is a call site.
+            if site == RefSite::Var
+                && let Some(instance) = instances.get(&node)
+                && let Some(callee) =
+                    specialized_callee(db, rewrite_map, keys, instance, enclosing.as_ref(), value)
+            {
+                *value = callee;
+            }
+        });
         walk_decl_mut(&mut rewrite, decl);
     }
 }
 
-/// The specialized function a call site at `node` refers to, if the callee
-/// is generic and was specialized for the call's type arguments.
+/// The specialized function the reference `instance` inside `enclosing`
+/// refers to, if the callee was specialized for the reference's arguments.
 fn specialized_callee<'db>(
     db: &'db dyn salsa::Database,
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
-    node: NodeId,
+    keys: &InstanceKeys<'db>,
+    instance: &crate::typeck::FunctionInstance<'db>,
+    enclosing: Option<&Symbol>,
     typed_ref: &TypedRef<'db>,
 ) -> Option<TypedRef<'db>> {
     let ResolvedRef::Function { id } = &typed_ref.resolved else {
         return None;
     };
-    let (scheme, entries) = rewrite_map.get(id)?;
-    let instance = instances.get(&node)?;
+    let entries = rewrite_map.get(id)?;
     if instance.function != *id {
         return None;
     }
-    let key = InstanceKey::of(db, *scheme, instance)?;
+    let key = keys.key(instance, enclosing)?;
     let (_, mangled) = entries.iter().find(|(entry, _)| *entry == key)?;
     Some(TypedRef::new(
         ResolvedRef::Function {
