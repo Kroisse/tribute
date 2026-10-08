@@ -20,9 +20,12 @@ use tribute_ir::dialect::ability;
 
 const ABILITY_LOWERED_BOUNDARY: &str = "ability-lowered";
 
-/// Conversion target for IR after shared ability lowering.
+/// Conversion target for IR after shared ability lowering. A value
+/// delimiter remains for the target ABI boundary.
 pub fn ability_lowered_target() -> ConversionTarget {
-    ConversionTarget::new().illegal_dialect("ability")
+    ConversionTarget::new()
+        .illegal_dialect("ability")
+        .legal_op("ability", "delimit")
 }
 
 /// Lower resultless handle delimiters and establish the ability boundary.

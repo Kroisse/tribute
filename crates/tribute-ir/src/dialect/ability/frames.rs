@@ -8,7 +8,7 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 
-use super::{Frame, Handle, Perform, SuffixFrame, is_evidence_type_ref};
+use super::{Delimit, Frame, Handle, Perform, SuffixFrame, is_evidence_type_ref};
 use crate::dialect::tribute_control::{
     CALLING_CONVENTION_ATTR, CallingConvention, EvidencePlanSite, verify_evidence_plan,
 };
@@ -245,6 +245,40 @@ impl trunk_ir::ops::Verify for Perform {
         match rest {
             [input] if !is_never(ctx, *input) => Ok(()),
             _ => Err("ability.perform resumption must take one operation result".into()),
+        }
+    }
+}
+
+impl trunk_ir::ops::Verify for Delimit {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        if self.evidence(ctx).len() > 1 {
+            return Err("ability.delimit takes at most one evidence".into());
+        }
+        let Some((convention, signature)) = closure_signature(ctx, ctx.value_ty(self.body(ctx)))
+        else {
+            return Err("ability.delimit body must be a closure with a calling convention".into());
+        };
+        if convention != CallingConvention::Cps {
+            return Err("ability.delimit body must use the cps convention".into());
+        }
+        let [evidence, frame] = signature.inputs(ctx) else {
+            return Err("ability.delimit body must take an evidence and a frame".into());
+        };
+        if !is_evidence_type_ref(ctx, *evidence) {
+            return Err("ability.delimit body must take an evidence first".into());
+        }
+        // Frame expansion replaces the abstract frame, and physicalization the
+        // `core.never` result; the answer is checked while both are present.
+        match signature.results(ctx) {
+            [] => {}
+            [result] if is_never(ctx, *result) => {}
+            _ => return Err("ability.delimit body must return core.never".into()),
+        }
+        match frame_result(ctx, *frame) {
+            Some(answer) if answer != self.result_ty(ctx) => {
+                Err("ability.delimit must produce the answer of its body's frame".into())
+            }
+            _ => Ok(()),
         }
     }
 }

@@ -113,6 +113,16 @@ mod ability {
         values: Variadic<_>,
     ) {
     }
+
+    /// Run the CPS computation `body` to completion and yield its answer.
+    ///
+    /// `body` is a `Cps` closure `(Evidence, frame) -> core.never`. `evidence`
+    /// holds the flow's evidence in an `EvidenceDirect` flow and is empty in
+    /// a `Direct` flow, where the body starts on the target's initial
+    /// evidence. The operation survives frame expansion; the target ABI
+    /// boundary builds its completion cell and terminal frame.
+    #[verify]
+    fn delimit(body: Value<Closure>, evidence: Variadic<Evidence>) -> Value<_> {}
 }
 
 // === Hash-Based Dispatch ===

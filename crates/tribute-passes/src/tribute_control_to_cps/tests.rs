@@ -2419,3 +2419,110 @@ mod shared_contract_boundary_regressions {
         }
     }
 }
+
+/// The value delimiters of `name`, each with its number of evidence
+/// operands and the type of its answer.
+fn delimiters(ctx: &IrContext, module: Module, name: &str) -> Vec<(usize, TypeRef)> {
+    let function = module
+        .ops(ctx)
+        .iter()
+        .copied()
+        .find(|&op| func::Func::from_op(ctx, op).is_ok_and(|f| f.sym_name(ctx) == name))
+        .unwrap();
+    let body = ctx.op_region(function, 0).unwrap();
+    ctx.region(body)
+        .blocks
+        .iter()
+        .flat_map(|&block| ctx.block(block).ops.iter().copied())
+        .filter_map(|op| ability::Delimit::from_op(ctx, op).ok())
+        .map(|delimit| (delimit.evidence(ctx).len(), delimit.result_ty(ctx)))
+        .collect()
+}
+
+#[test]
+fn a_cps_call_in_a_callable_that_is_not_cps_runs_under_a_value_delimiter() {
+    let input = r#"core.module @test {
+  tribute_control.func @cps_identity(%value: core.i32) -> core.i32 convention(cps) {
+    tribute_control.return %value
+  }
+  tribute_control.func @direct(%value: core.i32) -> core.i32 convention(direct) {
+    %answer = tribute_control.call %value {callee = @cps_identity} : core.i32
+    tribute_control.return %answer
+  }
+  tribute_control.func @with_evidence(%value: core.i32) -> core.i32 convention(evidence_direct) {
+    %answer = tribute_control.call %value {callee = @cps_identity} : core.i32
+    tribute_control.return %answer
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    run_pre_cps(&mut ctx, module).unwrap();
+    verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
+    let i32_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    // A Direct flow has no evidence to pass; its delimiter starts on the
+    // target's initial evidence.
+    assert_eq!(delimiters(&ctx, module, "direct"), [(0, i32_type)]);
+    assert_eq!(delimiters(&ctx, module, "with_evidence"), [(1, i32_type)]);
+    let printed = print_module(&ctx, module.op());
+    assert!(!printed.contains("ability.frame"), "{printed}");
+}
+
+#[test]
+fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
+    let input = r#"core.module @test {
+  tribute_control.func @run(%input: core.i32) -> core.i32 convention(direct) {
+    %handled = tribute_control.handle : core.i32 {
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+      tribute_control.yield %performed
+    } {
+      ^completion(%value: core.i32):
+        tribute_control.yield %value
+    } {
+      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+        ^arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+          %resumed = tribute_control.resume %token, %argument : core.i32
+          tribute_control.yield %resumed
+      }
+    }
+    tribute_control.return %handled
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let declarations = operation_declarations(&mut ctx, &[("State", "get")]);
+    tribute_control_to_cps(
+        &mut ctx,
+        module,
+        &declarations,
+        &[],
+        &mut Default::default(),
+    )
+    .unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
+    verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
+    let i32_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    assert_eq!(delimiters(&ctx, module, "run"), [(0, i32_type)]);
+    let printed = print_module(&ctx, module.op());
+    // The handle and its operation are in the delimited Cps closure.
+    assert!(printed.contains("ability.handle_dispatch"), "{printed}");
+    assert!(printed.contains("effect.dispatch_cps"), "{printed}");
+}
+
+#[test]
+fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
+    let input = r#"core.module @test {
+  tribute_control.func @run(%input: core.i32) -> core.i32 convention(direct) {
+    %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+    tribute_control.return %performed
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let declarations = operation_declarations(&mut ctx, &[("State", "get")]);
+    let error = assert_unchanged_on_error(&mut ctx, module, |ctx, module| {
+        tribute_control_to_cps(ctx, module, &declarations, &[], &mut Default::default())
+    });
+    assert!(
+        error
+            .to_string()
+            .contains("general operation appears in a non-CPS callable"),
+        "{error}"
+    );
+}
