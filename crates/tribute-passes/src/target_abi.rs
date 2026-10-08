@@ -645,7 +645,12 @@ pub fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(
         }
         let evidence = match delimit.evidence(ctx) {
             [evidence] => *evidence,
-            _ => {
+            [_, _, ..] => {
+                return Err(TargetAbiError::new(
+                    "value delimiter: more than one evidence operand",
+                ));
+            }
+            [] => {
                 let scratch = ctx.create_block(BlockData {
                     location,
                     args: vec![],
