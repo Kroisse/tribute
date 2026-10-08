@@ -1540,3 +1540,35 @@ fn main() ->{Io} Nil {
         "40",
     );
 }
+
+/// A handle in one arm of a `case` in a pure function is delimited where it
+/// stands; the other arm runs no CPS code.
+#[test]
+fn test_value_delimiter_in_a_case_arm() {
+    crate::common::assert_output_on_both_targets_with_native_asan(
+        "value_delimiter_in_a_case_arm.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Int
+}
+
+fn pick(flag: Bool) ->{} String {
+    case flag {
+        True -> handle Int::to_string(Ask::ask()) <> "!" {
+            do value { value }
+            op Ask::ask() { resume +7 }
+        }
+        False -> "none"
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(pick(True))
+    print_line(pick(False))
+}
+"#,
+        "7!\nnone",
+    );
+}

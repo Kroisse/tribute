@@ -2849,10 +2849,11 @@ fn test_specialized_enum_payloads() {
 }
 
 /// A lambda written where a pure callable is expected keeps the `Direct`
-/// convention and calls a Cps worker under a value delimiter.
+/// convention and calls a Cps worker under a value delimiter. Its `String`
+/// answer crosses the delimiter's completion cell.
 #[test]
 fn a_lambda_at_a_pure_callable_type_calls_a_cps_worker() {
-    assert_native_output(
+    common::assert_output_on_both_targets_with_native_asan(
         "pure_lambda_calls_cps_worker.trb",
         r#"
 use std::io::{Io, print_line}
