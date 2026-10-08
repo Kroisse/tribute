@@ -93,27 +93,30 @@ Boxed primitives are the simplest heap objects — just the raw value:
 
 ### Bytes
 
-`Bytes` 값은 RC object이고, 읽는 byte들의 소유자를 스스로 가리킨다.
+`Bytes` 값은 RC object이고, 읽는 byte 범위와 그 byte의 소유자를 함께 가진다.
 
 ```text
-Bytes:  [ptr: 첫 byte의 주소] [len: u64] [buffer: byte buffer 또는 null]
-Buffer: [len: u64] [bytes...]
+Bytes: [ptr: 첫 byte의 주소] [len: u64] [owner: Bytes 또는 null] [cap: u64] [bytes...]
 ```
 
-`ptr`와 `len`은 이 값이 보는 byte 범위다. `ptr`는 범위의 첫 byte를 직접 가리키므로
-읽는 쪽은 `buffer`를 거치지 않는다. `buffer`는 그 byte들을 소유한 byte buffer에 대한
-owned 참조이며, byte가 `clif.data`처럼 정적인 저장소에 있으면 null이다.
+`ptr`와 `len`은 이 값이 보는 byte 범위다. 읽는 쪽은 이 둘만 쓰며 `owner`와 `cap`을
+보지 않는다. `cap`은 객체 뒤에 붙은 byte 수이고, `owner`는 범위의 byte를 가진 다른
+`Bytes`에 대한 owned 참조다.
 
-Byte buffer는 `Array` layout을 쓰는 RC object다. 길이는 buffer가 할당된 크기이고
-`Bytes`의 `len`과 다를 수 있다. Byte buffer를 참조하는 것은 `Bytes` 객체뿐이다.
+| 값 | `ptr` | `owner` | `cap` |
+| ---- | ---- | ---- | ---- |
+| 새 byte를 만든 결과(이어 붙이기, 입력 읽기) | 자신의 뒤에 붙은 byte | null | 붙은 byte 수 |
+| Byte를 공유하는 결과(잘라내기) | 다른 `Bytes`에 붙은 byte의 일부 | 그 `Bytes` | `0` |
+| Literal | `clif.data` 같은 정적 저장소 | null | `0` |
 
-- Literal은 정적 byte를 가리키고 `buffer`가 null인 `Bytes`를 만든다.
-- 새 byte를 만드는 연산(이어 붙이기, 입력 읽기)은 byte buffer를 할당하고 그 unit
-  하나를 결과 `Bytes`의 `buffer`에 둔다.
-- Byte를 공유하는 연산(잘라내기)은 원본의 `buffer`를 retain해 결과의 `buffer`에
-  둔다. 원본 `Bytes` 객체는 retain하지 않는다. 따라서 결과는 원본이 release된 뒤에도
-  byte를 읽을 수 있고, 마지막 `Bytes`가 release될 때 byte buffer가 해제된다.
-- `Bytes`의 release는 null이 아닌 `buffer`를 release한 뒤 자신을 해제한다.
+- RC object는 할당된 뒤 옮겨지지 않으므로 자신의 뒤에 붙은 byte를 가리키는 `ptr`는
+  객체가 살아 있는 동안 유효하다.
+- 잘라내기의 결과는 byte를 실제로 가진 `Bytes`를 retain해 `owner`에 둔다. 원본이
+  byte를 공유하는 값이면 원본이 아니라 원본의 `owner`를 retain하고, 원본이 정적 byte를
+  보면 `owner`는 null이다. 따라서 `owner`는 다른 `owner`를 거치지 않으며, 결과는 원본이
+  release된 뒤에도 byte를 읽을 수 있다.
+- `Bytes`의 release는 null이 아닌 `owner`를 release한 뒤, 고정 부분에 `cap`을 더한
+  크기로 자신을 해제한다.
 
 Runtime 함수는 `Bytes` argument를 호출 동안 빌리고, `Bytes` 결과는 호출자가 unit
 하나를 갖는 새 값으로 돌려준다. Runtime이 다른 기록 안에 raw pointer로 담아 돌려준
@@ -686,9 +689,8 @@ Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다
 
 | Index | 의미 |
 | ---- | ---- |
-| `0` | [`Bytes`](#bytes). `buffer`를 release한 뒤 고정 크기로 해제 |
+| `0` | [`Bytes`](#bytes). `owner`를 release한 뒤 `cap`을 읽어 해제 |
 | `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`. 고정 크기 release |
-| `5` | `Bytes`의 byte buffer. 자신의 길이를 읽어 해제 |
 | 예약 범위 다음 | ownership planning이 할당 순서대로 정한 struct와 variant의 descriptor |
 
 예약 범위는 compiler가 생성하는 할당 operation 없이 runtime이나 boxing lowering이
@@ -699,10 +701,9 @@ RC header 없이 unmanaged로 다루는 값은 RC 객체가 아니므로 RTTI in
 갖지 않는다.
 
 RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. Table과
-`__tribute_deep_release`는 그 프로그램의 모듈 안에서만 index를 해석한다. Runtime과
-공유하는 번호는 runtime이 직접 할당하는 `Bytes`의 `0`과 byte buffer의 `5`뿐이며, 둘은
-고정이다. 그 밖의 예약 범위를 늘릴 때는 호환 단계가 필요 없고, 사용자 layout index는
-예약 범위 바로 다음부터 시작한다. 따로 컴파일한 단위 사이에서 객체가
+`__tribute_deep_release`는 그 프로그램의 모듈 안에서만 index를 해석하며, runtime과
+공유하는 번호는 `0`뿐이다. 따라서 예약 범위를 늘릴 때 호환 단계가 필요 없고, 사용자
+layout index는 예약 범위 바로 다음부터 시작한다. 따로 컴파일한 단위 사이에서 객체가
 오가게 되면 이 전제가 깨지므로, 그때는 번호 대신 header나 descriptor가 스스로 layout을
 설명하는 방식으로 바꿔야 한다.
 
