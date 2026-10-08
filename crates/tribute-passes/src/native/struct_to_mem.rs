@@ -477,7 +477,7 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("type = mem.struct<tribute_rt.anyref, core.ptr, core.ptr>"),
+            printed.contains("type = mem.struct<tribute_rt.anyref, core.ptr, tribute_rt.anyref>"),
             "{printed}"
         );
     }

@@ -12,7 +12,7 @@
 //!
 //! | Index | Type | Release |
 //! |-------|------|---------|
-//! | 0 | no release function (e.g. runtime-allocated `Bytes`) | shallow |
+//! | 0 | `Bytes` | fixed 24-byte release |
 //! | 1 | Bool | fixed 12-byte release |
 //! | 2 | Nat | fixed 12-byte release |
 //! | 3 | Int | fixed 12-byte release |
@@ -76,8 +76,8 @@ impl ClifTypes {
     }
 }
 
-/// Reserved RTTI indices. Index 0, which the runtime also writes, has no
-/// release function.
+/// Reserved RTTI indices. Index 0 is `Bytes`, which the runtime also
+/// allocates.
 pub const RTTI_NIL: u32 = 0;
 pub const RTTI_BOOL: u32 = 1;
 pub const RTTI_NAT: u32 = 2;
@@ -88,6 +88,8 @@ pub const RTTI_FLOAT: u32 = 4;
 /// reserved index.
 pub const RTTI_USER_START: u32 = RTTI_FLOAT + 1;
 
+/// The RC header and the `Bytes` payload `[ptr] [len]`.
+const BYTES_ALLOC_SIZE: u64 = 24;
 const PRIMITIVE_I32_ALLOC_SIZE: u64 = 12;
 const PRIMITIVE_F64_ALLOC_SIZE: u64 = 16;
 
@@ -200,7 +202,9 @@ pub(crate) fn generate_rtti(
     // release action carries a dynamic-size signal, resolved by the header
     // RTTI index before deallocation. Used primitive slots must therefore own
     // exact release functions instead of falling through with zero.
-    for (rtti_idx, alloc_size) in primitive_releases {
+    // A `Bytes` object may come from the runtime, so its entry always exists.
+    let bytes_release = [(RTTI_NIL, BYTES_ALLOC_SIZE)];
+    for (rtti_idx, alloc_size) in bytes_release.into_iter().chain(primitive_releases) {
         let func_op = generate_fixed_release_function(ctx, rtti_idx, alloc_size, loc);
         ctx.push_op(module_block, func_op);
         release_fns.insert(rtti_idx, release_fn_symbol(rtti_idx));

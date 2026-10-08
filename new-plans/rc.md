@@ -91,6 +91,37 @@ Boxed primitives are the simplest heap objects — just the raw value:
 | boxed i32 (Int/Nat/Bool) | 4 bytes | `[i32 value]` |
 | boxed f64 (Float) | 8 bytes | `[f64 value]` |
 
+### Bytes
+
+`Bytes` 값은 RC object이고, 읽는 byte 범위와 그 byte의 소유자를 함께 가진다.
+
+```text
+Bytes: [ptr: 첫 byte의 주소] [len: u64] [owner: Bytes 또는 null] [cap: u64] [bytes...]
+```
+
+`ptr`와 `len`은 이 값이 보는 byte 범위다. 읽는 쪽은 이 둘만 쓰며 `owner`와 `cap`을
+보지 않는다. `cap`은 객체 뒤에 붙은 byte 수이고, `owner`는 범위의 byte를 가진 다른
+`Bytes`에 대한 owned 참조다.
+
+| 값 | `ptr` | `owner` | `cap` |
+| ---- | ---- | ---- | ---- |
+| 새 byte를 만든 결과(이어 붙이기, 입력 읽기) | 자신의 뒤에 붙은 byte | null | 붙은 byte 수 |
+| Byte를 공유하는 결과(잘라내기) | 다른 `Bytes`에 붙은 byte의 일부 | 그 `Bytes` | `0` |
+| Literal | `clif.data` 같은 정적 저장소 | null | `0` |
+
+- RC object는 할당된 뒤 옮겨지지 않으므로 자신의 뒤에 붙은 byte를 가리키는 `ptr`는
+  객체가 살아 있는 동안 유효하다.
+- 잘라내기의 결과는 byte를 실제로 가진 `Bytes`를 retain해 `owner`에 둔다. 원본이
+  byte를 공유하는 값이면 원본이 아니라 원본의 `owner`를 retain하고, 원본이 정적 byte를
+  보면 `owner`는 null이다. 따라서 `owner`는 다른 `owner`를 거치지 않으며, 결과는 원본이
+  release된 뒤에도 byte를 읽을 수 있다.
+- `Bytes`의 release는 null이 아닌 `owner`를 release한 뒤, 고정 부분에 `cap`을 더한
+  크기로 자신을 해제한다.
+
+Runtime 함수는 `Bytes` argument를 호출 동안 빌리고, `Bytes` 결과는 호출자가 unit
+하나를 갖는 새 값으로 돌려준다. Runtime이 다른 기록 안에 raw pointer로 담아 돌려준
+`Bytes`도 같은 방식으로 unit 하나를 넘겨준다.
+
 ### Private native List nodes
 
 The native `List(a)` representation uses immutable RRB nodes with the ordinary
@@ -273,9 +304,15 @@ block을 만들므로 이런 edge를 만들지 않는다.
 
 `adt.typeref`는 type 자체로 managed다. Native RC-header allocation을 표현하는
 검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
-contract로 분류한다. Evidence, function/code address, borrowed buffer,
-`core.ptr`, `core.bytes`, `core.array`는 unmanaged다. 변환 결과가 pointer라는
+contract로 분류한다. `core.bytes`는 [`Bytes`](#bytes) 객체에 대한 managed 참조다.
+Evidence, function/code address, borrowed buffer, `core.ptr`, `core.array`는
+unmanaged다. 변환 결과가 pointer라는
 사실은 이 분류에 참여하지 않는다.
+
+Managed reference를 `core.ptr`로 보는 unrealized cast는 payload를 제자리에서 읽기
+위한 view이며 그 reference를 빌린다. View의 사용은 원래 값의 사용으로 세므로 owner는
+마지막 view 사용 뒤에 release된다. 반대로 `core.ptr`에서 managed reference를 받는
+cast의 결과는 unit 하나를 가진 새 owned 값이다.
 
 Residual structured region, stale nominal identity, malformed callable metadata,
 duplicate/conflicting action 또는 SSA remapping ambiguity는 plan 생성 전체를
@@ -652,7 +689,7 @@ Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다
 
 | Index | 의미 |
 | ---- | ---- |
-| `0` | Runtime이 할당하는 `Bytes`. Release 함수 없음, 얕은 해제. |
+| `0` | [`Bytes`](#bytes). `owner`를 release한 뒤 `cap`을 읽어 해제 |
 | `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`. 고정 크기 release |
 | 예약 범위 다음 | ownership planning이 할당 순서대로 정한 struct와 variant의 descriptor |
 

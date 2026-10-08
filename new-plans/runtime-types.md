@@ -37,7 +37,7 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
   별개의 descriptor를 가진다.
 - 소스 enum의 각 variant마다 하나. 같은 enum의 variant descriptor는 같은 enum
   descriptor를 가리킨다.
-- Compiler가 할당하는 값마다 하나. Boxing된 `Bool`, `Nat`, `Int`, `Float`, runtime이
+- Compiler가 할당하는 값마다 하나. Boxing된 `Bool`, `Nat`, `Int`, `Float`, runtime도
   할당하는 `Bytes`, compiler 소유 layout(closure 등)이 여기에 속한다. Native
   evidence처럼 RC 객체로 할당하지 않는 unmanaged 값은 descriptor를 갖지 않는다.
 

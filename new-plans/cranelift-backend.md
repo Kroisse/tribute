@@ -349,7 +349,10 @@ Native RC materialization은 같은 type-erasure 전 경계에서 검증된 plan
 Struct: [fields in order, naturally aligned]
 Enum:   [the variant's fields in order, naturally aligned], sized per variant
 Array:  [length: i64] [elements...]
+Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 ```
+
+`Bytes`의 소유 규칙은 [rc.md](rc.md#bytes)를 따른다.
 
 ### RC Object 헤더
 

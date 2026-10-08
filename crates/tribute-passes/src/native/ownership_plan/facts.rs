@@ -370,7 +370,11 @@ fn build_aliases(
                     "internal _closure to core.ptr handoff requires tribute_rt.into_raw",
                 ));
             }
-            if input_managed && (output_managed || callable_handoff) {
+            // A managed reference viewed as `core.ptr` is read in place. The
+            // view borrows the reference, so its uses keep the owner live.
+            let raw_view = core::UnrealizedConversionCast::matches(ctx, op)
+                && is_core_ptr_type(ctx, ctx.value_ty(*output));
+            if input_managed && (output_managed || callable_handoff || raw_view) {
                 let root = aliases.get(input).copied().unwrap_or(*input);
                 aliases.insert(*output, root);
                 if output_managed {

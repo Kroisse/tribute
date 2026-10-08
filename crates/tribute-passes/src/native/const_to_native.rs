@@ -455,7 +455,13 @@ impl RewritePattern for StringConstNativePattern {
         // Create adt.variant_new(type=String, tag=Leaf, bytes_payload)
         // Use the actual String enum type for the type attribute so that
         // adt_rc_header can compute the correct enum layout.
-        let variant_new = adt::VariantNew::operands([bytes_payload])
+        // The allocation is a `core.ptr`; the `Leaf` field takes the `Bytes`
+        // object it points to as an owned managed value.
+        let bytes_ty = core::bytes(ctx).as_type_ref();
+        let bytes = core::UnrealizedConversionCast::operands(bytes_payload)
+            .results(bytes_ty)
+            .build(ctx, loc);
+        let variant_new = adt::VariantNew::operands([bytes.result(ctx)])
             .r#type(string_enum_ty)
             .tag("Leaf")
             .results(result_ty)
@@ -464,6 +470,7 @@ impl RewritePattern for StringConstNativePattern {
         for o in insert_ops {
             rewriter.insert_op(o);
         }
+        rewriter.insert_op(bytes.op_ref());
         rewriter.replace_op(variant_new.op_ref());
         true
     }
