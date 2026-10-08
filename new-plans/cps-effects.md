@@ -406,7 +406,8 @@ CPS legalization은 이 표면으로 다음을 표현한다.
   frame의 `Dispatch<R>`와 함께 [`effect.dispatch_cps`](#op-operation-continuation-dispatch)로
   낮춘다. `ability.abort`는 reject continuation을 쓴다.
 - `ability.exit`는 frame의 `Done<R>`로 proper tail transfer한다.
-- `ability.delimit`은 펼치지 않는다. Region이 받는 frame의 타입만 layout으로 바꾼다.
+- `ability.delimit`은 펼치지 않는다. Body closure가 받는 frame의 타입만 layout으로
+  바꾼다.
 
 이 pass 뒤에는 `ability.frame` 타입이 남지 않는다. 남는 `ability.*`는
 `ability.call`, `ability.handle_dispatch`, `ability.delimit`뿐이다. Target이 delimited
@@ -534,9 +535,12 @@ delimiter 밖으로 나갈 수 있다. 재개된 계산은 재개한 지점이 �
 - 도달할 수 없는 terminal `Dispatch<R>`. 도달하면 trap한다
 - 이 둘을 담은 exact `ContinuationFrame<R>`
 
-Region은 evidence와 이 frame을 받는다. Evidence는 `EvidenceDirect` flow에서는 그
-flow의 evidence이고, `Direct` flow에서는 target의 초기 evidence다. Region의 proper
-tail chain이 끝나면 delimiter는 cell을 읽어 `R` 값을 낸다.
+Region은 `(Evidence, ContinuationFrame<R>) -> core.never`인 `Cps` closure이며
+evidence와 이 frame을 받는다. Region을 별도의 `Cps` callable로 두므로 그 안의 proper
+tail transfer는 다른 `Cps` callable과 같은 검증을 받는다. Evidence는
+`EvidenceDirect` flow에서는 그 flow의 evidence이고, `Direct` flow에서는 target의
+초기 evidence다. Region의 proper tail chain이 끝나면 delimiter는 cell을 읽어 `R`
+값을 낸다.
 
 **단계별 책임.** `tribute_control_to_cps`가 `ability.delimit`을 만들고 region을
 CPS로 legalize한다. Frame 펼치기는 region의 frame 타입에 layout을 준다. CPS
