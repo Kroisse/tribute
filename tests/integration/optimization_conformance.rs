@@ -111,8 +111,10 @@ fn generated_rtti_field_releases(ir: &str) -> String {
                     .expect("writing to a String cannot fail");
             }
             count = 0;
-            function = clif_func_symbol(trimmed)
-                .filter(|symbol| symbol.starts_with("@__tribute_release_"));
+            // Index 0 is the builtin `Bytes` release, present in every module.
+            function = clif_func_symbol(trimmed).filter(|symbol| {
+                symbol.starts_with("@__tribute_release_") && symbol != "@__tribute_release_0"
+            });
         } else if function.is_some() && trimmed.contains("tribute_rt.release") {
             count += 1;
         }

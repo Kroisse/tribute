@@ -90,7 +90,7 @@ flowchart TB
     subgraph native_passes["tribute-passes/src/native/"]
         abi["target ABI validation + physicalization\nroot bridge + closure lowering"]
         effect["effect ABI lowering\nnative evidence runtime + proper-tail calls"]
-        bytes["bytes intrinsic lowering\nverified identity → mem.load + mem.ptr_add"]
+        bytes["bytes intrinsic lowering\nverified identity → runtime 호출"]
         storage["finalize_closure_storage_layout"]
         list_lower["opaque List lowering\nnative::list::lower\nlist.* → private RC nodes"]
         cfg["structured control normalization\nscf_to_cf"]

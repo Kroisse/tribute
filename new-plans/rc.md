@@ -118,6 +118,10 @@ Bytes: [ptr: 첫 byte의 주소] [len: u64] [owner: Bytes 또는 null] [cap: u64
 - `Bytes`의 release는 null이 아닌 `owner`를 release한 뒤, 고정 부분에 `cap`을 더한
   크기로 자신을 해제한다.
 
+Byte 하나를 읽는 compiler intrinsic은 native에서 runtime 함수 호출이 된다. `ptr`에서
+읽어 낸 주소는 `Bytes`가 살아 있는 동안만 유효한데, 호출은 argument를 빌리므로 읽는
+동안 `Bytes`가 release되지 않는다.
+
 Runtime 함수는 `Bytes` argument를 호출 동안 빌리고, `Bytes` 결과는 호출자가 unit
 하나를 갖는 새 값으로 돌려준다. Runtime이 다른 기록 안에 raw pointer로 담아 돌려준
 `Bytes`도 같은 방식으로 unit 하나를 넘겨준다.
