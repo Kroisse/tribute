@@ -14,13 +14,14 @@ use crate::ast::{
 };
 use crate::typeck::subst::substitute_bound_vars;
 
-use super::mangle::{mangle_name, mangle_type_name};
+use super::instance::InstanceKey;
+use super::mangle::{mangle_instance_name, mangle_type_name};
 
 pub(super) struct GeneratedSpecializations<'db> {
     pub(super) specialized_declarations: Vec<FuncDecl<TypedRef<'db>>>,
     pub(super) specialized_extern_declarations: Vec<ExternFuncDecl>,
     pub(super) specialized_function_types: Vec<(Symbol, TypeScheme<'db>)>,
-    pub(super) metadata_origins: Vec<(Vec<Type<'db>>, HashSet<NodeId>)>,
+    pub(super) metadata_origins: Vec<(InstanceKey<'db>, HashSet<NodeId>)>,
     pub(super) compiler_intrinsic_specializations: Vec<(NodeId, Symbol)>,
 }
 
@@ -28,7 +29,7 @@ struct SpecializationEntry<'db> {
     name: Symbol,
     declaration: FuncDecl<TypedRef<'db>>,
     scheme: TypeScheme<'db>,
-    type_args: Vec<Type<'db>>,
+    key: InstanceKey<'db>,
     origins: HashSet<NodeId>,
 }
 
@@ -39,7 +40,7 @@ struct SpecializationEntry<'db> {
 pub(super) fn generate_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
-    instantiations: &HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    instantiations: &HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
     compiler_intrinsics: &HashMap<NodeId, Symbol>,
 ) -> GeneratedSpecializations<'db> {
@@ -52,7 +53,7 @@ pub(super) fn generate_specializations<'db>(
     let mut specialized_extern_declarations = Vec::new();
     let mut compiler_intrinsic_specializations = Vec::new();
 
-    for (func_id, type_arg_sets) in instantiations {
+    for (func_id, keys) in instantiations {
         let qualified = func_id.qualified(db);
         let func = func_decls.get(qualified).copied();
         let extern_function = extern_functions.get(qualified).copied();
@@ -64,8 +65,9 @@ pub(super) fn generate_specializations<'db>(
         };
         let origins = func.map(semantic_node_ids);
 
-        for type_args in type_arg_sets {
-            let mangled = mangle_name(db, qualified, type_args);
+        for key in keys {
+            let type_args = key.type_args.as_slice();
+            let mangled = mangle_instance_name(db, qualified, key);
             let specialized_scheme = scheme
                 .to_builder(db)
                 .map_types(db, |ty| {
@@ -79,12 +81,12 @@ pub(super) fn generate_specializations<'db>(
                 .type_params(Vec::new())
                 .build(db);
             if let Some(func) = func {
-                let specialized = specialize_func_decl(db, func, type_args, mangled.clone());
+                let specialized = specialize_func_decl(db, func, key, mangled.clone());
                 entries.push(SpecializationEntry {
                     name: mangled,
                     declaration: specialized,
                     scheme: specialized_scheme,
-                    type_args: type_args.clone(),
+                    key: key.clone(),
                     origins: origins.clone().expect("function specialization origins"),
                 });
             } else {
@@ -94,7 +96,7 @@ pub(super) fn generate_specializations<'db>(
                 extern_function_types.push((mangled.clone(), specialized_scheme));
                 let extern_function = extern_function.expect("extern specialization declaration");
                 if let Some(identity) = compiler_intrinsics.get(&extern_function.id).cloned() {
-                    let declaration = specialize_extern_decl(extern_function, type_args, mangled);
+                    let declaration = specialize_extern_decl(extern_function, key, mangled);
                     compiler_intrinsic_specializations.push((declaration.id, identity));
                     specialized_extern_declarations.push(declaration);
                 }
@@ -111,7 +113,7 @@ pub(super) fn generate_specializations<'db>(
     for entry in entries {
         new_decls.push(entry.declaration);
         new_function_types.push((entry.name, entry.scheme));
-        metadata_origins.push((entry.type_args, entry.origins));
+        metadata_origins.push((entry.key, entry.origins));
     }
     new_function_types.extend(extern_function_types);
     new_function_types.sort_by_key(|(name, _)| name.clone());
@@ -499,11 +501,11 @@ fn collect_extern_function_decls_inner<'a, 'db>(
 
 fn specialize_extern_decl(
     declaration: &ExternFuncDecl,
-    type_args: &[Type<'_>],
+    key: &InstanceKey<'_>,
     mangled_name: Symbol,
 ) -> ExternFuncDecl {
     ExternFuncDecl {
-        id: declaration.id.with_variant(type_args_variant(type_args)),
+        id: declaration.id.with_variant(key.variant()),
         is_pub: false,
         name: mangled_name,
         abi: declaration.abi.clone(),
@@ -527,7 +529,7 @@ pub(crate) fn type_args_variant(type_args: &[Type<'_>]) -> NonZero<u64> {
 fn specialize_func_decl<'db>(
     db: &'db dyn salsa::Database,
     func: &FuncDecl<TypedRef<'db>>,
-    type_args: &[Type<'db>],
+    key: &InstanceKey<'db>,
     mangled_name: Symbol,
 ) -> FuncDecl<TypedRef<'db>> {
     let mut specialized = FuncDecl {
@@ -536,7 +538,7 @@ fn specialize_func_decl<'db>(
         type_params: vec![],
         ..func.clone()
     };
-    Substitute::new(db, type_args).visit_func_decl_mut(&mut specialized);
+    Substitute::new(db, key).visit_func_decl_mut(&mut specialized);
     specialized
 }
 
@@ -566,11 +568,11 @@ struct Substitute<'a, 'db> {
 }
 
 impl<'a, 'db> Substitute<'a, 'db> {
-    fn new(db: &'db dyn salsa::Database, type_args: &'a [Type<'db>]) -> Self {
+    fn new(db: &'db dyn salsa::Database, key: &'a InstanceKey<'db>) -> Self {
         Self {
             db,
-            type_args,
-            variant: type_args_variant(type_args),
+            type_args: &key.type_args,
+            variant: key.variant(),
         }
     }
 }
@@ -587,6 +589,7 @@ impl<'db> VisitMut<TypedRef<'db>> for Substitute<'_, 'db> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::mangle::mangle_name;
     use crate::ast::{
         Arm, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind, Pattern,
         PatternKind, ResolvedRef, Stmt, TypeParam,
@@ -759,7 +762,7 @@ mod tests {
             bv0,
         );
         let mut result = Expr::new(node_id(1), ExprKind::Var(tr));
-        Substitute::new(&db, &[int]).visit_expr_mut(&mut result);
+        Substitute::new(&db, &InstanceKey::of_types(vec![int])).visit_expr_mut(&mut result);
 
         // NodeId should have the variant applied
         assert!(result.id.variant().is_some());
@@ -803,7 +806,8 @@ mod tests {
         };
 
         let mangled = mangle_name(&db, &Symbol::new("identity"), &[int]);
-        let specialized = specialize_func_decl(&db, &func, &[int], mangled);
+        let specialized =
+            specialize_func_decl(&db, &func, &InstanceKey::of_types(vec![int]), mangled);
 
         assert_eq!(specialized.name.to_string(), "identity$Int");
         assert!(specialized.type_params.is_empty());
@@ -885,8 +889,8 @@ mod tests {
         let function_types = vec![(func_name, scheme)];
 
         let mut type_arg_sets = HashSet::default();
-        type_arg_sets.insert(vec![int]);
-        type_arg_sets.insert(vec![float]);
+        type_arg_sets.insert(InstanceKey::of_types(vec![int]));
+        type_arg_sets.insert(InstanceKey::of_types(vec![float]));
         let mut instantiations = HashMap::default();
         instantiations.insert(func_id, type_arg_sets);
 

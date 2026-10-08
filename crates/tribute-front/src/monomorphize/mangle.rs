@@ -2,6 +2,7 @@ use std::fmt;
 
 use trunk_ir::Symbol;
 
+use super::instance::InstanceKey;
 use crate::ast::{
     AbilityOrigin, BuiltinAbility, CallingConvention, EffectRow, EffectVar, Type, TypeDefId,
     TypeKind,
@@ -38,6 +39,28 @@ pub fn mangle_name(db: &dyn salsa::Database, base: &Symbol, type_args: &[Type<'_
         buf.push('$');
         write_type_mangled(db, *ty, &mut row_vars, &mut buf).unwrap();
     }
+    Symbol::new(&buf)
+}
+
+/// The name of the function instance `key` selects: the type arguments, then
+/// `$9` and one letter per class variable. Classes that are all `Cps` are
+/// omitted.
+pub(crate) fn mangle_instance_name(
+    db: &dyn salsa::Database,
+    base: &Symbol,
+    key: &InstanceKey<'_>,
+) -> Symbol {
+    let name = mangle_name(db, base, &key.type_args);
+    if !key.has_weaker_class() {
+        return name;
+    }
+    let mut buf = name.to_string();
+    buf.push_str("$9");
+    buf.extend(key.class_args.iter().map(|class| match class {
+        CallingConvention::Direct => 'D',
+        CallingConvention::EvidenceDirect => 'E',
+        CallingConvention::Cps => 'C',
+    }));
     Symbol::new(&buf)
 }
 
@@ -543,6 +566,26 @@ mod tests {
             mangle_name(&db, &base, &[open(7), open(42)]).to_string(),
             "f$6$0$$1$2$3$0$Nat$6$0$$1$2$3$1$Nat"
         );
+    }
+
+    #[test]
+    fn test_instance_names_spell_classes_weaker_than_cps() {
+        let db = TestDb::default();
+        let base = Symbol::new("map");
+        let int = Type::new(&db, TypeKind::Int);
+        let name = |type_args: &[Type<'_>], class_args: &[CallingConvention]| {
+            let key = InstanceKey {
+                type_args: type_args.to_vec(),
+                class_args: class_args.to_vec(),
+            };
+            mangle_instance_name(&db, &base, &key).to_string()
+        };
+        use CallingConvention::{Cps, Direct, EvidenceDirect};
+
+        assert_eq!(name(&[int], &[Direct]), "map$Int$9D");
+        assert_eq!(name(&[int], &[EvidenceDirect, Cps]), "map$Int$9EC");
+        assert_eq!(name(&[int], &[Cps, Cps]), "map$Int");
+        assert_eq!(name(&[], &[Direct]), "map$9D");
     }
 
     #[test]
