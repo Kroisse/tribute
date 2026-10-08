@@ -2,37 +2,40 @@
 //! boundary.
 //!
 //! Calls to the verified intrinsic `__bytes_get_or_panic`, selected and
-//! validated by [`crate::bytes_intrinsic`], become shared `mem`/`arith`
-//! operations on the native TributeBytes layout: `{ ptr: *const u8, len: u64 }`.
+//! validated by [`crate::bytes_intrinsic`], become calls to the runtime's
+//! `__tribute_bytes_get_or_panic`. The runtime borrows the `Bytes` for the
+//! call, so the value stays live while its byte is read.
 //!
 //! The Wasm lowering lives in `wasm/bytes.rs`.
 
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{arith, core, mem};
+use trunk_ir::dialect::{core, func};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::TypeDataBuilder;
 
 use crate::bytes_intrinsic::{self, BytesIntrinsicError};
 
-/// Lower calls to the bytes intrinsic to native `mem` operations.
+/// Runtime function that reads one byte of a `Bytes`; see `tribute-runtime`.
+const GET_OR_PANIC_FN: &str = "__tribute_bytes_get_or_panic";
+
+/// Lower calls to the bytes intrinsic to calls to the native runtime.
 pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicError> {
-    bytes_intrinsic::lower_get_or_panic(ctx, module, lower_call)
+    let mut lowered = false;
+    bytes_intrinsic::lower_get_or_panic(ctx, module, |ctx, call| {
+        lowered = true;
+        lower_call(ctx, call);
+    })?;
+    if lowered {
+        ensure_runtime_declaration(ctx, module);
+    }
+    Ok(())
 }
 
-/// Rewrite one bytes element read into loads on the TributeBytes layout.
-///
-/// TributeBytes native layout (payload pointer points here):
-///   offset 0: ptr (*const u8) - 8 bytes
-///   offset 8: len (u64)       - 8 bytes
-///
-/// Emits:
-///   %payload  = core.unrealized_conversion_cast %bytes : core.ptr
-///   %data_ptr = mem.load %payload {offset = 0} : core.ptr
-///   %offset   = arith.extui %index : core.i64
-///   %addr     = mem.ptr_add %data_ptr, %offset : core.ptr
-///   %byte     = mem.load %addr {offset = 0} : core.i8
-///   %result   = arith.extui %byte : core.i32
+/// Rewrite one bytes element read into a call to the runtime function, which
+/// has the intrinsic's signature.
 fn lower_call(ctx: &mut IrContext, call: OpRef) {
     let [bytes, index] = ctx.op_operands(call) else {
         unreachable!("call arity is validated before lowering")
@@ -40,46 +43,33 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
     let (bytes, index) = (*bytes, *index);
     let result_ty = ctx.op_result_types(call)[0];
     let loc = ctx.op(call).location;
-    let ptr_ty = core::ptr(ctx).as_type_ref();
-    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
-    let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
+    let read = func::Call::operands([bytes, index])
+        .callee(SymbolPath::from(GET_OR_PANIC_FN))
+        .results([result_ty])
+        .build(ctx, loc);
+    let value = read.results(ctx)[0];
+    bytes_intrinsic::replace_call(ctx, call, &[read.op_ref()], value);
+}
 
-    // The Bytes payload is read in place: view the borrowed reference as its
-    // native payload pointer. Native type conversion maps both to `core.ptr`,
-    // so the cast folds away.
-    let payload = core::UnrealizedConversionCast::operands(bytes)
-        .results(ptr_ty)
-        .build(ctx, loc);
-    let data_ptr = mem::Load::operands(payload.result(ctx))
-        .offset(0)
-        .results(ptr_ty)
-        .build(ctx, loc);
-    // The index is an unsigned Nat and a byte is 0..=255: both widen with
-    // zero extension.
-    let offset = arith::Extui::operands(index)
-        .results(i64_ty)
-        .build(ctx, loc);
-    let addr = mem::PtrAdd::operands(data_ptr.result(ctx), offset.result(ctx)).build(ctx, loc);
-    let byte = mem::Load::operands(addr.result(ctx))
-        .offset(0)
-        .results(i8_ty)
-        .build(ctx, loc);
-    let value = arith::Extui::operands(byte.result(ctx))
-        .results(result_ty)
-        .build(ctx, loc);
-    bytes_intrinsic::replace_call(
-        ctx,
-        call,
-        &[
-            payload.op_ref(),
-            data_ptr.op_ref(),
-            offset.op_ref(),
-            addr.op_ref(),
-            byte.op_ref(),
-            value.op_ref(),
-        ],
-        value.result(ctx),
-    );
+fn ensure_runtime_declaration(ctx: &mut IrContext, module: Module) {
+    let Some(block) = module.first_block(ctx) else {
+        return;
+    };
+    let declared = ctx.block(block).ops.iter().any(|&op| {
+        func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == GET_OR_PANIC_FN)
+    });
+    if declared {
+        return;
+    }
+    let loc = ctx.op(module.op()).location;
+    let bytes_ty = core::bytes(ctx).as_type_ref();
+    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let declaration =
+        super::build_extern_func(ctx, loc, GET_OR_PANIC_FN, &[bytes_ty, i32_ty], i32_ty);
+    match ctx.block(block).ops.first().copied() {
+        Some(first) => ctx.insert_op_before(block, first, declaration),
+        None => ctx.push_op(block, declaration),
+    }
 }
 
 #[cfg(test)]
@@ -107,11 +97,19 @@ mod tests {
 }"#,
         );
 
-        assert!(!printed.contains("func.call"), "{printed}");
         assert!(!printed.contains("@read"), "{printed}");
         assert!(!printed.contains("tribute.compiler_intrinsic"), "{printed}");
-        assert!(printed.contains("mem.ptr_add"), "{printed}");
-        assert_eq!(printed.matches("mem.load").count(), 2, "{printed}");
-        assert!(!printed.contains("clif."), "{printed}");
+        assert!(
+            printed.contains(
+                r#"func.func @__tribute_bytes_get_or_panic(%arg0: core.bytes, %arg1: core.i32) -> core.i32 attributes {abi = "C"}"#
+            ),
+            "{printed}"
+        );
+        assert!(
+            printed
+                .contains("func.call %0, %1 {callee = @__tribute_bytes_get_or_panic} : core.i32"),
+            "{printed}"
+        );
+        assert!(!printed.contains("mem."), "{printed}");
     }
 }

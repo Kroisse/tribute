@@ -12,7 +12,7 @@
 //!
 //! | Index | Type | Release |
 //! |-------|------|---------|
-//! | 0 | `Bytes` | fixed 24-byte release |
+//! | 0 | `Bytes` | releases `owner`, frees the fixed part plus `cap` |
 //! | 1 | Bool | fixed 12-byte release |
 //! | 2 | Nat | fixed 12-byte release |
 //! | 3 | Int | fixed 12-byte release |
@@ -88,8 +88,23 @@ pub const RTTI_FLOAT: u32 = 4;
 /// reserved index.
 pub const RTTI_USER_START: u32 = RTTI_FLOAT + 1;
 
-/// The RC header and the `Bytes` payload `[ptr] [len]`.
-const BYTES_ALLOC_SIZE: u64 = 24;
+/// The RC header and the fixed `Bytes` payload `[ptr] [len] [owner] [cap]`.
+const BYTES_FIXED_ALLOC_SIZE: u64 = 40;
+/// Payload offset of the `Bytes` that stores the bytes, or null.
+const BYTES_OWNER_OFFSET: i32 = 16;
+/// Payload offset of the count of bytes stored after the fixed payload.
+const BYTES_CAP_OFFSET: i32 = 24;
+
+/// The size of an allocation, including the RC header.
+#[derive(Clone, Copy)]
+enum AllocSize {
+    Fixed(u64),
+    /// `fixed` plus the `i64` count the payload holds at `count_offset`.
+    Trailing {
+        fixed: u64,
+        count_offset: i32,
+    },
+}
 const PRIMITIVE_I32_ALLOC_SIZE: u64 = 12;
 const PRIMITIVE_F64_ALLOC_SIZE: u64 = 16;
 
@@ -203,8 +218,19 @@ pub(crate) fn generate_rtti(
     // RTTI index before deallocation. Used primitive slots must therefore own
     // exact release functions instead of falling through with zero.
     // A `Bytes` object may come from the runtime, so its entry always exists.
-    let bytes_release = [(RTTI_NIL, BYTES_ALLOC_SIZE)];
-    for (rtti_idx, alloc_size) in bytes_release.into_iter().chain(primitive_releases) {
+    let bytes_release = generate_release_function(
+        ctx,
+        RTTI_NIL,
+        &[BYTES_OWNER_OFFSET],
+        AllocSize::Trailing {
+            fixed: BYTES_FIXED_ALLOC_SIZE,
+            count_offset: BYTES_CAP_OFFSET,
+        },
+        loc,
+    );
+    ctx.push_op(module_block, bytes_release);
+    release_fns.insert(RTTI_NIL, release_fn_symbol(RTTI_NIL));
+    for (rtti_idx, alloc_size) in primitive_releases {
         let func_op = generate_fixed_release_function(ctx, rtti_idx, alloc_size, loc);
         ctx.push_op(module_block, func_op);
         release_fns.insert(rtti_idx, release_fn_symbol(rtti_idx));
@@ -225,7 +251,7 @@ pub(crate) fn generate_rtti(
             ctx,
             rtti_idx,
             &release.managed_offsets,
-            release.alloc_size,
+            AllocSize::Fixed(release.alloc_size),
             loc,
         );
         ctx.push_op(module_block, func_op);
@@ -462,7 +488,7 @@ fn generate_fixed_release_function(
         loc,
         entry_block,
         payload_ptr,
-        alloc_size,
+        AllocSize::Fixed(alloc_size),
         tys.ptr,
         tys.nil,
         tys.i64,
@@ -528,7 +554,7 @@ fn generate_release_function(
     ctx: &mut IrContext,
     rtti_idx: u32,
     managed_field_offsets: &[i32],
-    alloc_size: u64,
+    alloc_size: AllocSize,
     loc: Location,
 ) -> OpRef {
     let tys = ClifTypes::intern(ctx);
@@ -685,7 +711,7 @@ fn gen_dealloc_and_return_with_size(
     loc: Location,
     block: BlockRef,
     payload_ptr: ValueRef,
-    alloc_size: u64,
+    alloc_size: AllocSize,
     ptr_ty: TypeRef,
     nil_ty: TypeRef,
     i64_ty: TypeRef,
@@ -702,13 +728,27 @@ fn gen_dealloc_and_return_with_size(
         .build(ctx, loc);
     ctx.push_op(block, raw_ptr.op_ref());
 
-    let size_op = clif::Iconst::operands()
-        .value(alloc_size as i64)
+    let (AllocSize::Fixed(fixed) | AllocSize::Trailing { fixed, .. }) = alloc_size;
+    let fixed_op = clif::Iconst::operands()
+        .value(fixed as i64)
         .results(i64_ty)
         .build(ctx, loc);
-    ctx.push_op(block, size_op.op_ref());
+    ctx.push_op(block, fixed_op.op_ref());
+    let mut size = fixed_op.result(ctx);
+    if let AllocSize::Trailing { count_offset, .. } = alloc_size {
+        let count = clif::Load::operands(payload_ptr)
+            .offset(count_offset)
+            .results(i64_ty)
+            .build(ctx, loc);
+        ctx.push_op(block, count.op_ref());
+        let total = clif::Iadd::operands(size, count.result(ctx))
+            .results(i64_ty)
+            .build(ctx, loc);
+        ctx.push_op(block, total.op_ref());
+        size = total.result(ctx);
+    }
 
-    let dealloc_call = clif::Call::operands([raw_ptr.result(ctx), size_op.result(ctx)])
+    let dealloc_call = clif::Call::operands([raw_ptr.result(ctx), size])
         .callee(SymbolPath::from(DEALLOC_FN))
         .results([nil_ty])
         .build(ctx, loc);
@@ -1181,11 +1221,11 @@ mod tests {
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
         let output = print_module(&ctx, module.op());
-        // The release function should only release the env field (not func_ptr)
-        // Count tribute_rt.release ops in the release function
+        // The closure's release function releases only the env field, not
+        // func_ptr. The other release is the `Bytes` owner.
         let release_count = output.matches("tribute_rt.release").count();
         assert_eq!(
-            release_count, 1,
+            release_count, 2,
             "only env should be released, not func_ptr"
         );
     }

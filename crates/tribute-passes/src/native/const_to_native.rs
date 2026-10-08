@@ -142,7 +142,7 @@ fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 /// ```text
 /// %data_ptr = clif.symbol_addr @__tribute_rodata_0
 /// %len = clif.iconst 5
-/// %raw = clif.call @__tribute_alloc(24)  // RC(8) + ptr(8) + len(8)
+/// %raw = clif.call @__tribute_alloc(40)  // RC(8) + ptr, len, owner, cap
 /// // Store RC header
 /// clif.store 1, %raw, offset=0          // refcount
 /// clif.store 0, %raw, offset=4          // rtti_idx
@@ -151,6 +151,8 @@ fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 /// // Store TributeBytes fields
 /// clif.store %data_ptr, %payload, offset=0
 /// clif.store %len, %payload, offset=8
+/// clif.store 0, %payload, offset=16     // owner: the bytes are static
+/// clif.store 0, %payload, offset=24     // cap: none stored in the object
 /// → result = %payload
 /// ```
 ///
@@ -288,8 +290,9 @@ fn emit_bytes_alloc(
     ops.push(len_op.op_ref());
     let len_val = len_op.result(ctx);
 
-    // 3. Allocate RC header (8) + TributeBytes payload (ptr=8 + len=8 = 16) = 24 bytes
-    let alloc_size = RC_HEADER_SIZE + 16; // ptr(8) + len(8)
+    // 3. Allocate RC header (8) + the fixed TributeBytes payload
+    //    (ptr, len, owner, cap = 32 bytes).
+    let alloc_size = RC_HEADER_SIZE + 32;
     let size_op = clif::Iconst::operands()
         .value(alloc_size as i64)
         .results(i64_ty)
@@ -346,6 +349,19 @@ fn emit_bytes_alloc(
         .offset(8)
         .build(ctx, loc);
     ops.push(store_len.op_ref());
+
+    // Static bytes have no owner, and the object stores none after itself.
+    let zero = clif::Iconst::operands()
+        .value(0)
+        .results(i64_ty)
+        .build(ctx, loc);
+    ops.push(zero.op_ref());
+    for offset in [16, 24] {
+        let store = clif::Store::operands(zero.result(ctx), payload)
+            .offset(offset)
+            .build(ctx, loc);
+        ops.push(store.op_ref());
+    }
 
     (ops, payload)
 }
