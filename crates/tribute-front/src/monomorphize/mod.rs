@@ -1,4 +1,5 @@
 pub mod collect;
+mod instance;
 pub mod mangle;
 mod nominal;
 mod nominal_index;
@@ -13,6 +14,7 @@ use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::Symbol;
 
+use self::instance::InstanceKey;
 use crate::ast::{CtorId, Decl, EffectRow, FuncDefId, Module, NodeId, Type, TypeScheme, TypedRef};
 use crate::typeck::subst::{BoundVarOutOfBounds, substitute_bound_vars, substitute_effect_row};
 use crate::typeck::{
@@ -86,14 +88,11 @@ pub fn monomorphize_functions<'db>(
             &metadata.function_instances,
         );
         let mut new_instantiations: HashMap<_, HashSet<_>> = HashMap::default();
-        for (func_id, type_arg_sets) in discovered {
+        for (func_id, keys) in discovered {
             let known = instantiations.entry(func_id).or_default();
-            for type_args in type_arg_sets {
-                if known.insert(type_args.clone()) {
-                    new_instantiations
-                        .entry(func_id)
-                        .or_default()
-                        .insert(type_args);
+            for key in keys {
+                if known.insert(key.clone()) {
+                    new_instantiations.entry(func_id).or_default().insert(key);
                 }
             }
         }
@@ -116,8 +115,8 @@ pub fn monomorphize_functions<'db>(
             metadata_origins,
             compiler_intrinsic_specializations,
         } = specializations;
-        for (type_args, origins) in metadata_origins {
-            specialize_metadata(db, &mut metadata, &type_args, &origins);
+        for (key, origins) in metadata_origins {
+            specialize_metadata(db, &mut metadata, &key, &origins);
         }
         metadata
             .compiler_intrinsics
@@ -328,10 +327,11 @@ pub fn monomorphize_functions<'db>(
 fn specialize_metadata<'db>(
     db: &'db dyn salsa::Database,
     metadata: &mut MonomorphizeMetadata<'db>,
-    type_args: &[Type<'db>],
+    key: &InstanceKey<'db>,
     origins: &HashSet<NodeId>,
 ) {
-    let variant = specialize::type_args_variant(type_args);
+    let variant = key.variant();
+    let type_args = key.type_args.as_slice();
     clone_type_table(db, &mut metadata.node_types, variant, type_args, origins);
     let instances: Vec<_> = origins
         .iter()
@@ -526,28 +526,27 @@ fn substitute_row<'db>(
 /// for use during call site rewriting.
 fn build_rewrite_map<'db>(
     db: &'db dyn salsa::Database,
-    instantiations: &HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    instantiations: &HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
-) -> HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>> {
+) -> rewrite::RewriteMap<'db> {
     let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
-    let mut rewrite_map: HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>> =
-        HashMap::default();
+    let mut rewrite_map = rewrite::RewriteMap::default();
 
-    for (func_id, type_arg_sets) in instantiations {
+    for (func_id, keys) in instantiations {
         let qualified = func_id.qualified(db);
-        let Some(_scheme) = scheme_map.get(qualified) else {
+        let Some(scheme) = scheme_map.get(qualified) else {
             continue;
         };
 
-        let mut entries: Vec<(Vec<Type<'db>>, Symbol)> = type_arg_sets
+        let mut entries: Vec<(InstanceKey<'db>, Symbol)> = keys
             .iter()
-            .map(|type_args| {
-                let mangled = mangle::mangle_name(db, qualified, type_args);
-                (type_args.clone(), mangled)
+            .map(|key| {
+                let mangled = mangle::mangle_instance_name(db, qualified, key);
+                (key.clone(), mangled)
             })
             .collect();
         entries.sort_by_key(|e| e.1.clone());
-        rewrite_map.insert(*func_id, entries);
+        rewrite_map.insert(*func_id, (*scheme, entries));
     }
 
     rewrite_map
@@ -652,17 +651,17 @@ mod tests {
             exhaustive_cases: [origin].into_iter().collect::<HashSet<_>>(),
             compiler_intrinsics: HashMap::default(),
         };
-        let type_args = vec![int];
+        let key = InstanceKey::of_types(vec![int]);
         let origins = [origin].into_iter().collect::<HashSet<_>>();
 
-        specialize_metadata(&db, &mut metadata, &type_args, &origins);
+        specialize_metadata(&db, &mut metadata, &key, &origins);
 
-        let clone = origin.with_variant(specialize::type_args_variant(&type_args));
+        let clone = origin.with_variant(key.variant());
         assert_eq!(metadata.node_types.get(&clone), Some(&int));
         let local = &metadata.local_instances[&clone];
         assert_eq!(
             local.binding,
-            NodeId::from_raw(2).with_variant(specialize::type_args_variant(&type_args))
+            NodeId::from_raw(2).with_variant(key.variant())
         );
         assert_eq!(local.local, crate::ast::LocalId::new(7));
         assert_eq!(local.callable, specialized_function);

@@ -1,3 +1,4 @@
+use super::instance::InstanceKey;
 use super::nominal_index::NominalIndex;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -10,12 +11,12 @@ use crate::ast::{FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, Type
 /// Traverses the AST and records which concrete type argument combinations
 /// each generic function is called with. The result maps each polymorphic
 /// `FuncDefId` to the set of concrete type argument lists used.
-pub fn collect_instantiations<'db>(
+pub(super) fn collect_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
     function_instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-) -> HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>> {
+) -> HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>> {
     let mut collector = InstantiationCollector::new(db, function_types, function_instances);
     walk_module(
         &mut Refs(|site, node, value: &TypedRef<'db>| {
@@ -133,7 +134,7 @@ struct InstantiationCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
     schemes: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
     function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-    instantiations: HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    instantiations: HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
 }
 
 impl<'a, 'db> InstantiationCollector<'a, 'db> {
@@ -162,23 +163,23 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
         let Some(scheme) = self.schemes.get(id) else {
             return;
         };
-        if scheme.type_params(self.db).is_empty() {
-            return;
-        }
         let Some(instance) = self.function_instances.get(&node_id) else {
             return;
         };
         if instance.function != *id {
             return;
         }
-        let type_args = instance.type_arguments.clone();
-        if !type_args.iter().all(|ty| is_concrete_type(self.db, *ty)) {
+        let Some(key) = InstanceKey::of(self.db, *scheme, instance) else {
+            return;
+        };
+        if !key
+            .type_args
+            .iter()
+            .all(|ty| is_concrete_type(self.db, *ty))
+        {
             return;
         }
-        self.instantiations
-            .entry(*id)
-            .or_default()
-            .insert(type_args);
+        self.instantiations.entry(*id).or_default().insert(key);
     }
 }
 

@@ -11,13 +11,16 @@ use trunk_ir::Symbol;
 
 use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_module_mut};
 use crate::ast::{
-    CtorId, Decl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypedRef,
+    CtorId, Decl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme,
+    TypedRef,
 };
 
+use super::instance::InstanceKey;
 use super::mangle::mangle_type_name;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
-pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
+pub type RewriteMap<'db> =
+    HashMap<FuncDefId<'db>, (TypeScheme<'db>, Vec<(InstanceKey<'db>, Symbol)>)>;
 
 /// Type rewrite map: declaration identity → specialized argument/name pairs.
 pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
@@ -64,13 +67,13 @@ fn specialized_callee<'db>(
     let ResolvedRef::Function { id } = &typed_ref.resolved else {
         return None;
     };
-    let entries = rewrite_map.get(id)?;
+    let (scheme, entries) = rewrite_map.get(id)?;
     let instance = instances.get(&node)?;
     if instance.function != *id {
         return None;
     }
-    let type_args = &instance.type_arguments;
-    let (_, mangled) = entries.iter().find(|(args, _)| args == type_args)?;
+    let key = InstanceKey::of(db, *scheme, instance)?;
+    let (_, mangled) = entries.iter().find(|(entry, _)| *entry == key)?;
     Some(TypedRef::new(
         ResolvedRef::Function {
             id: FuncDefId::new(db, mangled.clone()),
