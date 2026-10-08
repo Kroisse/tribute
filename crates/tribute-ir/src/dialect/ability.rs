@@ -114,15 +114,15 @@ mod ability {
     ) {
     }
 
-    /// Run the CPS computation `body` to completion and yield its answer.
+    /// Run the CPS computation `body` to completion in a flow that is not
+    /// Cps, and yield its answer.
     ///
-    /// `body` is a `Cps` closure `(Evidence, frame) -> core.never`. `evidence`
-    /// holds the flow's evidence in an `EvidenceDirect` flow and is empty in
-    /// a `Direct` flow, where the body starts on the target's initial
-    /// evidence. The operation survives frame expansion; the target ABI
-    /// boundary builds its completion cell and terminal frame.
+    /// `body` is `(Evidence, frame) -> core.never` and the result is the
+    /// answer of that frame. `evidence` holds the flow's evidence in an
+    /// `EvidenceDirect` flow and is empty in a `Direct` flow. Frame expansion
+    /// lowers the operation to `effect.delimit`.
     #[verify]
-    fn delimit(body: Value<Closure>, evidence: Variadic<Evidence>) -> Value<_> {}
+    fn delimit(body: Value<CpsClosure>, evidence: Variadic<Evidence>) -> Value<_> {}
 }
 
 // === Hash-Based Dispatch ===

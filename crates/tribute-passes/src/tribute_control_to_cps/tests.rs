@@ -2434,7 +2434,7 @@ fn delimiters(ctx: &IrContext, module: Module, name: &str) -> Vec<(usize, TypeRe
         .blocks
         .iter()
         .flat_map(|&block| ctx.block(block).ops.iter().copied())
-        .filter_map(|op| ability::Delimit::from_op(ctx, op).ok())
+        .filter_map(|op| effect::Delimit::from_op(ctx, op).ok())
         .map(|delimit| (delimit.evidence(ctx).len(), delimit.result_ty(ctx)))
         .collect()
 }

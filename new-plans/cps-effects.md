@@ -299,8 +299,8 @@ named pre-CPS boundary가 아니다.
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 `func.*`/`closure.*`/`func.func_sig` graph, [추상 frame 표면](#abstract-continuation-frames),
 logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가
-`ability.delimit`을 뺀 추상 frame 표면을 제거한 뒤 `lower_closure_lambda`가 이
-shared graph의 lambda를 추출하지만
+추상 frame 표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph의
+lambda를 추출하지만
 `closure.new`, `closure.func`, `closure.env`와 convention-proven closure type은
 target ABI validation까지 유지한다. `lower_ability_call`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
@@ -406,11 +406,11 @@ CPS legalization은 이 표면으로 다음을 표현한다.
   frame의 `Dispatch<R>`와 함께 [`effect.dispatch_cps`](#op-operation-continuation-dispatch)로
   낮춘다. `ability.abort`는 reject continuation을 쓴다.
 - `ability.exit`는 frame의 `Done<R>`로 proper tail transfer한다.
-- `ability.delimit`은 펼치지 않는다. Body closure가 받는 frame의 타입만 layout으로
-  바꾼다.
+- `ability.delimit`은 `effect.delimit`이 된다. Body closure가 받는 frame의 타입이
+  layout으로 바뀔 뿐 delimiter의 장치는 여기서 만들지 않는다.
 
-이 pass 뒤에는 `ability.frame` 타입이 남지 않는다. 남는 `ability.*`는
-`ability.call`, `ability.handle_dispatch`, `ability.delimit`뿐이다. Target이 delimited
+이 pass 뒤에는 `ability.frame` 타입과 추상 frame operation이 남지 않는다. 남는
+`ability.*`는 `ability.call`과 `ability.handle_dispatch`뿐이다. Target이 delimited
 control을 다른 runtime 장치로 구현한다면 이 pass 대신 자기 lowering으로 같은 표면을
 소비할 수 있다.
 
@@ -543,8 +543,9 @@ tail transfer는 다른 `Cps` callable과 같은 검증을 받는다. Evidence�
 값을 낸다.
 
 **단계별 책임.** `tribute_control_to_cps`가 `ability.delimit`을 만들고 region을
-CPS로 legalize한다. Frame 펼치기는 region의 frame 타입에 layout을 준다. CPS
-signature 물리화 뒤의 target ABI 경계가 cell, frame 생성, 결과 없는 ordinary call,
+CPS로 legalize한다. Frame 펼치기는 region의 frame 타입에 layout을 주고 operation을
+`effect.delimit`으로 낮춘다. CPS signature 물리화 뒤의 target ABI 경계가
+cell, frame 생성, 결과 없는 ordinary call,
 cell 읽기를 합성한다. Frame contract는 명시적 result/layout provenance로 검사하며
 closure 이름, arity 또는 erased storage에서 추론하지 않는다. 이 adapter는
 answer-type polymorphism, trampoline, in-band sentinel 또는 control carrier가 아니다.

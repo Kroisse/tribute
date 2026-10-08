@@ -1131,8 +1131,8 @@ ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
 - **`ability.delimit`:** [값 delimiter](cps-effects.md#값-delimiter)다. `body`는
   `(Evidence, ability.frame<R>) -> core.never`인 `Cps` closure이고 결과는 `R` 하나다.
   Evidence operand는 `EvidenceDirect` flow에서만 있고, `Direct` flow에서는 없다.
-  Terminator가 아니며 `Cps`가 아닌 flow에만 온다. Frame 펼치기 뒤에도 남고 target
-  ABI 경계가 소비한다.
+  Terminator가 아니며 `Cps`가 아닌 flow에만 온다. Frame 펼치기가 같은 operand와
+  결과를 가진 `effect.delimit`으로 낮추고, target ABI 경계가 그것을 소비한다.
 - **검증:** Operation verifier는 위 타입 관계, frame과 closure의 `R` 일치, arm 표와
   arm closure의 일치, closure의 calling convention을 검사한다. Terminator 위치와
   enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다. `ability.delimit`을
@@ -1142,8 +1142,7 @@ ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
 - **위치:** suffix와 frame operation은 그것을 만든 source operation의 span을, handle과
   perform은 각 source `handle`/`perform`의 span을 쓴다.
 
-`lower_continuation_frames` 뒤에는 `ability.frame` 타입이 남지 않고, 위 operation
-가운데 `ability.delimit`만 남는다. `ability.delimit`은 target ABI 경계가 소비한다.
+`lower_continuation_frames` 뒤에는 이 타입과 operation이 남지 않는다.
 
 `ability.*` represents effect evidence and handler dispatch. Ability operations
 are lowered through the effect pipeline; ability-related types may remain until

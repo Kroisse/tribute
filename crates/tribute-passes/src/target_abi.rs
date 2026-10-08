@@ -572,7 +572,7 @@ fn build_cps_root_call(
     Ok(completed.expect("reading the cell produces the answer"))
 }
 
-/// Replace every `ability.delimit` with its completion cell, terminal frame,
+/// Replace every `effect.delimit` with its completion cell, terminal frame,
 /// the call of its body, and the read of the answer.
 ///
 /// Runs after physicalization, like the root bridge: the body and the frame
@@ -584,7 +584,7 @@ pub fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(
     };
     let delimiters: Vec<_> = collect_ops(ctx, module.op())
         .into_iter()
-        .filter_map(|op| ability::Delimit::from_op(ctx, op).ok())
+        .filter_map(|op| effect::Delimit::from_op(ctx, op).ok())
         .collect();
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let mut terminals: Vec<(TypeRef, TerminalFunctions)> = Vec::new();

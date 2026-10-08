@@ -254,32 +254,19 @@ impl trunk_ir::ops::Verify for Delimit {
         if self.evidence(ctx).len() > 1 {
             return Err("ability.delimit takes at most one evidence".into());
         }
-        let Some((convention, signature)) = closure_signature(ctx, ctx.value_ty(self.body(ctx)))
-        else {
+        let Some((_, signature)) = closure_signature(ctx, ctx.value_ty(self.body(ctx))) else {
             return Err("ability.delimit body must be a closure with a calling convention".into());
         };
-        if convention != CallingConvention::Cps {
-            return Err("ability.delimit body must use the cps convention".into());
-        }
         let [evidence, frame] = signature.inputs(ctx) else {
             return Err("ability.delimit body must take an evidence and a frame".into());
         };
         if !is_evidence_type_ref(ctx, *evidence) {
             return Err("ability.delimit body must take an evidence first".into());
         }
-        // Frame expansion replaces the abstract frame, and physicalization the
-        // `core.never` result; the answer is checked while both are present.
-        match signature.results(ctx) {
-            [] => {}
-            [result] if is_never(ctx, *result) => {}
-            _ => return Err("ability.delimit body must return core.never".into()),
+        if frame_result(ctx, *frame) != Some(self.result_ty(ctx)) {
+            return Err("ability.delimit must produce the answer of its body's frame".into());
         }
-        match frame_result(ctx, *frame) {
-            Some(answer) if answer != self.result_ty(ctx) => {
-                Err("ability.delimit must produce the answer of its body's frame".into())
-            }
-            _ => Ok(()),
-        }
+        Ok(())
     }
 }
 

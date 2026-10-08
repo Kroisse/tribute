@@ -88,6 +88,15 @@ mod effect {
         payload: Value<_>,
     ) {
     }
+
+    /// Run the CPS computation `body` to completion in a flow that is not
+    /// Cps, and yield its answer.
+    ///
+    /// `body` is a Cps closure over an evidence and the physical frame of the
+    /// answer. `evidence` is empty in a `Direct` flow, where the body starts
+    /// on the target's initial evidence. The target ABI boundary builds the
+    /// completion cell and the terminal frame.
+    fn delimit<E: Evidence>(body: Value<_>, evidence: Variadic<E>) -> Value<_> {}
 }
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Extend>() }
