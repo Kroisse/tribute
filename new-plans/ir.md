@@ -1145,7 +1145,8 @@ ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
 - **위치:** suffix와 frame operation은 그것을 만든 source operation의 span을, handle과
   perform은 각 source `handle`/`perform`의 span을 쓴다.
 
-`lower_continuation_frames` 뒤에는 이 타입과 operation이 남지 않는다.
+`lower_continuation_frames` 뒤에는 `ability.frame` 타입이 남지 않고, 위 operation
+가운데 `ability.delimit`만 남는다. `ability.delimit`은 target ABI 경계가 소비한다.
 
 `ability.*` represents effect evidence and handler dispatch. Ability operations
 are lowered through the effect pipeline; ability-related types may remain until

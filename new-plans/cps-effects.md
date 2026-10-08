@@ -298,8 +298,9 @@ named pre-CPS boundary가 아니다.
 `tribute_control` operation 또는 `func_sig`/`resume_token` type은 source
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 `func.*`/`closure.*`/`func.func_sig` graph, [추상 frame 표면](#abstract-continuation-frames),
-logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가 추상 frame
-표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph의 lambda를 추출하지만
+logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가
+`ability.delimit`을 뺀 추상 frame 표면을 제거한 뒤 `lower_closure_lambda`가 이
+shared graph의 lambda를 추출하지만
 `closure.new`, `closure.func`, `closure.env`와 convention-proven closure type은
 target ABI validation까지 유지한다. `lower_ability_call`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
