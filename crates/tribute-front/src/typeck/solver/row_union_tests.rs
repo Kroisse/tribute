@@ -252,6 +252,28 @@ fn signature_boundary_closes_free_tails_of_a_closed_union(db: &salsa::DatabaseIm
     }
 }
 
+/// A tail that a pending removal reads is not free: the removal decides it,
+/// and only the other tail of the closed union is empty.
+#[salsa_test]
+fn signature_boundary_leaves_a_removal_source_to_its_removal(db: &salsa::DatabaseImpl) {
+    let mut solver = TypeSolver::new(db);
+    let removed_from = EffectRow::open(db, EffectVar { id: 1 });
+    let free = EffectRow::open(db, EffectVar { id: 2 });
+    solver.add_row_unions(vec![crate::ast::RowUnion {
+        sources: vec![removed_from, free],
+        result: label(db, "Tell"),
+    }]);
+    solver.add_row_removals(vec![crate::ast::RowRemoval {
+        source: removed_from,
+        removed: label(db, "Ask"),
+        result: label(db, "Tell"),
+    }]);
+    solver.finalize_relations().unwrap();
+    solver.settle_signature_relations(&[]).unwrap();
+    assert_eq!(solver.row_subst.apply(db, removed_from), label(db, "Tell"));
+    assert!(solver.row_subst.apply(db, free).is_pure(db));
+}
+
 #[salsa_test]
 fn row_union_pure_result_closes_every_source(db: &salsa::DatabaseImpl) {
     let mut solver = TypeSolver::new(db);

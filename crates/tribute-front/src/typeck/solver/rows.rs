@@ -417,7 +417,19 @@ impl<'db> TypeSolver<'db> {
                             let within = known
                                 .iter()
                                 .all(|effect| normalized.result.effects(self.db).contains(effect));
-                            let settled = !free.is_empty() && fixed.is_empty() && within;
+                            // A pending removal still decides the tail it
+                            // removes from.
+                            let (free, removed_from): (Vec<_>, Vec<_>) =
+                                free.into_iter().partition(|tail| {
+                                    !self.pending_row_removals.iter().any(|(removal, _)| {
+                                        self.normalize_row(removal.source).rest(self.db)
+                                            == Some(*tail)
+                                    })
+                                });
+                            let settled = !free.is_empty()
+                                && fixed.is_empty()
+                                && removed_from.is_empty()
+                                && within;
                             for free in free {
                                 self.row_subst.insert(free.id, EffectRow::pure(self.db));
                                 bound += 1;
