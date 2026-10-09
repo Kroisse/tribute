@@ -1,0 +1,39 @@
+id: no-symbol-new-in-comparison
+valid:
+  - 'fn f() { let _ = sym == symbol!("func"); }'
+  - 'fn f() { let _ = sym == "func"; }'
+  - 'fn f() { let _ = sym == Symbol::new(name); }'
+  - 'fn f() { let _ = sym != Symbol::new(NAME); }'
+  - 'fn f() { let _ = Symbol::new("func"); }'
+  - 'fn f() { consume(Symbol::new("func")); }'
+  - 'fn f() { let _ = sym < Symbol::new("func"); }'
+  - 'fn f() { let _ = sym == Other::new("func"); }'
+  - 'fn f() { let _ = "sym == Symbol::new(\"func\")"; }'
+  - '// sym == Symbol::new("func")'
+  - 'fn f() { let _ = wrap(Symbol::new("func")) == sym; }'
+  - 'fn f() { let _ = (Symbol::new("func"), 0) == pair; }'
+  - 'fn f() { let _ = sym == Symbol::new("func").clone(); }'
+  # Known syntax-only blind spots; these are not approved comparison styles.
+  - 'fn f() { let _ = sym == Sym::new("func"); }'
+  - 'fn f() { assert!(sym == Symbol::new("func")); }'
+  - 'fn f() { assert_eq!(sym, Symbol::new("func")); }'
+invalid:
+  - 'fn f() { let _ = sym == Symbol::new("func"); }'
+  - 'fn f() { let _ = Symbol::new("func") == sym; }'
+  - 'fn f() { let _ = sym != Symbol::new("func"); }'
+  - 'fn f() { let _ = Symbol::new("func") != sym; }'
+  - 'fn f() { let _ = *ctx.name() == Symbol::new("func"); }'
+  - 'fn f() { let _ = sym == Symbol::new(r#"func"#); }'
+  - |
+    fn f() {
+        let _ = sym
+            == Symbol::new(
+                "func",
+            );
+    }
+  - 'fn f() { if sym == Symbol::new("func") && ready() {} }'
+  - 'fn f() { match sym { s if s != Symbol::new("func") => (), _ => () } }'
+  - 'fn f() { let _ = sym == (Symbol::new("func")); }'
+  - 'fn f() { let _ = ((Symbol::new("func"))) != sym; }'
+  - 'fn f() { let _ = sym == trunk_ir::Symbol::new("func"); }'
+  - 'fn f() { let _ = ::trunk_ir::symbol::Symbol::new("func") == sym; }'
