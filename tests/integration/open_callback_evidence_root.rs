@@ -78,7 +78,8 @@ fn main() -> Nil {
         .filter_map(|op| {
             let function = tribute_control::Func::from_op(&ctx, op).ok()?;
             let name = function.sym_name(&ctx);
-            let class = name.strip_prefix("std::Option::map$")?.rsplit_once("$9")?.1;
+            let rest = name.strip_prefix("std::Option::map$")?;
+            let class = rest.rsplit_once("$9").map_or("", |(_, class)| class);
             let convention = tribute_control::func_sig_convention(&ctx, function.r#type(&ctx));
             Some((class.to_owned(), convention))
         })
