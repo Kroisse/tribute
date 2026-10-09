@@ -76,7 +76,7 @@ expect_commands() {
 FMT='cargo fmt --all --check'
 CLIPPY='cargo clippy --workspace --all-targets --message-format=short -- -D warnings'
 AST_TEST='ast-grep test --skip-snapshot-tests'
-AST_SCAN='ast-grep scan crates'
+AST_SCAN='ast-grep scan src tests crates'
 MARKDOWN='npx markdownlint-cli2 **/*.md #node_modules'
 RUNTIME='cargo xtask runtime'
 TESTS='cargo nextest run --workspace -j 4'

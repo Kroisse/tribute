@@ -467,9 +467,7 @@ mod tests {
         let items = completion_items(&db, source);
         assert!(!items.is_empty());
 
-        let hello_item = items
-            .iter()
-            .find(|i| i.name == trunk_ir::Symbol::new("hello"));
+        let hello_item = items.iter().find(|i| i.name == "hello");
         assert!(hello_item.is_some());
         assert_eq!(hello_item.unwrap().kind, CompletionKind::Function);
     }
@@ -480,9 +478,7 @@ mod tests {
         let source = make_source(&db, "struct Point { x: Int, y: Int }");
 
         let items = completion_items(&db, source);
-        let point_item = items
-            .iter()
-            .find(|i| i.name == trunk_ir::Symbol::new("Point"));
+        let point_item = items.iter().find(|i| i.name == "Point");
         assert!(point_item.is_some());
         assert_eq!(point_item.unwrap().kind, CompletionKind::Struct);
     }
@@ -495,7 +491,7 @@ mod tests {
         let items = completion_items(&db, source);
         let io = items
             .iter()
-            .find(|item| item.name == trunk_ir::Symbol::new("Io"))
+            .find(|item| item.name == "Io")
             .expect("imported builtin Io should appear in completions");
         assert_eq!(io.kind, CompletionKind::Ability);
         assert_eq!(
@@ -512,16 +508,12 @@ mod tests {
         let items = completion_items(&db, source);
 
         // Should have the enum
-        let color_item = items
-            .iter()
-            .find(|i| i.name == trunk_ir::Symbol::new("Color"));
+        let color_item = items.iter().find(|i| i.name == "Color");
         assert!(color_item.is_some());
         assert_eq!(color_item.unwrap().kind, CompletionKind::Enum);
 
         // Should have the variants
-        let red_item = items
-            .iter()
-            .find(|i| i.name == trunk_ir::Symbol::new("Red"));
+        let red_item = items.iter().find(|i| i.name == "Red");
         assert!(red_item.is_some());
         assert_eq!(red_item.unwrap().kind, CompletionKind::Constructor);
     }
@@ -536,9 +528,7 @@ mod tests {
         let symbols = document_symbols(&db, source);
         assert!(!symbols.is_empty());
 
-        let main_sym = symbols
-            .iter()
-            .find(|s| s.name == trunk_ir::Symbol::new("main"));
+        let main_sym = symbols.iter().find(|s| s.name == "main");
         assert!(main_sym.is_some());
         assert_eq!(main_sym.unwrap().kind, SymbolKind::Function);
     }
@@ -550,9 +540,7 @@ mod tests {
 
         let symbols = document_symbols(&db, source);
 
-        let point_sym = symbols
-            .iter()
-            .find(|s| s.name == trunk_ir::Symbol::new("Point"));
+        let point_sym = symbols.iter().find(|s| s.name == "Point");
         assert!(point_sym.is_some());
         assert_eq!(point_sym.unwrap().kind, SymbolKind::Struct);
 
@@ -580,9 +568,7 @@ mod tests {
 
         let symbols = document_symbols(&db, source);
 
-        let option_sym = symbols
-            .iter()
-            .find(|s| s.name == trunk_ir::Symbol::new("Option"));
+        let option_sym = symbols.iter().find(|s| s.name == "Option");
         assert!(option_sym.is_some());
         assert_eq!(option_sym.unwrap().kind, SymbolKind::Enum);
 
@@ -670,9 +656,7 @@ mod tests {
         let source = make_source(&db, r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int"#);
 
         let items = completion_items(&db, source);
-        let add_item = items
-            .iter()
-            .find(|i| i.name == trunk_ir::Symbol::new("__add"));
+        let add_item = items.iter().find(|i| i.name == "__add");
         assert!(
             add_item.is_some(),
             "Extern function should appear in completions"
@@ -691,15 +675,11 @@ fn main() -> Nil { 1 }"#,
 
         let items = completion_items(&db, source);
 
-        let add_item = items
-            .iter()
-            .find(|i| i.name == trunk_ir::Symbol::new("__add"));
+        let add_item = items.iter().find(|i| i.name == "__add");
         assert!(add_item.is_some(), "Extern function should appear");
         assert_eq!(add_item.unwrap().kind, CompletionKind::Function);
 
-        let main_item = items
-            .iter()
-            .find(|i| i.name == trunk_ir::Symbol::new("main"));
+        let main_item = items.iter().find(|i| i.name == "main");
         assert!(main_item.is_some(), "Regular function should appear");
         assert_eq!(main_item.unwrap().kind, CompletionKind::Function);
     }

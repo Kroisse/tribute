@@ -16,9 +16,10 @@ diagnostic snapshots. CI and `.ci/lint.sh` (including `--quick`) run the shared
 `.ci/ast-grep.sh` entry point. Codex and Claude Stop hooks and Git pre-commit
 therefore run the same checks. A missing CLI or failed check is an error.
 
-Scanning runs directly with `ast-grep scan crates`. Any detected violation
-fails the check; there are no baseline exemptions. Test hook failure propagation
-with `.ci/test-lint.sh`.
+Scanning runs directly with `ast-grep scan src tests crates`, covering the root
+source and integration tests as well as every crate's source and tests. Any
+detected violation fails the check; there are no baseline exemptions. Test hook
+failure propagation with `.ci/test-lint.sh`.
 
 ## Scope and limitations
 

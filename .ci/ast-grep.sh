@@ -11,4 +11,4 @@ if ! command -v ast-grep >/dev/null 2>&1; then
 fi
 
 ast-grep test --skip-snapshot-tests
-ast-grep scan crates
+ast-grep scan src tests crates
