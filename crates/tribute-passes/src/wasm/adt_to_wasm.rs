@@ -507,7 +507,6 @@ impl RewritePattern for ArrayNewPattern {
         };
 
         let loc = ctx.op(op).location;
-        let result_ty = array_new.result_ty(ctx);
         let array_ty = array_new.r#type(ctx);
         let operands = array_new.elements(ctx).to_vec();
 
@@ -520,7 +519,6 @@ impl RewritePattern for ArrayNewPattern {
                 // Only size operand -> array_new_default
                 let new_op = wasm_gc_dialect::ArrayNewDefault::operands(operands[0])
                     .r#type(array_ty)
-                    .results(result_ty)
                     .build(ctx, loc);
                 rewriter.replace_op(new_op.op_ref());
             }
@@ -528,7 +526,6 @@ impl RewritePattern for ArrayNewPattern {
                 // size + init value -> array_new
                 let new_op = wasm_gc_dialect::ArrayNew::operands(operands[0], operands[1])
                     .r#type(array_ty)
-                    .results(result_ty)
                     .build(ctx, loc);
                 rewriter.replace_op(new_op.op_ref());
             }
@@ -574,7 +571,6 @@ impl RewritePattern for ArrayGetPattern {
         } else {
             wasm_gc_dialect::ArrayGet::operands(ref_val, index)
                 .r#type(array_ty)
-                .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
         };

@@ -6,13 +6,13 @@ use trunk_ir::attr_kind::Type;
 mod list {
     fn empty(element_type: Attr<Type>) -> Value<_> {}
 
-    fn prepend(element_type: Attr<Type>, element: Value<_>, tail: Value<_>) -> Value<_> {}
+    fn prepend<L>(element_type: Attr<Type>, element: Value<_>, tail: Value<L>) -> Value<L> {}
 
     fn is_empty(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
 
-    fn head(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
+    fn head<T>(element_type: Attr<TypeOf<T>>, list: Value<_>) -> Value<T> {}
 
-    fn tail(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
+    fn tail<L>(element_type: Attr<Type>, list: Value<L>) -> Value<L> {}
 }
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Empty>() }
@@ -52,8 +52,8 @@ mod tests {
         let empty_value = empty.result(&ctx);
         let prepend = super::Prepend::operands(element, empty_value)
             .element_type(element_ty)
-            .results(list_ty)
             .build(&mut ctx, loc);
+        assert_eq!(prepend.result_ty(&ctx), list_ty);
         let list_value = prepend.result(&ctx);
         let is_empty = super::IsEmpty::operands(list_value)
             .element_type(element_ty)
@@ -61,12 +61,12 @@ mod tests {
             .build(&mut ctx, loc);
         let head = super::Head::operands(list_value)
             .element_type(element_ty)
-            .results(element_ty)
             .build(&mut ctx, loc);
+        assert_eq!(head.result_ty(&ctx), element_ty);
         let tail = super::Tail::operands(list_value)
             .element_type(element_ty)
-            .results(list_ty)
             .build(&mut ctx, loc);
+        assert_eq!(tail.result_ty(&ctx), list_ty);
 
         assert!(super::Empty::from_op(&ctx, empty.op_ref()).is_ok());
         assert!(super::Prepend::from_op(&ctx, prepend.op_ref()).is_ok());
