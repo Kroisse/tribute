@@ -314,6 +314,8 @@ impl<'db> TypeSolver<'db> {
     ///   untouched, since a row holds each label once.
     /// - Joining rows whose tails a declared union covers yields that
     ///   union's result.
+    /// - A body-local tail joined into a closed row, with nothing else to
+    ///   constrain it, is empty.
     ///
     /// Relations that would constrain the signature rows themselves remain
     /// pending for the caller to report.
@@ -408,7 +410,15 @@ impl<'db> TypeSolver<'db> {
                         let (free, fixed): (Vec<_>, Vec<_>) = tails
                             .into_iter()
                             .partition(|tail| self.is_unconstrained_tail(*tail, &normalized));
-                        if let [tail] = fixed[..]
+                        if normalized.result.rest(self.db).is_none() {
+                            // A closed result bounds every source, and a
+                            // body-local tail that nothing else constrains
+                            // adds no labels of its own: it is empty.
+                            for free in free {
+                                self.row_subst.insert(free.id, EffectRow::pure(self.db));
+                                bound += 1;
+                            }
+                        } else if let [tail] = fixed[..]
                             && self.rigid_rows.contains(&tail)
                         {
                             for free in free {

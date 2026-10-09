@@ -93,6 +93,53 @@ fn main() -> Nil {
     );
 }
 
+/// Each of several row-polymorphic calls in one body selects the instance
+/// for its own callback, and the `Io` root stays as it is.
+#[salsa_test]
+fn calls_in_one_body_select_instances_independently(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    let _ = Option::map(Some(+1), fn(n) n + +1)
+    let _ = Option::map(Some("io"), fn(s) print_line(s))
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let mut functions: Vec<_> = module
+        .ops(&ctx)
+        .iter()
+        .copied()
+        .filter_map(|op| {
+            let function = tribute_control::Func::from_op(&ctx, op).ok()?;
+            let name = function.sym_name(&ctx);
+            let name = if name == "main" {
+                name
+            } else {
+                let rest = name.strip_prefix("std::Option::map$")?;
+                rest.rsplit_once("$9").map_or("", |(_, class)| class)
+            };
+            let convention = tribute_control::func_sig_convention(&ctx, function.r#type(&ctx));
+            Some((name.to_owned(), convention))
+        })
+        .collect();
+    functions.sort();
+    use tribute_control::CallingConvention::{Direct, EvidenceDirect};
+    assert_eq!(
+        functions,
+        [
+            ("D".to_owned(), Some(Direct)),
+            ("E".to_owned(), Some(EvidenceDirect)),
+            ("main".to_owned(), Some(EvidenceDirect)),
+        ]
+    );
+}
+
 #[test]
 fn generic_callback_evidence_root_executes_native() {
     let output = common::compile_and_run_native("test.trb", SOURCE);
