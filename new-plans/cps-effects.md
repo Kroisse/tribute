@@ -896,7 +896,8 @@ Rules:
 Evidence runtime은 `tribute-runtime`의
 `__tribute_evidence_*` C ABI 함수로 제공되고, native effect ABI lowering은
 `effect.*`를 marker lookup helper, runtime evidence extension, closure
-decomposition, and indirect calls로 변환한다.
+decomposition, and indirect calls로 변환한다. Native evidence는 RC object이며 그
+ownership 규칙은 [rc.md](rc.md#evidence)를 따른다.
 
 ### WasmGC
 

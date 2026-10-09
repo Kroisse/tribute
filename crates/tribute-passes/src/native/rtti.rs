@@ -17,12 +17,15 @@
 //! | 2 | Nat | fixed 12-byte release |
 //! | 3 | Int | fixed 12-byte release |
 //! | 4 | Float | fixed 16-byte release |
-//! | 5+ | declared struct and variant descriptors | per-descriptor deep release |
+//! | 5 | evidence | releases its markers, frees the fixed part plus them |
+//! | 6 | evidence marker | releases its three references, fixed release |
+//! | 7+ | declared struct and variant descriptors | per-descriptor deep release |
 //!
 //! Indices are private to one compiled program: the table and
-//! `__tribute_deep_release` interpret them within the module, and only index 0
-//! is shared with the runtime. Growing the reserved range therefore needs no
-//! compatibility step; user indices simply start after it.
+//! `__tribute_deep_release` interpret them within the module. Only the indices
+//! of the objects the runtime allocates (0, 5 and 6) are shared with it, so
+//! growing the reserved range otherwise needs no compatibility step; user
+//! indices simply start after it.
 //!
 //! ## Pipeline Position
 //!
@@ -76,17 +79,28 @@ impl ClifTypes {
     }
 }
 
-/// Reserved RTTI indices. Index 0 is `Bytes`, which the runtime also
-/// allocates.
+/// Reserved RTTI indices. The runtime allocates `Bytes` (index 0), evidences
+/// and markers itself, so it shares those three numbers.
 pub const RTTI_NIL: u32 = 0;
 pub const RTTI_BOOL: u32 = 1;
 pub const RTTI_NAT: u32 = 2;
 pub const RTTI_INT: u32 = 3;
 pub const RTTI_FLOAT: u32 = 4;
+pub const RTTI_EVIDENCE: u32 = 5;
+pub const RTTI_MARKER: u32 = 6;
 
 /// First index for declared allocation layouts, right after the last
 /// reserved index.
-pub const RTTI_USER_START: u32 = RTTI_FLOAT + 1;
+pub const RTTI_USER_START: u32 = RTTI_MARKER + 1;
+
+/// The RC header and the evidence payload before its markers: `[len]`.
+const EVIDENCE_FIXED_ALLOC_SIZE: u64 = 16;
+/// The RC header and the marker payload
+/// `[ability_id] [prompt_tag] [dispatch] [shadowed] [outer]`.
+const MARKER_ALLOC_SIZE: u64 = 40;
+/// Payload offsets of a marker's dispatch closure, shadowed marker and outer
+/// evidence.
+const MARKER_REFERENCE_OFFSETS: [i32; 3] = [8, 16, 24];
 
 /// The RC header and the fixed `Bytes` payload `[ptr] [len] [owner] [cap]`.
 const BYTES_FIXED_ALLOC_SIZE: u64 = 40;
@@ -230,6 +244,24 @@ pub(crate) fn generate_rtti(
     );
     ctx.push_op(module_block, bytes_release);
     release_fns.insert(RTTI_NIL, release_fn_symbol(RTTI_NIL));
+    // The runtime also allocates evidences and their markers.
+    let evidence_release = generate_reference_array_release_function(
+        ctx,
+        RTTI_EVIDENCE,
+        EVIDENCE_FIXED_ALLOC_SIZE,
+        loc,
+    );
+    ctx.push_op(module_block, evidence_release);
+    release_fns.insert(RTTI_EVIDENCE, release_fn_symbol(RTTI_EVIDENCE));
+    let marker_release = generate_release_function(
+        ctx,
+        RTTI_MARKER,
+        &MARKER_REFERENCE_OFFSETS,
+        AllocSize::Fixed(MARKER_ALLOC_SIZE),
+        loc,
+    );
+    ctx.push_op(module_block, marker_release);
+    release_fns.insert(RTTI_MARKER, release_fn_symbol(RTTI_MARKER));
     for (rtti_idx, alloc_size) in primitive_releases {
         let func_op = generate_fixed_release_function(ctx, rtti_idx, alloc_size, loc);
         ctx.push_op(module_block, func_op);
@@ -703,6 +735,143 @@ fn generate_release_function(
         .regions(body)
         .build(ctx, loc);
     func_op.op_ref()
+}
+
+/// Generate the release function of an allocation `[len: i64] [reference...]`
+/// whose fixed part, including the RC header, is `fixed` bytes: release every
+/// reference, then deallocate.
+///
+/// ```text
+/// entry(payload):
+///   len = load i64 payload
+///   jump head(0)
+/// head(i):
+///   i < len ? goto body : goto done
+/// body:
+///   release(load ptr (payload + 8 + i * 8))
+///   jump head(i + 1)
+/// done:
+///   __tribute_dealloc(payload - 8, fixed + len * 8)
+/// ```
+fn generate_reference_array_release_function(
+    ctx: &mut IrContext,
+    rtti_idx: u32,
+    fixed: u64,
+    loc: Location,
+) -> OpRef {
+    let tys = ClifTypes::intern(ctx);
+    let func_ty = clif::func_sig(ctx, [tys.ptr], [tys.nil]).as_type_ref();
+    let new_block = |ctx: &mut IrContext, args: Vec<TypeRef>| {
+        ctx.create_block(BlockData {
+            location: loc,
+            args: args
+                .into_iter()
+                .map(|ty| BlockArgData {
+                    ty,
+                    attrs: Default::default(),
+                })
+                .collect(),
+            ops: smallvec![],
+            parent_region: None,
+        })
+    };
+    let iconst = |ctx: &mut IrContext, block: BlockRef, value: i64| {
+        let op = clif::Iconst::operands()
+            .value(value)
+            .results(tys.i64)
+            .build(ctx, loc);
+        ctx.push_op(block, op.op_ref());
+        op.result(ctx)
+    };
+    let entry = new_block(ctx, vec![tys.ptr]);
+    let head = new_block(ctx, vec![tys.i64]);
+    let body = new_block(ctx, vec![]);
+    let done = new_block(ctx, vec![]);
+    let payload_ptr = ctx.block_arg(entry, 0);
+    let index = ctx.block_arg(head, 0);
+
+    let len = clif::Load::operands(payload_ptr)
+        .offset(0)
+        .results(tys.i64)
+        .build(ctx, loc);
+    ctx.push_op(entry, len.op_ref());
+    let len = len.result(ctx);
+    let zero = iconst(ctx, entry, 0);
+    let enter = clif::Jump::operands([zero])
+        .successors(head)
+        .build(ctx, loc);
+    ctx.push_op(entry, enter.op_ref());
+
+    let more = clif::Icmp::operands(index, len)
+        .cond("ult")
+        .results(tys.i8)
+        .build(ctx, loc);
+    ctx.push_op(head, more.op_ref());
+    let branch = clif::Brif::operands(more.result(ctx))
+        .successors(body, done)
+        .build(ctx, loc);
+    ctx.push_op(head, branch.op_ref());
+
+    let width = iconst(ctx, body, 8);
+    let offset = clif::Imul::operands(index, width)
+        .results(tys.i64)
+        .build(ctx, loc);
+    ctx.push_op(body, offset.op_ref());
+    let slot = clif::Iadd::operands(payload_ptr, offset.result(ctx))
+        .results(tys.ptr)
+        .build(ctx, loc);
+    ctx.push_op(body, slot.op_ref());
+    let reference = clif::Load::operands(slot.result(ctx))
+        .offset(8)
+        .results(tys.ptr)
+        .build(ctx, loc);
+    ctx.push_op(body, reference.op_ref());
+    let release = tribute_rt::Release::operands(reference.result(ctx))
+        .alloc_size(0)
+        .build(ctx, loc);
+    ctx.push_op(body, release.op_ref());
+    let one = iconst(ctx, body, 1);
+    let next = clif::Iadd::operands(index, one)
+        .results(tys.i64)
+        .build(ctx, loc);
+    ctx.push_op(body, next.op_ref());
+    let again = clif::Jump::operands([next.result(ctx)])
+        .successors(head)
+        .build(ctx, loc);
+    ctx.push_op(body, again.op_ref());
+
+    let references = clif::Imul::operands(len, iconst(ctx, done, 8))
+        .results(tys.i64)
+        .build(ctx, loc);
+    ctx.push_op(done, references.op_ref());
+    let size = clif::Iadd::operands(iconst(ctx, done, fixed as i64), references.result(ctx))
+        .results(tys.i64)
+        .build(ctx, loc);
+    ctx.push_op(done, size.op_ref());
+    let header = iconst(ctx, done, i64::from(tribute_rt::RC_HEADER_SIZE as u32));
+    let raw_ptr = clif::Isub::operands(payload_ptr, header)
+        .results(tys.ptr)
+        .build(ctx, loc);
+    ctx.push_op(done, raw_ptr.op_ref());
+    let dealloc = clif::Call::operands([raw_ptr.result(ctx), size.result(ctx)])
+        .callee(SymbolPath::from(DEALLOC_FN))
+        .results([tys.nil])
+        .build(ctx, loc);
+    ctx.push_op(done, dealloc.op_ref());
+    let ret = clif::Return::operands([]).build(ctx, loc);
+    ctx.push_op(done, ret.op_ref());
+
+    let region = ctx.create_region(RegionData {
+        location: loc,
+        blocks: smallvec![entry, head, body, done],
+        parent_op: None,
+    });
+    clif::Func::operands()
+        .sym_name(format!("{RELEASE_FN_PREFIX}{rtti_idx}"))
+        .r#type(func_ty)
+        .regions(region)
+        .build(ctx, loc)
+        .op_ref()
 }
 
 #[allow(clippy::too_many_arguments)]

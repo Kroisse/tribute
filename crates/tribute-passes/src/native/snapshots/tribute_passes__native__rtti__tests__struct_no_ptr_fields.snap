@@ -3,14 +3,14 @@ source: crates/tribute-passes/src/native/rtti.rs
 expression: output
 ---
 core.module @test {
-  !Test = adt.struct<Test(x: core.i32, y: core.i32)>
   !t0 = clif.func_sig<(core.ptr) -> core.nil>
+  !Test = adt.struct<Test(x: core.i32, y: core.i32)>
 
   func.func @create_struct(%0: core.i32, %1: core.i32) -> !Test {
       %2 = adt.struct_new %0, %1 {type = !Test} : !Test
       func.return %2
   }
-  tribute_rtti.layout {fields = ["u32", "u32"], index = 5, type = !Test}
+  tribute_rtti.layout {fields = ["u32", "u32"], index = 7, type = !Test}
   clif.func {sym_name = "__tribute_release_0", type = !t0} {
     ^bb0(%0: core.ptr):
       %1 = clif.load %0 {offset = 16} : core.ptr
@@ -34,15 +34,88 @@ core.module @test {
   }
   clif.func {sym_name = "__tribute_release_5", type = !t0} {
     ^bb0(%0: core.ptr):
+      %1 = clif.load %0 {offset = 0} : core.i64
+      %2 = clif.iconst {value = 0} : core.i64
+      clif.jump %2 [^bb1]
+
+    ^bb1(%3: core.i64):
+      %4 = clif.icmp %3, %1 {cond = "ult"} : core.i8
+      clif.brif %4 [^bb2, ^bb3]
+
+    ^bb2:
+      %5 = clif.iconst {value = 8} : core.i64
+      %6 = clif.imul %3, %5 : core.i64
+      %7 = clif.iadd %0, %6 : core.ptr
+      %8 = clif.load %7 {offset = 8} : core.ptr
+      tribute_rt.release %8 {alloc_size = 0}
+      %9 = clif.iconst {value = 1} : core.i64
+      %10 = clif.iadd %3, %9 : core.i64
+      clif.jump %10 [^bb1]
+
+    ^bb3:
+      %11 = clif.iconst {value = 8} : core.i64
+      %12 = clif.imul %1, %11 : core.i64
+      %13 = clif.iconst {value = 16} : core.i64
+      %14 = clif.iadd %13, %12 : core.i64
+      %15 = clif.iconst {value = 8} : core.i64
+      %16 = clif.isub %0, %15 : core.ptr
+      %17 = clif.call %16, %14 {callee = @__tribute_dealloc} : core.nil
+      clif.return
+  }
+  clif.func {sym_name = "__tribute_release_6", type = !t0} {
+    ^bb0(%0: core.ptr):
+      %1 = clif.load %0 {offset = 8} : core.ptr
+      %2 = clif.iconst {value = 0} : core.ptr
+      %3 = clif.icmp %1, %2 {cond = "eq"} : core.i8
+      clif.brif %3 [^bb2, ^bb1]
+
+    ^bb1:
+      %4 = clif.load %0 {offset = 8} : core.ptr
+      tribute_rt.release %4 {alloc_size = 0}
+      clif.jump [^bb2]
+
+    ^bb2:
+      %5 = clif.load %0 {offset = 16} : core.ptr
+      %6 = clif.iconst {value = 0} : core.ptr
+      %7 = clif.icmp %5, %6 {cond = "eq"} : core.i8
+      clif.brif %7 [^bb4, ^bb3]
+
+    ^bb3:
+      %8 = clif.load %0 {offset = 16} : core.ptr
+      tribute_rt.release %8 {alloc_size = 0}
+      clif.jump [^bb4]
+
+    ^bb4:
+      %9 = clif.load %0 {offset = 24} : core.ptr
+      %10 = clif.iconst {value = 0} : core.ptr
+      %11 = clif.icmp %9, %10 {cond = "eq"} : core.i8
+      clif.brif %11 [^bb6, ^bb5]
+
+    ^bb5:
+      %12 = clif.load %0 {offset = 24} : core.ptr
+      tribute_rt.release %12 {alloc_size = 0}
+      clif.jump [^bb6]
+
+    ^bb6:
+      %13 = clif.iconst {value = 8} : core.i64
+      %14 = clif.isub %0, %13 : core.ptr
+      %15 = clif.iconst {value = 40} : core.i64
+      %16 = clif.call %14, %15 {callee = @__tribute_dealloc} : core.nil
+      clif.return
+  }
+  clif.func {sym_name = "__tribute_release_7", type = !t0} {
+    ^bb0(%0: core.ptr):
       %1 = clif.iconst {value = 8} : core.i64
       %2 = clif.isub %0, %1 : core.ptr
       %3 = clif.iconst {value = 16} : core.i64
       %4 = clif.call %2, %3 {callee = @__tribute_dealloc} : core.nil
       clif.return
   }
-  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\08\x01\0\0\x05\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0=\x01\0\0\x04\0\0\0\0\0\0\0\0\0\0\0\xf0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0B\x01\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\xfc\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0E\x01\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\x08\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0H\x01\0\0\x05\0\0\0\0\0\0\0\0\0\0\0\x14\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x02\0\0\0M\x01\0\0\x04\0\0\0\0\0\0\0\0\0\0\0 \x01\0\0\0\0\0\0A\x01\0\0\x01\0\0\0\x06\0\0\0A\x01\0\0\x01\0\0\0\x04 \0\0A\x01\0\0\x01\0\0\0\x03 \0\0A\x01\0\0\x01\0\0\0\x05@\0\0Q\x01\0\0\x01\0\0\0\x04 \0\0R\x01\0\0\x01\0\0\0\x04 \0\0BytesBool0NatIntFloatTestxy", sym_name = "__tribute_rtti"} {
+  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\0\x88\x01\0\0\x05\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0\x8d\x01\0\0\x04\0\0\0\0\0\0\0\0\0\0\0@\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0\x92\x01\0\0\x03\0\0\0\0\0\0\0\0\0\0\0L\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0\x95\x01\0\0\x03\0\0\0\0\0\0\0\0\0\0\0X\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0\x98\x01\0\0\x05\0\0\0\0\0\0\0\0\0\0\0d\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\0\x9d\x01\0\0\x08\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\0\xa5\x01\0\0\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x02\0\0\0\xab\x01\0\0\x04\0\0\0\0\0\0\0\0\0\0\0p\x01\0\0\0\0\0\0\x91\x01\0\0\x01\0\0\0\x06\0\0\0\x91\x01\0\0\x01\0\0\0\x04 \0\0\x91\x01\0\0\x01\0\0\0\x03 \0\0\x91\x01\0\0\x01\0\0\0\x05@\0\0\xaf\x01\0\0\x01\0\0\0\x04 \0\0\xb0\x01\0\0\x01\0\0\0\x04 \0\0BytesBool0NatIntFloatEvidenceMarkerTestxy", sym_name = "__tribute_rtti"} {
       clif.func_reloc {func = @__tribute_release_0, offset = 0}
       clif.func_reloc {func = @__tribute_release_5, offset = 200}
+      clif.func_reloc {func = @__tribute_release_6, offset = 240}
+      clif.func_reloc {func = @__tribute_release_7, offset = 280}
   }
   clif.func {sym_name = "__tribute_deep_release", type = clif.func_sig<(core.ptr, core.i64) -> core.nil>} {
     ^bb0(%0: core.ptr, %1: core.i64):

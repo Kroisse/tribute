@@ -10,7 +10,6 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use smallvec::SmallVec;
@@ -722,23 +721,24 @@ pub unsafe extern "C" fn __tribute_dealloc(ptr: *mut u8, size: u64) {
 // Evidence-based ability dispatch
 // =============================================================================
 
-/// Marker for a single ability handler in the evidence.
+/// RTTI index of an [`Evidence`]; the compiler generates its release.
+const RTTI_EVIDENCE: u32 = 5;
+/// RTTI index of a [`Marker`]; the compiler generates its release.
+const RTTI_MARKER: u32 = 6;
+
+/// One ability handler in an evidence. A reference-counted object that never
+/// changes once made; see `new-plans/rc.md` (Evidence).
 ///
-/// `#[repr(C)]` so Cranelift can access individual fields by offset.
+/// `#[repr(C)]`: the compiler-generated release reads the reference fields
+/// by offset.
 ///
-/// `tr_dispatch_fn` is a pointer to a tail-resumptive dispatch function
-/// `(op_idx: i32, shift_value: ptr) -> ptr`, or null if the handler is
-/// not fully tail-resumptive.
-///
-/// `shadowed` is the marker of the same ability this one shadows, or null.
-/// It points into the evidence this marker's evidence was derived from. An
-/// evidence is immutable and never freed once returned, so the marker it
-/// points to stays valid.
-///
-/// `outer` is the evidence the handler was installed on, before the
-/// installation's selection. It stays valid for the same reason.
+/// `tr_dispatch_fn` is the handler's tail-resumptive dispatch closure, or
+/// null if the marker has none. `shadowed` is the marker of the same ability
+/// this one shadows, or null. `outer` is the evidence the handler was
+/// installed on, before the installation's selection. The marker owns one
+/// unit of each.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Marker {
     pub ability_id: i32,
     pub prompt_tag: i32,
@@ -747,28 +747,67 @@ pub struct Marker {
     pub outer: *const Evidence,
 }
 
-/// Opaque evidence structure — an array of marker stacks sorted by
-/// `ability_id`. Each slot holds the top `Marker` of its ability; the markers
-/// it shadows follow its `shadowed` chain.
+/// An array of the top [`Marker`] of each handled ability, sorted by
+/// `ability_id`. A reference-counted object that never changes once made;
+/// it owns one unit of each marker, which follow this header.
 ///
 /// IR-level code only sees `core.ptr`; this struct is never exposed across FFI
 /// except through the `__tribute_evidence_*` functions.
-#[derive(Debug, Clone)]
-struct Evidence {
-    markers: SmallVec<[Marker; 4]>,
+#[repr(C)]
+#[derive(Debug)]
+pub struct Evidence {
+    len: u64,
+}
+
+/// Take one more unit of a reference-counted object, or nothing for null.
+unsafe fn retain<T>(payload: *const T) -> *const T {
+    if !payload.is_null() {
+        unsafe { (*tribute_rc::RcBox::from_payload_ptr(payload)).retain() };
+    }
+    payload
+}
+
+/// Allocate an evidence that takes over one unit of each of `markers`.
+fn allocate_evidence(markers: &[*const Marker]) -> *mut Evidence {
+    let fixed = core::mem::size_of::<tribute_rc::RcBox<Evidence>>();
+    let size = fixed + core::mem::size_of_val(markers);
+    let raw = unsafe { __tribute_alloc(size as u64) };
+    let rc_box = unsafe { tribute_rc::RcBox::<Evidence>::init(raw, RTTI_EVIDENCE) };
+    unsafe {
+        (*rc_box).payload.len = markers.len() as u64;
+        core::ptr::copy_nonoverlapping(
+            markers.as_ptr(),
+            raw.add(fixed).cast::<*const Marker>(),
+            markers.len(),
+        );
+        &raw mut (*rc_box).payload
+    }
+}
+
+/// Allocate `marker`, which takes over the units its fields hold.
+fn allocate_marker(marker: Marker) -> *const Marker {
+    let size = core::mem::size_of::<tribute_rc::RcBox<Marker>>() as u64;
+    let raw = unsafe { __tribute_alloc(size) };
+    let rc_box = unsafe { tribute_rc::RcBox::<Marker>::init(raw, RTTI_MARKER) };
+    unsafe {
+        (*rc_box).payload = marker;
+        &raw const (*rc_box).payload
+    }
 }
 
 impl Evidence {
-    fn new() -> Self {
-        Self {
-            markers: SmallVec::new(),
-        }
+    fn markers(&self) -> &[*const Marker] {
+        unsafe { core::slice::from_raw_parts((&raw const *self).add(1).cast(), self.len as usize) }
+    }
+
+    /// The slot of `ability_id`, or where its slot would be inserted.
+    fn search(&self, ability_id: i32) -> Result<usize, usize> {
+        self.markers()
+            .binary_search_by_key(&ability_id, |&marker| unsafe { (*marker).ability_id })
     }
 
     fn position(&self, ability_id: i32) -> usize {
-        let result = self
-            .markers
-            .binary_search_by_key(&ability_id, |m| m.ability_id);
+        let result = self.search(ability_id);
         debug_assert!(
             result.is_ok(),
             "ICE: evidence has no marker for ability_id {} (compiler bug)",
@@ -784,94 +823,104 @@ impl Evidence {
     }
 
     fn lookup(&self, ability_id: i32) -> &Marker {
-        &self.markers[self.position(ability_id)]
+        unsafe { &*self.markers()[self.position(ability_id)] }
     }
 
-    /// Push `marker` onto its ability's stack. Its `shadowed` is set here.
-    fn extend(&self, mut marker: Marker) -> Self {
-        let mut new = self.clone();
-        match self
-            .markers
-            .binary_search_by_key(&marker.ability_id, |m| m.ability_id)
-        {
-            Ok(pos) => {
-                // The shadowed marker is the one stored in `self`, not its
-                // copy in `new`: `new` moves when it is boxed.
-                marker.shadowed = &self.markers[pos];
-                new.markers[pos] = marker;
+    /// A new evidence with the slot at `slot` replaced by `top`, inserted if
+    /// `slot` is an insertion point, or removed if `top` is null. It takes
+    /// over the unit of `top` and retains every marker it keeps.
+    fn with_slot(&self, slot: Result<usize, usize>, top: *const Marker) -> *mut Evidence {
+        let mut markers: SmallVec<[*const Marker; 8]> = SmallVec::from_slice(self.markers());
+        match slot {
+            Ok(pos) if top.is_null() => {
+                markers.remove(pos);
             }
-            Err(pos) => {
-                marker.shadowed = core::ptr::null();
-                new.markers.insert(pos, marker);
+            Ok(pos) => markers[pos] = top,
+            Err(pos) => markers.insert(pos, top),
+        }
+        for &marker in &markers {
+            if marker != top {
+                unsafe { retain(marker) };
             }
         }
-        new
+        allocate_evidence(&markers)
     }
 
-    /// Pop the top marker of `ability_id`, exposing the one it shadows.
-    fn mask(&self, ability_id: i32) -> Self {
+    /// A new evidence whose handler of `ability_id` is a new marker on top of
+    /// the one this evidence has, if any. The new marker takes over the units
+    /// of `tr_dispatch_fn` and `outer`.
+    fn extend(
+        &self,
+        ability_id: i32,
+        prompt_tag: i32,
+        tr_dispatch_fn: *const u8,
+        outer: *const Evidence,
+    ) -> *mut Evidence {
+        let slot = self.search(ability_id);
+        let shadowed = match slot {
+            Ok(pos) => unsafe { retain(self.markers()[pos]) },
+            Err(_) => core::ptr::null(),
+        };
+        let top = allocate_marker(Marker {
+            ability_id,
+            prompt_tag,
+            tr_dispatch_fn,
+            shadowed,
+            outer,
+        });
+        self.with_slot(slot, top)
+    }
+
+    fn mask(&self, ability_id: i32) -> *mut Evidence {
         let pos = self.position(ability_id);
-        let mut new = self.clone();
-        let shadowed = self.markers[pos].shadowed;
-        if shadowed.is_null() {
-            new.markers.remove(pos);
-        } else {
-            // SAFETY: `shadowed` points into an evidence that is never freed.
-            new.markers[pos] = unsafe { *shadowed };
-        }
-        new
+        let shadowed = unsafe { retain((*self.markers()[pos]).shadowed) };
+        self.with_slot(Ok(pos), shadowed)
     }
 
-    /// The evidence of the row tail in `slot`, or `self` without that slot.
+    /// The evidence a row tail slot holds, or this evidence if it has no such
+    /// slot. Not retained.
     fn tail(&self, slot: i32) -> *const Evidence {
-        match self.markers.binary_search_by_key(&slot, |m| m.ability_id) {
-            Ok(pos) => self.markers[pos].outer,
+        match self.search(slot) {
+            Ok(pos) => unsafe { (*self.markers()[pos]).outer },
             Err(_) => self,
         }
-    }
-
-    /// Push a copy of the top marker of `ability_id` onto its stack.
-    fn dup(&self, ability_id: i32) -> Self {
-        let pos = self.position(ability_id);
-        let mut new = self.clone();
-        new.markers[pos].shadowed = &self.markers[pos];
-        new
     }
 }
 
 /// Create an empty evidence.
 ///
+/// Every `__tribute_evidence_*` function borrows its evidence and closure
+/// arguments for the call and returns a result the caller owns one unit of.
+/// `__tribute_evidence_extend` alone takes over the unit of its closure.
+///
 /// Signature: `() -> ptr`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_evidence_empty() -> *mut Evidence {
-    Box::into_raw(Box::new(Evidence::new()))
+    allocate_evidence(&[])
 }
 
-/// Look up a marker by ability ID in the `Evidence` and return its
-/// `prompt_tag` (an `i32`).
-///
-/// Aborts if no marker with the given `ability_id` exists (compiler bug).
+/// Look up a marker by ability ID and return its prompt tag.
 ///
 /// Signature: `(ev: ptr, ability_id: i32) -> i32`
 ///
 /// # Safety
 ///
-/// `ev` must be a valid pointer returned by `__tribute_evidence_empty` or
-/// `__tribute_evidence_extend`.
+/// `ev` must be a valid evidence that has a marker for `ability_id`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_evidence_lookup(ev: *const Evidence, ability_id: i32) -> i32 {
     let ev = unsafe { &*ev };
     ev.lookup(ability_id).prompt_tag
 }
 
-/// Extend evidence with a new marker (persistent — returns a new evidence).
+/// Install a handler: a new evidence with a new marker on top of the slot of
+/// `ability_id`. The marker takes over the caller's unit of `tr_dispatch_fn`.
 ///
 /// Signature: `(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr, outer: ptr) -> ptr`
 ///
 /// # Safety
 ///
-/// `ev` must be a valid pointer returned by `__tribute_evidence_empty` or
-/// a previous `__tribute_evidence_extend` call.
+/// `ev` and `outer` must be valid evidences, and `tr_dispatch_fn` a
+/// reference-counted closure or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_evidence_extend(
     ev: *const Evidence,
@@ -881,96 +930,91 @@ pub unsafe extern "C" fn __tribute_evidence_extend(
     outer: *const Evidence,
 ) -> *mut Evidence {
     let ev = unsafe { &*ev };
-    let marker = Marker {
-        ability_id,
-        prompt_tag,
-        tr_dispatch_fn,
-        shadowed: core::ptr::null(),
-        outer,
-    };
-    Box::into_raw(Box::new(ev.extend(marker)))
+    ev.extend(ability_id, prompt_tag, tr_dispatch_fn, unsafe {
+        retain(outer)
+    })
 }
 
-/// Remove the top marker of an ability, exposing the marker it shadows
-/// (persistent — returns a new evidence). The ability's slot is removed when
-/// the top marker shadows nothing.
+/// Remove the top handler of `ability_id`, uncovering the one it shadows.
 ///
 /// Signature: `(ev: ptr, ability_id: i32) -> ptr`
 ///
 /// # Safety
 ///
-/// `ev` must be a valid pointer returned by a `__tribute_evidence_*` function
-/// and must hold a marker for `ability_id`.
+/// `ev` must be a valid evidence that has a marker for `ability_id`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_evidence_mask(
     ev: *const Evidence,
     ability_id: i32,
 ) -> *mut Evidence {
     let ev = unsafe { &*ev };
-    Box::into_raw(Box::new(ev.mask(ability_id)))
+    ev.mask(ability_id)
 }
 
-/// Push a copy of the top marker of an ability so that it shadows the
-/// original (persistent — returns a new evidence).
+/// Install the top handler of `ability_id` once more on top of itself.
 ///
 /// Signature: `(ev: ptr, ability_id: i32) -> ptr`
 ///
 /// # Safety
 ///
-/// `ev` must be a valid pointer returned by a `__tribute_evidence_*` function
-/// and must hold a marker for `ability_id`.
+/// `ev` must be a valid evidence that has a marker for `ability_id`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_evidence_dup(
     ev: *const Evidence,
     ability_id: i32,
 ) -> *mut Evidence {
     let ev = unsafe { &*ev };
-    Box::into_raw(Box::new(ev.dup(ability_id)))
+    let top = ev.lookup(ability_id);
+    unsafe {
+        ev.extend(
+            ability_id,
+            top.prompt_tag,
+            retain(top.tr_dispatch_fn),
+            retain(top.outer),
+        )
+    }
 }
 
-/// Return the evidence the top handler of an ability was installed on.
+/// The evidence the top handler of `ability_id` was installed on.
 ///
 /// Signature: `(ev: ptr, ability_id: i32) -> ptr`
 ///
 /// # Safety
 ///
-/// `ev` must be a valid pointer returned by a `__tribute_evidence_*` function
-/// and must hold a marker for `ability_id`.
+/// `ev` must be a valid evidence that has a marker for `ability_id`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_evidence_outer(
     ev: *const Evidence,
     ability_id: i32,
 ) -> *const Evidence {
     let ev = unsafe { &*ev };
-    ev.lookup(ability_id).outer
+    unsafe { retain(ev.lookup(ability_id).outer) }
 }
 
-/// Return the evidence of a row tail: the `outer` of the marker in `slot`, or
-/// `ev` itself when it holds no such marker.
+/// The evidence the row tail slot `slot` holds, or `ev` if it has no such
+/// slot.
 ///
 /// Signature: `(ev: ptr, slot: i32) -> ptr`
 ///
 /// # Safety
 ///
-/// `ev` must be a valid pointer returned by a `__tribute_evidence_*` function.
+/// `ev` must be a valid evidence.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_evidence_tail(
     ev: *const Evidence,
     slot: i32,
 ) -> *const Evidence {
     let ev = unsafe { &*ev };
-    ev.tail(slot)
+    unsafe { retain(ev.tail(slot)) }
 }
 
-/// Set the evidence of a row tail: put a marker in `slot` whose `outer` is
-/// `tail` (persistent — returns a new evidence).
+/// A new evidence whose row tail slot `slot` holds `tail`.
 ///
 /// Signature: `(ev: ptr, slot: i32, tail: ptr) -> ptr`
 ///
 /// # Safety
 ///
-/// Both pointers must be valid pointers returned by a `__tribute_evidence_*`
-/// function.
+/// `ev` and `tail` must be valid evidences.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_evidence_with_tail(
     ev: *const Evidence,
@@ -978,25 +1022,17 @@ pub unsafe extern "C" fn __tribute_evidence_with_tail(
     tail: *const Evidence,
 ) -> *mut Evidence {
     let ev = unsafe { &*ev };
-    let marker = Marker {
-        ability_id: slot,
-        prompt_tag: 0,
-        tr_dispatch_fn: core::ptr::null(),
-        shadowed: core::ptr::null(),
-        outer: tail,
-    };
-    Box::into_raw(Box::new(ev.extend(marker)))
+    ev.extend(slot, 0, core::ptr::null(), unsafe { retain(tail) })
 }
 
-/// Push the top marker that `source` holds for an ability onto `ev`
-/// (persistent — returns a new evidence).
+/// Install the top handler `source` has for `ability_id` on top of `ev`.
 ///
 /// Signature: `(ev: ptr, source: ptr, ability_id: i32) -> ptr`
 ///
 /// # Safety
 ///
-/// Both pointers must be valid pointers returned by a `__tribute_evidence_*`
-/// function, and `source` must hold a marker for `ability_id`.
+/// `ev` and `source` must be valid evidences, and `source` must have a marker
+/// for `ability_id`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_evidence_push(
     ev: *const Evidence,
@@ -1004,28 +1040,32 @@ pub unsafe extern "C" fn __tribute_evidence_push(
     ability_id: i32,
 ) -> *mut Evidence {
     let ev = unsafe { &*ev };
-    let source = unsafe { &*source };
-    Box::into_raw(Box::new(ev.extend(*source.lookup(ability_id))))
+    let top = unsafe { &*source }.lookup(ability_id);
+    unsafe {
+        ev.extend(
+            ability_id,
+            top.prompt_tag,
+            retain(top.tr_dispatch_fn),
+            retain(top.outer),
+        )
+    }
 }
 
-/// Look up the tail-resumptive dispatch function pointer for an ability.
-///
-/// Returns the `tr_dispatch_fn` pointer from the marker, or null if
-/// the handler is not tail-resumptive.
+/// The tail-resumptive dispatch closure of the top handler of `ability_id`,
+/// or null if it has none. The caller owns one unit of it.
 ///
 /// Signature: `(ev: ptr, ability_id: i32) -> ptr`
 ///
 /// # Safety
 ///
-/// `ev` must be a valid pointer returned by `__tribute_evidence_empty` or
-/// `__tribute_evidence_extend`.
+/// `ev` must be a valid evidence that has a marker for `ability_id`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_evidence_lookup_tr(
     ev: *const Evidence,
     ability_id: i32,
 ) -> *const u8 {
     let ev = unsafe { &*ev };
-    ev.lookup(ability_id).tr_dispatch_fn
+    unsafe { retain(ev.lookup(ability_id).tr_dispatch_fn) }
 }
 
 // =============================================================================
@@ -1036,6 +1076,7 @@ pub unsafe extern "C" fn __tribute_evidence_lookup_tr(
 mod tests {
     use super::*;
     use alloc::collections::BTreeMap;
+    use core::sync::atomic::Ordering;
     use proptest::prelude::*;
     use proptest::sample::Index;
     use proptest::strategy::Union;
@@ -1155,7 +1196,7 @@ mod tests {
 
     fn refcount(bytes: *const TributeBytes) -> u32 {
         let rc_box = unsafe { &*tribute_rc::RcBox::from_payload_ptr(bytes) };
-        rc_box.refcount.load(core::sync::atomic::Ordering::Relaxed)
+        rc_box.refcount.load(Ordering::Relaxed)
     }
 
     #[test]
@@ -1464,8 +1505,60 @@ mod tests {
     // =========================================================================
 
     /// The marker slots of a live evidence.
-    unsafe fn markers<'a>(ev: *const Evidence) -> &'a [Marker] {
-        unsafe { &(*ev).markers }
+    unsafe fn markers<'a>(ev: *const Evidence) -> &'a [*const Marker] {
+        unsafe { (*ev).markers() }
+    }
+
+    /// What the compiler-generated release does: give up one unit of an
+    /// evidence, and free it with its markers when that was the last one.
+    /// Returns the number of objects freed.
+    unsafe fn release_evidence(ev: *const Evidence) -> usize {
+        if ev.is_null() {
+            return 0;
+        }
+        let rc_box = unsafe { tribute_rc::RcBox::from_payload_ptr(ev) };
+        if unsafe { &(*rc_box).refcount }.fetch_sub(1, Ordering::Relaxed) != 1 {
+            return 0;
+        }
+        let slots = unsafe { markers(ev) };
+        let mut freed = 1;
+        for &marker in slots {
+            freed += unsafe { release_marker(marker) };
+        }
+        let size =
+            core::mem::size_of::<tribute_rc::RcBox<Evidence>>() + core::mem::size_of_val(slots);
+        unsafe { __tribute_dealloc(rc_box.cast_mut().cast(), size as u64) };
+        freed
+    }
+
+    unsafe fn release_marker(marker: *const Marker) -> usize {
+        if marker.is_null() {
+            return 0;
+        }
+        let rc_box = unsafe { tribute_rc::RcBox::from_payload_ptr(marker) };
+        if unsafe { &(*rc_box).refcount }.fetch_sub(1, Ordering::Relaxed) != 1 {
+            return 0;
+        }
+        let fields = unsafe { &*marker };
+        unsafe { release_closure(fields.tr_dispatch_fn) };
+        let freed = 1 + unsafe { release_marker(fields.shadowed) + release_evidence(fields.outer) };
+        let size = core::mem::size_of::<tribute_rc::RcBox<Marker>>() as u64;
+        unsafe { __tribute_dealloc(rc_box.cast_mut().cast(), size) };
+        freed
+    }
+
+    /// Give up one unit of a test closure. The test keeps its own unit, so
+    /// this never frees.
+    unsafe fn release_closure(closure: *const u8) {
+        if !closure.is_null() {
+            let rc_box = unsafe { tribute_rc::RcBox::from_payload_ptr(closure.cast::<u64>()) };
+            unsafe { &(*rc_box).refcount }.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    fn refcount_of<T>(payload: *const T) -> u32 {
+        let rc_box = unsafe { &*tribute_rc::RcBox::from_payload_ptr(payload) };
+        rc_box.refcount.load(Ordering::Relaxed)
     }
 
     #[test]
@@ -1507,10 +1600,8 @@ mod tests {
     fn test_evidence_empty() {
         let ev = __tribute_evidence_empty();
         assert!(!ev.is_null());
-        let ev_ref = unsafe { &*ev };
-        assert!(ev_ref.markers.is_empty());
-        // Clean up
-        let _ = unsafe { Box::from_raw(ev) };
+        assert!(unsafe { markers(ev) }.is_empty());
+        assert_eq!(unsafe { release_evidence(ev) }, 1);
     }
 
     /// Ability ids the evidence state machine draws from. The same ids serve
@@ -1590,7 +1681,7 @@ mod tests {
                                 base,
                                 ability,
                                 prompt_tag,
-                                tr: tr * 0x10,
+                                tr,
                                 outer,
                             },
                         )
@@ -1724,68 +1815,89 @@ mod tests {
         }
     }
 
-    /// The real evidence pool. It owns every evidence the machine creates.
-    /// Markers point into other evidences, so all of them are freed together
-    /// when the pool drops, including when a check panics.
-    struct EvidencePool(Vec<*mut Evidence>);
+    /// The real evidence pool. It owns one unit of every evidence the
+    /// machine creates and of each test closure; closure 0 is null.
+    struct EvidencePool {
+        evidences: Vec<*mut Evidence>,
+        closures: [*const u8; 3],
+        /// Markers the steps so far created: one each, except a mask.
+        markers: usize,
+    }
 
-    impl Drop for EvidencePool {
-        fn drop(&mut self) {
-            for &ev in &self.0 {
-                let _ = unsafe { Box::from_raw(ev) };
+    impl EvidencePool {
+        fn new() -> Self {
+            let closure = || {
+                let size = core::mem::size_of::<tribute_rc::RcBox<u64>>() as u64;
+                let raw = unsafe { __tribute_alloc(size) };
+                let rc_box = unsafe { tribute_rc::RcBox::<u64>::init(raw, u32::MAX) };
+                unsafe { (&raw const (*rc_box).payload).cast::<u8>() }
+            };
+            Self {
+                evidences: vec![__tribute_evidence_empty()],
+                closures: [core::ptr::null(), closure(), closure()],
+                markers: 0,
             }
         }
     }
 
     /// The real evidence at `pool[index]` must hold exactly the stacks of
     /// `models[index]`, sorted by ability id, and every query must agree.
-    fn check_evidence(pool: &[*mut Evidence], models: &[ModelEvidence], index: usize) {
+    fn check_evidence(system: &EvidencePool, models: &[ModelEvidence], index: usize) {
+        let pool = &system.evidences;
         let ev = pool[index].cast_const();
         let model = &models[index];
         let pool_index = |outer: *const Evidence| {
             pool.iter()
                 .position(|&candidate| candidate.cast_const() == outer)
         };
+        let closure_index = |closure: *const u8| {
+            system
+                .closures
+                .iter()
+                .position(|&candidate| candidate == closure)
+                .expect("a test closure")
+        };
 
         let slots = unsafe { markers(ev) };
-        let ids: Vec<i32> = slots.iter().map(|marker| marker.ability_id).collect();
+        let ids: Vec<i32> = slots
+            .iter()
+            .map(|&marker| unsafe { (*marker).ability_id })
+            .collect();
         let expected_ids: Vec<i32> = model.keys().copied().collect();
         assert_eq!(ids, expected_ids, "evidence {index} slots");
 
-        for slot in slots {
+        for (&slot, &id) in slots.iter().zip(&ids) {
             let mut stack = Vec::new();
-            let mut current: *const Marker = slot;
+            let mut current = slot;
             while !current.is_null() {
                 let marker = unsafe { &*current };
-                assert_eq!(marker.ability_id, slot.ability_id);
+                assert_eq!(marker.ability_id, id);
                 stack.push(ModelMarker {
                     prompt_tag: marker.prompt_tag,
-                    tr: marker.tr_dispatch_fn.addr(),
+                    tr: closure_index(marker.tr_dispatch_fn),
                     outer: pool_index(marker.outer).unwrap_or(usize::MAX),
                 });
                 current = marker.shadowed;
             }
             stack.reverse();
-            assert_eq!(&stack, &model[&slot.ability_id], "evidence {index} stack");
+            assert_eq!(&stack, &model[&id], "evidence {index} stack");
         }
 
+        // Every query result is a unit the caller owns.
         for id in EVIDENCE_IDS {
             let top = model.get(&id).and_then(|stack| stack.last());
             let expected_tail = top.map_or(index, |top| top.outer);
-            assert_eq!(
-                unsafe { __tribute_evidence_tail(ev, id) },
-                pool[expected_tail].cast_const()
-            );
+            let tail = unsafe { __tribute_evidence_tail(ev, id) };
+            assert_eq!(tail, pool[expected_tail].cast_const());
+            assert_eq!(unsafe { release_evidence(tail) }, 0);
             if let Some(top) = top {
                 assert_eq!(unsafe { __tribute_evidence_lookup(ev, id) }, top.prompt_tag);
-                assert_eq!(
-                    unsafe { __tribute_evidence_lookup_tr(ev, id) }.addr(),
-                    top.tr
-                );
-                assert_eq!(
-                    unsafe { __tribute_evidence_outer(ev, id) },
-                    pool[top.outer].cast_const()
-                );
+                let closure = unsafe { __tribute_evidence_lookup_tr(ev, id) };
+                assert_eq!(closure_index(closure), top.tr);
+                unsafe { release_closure(closure) };
+                let outer = unsafe { __tribute_evidence_outer(ev, id) };
+                assert_eq!(outer, pool[top.outer].cast_const());
+                assert_eq!(unsafe { release_evidence(outer) }, 0);
             }
         }
     }
@@ -1798,7 +1910,7 @@ mod tests {
         type Reference = EvidenceModel;
 
         fn init_test(_models: &Vec<ModelEvidence>) -> Self::SystemUnderTest {
-            EvidencePool(vec![__tribute_evidence_empty()])
+            EvidencePool::new()
         }
 
         fn apply(
@@ -1806,7 +1918,8 @@ mod tests {
             _models: &Vec<ModelEvidence>,
             action: EvidenceAction,
         ) -> Self::SystemUnderTest {
-            let evs = &pool.0;
+            pool.markers += usize::from(!matches!(action, EvidenceAction::Mask { .. }));
+            let evs = &pool.evidences;
             let ev = match action {
                 EvidenceAction::Extend {
                     base,
@@ -1819,7 +1932,8 @@ mod tests {
                         evs[base],
                         ability,
                         prompt_tag,
-                        core::ptr::without_provenance(tr),
+                        // The new marker takes over this unit.
+                        retain(pool.closures[tr]),
                         evs[outer],
                     )
                 },
@@ -1838,16 +1952,33 @@ mod tests {
                     ability,
                 } => unsafe { __tribute_evidence_push(evs[base], evs[source], ability) },
             };
-            pool.0.push(ev);
+            pool.evidences.push(ev);
             pool
+        }
+
+        /// Releasing the pool's unit of every evidence frees every evidence
+        /// and marker, and gives back every unit of the closures.
+        fn teardown(pool: Self::SystemUnderTest, _models: Vec<ModelEvidence>) {
+            let freed: usize = pool
+                .evidences
+                .iter()
+                .map(|&ev| unsafe { release_evidence(ev) })
+                .sum();
+            assert_eq!(freed, pool.evidences.len() + pool.markers);
+            let size = core::mem::size_of::<tribute_rc::RcBox<u64>>() as u64;
+            for &closure in &pool.closures[1..] {
+                assert_eq!(refcount_of(closure), 1);
+                let rc_box = unsafe { tribute_rc::RcBox::from_payload_ptr(closure.cast::<u64>()) };
+                unsafe { __tribute_dealloc(rc_box.cast_mut().cast(), size) };
+            }
         }
 
         /// Re-checks every evidence after each step, so a step that changed
         /// an existing evidence fails persistence.
         fn check_invariants(pool: &Self::SystemUnderTest, models: &Vec<ModelEvidence>) {
-            assert_eq!(pool.0.len(), models.len());
-            for index in 0..pool.0.len() {
-                check_evidence(&pool.0, models, index);
+            assert_eq!(pool.evidences.len(), models.len());
+            for index in 0..pool.evidences.len() {
+                check_evidence(pool, models, index);
             }
         }
     }
