@@ -29,6 +29,17 @@ pub(super) struct FuncSignature {
 
 impl FuncSignature {
     pub fn lookup_logical<'db>(
+        ctx: &mut IrLoweringCtx<'db>,
+        ir: &mut IrContext,
+        name: &Symbol,
+    ) -> Option<Self> {
+        let outer = ctx.enter_definition(name);
+        let signature = Self::lookup_in_definition(ctx, ir, name);
+        ctx.leave_definition(outer);
+        signature
+    }
+
+    fn lookup_in_definition<'db>(
         ctx: &IrLoweringCtx<'db>,
         ir: &mut IrContext,
         name: &Symbol,

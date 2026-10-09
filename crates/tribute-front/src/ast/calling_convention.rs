@@ -2,8 +2,11 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use super::{AbilityId, EffectRow, Type, TypeKind};
+use super::{AbilityId, EffectRow, EffectVar, Type, TypeKind};
 pub use tribute_core::CallingConvention;
+
+/// The convention class of each class variable of one function instance.
+pub type RowClasses = [(EffectVar, CallingConvention)];
 
 /// Derive a convention from an effect row and ability-level requirements.
 ///
@@ -13,6 +16,18 @@ pub fn calling_convention_for_effect_row<'db>(
     row: EffectRow<'db>,
     abilities: &HashMap<AbilityId<'db>, CallingConvention>,
 ) -> CallingConvention {
+    calling_convention_for_effect_row_in(db, row, abilities, &[])
+}
+
+/// Derive a convention from an effect row inside a function instance. A tail
+/// that is a class variable of the instance requires its class; any other
+/// tail requires CPS.
+pub fn calling_convention_for_effect_row_in<'db>(
+    db: &'db dyn salsa::Database,
+    row: EffectRow<'db>,
+    abilities: &HashMap<AbilityId<'db>, CallingConvention>,
+    classes: &RowClasses,
+) -> CallingConvention {
     let mut convention = CallingConvention::Direct;
     for effect in row.effects(db) {
         let requirement = abilities
@@ -21,8 +36,12 @@ pub fn calling_convention_for_effect_row<'db>(
             .unwrap_or(CallingConvention::Cps);
         convention = convention.join(requirement);
     }
-    if row.rest(db).is_some() {
-        convention = convention.join(CallingConvention::Cps);
+    if let Some(tail) = row.rest(db) {
+        let class = classes
+            .iter()
+            .find(|(var, _)| *var == tail)
+            .map_or(CallingConvention::Cps, |(_, class)| *class);
+        convention = convention.join(class);
     }
     convention
 }
@@ -33,6 +52,16 @@ pub fn calling_convention_for_function_type<'db>(
     ty: Type<'db>,
     abilities: &HashMap<AbilityId<'db>, CallingConvention>,
 ) -> Option<CallingConvention> {
+    calling_convention_for_function_type_in(db, ty, abilities, &[])
+}
+
+/// Derive a convention for a function type inside a function instance.
+pub fn calling_convention_for_function_type_in<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    abilities: &HashMap<AbilityId<'db>, CallingConvention>,
+    classes: &RowClasses,
+) -> Option<CallingConvention> {
     let TypeKind::Func {
         effect,
         minimum_convention,
@@ -41,7 +70,8 @@ pub fn calling_convention_for_function_type<'db>(
     else {
         return None;
     };
-    Some((*minimum_convention).join(calling_convention_for_effect_row(db, *effect, abilities)))
+    let row = calling_convention_for_effect_row_in(db, *effect, abilities, classes);
+    Some((*minimum_convention).join(row))
 }
 
 #[cfg(test)]
