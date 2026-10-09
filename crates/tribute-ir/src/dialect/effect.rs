@@ -8,7 +8,8 @@
 use trunk_ir::attr_kind::Type;
 use trunk_ir::dialect::core::I32;
 
-use super::ability::Evidence;
+use super::ability::{CpsClosure, Evidence};
+use crate::continuation_frame::FrameRef;
 
 #[trunk_ir::dialect]
 mod effect {
@@ -87,6 +88,25 @@ mod effect {
         resume: Value<_>,
         payload: Value<_>,
     ) {
+    }
+
+    /// The evidence a computation starts on when no handler is installed
+    /// around it: the root entry's, and a value delimiter's in a `Direct`
+    /// flow, whose callable receives none. The target ABI boundary builds it.
+    fn initial_evidence() -> Value<impl Evidence> {}
+
+    /// Run the CPS computation `body` to completion in a flow that is not
+    /// Cps, and yield its answer.
+    ///
+    /// `body` is `(Evidence, frame) -> core.never` over the frame layout of
+    /// the answer, and the result is that answer. Physicalization erases the
+    /// `core.never` result and the frame's answer; the target ABI boundary
+    /// replaces the operation right after it, building the completion cell
+    /// and the terminal frame.
+    fn delimit<C, F: FrameRef>(body: Value<C>, evidence: Value<Evidence>) -> Value<F::Result>
+    where
+        C: CpsClosure<Inputs = (Evidence, F)>,
+    {
     }
 }
 
@@ -191,6 +211,44 @@ mod tests {
         assert_eq!(wrapper.ability_ref(&ctx), ability);
         assert_eq!(ctx.value_ty(wrapper.result(&ctx)), evidence_ty);
         assert!(violations(&ctx, op.op_ref()).is_empty());
+    }
+
+    #[test]
+    fn delimit_yields_the_answer_of_its_body_frame() {
+        use trunk_ir::parser::parse_module;
+        use trunk_ir::rewrite::Module;
+        use trunk_ir::validation::validate_operation_verifiers;
+
+        let errors = |body_type: &str, result: &str| {
+            let text = format!(
+                r#"core.module @test {{
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>
+  !ev = core.array<!marker, {{layout = "evidence"}}>
+  !frame = adt.typeref<{{name = "frame_i32", tribute.cps_continuation_frame_result = core.i32}}>
+  !body = closure.closure<func.func_sig<{body_type} -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
+  func.func @run(%ev: !ev, %body: !body) -> {result} {{
+    %answer = effect.delimit %body, %ev : {result}
+    func.return %answer
+  }}
+}}"#
+            );
+            let mut ctx = IrContext::new();
+            let root = parse_module(&mut ctx, &text).expect("test module parses");
+            let module = Module::new(&ctx, root).expect("core.module");
+            validate_operation_verifiers(&ctx, module)
+                .errors
+                .iter()
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        assert_eq!(errors("(!ev, !frame)", "core.i32"), "");
+        // The result is the answer the body's frame carries.
+        assert!(errors("(!ev, !frame)", "core.nil").contains("F::Result"));
+        // The body takes an evidence and a frame, and nothing else.
+        assert!(errors("(!ev, !frame, core.i32)", "core.i32").contains("C::Inputs"));
+        assert!(errors("(!ev, core.i32)", "core.i32").contains("ContinuationFrame"));
     }
 
     #[test]

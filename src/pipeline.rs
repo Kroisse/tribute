@@ -1211,6 +1211,7 @@ fn enter_target_closure_storage_boundary(
 ) -> Result<(), DumpIrError> {
     tribute_passes::target_abi::lower_cps_signatures_to_physical(ctx, m)?;
     tribute_passes::target_abi::compose_root_entry_bridge(ctx, m)?;
+    tribute_passes::target_abi::compose_value_delimiters(ctx, m)?;
     let core_module = core_dialect::Module::from_op(ctx, m.op())
         .expect("target closure lowering requires a core.module");
     let mut pm = PassManager::new();

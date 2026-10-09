@@ -77,7 +77,7 @@ pub(super) fn logical_evaluation_control_class<'db>(
     };
 
     match &*expr.kind {
-        ExprKind::Handle { .. } => EvaluationControlClass::Cps,
+        ExprKind::Handle { .. } => EvaluationControlClass::Direct,
         ExprKind::Lambda { .. } => EvaluationControlClass::Direct,
         ExprKind::Resume { .. } => EvaluationControlClass::Cps,
         ExprKind::Become { call } => classify(call),

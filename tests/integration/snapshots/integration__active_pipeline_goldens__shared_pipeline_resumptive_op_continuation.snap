@@ -4,12 +4,10 @@ expression: "pipeline_contract_summary(&ir_text, false)"
 ---
 bump: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> (core.never)
   effect.dispatch_cps operands=4 results=0: 1
-main: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.nil>) -> (core.never)
-  func.call operands=2 results=1: 1
-  func.tail_call operands=2 results=0: 1
-run_state: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> (core.never)
-  effect.extend operands=4 results=1: 1
+main: Some(Direct) () -> (core.nil)
   func.call operands=0 results=1: 1
-  func.call operands=2 results=1: 2
-  func.call operands=6 results=1: 1
-  func.tail_call operands=2 results=0: 1
+  func.return operands=1 results=0: 1
+run_state: Some(Direct) () -> (core.i32)
+  effect.delimit operands=2 results=1: 1
+  effect.initial_evidence operands=0 results=1: 1
+  func.return operands=1 results=0: 1

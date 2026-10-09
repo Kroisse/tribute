@@ -1118,10 +1118,7 @@ ability.handle %outer_ev, %exit, %completion, %arm0, ... {handlers = [...]} {
 }
 ability.perform %ev, %f, %resumption, %arg0, ... {ability_ref = !State, op_name = "get"}
 ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
-%r = ability.delimit %ev {
-^body(%body_ev: Evidence, %f: !ability.frame<R>):
-  ...
-} : R
+%r = ability.delimit %body, %ev : R
 ```
 
 - **`ability.frame<R>`:** 타입 매개변수 `result`가 답 타입 `R`인 불투명 타입이다.
@@ -1156,11 +1153,15 @@ ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
   Resumption은 one-shot 검사가 없는 closure이며 그 검사는 펼치기가 더한다.
 - **`ability.abort`:** `ability.perform`에서 resumption을 뺀 형상이며 source
   `op -> Never`에만 쓴다.
-- **`ability.delimit`:** [값 delimiter](cps-effects.md#값-delimiter)다. 결과 `R` 하나와
-  region 하나를 가진다. Evidence operand는 `EvidenceDirect` flow에서만 있고, `Direct`
-  flow에서는 없다. Body entry block은 Evidence와 `ability.frame<R>`를 받으며 모든
-  경로가 proper tail transfer나 `func.unreachable`로 끝난다. Terminator가 아니며
-  `Cps`가 아닌 flow에만 온다. Frame 펼치기 뒤에도 남고 target ABI 경계가 소비한다.
+- **`ability.delimit`:** [값 delimiter](cps-effects.md#값-delimiter)다. `body`는
+  `(Evidence, ability.frame<R>) -> core.never`인 `Cps` closure이고 결과는 `R` 하나다.
+  `ev`는 그 flow의 evidence이고, evidence를 받지 않는 `Direct` flow에서는
+  `effect.initial_evidence`의 결과다.
+  Terminator가 아니며 `Cps`가 아닌 flow에만 온다. Frame 펼치기가 같은 operand와
+  결과를 가진 `effect.delimit`으로 낮추고, target ABI 경계가 그것을 소비한다.
+  `effect.delimit`도 같은 관계를 선언하되 body의 frame은 답 타입을 가진 layout
+  참조다. 물리화가 그 답 타입과 `core.never` 결과를 지우므로, target ABI 경계는
+  물리화 직후 다른 검증 지점 없이 `effect.delimit`을 소비한다.
 - **검증:** Operation verifier는 위 타입 관계, frame과 closure의 `R` 일치, arm 표와
   arm closure의 일치, closure의 calling convention을 검사한다. Terminator 위치와
   enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다. `ability.delimit`을
@@ -1170,8 +1171,7 @@ ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
 - **위치:** suffix와 frame operation은 그것을 만든 source operation의 span을, handle과
   perform은 각 source `handle`/`perform`의 span을 쓴다.
 
-`lower_continuation_frames` 뒤에는 `ability.frame` 타입이 남지 않고, 위 operation
-가운데 `ability.delimit`만 남는다. `ability.delimit`은 target ABI 경계가 소비한다.
+`lower_continuation_frames` 뒤에는 이 타입과 operation이 남지 않는다.
 
 `ability.*` represents effect evidence and handler dispatch. Ability operations
 are lowered through the effect pipeline; ability-related types may remain until

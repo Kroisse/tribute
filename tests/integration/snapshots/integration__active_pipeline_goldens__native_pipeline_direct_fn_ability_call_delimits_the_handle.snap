@@ -10,9 +10,6 @@ __tribute_main: () -> (core.nil)
   func.call operands=0 results=1: 1
   func.call_indirect operands=4 results=0: 1
   func.return operands=1 results=0: 1
-bump: (core.array<adt.struct<_Marker>>, Frame) -> ()
-  func.call operands=2 results=1: 1
-  func.tail_call_indirect operands=8 results=0: 1
 main: () -> (core.nil)
   func.call operands=0 results=1: 1
   func.return operands=1 results=0: 1
