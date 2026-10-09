@@ -316,10 +316,10 @@ impl<'db> Definition<'db> {
     }
 }
 
-/// Select the class variables of every definition: a candidate that occurs
-/// as the row of a function type inside a parameter type, or that is the tail
-/// of a row the body passes for a class variable of a definition it
-/// references.
+/// Select the class variables of every definition: a candidate that is the
+/// row tail of a function type inside a parameter type, of a lambda or a local
+/// binding in the body, or of a row the body passes for a class variable of a
+/// definition it references.
 fn settle_class_variables<'db>(
     mut definitions: Vec<(FuncDefId<'db>, Definition<'db>)>,
 ) -> HashMap<FuncDefId<'db>, Vec<(usize, EffectVar)>> {
