@@ -392,6 +392,7 @@ fn merge_and_lower_to_ir<'db>(
 struct PreparedFrontend<'db> {
     typed: ast_typeck::TypeCheckOutput<'db>,
     compiler_intrinsics: HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
+    row_classes: tribute_front::monomorphize::InstanceRowClasses,
 }
 
 /// Merge and specialize inside a tracked query so specialization failures
@@ -564,6 +565,7 @@ fn prepare_frontend_details<'db>(
                 .flat_map(|prelude| prelude.exhaustive_cases(db).iter().copied())
                 .chain(typed.exhaustive_cases(db).iter().copied())
                 .collect(),
+            ability_conventions: merged_ability_conventions.clone(),
             compiler_intrinsics,
         },
     );
@@ -588,6 +590,7 @@ fn prepare_frontend_details<'db>(
     let mut exhaustive_cases: Vec<_> = mono_result.metadata.exhaustive_cases.into_iter().collect();
     exhaustive_cases.sort();
     let compiler_intrinsics = mono_result.metadata.compiler_intrinsics;
+    let row_classes = mono_result.row_classes;
     let typed = ast_typeck::TypeCheckOutput::new(
         db,
         mono_result.module,
@@ -630,6 +633,7 @@ fn prepare_frontend_details<'db>(
     Some(PreparedFrontend {
         typed,
         compiler_intrinsics,
+        row_classes,
     })
 }
 
@@ -643,6 +647,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
         .expect("frontend instances must be checked before lowering");
     let typed = prepared.typed;
     let compiler_intrinsics = prepared.compiler_intrinsics.clone();
+    let row_classes = prepared.row_classes.clone();
     let mut ir = IrContext::new();
     let module = lower(
         ast_to_ir::TypedModule {
@@ -672,6 +677,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             evidence_plans: typed.expression_types(db).evidence_plans.clone(),
             well_known_types: *typed.well_known_types(db),
             compiler_intrinsics,
+            row_classes,
             merged_sources: vec![PRELUDE_URI.to_owned()],
         },
         db,

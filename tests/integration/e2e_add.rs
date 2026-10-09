@@ -631,7 +631,7 @@ fn test_indirect_call_ir_generation() {
 #[test]
 fn test_higher_order_function_ir() {
     TributeDatabaseImpl::default().attach(|db| {
-        let source = SourceCst::from_source_str(db, "higher_order.trb", "fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) } fn compute() ->{} Int { apply(fn(n) { n + +1 }, +41) } fn main() -> Nil {}");
+        let source = SourceCst::from_source_str(db, "higher_order.trb", "fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) } fn compute() ->{r} Int { apply(fn(n) { n + +1 }, +41) } fn main() -> Nil {}");
         let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source).unwrap().unwrap();
         let apply = named_function(&ctx, module, "apply");
         assert_indirect_signature(&ctx, apply, only_indirect_call(&ctx, apply));
@@ -651,7 +651,7 @@ fn test_higher_order_function_ir() {
 #[test]
 fn test_closure_lowering() {
     TributeDatabaseImpl::default().attach(|db| {
-        let source = SourceCst::from_source_str(db, "closure_lower.trb", "fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) } fn compute() ->{} Int { let a = +1 apply(fn(n) { n + a }, +41) } fn main() -> Nil {}");
+        let source = SourceCst::from_source_str(db, "closure_lower.trb", "fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) } fn compute() ->{r} Int { let a = +1 apply(fn(n) { n + a }, +41) } fn main() -> Nil {}");
         let (mut ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
             .unwrap()
             .unwrap();

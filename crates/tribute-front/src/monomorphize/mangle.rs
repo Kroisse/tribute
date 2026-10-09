@@ -54,9 +54,14 @@ pub(crate) fn mangle_instance_name(
     if !key.has_weaker_class() {
         return name;
     }
+    class_instance_name(&name, &key.class_args)
+}
+
+/// `name` with `$9` and one letter per class.
+pub(crate) fn class_instance_name(name: &Symbol, classes: &[CallingConvention]) -> Symbol {
     let mut buf = name.to_string();
     buf.push_str("$9");
-    buf.extend(key.class_args.iter().map(|class| match class {
+    buf.extend(classes.iter().map(|class| match class {
         CallingConvention::Direct => 'D',
         CallingConvention::EvidenceDirect => 'E',
         CallingConvention::Cps => 'C',
