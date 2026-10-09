@@ -98,6 +98,42 @@ fn effect_rows_are_not_widened_by_the_body(db: &salsa::DatabaseImpl) {
     assert!(errors(db, &declared).is_empty());
 }
 
+/// A call written with method syntax performs the callee's effects like the
+/// qualified call, including those of a callback it is given.
+#[salsa_test]
+fn a_method_call_performs_the_effects_of_its_callee(db: &salsa::DatabaseImpl) {
+    let declarations = format!(
+        "{ASK}struct Box {{ value: Nat }}\n\n\
+         fn ask(b: Box) ->{{Ask}} Nat {{ Ask::ask() }}\n\n\
+         fn apply(b: Box, g: fn(Nat) ->{{e}} Nat) ->{{e}} Nat {{ g(b.value) }}\n\n"
+    );
+    let check = |row: &str, body: &str| {
+        errors(
+            db,
+            &format!(
+                "{declarations}fn f(b: Box) ->{row} Nat {{ {body} }}\n\nfn main() -> Nil {{ }}\n"
+            ),
+        )
+    };
+    for (method, qualified) in [
+        ("b.ask()", "ask(b)"),
+        (
+            "b.apply(fn(n) Ask::ask() + n)",
+            "apply(b, fn(n) Ask::ask() + n)",
+        ),
+        (
+            "b.value::modify(fn(n) Ask::ask() + n).value",
+            "Box::value::modify(b, fn(n) Ask::ask() + n).value",
+        ),
+    ] {
+        let undeclared = check("{}", method);
+        assert!(!undeclared.is_empty(), "{method}");
+        assert_eq!(undeclared, check("{}", qualified), "{method}");
+        assert!(check("{Ask}", method).is_empty(), "{method}");
+    }
+    assert!(check("{}", "b.apply(fn(n) n)").is_empty());
+}
+
 /// A caller sees only the callee's declaration, so the order in which the
 /// functions are declared does not change the diagnostics.
 #[salsa_test]
