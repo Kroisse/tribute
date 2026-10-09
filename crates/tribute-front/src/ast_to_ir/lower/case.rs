@@ -332,11 +332,12 @@ fn emit_logical_variant_pattern_check<'db>(
     Some(checked.result(builder.ir))
 }
 
-fn logical_list_types<'db>(
+/// The logical element type of a list pattern's `List(a)` type.
+fn logical_list_element_type<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     pattern: &Pattern<TypedRef<'db>>,
-) -> (TypeRef, TypeRef) {
+) -> TypeRef {
     let list_source = ctx
         .get_node_type(pattern.id)
         .copied()
@@ -347,10 +348,7 @@ fn logical_list_types<'db>(
     if !id.is_builtin_list(ctx.db()) || args.len() != 1 {
         panic!("logical list pattern has malformed List type");
     }
-    (
-        ctx.convert_logical_type(ir, list_source),
-        ctx.convert_logical_type(ir, args[0]),
-    )
+    ctx.convert_logical_type(ir, args[0])
 }
 
 fn emit_logical_list_pattern_check<'db>(
@@ -361,20 +359,16 @@ fn emit_logical_list_pattern_check<'db>(
     elements: &[Pattern<TypedRef<'db>>],
     exact: bool,
 ) -> Option<ValueRef> {
-    let (list_ty, element_ty) = logical_list_types(builder.ctx, builder.ir, whole_pattern);
-    emit_logical_list_pattern_suffix(
-        builder, location, scrutinee, elements, exact, list_ty, element_ty,
-    )
+    let element_ty = logical_list_element_type(builder.ctx, builder.ir, whole_pattern);
+    emit_logical_list_pattern_suffix(builder, location, scrutinee, elements, exact, element_ty)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_logical_list_pattern_suffix<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     current: ValueRef,
     elements: &[Pattern<TypedRef<'db>>],
     exact: bool,
-    list_ty: TypeRef,
     element_ty: TypeRef,
 ) -> Option<ValueRef> {
     let bool_ty = builder.ctx.bool_type(builder.ir);
@@ -418,7 +412,6 @@ fn emit_logical_list_pattern_suffix<'db>(
         let mut nested = IrBuilder::new(builder.ctx, builder.ir, then_block);
         let head = list::Head::operands(current)
             .element_type(element_ty)
-            .results(element_ty)
             .build(nested.ir, location);
         nested.ir.push_op(nested.block, head.op_ref());
         let head_value = head.result(nested.ir);
@@ -433,7 +426,6 @@ fn emit_logical_list_pattern_suffix<'db>(
             let mut matched = IrBuilder::new(nested.ctx, nested.ir, match_block);
             let tail = list::Tail::operands(current)
                 .element_type(element_ty)
-                .results(list_ty)
                 .build(matched.ir, location);
             matched.ir.push_op(matched.block, tail.op_ref());
             let tail_value = tail.result(matched.ir);
@@ -443,7 +435,6 @@ fn emit_logical_list_pattern_suffix<'db>(
                 tail_value,
                 rest,
                 exact,
-                list_ty,
                 element_ty,
             )?
         };
@@ -770,18 +761,16 @@ fn bind_logical_list_pattern_fields<'db>(
     elements: &[Pattern<TypedRef<'db>>],
     rest: Option<(Symbol, crate::ast::LocalId)>,
 ) {
-    let (list_ty, element_ty) = logical_list_types(ctx, ir, whole_pattern);
+    let element_ty = logical_list_element_type(ctx, ir, whole_pattern);
     let mut current = scrutinee;
     for element in elements {
         let head = list::Head::operands(current)
             .element_type(element_ty)
-            .results(element_ty)
             .build(ir, location);
         ir.push_op(block, head.op_ref());
         bind_logical_pattern_fields(ctx, ir, block, location, head.result(ir), element);
         let tail = list::Tail::operands(current)
             .element_type(element_ty)
-            .results(list_ty)
             .build(ir, location);
         ir.push_op(block, tail.op_ref());
         current = tail.result(ir);

@@ -36,6 +36,8 @@ trunk_ir::register_pure_op!(RefCast);
 trunk_ir::register_pure_op!(StringConst);
 trunk_ir::register_pure_op!(BytesConst);
 
+use trunk_ir::dialect::core::{Array, IntegerLike};
+
 #[trunk_ir::dialect]
 mod adt {
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
@@ -60,11 +62,16 @@ mod adt {
 
     fn array_new(r#type: Attr<Type>, elements: Variadic<_>) -> Value<_> {}
 
-    fn array_get(r#ref: Value<_>, index: Value<_>) -> Value<_> {}
+    fn array_get<A: Array>(r#ref: Value<A>, index: Value<impl IntegerLike>) -> Value<A::Element> {}
 
-    fn array_set(r#ref: Value<_>, index: Value<_>, value: Value<_>) {}
+    fn array_set<A: Array>(
+        r#ref: Value<A>,
+        index: Value<impl IntegerLike>,
+        value: Value<A::Element>,
+    ) {
+    }
 
-    fn array_len(r#ref: Value<_>) -> Value<_> {}
+    fn array_len(r#ref: Value<impl Array>) -> Value<_> {}
 
     fn ref_null(r#type: Attr<Type>) -> Value<_> {}
 
