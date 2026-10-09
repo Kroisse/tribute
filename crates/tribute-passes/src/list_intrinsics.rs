@@ -127,14 +127,13 @@ impl RewritePattern for PrependCallPattern {
         if !eligible {
             return false;
         }
-        let ([element, tail], [result_ty]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
+        let ([element, tail], [_]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
             return false;
         };
-        let (element, tail, result_ty) = (*element, *tail, *result_ty);
+        let (element, tail) = (*element, *tail);
         let element_ty = ctx.value_ty(element);
         let prepend = list::Prepend::operands(element, tail)
             .element_type(element_ty)
-            .results(result_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(prepend.op_ref());
         true

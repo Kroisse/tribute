@@ -77,7 +77,6 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
     let bytes_ty = bytes_struct_type(ctx);
     let data_ty = bytes_data_type(ctx);
     let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-    let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
 
     // View the opaque `core.bytes` as its Wasm layout. Wasm type conversion
     // maps both to the same type, so the cast folds away.
@@ -95,9 +94,7 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
         .results(i32_ty)
         .build(ctx, loc);
     let at = arith::Addi::operands(offset.result(ctx), index).build(ctx, loc);
-    let byte = adt::ArrayGet::operands(data.result(ctx), at.result(ctx))
-        .results(i8_ty)
-        .build(ctx, loc);
+    let byte = adt::ArrayGet::operands(data.result(ctx), at.result(ctx)).build(ctx, loc);
     // A byte is 0..=255: it widens with zero extension.
     let value = arith::Extui::operands(byte.result(ctx))
         .results(result_ty)
