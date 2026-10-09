@@ -22,6 +22,8 @@ jobs:
   lint:
     name: Lint
     runs-on: [self-hosted, macOS]
+    permissions:
+      contents: read
     # The self-hosted runner cleans target/ on checkout and has no Actions
     # cache; kache keeps compiled crates across runs instead.
     env:
