@@ -126,6 +126,38 @@ Runtime 함수는 `Bytes` argument를 호출 동안 빌리고, `Bytes` 결과는
 하나를 갖는 새 값으로 돌려준다. Runtime이 다른 기록 안에 raw pointer로 담아 돌려준
 `Bytes`도 같은 방식으로 unit 하나를 넘겨준다.
 
+### Evidence
+
+Native evidence와 그 marker는 runtime이 할당하는 RC object다.
+
+```text
+Evidence: [len: u64] [marker: Marker...]
+Marker:   [ability_id: i32] [prompt_tag: i32] [dispatch: closure 또는 null]
+          [shadowed: Marker 또는 null] [outer: Evidence 또는 null]
+```
+
+Evidence는 `ability_id` 순으로 정렬된 marker 참조의 배열이다. 두 object는 만들어진 뒤
+바뀌지 않으며, 모든 참조 필드는 owned 참조다. 다른 object의 안쪽을 가리키는 주소는
+없다. 참조는 먼저 만들어진 object만 가리키므로 순환하지 않는다.
+
+- Marker의 `dispatch`는 handler를 설치할 때 `tribute_rt.into_raw`로 넘겨받은 closure의
+  unit이다. `shadowed`는 같은 ability에서 이 marker가 가린 marker이고, `outer`는
+  handler를 설치하기 전의 evidence다.
+- Evidence를 새로 만드는 연산(extend, mask, dup, push, with_tail)은 그대로 넘겨받는
+  marker를 marker마다 한 번 retain한다. 새 marker를 만드는 연산은 그 marker가 가리키는
+  closure, marker, evidence를 각각 retain한다.
+- 이미 있는 evidence를 돌려주는 연산(outer, tail)은 그 evidence를 retain해 돌려준다.
+- Evidence의 release는 marker를 모두 release한 뒤 자신을 해제하고, marker의 release는
+  세 참조 필드를 release한 뒤 자신을 해제한다.
+
+Runtime 함수는 evidence와 closure argument를 호출 동안 빌리고, 결과는 호출자가 unit
+하나를 갖는 새 값으로 돌려준다. Marker의 dispatch closure를 찾아 주는 함수도 그
+closure를 retain해 돌려주므로, 호출자는 evidence가 release된 뒤에도 그 closure를 부를
+수 있다. Handler를 설치하는 함수만 예외로, `into_raw`가 넘긴 closure의 unit을 새
+marker가 갖는다.
+
+Evidence parameter는 다른 physical input과 같은 ownership contract를 따른다.
+
 ### Private native List nodes
 
 The native `List(a)` representation uses immutable RRB nodes with the ordinary
@@ -308,8 +340,9 @@ block을 만들므로 이런 edge를 만들지 않는다.
 
 `adt.typeref`는 type 자체로 managed다. Native RC-header allocation을 표현하는
 검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
-contract로 분류한다. `core.bytes`는 [`Bytes`](#bytes) 객체에 대한 managed 참조다.
-Evidence, function/code address, borrowed buffer, `core.ptr`, `core.array`는
+contract로 분류한다. `core.bytes`는 [`Bytes`](#bytes) 객체에 대한 managed 참조이고,
+evidence type은 [evidence](#evidence) 객체에 대한 managed 참조다.
+Function/code address, borrowed buffer, `core.ptr`, 그 밖의 `core.array`는
 unmanaged다. 변환 결과가 pointer라는
 사실은 이 분류에 참여하지 않는다.
 
@@ -695,19 +728,21 @@ Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다
 | ---- | ---- |
 | `0` | [`Bytes`](#bytes). `owner`를 release한 뒤 `cap`을 읽어 해제 |
 | `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`. 고정 크기 release |
+| `5` | [Evidence](#evidence). Marker를 모두 release한 뒤 `len`을 읽어 해제 |
+| `6` | Evidence의 marker. 참조 필드를 release한 뒤 고정 크기로 해제 |
 | 예약 범위 다음 | ownership planning이 할당 순서대로 정한 struct와 variant의 descriptor |
 
 예약 범위는 compiler가 생성하는 할당 operation 없이 runtime이나 boxing lowering이
 만드는 값에만 쓴다. 할당 operation으로 만드는 값은 모두 예약 범위 다음 번호를 받는다.
 소스 struct와 variant뿐 아니라 closure layout처럼 compiler가 소유한 layout의 할당도
-여기에 속하며, 그 descriptor는 compiler 소유 이름과 필드 종류를 가진다. Evidence처럼
-RC header 없이 unmanaged로 다루는 값은 RC 객체가 아니므로 RTTI index와 descriptor를
-갖지 않는다.
+여기에 속하며, 그 descriptor는 compiler 소유 이름과 필드 종류를 가진다. RC header
+없이 unmanaged로 다루는 값은 RC 객체가 아니므로 RTTI index와 descriptor를 갖지 않는다.
 
 RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. Table과
-`__tribute_deep_release`는 그 프로그램의 모듈 안에서만 index를 해석하며, runtime과
-공유하는 번호는 `0`뿐이다. 따라서 예약 범위를 늘릴 때 호환 단계가 필요 없고, 사용자
-layout index는 예약 범위 바로 다음부터 시작한다. 따로 컴파일한 단위 사이에서 객체가
+`__tribute_deep_release`는 그 프로그램의 모듈 안에서만 index를 해석한다. Runtime과
+공유하는 번호는 runtime이 직접 할당하는 `Bytes`의 `0`, evidence의 `5`, marker의 `6`뿐이며
+고정이다. 그 밖의 예약 범위를 늘릴 때는 호환 단계가 필요 없고, 사용자 layout index는
+예약 범위 바로 다음부터 시작한다. 따로 컴파일한 단위 사이에서 객체가
 오가게 되면 이 전제가 깨지므로, 그때는 번호 대신 header나 descriptor가 스스로 layout을
 설명하는 방식으로 바꿔야 한다.
 

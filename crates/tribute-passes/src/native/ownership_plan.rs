@@ -320,6 +320,7 @@ fn is_typed_managed_reference(
     (data.dialect == "adt" && data.name == "typeref")
         || (data.dialect == "tribute_rt" && (matches!(data.name.as_str(), "anyref" | "intref")))
         || (data.dialect == "core" && data.name == "bytes")
+        || tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
 }
 
 fn is_managed_value(ctx: &IrContext, value: ValueRef, managed_layouts: &HashSet<TypeRef>) -> bool {
