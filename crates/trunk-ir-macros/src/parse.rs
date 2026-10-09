@@ -75,7 +75,7 @@ pub struct AttrDef {
 pub enum AttrKind {
     /// `_`: any attribute value.
     Any,
-    /// `V::Type`: a type attribute bound to a type variable.
+    /// `TypeOf<V>`: a type attribute bound to a type variable.
     BoundType,
     /// A Rust type implementing `trunk_ir::attr_kind::AttrKind`.
     Path(KindType),
@@ -541,9 +541,6 @@ fn parse_angle_params(iter: &mut TokenIter) -> Result<Vec<TypeParam>, String> {
         let param_ident: Ident =
             Ident::parser(iter).map_err(|e| format!("expected type parameter name: {e}"))?;
         let param_name = ident_str(&param_ident);
-        if param_name == "Type" {
-            return Err("type parameter `Type` is reserved for the Type projection".into());
-        }
         if !seen_names.insert(param_name.clone()) {
             return Err(format!("duplicate type parameter: `{param_name}`"));
         }

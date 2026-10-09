@@ -14,7 +14,7 @@ crate::register_isolated_op!(Func);
 #[trunk_ir::dialect]
 mod clif {
     // Module
-    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<S::Type>) {
+    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
         {}
     }
@@ -40,7 +40,7 @@ mod clif {
 
     #[verify]
     fn call_indirect<S: FuncSig>(
-        sig: Attr<S::Type>,
+        sig: Attr<TypeOf<S>>,
         callee: Value<_>,
         args: Values<S::Inputs>,
     ) -> Variadic<_> {
@@ -129,7 +129,7 @@ mod clif {
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     fn return_call_indirect<S: FuncSig>(
-        sig: Attr<S::Type>,
+        sig: Attr<TypeOf<S>>,
         callee: Value<_>,
         args: Values<S::Inputs>,
     ) {

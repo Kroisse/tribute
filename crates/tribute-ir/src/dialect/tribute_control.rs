@@ -81,7 +81,7 @@ mod tribute_control {
     struct ResumeToken<Input, Answer>;
 
     // FuncSig operations
-    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<S::Type>) {
+    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
         {}
     }

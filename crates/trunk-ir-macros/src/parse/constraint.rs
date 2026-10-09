@@ -692,9 +692,6 @@ fn parse_where_clause(
 /// Interpret `V: B<X = rhs>` as an equality on `<V as B>::X`.
 fn parse_relation(equality: &RawEquality, vars: &[TypeVar]) -> Result<RelationDef, String> {
     let name = ident_str(&equality.name);
-    if name == "Type" {
-        return Err("`Type` names the variable itself and cannot be constrained".into());
-    }
     let lhs = Projection {
         var: equality.var,
         bound: Some(equality.bound.clone()),
@@ -873,14 +870,34 @@ fn parse_attr_kind(ty: &Ty, vars: &[TypeVar]) -> Result<(AttrKind, Option<usize>
     if path.qself.is_some() {
         return Err("invalid attribute projection".into());
     }
-    if let [var, proj] = path.segments.as_slice()
-        && !path.leading_colon
-        && let Some(var) = vars.iter().position(|v| var.ident == v.name)
+    if let (
+        false,
+        [
+            Segment {
+                ident,
+                args: Some(args),
+            },
+        ],
+    ) = (path.leading_colon, path.segments.as_slice())
+        && ident == "TypeOf"
     {
-        if proj.ident == "Type" {
-            return Ok((AttrKind::BoundType, Some(var)));
-        }
-        return Err("attribute projection must be V::Type for a declared variable".into());
+        let var = match args.as_slice() {
+            [GenericArg::Type(Ty::Path(var))] => simple_var(var, vars),
+            _ => None,
+        };
+        return var
+            .map(|var| (AttrKind::BoundType, Some(var)))
+            .ok_or_else(|| "`TypeOf<..>` takes one declared type variable".into());
+    }
+    if let [var, _] = path.segments.as_slice()
+        && !path.leading_colon
+        && vars.iter().any(|v| var.ident == v.name)
+    {
+        return Err(format!(
+            "an attribute kind cannot project a type variable; write `Attr<TypeOf<{}>>` to \
+             bind it to the attribute's type",
+            var.ident
+        ));
     }
     let ident = match path.segments.as_slice() {
         [Segment { ident, args: None }] if !path.leading_colon => Some(ident.to_string()),
@@ -989,9 +1006,6 @@ fn projection(path: &TyPath, vars: &[TypeVar]) -> Result<Option<Projection>, Str
         };
         (var, None, ident.to_string())
     };
-    if name == "Type" {
-        return Err("V::Type in a value position is reserved; use V".into());
-    }
     if let Some(bound) = &bound
         && !vars[var].bounds.iter().any(|b| b.key() == bound.key())
     {
@@ -1042,7 +1056,7 @@ mod tests {
     fn typed_attributes_and_projections() {
         let op = parse_op(quote! {
             fn call_indirect<S: clif::FuncSig>(
-                sig: Attr<S::Type>,
+                sig: Attr<TypeOf<S>>,
                 callee: Value<core::Ptr>,
                 args: Values<S::Inputs>,
                 tag: Option<Attr<SymbolRef>>,
@@ -1146,9 +1160,21 @@ mod tests {
             ),
             (
                 quote!(
-                    fn f<S: A<Type = B>>(s: Value<S>) {}
+                    fn f<S: A>(x: Attr<S::Type>) {}
                 ),
-                "`Type` names the variable itself",
+                "write `Attr<TypeOf<S>>`",
+            ),
+            (
+                quote!(
+                    fn f(x: Attr<TypeOf<U>>) {}
+                ),
+                "`TypeOf<..>` takes one declared type variable",
+            ),
+            (
+                quote!(
+                    fn f<S, T>(x: Attr<TypeOf<S, T>>) {}
+                ),
+                "`TypeOf<..>` takes one declared type variable",
             ),
             (
                 quote!(
@@ -1349,12 +1375,6 @@ mod tests {
                     fn f() -> (Value<_>, Value<_>) {}
                 ),
                 "tuple results are reserved",
-            ),
-            (
-                quote!(
-                    fn f<T>(x: Value<T::Type>) {}
-                ),
-                "V::Type in a value position",
             ),
             (
                 quote!(

@@ -78,10 +78,15 @@ fn resume<T: ResumeToken>(
 
 #[verify]
 fn call_indirect<S: FuncSig>(
-    signature: Attr<S::Type>,
+    signature: Attr<TypeOf<S>>,
     callee: Value<_>,
     args: Values<S::Inputs>,
 ) -> Values<S::Results> {}
+
+fn perform<F: Frame, C>(frame: Value<F>, resumption: Value<C>)
+where
+    C: CpsClosure<Inputs = (Evidence, F, impl NotNever)>,
+{}
 ```
 
 - Parameters are `Value<C>`, `Variadic<C>`, `Values<L>`, `Attr<K>`,
@@ -94,6 +99,8 @@ fn call_indirect<S: FuncSig>(
   `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain
   and the values its accessor returns and its builder setter takes, so a
   dialect adds a kind by implementing the trait. `_` accepts any attribute.
+- `Attr<TypeOf<V>>` is a type attribute whose value binds the type variable
+  `V`. `V` needs no bound.
 - A list attribute's accessor iterates its elements, and its builder setter
   takes an iterator. For `Attr<[String]>` the accessor yields `&str` and
   `<name>_ref` yields the `StringRef`s, as for a single string. `String` is
@@ -114,6 +121,14 @@ fn call_indirect<S: FuncSig>(
   (projections are their declared parameters), and the `func`/`clif`/`wasm`
   `FuncSig` wrappers (`Inputs`/`Results`). Unknown, ambiguous, or wrong-kind
   projections and conflicting exact bounds fail to compile.
+- A variable's bound may constrain its projections with associated item
+  constraints, `C: CpsClosure<Inputs = (Evidence, F)>`, in the generic list
+  or in `where`. The right-hand side is a single-type constraint, an exact
+  list `(A, B)`, or another projection of the same kind. A named variable on
+  the right-hand side is bound there if nothing bound it earlier, so a type
+  that occurs only inside an operand's type can be named and projected
+  again (`F::Result`). A constraint that projects a variable nothing binds
+  fails to compile.
 - A bound written directly in a result, without `impl`, is that one fixed
   type (`-> Value<I32>`); it must denote exactly one type.
 - `#[verify]` on an operation requires an implementation of

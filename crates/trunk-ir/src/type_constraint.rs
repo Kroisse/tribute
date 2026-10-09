@@ -40,7 +40,7 @@ pub struct ConstraintDesc {
     /// Exact bounds require one dialect type; a type variable may have at most
     /// one distinct exact bound. Category bounds may be combined freely.
     pub exact: bool,
-    /// Projections this bound provides. `Type` is reserved and never listed.
+    /// Projections this bound provides.
     pub projections: &'static [ProjectionDesc],
     /// Whether a type satisfies the bound, including wrapper invariants.
     pub matches: fn(&IrContext, TypeRef) -> bool,
