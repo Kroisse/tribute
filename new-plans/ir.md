@@ -149,6 +149,24 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   타입 목록)를 선언한다. 예를 들어 signature 타입은 `Inputs`/`Results`
   목록을, 파라미터형 dialect 타입은 선언된 파라미터를 제공한다. 둘 이상의
   bound가 같은 이름을 제공하면 `<S as B>::X`로 명시해야 한다.
+- 변수의 bound는 Rust의 associated item constraint로 투영에 대한 등식(투영 등식)을
+  선언한다. `C: CpsClosure<Inputs = (Evidence, F)>`는 `<C as
+  CpsClosure>::Inputs`가 `(Evidence, F)`와 같다는 뜻이며, 제네릭 목록과 `where`
+  절 어디서든 쓸 수 있다. 투영이 단일 타입이면 우변은 단일 타입 제약이고,
+  타입 목록이면 우변은 명시적 목록 `(A, B)`이며 길이가 정확히 같아야 한다.
+  우변이 다른 투영이면 두 투영은 같은 종류여야 하고 값이 같아야 한다. 우변
+  안의 이름 있는 변수는 다른 위치와 같은 규칙을 따른다. 처음 나타난 위치가
+  변수를 바인딩하고, 이미 바인딩된 변수는 동일성을 요구한다. 따라서 operand에
+  직접 나타나지 않고 다른 타입 안에만 있는 타입도 변수로 이름 붙여 다시 투영할
+  수 있다. 위 예는 closure 입력 안의 frame을 `F`로 바인딩하고, 결과는
+  `F::Result`로 선언한다. 투영의 연쇄는 이렇게 중간 변수를 거쳐 표현한다.
+  `where C::Inputs = ..` 같은 등식 술어는 Rust 문법이 아니어서 attribute
+  매크로 입력으로 파싱되지 않으므로 쓰지 않는다. 관계를
+  `Closure<(Evidence, Frame<R>)>` 같은 중첩 제네릭 인자로 쓰지 않는 이유는,
+  Rust 문법으로는 읽히지만 의미는 pattern이 되어 정의 문법이 따르는 Rust
+  signature 모델과 어긋나기 때문이다. Associated item constraint는 변수의
+  bound에만 쓸 수 있고, `impl B<X = T>`나 `Type` 투영에는 쓸 수 없다. 등식이
+  투영하는 변수를 정의의 어느 위치도 바인딩할 수 없으면 컴파일 시점에 거부한다.
 - Schema로 표현할 수 없는 로컬 조건은 operation별 사용자 verifier가 맡는다.
   사용자 verifier는 생성된 검사를 통과한 operation에서만 실행된다.
 
@@ -158,8 +176,12 @@ panic하는 대신 진단을 남길 수 있어야 한다.
 
 1. Operand/result 개수와 필수 attribute 존재.
 2. 개별 타입 제약과 typed attribute의 내부 유효성.
-3. 타입 변수 바인딩과 동일성.
-4. 투영과 타입 목록 관계.
+3. 타입 변수 바인딩과 동일성. 직접 나타난 위치로 바인딩한 뒤, 좌변 변수가
+   바인딩된 투영 등식을 차례로 풀어 우변의 변수를 바인딩한다. 등식으로
+   얻은 타입에도 2단계의 개별 제약을 적용하며, 명시적 목록의 길이 불일치도 이
+   단계에서 보고한다.
+4. 투영과 타입 목록 관계. 투영 등식 우변의 투영과 투영끼리의 등식도
+   포함한다.
 5. 사용자 정의 로컬 verifier.
 
 진단은 operation, 위치, 필드 이름과 index, 기대 제약, 실제 타입을 포함한다.
@@ -206,7 +228,8 @@ region, successor는 각각 한 묶음으로 받는다. 묶음 안의 순서는 
 마지막 successor는 가변 목록으로 선언할 수 있으며, 고정 successor 뒤의 나머지
 전부가 그 목록이다.
 Builder는 결과 타입이 고정 타입, 단일 operand나 필수 attribute로 바인딩된
-변수, 또는 그 변수의 투영으로 유일하게 결정될 때만 결과 타입을 추론한다.
+변수, 그런 변수의 투영에서 투영 등식으로 바인딩되는 변수, 또는 이 변수들의
+투영으로 유일하게 결정될 때만 결과 타입을 추론한다.
 입력 타입을 검사하거나 cast를 삽입하지 않으며, 필수 입력의 누락은 프로그래밍
 오류로 취급한다. 심볼 해석, 소유 callable, conversion 경계, ownership처럼 한
 operation 밖의 정보가 필요한 조건은 schema가 아니라 기존 whole-IR verifier와
