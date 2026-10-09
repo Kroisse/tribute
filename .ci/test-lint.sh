@@ -76,7 +76,7 @@ expect_commands() {
 FMT='cargo fmt --all --check'
 CLIPPY='cargo clippy --workspace --all-targets --message-format=short -- -D warnings'
 AST_TEST='ast-grep test --skip-snapshot-tests'
-AST_SCAN='ast-grep scan --json=compact crates'
+AST_SCAN='ast-grep scan crates'
 MARKDOWN='npx markdownlint-cli2 **/*.md #node_modules'
 RUNTIME='cargo xtask runtime'
 TESTS='cargo nextest run --workspace -j 4'
@@ -94,7 +94,7 @@ expect_commands "$FMT" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
 expect_status 2 env LINT_TEST_AST_GREP_TEST_STATUS=1 "$SCRIPT_DIR/lint.sh" --quick
 expect_commands "$FMT" "$AST_TEST"
 
-expect_status 2 env LINT_TEST_AST_GREP_SCAN_STATUS=2 "$SCRIPT_DIR/lint.sh" --quick
+expect_status 2 env LINT_TEST_AST_GREP_SCAN_STATUS=1 "$SCRIPT_DIR/lint.sh" --quick
 expect_commands "$FMT" "$AST_TEST" "$AST_SCAN"
 
 expect_status 2 "$SCRIPT_DIR/lint.sh" --unknown
@@ -117,7 +117,7 @@ expect_status 2 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_NPX_STATUS=1 \
     "$SCRIPT_DIR/check.sh"
 expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
 
-expect_status 2 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_AST_GREP_SCAN_STATUS=2 \
+expect_status 2 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_AST_GREP_SCAN_STATUS=1 \
     "$SCRIPT_DIR/check.sh"
 expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN"
 
@@ -142,9 +142,6 @@ expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME"
     mkdir -p .ci/githooks
     cp "$SCRIPT_DIR/lint.sh" .ci/lint.sh
     cp "$SCRIPT_DIR/ast-grep.sh" .ci/ast-grep.sh
-    cp "$SCRIPT_DIR/check-ast-grep.py" .ci/check-ast-grep.py
-    mkdir .ast-grep
-    printf '[]\n' >.ast-grep/baseline.json
     cp "$SCRIPT_DIR/githooks/pre-commit" .ci/githooks/pre-commit
 
     printf 'clean\n' >sample.txt
@@ -165,11 +162,9 @@ expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME"
 
     expect_status 1 env LINT_TEST_NPX_STATUS=1 git commit -qm 'Markdown must fail'
     expect_commands "$FMT" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
-    expect_status 1 env LINT_TEST_AST_GREP_SCAN_STATUS=2 git commit -qm 'ast-grep must fail'
+    expect_status 1 env LINT_TEST_AST_GREP_SCAN_STATUS=1 git commit -qm 'ast-grep must fail'
     expect_commands "$FMT" "$AST_TEST" "$AST_SCAN"
     test "$(git rev-parse HEAD)" = "$initial_head"
 )
-
-python3 "$SCRIPT_DIR/test-ast-grep.py"
 
 echo "Lint, full validation, and pre-commit tests passed!"

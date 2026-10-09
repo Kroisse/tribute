@@ -11,4 +11,4 @@ if ! command -v ast-grep >/dev/null 2>&1; then
 fi
 
 ast-grep test --skip-snapshot-tests
-python3 "$SCRIPT_DIR/check-ast-grep.py"
+ast-grep scan crates

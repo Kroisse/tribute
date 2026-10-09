@@ -16,23 +16,9 @@ diagnostic snapshots. CI and `.ci/lint.sh` (including `--quick`) run the shared
 `.ci/ast-grep.sh` entry point. Codex and Claude Stop hooks and Git pre-commit
 therefore run the same checks. A missing CLI or failed check is an error.
 
-## Existing comparisons
-
-`.ast-grep/baseline.json` records the existing diagnostics as
-`[rule ID, file, constructor expression, count]` rows. The gate rejects counts
-exceeding this baseline, including another occurrence of the same expression
-in the same file. Line numbers are omitted so unrelated line movement does not
-invalidate the baseline. Diagnostic tool failures are never treated as existing
-violations. The gate uses Python 3's standard library.
-
-When removing existing comparisons, reduce or remove the corresponding baseline
-counts as well; otherwise the old allowance remains available. New rules and
-new expressions fail without a baseline entry. Baseline increases must be
-reviewed explicitly, not regenerated as part of normal lint runs.
-
-For raw diagnostics, run `ast-grep scan crates`; it exits nonzero when matches
-exist. Test the baseline gate with `python3 .ci/test-ast-grep.py`, and hook
-failure propagation with `.ci/test-lint.sh`.
+Scanning runs directly with `ast-grep scan crates`. Any detected violation
+fails the check; there are no baseline exemptions. Test hook failure propagation
+with `.ci/test-lint.sh`.
 
 ## Scope and limitations
 
