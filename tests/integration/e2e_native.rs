@@ -2868,3 +2868,77 @@ fn main() ->{Io} Nil {
         "io!!",
     );
 }
+
+/// A pure function that calls a row-polymorphic function selects that
+/// function's `Direct` instance, so it stays a pure callable.
+#[test]
+fn a_pure_function_keeps_its_convention_across_a_row_polymorphic_call() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "pure_function_calls_row_polymorphic.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn bang(s: String) -> String { app(s, fn(t) t <> "!") }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+
+fn main() ->{Io} Nil {
+    print_line(twice(bang, "io"))
+}
+"#,
+        "io!!",
+    );
+}
+
+/// A field's modifier has an instance per convention class of its callback:
+/// it is a pure callable where its callback is pure, both as a value and
+/// called from a pure function.
+#[test]
+fn a_field_modifier_is_a_pure_callable_for_a_pure_callback() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "pure_field_modifier.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct Name { text: String }
+
+fn apply(n: Name, m: fn(Name, fn(String) ->{} String) ->{} Name) -> Name {
+    m(n, fn(t) t <> "!")
+}
+fn bump(n: Name) -> Name { Name::text::modify(n, fn(t) t <> "?") }
+fn twice(f: fn(Name) ->{} Name, n: Name) -> Name { f(f(n)) }
+
+fn main() ->{Io} Nil {
+    let out = apply(Name { text: "io" }, Name::text::modify)
+    print_line(Name::text(twice(bump, out)))
+}
+"#,
+        "io!??",
+    );
+}
+
+/// A `become` from a pure function into a row-polymorphic function is a
+/// proper tail call into that function's `Direct` instance.
+#[test]
+fn a_pure_function_becomes_a_row_polymorphic_function() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "pure_become_row_polymorphic.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn go(f: fn(Int) ->{e} Int, n: Int, acc: Int) ->{e} Int {
+    case n == +0 {
+        True -> acc
+        False -> become go(f, n - +1, f(acc))
+    }
+}
+
+fn start(n: Int) ->{} Int { become go(fn(x) x + +2, n, +0) }
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(start(+1000000)))
+}
+"#,
+        "2000000",
+    );
+}

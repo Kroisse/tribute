@@ -54,6 +54,44 @@ fn generic_callback_selects_a_direct_instance_and_executes_wasm(db: &salsa::Data
     assert!(output.stdout.is_empty());
 }
 
+/// A pure callback in a pure function selects the `Direct` instance of a
+/// prelude function.
+#[salsa_test]
+fn a_pure_prelude_callback_selects_the_direct_instance(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn pure() ->{} Option(Int) { Option::map(Some(+1), fn(n) n + +1) }
+
+fn main() -> Nil {
+    let _ = pure()
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let instances: Vec<_> = module
+        .ops(&ctx)
+        .iter()
+        .copied()
+        .filter_map(|op| {
+            let function = tribute_control::Func::from_op(&ctx, op).ok()?;
+            let name = function.sym_name(&ctx);
+            let class = name.strip_prefix("std::Option::map$")?.rsplit_once("$9")?.1;
+            let convention = tribute_control::func_sig_convention(&ctx, function.r#type(&ctx));
+            Some((class.to_owned(), convention))
+        })
+        .collect();
+    assert_eq!(
+        instances,
+        [(
+            "D".to_owned(),
+            Some(tribute_control::CallingConvention::Direct)
+        )]
+    );
+}
+
 #[test]
 fn generic_callback_evidence_root_executes_native() {
     let output = common::compile_and_run_native("test.trb", SOURCE);

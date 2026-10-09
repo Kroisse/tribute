@@ -109,9 +109,10 @@ pub fn build_type_rewrite_map<'db>(
     map
 }
 
-/// Redirect references to a generic struct's field functions (`T::f`,
-/// `T::f::set`, `T::f::modify`) to the same function of the struct's
-/// specialization for the reference's type arguments.
+/// Redirect references to a struct's field functions (`T::f`, `T::f::set`,
+/// `T::f::modify`) to the same function of the struct's specialization for
+/// the reference's type arguments, and to the function's instance for the
+/// reference's convention classes.
 ///
 /// Field functions have no source declaration to clone; each specialized
 /// struct declaration has its own.  Run this before the instances' types are
@@ -121,9 +122,11 @@ pub fn rewrite_field_function_refs<'db>(
     module: &mut Module<TypedRef<'db>>,
     type_rewrite_map: &TypeRewriteMap<'db>,
     instances: &mut HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    keys: &mut InstanceKeys<'db>,
 ) {
-    walk_module_mut(
-        &mut Refs(|site, node, value: &mut TypedRef<'db>| {
+    for decl in &mut module.decls {
+        let enclosing = super::collect::enclosing_instance(decl).cloned();
+        let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
             if site != RefSite::Var {
                 return;
             }
@@ -133,28 +136,39 @@ pub fn rewrite_field_function_refs<'db>(
             let Some(instance) = instances.get_mut(&node) else {
                 return;
             };
+            if instance.function != *id {
+                return;
+            }
+            let classes = keys
+                .key(instance, enclosing.as_ref())
+                .filter(InstanceKey::has_weaker_class);
+            let original = instance.function;
             let crate::typeck::FunctionInstanceOrigin::FieldAccessor { owner, field, kind } =
                 &mut instance.origin
             else {
                 return;
             };
-            if instance.function != *id || instance.type_arguments.is_empty() {
-                return;
-            }
-            let Some((_, mangled)) = type_rewrite_map.get(owner).and_then(|entries| {
+            let mut function = original;
+            if let Some((_, mangled)) = type_rewrite_map.get(owner).and_then(|entries| {
                 entries
                     .iter()
                     .find(|(args, _)| *args == instance.type_arguments)
-            }) else {
-                return;
-            };
-            let function = FuncDefId::new(db, kind.qualified(mangled, field));
-            *owner = owner.with_qualified(db, mangled.clone());
+            }) && !instance.type_arguments.is_empty()
+            {
+                function = FuncDefId::new(db, kind.qualified(mangled, field));
+                *owner = owner.with_qualified(db, mangled.clone());
+            }
+            if let Some(key) = classes {
+                let name =
+                    super::mangle::class_instance_name(function.qualified(db), &key.class_args);
+                keys.record(name.clone(), original, &key);
+                function = FuncDefId::new(db, name);
+            }
             instance.function = function;
             value.resolved = ResolvedRef::Function { id: function };
-        }),
-        module,
-    );
+        });
+        walk_decl_mut(&mut rewrite, decl);
+    }
 }
 
 /// Rewrite all Named types with type arguments to their mangled monomorphic versions

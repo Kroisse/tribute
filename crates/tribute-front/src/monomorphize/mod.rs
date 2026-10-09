@@ -272,6 +272,7 @@ pub fn monomorphize_functions<'db>(
             &mut module,
             &type_rewrite_map,
             &mut metadata.function_instances,
+            &mut keys,
         );
         let rewrite_ty = |ty| rewrite::rewrite_type(db, ty, &type_rewrite_map);
         let rewrite_scheme =
@@ -333,6 +334,13 @@ pub fn monomorphize_functions<'db>(
             .extend(specialized_enums.into_iter().map(Decl::Enum));
         module
     } else {
+        rewrite::rewrite_field_function_refs(
+            db,
+            &mut module,
+            &rewrite::TypeRewriteMap::default(),
+            &mut metadata.function_instances,
+            &mut keys,
+        );
         module
     };
 

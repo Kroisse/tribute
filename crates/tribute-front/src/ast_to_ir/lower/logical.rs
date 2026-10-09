@@ -474,7 +474,9 @@ fn prescan_definition_conventions<'db>(
                 {
                     let getter = declaration_name(prefix, field);
                     let [_, modifier] = field_update_names(&getter);
-                    ctx.register_definition_convention(modifier, CallingConvention::Cps);
+                    for (modifier, class) in modifier_instances(ctx, modifier) {
+                        ctx.register_definition_convention(modifier, class);
+                    }
                 }
                 prefix.truncate(saved);
             }
@@ -826,6 +828,24 @@ fn field_update_names(getter: &Symbol) -> [Symbol; 2] {
     crate::ast::FIELD_LENS_FUNCTIONS.map(|name| Symbol::new(&format!("{getter}::{name}")))
 }
 
+/// The modifier `modifier` and its instances for the weaker convention
+/// classes of its callback that the module refers to, each with that class.
+fn modifier_instances(
+    ctx: &IrLoweringCtx<'_>,
+    modifier: Symbol,
+) -> Vec<(Symbol, CallingConvention)> {
+    let mut instances: Vec<_> = [CallingConvention::Direct, CallingConvention::EvidenceDirect]
+        .into_iter()
+        .map(|class| {
+            let name = crate::monomorphize::mangle::class_instance_name(&modifier, &[class]);
+            (name, class)
+        })
+        .filter(|(name, _)| !ctx.row_classes_of(name).is_empty())
+        .collect();
+    instances.push((modifier, CallingConvention::Cps));
+    instances
+}
+
 fn prescan_struct_accessor_signatures<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
@@ -874,14 +894,15 @@ fn prescan_struct_accessor_signatures<'db>(
                         CallingConvention::Direct,
                     );
                     // The modifier performs whatever its callback performs.
-                    let callback =
-                        func_sig_type(ir, field_type, [field_type], CallingConvention::Cps);
-                    ctx.register_logical_generated_signature(
-                        &modifier_name,
-                        vec![struct_type, callback],
-                        struct_type,
-                        CallingConvention::Cps,
-                    );
+                    for (modifier_name, class) in modifier_instances(ctx, modifier_name) {
+                        let callback = func_sig_type(ir, field_type, [field_type], class);
+                        ctx.register_logical_generated_signature(
+                            &modifier_name,
+                            vec![struct_type, callback],
+                            struct_type,
+                            class,
+                        );
+                    }
                 }
             }
             Decl::Module(module) => {
@@ -994,11 +1015,12 @@ fn lower_struct_accessors<'db>(
                 .map(|(_, ty)| *ty)
                 .collect();
         let [setter_name, modifier_name] = field_update_names(&getter_name);
-        let callback = func_sig_type(ir, field_type, [field_type], CallingConvention::Cps);
-        for (name, argument_ty, convention) in [
-            (setter_name, field_type, CallingConvention::Direct),
-            (modifier_name, callback, CallingConvention::Cps),
-        ] {
+        let mut functions = vec![(setter_name, field_type, CallingConvention::Direct, false)];
+        for (name, class) in modifier_instances(ctx, modifier_name) {
+            let callback = func_sig_type(ir, field_type, [field_type], class);
+            functions.push((name, callback, class, true));
+        }
+        for (name, argument_ty, convention, modifies) in functions {
             let entry = ir.create_block(BlockData {
                 location,
                 args: [struct_type, argument_ty]
@@ -1013,7 +1035,7 @@ fn lower_struct_accessors<'db>(
             let subject = ir.block_arg(entry, 0);
             let argument = ir.block_arg(entry, 1);
             // The modifier applies its callback to the field's current value.
-            let replacement = if convention == CallingConvention::Cps {
+            let replacement = if modifies {
                 let current = adt::StructGet::operands(subject)
                     .r#type(layout_type)
                     .field(index as u32)
