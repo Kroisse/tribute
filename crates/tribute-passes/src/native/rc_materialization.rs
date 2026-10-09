@@ -172,8 +172,11 @@ fn allocation_size_for_type(
     if data.dialect == "tribute_rt" && matches!(data.name.as_str(), "anyref" | "intref") {
         return Ok(0);
     }
-    // A `Bytes` object is released by its reserved RTTI entry.
-    if data.dialect == "core" && data.name == "bytes" {
+    // A `Bytes` object and an evidence are released by their reserved RTTI
+    // entries.
+    if (data.dialect == "core" && data.name == "bytes")
+        || tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
+    {
         return Ok(0);
     }
     let layout = plan.allocation_layout_for_type(ctx, ty)?;
