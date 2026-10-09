@@ -1,0 +1,10 @@
+#!/bin/sh
+
+: "${LINT_TEST_COMMAND_LOG:?must be set by test-lint.sh}"
+echo "ast-grep $*" >>"$LINT_TEST_COMMAND_LOG"
+
+case "$1" in
+    test) exit "${LINT_TEST_AST_GREP_TEST_STATUS:-0}" ;;
+    scan) exit "${LINT_TEST_AST_GREP_SCAN_STATUS:-0}" ;;
+    *) exit 1 ;;
+esac

@@ -10,6 +10,9 @@ elif [ "$#" -ne 0 ]; then
     exit 2
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."
+
 echo "Running cargo fmt..."
 if ! cargo fmt --all --check; then
     echo "" >&2
@@ -38,6 +41,12 @@ if [ "$QUICK" = false ]; then
         echo "Run 'cargo clippy --workspace --all-targets' to see all issues." >&2
         exit 2
     fi
+fi
+
+echo "Running ast-grep..."
+if ! "$SCRIPT_DIR/ast-grep.sh"; then
+    echo "ast-grep checks failed. See guides/development/symbol-lint.md." >&2
+    exit 2
 fi
 
 echo "Running markdownlint..."
