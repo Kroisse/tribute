@@ -18,6 +18,14 @@ mod test_typed {
     mod test_typed {
         struct Pair<First, Second>;
 
+        /// `Type` is an ordinary parameter and projection name.
+        struct Holder<Type>;
+
+        fn held<H: Holder>(holder: Value<H>) -> Value<H::Type> {}
+
+        /// `TypeOf` binds a variable without a bound.
+        fn typed_marker<T>(r#type: Attr<TypeOf<T>>) -> Value<T> {}
+
         fn add<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
 
         fn cmp<T: IntegerLike>(
@@ -30,7 +38,7 @@ mod test_typed {
         fn first<P: Pair>(pair: Value<P>) -> Value<P::First> {}
 
         fn call<S: func::FuncSig>(
-            sig: Attr<S::Type>,
+            sig: Attr<TypeOf<S>>,
             callee: Value<Ptr>,
             args: Values<S::Inputs>,
         ) -> Values<S::Results> {
@@ -65,7 +73,7 @@ mod test_typed {
         #[verify]
         fn nonempty(values: Variadic<_>) {}
 
-        fn maybe_call<S: func::FuncSig>(sig: Option<Attr<S::Type>>, args: Values<S::Inputs>) {}
+        fn maybe_call<S: func::FuncSig>(sig: Option<Attr<TypeOf<S>>>, args: Values<S::Inputs>) {}
 
         fn labeled(labels: Attr<[String]>, sizes: Option<Attr<[u32]>>) {}
 
@@ -91,7 +99,7 @@ mod test_typed {
         {
         }
 
-        fn maybe_unpack<S, T>(sig: Option<Attr<S::Type>>, value: Value<T>)
+        fn maybe_unpack<S, T>(sig: Option<Attr<TypeOf<S>>>, value: Value<T>)
         where
             S: func::FuncSig<Inputs = (T,)>,
         {
@@ -811,6 +819,31 @@ fn bound_constraints_are_recorded_in_the_schema() {
             ..
         })
     ));
+}
+
+#[test]
+fn type_attributes_bind_variables_and_type_is_an_ordinary_name() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let i64_ty = scalar(&mut ctx, "i64");
+    let holder = test_typed::holder(&mut ctx, i64_ty).as_type_ref();
+    let args = block_args(&mut ctx, loc, &[holder]);
+
+    let held = test_typed::Held::operands(args[0]).build(&mut ctx, loc);
+    assert_eq!(held.result_ty(&ctx), i64_ty);
+    let marker = test_typed::TypedMarker::operands()
+        .r#type(i64_ty)
+        .build(&mut ctx, loc);
+    assert_eq!(marker.result_ty(&ctx), i64_ty);
+    assert_eq!(
+        test_typed::TypedMarker::DEF.schema.attributes[0].binds,
+        Some(0)
+    );
+
+    for op in [held.op_ref(), marker.op_ref()] {
+        let def = crate::op_def::OpDef::of(&ctx, op).expect("typed ops are registered");
+        assert_eq!(def.verify(&ctx, op), []);
+    }
 }
 
 #[test]

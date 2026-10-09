@@ -165,7 +165,7 @@ pub struct AttributeSchema {
     pub name: &'static str,
     pub kind: AttributeKind,
     pub optional: bool,
-    /// Type variable bound by an `Attr<S::Type>` attribute.
+    /// Type variable bound by an `Attr<TypeOf<S>>` attribute.
     pub binds: Option<usize>,
 }
 
