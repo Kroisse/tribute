@@ -1,6 +1,7 @@
 """Regression tests for the baseline gate, using only the standard library."""
 
 import importlib.util
+from io import StringIO
 from pathlib import Path
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -68,6 +69,14 @@ class BaselineTests(TestCase):
                 gate.sys, "stderr"
             ):
                 self.assertEqual(gate.main(), 2)
+
+    def test_launch_failure_reports_error(self):
+        for error in [FileNotFoundError("not found"), PermissionError("not executable")]:
+            with self.subTest(error=error), patch.object(
+                gate.subprocess, "run", side_effect=error
+            ), patch.object(gate.sys, "stderr", new_callable=StringIO) as stderr:
+                self.assertEqual(gate.main(), 2)
+                self.assertIn(f"Cannot launch ast-grep: {error}", stderr.getvalue())
 
 
 if __name__ == "__main__":

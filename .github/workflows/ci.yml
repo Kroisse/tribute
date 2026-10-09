@@ -19,27 +19,8 @@ env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
-  ast-grep:
-    name: ast-grep
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-binstall
-
-      - name: Install ast-grep
-        run: cargo binstall ast-grep --version 0.45.3 --no-confirm
-
-      - name: Test and scan ast-grep rules
-        run: .ci/ast-grep.sh
-
-  clippy:
-    name: Clippy
+  lint:
+    name: Lint
     runs-on: [self-hosted, macOS]
     # The self-hosted runner cleans target/ on checkout and has no Actions
     # cache; kache keeps compiled crates across runs instead.
@@ -56,6 +37,17 @@ jobs:
         with:
           components: clippy
           cache: false
+
+      - name: Install cargo-binstall
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+
+      - name: Install ast-grep
+        run: cargo binstall ast-grep --version 0.45.3 --no-confirm
+
+      - name: Test and scan ast-grep rules
+        run: .ci/ast-grep.sh
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

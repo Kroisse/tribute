@@ -22,11 +22,15 @@ def new_diagnostics(diagnostics, baseline):
 
 
 def main():
-    result = subprocess.run(
-        ["ast-grep", "scan", "--json=compact", "crates"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["ast-grep", "scan", "--json=compact", "crates"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        print(f"Cannot launch ast-grep: {error}", file=sys.stderr)
+        return 2
     if result.returncode not in (0, 1):
         print(result.stderr, file=sys.stderr)
         return 2
