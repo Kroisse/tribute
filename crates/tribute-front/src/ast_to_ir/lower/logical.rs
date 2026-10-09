@@ -333,6 +333,7 @@ pub(super) fn lower_module<'db>(
         evidence_plans,
         well_known_types,
         compiler_intrinsics,
+        row_classes,
         merged_sources,
     } = typed;
     let source_paths = merged_sources
@@ -351,6 +352,7 @@ pub(super) fn lower_module<'db>(
         node_types,
     )
     .with_compiler_intrinsics(compiler_intrinsics)
+    .with_row_classes(row_classes)
     .with_source_paths(source_paths)
     .with_literal_equalities(crate::ast_to_ir::context::LiteralEqualities {
         string: well_known_types
@@ -445,7 +447,8 @@ fn prescan_definition_conventions<'db>(
                     continue;
                 };
                 let body = scheme.body(ctx.db);
-                let Some(mut convention) = ctx.calling_convention_for_type(body) else {
+                let classes = ctx.row_classes_of(&name);
+                let Some(mut convention) = ctx.calling_convention_for_type_in(body, classes) else {
                     continue;
                 };
                 if (function.effects.is_none()
@@ -471,7 +474,9 @@ fn prescan_definition_conventions<'db>(
                 {
                     let getter = declaration_name(prefix, field);
                     let [_, modifier] = field_update_names(&getter);
-                    ctx.register_definition_convention(modifier, CallingConvention::Cps);
+                    for (modifier, class) in modifier_instances(ctx, modifier) {
+                        ctx.register_definition_convention(modifier, class);
+                    }
                 }
                 prefix.truncate(saved);
             }
@@ -513,6 +518,7 @@ fn promote_definition_conventions_pass<'db>(
         match declaration {
             Decl::Function(function) => {
                 let name = declaration_name(prefix, function.name.clone());
+                let outer = ctx.enter_definition(&name);
                 if ctx.function_calling_convention(&name) != Some(CallingConvention::Cps)
                     && expr::logical_evaluation_control_class(
                         ctx,
@@ -523,6 +529,7 @@ fn promote_definition_conventions_pass<'db>(
                     ctx.register_definition_convention(name, CallingConvention::Cps);
                     *changed = true;
                 }
+                ctx.leave_definition(outer);
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
@@ -557,6 +564,7 @@ fn plan_local_callables<'db>(
                 let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
                     continue;
                 };
+                let outer = ctx.enter_definition(&name);
                 let mut plan = local_callables::Plan::collect(
                     ctx,
                     ir,
@@ -575,6 +583,7 @@ fn plan_local_callables<'db>(
                 declarations
                     .function_local_callables
                     .insert(function.id, plan);
+                ctx.leave_definition(outer);
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
@@ -608,7 +617,11 @@ fn lower_decl<'db>(
     declarations: &mut Declarations<'db>,
 ) {
     match declaration {
-        Decl::Function(function) => lower_function(ctx, ir, top, function, declarations),
+        Decl::Function(function) => {
+            let outer = ctx.enter_definition(&ctx.qualify_name(&function.name));
+            lower_function(ctx, ir, top, function, declarations);
+            ctx.leave_definition(outer);
+        }
         Decl::ExternFunction(function) => lower_extern(ctx, ir, top, function, declarations),
         Decl::Struct(declaration) => lower_struct_accessors(ctx, ir, top, declaration),
         Decl::Module(module) => {
@@ -815,6 +828,24 @@ fn field_update_names(getter: &Symbol) -> [Symbol; 2] {
     crate::ast::FIELD_LENS_FUNCTIONS.map(|name| Symbol::new(&format!("{getter}::{name}")))
 }
 
+/// The modifier `modifier` and its instances for the weaker convention
+/// classes of its callback that the module refers to, each with that class.
+fn modifier_instances(
+    ctx: &IrLoweringCtx<'_>,
+    modifier: Symbol,
+) -> Vec<(Symbol, CallingConvention)> {
+    let mut instances: Vec<_> = [CallingConvention::Direct, CallingConvention::EvidenceDirect]
+        .into_iter()
+        .map(|class| {
+            let name = crate::monomorphize::mangle::class_instance_name(&modifier, &[class]);
+            (name, class)
+        })
+        .filter(|(name, _)| !ctx.row_classes_of(name).is_empty())
+        .collect();
+    instances.push((modifier, CallingConvention::Cps));
+    instances
+}
+
 fn prescan_struct_accessor_signatures<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
@@ -863,14 +894,15 @@ fn prescan_struct_accessor_signatures<'db>(
                         CallingConvention::Direct,
                     );
                     // The modifier performs whatever its callback performs.
-                    let callback =
-                        func_sig_type(ir, field_type, [field_type], CallingConvention::Cps);
-                    ctx.register_logical_generated_signature(
-                        &modifier_name,
-                        vec![struct_type, callback],
-                        struct_type,
-                        CallingConvention::Cps,
-                    );
+                    for (modifier_name, class) in modifier_instances(ctx, modifier_name) {
+                        let callback = func_sig_type(ir, field_type, [field_type], class);
+                        ctx.register_logical_generated_signature(
+                            &modifier_name,
+                            vec![struct_type, callback],
+                            struct_type,
+                            class,
+                        );
+                    }
                 }
             }
             Decl::Module(module) => {
@@ -983,11 +1015,12 @@ fn lower_struct_accessors<'db>(
                 .map(|(_, ty)| *ty)
                 .collect();
         let [setter_name, modifier_name] = field_update_names(&getter_name);
-        let callback = func_sig_type(ir, field_type, [field_type], CallingConvention::Cps);
-        for (name, argument_ty, convention) in [
-            (setter_name, field_type, CallingConvention::Direct),
-            (modifier_name, callback, CallingConvention::Cps),
-        ] {
+        let mut functions = vec![(setter_name, field_type, CallingConvention::Direct, false)];
+        for (name, class) in modifier_instances(ctx, modifier_name) {
+            let callback = func_sig_type(ir, field_type, [field_type], class);
+            functions.push((name, callback, class, true));
+        }
+        for (name, argument_ty, convention, modifies) in functions {
             let entry = ir.create_block(BlockData {
                 location,
                 args: [struct_type, argument_ty]
@@ -1002,7 +1035,7 @@ fn lower_struct_accessors<'db>(
             let subject = ir.block_arg(entry, 0);
             let argument = ir.block_arg(entry, 1);
             // The modifier applies its callback to the field's current value.
-            let replacement = if convention == CallingConvention::Cps {
+            let replacement = if modifies {
                 let current = adt::StructGet::operands(subject)
                     .r#type(layout_type)
                     .field(index as u32)
@@ -1059,25 +1092,25 @@ fn lower_struct_accessors<'db>(
 }
 
 fn function_signature<'db>(
-    ctx: &IrLoweringCtx<'db>,
+    ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     function: &FuncDecl<TypedRef<'db>>,
 ) -> FuncSignature {
     let qualified = ctx.qualify_name(&function.name);
-    let mut signature = (if qualified == function.name {
-        FuncSignature::lookup_logical(ctx, ir, &function.name)
-    } else {
-        // Nested declarations are exported under their qualified identity; a
-        // short-name lookup can silently select an unrelated root declaration.
-        FuncSignature::lookup_logical(ctx, ir, &qualified)
-            .or_else(|| FuncSignature::lookup_logical(ctx, ir, &function.name))
-    })
-    .unwrap_or_else(|| {
-        panic!(
-            "missing typechecked signature for function {}",
-            function.name
-        )
-    });
+    // Nested declarations are exported under their qualified identity; a
+    // short-name lookup can silently select an unrelated root declaration.
+    let mut signature = FuncSignature::lookup_logical(ctx, ir, &qualified)
+        .or_else(|| {
+            (qualified != function.name)
+                .then(|| FuncSignature::lookup_logical(ctx, ir, &function.name))
+                .flatten()
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing typechecked signature for function {}",
+                function.name
+            )
+        });
     signature.convention = ctx
         .function_calling_convention(&qualified)
         .unwrap_or(signature.convention);

@@ -188,6 +188,8 @@ pub struct TypedModule<'db> {
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
     /// Exact intrinsic-directive declaration IDs and canonical identities.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
+    /// Convention classes of the class variables of each function instance.
+    pub row_classes: HashMap<Symbol, Vec<(crate::ast::EffectVar, CallingConvention)>>,
     /// URIs of the other sources whose declarations were merged into `ast`.
     pub merged_sources: Vec<String>,
 }

@@ -11,16 +11,14 @@ use trunk_ir::Symbol;
 
 use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_module_mut};
 use crate::ast::{
-    CtorId, Decl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme,
-    TypedRef,
+    CtorId, Decl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypedRef,
 };
 
-use super::instance::InstanceKey;
+use super::instance::{InstanceKey, InstanceKeys};
 use super::mangle::mangle_type_name;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
-pub type RewriteMap<'db> =
-    HashMap<FuncDefId<'db>, (TypeScheme<'db>, Vec<(InstanceKey<'db>, Symbol)>)>;
+pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(InstanceKey<'db>, Symbol)>>;
 
 /// Type rewrite map: declaration identity → specialized argument/name pairs.
 pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
@@ -31,8 +29,9 @@ pub fn rewrite_module<'db>(
     module: &mut Module<TypedRef<'db>>,
     rewrite_map: &RewriteMap<'db>,
     instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    keys: &InstanceKeys<'db>,
 ) {
-    rewrite_decls(db, &mut module.decls, rewrite_map, instances);
+    rewrite_decls(db, &mut module.decls, rewrite_map, instances, keys);
 }
 
 /// Rewrite call sites in a list of declarations (e.g., specialized function bodies).
@@ -41,38 +40,42 @@ pub fn rewrite_decls<'db>(
     decls: &mut [Decl<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
     instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    keys: &InstanceKeys<'db>,
 ) {
-    let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
-        // Only a function reference in expression position is a call site.
-        if site == RefSite::Var
-            && let Some(callee) = specialized_callee(db, rewrite_map, instances, node, value)
-        {
-            *value = callee;
-        }
-    });
     for decl in decls {
+        let enclosing = super::collect::enclosing_instance(decl).cloned();
+        let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
+            // Only a function reference in expression position is a call site.
+            if site == RefSite::Var
+                && let Some(instance) = instances.get(&node)
+                && let Some(callee) =
+                    specialized_callee(db, rewrite_map, keys, instance, enclosing.as_ref(), value)
+            {
+                *value = callee;
+            }
+        });
         walk_decl_mut(&mut rewrite, decl);
     }
 }
 
-/// The specialized function a call site at `node` refers to, if the callee
-/// is generic and was specialized for the call's type arguments.
+/// The specialized function the reference `instance` inside `enclosing`
+/// refers to, if the callee was specialized for the reference's arguments.
 fn specialized_callee<'db>(
     db: &'db dyn salsa::Database,
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
-    node: NodeId,
+    keys: &InstanceKeys<'db>,
+    instance: &crate::typeck::FunctionInstance<'db>,
+    enclosing: Option<&Symbol>,
     typed_ref: &TypedRef<'db>,
 ) -> Option<TypedRef<'db>> {
     let ResolvedRef::Function { id } = &typed_ref.resolved else {
         return None;
     };
-    let (scheme, entries) = rewrite_map.get(id)?;
-    let instance = instances.get(&node)?;
+    let entries = rewrite_map.get(id)?;
     if instance.function != *id {
         return None;
     }
-    let key = InstanceKey::of(db, *scheme, instance)?;
+    let key = keys.key(instance, enclosing)?;
     let (_, mangled) = entries.iter().find(|(entry, _)| *entry == key)?;
     Some(TypedRef::new(
         ResolvedRef::Function {
@@ -106,9 +109,10 @@ pub fn build_type_rewrite_map<'db>(
     map
 }
 
-/// Redirect references to a generic struct's field functions (`T::f`,
-/// `T::f::set`, `T::f::modify`) to the same function of the struct's
-/// specialization for the reference's type arguments.
+/// Redirect references to a struct's field functions (`T::f`, `T::f::set`,
+/// `T::f::modify`) to the same function of the struct's specialization for
+/// the reference's type arguments, and to the function's instance for the
+/// reference's convention classes.
 ///
 /// Field functions have no source declaration to clone; each specialized
 /// struct declaration has its own.  Run this before the instances' types are
@@ -118,9 +122,11 @@ pub fn rewrite_field_function_refs<'db>(
     module: &mut Module<TypedRef<'db>>,
     type_rewrite_map: &TypeRewriteMap<'db>,
     instances: &mut HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    keys: &mut InstanceKeys<'db>,
 ) {
-    walk_module_mut(
-        &mut Refs(|site, node, value: &mut TypedRef<'db>| {
+    for decl in &mut module.decls {
+        let enclosing = super::collect::enclosing_instance(decl).cloned();
+        let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
             if site != RefSite::Var {
                 return;
             }
@@ -130,28 +136,39 @@ pub fn rewrite_field_function_refs<'db>(
             let Some(instance) = instances.get_mut(&node) else {
                 return;
             };
+            if instance.function != *id {
+                return;
+            }
+            let classes = keys
+                .key(instance, enclosing.as_ref())
+                .filter(InstanceKey::has_weaker_class);
+            let original = instance.function;
             let crate::typeck::FunctionInstanceOrigin::FieldAccessor { owner, field, kind } =
                 &mut instance.origin
             else {
                 return;
             };
-            if instance.function != *id || instance.type_arguments.is_empty() {
-                return;
-            }
-            let Some((_, mangled)) = type_rewrite_map.get(owner).and_then(|entries| {
+            let mut function = original;
+            if let Some((_, mangled)) = type_rewrite_map.get(owner).and_then(|entries| {
                 entries
                     .iter()
                     .find(|(args, _)| *args == instance.type_arguments)
-            }) else {
-                return;
-            };
-            let function = FuncDefId::new(db, kind.qualified(mangled, field));
-            *owner = owner.with_qualified(db, mangled.clone());
+            }) && !instance.type_arguments.is_empty()
+            {
+                function = FuncDefId::new(db, kind.qualified(mangled, field));
+                *owner = owner.with_qualified(db, mangled.clone());
+            }
+            if let Some(key) = classes {
+                let name =
+                    super::mangle::class_instance_name(function.qualified(db), &key.class_args);
+                keys.record(name.clone(), original, &key);
+                function = FuncDefId::new(db, name);
+            }
             instance.function = function;
             value.resolved = ResolvedRef::Function { id: function };
-        }),
-        module,
-    );
+        });
+        walk_decl_mut(&mut rewrite, decl);
+    }
 }
 
 /// Rewrite all Named types with type arguments to their mangled monomorphic versions

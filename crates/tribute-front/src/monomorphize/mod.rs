@@ -14,8 +14,11 @@ use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::Symbol;
 
-use self::instance::InstanceKey;
-use crate::ast::{CtorId, Decl, EffectRow, FuncDefId, Module, NodeId, Type, TypeScheme, TypedRef};
+pub use self::instance::InstanceRowClasses;
+use self::instance::{InstanceKey, InstanceKeys};
+use crate::ast::{
+    CtorId, Decl, EffectRow, FuncDefId, Module, NodeId, RowClasses, Type, TypeScheme, TypedRef,
+};
 use crate::typeck::subst::{BoundVarOutOfBounds, substitute_bound_vars, substitute_effect_row};
 use crate::typeck::{
     EvidenceStep, InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature,
@@ -35,6 +38,8 @@ pub struct MonomorphizeMetadata<'db> {
     pub perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
     pub lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
     pub exhaustive_cases: HashSet<NodeId>,
+    /// The convention each ability requires of a callable that performs it.
+    pub ability_conventions: HashMap<crate::ast::AbilityId<'db>, crate::ast::CallingConvention>,
     /// Exact base identities transported to generated generic extern declarations.
     ///
     /// This is specialization metadata, not source-provenance or ownership data.
@@ -46,6 +51,8 @@ pub struct MonomorphizeResult<'db> {
     pub module: Module<TypedRef<'db>>,
     pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
     pub metadata: MonomorphizeMetadata<'db>,
+    /// The convention class of each class variable of every function instance.
+    pub row_classes: InstanceRowClasses,
 }
 
 /// Run monomorphization on a typed module.
@@ -77,6 +84,7 @@ pub fn monomorphize_functions<'db>(
     let mut all_function_types = fn_types_vec;
     let mut instantiations: HashMap<_, HashSet<_>> = HashMap::default();
     let mut reached_fixpoint = false;
+    let mut keys = InstanceKeys::new(db, &module, &source_function_types, &metadata);
 
     // A concrete clone can reveal direct calls that were abstract in its
     // source body. Clone the metadata first, then collect only unseen keys.
@@ -86,12 +94,15 @@ pub fn monomorphize_functions<'db>(
             &module,
             &source_function_types,
             &metadata.function_instances,
+            &keys,
         );
         let mut new_instantiations: HashMap<_, HashSet<_>> = HashMap::default();
-        for (func_id, keys) in discovered {
+        for (func_id, discovered) in discovered {
             let known = instantiations.entry(func_id).or_default();
-            for key in keys {
+            for key in discovered {
                 if known.insert(key.clone()) {
+                    let name = mangle::mangle_instance_name(db, func_id.qualified(db), &key);
+                    keys.record(name, func_id, &key);
                     new_instantiations.entry(func_id).or_default().insert(key);
                 }
             }
@@ -115,15 +126,22 @@ pub fn monomorphize_functions<'db>(
             metadata_origins,
             compiler_intrinsic_specializations,
         } = specializations;
-        for (key, origins) in metadata_origins {
-            specialize_metadata(db, &mut metadata, &key, &origins);
+        for (name, key, origins) in metadata_origins {
+            let classes = keys.row_classes.get(&name).map_or(&[][..], Vec::as_slice);
+            specialize_metadata(db, &mut metadata, &key, classes, &origins);
         }
         metadata
             .compiler_intrinsics
             .extend(compiler_intrinsic_specializations);
 
         let rewrite_map = build_rewrite_map(db, &instantiations, &source_function_types);
-        rewrite::rewrite_module(db, &mut module, &rewrite_map, &metadata.function_instances);
+        rewrite::rewrite_module(
+            db,
+            &mut module,
+            &rewrite_map,
+            &metadata.function_instances,
+            &keys,
+        );
         let mut specialized_decls: Vec<Decl<TypedRef<'db>>> = specialized_declarations
             .into_iter()
             .map(Decl::Function)
@@ -133,6 +151,7 @@ pub fn monomorphize_functions<'db>(
             &mut specialized_decls,
             &rewrite_map,
             &metadata.function_instances,
+            &keys,
         );
 
         module.decls.extend(specialized_decls);
@@ -253,6 +272,7 @@ pub fn monomorphize_functions<'db>(
             &mut module,
             &type_rewrite_map,
             &mut metadata.function_instances,
+            &mut keys,
         );
         let rewrite_ty = |ty| rewrite::rewrite_type(db, ty, &type_rewrite_map);
         let rewrite_scheme =
@@ -314,6 +334,13 @@ pub fn monomorphize_functions<'db>(
             .extend(specialized_enums.into_iter().map(Decl::Enum));
         module
     } else {
+        rewrite::rewrite_field_function_refs(
+            db,
+            &mut module,
+            &rewrite::TypeRewriteMap::default(),
+            &mut metadata.function_instances,
+            &mut keys,
+        );
         module
     };
 
@@ -321,6 +348,7 @@ pub fn monomorphize_functions<'db>(
         module,
         function_types: fn_types_vec,
         metadata,
+        row_classes: keys.row_classes,
     })
 }
 
@@ -328,6 +356,7 @@ fn specialize_metadata<'db>(
     db: &'db dyn salsa::Database,
     metadata: &mut MonomorphizeMetadata<'db>,
     key: &InstanceKey<'db>,
+    classes: &RowClasses,
     origins: &HashSet<NodeId>,
 ) {
     let variant = key.variant();
@@ -468,11 +497,25 @@ fn specialize_metadata<'db>(
         })
         .collect();
     for (id, signature) in lambdas {
+        let function_type = substitute_type(db, signature.function_type, type_args);
+        // A lambda whose row ends in a class variable takes the class the
+        // instance fixes for it.
+        let convention = if classes.is_empty() {
+            signature.convention
+        } else {
+            crate::ast::calling_convention_for_function_type_in(
+                db,
+                function_type,
+                &metadata.ability_conventions,
+                classes,
+            )
+            .unwrap_or(signature.convention)
+        };
         metadata.lambda_signatures.insert(
             id.with_variant(variant),
             LambdaSignature {
-                function_type: substitute_type(db, signature.function_type, type_args),
-                convention: signature.convention,
+                function_type,
+                convention,
             },
         );
     }
@@ -534,9 +577,9 @@ fn build_rewrite_map<'db>(
 
     for (func_id, keys) in instantiations {
         let qualified = func_id.qualified(db);
-        let Some(scheme) = scheme_map.get(qualified) else {
+        if !scheme_map.contains_key(qualified) {
             continue;
-        };
+        }
 
         let mut entries: Vec<(InstanceKey<'db>, Symbol)> = keys
             .iter()
@@ -546,7 +589,7 @@ fn build_rewrite_map<'db>(
             })
             .collect();
         entries.sort_by_key(|e| e.1.clone());
-        rewrite_map.insert(*func_id, (*scheme, entries));
+        rewrite_map.insert(*func_id, entries);
     }
 
     rewrite_map
@@ -649,12 +692,13 @@ mod tests {
             .into_iter()
             .collect::<HashMap<_, _>>(),
             exhaustive_cases: [origin].into_iter().collect::<HashSet<_>>(),
+            ability_conventions: HashMap::default(),
             compiler_intrinsics: HashMap::default(),
         };
         let key = InstanceKey::of_types(vec![int]);
         let origins = [origin].into_iter().collect::<HashSet<_>>();
 
-        specialize_metadata(&db, &mut metadata, &key, &origins);
+        specialize_metadata(&db, &mut metadata, &key, &[], &origins);
 
         let clone = origin.with_variant(key.variant());
         assert_eq!(metadata.node_types.get(&clone), Some(&int));

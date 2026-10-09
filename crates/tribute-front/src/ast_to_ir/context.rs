@@ -18,7 +18,8 @@ use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
 use crate::SortedMap;
 use crate::ast::{
-    AbilityId, CallingConvention, CtorId, LocalId, NodeId, SpanMap, TypeKind, TypeScheme,
+    AbilityId, CallingConvention, CtorId, EffectVar, LocalId, NodeId, RowClasses, SpanMap,
+    TypeKind, TypeScheme,
 };
 
 /// Encode a tagged type-shape node without relying on separator characters in
@@ -113,6 +114,10 @@ pub struct IrLoweringCtx<'db> {
     logical_nominal_declarations: HashSet<Symbol>,
     /// Exact intrinsic-directive declaration ID to canonical identity.
     compiler_intrinsics: HashMap<NodeId, Symbol>,
+    /// Convention classes of the class variables of each function instance.
+    row_classes: HashMap<Symbol, Vec<(EffectVar, CallingConvention)>>,
+    /// The classes of the definition whose types are being read.
+    current_row_classes: Vec<(EffectVar, CallingConvention)>,
     /// The `==` functions that `String` and `Bytes` literal patterns call.
     literal_equalities: LiteralEqualities,
     /// Node types from type checking, keyed by NodeId.
@@ -165,6 +170,8 @@ impl<'db> IrLoweringCtx<'db> {
             type_map: HashMap::default(),
             logical_nominal_declarations: HashSet::default(),
             compiler_intrinsics: HashMap::default(),
+            row_classes: HashMap::default(),
+            current_row_classes: Vec::new(),
             literal_equalities: LiteralEqualities::default(),
 
             node_types,
@@ -177,6 +184,33 @@ impl<'db> IrLoweringCtx<'db> {
     ) -> Self {
         self.compiler_intrinsics = compiler_intrinsics;
         self
+    }
+
+    pub(crate) fn with_row_classes(
+        mut self,
+        row_classes: HashMap<Symbol, Vec<(EffectVar, CallingConvention)>>,
+    ) -> Self {
+        self.row_classes = row_classes;
+        self
+    }
+
+    /// The convention classes of the function instance `name`.
+    pub(crate) fn row_classes_of(&self, name: &Symbol) -> &RowClasses {
+        self.row_classes.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// Read types as the definition `name` sees them, and return the classes
+    /// to restore with [`Self::leave_definition`].
+    pub(crate) fn enter_definition(
+        &mut self,
+        name: &Symbol,
+    ) -> Vec<(EffectVar, CallingConvention)> {
+        let classes = self.row_classes.get(name).cloned().unwrap_or_default();
+        std::mem::replace(&mut self.current_row_classes, classes)
+    }
+
+    pub(crate) fn leave_definition(&mut self, outer: Vec<(EffectVar, CallingConvention)>) {
+        self.current_row_classes = outer;
     }
 
     pub(crate) fn with_source_paths(mut self, source_paths: HashMap<u64, PathRef>) -> Self {
@@ -370,7 +404,21 @@ impl<'db> IrLoweringCtx<'db> {
         &self,
         ty: crate::ast::Type<'db>,
     ) -> Option<CallingConvention> {
-        crate::ast::calling_convention_for_function_type(self.db, ty, &self.ability_conventions)
+        self.calling_convention_for_type_in(ty, &self.current_row_classes)
+    }
+
+    /// Derive the convention of a function type read with `classes`.
+    pub(crate) fn calling_convention_for_type_in(
+        &self,
+        ty: crate::ast::Type<'db>,
+        classes: &RowClasses,
+    ) -> Option<CallingConvention> {
+        crate::ast::calling_convention_for_function_type_in(
+            self.db,
+            ty,
+            &self.ability_conventions,
+            classes,
+        )
     }
 
     /// Derive a convention from an effect row without a function-level ABI bound.
@@ -378,7 +426,12 @@ impl<'db> IrLoweringCtx<'db> {
         &self,
         effect: crate::ast::EffectRow<'db>,
     ) -> CallingConvention {
-        crate::ast::calling_convention_for_effect_row(self.db, effect, &self.ability_conventions)
+        crate::ast::calling_convention_for_effect_row_in(
+            self.db,
+            effect,
+            &self.ability_conventions,
+            &self.current_row_classes,
+        )
     }
 
     /// Look up a function definition and derive its ABI convention.
@@ -388,7 +441,7 @@ impl<'db> IrLoweringCtx<'db> {
         }
         let scheme = self.lookup_function_type(name)?;
         let body = scheme.body(self.db);
-        self.calling_convention_for_type(body)
+        self.calling_convention_for_type_in(body, self.row_classes_of(name))
     }
 
     /// Register the physical worker convention for a named definition.
