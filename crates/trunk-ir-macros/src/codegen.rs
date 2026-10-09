@@ -6,7 +6,8 @@ use quote::{format_ident, quote, quote_spanned};
 
 use crate::parse::{
     AttrDef, AttrKind, BoundPath, DialectItem, DialectModule, ListExpr, Operand, OperationDef,
-    Projection, RegionOrSuccessor, ResultDef, TypeDefData, TypeExpr, ValueExpr,
+    Projection, RegionOrSuccessor, RelationDef, RelationExpr, ResultDef, TypeDefData, TypeExpr,
+    ValueExpr,
 };
 
 /// Generate all code for a dialect module.
@@ -166,6 +167,11 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
         RegionOrSuccessor::Region { .. } => None,
     });
 
+    let relations = op
+        .relations
+        .iter()
+        .map(|relation| gen_relation(crate_path, relation, op));
+
     // The span points a missing `Verify` impl at the `#[verify]` attribute.
     let verifier = match op.verify {
         Some(span) => {
@@ -190,6 +196,7 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
                 attributes: &[#(#attributes),*],
                 regions: &[#(#regions),*],
                 successors: &[#(#successors),*],
+                relations: &[#(#relations),*],
             },
             verifier: #verifier,
         }
@@ -206,11 +213,13 @@ fn gen_bounds(crate_path: &TokenStream, paths: &[BoundPath]) -> TokenStream {
     })
 }
 
+/// Resolve a projection at compile time. With `kind`, the projection must
+/// have that kind; without, any kind is accepted.
 fn gen_projection(
     crate_path: &TokenStream,
     projection: &Projection,
     op: &OperationDef,
-    kind: TokenStream,
+    kind: Option<TokenStream>,
 ) -> TokenStream {
     let schema = quote!(#crate_path::op_schema);
     let tc = quote!(#crate_path::type_constraint);
@@ -223,18 +232,71 @@ fn gen_projection(
             .iter()
             .position(|p| quote!(#p).to_string() == quote!(#bound).to_string())
             .unwrap();
+        let resolve = match kind {
+            Some(kind) => quote!(#tc::projection_in(B[#index], #name, #kind)),
+            None => quote!(#tc::projection_in_any(B[#index], #name)),
+        };
         quote_spanned!(bound.span()=> {
             const B: &[&#tc::ConstraintDesc] = #bounds;
-            const I: usize = #tc::projection_in(B[#index], #name, #kind);
+            const I: usize = #resolve;
             #schema::ProjectionRef { var: #var, bound: #index, index: I }
         })
     } else {
+        let resolve = match kind {
+            Some(kind) => quote!(#tc::resolve_projection(B, #name, #kind)),
+            None => quote!(#tc::resolve_projection_any(B, #name)),
+        };
         quote!({
             const B: &[&#tc::ConstraintDesc] = #bounds;
-            const P: (usize, usize) = #tc::resolve_projection(B, #name, #kind);
+            const P: (usize, usize) = #resolve;
             #schema::ProjectionRef { var: #var, bound: P.0, index: P.1 }
         })
     }
+}
+
+fn gen_relation(
+    crate_path: &TokenStream,
+    relation: &RelationDef,
+    op: &OperationDef,
+) -> TokenStream {
+    let schema = quote!(#crate_path::op_schema);
+    let tc = quote!(#crate_path::type_constraint);
+    let (kind, target) = match &relation.target {
+        RelationExpr::One(expr) => {
+            let expr = gen_type_expr(crate_path, expr, op);
+            (
+                Some(quote!(#tc::ProjectionKind::One)),
+                quote!(#schema::RelationTarget::One(#expr)),
+            )
+        }
+        RelationExpr::List(exprs) => {
+            let exprs = exprs.iter().map(|expr| gen_type_expr(crate_path, expr, op));
+            (
+                Some(quote!(#tc::ProjectionKind::List)),
+                quote!(#schema::RelationTarget::List(&[#(#exprs),*])),
+            )
+        }
+        RelationExpr::Proj(right) => {
+            let left_ref = gen_projection(crate_path, &relation.projection, op, None);
+            let right_ref = gen_projection(crate_path, right, op, None);
+            let left_bounds = gen_bounds(crate_path, &op.type_vars[relation.projection.var].bounds);
+            let right_bounds = gen_bounds(crate_path, &op.type_vars[right.var].bounds);
+            (
+                None,
+                quote!({
+                    const L: #schema::ProjectionRef = #left_ref;
+                    const R: #schema::ProjectionRef = #right_ref;
+                    const _: () = #tc::check_same_kind(
+                        #left_bounds, (L.bound, L.index),
+                        #right_bounds, (R.bound, R.index),
+                    );
+                    #schema::RelationTarget::Proj(R)
+                }),
+            )
+        }
+    };
+    let projection = gen_projection(crate_path, &relation.projection, op, kind);
+    quote!(#schema::Relation { projection: #projection, target: #target })
 }
 
 fn gen_type_expr(crate_path: &TokenStream, expr: &TypeExpr, op: &OperationDef) -> TokenStream {
@@ -255,7 +317,7 @@ fn gen_type_expr(crate_path: &TokenStream, expr: &TypeExpr, op: &OperationDef) -
                 crate_path,
                 proj,
                 op,
-                quote!(#crate_path::type_constraint::ProjectionKind::One),
+                Some(quote!(#crate_path::type_constraint::ProjectionKind::One)),
             );
             quote!(#schema::TypeSpec::Proj(#p))
         }
@@ -278,7 +340,7 @@ fn gen_value_expr(crate_path: &TokenStream, expr: &ValueExpr, op: &OperationDef)
                 crate_path,
                 proj,
                 op,
-                quote!(#crate_path::type_constraint::ProjectionKind::List),
+                Some(quote!(#crate_path::type_constraint::ProjectionKind::List)),
             );
             quote!(#schema::ValueConstraint::List(#schema::ListSpec::Proj(#p)))
         }
@@ -814,29 +876,45 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
 }
 
 /// Whether a builder can infer every result type: each is a fixed type, a
-/// variable bound by a single operand or a required attribute, or a
-/// projection of such a variable. Must agree with
-/// `OpSchema::infer_result_types`.
+/// variable bound by a single operand, a required attribute, or a bound
+/// constraint on such a variable, or a projection of such a variable. Must
+/// agree with `OpSchema::infer_result_types`.
 fn results_inferable(op: &OperationDef) -> bool {
-    let var_bound = |var: usize| {
-        op.attrs
-            .iter()
-            .any(|attr| attr.binds == Some(var) && !attr.optional)
-            || op.operands.iter().any(|operand| {
-                !operand.variadic
-                    && matches!(operand.constraint, ValueExpr::Each(TypeExpr::Var(v)) if v == var)
-            })
-    };
+    let mut bound: Vec<bool> = (0..op.type_vars.len())
+        .map(|var| {
+            op.attrs
+                .iter()
+                .any(|attr| attr.binds == Some(var) && !attr.optional)
+                || op.operands.iter().any(|operand| {
+                    !operand.variadic
+                        && matches!(operand.constraint, ValueExpr::Each(TypeExpr::Var(v)) if v == var)
+                })
+        })
+        .collect();
+    loop {
+        let mut progressed = false;
+        for relation in &op.relations {
+            if !bound[relation.projection.var] {
+                continue;
+            }
+            for var in relation.bound_vars() {
+                progressed |= !std::mem::replace(&mut bound[var], true);
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
     let one = |expr: &TypeExpr| match expr {
-        TypeExpr::Var(var) => var_bound(*var),
-        TypeExpr::Proj(proj) => var_bound(proj.var),
+        TypeExpr::Var(var) => bound[*var],
+        TypeExpr::Proj(proj) => bound[proj.var],
         TypeExpr::Exact(_) => true,
         TypeExpr::Any | TypeExpr::Anon(_) => false,
     };
     match (&op.results, &op.result_constraint) {
         (ResultDef::Single(_), ValueExpr::Each(expr)) => one(expr),
         (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Types(exprs))) => exprs.iter().all(one),
-        (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Proj(proj))) => var_bound(proj.var),
+        (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Proj(proj))) => bound[proj.var],
         _ => false,
     }
 }

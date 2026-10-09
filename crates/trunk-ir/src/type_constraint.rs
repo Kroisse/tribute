@@ -134,29 +134,50 @@ pub const fn check_bounds(
 
 /// Resolve `<S as B>::name` within one bound, checking its kind.
 pub const fn projection_in(bound: &ConstraintDesc, name: &str, kind: ProjectionKind) -> usize {
+    let i = projection_in_any(bound, name);
+    check_kind(bound.projections[i].kind, kind);
+    i
+}
+
+/// Resolve `<S as B>::name` within one bound, whatever its kind.
+pub const fn projection_in_any(bound: &ConstraintDesc, name: &str) -> usize {
     let mut i = 0;
     while i < bound.projections.len() {
-        let p = &bound.projections[i];
-        if str_eq(p.name, name) {
-            if !kind_eq(p.kind, kind) {
-                match p.kind {
-                    ProjectionKind::List => {
-                        panic!(
-                            "type constraint projection is a type list but is used as a single type"
-                        )
-                    }
-                    ProjectionKind::One => {
-                        panic!(
-                            "type constraint projection is a single type but is used as a type list"
-                        )
-                    }
-                }
-            }
+        if str_eq(bound.projections[i].name, name) {
             return i;
         }
         i += 1;
     }
     panic!("type constraint projection is not provided by the selected bound")
+}
+
+const fn check_kind(actual: ProjectionKind, expected: ProjectionKind) {
+    if !kind_eq(actual, expected) {
+        match actual {
+            ProjectionKind::List => {
+                panic!("type constraint projection is a type list but is used as a single type")
+            }
+            ProjectionKind::One => {
+                panic!("type constraint projection is a single type but is used as a type list")
+            }
+        }
+    }
+}
+
+/// Require the two sides of a bound constraint between projections to have
+/// the same kind. `left` and `right` are `(bound, projection)` indices into
+/// the bounds of each side's variable.
+pub const fn check_same_kind(
+    left_bounds: &[&ConstraintDesc],
+    left: (usize, usize),
+    right_bounds: &[&ConstraintDesc],
+    right: (usize, usize),
+) {
+    let left = left_bounds[left.0].projections[left.1].kind;
+    let right = right_bounds[right.0].projections[right.1].kind;
+    if !kind_eq(left, right) {
+        panic!("bound constraint equates a single-type projection with a type-list projection")
+    }
 }
 
 const fn kind_eq(a: ProjectionKind, b: ProjectionKind) -> bool {
@@ -173,6 +194,14 @@ pub const fn resolve_projection(
     name: &str,
     kind: ProjectionKind,
 ) -> (usize, usize) {
+    let (i, j) = resolve_projection_any(bounds, name);
+    check_kind(bounds[i].projections[j].kind, kind);
+    (i, j)
+}
+
+/// Resolve `S::name` across all bounds of a variable, whatever its kind:
+/// exactly one bound must provide it.
+pub const fn resolve_projection_any(bounds: &[&ConstraintDesc], name: &str) -> (usize, usize) {
     let mut found = None;
     let mut i = 0;
     while i < bounds.len() {
@@ -185,26 +214,14 @@ pub const fn resolve_projection(
                         "type constraint projection is provided by more than one bound; use `<S as B>::X`"
                     );
                 }
-                found = Some((i, j, p.kind));
+                found = Some((i, j));
             }
             j += 1;
         }
         i += 1;
     }
     match found {
-        Some((i, j, actual)) => {
-            if !kind_eq(actual, kind) {
-                match actual {
-                    ProjectionKind::List => panic!(
-                        "type constraint projection is a type list but is used as a single type"
-                    ),
-                    ProjectionKind::One => panic!(
-                        "type constraint projection is a single type but is used as a type list"
-                    ),
-                }
-            }
-            (i, j)
-        }
+        Some(found) => found,
         None => {
             panic!("type constraint projection is not provided by any bound of the type variable")
         }

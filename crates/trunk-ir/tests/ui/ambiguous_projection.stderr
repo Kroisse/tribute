@@ -5,6 +5,11 @@ error[E0080]: evaluation panicked: type constraint projection is provided by mor
   |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `<d::Probe as trunk_ir::ops::DialectOp>::DEF::P` failed inside this call
   |
 note: inside `resolve_projection`
+ --> src/type_constraint.rs
+  |
+  |     let (i, j) = resolve_projection_any(bounds, name);
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: inside `resolve_projection_any`
  --> $RUST/core/src/panic.rs
   |
   |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
