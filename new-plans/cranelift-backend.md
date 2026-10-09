@@ -368,7 +368,7 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 `--sanitize=address`는 native binary의 address sanitizer 전체를 켠다. 부분 모드는
 없으며, 끈 build에는 아래 계측이 들어가지 않는다.
 
-켠 build는 세 부분으로 이루어진다.
+켠 build는 네 부분으로 이루어진다.
 
 - **초기화:** Native entrypoint가 다른 runtime 초기화보다 먼저 `__asan_init`을
   부른다.
@@ -381,6 +381,11 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
   앞에 runtime 검사 호출을 둔다. 호출은 실제 접근 주소(operand 주소에 `offset`을
   더한 값)와 byte 단위 접근 폭을 넘긴다. Load는 `__tribute_asan_load`를, store와
   atomic read-modify-write는 `__tribute_asan_store`를 부른다.
+
+- **종료 검사:** Native entrypoint가 `main`이 돌아온 뒤 `__asan_exit`를 부른다.
+  생성된 code가 만드는 할당은 모두 reference-counted이므로, 이때 살아 있는 할당은
+  누수다. Runtime은 남은 할당의 수와 payload byte 합을 stderr에 쓰고 process를
+  abort한다. Runtime이 자기 allocator로 직접 잡은 memory는 세지 않는다.
 
 Runtime은 접근 범위를 다음 순서로 판정한다.
 
