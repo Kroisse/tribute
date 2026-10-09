@@ -1572,3 +1572,34 @@ fn main() ->{Io} Nil {
         "7!\nnone",
     );
 }
+
+/// A delimited answer whose type is already an erased reference is stored in
+/// the completion cell as it is.
+#[test]
+fn test_value_delimiter_with_a_list_answer() {
+    assert_native_output(
+        "value_delimiter_with_a_list_answer.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Nat
+}
+
+fn collect() ->{} List(Nat) {
+    handle [Ask::ask(), Ask::ask()] {
+        do value { value }
+        op Ask::ask() { resume 7 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    case collect() {
+        [7, 7] -> print_line("sevens")
+        _ -> print_line("other")
+    }
+}
+"#,
+        "sevens",
+    );
+}

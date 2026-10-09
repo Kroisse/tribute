@@ -850,7 +850,7 @@ impl TerminalFunctions {
     fn build_frame(&self, ctx: &mut IrContext, location: Location) -> TerminalFrame {
         let mut ops = Vec::new();
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-        let initial = if Self::slot_type(ctx, self.answer) == self.answer {
+        let initial = if Self::slot_type(ctx, self.answer) != anyref_ty {
             core::NilValue::operands().build(ctx, location).op_ref()
         } else {
             adt::RefNull::operands()
