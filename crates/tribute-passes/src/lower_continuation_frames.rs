@@ -116,7 +116,6 @@ impl RewritePattern for LowerDelimits {
             return false;
         };
         let lowered = effect::Delimit::operands(delimit.body(ctx), delimit.evidence(ctx))
-            .results(delimit.result_ty(ctx))
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(lowered.op_ref());
         true

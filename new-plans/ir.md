@@ -1157,6 +1157,9 @@ ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
   `effect.initial_evidence`의 결과다.
   Terminator가 아니며 `Cps`가 아닌 flow에만 온다. Frame 펼치기가 같은 operand와
   결과를 가진 `effect.delimit`으로 낮추고, target ABI 경계가 그것을 소비한다.
+  `effect.delimit`도 같은 관계를 선언하되 body의 frame은 답 타입을 가진 layout
+  참조다. 물리화가 그 답 타입과 `core.never` 결과를 지우므로, target ABI 경계는
+  물리화 직후 다른 검증 지점 없이 `effect.delimit`을 소비한다.
 - **검증:** Operation verifier는 위 타입 관계, frame과 closure의 `R` 일치, arm 표와
   arm closure의 일치, closure의 calling convention을 검사한다. Terminator 위치와
   enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다. `ability.delimit`을
