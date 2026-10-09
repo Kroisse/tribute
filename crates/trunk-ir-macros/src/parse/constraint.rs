@@ -121,6 +121,58 @@ pub enum ValueExpr {
     List(ListExpr),
 }
 
+/// A bound constraint `V: B<X = ..>`: an equality on `<V as B>::X`.
+#[derive(Clone)]
+pub struct RelationDef {
+    pub projection: Projection,
+    pub target: RelationExpr,
+}
+
+/// The right-hand side of a bound constraint.
+#[derive(Clone)]
+pub enum RelationExpr {
+    /// A single-type constraint (`F::Result = T`).
+    One(TypeExpr),
+    /// An explicit type list (`C::Inputs = (Evidence, F)`).
+    List(Vec<TypeExpr>),
+    /// Another projection of the same kind (`C::Inputs = S::Inputs`).
+    Proj(Projection),
+}
+
+impl RelationDef {
+    /// The variables this equality binds once its projected variable is bound.
+    pub fn bound_vars(&self) -> impl Iterator<Item = usize> + '_ {
+        let exprs: &[TypeExpr] = match &self.target {
+            RelationExpr::One(expr) => std::slice::from_ref(expr),
+            RelationExpr::List(exprs) => exprs,
+            RelationExpr::Proj(_) => &[],
+        };
+        exprs.iter().filter_map(|expr| match expr {
+            TypeExpr::Var(var) => Some(*var),
+            _ => None,
+        })
+    }
+
+    /// The variables whose bindings the equality projects.
+    fn projected_vars(&self) -> impl Iterator<Item = usize> + '_ {
+        let exprs: &[TypeExpr] = match &self.target {
+            RelationExpr::One(expr) => std::slice::from_ref(expr),
+            RelationExpr::List(exprs) => exprs,
+            RelationExpr::Proj(_) => &[],
+        };
+        let target = match &self.target {
+            RelationExpr::Proj(proj) => Some(proj.var),
+            _ => None,
+        };
+        std::iter::once(self.projection.var)
+            .chain(target)
+            .chain(exprs.iter().filter_map(|expr| match expr {
+                TypeExpr::Proj(proj) => Some(proj.var),
+                _ => None,
+            }))
+    }
+}
+
 // ============================================================================
 // Type expression syntax
 // ============================================================================
@@ -160,6 +212,17 @@ struct Segment {
 enum GenericArg {
     Type(Ty),
     Lifetime,
+    /// An associated item constraint `Name = Ty`.
+    Binding(Ident, Ty),
+}
+
+/// An associated item constraint on a variable's bound,
+/// `V: B<Name = Ty>`, before interpretation.
+struct RawEquality {
+    var: usize,
+    bound: BoundPath,
+    name: Ident,
+    ty: Ty,
 }
 
 fn peek_ident(iter: &TokenIter, name: &str) -> bool {
@@ -277,6 +340,10 @@ fn parse_generic_args(iter: &mut TokenIter) -> Result<Vec<GenericArg>, String> {
         if peek_punct(iter, '\'') {
             skip_lifetime(iter);
             args.push(GenericArg::Lifetime);
+        } else if peek_binding(iter) {
+            let name = Ident::parser(iter).map_err(|e| format!("expected a name: {e}"))?;
+            expect_punct(iter, '=')?;
+            args.push(GenericArg::Binding(name, parse_ty(iter)?));
         } else {
             args.push(GenericArg::Type(parse_ty(iter)?));
         }
@@ -309,7 +376,37 @@ fn parse_qualified(iter: &mut TokenIter) -> Result<TyPath, String> {
     })
 }
 
+/// Whether the next generic argument is `Name = ..`.
+fn peek_binding(iter: &TokenIter) -> bool {
+    let mut look = iter.clone();
+    matches!(look.next(), Some(TokenTree::Ident(_)))
+        && matches!(look.next(), Some(TokenTree::Punct(p)) if p.as_char() == '=')
+}
+
+/// Parse `A + B` where no bound may carry associated item constraints.
 fn parse_bounds(iter: &mut TokenIter) -> Result<Vec<BoundPath>, String> {
+    parse_constrained_bounds(iter)?
+        .into_iter()
+        .map(|(bound, bindings)| {
+            if bindings.is_empty() {
+                Ok(bound)
+            } else {
+                Err(
+                    "associated item constraints are only supported on bounds of a declared \
+                     type variable"
+                        .into(),
+                )
+            }
+        })
+        .collect()
+}
+
+/// A bound with its associated item constraints (`B<X = T>`).
+type ConstrainedBound = (BoundPath, Vec<(Ident, Ty)>);
+
+/// Parse `A + B<X = T>`, returning each bound with its associated item
+/// constraints.
+fn parse_constrained_bounds(iter: &mut TokenIter) -> Result<Vec<ConstrainedBound>, String> {
     let mut bounds = Vec::new();
     loop {
         match iter.clone().next() {
@@ -317,7 +414,7 @@ fn parse_bounds(iter: &mut TokenIter) -> Result<Vec<BoundPath>, String> {
             Some(TokenTree::Punct(p)) if p.as_char() == ':' => {}
             _ => return Err("bounds must be plain Rust paths".into()),
         }
-        bounds.push(bound_path(&parse_ty_path(iter)?)?);
+        bounds.push(constrained_bound_path(&parse_ty_path(iter)?)?);
         if !peek_punct(iter, '+') {
             return Ok(bounds);
         }
@@ -325,16 +422,61 @@ fn parse_bounds(iter: &mut TokenIter) -> Result<Vec<BoundPath>, String> {
     }
 }
 
+/// Parse the bounds of variable `var`, collecting their associated item
+/// constraints into `equalities`.
+fn parse_var_bounds(
+    iter: &mut TokenIter,
+    var: usize,
+    equalities: &mut Vec<RawEquality>,
+) -> Result<Vec<BoundPath>, String> {
+    let mut bounds = Vec::new();
+    for (bound, bindings) in parse_constrained_bounds(iter)? {
+        for (name, ty) in bindings {
+            equalities.push(RawEquality {
+                var,
+                bound: bound.clone(),
+                name,
+                ty,
+            });
+        }
+        bounds.push(bound);
+    }
+    Ok(bounds)
+}
+
 /// Convert an unqualified path to a bound; qualified paths are projections.
 fn bound_path(path: &TyPath) -> Result<BoundPath, String> {
-    debug_assert!(path.qself.is_none());
-    if path.segments.iter().any(|s| s.args.is_some()) {
+    let (bound, bindings) = constrained_bound_path(path)?;
+    if !bindings.is_empty() {
         return Err("generic arguments on bound paths are not supported".into());
     }
-    Ok(BoundPath {
+    Ok(bound)
+}
+
+/// Convert an unqualified path to a bound whose last segment may carry
+/// associated item constraints (`B<X = T>`). Other generic arguments are
+/// rejected.
+fn constrained_bound_path(path: &TyPath) -> Result<ConstrainedBound, String> {
+    debug_assert!(path.qself.is_none());
+    let (last, init) = path.segments.split_last().expect("paths have a segment");
+    if init.iter().any(|s| s.args.is_some()) {
+        return Err("generic arguments on bound paths are not supported".into());
+    }
+    let mut bindings = Vec::new();
+    for arg in last.args.iter().flatten() {
+        match arg {
+            GenericArg::Binding(name, ty) => bindings.push((name.clone(), ty.clone())),
+            _ => return Err("generic arguments on bound paths are not supported".into()),
+        }
+    }
+    if last.args.as_ref().is_some_and(Vec::is_empty) {
+        return Err("generic arguments on bound paths are not supported".into());
+    }
+    let bound = BoundPath {
         leading_colon: path.leading_colon,
         segments: path.segments.iter().map(|s| s.ident.clone()).collect(),
-    })
+    };
+    Ok((bound, bindings))
 }
 
 // ============================================================================
@@ -354,7 +496,8 @@ pub(super) fn parse_typed_operation(
     };
     let mut sig = sig_tokens.to_token_iter();
 
-    let mut vars = parse_generics(&mut sig)?;
+    let mut equalities = Vec::new();
+    let mut vars = parse_generics(&mut sig, &mut equalities)?;
     let params = parse_params(expect_group(&mut sig, Delimiter::Parenthesis)?.stream())?;
     let output = if peek_punct(&sig, '-') {
         expect_punct(&mut sig, '-')?;
@@ -365,9 +508,15 @@ pub(super) fn parse_typed_operation(
     };
     if peek_ident(&sig, "where") {
         sig.next();
-        parse_where_clause(&mut sig, &mut vars)?;
+        parse_where_clause(&mut sig, &mut vars, &mut equalities)?;
     }
     expect_consumed(&sig, "typed operation signature")?;
+    // Equalities are interpreted after every bound is known, so that their
+    // types may project variables whose bounds are declared later.
+    let relations = equalities
+        .iter()
+        .map(|equality| parse_relation(equality, &vars))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut attrs = Vec::new();
     let mut operands = Vec::new();
@@ -448,6 +597,7 @@ pub(super) fn parse_typed_operation(
     if params.is_empty() && output.is_none() && !vars.is_empty() {
         return Err("type variables require an entity that uses them".into());
     }
+    check_relations_bound(&relations, &attrs, &operands, &result_constraint, &vars)?;
     let regions = parse_regions(body.stream())?;
     for item in &regions {
         let name = match item {
@@ -465,12 +615,16 @@ pub(super) fn parse_typed_operation(
         regions,
         type_vars: vars,
         result_constraint,
+        relations,
         verify: None,
     })
 }
 
 /// Parse `<T: A + B, U>`.
-fn parse_generics(iter: &mut TokenIter) -> Result<Vec<TypeVar>, String> {
+fn parse_generics(
+    iter: &mut TokenIter,
+    equalities: &mut Vec<RawEquality>,
+) -> Result<Vec<TypeVar>, String> {
     let mut vars = Vec::<TypeVar>::new();
     if !peek_punct(iter, '<') {
         return Ok(vars);
@@ -487,7 +641,7 @@ fn parse_generics(iter: &mut TokenIter) -> Result<Vec<TypeVar>, String> {
         }
         let bounds = if peek_punct(iter, ':') {
             consume_punct(iter)?;
-            parse_bounds(iter)?
+            parse_var_bounds(iter, vars.len(), equalities)?
         } else {
             Vec::new()
         };
@@ -500,24 +654,121 @@ fn parse_generics(iter: &mut TokenIter) -> Result<Vec<TypeVar>, String> {
     Ok(vars)
 }
 
-/// Parse `where T: A, U: B`, merging the bounds into the declared variables.
-fn parse_where_clause(iter: &mut TokenIter, vars: &mut [TypeVar]) -> Result<(), String> {
+/// Parse `where T: A + B<X = ..>`, merging the bounds into the declared
+/// variables and collecting associated item constraints into `equalities`.
+fn parse_where_clause(
+    iter: &mut TokenIter,
+    vars: &mut [TypeVar],
+    equalities: &mut Vec<RawEquality>,
+) -> Result<(), String> {
     while has_remaining(iter) {
         if peek_punct(iter, '\'') {
             return Err("unsupported where predicate".into());
         }
         let bounded = parse_ty(iter)?;
+        if peek_punct(iter, '=') {
+            return Err(
+                "equality predicates are not Rust syntax; constrain the bound instead, \
+                 as in `V: B<X = ..>`"
+                    .into(),
+            );
+        }
         expect_punct(iter, ':')?;
-        let bounds = parse_bounds(iter)?;
         let var = match &bounded {
             Ty::Path(path) => {
                 simple_var(path, vars).ok_or("where bound must name a declared type variable")?
             }
             _ => return Err("where bound must name a type variable".into()),
         };
+        let bounds = parse_var_bounds(iter, var, equalities)?;
         vars[var].bounds.extend(bounds);
         if has_remaining(iter) {
             expect_punct(iter, ',')?;
+        }
+    }
+    Ok(())
+}
+
+/// Interpret `V: B<X = rhs>` as an equality on `<V as B>::X`.
+fn parse_relation(equality: &RawEquality, vars: &[TypeVar]) -> Result<RelationDef, String> {
+    let name = ident_str(&equality.name);
+    if name == "Type" {
+        return Err("`Type` names the variable itself and cannot be constrained".into());
+    }
+    let lhs = Projection {
+        var: equality.var,
+        bound: Some(equality.bound.clone()),
+        name,
+    };
+    let rhs = &equality.ty;
+    let target = match rhs {
+        Ty::Tuple(tys) => RelationExpr::List(
+            tys.iter()
+                .map(|ty| parse_one(ty, vars))
+                .collect::<Result<_, _>>()?,
+        ),
+        Ty::Path(path) => match projection(path, vars)? {
+            Some(proj) => RelationExpr::Proj(proj),
+            None => RelationExpr::One(parse_one(rhs, vars)?),
+        },
+        _ => RelationExpr::One(parse_one(rhs, vars)?),
+    };
+    Ok(RelationDef {
+        projection: lhs,
+        target,
+    })
+}
+
+/// Reject equalities that project a variable nothing in the operation
+/// binds: such an equality could never be checked.
+fn check_relations_bound(
+    relations: &[RelationDef],
+    attrs: &[AttrDef],
+    operands: &[Operand],
+    results: &ValueExpr,
+    vars: &[TypeVar],
+) -> Result<(), String> {
+    let mut bound = vec![false; vars.len()];
+    let mut mark = |expr: &ValueExpr| {
+        let exprs: &[TypeExpr] = match expr {
+            ValueExpr::Each(expr) => std::slice::from_ref(expr),
+            ValueExpr::List(ListExpr::Types(exprs)) => exprs,
+            ValueExpr::List(ListExpr::Proj(_)) => &[],
+        };
+        for expr in exprs {
+            if let TypeExpr::Var(var) = expr {
+                bound[*var] = true;
+            }
+        }
+    };
+    for operand in operands {
+        mark(&operand.constraint);
+    }
+    mark(results);
+    for var in attrs.iter().filter_map(|attr| attr.binds) {
+        bound[var] = true;
+    }
+    loop {
+        let mut progressed = false;
+        for relation in relations {
+            if !bound[relation.projection.var] {
+                continue;
+            }
+            for var in relation.bound_vars() {
+                progressed |= !std::mem::replace(&mut bound[var], true);
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    for var in relations.iter().flat_map(RelationDef::projected_vars) {
+        if !bound[var] {
+            return Err(format!(
+                "bound constraint projects `{}`, which no operand, result, attribute, or \
+                 constraint binds",
+                vars[var].name
+            ));
         }
     }
     Ok(())
@@ -662,7 +913,9 @@ fn kind_tokens(ty: &Ty) -> Result<TokenStream, String> {
                     .iter()
                     .map(|arg| match arg {
                         GenericArg::Type(ty) => kind_tokens(ty),
-                        GenericArg::Lifetime => Err("invalid attribute kind".into()),
+                        GenericArg::Lifetime | GenericArg::Binding(..) => {
+                            Err("invalid attribute kind".into())
+                        }
                     })
                     .collect::<Result<Vec<_>, String>>()?;
                 segments.push(quote!(#ident<#(#args),*>));
@@ -830,6 +1083,116 @@ mod tests {
             ValueExpr::List(ListExpr::Proj(Projection { bound: Some(_), .. }))
         ));
         assert!(matches!(op.results, ResultDef::Optional(_)));
+    }
+
+    #[test]
+    fn associated_item_constraints_become_relations() {
+        let op = parse_op(quote! {
+            fn delimit<C: CpsClosure<Inputs = (Evidence, F)>, F: Frame, G>(
+                body: Value<C>,
+                items: Value<G>,
+            ) -> Value<F::Result>
+            where
+                C: Other<Results = F::Result, Extra = G::Items>,
+                G: Seq,
+            {}
+        })
+        .unwrap();
+        assert_eq!(op.type_vars[0].bounds.len(), 2);
+        let [inputs, results, extra] = op.relations.as_slice() else {
+            panic!("expected three relations");
+        };
+        assert!(matches!(
+            inputs,
+            RelationDef {
+                projection: Projection { var: 0, bound: Some(b), name },
+                target: RelationExpr::List(elements),
+            } if b.key() == "CpsClosure"
+                && name == "Inputs"
+                && matches!(elements.as_slice(), [TypeExpr::Exact(_), TypeExpr::Var(1)])
+        ));
+        assert!(matches!(
+            results.target,
+            RelationExpr::Proj(Projection { var: 1, .. })
+        ));
+        assert!(matches!(
+            &results.projection,
+            Projection { bound: Some(b), .. } if b.key() == "Other"
+        ));
+        assert!(matches!(
+            extra.target,
+            RelationExpr::Proj(Projection { var: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn malformed_associated_item_constraints_are_rejected() {
+        let cases = [
+            (
+                quote!(
+                    fn f<S: A>(s: Value<S>)
+                    where
+                        S::Inputs = (T,),
+                    {
+                    }
+                ),
+                "equality predicates are not Rust syntax",
+            ),
+            (
+                quote!(
+                    fn f(x: Value<impl A<X = B>>) {}
+                ),
+                "only supported on bounds of a declared type variable",
+            ),
+            (
+                quote!(
+                    fn f<S: A<Type = B>>(s: Value<S>) {}
+                ),
+                "`Type` names the variable itself",
+            ),
+            (
+                quote!(
+                    fn f<S: a<X = B>::A>(s: Value<S>) {}
+                ),
+                "generic arguments on bound paths",
+            ),
+            (
+                quote!(
+                    fn f<S: A<B, X = C>>(s: Value<S>) {}
+                ),
+                "generic arguments on bound paths",
+            ),
+            (
+                quote!(
+                    fn f<S: A<X = (T,)>, T>(t: Value<T>) {}
+                ),
+                "bound constraint projects `S`",
+            ),
+            (
+                quote!(
+                    fn f<S: A<X = T::Y>, T: B>(s: Value<S>) {}
+                ),
+                "bound constraint projects `T`",
+            ),
+        ];
+        let failures: Vec<String> = cases
+            .into_iter()
+            .filter_map(|(item, expected)| {
+                let err = parse_err(item.clone());
+                (!err.contains(expected))
+                    .then(|| format!("`{item}`: expected `{expected}`, got `{err}`"))
+            })
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn equalities_bind_variables_for_later_equalities() {
+        // `F` is bound only through `C`, and `G` only through `F`.
+        let op = parse_op(quote! {
+            fn f<C: A<Inputs = (F,)>, F: B<Item = G>, G: D<Items = (_,)>>(c: Value<C>) {}
+        });
+        assert!(op.is_ok());
     }
 
     #[test]

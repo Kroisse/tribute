@@ -8,7 +8,7 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 
-use super::{Frame, Handle, Perform, SuffixFrame, is_evidence_type_ref};
+use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
 use crate::dialect::tribute_control::{
     CALLING_CONVENTION_ATTR, CallingConvention, EvidencePlanSite, verify_evidence_plan,
 };
@@ -152,15 +152,55 @@ fn closure_signature(ctx: &IrContext, ty: TypeRef) -> Option<(CallingConvention,
 
 /// A `closure.closure` of the `Cps` convention that returns `core.never`:
 /// a continuation, completion, or `op` handler arm.
+///
+/// Provides the `Inputs` and `Results` lists of its function type.
 pub struct CpsClosure;
 
 impl trunk_ir::type_constraint::TypeConstraint for CpsClosure {
-    const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =
-        &trunk_ir::type_constraint::ConstraintDesc {
+    const DESC: &'static trunk_ir::type_constraint::ConstraintDesc = {
+        use trunk_ir::type_constraint::{
+            ConstraintDesc, Projected, ProjectionDesc, ProjectionKind,
+        };
+        &ConstraintDesc {
             name: "CpsClosure",
             exact: false,
-            projections: &[],
+            projections: &[
+                ProjectionDesc {
+                    name: "Inputs",
+                    kind: ProjectionKind::List,
+                },
+                ProjectionDesc {
+                    name: "Results",
+                    kind: ProjectionKind::List,
+                },
+            ],
             matches: is_cps_closure,
+            project: |ctx, ty, index| {
+                if !is_cps_closure(ctx, ty) {
+                    return None;
+                }
+                let (_, signature) = closure_signature(ctx, ty)?;
+                match index {
+                    0 => Some(Projected::List(signature.inputs(ctx))),
+                    1 => Some(Projected::List(signature.results(ctx))),
+                    _ => None,
+                }
+            },
+            fixed: None,
+        }
+    };
+}
+
+/// Any type but `core.never`: the value a resumption receives.
+pub struct NotNever;
+
+impl trunk_ir::type_constraint::TypeConstraint for NotNever {
+    const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =
+        &trunk_ir::type_constraint::ConstraintDesc {
+            name: "NotNever",
+            exact: false,
+            projections: &[],
+            matches: |ctx, ty| !is_never(ctx, ty),
             project: |_, _, _| None,
             fixed: None,
         };
@@ -212,40 +252,7 @@ fn frame_result(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
 
 impl trunk_ir::ops::Verify for SuffixFrame {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        let op = self.op_ref();
-        verify_evidence_plan(ctx, op, EvidencePlanSite::Legalized)?;
-        let outer = ctx.value_ty(self.outer(ctx));
-        let value_type = frame_result(ctx, self.result_ty(ctx))
-            .ok_or("ability.suffix_frame must produce an ability.frame")?;
-        let rest = cps_closure_rest(
-            ctx,
-            self.continuation(ctx),
-            outer,
-            "ability.suffix_frame continuation",
-        )?;
-        if rest != [value_type] {
-            return Err(
-                "ability.suffix_frame continuation must take the value of the produced frame"
-                    .into(),
-            );
-        }
-        Ok(())
-    }
-}
-
-impl trunk_ir::ops::Verify for Perform {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        let frame = ctx.value_ty(self.frame(ctx));
-        let rest = cps_closure_rest(
-            ctx,
-            self.resumption(ctx),
-            frame,
-            "ability.perform resumption",
-        )?;
-        match rest {
-            [input] if !is_never(ctx, *input) => Ok(()),
-            _ => Err("ability.perform resumption must take one operation result".into()),
-        }
+        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Legalized)
     }
 }
 
@@ -509,22 +516,23 @@ mod tests {
                 "resumption into another frame",
                 perform(", %other: !frame_nil, %k: !resume, %arg: core.i32", "%k")
                     .replace("%ev, %exit, %k", "%ev, %other, %k"),
-                "must take the evidence and the frame of the answer first",
+                "element #1 of `C::Inputs`: expected same type as operand #1 `frame` \
+                 (F = ability.frame<core.nil>), found ability.frame<core.i32>",
             ),
             (
                 "direct resumption",
                 perform(", %k: !fn_arm, %arg: core.i32", "%k"),
-                "`resumption`: expected CpsClosure",
+                "operand #2 `resumption`: expected C: CpsClosure",
             ),
             (
                 "resumption of an operation that returns never",
                 perform(&format!(", %k: {NEVER}, %arg: core.i32"), "%k"),
-                "must take one operation result",
+                "element #2 of `C::Inputs`: expected NotNever, found core.never",
             ),
             (
                 "resumption with resume tokens",
                 perform(", %k: !op_arm, %arg: core.i32", "%k"),
-                "must take one operation result",
+                "constraint on C::Inputs: expected a list of 3 type(s)",
             ),
         ];
         for (name, text, expected) in cases {
@@ -580,17 +588,17 @@ mod tests {
             (
                 "suffix frame of another value",
                 wrong_value,
-                "continuation must take the value of the produced frame",
+                "element #2 of `C::Inputs`: expected G::Result = core.i32, found core.nil",
             ),
             (
                 "suffix frame around another frame",
                 wrong_outer,
-                "must take the evidence and the frame of the answer first",
+                "element #1 of `C::Inputs`: expected same type as operand #1 `outer`",
             ),
             (
                 "direct continuation",
                 direct_continuation,
-                "operand #2 `continuation`: expected CpsClosure",
+                "operand #2 `continuation`: expected C: CpsClosure",
             ),
             (
                 "duplicate binding",

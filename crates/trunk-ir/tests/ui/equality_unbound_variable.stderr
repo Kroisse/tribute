@@ -1,0 +1,15 @@
+error: bound constraint projects `S`, which no operand, result, attribute, or constraint binds
+ --> tests/ui/equality_unbound_variable.rs:4:5
+  |
+4 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `trunk_ir::dialect::func::FuncSig`
+ --> tests/ui/equality_unbound_variable.rs:2:9
+  |
+2 |     use trunk_ir::dialect::func::FuncSig;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
