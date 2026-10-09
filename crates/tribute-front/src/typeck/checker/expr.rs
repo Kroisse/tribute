@@ -312,6 +312,7 @@ impl<'db> TypeChecker<'db> {
                                 let arg_ty = self.infer_expr_with_expected(ctx, arg, *param_ty);
                                 ctx.constrain_coerce(arg_ty, *param_ty, arg.id);
                             }
+                            ctx.merge_effect_at(*effect, expr.id);
                             *result
                         }
                         _ => ctx.fresh_type_var(),
@@ -1000,6 +1001,7 @@ impl<'db> TypeChecker<'db> {
                                 let actual = self.infer_expr_with_expected(ctx, arg, *param);
                                 ctx.constrain_coerce(actual, *param, arg.id);
                             }
+                            ctx.merge_effect_at(*effect, expr.id);
                             *result
                         }
                         _ => ctx.fresh_type_var(),
