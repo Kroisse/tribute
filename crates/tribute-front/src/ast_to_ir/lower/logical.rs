@@ -1809,7 +1809,6 @@ fn lower_list<'db>(
     for element in values.into_iter().rev() {
         let prepend = list::Prepend::operands(element, value)
             .element_type(element_ty)
-            .results(list_ty)
             .build(builder.ir, location);
         builder.ir.push_op(builder.block, prepend.op_ref());
         value = prepend.result(builder.ir);

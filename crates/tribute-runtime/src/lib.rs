@@ -177,7 +177,11 @@ pub extern "C" fn __tribute_print_float(value: f64) {
 // Bytes support
 // =============================================================================
 
-/// Bytes payload layout: [ptr: *const u8, len: u64].
+/// Bytes payload layout: `[ptr] [len] [owner] [cap] [bytes...]`.
+///
+/// `ptr` and `len` are the range this value reads. `cap` bytes are stored
+/// right after these fields, and `owner` is the `Bytes` that stores the range
+/// when this value does not. See `new-plans/rc.md` (Bytes).
 ///
 /// Compiler passes emit code that stores this layout after the RC header.
 /// Runtime functions receive a pointer to this payload area (not the raw allocation).
@@ -185,6 +189,54 @@ pub extern "C" fn __tribute_print_float(value: f64) {
 pub struct TributeBytes {
     pub ptr: *const u8,
     pub len: u64,
+    pub owner: *const TributeBytes,
+    pub cap: u64,
+}
+
+/// Allocate a `Bytes` that stores `cap` uninitialized bytes and reads all of
+/// them. Returns the value and the address of its bytes.
+fn allocate_storing_bytes(cap: u64) -> (*mut TributeBytes, *mut u8) {
+    let fixed = core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64;
+    let Some(size) = fixed.checked_add(cap) else {
+        oom_abort();
+    };
+    let raw = unsafe { __tribute_alloc(size) };
+    let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
+    let data = if cap == 0 {
+        core::ptr::null_mut()
+    } else {
+        unsafe { raw.add(fixed as usize) }
+    };
+    unsafe {
+        (*rc_box).payload = TributeBytes {
+            ptr: data,
+            len: cap,
+            owner: core::ptr::null(),
+            cap,
+        };
+        (&raw mut (*rc_box).payload, data)
+    }
+}
+
+/// Allocate a `Bytes` that reads `len` bytes at `ptr`, which `owner` stores.
+/// The caller hands over one unit of a non-null `owner`.
+fn allocate_sharing_bytes(
+    ptr: *const u8,
+    len: u64,
+    owner: *const TributeBytes,
+) -> *mut TributeBytes {
+    let size = core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64;
+    let raw = unsafe { __tribute_alloc(size) };
+    let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
+    unsafe {
+        (*rc_box).payload = TributeBytes {
+            ptr,
+            len,
+            owner,
+            cap: 0,
+        };
+        &raw mut (*rc_box).payload
+    }
 }
 
 fn write_stdout_all(bytes: &[u8]) {
@@ -412,23 +464,11 @@ fn allocate_read_result(result: NativeReadLineResult) -> *mut NativeReadLineResu
 }
 
 fn allocate_bytes(bytes: &[u8]) -> *mut TributeBytes {
-    let len = bytes.len() as u64;
-    let data = if bytes.is_empty() {
-        core::ptr::null_mut()
-    } else {
-        let data = unsafe { __tribute_alloc(len) };
+    let (result, data) = allocate_storing_bytes(bytes.len() as u64);
+    if !bytes.is_empty() {
         unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len()) };
-        data
-    };
-
-    let size = core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64;
-    let raw = unsafe { __tribute_alloc(size) };
-    let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
-    unsafe {
-        (*rc_box).payload.ptr = data;
-        (*rc_box).payload.len = len;
-        &raw mut (*rc_box).payload
     }
+    result
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -503,11 +543,29 @@ pub unsafe extern "C" fn __tribute_bytes_range_equal(
     u32::from(unsafe { libc::memcmp(left_ptr.cast(), right_ptr.cast(), len as usize) == 0 })
 }
 
-/// Concatenate two Bytes values, returning a new RC-managed Bytes.
+/// Read one byte of a Bytes value, zero-extended.
 ///
-/// Allocates a `TributeRc<TributeBytes>` (RC header + TributeBytes payload),
-/// copies both byte sequences into a fresh buffer, and returns a pointer
-/// to the payload area.
+/// Aborts if `index` is out of range.
+///
+/// Signature: `(bytes: ptr, index: u32) -> u32`
+///
+/// # Safety
+///
+/// `bytes` must be a valid pointer to a `TributeBytes` payload.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_bytes_get_or_panic(
+    bytes: *const TributeBytes,
+    index: u32,
+) -> u32 {
+    let b = unsafe { &*bytes };
+    if u64::from(index) >= b.len {
+        bounds_check_abort();
+    }
+    u32::from(unsafe { *b.ptr.add(index as usize) })
+}
+
+/// Concatenate two Bytes values, returning a new RC-managed Bytes that
+/// stores the result.
 ///
 /// Signature: `(a: ptr, b: ptr) -> ptr`
 ///
@@ -526,47 +584,30 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
         oom_abort();
     };
 
-    // Allocate buffer for concatenated bytes
-    let buf = if total_len > 0 {
-        let buf = unsafe { __tribute_alloc(total_len) };
-        if a_ref.len > 0 && !a_ref.ptr.is_null() {
-            unsafe {
-                core::ptr::copy_nonoverlapping(a_ref.ptr, buf, a_ref.len as usize);
-            }
+    let (result, data) = allocate_storing_bytes(total_len);
+    if a_ref.len > 0 && !a_ref.ptr.is_null() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(a_ref.ptr, data, a_ref.len as usize);
         }
-        if b_ref.len > 0 && !b_ref.ptr.is_null() {
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    b_ref.ptr,
-                    buf.add(a_ref.len as usize),
-                    b_ref.len as usize,
-                );
-            }
-        }
-        buf
-    } else {
-        core::ptr::null_mut()
-    };
-
-    // Allocate RcBox<TributeBytes>
-    let alloc_size = tribute_rc::HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
-    let raw = unsafe { __tribute_alloc(alloc_size) };
-    let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
-    unsafe {
-        (*rc_box).payload.ptr = buf;
-        (*rc_box).payload.len = total_len;
-        &raw mut (*rc_box).payload
     }
+    if b_ref.len > 0 && !b_ref.ptr.is_null() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                b_ref.ptr,
+                data.add(a_ref.len as usize),
+                b_ref.len as usize,
+            );
+        }
+    }
+    result
 }
 
-/// Slice a Bytes value, returning a new RC-managed Bytes pointing into the
-/// original buffer (zero-copy).
+/// Slice a Bytes value, returning a new RC-managed Bytes that reads part of
+/// the original's bytes (zero-copy).
 ///
-/// The returned slice shares the original's data buffer. To prevent
-/// use-after-free, this function bumps the original object's refcount so
-/// it stays alive at least as long as the slice. The extra retain is
-/// balanced when the compiler's RC insertion pass releases the original
-/// at the caller's scope boundary.
+/// The slice retains the `Bytes` that stores the bytes: the original's
+/// `owner` if it has one, the original itself if it stores bytes, and nothing
+/// for static bytes. Releasing the slice releases that owner.
 ///
 /// Panics (aborts) if `start > end` or `end > bytes.len`.
 ///
@@ -590,29 +631,21 @@ pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
         bounds_check_abort();
     }
 
-    // Retain the original so its data buffer stays alive while the slice
-    // points into it.
-    unsafe {
-        let rc_box = &*tribute_rc::RcBox::from_payload_ptr(bytes);
-        rc_box.retain();
-    }
-
     let new_len = e - s;
-    let new_ptr = if new_len > 0 && !b.ptr.is_null() {
-        unsafe { b.ptr.add(s as usize) }
+    if new_len == 0 || b.ptr.is_null() {
+        return allocate_sharing_bytes(core::ptr::null(), 0, core::ptr::null());
+    }
+    let owner = if !b.owner.is_null() {
+        b.owner
+    } else if b.cap != 0 {
+        bytes
     } else {
         core::ptr::null()
     };
-
-    // Allocate RcBox<TributeBytes>
-    let alloc_size = tribute_rc::HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
-    let raw = unsafe { __tribute_alloc(alloc_size) };
-    let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
-    unsafe {
-        (*rc_box).payload.ptr = new_ptr;
-        (*rc_box).payload.len = new_len;
-        &raw mut (*rc_box).payload
+    if !owner.is_null() {
+        unsafe { (*tribute_rc::RcBox::from_payload_ptr(owner)).retain() };
     }
+    allocate_sharing_bytes(unsafe { b.ptr.add(s as usize) }, new_len, owner)
 }
 
 fn bounds_check_abort() -> ! {
@@ -1029,12 +1062,12 @@ mod tests {
             return;
         }
         let payload = unsafe { &*bytes };
-        unsafe { __tribute_dealloc(payload.ptr.cast_mut(), payload.len) };
+        assert!(payload.owner.is_null(), "test bytes store their own bytes");
         let raw = unsafe { tribute_rc::RcBox::from_payload_ptr_mut(bytes) }.cast();
         unsafe {
             __tribute_dealloc(
                 raw,
-                core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64,
+                core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64 + payload.cap,
             )
         };
     }
@@ -1115,7 +1148,64 @@ mod tests {
                 data.as_ptr()
             },
             len: data.len() as u64,
+            owner: core::ptr::null(),
+            cap: 0,
         }
+    }
+
+    fn refcount(bytes: *const TributeBytes) -> u32 {
+        let rc_box = unsafe { &*tribute_rc::RcBox::from_payload_ptr(bytes) };
+        rc_box.refcount.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[test]
+    fn concat_stores_its_bytes_in_the_result() {
+        let (left, right) = (bytes_view(b"ab"), bytes_view(b"cde"));
+        let joined = unsafe { __tribute_bytes_concat(&left, &right) };
+        let payload = unsafe { &*joined };
+        assert_eq!(unsafe { bytes_contents(joined) }, b"abcde");
+        assert_eq!(payload.cap, 5);
+        assert!(payload.owner.is_null());
+        assert_eq!(
+            payload.ptr,
+            unsafe { joined.add(1) }.cast::<u8>().cast_const()
+        );
+        assert_eq!(
+            unsafe { __tribute_bytes_get_or_panic(joined, 4) },
+            u32::from(b'e')
+        );
+        unsafe { dealloc_test_bytes(joined) };
+    }
+
+    #[test]
+    fn slice_retains_the_bytes_that_store_its_range() {
+        let (left, right) = (bytes_view(b"ab"), bytes_view(b"cde"));
+        let stored = unsafe { __tribute_bytes_concat(&left, &right) };
+        let outer = unsafe { __tribute_bytes_slice_or_panic(stored, 1, 5) };
+        let inner = unsafe { __tribute_bytes_slice_or_panic(outer, 1, 3) };
+        assert_eq!(unsafe { bytes_contents(inner) }, b"cd");
+        // Both slices hold the storing value, not one another.
+        assert_eq!(unsafe { (*outer).owner }, stored.cast_const());
+        assert_eq!(unsafe { (*inner).owner }, stored.cast_const());
+        assert_eq!(refcount(stored), 3);
+        assert_eq!(refcount(outer), 1);
+        assert_eq!(unsafe { ((*inner).cap, (*outer).cap) }, (0, 0));
+
+        // A slice of static bytes, and an empty slice, hold nothing.
+        let literal = bytes_view(b"xyz");
+        let of_literal = unsafe { __tribute_bytes_slice_or_panic(&literal, 1, 3) };
+        let empty = unsafe { __tribute_bytes_slice_or_panic(stored, 2, 2) };
+        assert_eq!(unsafe { bytes_contents(of_literal) }, b"yz");
+        assert!(unsafe { (*of_literal).owner }.is_null());
+        assert!(unsafe { (*empty).owner }.is_null());
+        assert_eq!(refcount(stored), 3);
+
+        let fixed = core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64;
+        for slice in [outer, inner, of_literal, empty] {
+            let raw = unsafe { tribute_rc::RcBox::from_payload_ptr_mut(slice) }.cast();
+            unsafe { __tribute_dealloc(raw, fixed) };
+        }
+        unsafe { dealloc_test_bytes(stored) };
     }
 
     /// Range starts and lengths: mostly in bounds, sometimes near `u32::MAX`

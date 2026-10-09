@@ -20,7 +20,7 @@ use tribute_core::{
     set_calling_convention,
 };
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::{ability, closure, tribute_control, tribute_rt};
+use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_rt};
 use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
@@ -35,6 +35,7 @@ use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
 
 mod boundary;
 mod callable;
+mod delimit;
 mod frame;
 mod handle;
 mod structured;
@@ -273,6 +274,13 @@ impl<'a> Converter<'a> {
             if dialect != "tribute_control" {
                 let cloned = self.clone_plain_op(source, mapping)?;
                 self.ctx.push_op(block, cloned);
+                index += 1;
+                continue;
+            }
+
+            if flow.convention != CallingConvention::Cps && self.needs_cps_control(source) {
+                let answer = self.delimit(source, block, mapping, flow)?;
+                mapping.insert(self.ctx.op_result(source, 0), answer);
                 index += 1;
                 continue;
             }

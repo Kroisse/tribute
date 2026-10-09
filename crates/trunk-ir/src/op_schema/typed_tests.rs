@@ -18,6 +18,14 @@ mod test_typed {
     mod test_typed {
         struct Pair<First, Second>;
 
+        /// `Type` is an ordinary parameter and projection name.
+        struct Holder<Type>;
+
+        fn held<H: Holder>(holder: Value<H>) -> Value<H::Type> {}
+
+        /// `TypeOf` binds a variable without a bound.
+        fn typed_marker<T>(r#type: Attr<TypeOf<T>>) -> Value<T> {}
+
         fn add<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
 
         fn cmp<T: IntegerLike>(
@@ -30,7 +38,7 @@ mod test_typed {
         fn first<P: Pair>(pair: Value<P>) -> Value<P::First> {}
 
         fn call<S: func::FuncSig>(
-            sig: Attr<S::Type>,
+            sig: Attr<TypeOf<S>>,
             callee: Value<Ptr>,
             args: Values<S::Inputs>,
         ) -> Values<S::Results> {
@@ -65,13 +73,37 @@ mod test_typed {
         #[verify]
         fn nonempty(values: Variadic<_>) {}
 
-        fn maybe_call<S: func::FuncSig>(sig: Option<Attr<S::Type>>, args: Values<S::Inputs>) {}
+        fn maybe_call<S: func::FuncSig>(sig: Option<Attr<TypeOf<S>>>, args: Values<S::Inputs>) {}
 
         fn labeled(labels: Attr<[String]>, sizes: Option<Attr<[u32]>>) {}
 
         fn export(linkage: Attr<Linkage>, history: Option<Attr<[Linkage]>>) {}
 
         fn annotated(notes: Attr<Dict<String>>, sizes: Option<Attr<Dict<[u32]>>>) {}
+
+        /// `sig` takes a pair and an integer and returns the pair's first
+        /// component; the result is the pair's second component.
+        fn unpack<S, P: Pair>(sig: Value<S>) -> Value<P::Second>
+        where
+            S: func::FuncSig<Inputs = (P, impl IntegerLike), Results = (P::First)>,
+        {
+        }
+
+        /// A pair whose first component is a pair; the result is the inner
+        /// pair's first component.
+        fn nested<P: Pair<First = Q>, Q: Pair>(outer: Value<P>) -> Value<Q::First> {}
+
+        fn same_inputs<S, T: func::FuncSig>(a: Value<S>, b: Value<T>)
+        where
+            S: func::FuncSig<Inputs = T::Inputs>,
+        {
+        }
+
+        fn maybe_unpack<S, T>(sig: Option<Attr<TypeOf<S>>>, value: Value<T>)
+        where
+            S: func::FuncSig<Inputs = (T,)>,
+        {
+        }
     }
 
     /// An attribute kind defined next to its dialect.
@@ -741,5 +773,180 @@ fn dict_attributes_build_read_and_verify_their_values() {
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
         ["attribute `notes` must be a Dict<String> attribute"]
+    );
+}
+
+#[test]
+fn bound_constraints_are_recorded_in_the_schema() {
+    let unpack = &test_typed::Unpack::DEF.schema;
+    assert_eq!(unpack.relations.len(), 2);
+    let RelationTarget::List(inputs) = unpack.relations[0].target else {
+        panic!("expected an explicit list");
+    };
+    assert_eq!(
+        unpack.relations[0].projection,
+        ProjectionRef {
+            var: 0,
+            bound: 0,
+            index: 0
+        }
+    );
+    assert!(matches!(inputs, [TypeSpec::Var(1), TypeSpec::Anon(_)]));
+    let RelationTarget::List([TypeSpec::Proj(first)]) = unpack.relations[1].target else {
+        panic!("expected a projection element");
+    };
+    assert_eq!(
+        *first,
+        ProjectionRef {
+            var: 1,
+            bound: 0,
+            index: 0
+        }
+    );
+
+    let nested = &test_typed::Nested::DEF.schema;
+    assert!(matches!(
+        nested.relations[0].target,
+        RelationTarget::One(TypeSpec::Var(1))
+    ));
+
+    let same = &test_typed::SameInputs::DEF.schema;
+    assert!(matches!(
+        same.relations[0].target,
+        RelationTarget::Proj(ProjectionRef {
+            var: 1,
+            index: 0,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn type_attributes_bind_variables_and_type_is_an_ordinary_name() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let i64_ty = scalar(&mut ctx, "i64");
+    let holder = test_typed::holder(&mut ctx, i64_ty).as_type_ref();
+    let args = block_args(&mut ctx, loc, &[holder]);
+
+    let held = test_typed::Held::operands(args[0]).build(&mut ctx, loc);
+    assert_eq!(held.result_ty(&ctx), i64_ty);
+    let marker = test_typed::TypedMarker::operands()
+        .r#type(i64_ty)
+        .build(&mut ctx, loc);
+    assert_eq!(marker.result_ty(&ctx), i64_ty);
+    assert_eq!(
+        test_typed::TypedMarker::DEF.schema.attributes[0].binds,
+        Some(0)
+    );
+
+    for op in [held.op_ref(), marker.op_ref()] {
+        let def = crate::op_def::OpDef::of(&ctx, op).expect("typed ops are registered");
+        assert_eq!(def.verify(&ctx, op), []);
+    }
+}
+
+#[test]
+fn builders_infer_results_through_bound_constraints() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let i64_ty = scalar(&mut ctx, "i64");
+    let i32_ty = scalar(&mut ctx, "i32");
+    let i1_ty = scalar(&mut ctx, "i1");
+    let pair = test_typed::pair(&mut ctx, i64_ty, i1_ty).as_type_ref();
+    let sig = func::func_sig(&mut ctx, [pair, i32_ty], [i64_ty]).as_type_ref();
+    let outer = test_typed::pair(&mut ctx, pair, i32_ty).as_type_ref();
+    let args = block_args(&mut ctx, loc, &[sig, outer]);
+
+    let unpack = test_typed::Unpack::operands(args[0]).build(&mut ctx, loc);
+    assert_eq!(unpack.result_ty(&ctx), i1_ty);
+    let nested = test_typed::Nested::operands(args[1]).build(&mut ctx, loc);
+    assert_eq!(nested.result_ty(&ctx), i64_ty);
+
+    for op in [unpack.op_ref(), nested.op_ref()] {
+        let def = crate::op_def::OpDef::of(&ctx, op).expect("typed ops are registered");
+        assert_eq!(def.verify(&ctx, op), []);
+    }
+}
+
+#[test]
+#[should_panic(expected = "test_typed.unpack: cannot infer type variable `P`")]
+fn builders_reject_inputs_a_bound_constraint_does_not_apply_to() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let i32_ty = scalar(&mut ctx, "i32");
+    let sig = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+    let args = block_args(&mut ctx, loc, &[sig]);
+    test_typed::Unpack::operands(args[0]).build(&mut ctx, loc);
+}
+
+#[test]
+fn verifier_checks_types_reached_through_bound_constraints() {
+    const PAIR: &str = "test_typed.pair<core.i64, core.i1>";
+    let text = verify_errors(&format!(
+        r#"core.module @m {{
+  func.func @f(%ok: func.func_sig<({PAIR}, core.i32) -> core.i64>, %not_pair: func.func_sig<(core.i32, core.i32) -> core.i64>, %short: func.func_sig<({PAIR}) -> core.i64>, %first: func.func_sig<({PAIR}, core.i32) -> core.i1>, %float: func.func_sig<({PAIR}, core.f64) -> core.i64>) {{
+    %a = test_typed.unpack %ok : core.i1
+    %b = test_typed.unpack %ok : core.i64
+    %c = test_typed.unpack %not_pair : core.i1
+    %d = test_typed.unpack %short : core.i1
+    %e = test_typed.unpack %first : core.i1
+    %g = test_typed.unpack %float : core.i1
+    func.return
+  }}
+}}"#
+    ));
+    assert_eq!(text.matches("test_typed.unpack").count(), 5, "{text}");
+    for expected in [
+        "result #0 `result`: expected P::Second = core.i1, found core.i64",
+        "element #0 of `S::Inputs`: expected P: test_typed.pair, found core.i32",
+        "constraint on S::Inputs: expected a list of 2 type(s), found (test_typed.pair<core.i64, core.i1>)",
+        "element #0 of `S::Results`: expected P::First = core.i64, found core.i1",
+        "element #1 of `S::Inputs`: expected IntegerLike, found core.f64",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+}
+
+#[test]
+fn verifier_requires_variables_reached_twice_to_agree() {
+    let text = verify_errors(
+        r#"core.module @m {
+  func.func @f(%x: core.i32, %y: core.i64) {
+    test_typed.maybe_unpack %x {sig = func.func_sig<(core.i32) -> core.nil>}
+    test_typed.maybe_unpack %y {sig = func.func_sig<(core.i32) -> core.nil>}
+    test_typed.maybe_unpack %x
+    func.return
+  }
+}"#,
+    );
+    assert_eq!(text.matches("test_typed.maybe_unpack").count(), 2, "{text}");
+    assert!(
+        text.contains(
+            "element #0 of `S::Inputs`: expected same type as operand #0 `value` (T = core.i64), found core.i32"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("bound constraint: cannot check S::Inputs because `S` is not bound"),
+        "{text}"
+    );
+}
+
+#[test]
+fn verifier_compares_projections_equated_by_bound_constraints() {
+    let text = verify_errors(
+        r#"core.module @m {
+  func.func @f(%a: func.func_sig<(core.i32) -> core.nil>, %b: func.func_sig<(core.i32) -> core.i1>, %c: func.func_sig<(core.i64) -> core.nil>) {
+    test_typed.same_inputs %a, %b
+    test_typed.same_inputs %a, %c
+    func.return
+  }
+}"#,
+    );
+    assert_eq!(text.matches("test_typed.same_inputs").count(), 1, "{text}");
+    assert!(
+        text.contains("constraint on S::Inputs: expected T::Inputs = (core.i64), found (core.i32)"),
+        "{text}"
     );
 }

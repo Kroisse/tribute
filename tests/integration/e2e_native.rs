@@ -2766,6 +2766,47 @@ fn main() ->{Io} Nil {
     }
 }
 
+#[test]
+fn test_native_bytes_stay_readable_while_their_storing_value_is_shared() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+fn check(label: String, byte: Nat, expected: Nat) ->{Io} Nil {
+    case byte == expected {
+        True -> print_line(label)
+        False -> print_line("wrong")
+    }
+}
+
+fn inner(bytes: Bytes) -> Bytes {
+    bytes.slice_or_panic(1, 5).slice_or_panic(1, 3)
+}
+
+fn main() ->{Io} Nil {
+    check("temporary", Bytes::concat(b"ab", b"cd").get_or_panic(2), 99)
+    let nested = inner(Bytes::concat(b"abc", b"def"))
+    check("nested first", nested.get_or_panic(0), 99)
+    check("nested last", nested.get_or_panic(1), 100)
+    let again = Bytes::concat(nested, nested.slice_or_panic(1, 2))
+    check("rejoined", again.get_or_panic(2), 100)
+    check("literal", inner(b"uvwxyz").get_or_panic(1), 120)
+}
+"#;
+    // A read of a temporary keeps it live for the read, and a slice keeps the
+    // value that stores its bytes live after the slices in between are gone.
+    for output in [
+        compile_and_run_native("bytes_storing_value_shared.trb", source),
+        compile_and_run_native_asan("bytes_storing_value_shared_asan.trb", source),
+    ] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "stderr: {stderr}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "temporary\nnested first\nnested last\nrejoined\nliteral"
+        );
+    }
+}
+
 // =========================================================================
 // String::empty() and Bytes::empty() tests
 // =========================================================================
@@ -2804,5 +2845,26 @@ fn test_specialized_enum_payloads() {
         "specialized_enum_payloads.trb",
         include_str!("../specialized_enum_payloads.trb"),
         "43\n1",
+    );
+}
+
+/// A lambda written where a pure callable is expected keeps the `Direct`
+/// convention and calls a Cps worker under a value delimiter. Its `String`
+/// answer crosses the delimiter's completion cell.
+#[test]
+fn a_lambda_at_a_pure_callable_type_calls_a_cps_worker() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "pure_lambda_calls_cps_worker.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+
+fn main() ->{Io} Nil {
+    print_line(twice(fn(s) app(s, fn(t) t <> "!"), "io"))
+}
+"#,
+        "io!!",
     );
 }

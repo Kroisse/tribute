@@ -168,22 +168,24 @@ impl RewritePattern for LowerClosureCallArena {
 
         let loc = ctx.op(op).location;
         let args: Vec<ValueRef> = operands[1..].to_vec();
-        // Ordinary closure calls currently lower exactly one result.
-        let &[caller_result_ty] = ctx.op_result_types(op) else {
-            return false;
-        };
+        // An ordinary closure call has one result, or none when a value
+        // delimiter enters its Cps body.
+        let caller_results = ctx.op_result_types(op).to_vec();
 
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let Some(convention) = get_calling_convention(ctx, op) else {
             return false;
         };
+        if caller_results.len() != usize::from(convention != CallingConvention::Cps) {
+            return false;
+        }
         let Some(contract) = exact_physical_call_contract(
             ctx,
             callee,
             convention,
             &args,
-            &[caller_result_ty],
+            &caller_results,
             anyref_ty,
         ) else {
             return false;
@@ -496,8 +498,11 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
             return false;
         };
         if func::CallIndirect::matches(ctx, op) {
+            // A value delimiter enters its Cps body by an ordinary call
+            // with no result; every other closure call has one.
             let results = ctx.op_result_types(op).to_vec();
-            results.len() == 1
+            let expected = usize::from(convention != CallingConvention::Cps);
+            results.len() == expected
                 && exact_physical_call_contract(ctx, callee, convention, args, &results, anyref)
                     .is_some()
         } else {

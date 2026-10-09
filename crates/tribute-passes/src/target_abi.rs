@@ -37,7 +37,10 @@ const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
 const ROOT_DONE_K_SYMBOL: &str = "__tribute_done_k";
 const ROOT_UNHANDLED_SYMBOL: &str = "__tribute_unhandled";
 const ROOT_COMPLETION_CELL_NAME: &str = "__tribute_completion_cell";
+const ERASED_COMPLETION_CELL_NAME: &str = "__tribute_erased_completion_cell";
 const ROOT_COMPLETION_CELL_VALUE_FIELD: &str = "value";
+const DELIMIT_DONE_PREFIX: &str = "__tribute_delimit_done";
+const DELIMIT_UNHANDLED_PREFIX: &str = "__tribute_delimit_unhandled";
 
 /// Per-parameter attribute recording a physical callable's entry ownership
 /// contract; see `new-plans/rc.md` (proper-tail ownership transfer).
@@ -536,167 +539,386 @@ fn build_cps_root_call(
         evidence_ty,
         frame,
     } = contract;
-    let root_done_k = Symbol::new(ROOT_DONE_K_SYMBOL);
-    let root_dispatch = Symbol::new(ROOT_UNHANDLED_SYMBOL);
     let location = ctx.op(worker_op).location;
     remove_root_contract(ctx, worker_op);
 
-    let cell_ty = root_completion_cell_type(ctx, source_result);
-    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let contract = physical_parameter_attrs(ctx, CallingConvention::Cps);
-    let done_function_ty = func::func_sig_with_param_attrs(
+    let terminal = TerminalFunctions::define(
         ctx,
-        [(anyref_ty, contract.clone()), (source_result, contract)],
-        [],
-        AttributeMap::new(),
-    )
-    .with_call_conv(ctx, func::CallConv::Tail)
-    .as_type_ref();
-    let environment_name = bind_name(ctx, "__env");
-    let argument_name = bind_name(ctx, "__arg");
-    let answer_name = bind_name(ctx, "__answer");
-    let done_entry = ctx.create_block(BlockData {
         location,
-        args: vec![
-            BlockArgData {
-                ty: anyref_ty,
-                attrs: environment_name.clone(),
-            },
-            BlockArgData {
-                ty: source_result,
-                attrs: answer_name,
-            },
-        ],
-        ops: smallvec![],
-        parent_region: None,
-    });
-    let done_args = ctx.block_args(done_entry).to_vec();
-    let cell = adt::RefCast::operands(done_args[0])
-        .r#type(cell_ty)
-        .results(cell_ty)
-        .build(ctx, location);
-    ctx.push_op(done_entry, cell.op_ref());
-    let store = adt::StructSet::operands(cell.result(ctx), done_args[1])
-        .r#type(cell_ty)
-        .field(0)
-        .build(ctx, location);
-    ctx.push_op(done_entry, store.op_ref());
-    let done_return = func::Return::operands([]).build(ctx, location);
-    ctx.push_op(done_entry, done_return.op_ref());
-    let done_region = ctx.create_region(RegionData {
-        location,
-        blocks: smallvec![done_entry],
-        parent_op: None,
-    });
-    let done_function = func::Func::operands()
-        .sym_name(ctx.intern_symbol_text(&root_done_k))
-        .r#type(done_function_ty)
-        .regions(done_region)
-        .build(ctx, location);
-    set_root_convention(ctx, done_function.op_ref(), CallingConvention::Cps);
-
-    let dispatch_function_ty = dispatch_entry_function_type(ctx, frame.dispatch, anyref_ty)?;
-    let dispatch_entry = ctx.create_block(BlockData {
-        location,
-        args: func::FuncSig::from_type_ref(ctx, dispatch_function_ty)
-            .expect("validated dispatch entry contract")
-            .inputs(ctx)
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(index, ty)| BlockArgData {
-                ty,
-                attrs: if index == 1 {
-                    environment_name.clone()
-                } else {
-                    argument_name.clone()
-                },
-            })
-            .collect(),
-        ops: smallvec![],
-        parent_region: None,
-    });
-    let dispatch_unreachable = func::Unreachable::operands().build(ctx, location);
-    ctx.push_op(dispatch_entry, dispatch_unreachable.op_ref());
-    let dispatch_region = ctx.create_region(RegionData {
-        location,
-        blocks: smallvec![dispatch_entry],
-        parent_op: None,
-    });
-    let dispatch_function = func::Func::operands()
-        .sym_name(ctx.intern_symbol_text(&root_dispatch))
-        .r#type(dispatch_function_ty)
-        .regions(dispatch_region)
-        .build(ctx, location);
-    set_root_convention(ctx, dispatch_function.op_ref(), CallingConvention::Cps);
-
-    // Root entry validation admits only a nil source result.
-    let initial = core::NilValue::operands().build(ctx, location);
-    ctx.push_op(entry, initial.op_ref());
-    let cell_new = adt::StructNew::operands([initial.result(ctx)])
-        .r#type(cell_ty)
-        .results(cell_ty)
-        .build(ctx, location);
-    ctx.push_op(entry, cell_new.op_ref());
-    let erased_cell = core::UnrealizedConversionCast::operands(cell_new.result(ctx))
-        .results(anyref_ty)
-        .build(ctx, location);
-    ctx.push_op(entry, erased_cell.op_ref());
-    let done_constant = func::Constant::operands()
-        .func_ref(root_done_k.into())
-        .results(done_function_ty)
-        .build(ctx, location);
-    ctx.push_op(entry, done_constant.op_ref());
-    let closure_struct_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-    let done_closure =
-        adt::StructNew::operands([done_constant.result(ctx), erased_cell.result(ctx)])
-            .r#type(closure_struct_ty)
-            .results(closure_struct_ty)
-            .build(ctx, location);
-    ctx.push_op(entry, done_closure.op_ref());
-    let typed_done = core::UnrealizedConversionCast::operands(done_closure.result(ctx))
-        .results(frame.done)
-        .build(ctx, location);
-    ctx.push_op(entry, typed_done.op_ref());
-
-    let dispatch_constant = func::Constant::operands()
-        .func_ref(root_dispatch.into())
-        .results(dispatch_function_ty)
-        .build(ctx, location);
-    ctx.push_op(entry, dispatch_constant.op_ref());
-    let dispatch_closure =
-        adt::StructNew::operands([dispatch_constant.result(ctx), erased_cell.result(ctx)])
-            .r#type(closure_struct_ty)
-            .results(closure_struct_ty)
-            .build(ctx, location);
-    ctx.push_op(entry, dispatch_closure.op_ref());
-    let typed_dispatch = core::UnrealizedConversionCast::operands(dispatch_closure.result(ctx))
-        .results(frame.dispatch)
-        .build(ctx, location);
-    ctx.push_op(entry, typed_dispatch.op_ref());
-    let frame_value =
-        adt::StructNew::operands([typed_done.result(ctx), typed_dispatch.result(ctx)])
-            .r#type(frame.layout)
-            .results(frame.reference)
-            .build(ctx, location);
-    ctx.push_op(entry, frame_value.op_ref());
-
+        frame,
+        source_result,
+        Symbol::new(ROOT_DONE_K_SYMBOL),
+        Symbol::new(ROOT_UNHANDLED_SYMBOL),
+    )?;
+    let built = terminal.build_frame(ctx, location);
+    for &op in &built.ops {
+        ctx.push_op(entry, op);
+    }
     let evidence = build_initial_evidence(ctx, entry, location, evidence_ty);
-    let worker_call = func::Call::operands([evidence, frame_value.result(ctx)])
+    let worker_call = func::Call::operands([evidence, built.frame])
         .callee(worker)
         .results([])
         .build(ctx, location);
     ctx.push_op(entry, worker_call.op_ref());
-    let completed = adt::StructGet::operands(cell_new.result(ctx))
-        .r#type(cell_ty)
-        .field(0)
-        .results(source_result)
-        .build(ctx, location);
-    ctx.push_op(entry, completed.op_ref());
+    let mut completed = None;
+    for op in terminal.read_answer(ctx, location, built.cell) {
+        ctx.push_op(entry, op);
+        completed = Some(ctx.op_result(op, 0));
+    }
 
-    ctx.push_op(module_block, done_function.op_ref());
-    ctx.push_op(module_block, dispatch_function.op_ref());
-    Ok(completed.result(ctx))
+    for function in terminal.functions {
+        ctx.push_op(module_block, function);
+    }
+    Ok(completed.expect("reading the cell produces the answer"))
+}
+
+/// Replace every `effect.delimit` with its completion cell, terminal frame,
+/// the call of its body, and the read of the answer, and every
+/// `effect.initial_evidence` with the target's initial evidence.
+///
+/// Runs after physicalization, like the root bridge: the body and the frame
+/// members have empty results, so the body is entered by an ordinary call
+/// that returns when its proper tail chain ends.
+pub fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), TargetAbiError> {
+    let Some(module_block) = module.first_block(ctx) else {
+        return Ok(());
+    };
+    let operations = collect_ops(ctx, module.op());
+    let evidence_ty = ability::evidence_adt_type_ref(ctx);
+    let initials: Vec<_> = operations
+        .iter()
+        .filter_map(|&op| effect::InitialEvidence::from_op(ctx, op).ok())
+        .collect();
+    for initial in initials {
+        let op = initial.op_ref();
+        let location = ctx.op(op).location;
+        let block = ctx
+            .op(op)
+            .parent_block
+            .ok_or_else(|| TargetAbiError::new("initial evidence: operation is detached"))?;
+        let scratch = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let evidence = build_initial_evidence(ctx, scratch, location, evidence_ty);
+        for built in ctx.block(scratch).ops.clone() {
+            ctx.detach_op(built);
+            ctx.insert_op_before(block, op, built);
+        }
+        ctx.replace_all_uses(initial.result(ctx), evidence);
+        ctx.detach_op(op);
+        ctx.remove_op(op);
+    }
+    let delimiters: Vec<_> = operations
+        .into_iter()
+        .filter_map(|op| effect::Delimit::from_op(ctx, op).ok())
+        .collect();
+    let mut terminals: Vec<(TypeRef, TerminalFunctions)> = Vec::new();
+    for delimit in delimiters {
+        let op = delimit.op_ref();
+        let location = ctx.op(op).location;
+        let body = delimit.body(ctx);
+        let answer = delimit.result_ty(ctx);
+        let malformed = || TargetAbiError::new("value delimiter: body is not an exact Cps closure");
+        let body_ty = crate::closure_lower::physical_closure_type_for_callee(ctx, body)
+            .filter(|ty| get_physical_closure_convention(ctx, *ty) == Some(CallingConvention::Cps))
+            .ok_or_else(malformed)?;
+        let signature = cps_closure_function_type(ctx, body_ty).ok_or_else(malformed)?;
+        let callable = func::FuncSig::from_type_ref(ctx, signature).ok_or_else(malformed)?;
+        let &[body_evidence, frame_ty] = callable.inputs(ctx) else {
+            return Err(malformed());
+        };
+        if body_evidence != evidence_ty || !callable.results(ctx).is_empty() {
+            return Err(malformed());
+        }
+        let index = match terminals.iter().position(|(frame, _)| *frame == frame_ty) {
+            Some(index) => index,
+            None => {
+                let frame = validate_root_continuation_frame(
+                    ctx,
+                    frame_ty,
+                    answer,
+                    evidence_ty,
+                    &[],
+                    ContractPhase::Physical,
+                )?;
+                let index = terminals.len();
+                let functions = TerminalFunctions::define(
+                    ctx,
+                    location,
+                    frame,
+                    answer,
+                    Symbol::new(&format!("{DELIMIT_DONE_PREFIX}_{index}")),
+                    Symbol::new(&format!("{DELIMIT_UNHANDLED_PREFIX}_{index}")),
+                )?;
+                terminals.push((frame_ty, functions));
+                index
+            }
+        };
+        let terminal = &terminals[index].1;
+        if terminal.answer != answer {
+            return Err(TargetAbiError::new(
+                "value delimiter: answer differs from the answer of its body's frame",
+            ));
+        }
+        let block = ctx
+            .op(op)
+            .parent_block
+            .ok_or_else(|| TargetAbiError::new("value delimiter: operation is detached"))?;
+        let built = terminal.build_frame(ctx, location);
+        for &new in &built.ops {
+            ctx.insert_op_before(block, op, new);
+        }
+        let evidence = delimit.evidence(ctx);
+        let call = func::CallIndirect::operands(body, [evidence, built.frame])
+            .signature(signature)
+            .build(ctx, location);
+        set_root_convention(ctx, call.op_ref(), CallingConvention::Cps);
+        ctx.insert_op_before(block, op, call.op_ref());
+        let mut completed = None;
+        for new in terminal.read_answer(ctx, location, built.cell) {
+            ctx.insert_op_before(block, op, new);
+            completed = Some(ctx.op_result(new, 0));
+        }
+        let completed = completed.expect("reading the cell produces the answer");
+        ctx.replace_all_uses(delimit.result(ctx), completed);
+        ctx.detach_op(op);
+        ctx.remove_op(op);
+    }
+    for (_, terminal) in terminals {
+        for function in terminal.functions {
+            ctx.push_op(module_block, function);
+        }
+    }
+    Ok(())
+}
+
+/// The terminal `Done<R>` and `Dispatch<R>` of a completion cell: `Done`
+/// stores the answer in the cell, and `Dispatch` is never reached.
+struct TerminalFunctions {
+    frame: RootFrameContract,
+    answer: TypeRef,
+    cell_ty: TypeRef,
+    done: Symbol,
+    done_ty: TypeRef,
+    dispatch: Symbol,
+    dispatch_ty: TypeRef,
+    /// The definitions of `done` and `dispatch`, not yet in the module.
+    functions: [OpRef; 2],
+}
+
+/// A completion cell and the frame that completes into it.
+struct TerminalFrame {
+    ops: Vec<OpRef>,
+    cell: ValueRef,
+    frame: ValueRef,
+}
+
+impl TerminalFunctions {
+    /// A `core.nil` answer is stored as it is. Any other answer is stored
+    /// erased, because the cell needs a value before the answer exists.
+    fn slot_type(ctx: &mut IrContext, answer: TypeRef) -> TypeRef {
+        if answer == core::nil(ctx).as_type_ref() {
+            answer
+        } else {
+            tribute_rt::anyref(ctx).as_type_ref()
+        }
+    }
+
+    fn define(
+        ctx: &mut IrContext,
+        location: Location,
+        frame: RootFrameContract,
+        answer: TypeRef,
+        done: Symbol,
+        dispatch: Symbol,
+    ) -> Result<Self, TargetAbiError> {
+        let slot = Self::slot_type(ctx, answer);
+        let cell_ty = completion_cell_type(ctx, slot);
+        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let contract = physical_parameter_attrs(ctx, CallingConvention::Cps);
+        let done_ty = func::func_sig_with_param_attrs(
+            ctx,
+            [(anyref_ty, contract.clone()), (answer, contract)],
+            [],
+            AttributeMap::new(),
+        )
+        .with_call_conv(ctx, func::CallConv::Tail)
+        .as_type_ref();
+        let environment_name = bind_name(ctx, "__env");
+        let argument_name = bind_name(ctx, "__arg");
+        let answer_name = bind_name(ctx, "__answer");
+        let done_entry = ctx.create_block(BlockData {
+            location,
+            args: vec![
+                BlockArgData {
+                    ty: anyref_ty,
+                    attrs: environment_name.clone(),
+                },
+                BlockArgData {
+                    ty: answer,
+                    attrs: answer_name,
+                },
+            ],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let done_args = ctx.block_args(done_entry).to_vec();
+        let cell = adt::RefCast::operands(done_args[0])
+            .r#type(cell_ty)
+            .results(cell_ty)
+            .build(ctx, location);
+        ctx.push_op(done_entry, cell.op_ref());
+        let stored = if slot == answer {
+            done_args[1]
+        } else {
+            let erased = core::UnrealizedConversionCast::operands(done_args[1])
+                .results(slot)
+                .build(ctx, location);
+            ctx.push_op(done_entry, erased.op_ref());
+            erased.result(ctx)
+        };
+        let store = adt::StructSet::operands(cell.result(ctx), stored)
+            .r#type(cell_ty)
+            .field(0)
+            .build(ctx, location);
+        ctx.push_op(done_entry, store.op_ref());
+        let done_return = func::Return::operands([]).build(ctx, location);
+        ctx.push_op(done_entry, done_return.op_ref());
+        let done_region = ctx.create_region(RegionData {
+            location,
+            blocks: smallvec![done_entry],
+            parent_op: None,
+        });
+        let done_function = func::Func::operands()
+            .sym_name(ctx.intern_symbol_text(&done))
+            .r#type(done_ty)
+            .regions(done_region)
+            .build(ctx, location);
+        set_root_convention(ctx, done_function.op_ref(), CallingConvention::Cps);
+
+        let dispatch_ty = dispatch_entry_function_type(ctx, frame.dispatch, anyref_ty)?;
+        let dispatch_entry = ctx.create_block(BlockData {
+            location,
+            args: func::FuncSig::from_type_ref(ctx, dispatch_ty)
+                .expect("validated dispatch entry contract")
+                .inputs(ctx)
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, ty)| BlockArgData {
+                    ty,
+                    attrs: if index == 1 {
+                        environment_name.clone()
+                    } else {
+                        argument_name.clone()
+                    },
+                })
+                .collect(),
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let dispatch_unreachable = func::Unreachable::operands().build(ctx, location);
+        ctx.push_op(dispatch_entry, dispatch_unreachable.op_ref());
+        let dispatch_region = ctx.create_region(RegionData {
+            location,
+            blocks: smallvec![dispatch_entry],
+            parent_op: None,
+        });
+        let dispatch_function = func::Func::operands()
+            .sym_name(ctx.intern_symbol_text(&dispatch))
+            .r#type(dispatch_ty)
+            .regions(dispatch_region)
+            .build(ctx, location);
+        set_root_convention(ctx, dispatch_function.op_ref(), CallingConvention::Cps);
+
+        Ok(Self {
+            frame,
+            answer,
+            cell_ty,
+            done,
+            done_ty,
+            dispatch,
+            dispatch_ty,
+            functions: [done_function.op_ref(), dispatch_function.op_ref()],
+        })
+    }
+
+    /// Build a fresh cell and the frame whose `Done` writes it.
+    fn build_frame(&self, ctx: &mut IrContext, location: Location) -> TerminalFrame {
+        let mut ops = Vec::new();
+        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let initial = if Self::slot_type(ctx, self.answer) == self.answer {
+            core::NilValue::operands().build(ctx, location).op_ref()
+        } else {
+            adt::RefNull::operands()
+                .r#type(anyref_ty)
+                .results(anyref_ty)
+                .build(ctx, location)
+                .op_ref()
+        };
+        ops.push(initial);
+        let cell_new = adt::StructNew::operands([ctx.op_result(initial, 0)])
+            .r#type(self.cell_ty)
+            .results(self.cell_ty)
+            .build(ctx, location);
+        ops.push(cell_new.op_ref());
+        let erased_cell = core::UnrealizedConversionCast::operands(cell_new.result(ctx))
+            .results(anyref_ty)
+            .build(ctx, location);
+        ops.push(erased_cell.op_ref());
+        let closure_struct_ty = crate::closure_lower::closure_struct_type_ref(ctx);
+        let mut member = |ctx: &mut IrContext, symbol: &Symbol, function_ty, closure_ty| {
+            let constant = func::Constant::operands()
+                .func_ref(symbol.clone().into())
+                .results(function_ty)
+                .build(ctx, location);
+            ops.push(constant.op_ref());
+            let closure = adt::StructNew::operands([constant.result(ctx), erased_cell.result(ctx)])
+                .r#type(closure_struct_ty)
+                .results(closure_struct_ty)
+                .build(ctx, location);
+            ops.push(closure.op_ref());
+            let typed = core::UnrealizedConversionCast::operands(closure.result(ctx))
+                .results(closure_ty)
+                .build(ctx, location);
+            ops.push(typed.op_ref());
+            typed.result(ctx)
+        };
+        let done = member(ctx, &self.done, self.done_ty, self.frame.done);
+        let dispatch = member(ctx, &self.dispatch, self.dispatch_ty, self.frame.dispatch);
+        let frame = adt::StructNew::operands([done, dispatch])
+            .r#type(self.frame.layout)
+            .results(self.frame.reference)
+            .build(ctx, location);
+        ops.push(frame.op_ref());
+        TerminalFrame {
+            ops,
+            cell: cell_new.result(ctx),
+            frame: frame.result(ctx),
+        }
+    }
+
+    /// The operations that read the answer out of `cell`; the last one
+    /// produces it.
+    fn read_answer(&self, ctx: &mut IrContext, location: Location, cell: ValueRef) -> Vec<OpRef> {
+        let slot = Self::slot_type(ctx, self.answer);
+        let stored = adt::StructGet::operands(cell)
+            .r#type(self.cell_ty)
+            .field(0)
+            .results(slot)
+            .build(ctx, location);
+        let mut ops = vec![stored.op_ref()];
+        if slot != self.answer {
+            let answer = core::UnrealizedConversionCast::operands(stored.result(ctx))
+                .results(self.answer)
+                .build(ctx, location);
+            ops.push(answer.op_ref());
+        }
+        ops
+    }
 }
 
 /// Build the target's initial evidence: an empty evidence array.
@@ -720,10 +942,15 @@ fn build_initial_evidence(
     empty.result(ctx)
 }
 
-fn root_completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
+fn completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
+    let name = if value_ty == core::nil(ctx).as_type_ref() {
+        ROOT_COMPLETION_CELL_NAME
+    } else {
+        ERASED_COMPLETION_CELL_NAME
+    };
     adt::struct_type(
         ctx,
-        ROOT_COMPLETION_CELL_NAME,
+        name,
         [(ROOT_COMPLETION_CELL_VALUE_FIELD, value_ty)],
         AttributeMap::new(),
     )

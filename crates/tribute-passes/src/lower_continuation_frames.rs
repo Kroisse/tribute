@@ -14,15 +14,17 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use tribute_core::calling_convention::{cps_dispatch_type, cps_done_type};
 use tribute_ir::continuation_frame;
-use tribute_ir::dialect::{ability, tribute_rt};
+use tribute_ir::dialect::{ability, effect, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{BlockRef, TypeRef};
-use trunk_ir::rewrite::{Module, PatternApplicator, PatternRewriter, TypeConverter};
+use trunk_ir::refs::{BlockRef, OpRef, TypeRef};
+use trunk_ir::rewrite::{
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+};
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::walk::{WalkAction, walk_op};
 
@@ -94,8 +96,30 @@ pub fn lower_continuation_frames(
             handles: number_handles(ctx, module),
         })
         .add_pattern(ExpandDispatches { frames })
+        .add_pattern(LowerDelimits)
         .apply_partial(ctx, module);
     reject_abstract_frames(ctx, module)
+}
+
+/// Lower `ability.delimit` to `effect.delimit`. The body closure's frame is
+/// already a layout; building the delimiter is the target ABI boundary's.
+struct LowerDelimits;
+
+impl RewritePattern for LowerDelimits {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(delimit) = ability::Delimit::from_op(ctx, op) else {
+            return false;
+        };
+        let lowered = effect::Delimit::operands(delimit.body(ctx), delimit.evidence(ctx))
+            .build(ctx, ctx.op(op).location);
+        rewriter.replace_op(lowered.op_ref());
+        true
+    }
 }
 
 /// The frame layouts of the module by answer type. The expansions read them
@@ -318,6 +342,7 @@ fn reject_abstract_frames(ctx: &IrContext, module: Module) -> Result<(), Tribute
             || ability::Exit::matches(ctx, op)
             || ability::Handle::matches(ctx, op)
             || ability::Perform::matches(ctx, op)
+            || ability::Delimit::matches(ctx, op)
             || ability::Abort::matches(ctx, op);
         if (operation || mentions) && failure.is_none() {
             failure = Some(survived(ctx.op(op).location));

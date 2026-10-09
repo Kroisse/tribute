@@ -50,6 +50,33 @@ pub fn layout_type(
     adt::struct_type(ctx, name, [("done", done), ("dispatch", dispatch)], attrs).as_type_ref()
 }
 
+/// A frame reference that carries its result type: the frame of a CPS
+/// callable between frame expansion and physicalization. `Result` is the
+/// answer `R`.
+pub struct FrameRef;
+
+impl trunk_ir::type_constraint::TypeConstraint for FrameRef {
+    const DESC: &'static trunk_ir::type_constraint::ConstraintDesc = {
+        use trunk_ir::type_constraint::{
+            ConstraintDesc, Projected, ProjectionDesc, ProjectionKind,
+        };
+        &ConstraintDesc {
+            name: "ContinuationFrame",
+            exact: false,
+            projections: &[ProjectionDesc {
+                name: "Result",
+                kind: ProjectionKind::One,
+            }],
+            matches: |ctx, ty| result_type(ctx, ty).is_some(),
+            project: |ctx, ty, index| match index {
+                0 => result_type(ctx, ty).map(Projected::One),
+                _ => None,
+            },
+            fixed: None,
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

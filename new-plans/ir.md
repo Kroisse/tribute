@@ -144,11 +144,31 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
 - 결과 위치에 `impl` 없이 직접 쓴 bound는 그 bound가 가리키는 하나의 고정
   타입이다(`-> Value<core::I32>`). 하나의 타입을 가리키지 않는 bound를 이렇게
   쓰면 컴파일 시점에 거부한다.
-- 파생 타입은 투영으로 참조한다. `S::Type`은 변수 자체를 타입 attribute
-  값으로 쓰는 투영이다. Bound는 제공하는 투영의 이름과 종류(단일 타입 또는
+- Attribute 종류 `TypeOf<V>`는 타입 attribute이며, 그 값이 변수 `V`를
+  바인딩한다(`signature: Attr<TypeOf<S>>`). `TypeOf`는 투영이 아니므로 `V`에
+  bound가 없어도 쓸 수 있다.
+- 파생 타입은 투영으로 참조한다. Bound는 제공하는 투영의 이름과 종류(단일 타입 또는
   타입 목록)를 선언한다. 예를 들어 signature 타입은 `Inputs`/`Results`
   목록을, 파라미터형 dialect 타입은 선언된 파라미터를 제공한다. 둘 이상의
   bound가 같은 이름을 제공하면 `<S as B>::X`로 명시해야 한다.
+- 변수의 bound는 Rust의 associated item constraint로 투영에 대한 등식(투영 등식)을
+  선언한다. `C: CpsClosure<Inputs = (Evidence, F)>`는 `<C as
+  CpsClosure>::Inputs`가 `(Evidence, F)`와 같다는 뜻이며, 제네릭 목록과 `where`
+  절 어디서든 쓸 수 있다. 투영이 단일 타입이면 우변은 단일 타입 제약이고,
+  타입 목록이면 우변은 명시적 목록 `(A, B)`이며 길이가 정확히 같아야 한다.
+  우변이 다른 투영이면 두 투영은 같은 종류여야 하고 값이 같아야 한다. 우변
+  안의 이름 있는 변수는 다른 위치와 같은 규칙을 따른다. 처음 나타난 위치가
+  변수를 바인딩하고, 이미 바인딩된 변수는 동일성을 요구한다. 따라서 operand에
+  직접 나타나지 않고 다른 타입 안에만 있는 타입도 변수로 이름 붙여 다시 투영할
+  수 있다. 위 예는 closure 입력 안의 frame을 `F`로 바인딩하고, 결과는
+  `F::Result`로 선언한다. 투영의 연쇄는 이렇게 중간 변수를 거쳐 표현한다.
+  `where C::Inputs = ..` 같은 등식 술어는 Rust 문법이 아니어서 attribute
+  매크로 입력으로 파싱되지 않으므로 쓰지 않는다. 관계를
+  `Closure<(Evidence, Frame<R>)>` 같은 중첩 제네릭 인자로 쓰지 않는 이유는,
+  Rust 문법으로는 읽히지만 의미는 pattern이 되어 정의 문법이 따르는 Rust
+  signature 모델과 어긋나기 때문이다. Associated item constraint는 변수의
+  bound에만 쓸 수 있고, `impl B<X = T>`에는 쓸 수 없다. 등식이
+  투영하는 변수를 정의의 어느 위치도 바인딩할 수 없으면 컴파일 시점에 거부한다.
 - Schema로 표현할 수 없는 로컬 조건은 operation별 사용자 verifier가 맡는다.
   사용자 verifier는 생성된 검사를 통과한 operation에서만 실행된다.
 
@@ -158,8 +178,12 @@ panic하는 대신 진단을 남길 수 있어야 한다.
 
 1. Operand/result 개수와 필수 attribute 존재.
 2. 개별 타입 제약과 typed attribute의 내부 유효성.
-3. 타입 변수 바인딩과 동일성.
-4. 투영과 타입 목록 관계.
+3. 타입 변수 바인딩과 동일성. 직접 나타난 위치로 바인딩한 뒤, 좌변 변수가
+   바인딩된 투영 등식을 차례로 풀어 우변의 변수를 바인딩한다. 등식으로
+   얻은 타입에도 2단계의 개별 제약을 적용하며, 명시적 목록의 길이 불일치도 이
+   단계에서 보고한다.
+4. 투영과 타입 목록 관계. 투영 등식 우변의 투영과 투영끼리의 등식도
+   포함한다.
 5. 사용자 정의 로컬 verifier.
 
 진단은 operation, 위치, 필드 이름과 index, 기대 제약, 실제 타입을 포함한다.
@@ -206,7 +230,8 @@ region, successor는 각각 한 묶음으로 받는다. 묶음 안의 순서는 
 마지막 successor는 가변 목록으로 선언할 수 있으며, 고정 successor 뒤의 나머지
 전부가 그 목록이다.
 Builder는 결과 타입이 고정 타입, 단일 operand나 필수 attribute로 바인딩된
-변수, 또는 그 변수의 투영으로 유일하게 결정될 때만 결과 타입을 추론한다.
+변수, 그런 변수의 투영에서 투영 등식으로 바인딩되는 변수, 또는 이 변수들의
+투영으로 유일하게 결정될 때만 결과 타입을 추론한다.
 입력 타입을 검사하거나 cast를 삽입하지 않으며, 필수 입력의 누락은 프로그래밍
 오류로 취급한다. 심볼 해석, 소유 callable, conversion 경계, ownership처럼 한
 operation 밖의 정보가 필요한 조건은 schema가 아니라 기존 whole-IR verifier와
@@ -1093,6 +1118,7 @@ ability.handle %outer_ev, %exit, %completion, %arm0, ... {handlers = [...]} {
 }
 ability.perform %ev, %f, %resumption, %arg0, ... {ability_ref = !State, op_name = "get"}
 ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
+%r = ability.delimit %body, %ev : R
 ```
 
 - **`ability.frame<R>`:** 타입 매개변수 `result`가 답 타입 `R`인 불투명 타입이다.
@@ -1127,9 +1153,19 @@ ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
   Resumption은 one-shot 검사가 없는 closure이며 그 검사는 펼치기가 더한다.
 - **`ability.abort`:** `ability.perform`에서 resumption을 뺀 형상이며 source
   `op -> Never`에만 쓴다.
+- **`ability.delimit`:** [값 delimiter](cps-effects.md#값-delimiter)다. `body`는
+  `(Evidence, ability.frame<R>) -> core.never`인 `Cps` closure이고 결과는 `R` 하나다.
+  `ev`는 그 flow의 evidence이고, evidence를 받지 않는 `Direct` flow에서는
+  `effect.initial_evidence`의 결과다.
+  Terminator가 아니며 `Cps`가 아닌 flow에만 온다. Frame 펼치기가 같은 operand와
+  결과를 가진 `effect.delimit`으로 낮추고, target ABI 경계가 그것을 소비한다.
+  `effect.delimit`도 같은 관계를 선언하되 body의 frame은 답 타입을 가진 layout
+  참조다. 물리화가 그 답 타입과 `core.never` 결과를 지우므로, target ABI 경계는
+  물리화 직후 다른 검증 지점 없이 `effect.delimit`을 소비한다.
 - **검증:** Operation verifier는 위 타입 관계, frame과 closure의 `R` 일치, arm 표와
   arm closure의 일치, closure의 calling convention을 검사한다. Terminator 위치와
-  enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다.
+  enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다. `ability.delimit`을
+  제외한 operation은 `Cps` flow에만 온다.
 - **소유권과 값 흐름:** 모든 operand는 일반 SSA use다. Frame 값은 불변이며 여러 번
   쓸 수 있다. Resumption의 affine 사용은 펼치기가 runtime 상태로 강제한다.
 - **위치:** suffix와 frame operation은 그것을 만든 source operation의 span을, handle과
@@ -1453,7 +1489,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   없고 결과는 `Nil`이며 platform 규약을 따른다. Body는 root worker 호출 하나로 끝나고,
   모듈 안에서 이 `main`을 참조하는 곳은 없다. 원래 source `main`은 모든 calling
   convention에서 root worker가 되고, 모듈 안의 참조도 worker로 옮겨 간다. 초기
-  evidence와 CPS root frame처럼 source calling convention에 따라 달라지는 부분은
+  evidence와 값 delimiter처럼 source calling convention에 따라 달라지는 부분은
   bridge 합성이 소비한다. Target은 이 wrapper를 그 자리에서 target 진입점으로 바꾼다.
   이때 runtime 초기화, 종료 코드, sanitizer 초기화처럼 platform 고유 작업만 더하고,
   별도 진입 함수를 만들거나 `main`의 이름을 바꾸지 않는다.
@@ -1475,8 +1511,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   `closure.closure` type
 - Callable 결과로서의 `core.never`. 논리 CPS 결과는 물리 결과 목록 `[]`로 바뀐다.
 - 의미적 호출 규약과 제어 metadata: `tribute.calling_convention`,
-  `tribute.root_source_result`, `tribute.cps_continuation_frame_result`,
-  `tribute.closure_environment_index`
+  `tribute.cps_continuation_frame_result`, `tribute.closure_environment_index`
 - 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 effect row
 
 출구 이후에도 보존하는 것:

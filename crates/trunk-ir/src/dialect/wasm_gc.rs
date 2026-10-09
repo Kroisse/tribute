@@ -5,6 +5,7 @@
 //! `wasm` operations before binary emission.
 
 use crate::attr_kind::Type;
+use crate::dialect::core::{Array, IntegerLike};
 
 #[trunk_ir::dialect]
 mod wasm_gc {
@@ -18,9 +19,18 @@ mod wasm_gc {
 
     fn struct_set(r#type: Attr<Type>, field_idx: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
-    fn array_new(r#type: Attr<Type>, size: Value<_>, init: Value<_>) -> Value<_> {}
+    fn array_new<A: Array>(
+        r#type: Attr<TypeOf<A>>,
+        size: Value<impl IntegerLike>,
+        init: Value<A::Element>,
+    ) -> Value<A> {
+    }
 
-    fn array_new_default(r#type: Attr<Type>, size: Value<_>) -> Value<_> {}
+    fn array_new_default<A: Array>(
+        r#type: Attr<TypeOf<A>>,
+        size: Value<impl IntegerLike>,
+    ) -> Value<A> {
+    }
 
     fn array_new_data(
         r#type: Attr<Type>,
@@ -30,13 +40,34 @@ mod wasm_gc {
     ) -> Value<_> {
     }
 
-    fn array_get(r#type: Attr<Type>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
+    fn array_get<A: Array>(
+        r#type: Attr<TypeOf<A>>,
+        r#ref: Value<A>,
+        index: Value<impl IntegerLike>,
+    ) -> Value<A::Element> {
+    }
 
-    fn array_get_s(r#type: Attr<Type>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
+    fn array_get_s<A: Array>(
+        r#type: Attr<TypeOf<A>>,
+        r#ref: Value<A>,
+        index: Value<impl IntegerLike>,
+    ) -> Value<_> {
+    }
 
-    fn array_get_u(r#type: Attr<Type>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
+    fn array_get_u<A: Array>(
+        r#type: Attr<TypeOf<A>>,
+        r#ref: Value<A>,
+        index: Value<impl IntegerLike>,
+    ) -> Value<_> {
+    }
 
-    fn array_set(r#type: Attr<Type>, r#ref: Value<_>, index: Value<_>, value: Value<_>) {}
+    fn array_set<A: Array>(
+        r#type: Attr<TypeOf<A>>,
+        r#ref: Value<A>,
+        index: Value<impl IntegerLike>,
+        value: Value<A::Element>,
+    ) {
+    }
 
     fn array_copy(
         dst_type: Attr<Type>,
