@@ -144,8 +144,10 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
 - 결과 위치에 `impl` 없이 직접 쓴 bound는 그 bound가 가리키는 하나의 고정
   타입이다(`-> Value<core::I32>`). 하나의 타입을 가리키지 않는 bound를 이렇게
   쓰면 컴파일 시점에 거부한다.
-- 파생 타입은 투영으로 참조한다. `S::Type`은 변수 자체를 타입 attribute
-  값으로 쓰는 투영이다. Bound는 제공하는 투영의 이름과 종류(단일 타입 또는
+- Attribute 종류 `TypeOf<V>`는 타입 attribute이며, 그 값이 변수 `V`를
+  바인딩한다(`signature: Attr<TypeOf<S>>`). `TypeOf`는 투영이 아니므로 `V`에
+  bound가 없어도 쓸 수 있다.
+- 파생 타입은 투영으로 참조한다. Bound는 제공하는 투영의 이름과 종류(단일 타입 또는
   타입 목록)를 선언한다. 예를 들어 signature 타입은 `Inputs`/`Results`
   목록을, 파라미터형 dialect 타입은 선언된 파라미터를 제공한다. 둘 이상의
   bound가 같은 이름을 제공하면 `<S as B>::X`로 명시해야 한다.
@@ -165,7 +167,7 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   `Closure<(Evidence, Frame<R>)>` 같은 중첩 제네릭 인자로 쓰지 않는 이유는,
   Rust 문법으로는 읽히지만 의미는 pattern이 되어 정의 문법이 따르는 Rust
   signature 모델과 어긋나기 때문이다. Associated item constraint는 변수의
-  bound에만 쓸 수 있고, `impl B<X = T>`나 `Type` 투영에는 쓸 수 없다. 등식이
+  bound에만 쓸 수 있고, `impl B<X = T>`에는 쓸 수 없다. 등식이
   투영하는 변수를 정의의 어느 위치도 바인딩할 수 없으면 컴파일 시점에 거부한다.
 - Schema로 표현할 수 없는 로컬 조건은 operation별 사용자 verifier가 맡는다.
   사용자 verifier는 생성된 검사를 통과한 operation에서만 실행된다.

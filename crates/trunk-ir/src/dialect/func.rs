@@ -53,7 +53,7 @@ mod func {
 
     #[verify]
     fn call_indirect<S: FuncSig>(
-        signature: Attr<S::Type>,
+        signature: Attr<TypeOf<S>>,
         callee: Value<_>,
         args: Values<S::Inputs>,
     ) -> Values<S::Results> {
@@ -63,7 +63,7 @@ mod func {
 
     #[verify]
     fn tail_call_indirect<S: FuncSig>(
-        signature: Attr<S::Type>,
+        signature: Attr<TypeOf<S>>,
         callee: Value<_>,
         args: Values<S::Inputs>,
     ) {
