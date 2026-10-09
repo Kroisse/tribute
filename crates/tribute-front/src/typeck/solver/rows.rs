@@ -414,9 +414,18 @@ impl<'db> TypeSolver<'db> {
                             // A closed result bounds every source, and a
                             // body-local tail that nothing else constrains
                             // adds no labels of its own: it is empty.
+                            let within = known
+                                .iter()
+                                .all(|effect| normalized.result.effects(self.db).contains(effect));
+                            let settled = !free.is_empty() && fixed.is_empty() && within;
                             for free in free {
                                 self.row_subst.insert(free.id, EffectRow::pure(self.db));
                                 bound += 1;
+                            }
+                            // With every tail empty the sources are within
+                            // the bound; they need not name all its labels.
+                            if settled {
+                                continue;
                             }
                         } else if let [tail] = fixed[..]
                             && self.rigid_rows.contains(&tail)

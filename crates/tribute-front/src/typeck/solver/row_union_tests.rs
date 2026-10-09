@@ -227,6 +227,31 @@ fn row_union_closed_result_does_not_choose_a_source(db: &salsa::DatabaseImpl) {
     assert!(solver.solve(constraints).is_err());
 }
 
+/// At the signature boundary a closed result bounds its sources, so the
+/// tails nothing else constrains are empty, whichever labels the sources name.
+#[salsa_test]
+fn signature_boundary_closes_free_tails_of_a_closed_union(db: &salsa::DatabaseImpl) {
+    let writer = label(db, "Writer");
+    for named in [None, Some(writer)] {
+        let mut solver = TypeSolver::new(db);
+        let effects = named.map_or(vec![], |row| row.effects(db).to_vec());
+        let left = EffectRow::new(db, effects, Some(EffectVar { id: 1 }));
+        let right = EffectRow::open(db, EffectVar { id: 2 });
+        solver.add_row_unions(vec![crate::ast::RowUnion {
+            sources: vec![left, right],
+            result: writer,
+        }]);
+        solver.finalize_relations().unwrap();
+        solver.settle_signature_relations(&[]).unwrap();
+        assert_eq!(
+            solver.row_subst.apply(db, left),
+            named.unwrap_or(EffectRow::pure(db))
+        );
+        assert!(solver.row_subst.apply(db, right).is_pure(db));
+        assert!(solver.retained_row_unions().is_empty());
+    }
+}
+
 #[salsa_test]
 fn row_union_pure_result_closes_every_source(db: &salsa::DatabaseImpl) {
     let mut solver = TypeSolver::new(db);
