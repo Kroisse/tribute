@@ -273,9 +273,7 @@ fn nested_case_ids(
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Function(function) if function.name == trunk_ir::Symbol::new("nested") => {
-                Some(&function.body)
-            }
+            Decl::Function(function) if function.name == "nested" => Some(&function.body),
             _ => None,
         })
         .expect("nested function should be typechecked");

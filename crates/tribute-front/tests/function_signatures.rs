@@ -305,7 +305,7 @@ fn main() -> Nil { }
     let (_, scheme) = output
         .function_types(db)
         .iter()
-        .find(|(name, _)| *name == trunk_ir::Symbol::new("run_state"))
+        .find(|(name, _)| *name == "run_state")
         .unwrap();
     assert_eq!(scheme.effect_params(db).len(), 1);
     assert!(scheme.row_unions(db).is_empty());

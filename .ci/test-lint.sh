@@ -75,19 +75,27 @@ expect_commands() {
 
 FMT='cargo fmt --all --check'
 CLIPPY='cargo clippy --workspace --all-targets --message-format=short -- -D warnings'
+AST_TEST='ast-grep test --skip-snapshot-tests'
+AST_SCAN='ast-grep scan src tests crates'
 MARKDOWN='npx markdownlint-cli2 **/*.md #node_modules'
 RUNTIME='cargo xtask runtime'
 TESTS='cargo nextest run --workspace -j 4'
 
 # Quick lint succeeds even though the Clippy fixture fails by default.
 expect_status 0 "$SCRIPT_DIR/lint.sh" --quick
-expect_commands "$FMT" "$MARKDOWN"
+expect_commands "$FMT" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
 
 expect_status 2 env LINT_TEST_FMT_STATUS=1 "$SCRIPT_DIR/lint.sh" --quick
 expect_commands "$FMT"
 
 expect_status 2 env LINT_TEST_NPX_STATUS=1 "$SCRIPT_DIR/lint.sh" --quick
-expect_commands "$FMT" "$MARKDOWN"
+expect_commands "$FMT" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
+
+expect_status 2 env LINT_TEST_AST_GREP_TEST_STATUS=1 "$SCRIPT_DIR/lint.sh" --quick
+expect_commands "$FMT" "$AST_TEST"
+
+expect_status 2 env LINT_TEST_AST_GREP_SCAN_STATUS=1 "$SCRIPT_DIR/lint.sh" --quick
+expect_commands "$FMT" "$AST_TEST" "$AST_SCAN"
 
 expect_status 2 "$SCRIPT_DIR/lint.sh" --unknown
 expect_commands
@@ -96,26 +104,30 @@ expect_status 2 "$SCRIPT_DIR/lint.sh" --quick extra
 expect_commands
 
 expect_status 0 env LINT_TEST_CLIPPY_STATUS=0 "$SCRIPT_DIR/lint.sh"
-expect_commands "$FMT" "$CLIPPY" "$MARKDOWN"
+expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
 
 # Full validation runs tests only after every lint check passes.
 expect_status 0 env LINT_TEST_CLIPPY_STATUS=0 "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$MARKDOWN" "$RUNTIME" "$TESTS"
+expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME" "$TESTS"
 
 expect_status 2 "$SCRIPT_DIR/check.sh"
 expect_commands "$FMT" "$CLIPPY"
 
 expect_status 2 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_NPX_STATUS=1 \
     "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$MARKDOWN"
+expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
+
+expect_status 2 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_AST_GREP_SCAN_STATUS=1 \
+    "$SCRIPT_DIR/check.sh"
+expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN"
 
 expect_status 7 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_NEXTEST_STATUS=7 \
     "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$MARKDOWN" "$RUNTIME" "$TESTS"
+expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME" "$TESTS"
 
 expect_status 5 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_XTASK_STATUS=5 \
     "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$MARKDOWN" "$RUNTIME"
+expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME"
 
 # Exercise real commits without touching the caller's index or hooks.
 (
@@ -129,12 +141,13 @@ expect_commands "$FMT" "$CLIPPY" "$MARKDOWN" "$RUNTIME"
     git config core.whitespace trailing-space,space-before-tab
     mkdir -p .ci/githooks
     cp "$SCRIPT_DIR/lint.sh" .ci/lint.sh
+    cp "$SCRIPT_DIR/ast-grep.sh" .ci/ast-grep.sh
     cp "$SCRIPT_DIR/githooks/pre-commit" .ci/githooks/pre-commit
 
     printf 'clean\n' >sample.txt
     git add sample.txt
     expect_status 0 git commit -qm 'Clean commit'
-    expect_commands "$FMT" "$MARKDOWN"
+    expect_commands "$FMT" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
     initial_head="$(git rev-parse HEAD)"
 
     printf 'trailing space \n' >sample.txt
@@ -148,7 +161,9 @@ expect_commands "$FMT" "$CLIPPY" "$MARKDOWN" "$RUNTIME"
     expect_commands "$FMT"
 
     expect_status 1 env LINT_TEST_NPX_STATUS=1 git commit -qm 'Markdown must fail'
-    expect_commands "$FMT" "$MARKDOWN"
+    expect_commands "$FMT" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
+    expect_status 1 env LINT_TEST_AST_GREP_SCAN_STATUS=1 git commit -qm 'ast-grep must fail'
+    expect_commands "$FMT" "$AST_TEST" "$AST_SCAN"
     test "$(git rev-parse HEAD)" = "$initial_head"
 )
 

@@ -2368,11 +2368,7 @@ fn main() -> Nil {
         let i32_type = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| {
-                (data.dialect == trunk_ir::Symbol::new("core")
-                    && data.name == trunk_ir::Symbol::new("i32"))
-                .then_some(ty)
-            })
+            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
             .expect("fixture must contain core.i32");
         let calls = clif_indirect_calls(&ctx, module);
         assert_eq!(
@@ -2405,11 +2401,7 @@ fn main() -> Nil {
         let i32_type = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| {
-                (data.dialect == trunk_ir::Symbol::new("core")
-                    && data.name == trunk_ir::Symbol::new("i32"))
-                .then_some(ty)
-            })
+            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
             .expect("fixture must contain core.i32");
         let calls: Vec<_> = clif_indirect_calls(&ctx, module)
             .into_iter()
@@ -2662,8 +2654,7 @@ fn main() -> Nil {
                     .copied()
                     .find(|&op| {
                         let data = ctx.op(op);
-                        data.dialect == trunk_ir::Symbol::new("arith")
-                            && data.name == trunk_ir::Symbol::new("addi")
+                        data.dialect == "arith" && data.name == "addi"
                     })
                     .expect("test input must contain arith.addi");
 
@@ -3281,9 +3272,7 @@ fn main() -> Nil {
                         .decls
                         .iter()
                         .find_map(|d| match d {
-                            Decl::Enum(e) if e.name == trunk_ir::Symbol::new("Boxed$Int") => {
-                                Some(e.variants[0].id)
-                            }
+                            Decl::Enum(e) if e.name == "Boxed$Int" => Some(e.variants[0].id),
                             _ => None,
                         })
                         .unwrap();
@@ -3987,8 +3976,7 @@ fn main() -> Nil { }
     fn wasm_lowering_leaves_no_core_bytes(db: &salsa::DatabaseImpl) {
         let not_core_bytes = |ctx: &IrContext, ty| {
             let data = ctx.get_type(ty);
-            !(data.dialect == trunk_ir::Symbol::new("core")
-                && data.name == trunk_ir::Symbol::new("bytes"))
+            !(data.dialect == "core" && data.name == "bytes")
         };
         for (path, text) in [
             (
@@ -4020,8 +4008,7 @@ fn main() ->{std::io::Io} Nil {
 
     #[salsa_test]
     fn wasm_lowering_leaves_no_tribute_rt_types(db: &salsa::DatabaseImpl) {
-        let not_tribute_rt =
-            |ctx: &IrContext, ty| ctx.get_type(ty).dialect != trunk_ir::Symbol::new("tribute_rt");
+        let not_tribute_rt = |ctx: &IrContext, ty| ctx.get_type(ty).dialect != "tribute_rt";
         for (path, text) in [
             (
                 "native_effects.trb",
@@ -4048,8 +4035,7 @@ fn main() ->{std::io::Io} Nil {
         // and knows no other `adt` type.
         let builtin_layout_or_not_adt = |ctx: &IrContext, ty| {
             let data = ctx.get_type(ty);
-            data.dialect != trunk_ir::Symbol::new("adt")
-                || data.attrs.get(trunk_ir::types::LAYOUT_ATTR).is_some()
+            data.dialect != "adt" || data.attrs.get(trunk_ir::types::LAYOUT_ATTR).is_some()
         };
         for (path, text) in [
             (

@@ -1464,7 +1464,7 @@ fn use_point(p: Point) -> Int {
         let x_defs: Vec<_> = index
             .definitions(&db)
             .iter()
-            .filter(|d| d.name == trunk_ir::Symbol::new("x"))
+            .filter(|d| d.name == "x")
             .collect();
         assert!(
             x_defs.len() >= 2,
@@ -1498,12 +1498,12 @@ fn f(p: Point) -> Int {
         let x_locals: Vec<_> = index
             .definitions(&db)
             .iter()
-            .filter(|d| d.name == trunk_ir::Symbol::new("x") && d.kind == DefinitionKind::Local)
+            .filter(|d| d.name == "x" && d.kind == DefinitionKind::Local)
             .collect();
         let y_locals: Vec<_> = index
             .definitions(&db)
             .iter()
-            .filter(|d| d.name == trunk_ir::Symbol::new("y") && d.kind == DefinitionKind::Local)
+            .filter(|d| d.name == "y" && d.kind == DefinitionKind::Local)
             .collect();
 
         assert!(!x_locals.is_empty(), "Expected local definition for 'x'");
