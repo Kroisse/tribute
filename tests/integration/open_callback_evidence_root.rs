@@ -1,4 +1,5 @@
-//! Generic callbacks must retain the root export contract after specialization.
+//! A generic callback selects the instance of its convention class and keeps
+//! the root export contract.
 
 use crate::common;
 
@@ -22,28 +23,25 @@ fn main() ->{std::io::Io} Nil {
 "#;
 
 #[salsa_test]
-fn generic_callback_preserves_evidence_root_and_executes_wasm(db: &salsa::DatabaseImpl) {
+fn generic_callback_selects_a_direct_instance_and_executes_wasm(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "test.trb", SOURCE);
     let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
-    let main = module
-        .ops(&ctx)
-        .iter()
-        .copied()
-        .find_map(|op| {
+    let convention = |named: &dyn Fn(&str) -> bool| {
+        module.ops(&ctx).iter().copied().find_map(|op| {
             let function = tribute_control::Func::from_op(&ctx, op).ok()?;
-            (function.sym_name(&ctx) == "main").then_some(function)
+            named(function.sym_name(&ctx))
+                .then(|| tribute_control::func_sig_convention(&ctx, function.r#type(&ctx)))
         })
-        .expect("source main");
+    };
     assert_eq!(
-        tribute_control::func_sig_convention(&ctx, main.r#type(&ctx)),
-        Some(tribute_control::CallingConvention::Cps),
-        "the open callback requires a CPS worker"
+        convention(&|name| name == "main"),
+        Some(Some(tribute_control::CallingConvention::EvidenceDirect)),
+        "a pure callback leaves the Io root as it is"
     );
-    assert!(
-        ctx.op(main.op_ref())
-            .attributes
-            .contains_key("tribute.root_source_result"),
-        "the promoted Io root must carry its root source result"
+    assert_eq!(
+        convention(&|name| name.starts_with("apply_open$") && name.ends_with("$9D")),
+        Some(Some(tribute_control::CallingConvention::Direct)),
+        "a pure callback selects the Direct instance"
     );
 
     let binary = compile_to_wasm_binary(db, source).expect("generic root should compile to Wasm");
