@@ -92,25 +92,25 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
     let loc = ctx.op(module.op()).location;
     let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
     let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    // Evidence is a managed reference: the runtime borrows evidence arguments
+    // and returns a result the caller owns. A dispatch closure crosses as a
+    // raw pointer, handed over by `tribute_rt.into_raw` or received as a unit.
+    let ev_ty = ability::evidence_adt_type_ref(ctx);
     for (name, params, result) in [
-        (evidence_abi::EMPTY, &[][..], ptr_ty),
-        (evidence_abi::LOOKUP, &[ptr_ty, i32_ty][..], i32_ty),
+        (evidence_abi::EMPTY, &[][..], ev_ty),
+        (evidence_abi::LOOKUP, &[ev_ty, i32_ty][..], i32_ty),
         (
             evidence_abi::EXTEND,
-            &[ptr_ty, i32_ty, i32_ty, ptr_ty, ptr_ty][..],
-            ptr_ty,
+            &[ev_ty, i32_ty, i32_ty, ptr_ty, ev_ty][..],
+            ev_ty,
         ),
-        (evidence_abi::MASK, &[ptr_ty, i32_ty][..], ptr_ty),
-        (evidence_abi::DUP, &[ptr_ty, i32_ty][..], ptr_ty),
-        (evidence_abi::OUTER, &[ptr_ty, i32_ty][..], ptr_ty),
-        (evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty][..], ptr_ty),
-        (evidence_abi::TAIL, &[ptr_ty, i32_ty][..], ptr_ty),
-        (
-            evidence_abi::WITH_TAIL,
-            &[ptr_ty, i32_ty, ptr_ty][..],
-            ptr_ty,
-        ),
-        (evidence_abi::PUSH, &[ptr_ty, ptr_ty, i32_ty][..], ptr_ty),
+        (evidence_abi::MASK, &[ev_ty, i32_ty][..], ev_ty),
+        (evidence_abi::DUP, &[ev_ty, i32_ty][..], ev_ty),
+        (evidence_abi::OUTER, &[ev_ty, i32_ty][..], ev_ty),
+        (evidence_abi::LOOKUP_TR, &[ev_ty, i32_ty][..], ptr_ty),
+        (evidence_abi::TAIL, &[ev_ty, i32_ty][..], ev_ty),
+        (evidence_abi::WITH_TAIL, &[ev_ty, i32_ty, ev_ty][..], ev_ty),
+        (evidence_abi::PUSH, &[ev_ty, ev_ty, i32_ty][..], ev_ty),
     ] {
         if module.ops(ctx).iter().copied().any(|op| {
             func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == name)
@@ -287,7 +287,7 @@ impl RewritePattern for LowerEffectExtendToNative {
 
         let extend_call = func::Call::operands(operands)
             .callee(SymbolPath::from(evidence_abi::EXTEND))
-            .results([ptr_ty])
+            .results([ctx.op_result_types(op)[0]])
             .build(ctx, loc);
         rewriter.insert_op(extend_call.op_ref());
         replace_with_runtime_call_result(ctx, op, extend_call, rewriter);
@@ -346,11 +346,10 @@ impl RewritePattern for LowerEffectStackOpToNative {
         };
 
         let loc = ctx.op(op).location;
-        let ptr_ty = core_ptr_type(ctx);
         let ability_id = effect_dispatch::insert_ability_id(ctx, loc, ability_ref, rewriter);
         let call = func::Call::operands([evidence, ability_id])
             .callee(SymbolPath::from(helper))
-            .results([ptr_ty])
+            .results([ctx.op_result_types(op)[0]])
             .build(ctx, loc);
         rewriter.insert_op(call.op_ref());
         replace_with_runtime_call_result(ctx, op, call, rewriter);
@@ -370,7 +369,6 @@ impl RewritePattern for LowerEffectTailOpToNative {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let loc = ctx.op(op).location;
-        let ptr_ty = core_ptr_type(ctx);
         let i32_ty = core_i32_type(ctx);
         let mut slot = |ctx: &mut IrContext, index: u32| {
             let slot = arith::Const::operands()
@@ -401,7 +399,7 @@ impl RewritePattern for LowerEffectTailOpToNative {
         };
         let call = func::Call::operands(operands)
             .callee(SymbolPath::from(helper))
-            .results([ptr_ty])
+            .results([ctx.op_result_types(op)[0]])
             .build(ctx, loc);
         rewriter.insert_op(call.op_ref());
         replace_with_runtime_call_result(ctx, op, call, rewriter);
@@ -434,6 +432,14 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
             .callee(SymbolPath::from(evidence_abi::LOOKUP_TR))
             .results([ptr_ty])
             .build(ctx, loc);
+        rewriter.insert_op(dispatch_closure.op_ref());
+        // The runtime hands over one unit of the closure, so it is an owned
+        // closure value from here on.
+        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
+        let dispatch_closure =
+            core::UnrealizedConversionCast::operands(dispatch_closure.result(ctx))
+                .results(closure_ty)
+                .build(ctx, loc);
         rewriter.insert_op(dispatch_closure.op_ref());
         effect_dispatch::lower_tail_dispatch(ctx, op, dispatch_closure.result(ctx), rewriter);
         true
@@ -496,7 +502,6 @@ fn replace_with_runtime_evidence(
 }
 
 fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRunResult {
-    let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
     // Ops to erase after processing
     let mut ops_to_erase: Vec<OpRef> = Vec::new();
 
@@ -517,7 +522,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                 let old_result = ctx.op_result(op, 0);
                 let call = func::Call::operands([])
                     .callee(SymbolPath::from(evidence_abi::EMPTY))
-                    .results([ptr_ty])
+                    .results([result_types[0]])
                     .build(ctx, loc);
                 ctx.insert_op_before(block, op, call.op_ref());
                 replace_with_runtime_evidence(ctx, block, op, old_result, call.result(ctx));
@@ -547,7 +552,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                 let old_result = ctx.op_result(op, 0);
                 let call = func::Call::operands([])
                     .callee(SymbolPath::from(evidence_abi::EMPTY))
-                    .results([ptr_ty])
+                    .results([result_types[0]])
                     .build(ctx, loc);
                 ctx.insert_op_before(block, op, call.op_ref());
                 replace_with_runtime_evidence(ctx, block, op, old_result, call.result(ctx));
@@ -638,49 +643,22 @@ mod tests {
         );
         prepare_native_evidence_runtime(&mut ctx, module);
         assert_eq!(module.ops(&ctx).len(), 11);
+        // Evidence parameters and results have the managed evidence type; a
+        // dispatch closure crosses as a raw pointer.
+        let ev_ty = ability::evidence_adt_type_ref(&mut ctx);
+        let ev = trunk_ir::printer::print_type(&ctx, ev_ty);
+        let (ev, ptr, i32) = (ev.as_str(), "core.ptr", "core.i32");
         for (name, params, result) in [
-            (evidence_abi::EMPTY, &[][..], "core.ptr"),
-            (
-                evidence_abi::LOOKUP,
-                &["core.ptr", "core.i32"][..],
-                "core.i32",
-            ),
-            (
-                evidence_abi::EXTEND,
-                &["core.ptr", "core.i32", "core.i32", "core.ptr", "core.ptr"][..],
-                "core.ptr",
-            ),
-            (
-                evidence_abi::MASK,
-                &["core.ptr", "core.i32"][..],
-                "core.ptr",
-            ),
-            (evidence_abi::DUP, &["core.ptr", "core.i32"][..], "core.ptr"),
-            (
-                evidence_abi::OUTER,
-                &["core.ptr", "core.i32"][..],
-                "core.ptr",
-            ),
-            (
-                evidence_abi::LOOKUP_TR,
-                &["core.ptr", "core.i32"][..],
-                "core.ptr",
-            ),
-            (
-                evidence_abi::TAIL,
-                &["core.ptr", "core.i32"][..],
-                "core.ptr",
-            ),
-            (
-                evidence_abi::WITH_TAIL,
-                &["core.ptr", "core.i32", "core.ptr"][..],
-                "core.ptr",
-            ),
-            (
-                evidence_abi::PUSH,
-                &["core.ptr", "core.ptr", "core.i32"][..],
-                "core.ptr",
-            ),
+            (evidence_abi::EMPTY, &[][..], ev),
+            (evidence_abi::LOOKUP, &[ev, i32][..], i32),
+            (evidence_abi::EXTEND, &[ev, i32, i32, ptr, ev][..], ev),
+            (evidence_abi::MASK, &[ev, i32][..], ev),
+            (evidence_abi::DUP, &[ev, i32][..], ev),
+            (evidence_abi::OUTER, &[ev, i32][..], ev),
+            (evidence_abi::LOOKUP_TR, &[ev, i32][..], ptr),
+            (evidence_abi::TAIL, &[ev, i32][..], ev),
+            (evidence_abi::WITH_TAIL, &[ev, i32, ev][..], ev),
+            (evidence_abi::PUSH, &[ev, ev, i32][..], ev),
         ] {
             let function = func_by_name_recursive(&ctx, module, name);
             assert!(!ctx.op_has_regions(function.op_ref()));

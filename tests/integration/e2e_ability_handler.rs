@@ -5,7 +5,7 @@
 
 use crate::common;
 
-use common::{assert_native_output, compile_and_run_native};
+use common::{assert_native_output, compile_and_run_native, compile_and_run_native_asan};
 
 fn cps_control_read_outcome_program() -> &'static str {
     r#"
@@ -1571,4 +1571,67 @@ fn main() ->{Io} Nil {
 "#,
         "7!\nnone",
     );
+}
+
+#[test]
+fn test_handler_evidence_and_captured_values_are_released() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    fn ask() -> Int
+}
+
+ability Next {
+    op next() -> Int
+}
+
+struct Cell { value: Int }
+
+fn twice() ->{Ask} Int {
+    Ask::ask() + Ask::ask()
+}
+
+fn answered(cell: Cell) -> Int {
+    handle twice() {
+        do result { result }
+        fn Ask::ask() { cell.value }
+    }
+}
+
+fn counted() ->{Next} Int {
+    Next::next() + Next::next()
+}
+
+fn resumed(step: Cell) -> Int {
+    handle counted() {
+        do result { result }
+        op Next::next() { resume step.value }
+    }
+}
+
+fn nested(cell: Cell) -> Int {
+    handle answered(Cell { value: +5 }) + twice() {
+        do result { result }
+        fn Ask::ask() { cell.value }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(answered(Cell { value: +21 })))
+    print_line(Int::to_string(resumed(Cell { value: +4 })))
+    print_line(Int::to_string(nested(Cell { value: +100 })))
+}
+"#;
+    // Each handler installation makes an evidence and a marker whose dispatch
+    // closure captures a value. The sanitizer run reports a read of any of
+    // them that was released while a handler or a resumption still used it.
+    for output in [
+        compile_and_run_native("handler_evidence_released.trb", source),
+        compile_and_run_native_asan("handler_evidence_released_asan.trb", source),
+    ] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "stderr: {stderr}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42\n8\n210");
+    }
 }

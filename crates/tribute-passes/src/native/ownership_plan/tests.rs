@@ -413,11 +413,12 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
         &mut ctx,
         r#"core.module @test {
   !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
-  func.func @install(%evidence: core.ptr, %prompt: core.i32) -> core.nil {
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  func.func @install(%evidence: !Evidence, %prompt: core.i32) -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
-    %extended = effect.extend %evidence, %prompt, %closure, %evidence {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
+    %extended = effect.extend %evidence, %prompt, %closure, %evidence {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
     func.return
   }
 }"#,
@@ -471,11 +472,12 @@ fn native_evidence_lowers_a_managed_dispatcher_to_into_raw() {
         &mut ctx,
         r#"core.module @test {
   !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
-  func.func @install(%evidence: core.ptr, %prompt: core.i32) -> core.nil {
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  func.func @install(%evidence: !Evidence, %prompt: core.i32) -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %tr = adt.struct_new %code, %env {type = !_closure} : !_closure
-    %extended = effect.extend %evidence, %prompt, %tr, %evidence {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
+    %extended = effect.extend %evidence, %prompt, %tr, %evidence {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
     func.return
   }
 }"#,
@@ -2029,6 +2031,35 @@ fn bytes_is_a_managed_reference_with_its_own_units() {
     };
     let bytes = ctx.op_result(cast, 0);
     assert_eq!(final_releases(read, bytes), [ActionAnchor::After(last)]);
+}
+
+#[test]
+fn evidence_is_a_managed_reference_the_runtime_returns_owned() {
+    let (ctx, _module, plan) = build(
+        r#"core.module @test {
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  func.func @__tribute_evidence_mask(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
+  func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
+  func.func @derive(%ev: !Evidence, %id: core.i32) -> core.i32 {
+    %masked = func.call %ev, %id {callee = @__tribute_evidence_mask} : !Evidence
+    %tag = func.call %masked, %id {callee = @__tribute_evidence_lookup} : core.i32
+    func.return %tag
+  }
+}"#,
+    );
+    let derive = plan.function(&Symbol::new("derive")).unwrap();
+    let [mask, lookup, _] = ctx.block(function_blocks(&ctx, &plan, "derive")[0]).ops[..] else {
+        panic!("three-operation fixture")
+    };
+    // The runtime borrows its evidence argument and returns a unit the caller
+    // owns, which is released after the last use.
+    let masked = ctx.op_result(mask, 0);
+    assert!(plan.is_managed_type(&ctx, ctx.value_ty(masked)));
+    assert_eq!(count(derive, ActionKind::CallAcquire), 0);
+    assert_eq!(
+        final_releases(derive, masked),
+        [ActionAnchor::After(lookup)]
+    );
 }
 
 #[test]
