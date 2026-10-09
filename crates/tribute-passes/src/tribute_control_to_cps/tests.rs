@@ -2420,9 +2420,9 @@ mod shared_contract_boundary_regressions {
     }
 }
 
-/// The value delimiters of `name`, each with its number of evidence
-/// operands and the type of its answer.
-fn delimiters(ctx: &IrContext, module: Module, name: &str) -> Vec<(usize, TypeRef)> {
+/// The value delimiters of `name`, each with whether it starts on the
+/// initial evidence and the type of its answer.
+fn delimiters(ctx: &IrContext, module: Module, name: &str) -> Vec<(bool, TypeRef)> {
     let function = module
         .ops(ctx)
         .iter()
@@ -2435,7 +2435,13 @@ fn delimiters(ctx: &IrContext, module: Module, name: &str) -> Vec<(usize, TypeRe
         .iter()
         .flat_map(|&block| ctx.block(block).ops.iter().copied())
         .filter_map(|op| effect::Delimit::from_op(ctx, op).ok())
-        .map(|delimit| (delimit.evidence(ctx).len(), delimit.result_ty(ctx)))
+        .map(|delimit| {
+            let initial = matches!(
+                ctx.value_def(delimit.evidence(ctx)),
+                trunk_ir::ValueDef::OpResult(op, _) if effect::InitialEvidence::matches(ctx, op)
+            );
+            (initial, delimit.result_ty(ctx))
+        })
         .collect()
 }
 
@@ -2458,10 +2464,13 @@ fn a_cps_call_in_a_callable_that_is_not_cps_runs_under_a_value_delimiter() {
     run_pre_cps(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
     let i32_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-    // A Direct flow has no evidence to pass; its delimiter starts on the
-    // target's initial evidence.
-    assert_eq!(delimiters(&ctx, module, "direct"), [(0, i32_type)]);
-    assert_eq!(delimiters(&ctx, module, "with_evidence"), [(1, i32_type)]);
+    // A Direct flow receives no evidence; its delimiter starts on the
+    // initial one.
+    assert_eq!(delimiters(&ctx, module, "direct"), [(true, i32_type)]);
+    assert_eq!(
+        delimiters(&ctx, module, "with_evidence"),
+        [(false, i32_type)]
+    );
     let printed = print_module(&ctx, module.op());
     assert!(!printed.contains("ability.frame"), "{printed}");
 }
@@ -2499,7 +2508,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     lower_continuation_frames(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
     let i32_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-    assert_eq!(delimiters(&ctx, module, "run"), [(0, i32_type)]);
+    assert_eq!(delimiters(&ctx, module, "run"), [(true, i32_type)]);
     let printed = print_module(&ctx, module.op());
     // The handle and its operation are in the delimited Cps closure.
     assert!(printed.contains("ability.handle_dispatch"), "{printed}");

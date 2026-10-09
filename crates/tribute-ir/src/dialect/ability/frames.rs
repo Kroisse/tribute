@@ -8,7 +8,7 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 
-use super::{Delimit, Frame, Handle, SuffixFrame, is_evidence_type_ref};
+use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
 use crate::dialect::tribute_control::{
     CALLING_CONVENTION_ATTR, CallingConvention, EvidencePlanSite, verify_evidence_plan,
 };
@@ -253,15 +253,6 @@ fn frame_result(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
 impl trunk_ir::ops::Verify for SuffixFrame {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
         verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Legalized)
-    }
-}
-
-impl trunk_ir::ops::Verify for Delimit {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        if self.evidence(ctx).len() > 1 {
-            return Err("ability.delimit takes at most one evidence".into());
-        }
-        Ok(())
     }
 }
 

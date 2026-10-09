@@ -123,11 +123,10 @@ mod ability {
     /// Cps, and yield its answer.
     ///
     /// `body` is `(Evidence, frame) -> core.never` and the result is the
-    /// answer of that frame. `evidence` holds the flow's evidence in an
-    /// `EvidenceDirect` flow and is empty in a `Direct` flow. Frame expansion
-    /// lowers the operation to `effect.delimit`.
-    #[verify]
-    fn delimit<C, F: Frame>(body: Value<C>, evidence: Variadic<Evidence>) -> Value<F::Result>
+    /// answer of that frame. `evidence` is the flow's evidence, or
+    /// `effect.initial_evidence` in a `Direct` flow. Frame expansion lowers
+    /// the operation to `effect.delimit`.
+    fn delimit<C, F: Frame>(body: Value<C>, evidence: Value<Evidence>) -> Value<F::Result>
     where
         C: CpsClosure<Inputs = (Evidence, F)>,
     {

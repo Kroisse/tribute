@@ -115,8 +115,7 @@ impl RewritePattern for LowerDelimits {
         let Ok(delimit) = ability::Delimit::from_op(ctx, op) else {
             return false;
         };
-        let evidence = delimit.evidence(ctx).to_vec();
-        let lowered = effect::Delimit::operands(delimit.body(ctx), evidence)
+        let lowered = effect::Delimit::operands(delimit.body(ctx), delimit.evidence(ctx))
             .results(delimit.result_ty(ctx))
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(lowered.op_ref());

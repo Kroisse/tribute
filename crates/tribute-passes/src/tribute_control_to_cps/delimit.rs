@@ -81,7 +81,19 @@ impl Converter<'_> {
             CallingConvention::Cps,
         );
         self.ctx.push_op(block, closure.op_ref());
-        let delimit = ability::Delimit::operands(closure.result(self.ctx), flow.evidence)
+        // A Direct flow receives no evidence; its delimiter starts on the
+        // initial one.
+        let evidence = match flow.evidence {
+            Some(evidence) => evidence,
+            None => {
+                let initial = effect::InitialEvidence::operands()
+                    .results(evidence_type)
+                    .build(self.ctx, location);
+                self.ctx.push_op(block, initial.op_ref());
+                initial.result(self.ctx)
+            }
+        };
+        let delimit = ability::Delimit::operands(closure.result(self.ctx), evidence)
             .build(self.ctx, location);
         self.ctx.push_op(block, delimit.op_ref());
         Ok(delimit.result(self.ctx))

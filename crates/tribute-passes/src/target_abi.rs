@@ -573,7 +573,8 @@ fn build_cps_root_call(
 }
 
 /// Replace every `effect.delimit` with its completion cell, terminal frame,
-/// the call of its body, and the read of the answer.
+/// the call of its body, and the read of the answer, and every
+/// `effect.initial_evidence` with the target's initial evidence.
 ///
 /// Runs after physicalization, like the root bridge: the body and the frame
 /// members have empty results, so the body is entered by an ordinary call
@@ -582,11 +583,38 @@ pub fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(
     let Some(module_block) = module.first_block(ctx) else {
         return Ok(());
     };
-    let delimiters: Vec<_> = collect_ops(ctx, module.op())
+    let operations = collect_ops(ctx, module.op());
+    let evidence_ty = ability::evidence_adt_type_ref(ctx);
+    let initials: Vec<_> = operations
+        .iter()
+        .filter_map(|&op| effect::InitialEvidence::from_op(ctx, op).ok())
+        .collect();
+    for initial in initials {
+        let op = initial.op_ref();
+        let location = ctx.op(op).location;
+        let block = ctx
+            .op(op)
+            .parent_block
+            .ok_or_else(|| TargetAbiError::new("initial evidence: operation is detached"))?;
+        let scratch = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let evidence = build_initial_evidence(ctx, scratch, location, evidence_ty);
+        for built in ctx.block(scratch).ops.clone() {
+            ctx.detach_op(built);
+            ctx.insert_op_before(block, op, built);
+        }
+        ctx.replace_all_uses(initial.result(ctx), evidence);
+        ctx.detach_op(op);
+        ctx.remove_op(op);
+    }
+    let delimiters: Vec<_> = operations
         .into_iter()
         .filter_map(|op| effect::Delimit::from_op(ctx, op).ok())
         .collect();
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let mut terminals: Vec<(TypeRef, TerminalFunctions)> = Vec::new();
     for delimit in delimiters {
         let op = delimit.op_ref();
@@ -643,28 +671,7 @@ pub fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(
         for &new in &built.ops {
             ctx.insert_op_before(block, op, new);
         }
-        let evidence = match delimit.evidence(ctx) {
-            [evidence] => *evidence,
-            [_, _, ..] => {
-                return Err(TargetAbiError::new(
-                    "value delimiter: more than one evidence operand",
-                ));
-            }
-            [] => {
-                let scratch = ctx.create_block(BlockData {
-                    location,
-                    args: vec![],
-                    ops: smallvec![],
-                    parent_region: None,
-                });
-                let evidence = build_initial_evidence(ctx, scratch, location, evidence_ty);
-                for new in ctx.block(scratch).ops.clone() {
-                    ctx.detach_op(new);
-                    ctx.insert_op_before(block, op, new);
-                }
-                evidence
-            }
-        };
+        let evidence = delimit.evidence(ctx);
         let call = func::CallIndirect::operands(body, [evidence, built.frame])
             .signature(signature)
             .build(ctx, location);

@@ -1153,7 +1153,8 @@ ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
   `op -> Never`에만 쓴다.
 - **`ability.delimit`:** [값 delimiter](cps-effects.md#값-delimiter)다. `body`는
   `(Evidence, ability.frame<R>) -> core.never`인 `Cps` closure이고 결과는 `R` 하나다.
-  Evidence operand는 `EvidenceDirect` flow에서만 있고, `Direct` flow에서는 없다.
+  `ev`는 그 flow의 evidence이고, evidence를 받지 않는 `Direct` flow에서는
+  `effect.initial_evidence`의 결과다.
   Terminator가 아니며 `Cps`가 아닌 flow에만 온다. Frame 펼치기가 같은 operand와
   결과를 가진 `effect.delimit`으로 낮추고, target ABI 경계가 그것을 소비한다.
 - **검증:** Operation verifier는 위 타입 관계, frame과 closure의 `R` 일치, arm 표와

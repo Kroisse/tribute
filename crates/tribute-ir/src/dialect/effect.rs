@@ -89,14 +89,18 @@ mod effect {
     ) {
     }
 
+    /// The evidence a computation starts on when no handler is installed
+    /// around it: the root entry's, and a value delimiter's in a `Direct`
+    /// flow, whose callable receives none. The target ABI boundary builds it.
+    fn initial_evidence() -> Value<impl Evidence> {}
+
     /// Run the CPS computation `body` to completion in a flow that is not
     /// Cps, and yield its answer.
     ///
     /// `body` is a Cps closure over an evidence and the physical frame of the
-    /// answer. `evidence` is empty in a `Direct` flow, where the body starts
-    /// on the target's initial evidence. The target ABI boundary builds the
-    /// completion cell and the terminal frame.
-    fn delimit<E: Evidence>(body: Value<_>, evidence: Variadic<E>) -> Value<_> {}
+    /// answer. The target ABI boundary builds the completion cell and the
+    /// terminal frame.
+    fn delimit<E: Evidence>(body: Value<_>, evidence: Value<E>) -> Value<_> {}
 }
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Extend>() }

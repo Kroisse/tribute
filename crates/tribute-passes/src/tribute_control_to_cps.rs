@@ -20,7 +20,7 @@ use tribute_core::{
     set_calling_convention,
 };
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::{ability, closure, tribute_control, tribute_rt};
+use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_rt};
 use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, RegionData};

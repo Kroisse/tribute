@@ -538,15 +538,17 @@ delimiter 밖으로 나갈 수 있다. 재개된 계산은 재개한 지점이 �
 Region은 `(Evidence, ContinuationFrame<R>) -> core.never`인 `Cps` closure이며
 evidence와 이 frame을 받는다. Region을 별도의 `Cps` callable로 두므로 그 안의 proper
 tail transfer는 다른 `Cps` callable과 같은 검증을 받는다. Evidence는
-`EvidenceDirect` flow에서는 그 flow의 evidence이고, `Direct` flow에서는 target의
-초기 evidence다. Region의 proper tail chain이 끝나면 delimiter는 cell을 읽어 `R`
-값을 낸다.
+`EvidenceDirect` flow에서는 그 flow의 evidence다. `Direct` flow는 evidence를 받지
+않으므로 delimiter가 `effect.initial_evidence`로 초기 evidence를 만들어 넘긴다. 그
+flow의 row가 비어 있어 바깥 handler를 볼 일이 없다. Region의 proper tail chain이
+끝나면 delimiter는 cell을 읽어 `R` 값을 낸다.
 
 **단계별 책임.** `tribute_control_to_cps`가 `ability.delimit`을 만들고 region을
 CPS로 legalize한다. Frame 펼치기는 region의 frame 타입에 layout을 주고 operation을
-`effect.delimit`으로 낮춘다. CPS signature 물리화 뒤의 target ABI 경계가
-cell, frame 생성, 결과 없는 ordinary call,
-cell 읽기를 합성한다. Frame contract는 명시적 result/layout provenance로 검사하며
+`effect.delimit`으로 낮춘다. CPS signature 물리화 뒤의 target ABI 경계가 cell,
+frame 생성, 결과 없는 ordinary call, cell 읽기를 합성하고,
+`effect.initial_evidence`를 target의 초기 evidence로 바꾼다. Frame contract는
+명시적 result/layout provenance로 검사하며
 closure 이름, arity 또는 erased storage에서 추론하지 않는다. 이 adapter는
 answer-type polymorphism, trampoline, in-band sentinel 또는 control carrier가 아니다.
 

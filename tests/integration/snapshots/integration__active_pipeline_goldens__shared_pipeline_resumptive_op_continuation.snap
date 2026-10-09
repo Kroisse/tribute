@@ -8,5 +8,6 @@ main: Some(Direct) () -> (core.nil)
   func.call operands=0 results=1: 1
   func.return operands=1 results=0: 1
 run_state: Some(Direct) () -> (core.i32)
-  effect.delimit operands=1 results=1: 1
+  effect.delimit operands=2 results=1: 1
+  effect.initial_evidence operands=0 results=1: 1
   func.return operands=1 results=0: 1
