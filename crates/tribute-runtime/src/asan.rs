@@ -13,6 +13,8 @@
 //! - **Double-free**: A second free of a quarantined block is reported as a
 //!   double free, and a free of any address without a live block, including a
 //!   block that already left the quarantine, as a free of unallocated memory.
+//! - **Leaks**: [`__asan_exit`] reports allocations still live when `main`
+//!   returns.
 //! - **Invalid access at the access site**: Compiled code calls
 //!   [`__tribute_asan_load`] or [`__tribute_asan_store`] before each memory
 //!   access; the region table classifies the address range.
@@ -413,6 +415,31 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
     with_state(|state| state.quarantine_push(base as usize, total));
 }
 
+/// Report the allocations still live when the program returns from `main`.
+///
+/// Called from the entrypoint before it returns. Every allocation compiled
+/// code makes is reference counted, so one that is still live was leaked.
+#[unsafe(no_mangle)]
+pub extern "C" fn __asan_exit() {
+    let (count, bytes) = with_state(live_allocations);
+    if count != 0 {
+        report(format_args!(
+            "==ERROR: TributeASan: detected memory leaks\n  {bytes} byte(s) in {count} allocation(s)\n"
+        ));
+    }
+}
+
+/// The number of live blocks and the payload bytes they hold.
+fn live_allocations(state: &mut State) -> (usize, usize) {
+    state
+        .regions
+        .values()
+        .filter(|region| !region.freed)
+        .fold((0, 0), |(count, bytes), region| {
+            (count + 1, bytes + region.payload)
+        })
+}
+
 /// Check a read of `size` bytes at `addr` before compiled code performs it.
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_asan_load(addr: *const u8, size: u64) {
@@ -465,6 +492,28 @@ mod tests {
             // Dealloc should succeed (red zones intact)
             dealloc(ptr, 64);
         }
+
+        ASAN_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_asan_counts_the_allocations_still_live() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        ASAN_ENABLED.store(true, Ordering::SeqCst);
+        unsafe { reset_quarantine() };
+        let live = || with_state(live_allocations);
+        let before = live();
+
+        unsafe {
+            let first = alloc(64);
+            let second = alloc(8);
+            assert_eq!(live(), (before.0 + 2, before.1 + 72));
+            // A freed block waits in the quarantine but is no longer live.
+            dealloc(first, 64);
+            assert_eq!(live(), (before.0 + 1, before.1 + 8));
+            dealloc(second, 8);
+        }
+        assert_eq!(live(), before);
 
         ASAN_ENABLED.store(false, Ordering::SeqCst);
     }
