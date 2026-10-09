@@ -2,7 +2,7 @@
 
 mod frames;
 
-pub use frames::{CpsClosure, HandlerBinding, OperationKind};
+pub use frames::{CpsClosure, HandlerBinding, NotNever, OperationKind};
 
 use super::closure::Closure;
 use super::tribute_control::EvidenceStep;
@@ -56,14 +56,18 @@ mod ability {
     ///
     /// `continuation` is `(Evidence, outer frame, value) -> core.never`. When
     /// the frame is resumed, `evidence_plan` selects the evidence passed to
-    /// the resumed inner computation.
+    /// the resumed inner computation. The produced frame's type is not
+    /// inferred: it is built from the continuation's value type.
     #[verify]
-    fn suffix_frame<F: Frame>(
+    fn suffix_frame<F: Frame, C, G: Frame>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         evidence: Value<Evidence>,
         outer: Value<F>,
-        continuation: Value<CpsClosure>,
-    ) -> Value<impl Frame> {
+        continuation: Value<C>,
+    ) -> Value<G>
+    where
+        C: CpsClosure<Inputs = (Evidence, F, G::Result)>,
+    {
     }
 
     /// Deliver `value` to the frame's completion.
@@ -92,15 +96,16 @@ mod ability {
     /// `resumption` is `(Evidence, frame, operation result) -> core.never`,
     /// the rest of the computation with no one-shot check. Expanding the
     /// operation adds the check.
-    #[verify]
-    fn perform<F: Frame>(
+    fn perform<F: Frame, C>(
         ability_ref: Attr<Type>,
         op_name: Attr<String>,
         evidence: Value<Evidence>,
         frame: Value<F>,
-        resumption: Value<CpsClosure>,
+        resumption: Value<C>,
         values: Variadic<_>,
-    ) {
+    ) where
+        C: CpsClosure<Inputs = (Evidence, F, impl NotNever)>,
+    {
     }
 
     /// Perform an operation returning `core.never` through the frame's
@@ -122,7 +127,11 @@ mod ability {
     /// `EvidenceDirect` flow and is empty in a `Direct` flow. Frame expansion
     /// lowers the operation to `effect.delimit`.
     #[verify]
-    fn delimit(body: Value<CpsClosure>, evidence: Variadic<Evidence>) -> Value<_> {}
+    fn delimit<C, F: Frame>(body: Value<C>, evidence: Variadic<Evidence>) -> Value<F::Result>
+    where
+        C: CpsClosure<Inputs = (Evidence, F)>,
+    {
+    }
 }
 
 // === Hash-Based Dispatch ===

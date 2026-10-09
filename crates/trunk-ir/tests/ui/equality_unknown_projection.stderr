@@ -1,0 +1,35 @@
+error[E0080]: evaluation panicked: type constraint projection is not provided by the selected bound
+ --> tests/ui/equality_unknown_projection.rs:4:5
+  |
+4 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `<d::Probe as trunk_ir::ops::DialectOp>::DEF::I` failed inside this call
+  |
+note: inside `projection_in`
+ --> src/type_constraint.rs
+  |
+  |     let i = projection_in_any(bound, name);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: inside `projection_in_any`
+ --> $RUST/core/src/panic.rs
+  |
+  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: src/type_constraint.rs
+  |
+  |     panic!("type constraint projection is not provided by the selected bound")
+  |     -------------------------------------------------------------------------- in this macro invocation
+
+note: erroneous constant encountered
+ --> tests/ui/equality_unknown_projection.rs:6:21
+  |
+6 |         fn probe<S: FuncSig<Arguments = (_,)>>(sig: Value<S>) {}
+  |                     ^^^^^^^
+
+note: erroneous constant encountered
+ --> tests/ui/equality_unknown_projection.rs:4:5
+  |
+4 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

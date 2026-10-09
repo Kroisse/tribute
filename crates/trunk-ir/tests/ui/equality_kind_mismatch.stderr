@@ -1,14 +1,14 @@
 error[E0080]: evaluation panicked: type constraint projection is a type list but is used as a single type
- --> tests/ui/projection_kind_mismatch.rs:4:5
+ --> tests/ui/equality_kind_mismatch.rs:4:5
   |
 4 |     #[trunk_ir::dialect]
-  |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `<d::Probe as trunk_ir::ops::DialectOp>::DEF::P` failed inside this call
+  |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `<d::Probe as trunk_ir::ops::DialectOp>::DEF::I` failed inside this call
   |
-note: inside `resolve_projection`
+note: inside `projection_in`
  --> src/type_constraint.rs
   |
-  |     check_kind(bounds[i].projections[j].kind, kind);
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     check_kind(bound.projections[i].kind, kind);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: inside `type_constraint::check_kind`
  --> $RUST/core/src/panic.rs
   |
@@ -21,7 +21,13 @@ note: inside `type_constraint::check_kind`
   |                 -------------------------------------------------------------------------------- in this macro invocation
 
 note: erroneous constant encountered
- --> tests/ui/projection_kind_mismatch.rs:4:5
+ --> tests/ui/equality_kind_mismatch.rs:7:21
+  |
+7 |         fn probe<S: FuncSig<Inputs = T>, T>(sig: Value<S>) {}
+  |                     ^^^^^^^
+
+note: erroneous constant encountered
+ --> tests/ui/equality_kind_mismatch.rs:4:5
   |
 4 |     #[trunk_ir::dialect]
   |     ^^^^^^^^^^^^^^^^^^^^

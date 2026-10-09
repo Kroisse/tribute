@@ -82,7 +82,6 @@ impl Converter<'_> {
         );
         self.ctx.push_op(block, closure.op_ref());
         let delimit = ability::Delimit::operands(closure.result(self.ctx), flow.evidence)
-            .results(answer)
             .build(self.ctx, location);
         self.ctx.push_op(block, delimit.op_ref());
         Ok(delimit.result(self.ctx))

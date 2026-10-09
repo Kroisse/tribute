@@ -7,7 +7,10 @@ use rustc_hash::FxHashSet as HashSet;
 use unsynn::{Parser, ToTokenIter, TokenIter};
 
 mod constraint;
-pub use constraint::{BoundPath, KindType, ListExpr, Projection, TypeExpr, TypeVar, ValueExpr};
+pub use constraint::{
+    BoundPath, KindType, ListExpr, Projection, RelationDef, RelationExpr, TypeExpr, TypeVar,
+    ValueExpr,
+};
 
 // ============================================================================
 // Parsed types
@@ -32,6 +35,8 @@ pub struct OperationDef {
     pub regions: Vec<RegionOrSuccessor>,
     pub type_vars: Vec<TypeVar>,
     pub result_constraint: ValueExpr,
+    /// Equalities from the `where` clause.
+    pub relations: Vec<RelationDef>,
     /// `#[verify]`: call the wrapper's `Verify` impl after the schema checks. Holds the attribute's span for diagnostics.
     pub verify: Option<proc_macro2::Span>,
 }
