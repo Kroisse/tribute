@@ -146,7 +146,7 @@ impl FieldKind {
             return Some(Self::Float { width: 32 });
         }
         // A `core` integer carries no sign, so it records as unsigned.
-        let width = (data.dialect == trunk_ir::Symbol::new("core"))
+        let width = (data.dialect == "core")
             .then(|| {
                 data.name
                     .with_str(|name| name.strip_prefix('i').and_then(|width| width.parse().ok()))
