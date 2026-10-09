@@ -134,6 +134,33 @@ fn a_method_call_performs_the_effects_of_its_callee(db: &salsa::DatabaseImpl) {
     assert!(check("{}", "b.apply(fn(n) n)").is_empty());
 }
 
+/// Several row-polymorphic calls in a body with a closed row leave their
+/// callbacks' rows as the callbacks wrote them; an effect the row does not
+/// name is still reported.
+#[salsa_test]
+fn calls_into_a_closed_row_keep_their_callbacks_effects(db: &salsa::DatabaseImpl) {
+    let check = |row: &str| {
+        errors(
+            db,
+            &format!(
+                "{ASK}ability Tell {{\n    op tell() -> Nat\n}}\n\n\
+                 fn apply(x: Nat, g: fn(Nat) ->{{e}} Nat) ->{{e}} Nat {{ g(x) }}\n\n\
+                 fn f() ->{row} Nat {{\n    \
+                     let a = apply(1, fn(n) n)\n    \
+                     let b = apply(a, fn(n) n + Tell::tell())\n    \
+                     apply(b, fn(n) n + Ask::ask())\n}}\n\n\
+                 fn main() -> Nil {{ }}\n"
+            ),
+        )
+    };
+    assert!(check("{Ask, Tell}").is_empty());
+    let undeclared = check("{Tell}");
+    assert!(
+        matches!(&undeclared[..], [error] if error.contains("Ask")),
+        "{undeclared:?}"
+    );
+}
+
 /// A caller sees only the callee's declaration, so the order in which the
 /// functions are declared does not change the diagnostics.
 #[salsa_test]

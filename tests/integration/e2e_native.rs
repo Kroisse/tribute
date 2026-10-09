@@ -2963,3 +2963,38 @@ fn main() ->{Io} Nil {
         "3",
     );
 }
+
+/// Row-polymorphic calls that share one body each take the class of their
+/// own callback: the rows they join into the closed row of the function do
+/// not keep the callbacks open.
+#[test]
+fn row_polymorphic_calls_in_one_body_keep_their_own_class() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "row_polymorphic_calls_in_one_body.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Int
+}
+
+fn asked(x: Option(Int)) ->{Ask, Io} Option(Int) {
+    let y = Option::map(x, fn(n) n + +1)
+    let z = Option::map(y, fn(n) { print_line("io") n })
+    Option::map(z, fn(n) n + Ask::ask())
+}
+
+fn main() ->{Io} Nil {
+    let answer = handle asked(Some(+1)) {
+        do value { value }
+        op Ask::ask() { resume +40 }
+    }
+    case answer {
+        Some(n) -> print_line(Int::to_string(n))
+        None -> print_line("none")
+    }
+}
+"#,
+        "io\n42",
+    );
+}
