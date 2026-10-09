@@ -2942,3 +2942,24 @@ fn main() ->{Io} Nil {
         "2000000",
     );
 }
+
+/// A row variable that only a lambda in the body carries is a class
+/// variable: the returned lambda is a pure callable where its row is empty.
+#[test]
+fn a_returned_lambda_takes_the_class_of_its_row_variable() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "returned_lambda_class.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn mk() ->{} fn(Int) ->{r} Int { fn(n) { n + +2 } }
+fn call(f: fn(Int) ->{} Int) ->{} Int { f(+1) }
+fn pure() ->{} Int { call(mk()) }
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(pure()))
+}
+"#,
+        "3",
+    );
+}
