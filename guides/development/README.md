@@ -6,7 +6,7 @@ this directory.
 
 - [Code conventions](conventions.md): preferred implementation patterns,
   formatting helpers, and error handling.
-- [Rust lints](lints.md): Clippy configuration and hash map conventions.
+- [Rust lints](lints.md): shared lint commands and links to individual rules.
 - [Crate structure](crates.md): crate responsibilities and dependency direction.
 - [TrunkIR](ir.md): dialect definitions and typed IR APIs.
 - [Salsa](../salsa.md): query and incremental computation guidance.

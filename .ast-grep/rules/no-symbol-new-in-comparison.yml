@@ -1,0 +1,25 @@
+id: no-symbol-new-in-comparison
+language: Rust
+severity: error
+message: Avoid constructing a temporary Symbol from a literal for comparison.
+note: >-
+  Use trunk_ir::symbol!("...") for a registered literal, or compare with the
+  string directly when text comparison is intended. This syntax-only rule
+  does not resolve types or check whether the literal is registered.
+rule:
+  all:
+    - pattern: $CTOR($TEXT)
+    - inside:
+        any:
+          - pattern: $LEFT == $RIGHT
+          - pattern: $LEFT != $RIGHT
+        stopBy:
+          not:
+            kind: parenthesized_expression
+constraints:
+  CTOR:
+    regex: '^(::)?(trunk_ir::(symbol::)?)?Symbol::new$'
+  TEXT:
+    any:
+      - kind: string_literal
+      - kind: raw_string_literal
