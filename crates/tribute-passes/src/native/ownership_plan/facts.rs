@@ -318,6 +318,17 @@ fn build_aliases(
     let mut aliases = HashMap::default();
     for &block in blocks {
         for &op in &ctx.block(block).ops {
+            if let Ok(from_raw) = tribute_ir::dialect::tribute_rt::FromRaw::from_op(ctx, op) {
+                // The result is a fresh owned value, like an allocation's.
+                if !is_core_ptr_type(ctx, ctx.value_ty(from_raw.ptr(ctx)))
+                    || !is_managed_value(ctx, from_raw.result(ctx), managed_layouts)
+                {
+                    return Err(OwnershipPlanError::new(
+                        "tribute_rt.from_raw must take a core.ptr and produce a managed reference",
+                    ));
+                }
+                continue;
+            }
             if !(adt::RefCast::matches(ctx, op)
                 || adt::VariantCast::matches(ctx, op)
                 || core::UnrealizedConversionCast::matches(ctx, op))
@@ -331,13 +342,18 @@ fn build_aliases(
             let output_managed = is_managed_value(ctx, *output, managed_layouts);
             let input_data = ctx.get_type(ctx.value_ty(*input));
             let output_data = ctx.get_type(ctx.value_ty(*output));
-            if input_data.dialect == "core"
-                && input_data.name == "ptr"
-                && output_data.dialect == "adt"
-                && output_data.name == "typeref"
-            {
+            // A cast cannot say whether a unit moves, so only the explicit
+            // transfers cross between a raw pointer and a managed reference.
+            if input_data.dialect == "core" && input_data.name == "ptr" && output_managed {
                 return Err(OwnershipPlanError::new(format!(
-                    "raw pointer alias {op:?} masquerades as managed adt.typeref: {} -> {}",
+                    "raw pointer alias {op:?} masquerades as a managed reference; use tribute_rt.from_raw: {} -> {}",
+                    ctx.value_ty(*input),
+                    ctx.value_ty(*output)
+                )));
+            }
+            if input_managed && output_data.dialect == "core" && output_data.name == "ptr" {
+                return Err(OwnershipPlanError::new(format!(
+                    "managed reference {op:?} is viewed as a raw pointer; use tribute_rt.into_raw: {} -> {}",
                     ctx.value_ty(*input),
                     ctx.value_ty(*output)
                 )));
@@ -362,19 +378,7 @@ fn build_aliases(
             // handoff, not a `core.ptr` provenance rule.
             let callable_handoff = core::UnrealizedConversionCast::matches(ctx, op)
                 && func::FuncSig::from_type_ref(ctx, ctx.value_ty(*output)).is_some();
-            if input_managed
-                && is_internal_closure_layout(ctx, ctx.value_ty(*input), managed_layouts)
-                && is_core_ptr_type(ctx, ctx.value_ty(*output))
-            {
-                return Err(OwnershipPlanError::new(
-                    "internal _closure to core.ptr handoff requires tribute_rt.into_raw",
-                ));
-            }
-            // A managed reference viewed as `core.ptr` is read in place. The
-            // view borrows the reference, so its uses keep the owner live.
-            let raw_view = core::UnrealizedConversionCast::matches(ctx, op)
-                && is_core_ptr_type(ctx, ctx.value_ty(*output));
-            if input_managed && (output_managed || callable_handoff || raw_view) {
+            if input_managed && (output_managed || callable_handoff) {
                 let root = aliases.get(input).copied().unwrap_or(*input);
                 aliases.insert(*output, root);
                 if output_managed {
