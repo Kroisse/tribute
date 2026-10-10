@@ -30,6 +30,7 @@ pub mod io;
 pub mod list;
 pub mod ownership_lowering;
 pub mod ownership_plan;
+mod ownership_transfers;
 pub mod rc_lowering;
 pub mod rc_materialization;
 pub mod rc_optimization;

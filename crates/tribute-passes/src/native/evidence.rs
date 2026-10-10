@@ -242,7 +242,6 @@ fn lower_evidence_dispatch_operand(
         || get_physical_closure_convention(ctx, ctx.value_ty(value)).is_some()
     {
         tribute_rt::IntoRaw::operands(value)
-            .results(ptr_ty)
             .build(ctx, loc)
             .op_ref()
     } else {

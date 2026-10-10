@@ -9,8 +9,6 @@
 //! - `tribute_rt.unbox_float` → `clif.load`
 //! - `tribute_rt.box_bool` → `clif.call @__tribute_alloc` + `clif.store`
 //! - `tribute_rt.unbox_bool` → `clif.load`
-//! - `tribute_rt.into_raw` → `core.unrealized_conversion_cast`
-//! - `tribute_rt.from_raw` → `core.unrealized_conversion_cast`
 //!
 //! ## Allocation Strategy
 //!
@@ -172,9 +170,7 @@ fn lower(
             i64_ty,
             i32_ty,
         })
-        .add_pattern(UnboxBoolPattern { i32_ty })
-        .add_pattern(IntoRawPattern { ptr_ty })
-        .add_pattern(FromRawPattern);
+        .add_pattern(UnboxBoolPattern { i32_ty });
 
     let target = tribute_rt_to_clif_target();
     applicator
@@ -188,58 +184,6 @@ fn tribute_rt_to_clif_target() -> ConversionTarget {
         .illegal_dialect("tribute_rt")
         .legal_op("tribute_rt", "retain")
         .legal_op("tribute_rt", "release")
-}
-
-// =============================================================================
-// Ownership-boundary conversion
-// =============================================================================
-
-/// `into_raw` has already consumed and validated a typed ownership unit. Its
-/// remaining work is only the native representation conversion; later native
-/// cast lowering resolves the explicit `core.ptr` identity.
-struct IntoRawPattern {
-    ptr_ty: TypeRef,
-}
-
-impl RewritePattern for IntoRawPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(into_raw) = tribute_rt::IntoRaw::from_op(ctx, op) else {
-            return false;
-        };
-        let cast = core::UnrealizedConversionCast::operands(into_raw.value(ctx))
-            .results(self.ptr_ty)
-            .build(ctx, ctx.op(op).location);
-        rewriter.replace_op(cast.op_ref());
-        true
-    }
-}
-
-/// `from_raw` has already given ownership planning its unit. What remains is
-/// the representation conversion to the type its result declares.
-struct FromRawPattern;
-
-impl RewritePattern for FromRawPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(from_raw) = tribute_rt::FromRaw::from_op(ctx, op) else {
-            return false;
-        };
-        let result_ty = ctx.op_result_types(op)[0];
-        let cast = core::UnrealizedConversionCast::operands(from_raw.ptr(ctx))
-            .results(result_ty)
-            .build(ctx, ctx.op(op).location);
-        rewriter.replace_op(cast.op_ref());
-        true
-    }
 }
 
 // =============================================================================
@@ -616,41 +560,6 @@ mod tests {
         assert!(
             output.contains("tribute_rt.release"),
             "release should be preserved"
-        );
-    }
-
-    #[test]
-    fn test_into_raw_lowers_to_the_explicit_native_conversion() {
-        let output = run_pass(
-            r#"core.module @test {
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
-  func.func @f(%closure: !_closure) -> core.ptr {
-    %raw = tribute_rt.into_raw %closure : core.ptr
-    func.return %raw
-  }
-}"#,
-        );
-        assert!(!output.contains("tribute_rt.into_raw"), "{output}");
-        assert!(
-            output.contains("core.unrealized_conversion_cast"),
-            "{output}"
-        );
-    }
-
-    #[test]
-    fn test_from_raw_lowers_to_the_explicit_native_conversion() {
-        let output = run_pass(
-            r#"core.module @test {
-  func.func @f(%raw: core.ptr) -> core.bytes {
-    %bytes = tribute_rt.from_raw %raw : core.bytes
-    func.return %bytes
-  }
-}"#,
-        );
-        assert!(!output.contains("tribute_rt.from_raw"), "{output}");
-        assert!(
-            output.contains("core.unrealized_conversion_cast"),
-            "{output}"
         );
     }
 }

@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn descriptor_of_an_unmanaged_pointer_or_scalar_is_rejected() {
-        for ty in ["core.ptr", "core.i32", "core.bytes"] {
+        for ty in ["core.ptr", "core.i32", "core.array<core.i32>"] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,

@@ -12,10 +12,11 @@ use trunk_ir::pass::{Pass, PassRunError, PassRunResult};
 
 use super::ownership_plan::{NativeOwnershipPlanOptions, build_native_ownership_plan};
 use super::type_converter::native_type_converter;
-use super::{adapt_closure_layout, rc_materialization, rtti, struct_to_mem};
+use super::{adapt_closure_layout, ownership_transfers, rc_materialization, rtti, struct_to_mem};
 
 /// Plan ownership, materialize its RC operations, declare the RTTI layouts,
-/// adapt closure layouts, and lower struct field accesses to `mem.struct`.
+/// adapt closure layouts, lower struct field accesses to `mem.struct`, and
+/// lower the ownership transfers to conversions.
 pub struct LowerNativeOwnership {
     pub options: NativeOwnershipPlanOptions,
 }
@@ -52,6 +53,9 @@ impl Pass for LowerNativeOwnership {
         // descriptors.
         let (type_converter, _) = native_type_converter(ctx);
         struct_to_mem::lower(ctx, module, &plan, &type_converter);
+        // The plan is spent, so the transfers it validated are now only
+        // changes of type.
+        ownership_transfers::lower(ctx, module);
         Ok(())
     }
 }

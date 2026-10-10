@@ -368,14 +368,24 @@ mod tests {
   !raw = core.ptr
   !int = tribute_rt.int
   !bytes = core.bytes
+  !callable = closure.closure<func.func_sig<() -> core.nil>>
+  !array = core.array<core.i32>
 }"#,
         );
         let alias = |name| ctx.type_alias_by_text(name).expect("fixture alias");
 
-        for name in ["point", "point_ref", "choice", "any", "small"] {
+        for name in [
+            "point",
+            "point_ref",
+            "choice",
+            "any",
+            "small",
+            "bytes",
+            "callable",
+        ] {
             assert!(ManagedRef::matches(&ctx, alias(name)), "{name}");
         }
-        for name in ["raw", "int", "bytes"] {
+        for name in ["raw", "int", "array"] {
             assert!(!ManagedRef::matches(&ctx, alias(name)), "{name}");
         }
     }
