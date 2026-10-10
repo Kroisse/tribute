@@ -18,6 +18,8 @@ mod unify;
 
 pub use error::{LocatedSolveError, SolveError};
 
+use std::collections::VecDeque;
+
 use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::smallvec::SmallVec;
@@ -80,7 +82,7 @@ pub struct TypeSolver<'db> {
     /// Counter for fresh row variables.
     next_row_var: u64,
     /// Expression relations survive each equality/row and deferred-method round.
-    pending_relations: Vec<Constraint<'db>>,
+    pending_relations: VecDeque<Constraint<'db>>,
     pending_row_unions: Vec<(crate::ast::RowUnion<'db>, Option<ConstraintOrigin>)>,
     pending_row_removals: Vec<(
         crate::ast::RowRemoval<'db>,
@@ -114,7 +116,7 @@ impl<'db> TypeSolver<'db> {
             type_subst: TypeSubst::new(),
             row_subst: RowSubst::new(),
             next_row_var: 0,
-            pending_relations: Vec::new(),
+            pending_relations: VecDeque::new(),
             pending_row_unions: Vec::new(),
             pending_row_removals: Vec::new(),
             pending_row_eqs: Vec::new(),
@@ -244,7 +246,12 @@ impl<'db> TypeSolver<'db> {
                 self.pending_row_eqs.len(),
             );
             let protected = self.protected_relation_results();
-            for relation in std::mem::take(&mut self.pending_relations) {
+            // The relations not solved yet stay pending while one is solved,
+            // so a row equality it raises waits for them.
+            for _ in 0..self.pending_relations.len() {
+                let Some(relation) = self.pending_relations.pop_front() else {
+                    break;
+                };
                 let outcome = match &relation {
                     Constraint::TypeCoerce(actual, expected, origin) => {
                         let actual = self.type_subst.apply(self.db, *actual);
@@ -277,7 +284,7 @@ impl<'db> TypeSolver<'db> {
                 };
                 match outcome {
                     Ok(true) => {}
-                    Ok(false) => self.pending_relations.push(relation),
+                    Ok(false) => self.pending_relations.push_back(relation),
                     Err(error) => {
                         first_error.get_or_insert(error);
                     }
@@ -475,7 +482,7 @@ impl<'db> TypeSolver<'db> {
                 Ok(())
             }
             relation @ (Constraint::TypeCoerce(..) | Constraint::TypeJoin { .. }) => {
-                self.pending_relations.push(relation);
+                self.pending_relations.push_back(relation);
                 Ok(())
             }
             Constraint::TypeEq(t1, t2) => {
