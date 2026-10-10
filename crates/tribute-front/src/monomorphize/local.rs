@@ -8,12 +8,12 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use super::MonomorphizeMetadata;
 use super::instance::InstanceKeys;
 use crate::ast::visit::{
-    RefSite, Visit, VisitMut, walk_expr_mut, walk_pattern, walk_pattern_mut, walk_stmt,
-    walk_stmt_mut,
+    RefSite, Visit, VisitMut, walk_expr, walk_expr_mut, walk_handler_arm, walk_pattern,
+    walk_pattern_mut, walk_stmt, walk_stmt_mut,
 };
 use crate::ast::{
-    CallingConvention, Decl, EffectRow, EffectVar, Expr, ExprKind, LocalId, NodeId, Pattern,
-    PatternKind, ResolvedRef, Stmt, Type, TypedRef, collect_effect_vars,
+    CallingConvention, Decl, EffectRow, EffectVar, Expr, ExprKind, HandlerArm, HandlerKind,
+    LocalId, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypedRef, collect_effect_vars,
 };
 use crate::typeck::{RowSubst, TypeSubst};
 
@@ -61,15 +61,7 @@ fn split_local_lambdas<'db>(
         };
         // The lambdas a `let` binds, by the local they bind.
         let mut bindings = HashMap::default();
-        let mut next_local = 0;
         function.body.for_each(|expr| {
-            if let ExprKind::Var(TypedRef {
-                resolved: ResolvedRef::Local { id, .. },
-                ..
-            }) = &*expr.kind
-            {
-                next_local = next_local.max(id.raw().saturating_add(1));
-            }
             let ExprKind::Block { stmts, .. } = &*expr.kind else {
                 return;
             };
@@ -79,11 +71,9 @@ fn split_local_lambdas<'db>(
                         local_id: Some(local),
                         ..
                     } = &*pattern.kind
+                    && matches!(&*value.kind, ExprKind::Lambda { .. })
                 {
-                    next_local = next_local.max(local.raw().saturating_add(1));
-                    if matches!(&*value.kind, ExprKind::Lambda { .. }) {
-                        bindings.insert(*local, (pattern.id, value.id));
-                    }
+                    bindings.insert(*local, (pattern.id, value.id));
                 }
             }
         });
@@ -137,6 +127,13 @@ fn split_local_lambdas<'db>(
                 }
             }
         });
+        // A copy's locals must differ from every local of the function.
+        let mut locals = Locals::default();
+        for param in &function.params {
+            locals.reserve(param.local_id);
+        }
+        locals.visit_expr(&function.body);
+        let mut next_local = locals.next;
         let mut copies = Vec::new();
         let mut uses: Vec<_> = uses.into_iter().collect();
         uses.sort_by_key(|(local, _)| local.raw());
@@ -294,6 +291,62 @@ impl<'db> VisitMut<TypedRef<'db>> for Split<'_, 'db> {
             && let Some(copy) = self.copies.iter().find(|copy| copy.uses.contains(&node))
         {
             *id = copy.local;
+        }
+    }
+}
+
+/// The first local identity a function does not use.
+#[derive(Default)]
+struct Locals {
+    next: u32,
+}
+
+impl Locals {
+    fn reserve(&mut self, local: Option<LocalId>) {
+        if let Some(local) = local.filter(|local| !local.is_unresolved()) {
+            self.next = self.next.max(local.raw() + 1);
+        }
+    }
+}
+
+impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for Locals {
+    fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
+        match &*expr.kind {
+            ExprKind::Lambda { params, .. } => {
+                for param in params {
+                    self.reserve(param.local_id);
+                }
+            }
+            ExprKind::Resume { local_id, .. } => self.reserve(*local_id),
+            _ => {}
+        }
+        walk_expr(self, expr);
+    }
+
+    fn visit_handler_arm(&mut self, arm: &'ast HandlerArm<TypedRef<'db>>) {
+        if let HandlerKind::Op {
+            resume_local_id, ..
+        } = &arm.kind
+        {
+            self.reserve(*resume_local_id);
+        }
+        walk_handler_arm(self, arm);
+    }
+
+    fn visit_pattern(&mut self, pattern: &'ast Pattern<TypedRef<'db>>) {
+        match &*pattern.kind {
+            PatternKind::Bind { local_id, .. } | PatternKind::As { local_id, .. } => {
+                self.reserve(*local_id);
+            }
+            PatternKind::ListRest { rest_local_id, .. } => self.reserve(*rest_local_id),
+            _ => {}
+        }
+        walk_pattern(self, pattern);
+    }
+
+    fn visit_ref(&mut self, _: RefSite, _: NodeId, value: &'ast TypedRef<'db>) {
+        if let ResolvedRef::Local { id, .. } = &value.resolved {
+            self.reserve(Some(*id));
         }
     }
 }

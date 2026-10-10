@@ -3191,3 +3191,40 @@ fn main() ->{Io} Nil {
         "io!!\nio!a??+b?\na..b.",
     );
 }
+
+/// A let-bound lambda copied inside a handler arm that resumes: the copy's
+/// locals stay apart from the arm's continuation.
+#[test]
+fn a_let_bound_lambda_is_copied_inside_a_resuming_handler_arm() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "let_bound_lambda_in_handler_arm.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> String
+}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+fn ask_once(f: fn(String) ->{Ask} String, s: String) ->{Ask} String { f(s) }
+
+fn main() ->{Io} Nil {
+    let answer = handle Ask::ask() <> "." {
+        do value { value }
+        op Ask::ask() {
+            let g = fn(s: String) app(s, fn(t) t <> "!")
+            let pure = twice(g, "x")
+            let asked = handle ask_once(g, "y") {
+                do value { value }
+                op Ask::ask() { resume "+" }
+            }
+            resume pure <> asked
+        }
+    }
+    print_line(answer)
+}
+"#,
+        "x!!y!.",
+    );
+}
