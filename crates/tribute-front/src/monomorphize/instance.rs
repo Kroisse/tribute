@@ -12,7 +12,7 @@ use super::MonomorphizeMetadata;
 use crate::ast::visit::{Visit, walk_expr, walk_pattern};
 use crate::ast::{
     AbilityId, CallingConvention, Decl, EffectVar, Expr, ExprKind, FuncDecl, FuncDefId, Module,
-    NodeId, Pattern, PatternKind, RowClasses, Type, TypeKind, TypeScheme, TypedRef,
+    NodeId, Pattern, PatternKind, RowClasses, Stmt, Type, TypeKind, TypeScheme, TypedRef,
     calling_convention_for_effect_row_in, collect_effect_vars,
 };
 use crate::typeck::{FunctionInstance, FunctionInstanceOrigin};
@@ -158,6 +158,97 @@ impl<'db> InstanceKeys<'db> {
         (!key.type_args.is_empty() || key.has_weaker_class()).then_some(key)
     }
 
+    /// The class of each of `rows` inside the instance `enclosing`.
+    pub(crate) fn classes_of_rows(
+        &self,
+        rows: &[crate::ast::EffectRow<'db>],
+        enclosing: &Symbol,
+    ) -> Vec<CallingConvention> {
+        let classes: &RowClasses = self.row_classes.get(enclosing).map_or(&[], Vec::as_slice);
+        rows.iter()
+            .map(|row| {
+                calling_convention_for_effect_row_in(self.db, *row, &self.abilities, classes)
+            })
+            .collect()
+    }
+
+    /// Fix the class of each row variable a let-bound lambda of `decls`
+    /// quantifies, inside the instance that binds it: the join of the classes
+    /// its uses select. Returns whether a class changed.
+    pub(crate) fn settle_local_classes(
+        &mut self,
+        decls: &[Decl<TypedRef<'db>>],
+        metadata: &MonomorphizeMetadata<'db>,
+    ) -> bool {
+        let mut changed = false;
+        for decl in decls {
+            let Decl::Function(function) = decl else {
+                continue;
+            };
+            // The lambda each `let` binds, by its pattern.
+            let mut bound = HashMap::default();
+            function.body.for_each(|expr| {
+                let ExprKind::Block { stmts, .. } = &*expr.kind else {
+                    return;
+                };
+                for stmt in stmts {
+                    if let Stmt::Let { pattern, value, .. } = stmt
+                        && matches!(&*value.kind, ExprKind::Lambda { .. })
+                    {
+                        bound.insert(pattern.id, value.id);
+                    }
+                }
+            });
+            let enclosing = self.row_classes.get(&function.name);
+            let mut classes = enclosing.cloned().unwrap_or_default();
+            let mut locals: Vec<(EffectVar, CallingConvention)> = Vec::new();
+            function.body.for_each(|expr| {
+                let Some(instance) = metadata.local_instances.get(&expr.id) else {
+                    return;
+                };
+                let Some(signature) = bound
+                    .get(&instance.binding)
+                    .and_then(|lambda| metadata.lambda_signatures.get(lambda))
+                else {
+                    return;
+                };
+                // The lambda's own type spells the rows its scheme quantifies
+                // with the variables its body uses.
+                let quantified = collect_effect_vars(self.db, instance.scheme.body(self.db));
+                let spelled = collect_effect_vars(self.db, signature.function_type);
+                if quantified.len() != spelled.len() {
+                    return;
+                }
+                let variables = instance.scheme.effect_params(self.db);
+                for (variable, row) in variables.iter().zip(&instance.row_arguments) {
+                    let Some(at) = quantified.iter().position(|var| var == variable) else {
+                        continue;
+                    };
+                    let class = calling_convention_for_effect_row_in(
+                        self.db,
+                        *row,
+                        &self.abilities,
+                        &classes,
+                    );
+                    match locals.iter_mut().find(|(local, _)| *local == spelled[at]) {
+                        Some((_, joined)) => *joined = joined.join(class),
+                        None => locals.push((spelled[at], class)),
+                    }
+                }
+            });
+            if locals.is_empty() {
+                continue;
+            }
+            classes.retain(|(variable, _)| !locals.iter().any(|(local, _)| local == variable));
+            classes.extend(locals);
+            if enclosing != Some(&classes) {
+                self.row_classes.insert(function.name.clone(), classes);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Record the classes of the instance `name` of `function` that `key`
     /// selects.
     pub(crate) fn record(
@@ -258,6 +349,15 @@ impl<'db> Definition<'db> {
                 }
                 if let Some(ty) = self.metadata.node_types.get(&id) {
                     collect_ability_argument_tails(self.db, *ty, &mut self.excluded);
+                }
+                // A row passed for the row variable of a let-bound callable
+                // decides that callable's class.
+                if let Some(local) = self.metadata.local_instances.get(&id) {
+                    let tails = local
+                        .row_arguments
+                        .iter()
+                        .filter_map(|row| row.rest(self.db));
+                    self.callable_tails.extend(tails);
                 }
                 if let Some(instance) = self.metadata.function_instances.get(&id) {
                     if matches!(
