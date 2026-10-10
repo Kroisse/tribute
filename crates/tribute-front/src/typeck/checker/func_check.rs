@@ -598,7 +598,18 @@ impl<'db> TypeChecker<'db> {
 
             for mc in std::mem::take(&mut deferred) {
                 let resolved_receiver = solver.type_subst().apply(self.db(), mc.receiver_ty);
-                if let super::expr::MethodSelection::One(entry) =
+                if mc.path.is_none()
+                    && mc.arg_types.len() == 1
+                    && let Some(field_ty) =
+                        self.lookup_struct_field_type(resolved_receiver, &mc.method)
+                    && let Some(instance) =
+                        self.field_getter_instance(resolved_receiver, mc.method.clone(), field_ty)
+                {
+                    resolved.insert(mc.node_id, (instance.function, instance.callable));
+                    instances.insert(mc.node_id, instance);
+                    new_constraints.add_type_eq(mc.result_ty, field_ty);
+                    solver.resolve_producer(mc.node_id);
+                } else if let super::expr::MethodSelection::One(entry) =
                     self.select_method(&mc.method, mc.path.as_ref(), resolved_receiver)
                 {
                     // Method found — instantiate the TypeScheme to get fresh types
@@ -686,6 +697,7 @@ impl<'db> TypeChecker<'db> {
                 // has only the functions its path names, so it is final here.
                 for mc in &remaining {
                     self.report_unresolved_method_path(solver, mc);
+                    self.report_field_called_with_arguments(solver, mc);
                 }
                 break;
             }
@@ -739,6 +751,39 @@ impl<'db> TypeChecker<'db> {
         Diagnostic::new(
             message,
             self.get_span(*path),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+        .accumulate(self.db());
+    }
+
+    /// Report an unqualified call that names a field of its receiver and
+    /// passes arguments: a field's getter takes none.
+    fn report_field_called_with_arguments(
+        &self,
+        solver: &TypeSolver<'db>,
+        call: &crate::typeck::func_context::DeferredMethodCall<'db>,
+    ) {
+        if call.path.is_some() || call.arg_types.len() == 1 {
+            return;
+        }
+        let receiver = solver.type_subst().apply(self.db(), call.receiver_ty);
+        if self
+            .lookup_struct_field_type(receiver, &call.method)
+            .is_none()
+        {
+            return;
+        }
+        Diagnostic::new(
+            format!(
+                "`{}` is a field of `{receiver}` and takes no arguments, but {} given",
+                call.method,
+                match call.arg_types.len() - 1 {
+                    1 => "1 was".to_string(),
+                    count => format!("{count} were"),
+                },
+            ),
+            self.get_span(call.node_id),
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )

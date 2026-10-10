@@ -3228,3 +3228,30 @@ fn main() ->{Io} Nil {
         "x!!y!.",
     );
 }
+
+/// A field read whose receiver type is known only after solving, such as a
+/// call's result, selects the field's getter like a read of a local.
+#[test]
+fn a_field_is_read_from_a_receiver_typed_after_solving() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "field_read_on_call_result.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct Name { text: String }
+struct Pair(a) { first: a, second: a }
+
+fn id(x: a) -> a { x }
+fn make() -> Name { Name { text: "io" } }
+
+fn main() ->{Io} Nil {
+    print_line(make().text)
+    let name = id(Name { text: "io" }).text::modify(fn(text) text <> "!")
+    print_line(name.text)
+    print_line(id(Pair { first: "a", second: "b" }).second)
+    print_line({ make() }.text <> "?")
+}
+"#,
+        "io\nio!\nb\nio?",
+    );
+}

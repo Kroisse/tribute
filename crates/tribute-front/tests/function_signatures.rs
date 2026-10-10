@@ -338,3 +338,23 @@ fn main() -> Nil { }
     assert!(scheme.row_unions(db).is_empty());
     assert!(scheme.row_removals(db).is_empty());
 }
+
+/// A field's getter takes no arguments, whether or not the receiver's type
+/// is known when the call is inferred.
+#[salsa_test]
+fn a_field_read_with_arguments_is_reported(db: &salsa::DatabaseImpl) {
+    let text = r#"struct Name { text: String }
+
+fn id(x: a) -> a { x }
+
+fn known(name: Name) -> String { name.text("a") }
+fn solved_later(name: Name) -> String { id(name).text("a", "b") }
+"#;
+    assert_eq!(
+        errors(db, text),
+        [
+            "`text` is a field of `Name` and takes no arguments, but 1 was given",
+            "`text` is a field of `Name` and takes no arguments, but 2 were given",
+        ]
+    );
+}
