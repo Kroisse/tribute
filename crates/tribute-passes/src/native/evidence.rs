@@ -93,9 +93,11 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
     let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
     let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
     // Evidence is a managed reference: the runtime borrows evidence arguments
-    // and returns a result the caller owns. A dispatch closure crosses as a
-    // raw pointer, handed over by `tribute_rt.into_raw` or received as a unit.
+    // and returns a result the caller owns, which includes the dispatch
+    // closure it looks up. A closure handed to the runtime crosses as a raw
+    // pointer through `tribute_rt.into_raw`.
     let ev_ty = ability::evidence_adt_type_ref(ctx);
+    let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     for (name, params, result) in [
         (evidence_abi::EMPTY, &[][..], ev_ty),
         (evidence_abi::LOOKUP, &[ev_ty, i32_ty][..], i32_ty),
@@ -107,7 +109,7 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         (evidence_abi::MASK, &[ev_ty, i32_ty][..], ev_ty),
         (evidence_abi::DUP, &[ev_ty, i32_ty][..], ev_ty),
         (evidence_abi::OUTER, &[ev_ty, i32_ty][..], ev_ty),
-        (evidence_abi::LOOKUP_TR, &[ev_ty, i32_ty][..], ptr_ty),
+        (evidence_abi::LOOKUP_TR, &[ev_ty, i32_ty][..], closure_ty),
         (evidence_abi::TAIL, &[ev_ty, i32_ty][..], ev_ty),
         (evidence_abi::WITH_TAIL, &[ev_ty, i32_ty, ev_ty][..], ev_ty),
         (evidence_abi::PUSH, &[ev_ty, ev_ty, i32_ty][..], ev_ty),
@@ -290,30 +292,9 @@ impl RewritePattern for LowerEffectExtendToNative {
             .results([ctx.op_result_types(op)[0]])
             .build(ctx, loc);
         rewriter.insert_op(extend_call.op_ref());
-        replace_with_runtime_call_result(ctx, op, extend_call, rewriter);
+        rewriter.erase_op(vec![extend_call.result(ctx)]);
         true
     }
-}
-
-/// Replace `op` with the `core.ptr` evidence handle `call` returns.
-///
-/// Uses keep the declared evidence type until native type conversion.
-fn replace_with_runtime_call_result(
-    ctx: &mut IrContext,
-    op: OpRef,
-    call: func::Call,
-    rewriter: &mut PatternRewriter<'_>,
-) {
-    let evidence_ty = ctx.op_result_types(op)[0];
-    let mut evidence = call.result(ctx);
-    if evidence_ty != ctx.value_ty(evidence) {
-        let cast = core::UnrealizedConversionCast::operands(evidence)
-            .results(evidence_ty)
-            .build(ctx, ctx.op(op).location);
-        rewriter.insert_op(cast.op_ref());
-        evidence = cast.result(ctx);
-    }
-    rewriter.erase_op(vec![evidence]);
 }
 
 /// `effect.mask` / `effect.dup` / `effect.outer` → the runtime call of the
@@ -352,7 +333,7 @@ impl RewritePattern for LowerEffectStackOpToNative {
             .results([ctx.op_result_types(op)[0]])
             .build(ctx, loc);
         rewriter.insert_op(call.op_ref());
-        replace_with_runtime_call_result(ctx, op, call, rewriter);
+        rewriter.erase_op(vec![call.result(ctx)]);
         true
     }
 }
@@ -402,7 +383,7 @@ impl RewritePattern for LowerEffectTailOpToNative {
             .results([ctx.op_result_types(op)[0]])
             .build(ctx, loc);
         rewriter.insert_op(call.op_ref());
-        replace_with_runtime_call_result(ctx, op, call, rewriter);
+        rewriter.erase_op(vec![call.result(ctx)]);
         true
     }
 }
@@ -425,21 +406,14 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
         }
 
         let loc = ctx.op(op).location;
-        let ptr_ty = core_ptr_type(ctx);
         let ability_id =
             effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
+        // The runtime hands over one unit of the closure it looks up.
+        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
         let dispatch_closure = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
             .callee(SymbolPath::from(evidence_abi::LOOKUP_TR))
-            .results([ptr_ty])
+            .results([closure_ty])
             .build(ctx, loc);
-        rewriter.insert_op(dispatch_closure.op_ref());
-        // The runtime hands over one unit of the closure, so it is an owned
-        // closure value from here on.
-        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let dispatch_closure =
-            core::UnrealizedConversionCast::operands(dispatch_closure.result(ctx))
-                .results(closure_ty)
-                .build(ctx, loc);
         rewriter.insert_op(dispatch_closure.op_ref());
         effect_dispatch::lower_tail_dispatch(ctx, op, dispatch_closure.result(ctx), rewriter);
         true
@@ -477,30 +451,6 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
     }
 }
 
-/// Replace an evidence value with the runtime's `core.ptr` evidence handle.
-///
-/// Uses keep the evidence type they declare (for example an indirect call's
-/// signature), so the handle is cast back to it; the native type conversion
-/// later maps both types to `core.ptr` and removes the cast.
-fn replace_with_runtime_evidence(
-    ctx: &mut IrContext,
-    block: BlockRef,
-    before: OpRef,
-    old_value: ValueRef,
-    handle: ValueRef,
-) {
-    let evidence_ty = ctx.value_ty(old_value);
-    if evidence_ty == ctx.value_ty(handle) {
-        ctx.replace_all_uses(old_value, handle);
-        return;
-    }
-    let cast = core::UnrealizedConversionCast::operands(handle)
-        .results(evidence_ty)
-        .build(ctx, ctx.op(before).location);
-    ctx.insert_op_before(block, before, cast.op_ref());
-    ctx.replace_all_uses(old_value, cast.result(ctx));
-}
-
 fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRunResult {
     // Ops to erase after processing
     let mut ops_to_erase: Vec<OpRef> = Vec::new();
@@ -525,7 +475,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                     .results([result_types[0]])
                     .build(ctx, loc);
                 ctx.insert_op_before(block, op, call.op_ref());
-                replace_with_runtime_evidence(ctx, block, op, old_result, call.result(ctx));
+                ctx.replace_all_uses(old_result, call.result(ctx));
                 ops_to_erase.push(op);
                 continue;
             }
@@ -555,7 +505,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                     .results([result_types[0]])
                     .build(ctx, loc);
                 ctx.insert_op_before(block, op, call.op_ref());
-                replace_with_runtime_evidence(ctx, block, op, old_result, call.result(ctx));
+                ctx.replace_all_uses(old_result, call.result(ctx));
                 ops_to_erase.push(op);
                 continue;
             }
@@ -643,11 +593,14 @@ mod tests {
         );
         prepare_native_evidence_runtime(&mut ctx, module);
         assert_eq!(module.ops(&ctx).len(), 11);
-        // Evidence parameters and results have the managed evidence type; a
-        // dispatch closure crosses as a raw pointer.
+        // Evidence parameters and results have the managed evidence type. A
+        // dispatch closure is handed over as a raw pointer and looked up as a
+        // managed closure.
         let ev_ty = ability::evidence_adt_type_ref(&mut ctx);
         let ev = trunk_ir::printer::print_type(&ctx, ev_ty);
-        let (ev, ptr, i32) = (ev.as_str(), "core.ptr", "core.i32");
+        let closure_ty = crate::closure_lower::closure_struct_type_ref(&mut ctx);
+        let closure = trunk_ir::printer::print_type(&ctx, closure_ty);
+        let (ev, closure, ptr, i32) = (ev.as_str(), closure.as_str(), "core.ptr", "core.i32");
         for (name, params, result) in [
             (evidence_abi::EMPTY, &[][..], ev),
             (evidence_abi::LOOKUP, &[ev, i32][..], i32),
@@ -655,7 +608,7 @@ mod tests {
             (evidence_abi::MASK, &[ev, i32][..], ev),
             (evidence_abi::DUP, &[ev, i32][..], ev),
             (evidence_abi::OUTER, &[ev, i32][..], ev),
-            (evidence_abi::LOOKUP_TR, &[ev, i32][..], ptr),
+            (evidence_abi::LOOKUP_TR, &[ev, i32][..], closure),
             (evidence_abi::TAIL, &[ev, i32][..], ev),
             (evidence_abi::WITH_TAIL, &[ev, i32, ev][..], ev),
             (evidence_abi::PUSH, &[ev, ev, i32][..], ev),

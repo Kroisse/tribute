@@ -172,20 +172,22 @@ and are not visible as source constructors or shared-IR field indices.
 
 ## RC Operations
 
-`tribute_rt` dialect는 두 RC operation과 한 ownership 경계 operation을 제공한다.
+`tribute_rt` dialect는 두 RC operation과 두 ownership 경계 operation을 제공한다.
 
 ```text
 tribute_rt.retain(ptr) -> ptr    // refcount++, return same pointer
 tribute_rt.release(ptr)          // refcount--, free if zero
 tribute_rt.into_raw(value) -> core.ptr // typed ownership unit 하나를 소비
+tribute_rt.from_raw(ptr) -> value      // unit 하나를 가진 typed 값을 만든다
 ```
 
 이 연산은 dialect 수준에서 다음 순서로 처리된다.
 
-1. 네이티브 evidence lowering이 필요한 `into_raw`를 먼저 만든다.
+1. Native lowering이 필요한 `into_raw`와 `from_raw`를 먼저 만든다.
 2. 검증된 type-erasure 전 ownership plan은 `retain`/`release`만 **materialize**하고
-   검증한 `into_raw`를 보존한다.
-3. `into_raw`를 explicit native representation conversion으로 **lower**한다.
+   검증한 `into_raw`와 `from_raw`를 보존한다.
+3. `into_raw`와 `from_raw`를 explicit native representation conversion으로
+   **lower**한다.
 4. RC lowering pass가 retain/release를 inline code로 **lower**한다.
 
 Type erasure 전 RC planning은 검증된 모든 `adt.typeref`를 semantic type에 따라
@@ -203,6 +205,18 @@ Pre-erasure ownership plan이 물리 IR에 명시적으로 materialize한
 `tribute_rt.retain`/`tribute_rt.release`와 검증한 `tribute_rt.into_raw`만 RC 의미를
 보존한다. 따라서 이 operation의 `core.ptr` operand가 RC allocation을 가리킬 수 있다는 사실과
 `core.ptr` 자체가 unmanaged라는 규칙은 모순되지 않는다.
+
+`tribute_rt.from_raw`는 그 역이다. RC object의 payload를 가리키는 `core.ptr`를 받아
+unit 하나를 가진 typed managed 값을 만든다. 결과는 할당의 결과와 같은 새 owned 값이다.
+이 operation은 pointer가 가리키는 object의 layout과 unit의 이전을 만든 쪽이 보장하는
+자리에서만 쓴다. Native lowering이 직접 할당한 object, 그리고 runtime이 raw pointer로
+담아 unit과 함께 넘겨준 object가 그런 자리다. RC header가 없는 memory를 managed 값으로
+바꾸는 수단이 아니다.
+
+`core.ptr`와 managed reference 사이를 오가는 길은 이 두 operation뿐이다. 둘 사이의
+`core.unrealized_conversion_cast`는 ownership의 의미를 말하지 못하므로 ownership
+planning이 거부한다. Managed reference의 payload를 `core.ptr`로 빌려 제자리에서 읽는
+operation은 없으며, 그런 읽기는 값을 빌리는 runtime 함수 호출로 한다.
 
 ### Inline Lowering
 
@@ -345,11 +359,6 @@ evidence type은 [evidence](#evidence) 객체에 대한 managed 참조다.
 Function/code address, borrowed buffer, `core.ptr`, 그 밖의 `core.array`는
 unmanaged다. 변환 결과가 pointer라는
 사실은 이 분류에 참여하지 않는다.
-
-Managed reference를 `core.ptr`로 보는 unrealized cast는 payload를 제자리에서 읽기
-위한 view이며 그 reference를 빌린다. View의 사용은 원래 값의 사용으로 세므로 owner는
-마지막 view 사용 뒤에 release된다. 반대로 `core.ptr`에서 managed reference를 받는
-cast의 결과는 unit 하나를 가진 새 owned 값이다.
 
 Residual structured region, stale nominal identity, malformed callable metadata,
 duplicate/conflicting action 또는 SSA remapping ambiguity는 plan 생성 전체를

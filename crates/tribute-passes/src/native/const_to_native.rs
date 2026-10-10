@@ -20,6 +20,7 @@ use hashbrown::hash_map::EntryRef;
 use crate::collections::{HashMap, HashSet};
 
 use tribute_ir::dialect::adt;
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -402,10 +403,10 @@ impl RewritePattern for BytesConstNativePattern {
             self.i32_ty,
         );
 
-        // The allocation is a `core.ptr`; uses still declare the constant's
-        // type until native type conversion runs.
+        // The allocation is a `core.ptr` to a new object; the constant is the
+        // owned managed value it holds.
         let result_ty = ctx.op_result_types(op)[0];
-        let typed = core::UnrealizedConversionCast::operands(payload)
+        let typed = tribute_rt::FromRaw::operands(payload)
             .results(result_ty)
             .build(ctx, loc);
 
@@ -474,7 +475,7 @@ impl RewritePattern for StringConstNativePattern {
         // The allocation is a `core.ptr`; the `Leaf` field takes the `Bytes`
         // object it points to as an owned managed value.
         let bytes_ty = core::bytes(ctx).as_type_ref();
-        let bytes = core::UnrealizedConversionCast::operands(bytes_payload)
+        let bytes = tribute_rt::FromRaw::operands(bytes_payload)
             .results(bytes_ty)
             .build(ctx, loc);
         let variant_new = adt::VariantNew::operands([bytes.result(ctx)])

@@ -13,7 +13,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
-use tribute_ir::dialect::tribute_io;
+use tribute_ir::dialect::{tribute_io, tribute_rt};
 use trunk_ir::SymbolPath;
 
 const WRITE_FN: &str = "__tribute_io_write";
@@ -158,20 +158,20 @@ impl RewritePattern for NativeReadLinePattern {
             .results(i32_ty)
             .build(ctx, loc);
         // The descriptor's Bytes fields are runtime pointers that the
-        // descriptor transfers to the caller; load them as pointers and view
-        // them as the Bytes references they are.
+        // descriptor transfers to the caller; load them as pointers and take
+        // over the unit of each.
         let bytes_ptr = mem::Load::operands(descriptor_value)
             .offset(BYTES_OFFSET)
             .results(ptr_ty)
             .build(ctx, loc);
-        let bytes = core::UnrealizedConversionCast::operands(bytes_ptr.result(ctx))
+        let bytes = tribute_rt::FromRaw::operands(bytes_ptr.result(ctx))
             .results(bytes_ty)
             .build(ctx, loc);
         let message_ptr = mem::Load::operands(descriptor_value)
             .offset(MESSAGE_OFFSET)
             .results(ptr_ty)
             .build(ctx, loc);
-        let message = core::UnrealizedConversionCast::operands(message_ptr.result(ctx))
+        let message = tribute_rt::FromRaw::operands(message_ptr.result(ctx))
             .results(bytes_ty)
             .build(ctx, loc);
         let dealloc = func::Call::operands([descriptor_value])
