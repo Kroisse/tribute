@@ -119,18 +119,12 @@ fn write_type_mangled(
             params,
             result,
             effect,
-            minimum_convention,
         } => {
             f.write_str("6$0$")?;
             write_type_mangled_list(db, params, row_vars, f)?;
             f.write_str("$1$")?;
             if !effect.is_pure(db) {
                 write_effect_row_mangled(db, *effect, row_vars, f)?;
-            }
-            match minimum_convention {
-                CallingConvention::Direct => {}
-                CallingConvention::EvidenceDirect => f.write_str("4$evidence_direct$")?,
-                CallingConvention::Cps => f.write_str("4$cps$")?,
             }
             write_type_mangled(db, *result, row_vars, f)
         }
@@ -413,7 +407,6 @@ mod tests {
                 params: vec![int_ty],
                 result: bool_ty,
                 effect: crate::ast::EffectRow::new(&db, vec![], None),
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let result = mangle_name(&db, &base, &[func_ty]);
@@ -434,7 +427,6 @@ mod tests {
                 params: vec![],
                 result: Type::new(db, TypeKind::Nat),
                 effect,
-                minimum_convention: CallingConvention::Direct,
             },
         )
     }
@@ -505,23 +497,20 @@ mod tests {
         let db = TestDb::default();
         let base = Symbol::new("f");
         let ask = || EffectRow::single(&db, ability(&db, "Ask", vec![]));
-        let returning = |result, effect, minimum_convention| {
+        let returning = |result, effect| {
             Type::new(
                 &db,
                 TypeKind::Func {
                     params: vec![],
                     result,
                     effect,
-                    minimum_convention,
                 },
             )
         };
         let pure = EffectRow::pure(&db);
-        let direct = CallingConvention::Direct;
-        let cps = CallingConvention::Cps;
 
-        let outer = returning(thunk(&db, pure), ask(), direct);
-        let inner = returning(thunk(&db, ask()), pure, direct);
+        let outer = returning(thunk(&db, pure), ask());
+        let inner = returning(thunk(&db, ask()), pure);
         assert_eq!(
             mangle_name(&db, &base, &[outer]).to_string(),
             "f$6$0$$1$2$Ask$1$6$0$$1$Nat"
@@ -529,23 +518,6 @@ mod tests {
         assert_eq!(
             mangle_name(&db, &base, &[inner]).to_string(),
             "f$6$0$$1$6$0$$1$2$Ask$1$Nat"
-        );
-
-        let outer = returning(thunk(&db, pure), pure, cps);
-        let inner = returning(
-            returning(Type::new(&db, TypeKind::Nat), pure, cps),
-            pure,
-            direct,
-        );
-        assert_ne!(
-            mangle_name(&db, &base, &[outer]),
-            mangle_name(&db, &base, &[inner])
-        );
-
-        let both = returning(Type::new(&db, TypeKind::Nat), ask(), cps);
-        assert_eq!(
-            mangle_name(&db, &base, &[both]).to_string(),
-            "f$6$0$$1$2$Ask$1$4$cps$Nat"
         );
     }
 
@@ -591,32 +563,6 @@ mod tests {
         assert_eq!(name(&[int], &[EvidenceDirect, Cps]), "map$Int$9EC");
         assert_eq!(name(&[int], &[Cps, Cps]), "map$Int");
         assert_eq!(name(&[], &[Direct]), "map$9D");
-    }
-
-    #[test]
-    fn test_function_types_mangle_convention_floors_distinctly() {
-        let db = TestDb::default();
-        let base = Symbol::new("f");
-        let func = |minimum_convention| {
-            Type::new(
-                &db,
-                TypeKind::Func {
-                    params: vec![],
-                    result: Type::new(&db, TypeKind::Nat),
-                    effect: EffectRow::pure(&db),
-                    minimum_convention,
-                },
-            )
-        };
-
-        assert_eq!(
-            mangle_name(&db, &base, &[func(CallingConvention::EvidenceDirect)]).to_string(),
-            "f$6$0$$1$4$evidence_direct$Nat"
-        );
-        assert_eq!(
-            mangle_name(&db, &base, &[func(CallingConvention::Cps)]).to_string(),
-            "f$6$0$$1$4$cps$Nat"
-        );
     }
 
     #[test]
@@ -712,11 +658,7 @@ mod laws {
 
     /// Resolved type arguments: no unification variables, `App`, or
     /// `Continuation`, which mangling rejects.
-    const ARGS: TypeGen = TypeGen::GROUND
-        .bound_vars(2)
-        .row_vars(3)
-        .error(true)
-        .conventions(true);
+    const ARGS: TypeGen = TypeGen::GROUND.bound_vars(2).row_vars(3).error(true);
 
     fn args() -> BoxedStrategy<Vec<TypeShape>> {
         proptest::collection::vec(type_shape(ARGS), 0..=3).boxed()
@@ -796,15 +738,13 @@ mod laws {
                             params: lp,
                             result: lr,
                             effect: le,
-                            convention: lc,
                         },
                         TypeShape::Func {
                             params: rp,
                             result: rr,
                             effect: re,
-                            convention: rc,
                         },
-                    ) => lc == rc && self.lists(lp, rp) && self.rows(le, re) && self.types(lr, rr),
+                    ) => self.lists(lp, rp) && self.rows(le, re) && self.types(lr, rr),
                     (TypeShape::Tuple(l), TypeShape::Tuple(r)) => self.lists(l, r),
                     (left, right) => left == right,
                 }
@@ -867,7 +807,6 @@ mod laws {
                     params,
                     result,
                     effect: EffectRow::pure(&db),
-                    minimum_convention: CallingConvention::Direct,
                 },
             )
         };

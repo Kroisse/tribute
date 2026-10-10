@@ -46,7 +46,7 @@ pub fn calling_convention_for_effect_row_in<'db>(
     convention
 }
 
-/// Derive a convention for a function type, including its explicit ABI lower bound.
+/// Derive a convention for a function type from its effect row.
 pub fn calling_convention_for_function_type<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
@@ -62,16 +62,12 @@ pub fn calling_convention_for_function_type_in<'db>(
     abilities: &HashMap<AbilityId<'db>, CallingConvention>,
     classes: &RowClasses,
 ) -> Option<CallingConvention> {
-    let TypeKind::Func {
-        effect,
-        minimum_convention,
-        ..
-    } = ty.kind(db)
-    else {
+    let TypeKind::Func { effect, .. } = ty.kind(db) else {
         return None;
     };
-    let row = calling_convention_for_effect_row_in(db, *effect, abilities, classes);
-    Some((*minimum_convention).join(row))
+    Some(calling_convention_for_effect_row_in(
+        db, *effect, abilities, classes,
+    ))
 }
 
 #[cfg(test)]

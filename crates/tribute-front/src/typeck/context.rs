@@ -844,24 +844,12 @@ impl<'db> ModuleTypeEnv<'db> {
         result: Type<'db>,
         effect: EffectRow<'db>,
     ) -> Type<'db> {
-        self.func_type_with_convention(params, result, effect, CallingConvention::Direct)
-    }
-
-    /// Create a function type with an explicit calling-convention lower bound.
-    pub fn func_type_with_convention(
-        &self,
-        params: Vec<Type<'db>>,
-        result: Type<'db>,
-        effect: EffectRow<'db>,
-        minimum_convention: CallingConvention,
-    ) -> Type<'db> {
         Type::new(
             self.db,
             TypeKind::Func {
                 params,
                 result,
                 effect,
-                minimum_convention,
             },
         )
     }
@@ -1268,7 +1256,6 @@ mod tests {
                     params: vec![receiver],
                     result: int_ty,
                     effect,
-                    minimum_convention: crate::ast::CallingConvention::Direct,
                 },
             );
             env.register_method(
@@ -1327,7 +1314,6 @@ mod tests {
                 params: params.to_vec(),
                 result,
                 effect: EffectRow::pure(db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         )
     }

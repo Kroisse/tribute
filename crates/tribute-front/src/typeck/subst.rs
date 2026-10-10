@@ -88,7 +88,6 @@ pub fn substitute_bound_vars<'db>(
             params,
             result,
             effect,
-            minimum_convention,
         } => {
             let mut new_params = Vec::with_capacity(params.len());
             for param in params {
@@ -113,7 +112,6 @@ pub fn substitute_bound_vars<'db>(
                     params: new_params,
                     result: new_result,
                     effect: new_effect,
-                    minimum_convention: *minimum_convention,
                 },
             ))
         }
@@ -395,7 +393,6 @@ fn freshen_effect_vars_inner<'db>(
             params,
             result,
             effect,
-            minimum_convention,
         } => Type::new(
             db,
             TypeKind::Func {
@@ -419,7 +416,6 @@ fn freshen_effect_vars_inner<'db>(
                     row_vars,
                 ),
                 effect: freshen_row(*effect, fresh_row_var, row_vars),
-                minimum_convention: *minimum_convention,
             },
         ),
         TypeKind::Tuple(elements) => Type::new(
@@ -499,7 +495,7 @@ fn freshen_effect_vars_inner<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, CallingConvention, EffectRow};
+    use crate::ast::{AbilityId, EffectRow};
     use crate::typeck::TypeSolver;
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
@@ -526,7 +522,6 @@ mod tests {
                 params: vec![],
                 result: nil,
                 effect: EffectRow::open(db, shared_id),
-                minimum_convention: CallingConvention::Direct,
             },
         );
         let row = EffectRow::new(
@@ -543,7 +538,6 @@ mod tests {
                 params: vec![bound],
                 result: bound,
                 effect: row,
-                minimum_convention: CallingConvention::Direct,
             },
         );
         let scheme = TypeScheme::builder(
@@ -590,7 +584,6 @@ mod tests {
                 params: Vec::new(),
                 result: Type::new(db, TypeKind::Nil),
                 effect: EffectRow::new(db, Vec::new(), Some(quantified_row)),
-                minimum_convention: CallingConvention::Direct,
             },
         );
         let scheme = TypeScheme::new(
@@ -705,7 +698,7 @@ mod laws {
     }
 
     fn body(n: u32) -> TypeGen {
-        ARGS.bound_vars(n).higher_kinded(true).conventions(true)
+        ARGS.bound_vars(n).higher_kinded(true)
     }
 
     fn build_all<'db>(db: &'db dyn salsa::Database, shapes: &[TypeShape]) -> Vec<Type<'db>> {
@@ -744,7 +737,7 @@ mod laws {
         /// arguments; rows without them keep their interned identity.
         #[test]
         fn types_without_bound_vars_are_unchanged(
-            ty in type_shape(ARGS.higher_kinded(true).conventions(true)),
+            ty in type_shape(ARGS.higher_kinded(true)),
             row in row_shape(ARGS),
             args in proptest::collection::vec(type_shape(ARGS), 0..=2),
         ) {
@@ -836,7 +829,6 @@ mod laws {
             params: vec![],
             result: Box::new(TypeShape::Prim(crate::typeck::prop::Prim::Nil)),
             effect: RowShape::closed(vec![state]),
-            convention: crate::ast::CallingConvention::Direct,
         };
         let int = Type::new(&db, TypeKind::Int);
         assert_eq!(

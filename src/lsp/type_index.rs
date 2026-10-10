@@ -327,7 +327,6 @@ mod tests {
                 params: vec![int_ty, int_ty],
                 result: int_ty,
                 effect: pure_effect,
-                minimum_convention: tribute_front::ast::CallingConvention::Direct,
             },
         );
         assert_eq!(print_ast_type(&db, func_ty), "fn(Int, Int) -> Int");
@@ -510,7 +509,6 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect: effect_row,
-                minimum_convention: tribute_front::ast::CallingConvention::Direct,
             },
         );
         assert_eq!(print_ast_type(&db, func_ty), "fn(Int) ->{IO} Int");

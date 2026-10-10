@@ -863,7 +863,6 @@ mod tests {
                 params: vec![bv0],
                 result: bv0,
                 effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let writer = crate::ast::AbilityId::source(&db, Symbol::new("Writer"));
@@ -1005,7 +1004,6 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let ann = type_to_annotation(&db, func_ty, node_id(1));
@@ -1054,7 +1052,6 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let ann = type_to_annotation(&db, func_ty, node_id(1));
@@ -1077,7 +1074,6 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect: EffectRow::pure(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 

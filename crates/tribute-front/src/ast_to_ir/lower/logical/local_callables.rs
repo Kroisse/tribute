@@ -238,14 +238,12 @@ fn fixed_instance<'db>(
         TypeKind::Func {
             params,
             result,
-            minimum_convention,
             effect,
             ..
         },
         TypeKind::Func {
             params: actual_params,
             result: actual_result,
-            minimum_convention: actual_minimum,
             ..
         },
     ) = (seed.function_type.kind(db), instance.callable.kind(db))
@@ -254,7 +252,6 @@ fn fixed_instance<'db>(
     };
     if params != actual_params
         || result != actual_result
-        || minimum_convention > actual_minimum
         || !params
             .iter()
             .chain(std::iter::once(result))
@@ -272,7 +269,6 @@ fn fixed_instance<'db>(
                     params: vec![],
                     result: Type::new(db, TypeKind::Nil),
                     effect: *row,
-                    minimum_convention: CallingConvention::Direct,
                 },
             );
             crate::ast::collect_effect_vars(db, wrapper)

@@ -254,7 +254,6 @@ impl<'db> TdnrResolver<'db> {
                                 params: vec![self_ty],
                                 result: field_ty,
                                 effect,
-                                minimum_convention: crate::ast::CallingConvention::Direct,
                             },
                         );
 
@@ -311,7 +310,6 @@ impl<'db> TdnrResolver<'db> {
                 params,
                 result,
                 effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         )
     }
@@ -793,7 +791,6 @@ mod tests {
                 params: vec![int_ty],
                 result: option_int,
                 effect: EffectRow::pure(db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -899,7 +896,6 @@ mod tests {
                 params: vec![foo_ty],
                 result: Type::new(db, TypeKind::Int),
                 effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -954,7 +950,6 @@ mod tests {
                     params: vec![foo_ty],
                     result: result_ty,
                     effect,
-                    minimum_convention: crate::ast::CallingConvention::Direct,
                 },
             )
         };
@@ -1046,7 +1041,6 @@ mod tests {
                 params: vec![list_named],
                 result: Type::new(db, TypeKind::Int),
                 effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 

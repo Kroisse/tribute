@@ -729,7 +729,6 @@ mod tests {
                 params: vec![bound],
                 result: bound,
                 effect: EffectRow::pure(&db),
-                minimum_convention: CallingConvention::Direct,
             },
         );
         let specialized_function = Type::new(
@@ -738,7 +737,6 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect: EffectRow::pure(&db),
-                minimum_convention: CallingConvention::Direct,
             },
         );
         let ability = AbilityId::source(&db, Symbol::new("Audit"));

@@ -441,7 +441,6 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         )
     }
@@ -511,7 +510,6 @@ mod tests {
                     params,
                     result,
                     effect: pure_effect(&db),
-                    minimum_convention: crate::ast::CallingConvention::Direct,
                 },
             )
         };
@@ -704,7 +702,6 @@ mod tests {
                         params: vec![pair_int_int],
                         result: int,
                         effect: pure_effect(&db),
-                        minimum_convention: crate::ast::CallingConvention::Direct,
                     },
                 ),
                 vec![(pair_id, vec![vec![int, int]])],

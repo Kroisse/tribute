@@ -1064,7 +1064,6 @@ mod tests {
                 params,
                 result: AstType::new(db, TypeKind::Nat),
                 effect,
-                minimum_convention: CallingConvention::Direct,
             },
         )
     }
@@ -1197,7 +1196,6 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect,
-                minimum_convention: CallingConvention::Direct,
             },
         );
         let logical_callable = ctx.convert_logical_type(&mut ir, callable);
@@ -1279,7 +1277,6 @@ mod tests {
                 params: vec![builtin_list, source_list],
                 result: builtin_list,
                 effect,
-                minimum_convention: CallingConvention::Direct,
             },
         );
         let callable_ir = ctx.convert_logical_type(&mut ir, list_callable);
@@ -1377,35 +1374,14 @@ mod tests {
             ctx.adt_typeref(&mut ir, &nominal_name)
         );
 
-        let evidence_callable = AstType::new(
+        let callable = AstType::new(
             &db,
             TypeKind::Func {
                 params: vec![int],
                 result: int,
                 effect,
-                minimum_convention: CallingConvention::EvidenceDirect,
             },
         );
-        let cps_callable = AstType::new(
-            &db,
-            TypeKind::Func {
-                params: vec![int],
-                result: int,
-                effect,
-                minimum_convention: CallingConvention::Cps,
-            },
-        );
-        let evidence_ir = ctx.convert_logical_type(&mut ir, evidence_callable);
-        let cps_ir = ctx.convert_logical_type(&mut ir, cps_callable);
-        assert_eq!(
-            tribute_ir::dialect::tribute_control::func_sig_convention(&ir, evidence_ir),
-            Some(tribute_ir::dialect::tribute_control::CallingConvention::EvidenceDirect)
-        );
-        assert_eq!(
-            tribute_ir::dialect::tribute_control::func_sig_convention(&ir, cps_ir),
-            Some(tribute_ir::dialect::tribute_control::CallingConvention::Cps)
-        );
-
         let continuation_key = AstType::new(
             &db,
             TypeKind::Continuation {
@@ -1455,8 +1431,7 @@ mod tests {
         let structural_tuple = AstType::new(
             &db,
             TypeKind::Tuple(vec![
-                evidence_callable,
-                cps_callable,
+                callable,
                 applied_forward,
                 continuation_key,
                 univar_key,
@@ -1470,8 +1445,6 @@ mod tests {
         let structural_text = structural_name.with_str(str::to_owned);
         assert!(
             structural_text.contains("callable")
-                && structural_text.contains("evidence_direct")
-                && structural_text.contains("cps")
                 && structural_text.contains("app")
                 && structural_text.contains("resume")
                 && structural_text.contains("univar")
