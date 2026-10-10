@@ -372,21 +372,41 @@ impl<'db> TypeSolver<'db> {
                     _ => self.pending_row_removals.push((removal, origin)),
                 }
             }
-            for (union, origin) in std::mem::take(&mut self.pending_row_unions) {
+            let unions = std::mem::take(&mut self.pending_row_unions);
+            for (index, (union, origin)) in unions.iter().cloned().enumerate() {
                 let mut normalized = union.clone();
                 normalized.for_each_row_mut(|row| *row = self.normalize_row(*row));
                 let mut known = Vec::new();
                 let mut tails = Vec::new();
-                for source in &normalized.sources {
+                // A source tail that another union defines stands for that
+                // union's sources.
+                let mut sources = normalized.sources.clone();
+                let mut expanded = vec![index];
+                while let Some(source) = sources.pop() {
                     for effect in source.effects(self.db) {
                         if !known.contains(effect) {
                             known.push(effect.clone());
                         }
                     }
-                    if let Some(tail) = source.rest(self.db)
-                        && !tails.contains(&tail)
-                    {
-                        tails.push(tail);
+                    let Some(tail) = source.rest(self.db) else {
+                        continue;
+                    };
+                    // A signature row is not defined by the unions it
+                    // results from.
+                    let defined = !self.rigid_rows.contains(&tail);
+                    let definition = unions.iter().enumerate().find(|(other, (union, _))| {
+                        defined
+                            && !expanded.contains(other)
+                            && self.normalize_row(union.result).rest(self.db) == Some(tail)
+                    });
+                    match definition {
+                        Some((other, (union, _))) => {
+                            expanded.push(other);
+                            sources
+                                .extend(union.sources.iter().map(|row| self.normalize_row(*row)));
+                        }
+                        None if !tails.contains(&tail) => tails.push(tail),
+                        None => {}
                     }
                 }
                 let cover = declared.iter().find(|(result, sources)| {

@@ -481,3 +481,46 @@ fn run() ->{Tell} Int { apply(+1, bump) }
         ["type error in function 'run': effect mismatch: expected `{Tell}`, found `{Ask, Tell}`"]
     );
 }
+
+/// Body-local tails joined with each other before they reach a signature row
+/// are still that row.
+#[salsa_test]
+fn body_local_tails_joined_before_a_signature_row_are_that_row(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "joined_local_tails.trb",
+        r#"
+ability Ask { op ask() -> Int }
+fn one() -> Int { +1 }
+fn two() -> Int { +2 }
+fn asked() ->{Ask} Int { Ask::ask() }
+fn sum(x: Int, y: Int, z: Int) ->{} Int { x + y + z }
+fn omitted() -> Int {
+    handle {
+        let x = one()
+        let y = two()
+        sum(x, y, asked())
+    } {
+        do result { result }
+        op Ask::ask() { resume +3 }
+    }
+}
+fn named(f: fn() ->{e} Int) ->{e} Int {
+    handle {
+        let x = one()
+        let y = two()
+        sum(x, y, asked()) + f()
+    } {
+        do result { result }
+        op Ask::ask() { resume +3 }
+    }
+}
+"#,
+    );
+    let _ = checked(db, source);
+    let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.inner.message.clone())
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+}
