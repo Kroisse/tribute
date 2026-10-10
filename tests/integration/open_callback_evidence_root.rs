@@ -175,10 +175,10 @@ fn main() -> Nil {
     );
 }
 
-/// A let-bound lambda used at two classes takes their join, and one used at
-/// an empty row is `Direct`.
+/// A let-bound lambda used at two classes is emitted once for each, and one
+/// used at an empty row is `Direct`.
 #[salsa_test]
-fn let_bound_lambdas_take_the_join_of_their_uses(db: &salsa::DatabaseImpl) {
+fn let_bound_lambdas_are_emitted_per_class_in_use(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
@@ -209,6 +209,7 @@ fn main() ->{Io} Nil {
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
     // `both` is used with a pure and with an `Io` callback.
+    assert!(main.contains("callee = @\"app$9D\""), "{main}");
     assert!(main.contains("callee = @\"app$9E\""), "{main}");
     assert!(!main.contains("callee = @app}"), "{main}");
     // `step` is used at an empty row, so it and `each` need no Cps control.

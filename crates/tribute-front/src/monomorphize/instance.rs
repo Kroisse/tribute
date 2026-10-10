@@ -158,6 +158,20 @@ impl<'db> InstanceKeys<'db> {
         (!key.type_args.is_empty() || key.has_weaker_class()).then_some(key)
     }
 
+    /// The class of each of `rows` inside the instance `enclosing`.
+    pub(crate) fn classes_of_rows(
+        &self,
+        rows: &[crate::ast::EffectRow<'db>],
+        enclosing: &Symbol,
+    ) -> Vec<CallingConvention> {
+        let classes: &RowClasses = self.row_classes.get(enclosing).map_or(&[], Vec::as_slice);
+        rows.iter()
+            .map(|row| {
+                calling_convention_for_effect_row_in(self.db, *row, &self.abilities, classes)
+            })
+            .collect()
+    }
+
     /// Fix the class of each row variable a let-bound lambda of `decls`
     /// quantifies, inside the instance that binds it: the join of the classes
     /// its uses select. Returns whether a class changed.

@@ -1,5 +1,6 @@
 pub mod collect;
 mod instance;
+mod local;
 pub mod mangle;
 mod nominal;
 mod nominal_index;
@@ -85,8 +86,7 @@ pub fn monomorphize_functions<'db>(
     let mut instantiations: HashMap<_, HashSet<_>> = HashMap::default();
     let mut reached_fixpoint = false;
     let mut keys = InstanceKeys::new(db, &module, &source_function_types, &metadata);
-    // A use can pass on the class of a callable bound before it.
-    while keys.settle_local_classes(&module.decls, &metadata) {}
+    local::settle_local_lambdas(db, &mut module.decls, &mut metadata, &mut keys);
 
     // A concrete clone can reveal direct calls that were abstract in its
     // source body. Clone the metadata first, then collect only unseen keys.
@@ -148,7 +148,7 @@ pub fn monomorphize_functions<'db>(
             .into_iter()
             .map(Decl::Function)
             .collect();
-        while keys.settle_local_classes(&specialized_decls, &metadata) {}
+        local::settle_local_lambdas(db, &mut specialized_decls, &mut metadata, &mut keys);
         rewrite::rewrite_decls(
             db,
             &mut specialized_decls,
@@ -363,8 +363,26 @@ fn specialize_metadata<'db>(
     classes: &RowClasses,
     origins: &HashSet<NodeId>,
 ) {
-    let variant = key.variant();
-    let type_args = key.type_args.as_slice();
+    clone_metadata(
+        db,
+        metadata,
+        key.variant(),
+        &key.type_args,
+        classes,
+        origins,
+    );
+}
+
+/// Copy the metadata of `origins` to the nodes of the same identity with
+/// `variant`, with `type_args` substituted.
+fn clone_metadata<'db>(
+    db: &'db dyn salsa::Database,
+    metadata: &mut MonomorphizeMetadata<'db>,
+    variant: std::num::NonZero<u64>,
+    type_args: &[Type<'db>],
+    classes: &RowClasses,
+    origins: &HashSet<NodeId>,
+) {
     clone_type_table(db, &mut metadata.node_types, variant, type_args, origins);
     let instances: Vec<_> = origins
         .iter()
@@ -597,6 +615,61 @@ fn build_rewrite_map<'db>(
     }
 
     rewrite_map
+}
+
+/// Apply `map` to every type, and `rows` to every row, the metadata records
+/// for `node`.
+fn map_metadata_types<'db>(
+    db: &'db dyn salsa::Database,
+    metadata: &mut MonomorphizeMetadata<'db>,
+    node: NodeId,
+    map: &dyn Fn(Type<'db>) -> Type<'db>,
+    rows: &crate::typeck::RowSubst<'db>,
+) {
+    if let Some(ty) = metadata.node_types.get_mut(&node) {
+        *ty = map(*ty);
+    }
+    if let Some(signature) = metadata.lambda_signatures.get_mut(&node) {
+        signature.function_type = map(signature.function_type);
+    }
+    if let Some(instance) = metadata.function_instances.get_mut(&node) {
+        instance.callable = map(instance.callable);
+        for ty in &mut instance.type_arguments {
+            *ty = map(*ty);
+        }
+        for row in &mut instance.row_arguments {
+            *row = rows.apply(db, *row);
+        }
+    }
+    if let Some(instance) = metadata.local_instances.get_mut(&node) {
+        instance.callable = map(instance.callable);
+        for row in &mut instance.row_arguments {
+            *row = rows.apply(db, *row);
+        }
+    }
+    if let Some(operation) = metadata.handler_operations.get_mut(&node) {
+        for ty in operation
+            .ability_args
+            .iter_mut()
+            .chain(operation.params.iter_mut())
+        {
+            *ty = map(*ty);
+        }
+        operation.result = map(operation.result);
+    }
+    if let Some(operation) = metadata.perform_operations.get_mut(&node) {
+        for ty in operation
+            .ability_args
+            .iter_mut()
+            .chain(operation.params.iter_mut())
+        {
+            *ty = map(*ty);
+        }
+        operation.result = map(operation.result);
+    }
+    for step in metadata.evidence_plans.get_mut(&node).into_iter().flatten() {
+        *step = step.map_types(map);
+    }
 }
 
 /// Give the lambdas of every function the conventions its row classes

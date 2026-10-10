@@ -3106,3 +3106,45 @@ fn main() ->{Io} Nil {
         "0",
     );
 }
+
+/// A let-bound lambda is emitted once per class in use: the same lambda is a
+/// pure callable, a callable at a row with an `op` ability, and the callee of
+/// another lambda, in a root function and in the instances of a
+/// row-polymorphic one. Each copy shares the binding's capture.
+#[test]
+fn a_let_bound_lambda_is_emitted_per_class_in_use() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "let_bound_lambda_per_class.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> String
+}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+fn ask_once(f: fn(String) ->{Ask} String, s: String) ->{Ask} String { f(s) }
+
+fn run(suffix: String, callback: fn(String) ->{r} String) ->{r} String {
+    let g = fn(s: String) app(s, fn(t) t <> suffix)
+    let alias = fn(s: String) g(s)
+    callback(twice(g, "a")) <> g("b") <> alias("c")
+}
+
+fn main() ->{Io} Nil {
+    let suffix = "!"
+    let g = fn(s: String) app(s, fn(t) t <> suffix)
+    print_line(twice(g, "io"))
+    let asked = handle ask_once(g, "io") <> run("?", fn(s) s <> Ask::ask()) {
+        do value { value }
+        op Ask::ask() { resume "+" }
+    }
+    print_line(asked)
+    print_line(run(".", fn(s) s))
+    print_line(g("x"))
+}
+"#,
+        "io!!\nio!a??+b?c?\na..b.c.\nx!",
+    );
+}

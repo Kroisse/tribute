@@ -52,6 +52,21 @@ impl NodeId {
     /// same generic function (e.g., `identity$Int` vs `identity$Float`).
     #[inline]
     pub const fn with_variant(self, variant: NonZero<u64>) -> Self {
+        // A copy of a copy keeps both variants, so that the copies of two
+        // nodes that differ only in their variant stay distinct.
+        let variant = match self.variant {
+            None => variant,
+            Some(outer) => {
+                let mixed = outer
+                    .get()
+                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    .wrapping_add(variant.get());
+                match NonZero::new(mixed) {
+                    Some(mixed) => mixed,
+                    None => NonZero::<u64>::MIN,
+                }
+            }
+        };
         Self {
             source: self.source,
             raw: self.raw,

@@ -342,14 +342,12 @@ Effect row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실�
 Compiler가 생성하는 정의도 같은 규칙을 따른다. 필드의 `modify`는 callback의 row
 변수를 class 변수로 가진다.
 
-**`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수는 그 람다를 묶은 인스턴스
-안에서 class 하나를 가진다. 그 class는 사용처마다 row 인자에서 계산한 class의
-join이다. 람다 자신의 convention과 본문의 참조는 이 class로 읽으므로, 람다는
-인스턴스마다 한 번 생성한다. 사용처가 고른 class가 join보다 약하면 그 사용처는
-join의 convention을 가진 값을 받으며, 이 값은 더 약한 callable 타입이 요구되는
-자리에 넘길 수 없다. 본문이 그 row에 의존하지 않는 람다는
-[사용처의 타입마다 따로 생성](type-inference.md#지역-callable-인스턴스의-전달)할 수
-있다.
+**`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수의 class는 사용처마다 row
+인자에서 계산한다. 람다는 그것을 묶은 인스턴스 안에서 쓰이는 class 조합마다 한 번
+생성하고, 각 사용처는 자기 class의 생성물을 읽는다. 생성물마다 람다 자신의
+convention과 본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 생성물마다
+따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의
+class가 정해진 뒤에 계산한다.
 
 **Class 인자.** 참조 지점의 class 인자는 checked instance가 기록한 row 인자에서
 계산한다. Callable 타입에서 역추론하지 않는다.
