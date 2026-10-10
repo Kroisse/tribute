@@ -533,6 +533,9 @@ fn a_call_selects_among_imported_functions_by_its_first_argument(db: &salsa::Dat
          fn main() -> Nil {\n    let _ = size(1)\n}\n",
         "use a::size\nuse b::size\n\
          fn main() -> Nil {\n    let size = fn(x: Nat) { x }\n    let _ = size(1)\n}\n",
+        // An alias is the name the functions are imported under.
+        "use a::size as measure\nuse b::size as measure\n\
+         fn main() -> Nil {\n    let _ = measure(A { n: 1 }) + measure(B { n: 2 })\n}\n",
         // One function imported twice is one function.
         "use a::make\nuse a::make\n\
          fn main() -> Nil {\n    let _ = make()\n}\n",
