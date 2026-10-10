@@ -175,6 +175,102 @@ fn main() -> Nil {
     );
 }
 
+/// A let-bound lambda used at two classes is emitted once for each, and one
+/// used at an empty row is `Direct`.
+#[salsa_test]
+fn let_bound_lambdas_are_emitted_per_class_in_use(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: Int, f: fn(Int) ->{e} Int) ->{e} Int { f(x) }
+
+fn each(n: Int) -> Int {
+    let step = fn(m: Int) -> Int { m + +1 }
+    step(n)
+}
+
+fn main() ->{Io} Nil {
+    let both = fn(x: Int, f: fn(Int) ->{e} Int) app(x, f)
+    let _ = both(+1, fn(n) n + +1)
+    let _ = both(+2, fn(n) { print_line("io") n })
+    let _ = each(+3)
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let main = ir
+        .split("tribute_control.func @main(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .expect("root main");
+    // `both` is used with a pure and with an `Io` callback.
+    assert!(main.contains("callee = @\"app$9D\""), "{main}");
+    assert!(main.contains("callee = @\"app$9E\""), "{main}");
+    assert!(!main.contains("callee = @app}"), "{main}");
+    // `step` is used at an empty row, so it and `each` need no Cps control.
+    let each = ir
+        .split("tribute_control.func @each(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .expect("each");
+    assert!(
+        each.starts_with("%0: core.i32) -> core.i32 convention(direct)"),
+        "{each}"
+    );
+    assert!(
+        each.contains("tribute_control.lambda") && !each.contains("convention(cps)"),
+        "{each}"
+    );
+}
+
+/// A row a definition passes only to a lambda it binds is a class variable
+/// of the definition: a caller at an empty row selects the `Direct` instance,
+/// whose lambda is `Direct` too.
+#[salsa_test]
+fn a_row_passed_to_a_let_bound_lambda_is_a_class_variable(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn countdown(n: Int) -> Int {
+    let step = fn(m: Int) -> Int {
+        case m == +0 {
+            True -> m
+            False -> become countdown(m - +1)
+        }
+    }
+    become step(n)
+}
+
+fn main() -> Nil {
+    let _ = countdown(+3)
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    assert!(ir.contains("callee = @\"countdown$9D\""), "{ir}");
+    let instance = ir
+        .split("tribute_control.func @\"countdown$9D\"(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .expect("the Direct instance");
+    assert!(
+        instance.starts_with("%0: core.i32) -> core.i32 convention(direct)"),
+        "{instance}"
+    );
+    assert!(
+        instance.contains("tribute_control.lambda") && !instance.contains("convention(cps)"),
+        "{instance}"
+    );
+}
+
 #[test]
 fn generic_callback_evidence_root_executes_native() {
     let output = common::compile_and_run_native("test.trb", SOURCE);

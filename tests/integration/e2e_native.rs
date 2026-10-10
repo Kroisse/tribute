@@ -3058,3 +3058,173 @@ fn main() ->{Io} Nil {
         "10\n2000000",
     );
 }
+
+/// A let-bound lambda takes the class its uses select: used as a pure
+/// callable, it and the row-polymorphic call in its body are `Direct`.
+#[test]
+fn a_let_bound_lambda_takes_the_class_of_its_use() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "let_bound_lambda_class.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+
+fn main() ->{Io} Nil {
+    let g = fn(s: String) app(s, fn(t) t <> "!")
+    print_line(twice(g, "io"))
+}
+"#,
+        "io!!",
+    );
+}
+
+/// A function and the lambda it binds `become` each other: the lambda takes
+/// the class of the function's row, so both transfers are proper tail calls.
+#[test]
+fn a_function_and_its_let_bound_lambda_become_each_other() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "become_through_let_bound_lambda.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn countdown(n: Int) -> Int {
+    let step = fn(m: Int) -> Int {
+        case m == +0 {
+            True -> m
+            False -> become countdown(m - +1)
+        }
+    }
+    become step(n)
+}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(countdown(+1000000)))
+}
+"#,
+        "0",
+    );
+}
+
+/// A let-bound lambda is emitted once per class in use: the same lambda is a
+/// pure callable, a callable at a row with an `op` ability, and the callee of
+/// another lambda, in a root function and in the instances of a
+/// row-polymorphic one. Each copy shares the binding's capture.
+#[test]
+fn a_let_bound_lambda_is_emitted_per_class_in_use() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "let_bound_lambda_per_class.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> String
+}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+fn ask_once(f: fn(String) ->{Ask} String, s: String) ->{Ask} String { f(s) }
+
+fn run(suffix: String, callback: fn(String) ->{r} String) ->{r} String {
+    let g = fn(s: String) app(s, fn(t) t <> suffix)
+    let alias = fn(s: String) g(s)
+    callback(twice(g, "a")) <> g("b") <> alias("c")
+}
+
+fn main() ->{Io} Nil {
+    let suffix = "!"
+    let g = fn(s: String) app(s, fn(t) t <> suffix)
+    print_line(twice(g, "io"))
+    let asked = handle ask_once(g, "io") <> run("?", fn(s) s <> Ask::ask()) {
+        do value { value }
+        op Ask::ask() { resume "+" }
+    }
+    print_line(asked)
+    print_line(run(".", fn(s) s))
+    print_line(g("x"))
+}
+"#,
+        "io!!\nio!a??+b?c?\na..b.c.\nx!",
+    );
+}
+
+/// A copy of a let-bound lambda carries its own copies of the lambdas bound
+/// in its body, each with the class of the copy that binds it.
+#[test]
+fn a_copied_let_bound_lambda_copies_the_lambdas_it_binds() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "nested_let_bound_lambda_per_class.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> String
+}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+fn ask_once(f: fn(String) ->{Ask} String, s: String) ->{Ask} String { f(s) }
+
+fn run(suffix: String, callback: fn(String) ->{r} String) ->{r} String {
+    let g = fn(s: String) {
+        let h = fn(t: String) app(t, fn(u) u <> suffix)
+        h(s)
+    }
+    callback(twice(g, "a")) <> g("b")
+}
+
+fn main() ->{Io} Nil {
+    let g = fn(s: String) {
+        let h = fn(t: String) app(t, fn(u) u <> "!")
+        h(s)
+    }
+    print_line(twice(g, "io"))
+    let asked = handle ask_once(g, "io") <> run("?", fn(s) s <> Ask::ask()) {
+        do value { value }
+        op Ask::ask() { resume "+" }
+    }
+    print_line(asked)
+    print_line(run(".", fn(s) s))
+}
+"#,
+        "io!!\nio!a??+b?\na..b.",
+    );
+}
+
+/// A let-bound lambda copied inside a handler arm that resumes: the copy's
+/// locals stay apart from the arm's continuation.
+#[test]
+fn a_let_bound_lambda_is_copied_inside_a_resuming_handler_arm() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "let_bound_lambda_in_handler_arm.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> String
+}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+fn ask_once(f: fn(String) ->{Ask} String, s: String) ->{Ask} String { f(s) }
+
+fn main() ->{Io} Nil {
+    let answer = handle Ask::ask() <> "." {
+        do value { value }
+        op Ask::ask() {
+            let g = fn(s: String) app(s, fn(t) t <> "!")
+            let pure = twice(g, "x")
+            let asked = handle ask_once(g, "y") {
+                do value { value }
+                op Ask::ask() { resume "+" }
+            }
+            resume pure <> asked
+        }
+    }
+    print_line(answer)
+}
+"#,
+        "x!!y!.",
+    );
+}
