@@ -50,10 +50,12 @@ impl NodeId {
     ///
     /// The `variant` hash distinguishes different specializations of the
     /// same generic function (e.g., `identity$Int` vs `identity$Float`).
+    /// A copy of a copy combines both variants; [`origin()`](NodeId::origin)
+    /// still recovers the original node.
     #[inline]
     pub const fn with_variant(self, variant: NonZero<u64>) -> Self {
-        // A copy of a copy keeps both variants, so that the copies of two
-        // nodes that differ only in their variant stay distinct.
+        // The copies of two nodes that differ only in their variant must
+        // stay distinct.
         let variant = match self.variant {
             None => variant,
             Some(outer) => {

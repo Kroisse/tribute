@@ -3148,3 +3148,46 @@ fn main() ->{Io} Nil {
         "io!!\nio!a??+b?c?\na..b.c.\nx!",
     );
 }
+
+/// A copy of a let-bound lambda carries its own copies of the lambdas bound
+/// in its body, each with the class of the copy that binds it.
+#[test]
+fn a_copied_let_bound_lambda_copies_the_lambdas_it_binds() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "nested_let_bound_lambda_per_class.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> String
+}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+fn ask_once(f: fn(String) ->{Ask} String, s: String) ->{Ask} String { f(s) }
+
+fn run(suffix: String, callback: fn(String) ->{r} String) ->{r} String {
+    let g = fn(s: String) {
+        let h = fn(t: String) app(t, fn(u) u <> suffix)
+        h(s)
+    }
+    callback(twice(g, "a")) <> g("b")
+}
+
+fn main() ->{Io} Nil {
+    let g = fn(s: String) {
+        let h = fn(t: String) app(t, fn(u) u <> "!")
+        h(s)
+    }
+    print_line(twice(g, "io"))
+    let asked = handle ask_once(g, "io") <> run("?", fn(s) s <> Ask::ask()) {
+        do value { value }
+        op Ask::ask() { resume "+" }
+    }
+    print_line(asked)
+    print_line(run(".", fn(s) s))
+}
+"#,
+        "io!!\nio!a??+b?\na..b.",
+    );
+}

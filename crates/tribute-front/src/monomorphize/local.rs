@@ -7,35 +7,15 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::MonomorphizeMetadata;
 use super::instance::InstanceKeys;
-use crate::ast::visit::{RefSite, Visit, VisitMut, walk_expr_mut, walk_stmt, walk_stmt_mut};
+use crate::ast::visit::{
+    RefSite, Visit, VisitMut, walk_expr_mut, walk_pattern, walk_pattern_mut, walk_stmt,
+    walk_stmt_mut,
+};
 use crate::ast::{
-    CallingConvention, Decl, EffectRow, EffectVar, Expr, ExprKind, LocalId, NodeId, PatternKind,
-    ResolvedRef, Stmt, Type, TypedRef, collect_effect_vars,
+    CallingConvention, Decl, EffectRow, EffectVar, Expr, ExprKind, LocalId, NodeId, Pattern,
+    PatternKind, ResolvedRef, Stmt, Type, TypedRef, collect_effect_vars,
 };
 use crate::typeck::{RowSubst, TypeSubst};
-
-/// A copy of a let-bound lambda for the uses that select `classes`.
-struct Copy {
-    binding: NodeId,
-    local: LocalId,
-    variant: NonZero<u64>,
-    uses: HashSet<NodeId>,
-    /// The row variables the binding quantifies, as the lambda spells them.
-    /// The copy gets its own, so that each copy has its own class.
-    rows: Vec<EffectVar>,
-}
-
-impl Copy {
-    fn renaming<'db>(&self, db: &'db dyn salsa::Database) -> RowSubst<'db> {
-        let mut renaming = RowSubst::new();
-        for (index, row) in self.rows.iter().enumerate() {
-            // Checked row variables are numbered from zero per function.
-            let id = (self.variant.get() | 1 << 63).wrapping_add(index as u64);
-            renaming.insert(row.id, EffectRow::open(db, EffectVar { id }));
-        }
-        renaming
-    }
-}
 
 /// Give every let-bound lambda of `decls` one class per binding, copying a
 /// binding whose uses select several.
@@ -54,6 +34,15 @@ pub(super) fn settle_local_lambdas<'db>(
             return;
         }
     }
+}
+
+/// A copy of the `let` that binds `binding`, for the uses that select one
+/// class.
+struct LambdaCopy {
+    binding: NodeId,
+    local: LocalId,
+    variant: NonZero<u64>,
+    uses: HashSet<NodeId>,
 }
 
 /// Bind a let-bound lambda of `decls` once per class its uses select. The
@@ -105,7 +94,9 @@ fn split_local_lambdas<'db>(
         // recorded no instance for reads the binding as it is.
         let mut uses: HashMap<LocalId, Vec<(NodeId, Vec<CallingConvention>)>> = HashMap::default();
         let mut shared = HashSet::default();
-        let mut schemes = HashMap::default();
+        // The row variables each binding quantifies, as its lambda spells
+        // them.
+        let mut rows: HashMap<NodeId, Vec<EffectVar>> = HashMap::default();
         function.body.for_each(|expr| {
             let ExprKind::Var(TypedRef {
                 resolved: ResolvedRef::Local { id, .. },
@@ -114,14 +105,32 @@ fn split_local_lambdas<'db>(
             else {
                 return;
             };
-            let Some((binding, _)) = bindings.get(id) else {
+            let Some((binding, lambda)) = bindings.get(id) else {
                 return;
             };
-            match metadata.local_instances.get(&expr.id) {
-                Some(instance) if instance.binding == *binding => {
+            let instance = metadata
+                .local_instances
+                .get(&expr.id)
+                .filter(|instance| instance.binding == *binding);
+            let spelled = instance.and_then(|instance| {
+                let signature = metadata.lambda_signatures.get(lambda)?;
+                let quantified = collect_effect_vars(db, instance.scheme.body(db));
+                let spelled = collect_effect_vars(db, signature.function_type);
+                (quantified.len() == spelled.len()).then(|| {
+                    instance
+                        .scheme
+                        .effect_params(db)
+                        .iter()
+                        .filter_map(|row| quantified.iter().position(|var| var == row))
+                        .map(|at| spelled[at])
+                        .collect()
+                })
+            });
+            match (instance, spelled) {
+                (Some(instance), Some(spelled)) => {
                     let classes = keys.classes_of_rows(&instance.row_arguments, &function.name);
                     uses.entry(*id).or_default().push((expr.id, classes));
-                    schemes.insert(*id, instance.scheme);
+                    rows.insert(*binding, spelled);
                 }
                 _ => {
                     shared.insert(*id);
@@ -135,22 +144,7 @@ fn split_local_lambdas<'db>(
             if shared.contains(&local) {
                 continue;
             }
-            let (binding, lambda) = bindings[&local];
-            let Some(signature) = metadata.lambda_signatures.get(&lambda) else {
-                continue;
-            };
-            let scheme = schemes[&local];
-            let quantified = collect_effect_vars(db, scheme.body(db));
-            let spelled = collect_effect_vars(db, signature.function_type);
-            if quantified.len() != spelled.len() {
-                continue;
-            }
-            let rows: Vec<_> = scheme
-                .effect_params(db)
-                .iter()
-                .filter_map(|row| quantified.iter().position(|var| var == row))
-                .map(|at| spelled[at])
-                .collect();
+            let (binding, _) = bindings[&local];
             let original = &uses[0].1;
             let mut classes: Vec<&Vec<CallingConvention>> = Vec::new();
             for (_, selected) in &uses {
@@ -161,7 +155,7 @@ fn split_local_lambdas<'db>(
             for selected in classes {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 (binding, selected).hash(&mut hasher);
-                copies.push(Copy {
+                copies.push(LambdaCopy {
                     binding,
                     local: LocalId::new(next_local),
                     variant: NonZero::new(hasher.finish()).unwrap_or(NonZero::<u64>::MIN),
@@ -170,7 +164,6 @@ fn split_local_lambdas<'db>(
                         .filter(|(_, classes)| classes == selected)
                         .map(|(node, _)| *node)
                         .collect(),
-                    rows: rows.clone(),
                 });
                 next_local += 1;
             }
@@ -182,6 +175,8 @@ fn split_local_lambdas<'db>(
             db,
             metadata,
             copies: &copies,
+            rows: &rows,
+            next_local,
         }
         .visit_expr_mut(&mut function.body);
         split = true;
@@ -192,7 +187,82 @@ fn split_local_lambdas<'db>(
 struct Split<'a, 'db> {
     db: &'db dyn salsa::Database,
     metadata: &'a mut MonomorphizeMetadata<'db>,
-    copies: &'a [Copy],
+    copies: &'a [LambdaCopy],
+    rows: &'a HashMap<NodeId, Vec<EffectVar>>,
+    next_local: u32,
+}
+
+impl<'db> Split<'_, 'db> {
+    /// Copy `stmt`, the `let` of `copy`, with its own node identities,
+    /// locals, and row variables, and point the uses of `copy` at it.
+    fn copy(&mut self, stmt: &Stmt<TypedRef<'db>>, copy: &LambdaCopy) -> Stmt<TypedRef<'db>> {
+        let mut origins = Origins::default();
+        walk_stmt(&mut origins, stmt);
+        // Every local the statement binds gets its own identity in the copy,
+        // and every row variable a lambda in it quantifies its own class.
+        let mut locals = HashMap::default();
+        let mut renaming = RowSubst::new();
+        let mut renamed = 0;
+        for (pattern, local) in &origins.binds {
+            let fresh = if *pattern == copy.binding {
+                copy.local
+            } else {
+                self.next_local += 1;
+                LocalId::new(self.next_local - 1)
+            };
+            locals.insert(*local, fresh);
+            for row in self.rows.get(pattern).into_iter().flatten() {
+                // Checked row variables are numbered from zero per function.
+                let id = (copy.variant.get() | 1 << 63).wrapping_add(renamed);
+                renaming.insert(row.id, EffectRow::open(self.db, EffectVar { id }));
+                renamed += 1;
+            }
+        }
+        let rename = |ty| TypeSubst::new().apply_with_rows(self.db, ty, &renaming);
+        let mut stmt = stmt.clone();
+        walk_stmt_mut(
+            &mut Rebind {
+                variant: copy.variant,
+                locals: &locals,
+                rename: &rename,
+            },
+            &mut stmt,
+        );
+        super::clone_metadata(
+            self.db,
+            self.metadata,
+            copy.variant,
+            &[],
+            &[],
+            &origins.nodes,
+        );
+        for origin in &origins.nodes {
+            let node = origin.with_variant(copy.variant);
+            // A use in the copy can read a binding outside it.
+            let outer = self
+                .metadata
+                .local_instances
+                .get(origin)
+                .map(|instance| instance.binding)
+                .filter(|binding| !origins.nodes.contains(binding));
+            if let Some(instance) = self.metadata.local_instances.get_mut(&node) {
+                if let Some(binding) = outer {
+                    instance.binding = binding;
+                }
+                if let Some(local) = locals.get(&instance.local) {
+                    instance.local = *local;
+                }
+            }
+            super::map_metadata_types(self.db, self.metadata, node, &rename, &renaming);
+        }
+        for node in &copy.uses {
+            if let Some(instance) = self.metadata.local_instances.get_mut(node) {
+                instance.binding = copy.binding.with_variant(copy.variant);
+                instance.local = copy.local;
+            }
+        }
+        stmt
+    }
 }
 
 impl<'db> VisitMut<TypedRef<'db>> for Split<'_, 'db> {
@@ -208,46 +278,9 @@ impl<'db> VisitMut<TypedRef<'db>> for Split<'_, 'db> {
                 continue;
             };
             let binding = pattern.id;
-            let mut origins = Origins::default();
-            walk_stmt(&mut origins, &stmts[index]);
-            let copies: Vec<_> = self
-                .copies
-                .iter()
-                .filter(|copy| copy.binding == binding)
-                .collect();
-            for copy in &copies {
-                let renaming = copy.renaming(self.db);
-                let rename = |ty| TypeSubst::new().apply_with_rows(self.db, ty, &renaming);
-                let mut stmt = stmts[index].clone();
-                walk_stmt_mut(
-                    &mut Rebind {
-                        copy,
-                        rename: &rename,
-                    },
-                    &mut stmt,
-                );
-                super::clone_metadata(self.db, self.metadata, copy.variant, &[], &[], &origins.0);
-                for origin in &origins.0 {
-                    let node = origin.with_variant(copy.variant);
-                    // A use in the copy can read a binding outside it.
-                    if let Some(binding) = self
-                        .metadata
-                        .local_instances
-                        .get(origin)
-                        .map(|instance| instance.binding)
-                        .filter(|binding| !origins.0.contains(binding))
-                        && let Some(instance) = self.metadata.local_instances.get_mut(&node)
-                    {
-                        instance.binding = binding;
-                    }
-                    super::map_metadata_types(self.db, self.metadata, node, &rename, &renaming);
-                }
-                for node in &copy.uses {
-                    if let Some(instance) = self.metadata.local_instances.get_mut(node) {
-                        instance.binding = binding.with_variant(copy.variant);
-                        instance.local = copy.local;
-                    }
-                }
+            let copies = self.copies;
+            for copy in copies.iter().filter(|copy| copy.binding == binding) {
+                let stmt = self.copy(&stmts[index], copy);
                 index += 1;
                 stmts.insert(index, stmt);
             }
@@ -265,38 +298,61 @@ impl<'db> VisitMut<TypedRef<'db>> for Split<'_, 'db> {
     }
 }
 
-/// The nodes of one statement.
+/// The nodes of one statement and the locals it binds, by their pattern.
 #[derive(Default)]
-struct Origins(HashSet<NodeId>);
+struct Origins {
+    nodes: HashSet<NodeId>,
+    binds: Vec<(NodeId, LocalId)>,
+}
 
 impl<'ast, V: 'ast> Visit<'ast, V> for Origins {
     fn visit_node_id(&mut self, id: NodeId) {
-        self.0.insert(id);
+        self.nodes.insert(id);
+    }
+
+    fn visit_pattern(&mut self, pattern: &'ast Pattern<V>) {
+        if let PatternKind::Bind {
+            local_id: Some(local),
+            ..
+        } = &*pattern.kind
+        {
+            self.binds.push((pattern.id, *local));
+        }
+        walk_pattern(self, pattern);
     }
 }
 
-/// Gives a copied `let` its own node identities, the local it binds, and
-/// its own row variables.
+/// Gives a copied statement its own node identities, locals, and row
+/// variables.
 struct Rebind<'a, 'db> {
-    copy: &'a Copy,
+    variant: NonZero<u64>,
+    locals: &'a HashMap<LocalId, LocalId>,
     rename: &'a dyn Fn(Type<'db>) -> Type<'db>,
 }
 
 impl<'db> VisitMut<TypedRef<'db>> for Rebind<'_, 'db> {
     fn visit_ref_mut(&mut self, _: RefSite, _: NodeId, value: &mut TypedRef<'db>) {
         value.ty = (self.rename)(value.ty);
+        if let ResolvedRef::Local { id, .. } = &mut value.resolved
+            && let Some(local) = self.locals.get(id)
+        {
+            *id = *local;
+        }
     }
 
     fn visit_node_id_mut(&mut self, id: &mut NodeId) {
-        *id = id.with_variant(self.copy.variant);
+        *id = id.with_variant(self.variant);
     }
 
-    fn visit_pattern_mut(&mut self, pattern: &mut crate::ast::Pattern<TypedRef<'db>>) {
-        if pattern.id == self.copy.binding
-            && let PatternKind::Bind { local_id, .. } = &mut *pattern.kind
+    fn visit_pattern_mut(&mut self, pattern: &mut Pattern<TypedRef<'db>>) {
+        if let PatternKind::Bind {
+            local_id: Some(local),
+            ..
+        } = &mut *pattern.kind
+            && let Some(fresh) = self.locals.get(local)
         {
-            *local_id = Some(self.copy.local);
+            *local = *fresh;
         }
-        crate::ast::visit::walk_pattern_mut(self, pattern);
+        walk_pattern_mut(self, pattern);
     }
 }
