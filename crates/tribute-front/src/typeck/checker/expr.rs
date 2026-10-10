@@ -279,7 +279,7 @@ impl<'db> TypeChecker<'db> {
 
                 // Try to look up the method as a struct field accessor
                 if let Some(field) = &field
-                    && let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, field)
+                    && let Some(result_ty) = self.lookup_struct_field_type(receiver_ty, field)
                 {
                     self.record_field_instance(ctx, expr.id, receiver_ty, field.clone(), result_ty);
                     result_ty
@@ -972,7 +972,7 @@ impl<'db> TypeChecker<'db> {
                 let field =
                     self.method_field(receiver_ty, method, path.is_some(), args, &selection);
                 if let Some(field) = &field
-                    && let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, field)
+                    && let Some(result_ty) = self.lookup_struct_field_type(receiver_ty, field)
                 {
                     self.record_field_instance(ctx, expr.id, receiver_ty, field.clone(), result_ty);
                     result_ty
@@ -1187,7 +1187,7 @@ impl<'db> TypeChecker<'db> {
             // Struct fields are read from the struct declaration; a named
             // variant's fields are its constructor instance's parameters.
             if let Some(expected_field_ty) = self
-                .lookup_struct_field_type(ctx, struct_ty, field_name)
+                .lookup_struct_field_type(struct_ty, field_name)
                 .or(variant_field_ty)
             {
                 let field_ty = self.infer_expr_with_expected(ctx, field_expr, expected_field_ty);
@@ -1878,15 +1878,28 @@ impl<'db> TypeChecker<'db> {
         field: Symbol,
         result: Type<'db>,
     ) {
+        let Some(instance) = self.field_getter_instance(receiver, field, result) else {
+            return;
+        };
+        ctx.record_resolved_method(node, instance.function, instance.callable);
+        ctx.record_field_instance(node, instance);
+    }
+
+    /// The instance of the getter that reads `field` of a `receiver` whose
+    /// field has type `result`.
+    pub(crate) fn field_getter_instance(
+        &self,
+        receiver: Type<'db>,
+        field: Symbol,
+        result: Type<'db>,
+    ) -> Option<crate::typeck::FunctionInstance<'db>> {
         let TypeKind::Named {
             id: owner, args, ..
         } = receiver.kind(self.db())
         else {
-            return;
+            return None;
         };
-        let Some((parameters, field_ty)) = self.env.lookup_struct_field(*owner, &field) else {
-            return;
-        };
+        let (parameters, field_ty) = self.env.lookup_struct_field(*owner, &field)?;
         let mut prefix = owner.qualified(self.db()).to_string();
         let function =
             crate::ast::FuncDefId::new(self.db(), crate::qualified_symbol(&mut prefix, &field));
@@ -1907,7 +1920,7 @@ impl<'db> TypeChecker<'db> {
                     .collect(),
             },
         );
-        let template = ctx.func_type(
+        let template = self.env.func_type(
             vec![receiver_template],
             field_ty,
             EffectRow::pure(self.db()),
@@ -1918,32 +1931,29 @@ impl<'db> TypeChecker<'db> {
             collect_effect_vars(self.db(), template),
             template,
         );
-        let callable = ctx.func_type(vec![receiver], result, EffectRow::pure(self.db()));
-        ctx.record_field_instance(
-            node,
-            crate::typeck::FunctionInstance {
-                origin: crate::typeck::FunctionInstanceOrigin::FieldAccessor {
-                    owner: *owner,
-                    field,
-                    kind: crate::typeck::FieldFunctionKind::Get,
-                },
-                function,
-                scheme,
-                callable,
-                type_arguments: args.clone(),
-                row_arguments: scheme
-                    .effect_params(self.db())
-                    .iter()
-                    .map(|var| EffectRow::open(self.db(), *var))
-                    .collect(),
+        let callable = self
+            .env
+            .func_type(vec![receiver], result, EffectRow::pure(self.db()));
+        Some(crate::typeck::FunctionInstance {
+            origin: crate::typeck::FunctionInstanceOrigin::FieldAccessor {
+                owner: *owner,
+                field,
+                kind: crate::typeck::FieldFunctionKind::Get,
             },
-        );
-        ctx.record_resolved_method(node, function, callable);
+            function,
+            scheme,
+            callable,
+            type_arguments: args.clone(),
+            row_arguments: scheme
+                .effect_params(self.db())
+                .iter()
+                .map(|var| EffectRow::open(self.db(), *var))
+                .collect(),
+        })
     }
 
-    fn lookup_struct_field_type(
+    pub(crate) fn lookup_struct_field_type(
         &self,
-        ctx: &mut FunctionInferenceContext<'_, 'db>,
         receiver_ty: Type<'db>,
         field_name: &Symbol,
     ) -> Option<Type<'db>> {
@@ -1978,7 +1988,7 @@ impl<'db> TypeChecker<'db> {
         if type_params.is_empty() {
             Some(field_ty)
         } else {
-            Some(self.substitute_bound_vars(ctx, field_ty, &actual_args))
+            Some(self.substitute_bound_vars(field_ty, &actual_args))
         }
     }
 
@@ -1987,7 +1997,6 @@ impl<'db> TypeChecker<'db> {
     /// Panics if a BoundVar index is out of bounds.
     fn substitute_bound_vars(
         &self,
-        _ctx: &mut FunctionInferenceContext<'_, 'db>,
         ty: Type<'db>,
         args: &[Type<'db>],
     ) -> Type<'db> {
@@ -4375,8 +4384,6 @@ mod tests {
     #[should_panic(expected = "BoundVar index out of range")]
     fn test_substitute_out_of_bounds_panics(db: &dyn salsa::Database) {
         let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
 
         // BoundVar(5) + [Int] → should panic (out of bounds)
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 5 });
@@ -4384,7 +4391,7 @@ mod tests {
         let args = vec![int_ty];
 
         // This should panic
-        checker.substitute_bound_vars(&mut ctx, bound_var, &args);
+        checker.substitute_bound_vars(bound_var, &args);
     }
 
     // =========================================================================

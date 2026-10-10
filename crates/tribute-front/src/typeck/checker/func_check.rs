@@ -598,7 +598,21 @@ impl<'db> TypeChecker<'db> {
 
             for mc in std::mem::take(&mut deferred) {
                 let resolved_receiver = solver.type_subst().apply(self.db(), mc.receiver_ty);
-                if let super::expr::MethodSelection::One(entry) =
+                if mc.path.is_none()
+                    && mc.arg_types.len() == 1
+                    && let Some(field_ty) =
+                        self.lookup_struct_field_type(resolved_receiver, &mc.method)
+                    && let Some(instance) = self.field_getter_instance(
+                        resolved_receiver,
+                        mc.method.clone(),
+                        field_ty,
+                    )
+                {
+                    resolved.insert(mc.node_id, (instance.function, instance.callable));
+                    instances.insert(mc.node_id, instance);
+                    new_constraints.add_type_eq(mc.result_ty, field_ty);
+                    solver.resolve_producer(mc.node_id);
+                } else if let super::expr::MethodSelection::One(entry) =
                     self.select_method(&mc.method, mc.path.as_ref(), resolved_receiver)
                 {
                     // Method found — instantiate the TypeScheme to get fresh types
