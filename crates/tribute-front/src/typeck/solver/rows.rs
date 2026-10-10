@@ -314,6 +314,8 @@ impl<'db> TypeSolver<'db> {
     ///   untouched, since a row holds each label once.
     /// - Joining rows whose tails a declared union covers yields that
     ///   union's result.
+    /// - A body-local tail joined into a closed row, with nothing else to
+    ///   constrain it, is empty.
     ///
     /// Relations that would constrain the signature rows themselves remain
     /// pending for the caller to report.
@@ -408,7 +410,36 @@ impl<'db> TypeSolver<'db> {
                         let (free, fixed): (Vec<_>, Vec<_>) = tails
                             .into_iter()
                             .partition(|tail| self.is_unconstrained_tail(*tail, &normalized));
-                        if let [tail] = fixed[..]
+                        if normalized.result.rest(self.db).is_none() {
+                            // A closed result bounds every source, and a
+                            // body-local tail that nothing else constrains
+                            // adds no labels of its own: it is empty.
+                            let within = known
+                                .iter()
+                                .all(|effect| normalized.result.effects(self.db).contains(effect));
+                            // A pending removal still decides the tail it
+                            // removes from.
+                            let (free, removed_from): (Vec<_>, Vec<_>) =
+                                free.into_iter().partition(|tail| {
+                                    !self.pending_row_removals.iter().any(|(removal, _)| {
+                                        self.normalize_row(removal.source).rest(self.db)
+                                            == Some(*tail)
+                                    })
+                                });
+                            let settled = !free.is_empty()
+                                && fixed.is_empty()
+                                && removed_from.is_empty()
+                                && within;
+                            for free in free {
+                                self.row_subst.insert(free.id, EffectRow::pure(self.db));
+                                bound += 1;
+                            }
+                            // With every tail empty the sources are within
+                            // the bound; they need not name all its labels.
+                            if settled {
+                                continue;
+                            }
+                        } else if let [tail] = fixed[..]
                             && self.rigid_rows.contains(&tail)
                         {
                             for free in free {
