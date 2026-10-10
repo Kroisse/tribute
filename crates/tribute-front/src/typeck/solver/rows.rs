@@ -820,7 +820,7 @@ impl<'db> TypeSolver<'db> {
         left: EffectRow<'db>,
         right: EffectRow<'db>,
     ) -> Result<(), SolveError<'db>> {
-        if !self.solving_row_relation && self.waits_for_relation(left, right, true, true) {
+        if !self.solving_row_relation && self.waits_for_relation(left, right, true) {
             self.pending_row_eqs
                 .push((left, right, self.current_origin));
             return Ok(());
@@ -879,17 +879,17 @@ impl<'db> TypeSolver<'db> {
     /// A call emits the relations of its arguments before its row joins the
     /// enclosing one, so they are pending when that row is equated.
     ///
-    /// `unions` and `expressions` select the relations to wait for.
+    /// An equality stops waiting for unions once none of them progresses
+    /// (`unions` unset): the tails hold no more labels. It never stops
+    /// waiting for an expression relation, whose types are not known yet.
     fn waits_for_relation(
         &self,
         left: EffectRow<'db>,
         right: EffectRow<'db>,
         unions: bool,
-        expressions: bool,
     ) -> bool {
         let unions = unions && !self.pending_row_unions.is_empty();
-        let expressions = expressions && !self.pending_relations.is_empty();
-        if !unions && !expressions {
+        if !unions && self.pending_relations.is_empty() {
             return false;
         }
         let left = self.normalize_row(left);
@@ -907,7 +907,7 @@ impl<'db> TypeSolver<'db> {
                         && self.pending_row_unions.iter().any(|(union, _)| {
                             self.normalize_row(union.result).rest(self.db) == Some(tail)
                         }))
-                        || (expressions && self.pending_relation_mentions(tail)))
+                        || self.pending_relation_mentions(tail))
             })
     }
 
@@ -932,16 +932,12 @@ impl<'db> TypeSolver<'db> {
             })
     }
 
-    /// Unify the row equalities that no longer wait for a relation.
-    /// `unions` and `expressions` select the relations they wait for.
-    pub(super) fn settle_row_eqs(
-        &mut self,
-        unions: bool,
-        expressions: bool,
-    ) -> Result<(), LocatedSolveError<'db>> {
+    /// Unify the row equalities that no longer wait for a relation. `unions`
+    /// is unset once no union progresses.
+    pub(super) fn settle_row_eqs(&mut self, unions: bool) -> Result<(), LocatedSolveError<'db>> {
         let mut first_error = None;
         for (left, right, origin) in std::mem::take(&mut self.pending_row_eqs) {
-            if self.waits_for_relation(left, right, unions, expressions) {
+            if self.waits_for_relation(left, right, unions) {
                 self.pending_row_eqs.push((left, right, origin));
                 continue;
             }

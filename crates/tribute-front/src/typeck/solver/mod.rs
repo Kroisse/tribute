@@ -293,7 +293,7 @@ impl<'db> TypeSolver<'db> {
             if let Err(error) = self.settle_row_unions() {
                 first_error.get_or_insert(error);
             }
-            if let Err(error) = self.settle_row_eqs(true, true) {
+            if let Err(error) = self.settle_row_eqs(true) {
                 first_error.get_or_insert(error);
             }
             let after = (
@@ -306,8 +306,8 @@ impl<'db> TypeSolver<'db> {
             if before == after {
                 let waiting = self.pending_row_eqs.len();
                 // No union can name more labels: the tails hold none. An
-                // expression relation still can until relations finalize.
-                if let Err(error) = self.settle_row_eqs(false, !finalize) {
+                // expression relation still can until it is solved.
+                if let Err(error) = self.settle_row_eqs(false) {
                     first_error.get_or_insert(error);
                 }
                 if self.pending_row_eqs.len() < waiting {

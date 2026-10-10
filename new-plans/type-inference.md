@@ -264,7 +264,9 @@ Label을 명시한 열린 row `{A | u}`를 닫힌 row나 label을 명시한 row�
 
 아직 풀리지 않은 관계가 `u`에 label을 더할 수 있는 동안에는 이 equality를 풀지
 않는다. `u`가 결과인 합집합, 그리고 타입에 `u`가 나타나는 `TypeCoerce`와
-`TypeJoin`이 그런 관계이다. 관계들이 더 진전하지 못할 때에만 최소해로 확정한다.
+`TypeJoin`이 그런 관계이다. 합집합들이 더 진전하지 못하면 그 결과 tail에 더
+들어올 label이 없으므로 최소해로 확정한다. `TypeCoerce`와 `TypeJoin`은 풀릴
+때까지 기다린다. 아직 정해지지 않은 타입을 tail을 닫는 근거로 삼지 않는다.
 해가 하나뿐인 equality, 예컨대 label이 없는 `{u}`와 닫힌 row의 equality는
 기다리지 않는다.
 
