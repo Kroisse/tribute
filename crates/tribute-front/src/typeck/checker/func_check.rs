@@ -602,11 +602,8 @@ impl<'db> TypeChecker<'db> {
                     && mc.arg_types.len() == 1
                     && let Some(field_ty) =
                         self.lookup_struct_field_type(resolved_receiver, &mc.method)
-                    && let Some(instance) = self.field_getter_instance(
-                        resolved_receiver,
-                        mc.method.clone(),
-                        field_ty,
-                    )
+                    && let Some(instance) =
+                        self.field_getter_instance(resolved_receiver, mc.method.clone(), field_ty)
                 {
                     resolved.insert(mc.node_id, (instance.function, instance.callable));
                     instances.insert(mc.node_id, instance);

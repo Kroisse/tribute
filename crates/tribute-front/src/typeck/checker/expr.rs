@@ -1995,11 +1995,7 @@ impl<'db> TypeChecker<'db> {
     /// Substitute BoundVars in a type with actual types.
     ///
     /// Panics if a BoundVar index is out of bounds.
-    fn substitute_bound_vars(
-        &self,
-        ty: Type<'db>,
-        args: &[Type<'db>],
-    ) -> Type<'db> {
+    fn substitute_bound_vars(&self, ty: Type<'db>, args: &[Type<'db>]) -> Type<'db> {
         subst::substitute_bound_vars(self.db(), ty, args).unwrap_or_else(|index, max| {
             panic!(
                 "BoundVar index out of range: index={}, subst.len()={}",
