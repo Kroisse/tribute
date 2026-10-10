@@ -577,13 +577,17 @@ struct A { n: Nat }
 mod a {
     pub fn pair(x: super::A, y: Nat) -> Nat { x.n + y }
     pub fn pick(x: Nat) -> Nat { x }
+    pub fn count(x: super::A) -> Nat { x.n }
 }
 mod b {
     pub fn pair(x: super::A, y: String) -> Nat { x.n }
     pub fn pick(x: Nat) -> String { "picked" }
+    pub fn count(x: super::A, y: Nat) -> Nat { x.n + y }
 }
 use a::pair
 use b::pair
+use a::count
+use b::count
 use a::pick
 use b::pick
 fn text(s: String) -> String { s }
@@ -599,6 +603,8 @@ fn a_call_selects_a_function_by_all_its_arguments_and_its_result(db: &salsa::Dat
         "let _ = A { n: 1 }.pair(2) + A { n: 1 }.pair(\"two\")",
         // An argument typed after solving waits for the others to select.
         "let late = fn(x) { pair(x, 5) }\n    let _ = late(A { n: 1 })",
+        // The number of arguments.
+        "let _ = count(A { n: 1 }) + count(A { n: 1 }, 2)",
         // The result, used as a `String` and as a `Nat`.
         "let _ = text(pick(1))\n    let _ = pick(7) + 1",
     ] {

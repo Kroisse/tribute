@@ -368,9 +368,8 @@ fn main() -> Nil {
                 "nope::set".to_owned()
             ),
             (
-                "unresolved path `name::set`: no function it names takes arguments of types (`Int`, `std::String`)"
-                    .to_owned(),
-                "name::set".to_owned()
+                "type error in function 'main': expected `User`, found `Int`".to_owned(),
+                "+1".to_owned()
             ),
         ]
     );

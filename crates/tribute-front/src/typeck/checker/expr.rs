@@ -1879,14 +1879,14 @@ impl<'db> TypeChecker<'db> {
                         .collect(),
                     None => Vec::new(),
                 };
-                // The receiver's type has one function of this name: there
-                // is nothing to select, and the call is checked against it.
-                if let [entry] = candidates[..] {
-                    return MethodSelection::One(entry);
-                }
                 candidates
             }
         };
+        // One function leaves nothing to select: the call is checked against
+        // it, and what does not fit is an ordinary type error.
+        if let [entry] = candidates[..] {
+            return MethodSelection::One(entry);
+        }
         let select = |matches: &dyn Fn(Type<'db>) -> bool| {
             let mut matching = candidates.iter().filter(|entry| matches(entry.func_ty));
             match (matching.next(), matching.next()) {
