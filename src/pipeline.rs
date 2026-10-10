@@ -2388,22 +2388,22 @@ fn main() -> Nil {
             db,
             "closure_exec_callback.trb",
             r#"
-extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+use std::io::{Io, print_line}
 
 ability Tick {
-    op tick() -> Nat
+    op tick() -> Int
 }
 
-fn apply(f: fn(Nat) ->{e} Nat, value: Nat) ->{e} Nat { f(value) }
+fn apply(f: fn(Int) ->{e} Int, value: Int) ->{e} Int { f(value) }
 
-fn run(seed: fn() ->{r} Nat) ->{r} Nat { apply(fn(x) { x + 1 }, seed()) }
+fn run(seed: fn() ->{r} Int) ->{r} Int { apply(fn(x) { x + +1 }, seed()) }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle run(fn() { Tick::tick() }) {
         do value { value }
-        op Tick::tick() { resume 41 }
+        op Tick::tick() { resume +41 }
     }
-    __tribute_print_nat(result)
+    print_line(Int::to_string(result))
 }
 "#,
         );
