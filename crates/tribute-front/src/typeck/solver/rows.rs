@@ -329,6 +329,18 @@ impl<'db> TypeSolver<'db> {
         result
     }
 
+    /// Settle pending unions and removals using the signature's
+    /// `declared_unions`, updating substitutions and retaining relations
+    /// that cannot yet be settled.
+    ///
+    /// When classifying a union, a body-local source tail defined by another
+    /// pending union stands for that union's sources. Rigid signature tails are
+    /// never expanded this way.
+    ///
+    /// Returns success when no further relations settle or local tails are
+    /// bound; success does not imply that all relations have been discharged.
+    /// Propagates unification and relation-solving errors with their constraint
+    /// origins. Ambiguous row unification is deferred as a pending union.
     fn settle_signature_relations_inner(
         &mut self,
         declared_unions: &[crate::ast::RowUnion<'db>],
@@ -372,21 +384,51 @@ impl<'db> TypeSolver<'db> {
                     _ => self.pending_row_removals.push((removal, origin)),
                 }
             }
-            for (union, origin) in std::mem::take(&mut self.pending_row_unions) {
+            let unions = std::mem::take(&mut self.pending_row_unions);
+            for (index, (union, origin)) in unions.iter().cloned().enumerate() {
                 let mut normalized = union.clone();
                 normalized.for_each_row_mut(|row| *row = self.normalize_row(*row));
                 let mut known = Vec::new();
                 let mut tails = Vec::new();
-                for source in &normalized.sources {
+                // A source tail that another union defines stands for that
+                // union's sources.
+                let mut sources = normalized.sources.clone();
+                let mut expanded = Vec::new();
+                while let Some(source) = sources.pop() {
                     for effect in source.effects(self.db) {
                         if !known.contains(effect) {
                             known.push(effect.clone());
                         }
                     }
-                    if let Some(tail) = source.rest(self.db)
-                        && !tails.contains(&tail)
-                    {
-                        tails.push(tail);
+                    let Some(tail) = source.rest(self.db) else {
+                        continue;
+                    };
+                    // A signature row is not defined by the unions it
+                    // results from, nor a tail by the union being settled.
+                    let defined = !self.rigid_rows.contains(&tail);
+                    let definitions: Vec<_> = unions
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, (union, _))| {
+                            defined
+                                && *other != index
+                                && self.normalize_row(union.result).rest(self.db) == Some(tail)
+                        })
+                        .collect();
+                    if definitions.is_empty() {
+                        if !tails.contains(&tail) {
+                            tails.push(tail);
+                        }
+                        continue;
+                    }
+                    // Sources reached again through another path are already
+                    // counted.
+                    for (other, (union, _)) in definitions {
+                        if !expanded.contains(&other) {
+                            expanded.push(other);
+                            sources
+                                .extend(union.sources.iter().map(|row| self.normalize_row(*row)));
+                        }
                     }
                 }
                 let cover = declared.iter().find(|(result, sources)| {
