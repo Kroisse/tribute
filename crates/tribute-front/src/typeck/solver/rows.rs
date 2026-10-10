@@ -875,6 +875,9 @@ impl<'db> TypeSolver<'db> {
     /// `u`, or an expression relation whose types mention `u`. The
     /// substituted row then holds `A` once, and the labels left for the
     /// other side differ.
+    ///
+    /// A call emits the relations of its arguments before its row joins the
+    /// enclosing one, so they are pending when that row is equated.
     fn waits_for_relation(&self, left: EffectRow<'db>, right: EffectRow<'db>) -> bool {
         if self.pending_row_unions.is_empty() && self.pending_relations.is_empty() {
             return false;
