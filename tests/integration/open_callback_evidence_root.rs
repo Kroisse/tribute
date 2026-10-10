@@ -228,6 +228,49 @@ fn main() ->{Io} Nil {
     );
 }
 
+/// A row a definition passes only to a lambda it binds is a class variable
+/// of the definition: a caller at an empty row selects the `Direct` instance,
+/// whose lambda is `Direct` too.
+#[salsa_test]
+fn a_row_passed_to_a_let_bound_lambda_is_a_class_variable(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn countdown(n: Int) -> Int {
+    let step = fn(m: Int) -> Int {
+        case m == +0 {
+            True -> m
+            False -> become countdown(m - +1)
+        }
+    }
+    become step(n)
+}
+
+fn main() -> Nil {
+    let _ = countdown(+3)
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    assert!(ir.contains("callee = @\"countdown$9D\""), "{ir}");
+    let instance = ir
+        .split("tribute_control.func @\"countdown$9D\"(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .expect("the Direct instance");
+    assert!(
+        instance.starts_with("%0: core.i32) -> core.i32 convention(direct)"),
+        "{instance}"
+    );
+    assert!(
+        instance.contains("tribute_control.lambda") && !instance.contains("convention(cps)"),
+        "{instance}"
+    );
+}
+
 #[test]
 fn generic_callback_evidence_root_executes_native() {
     let output = common::compile_and_run_native("test.trb", SOURCE);
