@@ -399,7 +399,7 @@ fn partial_generalization() -> #(Nat, Bool) {
 }
 
 #[salsa_test]
-fn returned_callback_preserves_cps_convention_after_pure_let(db: &salsa::DatabaseImpl) {
+fn returned_callback_keeps_its_cps_convention_after_pure_let(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "returned_callback_preserves_cps_convention_after_pure_let.trb",
@@ -424,8 +424,8 @@ fn main() -> Nil {
         .find(|line| line.contains("func @main("))
         .expect("IR must contain main");
     assert!(
-        main.contains("convention(cps)"),
-        "main must remain CPS for the returned callback call:\n{ir}"
+        main.contains("convention(direct)"),
+        "main keeps the convention of its row around the returned callback call:\n{ir}"
     );
     let lambda = ir
         .lines()
