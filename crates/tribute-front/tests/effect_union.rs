@@ -433,6 +433,10 @@ fn bump(n: Int) ->{Ask} Int { n + Ask::ask() }
             "fn run() ->{Ask} Int {\n    let go = fn(n: Int) ->{Ask} Int { apply(n, bump) }\n    go(+1)\n}",
         ),
         (
+            "typed only by its uses",
+            "fn needs(f: fn(Int) ->{Ask} Int) ->{Ask} Int { f(+1) }\nfn run() ->{Ask} Int {\n    let fs = []\n    case fs {\n        [g, ..] -> {\n            let _ = apply(+1, g)\n            needs(g)\n        }\n        [] -> +0\n    }\n}",
+        ),
+        (
             "beside a signature tail",
             "fn run(f: fn(Int) ->{e} Int) ->{e, Ask} Int {\n    let _ = apply(+1, f)\n    apply(+2, bump)\n}",
         ),
