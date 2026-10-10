@@ -46,7 +46,7 @@ fn is_odd(n: Int) -> Bool {
     }
 }
 
-fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     become f(x)
 }
 

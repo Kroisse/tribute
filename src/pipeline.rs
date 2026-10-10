@@ -2390,10 +2390,20 @@ fn main() -> Nil {
             r#"
 extern "C" fn __tribute_print_nat(value: Nat) -> Nil
 
+ability Tick {
+    op tick() -> Nat
+}
+
 fn apply(f: fn(Nat) ->{e} Nat, value: Nat) ->{e} Nat { f(value) }
 
+fn run(seed: fn() ->{r} Nat) ->{r} Nat { apply(fn(x) { x + 1 }, seed()) }
+
 fn main() -> Nil {
-    __tribute_print_nat(apply(fn(x) { x + 1 }, 41))
+    let result = handle run(fn() { Tick::tick() }) {
+        do value { value }
+        op Tick::tick() { resume 41 }
+    }
+    __tribute_print_nat(result)
 }
 "#,
         );
@@ -2406,19 +2416,21 @@ fn main() -> Nil {
         let calls: Vec<_> = clif_indirect_calls(&ctx, module)
             .into_iter()
             .filter(|&call| {
-                ctx.op_operands(call).last().is_some_and(|&argument| {
-                    matches!(
-                        ctx.value_def(argument),
-                        trunk_ir::refs::ValueDef::OpResult(producer, _)
-                            if clif::Iadd::matches(&ctx, producer)
-                    )
-                })
+                clif::ReturnCallIndirect::matches(&ctx, call)
+                    && ctx.op_operands(call).len() == 3
+                    && ctx.op_operands(call).last().is_some_and(|&argument| {
+                        matches!(
+                            ctx.value_def(argument),
+                            trunk_ir::refs::ValueDef::OpResult(producer, _)
+                                if clif::Iadd::matches(&ctx, producer)
+                        )
+                    })
             })
             .collect();
         assert_eq!(
             calls.len(),
             1,
-            "open callback fixture must have one CPS call with the addition result"
+            "the Cps callback fixture must have one CPS call with the addition result"
         );
         let call = calls[0];
         let [callee, continuation_environment, value] = ctx.op_operands(call) else {
@@ -3669,7 +3681,8 @@ fn main() -> Nil {
             );
             let (_, monomorphized) =
                 merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
-            let specialized = trunk_ir::Symbol::new("run_state$Nat$Nat");
+            // Root `main` selects the instance for an empty row tail.
+            let specialized = trunk_ir::Symbol::new("run_state$Nat$Nat$9D");
             let scheme = monomorphized
                 .function_types
                 .get(&specialized)

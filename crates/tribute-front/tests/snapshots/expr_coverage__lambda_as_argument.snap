@@ -9,7 +9,7 @@ core.module @test {
       %2 = tribute_control.call_indirect %0, %1 : core.i32
       tribute_control.return %2
   }
-  tribute_control.func @test_lambda() -> core.i32 convention(cps) {
+  tribute_control.func @test_lambda() -> core.i32 convention(direct) {
       %0 = tribute_control.lambda(%1: core.i32) -> core.i32 convention(cps) captures [] {
           tribute_control.return %1
       }

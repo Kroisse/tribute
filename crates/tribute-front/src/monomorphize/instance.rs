@@ -54,6 +54,9 @@ impl<'db> InstanceKey<'db> {
     }
 }
 
+/// The name of the root entry function, which is its own instance.
+pub(crate) const ROOT_MAIN: &str = "main";
+
 /// The convention class of each class variable of every function instance,
 /// by the instance's name.
 pub type InstanceRowClasses = HashMap<Symbol, Vec<(EffectVar, CallingConvention)>>;
@@ -96,11 +99,24 @@ impl<'db> InstanceKeys<'db> {
             (id, definition)
         }));
         let class_variables = settle_class_variables(definitions);
+        // Nothing instantiates the row of root `main`, so its tail is empty.
+        let root = Symbol::new(ROOT_MAIN);
+        let row_classes = class_variables
+            .get(&FuncDefId::new(db, root.clone()))
+            .map(|variables| {
+                let classes = variables
+                    .iter()
+                    .map(|(_, variable)| (*variable, CallingConvention::Direct))
+                    .collect();
+                (root, classes)
+            })
+            .into_iter()
+            .collect();
         Self {
             db,
             class_variables,
             abilities: metadata.ability_conventions.clone(),
-            row_classes: HashMap::default(),
+            row_classes,
         }
     }
 

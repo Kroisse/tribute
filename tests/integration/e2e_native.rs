@@ -2998,3 +2998,25 @@ fn main() ->{Io} Nil {
         "io\n42",
     );
 }
+
+/// A pure function that modifies a field through method syntax selects the
+/// modifier's `Direct` instance and stays a pure callable.
+#[test]
+fn a_pure_function_modifies_a_field_through_method_syntax() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "pure_method_field_modifier.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct Name { text: String }
+
+fn bump(n: Name) -> Name { n.text::modify(fn(t) t <> "!") }
+fn twice(f: fn(Name) ->{} Name, n: Name) -> Name { f(f(n)) }
+
+fn main() ->{Io} Nil {
+    print_line(Name::text(twice(bump, Name { text: "io" })))
+}
+"#,
+        "io!!",
+    );
+}
