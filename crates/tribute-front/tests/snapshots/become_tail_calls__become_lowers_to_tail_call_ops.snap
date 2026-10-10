@@ -59,7 +59,7 @@ core.module @test {
   tribute_control.func @apply(%0: !t1, %1: core.i32) -> core.i32 convention(cps) {
       tribute_control.tail_call_indirect %0, %1
   }
-  tribute_control.func @countdown(%0: core.i32) -> core.i32 convention(cps) {
+  tribute_control.func @countdown(%0: core.i32) -> core.i32 convention(direct) {
       %1 = tribute_control.lambda(%2: core.i32) -> core.i32 convention(cps) captures [] {
           %3 = arith.const {value = 0} : core.i32
           %4 = tribute_control.call %2, %3 {callee = @"std::Int::=="} : core.i1
