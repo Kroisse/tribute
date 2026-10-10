@@ -514,6 +514,10 @@ mod tests {
             dealloc(second, 8);
         }
         assert_eq!(live(), before);
+        // With nothing live the exit check returns instead of aborting.
+        if before == (0, 0) {
+            __asan_exit();
+        }
 
         ASAN_ENABLED.store(false, Ordering::SeqCst);
     }
