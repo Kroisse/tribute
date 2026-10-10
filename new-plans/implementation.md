@@ -460,6 +460,10 @@ frontend가 각 `tribute_control.perform.operation_kind`에 이를 복사한다.
 `tribute_control_to_cps`는 이를 직접 소비하며 `CallingConvention`, handler-body
 analysis, effect-row bound 중 어느 것도 kind를 재구성하거나 변경하지 않는다.
 
+Typechecking은 convention을 계산하지 않는다. Function type은 effect row만 가지며,
+type 추론과 unification은 convention을 보지 않는다. Convention은 typechecking 뒤의
+특수화와 source-logical lowering이 row와 ability의 operation kind에서 계산한다.
+
 Effect annotation 생략은 closed-empty 추론이 아니다.
 
 ```text

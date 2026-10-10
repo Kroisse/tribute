@@ -45,7 +45,6 @@ use super::context::ModuleTypeEnv;
 use super::{
     DefinitionIdentity, PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes,
 };
-use crate::ast::CallingConvention;
 
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
@@ -63,8 +62,6 @@ pub struct ModuleCheckResult<'db> {
     pub local_instances: SortedMap<NodeId, super::LocalCallableInstance<'db>>,
     /// Non-identity evidence selections of calls and resumes.
     pub evidence_plans: SortedMap<NodeId, Vec<super::EvidenceStep<'db>>>,
-    /// Ability-level calling-convention requirements.
-    pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
     /// Exact semantic operation instances for handler arms.
     pub handler_operations: SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     /// Exact semantic operation instances for ability-operation calls.
@@ -310,7 +307,6 @@ impl<'db> TypeChecker<'db> {
         // Export the function types (already finalized during per-function checking)
         let function_types = self.env.export_function_types();
         let constructor_types = self.env.export_constructor_types();
-        let ability_conventions = self.env.export_ability_conventions();
         let ability_definitions = self.env.export_ability_defs();
         let well_known_types = self.env.well_known_types();
 
@@ -328,7 +324,6 @@ impl<'db> TypeChecker<'db> {
             function_instances: self.function_instances.into_iter().collect(),
             local_instances: self.local_instances.into_iter().collect(),
             evidence_plans: self.evidence_plans.into_iter().collect(),
-            ability_conventions,
             handler_operations: self.handler_operations.into_iter().collect(),
             perform_operations: self.perform_operations.into_iter().collect(),
             lambda_signatures: self.lambda_signatures.into_iter().collect(),
@@ -350,7 +345,6 @@ impl<'db> TypeChecker<'db> {
             self.env.export_enum_variants(),
             self.env.export_constructor_field_names(),
             self.env.export_method_index(),
-            self.env.export_ability_conventions(),
             self.env.export_ability_defs_for_prelude(),
             well_known_types,
         )

@@ -380,7 +380,6 @@ pub(super) fn materialize<'db>(
     for key in requests {
         let signature = LambdaSignature {
             function_type: key.1,
-            convention: builder.ctx.calling_convention_for_type(key.1)?,
         };
         let value = lower_lambda(
             builder,

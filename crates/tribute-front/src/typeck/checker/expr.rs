@@ -555,7 +555,6 @@ impl<'db> TypeChecker<'db> {
                     expr.id,
                     crate::typeck::LambdaSignature {
                         function_type: lambda_type,
-                        convention: crate::ast::CallingConvention::Direct,
                     },
                 );
                 lambda_type
@@ -770,7 +769,6 @@ impl<'db> TypeChecker<'db> {
                 expr.id,
                 crate::typeck::LambdaSignature {
                     function_type: lambda_signature_type,
-                    convention: crate::ast::CallingConvention::Direct,
                 },
             );
         }

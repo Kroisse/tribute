@@ -2,11 +2,29 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use super::{AbilityId, EffectRow, EffectVar, Type, TypeKind};
+use super::{AbilityId, EffectRow, EffectVar, OpDeclKind, Type, TypeKind};
 pub use tribute_core::CallingConvention;
 
 /// The convention class of each class variable of one function instance.
 pub type RowClasses = [(EffectVar, CallingConvention)];
+
+/// The convention each ability requires of a callable whose row names it:
+/// `Cps` when it declares an `op`, `EvidenceDirect` otherwise.
+pub fn ability_conventions<'db>(
+    abilities: impl IntoIterator<Item = (AbilityId<'db>, impl IntoIterator<Item = OpDeclKind>)>,
+) -> HashMap<AbilityId<'db>, CallingConvention> {
+    abilities
+        .into_iter()
+        .map(|(ability, operations)| {
+            let convention = if operations.into_iter().any(|kind| kind == OpDeclKind::Op) {
+                CallingConvention::Cps
+            } else {
+                CallingConvention::EvidenceDirect
+            };
+            (ability, convention)
+        })
+        .collect()
+}
 
 /// Derive a convention from an effect row and ability-level requirements.
 ///

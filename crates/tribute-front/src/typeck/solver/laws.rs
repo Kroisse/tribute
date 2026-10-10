@@ -7,9 +7,6 @@
 //! - A closed empty row unified against a row that names effects succeeds
 //!   without binding (pure subsumption); [`RowRelation::PureSubsumes`]
 //!   accounts for it.
-//! - Function types are generated with the `Direct` convention floor, the
-//!   only floor source function types carry; unification does not relate
-//!   floors.
 //!
 //! The tests at the end are minimal examples of cases the laws once found
 //! failing, kept as regressions.
