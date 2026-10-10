@@ -3058,3 +3058,51 @@ fn main() ->{Io} Nil {
         "10\n2000000",
     );
 }
+
+/// A let-bound lambda takes the class its uses select: used as a pure
+/// callable, it and the row-polymorphic call in its body are `Direct`.
+#[test]
+fn a_let_bound_lambda_takes_the_class_of_its_use() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "let_bound_lambda_class.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
+
+fn main() ->{Io} Nil {
+    let g = fn(s: String) app(s, fn(t) t <> "!")
+    print_line(twice(g, "io"))
+}
+"#,
+        "io!!",
+    );
+}
+
+/// A function and the lambda it binds `become` each other: the lambda takes
+/// the class of the function's row, so both transfers are proper tail calls.
+#[test]
+fn a_function_and_its_let_bound_lambda_become_each_other() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "become_through_let_bound_lambda.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn countdown(n: Int) -> Int {
+    let step = fn(m: Int) -> Int {
+        case m == +0 {
+            True -> m
+            False -> become countdown(m - +1)
+        }
+    }
+    become step(n)
+}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(countdown(+1000000)))
+}
+"#,
+        "0",
+    );
+}

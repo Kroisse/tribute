@@ -85,7 +85,8 @@ pub fn monomorphize_functions<'db>(
     let mut instantiations: HashMap<_, HashSet<_>> = HashMap::default();
     let mut reached_fixpoint = false;
     let mut keys = InstanceKeys::new(db, &module, &source_function_types, &metadata);
-    close_root_lambdas(db, &module, &mut metadata, &keys);
+    // A use can pass on the class of a callable bound before it.
+    while keys.settle_local_classes(&module.decls, &metadata) {}
 
     // A concrete clone can reveal direct calls that were abstract in its
     // source body. Clone the metadata first, then collect only unseen keys.
@@ -147,6 +148,7 @@ pub fn monomorphize_functions<'db>(
             .into_iter()
             .map(Decl::Function)
             .collect();
+        while keys.settle_local_classes(&specialized_decls, &metadata) {}
         rewrite::rewrite_decls(
             db,
             &mut specialized_decls,
@@ -169,6 +171,7 @@ pub fn monomorphize_functions<'db>(
             kind: InstanceErrorKind::ExpansionLimit,
         }]);
     }
+    close_lambdas(db, &module, &mut metadata, &keys);
     let mut fn_types_vec = all_function_types;
 
     // === Type monomorphization (struct/enum) ===
@@ -596,35 +599,35 @@ fn build_rewrite_map<'db>(
     rewrite_map
 }
 
-/// Give the lambdas of root `main` the conventions of its row classes, as
-/// the lambdas of a cloned instance get theirs.
-fn close_root_lambdas<'db>(
+/// Give the lambdas of every function the conventions its row classes
+/// select: a lambda's row can end in a class variable of the instance or in
+/// the row variable of a let-bound callable.
+fn close_lambdas<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     metadata: &mut MonomorphizeMetadata<'db>,
     keys: &InstanceKeys<'db>,
 ) {
-    let Some(classes) = keys.row_classes.get(&Symbol::new(instance::ROOT_MAIN)) else {
-        return;
-    };
-    let Some(main) = module.decls.iter().find_map(|decl| match decl {
-        Decl::Function(function) if function.name == instance::ROOT_MAIN => Some(function),
-        _ => None,
-    }) else {
-        return;
-    };
-    main.body.for_each(|expr| {
-        if let Some(signature) = metadata.lambda_signatures.get_mut(&expr.id)
-            && let Some(convention) = crate::ast::calling_convention_for_function_type_in(
-                db,
-                signature.function_type,
-                &metadata.ability_conventions,
-                classes,
-            )
-        {
-            signature.convention = convention;
-        }
-    });
+    for decl in &module.decls {
+        let Decl::Function(function) = decl else {
+            continue;
+        };
+        let Some(classes) = keys.row_classes.get(&function.name) else {
+            continue;
+        };
+        function.body.for_each(|expr| {
+            if let Some(signature) = metadata.lambda_signatures.get_mut(&expr.id)
+                && let Some(convention) = crate::ast::calling_convention_for_function_type_in(
+                    db,
+                    signature.function_type,
+                    &metadata.ability_conventions,
+                    classes,
+                )
+            {
+                signature.convention = convention;
+            }
+        });
+    }
 }
 
 #[cfg(test)]

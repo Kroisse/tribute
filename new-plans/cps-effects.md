@@ -36,7 +36,8 @@ Local lambda의 convention도 typechecking이 확정한 effect row에서 계산�
 검사한 callable context의 open tail만 callable type에 남긴다. 본문이 요구한
 ability는 row에 남으며 그 ability의 convention lower bound를 적용한다. Row의 tail은
 람다를 둘러싼 정의의 [convention class](generics.md#row-변수의-convention-class)로
-읽는다. Class가 없는 tail만 `Cps`를 요구한다.
+읽는다. `let`에 묶인 람다가 양화한 tail은 그 binding의 class로 읽는다. Class가 없는
+tail만 `Cps`를 요구한다.
 
 한 람다 식은 쓰이는 convention마다 한 번씩 생성한다. 이는 이미 생성된 Cps 값을
 Direct로 cast하는 것이 아니다. Named callable은 정확한 target identity를 가진

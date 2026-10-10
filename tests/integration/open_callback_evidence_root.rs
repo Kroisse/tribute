@@ -175,6 +175,58 @@ fn main() -> Nil {
     );
 }
 
+/// A let-bound lambda used at two classes takes their join, and one used at
+/// an empty row is `Direct`.
+#[salsa_test]
+fn let_bound_lambdas_take_the_join_of_their_uses(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: Int, f: fn(Int) ->{e} Int) ->{e} Int { f(x) }
+
+fn each(n: Int) -> Int {
+    let step = fn(m: Int) -> Int { m + +1 }
+    step(n)
+}
+
+fn main() ->{Io} Nil {
+    let both = fn(x: Int, f: fn(Int) ->{e} Int) app(x, f)
+    let _ = both(+1, fn(n) n + +1)
+    let _ = both(+2, fn(n) { print_line("io") n })
+    let _ = each(+3)
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let main = ir
+        .split("tribute_control.func @main(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .expect("root main");
+    // `both` is used with a pure and with an `Io` callback.
+    assert!(main.contains("callee = @\"app$9E\""), "{main}");
+    assert!(!main.contains("callee = @app}"), "{main}");
+    // `step` is used at an empty row, so it and `each` need no Cps control.
+    let each = ir
+        .split("tribute_control.func @each(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .expect("each");
+    assert!(
+        each.starts_with("%0: core.i32) -> core.i32 convention(direct)"),
+        "{each}"
+    );
+    assert!(
+        each.contains("tribute_control.lambda") && !each.contains("convention(cps)"),
+        "{each}"
+    );
+}
+
 #[test]
 fn generic_callback_evidence_root_executes_native() {
     let output = common::compile_and_run_native("test.trb", SOURCE);
