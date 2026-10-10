@@ -2,6 +2,9 @@
 
 use trunk_ir::attr_kind::SymbolRef;
 
+// A closure value points to a reference-counted closure object.
+inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Closure>());
+
 #[trunk_ir::dialect]
 mod closure {
     // Types

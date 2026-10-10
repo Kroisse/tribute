@@ -3,6 +3,13 @@
 // === Managed reference registrations ===
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Intref>());
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Anyref>());
+// A native `Bytes` value points to a reference-counted object.
+inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::named(
+    "core", "bytes"
+));
+
+use crate::dialect::tribute_rtti::ManagedRef;
+use trunk_ir::dialect::core::Ptr;
 
 #[trunk_ir::dialect]
 mod tribute_rt {
@@ -29,12 +36,12 @@ mod tribute_rt {
 
     /// Consume one managed ownership unit while crossing a native raw-pointer
     /// representation boundary. This is deliberately not a pure operation.
-    fn into_raw(value: Value<_>) -> Value<_> {}
+    fn into_raw(value: Value<impl ManagedRef>) -> Value<Ptr> {}
 
     /// Receive one managed ownership unit from a raw pointer to a
     /// reference-counted object. The inverse of `into_raw`, and like it not a
     /// pure operation: dropping it would leak the unit.
-    fn from_raw(ptr: Value<_>) -> Value<_> {}
+    fn from_raw(ptr: Value<Ptr>) -> Value<impl ManagedRef> {}
 }
 
 // === RC Header Layout ===
@@ -161,8 +168,17 @@ mod tests {
         check!(BoxFloat, value, f64_ty, ptr_ty);
         check!(BoxBool, value, bool_ty, ptr_ty);
         check!(Retain, ptr, ptr_ty, ptr_ty);
-        check!(IntoRaw, value, managed_ty, ptr_ty);
         check!(FromRaw, ptr, ptr_ty, managed_ty);
+
+        // `into_raw` infers its `core.ptr` result.
+        let managed = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(managed_ty)
+            .build(&mut ctx, loc)
+            .result(&ctx);
+        let into_raw = super::IntoRaw::operands(managed).build(&mut ctx, loc);
+        assert_eq!(into_raw.value(&ctx), managed);
+        assert_eq!(ctx.value_ty(into_raw.result(&ctx)), ptr_ty);
     }
 
     #[test]
