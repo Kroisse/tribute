@@ -30,7 +30,7 @@ use crate::ast::{
 
 use super::super::context::IrLoweringCtx;
 use super::super::{FrontendIrModule, TypedModule};
-use super::{FuncSignature, IrBuilder, expr};
+use super::{FuncSignature, IrBuilder};
 
 mod local_callables;
 
@@ -385,7 +385,6 @@ pub(super) fn lower_module<'db>(
         function_local_callables: HashMap::default(),
     };
     prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
-    promote_definition_conventions_to_fixed_point(&mut ctx, &ast.decls, &mut String::new());
     let mut well_known_type_prescan = super::decl::WellKnownTypePrescan::new(well_known_types);
     collect_logical_nominal_identities(&mut ctx, &ast.decls, &mut String::new());
     prescan_logical_nominal_layouts(
@@ -399,17 +398,13 @@ pub(super) fn lower_module<'db>(
     );
     prescan_struct_accessor_signatures(&mut ctx, ir, &ast.decls);
     prescan_source_functions(&mut ctx, &ast.decls);
-    // A strengthened function can strengthen the lambdas that call it, so
-    // plan again until the conventions the plans were made with are final.
-    while plan_local_callables(
+    plan_local_callables(
         &mut ctx,
         ir,
         &ast.decls,
         &mut String::new(),
         &mut declarations,
-    ) {
-        promote_definition_conventions_to_fixed_point(&mut ctx, &ast.decls, &mut String::new());
-    }
+    );
     let well_known_types = well_known_type_prescan.finish();
     for declaration in ast.decls {
         lower_decl(&mut ctx, ir, module_block, declaration, &mut declarations);
@@ -467,8 +462,7 @@ fn prescan_definition_conventions<'db>(
                 }
                 ctx.register_definition_convention(name, convention);
             }
-            // A field's modifier performs whatever its callback performs, so
-            // its callers must already see it as Cps when they are promoted.
+            // A field's modifier performs whatever its callback performs.
             Decl::Struct(declaration) => {
                 let saved = crate::push_prefix(prefix, &declaration.name);
                 for field in declaration
@@ -496,71 +490,16 @@ fn prescan_definition_conventions<'db>(
     }
 }
 
-/// Strengthen workers until direct calls and structured logical evaluation no
-/// longer leave a Direct/EvidenceDirect worker responsible for CPS control.
-fn promote_definition_conventions_to_fixed_point<'db>(
-    ctx: &mut IrLoweringCtx<'db>,
-    declarations: &[Decl<TypedRef<'db>>],
-    prefix: &mut String,
-) {
-    loop {
-        let mut changed = false;
-        promote_definition_conventions_pass(ctx, declarations, prefix, &mut changed);
-        if !changed {
-            return;
-        }
-    }
-}
-
-fn promote_definition_conventions_pass<'db>(
-    ctx: &mut IrLoweringCtx<'db>,
-    declarations: &[Decl<TypedRef<'db>>],
-    prefix: &mut String,
-    changed: &mut bool,
-) {
-    for declaration in declarations {
-        match declaration {
-            Decl::Function(function) => {
-                let name = declaration_name(prefix, function.name.clone());
-                let outer = ctx.enter_definition(&name);
-                if ctx.function_calling_convention(&name) != Some(CallingConvention::Cps)
-                    && expr::logical_evaluation_control_class(
-                        ctx,
-                        &function.body,
-                        &HashSet::default(),
-                    ) == expr::EvaluationControlClass::Cps
-                {
-                    ctx.register_definition_convention(name, CallingConvention::Cps);
-                    *changed = true;
-                }
-                ctx.leave_definition(outer);
-            }
-            Decl::Module(module) => {
-                if let Some(body) = &module.body {
-                    let saved = crate::push_prefix(prefix, &module.name);
-                    promote_definition_conventions_pass(ctx, body, prefix, changed);
-                    prefix.truncate(saved);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Plan the local callables of every function, and strengthen the lambdas and
-/// functions that need Cps control because of a local call. A plan gives a
-/// pure use of a lambda its own instance where it can; a use it leaves alone
-/// reads the lambda as it was written, so its caller needs Cps control like
-/// the caller of a Cps definition. Returns whether a function was
-/// strengthened.
+/// Plan the local callables of every function. A plan gives a pure use of a
+/// lambda its own instance where it can; a use it leaves alone reads the
+/// lambda as it was written.
 fn plan_local_callables<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     ast: &[Decl<TypedRef<'db>>],
     prefix: &mut String,
     declarations: &mut Declarations<'db>,
-) -> bool {
-    let mut changed = false;
+) {
     for declaration in ast {
         match declaration {
             Decl::Function(function) => {
@@ -569,21 +508,13 @@ fn plan_local_callables<'db>(
                     continue;
                 };
                 let outer = ctx.enter_definition(&name);
-                let mut plan = local_callables::Plan::collect(
+                let plan = local_callables::Plan::collect(
                     ctx,
                     ir,
                     &function.body,
                     declarations,
                     scheme.type_params(ctx.db).len(),
                 );
-                let cps_calls = plan.settle_conventions(ctx, ir, &function.body, declarations);
-                if ctx.function_calling_convention(&name) != Some(CallingConvention::Cps)
-                    && expr::logical_evaluation_control_class(ctx, &function.body, &cps_calls)
-                        == expr::EvaluationControlClass::Cps
-                {
-                    ctx.register_definition_convention(name, CallingConvention::Cps);
-                    changed = true;
-                }
                 declarations
                     .function_local_callables
                     .insert(function.id, plan);
@@ -592,14 +523,13 @@ fn plan_local_callables<'db>(
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
                     let saved = crate::push_prefix(prefix, &module.name);
-                    changed |= plan_local_callables(ctx, ir, body, prefix, declarations);
+                    plan_local_callables(ctx, ir, body, prefix, declarations);
                     prefix.truncate(saved);
                 }
             }
             _ => {}
         }
     }
-    changed
 }
 
 impl<'db> TypedModule<'db> {

@@ -755,7 +755,7 @@ fn main() -> Nil { }
 /// before `apply_open` so this also proves named-call propagation needs a
 /// fixed-point pass rather than a declaration-order scan.
 #[salsa_test]
-fn test_open_callback_workers_promote_to_cps(db: &salsa::DatabaseImpl) {
+fn test_open_callback_workers_are_cps_and_their_caller_is_not(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
@@ -840,12 +840,9 @@ fn main() -> Nil {
     let main = checked_logical_function(&ir_text, "main");
     let main_header = main.lines().next().expect("logical function has a header");
     assert!(
-        main_header.contains("convention(cps)"),
-        "root main worker must be promoted to Cps:\n{main_header}"
-    );
-    assert!(
-        main_header.contains("tribute.root_source_result = core.nil"),
-        "root source result must stay core.nil:\n{main_header}"
+        main_header.contains("convention(direct)")
+            && !main_header.contains("tribute.root_source_result"),
+        "a call to a Cps worker leaves the root main as its row has it:\n{main_header}"
     );
     assert!(
         main.contains("tribute_control.call"),
@@ -853,7 +850,7 @@ fn main() -> Nil {
     );
     assert!(
         main.contains("callee = @forward_open"),
-        "root main must call the promoted forward_open worker:\n{main}"
+        "root main must call the forward_open worker:\n{main}"
     );
     assert!(
         !ir_text.contains("Nested::Nested::"),
@@ -871,10 +868,10 @@ fn main() -> Nil {
     );
 }
 
-/// An `Io` root promoted for an open-callback call is marked only by its
-/// source result.
+/// An `Io` root that calls an open-callback worker keeps the convention of
+/// its row.
 #[salsa_test]
-fn test_open_callback_evidence_root_main_is_marked_by_its_source_result(db: &salsa::DatabaseImpl) {
+fn test_open_callback_leaves_the_evidence_root_as_it_is(db: &salsa::DatabaseImpl) {
     // This helper lowers before monomorphization. The original generic fixture
     // is covered through the production pipeline in tests/integration/open_callback_evidence_root.rs.
     let source = SourceCst::from_source_str(
@@ -898,9 +895,9 @@ fn main() ->{std::io::Io} Nil {
         .find(|line| line.trim_start().starts_with("tribute_control.func @main("))
         .expect("missing lowered root main");
     assert!(
-        main_header.contains("convention(cps)")
-            && main_header.contains("tribute.root_source_result = core.nil"),
-        "the promoted Io root is marked by its source result alone:\n{main_header}"
+        main_header.contains("convention(evidence_direct)")
+            && !main_header.contains("tribute.root_source_result"),
+        "the Io root keeps the convention of its row:\n{main_header}"
     );
 }
 
@@ -933,10 +930,10 @@ fn main() -> Nil { }
     );
 }
 
-/// A nested open-callback `main` is promoted as an ordinary worker; only the
-/// exact root entrypoint receives the frontend delimiter exemption.
+/// A nested `main` that calls an open-callback worker is an ordinary function
+/// with the convention of its own row.
 #[salsa_test]
-fn test_nested_open_callback_main_promotes_to_cps(db: &salsa::DatabaseImpl) {
+fn test_nested_open_callback_main_keeps_its_convention(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
@@ -964,8 +961,8 @@ fn main() -> Nil { }
         })
         .expect("missing lowered Nested::main worker");
     assert!(
-        nested_main.contains("convention(cps)"),
-        "nested open-callback main must be promoted to Cps:\n{nested_main}"
+        nested_main.contains("convention(direct)"),
+        "nested open-callback main keeps the convention of its row:\n{nested_main}"
     );
 }
 

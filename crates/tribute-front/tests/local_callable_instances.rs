@@ -241,9 +241,9 @@ fn main() ->{} Int {
 }
 
 #[salsa_test]
-fn caller_of_an_original_cps_lambda_is_cps(db: &salsa::DatabaseImpl) {
-    // `g` is checked at a pure row in `main`, but its body calls the Cps
-    // worker of `app`, so no pure instance of it exists.
+fn caller_of_a_cps_worker_keeps_the_convention_of_its_row(db: &salsa::DatabaseImpl) {
+    // `g` has an open row, so it is Cps. `main` calls it at a pure row and
+    // keeps the convention of its own row.
     let source = SourceCst::from_source_str(
         db,
         "original_cps_lambda.trb",
@@ -263,7 +263,7 @@ fn main() ->{} Int {
         })
         .map(|line| line.contains("convention(cps)"))
         .collect();
-    assert_eq!(conventions, [true, true, true], "{ir}");
+    assert_eq!(conventions, [false, true, true], "{ir}");
 }
 
 #[salsa_test]
