@@ -54,6 +54,9 @@ impl<'db> InstanceKey<'db> {
     }
 }
 
+/// The name of the root entry function, which is its own instance.
+pub(crate) const ROOT_MAIN: &str = "main";
+
 /// The convention class of each class variable of every function instance,
 /// by the instance's name.
 pub type InstanceRowClasses = HashMap<Symbol, Vec<(EffectVar, CallingConvention)>>;
@@ -96,11 +99,26 @@ impl<'db> InstanceKeys<'db> {
             (id, definition)
         }));
         let class_variables = settle_class_variables(definitions);
+        // A definition is its own instance with every class `Cps`, except
+        // root `main`: nothing instantiates its row, so its tail is empty.
+        let root = FuncDefId::new(db, Symbol::new(ROOT_MAIN));
+        let row_classes = class_variables
+            .iter()
+            .map(|(id, variables)| {
+                let class = if *id == root {
+                    CallingConvention::Direct
+                } else {
+                    CallingConvention::Cps
+                };
+                let classes = variables.iter().map(|(_, variable)| (*variable, class));
+                (id.qualified(db).clone(), classes.collect())
+            })
+            .collect();
         Self {
             db,
             class_variables,
             abilities: metadata.ability_conventions.clone(),
-            row_classes: HashMap::default(),
+            row_classes,
         }
     }
 
@@ -148,10 +166,9 @@ impl<'db> InstanceKeys<'db> {
         function: FuncDefId<'db>,
         key: &InstanceKey<'db>,
     ) {
-        if !key.has_weaker_class() {
+        let Some(variables) = self.class_variables.get(&function) else {
             return;
-        }
-        let variables = &self.class_variables[&function];
+        };
         let classes = variables
             .iter()
             .map(|(_, variable)| *variable)

@@ -2998,3 +2998,63 @@ fn main() ->{Io} Nil {
         "io\n42",
     );
 }
+
+/// A pure function that modifies a field through method syntax selects the
+/// modifier's `Direct` instance and stays a pure callable.
+#[test]
+fn a_pure_function_modifies_a_field_through_method_syntax() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "pure_method_field_modifier.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct Name { text: String }
+
+fn bump(n: Name) -> Name { n.text::modify(fn(t) t <> "!") }
+fn twice(f: fn(Name) ->{} Name, n: Name) -> Name { f(f(n)) }
+
+fn main() ->{Io} Nil {
+    print_line(Name::text(twice(bump, Name { text: "io" })))
+}
+"#,
+        "io!!",
+    );
+}
+
+/// A definition whose omitted row ends in a class variable is `Cps` where
+/// that variable is: used at a row with an `op` ability, its `become` into a
+/// row-polymorphic function stays a proper tail call between Cps workers.
+#[test]
+fn an_unannotated_function_becomes_at_the_class_of_its_use() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "unannotated_become_class.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Int
+}
+
+fn go(f: fn(Int) ->{e} Int, n: Int, acc: Int) ->{e} Int {
+    case n == +0 {
+        True -> acc
+        False -> become go(f, n - +1, f(acc))
+    }
+}
+
+fn start(n: Int) -> Int { become go(fn(x) x + +2, n, +0) }
+
+fn asking(g: fn(Int) ->{Ask} Int) ->{Ask} Int { g(+5) }
+
+fn main() ->{Io} Nil {
+    let answer = handle asking(start) {
+        do value { value }
+        op Ask::ask() { resume +0 }
+    }
+    print_line(Int::to_string(answer))
+    print_line(Int::to_string(start(+1000000)))
+}
+"#,
+        "10\n2000000",
+    );
+}
