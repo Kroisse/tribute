@@ -30,11 +30,13 @@ fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: boo
     let main_sym = Symbol::new("main");
     let init_sym = Symbol::new("__tribute_init");
     let asan_init_sym = Symbol::new("__asan_init");
+    let asan_exit_sym = Symbol::new("__asan_exit");
 
     let ops = &ctx.block(first_block).ops;
     let mut main_op = None;
     let mut has_tribute_init = false;
     let mut has_asan_init = false;
+    let mut has_asan_exit = false;
     for &op in ops {
         if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx);
@@ -46,6 +48,9 @@ fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: boo
             }
             if name == asan_init_sym {
                 has_asan_init = true;
+            }
+            if name == asan_exit_sym {
+                has_asan_exit = true;
             }
         }
     }
@@ -82,6 +87,10 @@ fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: boo
         let asan_op = super::build_extern_func(ctx, loc, "__asan_init", &[], nil_ty);
         ctx.insert_op_before(first_block, ctx.block(first_block).ops[0], asan_op);
     }
+    if sanitize && !has_asan_exit {
+        let asan_op = super::build_extern_func(ctx, loc, "__asan_exit", &[], nil_ty);
+        ctx.insert_op_before(first_block, ctx.block(first_block).ops[0], asan_op);
+    }
 
     // Initialize ASan before anything else, then the runtime TLS before any
     // ability use.
@@ -109,6 +118,14 @@ fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: boo
             .collect();
         for ret in returns {
             let location = ctx.op(ret).location;
+            if sanitize {
+                // Report the allocations the program left live.
+                let exit = func::Call::operands([])
+                    .callee(asan_exit_sym.clone().into())
+                    .results([nil_ty])
+                    .build(ctx, location);
+                ctx.insert_op_before(block, ret, exit.op_ref());
+            }
             replace_with_exit_code(ctx, block, ret, i32_ty, location);
         }
     }
@@ -228,8 +245,16 @@ mod tests {
         let worker = printed
             .find("func.call {callee = @__tribute_main}")
             .expect("worker call");
-        assert!(asan < init && init < worker, "{printed}");
+        let exit = printed
+            .find("func.call {callee = @__asan_exit}")
+            .expect("asan exit call");
+        let ret = printed.rfind("func.return").expect("exit return");
+        assert!(
+            asan < init && init < worker && worker < exit && exit < ret,
+            "{printed}"
+        );
         assert!(printed.contains("func.func @__asan_init()"), "{printed}");
+        assert!(printed.contains("func.func @__asan_exit()"), "{printed}");
     }
 
     #[test]
