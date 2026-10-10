@@ -824,7 +824,10 @@ impl<'db> Resolver<'db> {
                 .expect("pushed above")
                 .extend(resolved);
         }
-        let mut functions: HashMap<Symbol, Vec<crate::ast::FuncDefId<'db>>> = HashMap::default();
+        // A name that also imports something other than a function imports
+        // no choice of functions.
+        let mut functions: HashMap<Symbol, Option<Vec<crate::ast::FuncDefId<'db>>>> =
+            HashMap::default();
         for import in &uses {
             let Some(name) = import.alias.clone().or_else(|| import.path.last().cloned()) else {
                 continue;
@@ -835,14 +838,19 @@ impl<'db> Resolver<'db> {
                         Some(Binding::Function { id }) => Some(*id),
                         _ => None,
                     });
-            let imported = functions.entry(name).or_default();
-            if let Some(function) = function
-                && !imported.contains(&function)
-            {
-                imported.push(function);
+            let imported = functions.entry(name).or_insert_with(|| Some(Vec::new()));
+            match (imported.as_mut(), function) {
+                (Some(imported), Some(function)) if !imported.contains(&function) => {
+                    imported.push(function);
+                }
+                (Some(_), Some(_)) => {}
+                _ => *imported = None,
             }
         }
-        functions.retain(|_, imported| imported.len() > 1);
+        let functions = functions
+            .into_iter()
+            .filter_map(|(name, imported)| Some((name, imported.filter(|f| f.len() > 1)?)))
+            .collect();
         self.module_imported_functions.push(functions);
         let body = module.body.as_ref().map(|decls| self.resolve_decls(decls));
         self.module_imported_functions.pop();
