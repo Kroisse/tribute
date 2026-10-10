@@ -840,8 +840,7 @@ fn main() -> Nil {
     let main = checked_logical_function(&ir_text, "main");
     let main_header = main.lines().next().expect("logical function has a header");
     assert!(
-        main_header.contains("convention(direct)")
-            && !main_header.contains("tribute.root_source_result"),
+        main_header.contains("convention(direct)"),
         "a call to a Cps worker leaves the root main as its row has it:\n{main_header}"
     );
     assert!(
@@ -895,8 +894,7 @@ fn main() ->{std::io::Io} Nil {
         .find(|line| line.trim_start().starts_with("tribute_control.func @main("))
         .expect("missing lowered root main");
     assert!(
-        main_header.contains("convention(evidence_direct)")
-            && !main_header.contains("tribute.root_source_result"),
+        main_header.contains("convention(evidence_direct)"),
         "the Io root keeps the convention of its row:\n{main_header}"
     );
 }

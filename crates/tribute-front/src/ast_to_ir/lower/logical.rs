@@ -1059,35 +1059,6 @@ fn lower_function<'db>(
     declarations: &mut Declarations<'db>,
 ) {
     let location = ctx.location(function.id);
-    let root_convention =
-        crate::is_root_main(&function.name, ctx.module_path().len() == 1).then(|| {
-            let name = ctx.qualify_name(&function.name);
-            let scheme = ctx
-                .lookup_function_type(&name)
-                .expect("root main has a typechecked logical signature");
-            // Nothing calls the root entry to supply its effect tail, so the
-            // entry instantiates an open tail as the empty row.
-            let ty = scheme.body(ctx.db);
-            let entry_ty = match ty.kind(ctx.db) {
-                crate::ast::TypeKind::Func {
-                    params,
-                    result,
-                    effect,
-                    minimum_convention,
-                } if effect.rest(ctx.db).is_some() => crate::ast::Type::new(
-                    ctx.db,
-                    crate::ast::TypeKind::Func {
-                        params: params.clone(),
-                        result: *result,
-                        effect: crate::ast::EffectRow::new(ctx.db, effect.effects(ctx.db), None),
-                        minimum_convention: *minimum_convention,
-                    },
-                ),
-                _ => ty,
-            };
-            ctx.calling_convention_for_type(entry_ty)
-                .expect("root main has a function type")
-        });
     let parent_type_parameters = ctx
         .lookup_function_type(&ctx.qualify_name(&function.name))
         .expect("function has a typechecked signature")
@@ -1165,17 +1136,6 @@ fn lower_function<'db>(
     let name = ctx.qualify_name(&function.name);
     let function = tribute_control::func_declaration(ir, location, &name, callable);
     ir.push_op_region(function.op_ref(), body);
-    // A root `main` promoted to Cps records its source result; that alone
-    // marks the root CPS contract for root bridge composition.
-    if let Some(convention) = root_convention
-        && convention != signature.convention
-    {
-        assert_ne!(convention, CallingConvention::Cps);
-        ir.op_mut(function.op_ref()).attributes.insert(
-            Symbol::new("tribute.root_source_result"),
-            Attribute::Type(signature.return_type),
-        );
-    }
     ir.push_op(top, function.op_ref());
 }
 
