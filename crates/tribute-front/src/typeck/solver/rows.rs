@@ -329,6 +329,18 @@ impl<'db> TypeSolver<'db> {
         result
     }
 
+    /// Settle pending unions and removals using the signature's
+    /// `declared_unions`, updating substitutions and retaining relations
+    /// that cannot yet be settled.
+    ///
+    /// When classifying a union, a body-local source tail defined by another
+    /// pending union stands for that union's sources. Rigid signature tails are
+    /// never expanded this way.
+    ///
+    /// Returns success when no further relations settle or local tails are
+    /// bound; success does not imply that all relations have been discharged.
+    /// Propagates unification and relation-solving errors with their constraint
+    /// origins. Ambiguous row unification is deferred as a pending union.
     fn settle_signature_relations_inner(
         &mut self,
         declared_unions: &[crate::ast::RowUnion<'db>],
