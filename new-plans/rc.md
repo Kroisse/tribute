@@ -186,7 +186,8 @@ tribute_rt.from_raw(ptr) -> value      // unit 하나를 가진 typed 값을 만
 1. Native lowering이 필요한 `into_raw`와 `from_raw`를 먼저 만든다.
 2. 검증된 type-erasure 전 ownership plan은 `retain`/`release`만 **materialize**하고
    검증한 `into_raw`와 `from_raw`를 보존한다.
-3. `into_raw`와 `from_raw`를 explicit native representation conversion으로
+3. Ownership lowering이 plan을 다 쓴 뒤, managed type을 physical type으로 바꾸기 전에
+   `into_raw`와 `from_raw`를 explicit native representation conversion으로
    **lower**한다.
 4. RC lowering pass가 retain/release를 inline code로 **lower**한다.
 
@@ -212,6 +213,10 @@ unit 하나를 가진 typed managed 값을 만든다. 결과는 할당의 결과
 자리에서만 쓴다. Native lowering이 직접 할당한 object, 그리고 runtime이 raw pointer로
 담아 unit과 함께 넘겨준 object가 그런 자리다. RC header가 없는 memory를 managed 값으로
 바꾸는 수단이 아니다.
+
+두 operation의 타입은 선언이 고정한다. `into_raw`는 managed reference를 받아 `core.ptr`를
+만들고, `from_raw`는 `core.ptr`를 받아 managed reference를 만든다. 두 operation은 managed
+type이 physical type으로 바뀌기 전에 lower되므로, 존재하는 동안 이 선언을 항상 만족한다.
 
 `core.ptr`와 managed reference 사이를 오가는 길은 이 두 operation뿐이다. 둘 사이의
 `core.unrealized_conversion_cast`는 ownership의 의미를 말하지 못하므로 ownership
