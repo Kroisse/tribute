@@ -404,3 +404,80 @@ fn leak(h: fn() ->{t} Nil) ->{t} Nil {
         .collect();
     assert_eq!(errors, ["function 'leak' uses undeclared effects: Ping"]);
 }
+
+/// A function value's labels reach the row tail it is passed for before the
+/// enclosing closed row is equated with the accumulated one.
+#[salsa_test]
+fn function_value_labels_reach_a_tail_in_a_closed_row(db: &salsa::DatabaseImpl) {
+    const PRELUDE: &str = r#"
+ability Ask { op ask() -> Int }
+fn apply(x: a, f: fn(a) ->{eff} b) ->{eff} b { f(x) }
+fn bump(n: Int) ->{Ask} Int { n + Ask::ask() }
+"#;
+    for (name, body) in [
+        ("named", "fn run() ->{Ask} Int { apply(+1, bump) }"),
+        (
+            "local",
+            "fn run() ->{Ask} Int {\n    let f = bump\n    apply(+1, f)\n}",
+        ),
+        (
+            "repeated",
+            "fn run() ->{Ask} Int {\n    let _ = apply(+1, bump)\n    apply(+2, bump)\n}",
+        ),
+        (
+            "joined",
+            "fn run(flag: Bool) ->{Ask} Int {\n    let f = case flag {\n        True -> bump\n        False -> fn(n) { Ask::ask() + n }\n    }\n    apply(+1, f)\n}",
+        ),
+        (
+            "lambda body",
+            "fn run() ->{Ask} Int {\n    let go = fn(n: Int) ->{Ask} Int { apply(n, bump) }\n    go(+1)\n}",
+        ),
+        (
+            "typed only by its uses",
+            "fn needs(f: fn(Int) ->{Ask} Int) ->{Ask} Int { f(+1) }\nfn run() ->{Ask} Int {\n    let fs = []\n    case fs {\n        [g, ..] -> {\n            let _ = apply(+1, g)\n            needs(g)\n        }\n        [] -> +0\n    }\n}",
+        ),
+        (
+            "shared by two arguments",
+            "fn runs(f: fn(Int) ->{Ask, e} Int, g: fn(Int) ->{e} Int) ->{Ask, e} Int { f(+1) + g(+2) }\nfn run() ->{Ask} Int { runs(bump, bump) }",
+        ),
+        (
+            "beside a signature tail",
+            "fn run(f: fn(Int) ->{e} Int) ->{e, Ask} Int {\n    let _ = apply(+1, f)\n    apply(+2, bump)\n}",
+        ),
+    ] {
+        let text = format!("{PRELUDE}{body}\n");
+        let source = SourceCst::from_source_str(db, "function_value.trb", &text);
+        let _ = checked(db, source);
+        let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+            .into_iter()
+            .map(|diagnostic| diagnostic.inner.message.clone())
+            .collect();
+        assert!(errors.is_empty(), "{name}: {errors:?}");
+    }
+}
+
+/// A function value's labels that the enclosing closed row does not declare
+/// are reported against that row.
+#[salsa_test]
+fn function_value_labels_outside_a_closed_row_are_rejected(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "function_value_outside.trb",
+        r#"
+ability Ask { op ask() -> Int }
+ability Tell { op tell(n: Int) -> Nil }
+fn apply(x: a, f: fn(a) ->{eff} b) ->{eff} b { f(x) }
+fn bump(n: Int) ->{Ask} Int { n + Ask::ask() }
+fn run() ->{Tell} Int { apply(+1, bump) }
+"#,
+    );
+    let _ = checked(db, source);
+    let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.inner.message.clone())
+        .collect();
+    assert_eq!(
+        errors,
+        ["type error in function 'run': effect mismatch: expected `{Tell}`, found `{Ask, Tell}`"]
+    );
+}
