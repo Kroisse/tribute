@@ -343,6 +343,11 @@ impl<'db> TypeChecker<'db> {
                         _ => ctx.fresh_type_var(),
                     };
 
+                    let effect = ctx
+                        .deferred_method_effect(expr.id)
+                        .unwrap_or_else(|| ctx.fresh_effect_row());
+                    ctx.evidence.record_call(expr.id, effect);
+                    ctx.merge_effect_at(effect, expr.id);
                     ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
                         node_id: expr.id,
                         receiver_ty,
@@ -350,6 +355,7 @@ impl<'db> TypeChecker<'db> {
                         path,
                         result_ty,
                         arg_types,
+                        effect,
                     });
                     result_ty
                 }
@@ -995,6 +1001,11 @@ impl<'db> TypeChecker<'db> {
                     let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
                         .chain(args.iter().map(|a| self.infer_deferred_argument(ctx, a)))
                         .collect();
+                    let effect = ctx
+                        .deferred_method_effect(expr.id)
+                        .unwrap_or_else(|| ctx.fresh_effect_row());
+                    ctx.evidence.record_call(expr.id, effect);
+                    ctx.merge_effect_at(effect, expr.id);
                     ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
                         node_id: expr.id,
                         receiver_ty,
@@ -1002,6 +1013,7 @@ impl<'db> TypeChecker<'db> {
                         path,
                         result_ty,
                         arg_types,
+                        effect,
                     });
                     result_ty
                 }
@@ -2445,6 +2457,56 @@ impl<'db> TypeChecker<'db> {
     // Pattern handling
     // =========================================================================
 
+    /// Resolve the deferred method calls whose receiver `solver` has typed,
+    /// as inference does for a receiver typed where the call is written.
+    fn resolve_typed_deferred_methods(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        solver: &TypeSolver<'db>,
+    ) -> bool {
+        let mut resolved = false;
+        for call in ctx.deferred_methods().to_vec() {
+            let receiver = solver.type_subst().apply(self.db(), call.receiver_ty);
+            let MethodSelection::One(entry) =
+                self.select_method(&call.method, call.path.as_ref(), receiver)
+            else {
+                continue;
+            };
+            let Some(callee_ty) = ctx.instantiate_function_reference(call.node_id, entry.func_id)
+            else {
+                continue;
+            };
+            let TypeKind::Func {
+                params,
+                result,
+                effect,
+                ..
+            } = callee_ty.kind(self.db())
+            else {
+                continue;
+            };
+            ctx.resolve_deferred_method(call.node_id, entry.func_id, callee_ty);
+            self.check_method_arity(
+                call.node_id,
+                &call.method,
+                params.len(),
+                call.arg_types.len().saturating_sub(1),
+            );
+            ctx.constrain_eq_at(
+                call.result_ty,
+                *result,
+                call.node_id,
+                ConstraintOriginKind::Call,
+            );
+            for (arg, param) in call.arg_types.iter().zip(params) {
+                ctx.constrain_coerce_at(*arg, *param, call.node_id, ConstraintOriginKind::Call);
+            }
+            ctx.constrain_call_effect(solver, *effect, call.effect, call.node_id);
+            resolved = true;
+        }
+        resolved
+    }
+
     fn generalize_and_bind_pattern_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -2472,19 +2534,38 @@ impl<'db> TypeChecker<'db> {
             }
             return;
         }
-        let mut solver = TypeSolver::new(self.db());
-        solver.reserve_row_vars(ctx.next_row_var());
-        for method in ctx.deferred_methods() {
-            solver.defer_producer(method.node_id, method.result_ty, method.arg_types.clone());
-        }
-        let solved = solver
-            .solve(ctx.constraints_snapshot())
-            .and_then(|()| solver.finalize_relations().map_err(|failure| failure.error));
-        ctx.reserve_row_vars(solver.next_row_var());
-        if solved.is_err() {
-            self.bind_pattern_vars_with_ctx(ctx, pattern, value_ty);
-            return;
-        }
+        // A call whose receiver the statements so far have typed is resolved
+        // here, so the binding generalizes over what the call performs.
+        let mut solver = loop {
+            let mut solver = TypeSolver::new(self.db());
+            solver.reserve_row_vars(ctx.next_row_var());
+            for method in ctx.deferred_methods() {
+                solver.defer_producer(
+                    method.node_id,
+                    method.result_ty,
+                    method.arg_types.clone(),
+                    method.effect,
+                );
+            }
+            let solved = solver
+                .solve(ctx.constraints_snapshot())
+                .and_then(|()| solver.finalize_relations().map_err(|failure| failure.error));
+            ctx.reserve_row_vars(solver.next_row_var());
+            if solved.is_err() {
+                self.bind_pattern_vars_with_ctx(ctx, pattern, value_ty);
+                return;
+            }
+            if !self.resolve_typed_deferred_methods(ctx, &solver) {
+                break solver;
+            }
+        };
+        // The row of a call still to be resolved keeps its own name in the
+        // scheme, so resolving the call reaches the scheme's uses.
+        solver.make_row_representatives(
+            ctx.deferred_methods()
+                .iter()
+                .filter_map(|method| method.effect.rest(self.db())),
+        );
 
         let type_subst = solver.type_subst().clone();
         let row_subst = solver.row_subst().clone();
@@ -3423,7 +3504,12 @@ impl<'db> TypeChecker<'db> {
         let mut solver = TypeSolver::new(self.db());
         solver.reserve_row_vars(ctx.next_row_var());
         for method in ctx.deferred_methods() {
-            solver.defer_producer(method.node_id, method.result_ty, method.arg_types.clone());
+            solver.defer_producer(
+                method.node_id,
+                method.result_ty,
+                method.arg_types.clone(),
+                method.effect,
+            );
         }
         let _ = solver.solve(ctx.constraints_snapshot());
         ctx.reserve_row_vars(solver.next_row_var());

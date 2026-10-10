@@ -239,3 +239,38 @@ fn main() -> Nil {
     // ask() → 40, tell() → 2
     assert_native_output("effect_row_specializations.trb", code, "42");
 }
+
+/// A method whose receiver is typed after solving runs under the handler of
+/// the effects it performs, with the callback it is given.
+#[test]
+fn test_effect_row_method_resolved_after_solving() {
+    let code = r#"
+ability Ask {
+    op ask() -> Nat
+}
+
+struct Box { value: Nat }
+
+fn bump(n: Nat) ->{Ask} Nat { n + Ask::ask() }
+
+fn each(b: Box, g: fn(Nat) ->{e} Nat) ->{e} Nat { g(b.value) }
+
+fn asks(b: Box) ->{Ask} Nat { b.value + Ask::ask() }
+
+fn run() ->{Ask} Nat {
+    let callback = fn(c) { c.each(bump) }
+    let direct = fn(c) { c.asks() }
+    callback(Box { value: 1 }) + direct(Box { value: 1 })
+}
+
+fn main() -> Nil {
+    let total = handle run() {
+        do result { result }
+        op Ask::ask() { resume 20 }
+    }
+    __tribute_print_nat(total)
+}
+"#;
+    // each(bump) → 1 + 20, asks() → 1 + 20
+    assert_native_output("effect_row_late_method.trb", code, "42");
+}

@@ -316,8 +316,8 @@ fn deferred_producers_with_equal_results_retain_distinct_dependencies() {
     let result = Type::new(&db, TypeKind::Bool);
     let first_node = NodeId::from_raw(1);
     let second_node = NodeId::from_raw(2);
-    solver.defer_producer(first_node, result, vec![first]);
-    solver.defer_producer(second_node, result, vec![second]);
+    solver.defer_producer(first_node, result, vec![first], EffectRow::pure(&db));
+    solver.defer_producer(second_node, result, vec![second], EffectRow::pure(&db));
     assert_eq!(solver.pending_variables().0.len(), 2);
     solver.resolve_producer(first_node);
     let TypeKind::UniVar { id } = second.kind(&db) else {
@@ -337,7 +337,7 @@ fn deferred_join_keeps_actual_producer_and_reports_a_late_mismatch_once() {
         node_id: NodeId::from_raw(1),
         kind: super::super::constraint::ConstraintOriginKind::Expression,
     };
-    solver.defer_producer(origin.node_id, actual, vec![]);
+    solver.defer_producer(origin.node_id, actual, vec![], EffectRow::pure(&db));
     let mut constraints = ConstraintSet::new();
     constraints.add(Constraint::TypeJoin {
         sources: vec![(actual, origin), (nat, origin)],

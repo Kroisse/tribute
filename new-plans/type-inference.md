@@ -263,8 +263,8 @@ Label을 명시한 열린 row `{A | u}`를 닫힌 row나 label을 명시한 row�
 담는 해도 있으며, 이 equality는 `u`가 `A`를 담지 않는 최소해를 고른다.
 
 아직 풀리지 않은 관계가 `u`에 label을 더할 수 있는 동안에는 이 equality를 풀지
-않는다. `u`가 결과인 합집합, 그리고 타입에 `u`가 나타나는 `TypeCoerce`와
-`TypeJoin`이 그런 관계이다. 합집합들이 더 진전하지 못하면 그 결과 tail에 더
+않는다. `u`가 결과인 합집합, 타입에 `u`가 나타나는 `TypeCoerce`와 `TypeJoin`,
+그리고 row가 `u`인 아직 해석되지 않은 메서드 호출이 그런 관계이다. 합집합들이 더 진전하지 못하면 그 결과 tail에 더
 들어올 label이 없으므로 최소해로 확정한다. `TypeCoerce`와 `TypeJoin`은 풀릴
 때까지 기다린다. 아직 정해지지 않은 타입을 tail을 닫는 근거로 삼지 않는다.
 해가 하나뿐인 equality, 예컨대 label이 없는 `{u}`와 닫힌 row의 equality는
@@ -278,6 +278,41 @@ fn apply(x: a, f: fn(a) ->{eff} b) ->{eff} b { f(x) }
 
 // eff = {Io}; 본문 row {Io | eff}는 선언된 {Io}와 같다
 fn main() ->{Io} Nil { apply("io", print_line) }
+```
+
+### 지연된 메서드 호출의 effect
+
+수신자 타입이 호출을 쓴 자리에서 아직 정해지지 않은 메서드 호출은 해석을
+미룬다. 이 호출도 자신을 감싼 callable의 row에 기여한다. 호출은 fresh row
+변수 하나를 받고, 그 변수를 다른 호출의 row와 똑같이 누적 row에 합친다.
+
+해석이 정해지면 그 변수를 선택된 선언의 row와 관계짓는다. 호출은 callee의
+effect를 수행하므로, 다른 무엇과도 equality로 묶이지 않은 변수는 callee의 row와
+같다. Row-polymorphic 매개변수에 넘긴 람다의 tail처럼 이미 다른 row와 묶인
+변수는 그보다 많은 label을 담을 수 있으므로, callee의 row는 그 변수의 하한이다.
+필드를 읽는 호출의 row는 비어 있다.
+
+해석되기 전의 변수는 정해지지 않은 타입과 같이 다룬다:
+
+- 그 변수를 tail로 하는 row의 equality는 [열린 tail의 확정](#열린-tail의-확정)
+  규칙에 따라 호출이 해석될 때까지 기다린다. 그 변수가 원천인 합집합의 결과
+  tail도 같다.
+- 지역 스킴은 그 변수를 양화하지 않으며, 스킴 본문은 그 변수를 자기 이름
+  그대로 담는다. 해석 결과가 스킴의 모든 사용처에 닿아야 하기 때문이다.
+
+`let`을 일반화할 때는 그때까지의 제약으로 수신자 타입이 정해진 호출을 먼저
+해석한다. 따라서 `let f = fn(n) { n + 1 }`의 row는 `let` 시점에 정해지고, `f`는
+그 row로 일반화된다. 그때도 수신자가 정해지지 않은 호출은 함수 본문 전체를 푼
+뒤에 해석한다.
+
+```rust
+fn asks(b: Box) ->{Ask} Nat { Ask::ask() }
+
+// c의 타입은 go를 호출할 때 정해진다. c.asks()의 row는 go의 row에 들어간다
+fn f() ->{Ask} Nat {
+    let go = fn(c) { c.asks() }
+    go(Box { value: 1 })
+}
 ```
 
 ### 모듈 수준 함수의 관계
