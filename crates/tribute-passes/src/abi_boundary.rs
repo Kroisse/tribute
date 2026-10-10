@@ -28,7 +28,6 @@ const FORBIDDEN_DIALECTS: &[&str] = &["tribute_control", "ability", "effect", "c
 /// Semantic control metadata that must not cross the boundary.
 const FORBIDDEN_ATTRIBUTES: &[&str] = &[
     "tribute.calling_convention",
-    "tribute.root_source_result",
     "tribute.cps_continuation_frame_result",
     "tribute.closure_environment_index",
 ];
@@ -613,10 +612,10 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  !frame = adt.typeref<{meta = {entry = {tribute.root_source_result = core.nil}}, name = "Frame"}>
+  !frame = adt.typeref<{meta = {entry = {tribute.cps_continuation_frame_result = core.nil}}, name = "Frame"}>
 }"#
             ),
-            [attribute("tribute.root_source_result")]
+            [attribute("tribute.cps_continuation_frame_result")]
         );
         assert_eq!(
             kinds(
@@ -642,15 +641,16 @@ mod tests {
         let function = module.ops(&ctx)[0];
         let entry = ctx.region(ctx.op_region(function, 0).unwrap()).blocks[0];
         let nil = core::nil(&mut ctx).as_type_ref();
-        ctx.block_mut(entry).args[0]
-            .attrs
-            .insert("tribute.root_source_result", Attribute::Type(nil));
+        ctx.block_mut(entry).args[0].attrs.insert(
+            "tribute.cps_continuation_frame_result",
+            Attribute::Type(nil),
+        );
         assert_eq!(
             verify_boundary_exit(&ctx, module, TargetKind::Native)
                 .into_iter()
                 .map(|violation| violation.kind)
                 .collect::<Vec<_>>(),
-            [attribute("tribute.root_source_result")]
+            [attribute("tribute.cps_continuation_frame_result")]
         );
     }
 

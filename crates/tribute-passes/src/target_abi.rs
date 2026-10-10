@@ -32,7 +32,6 @@ use trunk_ir::types::{Attribute, AttributeMap, Location, TypeData, TypeDataBuild
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{Symbol, SymbolPath};
 
-const ROOT_SOURCE_RESULT_ATTR: &str = "tribute.root_source_result";
 const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
 const ROOT_DONE_K_SYMBOL: &str = "__tribute_done_k";
 const ROOT_UNHANDLED_SYMBOL: &str = "__tribute_unhandled";
@@ -347,21 +346,11 @@ fn validate_root_entry(
         return Ok(None);
     };
 
-    let Some(source_result) = root_source_result(ctx, worker_op)? else {
-        return Ok(None);
-    };
     if get_calling_convention(ctx, worker_op) != Some(CallingConvention::Cps) {
-        return Err(TargetAbiError::new(
-            "target root bridge: root source result metadata requires a Cps root worker",
-        ));
+        return Ok(None);
     }
-
-    let nil_ty = core::nil(ctx).as_type_ref();
-    if source_result != nil_ty {
-        return Err(TargetAbiError::new(
-            "target root bridge: the current root source result must be core.nil",
-        ));
-    }
+    // The root contract fixes the source result of `main`.
+    let source_result = core::nil(ctx).as_type_ref();
     let worker = func::Func::from_op(ctx, worker_op)
         .map_err(|_| TargetAbiError::new("target root bridge: main is not func.func"))?;
     let worker_callable = func::FuncSig::from_type_ref(ctx, worker.r#type(ctx))
@@ -540,7 +529,6 @@ fn build_cps_root_call(
         frame,
     } = contract;
     let location = ctx.op(worker_op).location;
-    remove_root_contract(ctx, worker_op);
 
     let terminal = TerminalFunctions::define(
         ctx,
@@ -1227,18 +1215,6 @@ fn is_parameterless_dialect_type(ctx: &IrContext, ty: TypeRef, dialect: &str, na
         && ctx.get_type(ty).attrs.is_empty()
 }
 
-fn root_source_result(ctx: &IrContext, op: OpRef) -> Result<Option<TypeRef>, TargetAbiError> {
-    let Some(attribute) = ctx.op(op).attributes.get(ROOT_SOURCE_RESULT_ATTR) else {
-        return Ok(None);
-    };
-    let Attribute::Type(result) = attribute else {
-        return Err(TargetAbiError::new(
-            "target root bridge: root source result metadata is malformed",
-        ));
-    };
-    Ok(Some(*result))
-}
-
 fn set_root_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
     ctx.op_mut(op)
         .attributes
@@ -1249,10 +1225,6 @@ fn bind_name(ctx: &mut IrContext, name: &str) -> AttributeMap {
     [(Symbol::new("bind_name"), ctx.string_attr(name))]
         .into_iter()
         .collect()
-}
-
-fn remove_root_contract(ctx: &mut IrContext, op: OpRef) {
-    ctx.op_mut(op).attributes.remove(ROOT_SOURCE_RESULT_ATTR);
 }
 
 fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: &SymbolPath, new: &SymbolPath) {
@@ -2276,9 +2248,6 @@ mod tests {
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
-        ctx.op_mut(main.op_ref())
-            .attributes
-            .insert(ROOT_SOURCE_RESULT_ATTR, Attribute::Type(nil));
 
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         compose_root_entry_bridge(&mut ctx, module).unwrap();
@@ -2316,11 +2285,6 @@ mod tests {
                     .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
             );
         }
-        assert!(
-            !ctx.op(worker.op_ref())
-                .attributes
-                .contains_key(ROOT_SOURCE_RESULT_ATTR)
-        );
 
         let wrapper_ops = collect_ops(&ctx, wrapper.op_ref());
         let call = wrapper_ops
@@ -2618,9 +2582,6 @@ mod tests {
             let entry = ctx.region(main.body(&ctx)).blocks[0];
             ctx.set_block_arg_type(entry, 0, evidence);
             ctx.set_block_arg_type(entry, 1, frame);
-            ctx.op_mut(main.op_ref())
-                .attributes
-                .insert(ROOT_SOURCE_RESULT_ATTR, Attribute::Type(nil));
 
             let before = print_module(&ctx, module.op());
             let aliases = ctx.type_aliases().to_vec();
@@ -2673,9 +2634,6 @@ mod tests {
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
-        ctx.op_mut(main.op_ref())
-            .attributes
-            .insert(ROOT_SOURCE_RESULT_ATTR, Attribute::Type(nil));
 
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 

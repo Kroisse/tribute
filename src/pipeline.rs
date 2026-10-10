@@ -1774,7 +1774,7 @@ mod tests {
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 1}>
             !__tribute_continuation_frame_root_nil = adt.struct<__tribute_continuation_frame_root_nil(done: !Done, dispatch: !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
             !Payload = adt.struct<__tribute_ability_payload_7590c57e()>
-            func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = 2, tribute.root_source_result = core.nil} {
+            func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = 2} {
                 BODY
             }
         }"#.replace("BODY", body);
