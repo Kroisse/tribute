@@ -256,6 +256,30 @@ instance 집합이며, source의 열린 tail에서 나중에 드러나는 label�
 일반화와 인스턴스화는 이 관계를 합집합 관계와 함께 보존한다. 결과가 비어 있다는
 이유로 source 자체를 빈 row로 닫아서는 안 된다.
 
+### 열린 tail의 확정
+
+Label을 명시한 열린 row `{A | u}`를 닫힌 row나 label을 명시한 row와 같다고 두면
+`u`는 공통 label을 맞추고 남은 label로 정해진다. Row는 집합이므로 `u`가 `A`를
+담는 해도 있으며, 이 equality는 `u`가 `A`를 담지 않는 최소해를 고른다.
+
+아직 풀리지 않은 관계가 `u`에 label을 더할 수 있는 동안에는 이 equality를 풀지
+않는다. `u`가 결과인 합집합, 그리고 타입에 `u`가 나타나는 `TypeCoerce`와
+`TypeJoin`이 그런 관계이다. 합집합들이 더 진전하지 못하면 그 결과 tail에 더
+들어올 label이 없으므로 최소해로 확정한다. `TypeCoerce`와 `TypeJoin`은 풀릴
+때까지 기다린다. 아직 정해지지 않은 타입을 tail을 닫는 근거로 삼지 않는다.
+해가 하나뿐인 equality, 예컨대 label이 없는 `{u}`와 닫힌 row의 equality는
+기다리지 않는다.
+
+따라서 concrete row를 가진 함수 값을 row-polymorphic 매개변수에 넘기면, 그 label은
+호출자의 닫힌 row와 누적된 본문 row를 비교하기 전에 매개변수의 tail에 들어간다:
+
+```rust
+fn apply(x: a, f: fn(a) ->{eff} b) ->{eff} b { f(x) }
+
+// eff = {Io}; 본문 row {Io | eff}는 선언된 {Io}와 같다
+fn main() ->{Io} Nil { apply("io", print_line) }
+```
+
 ### 모듈 수준 함수의 관계
 
 모듈 수준 함수의 스킴은 선언 시그니처이며, annotation이 만든 합집합 관계만
