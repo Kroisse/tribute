@@ -1,8 +1,8 @@
 //! Effect-row equality, set matching, and retained relations.
 
 use super::{
-    EffectRow, EffectVar, HashMap, LocatedSolveError, SolveError, Type, TypeKind, TypeSolver,
-    UniVarId, collect_effect_vars, map_effect_row_type_args,
+    Constraint, EffectRow, EffectVar, HashMap, LocatedSolveError, SolveError, Type, TypeKind,
+    TypeSolver, UniVarId, collect_effect_vars, map_effect_row_type_args,
 };
 
 impl<'db> TypeSolver<'db> {
@@ -820,7 +820,7 @@ impl<'db> TypeSolver<'db> {
         left: EffectRow<'db>,
         right: EffectRow<'db>,
     ) -> Result<(), SolveError<'db>> {
-        if !self.solving_row_relation && self.waits_for_union(left, right) {
+        if !self.solving_row_relation && self.waits_for_relation(left, right) {
             self.pending_row_eqs
                 .push((left, right, self.current_origin));
             return Ok(());
@@ -867,15 +867,16 @@ impl<'db> TypeSolver<'db> {
         })
     }
 
-    /// Whether equating the rows must wait for a pending union.
+    /// Whether equating the rows must wait for a pending relation.
     ///
     /// Equating `{A | u}` with a row that names labels binds `u` to what is
     /// left once the common labels are matched, as if `u` held none of them.
-    /// While `u` is the result of a pending union, the union may still add
-    /// `A` to it; the substituted row then holds `A` once, and the labels left
-    /// for the other side differ.
-    fn waits_for_union(&self, left: EffectRow<'db>, right: EffectRow<'db>) -> bool {
-        if self.pending_row_unions.is_empty() {
+    /// A pending relation may still add `A` to `u`: a union whose result is
+    /// `u`, or an expression relation whose types mention `u`. The
+    /// substituted row then holds `A` once, and the labels left for the
+    /// other side differ.
+    fn waits_for_relation(&self, left: EffectRow<'db>, right: EffectRow<'db>) -> bool {
+        if self.pending_row_unions.is_empty() && self.pending_relations.is_empty() {
             return false;
         }
         let left = self.normalize_row(left);
@@ -889,18 +890,39 @@ impl<'db> TypeSolver<'db> {
                 let names_labels = |row: EffectRow<'db>| !row.effects(self.db).is_empty();
                 names_labels(row)
                     && (names_labels(other) || other.rest(self.db).is_none())
-                    && self.pending_row_unions.iter().any(|(union, _)| {
+                    && (self.pending_row_unions.iter().any(|(union, _)| {
                         self.normalize_row(union.result).rest(self.db) == Some(tail)
-                    })
+                    }) || self.pending_relation_mentions(tail))
             })
     }
 
-    /// Unify the row equalities that no longer wait for a union, or all of
+    /// Whether the types of a pending expression relation mention `tail`.
+    fn pending_relation_mentions(&self, tail: EffectVar) -> bool {
+        let mentions = |ty: Type<'db>| {
+            let ty = self
+                .type_subst
+                .apply_with_rows(self.db, ty, &self.row_subst);
+            collect_effect_vars(self.db, ty).contains(&tail)
+        };
+        self.pending_relations
+            .iter()
+            .any(|relation| match relation {
+                Constraint::TypeCoerce(actual, expected, _) => {
+                    mentions(*actual) || mentions(*expected)
+                }
+                Constraint::TypeJoin {
+                    sources, result, ..
+                } => mentions(*result) || sources.iter().any(|(ty, _)| mentions(*ty)),
+                _ => unreachable!("only expression relations are deferred"),
+            })
+    }
+
+    /// Unify the row equalities that no longer wait for a relation, or all of
     /// them when `force` is set.
     pub(super) fn settle_row_eqs(&mut self, force: bool) -> Result<(), LocatedSolveError<'db>> {
         let mut first_error = None;
         for (left, right, origin) in std::mem::take(&mut self.pending_row_eqs) {
-            if !force && self.waits_for_union(left, right) {
+            if !force && self.waits_for_relation(left, right) {
                 self.pending_row_eqs.push((left, right, origin));
                 continue;
             }

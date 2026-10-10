@@ -86,8 +86,8 @@ pub struct TypeSolver<'db> {
         crate::ast::RowRemoval<'db>,
         Option<super::constraint::ConstraintOrigin>,
     )>,
-    /// Row equalities that wait for a pending union to name the labels of a
-    /// row tail (see [`Self::waits_for_union`]).
+    /// Row equalities that wait for a pending relation to name the labels of a
+    /// row tail (see [`Self::waits_for_relation`]).
     pending_row_eqs: Vec<(EffectRow<'db>, EffectRow<'db>, Option<ConstraintOrigin>)>,
     /// The origin of the equality constraint being solved.
     current_origin: Option<ConstraintOrigin>,
@@ -298,7 +298,7 @@ impl<'db> TypeSolver<'db> {
             );
             if before == after {
                 if !self.pending_row_eqs.is_empty() {
-                    // No union can name more labels: the tails hold none.
+                    // No relation can name more labels: the tails hold none.
                     if let Err(error) = self.settle_row_eqs(true) {
                         first_error.get_or_insert(error);
                     }
