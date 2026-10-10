@@ -140,6 +140,41 @@ fn main() ->{Io} Nil {
     );
 }
 
+/// Root `main` is the instance of its own row with an empty tail, so a call
+/// it makes with a pure callback selects the `Direct` instance even when its
+/// effect annotation is omitted.
+#[salsa_test]
+fn root_main_selects_instances_for_an_empty_tail(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn apply(f: fn(Nat) ->{e} Nat, value: Nat) ->{e} Nat { f(value) }
+
+fn main() -> Nil {
+    let _ = apply(fn(x) { x + 1 }, 41)
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let main = ir
+        .split("tribute_control.func @main(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .expect("root main");
+    assert!(
+        main.starts_with(") -> core.nil convention(direct)"),
+        "{main}"
+    );
+    assert!(main.contains("callee = @\"apply$9D\""), "{main}");
+    assert!(
+        main.contains("tribute_control.lambda") && !main.contains("convention(cps)"),
+        "{main}"
+    );
+}
+
 #[test]
 fn generic_callback_evidence_root_executes_native() {
     let output = common::compile_and_run_native("test.trb", SOURCE);

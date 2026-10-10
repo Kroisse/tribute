@@ -359,6 +359,9 @@ class(e) = 참조를 포함한 인스턴스가 e에 고정한 class   (e가 그 
 구별하는 값도 타입 인자와 class 인자를 함께 반영한다. Class 인자가 모두 `Cps`인
 인스턴스는 class 특수화가 없는 정의와 같은 convention과 이름을 가진다.
 
+Root `main`은 참조 없이 존재하는 인스턴스다. 그 row를 instantiate하는 호출자가
+없으므로 tail은 비어 있고, class 변수는 모두 `Direct`로 고정한다.
+
 **인스턴스 안에서의 규칙.** 인스턴스는 class 변수에서 class로 가는 표를 가진다.
 Lowering이 row의 convention을 계산할 때 tail이 표에 있으면 그 class를 쓰고, 없으면
 열린 row의 규칙대로 `Cps`를 쓴다. 매개변수의 callable 타입, 그 callable의 호출,

@@ -64,7 +64,10 @@ fn evidence_plans_reach_source_logical_ir(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "plans.trb", SOURCE);
     let (ctx, module) = compile_frontend(db, source).expect("frontend should lower");
     let ir = print_module(&ctx, module.op());
-    let lines = planned_lines(&ir);
+    // An instance repeats the lines of its definition.
+    let mut lines = planned_lines(&ir);
+    lines.sort_unstable();
+    lines.dedup();
     // `g()` reaches `State` only through its tail; `both` takes the caller's
     // handler twice; `counter` hides the handler its row names.
     assert_line(&lines, "tribute_control.call_indirect", "[{mask = ", &ir);
