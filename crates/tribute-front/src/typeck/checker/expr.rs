@@ -1808,7 +1808,7 @@ impl<'db> TypeChecker<'db> {
         selection: &MethodSelection<'db>,
     ) -> Option<Symbol> {
         if !qualified {
-            return Some(method.clone());
+            return args.is_empty().then(|| method.clone());
         }
         let MethodSelection::One(selected) = selection else {
             return None;
