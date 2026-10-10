@@ -53,22 +53,14 @@ impl NodeId {
     /// A copy of a copy combines both variants; [`origin()`](NodeId::origin)
     /// still recovers the original node.
     #[inline]
-    pub const fn with_variant(self, variant: NonZero<u64>) -> Self {
-        // The copies of two nodes that differ only in their variant must
-        // stay distinct.
-        let variant = match self.variant {
-            None => variant,
-            Some(outer) => {
-                let mixed = outer
-                    .get()
-                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                    .wrapping_add(variant.get());
-                match NonZero::new(mixed) {
-                    Some(mixed) => mixed,
-                    None => NonZero::<u64>::MIN,
-                }
-            }
-        };
+    pub fn with_variant(self, variant: NonZero<u64>) -> Self {
+        // A copy of a copy: two nodes that differ only in their variant must
+        // stay distinct, so hash the outer variant together with the new one.
+        let variant = self.variant.map_or(variant, |outer| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (outer, variant).hash(&mut hasher);
+            NonZero::new(hasher.finish()).unwrap_or(NonZero::<u64>::MIN)
+        });
         Self {
             source: self.source,
             raw: self.raw,
