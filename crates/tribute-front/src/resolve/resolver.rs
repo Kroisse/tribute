@@ -544,6 +544,9 @@ impl<'db> Resolver<'db> {
                 result,
                 abilities,
             } => {
+                if self.module_path.is_empty() {
+                    self.resolve_effect_annotations(abilities);
+                }
                 params
                     .iter_mut()
                     .chain(abilities)
