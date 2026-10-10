@@ -115,6 +115,9 @@ pub struct Resolver<'db> {
     /// package-root path it names. An import is visible only in the body of
     /// the module that declares it.
     module_imports: Vec<HashMap<Symbol, Vec<Symbol>>>,
+    /// The functions a name imports in each enclosing inline module when
+    /// several of the module's `use`s give it different ones.
+    module_imported_functions: Vec<HashMap<Symbol, Vec<crate::ast::FuncDefId<'db>>>>,
     /// Source functions that redefine a struct field's function. They are
     /// reported and dropped, so the field's function is the definition.
     redefinitions: Vec<NodeId>,
@@ -136,6 +139,7 @@ impl<'db> Resolver<'db> {
             effect_ops: HashMap::default(),
             module_path: Vec::new(),
             module_imports: Vec::new(),
+            module_imported_functions: Vec::new(),
             redefinitions: Vec::new(),
             package_depth: 0,
         }
@@ -268,6 +272,39 @@ impl<'db> Resolver<'db> {
         Ok(self
             .namespace_in_scope(namespace)
             .and_then(|namespace| self.env.lookup_qualified(&namespace, &sym)))
+    }
+
+    /// The functions an unqualified `name` imports when several `use`s give
+    /// it different ones.
+    fn imported_functions(&self, name: &UnresolvedName) -> Option<&[crate::ast::FuncDefId<'db>]> {
+        let sym = name.name();
+        if !name.is_simple() || self.lookup_local(&sym).is_some() {
+            return None;
+        }
+        if self.module_path.is_empty() {
+            return self.env.imported_functions(&sym);
+        }
+        if self.defined_in_module(&sym) {
+            return None;
+        }
+        self.module_imported_functions
+            .last()?
+            .get(&sym)
+            .map(Vec::as_slice)
+    }
+
+    fn report_unselected_import(&self, name: &UnresolvedName, usage: &str) {
+        Diagnostic::new(
+            format!(
+                "`{}` imports several functions and {usage}, so no argument type selects one; \
+                 name the function by its path",
+                name.name()
+            ),
+            self.span_map.get_or_default(name.id),
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(self.db);
     }
 
     /// The functions the path of a qualified method call `x.a::b(y)` may
@@ -787,7 +824,28 @@ impl<'db> Resolver<'db> {
                 .expect("pushed above")
                 .extend(resolved);
         }
+        let mut functions: HashMap<Symbol, Vec<crate::ast::FuncDefId<'db>>> = HashMap::default();
+        for import in &uses {
+            let Some(name) = import.alias.clone().or_else(|| import.path.last().cloned()) else {
+                continue;
+            };
+            let function =
+                self.use_target(&import.path)
+                    .and_then(|target| match self.lookup_path(&target) {
+                        Some(Binding::Function { id }) => Some(*id),
+                        _ => None,
+                    });
+            let imported = functions.entry(name).or_default();
+            if let Some(function) = function
+                && !imported.contains(&function)
+            {
+                imported.push(function);
+            }
+        }
+        functions.retain(|_, imported| imported.len() > 1);
+        self.module_imported_functions.push(functions);
         let body = module.body.as_ref().map(|decls| self.resolve_decls(decls));
+        self.module_imported_functions.pop();
         self.module_imports.pop();
         self.module_path.pop();
 
@@ -1116,7 +1174,14 @@ impl<'db> Resolver<'db> {
     /// Resolve an expression.
     pub fn resolve_expr(&mut self, expr: &Expr<UnresolvedName>) -> Expr<ResolvedRef<'db>> {
         let kind = match &*expr.kind {
-            ExprKind::Var(name) => ExprKind::Var(self.resolve_name(name)),
+            ExprKind::Var(name) => {
+                if self.imported_functions(name).is_some() {
+                    self.report_unselected_import(name, "is not called");
+                    ExprKind::Var(ResolvedRef::local(LocalId::UNRESOLVED, name.name()))
+                } else {
+                    ExprKind::Var(self.resolve_name(name))
+                }
+            }
 
             ExprKind::NatLit(n) => ExprKind::NatLit(*n),
             ExprKind::IntLit(n) => ExprKind::IntLit(*n),
@@ -1128,9 +1193,42 @@ impl<'db> Resolver<'db> {
             ExprKind::RuneLit(c) => ExprKind::RuneLit(*c),
 
             ExprKind::Call { callee, args } => {
-                let callee = self.resolve_expr(callee);
-                let args = args.iter().map(|a| self.resolve_expr(a)).collect();
-                ExprKind::Call { callee, args }
+                let candidates = match &*callee.kind {
+                    ExprKind::Var(name) => self.imported_functions(name).map(|functions| {
+                        let candidates = functions
+                            .iter()
+                            .map(|id| ResolvedRef::Function { id: *id })
+                            .collect();
+                        (name, candidates)
+                    }),
+                    _ => None,
+                };
+                let mut args: Vec<_> = args.iter().map(|a| self.resolve_expr(a)).collect();
+                match candidates {
+                    // The first argument selects the function by its type,
+                    // as the receiver of a method call does.
+                    Some((name, candidates)) if !args.is_empty() => ExprKind::MethodCall {
+                        receiver: args.remove(0),
+                        method: name.qualified.clone(),
+                        path: Some(MethodPath {
+                            id: callee.id,
+                            candidates,
+                        }),
+                        args,
+                    },
+                    Some((name, _)) => {
+                        self.report_unselected_import(name, "is called without an argument");
+                        let unresolved = ResolvedRef::local(LocalId::UNRESOLVED, name.name());
+                        ExprKind::Call {
+                            callee: Expr::new(callee.id, ExprKind::Var(unresolved)),
+                            args,
+                        }
+                    }
+                    None => {
+                        let callee = self.resolve_expr(callee);
+                        ExprKind::Call { callee, args }
+                    }
+                }
             }
 
             ExprKind::Cons { ctor, args } => {

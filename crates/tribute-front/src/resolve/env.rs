@@ -77,6 +77,11 @@ pub struct ModuleEnv<'db> {
     /// Original paths for resolved `use` imports (import name → original path).
     /// Used to rewrite effect annotations from imported names to qualified paths.
     use_paths: HashMap<Symbol, Vec<Symbol>>,
+    /// Every path a `use` imports under a name, in declaration order.
+    use_targets: HashMap<Symbol, Vec<Vec<Symbol>>>,
+    /// The functions a name imports when several `use`s give it different
+    /// ones. A call selects one by the type of its first argument.
+    imported_functions: HashMap<Symbol, Vec<FuncDefId<'db>>>,
     /// Names the prelude and the compiler supply, visible in every module.
     library: HashMap<Symbol, Binding<'db>>,
     /// First segments of the namespaces the prelude and the compiler supply.
@@ -132,6 +137,38 @@ impl<'db> ModuleEnv<'db> {
     /// Add an import.
     pub fn add_import(&mut self, name: Symbol, binding: Binding<'db>) {
         self.imports.insert(name, binding);
+    }
+
+    /// Add the placeholder of a `use` that imports `path` as `name`.
+    pub fn add_use(&mut self, name: Symbol, path: Vec<Symbol>) {
+        let targets = self.use_targets.entry(name.clone()).or_default();
+        if !targets.contains(&path) {
+            targets.push(path.clone());
+        }
+        self.add_import(name, Binding::Module { path });
+    }
+
+    /// The names several `use`s import, with every path each one names.
+    pub fn repeated_uses(&self) -> Vec<(Symbol, Vec<Vec<Symbol>>)> {
+        self.use_targets
+            .iter()
+            .filter(|(_, paths)| paths.len() > 1)
+            .map(|(name, paths)| (name.clone(), paths.clone()))
+            .collect()
+    }
+
+    /// Record the functions that several `use`s import as `name`.
+    pub fn set_imported_functions(&mut self, name: Symbol, functions: Vec<FuncDefId<'db>>) {
+        self.imported_functions.insert(name, functions);
+    }
+
+    /// The functions `name` imports when it imports several and the module
+    /// declares none of that name.
+    pub fn imported_functions(&self, name: &Symbol) -> Option<&[FuncDefId<'db>]> {
+        if self.definitions.contains_key(name) {
+            return None;
+        }
+        self.imported_functions.get(name).map(Vec::as_slice)
     }
 
     /// Add an import only if no binding exists for that name.
