@@ -446,20 +446,23 @@ fn prescan_definition_conventions<'db>(
                 let Some(mut convention) = ctx.calling_convention_for_type_in(body, classes) else {
                     continue;
                 };
+                // An omitted row's tail asks for nothing unless it is a
+                // class variable of the definition.
                 if (function.effects.is_none()
                     || crate::is_root_main(&function.name, prefix.is_empty()))
                     && let TypeKind::Func { effect, .. } = body.kind(ctx.db)
                 {
-                    convention = ctx.calling_convention_for_effect_row(EffectRow::new(
-                        ctx.db,
-                        effect.effects(ctx.db),
-                        None,
-                    ));
+                    let tail = effect
+                        .rest(ctx.db)
+                        .filter(|tail| classes.iter().any(|(variable, _)| variable == tail));
+                    let row = EffectRow::new(ctx.db, effect.effects(ctx.db), tail);
+                    let outer = ctx.enter_definition(&name);
+                    convention = ctx.calling_convention_for_effect_row(row);
+                    ctx.leave_definition(outer);
                 }
                 ctx.register_definition_convention(name, convention);
             }
-            // A field's modifier performs whatever its callback performs, so
-            // its callers must already see it as Cps when they are promoted.
+            // A field's modifier performs whatever its callback performs.
             Decl::Struct(declaration) => {
                 let saved = crate::push_prefix(prefix, &declaration.name);
                 for field in declaration

@@ -99,18 +99,20 @@ impl<'db> InstanceKeys<'db> {
             (id, definition)
         }));
         let class_variables = settle_class_variables(definitions);
-        // Nothing instantiates the row of root `main`, so its tail is empty.
-        let root = Symbol::new(ROOT_MAIN);
+        // A definition is its own instance with every class `Cps`, except
+        // root `main`: nothing instantiates its row, so its tail is empty.
+        let root = FuncDefId::new(db, Symbol::new(ROOT_MAIN));
         let row_classes = class_variables
-            .get(&FuncDefId::new(db, root.clone()))
-            .map(|variables| {
-                let classes = variables
-                    .iter()
-                    .map(|(_, variable)| (*variable, CallingConvention::Direct))
-                    .collect();
-                (root, classes)
+            .iter()
+            .map(|(id, variables)| {
+                let class = if *id == root {
+                    CallingConvention::Direct
+                } else {
+                    CallingConvention::Cps
+                };
+                let classes = variables.iter().map(|(_, variable)| (*variable, class));
+                (id.qualified(db).clone(), classes.collect())
             })
-            .into_iter()
             .collect();
         Self {
             db,
@@ -164,10 +166,9 @@ impl<'db> InstanceKeys<'db> {
         function: FuncDefId<'db>,
         key: &InstanceKey<'db>,
     ) {
-        if !key.has_weaker_class() {
+        let Some(variables) = self.class_variables.get(&function) else {
             return;
-        }
-        let variables = &self.class_variables[&function];
+        };
         let classes = variables
             .iter()
             .map(|(_, variable)| *variable)
