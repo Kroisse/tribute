@@ -461,3 +461,40 @@ fn main() -> Nil {
     );
     assert!(errors.is_empty(), "{errors:#?}");
 }
+
+#[salsa_test]
+fn imported_abilities_resolve_inside_function_type_annotations(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod abilities {
+    pub ability Ask {
+        fn ask() -> Int
+    }
+}
+use abilities::Ask
+use std::io::{Io, print_line}
+
+struct Hook { run: fn(String) ->{Io} String }
+
+fn io_once(f: fn(String) ->{Io} String, s: String) ->{Io} String { f(s) }
+
+fn asking(g: fn(Int) ->{Ask} Int) ->{Ask} Int { g(+5) }
+
+fn echo(s: String) ->{Io} String {
+    print_line(s)
+    s
+}
+
+fn hooked(hook: Hook) ->{Io} String {
+    io_once(hook.run, "hook")
+}
+
+fn main() ->{Io} Nil {
+    print_line(io_once(echo, "io"))
+    print_line(hooked(Hook { run: echo }))
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
