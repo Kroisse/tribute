@@ -126,9 +126,15 @@ fn a_method_call_performs_the_effects_of_its_callee(db: &salsa::DatabaseImpl) {
             "Box::value::modify(b, fn(n) Ask::ask() + n).value",
         ),
     ] {
-        let undeclared = check("{}", method);
-        assert!(!undeclared.is_empty(), "{method}");
-        assert_eq!(undeclared, check("{}", qualified), "{method}");
+        // A call resolved after solving reports the effect against the
+        // function's row instead of the call site.
+        for call in [method, qualified] {
+            let undeclared = check("{}", call);
+            assert!(
+                matches!(&undeclared[..], [error] if error.contains("Ask")),
+                "{call}: {undeclared:?}"
+            );
+        }
         assert!(check("{Ask}", method).is_empty(), "{method}");
     }
     assert!(check("{}", "b.apply(fn(n) n)").is_empty());
@@ -357,4 +363,48 @@ fn solved_later(name: Name) -> String { id(name).text("a", "b") }
             "`text` is a field of `Name` and takes no arguments, but 2 were given",
         ]
     );
+}
+
+/// A method call whose receiver is typed only after solving performs its
+/// callee's effects, and those of a callback it is given, in the callable
+/// that makes the call.
+#[salsa_test]
+fn a_method_call_resolved_after_solving_performs_its_effects(db: &salsa::DatabaseImpl) {
+    let declarations = format!(
+        "{ASK}ability Tell {{\n    op tell() -> Nat\n}}\n\n\
+         struct Box {{ value: Nat }}\n\n\
+         fn bump(n: Nat) ->{{Ask}} Nat {{ n + Ask::ask() }}\n\n\
+         fn asks(b: Box) ->{{Ask}} Nat {{ Ask::ask() }}\n\n\
+         fn each(b: Box, g: fn(Nat) ->{{e}} Nat) ->{{e}} Nat {{ g(b.value) }}\n\n\
+         fn twice(g: fn(Box) ->{{e}} Nat) ->{{e}} Nat {{\n    \
+             g(Box {{ value: 1 }}) + g(Box {{ value: 2 }})\n}}\n\n"
+    );
+    let check = |function: &str| {
+        errors(
+            db,
+            &format!("{declarations}{function}\n\nfn main() -> Nil {{ }}\n"),
+        )
+    };
+    for accepted in [
+        "fn f() ->{Ask} Nat {\n    let go = fn(c) { c.asks() }\n    go(Box { value: 1 })\n}",
+        "fn f() ->{Ask} Nat {\n    let go = fn(c) { c.each(bump) }\n    go(Box { value: 1 })\n}",
+        "fn f() ->{Ask} Nat {\n    let go = fn(c) {\n        let k = Ask::ask()\n        c.each(bump) + k\n    }\n    go(Box { value: 1 })\n}",
+        "fn f() ->{Ask, Tell} Nat {\n    let go = fn(c) ->{Ask} Nat { c.asks() + Ask::ask() }\n    Tell::tell() + go(Box { value: 1 })\n}",
+        "fn f() ->{Ask} Nat { twice(fn(c) { c.asks() }) }",
+        "fn f() ->{} Nat {\n    let go = fn(c) { c.each(fn(n) { n + 1 }) }\n    go(Box { value: 1 })\n}",
+    ] {
+        let errors = check(accepted);
+        assert!(errors.is_empty(), "{accepted}: {errors:?}");
+    }
+    for rejected in [
+        "fn f() -> Nat {\n    let go = fn(c) { c.asks() }\n    go(Box { value: 1 })\n}",
+        "fn f() ->{Tell} Nat {\n    let go = fn(c) ->{Tell} Nat { Tell::tell() + c.asks() }\n    go(Box { value: 1 })\n}",
+        "fn f() ->{Tell} Nat { twice(fn(c) { c.each(bump) }) }",
+    ] {
+        let errors = check(rejected);
+        assert!(
+            !errors.is_empty() && errors.iter().all(|error| error.contains("Ask")),
+            "{rejected}: {errors:?}"
+        );
+    }
 }

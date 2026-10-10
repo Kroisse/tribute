@@ -193,6 +193,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Deferred UFCS method calls whose receiver type is still a UniVar.
     /// Resolved after constraint solving when UniVars have been substituted.
     deferred_methods: Vec<DeferredMethodCall<'db>>,
+    /// Deferred method calls resolved before the function was solved.
+    resolved_deferred_methods: Vec<(DeferredMethodCall<'db>, FuncDefId<'db>, Type<'db>)>,
 
     /// Evidence scopes and the calls and resumes made in them.
     pub(crate) evidence: super::evidence_plan::EvidenceTracker<'db>,
@@ -203,6 +205,7 @@ pub struct FunctionInferenceContext<'a, 'db> {
 /// Created when the receiver type is a UniVar at inference time.
 /// After solving, the receiver UniVar is resolved to a concrete type,
 /// enabling method lookup and additional type constraints.
+#[derive(Clone)]
 pub struct DeferredMethodCall<'db> {
     /// The NodeId of the MethodCall expression (for span lookup in diagnostics).
     pub node_id: NodeId,
@@ -216,6 +219,8 @@ pub struct DeferredMethodCall<'db> {
     pub result_ty: Type<'db>,
     /// Argument types including receiver as first element.
     pub arg_types: Vec<Type<'db>>,
+    /// Fresh row for the method's effects, joined into the caller's row.
+    pub effect: EffectRow<'db>,
 }
 
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
@@ -269,6 +274,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             handle_ctx_stack: Vec::new(),
             resolved_methods: HashMap::default(),
             deferred_methods: Vec::new(),
+            resolved_deferred_methods: Vec::new(),
             evidence: Default::default(),
         }
     }
@@ -495,6 +501,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         if let Some(existing) = self
             .deferred_methods
             .iter()
+            .chain(
+                self.resolved_deferred_methods
+                    .iter()
+                    .map(|(method, ..)| method),
+            )
             .find(|method| method.node_id == deferred.node_id)
         {
             let result = existing.result_ty;
@@ -516,6 +527,64 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         } else {
             self.deferred_methods.push(deferred);
         }
+    }
+
+    /// Relate the row a deferred call was given to its callee's row.
+    pub fn constrain_call_effect(
+        &mut self,
+        solver: &super::solver::TypeSolver<'db>,
+        callee: EffectRow<'db>,
+        call: EffectRow<'db>,
+        node_id: NodeId,
+    ) {
+        let origin = ConstraintOrigin {
+            node_id,
+            kind: ConstraintOriginKind::Call,
+        };
+        let constraint =
+            solver.call_effect_constraint(callee, call, || self.fresh_row_var(), origin);
+        self.constraints.add(constraint);
+    }
+
+    /// The row a deferred method call was given on an earlier visit.
+    pub fn deferred_method_effect(&self, node: NodeId) -> Option<EffectRow<'db>> {
+        self.deferred_methods
+            .iter()
+            .chain(
+                self.resolved_deferred_methods
+                    .iter()
+                    .map(|(method, ..)| method),
+            )
+            .find(|method| method.node_id == node)
+            .map(|method| method.effect)
+    }
+
+    /// Record the function a deferred method call resolved to.
+    pub fn resolve_deferred_method(
+        &mut self,
+        node: NodeId,
+        function: FuncDefId<'db>,
+        callee_ty: Type<'db>,
+    ) {
+        if let Some(index) = self
+            .deferred_methods
+            .iter()
+            .position(|method| method.node_id == node)
+        {
+            let method = self.deferred_methods.remove(index);
+            self.resolved_deferred_methods
+                .push((method, function, callee_ty));
+        }
+    }
+
+    /// Take the deferred method calls resolved before solving.
+    pub fn take_resolved_deferred_methods(
+        &mut self,
+    ) -> HashMap<NodeId, (FuncDefId<'db>, Type<'db>)> {
+        std::mem::take(&mut self.resolved_deferred_methods)
+            .into_iter()
+            .map(|(method, function, callee_ty)| (method.node_id, (function, callee_ty)))
+            .collect()
     }
 
     /// Take ownership of deferred method calls.

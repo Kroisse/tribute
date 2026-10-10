@@ -1,8 +1,8 @@
 //! Effect-row equality, set matching, and retained relations.
 
 use super::{
-    Constraint, EffectRow, EffectVar, HashMap, LocatedSolveError, SolveError, Type, TypeKind,
-    TypeSolver, UniVarId, collect_effect_vars, map_effect_row_type_args,
+    Constraint, ConstraintOrigin, EffectRow, EffectVar, HashMap, LocatedSolveError, SolveError,
+    Type, TypeKind, TypeSolver, UniVarId, collect_effect_vars, map_effect_row_type_args,
 };
 
 impl<'db> TypeSolver<'db> {
@@ -269,6 +269,31 @@ impl<'db> TypeSolver<'db> {
             self.type_subst
                 .apply_with_rows(self.db, ty, &self.row_subst)
         })
+    }
+
+    /// Relate the row a deferred call was given to its callee's row.
+    ///
+    /// The call performs the callee's effects, so a row nothing was equated
+    /// with is the callee's. A row that was, as the tail of a lambda checked
+    /// against a row-polymorphic parameter, may hold more.
+    pub(crate) fn call_effect_constraint(
+        &self,
+        callee: EffectRow<'db>,
+        call: EffectRow<'db>,
+        slack: impl FnOnce() -> EffectVar,
+        origin: ConstraintOrigin,
+    ) -> Constraint<'db> {
+        if self.normalize_row(call) == call {
+            Constraint::RowEqAt(callee, call, origin)
+        } else {
+            Constraint::RowUnion(
+                crate::ast::RowUnion {
+                    sources: vec![callee, EffectRow::open(self.db, slack())],
+                    result: call,
+                },
+                Some(origin),
+            )
+        }
     }
 
     pub(super) fn settle_row_unions(&mut self) -> Result<(), LocatedSolveError<'db>> {
@@ -919,7 +944,7 @@ impl<'db> TypeSolver<'db> {
         unions: bool,
     ) -> bool {
         let unions = unions && !self.pending_row_unions.is_empty();
-        if !unions && self.pending_relations.is_empty() {
+        if !unions && self.pending_relations.is_empty() && self.pending_producers.is_empty() {
             return false;
         }
         let left = self.normalize_row(left);
@@ -937,12 +962,42 @@ impl<'db> TypeSolver<'db> {
                         && self.pending_row_unions.iter().any(|(union, _)| {
                             self.normalize_row(union.result).rest(self.db) == Some(tail)
                         }))
-                        || self.pending_relation_mentions(tail))
+                        || self.awaits_expression(tail, &mut Vec::new()))
             })
     }
 
-    /// Whether the types of a pending expression relation mention `tail`.
+    /// Whether an expression relation or a call still to be resolved may add
+    /// labels to `tail`, directly or through the unions that define it.
+    fn awaits_expression(&self, tail: EffectVar, visited: &mut Vec<EffectVar>) -> bool {
+        if visited.contains(&tail) {
+            return false;
+        }
+        visited.push(tail);
+        if self.pending_relation_mentions(tail) {
+            return true;
+        }
+        let sources: Vec<_> = self
+            .pending_row_unions
+            .iter()
+            .filter(|(union, _)| self.normalize_row(union.result).rest(self.db) == Some(tail))
+            .flat_map(|(union, _)| &union.sources)
+            .filter_map(|source| self.normalize_row(*source).rest(self.db))
+            .collect();
+        sources
+            .into_iter()
+            .any(|source| self.awaits_expression(source, visited))
+    }
+
+    /// Whether the types of a pending expression relation, or the row of a
+    /// call still to be resolved, mention `tail`.
     fn pending_relation_mentions(&self, tail: EffectVar) -> bool {
+        if self
+            .pending_producers
+            .iter()
+            .any(|producer| self.normalize_row(producer.effect).rest(self.db) == Some(tail))
+        {
+            return true;
+        }
         let mentions = |ty: Type<'db>| {
             let ty = self
                 .type_subst

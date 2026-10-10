@@ -16,9 +16,9 @@ use crate::ast::{
     ExprKind, FuncDecl, FuncDefId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
 };
 
-use super::super::constraint::{ConstraintOriginKind, ConstraintSet};
+use super::super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
 use super::super::func_context::FunctionInferenceContext;
-use super::super::solver::TypeSolver;
+use super::super::solver::{LocatedSolveError, TypeSolver};
 #[cfg(test)]
 use super::diagnostics::{format_solve_error, solve_error_context};
 use super::finalize::{Finalize, Substitution};
@@ -146,6 +146,7 @@ impl<'db> TypeChecker<'db> {
         // Take node_types now while ctx is still alive, before we need mutable self access
         let func_node_types = ctx.take_node_types();
         let mut func_instances = ctx.take_function_instances();
+        let early_resolutions = ctx.take_resolved_deferred_methods();
         let local_instances = ctx.take_local_instances();
         let func_handler_operations = ctx.take_handler_operations();
         let func_perform_operations = ctx.take_perform_operations();
@@ -168,7 +169,12 @@ impl<'db> TypeChecker<'db> {
             solver.set_rigid_rows(scheme.effect_params(self.db()).iter().copied());
         }
         for method in &deferred_methods {
-            solver.defer_producer(method.node_id, method.result_ty, method.arg_types.clone());
+            solver.defer_producer(
+                method.node_id,
+                method.result_ty,
+                method.arg_types.clone(),
+                method.effect,
+            );
         }
 
         let mut solve_failed = false;
@@ -194,12 +200,22 @@ impl<'db> TypeChecker<'db> {
         // 4b. Post-solve: resolve deferred method calls
         // After solving, UniVar receiver types may now be concrete.
         // Look up methods and add type constraints for return types.
-        let deferred_resolutions = self.resolve_deferred_methods(
+        let (mut deferred_resolutions, waiting_errors) = self.resolve_deferred_methods(
             &mut solver,
             deferred_methods,
             func.id,
             &mut func_instances,
         );
+        deferred_resolutions.extend(early_resolutions);
+        for error in waiting_errors {
+            solve_failed = true;
+            self.report_solve_error(
+                diagnostic_func_id,
+                &diagnostic_func_name,
+                diagnostic_effects.as_deref(),
+                error,
+            );
+        }
         for operand in become_method_operands {
             if let Some((callee, _)) = deferred_resolutions.get(&operand) {
                 self.check_become_callee(operand, *callee);
@@ -575,8 +591,13 @@ impl<'db> TypeChecker<'db> {
         mut deferred: Vec<crate::typeck::func_context::DeferredMethodCall<'db>>,
         func_node_id: crate::ast::NodeId,
         instances: &mut HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-    ) -> HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)> {
+    ) -> (
+        HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
+        Vec<LocatedSolveError<'db>>,
+    ) {
         let mut resolved = HashMap::default();
+        // Errors of relations that waited for a call, not of the call.
+        let mut waiting_errors = Vec::new();
         loop {
             let mut new_constraints = ConstraintSet::new();
             let mut remaining = Vec::new();
@@ -593,6 +614,7 @@ impl<'db> TypeChecker<'db> {
                     resolved.insert(mc.node_id, (instance.function, instance.callable));
                     instances.insert(mc.node_id, instance);
                     new_constraints.add_type_eq(mc.result_ty, field_ty);
+                    new_constraints.add_row_eq(crate::ast::EffectRow::pure(self.db()), mc.effect);
                     solver.resolve_producer(mc.node_id);
                 } else if let super::expr::MethodSelection::One(entry) =
                     self.select_method(&mc.method, mc.path.as_ref(), resolved_receiver)
@@ -665,9 +687,16 @@ impl<'db> TypeChecker<'db> {
                             );
                         }
 
-                        // Propagate effect row
-                        let pure = crate::ast::EffectRow::pure(self.db());
-                        new_constraints.add_row_eq(*effect, pure);
+                        let slack = solver.fresh_row_var();
+                        new_constraints.add(solver.call_effect_constraint(
+                            *effect,
+                            mc.effect,
+                            || slack,
+                            ConstraintOrigin {
+                                node_id: mc.node_id,
+                                kind: ConstraintOriginKind::Call,
+                            },
+                        ));
                     }
                 } else {
                     remaining.push(mc);
@@ -686,27 +715,29 @@ impl<'db> TypeChecker<'db> {
                 }
                 break;
             }
-            if let Err(error) = solver.solve(new_constraints) {
-                Diagnostic::new(
-                    format!("type error during UFCS method resolution: {}", error),
-                    self.get_span(func_node_id),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
-            }
-            if let Err(error) = solver.finalize_relations() {
-                Diagnostic::new(
-                    format!("type error during UFCS method resolution: {}", error.error),
-                    self.get_span(error.origin.map_or(func_node_id, |origin| origin.node_id)),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
+            for error in [
+                solver.solve_with_origin(new_constraints).err(),
+                solver.finalize_relations().err(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                match error.origin {
+                    Some(origin) if !resolved.contains_key(&origin.node_id) => {
+                        waiting_errors.push(error);
+                    }
+                    origin => Diagnostic::new(
+                        format!("type error during UFCS method resolution: {}", error.error),
+                        self.get_span(origin.map_or(func_node_id, |origin| origin.node_id)),
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::TypeChecking,
+                    )
+                    .accumulate(self.db()),
+                }
             }
             deferred = remaining;
         }
-        resolved
+        (resolved, waiting_errors)
     }
 
     /// Report a qualified method call whose path names no single function

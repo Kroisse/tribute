@@ -106,6 +106,7 @@ struct PendingProducer<'db> {
     node_id: NodeId,
     result: Type<'db>,
     inputs: Vec<Type<'db>>,
+    effect: EffectRow<'db>,
 }
 
 impl<'db> TypeSolver<'db> {
@@ -157,7 +158,13 @@ impl<'db> TypeSolver<'db> {
         self.next_row_var = self.next_row_var.max(next);
     }
 
-    pub fn defer_producer(&mut self, node_id: NodeId, result: Type<'db>, inputs: Vec<Type<'db>>) {
+    pub fn defer_producer(
+        &mut self,
+        node_id: NodeId,
+        result: Type<'db>,
+        inputs: Vec<Type<'db>>,
+        effect: EffectRow<'db>,
+    ) {
         if !self
             .pending_producers
             .iter()
@@ -167,6 +174,7 @@ impl<'db> TypeSolver<'db> {
                 node_id,
                 result,
                 inputs,
+                effect,
             });
         }
     }
@@ -197,6 +205,15 @@ impl<'db> TypeSolver<'db> {
         }
         let mut vars = Vec::new();
         let mut effects = Vec::new();
+        for producer in &self.pending_producers {
+            let row = self.normalize_row(producer.effect);
+            types.extend(
+                row.effects(self.db)
+                    .iter()
+                    .flat_map(|effect| effect.args.clone()),
+            );
+            effects.extend(row.rest(self.db));
+        }
         for ty in types {
             let ty = self
                 .type_subst
