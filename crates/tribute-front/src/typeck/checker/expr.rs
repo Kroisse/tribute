@@ -51,30 +51,39 @@ pub(crate) enum MethodSelection<'db> {
     None,
 }
 
-/// Whether a function a path names takes a receiver of type `actual` as its
-/// first parameter. A type variable takes any known receiver, and a function
-/// or tuple parameter takes a receiver of the same shape; a nominal or
-/// primitive parameter takes its own type. A receiver not inferred yet
-/// matches nothing, so its call waits.
-fn path_receiver_matches<'db>(
-    db: &'db dyn salsa::Database,
-    entry: &crate::typeck::MethodEntry<'db>,
-    actual: Type<'db>,
-) -> bool {
-    let Some(declared) = entry.receiver_ty(db) else {
-        return false;
-    };
-    match (declared.kind(db), actual.kind(db)) {
-        (_, TypeKind::UniVar { .. }) => false,
-        (TypeKind::BoundVar { .. }, _) => true,
-        (
-            TypeKind::Func {
-                params: declared, ..
-            },
-            TypeKind::Func { params: actual, .. },
-        ) => declared.len() == actual.len(),
-        (TypeKind::Tuple(declared), TypeKind::Tuple(actual)) => declared.len() == actual.len(),
-        _ => crate::typeck::receiver_type_matches(db, entry, actual),
+/// The types of a call that selects among several functions: the arguments
+/// inferred so far, receiver first, of the `arity` it passes, and the type
+/// its result is used at.
+#[derive(Clone, Copy)]
+pub(crate) struct CallTypes<'a, 'db> {
+    pub args: &'a [Type<'db>],
+    pub arity: usize,
+    pub result: Option<Type<'db>>,
+}
+
+impl<'db> CallTypes<'_, 'db> {
+    /// Whether `function` takes the arguments inferred so far, whatever
+    /// number of arguments the call passes.
+    fn arguments_match(self, db: &'db dyn salsa::Database, function: Type<'db>) -> bool {
+        let TypeKind::Func { params, .. } = function.kind(db) else {
+            return false;
+        };
+        self.args
+            .iter()
+            .zip(params)
+            .all(|(actual, declared)| crate::typeck::parameter_type_matches(db, *declared, *actual))
+    }
+
+    /// Whether `function` is a function the call may select.
+    fn matches(self, db: &'db dyn salsa::Database, function: Type<'db>) -> bool {
+        let TypeKind::Func { params, result, .. } = function.kind(db) else {
+            return false;
+        };
+        params.len() == self.arity
+            && self.arguments_match(db, function)
+            && self
+                .result
+                .is_none_or(|actual| crate::typeck::parameter_type_matches(db, *result, actual))
     }
 }
 
@@ -273,7 +282,15 @@ impl<'db> TypeChecker<'db> {
                 // Infer receiver type first
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
                 let path = path.as_ref().map(method_path_functions);
-                let selection = self.select_method(method, path.as_ref(), receiver_ty);
+                let selection = self.select_method(
+                    method,
+                    path.as_ref(),
+                    CallTypes {
+                        args: &[receiver_ty],
+                        arity: args.len() + 1,
+                        result: None,
+                    },
+                );
                 let field =
                     self.method_field(receiver_ty, method, path.is_some(), args, &selection);
 
@@ -957,7 +974,15 @@ impl<'db> TypeChecker<'db> {
             } => {
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
                 let path = path.as_ref().map(method_path_functions);
-                let selection = self.select_method(method, path.as_ref(), receiver_ty);
+                let selection = self.select_method(
+                    method,
+                    path.as_ref(),
+                    CallTypes {
+                        args: &[receiver_ty],
+                        arity: args.len() + 1,
+                        result: None,
+                    },
+                );
                 let field =
                     self.method_field(receiver_ty, method, path.is_some(), args, &selection);
                 if let Some(field) = &field
@@ -1825,39 +1850,67 @@ impl<'db> TypeChecker<'db> {
         (*selected.func_id.qualified(self.db()) == getter).then_some(field)
     }
 
-    /// Select the function a method call names for a receiver of type
-    /// `receiver_ty`: among the functions its path may name, or for an
-    /// unqualified method among the functions of that name.
+    /// Select the function a call names among the functions its path may
+    /// name, or for an unqualified method among the functions of that name
+    /// its receiver's type has: the one whose signature takes the call.
     pub(crate) fn select_method(
         &self,
         method: &Symbol,
         path: Option<&(NodeId, Vec<crate::ast::FuncDefId<'db>>)>,
-        receiver_ty: Type<'db>,
+        call: CallTypes<'_, 'db>,
     ) -> MethodSelection<'db> {
-        let Some((_, candidates)) = path else {
-            return match self.env.lookup_method(method, receiver_ty) {
-                Some(entry) => MethodSelection::One(*entry),
-                None => MethodSelection::None,
-            };
+        let candidates: Vec<crate::typeck::MethodEntry<'db>> = match path {
+            Some((_, candidates)) => candidates
+                .iter()
+                .filter_map(|candidate| {
+                    let (scheme, _) = self.env.function_scheme(*candidate)?;
+                    Some(crate::typeck::MethodEntry {
+                        func_id: *candidate,
+                        func_ty: scheme.body(self.db()),
+                    })
+                })
+                .collect(),
+            None => {
+                let candidates: Vec<_> = match call.args.first() {
+                    Some(receiver) => self
+                        .env
+                        .lookup_methods(method, *receiver)
+                        .copied()
+                        .collect(),
+                    None => Vec::new(),
+                };
+                // The receiver's type has one function of this name: there
+                // is nothing to select, and the call is checked against it.
+                if let [entry] = candidates[..] {
+                    return MethodSelection::One(entry);
+                }
+                candidates
+            }
         };
-        let mut matching = candidates.iter().filter_map(|candidate| {
-            let (scheme, _) = self.env.function_scheme(*candidate)?;
-            let entry = crate::typeck::MethodEntry {
-                func_id: *candidate,
-                func_ty: scheme.body(self.db()),
-            };
-            path_receiver_matches(self.db(), &entry, receiver_ty).then_some(entry)
-        });
-        match (matching.next(), matching.next()) {
-            (Some(entry), None) => MethodSelection::One(entry),
-            (Some(first), Some(second)) => MethodSelection::Ambiguous(
-                [first, second]
-                    .into_iter()
-                    .chain(matching)
-                    .map(|entry| entry.func_id)
-                    .collect(),
-            ),
-            (None, _) => MethodSelection::None,
+        let select = |matches: &dyn Fn(Type<'db>) -> bool| {
+            let mut matching = candidates.iter().filter(|entry| matches(entry.func_ty));
+            match (matching.next(), matching.next()) {
+                (Some(entry), None) => MethodSelection::One(*entry),
+                (Some(first), Some(second)) => MethodSelection::Ambiguous(
+                    [first, second]
+                        .into_iter()
+                        .chain(matching)
+                        .map(|entry| entry.func_id)
+                        .collect(),
+                ),
+                (None, _) => MethodSelection::None,
+            }
+        };
+        match select(&|function| call.matches(self.db(), function)) {
+            // A call that passes the wrong number of arguments still names
+            // the function its arguments select, which reports the number.
+            MethodSelection::None => {
+                match select(&|function| call.arguments_match(self.db(), function)) {
+                    selection @ MethodSelection::One(_) => selection,
+                    _ => MethodSelection::None,
+                }
+            }
+            selection => selection,
         }
     }
 
@@ -2466,9 +2519,18 @@ impl<'db> TypeChecker<'db> {
     ) -> bool {
         let mut resolved = false;
         for call in ctx.deferred_methods().to_vec() {
-            let receiver = solver.type_subst().apply(self.db(), call.receiver_ty);
+            let args: Vec<_> = call
+                .arg_types
+                .iter()
+                .map(|ty| solver.type_subst().apply(self.db(), *ty))
+                .collect();
+            let types = CallTypes {
+                args: &args,
+                arity: args.len(),
+                result: Some(solver.expected_type(call.result_ty)),
+            };
             let MethodSelection::One(entry) =
-                self.select_method(&call.method, call.path.as_ref(), receiver)
+                self.select_method(&call.method, call.path.as_ref(), types)
             else {
                 continue;
             };

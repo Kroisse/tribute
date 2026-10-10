@@ -878,8 +878,8 @@ ExprList ::= Expression (',' Expression)* ','?
 - `x.f` → `f(x)` (인자가 없으면 괄호 생략 가능)
 - `x.a::b(y)` → `a::b(x, y)` (qualified path도 가능)
 
-Qualified UFCS `x.a::b(y)`도 비한정 UFCS처럼 receiver 타입으로 후보를 고른다
-([modules.md](modules.md#type-directed-resolution)). `User::name::set`의 `User`는
+Qualified UFCS `x.a::b(y)`도 호출의 타입으로 후보를 고른다
+([modules.md](modules.md#후보-선택)). `User::name::set`의 `User`는
 타입 binding이 아니라 타입 선언이 만드는 [동명 namespace](modules.md#타입과-동명-네임스페이스)
 (companion 모듈이 항목을 더하는 모듈)이므로, 후보는 호출 위치 스코프의 경로로만
 찾는다:
@@ -887,7 +887,7 @@ Qualified UFCS `x.a::b(y)`도 비한정 UFCS처럼 receiver 타입으로 후보�
 - 스코프에서 그대로 해소되는 `a::b`
 - 스코프 안의 모듈 `m`마다 `m::a::b`
 
-이 중 첫 매개변수가 receiver 타입과 맞는 후보가 하나면 그것을 쓰고, 여럿이면
+이 중 호출의 인자와 결과 타입에 맞는 후보가 하나면 그것을 쓰고, 여럿이면
 모호성 오류, 없으면 경로 `a::b`에 대한 미해소 진단을 원래 위치에 낸다. 스코프
 밖의 모듈은 receiver 타입을 정의한 모듈이라도 찾지 않으므로, 다른 모듈의 타입에
 쓰려면 그 동명 모듈을 `use`한다(`use m::User`).

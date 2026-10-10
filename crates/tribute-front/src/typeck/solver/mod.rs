@@ -230,6 +230,26 @@ impl<'db> TypeSolver<'db> {
         (vars, effects)
     }
 
+    /// The type the result `ty` of a call still to be resolved is used at:
+    /// what `ty` resolved to, or the type a pending check expects of it.
+    pub(crate) fn expected_type(&self, ty: Type<'db>) -> Type<'db> {
+        let resolved = self.type_subst.apply(self.db, ty);
+        if !matches!(resolved.kind(self.db), TypeKind::UniVar { .. }) {
+            return resolved;
+        }
+        self.pending_relations
+            .iter()
+            .find_map(|relation| match relation {
+                Constraint::TypeCoerce(actual, expected, _)
+                    if self.type_subst.apply(self.db, *actual) == resolved =>
+                {
+                    Some(self.type_subst.apply(self.db, *expected))
+                }
+                _ => None,
+            })
+            .unwrap_or(resolved)
+    }
+
     /// At an inference boundary, equate remaining ordinary variables only when
     /// no unresolved producer or common-result relation can still supply Never.
     pub fn finalize_relations(&mut self) -> Result<(), LocatedSolveError<'db>> {

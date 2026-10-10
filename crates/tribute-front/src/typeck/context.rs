@@ -119,6 +119,37 @@ pub fn receiver_type_matches<'db>(
     same_constructor(db, declared, actual)
 }
 
+/// Whether a parameter declared as `declared` takes an argument of type
+/// `actual` when a call selects among several functions.
+///
+/// Nominal types match by declaration and primitives by name, as for a
+/// receiver; function types and tuples match by their number of items. A
+/// type variable of the declaration takes any type, and a type not inferred
+/// yet excludes no declaration.
+pub fn parameter_type_matches<'db>(
+    db: &'db dyn salsa::Database,
+    declared: Type<'db>,
+    actual: Type<'db>,
+) -> bool {
+    match (declared.kind(db), actual.kind(db)) {
+        (TypeKind::BoundVar { .. }, _)
+        | (_, TypeKind::UniVar { .. } | TypeKind::Never | TypeKind::Error) => true,
+        (
+            TypeKind::Func {
+                params: declared, ..
+            },
+            TypeKind::Func { params: actual, .. },
+        ) => declared.len() == actual.len(),
+        (TypeKind::Tuple(declared), TypeKind::Tuple(actual)) => declared.len() == actual.len(),
+        (TypeKind::App { ctor, .. }, _) => parameter_type_matches(db, *ctor, actual),
+        (_, TypeKind::App { ctor, .. }) => parameter_type_matches(db, declared, *ctor),
+        (TypeKind::Named { id: left, .. }, TypeKind::Named { id: right, .. }) => left == right,
+        (left, right) => {
+            left.primitive_name().is_some() && left.primitive_name() == right.primitive_name()
+        }
+    }
+}
+
 /// A function a struct has for one of its named fields.
 #[derive(Clone, Debug)]
 pub struct FieldFunction<'db> {
@@ -278,6 +309,20 @@ impl<'db> ModuleTypeEnv<'db> {
             return None; // ambiguous
         }
         Some(matched)
+    }
+
+    /// The functions named `method_name` that take a receiver of type
+    /// `receiver_ty`.
+    pub fn lookup_methods(
+        &self,
+        method_name: &Symbol,
+        receiver_ty: Type<'db>,
+    ) -> impl Iterator<Item = &MethodEntry<'db>> {
+        self.method_index
+            .get(method_name)
+            .into_iter()
+            .flatten()
+            .filter(move |entry| receiver_type_matches(self.db, entry, receiver_ty))
     }
 
     /// Register a constructor's type scheme.
