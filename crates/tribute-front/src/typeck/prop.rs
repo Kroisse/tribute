@@ -21,8 +21,8 @@ use proptest::prelude::*;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, CallingConvention, Effect, EffectRow, EffectVar, NodeId, Type, TypeDefId, TypeKind,
-    UniVarId, UniVarSource,
+    AbilityId, Effect, EffectRow, EffectVar, NodeId, Type, TypeDefId, TypeKind, UniVarId,
+    UniVarSource,
 };
 
 /// First row-variable id used by generated rows. Solvers and inference
@@ -148,7 +148,6 @@ pub(crate) enum TypeShape {
         params: Vec<TypeShape>,
         result: Box<TypeShape>,
         effect: RowShape,
-        convention: CallingConvention,
     },
     Tuple(Vec<TypeShape>),
     App {
@@ -205,12 +204,10 @@ impl TypeShape {
                 params,
                 result,
                 effect,
-                convention,
             } => TypeKind::Func {
                 params: build_all(db, params),
                 result: result.build(db),
                 effect: effect.build(db),
-                minimum_convention: *convention,
             },
             TypeShape::Tuple(elements) => TypeKind::Tuple(build_all(db, elements)),
             TypeShape::App { ctor, args } => TypeKind::App {
@@ -339,7 +336,6 @@ impl TypeShape {
                     params,
                     result,
                     effect,
-                    convention,
                 } => {
                     let params = all(params, n);
                     let result = Box::new(go(result, n, with));
@@ -347,7 +343,6 @@ impl TypeShape {
                         params,
                         result,
                         effect: row(effect, n),
-                        convention: *convention,
                     }
                 }
                 TypeShape::Tuple(elements) => TypeShape::Tuple(all(elements, n)),
@@ -388,12 +383,10 @@ impl TypeShape {
                 params,
                 result,
                 effect,
-                convention,
             } => TypeShape::Func {
                 params: params.iter().map(|param| param.map(f)).collect(),
                 result: Box::new(result.map(f)),
                 effect: effect.map_types(f),
-                convention: *convention,
             },
             TypeShape::Tuple(elements) => {
                 TypeShape::Tuple(elements.iter().map(|element| element.map(f)).collect())
@@ -441,12 +434,10 @@ impl TypeShape {
                 params,
                 result,
                 effect,
-                convention,
             } => TypeShape::Func {
                 params,
                 result,
                 effect: effect.rename_tail(rename),
-                convention,
             },
             TypeShape::Continuation {
                 arg,
@@ -553,8 +544,6 @@ pub(crate) struct TypeGen {
     pub error: bool,
     /// Whether `App` and `Continuation` appear.
     pub higher_kinded: bool,
-    /// Whether function types carry a convention floor above `Direct`.
-    pub conventions: bool,
     /// Whether rows hold function types as effect arguments.
     pub row_functions: bool,
     /// Whether a row holds at most one instance of each ability.
@@ -563,7 +552,7 @@ pub(crate) struct TypeGen {
 
 impl TypeGen {
     /// Fully resolved first-order-kinded types: closed rows, no variables,
-    /// no `Error`, `Direct` floors.
+    /// no `Error`.
     pub(crate) const GROUND: Self = Self {
         depth: 3,
         univars: 0,
@@ -571,7 +560,6 @@ impl TypeGen {
         row_vars: 0,
         error: false,
         higher_kinded: false,
-        conventions: false,
         row_functions: true,
         unique_abilities: false,
     };
@@ -595,13 +583,6 @@ impl TypeGen {
     pub(crate) const fn higher_kinded(self, higher_kinded: bool) -> Self {
         Self {
             higher_kinded,
-            ..self
-        }
-    }
-
-    pub(crate) const fn conventions(self, conventions: bool) -> Self {
-        Self {
-            conventions,
             ..self
         }
     }
@@ -713,16 +694,6 @@ pub(crate) fn type_shape(cfg: TypeGen) -> BoxedStrategy<TypeShape> {
     leaf(cfg)
         .prop_recursive(cfg.depth, 32, 3, move |inner| {
             let row = row_with(cfg, row_args(cfg, &inner));
-            let convention = if cfg.conventions {
-                proptest::sample::select(vec![
-                    CallingConvention::Direct,
-                    CallingConvention::EvidenceDirect,
-                    CallingConvention::Cps,
-                ])
-                .boxed()
-            } else {
-                Just(CallingConvention::Direct).boxed()
-            };
             let named = {
                 let inner = inner.clone();
                 (0..NOMINALS.len()).prop_flat_map(move |nominal| {
@@ -734,13 +705,11 @@ pub(crate) fn type_shape(cfg: TypeGen) -> BoxedStrategy<TypeShape> {
                 proptest::collection::vec(inner.clone(), 0..=2),
                 inner.clone(),
                 row.clone(),
-                convention,
             )
-                .prop_map(|(params, result, effect, convention)| TypeShape::Func {
+                .prop_map(|(params, result, effect)| TypeShape::Func {
                     params,
                     result: Box::new(result),
                     effect,
-                    convention,
                 });
             let tuple = proptest::collection::vec(inner.clone(), 2..=3).prop_map(TypeShape::Tuple);
             let mut options: Vec<(u32, BoxedStrategy<TypeShape>)> =
@@ -859,7 +828,6 @@ fn generalize_children(shape: &TypeShape, sharing: Sharing) -> BoxedStrategy<Typ
             params,
             result,
             effect,
-            convention,
         } => (
             generalize_all(&params, sharing),
             generalize_inner(&result, sharing),
@@ -869,7 +837,6 @@ fn generalize_children(shape: &TypeShape, sharing: Sharing) -> BoxedStrategy<Typ
                 params,
                 result: Box::new(result),
                 effect,
-                convention,
             })
             .boxed(),
         TypeShape::Tuple(elements) => generalize_all(&elements, sharing)
@@ -967,12 +934,10 @@ fn renumber_placeholders(shape: TypeShape) -> TypeShape {
             params,
             result,
             effect,
-            convention,
         } => TypeShape::Func {
             params,
             result,
             effect: renumber_row(effect, &mut next_row),
-            convention,
         },
         TypeShape::Continuation {
             arg,
@@ -1038,17 +1003,14 @@ pub(crate) fn types_equiv<'db>(
                 params: left_params,
                 result: left_result,
                 effect: left_effect,
-                minimum_convention: left_convention,
             },
             TypeKind::Func {
                 params: right_params,
                 result: right_result,
                 effect: right_effect,
-                minimum_convention: right_convention,
             },
         ) => {
-            left_convention == right_convention
-                && all(left_params, right_params)
+            all(left_params, right_params)
                 && types_equiv(db, *left_result, *right_result, relation)
                 && rows_equiv(db, *left_effect, *right_effect, relation)
         }

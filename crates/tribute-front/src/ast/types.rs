@@ -118,11 +118,6 @@ pub enum TypeKind<'db> {
         params: Vec<Type<'db>>,
         result: Type<'db>,
         effect: EffectRow<'db>,
-        /// Calling-convention lower bound requested independently of the row.
-        ///
-        /// This is independent of the convention derived from the effect row.
-        /// Source function types currently use `Direct` as their floor.
-        minimum_convention: super::CallingConvention,
     },
 
     /// Tuple type.

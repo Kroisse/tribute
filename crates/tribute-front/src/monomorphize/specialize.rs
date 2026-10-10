@@ -22,7 +22,7 @@ pub(super) struct GeneratedSpecializations<'db> {
     pub(super) specialized_extern_declarations: Vec<ExternFuncDecl>,
     pub(super) specialized_function_types: Vec<(Symbol, TypeScheme<'db>)>,
     /// The name, key, and source nodes of each generated function.
-    pub(super) metadata_origins: Vec<(Symbol, InstanceKey<'db>, HashSet<NodeId>)>,
+    pub(super) metadata_origins: Vec<(InstanceKey<'db>, HashSet<NodeId>)>,
     pub(super) compiler_intrinsic_specializations: Vec<(NodeId, Symbol)>,
 }
 
@@ -113,8 +113,8 @@ pub(super) fn generate_specializations<'db>(
     let mut metadata_origins = Vec::with_capacity(entries.len());
     for entry in entries {
         new_decls.push(entry.declaration);
-        new_function_types.push((entry.name.clone(), entry.scheme));
-        metadata_origins.push((entry.name, entry.key, entry.origins));
+        new_function_types.push((entry.name, entry.scheme));
+        metadata_origins.push((entry.key, entry.origins));
     }
     new_function_types.extend(extern_function_types);
     new_function_types.sort_by_key(|(name, _)| name.clone());
@@ -863,7 +863,6 @@ mod tests {
                 params: vec![bv0],
                 result: bv0,
                 effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let writer = crate::ast::AbilityId::source(&db, Symbol::new("Writer"));
@@ -1005,7 +1004,6 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let ann = type_to_annotation(&db, func_ty, node_id(1));
@@ -1054,7 +1052,6 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let ann = type_to_annotation(&db, func_ty, node_id(1));
@@ -1077,7 +1074,6 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect: EffectRow::pure(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 

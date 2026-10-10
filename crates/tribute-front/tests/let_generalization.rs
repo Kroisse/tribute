@@ -3,8 +3,8 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::{
     SourceCst,
     ast::{
-        AbilityId, CallingConvention, Decl, Effect, EffectRow, Expr, ExprKind, Module, NodeId,
-        Type, TypeKind, TypedRef, UniVarId, UniVarSource,
+        AbilityId, Decl, Effect, EffectRow, Expr, ExprKind, Module, NodeId, Type, TypeKind,
+        TypedRef, UniVarId, UniVarSource,
     },
 };
 use trunk_ir::Symbol;
@@ -410,7 +410,6 @@ fn pair() -> Nil {
             params: vec![],
             result: nil,
             effect,
-            minimum_convention: CallingConvention::Direct,
         },
     );
     let continuation = Type::new(

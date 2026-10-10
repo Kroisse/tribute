@@ -588,7 +588,6 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                         params,
                         result,
                         effect,
-                        minimum_convention,
                     } = scheme.body(db).kind(db)
                     else {
                         panic!("constructor signature")
@@ -609,7 +608,6 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                                 *result
                             },
                             effect: *effect,
-                            minimum_convention: *minimum_convention,
                         },
                     );
                     schemas.insert(

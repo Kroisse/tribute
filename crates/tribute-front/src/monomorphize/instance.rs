@@ -592,7 +592,6 @@ mod tests {
                 params,
                 result,
                 effect,
-                minimum_convention: CallingConvention::Direct,
             },
         )
     }

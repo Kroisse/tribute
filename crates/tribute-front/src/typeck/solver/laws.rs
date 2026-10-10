@@ -7,9 +7,6 @@
 //! - A closed empty row unified against a row that names effects succeeds
 //!   without binding (pure subsumption); [`RowRelation::PureSubsumes`]
 //!   accounts for it.
-//! - Function types are generated with the `Direct` convention floor, the
-//!   only floor source function types carry; unification does not relate
-//!   floors.
 //!
 //! The tests at the end are minimal examples of cases the laws once found
 //! failing, kept as regressions.
@@ -440,7 +437,6 @@ fn open_row_tail_binding_keeps_argument_bindings() {
             effects: vec![],
             rest: Some(tail),
         },
-        convention: crate::ast::CallingConvention::Direct,
     };
     let state = |tail| EffectShape {
         ability: 1,
@@ -476,7 +472,6 @@ fn open_rows_allow_a_tail_in_the_other_remainder() {
                 effects: vec![],
                 rest: Some(e1),
             },
-            convention: crate::ast::CallingConvention::Direct,
         }],
     };
     let left = RowShape {
@@ -509,7 +504,6 @@ fn open_rows_reject_a_cycle_through_both_tails() {
             effects: vec![],
             rest: Some(tail),
         },
-        convention: crate::ast::CallingConvention::Direct,
     };
     let (e1, e2) = (ROW_VAR_BASE, ROW_VAR_BASE + 1);
     let left = RowShape {

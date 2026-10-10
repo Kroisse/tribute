@@ -2475,6 +2475,10 @@ fn lower_lambda<'db>(
     let result_type = builder
         .ctx
         .convert_logical_type(builder.ir, *signature_result);
+    let row_convention = builder
+        .ctx
+        .calling_convention_for_type(signature.function_type)
+        .expect("solved logical lambda signature is a function type");
     let convention = expected_ty
         .and_then(|expected_ty| {
             let expected = tribute_control::FuncSig::from_type_ref(builder.ir, expected_ty)?;
@@ -2482,7 +2486,7 @@ fn lower_lambda<'db>(
                 tribute_control::func_sig_convention(builder.ir, expected_ty)?;
             (expected.result(builder.ir) == result_type
                 && expected.inputs(builder.ir) == param_types
-                && expected_convention >= control_convention(signature.convention))
+                && expected_convention >= control_convention(row_convention))
             .then_some(expected_convention)
         })
         .map(|convention| match convention {
@@ -2490,7 +2494,7 @@ fn lower_lambda<'db>(
             tribute_control::CallingConvention::EvidenceDirect => CallingConvention::EvidenceDirect,
             tribute_control::CallingConvention::Cps => CallingConvention::Cps,
         })
-        .unwrap_or(signature.convention);
+        .unwrap_or(row_convention);
     let entry = builder.ir.create_block(BlockData {
         location,
         args: param_types

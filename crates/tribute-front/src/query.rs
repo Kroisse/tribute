@@ -422,24 +422,14 @@ fn explicit() ->{} Nil { Nil }
                 .iter()
                 .find(|(symbol, _)| *symbol == name)
                 .expect("function scheme should exist");
-            let crate::ast::TypeKind::Func {
-                effect,
-                minimum_convention,
-                ..
-            } = scheme.body(&db).kind(&db)
-            else {
+            let crate::ast::TypeKind::Func { effect, .. } = scheme.body(&db).kind(&db) else {
                 panic!("expected function type");
             };
-            (*effect, *minimum_convention)
+            *effect
         };
 
-        let (omitted, omitted_minimum) = effect_of("omitted");
-        assert!(omitted.rest(&db).is_some());
-        assert_eq!(omitted_minimum, crate::ast::CallingConvention::Direct);
-
-        let (explicit, explicit_minimum) = effect_of("explicit");
-        assert!(explicit.is_pure(&db));
-        assert_eq!(explicit_minimum, crate::ast::CallingConvention::Direct);
+        assert!(effect_of("omitted").rest(&db).is_some());
+        assert!(effect_of("explicit").is_pure(&db));
     }
 
     #[test]
@@ -522,7 +512,6 @@ fn explicit() ->{} Nil { Nil }
                 params: vec![],
                 result: crate::ast::Type::new(&db, crate::ast::TypeKind::Nil),
                 effect,
-                minimum_convention: crate::ast::CallingConvention::Cps,
             },
         );
 

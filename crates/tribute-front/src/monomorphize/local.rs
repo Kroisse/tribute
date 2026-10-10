@@ -225,14 +225,7 @@ impl<'db> Split<'_, 'db> {
             },
             &mut stmt,
         );
-        super::clone_metadata(
-            self.db,
-            self.metadata,
-            copy.variant,
-            &[],
-            &[],
-            &origins.nodes,
-        );
+        super::clone_metadata(self.db, self.metadata, copy.variant, &[], &origins.nodes);
         for origin in &origins.nodes {
             let node = origin.with_variant(copy.variant);
             // A use in the copy can read a binding outside it.

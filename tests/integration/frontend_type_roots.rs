@@ -114,7 +114,6 @@ fn prepare_root<'db>(
         functions,
         constructors,
         metadata,
-        typed.ability_conventions(db).to_vec(),
         typed.ability_definitions(db).to_vec(),
         typed.handler_operations(db).clone(),
         typed.perform_operations(db).clone(),

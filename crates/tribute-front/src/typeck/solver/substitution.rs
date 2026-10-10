@@ -65,7 +65,6 @@ impl<'db> TypeSubst<'db> {
                 params,
                 result,
                 effect,
-                minimum_convention,
             } => {
                 let params = params
                     .iter()
@@ -82,7 +81,6 @@ impl<'db> TypeSubst<'db> {
                         params,
                         result,
                         effect,
-                        minimum_convention: *minimum_convention,
                     },
                 )
             }
@@ -291,7 +289,6 @@ impl<'db> TypeSubst<'db> {
                 params,
                 result,
                 effect,
-                minimum_convention,
             } => Type::new(
                 db,
                 TypeKind::Func {
@@ -323,7 +320,6 @@ impl<'db> TypeSubst<'db> {
                             local_vars,
                         )
                     }),
-                    minimum_convention: *minimum_convention,
                 },
             ),
             TypeKind::Tuple(elements) => Type::new(

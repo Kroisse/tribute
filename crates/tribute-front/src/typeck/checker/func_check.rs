@@ -545,26 +545,11 @@ impl<'db> TypeChecker<'db> {
                 },
             );
         }
-        let ability_conventions = self
-            .env
-            .export_ability_conventions()
-            .into_iter()
-            .collect::<HashMap<_, _>>();
         for (lambda_id, signature) in func_lambda_signatures {
             let function_type = substitution.apply(signature.function_type);
-            let convention = crate::ast::calling_convention_for_function_type(
-                self.db(),
-                function_type,
-                &ability_conventions,
-            )
-            .expect("lambda semantic signature must remain a function type");
-            checked.lambda_signatures.insert(
-                lambda_id,
-                crate::typeck::LambdaSignature {
-                    function_type,
-                    convention,
-                },
-            );
+            checked
+                .lambda_signatures
+                .insert(lambda_id, crate::typeck::LambdaSignature { function_type });
         }
         let decl = FuncDecl {
             id: func.id,
