@@ -30,6 +30,11 @@ mod tribute_rt {
     /// Consume one managed ownership unit while crossing a native raw-pointer
     /// representation boundary. This is deliberately not a pure operation.
     fn into_raw(value: Value<_>) -> Value<_> {}
+
+    /// Receive one managed ownership unit from a raw pointer to a
+    /// reference-counted object. The inverse of `into_raw`, and like it not a
+    /// pure operation: dropping it would leak the unit.
+    fn from_raw(ptr: Value<_>) -> Value<_> {}
 }
 
 // === RC Header Layout ===
@@ -157,6 +162,7 @@ mod tests {
         check!(BoxBool, value, bool_ty, ptr_ty);
         check!(Retain, ptr, ptr_ty, ptr_ty);
         check!(IntoRaw, value, managed_ty, ptr_ty);
+        check!(FromRaw, ptr, ptr_ty, managed_ty);
     }
 
     #[test]

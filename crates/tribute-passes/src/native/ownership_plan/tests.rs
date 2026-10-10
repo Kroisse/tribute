@@ -511,7 +511,7 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
     func.return
   }
 }"#,
-        "internal _closure to core.ptr handoff requires tribute_rt.into_raw",
+        "is viewed as a raw pointer; use tribute_rt.into_raw",
     );
 }
 
@@ -1987,28 +1987,20 @@ fn bytes_is_a_managed_reference_with_its_own_units() {
   !Leaf = adt.struct<Leaf(bytes: core.bytes)>
   !LeafRef = adt.typeref<{name = "Leaf"}>
   func.func @wrap(%raw: core.ptr) -> !LeafRef {
-    %bytes = core.unrealized_conversion_cast %raw : core.bytes
+    %bytes = tribute_rt.from_raw %raw : core.bytes
     %leaf = adt.struct_new %bytes {type = !Leaf} : !LeafRef
     func.return %leaf
   }
-  func.func @read(%raw: core.ptr) -> core.i32 {
-    %bytes = core.unrealized_conversion_cast %raw : core.bytes
-    %view = core.unrealized_conversion_cast %bytes : core.ptr
-    %first = func.call %view {callee = @peek} : core.i32
-    %second = func.call %view {callee = @peek} : core.i32
-    func.return %second
-  }
 }"#,
     );
-    let ops = |name: &'static str| ctx.block(function_blocks(&ctx, &plan, name)[0]).ops.clone();
 
-    // A `Bytes` received from a raw pointer is a fresh owned value: the field
-    // takes its own unit and the local one is released.
+    // `from_raw` yields a fresh owned value: the field takes its own unit and
+    // the local one is released.
     let wrap = plan.function(&Symbol::new("wrap")).unwrap();
-    let [cast, new, _] = ops("wrap")[..] else {
+    let [from_raw, new, _] = ctx.block(function_blocks(&ctx, &plan, "wrap")[0]).ops[..] else {
         panic!("three-operation fixture")
     };
-    let bytes = ctx.op_result(cast, 0);
+    let bytes = ctx.op_result(from_raw, 0);
     assert!(plan.is_managed_type(&ctx, ctx.value_ty(bytes)));
     assert!(has_action(
         wrap,
@@ -2023,14 +2015,48 @@ fn bytes_is_a_managed_reference_with_its_own_units() {
         .find(|entry| entry.ty == ctx.type_alias_by_text("Leaf").unwrap())
         .unwrap();
     assert_eq!(leaf.fields, [FieldKind::Managed]);
+}
 
-    // A raw view borrows the value, so its last use keeps the owner live.
-    let read = plan.function(&Symbol::new("read")).unwrap();
-    let [cast, _, _, last, _] = ops("read")[..] else {
-        panic!("five-operation fixture")
-    };
-    let bytes = ctx.op_result(cast, 0);
-    assert_eq!(final_releases(read, bytes), [ActionAnchor::After(last)]);
+#[test]
+fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
+    // A cast cannot say whether a unit moves, in either direction.
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  func.func @receive(%raw: core.ptr) -> core.bytes {
+    %bytes = core.unrealized_conversion_cast %raw : core.bytes
+    func.return %bytes
+  }
+}"#,
+        "masquerades as a managed reference; use tribute_rt.from_raw",
+    );
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  func.func @view(%bytes: core.bytes) -> core.ptr {
+    %raw = core.unrealized_conversion_cast %bytes : core.ptr
+    func.return %raw
+  }
+}"#,
+        "is viewed as a raw pointer; use tribute_rt.into_raw",
+    );
+    // `from_raw` itself takes a raw pointer and produces a managed reference.
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  func.func @retype(%bytes: core.bytes) -> core.bytes {
+    %again = tribute_rt.from_raw %bytes : core.bytes
+    func.return %again
+  }
+}"#,
+        "tribute_rt.from_raw must take a core.ptr and produce a managed reference",
+    );
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  func.func @copy(%raw: core.ptr) -> core.ptr {
+    %same = tribute_rt.from_raw %raw : core.ptr
+    func.return %same
+  }
+}"#,
+        "tribute_rt.from_raw must take a core.ptr and produce a managed reference",
+    );
 }
 
 #[test]
