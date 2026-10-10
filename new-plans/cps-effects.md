@@ -71,8 +71,11 @@ Cps`, callee effect row는 caller row에 포함) 조합은 다음 셋이다:
   `ContinuationFrame<R>`를 그대로 넘긴다. 호출 결과의 continuation은 caller의
   continuation이다.
 - **`Cps` caller와 값을 반환하는 callee:** callee를 일반 호출한 뒤 결과를 caller의
-  `Done<R>`로 proper tail transfer한다. 값을 반환하는 callee는 `Cps` callable을 다시
-  부를 수 없으므로 이 조합이 더하는 stack 깊이는 callee 한 번의 실행으로 제한된다.
+  `Done<R>`로 proper tail transfer한다. 값을 반환하는 callee는 `become`으로 `Cps`
+  callable에 이전할 수 없으므로, `become`만으로 이 조합을 되풀이하는 순환은 없다. 이
+  조합이 더하는 stack 깊이는 callee 한 번의 실행으로 제한된다. Callee가
+  [값 delimiter](#값-delimiter) 안에서 `Cps` callable을 일반 호출하면 그 깊이는 다른
+  일반 호출처럼 쌓인다.
 
 꼬리 위치 structured arm 안의 `become`은 그 operation을 terminal로 만든다. 값을 내는
 arm(`scf.yield`)은 operation 뒤에 남은 suffix(감싼 callable의 `return` 또는 바깥 꼬리
