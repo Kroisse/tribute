@@ -65,7 +65,6 @@ fn test_occurs_check_applies_effect_row_substitution() {
             params: vec![],
             result: int_ty,
             effect,
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
     let continuation_ty = Type::new(
@@ -107,7 +106,6 @@ fn test_occurs_check_not_triggered_for_different_var_in_effect() {
             params: vec![],
             result: int_ty,
             effect,
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
 
@@ -425,7 +423,6 @@ fn test_generalize_single_univar() {
             params: vec![var_ty],
             result: var_ty,
             effect,
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
 
@@ -464,7 +461,6 @@ fn test_generalize_two_univars() {
             params: vec![var_a],
             result: var_b,
             effect,
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
 
@@ -509,7 +505,6 @@ fn test_generalize_resolved_univar_not_generalized() {
             params: vec![var_ty],
             result: var_ty,
             effect,
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
 
@@ -592,7 +587,6 @@ fn test_row_occurs_in_func_params() {
             params: vec![],
             result: int_ty,
             effect: inner_effect,
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
     let outer_effect = EffectRow::new(&db, vec![], None);
@@ -602,7 +596,6 @@ fn test_row_occurs_in_func_params() {
             params: vec![inner_func],
             result: int_ty,
             effect: outer_effect,
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
 
@@ -629,7 +622,6 @@ fn test_row_occurs_in_func_result() {
             params: vec![],
             result: int_ty,
             effect: inner_effect,
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
     let outer_effect = EffectRow::new(&db, vec![], None);
@@ -639,7 +631,6 @@ fn test_row_occurs_in_func_result() {
             params: vec![],
             result: inner_func,
             effect: outer_effect,
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
 
@@ -667,7 +658,6 @@ fn test_row_not_in_func_if_absent() {
             params: vec![],
             result: int_ty,
             effect,
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
 

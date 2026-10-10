@@ -56,7 +56,6 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
         typed.function_types(db).to_vec(),
         typed.constructor_types(db).clone(),
         metadata,
-        typed.ability_conventions(db).to_vec(),
         typed.ability_definitions(db).to_vec(),
         handlers,
         performs,

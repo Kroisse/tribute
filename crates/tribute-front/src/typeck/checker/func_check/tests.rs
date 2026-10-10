@@ -72,7 +72,6 @@ fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::Database
             params: vec![Type::new(db, TypeKind::Nat)],
             result: first_solver_var,
             effect: EffectRow::pure(db),
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
     let second_callee_ty = Type::new(
@@ -81,7 +80,6 @@ fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::Database
             params: vec![Type::new(db, TypeKind::Nat)],
             result: second_solver_var,
             effect: EffectRow::pure(db),
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
 

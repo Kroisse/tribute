@@ -95,8 +95,14 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
 
     let function_types_map: HashMap<_, _> = result.function_types.into_iter().collect();
     let constructor_types: HashMap<_, _> = result.constructor_types.into_iter().collect();
-    let ability_conventions: HashMap<_, _> = result.ability_conventions.into_iter().collect();
     let ability_definitions: HashMap<_, _> = result.ability_definitions.into_iter().collect();
+    let ability_conventions =
+        tribute_front::ast::ability_conventions(ability_definitions.iter().map(|(id, info)| {
+            (
+                *id,
+                info.operations.values().map(|operation| operation.kind),
+            )
+        }));
     let compiler_intrinsics = prelude
         .as_ref()
         .map(|prelude| {

@@ -45,8 +45,8 @@ pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, CallingConvention, CtorId, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId,
-    TypeParam, TypeScheme, TypedRef,
+    AbilityId, CtorId, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeParam,
+    TypeScheme, TypedRef,
 };
 
 /// Exact, monomorphic semantic signature selected for a handler arm.
@@ -81,10 +81,8 @@ pub struct InstantiatedPerformOperation<'db> {
 /// not be recovered from their body or from a concrete expression node type.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct LambdaSignature<'db> {
-    /// The solved full source function type.  Retaining its effect row avoids
-    /// confusing the ABI lower bound with the selected convention.
+    /// The solved full source function type.
     pub function_type: Type<'db>,
-    pub convention: CallingConvention,
 }
 
 /// Deterministic schema form of an ability declaration for the public typed
@@ -380,9 +378,6 @@ pub struct TypeCheckOutput<'db> {
     pub constructor_types: ConstructorTypeMetadata<'db>,
     /// Exact expression types and callee instantiations.
     pub expression_types: ExpressionTypeMetadata<'db>,
-    /// Ability-level calling-convention requirements.
-    #[returns(deref)]
-    pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
     /// Deterministic ability schemas required by the public logical-lowering
     /// boundary. This preserves semantic declarations without re-inspection.
     #[returns(deref)]
@@ -447,9 +442,6 @@ pub struct PreludeExports<'db> {
     /// Method index for UFCS resolution: method_name → candidates.
     #[returns(deref)]
     pub method_index: Vec<(Symbol, Vec<MethodEntry<'db>>)>,
-    /// Ability-level calling-convention requirements exported by the prelude.
-    #[returns(deref)]
-    pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
     /// Ability operation schemas exported by the prelude as deterministic
     /// vectors (the module environment rebuilds its lookup map on injection).
     #[returns(deref)]
@@ -484,7 +476,6 @@ pub fn typecheck_module<'db>(
             local_instances: result.local_instances,
             evidence_plans: result.evidence_plans,
         },
-        result.ability_conventions,
         ability_schemas(&result.ability_definitions),
         result.handler_operations,
         result.perform_operations,

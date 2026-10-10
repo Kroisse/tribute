@@ -1,9 +1,7 @@
 use salsa_test_macros::salsa_test;
 
 use super::*;
-use crate::ast::{
-    AbilityId, CallingConvention, EffectVar, NodeId, TypeDefId, UniVarId, UniVarSource,
-};
+use crate::ast::{AbilityId, EffectVar, NodeId, TypeDefId, UniVarId, UniVarSource};
 use trunk_ir::Symbol;
 
 fn effect<'db>(
@@ -66,7 +64,6 @@ fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
                 params: vec![],
                 result: int,
                 effect: pure,
-                minimum_convention: CallingConvention::Direct,
             },
             "fn() -> Int",
         ),
@@ -75,7 +72,6 @@ fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
                 params: vec![int, bool_ty],
                 result: int,
                 effect: pure,
-                minimum_convention: CallingConvention::Direct,
             },
             "fn(Int, Bool) -> Int",
         ),
@@ -154,13 +150,11 @@ fn effect_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
                 params: vec![],
                 result: int,
                 effect: pure,
-                minimum_convention: CallingConvention::Direct,
             },
             TypeKind::Func {
                 params: vec![],
                 result: int,
                 effect: open,
-                minimum_convention: CallingConvention::Cps,
             },
         ),
         (

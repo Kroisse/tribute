@@ -398,20 +398,12 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Lambda { params, body } => {
                 // Extract expected effect from mode if checking against a function type.
                 // This is crucial for lambdas passed to higher-order functions with effects.
-                let (expected_effect, minimum_convention) = if let Mode::Check(expected_ty) = &mode
+                let expected_effect = if let Mode::Check(expected_ty) = &mode
+                    && let TypeKind::Func { effect, .. } = expected_ty.kind(self.db())
                 {
-                    if let TypeKind::Func {
-                        effect,
-                        minimum_convention,
-                        ..
-                    } = expected_ty.kind(self.db())
-                    {
-                        (Some(*effect), *minimum_convention)
-                    } else {
-                        (None, crate::ast::CallingConvention::Direct)
-                    }
+                    Some(*effect)
                 } else {
-                    (None, crate::ast::CallingConvention::Direct)
+                    None
                 };
 
                 // A revisited lambda keeps the parameter types of its first
@@ -558,17 +550,11 @@ impl<'db> TypeChecker<'db> {
                     },
                     Mode::Infer => inferred_result,
                 };
-                let lambda_type = ctx.func_type_with_convention(
-                    param_types,
-                    result_ty,
-                    lambda_effect,
-                    minimum_convention,
-                );
+                let lambda_type = ctx.func_type(param_types, result_ty, lambda_effect);
                 ctx.record_lambda_signature(
                     expr.id,
                     crate::typeck::LambdaSignature {
                         function_type: lambda_type,
-                        convention: minimum_convention,
                     },
                 );
                 lambda_type
@@ -777,15 +763,12 @@ impl<'db> TypeChecker<'db> {
             ty
         };
         if let ExprKind::Lambda { .. } = &*expr.kind
-            && let TypeKind::Func {
-                minimum_convention, ..
-            } = lambda_signature_type.kind(self.db())
+            && let TypeKind::Func { .. } = lambda_signature_type.kind(self.db())
         {
             ctx.record_checked_lambda_signature(
                 expr.id,
                 crate::typeck::LambdaSignature {
                     function_type: lambda_signature_type,
-                    convention: *minimum_convention,
                 },
             );
         }

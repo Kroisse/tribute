@@ -256,7 +256,9 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-            ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
+            ability_conventions: tribute_front::monomorphize::ability_conventions(
+                checked.ability_definitions(db),
+            ),
             compiler_intrinsics: HashMap::default(),
         },
     )
@@ -274,7 +276,9 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             .collect(),
         node_types: mono.metadata.node_types.into_iter().collect(),
         local_instances: mono.metadata.local_instances.into_iter().collect(),
-        ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
+        ability_conventions: tribute_front::monomorphize::ability_conventions(
+            checked.ability_definitions(db),
+        ),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
@@ -360,7 +364,9 @@ fn lower_specialized_source(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-            ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
+            ability_conventions: tribute_front::monomorphize::ability_conventions(
+                checked.ability_definitions(db),
+            ),
             compiler_intrinsics: HashMap::default(),
         },
     )
@@ -378,7 +384,9 @@ fn lower_specialized_source(
             .collect(),
         node_types: mono.metadata.node_types.into_iter().collect(),
         local_instances: mono.metadata.local_instances.into_iter().collect(),
-        ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
+        ability_conventions: tribute_front::monomorphize::ability_conventions(
+            checked.ability_definitions(db),
+        ),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
@@ -456,7 +464,9 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .iter()
             .cloned()
             .collect(),
-        ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
+        ability_conventions: tribute_front::monomorphize::ability_conventions(
+            checked.ability_definitions(db),
+        ),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),

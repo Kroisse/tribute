@@ -17,9 +17,7 @@ use trunk_ir::Symbol;
 
 pub use self::instance::InstanceRowClasses;
 use self::instance::{InstanceKey, InstanceKeys};
-use crate::ast::{
-    CtorId, Decl, EffectRow, FuncDefId, Module, NodeId, RowClasses, Type, TypeScheme, TypedRef,
-};
+use crate::ast::{CtorId, Decl, EffectRow, FuncDefId, Module, NodeId, Type, TypeScheme, TypedRef};
 use crate::typeck::subst::{BoundVarOutOfBounds, substitute_bound_vars, substitute_effect_row};
 use crate::typeck::{
     EvidenceStep, InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature,
@@ -128,9 +126,8 @@ pub fn monomorphize_functions<'db>(
             metadata_origins,
             compiler_intrinsic_specializations,
         } = specializations;
-        for (name, key, origins) in metadata_origins {
-            let classes = keys.row_classes.get(&name).map_or(&[][..], Vec::as_slice);
-            specialize_metadata(db, &mut metadata, &key, classes, &origins);
+        for (key, origins) in metadata_origins {
+            specialize_metadata(db, &mut metadata, &key, &origins);
         }
         metadata
             .compiler_intrinsics
@@ -171,7 +168,6 @@ pub fn monomorphize_functions<'db>(
             kind: InstanceErrorKind::ExpansionLimit,
         }]);
     }
-    close_lambdas(db, &module, &mut metadata, &keys);
     let mut fn_types_vec = all_function_types;
 
     // === Type monomorphization (struct/enum) ===
@@ -360,17 +356,9 @@ fn specialize_metadata<'db>(
     db: &'db dyn salsa::Database,
     metadata: &mut MonomorphizeMetadata<'db>,
     key: &InstanceKey<'db>,
-    classes: &RowClasses,
     origins: &HashSet<NodeId>,
 ) {
-    clone_metadata(
-        db,
-        metadata,
-        key.variant(),
-        &key.type_args,
-        classes,
-        origins,
-    );
+    clone_metadata(db, metadata, key.variant(), &key.type_args, origins);
 }
 
 /// Copy the metadata of `origins` to the nodes of the same identity with
@@ -380,7 +368,6 @@ fn clone_metadata<'db>(
     metadata: &mut MonomorphizeMetadata<'db>,
     variant: std::num::NonZero<u64>,
     type_args: &[Type<'db>],
-    classes: &RowClasses,
     origins: &HashSet<NodeId>,
 ) {
     clone_type_table(db, &mut metadata.node_types, variant, type_args, origins);
@@ -520,26 +507,9 @@ fn clone_metadata<'db>(
         .collect();
     for (id, signature) in lambdas {
         let function_type = substitute_type(db, signature.function_type, type_args);
-        // A lambda whose row ends in a class variable takes the class the
-        // instance fixes for it.
-        let convention = if classes.is_empty() {
-            signature.convention
-        } else {
-            crate::ast::calling_convention_for_function_type_in(
-                db,
-                function_type,
-                &metadata.ability_conventions,
-                classes,
-            )
-            .unwrap_or(signature.convention)
-        };
-        metadata.lambda_signatures.insert(
-            id.with_variant(variant),
-            LambdaSignature {
-                function_type,
-                convention,
-            },
-        );
+        metadata
+            .lambda_signatures
+            .insert(id.with_variant(variant), LambdaSignature { function_type });
     }
     let exhaustive: Vec<_> = origins
         .iter()
@@ -672,41 +642,20 @@ fn map_metadata_types<'db>(
     }
 }
 
-/// Give the lambdas of every function the conventions its row classes
-/// select: a lambda's row can end in a class variable of the instance or in
-/// the row variable of a let-bound callable.
-fn close_lambdas<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
-    metadata: &mut MonomorphizeMetadata<'db>,
-    keys: &InstanceKeys<'db>,
-) {
-    for decl in &module.decls {
-        let Decl::Function(function) = decl else {
-            continue;
-        };
-        let Some(classes) = keys.row_classes.get(&function.name) else {
-            continue;
-        };
-        function.body.for_each(|expr| {
-            if let Some(signature) = metadata.lambda_signatures.get_mut(&expr.id)
-                && let Some(convention) = crate::ast::calling_convention_for_function_type_in(
-                    db,
-                    signature.function_type,
-                    &metadata.ability_conventions,
-                    classes,
-                )
-            {
-                signature.convention = convention;
-            }
-        });
-    }
+/// The convention each ability in `schemas` requires of a callable whose row
+/// names it.
+pub fn ability_conventions<'db>(
+    schemas: &[crate::typeck::AbilitySchema<'db>],
+) -> HashMap<crate::ast::AbilityId<'db>, crate::ast::CallingConvention> {
+    crate::ast::ability_conventions(schemas.iter().map(|(ability, _, operations)| {
+        (*ability, operations.iter().map(|operation| operation.kind))
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, CallingConvention, OpDeclKind, TypeKind};
+    use crate::ast::{AbilityId, OpDeclKind, TypeKind};
 
     #[salsa::db]
     #[derive(Default)]
@@ -729,7 +678,6 @@ mod tests {
                 params: vec![bound],
                 result: bound,
                 effect: EffectRow::pure(&db),
-                minimum_convention: CallingConvention::Direct,
             },
         );
         let specialized_function = Type::new(
@@ -738,7 +686,6 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect: EffectRow::pure(&db),
-                minimum_convention: CallingConvention::Direct,
             },
         );
         let ability = AbilityId::source(&db, Symbol::new("Audit"));
@@ -794,7 +741,6 @@ mod tests {
                 origin,
                 LambdaSignature {
                     function_type: function,
-                    convention: CallingConvention::Direct,
                 },
             )]
             .into_iter()
@@ -806,7 +752,7 @@ mod tests {
         let key = InstanceKey::of_types(vec![int]);
         let origins = [origin].into_iter().collect::<HashSet<_>>();
 
-        specialize_metadata(&db, &mut metadata, &key, &[], &origins);
+        specialize_metadata(&db, &mut metadata, &key, &origins);
 
         let clone = origin.with_variant(key.variant());
         assert_eq!(metadata.node_types.get(&clone), Some(&int));

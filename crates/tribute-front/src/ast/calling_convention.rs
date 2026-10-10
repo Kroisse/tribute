@@ -2,11 +2,29 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use super::{AbilityId, EffectRow, EffectVar, Type, TypeKind};
+use super::{AbilityId, EffectRow, EffectVar, OpDeclKind, Type, TypeKind};
 pub use tribute_core::CallingConvention;
 
 /// The convention class of each class variable of one function instance.
 pub type RowClasses = [(EffectVar, CallingConvention)];
+
+/// The convention each ability requires of a callable whose row names it:
+/// `Cps` when it declares an `op`, `EvidenceDirect` otherwise.
+pub fn ability_conventions<'db>(
+    abilities: impl IntoIterator<Item = (AbilityId<'db>, impl IntoIterator<Item = OpDeclKind>)>,
+) -> HashMap<AbilityId<'db>, CallingConvention> {
+    abilities
+        .into_iter()
+        .map(|(ability, operations)| {
+            let convention = if operations.into_iter().any(|kind| kind == OpDeclKind::Op) {
+                CallingConvention::Cps
+            } else {
+                CallingConvention::EvidenceDirect
+            };
+            (ability, convention)
+        })
+        .collect()
+}
 
 /// Derive a convention from an effect row and ability-level requirements.
 ///
@@ -46,7 +64,7 @@ pub fn calling_convention_for_effect_row_in<'db>(
     convention
 }
 
-/// Derive a convention for a function type, including its explicit ABI lower bound.
+/// Derive a convention for a function type from its effect row.
 pub fn calling_convention_for_function_type<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
@@ -62,16 +80,12 @@ pub fn calling_convention_for_function_type_in<'db>(
     abilities: &HashMap<AbilityId<'db>, CallingConvention>,
     classes: &RowClasses,
 ) -> Option<CallingConvention> {
-    let TypeKind::Func {
-        effect,
-        minimum_convention,
-        ..
-    } = ty.kind(db)
-    else {
+    let TypeKind::Func { effect, .. } = ty.kind(db) else {
         return None;
     };
-    let row = calling_convention_for_effect_row_in(db, *effect, abilities, classes);
-    Some((*minimum_convention).join(row))
+    Some(calling_convention_for_effect_row_in(
+        db, *effect, abilities, classes,
+    ))
 }
 
 #[cfg(test)]

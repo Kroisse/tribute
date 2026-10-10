@@ -171,7 +171,6 @@ fn scheme_row_dependencies_follow_shared_effect_type_arguments(db: &salsa::Datab
             params: vec![],
             result: nil,
             effect: EffectRow::open(db, EffectVar { id: 1 }),
-            minimum_convention: crate::ast::CallingConvention::Direct,
         },
     );
     // The second union is reachable only through the first union's
