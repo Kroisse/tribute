@@ -314,6 +314,13 @@ impl<'db> ModuleTypeEnv<'db> {
         Some(matched)
     }
 
+    /// Stop a method call from naming `function` by `method_name`.
+    pub fn unregister_method(&mut self, method_name: &Symbol, function: FuncDefId<'db>) {
+        if let Some(entries) = self.method_index.get_mut(method_name) {
+            entries.retain(|entry| entry.func_id != function);
+        }
+    }
+
     /// The functions a method call may name by `method_name`: the functions
     /// of that name, and the getter of every struct with a field of that
     /// name.

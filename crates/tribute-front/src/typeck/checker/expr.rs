@@ -9,7 +9,6 @@ use rustc_hash::FxHashSet as HashSet;
 use itertools::Itertools;
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_ir::ModulePathExt as _;
 use trunk_ir::Symbol;
 
 use crate::ast::{
@@ -1803,30 +1802,11 @@ impl<'db> TypeChecker<'db> {
                 _ => None,
             })
             .collect();
-        // Of several functions an unqualified method call matches, those of
-        // the receiver's own type come first: `x.f` is `T::f(x)` before it is
-        // another `f(x)`.
-        let own = match (path, call.args.first()) {
-            (None, Some(receiver)) => self.type_namespace(*receiver),
-            _ => None,
-        };
         let select = |matches: &dyn Fn(&[Type<'db>], Type<'db>) -> bool| {
-            let matching: Vec<_> = signatures
+            let mut matching = signatures
                 .iter()
                 .filter(|(_, params, result)| matches(params, *result))
-                .map(|(entry, ..)| *entry)
-                .collect();
-            let owned: Vec<_> = matching
-                .iter()
-                .copied()
-                .filter(|entry| {
-                    own.is_some() && entry.func_id.qualified(self.db()).parent_path() == own
-                })
-                .collect();
-            let mut matching = match owned.is_empty() {
-                true => matching.into_iter(),
-                false => owned.into_iter(),
-            };
+                .map(|(entry, ..)| *entry);
             match (matching.next(), matching.next()) {
                 (Some(entry), None) => MethodSelection::One(*entry),
                 (Some(first), Some(second)) => MethodSelection::Ambiguous(
@@ -1849,16 +1829,6 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             selection => selection,
-        }
-    }
-
-    /// The namespace of a nominal type: the path its own functions, such as
-    /// the getters of a struct's fields, are declared under.
-    fn type_namespace(&self, ty: Type<'db>) -> Option<Symbol> {
-        match ty.kind(self.db()) {
-            TypeKind::Named { id, .. } => Some(id.qualified(self.db()).clone()),
-            TypeKind::App { ctor, .. } => self.type_namespace(*ctor),
-            _ => None,
         }
     }
 

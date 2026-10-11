@@ -436,7 +436,8 @@ fn main() -> Nil {
 #[salsa_test]
 fn diag_ambiguous_getter_path(db: &salsa::DatabaseImpl) {
     // `x.User::name` reads the field only when the getter is the one function
-    // its path names for the receiver.
+    // its path names for the receiver. A function that takes the struct alone
+    // under the field's name is itself reported.
     let diagnostics = messages(
         db,
         r#"
@@ -457,12 +458,20 @@ fn main() -> Nil {
     );
     assert_eq!(
         diagnostics,
-        [(
-            "ambiguous path `User::name` for arguments of types (`User`): it names \
-             `User::name`, `audit::User::name`"
-                .to_owned(),
-            "User::name".to_owned()
-        )]
+        [
+            (
+                "function `name` conflicts with field `name` of struct `User`: \
+                 `.name` on a `User` would name both"
+                    .to_owned(),
+                "pub fn name(user: pkg::User) -> String { \"audit\" }".to_owned()
+            ),
+            (
+                "ambiguous path `User::name` for arguments of types (`User`): it names \
+                 `User::name`, `audit::User::name`"
+                    .to_owned(),
+                "User::name".to_owned()
+            ),
+        ]
     );
 }
 

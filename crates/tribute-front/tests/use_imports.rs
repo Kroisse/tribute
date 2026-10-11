@@ -698,15 +698,15 @@ use b::tag
 }
 
 /// Reading a field is calling its getter: `x.f` selects like any other
-/// call, also before its receiver is typed, and a struct's own getter comes
-/// before another function of the field's name.
+/// call, also before its receiver is typed. A function that takes the struct
+/// alone under the field's name would be a second `x.f`, so declaring it is
+/// an error.
 #[salsa_test]
 fn a_field_read_is_a_call_of_its_getter(db: &salsa::DatabaseImpl) {
     const DECLARATIONS: &str = r#"
 struct Name { text: String }
 struct Label { text: String, size: Nat }
-fn text(name: Name) -> String { name.text }
-fn width(s: String) -> Nat { 1 }
+fn shown(name: Name) -> String { name.text }
 "#;
     let check = |body: &str| {
         errors(
@@ -718,12 +718,33 @@ fn width(s: String) -> Nat { 1 }
         // One struct has the field, so the getter types the receiver.
         "let _ = fn(l) { l.size }",
         "let size = fn(l) { l.size }\n    let _ = size(Label { text: \"a\", size: 1 })",
-        // Two structs and a function share the name; the receiver decides.
+        // Two structs have the field; the receiver decides.
         "let read = fn(n) { n.text }\n    let _ = read(Label { text: \"a\", size: 1 })",
         "let _ = Name { text: \"a\" }.text",
-        "let _ = text(Name { text: \"a\" })",
+        "let _ = shown(Name { text: \"a\" })",
     ] {
         let errors = check(body);
         assert!(errors.is_empty(), "{body}: {errors:#?}");
     }
+    assert_eq!(
+        errors(
+            db,
+            "struct Name { text: String }\n\
+             fn text(name: Name) -> String { name.text }\n\
+             fn main() -> Nil { }\n",
+        ),
+        [
+            "function `text` conflicts with field `text` of struct `Name`: \
+          `.text` on a `Name` would name both"
+        ],
+    );
+    // More parameters, or another type's, are another function.
+    let errors = errors(
+        db,
+        "struct Name { text: String }\n\
+         fn text(name: Name, suffix: String) -> String { name.text <> suffix }\n\
+         fn size(text: String) -> Nat { 1 }\n\
+         fn main() -> Nil { let _ = Name { text: \"a\" }.text(\"b\") }\n",
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
 }

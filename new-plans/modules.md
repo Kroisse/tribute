@@ -312,14 +312,17 @@ Receiver는 첫 번째 인자이며 다른 인자와 다르지 않다. Receiver�
 필드를 가진 모든 struct의 getter가 들어간다. 따라서 필드 `f`를 가진 struct가
 하나뿐이고 같은 이름의 함수가 없으면 `x.f`는 `x`의 타입 없이도 정해진다.
 
-비한정 UFCS에서 맞는 후보가 여럿이면 receiver 타입 자신의 namespace에 선언된
-함수가 먼저다. `x.f`는 다른 `f(x)`이기 전에 `T::f(x)`이다. 그래서 필드와 이름이
-같은 함수가 있어도 그 struct의 값에 대한 `x.f`는 필드를 읽는다:
+Struct 하나만을 받고 그 struct의 필드와 이름이 같은 함수는 선언할 수 없다. 그런
+함수는 `x.f`가 가리킬 둘째 함수가 되어, 필드를 읽는 `x.f`를 모호하게 만든다.
+매개변수가 더 있거나 다른 타입을 받는 함수는 `x.f`의 후보가 아니므로 선언할 수
+있다:
 
 ```rust
 struct Name { text: String }
 
-fn text(name: Name) -> String { name.text }   // Name::text: 필드를 읽는다
+fn text(name: Name) -> String { name.text }                 // Error: 필드 text와 충돌
+fn shown(name: Name) -> String { name.text }                // OK
+fn text(name: Name, suffix: String) -> String { ... }       // OK: name.text("!")
 ```
 
 ```rust

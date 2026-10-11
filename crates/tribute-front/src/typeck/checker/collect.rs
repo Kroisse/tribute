@@ -51,6 +51,44 @@ impl<'db> TypeChecker<'db> {
         self.predeclare_nominal_types(&module.decls);
         self.collect_type_imports(&module.decls);
         self.collect_declarations_in_order(module);
+        self.report_getter_conflicts();
+    }
+
+    /// Report a function that takes one struct and is named after one of
+    /// its fields. `x.f` would name both it and the field's getter `T::f`,
+    /// so the function is not a method.
+    fn report_getter_conflicts(&mut self) {
+        let mut pending = Vec::new();
+        for (node, name, function, receiver) in std::mem::take(&mut self.unary_functions) {
+            let owner = match receiver.kind(self.db()) {
+                TypeKind::Named { id, .. } => Some(*id),
+                TypeKind::App { ctor, .. } => match ctor.kind(self.db()) {
+                    TypeKind::Named { id, .. } => Some(*id),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match owner.filter(|owner| self.env.lookup_struct_field(*owner, &name).is_some()) {
+                Some(owner) => {
+                    Diagnostic::new(
+                        format!(
+                            "function `{name}` conflicts with field `{name}` of struct `{}`: \
+                             `.{name}` on a `{}` would name both",
+                            owner.name(self.db()),
+                            owner.name(self.db()),
+                        ),
+                        self.get_span(node),
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::TypeChecking,
+                    )
+                    .accumulate(self.db());
+                    self.env.unregister_method(&name, function);
+                }
+                // The struct may be declared later, in an enclosing module.
+                None => pending.push((node, name, function, receiver)),
+            }
+        }
+        self.unary_functions = pending;
     }
 
     /// Import a type scheme without inventing a nominal identity for its alias.
@@ -267,6 +305,12 @@ impl<'db> TypeChecker<'db> {
             self.env
                 .register_method(func.name.clone(), MethodEntry { func_id, func_ty });
         }
+        if let TypeKind::Func { params, .. } = func_ty.kind(self.db())
+            && let [receiver] = params[..]
+        {
+            self.unary_functions
+                .push((func.id, func.name.clone(), func_id, receiver));
+        }
     }
 
     /// Report a missing part of a function signature, typed as an error.
@@ -333,6 +377,12 @@ impl<'db> TypeChecker<'db> {
         if !func.params.is_empty() {
             self.env
                 .register_method(func.name.clone(), MethodEntry { func_id, func_ty });
+        }
+        if let TypeKind::Func { params, .. } = func_ty.kind(self.db())
+            && let [receiver] = params[..]
+        {
+            self.unary_functions
+                .push((func.id, func.name.clone(), func_id, receiver));
         }
     }
 
