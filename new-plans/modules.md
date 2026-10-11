@@ -305,9 +305,22 @@ fn example(xs: List(Int), opt: Option(String)) {
 
 Receiver는 첫 번째 인자이며 다른 인자와 다르지 않다. Receiver의 타입이 정해지지
 않았어도 나머지 인자와 결과가 후보를 하나로 좁히면 그 함수를 고르고, receiver의
-타입은 고른 함수에서 추론된다. 예외는 인자 없는 비한정 UFCS `x.f`뿐이다. 이
-호출은 receiver의 필드를 읽는 것일 수 있으므로, receiver의 타입이 정해진 뒤에
-필드인지 함수인지를 정한다.
+타입은 고른 함수에서 추론된다.
+
+필드를 읽는 `x.f`도 호출이다. Struct `T`의 필드 `f`는 getter 함수 `T::f`를 만들고,
+`x.f`는 `f(x)`이다. 비한정 UFCS의 후보에는 그 이름의 함수들과 함께, 그 이름의
+필드를 가진 모든 struct의 getter가 들어간다. 따라서 필드 `f`를 가진 struct가
+하나뿐이고 같은 이름의 함수가 없으면 `x.f`는 `x`의 타입 없이도 정해진다.
+
+비한정 UFCS에서 맞는 후보가 여럿이면 receiver 타입 자신의 namespace에 선언된
+함수가 먼저다. `x.f`는 다른 `f(x)`이기 전에 `T::f(x)`이다. 그래서 필드와 이름이
+같은 함수가 있어도 그 struct의 값에 대한 `x.f`는 필드를 읽는다:
+
+```rust
+struct Name { text: String }
+
+fn text(name: Name) -> String { name.text }   // Name::text: 필드를 읽는다
+```
 
 ```rust
 use a::pair   // fn pair(x: A, y: Int) -> Int

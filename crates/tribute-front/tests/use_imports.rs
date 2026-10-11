@@ -696,3 +696,34 @@ use b::tag
         assert_eq!(reported, check(call), "{method}");
     }
 }
+
+/// Reading a field is calling its getter: `x.f` selects like any other
+/// call, also before its receiver is typed, and a struct's own getter comes
+/// before another function of the field's name.
+#[salsa_test]
+fn a_field_read_is_a_call_of_its_getter(db: &salsa::DatabaseImpl) {
+    const DECLARATIONS: &str = r#"
+struct Name { text: String }
+struct Label { text: String, size: Nat }
+fn text(name: Name) -> String { name.text }
+fn width(s: String) -> Nat { 1 }
+"#;
+    let check = |body: &str| {
+        errors(
+            db,
+            &format!("{DECLARATIONS}fn main() -> Nil {{\n    {body}\n}}\n"),
+        )
+    };
+    for body in [
+        // One struct has the field, so the getter types the receiver.
+        "let _ = fn(l) { l.size }",
+        "let size = fn(l) { l.size }\n    let _ = size(Label { text: \"a\", size: 1 })",
+        // Two structs and a function share the name; the receiver decides.
+        "let read = fn(n) { n.text }\n    let _ = read(Label { text: \"a\", size: 1 })",
+        "let _ = Name { text: \"a\" }.text",
+        "let _ = text(Name { text: \"a\" })",
+    ] {
+        let errors = check(body);
+        assert!(errors.is_empty(), "{body}: {errors:#?}");
+    }
+}

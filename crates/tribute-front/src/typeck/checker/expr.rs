@@ -1477,13 +1477,6 @@ impl<'db> TypeChecker<'db> {
                 result: None,
             },
         );
-        let field = self.method_field(receiver_ty, method, path.is_some(), args, &selection);
-        if let Some(field) = &field
-            && let Some(result_ty) = self.lookup_struct_field_type(receiver_ty, field)
-        {
-            self.record_field_instance(ctx, node, receiver_ty, field.clone(), result_ty);
-            return result_ty;
-        }
         if let MethodSelection::One(entry) = selection {
             let callee_ty = self.select_callee(ctx, node, entry.func_id);
             let mut arg_types = vec![receiver_ty];
@@ -1775,41 +1768,6 @@ impl<'db> TypeChecker<'db> {
         .accumulate(self.db());
     }
 
-    /// The field a method call reads from its receiver, if it names one: an
-    /// unqualified method is the field's name, and a path names the field's
-    /// getter `T::f` in the receiver's struct `T` when the path selects that
-    /// getter alone.
-    fn method_field(
-        &self,
-        receiver_ty: Type<'db>,
-        method: &Symbol,
-        qualified: bool,
-        args: &[Expr<ResolvedRef<'db>>],
-        selection: &MethodSelection<'db>,
-    ) -> Option<Symbol> {
-        if !qualified {
-            return args.is_empty().then(|| method.clone());
-        }
-        let MethodSelection::One(selected) = selection else {
-            return None;
-        };
-        if !args.is_empty() {
-            return None;
-        }
-        let owner = match receiver_ty.kind(self.db()) {
-            TypeKind::Named { id, .. } => *id,
-            TypeKind::App { ctor, .. } => match ctor.kind(self.db()) {
-                TypeKind::Named { id, .. } => *id,
-                _ => return None,
-            },
-            _ => return None,
-        };
-        let field = method.last_segment();
-        let mut prefix = owner.qualified(self.db()).to_string();
-        let getter = crate::qualified_symbol(&mut prefix, &field);
-        (*selected.func_id.qualified(self.db()) == getter).then_some(field)
-    }
-
     /// Select the function a call names among the functions its path may
     /// name, or for an unqualified method among the functions of that name
     /// its receiver's type has: the one whose signature takes the call.
@@ -1844,11 +1802,30 @@ impl<'db> TypeChecker<'db> {
                 _ => None,
             })
             .collect();
+        // Of several functions an unqualified method call matches, those of
+        // the receiver's own type come first: `x.f` is `T::f(x)` before it is
+        // another `f(x)`.
+        let own = match (path, call.args.first()) {
+            (None, Some(receiver)) => self.type_namespace(*receiver),
+            _ => None,
+        };
         let select = |matches: &dyn Fn(&[Type<'db>], Type<'db>) -> bool| {
-            let mut matching = signatures
+            let matching: Vec<_> = signatures
                 .iter()
                 .filter(|(_, params, result)| matches(params, *result))
-                .map(|(entry, ..)| *entry);
+                .map(|(entry, ..)| *entry)
+                .collect();
+            let owned: Vec<_> = matching
+                .iter()
+                .copied()
+                .filter(|entry| {
+                    own.is_some() && entry.func_id.qualified(self.db()).parent_path() == own
+                })
+                .collect();
+            let mut matching = match owned.is_empty() {
+                true => matching.into_iter(),
+                false => owned.into_iter(),
+            };
             match (matching.next(), matching.next()) {
                 (Some(entry), None) => MethodSelection::One(*entry),
                 (Some(first), Some(second)) => MethodSelection::Ambiguous(
@@ -1874,92 +1851,20 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// The namespace of a nominal type: the path its own functions, such as
+    /// the getters of a struct's fields, are declared under.
+    fn type_namespace(&self, ty: Type<'db>) -> Option<Symbol> {
+        match ty.kind(self.db()) {
+            TypeKind::Named { id, .. } => Some(id.qualified(self.db()).clone()),
+            TypeKind::App { ctor, .. } => self.type_namespace(*ctor),
+            _ => None,
+        }
+    }
+
     /// Look up a struct field type from the receiver type.
     ///
     /// Given a receiver type like `Point` or `Point(Int)`, look up the field `x`
     /// and return its type with BoundVars substituted by the actual type arguments.
-    fn record_field_instance(
-        &self,
-        ctx: &mut FunctionInferenceContext<'_, 'db>,
-        node: NodeId,
-        receiver: Type<'db>,
-        field: Symbol,
-        result: Type<'db>,
-    ) {
-        let Some(instance) = self.field_getter_instance(receiver, field, result) else {
-            return;
-        };
-        ctx.record_resolved_method(node, instance.function, instance.callable);
-        ctx.record_field_instance(node, instance);
-    }
-
-    /// The instance of the getter that reads `field` of a `receiver` whose
-    /// field has type `result`.
-    pub(crate) fn field_getter_instance(
-        &self,
-        receiver: Type<'db>,
-        field: Symbol,
-        result: Type<'db>,
-    ) -> Option<crate::typeck::FunctionInstance<'db>> {
-        let TypeKind::Named {
-            id: owner, args, ..
-        } = receiver.kind(self.db())
-        else {
-            return None;
-        };
-        let (parameters, field_ty) = self.env.lookup_struct_field(*owner, &field)?;
-        let mut prefix = owner.qualified(self.db()).to_string();
-        let function =
-            crate::ast::FuncDefId::new(self.db(), crate::qualified_symbol(&mut prefix, &field));
-        let receiver_template = Type::new(
-            self.db(),
-            TypeKind::Named {
-                id: *owner,
-                name: owner.qualified(self.db()).clone(),
-                args: (0..parameters.len())
-                    .map(|index| {
-                        Type::new(
-                            self.db(),
-                            TypeKind::BoundVar {
-                                index: index as u32,
-                            },
-                        )
-                    })
-                    .collect(),
-            },
-        );
-        let template = self.env.func_type(
-            vec![receiver_template],
-            field_ty,
-            EffectRow::pure(self.db()),
-        );
-        let scheme = TypeScheme::new(
-            self.db(),
-            parameters.to_vec(),
-            collect_effect_vars(self.db(), template),
-            template,
-        );
-        let callable = self
-            .env
-            .func_type(vec![receiver], result, EffectRow::pure(self.db()));
-        Some(crate::typeck::FunctionInstance {
-            origin: crate::typeck::FunctionInstanceOrigin::FieldAccessor {
-                owner: *owner,
-                field,
-                kind: crate::typeck::FieldFunctionKind::Get,
-            },
-            function,
-            scheme,
-            callable,
-            type_arguments: args.clone(),
-            row_arguments: scheme
-                .effect_params(self.db())
-                .iter()
-                .map(|var| EffectRow::open(self.db(), *var))
-                .collect(),
-        })
-    }
-
     pub(crate) fn lookup_struct_field_type(
         &self,
         receiver_ty: Type<'db>,
