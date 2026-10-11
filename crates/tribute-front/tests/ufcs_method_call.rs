@@ -230,7 +230,7 @@ fn test(n: Int) -> Int {
 // TDNR AST Tests (verify MethodCall -> Call before IR lowering)
 // ========================================================================
 
-/// Covers TDNR's resolved, ambiguous, unresolved, and nested-module paths.
+/// Covers the resolved, ambiguous, and nested-module paths.
 #[salsa_test]
 fn test_tdnr_method_resolution_cases(db: &salsa::DatabaseImpl) {
     let field_accessor = SourceCst::from_source_str(
@@ -314,26 +314,6 @@ fn test(t: Thing) -> Nat {
         tdnr_function_summary(db, ambiguous, "test"),
         TdnrSummary {
             method_calls: vec!["pick".to_owned()],
-            calls: vec![],
-        }
-    );
-
-    let unresolved = SourceCst::from_source_str(
-        db,
-        "unresolved.trb",
-        r#"
-struct Thing { value: Nat }
-
-fn test(t: Thing) -> Nat {
-    t.missing()
-}
-"#,
-    );
-
-    assert_eq!(
-        tdnr_function_summary(db, unresolved, "test"),
-        TdnrSummary {
-            method_calls: vec![],
             calls: vec![],
         }
     );

@@ -282,15 +282,21 @@ impl<'db> Resolver<'db> {
         if !name.is_simple() || self.lookup_local(&sym).is_some() {
             return None;
         }
+        self.module_imported_functions(&sym)
+    }
+
+    /// The functions several `use`s of the enclosing module give `name`,
+    /// whatever the local variables are.
+    fn module_imported_functions(&self, name: &Symbol) -> Option<&[crate::ast::FuncDefId<'db>]> {
         if self.module_path.is_empty() {
-            return self.env.imported_functions(&sym);
+            return self.env.imported_functions(name);
         }
-        if self.defined_in_module(&sym) {
+        if self.defined_in_module(name) {
             return None;
         }
         self.module_imported_functions
             .last()?
-            .get(&sym)
+            .get(name)
             .map(Vec::as_slice)
     }
 
@@ -373,14 +379,16 @@ impl<'db> Resolver<'db> {
         if let Some(functions) = self.method_functions.last().and_then(|m| m.get(method)) {
             return functions.clone();
         }
-        let name = UnresolvedName::new(method.clone(), node);
-        let mut functions: Vec<crate::ast::FuncDefId<'db>> = match self.imported_functions(&name) {
-            Some(imported) => imported.to_vec(),
-            None => match self.lookup_simple(method) {
-                Some(Binding::Function { id }) => vec![*id],
-                _ => Vec::new(),
-            },
-        };
+        // A method is a declared function; a local variable of its name does
+        // not hide it.
+        let mut functions: Vec<crate::ast::FuncDefId<'db>> =
+            match self.module_imported_functions(method) {
+                Some(imported) => imported.to_vec(),
+                None => match self.lookup_simple(method) {
+                    Some(Binding::Function { id }) => vec![*id],
+                    _ => Vec::new(),
+                },
+            };
         for module in self.names_in_scope() {
             let nested = UnresolvedName::new(Symbol::new(&format!("{module}::{method}")), node);
             if let Ok(Some(Binding::Function { id })) = self.lookup_qualified_name(&nested)
