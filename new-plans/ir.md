@@ -860,8 +860,8 @@ ability.decl {
   sym_name = "<instance key>",
   ability_ref = core.ability_ref<..., {name = "State", instance = "<instance key>"}>
 } {
-  ability.operation {op_name = "get", kind = "op", params = [], result = ResultType}
-  ability.operation {op_name = "set", kind = "op", params = [ValueType], result = core.nil}
+  ability.operation {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
+  ability.operation {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
 }
 ```
 
@@ -880,8 +880,8 @@ ability.decl {
   operation 이름을 선언하므로 operation은 symbol namespace에 들어가지 않고 선언
   안에서 `op_name`으로 찾는다.
 - **`ability.operation` 속성:** `op_name: String`, `kind: String`(`fn` 또는 `op`),
-  `params: [Type]`, `result: Type`. Source declaration 순서의 parameter type과 result
-  type이다.
+  `param_types: [Type]`, `result_type: Type`. Source declaration 순서의 parameter
+  type과 result type이다.
 - **검증:** 한 module에서 같은 `ability_ref`를 선언하는 `ability.decl`은 하나이고,
   한 선언 안에서 `op_name`은 중복되지 않는다. `perform`과 handler arm은 자신의
   `ability_ref`와 `op_name`이 가리키는 선언의 kind, parameter type, result type과
