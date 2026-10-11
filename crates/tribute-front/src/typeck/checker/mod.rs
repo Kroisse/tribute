@@ -139,9 +139,9 @@ pub struct TypeChecker<'db> {
     effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
     signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::EffectVar>>,
     signature_type_names: HashMap<FuncDefId<'db>, HashMap<Symbol, u32>>,
-    /// Each collected function with its first parameter, checked against
-    /// that parameter's struct fields once every declaration is collected.
-    method_decls: Vec<(NodeId, Symbol, FuncDefId<'db>, Type<'db>)>,
+    /// Each collected function, checked against the field getters once
+    /// every declaration is collected.
+    function_decls: Vec<(NodeId, FuncDefId<'db>)>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -210,7 +210,7 @@ impl<'db> TypeChecker<'db> {
             effect_annotation_origins: HashMap::default(),
             signature_row_names: HashMap::default(),
             signature_type_names: HashMap::default(),
-            method_decls: Vec::new(),
+            function_decls: Vec::new(),
         }
     }
 

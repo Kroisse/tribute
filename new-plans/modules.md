@@ -312,19 +312,28 @@ Receiver는 첫 번째 인자이며 다른 인자와 다르지 않다. Receiver�
 필드를 가진 모든 struct의 getter가 들어간다. 따라서 필드 `f`를 가진 struct가
 하나뿐이고 같은 이름의 함수가 없으면 `x.f`는 `x`의 타입 없이도 정해진다.
 
-Struct를 첫 번째 인자로 받고 그 struct의 필드와 이름이 같은 함수는, 나머지
-매개변수가 무엇이든 선언할 수 없다. 한 타입의 값 `x`에 대해 `x.f`가 가리키는 것은
-하나여야 한다. 그런 함수가 있으면 `x.f`는 필드를 읽는지 함수를 부르는지,
-`x.f(y)`는 필드에 든 함수를 부르는지 그 함수를 부르는지 이름만으로 알 수 없게
-된다. 다른 타입을 첫 번째 인자로 받는 함수는 선언할 수 있다:
+Getter `T::f`는 `T`의 네임스페이스에 선언된 함수다. 한 네임스페이스에서 한 이름은
+한 함수이므로, `T`의 companion 모듈은 필드와 같은 이름의 함수를 매개변수와 상관없이
+선언할 수 없다. 다른 모듈은 같은 이름의 함수를 선언할 수 있다. 그 함수가 `T`를
+첫 번째 인자로 받으면 `x.f`의 후보는 getter와 그 함수 둘이고, 다른 호출과 같은
+규칙으로 고른다. 둘 다 맞으면 모호하며 `x.T::f`처럼 경로로 구분한다:
 
 ```rust
 struct Name { text: String }
 
-fn text(name: Name) -> String { name.text }                 // Error: 필드 text와 충돌
-fn text(name: Name, suffix: String) -> String { ... }       // Error: 필드 text와 충돌
-fn shown(name: Name) -> String { name.text }                // OK
-fn text(label: Label) -> String { ... }                     // OK: 다른 타입
+pub mod Name {
+    pub fn text(name: Name, suffix: String) -> String { ... }  // Error: Name::text는 필드의 getter
+}
+
+mod audit {
+    pub fn text(name: Name) -> String { ... }                  // OK: audit::text
+}
+
+fn show(name: Name) -> String {
+    name.text           // Error: Name::text와 audit::text 모두 맞음
+    name.Name::text     // OK
+    name.audit::text    // OK
+}
 ```
 
 ```rust
