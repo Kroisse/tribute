@@ -3332,3 +3332,38 @@ fn main() ->{Io} Nil {
         "3\n101\n101\n6\npicked\n8",
     );
 }
+
+/// A receiver not typed yet is an argument like the others: the rest of a
+/// method call selects the function, and the receiver's type follows.
+#[test]
+fn a_method_call_selects_without_its_receivers_type() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "method_selection_without_receiver_type.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct A { n: Int }
+struct B { n: Int }
+
+fn pair(x: A, y: Int) -> Int { x.n + y }
+
+mod a {
+    pub fn tag(x: super::A, s: String) -> Int { x.n + +10 }
+}
+
+mod b {
+    pub fn tag(x: super::B, s: String) -> Int { x.n + +20 }
+}
+
+fn main() ->{Io} Nil {
+    let method = fn(x) { x.pair(+5) }
+    let call = fn(x) { pair(x, +7) }
+    let waits = fn(x) { x.tag("t") }
+    print_line(Int::to_string(method(A { n: +1 })))
+    print_line(Int::to_string(call(A { n: +1 })))
+    print_line(Int::to_string(waits(B { n: +1 })))
+}
+"#,
+        "6\n8\n21",
+    );
+}

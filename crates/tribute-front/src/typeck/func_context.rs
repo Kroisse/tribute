@@ -189,6 +189,9 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Resolved UFCS methods: NodeId → (FuncDefId, instantiated callee type).
     /// Populated during inference phase, consumed during conversion phase.
     resolved_methods: HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+    /// Calls whose number of arguments was reported; inference may visit a
+    /// call more than once.
+    reported_arities: HashSet<NodeId>,
 
     /// Deferred UFCS method calls whose receiver type is still a UniVar.
     /// Resolved after constraint solving when UniVars have been substituted.
@@ -273,6 +276,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             become_method_operands: Vec::new(),
             handle_ctx_stack: Vec::new(),
             resolved_methods: HashMap::default(),
+            reported_arities: HashSet::default(),
             deferred_methods: Vec::new(),
             resolved_deferred_methods: Vec::new(),
             evidence: Default::default(),
@@ -491,6 +495,12 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.resolved_methods.insert(node, (func_id, callee_ty));
     }
 
+    /// Whether the number of arguments of the call at `node` is reported
+    /// now for the first time.
+    pub fn report_arity_once(&mut self, node: NodeId) -> bool {
+        self.reported_arities.insert(node)
+    }
+
     /// Get a resolved UFCS method by node ID.
     pub fn get_resolved_method(&self, node: NodeId) -> Option<(FuncDefId<'db>, Type<'db>)> {
         self.resolved_methods.get(&node).copied()
@@ -529,21 +539,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         }
     }
 
-    /// Relate the row a deferred call was given to its callee's row.
-    pub fn constrain_call_effect(
-        &mut self,
-        solver: &super::solver::TypeSolver<'db>,
-        callee: EffectRow<'db>,
-        call: EffectRow<'db>,
-        node_id: NodeId,
-    ) {
-        let origin = ConstraintOrigin {
-            node_id,
-            kind: ConstraintOriginKind::Call,
-        };
-        let constraint =
-            solver.call_effect_constraint(callee, call, || self.fresh_row_var(), origin);
-        self.constraints.add(constraint);
+    /// Add constraints built outside the context.
+    pub fn constrain_all(&mut self, constraints: impl IntoIterator<Item = Constraint<'db>>) {
+        for constraint in constraints {
+            self.constraints.add(constraint);
+        }
     }
 
     /// The row a deferred method call was given on an earlier visit.

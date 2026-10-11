@@ -648,55 +648,10 @@ impl<'db> TypeChecker<'db> {
                     // Record the resolution for MethodCall → Call conversion
                     resolved.insert(mc.node_id, (entry.func_id, func_ty));
 
-                    if let TypeKind::Func {
-                        params,
-                        result,
-                        effect,
-                        ..
-                    } = func_ty.kind(self.db())
-                    {
-                        // Arity check
-                        if mc.arg_types.len() != params.len() {
-                            Diagnostic::new(
-                                format!(
-                                    "UFCS arity mismatch for '{}': expected {} args, got {}",
-                                    mc.method,
-                                    params.len(),
-                                    mc.arg_types.len(),
-                                ),
-                                self.get_span(mc.node_id),
-                                DiagnosticSeverity::Error,
-                                CompilationPhase::TypeChecking,
-                            )
-                            .accumulate(self.db());
-                        }
-
-                        // Constrain result type
-                        new_constraints.add_type_eq(mc.result_ty, *result);
-                        solver.resolve_producer(mc.node_id);
-
-                        // Constrain arg types against function params (min of both lengths)
-                        for (arg, param) in mc.arg_types.iter().zip(params.iter()) {
-                            new_constraints.add_type_coerce(
-                                *arg,
-                                *param,
-                                super::super::constraint::ConstraintOrigin {
-                                    node_id: mc.node_id,
-                                    kind: super::super::constraint::ConstraintOriginKind::Call,
-                                },
-                            );
-                        }
-
-                        let slack = solver.fresh_row_var();
-                        new_constraints.add(solver.call_effect_constraint(
-                            *effect,
-                            mc.effect,
-                            || slack,
-                            ConstraintOrigin {
-                                node_id: mc.node_id,
-                                kind: ConstraintOriginKind::Call,
-                            },
-                        ));
+                    solver.resolve_producer(mc.node_id);
+                    let slack = solver.fresh_row_var();
+                    for constraint in self.selected_call_constraints(solver, &mc, func_ty, slack) {
+                        new_constraints.add(constraint);
                     }
                 } else {
                     remaining.push(mc);
@@ -738,6 +693,45 @@ impl<'db> TypeChecker<'db> {
             deferred = remaining;
         }
         (resolved, waiting_errors)
+    }
+
+    /// What selecting a function of type `callee` for the deferred `call`
+    /// requires: the constraints a call of that function makes where it is
+    /// written, on the types the call was deferred with. `slack` is a fresh
+    /// row variable for [`TypeSolver::call_effect_constraint`].
+    pub(crate) fn selected_call_constraints(
+        &self,
+        solver: &TypeSolver<'db>,
+        call: &crate::typeck::func_context::DeferredMethodCall<'db>,
+        callee: Type<'db>,
+        slack: crate::ast::EffectVar,
+    ) -> Vec<super::super::constraint::Constraint<'db>> {
+        use super::super::constraint::Constraint;
+        let TypeKind::Func {
+            params,
+            result,
+            effect,
+            ..
+        } = callee.kind(self.db())
+        else {
+            return Vec::new();
+        };
+        if params.len() != call.arg_types.len() {
+            self.report_call_arity(call.node_id, params.len(), call.arg_types.len());
+        }
+        let origin = ConstraintOrigin {
+            node_id: call.node_id,
+            kind: ConstraintOriginKind::Call,
+        };
+        let mut constraints = vec![Constraint::TypeEqAt(call.result_ty, *result, origin)];
+        constraints.extend(
+            call.arg_types
+                .iter()
+                .zip(params)
+                .map(|(arg, param)| Constraint::TypeCoerce(*arg, *param, origin)),
+        );
+        constraints.push(solver.call_effect_constraint(*effect, call.effect, || slack, origin));
+        constraints
     }
 
     /// Select the function a deferred call names with the types `solver`

@@ -929,8 +929,9 @@ Lowering은 준비에 성공한 AST와 대응 스킴을 함께 소비한다. 인
 스킴 재사용, variant 연결과 확장 한도의 상세 계약은
 [Generics — Nominal 타입 수집과 재작성](generics.md#nominal-타입-수집과-재작성)을 따른다.
 
-Method 후보 선택과 scheme instantiation은 타입 체커가 소유한다. Receiver
-타입이 미해결인 호출은 제약 해결 과정에서 선택을 확정한다. TDNR 재작성은
+Method 후보 선택과 scheme instantiation은 타입 체커가 소유한다. 선택된 호출은
+문법과 무관하게 함수 호출의 검사 규칙 하나를 거친다. 후보가 하나로 좁혀지지 않은
+호출은 제약 해결 과정에서 선택을 확정한다. TDNR 재작성은
 선택된 callee와 인스턴스를 소비하며 source annotation에서 타입을 재구성하지
 않는다. 해결되지 않은 참조는 원본 위치의 진단으로 남는다.
 
