@@ -359,8 +359,8 @@ fn solved_later(name: Name) -> String { id(name).text("a", "b") }
     assert_eq!(
         errors(db, text),
         [
-            "`text` is a field of `Name` and takes no arguments, but 1 was given",
-            "`text` is a field of `Name` and takes no arguments, but 2 were given",
+            "call arity mismatch: expected 1 argument, found 2",
+            "call arity mismatch: expected 1 argument, found 3",
         ]
     );
 }

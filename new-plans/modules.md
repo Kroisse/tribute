@@ -305,9 +305,36 @@ fn example(xs: List(Int), opt: Option(String)) {
 
 Receiver는 첫 번째 인자이며 다른 인자와 다르지 않다. Receiver의 타입이 정해지지
 않았어도 나머지 인자와 결과가 후보를 하나로 좁히면 그 함수를 고르고, receiver의
-타입은 고른 함수에서 추론된다. 예외는 인자 없는 비한정 UFCS `x.f`뿐이다. 이
-호출은 receiver의 필드를 읽는 것일 수 있으므로, receiver의 타입이 정해진 뒤에
-필드인지 함수인지를 정한다.
+타입은 고른 함수에서 추론된다.
+
+필드를 읽는 `x.f`도 호출이다. Struct `T`의 필드 `f`는 getter 함수 `T::f`를 만들고,
+`x.f`는 `f(x)`이다. 비한정 UFCS의 후보에는 그 이름의 함수들과 함께, 그 이름의
+필드를 가진 모든 struct의 getter가 들어간다. 따라서 필드 `f`를 가진 struct가
+하나뿐이고 같은 이름의 함수가 없으면 `x.f`는 `x`의 타입 없이도 정해진다.
+
+Getter `T::f`는 `T`의 네임스페이스에 선언된 함수다. 한 네임스페이스에서 한 이름은
+한 함수이므로, `T`의 companion 모듈은 필드와 같은 이름의 함수를 매개변수와 상관없이
+선언할 수 없다. 다른 모듈은 같은 이름의 함수를 선언할 수 있다. 그 함수가 `T`를
+첫 번째 인자로 받으면 `x.f`의 후보는 getter와 그 함수 둘이고, 다른 호출과 같은
+규칙으로 고른다. 둘 다 맞으면 모호하며 `x.T::f`처럼 경로로 구분한다:
+
+```rust
+struct Name { text: String }
+
+pub mod Name {
+    pub fn text(name: Name, suffix: String) -> String { ... }  // Error: Name::text는 필드의 getter
+}
+
+mod audit {
+    pub fn text(name: Name) -> String { ... }                  // OK: audit::text
+}
+
+fn show(name: Name) -> String {
+    name.text           // Error: Name::text와 audit::text 모두 맞음
+    name.Name::text     // OK
+    name.audit::text    // OK
+}
+```
 
 ```rust
 use a::pair   // fn pair(x: A, y: Int) -> Int

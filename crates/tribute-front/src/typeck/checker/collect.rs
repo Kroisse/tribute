@@ -51,6 +51,32 @@ impl<'db> TypeChecker<'db> {
         self.predeclare_nominal_types(&module.decls);
         self.collect_type_imports(&module.decls);
         self.collect_declarations_in_order(module);
+        self.report_getter_redeclarations();
+    }
+
+    /// Report a function declared under the name a struct's field already
+    /// gives its getter, such as `text` in the companion module of a struct
+    /// with a field `text`.
+    fn report_getter_redeclarations(&mut self) {
+        for (node, function) in std::mem::take(&mut self.function_decls) {
+            let Some(getter) = self.env.field_function(function) else {
+                continue;
+            };
+            Diagnostic::new(
+                format!(
+                    "function `{}` is already declared by field `{}` of struct `{}`",
+                    function.qualified(self.db()),
+                    getter.field,
+                    getter.owner.name(self.db()),
+                ),
+                self.get_span(node),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+            self.env
+                .unregister_method(&function.name(self.db()), function);
+        }
     }
 
     /// Import a type scheme without inventing a nominal identity for its alias.
@@ -267,6 +293,7 @@ impl<'db> TypeChecker<'db> {
             self.env
                 .register_method(func.name.clone(), MethodEntry { func_id, func_ty });
         }
+        self.function_decls.push((func.id, func_id));
     }
 
     /// Report a missing part of a function signature, typed as an error.
@@ -334,6 +361,7 @@ impl<'db> TypeChecker<'db> {
             self.env
                 .register_method(func.name.clone(), MethodEntry { func_id, func_ty });
         }
+        self.function_decls.push((func.id, func_id));
     }
 
     /// Collect a struct definition.

@@ -828,14 +828,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         Some(callable)
     }
 
-    pub(crate) fn record_field_instance(
-        &mut self,
-        node: NodeId,
-        instance: super::FunctionInstance<'db>,
-    ) {
-        self.function_instances.entry(node).or_insert(instance);
-    }
-
     pub fn take_function_instances(&mut self) -> HashMap<NodeId, super::FunctionInstance<'db>> {
         std::mem::take(&mut self.function_instances)
     }

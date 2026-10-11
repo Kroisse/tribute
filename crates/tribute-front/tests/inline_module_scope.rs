@@ -51,7 +51,7 @@ mod other {
 mod m {
     pub fn value() -> Nat { base() + other::f() }
 
-    pub fn x(p: Point) -> Nat { p.x }
+    pub fn read(p: Point) -> Nat { p.x }
 }
 
 fn main() -> Nil { }
@@ -86,11 +86,11 @@ mod m {
 
     pub fn value() -> Nat { base() + super::other::f() + pkg::other::f() }
 
-    pub fn x(p: Point) -> Nat { p.x }
+    pub fn read(p: Point) -> Nat { p.x }
 }
 
 fn main() -> Nil {
-    let _ = m::value() + m::x(Point { x: 3 })
+    let _ = m::value() + m::read(Point { x: 3 })
 }
 "#,
     );
@@ -222,11 +222,11 @@ mod other {
 mod m {
     use super::other as m
 
-    pub fn x(p: m::Point) -> Nat { p.x }
+    pub fn read(p: m::Point) -> Nat { p.x }
 }
 
 fn main() -> Nil {
-    let _ = m::x(other::Point { x: 1 })
+    let _ = m::read(other::Point { x: 1 })
 }
 "#,
     );

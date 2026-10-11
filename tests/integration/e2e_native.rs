@@ -87,7 +87,7 @@ struct Name { text: String }
 
 fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
 fn bang(s: String) -> String { app(s, fn(t) t <> "!") }
-fn text(name: Name) -> String { name.text }
+fn text_of(name: Name) -> String { name.text }
 
 fn before() -> String {
     let call = fn(s: String) after(s)
@@ -108,7 +108,7 @@ fn main() ->{Io} Nil {
     let nested = fn() direct("nested")
     print_line(nested())
     let modify = fn(n: Name) n.text::modify(fn(t) t <> "!")
-    print_line(text(modify(Name { text: "field" })))
+    print_line(text_of(modify(Name { text: "field" })))
 }
 "#,
     );
@@ -546,13 +546,13 @@ fn test_native_generic_struct_pattern() {
         r#"
 struct Pair(a, b) { left: a, right: b }
 
-fn right(pair: Pair(Nat, Nat)) -> Nat {
+fn second(pair: Pair(Nat, Nat)) -> Nat {
     let Pair { right, .. } = pair
     right
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(right(Pair { left: 1, right: 2 }))
+    __tribute_print_nat(second(Pair { left: 1, right: 2 }))
 }
 "#,
         "2",
@@ -3365,5 +3365,33 @@ fn main() ->{Io} Nil {
 }
 "#,
         "6\n8\n21",
+    );
+}
+
+/// A field read is a call of the field's getter: it types a receiver that
+/// one struct's field decides, and waits for one that two structs' fields
+/// could take.
+#[test]
+fn a_field_read_is_a_call_of_its_getter() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "field_read_as_call.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct Name { text: String }
+struct Label { text: String, size: Int }
+
+fn shown(name: Name) -> String { name.text }
+
+fn main() ->{Io} Nil {
+    let size = fn(l) { l.size }
+    let read = fn(n) { n.text }
+    print_line(Int::to_string(size(Label { text: "wide", size: +4 })))
+    print_line(read(Label { text: "label", size: +1 }))
+    print_line(shown(Name { text: "name" }))
+    print_line(Name { text: "field" }.text)
+}
+"#,
+        "4\nlabel\nname\nfield",
     );
 }
