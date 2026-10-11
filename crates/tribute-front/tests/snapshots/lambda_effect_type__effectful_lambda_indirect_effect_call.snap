@@ -45,4 +45,8 @@ core.module @test {
       %2 = tribute_control.call %0 {callee = @run_with_state} : core.i32
       tribute_control.return %2
   }
+  ability.decl {ability_ref = !t0, sym_name = "ability_2_5_State_3_int"} {
+      ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
+      ability.operation {kind = "op", op_name = "set", param_types = [core.i32], result_type = core.nil}
+  }
 }

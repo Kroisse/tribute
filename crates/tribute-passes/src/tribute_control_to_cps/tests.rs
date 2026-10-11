@@ -10,7 +10,7 @@ use crate::test_support::assert_unchanged_on_error;
 
 /// Run the conversion without operation declarations or intrinsics.
 fn run_pre_cps(ctx: &mut IrContext, module: Module) -> Result<(), TributeControlToCpsError> {
-    tribute_control_to_cps(ctx, module, &[], &[], &mut Default::default())?;
+    tribute_control_to_cps(ctx, module, &[], &mut Default::default())?;
     lower_continuation_frames(ctx, module)
 }
 
@@ -186,7 +186,7 @@ fn textual_callable_graph_converts_and_reparses() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
     let printed = print_module(&ctx, module.op());
@@ -212,7 +212,7 @@ fn pass_wrapper_runs_the_verified_conversion() {
 }"#;
     let (mut ctx, module) = parse(input);
     let target = core::Module::from_op(&ctx, module.op()).unwrap();
-    let mut pass = TributeControlToCps::new([]);
+    let mut pass = TributeControlToCps::new();
     assert_eq!(pass.name(), "tribute-control-to-cps");
     pass.run(&mut ctx, target, &mut Default::default()).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
@@ -250,7 +250,7 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("func.call "));
@@ -350,7 +350,7 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
 
     let transfers = convention_bearing_transfers(&ctx, module.op());
     let mut conventions: Vec<_> = transfers
@@ -400,7 +400,7 @@ fn nested_textual_module_converts_its_callable_graph_atomically() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("core.module @inner"));
@@ -434,7 +434,7 @@ fn nested_modules_resolve_same_named_callables_by_qualified_path() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
     let printed = print_module(&ctx, module.op());
     assert_eq!(printed.matches("func.func @same").count(), 2, "{printed}");
@@ -458,7 +458,7 @@ fn textual_nested_attribute_types_convert_atomically() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("adt.struct<CallbackRecord("));
     assert!(
@@ -503,7 +503,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
         );
     let (mut ctx, module) = parse(&printed_source);
 
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     let lowered = module
         .ops(&ctx)
         .iter()
@@ -629,8 +629,8 @@ fn malformed_or_retired_source_signatures_fail_before_conversion() {
             .insert("type", Attribute::Type(malformed));
 
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
-            .unwrap_err();
+        let error =
+            tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY, "{name}: {error}");
         assert!(error.to_string().contains(expected), "{name}: {error}");
         assert_eq!(print_module(&ctx, module.op()), before, "{name}");
@@ -871,8 +871,8 @@ fn named_boundaries_report_local_and_core_validation_errors() {
   }
 }"#;
     let (ctx, module) = parse(local_input);
-    let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut Default::default())
-        .unwrap_err();
+    let error =
+        verify_tribute_control_pre_cps(&ctx, module, &[], &mut Default::default()).unwrap_err();
     assert!(error.to_string().contains("expected 1 operand"), "{error}");
 
     let core_input = r#"core.module @test {
@@ -882,8 +882,8 @@ fn named_boundaries_report_local_and_core_validation_errors() {
   }
 }"#;
     let (ctx, module) = parse(core_input);
-    let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut Default::default())
-        .unwrap_err();
+    let error =
+        verify_tribute_control_pre_cps(&ctx, module, &[], &mut Default::default()).unwrap_err();
     assert!(
         error
             .to_string()
@@ -935,8 +935,8 @@ fn pre_boundary_rejects_recursively_nested_physical_signatures() {
   !nested = core.tuple<func.func_sig<(core.i32) -> core.i32>>
 }"#;
     let (ctx, module) = parse(input);
-    let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut Default::default())
-        .unwrap_err();
+    let error =
+        verify_tribute_control_pre_cps(&ctx, module, &[], &mut Default::default()).unwrap_err();
     assert!(error.to_string().contains("forbidden type"), "{error}");
 }
 
@@ -1176,13 +1176,10 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
         vec![i32_type],
         i32_type,
     )];
-    tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
+    {
+        tribute_control::declare_operations(&mut ctx, module, &declarations);
+        tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+    }
     .unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     let mut perform_resume = None;
@@ -1328,13 +1325,10 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
             i32_type,
         ),
     ];
-    tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
+    {
+        tribute_control::declare_operations(&mut ctx, module, &declarations);
+        tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+    }
     .unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
 
@@ -1429,13 +1423,10 @@ fn textual_scf_branch_captures_only_the_selected_suffix() {
         vec![i32_type],
         i32_type,
     )];
-    tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
+    {
+        tribute_control::declare_operations(&mut ctx, module, &declarations);
+        tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+    }
     .unwrap();
     let converted = print_module(&ctx, module.op());
     lower_continuation_frames(&mut ctx, module).unwrap();
@@ -1501,13 +1492,10 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
             i32_type,
         ),
     ];
-    tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
+    {
+        tribute_control::declare_operations(&mut ctx, module, &declarations);
+        tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+    }
     .unwrap();
     let converted = print_module(&ctx, module.op());
     lower_continuation_frames(&mut ctx, module).unwrap();
@@ -1641,7 +1629,6 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let before = print_module(&ctx, module.op());
     let ability_ref = ctx
         .types()
         .iter()
@@ -1659,14 +1646,9 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
         [i32_type],
         i32_type,
     )];
-    let error = tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
-    .unwrap_err();
+    tribute_control::declare_operations(&mut ctx, module, &declarations);
+    let before = print_module(&ctx, module.op());
+    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
         error
@@ -1691,7 +1673,7 @@ fn stronger_func_ref_builds_a_cps_adapter_without_a_null_environment() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("__tribute_func_ref_adapter"));
     assert!(printed.contains("closure.new"));
@@ -1739,7 +1721,7 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
 
     // Evidence, environment, and frame are hidden parameters; the Cps
     // source result is replaced by `core.never` and loses its attributes.
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     let logical = adapter_type(&ctx);
     assert_eq!(
         logical
@@ -1817,7 +1799,7 @@ fn func_ref_adapters_cover_every_legal_convention_strengthening() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
     let printed = print_module(&ctx, module.op());
     assert_eq!(
@@ -1979,7 +1961,7 @@ fn handles_stay_abstract_until_the_frames_are_lowered() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     let printed = print_module(&ctx, module.op());
     assert_eq!(printed.matches("ability.handle ").count(), 2, "{printed}");
     assert!(!printed.contains("ability.handle_dispatch"), "{printed}");
@@ -2015,7 +1997,7 @@ fn nested_textual_handles_keep_distinct_delimiters() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
     // Each handle is installed in place, and again in the layer a
@@ -2061,13 +2043,10 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
 }"#;
     let (mut ctx, module) = parse(input);
     let declarations = operation_declarations(&mut ctx, &[("State", "get")]);
-    tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
+    {
+        tribute_control::declare_operations(&mut ctx, module, &declarations);
+        tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+    }
     .unwrap();
     let converted = print_module(&ctx, module.op());
     lower_continuation_frames(&mut ctx, module).unwrap();
@@ -2109,13 +2088,10 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
 }"#;
     let (mut ctx, module) = parse(input);
     let declarations = operation_declarations(&mut ctx, &[("State", "get"), ("Console", "read")]);
-    tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
+    {
+        tribute_control::declare_operations(&mut ctx, module, &declarations);
+        tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+    }
     .unwrap();
     let converted = print_module(&ctx, module.op());
     lower_continuation_frames(&mut ctx, module).unwrap();
@@ -2165,13 +2141,10 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
         vec![i32_type],
         never_type,
     )];
-    tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
+    {
+        tribute_control::declare_operations(&mut ctx, module, &declarations);
+        tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+    }
     .unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     let mut perform = None;
@@ -2293,13 +2266,10 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
         vec![i32_type],
         i32_type,
     )];
-    tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
+    {
+        tribute_control::declare_operations(&mut ctx, module, &declarations);
+        tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+    }
     .unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
@@ -2374,13 +2344,10 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
         vec![i32_type],
         i32_type,
     )];
-    tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
+    {
+        tribute_control::declare_operations(&mut ctx, module, &declarations);
+        tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+    }
     .unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("scf.switch"));
@@ -2497,13 +2464,10 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
 }"#;
     let (mut ctx, module) = parse(input);
     let declarations = operation_declarations(&mut ctx, &[("State", "get")]);
-    tribute_control_to_cps(
-        &mut ctx,
-        module,
-        &declarations,
-        &[],
-        &mut Default::default(),
-    )
+    {
+        tribute_control::declare_operations(&mut ctx, module, &declarations);
+        tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+    }
     .unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
@@ -2525,8 +2489,9 @@ fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
 }"#;
     let (mut ctx, module) = parse(input);
     let declarations = operation_declarations(&mut ctx, &[("State", "get")]);
+    tribute_control::declare_operations(&mut ctx, module, &declarations);
     let error = assert_unchanged_on_error(&mut ctx, module, |ctx, module| {
-        tribute_control_to_cps(ctx, module, &declarations, &[], &mut Default::default())
+        tribute_control_to_cps(ctx, module, &[], &mut Default::default())
     });
     assert!(
         error
