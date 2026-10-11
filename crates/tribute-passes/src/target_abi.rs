@@ -1919,7 +1919,7 @@ mod tests {
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}>
             !{frame_name} = adt.struct<{frame_name}(done: !Done, dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = 2}} {{
-                effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref<{{name = "State"}}>, op_name = "get", answer_type = !Answer}}
+                effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = @State, op_name = "get", answer_type = !Answer}}
             }}
         }}"#
             ),

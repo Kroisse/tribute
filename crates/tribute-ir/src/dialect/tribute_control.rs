@@ -129,7 +129,7 @@ mod tribute_control {
 
     // Direct-style control operations
     fn perform(
-        ability_ref: Attr<Type>,
+        ability_ref: Attr<SymbolRef>,
         op_name: Attr<String>,
         operation_kind: Attr<String>,
         args: Variadic<_>,
@@ -147,7 +147,7 @@ mod tribute_control {
     }
 
     fn handler(
-        ability_ref: Attr<Type>,
+        ability_ref: Attr<SymbolRef>,
         op_name: Attr<String>,
         kind: Attr<String>,
         operation_result_type: Attr<Type>,
@@ -173,42 +173,42 @@ pub const EVIDENCE_PLAN_ATTR: &str = "evidence_plan";
 
 /// One element of an `evidence_plan`. `{mask = instance}`, `{dup = instance}`,
 /// `{outer = instance}`, and `{push = instance}` name an exact
-/// `core.ability_ref` type; `{select = index}` names a row tail of the
+/// `ability.decl` symbol; `{select = index}` names a row tail of the
 /// surrounding callable, and `{tails = [plan, ...]}` holds one plan for each
 /// row tail of the callee.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EvidenceStep {
     /// Hide the top handler of the instance, uncovering the one beneath.
-    Mask(TypeRef),
+    Mask(SymbolPath),
     /// Stack one more copy of the top handler of the instance.
-    Dup(TypeRef),
+    Dup(SymbolPath),
     /// Take the evidence the top handler of the instance was installed on.
     /// CPS legalization adds this step; source operations never carry it.
-    Outer(TypeRef),
+    Outer(SymbolPath),
     /// Take the evidence of the surrounding callable's row tail `index`.
     Select(u32),
     /// Put the surrounding evidence's top handler of the instance on top of
     /// the selected evidence.
-    Push(TypeRef),
+    Push(SymbolPath),
     /// Give each row tail of the callee the surrounding evidence after its
     /// plan.
     Tails(Vec<Vec<EvidenceStep>>),
 }
 
 impl EvidenceStep {
-    /// The `core.ability_ref` instance this step changes.
-    pub fn instance(&self) -> Option<TypeRef> {
+    /// The ability instance this step changes.
+    pub fn instance(&self) -> Option<&SymbolPath> {
         match self {
             Self::Mask(instance)
             | Self::Dup(instance)
             | Self::Outer(instance)
-            | Self::Push(instance) => Some(*instance),
+            | Self::Push(instance) => Some(instance),
             Self::Select(_) | Self::Tails(_) => None,
         }
     }
 
     /// Decode one plan element, or say why it is malformed.
-    pub fn from_attribute(ctx: &IrContext, attr: &Attribute) -> Result<Self, String> {
+    pub fn from_attribute(attr: &Attribute) -> Result<Self, String> {
         let Attribute::Dict(entries) = attr else {
             return Err("evidence_plan element must be a dictionary".into());
         };
@@ -219,10 +219,8 @@ impl EvidenceStep {
             ));
         };
         let instance = || match value {
-            Attribute::Type(instance) if is_ability_ref(ctx, *instance) => Ok(*instance),
-            _ => Err(format!(
-                "evidence_plan {key} must name a core.ability_ref type"
-            )),
+            Attribute::SymbolRef(instance) => Ok(instance.clone()),
+            _ => Err(format!("evidence_plan {key} must name an ability instance")),
         };
         key.with_str(|name| match name {
             "mask" => instance().map(Self::Mask),
@@ -245,10 +243,7 @@ impl EvidenceStep {
                         let Attribute::List(steps) = plan else {
                             return Err("evidence_plan tails must be a list of plans".into());
                         };
-                        steps
-                            .iter()
-                            .map(|step| Self::from_attribute(ctx, step))
-                            .collect()
+                        steps.iter().map(Self::from_attribute).collect()
                     })
                     .collect::<Result<_, _>>()
                     .map(Self::Tails)
@@ -262,10 +257,10 @@ impl EvidenceStep {
 
     pub fn to_attribute(&self) -> Attribute {
         let (keyword, value) = match self {
-            Self::Mask(instance) => ("mask", Attribute::Type(*instance)),
-            Self::Dup(instance) => ("dup", Attribute::Type(*instance)),
-            Self::Outer(instance) => ("outer", Attribute::Type(*instance)),
-            Self::Push(instance) => ("push", Attribute::Type(*instance)),
+            Self::Mask(instance) => ("mask", Attribute::SymbolRef(instance.clone())),
+            Self::Dup(instance) => ("dup", Attribute::SymbolRef(instance.clone())),
+            Self::Outer(instance) => ("outer", Attribute::SymbolRef(instance.clone())),
+            Self::Push(instance) => ("push", Attribute::SymbolRef(instance.clone())),
             Self::Select(index) => ("select", Attribute::Int(i128::from(*index))),
             Self::Tails(plans) => (
                 "tails",
@@ -296,19 +291,14 @@ impl trunk_ir::attr_kind::AttrKind for EvidenceStep {
     type Out<'ctx> = EvidenceStep;
     type In = EvidenceStep;
 
-    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> EvidenceStep {
-        Self::from_attribute(ctx, attr)
+    fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> EvidenceStep {
+        Self::from_attribute(attr)
             .unwrap_or_else(|error| panic!("unverified evidence_plan element: {error}"))
     }
 
     fn write(_: &mut IrContext, value: EvidenceStep) -> Attribute {
         value.to_attribute()
     }
-}
-
-fn is_ability_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "ability_ref"
 }
 
 /// The operation that carries an `evidence_plan`, which decides the steps it
@@ -342,7 +332,7 @@ pub(crate) fn verify_evidence_plan(
     }
     let steps: Vec<_> = items
         .iter()
-        .map(|item| EvidenceStep::from_attribute(ctx, item))
+        .map(EvidenceStep::from_attribute)
         .collect::<Result<_, _>>()?;
     if site == EvidencePlanSite::Handle
         && steps
@@ -389,14 +379,14 @@ fn verify_evidence_steps(
             EvidenceStep::Mask(instance)
             | EvidenceStep::Dup(instance)
             | EvidenceStep::Outer(instance) => {
-                if !seen.insert((*instance, false)) {
+                if !seen.insert((instance, false)) {
                     return Err(format!(
                         "evidence_plan names ability instance {instance} more than once"
                     ));
                 }
             }
             EvidenceStep::Push(instance) => {
-                if !seen.insert((*instance, true)) {
+                if !seen.insert((instance, true)) {
                     return Err(format!(
                         "evidence_plan names ability instance {instance} more than once"
                     ));
@@ -1132,7 +1122,7 @@ inventory::submit! {
 /// validation reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OperationDeclaration {
-    pub ability_ref: TypeRef,
+    pub ability_ref: SymbolPath,
     pub op_name: StringRef,
     pub kind: StringRef,
     pub parameter_types: Vec<TypeRef>,
@@ -1163,14 +1153,14 @@ impl CompilerIntrinsicDeclaration {
 
 impl OperationDeclaration {
     pub fn new(
-        ability_ref: TypeRef,
+        ability_ref: impl Into<SymbolPath>,
         op_name: StringRef,
         kind: StringRef,
         parameter_types: impl IntoIterator<Item = TypeRef>,
         result_type: TypeRef,
     ) -> Self {
         Self {
-            ability_ref,
+            ability_ref: ability_ref.into(),
             op_name,
             kind,
             parameter_types: parameter_types.into_iter().collect(),
@@ -1194,8 +1184,8 @@ pub fn declare_operations(
         .expect("a module that declares ability operations has a body block");
     let mut instances = Vec::new();
     for declaration in declarations {
-        if !instances.contains(&declaration.ability_ref) {
-            instances.push(declaration.ability_ref);
+        if !instances.contains(&&declaration.ability_ref) {
+            instances.push(&declaration.ability_ref);
         }
     }
     for ability_ref in instances {
@@ -1207,7 +1197,7 @@ pub fn declare_operations(
         });
         for declaration in declarations
             .iter()
-            .filter(|declaration| declaration.ability_ref == ability_ref)
+            .filter(|declaration| declaration.ability_ref == *ability_ref)
         {
             let operation = crate::dialect::ability::Operation::operands()
                 .op_name(declaration.op_name)
@@ -1222,10 +1212,8 @@ pub fn declare_operations(
             blocks: trunk_ir::smallvec::smallvec![block],
             parent_op: None,
         });
-        let symbol = crate::dialect::ability::declaration_symbol(ctx, ability_ref);
         let decl = crate::dialect::ability::Decl::operands()
-            .sym_name(symbol)
-            .ability_ref(ability_ref)
+            .sym_name(ability_ref.leaf().to_string())
             .regions(operations)
             .build(ctx, location);
         ctx.push_op(module_block, decl.op_ref());
@@ -1246,25 +1234,18 @@ fn declared_operations(
     use crate::dialect::ability::{Decl, Operation};
 
     let mut declarations = Vec::new();
-    let mut declared = HashSet::default();
     for &op in module.ops(ctx) {
         let Ok(decl) = Decl::from_op(ctx, op) else {
             continue;
         };
-        let ability_ref = decl.ability_ref(ctx);
-        if !declared.insert(ability_ref) {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!("duplicate ability.decl for {ability_ref}"),
-            );
-        }
+        let Some(ability_ref) = qualified_name(ctx, op) else {
+            continue;
+        };
         let blocks = &ctx.region(decl.operations(ctx)).blocks;
         for &operation in blocks.iter().flat_map(|block| &ctx.block(*block).ops) {
             match Operation::from_op(ctx, operation) {
                 Ok(operation) => declarations.push(OperationDeclaration {
-                    ability_ref,
+                    ability_ref: ability_ref.clone(),
                     op_name: operation.op_name_ref(ctx),
                     kind: operation.kind_ref(ctx),
                     parameter_types: operation.param_types(ctx).collect(),
@@ -1958,7 +1939,7 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
         }
         let data = ctx.op(child);
         if let (Some(ability), Some(name)) = (
-            data.attributes.get_type("ability_ref"),
+            data.attributes.get_symbol_ref("ability_ref"),
             data.attributes.get_string_ref("op_name"),
         ) && !clauses.insert((ability, name))
         {
@@ -2451,10 +2432,10 @@ fn declaration_map<'a>(
     ctx: &IrContext,
     declarations: &'a [OperationDeclaration],
     errors: &mut Vec<ValidationError>,
-) -> HashMap<(TypeRef, StringRef), &'a OperationDeclaration> {
+) -> HashMap<(&'a SymbolPath, StringRef), &'a OperationDeclaration> {
     let mut map = HashMap::default();
     for declaration in declarations {
-        let key = (declaration.ability_ref, declaration.op_name);
+        let key = (&declaration.ability_ref, declaration.op_name);
         if map.insert(key, declaration).is_some() {
             push_type_error(
                 errors,
@@ -2850,7 +2831,7 @@ fn variant_field_type(
 struct CallableProvenance<'a> {
     functions: &'a SymbolTable,
     registered: &'a HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration>,
-    declarations: &'a HashMap<(TypeRef, StringRef), &'a OperationDeclaration>,
+    declarations: &'a HashMap<(&'a SymbolPath, StringRef), &'a OperationDeclaration>,
     nominal_layouts: &'a HashMap<StringRef, TypeRef>,
 }
 
@@ -2890,7 +2871,7 @@ fn callable_block_arg_has_source_contract(
     if is_control_op(ctx, owner, "handler") && ctx.op_regions(owner).eq([region]) {
         let data = ctx.op(owner);
         if let (Some(ability), Some(name), Some(kind)) = (
-            data.attributes.get_type("ability_ref"),
+            data.attributes.get_symbol_ref("ability_ref"),
             data.attributes.get_string_ref("op_name"),
             data.attributes.get_string_ref("kind"),
         ) {
@@ -2999,7 +2980,7 @@ fn validate_callable_origins(
     body: RegionRef,
     functions: &SymbolTable,
     declarations: &[CompilerIntrinsicDeclaration],
-    operation_declarations: &HashMap<(TypeRef, StringRef), &OperationDeclaration>,
+    operation_declarations: &HashMap<(&SymbolPath, StringRef), &OperationDeclaration>,
     nominal_layouts: &HashMap<StringRef, TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) {
@@ -3177,7 +3158,7 @@ fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
 fn validate_declaration_uses(
     ctx: &IrContext,
     body: RegionRef,
-    declarations: &HashMap<(TypeRef, StringRef), &OperationDeclaration>,
+    declarations: &HashMap<(&SymbolPath, StringRef), &OperationDeclaration>,
     errors: &mut Vec<ValidationError>,
 ) {
     walk_region_ops(ctx, body, &mut |op| {
@@ -3211,7 +3192,7 @@ fn validate_declaration_uses(
         };
         let data = ctx.op(op);
         let (Some(ability), Some(name)) = (
-            data.attributes.get_type("ability_ref"),
+            data.attributes.get_symbol_ref("ability_ref"),
             data.attributes.get_string_ref("op_name"),
         ) else {
             return;
@@ -3667,13 +3648,8 @@ mod tests {
         ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
     }
 
-    fn ability_type(ctx: &mut IrContext, name: &str) -> TypeRef {
-        let name = ctx.intern_str(name);
-        ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::String(name))
-                .build(),
-        )
+    fn ability_type(_: &mut IrContext, name: &str) -> SymbolPath {
+        SymbolPath::from(name)
     }
 
     fn block(ctx: &mut IrContext, loc: Location, args: &[TypeRef]) -> BlockRef {
@@ -3778,7 +3754,7 @@ mod tests {
 
         let body_block = block(&mut ctx, loc, &[]);
         let perform = Perform::operands([x])
-            .ability_ref(ability)
+            .ability_ref(ability.clone())
             .op_name("get")
             .operation_kind("op")
             .results(i32_ty)
@@ -3806,7 +3782,7 @@ mod tests {
         ctx.push_op(handler_block, handler_yield.op_ref());
         let handler_body = region(&mut ctx, loc, handler_block);
         let handler = Handler::operands()
-            .ability_ref(ability)
+            .ability_ref(ability.clone())
             .op_name("get")
             .kind("op")
             .operation_result_type(i32_ty)
@@ -3864,13 +3840,13 @@ mod tests {
       tribute_control.return %value
     }
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %value {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %value {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^completion(%completed: core.i32):
         tribute_control.yield %completed
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^handler(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
@@ -3918,7 +3894,8 @@ mod tests {
         let handler_data = ctx.op(handler);
         let ability_ref = handler_data
             .attributes
-            .get_type("ability_ref")
+            .get_symbol_ref("ability_ref")
+            .cloned()
             .expect("handler ability");
         let op_name = handler_data
             .attributes
@@ -3953,13 +3930,32 @@ mod tests {
 
     const DECLARED_PERFORM: &str = r#"core.module @test {
   tribute_control.func @run() -> core.i32 convention(cps) {
-    %value = tribute_control.perform {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+    %value = tribute_control.perform {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
     tribute_control.return %value
   }
-  ability.decl {ability_ref = core.ability_ref<{name = "State"}>, sym_name = "State"} {
+  ability.decl {sym_name = "State"} {
     ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
   }
 }"#;
+
+    #[test]
+    fn ability_instances_are_symbol_references() {
+        let (ctx, module) = parse_fixture(&evidence_plan_module(
+            "[{mask = @State}, {dup = @Log}]",
+            "[{mask = @State}]",
+        ));
+        let referenced = |name: &str| {
+            let mut referenced = Vec::new();
+            ctx.op(control_op(&ctx, module, name))
+                .attributes
+                .visit_symbol_refs(&mut |path| referenced.push(path.to_string()));
+            referenced
+        };
+        // A call's callee, then the instances its evidence plan names.
+        assert_eq!(referenced("call"), ["id", "State", "Log"]);
+        assert_eq!(referenced("perform"), ["State"]);
+        assert_eq!(referenced("handler"), ["State"]);
+    }
 
     #[test]
     fn a_textual_module_declares_the_operations_it_performs() {
@@ -3994,7 +3990,7 @@ mod tests {
 
         let twice = DECLARED_PERFORM.replacen(
             "  ability.decl",
-            r#"  ability.decl {ability_ref = core.ability_ref<{name = "State"}>, sym_name = "State"} {
+            r#"  ability.decl {sym_name = "State"} {
     ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
   }
   ability.decl"#,
@@ -4004,21 +4000,6 @@ mod tests {
         let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(
             messages(&result).contains("duplicate operation declaration"),
-            "{result}"
-        );
-
-        let split = DECLARED_PERFORM.replacen(
-            "  ability.decl",
-            r#"  ability.decl {ability_ref = core.ability_ref<{name = "State"}>, sym_name = "Other"} {
-    ability.operation {kind = "op", op_name = "set", param_types = [core.i32], result_type = core.nil}
-  }
-  ability.decl"#,
-            1,
-        );
-        let (ctx, module) = parse_fixture(&split);
-        let result = validate(&ctx, module, &[], &mut Default::default());
-        assert!(
-            messages(&result).contains("duplicate ability.decl"),
             "{result}"
         );
     }
@@ -4502,7 +4483,7 @@ mod tests {
             &result,
             control_op(&ctx, module, "perform"),
             &[
-                "attribute `ability_ref` must be a Type attribute",
+                "attribute `ability_ref` must be a SymbolRef attribute",
                 "attribute `op_name` must be a String attribute",
                 "attribute `operation_kind` must be a String attribute",
             ],
@@ -4511,7 +4492,7 @@ mod tests {
             &result,
             control_op(&ctx, module, "handler"),
             &[
-                "attribute `ability_ref` must be a Type attribute",
+                "attribute `ability_ref` must be a SymbolRef attribute",
                 "attribute `op_name` must be a String attribute",
                 "attribute `kind` must be a String attribute",
                 "attribute `operation_result_type` must be a Type attribute",
@@ -4527,7 +4508,7 @@ mod tests {
   !never = core.never
   %value = arith.const {value = 0} : !wrapper
   %call = tribute_control.call %value {callee = @id} : !wrapper
-  %perform = tribute_control.perform %value {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : !wrapper
+  %perform = tribute_control.perform %value {ability_ref = @State, op_name = "get", operation_kind = "op"} : !wrapper
 }"#,
         );
         let never = ctx
@@ -4625,8 +4606,8 @@ mod tests {
   %non_callable = tribute_control.call_indirect %integer, %boolean : core.i32
   %callable = tribute_control.func_ref {func_ref = @bad_func} : !direct
   %mismatched = tribute_control.call_indirect %callable, %boolean : core.i1
-  %bad_perform = tribute_control.perform %integer {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "bogus"} : core.i32
-  tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", kind = "bogus", operation_result_type = core.i32} {
+  %bad_perform = tribute_control.perform %integer {ability_ref = @State, op_name = "get", operation_kind = "bogus"} : core.i32
+  tribute_control.handler {ability_ref = @State, op_name = "get", kind = "bogus", operation_result_type = core.i32} {
     ^clause(%argument: core.i32):
       tribute_control.yield %argument
   }
@@ -4825,7 +4806,7 @@ mod tests {
       tribute_control.yield %value
   } {
     %not_a_handler = arith.const {value = 0} : core.i32
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i1, core.i1>):
         %wrong = arith.const {value = false} : core.i1
         tribute_control.yield %wrong
@@ -4857,7 +4838,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "fn", op_name = "get", operation_result_type = core.i1} {
+    tribute_control.handler {ability_ref = @State, kind = "fn", op_name = "get", operation_result_type = core.i1} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         tribute_control.yield %argument
     }
@@ -5024,8 +5005,8 @@ mod tests {
   %missing_call = tribute_control.call {callee = @missing} : core.i32
   %false = arith.const {value = false} : core.i1
   %bad_call = tribute_control.call %false {callee = @id} : core.i1
-  %unknown_perform = tribute_control.perform {ability_ref = core.ability_ref<{name = "State"}>, op_name = "missing", operation_kind = "op"} : core.i32
-  %bad_perform = tribute_control.perform %false {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "fn"} : core.i1
+  %unknown_perform = tribute_control.perform {ability_ref = @State, op_name = "missing", operation_kind = "op"} : core.i32
+  %bad_perform = tribute_control.perform %false {ability_ref = @State, op_name = "get", operation_kind = "fn"} : core.i1
   %duplicate_capture = tribute_control.lambda() -> core.i1 convention(direct) captures [%false, %false] {
     tribute_control.return %false
   }
@@ -5041,20 +5022,8 @@ mod tests {
             .iter()
             .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
             .expect("core.i32");
-        let ability_ref = ctx
-            .types()
-            .iter()
-            .find_map(|(ty, data)| {
-                (data.dialect == "core"
-                    && data.name == "ability_ref"
-                    && data.attrs.get_str(&ctx, "name") == Some("State"))
-                .then_some(ty)
-            })
-            .expect("State ability reference");
-        // Operation declarations are semantic validation inputs rather than IR
-        // operations, so they have no textual TrunkIR representation.
         let declaration = OperationDeclaration {
-            ability_ref,
+            ability_ref: SymbolPath::from("State"),
             op_name: ctx.intern_str("get"),
             kind: ctx.intern_str("op"),
             parameter_types: vec![i32_ty],
@@ -5093,18 +5062,18 @@ mod tests {
             r#"core.module @test {
   %handled = tribute_control.handle : core.i32 {
     %input = arith.const {value = 0} : core.i32
-    %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+    %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
     tribute_control.yield %performed
   } {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^first(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %resumed = tribute_control.resume %token, %argument : core.i32
         tribute_control.yield %resumed
     }
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^duplicate(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %resumed = tribute_control.resume %token, %argument : core.i32
         tribute_control.yield %resumed
@@ -5116,7 +5085,11 @@ mod tests {
         let fn_kind = ctx.intern_str("fn");
         let handler_data = ctx.op(handler);
         let declarations = [OperationDeclaration::new(
-            handler_data.attributes.get_type("ability_ref").unwrap(),
+            handler_data
+                .attributes
+                .get_symbol_ref("ability_ref")
+                .cloned()
+                .unwrap(),
             handler_data.attributes.get_string_ref("op_name").unwrap(),
             fn_kind,
             [handler_data
@@ -5149,7 +5122,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %first = tribute_control.resume %token, %argument : core.i32
         %second = tribute_control.resume %token, %argument : core.i32
@@ -5173,7 +5146,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %inner = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
           %resumed = tribute_control.resume %token, %argument : core.i32
@@ -5221,7 +5194,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %first = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
           %resumed = tribute_control.resume %token, %argument : core.i32
@@ -5254,7 +5227,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %flag = arith.const {value = true} : core.i1
         %value = scf.if %flag : core.i32 {
@@ -5300,7 +5273,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %choice = arith.const {value = 0} : core.i32
         scf.switch %choice {
@@ -5365,7 +5338,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %continuation = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
           %resumed = tribute_control.resume %token, %argument : core.i32
@@ -5395,7 +5368,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         tribute_control.yield %token
     }
@@ -5416,7 +5389,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.never} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.never} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %resumed = tribute_control.resume %token, %argument : core.i32
         tribute_control.yield %resumed
@@ -5449,7 +5422,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !malformed = tribute_control.resume_token<core.i32>
-  tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+  tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
     ^clause(%value: core.i32, %token: !malformed):
       %resumed = tribute_control.resume %token, %value : core.i32
       tribute_control.yield %resumed
@@ -5499,7 +5472,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %inner = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
           %resumed = tribute_control.resume %token, %argument : core.i32
@@ -5534,7 +5507,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^outer_clause(%argument: core.i32, %outer_token: tribute_control.resume_token<core.i32, core.i32>):
         %nested = tribute_control.handle : core.i32 {
           tribute_control.yield %argument
@@ -5542,7 +5515,7 @@ mod tests {
           ^nested_completion(%value: core.i32):
             tribute_control.yield %value
         } {
-          tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "fn", op_name = "get", operation_result_type = core.i32} {
+          tribute_control.handler {ability_ref = @State, kind = "fn", op_name = "get", operation_result_type = core.i32} {
             ^inner_clause(%inner_argument: core.i32):
               %crossed = tribute_control.resume %outer_token, %inner_argument : core.i32
               tribute_control.yield %crossed
@@ -5993,7 +5966,7 @@ mod tests {
       ^completion(%completed: core.i32):
         tribute_control.yield %completed
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = "Callback"}>, kind = "fn", op_name = "apply", operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = @Callback, kind = "fn", op_name = "apply", operation_result_type = core.i32} {
         ^handler(%callback: !F):
           %called = tribute_control.call_indirect %callback, %value : core.i32
           tribute_control.yield %called
@@ -6007,7 +5980,12 @@ mod tests {
         let handler_region = ctx.op_region(handler, 0).unwrap();
         let handler_block = ctx.region(handler_region).blocks[0];
         let callback_type = ctx.value_ty(ctx.block_args(handler_block)[0]);
-        let ability = ctx.op(handler).attributes.get_type("ability_ref").unwrap();
+        let ability = ctx
+            .op(handler)
+            .attributes
+            .get_symbol_ref("ability_ref")
+            .cloned()
+            .unwrap();
         let operation_result = ctx
             .op(handler)
             .attributes
@@ -6201,18 +6179,13 @@ mod tests {
     /// call, handle, and resume.
     fn evidence_plan_module(call: &str, handle: &str) -> String {
         VALID_CONTROL_MODULE
-            .replacen(
-                "\n\n",
-                "\n  !state = core.ability_ref<{name = \"State\"}>\n  !log = core.ability_ref<{name = \"Log\"}>\n\n",
-                1,
-            )
             .replace(
                 "{callee = @id}",
                 &format!("{{callee = @id, evidence_plan = {call}}}"),
             )
             .replace(
                 "%function, %value : core.i32",
-                "%function, %value {evidence_plan = [{dup = !state}]} : core.i32",
+                "%function, %value {evidence_plan = [{dup = @State}]} : core.i32",
             )
             .replace(
                 "tribute_control.handle : core.i32",
@@ -6220,25 +6193,24 @@ mod tests {
             )
             .replace(
                 "%token, %argument : core.i32",
-                "%token, %argument {evidence_plan = [{mask = !log}]} : core.i32",
+                "%token, %argument {evidence_plan = [{mask = @Log}]} : core.i32",
             )
     }
 
     #[test]
     fn evidence_plans_validate_and_round_trip() {
         let (ctx, module) = parse_fixture(&evidence_plan_module(
-            "[{mask = !state}, {dup = !log}]",
-            "[{mask = !state}]",
+            "[{mask = @State}, {dup = @Log}]",
+            "[{mask = @State}]",
         ));
         let result = validate_local(&ctx, module);
         assert!(result.is_ok(), "{result}");
 
         let call = Call::from_op(&ctx, control_op(&ctx, module, "call")).unwrap();
-        let state = ctx.get_type(match call.evidence_plan(&ctx).unwrap().next() {
-            Some(EvidenceStep::Mask(state)) => state,
+        match call.evidence_plan(&ctx).unwrap().next() {
+            Some(EvidenceStep::Mask(state)) => assert_eq!(state, "State"),
             other => panic!("expected a leading mask, found {other:?}"),
-        });
-        assert_eq!(state.attrs.get_str(&ctx, "name"), Some("State"));
+        }
         let steps: Vec<_> = call.evidence_plan(&ctx).unwrap().collect();
         assert!(matches!(
             steps[..],
@@ -6247,16 +6219,16 @@ mod tests {
 
         let printed = assert_round_trip(&ctx, module);
         assert!(
-            printed.contains("evidence_plan = [{mask = !state}, {dup = !log}]"),
+            printed.contains("evidence_plan = [{mask = @State}, {dup = @Log}]"),
             "{printed}"
         );
     }
 
     #[test]
     fn evidence_plans_with_row_tails_validate_and_round_trip() {
-        let plan = "[{select = 1}, {push = !state}, {dup = !state}, \
-                    {tails = [[], [{select = 0}, {mask = !log}]]}]";
-        let (ctx, module) = parse_fixture(&evidence_plan_module(plan, "[{mask = !state}]"));
+        let plan = "[{select = 1}, {push = @State}, {dup = @State}, \
+                    {tails = [[], [{select = 0}, {mask = @Log}]]}]";
+        let (ctx, module) = parse_fixture(&evidence_plan_module(plan, "[{mask = @State}]"));
         let result = validate_local(&ctx, module);
         assert!(result.errors.is_empty(), "{result}");
         let call = Call::from_op(&ctx, control_op(&ctx, module, "call")).unwrap();
@@ -6277,7 +6249,7 @@ mod tests {
         ));
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("{tails = [[], [{select = 0}, {mask = !log}]]}"),
+            printed.contains("{tails = [[], [{select = 0}, {mask = @Log}]]}"),
             "{printed}"
         );
     }
@@ -6285,65 +6257,65 @@ mod tests {
     #[test]
     fn evidence_plan_verifier_rejects_malformed_selections() {
         for (call, handle, expected) in [
-            ("[]", "[{mask = !state}]", "evidence_plan must not be empty"),
+            ("[]", "[{mask = @State}]", "evidence_plan must not be empty"),
             (
-                "[{mask = !state}, {dup = !state}]",
-                "[{mask = !state}]",
+                "[{mask = @State}, {dup = @State}]",
+                "[{mask = @State}]",
                 "names ability instance",
             ),
             (
-                "[{keep = !state}]",
-                "[{mask = !state}]",
+                "[{keep = @State}]",
+                "[{mask = @State}]",
                 "must be mask, dup, outer, select, push, or tails, found keep",
             ),
             (
-                "[{mask = !state}, {select = 0}]",
-                "[{mask = !state}]",
+                "[{mask = @State}, {select = 0}]",
+                "[{mask = @State}]",
                 "select must be the first step",
             ),
             (
-                "[{select = !state}]",
-                "[{mask = !state}]",
+                "[{select = @State}]",
+                "[{mask = @State}]",
                 "select must be a row tail index",
             ),
             (
-                "[{push = !state}]",
-                "[{mask = !state}]",
+                "[{push = @State}]",
+                "[{mask = @State}]",
                 "push requires a selected row tail",
             ),
             (
-                "[{tails = [[], []]}, {mask = !state}]",
-                "[{mask = !state}]",
+                "[{tails = [[], []]}, {mask = @State}]",
+                "[{mask = @State}]",
                 "tails must be the last step",
             ),
             (
                 "[{tails = [[{tails = [[]]}]]}]",
-                "[{mask = !state}]",
+                "[{mask = @State}]",
                 "a row tail may not attach tails",
             ),
             (
-                "[{tails = [{mask = !state}]}]",
-                "[{mask = !state}]",
+                "[{tails = [{mask = @State}]}]",
+                "[{mask = @State}]",
                 "tails must be a list of plans",
             ),
             (
-                "[{outer = !state}]",
-                "[{mask = !state}]",
+                "[{outer = @State}]",
+                "[{mask = @State}]",
                 "may not use outer",
             ),
             (
                 "[{mask = core.i32}]",
-                "[{mask = !state}]",
-                "evidence_plan mask must name a core.ability_ref type",
+                "[{mask = @State}]",
+                "evidence_plan mask must name an ability instance",
             ),
             (
-                "[{mask = !state, dup = !log}]",
-                "[{mask = !state}]",
+                "[{mask = @State, dup = @Log}]",
+                "[{mask = @State}]",
                 "must have exactly one entry, found 2",
             ),
             (
-                "[{mask = !state}]",
-                "[{dup = !state}]",
+                "[{mask = @State}]",
+                "[{dup = @State}]",
                 "a handle's evidence_plan may only mask",
             ),
         ] {
@@ -6361,7 +6333,7 @@ mod tests {
 
     #[test]
     fn evidence_plan_elements_must_be_type_dictionaries() {
-        let (ctx, module) = parse_fixture(&evidence_plan_module("[1]", "[{mask = !state}]"));
+        let (ctx, module) = parse_fixture(&evidence_plan_module("[1]", "[{mask = @State}]"));
         let result = validate_local(&ctx, module);
         assert_eq!(result.errors.len(), 1, "{result}");
         assert_eq!(result.errors[0].op, Some(control_op(&ctx, module, "call")));

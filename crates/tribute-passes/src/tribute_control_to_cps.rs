@@ -109,7 +109,7 @@ enum ArmEvidence {
     /// from the flow's evidence: one handled instance per nested handle,
     /// outermost first. Each handle's marker records the evidence it was
     /// installed on.
-    Outside(Vec<TypeRef>),
+    Outside(Vec<trunk_ir::SymbolPath>),
 }
 
 /// The operations of a source block that follow the one being converted.

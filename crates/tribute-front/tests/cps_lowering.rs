@@ -543,28 +543,14 @@ fn main() -> Nil { }
 "#,
     );
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    // The printer may alias a repeated ability type, so resolve `!tN` first.
     let instance = |name: &str| {
         let function = logical_function(&ir_text, name);
         let start = function
-            .find("ability_ref = ")
+            .find("ability_ref = @")
             .unwrap_or_else(|| panic!("{name} performs an ability:\n{function}"))
-            + "ability_ref = ".len();
-        let mut ability = &function[start..];
-        if let Some(alias) = ability.strip_prefix('!') {
-            let alias = &alias[..alias.find([',', '}']).unwrap()];
-            let definition = format!("!{alias} = ");
-            let line = ir_text
-                .lines()
-                .find_map(|line| line.trim_start().strip_prefix(definition.as_str()))
-                .unwrap_or_else(|| panic!("alias !{alias} is defined:\n{ir_text}"));
-            ability = line;
-        }
-        let key = &ability[ability
-            .find("instance = \"")
-            .expect("keyed ability instance")
-            + "instance = \"".len()..];
-        key[..key.find('"').unwrap()].to_owned()
+            + "ability_ref = @".len();
+        let symbol = &function[start..];
+        symbol[..symbol.find([',', '}']).unwrap()].to_owned()
     };
     assert_ne!(
         instance("read_a"),
@@ -593,9 +579,7 @@ fn main() -> Nil { }
     );
     let phantom_ir = run_ast_pipeline_with_ir(db, phantom);
     assert!(
-        phantom_ir.contains(
-            "core.ability_ref<core.i1, {instance = \"ability_2_7_Phantom_4_bool\", name = \"Phantom\"}>"
-        ),
+        phantom_ir.contains("@ability_2_7_Phantom_4_bool"),
         "perform must retain the phantom ability argument from its typed effect:\n{phantom_ir}"
     );
     let conflicting = SourceCst::from_source_str(

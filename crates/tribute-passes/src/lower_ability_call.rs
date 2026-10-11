@@ -3,12 +3,12 @@
 //! ```text
 //! // Input:
 //! %result = ability.call [%args...]
-//!   { ability_ref: core.ability_ref<{name = "State"}>, op_name: "get" }
+//!   { ability_ref: @State, op_name: "get" }
 //!
 //! // Output:
 //! %payload = pack %args into the canonical operation product
 //! %erased = effect.dispatch_tail %evidence, %payload
-//!   { ability_ref: core.ability_ref<{name = "State"}>, op_name: "get" }
+//!   { ability_ref: @State, op_name: "get" }
 //! ```
 //!
 //! `lower_continuation_frames` lowers `ability.perform` and `ability.abort`
@@ -97,7 +97,12 @@ impl RewritePattern for LowerCallPattern {
         }
 
         let location = ctx.op(op).location;
-        let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
+        let ability_ref_type = ctx
+            .op(op)
+            .attributes
+            .get_symbol_ref("ability_ref")
+            .cloned()
+            .unwrap();
         let op_name = ctx.op(op).attributes.get_string_ref("op_name").unwrap();
         let result_types = ctx.op_result_types(op).to_vec();
         let [result_type] = result_types.as_slice() else {
@@ -121,7 +126,7 @@ impl RewritePattern for LowerCallPattern {
             ctx,
             rewriter,
             location,
-            ability_ref_type,
+            &ability_ref_type,
             op_name,
             value_operands,
             t.anyref,
@@ -213,7 +218,7 @@ mod tests {
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
     %msg = arith.const {{value = 1}} : tribute_rt.anyref
-    %result = ability.call %msg {{ability_ref = core.ability_ref<{{name = "Console"}}>, op_name = "print"}} : tribute_rt.anyref
+    %result = ability.call %msg {{ability_ref = @Console, op_name = "print"}} : tribute_rt.anyref
     func.return %result
   }}
 }}"#
@@ -254,7 +259,7 @@ mod tests {
                     r#"core.module @test {{
   !Evidence = {evidence}
   func.func @test_fn({params}) -> core.i32 {attributes} {{
-    %result = ability.call {{ability_ref = core.ability_ref<{{name = "Counter"}}>, op_name = "next"}} : core.i32
+    %result = ability.call {{ability_ref = @Counter, op_name = "next"}} : core.i32
     func.return %result
   }}
 }}"#
@@ -277,7 +282,7 @@ mod tests {
             &format!(
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> core.i32 attributes {{tribute.calling_convention = 1}} {{
-    %result = ability.call {{ability_ref = core.ability_ref<{{name = "Counter"}}>, op_name = "next"}} : core.i32
+    %result = ability.call {{ability_ref = @Counter, op_name = "next"}} : core.i32
     func.return %result
   }}
 }}"#

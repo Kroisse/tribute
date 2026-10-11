@@ -428,7 +428,7 @@ control을 다른 runtime 장치로 구현한다면 이 pass 대신 자기 lower
 
 ```text
 %result = ability.call %arg
-  { ability_ref = core.ability_ref<{name = "Logger"}>, op_name = "log" }
+  { ability_ref = @Logger, op_name = "log" }
 ```
 
 `lower_ability_call`은 enclosing callable의 exact `EvidenceDirect`/`Cps`
@@ -449,7 +449,7 @@ payload를 pack한다.
 %product = pack %args into the canonical operation payload product
 %payload = cast %product to anyref
 effect.dispatch_cps %ev, %dispatch, %resume, %payload
-  { ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", answer_type = R }
+  { ability_ref = @State, op_name = "get", answer_type = R }
 ```
 
 필수 `answer_type: Type`은 `ContinuationFrame<R>`의 의미적 `R`이다. 호출 결과,
@@ -630,7 +630,7 @@ CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 
 
 ```text
 %ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %outer
-  { ability_ref = core.ability_ref<{name = "State"}> }
+  { ability_ref = @State }
 ```
 
 Concrete Marker layout은 backend가 소유한다. Native는

@@ -979,19 +979,18 @@ lookup은 GC Evidence reference와 concrete Marker reference를 사용한다.
 
 ### Runtime identity와 ordering
 
-`ability::compute_ability_id`는 canonical ability name과 ability instance key의
-hash로 31-bit runtime key를 만든다. Instance key가 없는 손으로 쓴 IR에서는 instance
-key 대신 type parameter의 structural hash를 쓴다. Marker의 `i32` slot에 음수가 아닌 값으로
+`ability::compute_ability_id`는 ability instance를 선언하는 `ability.decl`의
+symbol, 곧 instance key의 hash로 31-bit runtime key를 만든다. Operation index는 그
+symbol과 operation 이름의 hash다. 둘 다 참조만으로 계산하며 선언을 읽지 않는다. Marker의 `i32` slot에 음수가 아닌 값으로
 저장하고, 음수 key는 [row tail 칸](cps-effects.md#row-directed-evidence)이 쓴다.
 Call-site와 handler 설치가 같은 함수를 사용한다. Type parameter가 다른
 ability instance는 별도 key를 가진다.
 
 Instance key는 frontend가 typecheck된 source type argument에서 만들어
-`core.ability_ref`의 type 속성 `instance`(문자열)에 기록한다. Lowering된 표현
+`ability.decl`의 `sym_name`으로 쓴다. Lowering된 표현
 타입에서 만들지 않는다. 표현이 같은 source 타입(`Int`와 `Nat`)이나 모양이 같은
-서로 다른 nominal 타입도 별도 instance다. `core.ability_ref`의 type parameter는
-이 identity에 참여하지 않으므로, 이후 단계의 타입 변환이 parameter를 바꾸어도
-runtime key는 변하지 않는다. Runtime array는 이 key로 정렬하고 binary
+서로 다른 nominal 타입도 별도 instance다. Instance의 타입 인자는 IR에 나타나지
+않으므로 이후 단계의 타입 변환은 runtime key를 바꿀 수 없다. Runtime array는 이 key로 정렬하고 binary
 search로 그 instance의 marker 칸을 찾는다. 칸의 가장 위 marker가 선택되며, 어느
 handler가 가장 위에 오는지는
 [row 위치에 따른 evidence 선택](cps-effects.md#row-directed-evidence)이 정한다.

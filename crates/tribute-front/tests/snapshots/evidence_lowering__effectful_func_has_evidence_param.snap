@@ -3,17 +3,15 @@ source: crates/tribute-front/tests/evidence_lowering.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = core.ability_ref<{instance = "ability_1_3_Foo", name = "Foo"}>
-
   tribute_control.func @effectful() -> core.i32 convention(cps) {
-      %0 = tribute_control.perform {ability_ref = !t0, op_name = "bar", operation_kind = "op"} : core.i32
+      %0 = tribute_control.perform {ability_ref = @ability_1_3_Foo, op_name = "bar", operation_kind = "op"} : core.i32
       tribute_control.return %0
   }
   tribute_control.func @main() -> core.nil convention(direct) {
       %0 = core.nil_value : core.nil
       tribute_control.return %0
   }
-  ability.decl {ability_ref = !t0, sym_name = "ability_1_3_Foo"} {
+  ability.decl {sym_name = "ability_1_3_Foo"} {
       ability.operation {kind = "op", op_name = "bar", param_types = [], result_type = core.i32}
   }
 }

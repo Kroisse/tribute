@@ -1848,7 +1848,7 @@ mod tests {
             %resume = adt.ref_null {type = !Resume} : !Resume
             %product = adt.struct_new {type = !Payload} : !Payload
             %payload = core.unrealized_conversion_cast %product : tribute_rt.anyref
-            effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", answer_type = core.nil}
+            effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = @State, op_name = "get", answer_type = core.nil}
         "#,
         );
         run_wasm_target_pipeline(&mut ctx, module).unwrap();

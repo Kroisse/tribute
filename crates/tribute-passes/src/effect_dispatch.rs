@@ -13,6 +13,7 @@ use tribute_ir::dialect::ability::{self, compute_op_idx};
 use crate::target_abi::physical_parameter_attrs;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{closure, effect, tribute_rt};
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -28,7 +29,7 @@ pub(crate) fn i32_type(ctx: &mut IrContext) -> TypeRef {
 pub(crate) fn insert_ability_id(
     ctx: &mut IrContext,
     loc: Location,
-    ability_ref: TypeRef,
+    ability_ref: &SymbolPath,
     rewriter: &mut PatternRewriter<'_>,
 ) -> ValueRef {
     let i32_ty = i32_type(ctx);
@@ -40,15 +41,12 @@ pub(crate) fn insert_ability_id(
 fn insert_op_idx(
     ctx: &mut IrContext,
     loc: Location,
-    ability_ref: TypeRef,
+    ability_ref: &SymbolPath,
     op_name: StringRef,
     rewriter: &mut PatternRewriter<'_>,
 ) -> ValueRef {
     let i32_ty = i32_type(ctx);
-    let op_idx = compute_op_idx(
-        ability::ability_name(ctx, ability_ref),
-        Some(ctx.str(op_name)),
-    );
+    let op_idx = compute_op_idx(ability_ref, ctx.str(op_name));
     let constant = arith::Const::operands()
         .value(Attribute::Int(op_idx as i128))
         .results(i32_ty)
@@ -95,7 +93,11 @@ pub(crate) fn is_valid_tail_dispatch(
     let results = ctx.op_result_types(op).to_vec();
     if operands.len() != 2
         || results.len() != 1
-        || ctx.op(op).attributes.get_type("ability_ref").is_none()
+        || ctx
+            .op(op)
+            .attributes
+            .get_symbol_ref("ability_ref")
+            .is_none()
         || ctx.op(op).attributes.get_string_ref("op_name").is_none()
     {
         return false;
@@ -121,10 +123,11 @@ pub(crate) fn lower_tail_dispatch(
     let loc = ctx.op(op).location;
     let evidence = dispatch_op.evidence(ctx);
     let payload = dispatch_op.payload(ctx);
+    let ability_ref = dispatch_op.ability_ref(ctx).clone();
     let op_idx = insert_op_idx(
         ctx,
         loc,
-        dispatch_op.ability_ref(ctx),
+        &ability_ref,
         dispatch_op.op_name_ref(ctx),
         rewriter,
     );
@@ -186,7 +189,11 @@ pub(crate) fn is_valid_cps_dispatch(
 ) -> bool {
     if !ctx.op_result_types(op).is_empty()
         || ctx.op(op).attributes.get_type("answer_type").is_none()
-        || ctx.op(op).attributes.get_type("ability_ref").is_none()
+        || ctx
+            .op(op)
+            .attributes
+            .get_symbol_ref("ability_ref")
+            .is_none()
         || ctx.op(op).attributes.get_string_ref("op_name").is_none()
         || ctx.op_operands(op).len() != 4
     {
@@ -217,10 +224,11 @@ pub(crate) fn lower_cps_dispatch(
 ) {
     let dispatch_op = effect::DispatchCps::from_op(ctx, op).expect("CPS dispatch");
     let loc = ctx.op(op).location;
+    let ability_ref = dispatch_op.ability_ref(ctx).clone();
     let op_idx = insert_op_idx(
         ctx,
         loc,
-        dispatch_op.ability_ref(ctx),
+        &ability_ref,
         dispatch_op.op_name_ref(ctx),
         rewriter,
     );
@@ -260,7 +268,7 @@ pub(crate) fn pack_payload(
     ctx: &mut IrContext,
     rewriter: &mut PatternRewriter<'_>,
     location: trunk_ir::types::Location,
-    ability_ref: TypeRef,
+    ability_ref: &SymbolPath,
     op_name: StringRef,
     values: &[ValueRef],
     anyref: TypeRef,

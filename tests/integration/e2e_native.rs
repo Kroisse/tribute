@@ -3367,3 +3367,35 @@ fn main() ->{Io} Nil {
         "6\n8\n21",
     );
 }
+
+/// An ability instance whose argument is a function type is found by its
+/// handler: its identity is the instance's symbol, which no later conversion
+/// of value types rewrites.
+#[test]
+fn an_ability_instance_with_a_function_argument_reaches_its_handler() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "function_typed_ability_argument.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Tag(t) {
+    op tag() -> Int
+    fn label() -> Int
+}
+
+fn tagged() ->{Tag(fn(Int) ->{} Int)} Int {
+    Tag::tag() + Tag::label()
+}
+
+fn main() ->{Io} Nil {
+    let value = handle tagged() {
+        do result { result }
+        op Tag::tag() { resume +40 }
+        fn Tag::label() { +2 }
+    }
+    print_line(Int::to_string(value))
+}
+"#,
+        "42",
+    );
+}

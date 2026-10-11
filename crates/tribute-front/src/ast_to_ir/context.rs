@@ -10,6 +10,7 @@ use std::ops::{Deref, DerefMut};
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -914,30 +915,18 @@ impl<'db> IrLoweringCtx<'db> {
         tribute_rt::anyref(ir).as_type_ref()
     }
 
-    /// Create a `core.ability_ref` type for one ability instance.
+    /// The symbol of the `ability.decl` of one ability instance.
     ///
-    /// The `instance` key is derived from the checked source arguments, so
+    /// It is the instance key, derived from the checked source arguments, so
     /// arguments sharing a lowered representation stay distinct instances.
-    pub fn ability_ref_type(
+    pub fn ability_symbol(
         &self,
-        ir: &mut IrContext,
         ability_name: &Symbol,
         arguments: &[crate::ast::Type<'db>],
-    ) -> TypeRef {
-        let instance = self.ability_instance_key(ability_name, arguments);
-        let params: Vec<_> = arguments
-            .iter()
-            .map(|arg| self.convert_logical_type(ir, *arg))
-            .collect();
-        let ability_name = ir.intern_symbol_text(ability_name);
-        let instance = ir.intern_str(&instance);
-        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-            .attr("name", Attribute::String(ability_name))
-            .attr("instance", Attribute::String(instance));
-        for p in params {
-            builder = builder.param(p);
-        }
-        ir.intern_type(builder.build())
+    ) -> SymbolPath {
+        SymbolPath::from(Symbol::new(
+            &self.ability_instance_key(ability_name, arguments),
+        ))
     }
 
     /// Create an `adt.struct` type with name and fields.
