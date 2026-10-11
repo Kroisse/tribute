@@ -696,3 +696,61 @@ use b::tag
         assert_eq!(reported, check(call), "{method}");
     }
 }
+
+/// Reading a field is calling its getter: `x.f` selects like any other
+/// call, also before its receiver is typed. The struct's own module cannot declare
+/// the getter's name again; elsewhere it is another function.
+#[salsa_test]
+fn a_field_read_is_a_call_of_its_getter(db: &salsa::DatabaseImpl) {
+    const DECLARATIONS: &str = r#"
+struct Name { text: String }
+struct Label { text: String, size: Nat }
+fn shown(name: Name) -> String { name.text }
+"#;
+    let check = |body: &str| {
+        errors(
+            db,
+            &format!("{DECLARATIONS}fn main() -> Nil {{\n    {body}\n}}\n"),
+        )
+    };
+    for body in [
+        // One struct has the field, so the getter types the receiver.
+        "let _ = fn(l) { l.size }",
+        "let size = fn(l) { l.size }\n    let _ = size(Label { text: \"a\", size: 1 })",
+        // Two structs have the field; the receiver decides.
+        "let read = fn(n) { n.text }\n    let _ = read(Label { text: \"a\", size: 1 })",
+        "let _ = Name { text: \"a\" }.text",
+        "let _ = shown(Name { text: \"a\" })",
+    ] {
+        let errors = check(body);
+        assert!(errors.is_empty(), "{body}: {errors:#?}");
+    }
+    // The getter is `Name::text`, so the struct's own module cannot declare
+    // that name again, whatever the function takes.
+    assert_eq!(
+        errors(
+            db,
+            "struct Name { text: String }\n\
+             pub mod Name {\n\
+                 pub fn text(name: Name, suffix: String) -> String { suffix }\n\
+             }\n\
+             fn main() -> Nil { }\n",
+        ),
+        ["function `Name::text` is already declared by field `text` of struct `Name`"],
+    );
+    // Another module's function is another name. Where it takes the struct
+    // too, a path says which of the two a read means.
+    const AUDITED: &str = "struct Name { text: String }\n\
+         mod audit {\n\
+             pub fn text(name: pkg::Name) -> String { \"audit\" }\n\
+             pub fn size(text: String) -> Nat { 1 }\n\
+         }\n";
+    for body in [
+        "let _ = Name { text: \"a\" }.Name::text",
+        "let _ = Name { text: \"a\" }.audit::text",
+        "let _ = \"a\".size",
+    ] {
+        let errors = errors(db, &format!("{AUDITED}fn main() -> Nil {{ {body} }}\n"));
+        assert!(errors.is_empty(), "{body}: {errors:#?}");
+    }
+}

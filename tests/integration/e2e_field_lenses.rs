@@ -434,6 +434,36 @@ fn main() -> Nil {
 }
 
 #[salsa_test]
+fn diag_field_read_with_a_function_of_the_same_name(db: &salsa::DatabaseImpl) {
+    // Another module's function over the struct is a second `.name`; a path
+    // says which one a read means.
+    let diagnostics = messages(
+        db,
+        r#"
+struct User { name: String }
+
+mod audit {
+    pub fn name(user: pkg::User) -> String { "audit" }
+}
+
+fn main() -> Nil {
+    let user = User { name: "John" }
+    let _ = user.User::name
+    let _ = user.audit::name
+    let _ = user.name
+}
+"#,
+    );
+    assert_eq!(
+        diagnostics,
+        [(
+            "unresolved method 'name' for this receiver type".to_owned(),
+            "user.name".to_owned()
+        )]
+    );
+}
+
+#[salsa_test]
 fn diag_ambiguous_getter_path(db: &salsa::DatabaseImpl) {
     // `x.User::name` reads the field only when the getter is the one function
     // its path names for the receiver.
@@ -459,10 +489,10 @@ fn main() -> Nil {
         diagnostics,
         [(
             "ambiguous path `User::name` for arguments of types (`User`): it names \
-             `User::name`, `audit::User::name`"
+                 `User::name`, `audit::User::name`"
                 .to_owned(),
             "User::name".to_owned()
-        )]
+        ),]
     );
 }
 

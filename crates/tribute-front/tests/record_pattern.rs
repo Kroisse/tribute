@@ -89,7 +89,7 @@ fn swap(pair: Pair(Nat, Bool)) -> Bool {
     right
 }
 
-fn left(pair: Pair(Nat, Bool)) -> Nat {
+fn first(pair: Pair(Nat, Bool)) -> Nat {
     case pair {
         Pair { right: _, left } -> left
     }
