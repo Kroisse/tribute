@@ -498,3 +498,76 @@ fn main() ->{Io} Nil {
     );
     assert!(errors.is_empty(), "{errors:#?}");
 }
+
+const SIZES: &str = r#"
+struct A { n: Nat }
+struct B { n: Nat }
+mod a {
+    pub fn size(x: super::A) -> Nat { x.n }
+    pub fn make() -> Nat { 1 }
+}
+mod b {
+    pub fn size(x: super::B) -> Nat { x.n + 100 }
+    pub fn make() -> Nat { 2 }
+}
+"#;
+
+/// A name several `use`s give different functions is called with the one
+/// whose first parameter takes the first argument, like a method call.
+#[salsa_test]
+fn a_call_selects_among_imported_functions_by_its_first_argument(db: &salsa::DatabaseImpl) {
+    for body in [
+        // At the package root, also for a first argument typed after solving.
+        "use a::size\nuse b::size\n\
+         fn main() -> Nil {\n    \
+             let _ = size(A { n: 1 }) + size(B { n: 2 }) + A { n: 3 }.size\n    \
+             let late = fn(x) { size(x) }\n    \
+             let _ = late(B { n: 4 })\n}\n",
+        // In an inline module.
+        "mod inner {\n    use super::a::size\n    use super::b::size\n    \
+             pub fn both(x: super::A, y: super::B) -> Nat { size(x) + size(y) }\n}\n\
+         fn main() -> Nil {\n    let _ = inner::both(A { n: 1 }, B { n: 2 })\n}\n",
+        // A declaration or a local of that name is what the name means.
+        "use a::size\nuse b::size\n\
+         fn size(x: Nat) -> Nat { x }\n\
+         fn main() -> Nil {\n    let _ = size(1)\n}\n",
+        "use a::size\nuse b::size\n\
+         fn main() -> Nil {\n    let size = fn(x: Nat) { x }\n    let _ = size(1)\n}\n",
+        // An alias is the name the functions are imported under.
+        "use a::size as measure\nuse b::size as measure\n\
+         fn main() -> Nil {\n    let _ = measure(A { n: 1 }) + measure(B { n: 2 })\n}\n",
+        // One function imported twice is one function.
+        "use a::make\nuse a::make\n\
+         fn main() -> Nil {\n    let _ = make()\n}\n",
+    ] {
+        let errors = errors(db, &format!("{SIZES}{body}"));
+        assert!(errors.is_empty(), "{body}: {errors:#?}");
+    }
+}
+
+/// Without a first argument whose type selects one, a name that imports
+/// several functions has to be written as a path.
+#[salsa_test]
+fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
+    for (body, expected) in [
+        (
+            "use a::make\nuse b::make\n\
+             fn main() -> Nil {\n    let _ = make()\n}\n",
+            "`make` imports several functions and is called without an argument, \
+             so no argument type selects one; name the function by its path",
+        ),
+        (
+            "use a::size\nuse b::size\n\
+             fn main() -> Nil {\n    let _ = size\n}\n",
+            "`size` imports several functions and is not called, \
+             so no argument type selects one; name the function by its path",
+        ),
+        (
+            "use a::size\nuse b::size\n\
+             fn main() -> Nil {\n    let _ = size(1)\n}\n",
+            "unresolved path `size`: no function it names takes a first argument of type `Nat`",
+        ),
+    ] {
+        assert_eq!(errors(db, &format!("{SIZES}{body}")), [expected], "{body}");
+    }
+}

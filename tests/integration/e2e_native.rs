@@ -3255,3 +3255,38 @@ fn main() ->{Io} Nil {
         "io\nio!\nb\nio?",
     );
 }
+
+/// A name several `use`s give different functions calls the one that takes
+/// the first argument, whichever syntax the call is written in.
+#[test]
+fn a_call_selects_among_imported_functions_by_its_first_argument() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "imported_function_selection.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct A { n: Int }
+struct B { n: Int }
+
+mod a {
+    pub fn size(x: super::A) -> Int { x.n }
+}
+
+mod b {
+    pub fn size(x: super::B) -> Int { x.n + +100 }
+}
+
+use a::size
+use b::size
+
+fn main() ->{Io} Nil {
+    let late = fn(x) { size(x) }
+    print_line(Int::to_string(size(A { n: +1 })))
+    print_line(Int::to_string(size(B { n: +2 })))
+    print_line(Int::to_string(A { n: +3 }.size))
+    print_line(Int::to_string(late(B { n: +4 })))
+}
+"#,
+        "1\n102\n3\n104",
+    );
+}

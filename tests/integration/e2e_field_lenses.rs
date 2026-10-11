@@ -368,7 +368,7 @@ fn main() -> Nil {
                 "nope::set".to_owned()
             ),
             (
-                "unresolved path `name::set`: no function it names takes a receiver of type `Int`"
+                "unresolved path `name::set`: no function it names takes a first argument of type `Int`"
                     .to_owned(),
                 "name::set".to_owned()
             ),
@@ -425,7 +425,7 @@ fn main() -> Nil {
     assert_eq!(
         diagnostics,
         [(
-            "ambiguous path `name::set` for a receiver of type `User`: it names \
+            "ambiguous path `name::set` for a first argument of type `User`: it names \
              `User::name::set`, `audit::name::set`"
                 .to_owned(),
             "name::set".to_owned()
@@ -458,7 +458,7 @@ fn main() -> Nil {
     assert_eq!(
         diagnostics,
         [(
-            "ambiguous path `User::name` for a receiver of type `User`: it names \
+            "ambiguous path `User::name` for a first argument of type `User`: it names \
              `User::name`, `audit::User::name`"
                 .to_owned(),
             "User::name".to_owned()

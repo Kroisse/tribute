@@ -278,6 +278,16 @@ fn example(xs: List(Int), opt: Option(String)) {
    후보로 같은 규칙을 따른다([syntax.md](syntax.md#call-and-ufcs)).
 3. **Unqualified**: `map(xs, f)` — use된 모듈 중 타입이 맞는 함수 검색
 
+비한정 이름이 고를 후보는 그 이름으로 `use`한 함수들이다. 한 스코프의 여러
+`use`가 같은 이름에 서로 다른 함수를 주면 그 이름은 그 함수들을 모두 가리키고,
+호출은 UFCS와 같은 방식으로 첫 번째 인자의 타입에 맞는 하나를 고른다. `f(x, y)`와
+`x.f(y)`는 후보를 모으는 범위만 다르다. 첫 번째 인자의 타입이 호출을 쓴 자리에서
+정해지지 않았으면 UFCS처럼 타입이 정해진 뒤에 고른다.
+
+그 스코프가 같은 이름을 선언하거나 지역 변수로 묶으면 이름은 그 선언이나 변수를
+가리키며, `use`한 함수들은 후보가 아니다. 같은 함수를 여러 번 `use`하면 후보는
+하나다.
+
 ### 모호성 처리
 
 ```rust
@@ -290,6 +300,22 @@ fn ambiguous(xs: List(Int), ys: OtherList(Int)) {
 
     // 만약 타입으로 해소할 수 없으면 컴파일 에러 + 명시적 지정 요구
 }
+```
+
+여러 함수를 가리키는 이름은 고를 인자가 있어야 쓸 수 있다. 인자 없이 호출하거나
+호출하지 않고 값으로 쓰면 오류이며, 함수를 경로로 지정해야 한다:
+
+```rust
+use a::size   // fn size(x: A) -> Nat
+use b::size   // fn size(x: B) -> Nat
+use a::make   // fn make() -> Nat
+use b::make
+
+size(A { n: 1 })    // OK: a::size
+size(B { n: 2 })    // OK: b::size
+size(1)             // Error: 어느 size도 Nat을 첫 인자로 받지 않는다
+make()              // Error: 고를 인자가 없다. a::make()로 지정
+apply(x, size)      // Error: 값으로 쓰면 고를 인자가 없다. a::size로 지정
 ```
 
 ### Use 범위 제한
