@@ -76,7 +76,6 @@ pub const NEXT_TAG: &str = "__tribute_next_tag";
 /// Run once on the module before [`LowerEvidenceToWasm`]. Only helpers that
 /// some operation needs are declared, so the target binds no unused runtime.
 pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
-    ability::remove_declarations(ctx, module);
     let needs = evidence_helper_requirements(ctx, module);
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);

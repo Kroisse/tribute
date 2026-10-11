@@ -1067,6 +1067,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
         .add_pass(tribute_passes::wasm::evidence_to_wasm::LowerEvidenceToWasm);
     pm.with_debug_verifier();
     pm.run(ctx, core_module, &mut analyses)?;
+    tribute_ir::dialect::ability::remove_declarations(ctx, m);
     // Complete the supported bytes intrinsic bridge inside the boundary; the
     // lowering consumes its verified compiler intrinsic identity.
     tribute_passes::wasm::bytes::lower(ctx, m)?;
@@ -1105,6 +1106,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
             .add_pass(tribute_passes::native::evidence::LowerEvidenceToNative);
         pm.with_debug_verifier();
         pm.run(ctx, core_module, &mut analyses)?;
+        tribute_ir::dialect::ability::remove_declarations(ctx, m);
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     }
