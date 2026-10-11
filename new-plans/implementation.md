@@ -188,13 +188,12 @@ canonical path를 다시 짧은 이름으로 바꾸지 않는다. 함수 스킴,
 
 The resolved AST stores a declaration-backed identity on every named type.
 Source declarations derive that identity from their declaration node and carry
-it through annotation conversion, type checking, substitution, TDNR receiver
-matching, and AST-to-IR lowering. Reconstructing a named type from an
+it through annotation conversion, type checking, substitution, method
+selection, and AST-to-IR lowering. Reconstructing a named type from an
 unqualified symbol alone is not sound.
 
-TDNR annotation reconstruction uses the current module prefix: a qualified path
-and a local unqualified reference must select the same declaration identity as
-ordinary type resolution. Generic type collection and rewrite maps are keyed by
+A qualified path and a local unqualified reference select the same declaration
+identity. Generic type collection and rewrite maps are keyed by
 that identity rather than by display symbols.
 
 Specialization mangling uses the declaration's qualified identity when needed
@@ -695,7 +694,7 @@ tail ABI의 구분과 순서는 [cps-effects.md](cps-effects.md#dispatch-layers)
 exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 두지 않는다.
 
 ```text
-공통: parse → resolve → typecheck → tdnr → ast_to_ir
+공통: parse → resolve → typecheck → ast_to_ir
       → source-logical global DCE (산출물 컴파일)
       → tribute_control_to_cps → lower_continuation_frames
       → lower_closure_lambda → lower_ability_call
@@ -845,7 +844,7 @@ flowchart TB
 
 | 경계 | 입력 | 출력과 소유권 |
 | ---- | ---- | ---- |
-| `parse`, `resolve`, `typecheck`, `tdnr` | source와 선언 환경 | 해석·검사된 AST와 callable/operation metadata; frontend query |
+| `parse`, `resolve`, `typecheck` | source와 선언 환경 | 해석·검사된 AST와 callable/operation metadata; frontend query |
 | `monomorphize`, lowering preparation | checked generic AST | 구체 AST instance와 함께 치환된 metadata |
 | `ast_to_ir` | prepared typed AST | source-logical `tribute_control`과 일반 value IR, struct 필드 함수(getter·setter·modifier) 정의; frontend |
 | source-logical `global_dce` | source-logical 함수 정의와 symbol 참조 | root에서 도달 가능한 정의와 모든 본문 없는 선언; 산출물 컴파일에서만, module-wide |
@@ -870,7 +869,7 @@ structured-to-CFG 변환은 `func.func`에 nested된 `scf_to_cf_pass()`가 소�
 `typecheck` solves function-local unification variables where constraints make
 them concrete and generalizes remaining polymorphic variables into stable
 `BoundVar` indices. Generalization covers the function signature, checked body,
-and post-solve deferred UFCS callee types so later TDNR and monomorphization do
+and post-solve deferred UFCS callee types so later monomorphization does
 not see raw solver variables in typed references. Each type-scheme
 instantiation freshens both bound type variables and quantified effect-row variables,
 while preserving repeated references to the same row variable within that
@@ -931,7 +930,7 @@ Lowering은 준비에 성공한 AST와 대응 스킴을 함께 소비한다. 인
 
 Method 후보 선택과 scheme instantiation은 타입 체커가 소유한다. 선택된 호출은
 문법과 무관하게 함수 호출의 검사 규칙 하나를 거친다. 후보가 하나로 좁혀지지 않은
-호출은 제약 해결 과정에서 선택을 확정한다. TDNR 재작성은
+호출은 제약 해결 과정에서 선택을 확정한다. 호출로의 재작성은
 선택된 callee와 인스턴스를 소비하며 source annotation에서 타입을 재구성하지
 않는다. 해결되지 않은 참조는 원본 위치의 진단으로 남는다.
 

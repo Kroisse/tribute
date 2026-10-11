@@ -104,8 +104,7 @@ pub enum ExprKind<V> {
 
     /// Method call: `expr.method(args)`
     ///
-    /// This is kept separate from Call during parsing for TDNR.
-    /// After TDNR, it may be converted to a Call.
+    /// Type checking selects its function and converts it to a Call.
     MethodCall {
         receiver: Expr<V>,
         method: Symbol,

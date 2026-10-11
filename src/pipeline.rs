@@ -30,10 +30,7 @@
 //! Module (resolved names)
 //!     │
 //!     ▼ typecheck
-//! Typed Module
-//!     │
-//!     ▼ tdnr
-//! Module (UFCS resolved)
+//! Typed Module (UFCS resolved)
 //!     │
 //!     ├─── Shared Middle-End (single arena session) ──┤
 //!     ▼ ast_to_ir
@@ -243,7 +240,6 @@ use tribute_front::astgen::ParsedAst;
 use tribute_front::query as ast_query;
 use tribute_front::resolve as ast_resolve;
 use tribute_front::resolve::ModuleEnv;
-use tribute_front::tdnr as ast_tdnr;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
 use trunk_ir_cranelift_backend::{
@@ -278,7 +274,7 @@ fn parse_prelude<'db>(db: &'db dyn salsa::Database) -> Option<(ParsedAst<'db>, c
     Some((parsed, prelude_source))
 }
 
-/// Parse, resolve, type check, and apply TDNR to the prelude once.
+/// Parse, resolve, and type check the prelude once.
 ///
 /// Returns both the typed prelude, which user modules import methods from and
 /// merge before lowering, and the exports injected into their type checking.
@@ -298,13 +294,9 @@ fn checked_prelude<'db>(
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
     let (result, exports) = checker.check_prelude(&resolved);
 
-    // TDNR for remaining MethodCall → Call AST transformations
-    let mut tdnr_ast = result.module;
-    ast_tdnr::resolve_tdnr(db, &mut tdnr_ast, std::iter::empty());
-
     let typed = ast_typeck::TypeCheckOutput::new(
         db,
-        tdnr_ast,
+        result.module,
         result.function_types,
         result.constructor_types.into(),
         ast_typeck::ExpressionTypeMetadata {
@@ -324,7 +316,7 @@ fn checked_prelude<'db>(
     Some((typed, exports))
 }
 
-/// The prelude's typed AST (parse → resolve → typecheck → TDNR), without
+/// The prelude's typed AST (parse → resolve → typecheck), without
 /// lowering to TrunkIR. The caller is responsible for `ast_to_ir`.
 fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutput<'_>> {
     checked_prelude(db).map(|(typed, _)| typed)
@@ -672,7 +664,7 @@ pub struct FrontendCompilation {
     compiler_intrinsics: Vec<tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration>,
 }
 
-/// Run frontend (parse → typecheck → TDNR) and lower to arena IR.
+/// Run frontend (parse → typecheck) and lower to arena IR.
 ///
 /// Returns `None` if parsing fails. Otherwise returns arena IR ready
 /// for in-place passes, avoiding unnecessary Salsa↔Arena round-trips.
@@ -1527,10 +1519,10 @@ pub fn compile_to_native_binary(
 // =============================================================================
 //
 // The AST-based pipeline provides better type safety and separation of concerns.
-// It transforms: CST → AST → resolve → typecheck → tdnr → ast_to_ir → TrunkIR
+// It transforms: CST → AST → resolve → typecheck → ast_to_ir → TrunkIR
 //
 
-/// Parse source and run the frontend pipeline (parse → resolve → typecheck → TDNR).
+/// Parse source and run the frontend pipeline (parse → resolve → typecheck).
 ///
 /// Returns the typed AST with span map, ready for `ast_to_ir` lowering.
 /// Does NOT call `ast_to_ir` — that is the caller's responsibility.
@@ -1541,7 +1533,6 @@ pub fn compile_to_native_binary(
 /// 3. Resolve names with merged environment
 /// 4. Inject prelude TypeSchemes into user's ModuleTypeEnv
 /// 5. Type check with injected types
-/// 6. Run TDNR
 #[salsa::tracked(returns(copy))]
 pub fn parse_and_lower_ast<'db>(
     db: &'db dyn salsa::Database,
@@ -1581,17 +1572,9 @@ pub fn parse_and_lower_ast<'db>(
         result.node_types.len()
     );
 
-    // TDNR for remaining MethodCall → Call AST transformations
-    let mut tdnr_ast = result.module;
-    ast_tdnr::resolve_tdnr(
-        db,
-        &mut tdnr_ast,
-        prelude_module(db).iter().map(|p| p.module(db)),
-    );
-
     Some(ast_typeck::TypeCheckOutput::new(
         db,
-        tdnr_ast,
+        result.module,
         result.function_types,
         result.constructor_types.into(),
         ast_typeck::ExpressionTypeMetadata {
