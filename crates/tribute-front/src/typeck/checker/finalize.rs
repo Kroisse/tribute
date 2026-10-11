@@ -104,7 +104,7 @@ impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
         match &mut *expr.kind {
             ExprKind::MethodCall { .. } => {
                 // A deferred method resolved during solving becomes a call;
-                // an unresolved one stays a MethodCall for TDNR.
+                // an unresolved one was reported and stays a MethodCall.
                 let Some(&(func_id, callee_ty)) = self.deferred_resolutions.get(&expr.id) else {
                     return;
                 };

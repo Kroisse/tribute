@@ -21,8 +21,8 @@ struct PreludeData<'db> {
 /// Load and type-check the prelude so tests can use arithmetic operators.
 ///
 /// Operators like `+`, `*`, `==` are declared as `extern "intrinsic" fn` in
-/// the prelude for Int, Nat, and Float. Without the prelude, TDNR cannot
-/// resolve them and the IR lowerer panics on unresolved MethodCall nodes.
+/// the prelude for Int, Nat, and Float. Without the prelude, no function
+/// is in scope for them.
 fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     let prelude_cst = SourceCst::from_source_str(db, "prelude:///std/prelude", PRELUDE_SOURCE);
 
@@ -47,7 +47,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     );
 
     // Type-check once for both the exports injected into user modules and
-    // the typed module that TDNR imports methods from.
+    // the typed module lowering reads the intrinsics from.
     let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
     let (result, exports) = checker.check_prelude(&resolved_prelude);
 
@@ -88,10 +88,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     }
     let result = checker.check_module(&resolved);
 
-    // TDNR with prelude module as import source for method resolution
-    let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
-    let mut tdnr_ast = result.module;
-    tribute_front::tdnr::resolve_tdnr(db, &mut tdnr_ast, prelude_modules.iter().copied());
+    let tdnr_ast = result.module;
 
     let function_types_map: HashMap<_, _> = result.function_types.into_iter().collect();
     let constructor_types: HashMap<_, _> = result.constructor_types.into_iter().collect();
@@ -165,11 +162,7 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     if let Some(ref p) = prelude {
         checker.inject_prelude(&p.exports);
     }
-    let result = checker.check_module(&resolved);
-
-    let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
-    let mut module = result.module;
-    tribute_front::tdnr::resolve_tdnr(db, &mut module, prelude_modules.iter().copied());
+    let _ = checker.check_module(&resolved);
 }
 
 #[salsa::tracked(returns(clone))]
@@ -199,9 +192,7 @@ fn tdnr_function_summary_inner(
     }
     let result = checker.check_module(&resolved);
 
-    let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
-    let mut module = result.module;
-    tribute_front::tdnr::resolve_tdnr(db, &mut module, prelude_modules.iter().copied());
+    let module = result.module;
     let body = function_body(&module, &function_name);
     let mut summary = TdnrSummary::default();
     collect_tdnr_summary(db, body, &mut summary);

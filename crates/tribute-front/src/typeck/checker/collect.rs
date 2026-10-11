@@ -74,8 +74,6 @@ impl<'db> TypeChecker<'db> {
                 CompilationPhase::TypeChecking,
             )
             .accumulate(self.db());
-            self.env
-                .unregister_method(&function.name(self.db()), function);
         }
     }
 

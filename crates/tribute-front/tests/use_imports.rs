@@ -503,10 +503,12 @@ const SIZES: &str = r#"
 struct A { n: Nat }
 struct B { n: Nat }
 mod a {
+    use super::A
     pub fn size(x: super::A) -> Nat { x.n }
     pub fn make() -> Nat { 1 }
 }
 mod b {
+    use super::B
     pub fn size(x: super::B) -> Nat { x.n + 100 }
     pub fn make() -> Nat { 2 }
 }
@@ -533,6 +535,11 @@ fn a_call_selects_among_imported_functions_by_its_first_argument(db: &salsa::Dat
          fn main() -> Nil {\n    let _ = size(1)\n}\n",
         "use a::size\nuse b::size\n\
          fn main() -> Nil {\n    let size = fn(x: Nat) { x }\n    let _ = size(1)\n}\n",
+        // A method is a declared function, whatever a local is called.
+        "use a::size\nuse b::size\n\
+         fn first() -> Nat {\n    let size = 1\n    A { n: 1 }.size\n}\n\
+         fn second() -> Nat { A { n: 1 }.size + B { n: 2 }.size }\n\
+         fn main() -> Nil { }\n",
         // An alias is the name the functions are imported under.
         "use a::size as measure\nuse b::size as measure\n\
          fn main() -> Nil {\n    let _ = measure(A { n: 1 }) + measure(B { n: 2 })\n}\n",
@@ -582,11 +589,13 @@ fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
 const PAIRS: &str = r#"
 struct A { n: Nat }
 mod a {
+    use super::A
     pub fn pair(x: super::A, y: Nat) -> Nat { x.n + y }
     pub fn pick(x: Nat) -> Nat { x }
     pub fn count(x: super::A) -> Nat { x.n }
 }
 mod b {
+    use super::A
     pub fn pair(x: super::A, y: String) -> Nat { x.n }
     pub fn pick(x: Nat) -> String { "picked" }
     pub fn count(x: super::A, y: Nat) -> Nat { x.n + y }
@@ -651,9 +660,11 @@ struct A { n: Nat }
 struct B { n: Nat }
 fn pair(x: A, y: Nat) -> Nat { x.n + y }
 mod a {
+    use super::A
     pub fn tag(x: super::A, s: String) -> Nat { x.n }
 }
 mod b {
+    use super::B
     pub fn tag(x: super::B, s: String) -> Nat { x.n }
 }
 use a::tag

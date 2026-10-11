@@ -1468,7 +1468,6 @@ impl<'db> TypeChecker<'db> {
         let path = path.as_ref().map(method_path_functions);
         let arity = args.len() + 1;
         let selection = self.select_method(
-            method,
             path.as_ref(),
             CallTypes {
                 args: &[receiver_ty],
@@ -1496,7 +1495,6 @@ impl<'db> TypeChecker<'db> {
             .chain(args.iter().map(|a| self.infer_deferred_argument(ctx, a)))
             .collect();
         let selection = self.select_method(
-            method,
             path.as_ref(),
             CallTypes {
                 args: &arg_types,
@@ -1768,12 +1766,11 @@ impl<'db> TypeChecker<'db> {
         .accumulate(self.db());
     }
 
-    /// Select the function a call names among the functions its path may
-    /// name, or for an unqualified method among the functions of that name
-    /// its receiver's type has: the one whose signature takes the call.
+    /// Select the function a call names among the functions name resolution
+    /// found for it in the call's scope: the one whose signature takes the
+    /// call.
     pub(crate) fn select_method(
         &self,
-        method: &Symbol,
         path: Option<&(NodeId, Vec<crate::ast::FuncDefId<'db>>)>,
         call: CallTypes<'_, 'db>,
     ) -> MethodSelection<'db> {
@@ -1788,7 +1785,8 @@ impl<'db> TypeChecker<'db> {
                     })
                 })
                 .collect(),
-            None => self.env.methods_named(method),
+            // Name resolution gives every method call its candidates.
+            None => Vec::new(),
         };
         // One function leaves nothing to select: the call is checked against
         // it, and what does not fit is an ordinary type error.
@@ -2365,9 +2363,7 @@ impl<'db> TypeChecker<'db> {
                 arity: args.len(),
                 result: Some(solver.expected_type(call.result_ty)),
             };
-            let MethodSelection::One(entry) =
-                self.select_method(&call.method, call.path.as_ref(), types)
-            else {
+            let MethodSelection::One(entry) = self.select_method(call.path.as_ref(), types) else {
                 continue;
             };
             let Some(callee_ty) = ctx.instantiate_function_reference(call.node_id, entry.func_id)

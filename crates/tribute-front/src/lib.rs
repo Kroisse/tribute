@@ -9,7 +9,6 @@
 //! - [`astgen`]: CST to AST lowering
 //! - [`resolve`]: Name resolution (AST → AST)
 //! - [`typeck`]: Type checking (AST → AST)
-//! - [`tdnr`]: Type-directed name resolution (AST → AST)
 //! - [`ast_to_ir`]: AST to TrunkIR lowering
 //! - [`query`]: Salsa-tracked query functions for incremental compilation
 //! - [`sorted_map`]: Sorted-vector map for deterministic phase results
@@ -24,7 +23,6 @@ pub mod query;
 pub mod resolve;
 pub mod sorted_map;
 pub mod source_file;
-pub mod tdnr;
 pub mod typeck;
 
 pub use fluent_uri::Uri;

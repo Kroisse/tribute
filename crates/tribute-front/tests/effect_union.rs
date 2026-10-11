@@ -310,6 +310,7 @@ fn main() -> Nil { print(run_writer(fn() { relay(use_writer) })) }
 #[salsa_test]
 fn handler_removes_a_label_supplied_through_one_tail(db: &salsa::DatabaseImpl) {
     const PRELUDE: &str = r#"
+pub mod Int { extern "intrinsic" fn (+)(left: Int, right: Int) -> Int }
 ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -410,6 +411,7 @@ fn leak(h: fn() ->{t} Nil) ->{t} Nil {
 #[salsa_test]
 fn function_value_labels_reach_a_tail_in_a_closed_row(db: &salsa::DatabaseImpl) {
     const PRELUDE: &str = r#"
+pub mod Int { extern "intrinsic" fn (+)(left: Int, right: Int) -> Int }
 ability Ask { op ask() -> Int }
 fn apply(x: a, f: fn(a) ->{eff} b) ->{eff} b { f(x) }
 fn bump(n: Int) ->{Ask} Int { n + Ask::ask() }
@@ -464,6 +466,7 @@ fn function_value_labels_outside_a_closed_row_are_rejected(db: &salsa::DatabaseI
         db,
         "function_value_outside.trb",
         r#"
+pub mod Int { extern "intrinsic" fn (+)(left: Int, right: Int) -> Int }
 ability Ask { op ask() -> Int }
 ability Tell { op tell(n: Int) -> Nil }
 fn apply(x: a, f: fn(a) ->{eff} b) ->{eff} b { f(x) }
@@ -490,6 +493,7 @@ fn body_local_tails_joined_before_a_signature_row_are_that_row(db: &salsa::Datab
         db,
         "joined_local_tails.trb",
         r#"
+pub mod Int { extern "intrinsic" fn (+)(left: Int, right: Int) -> Int }
 ability Ask { op ask() -> Int }
 fn one() -> Int { +1 }
 fn two() -> Int { +2 }

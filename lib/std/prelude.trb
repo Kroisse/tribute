@@ -121,7 +121,7 @@ pub mod Result {
 // These are resolved via TDNR and lowered to arith dialect operations.
 
 pub mod Int {
-    use super::{Result, Ok, Error, String}
+    use super::{Result, Ok, Error, String, Nat, Bytes}
 
     /// Errors returned by decimal integer parsing.
     pub enum ParseError {
@@ -329,7 +329,7 @@ enum String {
 }
 
 pub mod String {
-    use super::{__tribute_bytes_concat, __tribute_bytes_range_equal}
+    use super::{Nat, Bytes, __tribute_bytes_concat, __tribute_bytes_range_equal}
 
     // Internal depth-first traversal state used to compare rope leaves without
     // flattening. Chunk offsets and remaining lengths always describe a valid
@@ -535,7 +535,7 @@ extern "C" fn __tribute_bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat)
 
 /// Bytes module with operations for byte sequences.
 pub mod Bytes {
-    use super::{Option, None, Some, __bytes_get_or_panic, __tribute_bytes_len, __tribute_bytes_concat, __tribute_bytes_range_equal, __tribute_bytes_slice_or_panic}
+    use super::{Nat, Option, None, Some, __bytes_get_or_panic, __tribute_bytes_len, __tribute_bytes_concat, __tribute_bytes_range_equal, __tribute_bytes_slice_or_panic}
 
     /// Create an empty byte sequence.
     pub fn empty() -> Bytes { b"" }

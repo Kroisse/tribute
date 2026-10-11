@@ -8,7 +8,7 @@
 //! ## Pipeline Position
 //!
 //! ```text
-//! CST → AST → resolve → typecheck → tdnr → ast_to_ir → source-logical TrunkIR
+//! CST → AST → resolve → typecheck → ast_to_ir → source-logical TrunkIR
 //! ```
 //!
 //! ## Output Format

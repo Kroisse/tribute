@@ -1441,7 +1441,6 @@ source
   -> parse / AST
   -> name resolution
   -> type checking
-  -> TDNR
   -> AST-to-IR (tribute_control callable/control + ordinary value IR)
   -> shared CPS legalization
   -> shared lowering and optimization
@@ -1455,8 +1454,7 @@ Important stage invariants:
 | Stage | Required invariant |
 | ---- | ---- |
 | Resolution | Names, constructors, and variable references are resolved |
-| Type check | Type variables and effect rows are solved |
-| TDNR | Method-style calls are converted to resolved calls |
+| Type check | Type variables and effect rows are solved; method-style calls are converted to resolved calls |
 | AST-to-IR | `tribute_control.func_sig`과 callable/control operation, valid SSA use chain |
 | Shared CPS legalization | 전체 callable graph가 physical `CallableAbi`와 direct/indirect tail transfer를 사용하며 `tribute_control` operation/type이 남지 않음 |
 | Shared lowering | 명시된 경계에서 high-level ability dispatch operation이 제거됨 |
