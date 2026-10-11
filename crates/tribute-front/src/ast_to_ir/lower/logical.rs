@@ -38,6 +38,12 @@ struct Declarations<'db> {
     // TypeRef is an arena index and therefore has deterministic total order only
     // through its debug representation.  Preserve first source use explicitly.
     values: Vec<OperationDeclaration>,
+    /// The ability instances operations were recorded for, in first-use order.
+    instances: Vec<(
+        TypeRef,
+        crate::ast::AbilityId<'db>,
+        Vec<crate::ast::Type<'db>>,
+    )>,
     compiler_intrinsics: Vec<CompilerIntrinsicDeclaration>,
     schemas: HashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
     handler_operations:
@@ -66,9 +72,19 @@ impl<'db> Declarations<'db> {
         &mut self,
         ir: &IrContext,
         declaration: OperationDeclaration,
+        ability: crate::ast::AbilityId<'db>,
+        arguments: &[crate::ast::Type<'db>],
         location: Location,
         db: &dyn salsa::Database,
     ) {
+        if !self
+            .instances
+            .iter()
+            .any(|(ability_ref, ..)| *ability_ref == declaration.ability_ref)
+        {
+            self.instances
+                .push((declaration.ability_ref, ability, arguments.to_vec()));
+        }
         if let Some(existing) = self.values.iter().find(|candidate| {
             candidate.ability_ref == declaration.ability_ref
                 && candidate.op_name == declaration.op_name
@@ -373,6 +389,7 @@ pub(super) fn lower_module<'db>(
     ctx.set_module_block(module_block);
     let mut declarations = Declarations {
         values: vec![],
+        instances: vec![],
         compiler_intrinsics: vec![],
         schemas: ability_definitions,
         handler_operations,
@@ -419,11 +436,53 @@ pub(super) fn lower_module<'db>(
         .regions(region)
         .build(ir, location);
     well_known_types.attach(ir, module.op_ref());
+    let module = IrModule::new(ir, module.op_ref()).expect("valid core.module operation");
+    let operations = instance_operations(&ctx, ir, &declarations);
+    tribute_control::declare_operations(ir, module, &operations);
     FrontendIrModule {
-        module: IrModule::new(ir, module.op_ref()).expect("valid core.module operation"),
-        operation_declarations: declarations.values,
+        module,
         compiler_intrinsics: declarations.compiler_intrinsics,
     }
+}
+
+/// Every operation of each ability instance the module names, with the
+/// parameter and result types of that instance.
+fn instance_operations<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    declarations: &Declarations<'db>,
+) -> Vec<OperationDeclaration> {
+    let instantiate = |ty, arguments: &[crate::ast::Type<'db>]| {
+        match crate::typeck::subst::substitute_bound_vars(ctx.db, ty, arguments) {
+            crate::typeck::subst::SubstResult::Ok(ty) => ty,
+            crate::typeck::subst::SubstResult::OutOfBounds { .. } => {
+                panic!("ability operation substitution failed")
+            }
+        }
+    };
+    let mut operations = Vec::new();
+    for (ability_ref, ability, arguments) in &declarations.instances {
+        let schema = &declarations.schemas[ability];
+        let mut declared: Vec<_> = schema.operations.values().collect();
+        declared.sort_by(|a, b| a.name.with_str(|a| b.name.with_str(|b| a.cmp(b))));
+        for operation in declared {
+            let parameters: Vec<_> = operation
+                .param_types
+                .iter()
+                .map(|ty| ctx.convert_logical_type(ir, instantiate(*ty, arguments)))
+                .collect();
+            let result =
+                ctx.convert_logical_type(ir, instantiate(operation.return_type, arguments));
+            operations.push(OperationDeclaration::new(
+                *ability_ref,
+                ir.intern_symbol_text(&operation.name),
+                ir.intern_str(operation_kind_text(operation.kind)),
+                parameters,
+                result,
+            ));
+        }
+    }
+    operations
 }
 
 /// Seed worker conventions from each body's concrete residual effects. The
@@ -2351,6 +2410,7 @@ fn lower_call<'db>(
                     .unwrap_or_else(|| {
                         panic!("missing exact typed metadata for ability operation call")
                     });
+                let ability_arguments = semantic.ability_args.clone();
                 let (ability_ref, declaration) = call_operation_metadata(
                     builder,
                     declarations,
@@ -2380,7 +2440,14 @@ fn lower_call<'db>(
                         .attr("op_name", Attribute::String(declaration.op_name))
                         .attr("operation_kind", Attribute::String(declaration.kind))
                 });
-                declarations.record(builder.ir, declaration, location, builder.db());
+                declarations.record(
+                    builder.ir,
+                    declaration,
+                    ability,
+                    &ability_arguments,
+                    location,
+                    builder.db(),
+                );
                 let value = result(builder.ir, perform);
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
@@ -2751,7 +2818,7 @@ fn lower_handler<'db>(
         parameter_types.clone(),
         operation_result,
     );
-    declarations.record(ir, declaration, location, ctx.db);
+    declarations.record(ir, declaration, ability_id, &arguments, location, ctx.db);
     let is_never = ir.get_type(operation_result).dialect == "core"
         && ir.get_type(operation_result).name == "never";
     let mut block_args: Vec<_> = parameter_types

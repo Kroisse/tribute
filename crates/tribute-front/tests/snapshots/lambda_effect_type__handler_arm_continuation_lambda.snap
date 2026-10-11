@@ -40,4 +40,8 @@ core.module @test {
       %0 = arith.const {value = 0} : core.i32
       tribute_control.return %0
   }
+  ability.decl {ability_ref = !t1, sym_name = "ability_2_5_State_11_bound_1_1_1"} {
+      ability.operation {kind = "op", op_name = "get", param_types = [], result_type = tribute_rt.anyref}
+      ability.operation {kind = "op", op_name = "set", param_types = [tribute_rt.anyref], result_type = core.nil}
+  }
 }

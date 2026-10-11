@@ -1602,8 +1602,8 @@ fn run() ->{Trace} Pair {
             "adt.struct_new",
         ],
     );
-    assert_occurrences(run, "op_name = \"spread\"", 1);
-    assert_occurrences(run, "op_name = \"field\"", 1);
+    assert_occurrences(run, "op_name = \"spread\", operation_kind", 1);
+    assert_occurrences(run, "op_name = \"field\", operation_kind", 1);
 }
 
 /// Logical aggregate construction and matching must preserve callable fields

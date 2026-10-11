@@ -10,6 +10,25 @@ use super::tribute_control::EvidenceStep;
 #[trunk_ir::dialect]
 mod ability {
 
+    /// One ability instance the module names, and its operations.
+    ///
+    /// `sym_name` is the instance key of `ability_ref`. The `operations`
+    /// region holds one `ability.operation` per operation of the instance.
+    fn decl(sym_name: Attr<String>, ability_ref: Attr<Type>) {
+        #[region(operations)]
+        {}
+    }
+
+    /// One operation of the enclosing `ability.decl`, with the parameter and
+    /// result types of that instance. `kind` is `fn` or `op`.
+    fn operation(
+        op_name: Attr<String>,
+        kind: Attr<String>,
+        param_types: Attr<[Type]>,
+        result_type: Attr<Type>,
+    ) {
+    }
+
     /// Resultless proper-tail handler delimiter emitted by
     /// `lower_continuation_frames`.
     ///
@@ -220,6 +239,29 @@ pub fn tail_slot_id(index: u32) -> i32 {
 /// Return the source-level instance key attached to an ability reference type.
 pub fn ability_instance(ctx: &IrContext, ability_ref: TypeRef) -> Option<&str> {
     ctx.get_type(ability_ref).attrs.get_str(ctx, "instance")
+}
+
+/// The symbol that names the declaration of an ability instance: its instance
+/// key, or for a reference built without one, its name and runtime id.
+pub fn declaration_symbol(ctx: &IrContext, ability_ref: TypeRef) -> String {
+    match ability_instance(ctx, ability_ref) {
+        Some(instance) => instance.to_owned(),
+        None => format!(
+            "{}.{:x}",
+            ability_name(ctx, ability_ref).unwrap_or_default(),
+            compute_ability_id(ctx, ability_ref)
+        ),
+    }
+}
+
+/// Remove the `ability.decl` definitions of `module`, once nothing names an
+/// ability instance any more.
+pub fn remove_declarations(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
+    for op in module.ops_snapshot(ctx) {
+        if <Decl as trunk_ir::ops::DialectOp>::matches(ctx, op) {
+            trunk_ir::rewrite::helpers::erase_op(ctx, op);
+        }
+    }
 }
 
 /// Return the source-level ability name attached to an ability reference type.

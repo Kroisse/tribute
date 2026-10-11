@@ -39,4 +39,7 @@ core.module @test {
       %4 = tribute_control.call %0 {callee = @apply_thunk} : core.i32
       tribute_control.return %4
   }
+  ability.decl {ability_ref = !t1, sym_name = "ability_2_5_State_3_int"} {
+      ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
+  }
 }

@@ -418,9 +418,8 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
     ir_text
 }
 
-/// The public typecheck-to-logical-lowering boundary carries deterministic,
-/// exact operation declarations rather than reconstructing them from printed
-/// operations. First source use is bounce, then echo; handler repeats dedupe.
+/// The logical module declares each ability instance once, with its
+/// operations in name order; repeated uses and handler arms add nothing.
 #[salsa::tracked]
 fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: SourceCst) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
@@ -486,7 +485,8 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
-    let declarations = &output.operation_declarations;
+    let declarations =
+        &tribute_ir::dialect::tribute_control::operation_declarations(&ir, output.module);
     assert_eq!(
         declarations.len(),
         4,
@@ -557,7 +557,6 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,
         output.module,
-        declarations,
         &output.compiler_intrinsics,
         &mut Default::default(),
     );
@@ -656,7 +655,6 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,
         output.module,
-        &output.operation_declarations,
         &output.compiler_intrinsics,
         &mut Default::default(),
     );
