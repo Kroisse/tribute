@@ -222,7 +222,7 @@ mod other {
 mod m {
     use super::other as m
 
-    pub fn read(p: m::Point) -> Nat { p.x }
+    pub fn read(p: m::Point) -> Nat { p.m::Point::x }
 }
 
 fn main() -> Nil {
@@ -261,6 +261,55 @@ fn main() -> Nil { }
                 .iter()
                 .any(|message| message.starts_with(&format!("unresolved name `{name}`"))),
             "{name}: {errors:?}"
+        );
+    }
+}
+
+/// A method call finds its function from the names in scope: the function
+/// of that name, or the one a module or type in scope has. A type named by
+/// a path brings no methods, and a module out of scope adds no candidate.
+#[salsa_test]
+fn methods_come_from_the_names_in_scope(db: &salsa::DatabaseImpl) {
+    const SHAPES: &str = r#"
+mod shapes {
+    pub struct Point { x: Nat }
+    pub mod Point {
+        pub fn double(p: Point) -> Nat { p.x + p.x }
+    }
+    pub fn x(n: Nat) -> Nat { n }
+}
+"#;
+    let check = |module: &str| {
+        errors(
+            db,
+            &format!("{SHAPES}mod m {{\n{module}\n}}\nfn main() -> Nil {{ }}\n"),
+        )
+    };
+    for module in [
+        "use super::shapes::Point\n    pub fn f(p: Point) -> Nat { p.double + p.x }",
+        // `shapes::x` is no candidate of `p.x` here, though it is one where
+        // `shapes` is in scope.
+        "use super::shapes::Point\n    pub fn f(p: Point) -> Nat { p.x }",
+        "use super::shapes\n    pub fn f(p: shapes::Point) -> Nat { 1.x + p.shapes::Point::x }",
+        "pub fn f(p: super::shapes::Point) -> Nat { p.super::shapes::Point::double }",
+    ] {
+        let errors = check(module);
+        assert!(errors.is_empty(), "{module}: {errors:#?}");
+    }
+    for (module, method) in [
+        ("pub fn f(p: super::shapes::Point) -> Nat { p.x }", "x"),
+        (
+            "pub fn f(p: super::shapes::Point) -> Nat { p.double }",
+            "double",
+        ),
+    ] {
+        assert_eq!(
+            check(module),
+            [format!(
+                "unresolved method `{method}`: the scope names no function `{method}`, and no \
+                 module or type in it has one"
+            )],
+            "{module}"
         );
     }
 }

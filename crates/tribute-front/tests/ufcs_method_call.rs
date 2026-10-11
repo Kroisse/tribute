@@ -333,7 +333,7 @@ fn test(t: Thing) -> Nat {
     assert_eq!(
         tdnr_function_summary(db, unresolved, "test"),
         TdnrSummary {
-            method_calls: vec!["missing".to_owned()],
+            method_calls: vec![],
             calls: vec![],
         }
     );
@@ -470,7 +470,7 @@ fn len(_value: String) -> Nat {
 }
 
 fn test() -> Nat {
-    "hello".len()
+    "hello".std::String::len()
 }
 "#,
     );

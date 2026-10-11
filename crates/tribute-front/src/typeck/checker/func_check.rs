@@ -733,7 +733,6 @@ impl<'db> TypeChecker<'db> {
             .map(|ty| solver.type_subst().apply(self.db(), *ty))
             .collect();
         self.select_method(
-            &call.method,
             call.path.as_ref(),
             super::expr::CallTypes {
                 args: &args,

@@ -285,7 +285,7 @@ fn get(o: Option(Nat)) -> Nat {
 }
 
 #[salsa_test]
-fn diag_unresolved_method_after_tdnr(db: &salsa::DatabaseImpl) {
+fn diag_unresolved_method(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",

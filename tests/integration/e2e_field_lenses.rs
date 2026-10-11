@@ -105,7 +105,7 @@ fn main() ->{Io} Nil {
     let text = Box::value::set(Box { value: "s" }, "t")
     print_line(get(text))
     let cell = inner::Cell::item::set(inner::Cell { item: +5 }, +6)
-    print_line(Int::to_string(cell.item))
+    print_line(Int::to_string(cell.inner::Cell::item))
 }
 "#,
         "1\n2\nt\n6",
@@ -457,7 +457,9 @@ fn main() -> Nil {
     assert_eq!(
         diagnostics,
         [(
-            "unresolved method 'name' for this receiver type".to_owned(),
+            "ambiguous path `name` for arguments of types (`User`): it names `User::name`, \
+             `audit::name`"
+                .to_owned(),
             "user.name".to_owned()
         )]
     );

@@ -2,9 +2,9 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "unresolved method 'missing' for this receiver type"
+- message: "unresolved method `missing`: the scope names no function `missing`, and no module or type in it has one"
   span:
     start: 65
     end: 80
   severity: Error
-  phase: TypeChecking
+  phase: NameResolution

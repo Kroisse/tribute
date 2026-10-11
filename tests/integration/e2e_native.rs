@@ -262,7 +262,7 @@ pub mod Option {
 
 fn main() -> Nil {
     __tribute_print_nat(Option::map(1))
-    let doubled = Some(3).map(fn(n) { n * 2 })
+    let doubled = Some(3).std::Option::map(fn(n) { n * 2 })
     case doubled {
         Some(n) -> __tribute_print_nat(n)
         None -> __tribute_print_nat(0)
@@ -3269,10 +3269,12 @@ struct A { n: Int }
 struct B { n: Int }
 
 mod a {
+    use super::A
     pub fn size(x: super::A) -> Int { x.n }
 }
 
 mod b {
+    use super::B
     pub fn size(x: super::B) -> Int { x.n + +100 }
 }
 
@@ -3303,11 +3305,13 @@ use std::io::{Io, print_line}
 struct A { n: Int }
 
 mod a {
+    use super::A
     pub fn pair(x: super::A, y: Int) -> Int { x.n + y }
     pub fn pick(x: Int) -> Int { x }
 }
 
 mod b {
+    use super::A
     pub fn pair(x: super::A, y: String) -> Int { x.n + +100 }
     pub fn pick(x: Int) -> String { "picked" }
 }
@@ -3348,10 +3352,12 @@ struct B { n: Int }
 fn pair(x: A, y: Int) -> Int { x.n + y }
 
 mod a {
+    use super::A
     pub fn tag(x: super::A, s: String) -> Int { x.n + +10 }
 }
 
 mod b {
+    use super::B
     pub fn tag(x: super::B, s: String) -> Int { x.n + +20 }
 }
 

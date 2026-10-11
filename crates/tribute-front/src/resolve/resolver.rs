@@ -118,6 +118,9 @@ pub struct Resolver<'db> {
     /// The functions a name imports in each enclosing inline module when
     /// several of the module's `use`s give it different ones.
     module_imported_functions: Vec<HashMap<Symbol, Vec<crate::ast::FuncDefId<'db>>>>,
+    /// The functions each method name has named so far in the package root
+    /// (first) and in each enclosing inline module.
+    method_functions: Vec<HashMap<Symbol, Vec<crate::ast::FuncDefId<'db>>>>,
     /// Source functions that redefine a struct field's function. They are
     /// reported and dropped, so the field's function is the definition.
     redefinitions: Vec<NodeId>,
@@ -140,6 +143,7 @@ impl<'db> Resolver<'db> {
             module_path: Vec::new(),
             module_imports: Vec::new(),
             module_imported_functions: Vec::new(),
+            method_functions: vec![HashMap::default()],
             redefinitions: Vec::new(),
             package_depth: 0,
         }
@@ -192,37 +196,7 @@ impl<'db> Resolver<'db> {
                 return ResolvedRef::local(local_id, sym);
             }
 
-            if !self.module_path.is_empty() {
-                let namespace = Symbol::new(
-                    &self
-                        .module_path
-                        .iter()
-                        .map(Symbol::to_string)
-                        .collect::<Vec<_>>()
-                        .join("::"),
-                );
-                if let Some(binding) = self.env.lookup_qualified(&namespace, &sym) {
-                    return self.binding_to_ref(binding, sym);
-                }
-            }
-
-            // Then the enclosing inline module's imports.
-            if let Some(target) = self.module_import(&sym)
-                && let Some(binding) = self.lookup_path(target)
-            {
-                return self.binding_to_ref(binding, sym);
-            }
-
-            // An inline module sees its companion and the prelude, not the
-            // items of the modules around it; the package root sees its own
-            // items too.
-            let binding = if self.module_path.is_empty() {
-                self.env.lookup(&sym)
-            } else {
-                self.companion(&sym)
-                    .or_else(|| self.env.lookup_library(&sym))
-            };
-            if let Some(binding) = binding {
+            if let Some(binding) = self.lookup_simple(&sym) {
                 return self.binding_to_ref(binding, sym);
             }
 
@@ -245,6 +219,33 @@ impl<'db> Resolver<'db> {
         // Not found - emit diagnostic and return unresolved sentinel
         self.report_unresolved_name(name);
         ResolvedRef::local(LocalId::UNRESOLVED, sym)
+    }
+
+    /// The binding a simple name has in the current scope, apart from local
+    /// variables.
+    fn lookup_simple(&self, sym: &Symbol) -> Option<&Binding<'db>> {
+        if !self.module_path.is_empty() {
+            let namespace = Symbol::new(&self.module_path.iter().format("::").to_string());
+            if let Some(binding) = self.env.lookup_qualified(&namespace, sym) {
+                return Some(binding);
+            }
+        }
+
+        // Then the enclosing inline module's imports.
+        if let Some(target) = self.module_import(sym)
+            && let Some(binding) = self.lookup_path(target)
+        {
+            return Some(binding);
+        }
+
+        // An inline module sees its companion and the prelude, not the
+        // items of the modules around it; the package root sees its own
+        // items too.
+        if self.module_path.is_empty() {
+            self.env.lookup(sym)
+        } else {
+            self.companion(sym).or_else(|| self.env.lookup_library(sym))
+        }
     }
 
     /// The binding a qualified path names from the current scope.
@@ -291,6 +292,19 @@ impl<'db> Resolver<'db> {
             .last()?
             .get(&sym)
             .map(Vec::as_slice)
+    }
+
+    fn report_unresolved_method(&self, node: NodeId, method: &Symbol) {
+        Diagnostic::new(
+            format!(
+                "unresolved method `{method}`: the scope names no function `{method}`, \
+                 and no module or type in it has one"
+            ),
+            self.span_map.get_or_default(node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(self.db);
     }
 
     fn report_unselected_import(&self, name: &UnresolvedName, usage: &str) {
@@ -346,6 +360,43 @@ impl<'db> Resolver<'db> {
                 .with_str(|left| right.qualified(self.db).with_str(|right| left.cmp(right)))
         });
         MethodCandidates::Functions(functions.into_iter().map(ResolvedRef::function).collect())
+    }
+
+    /// The functions an unqualified method call `x.f(y)` may name: `f` as
+    /// the call's scope names it, and `m::f` for each module `m` in that
+    /// scope. A declaration's name counts as the module that shares it.
+    fn method_functions(
+        &mut self,
+        method: &Symbol,
+        node: NodeId,
+    ) -> Vec<crate::ast::FuncDefId<'db>> {
+        if let Some(functions) = self.method_functions.last().and_then(|m| m.get(method)) {
+            return functions.clone();
+        }
+        let name = UnresolvedName::new(method.clone(), node);
+        let mut functions: Vec<crate::ast::FuncDefId<'db>> = match self.imported_functions(&name) {
+            Some(imported) => imported.to_vec(),
+            None => match self.lookup_simple(method) {
+                Some(Binding::Function { id }) => vec![*id],
+                _ => Vec::new(),
+            },
+        };
+        for module in self.names_in_scope() {
+            let nested = UnresolvedName::new(Symbol::new(&format!("{module}::{method}")), node);
+            if let Ok(Some(Binding::Function { id })) = self.lookup_qualified_name(&nested)
+                && !functions.contains(id)
+            {
+                functions.push(*id);
+            }
+        }
+        functions.sort_by(|left, right| {
+            left.qualified(self.db)
+                .with_str(|left| right.qualified(self.db).with_str(|right| left.cmp(right)))
+        });
+        if let Some(scope) = self.method_functions.last_mut() {
+            scope.insert(method.clone(), functions.clone());
+        }
+        functions
     }
 
     /// The names an unqualified reference may use at this point, apart from
@@ -852,7 +903,9 @@ impl<'db> Resolver<'db> {
             .filter_map(|(name, imported)| Some((name, imported.filter(|f| f.len() > 1)?)))
             .collect();
         self.module_imported_functions.push(functions);
+        self.method_functions.push(HashMap::default());
         let body = module.body.as_ref().map(|decls| self.resolve_decls(decls));
+        self.method_functions.pop();
         self.module_imported_functions.pop();
         self.module_imports.pop();
         self.module_path.pop();
@@ -1283,12 +1336,32 @@ impl<'db> Resolver<'db> {
                     (path.id, self.method_candidates(&name))
                 });
                 match candidates {
-                    None => ExprKind::MethodCall {
-                        receiver,
-                        method: method.clone(),
-                        path: None,
-                        args,
-                    },
+                    None => {
+                        let candidates: Vec<_> = self
+                            .method_functions(method, expr.id)
+                            .into_iter()
+                            .map(ResolvedRef::function)
+                            .collect();
+                        if candidates.is_empty() {
+                            self.report_unresolved_method(expr.id, method);
+                            args.insert(0, receiver);
+                            let callee = ResolvedRef::local(LocalId::UNRESOLVED, method.clone());
+                            ExprKind::Call {
+                                callee: Expr::new(expr.id, ExprKind::Var(callee)),
+                                args,
+                            }
+                        } else {
+                            ExprKind::MethodCall {
+                                receiver,
+                                method: method.clone(),
+                                path: Some(MethodPath {
+                                    id: expr.id,
+                                    candidates,
+                                }),
+                                args,
+                            }
+                        }
+                    }
                     Some((id, MethodCandidates::Functions(candidates))) => ExprKind::MethodCall {
                         receiver,
                         method: method.clone(),

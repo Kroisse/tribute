@@ -98,7 +98,7 @@ fn read_bare(value: Later) -> Nat {
 }
 
 fn read_qualified(value: A::Later) -> Nat {
-    value.value
+    value.A::Later::value
 }
 
 struct Holder {

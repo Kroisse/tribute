@@ -95,7 +95,7 @@ struct Point { x: Nat }
 mod shapes {
     struct Point { y: Nat }
 
-    pub fn x_of(p: super::Point) -> Nat { p.x }
+    pub fn x_of(p: super::Point) -> Nat { p.super::Point::x }
     pub fn origin() -> pkg::Point { pkg::Point { x: 0 } }
 }
 

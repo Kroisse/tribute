@@ -61,8 +61,9 @@ prelude는 패키지 `std`의 루트 모듈이다. 선언의 식별자는 그 �
 모든 모듈은 prelude 루트 항목을 짧은 이름으로 본다. 값과 타입(`Option`, `Some`,
 `String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
 (`Option::map`, `Int::to_string`, `abilities::Throw`). 사용자 선언이 같은 이름을 가지면
-그 선언이 우선하고, prelude 항목은 `std::Option`처럼 패키지 경로로 가리킨다. UFCS는
-method index에서 후보를 모으므로 이름이 가려져도 prelude method를 찾는다.
+그 선언이 우선하고, prelude 항목은 `std::Option`처럼 패키지 경로로 가리킨다. UFCS도
+스코프의 이름으로 후보를 찾으므로, 가려진 prelude 타입의 method는
+`x.std::Option::map(f)`처럼 경로로 부른다.
 
 진단은 타입을 식별 경로로 표시한다. prelude 타입은 `std::Option(Int)`처럼 보인다.
 
@@ -273,15 +274,42 @@ fn example(xs: List(Int), opt: Option(String)) {
 ### Resolution 규칙
 
 1. **Qualified name**: `List::map(xs, f)` — 항상 명시적으로 지정된 함수 사용
-2. **UFCS**: `xs.map(f)` — 그 이름의 함수 중 호출의 타입에 맞는 함수 검색.
-   Qualified UFCS `x.a::b(y)`는 스코프의 `a::b`와 스코프 안 모듈 `m`의 `m::a::b`를
-   후보로 같은 규칙을 따른다([syntax.md](syntax.md#call-and-ufcs)).
+2. **UFCS**: `xs.map(f)` — 호출 위치의 스코프가 가리키는 `map`과 스코프 안 모듈
+   `m`의 `m::map` 중 호출의 타입에 맞는 함수 검색. Qualified UFCS `x.a::b(y)`는
+   스코프의 `a::b`와 스코프 안 모듈 `m`의 `m::a::b`를 후보로 같은 규칙을 따른다
+   ([syntax.md](syntax.md#call-and-ufcs)).
 3. **Unqualified**: `map(xs, f)` — use된 모듈 중 타입이 맞는 함수 검색
 
 비한정 이름이 고를 후보는 그 이름으로 `use`한 함수들이다. 한 스코프의 여러
 `use`가 같은 이름에 서로 다른 함수를 주면 그 이름은 그 함수들을 모두 가리킨다.
 `f(x, y)`와 `x.f(y)`는 후보를 모으는 범위만 다르다. 그중 하나를 고르는 방식과,
 고른 뒤 인자를 검사하고 인자 수와 타입의 오류를 보고하는 방식은 같다.
+
+UFCS의 후보는 호출 위치의 스코프에서만 찾는다. `x.f(y)`의 후보는 스코프가
+가리키는 함수 `f`(여러 `use`가 준 함수 전부)와, 스코프 안의 이름 `m`마다 `m::f`이다.
+타입의 이름은 그 companion 네임스페이스를 가리키므로, 스코프에 있는 타입 `T`의
+`T::f`가 여기에 든다. 스코프 밖의 모듈은 receiver 타입을 선언한 모듈이라도 찾지
+않는다. 다른 모듈의 타입에 메서드를 쓰려면 그 타입을 `use`한다:
+
+```rust
+mod shapes {
+    pub struct Point { x: Nat }
+    pub mod Point {
+        pub fn double(p: Point) -> Nat { p.x * 2 }
+    }
+}
+
+mod a {
+    fn f(p: super::shapes::Point) -> Nat { p.double }   // Error: Point가 스코프에 없음
+}
+
+mod b {
+    use super::shapes::Point
+    fn f(p: Point) -> Nat { p.double + p.x }            // OK
+}
+```
+
+스코프에 없는 모듈의 선언은 호출의 후보를 바꾸지 않는다.
 
 ### 후보 선택
 
@@ -308,15 +336,16 @@ Receiver는 첫 번째 인자이며 다른 인자와 다르지 않다. Receiver�
 타입은 고른 함수에서 추론된다.
 
 필드를 읽는 `x.f`도 호출이다. Struct `T`의 필드 `f`는 getter 함수 `T::f`를 만들고,
-`x.f`는 `f(x)`이다. 비한정 UFCS의 후보에는 그 이름의 함수들과 함께, 그 이름의
-필드를 가진 모든 struct의 getter가 들어간다. 따라서 필드 `f`를 가진 struct가
-하나뿐이고 같은 이름의 함수가 없으면 `x.f`는 `x`의 타입 없이도 정해진다.
+`x.f`는 `f(x)`이다. Getter는 `T`의 네임스페이스에 있으므로 `T`가 스코프에 있을 때
+`x.f`의 후보가 된다. 스코프의 타입 중 필드 `f`를 가진 struct가 하나뿐이고 같은
+이름의 다른 후보가 없으면 `x.f`는 `x`의 타입 없이도 정해진다.
 
 Getter `T::f`는 `T`의 네임스페이스에 선언된 함수다. 한 네임스페이스에서 한 이름은
 한 함수이므로, `T`의 companion 모듈은 필드와 같은 이름의 함수를 매개변수와 상관없이
 선언할 수 없다. 다른 모듈은 같은 이름의 함수를 선언할 수 있다. 그 함수가 `T`를
-첫 번째 인자로 받으면 `x.f`의 후보는 getter와 그 함수 둘이고, 다른 호출과 같은
-규칙으로 고른다. 둘 다 맞으면 모호하며 `x.T::f`처럼 경로로 구분한다:
+첫 번째 인자로 받고 `x.f`의 스코프에서 후보가 되면 후보는 getter와 그 함수 둘이고,
+다른 호출과 같은 규칙으로 고른다. 둘 다 맞으면 모호하며 `x.T::f`처럼 경로로
+구분한다:
 
 ```rust
 struct Name { text: String }
@@ -330,7 +359,7 @@ mod audit {
 }
 
 fn show(name: Name) -> String {
-    name.text           // Error: Name::text와 audit::text 모두 맞음
+    name.text           // Error: 스코프의 Name::text와 audit::text 모두 맞음
     name.Name::text     // OK
     name.audit::text    // OK
 }
