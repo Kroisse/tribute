@@ -368,8 +368,9 @@ fn main() -> Nil {
                 "nope::set".to_owned()
             ),
             (
-                "type error in function 'main': expected `User`, found `Int`".to_owned(),
-                "+1".to_owned()
+                "type error at call site in function 'main': expected `User`, found `Int`"
+                    .to_owned(),
+                "+1.name::set(\"Jane\")".to_owned()
             ),
         ]
     );
@@ -486,15 +487,15 @@ fn main() -> Nil {
         diagnostics,
         [
             (
-                "UFCS arity mismatch for 'name::set': expected 2 args, got 1".to_owned(),
+                "call arity mismatch: expected 2 arguments, found 1".to_owned(),
                 "user.name::set()".to_owned()
             ),
             (
-                "UFCS arity mismatch for 'name::set': expected 2 args, got 3".to_owned(),
+                "call arity mismatch: expected 2 arguments, found 3".to_owned(),
                 "user.name::set(\"a\", \"b\")".to_owned()
             ),
             (
-                "UFCS arity mismatch for 'User::name': expected 1 args, got 2".to_owned(),
+                "call arity mismatch: expected 1 arguments, found 2".to_owned(),
                 "user.User::name(\"x\")".to_owned()
             ),
         ]

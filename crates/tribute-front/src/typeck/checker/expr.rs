@@ -273,110 +273,7 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 spread,
             } => self.infer_record_type_with_ctx(ctx, expr.id, type_name, fields, spread.as_ref()),
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                path,
-                args,
-            } => {
-                // Infer receiver type first
-                let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
-                let path = path.as_ref().map(method_path_functions);
-                let selection = self.select_method(
-                    method,
-                    path.as_ref(),
-                    CallTypes {
-                        args: &[receiver_ty],
-                        arity: args.len() + 1,
-                        result: None,
-                    },
-                );
-                let field =
-                    self.method_field(receiver_ty, method, path.is_some(), args, &selection);
-
-                // Try to look up the method as a struct field accessor
-                if let Some(field) = &field
-                    && let Some(result_ty) = self.lookup_struct_field_type(receiver_ty, field)
-                {
-                    self.record_field_instance(ctx, expr.id, receiver_ty, field.clone(), result_ty);
-                    result_ty
-                } else if let MethodSelection::One(entry) = selection {
-                    // UFCS method found — record for conversion phase and extract return type
-                    let func_id = entry.func_id;
-                    let callee_ty = ctx
-                        .instantiate_function_reference(expr.id, func_id)
-                        .unwrap_or_else(|| ctx.fresh_type_var());
-                    // Inference may visit a call more than once; report its arity once.
-                    let first_visit = ctx.get_resolved_method(expr.id).is_none();
-                    ctx.record_resolved_method(expr.id, func_id, callee_ty);
-                    match callee_ty.kind(self.db()) {
-                        TypeKind::Func {
-                            params,
-                            result,
-                            effect,
-                            ..
-                        } => {
-                            ctx.evidence.record_call(expr.id, *effect);
-                            if first_visit {
-                                self.check_method_arity(expr.id, method, params.len(), args.len());
-                            }
-                            // Constrain receiver against the method's first param
-                            if let Some(first_param) = params.first() {
-                                ctx.constrain_coerce(receiver_ty, *first_param, receiver.id);
-                            }
-                            // Infer arg types and constrain against method's parameter types
-                            for (arg, param_ty) in args.iter().zip(params.iter().skip(1)) {
-                                let arg_ty = self.infer_expr_with_expected(ctx, arg, *param_ty);
-                                ctx.constrain_coerce(arg_ty, *param_ty, arg.id);
-                            }
-                            ctx.merge_effect_at(*effect, expr.id);
-                            *result
-                        }
-                        _ => ctx.fresh_type_var(),
-                    }
-                } else {
-                    // Receiver not yet resolved — defer to post-solve
-                    let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
-                        .chain(args.iter().map(|a| self.infer_deferred_argument(ctx, a)))
-                        .collect();
-
-                    // For known operator methods, add type constraints eagerly
-                    // so that type inference can propagate even before TDNR resolves the method.
-                    let result_ty = match method.to_string().as_str() {
-                        "+" | "-" | "*" | "/" | "%" => {
-                            // Arithmetic: all operands same type, result = operand type
-                            if let Some(rhs_ty) = arg_types.get(1) {
-                                ctx.constrain_eq(receiver_ty, *rhs_ty);
-                            }
-                            receiver_ty
-                        }
-                        "==" | "!=" | "<" | "<=" | ">" | ">=" => {
-                            // Comparison: operands same type, result = Bool
-                            if let Some(rhs_ty) = arg_types.get(1) {
-                                ctx.constrain_eq(receiver_ty, *rhs_ty);
-                            }
-                            ctx.bool_type()
-                        }
-                        _ => ctx.fresh_type_var(),
-                    };
-
-                    let effect = ctx
-                        .deferred_method_effect(expr.id)
-                        .unwrap_or_else(|| ctx.fresh_effect_row());
-                    ctx.evidence.record_call(expr.id, effect);
-                    ctx.merge_effect_at(effect, expr.id);
-                    ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
-                        node_id: expr.id,
-                        receiver_ty,
-                        method: method.clone(),
-                        path,
-                        result_ty,
-                        arg_types,
-                        effect,
-                    });
-                    result_ty
-                }
-            }
+            ExprKind::MethodCall { .. } => self.infer_method_call_with_ctx(ctx, expr, true),
             ExprKind::BinOp { op, lhs, rhs } => {
                 let lhs_ty = self.infer_expr_type_with_ctx(ctx, lhs);
                 let rhs_ty = self.infer_expr_type_with_ctx(ctx, rhs);
@@ -966,83 +863,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.finish_result_join(expr.id);
                 result_ty
             }
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                path,
-                args,
-            } => {
-                let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
-                let path = path.as_ref().map(method_path_functions);
-                let selection = self.select_method(
-                    method,
-                    path.as_ref(),
-                    CallTypes {
-                        args: &[receiver_ty],
-                        arity: args.len() + 1,
-                        result: None,
-                    },
-                );
-                let field =
-                    self.method_field(receiver_ty, method, path.is_some(), args, &selection);
-                if let Some(field) = &field
-                    && let Some(result_ty) = self.lookup_struct_field_type(receiver_ty, field)
-                {
-                    self.record_field_instance(ctx, expr.id, receiver_ty, field.clone(), result_ty);
-                    result_ty
-                } else if let MethodSelection::One(entry) = selection {
-                    let callee_ty = ctx
-                        .instantiate_function_reference(expr.id, entry.func_id)
-                        .unwrap_or_else(|| ctx.fresh_type_var());
-                    // Inference may visit a call more than once; report its arity once.
-                    let first_visit = ctx.get_resolved_method(expr.id).is_none();
-                    ctx.record_resolved_method(expr.id, entry.func_id, callee_ty);
-                    match callee_ty.kind(self.db()) {
-                        TypeKind::Func {
-                            params,
-                            result,
-                            effect,
-                            ..
-                        } => {
-                            ctx.evidence.record_call(expr.id, *effect);
-                            if first_visit {
-                                self.check_method_arity(expr.id, method, params.len(), args.len());
-                            }
-                            if let Some(param) = params.first() {
-                                ctx.constrain_coerce(receiver_ty, *param, receiver.id);
-                            }
-                            for (arg, param) in args.iter().zip(params.iter().skip(1)) {
-                                let actual = self.infer_expr_with_expected(ctx, arg, *param);
-                                ctx.constrain_coerce(actual, *param, arg.id);
-                            }
-                            ctx.merge_effect_at(*effect, expr.id);
-                            *result
-                        }
-                        _ => ctx.fresh_type_var(),
-                    }
-                } else {
-                    // Defer to post-solve
-                    let result_ty = ctx.fresh_type_var();
-                    let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
-                        .chain(args.iter().map(|a| self.infer_deferred_argument(ctx, a)))
-                        .collect();
-                    let effect = ctx
-                        .deferred_method_effect(expr.id)
-                        .unwrap_or_else(|| ctx.fresh_effect_row());
-                    ctx.evidence.record_call(expr.id, effect);
-                    ctx.merge_effect_at(effect, expr.id);
-                    ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
-                        node_id: expr.id,
-                        receiver_ty,
-                        method: method.clone(),
-                        path,
-                        result_ty,
-                        arg_types,
-                        effect,
-                    });
-                    result_ty
-                }
-            }
+            ExprKind::MethodCall { .. } => self.infer_method_call_with_ctx(ctx, expr, false),
             ExprKind::Lambda { .. } | ExprKind::Handle { .. } => {
                 // These constructs need their scoped bodies checked before a
                 // surrounding let can solve/generalize the result relation.
@@ -1622,6 +1443,130 @@ impl<'db> TypeChecker<'db> {
             .unwrap_or_else(|| ctx.fresh_type_var())
     }
 
+    /// Infer a call written `receiver.method(args)`: `method(receiver, args)`
+    /// once the function it names is selected.
+    ///
+    /// The receiver alone is tried first, so that the other arguments are
+    /// inferred against the selected function's parameters. A call it does
+    /// not decide infers them on their own and tries again with all of them;
+    /// one still undecided is deferred. `operators` relates the operands of
+    /// an operator that stays undecided.
+    fn infer_method_call_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        expr: &Expr<ResolvedRef<'db>>,
+        operators: bool,
+    ) -> Type<'db> {
+        let ExprKind::MethodCall {
+            receiver,
+            method,
+            path,
+            args,
+        } = &*expr.kind
+        else {
+            unreachable!("the caller matched a method call");
+        };
+        let node = expr.id;
+        let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
+        let path = path.as_ref().map(method_path_functions);
+        let arity = args.len() + 1;
+        let selection = self.select_method(
+            method,
+            path.as_ref(),
+            CallTypes {
+                args: &[receiver_ty],
+                arity,
+                result: None,
+            },
+        );
+        let field = self.method_field(receiver_ty, method, path.is_some(), args, &selection);
+        if let Some(field) = &field
+            && let Some(result_ty) = self.lookup_struct_field_type(receiver_ty, field)
+        {
+            self.record_field_instance(ctx, node, receiver_ty, field.clone(), result_ty);
+            return result_ty;
+        }
+        if let MethodSelection::One(entry) = selection {
+            let callee_ty = self.select_callee(ctx, node, entry.func_id);
+            let mut arg_types = vec![receiver_ty];
+            let params = match callee_ty.kind(self.db()) {
+                TypeKind::Func { params, .. } => params.as_slice(),
+                _ => &[],
+            };
+            for (index, arg) in args.iter().enumerate() {
+                arg_types.push(match params.get(index + 1) {
+                    Some(expected) => self.infer_expr_with_expected(ctx, arg, *expected),
+                    None => self.infer_expr_type_with_ctx(ctx, arg),
+                });
+            }
+            return self.infer_call_with_ctx(ctx, callee_ty, &arg_types, node);
+        }
+
+        let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
+            .chain(args.iter().map(|a| self.infer_deferred_argument(ctx, a)))
+            .collect();
+        let selection = self.select_method(
+            method,
+            path.as_ref(),
+            CallTypes {
+                args: &arg_types,
+                arity,
+                result: None,
+            },
+        );
+        if let MethodSelection::One(entry) = selection {
+            let callee_ty = self.select_callee(ctx, node, entry.func_id);
+            return self.infer_call_with_ctx(ctx, callee_ty, &arg_types, node);
+        }
+
+        // For known operator methods, add type constraints eagerly so that
+        // type inference can propagate before the method is selected.
+        let result_ty = match method.to_string().as_str() {
+            "+" | "-" | "*" | "/" | "%" if operators => {
+                if let Some(rhs_ty) = arg_types.get(1) {
+                    ctx.constrain_eq(receiver_ty, *rhs_ty);
+                }
+                receiver_ty
+            }
+            "==" | "!=" | "<" | "<=" | ">" | ">=" if operators => {
+                if let Some(rhs_ty) = arg_types.get(1) {
+                    ctx.constrain_eq(receiver_ty, *rhs_ty);
+                }
+                ctx.bool_type()
+            }
+            _ => ctx.fresh_type_var(),
+        };
+        let effect = ctx
+            .deferred_method_effect(node)
+            .unwrap_or_else(|| ctx.fresh_effect_row());
+        ctx.evidence.record_call(node, effect);
+        ctx.merge_effect_at(effect, node);
+        ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
+            node_id: node,
+            receiver_ty,
+            method: method.clone(),
+            path,
+            result_ty,
+            arg_types,
+            effect,
+        });
+        result_ty
+    }
+
+    /// The instance of `function` that the call at `node` selected.
+    fn select_callee(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        node: NodeId,
+        function: crate::ast::FuncDefId<'db>,
+    ) -> Type<'db> {
+        let callee_ty = ctx
+            .instantiate_function_reference(node, function)
+            .unwrap_or_else(|| ctx.fresh_type_var());
+        ctx.record_resolved_method(node, function, callee_ty);
+        callee_ty
+    }
+
     /// Infer the result type of a function call.
     ///
     /// This method:
@@ -1639,6 +1584,27 @@ impl<'db> TypeChecker<'db> {
         arg_types: &[Type<'db>],
         origin: NodeId,
     ) -> Type<'db> {
+        // A function called with the wrong number of arguments is reported
+        // as that, and the arguments it does have are checked.
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+            ..
+        } = callee_ty.kind(self.db())
+            && params.len() != arg_types.len()
+        {
+            if ctx.report_arity_once(origin) {
+                self.report_call_arity(origin, params.len(), arg_types.len());
+            }
+            for (param_ty, arg_ty) in params.iter().zip(arg_types) {
+                ctx.constrain_coerce_at(*arg_ty, *param_ty, origin, ConstraintOriginKind::Call);
+            }
+            ctx.evidence.record_call(origin, *effect);
+            ctx.merge_effect_at(*effect, origin);
+            return *result;
+        }
+
         // Create expected type - could be either a function or continuation type.
         // We create fresh type variables and let unification determine the actual type.
         let param_types: Vec<Type<'db>> = arg_types.iter().map(|_| ctx.fresh_type_var()).collect();
@@ -1799,15 +1765,11 @@ impl<'db> TypeChecker<'db> {
 
     /// Report a method call whose receiver and explicit arguments do not
     /// match the selected function's parameters.
-    fn check_method_arity(&self, node: NodeId, method: &Symbol, params: usize, args: usize) {
-        if args + 1 == params {
-            return;
-        }
+    /// Report a call that passes `args` arguments to a function of `params`
+    /// parameters.
+    pub(crate) fn report_call_arity(&self, node: NodeId, params: usize, args: usize) {
         Diagnostic::new(
-            format!(
-                "UFCS arity mismatch for '{method}': expected {params} args, got {}",
-                args + 1
-            ),
+            format!("call arity mismatch: expected {params} arguments, found {args}"),
             self.get_span(node),
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
@@ -1870,13 +1832,16 @@ impl<'db> TypeChecker<'db> {
                     })
                 })
                 .collect(),
-            None => call
-                .args
-                .first()
-                .into_iter()
-                .flat_map(|receiver| self.env.lookup_methods(method, *receiver))
-                .copied()
-                .collect(),
+            // A call without further arguments may read a field of its
+            // receiver, so the receiver's type has to be known.
+            None if call.arity == 1
+                && call.args.first().is_none_or(|receiver| {
+                    matches!(receiver.kind(self.db()), TypeKind::UniVar { .. })
+                }) =>
+            {
+                Vec::new()
+            }
+            None => self.env.methods_named(method).to_vec(),
         };
         // One function leaves nothing to select: the call is checked against
         // it, and what does not fit is an ordinary type error.
@@ -2544,32 +2509,9 @@ impl<'db> TypeChecker<'db> {
             else {
                 continue;
             };
-            let TypeKind::Func {
-                params,
-                result,
-                effect,
-                ..
-            } = callee_ty.kind(self.db())
-            else {
-                continue;
-            };
             ctx.resolve_deferred_method(call.node_id, entry.func_id, callee_ty);
-            self.check_method_arity(
-                call.node_id,
-                &call.method,
-                params.len(),
-                call.arg_types.len().saturating_sub(1),
-            );
-            ctx.constrain_eq_at(
-                call.result_ty,
-                *result,
-                call.node_id,
-                ConstraintOriginKind::Call,
-            );
-            for (arg, param) in call.arg_types.iter().zip(params) {
-                ctx.constrain_coerce_at(*arg, *param, call.node_id, ConstraintOriginKind::Call);
-            }
-            ctx.constrain_call_effect(solver, *effect, call.effect, call.node_id);
+            let slack = ctx.fresh_row_var();
+            ctx.constrain_all(self.selected_call_constraints(solver, &call, callee_ty, slack));
             resolved = true;
         }
         resolved

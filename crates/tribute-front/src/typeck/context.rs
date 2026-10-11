@@ -311,18 +311,11 @@ impl<'db> ModuleTypeEnv<'db> {
         Some(matched)
     }
 
-    /// The functions named `method_name` that take a receiver of type
-    /// `receiver_ty`.
-    pub fn lookup_methods(
-        &self,
-        method_name: &Symbol,
-        receiver_ty: Type<'db>,
-    ) -> impl Iterator<Item = &MethodEntry<'db>> {
+    /// The functions a method call may name by `method_name`.
+    pub fn methods_named(&self, method_name: &Symbol) -> &[MethodEntry<'db>] {
         self.method_index
             .get(method_name)
-            .into_iter()
-            .flatten()
-            .filter(move |entry| receiver_type_matches(self.db, entry, receiver_ty))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Register a constructor's type scheme.

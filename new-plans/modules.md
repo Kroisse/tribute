@@ -62,7 +62,7 @@ prelude는 패키지 `std`의 루트 모듈이다. 선언의 식별자는 그 �
 `String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
 (`Option::map`, `Int::to_string`, `abilities::Throw`). 사용자 선언이 같은 이름을 가지면
 그 선언이 우선하고, prelude 항목은 `std::Option`처럼 패키지 경로로 가리킨다. UFCS는
-receiver 타입의 method index로 고르므로 이름이 가려져도 prelude method를 찾는다.
+method index에서 후보를 모으므로 이름이 가려져도 prelude method를 찾는다.
 
 진단은 타입을 식별 경로로 표시한다. prelude 타입은 `std::Option(Int)`처럼 보인다.
 
@@ -273,15 +273,15 @@ fn example(xs: List(Int), opt: Option(String)) {
 ### Resolution 규칙
 
 1. **Qualified name**: `List::map(xs, f)` — 항상 명시적으로 지정된 함수 사용
-2. **UFCS**: `xs.map(f)` — receiver 타입의 함수 중 호출의 타입에 맞는 함수 검색.
+2. **UFCS**: `xs.map(f)` — 그 이름의 함수 중 호출의 타입에 맞는 함수 검색.
    Qualified UFCS `x.a::b(y)`는 스코프의 `a::b`와 스코프 안 모듈 `m`의 `m::a::b`를
    후보로 같은 규칙을 따른다([syntax.md](syntax.md#call-and-ufcs)).
 3. **Unqualified**: `map(xs, f)` — use된 모듈 중 타입이 맞는 함수 검색
 
 비한정 이름이 고를 후보는 그 이름으로 `use`한 함수들이다. 한 스코프의 여러
 `use`가 같은 이름에 서로 다른 함수를 주면 그 이름은 그 함수들을 모두 가리킨다.
-`f(x, y)`와 `x.f(y)`는 후보를 모으는 범위만 다르고, 그중 하나를 고르는 방식은
-같다.
+`f(x, y)`와 `x.f(y)`는 후보를 모으는 범위만 다르다. 그중 하나를 고르는 방식과,
+고른 뒤 인자를 검사하고 인자 수와 타입의 오류를 보고하는 방식은 같다.
 
 ### 후보 선택
 
@@ -303,9 +303,11 @@ fn example(xs: List(Int), opt: Option(String)) {
 함수 본문을 다 푼 뒤에도 여럿이면 오류다. 맞는 후보가 없어도 오류다. 다만 인자의
 타입은 맞고 수만 다른 후보가 하나이면 그 함수의 인자 수 오류로 보고한다.
 
-비한정 UFCS `x.f(y)`의 후보는 receiver 타입의 함수들이므로, 후보를 모으려면
-receiver의 타입이 정해져 있어야 한다. 한정 UFCS와 비한정 호출의 후보는 스코프가
-정하므로 첫 번째 인자가 다른 인자와 다르지 않다.
+Receiver는 첫 번째 인자이며 다른 인자와 다르지 않다. Receiver의 타입이 정해지지
+않았어도 나머지 인자와 결과가 후보를 하나로 좁히면 그 함수를 고르고, receiver의
+타입은 고른 함수에서 추론된다. 예외는 인자 없는 비한정 UFCS `x.f`뿐이다. 이
+호출은 receiver의 필드를 읽는 것일 수 있으므로, receiver의 타입이 정해진 뒤에
+필드인지 함수인지를 정한다.
 
 ```rust
 use a::pair   // fn pair(x: A, y: Int) -> Int
@@ -314,6 +316,7 @@ use b::pair   // fn pair(x: A, y: String) -> Int
 pair(A { n: +1 }, +2)       // a::pair: 두 번째 인자가 Int
 pair(A { n: +1 }, "two")    // b::pair
 A { n: +1 }.pair("two")     // b::pair
+fn(x) { x.pair("two") }     // b::pair: x는 A로 추론된다
 ```
 
 그 스코프가 같은 이름을 선언하거나 지역 변수로 묶으면 이름은 그 선언이나 변수를

@@ -567,7 +567,7 @@ fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
         (
             "use a::size\nuse b::size\n\
              fn main() -> Nil {\n    let _ = size(A { n: 1 }, 2)\n}\n",
-            "UFCS arity mismatch for 'size': expected 1 args, got 2",
+            "call arity mismatch: expected 1 arguments, found 2",
         ),
         (
             "use a::size\nuse b::size\n\
@@ -639,5 +639,60 @@ fn a_call_its_types_do_not_decide_is_reported(db: &salsa::DatabaseImpl) {
             [expected],
             "{body}"
         );
+    }
+}
+
+/// A method call and the call it stands for select the same function and
+/// report the same errors.
+#[salsa_test]
+fn method_syntax_and_call_syntax_are_checked_alike(db: &salsa::DatabaseImpl) {
+    const DECLARATIONS: &str = r#"
+struct A { n: Nat }
+struct B { n: Nat }
+fn pair(x: A, y: Nat) -> Nat { x.n + y }
+mod a {
+    pub fn tag(x: super::A, s: String) -> Nat { x.n }
+}
+mod b {
+    pub fn tag(x: super::B, s: String) -> Nat { x.n }
+}
+use a::tag
+use b::tag
+"#;
+    let check = |body: &str| {
+        errors(
+            db,
+            &format!("{DECLARATIONS}fn main() -> Nil {{\n    {body}\n}}\n"),
+        )
+    };
+    // A receiver not typed yet is an argument like the others: the rest of
+    // the call selects, and the receiver's type follows.
+    for body in [
+        "let late = fn(x) { x.pair(5) }\n    let _ = late(A { n: 1 })",
+        "let late = fn(x) { pair(x, 5) }\n    let _ = late(A { n: 1 })",
+        "let late = fn(x) { x.tag(\"t\") }\n    let _ = late(B { n: 1 })",
+        "let late = fn(x) { tag(x, \"t\") }\n    let _ = late(B { n: 1 })",
+        // Nothing else types these receivers.
+        "let _ = fn(x) { x.pair(5) }",
+        "let _ = fn(x) { pair(x, 5) }",
+    ] {
+        let errors = check(body);
+        assert!(errors.is_empty(), "{body}: {errors:#?}");
+    }
+    for (method, call) in [
+        ("let _ = A { n: 1 }.pair()", "let _ = pair(A { n: 1 })"),
+        (
+            "let _ = A { n: 1 }.pair(1, 2)",
+            "let _ = pair(A { n: 1 }, 1, 2)",
+        ),
+        ("let _ = 1.pair(2)", "let _ = pair(1, 2)"),
+        (
+            "let _ = A { n: 1 }.pair(True)",
+            "let _ = pair(A { n: 1 }, True)",
+        ),
+    ] {
+        let reported = check(method);
+        assert!(!reported.is_empty(), "{method}");
+        assert_eq!(reported, check(call), "{method}");
     }
 }
