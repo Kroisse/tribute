@@ -562,6 +562,13 @@ fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
             "`size` imports several functions and is not called, \
              so no argument type selects one; name the function by its path",
         ),
+        // A call with the wrong number of arguments still names the function
+        // its arguments select.
+        (
+            "use a::size\nuse b::size\n\
+             fn main() -> Nil {\n    let _ = size(A { n: 1 }, 2)\n}\n",
+            "UFCS arity mismatch for 'size': expected 1 args, got 2",
+        ),
         (
             "use a::size\nuse b::size\n\
              fn main() -> Nil {\n    let _ = size(1)\n}\n",

@@ -1445,6 +1445,72 @@ mod tests {
     }
 
     #[test]
+    fn parameter_type_matches_by_declaration_and_shape() {
+        let db = salsa::DatabaseImpl::new();
+        let int = Type::new(&db, TypeKind::Int);
+        let bool = Type::new(&db, TypeKind::Bool);
+        let foo = named(&db, "Foo");
+        let bar = named(&db, "Bar");
+        let app = |ctor, arg| {
+            Type::new(
+                &db,
+                TypeKind::App {
+                    ctor,
+                    args: vec![arg],
+                },
+            )
+        };
+        let id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
+        let unknown = Type::new(&db, TypeKind::UniVar { id });
+        let variable = Type::new(&db, TypeKind::BoundVar { index: 0 });
+
+        // A nominal type matches its declaration, whatever its arguments.
+        assert!(super::parameter_type_matches(&db, foo, foo));
+        assert!(!super::parameter_type_matches(&db, foo, bar));
+        assert!(super::parameter_type_matches(
+            &db,
+            app(foo, int),
+            app(foo, bool)
+        ));
+        assert!(super::parameter_type_matches(&db, app(foo, int), foo));
+        assert!(super::parameter_type_matches(&db, foo, app(foo, int)));
+        assert!(!super::parameter_type_matches(
+            &db,
+            app(foo, int),
+            app(bar, int)
+        ));
+        assert!(super::parameter_type_matches(&db, int, int));
+        assert!(!super::parameter_type_matches(&db, int, bool));
+        // Functions and tuples match by their number of items.
+        let unary = func(&db, &[int], int);
+        assert!(super::parameter_type_matches(
+            &db,
+            unary,
+            func(&db, &[bool], bool)
+        ));
+        assert!(!super::parameter_type_matches(
+            &db,
+            unary,
+            func(&db, &[int, int], int)
+        ));
+        assert!(!super::parameter_type_matches(&db, unary, int));
+        assert!(super::parameter_type_matches(
+            &db,
+            Type::new(&db, TypeKind::Tuple(vec![int, int])),
+            Type::new(&db, TypeKind::Tuple(vec![bool, foo]))
+        ));
+        assert!(!super::parameter_type_matches(
+            &db,
+            Type::new(&db, TypeKind::Tuple(vec![int, int])),
+            Type::new(&db, TypeKind::Tuple(vec![int]))
+        ));
+        // A type variable takes any type, and an unknown type excludes none.
+        assert!(super::parameter_type_matches(&db, variable, foo));
+        assert!(super::parameter_type_matches(&db, foo, unknown));
+        assert!(!super::parameter_type_matches(&db, foo, variable));
+    }
+
+    #[test]
     fn test_receiver_type_matches_same_type() {
         let db = salsa::DatabaseImpl::new();
         let foo = named(&db, "Foo");

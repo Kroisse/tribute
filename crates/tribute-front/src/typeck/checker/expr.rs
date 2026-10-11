@@ -62,28 +62,28 @@ pub(crate) struct CallTypes<'a, 'db> {
 }
 
 impl<'db> CallTypes<'_, 'db> {
-    /// Whether `function` takes the arguments inferred so far, whatever
-    /// number of arguments the call passes.
-    fn arguments_match(self, db: &'db dyn salsa::Database, function: Type<'db>) -> bool {
-        let TypeKind::Func { params, .. } = function.kind(db) else {
-            return false;
-        };
+    /// Whether a function taking `params` takes the arguments inferred so
+    /// far, whatever number of arguments the call passes.
+    fn arguments_match(self, db: &'db dyn salsa::Database, params: &[Type<'db>]) -> bool {
         self.args
             .iter()
             .zip(params)
             .all(|(actual, declared)| crate::typeck::parameter_type_matches(db, *declared, *actual))
     }
 
-    /// Whether `function` is a function the call may select.
-    fn matches(self, db: &'db dyn salsa::Database, function: Type<'db>) -> bool {
-        let TypeKind::Func { params, result, .. } = function.kind(db) else {
-            return false;
-        };
+    /// Whether a function from `params` to `result` is one the call may
+    /// select.
+    fn matches(
+        self,
+        db: &'db dyn salsa::Database,
+        params: &[Type<'db>],
+        result: Type<'db>,
+    ) -> bool {
         params.len() == self.arity
-            && self.arguments_match(db, function)
+            && self.arguments_match(db, params)
             && self
                 .result
-                .is_none_or(|actual| crate::typeck::parameter_type_matches(db, *result, actual))
+                .is_none_or(|actual| crate::typeck::parameter_type_matches(db, result, actual))
     }
 }
 
@@ -1870,25 +1870,31 @@ impl<'db> TypeChecker<'db> {
                     })
                 })
                 .collect(),
-            None => {
-                let candidates: Vec<_> = match call.args.first() {
-                    Some(receiver) => self
-                        .env
-                        .lookup_methods(method, *receiver)
-                        .copied()
-                        .collect(),
-                    None => Vec::new(),
-                };
-                candidates
-            }
+            None => call
+                .args
+                .first()
+                .into_iter()
+                .flat_map(|receiver| self.env.lookup_methods(method, *receiver))
+                .copied()
+                .collect(),
         };
         // One function leaves nothing to select: the call is checked against
         // it, and what does not fit is an ordinary type error.
         if let [entry] = candidates[..] {
             return MethodSelection::One(entry);
         }
-        let select = |matches: &dyn Fn(Type<'db>) -> bool| {
-            let mut matching = candidates.iter().filter(|entry| matches(entry.func_ty));
+        let signatures: Vec<_> = candidates
+            .iter()
+            .filter_map(|entry| match entry.func_ty.kind(self.db()) {
+                TypeKind::Func { params, result, .. } => Some((entry, &params[..], *result)),
+                _ => None,
+            })
+            .collect();
+        let select = |matches: &dyn Fn(&[Type<'db>], Type<'db>) -> bool| {
+            let mut matching = signatures
+                .iter()
+                .filter(|(_, params, result)| matches(params, *result))
+                .map(|(entry, ..)| *entry);
             match (matching.next(), matching.next()) {
                 (Some(entry), None) => MethodSelection::One(*entry),
                 (Some(first), Some(second)) => MethodSelection::Ambiguous(
@@ -1901,11 +1907,11 @@ impl<'db> TypeChecker<'db> {
                 (None, _) => MethodSelection::None,
             }
         };
-        match select(&|function| call.matches(self.db(), function)) {
+        match select(&|params, result| call.matches(self.db(), params, result)) {
             // A call that passes the wrong number of arguments still names
             // the function its arguments select, which reports the number.
             MethodSelection::None => {
-                match select(&|function| call.arguments_match(self.db(), function)) {
+                match select(&|params, _| call.arguments_match(self.db(), params)) {
                     selection @ MethodSelection::One(_) => selection,
                     _ => MethodSelection::None,
                 }
