@@ -111,10 +111,11 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
     }
 
     // A name that several `use`s give different functions imports them all.
-    for (name, paths) in env.repeated_uses() {
+    let repeated = env.take_repeated_uses();
+    for (name, paths) in &repeated {
         let mut functions = Vec::new();
         for path in paths {
-            match use_target(env, path) {
+            match use_target(env, path.clone()) {
                 Some((_, Binding::Function { id })) if !functions.contains(&id) => {
                     functions.push(id);
                 }
@@ -126,9 +127,10 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
             }
         }
         if functions.len() > 1 {
-            env.set_imported_functions(name, functions);
+            env.set_imported_functions(name.clone(), functions);
         }
     }
+    env.set_repeated_uses(repeated);
 }
 
 /// The package path a `use` of `path` names and what is declared there.

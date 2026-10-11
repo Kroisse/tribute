@@ -77,8 +77,9 @@ pub struct ModuleEnv<'db> {
     /// Original paths for resolved `use` imports (import name → original path).
     /// Used to rewrite effect annotations from imported names to qualified paths.
     use_paths: HashMap<Symbol, Vec<Symbol>>,
-    /// Every path a `use` imports under a name, in declaration order.
-    use_targets: HashMap<Symbol, Vec<Vec<Symbol>>>,
+    /// The paths of the names that several `use`s import, in declaration
+    /// order.
+    repeated_uses: HashMap<Symbol, Vec<Vec<Symbol>>>,
     /// The functions a name imports when several `use`s give it different
     /// ones. A call selects one by the type of its first argument.
     imported_functions: HashMap<Symbol, Vec<FuncDefId<'db>>>,
@@ -141,20 +142,28 @@ impl<'db> ModuleEnv<'db> {
 
     /// Add the placeholder of a `use` that imports `path` as `name`.
     pub fn add_use(&mut self, name: Symbol, path: Vec<Symbol>) {
-        let targets = self.use_targets.entry(name.clone()).or_default();
-        if !targets.contains(&path) {
-            targets.push(path.clone());
+        if let Some(Binding::Module { path: earlier }) = self.imports.get(&name)
+            && *earlier != path
+        {
+            let paths = self
+                .repeated_uses
+                .entry(name.clone())
+                .or_insert_with(|| vec![earlier.clone()]);
+            if !paths.contains(&path) {
+                paths.push(path.clone());
+            }
         }
         self.add_import(name, Binding::Module { path });
     }
 
-    /// The names several `use`s import, with every path each one names.
-    pub fn repeated_uses(&self) -> Vec<(Symbol, Vec<Vec<Symbol>>)> {
-        self.use_targets
-            .iter()
-            .filter(|(_, paths)| paths.len() > 1)
-            .map(|(name, paths)| (name.clone(), paths.clone()))
-            .collect()
+    /// Take the paths of the names that several `use`s import, to put back
+    /// with [`Self::set_repeated_uses`].
+    pub fn take_repeated_uses(&mut self) -> HashMap<Symbol, Vec<Vec<Symbol>>> {
+        std::mem::take(&mut self.repeated_uses)
+    }
+
+    pub fn set_repeated_uses(&mut self, repeated: HashMap<Symbol, Vec<Vec<Symbol>>>) {
+        self.repeated_uses = repeated;
     }
 
     /// Record the functions that several `use`s import as `name`.
