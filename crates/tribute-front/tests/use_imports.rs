@@ -562,12 +562,82 @@ fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
             "`size` imports several functions and is not called, \
              so no argument type selects one; name the function by its path",
         ),
+        // A call with the wrong number of arguments still names the function
+        // its arguments select.
+        (
+            "use a::size\nuse b::size\n\
+             fn main() -> Nil {\n    let _ = size(A { n: 1 }, 2)\n}\n",
+            "UFCS arity mismatch for 'size': expected 1 args, got 2",
+        ),
         (
             "use a::size\nuse b::size\n\
              fn main() -> Nil {\n    let _ = size(1)\n}\n",
-            "unresolved path `size`: no function it names takes a first argument of type `Nat`",
+            "unresolved path `size`: no function it names takes arguments of types (`Nat`)",
         ),
     ] {
         assert_eq!(errors(db, &format!("{SIZES}{body}")), [expected], "{body}");
+    }
+}
+
+const PAIRS: &str = r#"
+struct A { n: Nat }
+mod a {
+    pub fn pair(x: super::A, y: Nat) -> Nat { x.n + y }
+    pub fn pick(x: Nat) -> Nat { x }
+    pub fn count(x: super::A) -> Nat { x.n }
+}
+mod b {
+    pub fn pair(x: super::A, y: String) -> Nat { x.n }
+    pub fn pick(x: Nat) -> String { "picked" }
+    pub fn count(x: super::A, y: Nat) -> Nat { x.n + y }
+}
+use a::pair
+use b::pair
+use a::count
+use b::count
+use a::pick
+use b::pick
+fn text(s: String) -> String { s }
+"#;
+
+/// Every argument of a call and the type its result is used at select the
+/// function, in either call syntax.
+#[salsa_test]
+fn a_call_selects_a_function_by_all_its_arguments_and_its_result(db: &salsa::DatabaseImpl) {
+    for body in [
+        // The second argument, whose first parameter the functions share.
+        "let _ = pair(A { n: 1 }, 2) + pair(A { n: 1 }, \"two\")",
+        "let _ = A { n: 1 }.pair(2) + A { n: 1 }.pair(\"two\")",
+        // An argument typed after solving waits for the others to select.
+        "let late = fn(x) { pair(x, 5) }\n    let _ = late(A { n: 1 })",
+        // The number of arguments.
+        "let _ = count(A { n: 1 }) + count(A { n: 1 }, 2)",
+        // The result, used as a `String` and as a `Nat`.
+        "let _ = text(pick(1))\n    let _ = pick(7) + 1",
+    ] {
+        let errors = errors(db, &format!("{PAIRS}fn main() -> Nil {{\n    {body}\n}}\n"));
+        assert!(errors.is_empty(), "{body}: {errors:#?}");
+    }
+}
+
+/// A call that no argument or use of its result decides, or that no
+/// function takes, is reported with the types it has.
+#[salsa_test]
+fn a_call_its_types_do_not_decide_is_reported(db: &salsa::DatabaseImpl) {
+    for (body, expected) in [
+        (
+            "let _ = pick(1)",
+            "ambiguous path `pick` for arguments of types (`Nat`): it names `a::pick`, `b::pick`",
+        ),
+        (
+            "let _ = pair(A { n: 1 }, True)",
+            "unresolved path `pair`: no function it names takes arguments of types (`A`, `Bool`)",
+        ),
+    ] {
+        assert_eq!(
+            errors(db, &format!("{PAIRS}fn main() -> Nil {{\n    {body}\n}}\n")),
+            [expected],
+            "{body}"
+        );
     }
 }

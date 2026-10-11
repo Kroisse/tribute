@@ -3290,3 +3290,45 @@ fn main() ->{Io} Nil {
         "1\n102\n3\n104",
     );
 }
+
+/// A call selects among imported functions by every argument and by the
+/// type its result is used at.
+#[test]
+fn a_call_selects_a_function_by_all_its_arguments_and_its_result() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "function_selection_by_signature.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct A { n: Int }
+
+mod a {
+    pub fn pair(x: super::A, y: Int) -> Int { x.n + y }
+    pub fn pick(x: Int) -> Int { x }
+}
+
+mod b {
+    pub fn pair(x: super::A, y: String) -> Int { x.n + +100 }
+    pub fn pick(x: Int) -> String { "picked" }
+}
+
+use a::pair
+use b::pair
+use a::pick
+use b::pick
+
+fn text(s: String) -> String { s }
+
+fn main() ->{Io} Nil {
+    let late = fn(x) { pair(x, +5) }
+    print_line(Int::to_string(pair(A { n: +1 }, +2)))
+    print_line(Int::to_string(pair(A { n: +1 }, "two")))
+    print_line(Int::to_string(A { n: +1 }.pair("two")))
+    print_line(Int::to_string(late(A { n: +1 })))
+    print_line(text(pick(+1)))
+    print_line(Int::to_string(pick(+7) + +1))
+}
+"#,
+        "3\n101\n101\n6\npicked\n8",
+    );
+}
