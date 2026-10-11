@@ -273,7 +273,7 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 spread,
             } => self.infer_record_type_with_ctx(ctx, expr.id, type_name, fields, spread.as_ref()),
-            ExprKind::MethodCall { .. } => self.infer_method_call_with_ctx(ctx, expr, true),
+            ExprKind::MethodCall { .. } => self.infer_method_call_with_ctx(ctx, expr),
             ExprKind::BinOp { op, lhs, rhs } => {
                 let lhs_ty = self.infer_expr_type_with_ctx(ctx, lhs);
                 let rhs_ty = self.infer_expr_type_with_ctx(ctx, rhs);
@@ -863,7 +863,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.finish_result_join(expr.id);
                 result_ty
             }
-            ExprKind::MethodCall { .. } => self.infer_method_call_with_ctx(ctx, expr, false),
+            ExprKind::MethodCall { .. } => self.infer_method_call_with_ctx(ctx, expr),
             ExprKind::Lambda { .. } | ExprKind::Handle { .. } => {
                 // These constructs need their scoped bodies checked before a
                 // surrounding let can solve/generalize the result relation.
@@ -1449,13 +1449,11 @@ impl<'db> TypeChecker<'db> {
     /// The receiver alone is tried first, so that the other arguments are
     /// inferred against the selected function's parameters. A call it does
     /// not decide infers them on their own and tries again with all of them;
-    /// one still undecided is deferred. `operators` relates the operands of
-    /// an operator that stays undecided.
+    /// one still undecided is deferred.
     fn infer_method_call_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         expr: &Expr<ResolvedRef<'db>>,
-        operators: bool,
     ) -> Type<'db> {
         let ExprKind::MethodCall {
             receiver,
@@ -1522,13 +1520,13 @@ impl<'db> TypeChecker<'db> {
         // For known operator methods, add type constraints eagerly so that
         // type inference can propagate before the method is selected.
         let result_ty = match method.to_string().as_str() {
-            "+" | "-" | "*" | "/" | "%" if operators => {
+            "+" | "-" | "*" | "/" | "%" => {
                 if let Some(rhs_ty) = arg_types.get(1) {
                     ctx.constrain_eq(receiver_ty, *rhs_ty);
                 }
                 receiver_ty
             }
-            "==" | "!=" | "<" | "<=" | ">" | ">=" if operators => {
+            "==" | "!=" | "<" | "<=" | ">" | ">=" => {
                 if let Some(rhs_ty) = arg_types.get(1) {
                     ctx.constrain_eq(receiver_ty, *rhs_ty);
                 }
