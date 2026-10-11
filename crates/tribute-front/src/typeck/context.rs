@@ -188,8 +188,6 @@ pub struct ModuleTypeEnv<'db> {
 
     /// Struct field definitions keyed by nominal declaration identity.
     struct_fields: HashMap<TypeDefId<'db>, StructFieldInfo<'db>>,
-    /// The structs that have a field of each name, in registration order.
-    field_owners: HashMap<Symbol, Vec<TypeDefId<'db>>>,
 
     /// Enum variant information: enum_name → [variant_names]
     /// Used for exhaustiveness checking in case expressions.
@@ -253,7 +251,6 @@ impl<'db> ModuleTypeEnv<'db> {
             constructor_types: HashMap::default(),
             type_defs,
             struct_fields: HashMap::default(),
-            field_owners: HashMap::default(),
             enum_variants: HashMap::default(),
             constructor_field_names: HashMap::default(),
             ability_defs,
@@ -314,36 +311,6 @@ impl<'db> ModuleTypeEnv<'db> {
         Some(matched)
     }
 
-    /// Stop a method call from naming `function` by `method_name`.
-    pub fn unregister_method(&mut self, method_name: &Symbol, function: FuncDefId<'db>) {
-        if let Some(entries) = self.method_index.get_mut(method_name) {
-            entries.retain(|entry| entry.func_id != function);
-        }
-    }
-
-    /// The functions a method call may name by `method_name`: the functions
-    /// of that name, and the getter of every struct with a field of that
-    /// name.
-    pub fn methods_named(&self, method_name: &Symbol) -> Vec<MethodEntry<'db>> {
-        let functions = self.method_index.get(method_name).into_iter().flatten();
-        let getters = self
-            .field_owners
-            .get(method_name)
-            .into_iter()
-            .flatten()
-            .filter_map(|owner| {
-                let mut prefix = owner.qualified(self.db).to_string();
-                let getter =
-                    FuncDefId::new(self.db, crate::qualified_symbol(&mut prefix, method_name));
-                let function = self.field_function(getter)?;
-                Some(MethodEntry {
-                    func_id: getter,
-                    func_ty: function.scheme.body(self.db),
-                })
-            });
-        functions.copied().chain(getters).collect()
-    }
-
     /// Register a constructor's type scheme.
     pub fn register_constructor(&mut self, id: CtorId<'db>, scheme: TypeScheme<'db>) {
         self.constructor_types.insert(id, scheme);
@@ -361,12 +328,6 @@ impl<'db> ModuleTypeEnv<'db> {
         type_params: Vec<TypeParam>,
         fields: Vec<(Symbol, Type<'db>)>,
     ) {
-        for (field, _) in &fields {
-            let owners = self.field_owners.entry(field.clone()).or_default();
-            if !owners.contains(&struct_id) {
-                owners.push(struct_id);
-            }
-        }
         self.struct_fields.insert(struct_id, (type_params, fields));
     }
 

@@ -238,8 +238,6 @@ pub enum NativePipelineStage {
 }
 
 // AST-based pipeline imports
-use tribute_front::ast::visit::{Visit, walk_expr, walk_module};
-use tribute_front::ast::{Expr, ExprKind, SpanMap, TypedRef};
 use tribute_front::ast_to_ir;
 use tribute_front::astgen::ParsedAst;
 use tribute_front::query as ast_query;
@@ -1590,7 +1588,6 @@ pub fn parse_and_lower_ast<'db>(
         &mut tdnr_ast,
         prelude_module(db).iter().map(|p| p.module(db)),
     );
-    report_unresolved_methods(db, &tdnr_ast, &span_map);
 
     Some(ast_typeck::TypeCheckOutput::new(
         db,
@@ -1611,38 +1608,6 @@ pub fn parse_and_lower_ast<'db>(
         result.well_known_types,
         span_map,
     ))
-}
-
-/// Report method calls that remain unresolved after TDNR has had the final
-/// opportunity to use types propagated through the enclosing function.
-fn report_unresolved_methods<'db>(
-    db: &'db dyn salsa::Database,
-    module: &tribute_front::ast::Module<TypedRef<'db>>,
-    span_map: &SpanMap,
-) {
-    struct Report<'a, 'db> {
-        db: &'db dyn salsa::Database,
-        span_map: &'a SpanMap,
-    }
-    impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for Report<'_, 'db> {
-        fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
-            // Type checking reports a path call it cannot resolve.
-            if let ExprKind::MethodCall {
-                method, path: None, ..
-            } = &*expr.kind
-            {
-                Diagnostic::new(
-                    format!("unresolved method '{}' for this receiver type", method),
-                    self.span_map.get_or_default(expr.id),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db);
-            }
-            walk_expr(self, expr);
-        }
-    }
-    walk_module(&mut Report { db, span_map }, module);
 }
 
 /// Run the shared pipeline for diagnostic collection only.
