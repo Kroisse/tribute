@@ -1246,11 +1246,20 @@ fn declared_operations(
     use crate::dialect::ability::{Decl, Operation};
 
     let mut declarations = Vec::new();
+    let mut declared = HashSet::default();
     for &op in module.ops(ctx) {
         let Ok(decl) = Decl::from_op(ctx, op) else {
             continue;
         };
         let ability_ref = decl.ability_ref(ctx);
+        if !declared.insert(ability_ref) {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!("duplicate ability.decl for {ability_ref}"),
+            );
+        }
         let blocks = &ctx.region(decl.operations(ctx)).blocks;
         for &operation in blocks.iter().flat_map(|block| &ctx.block(*block).ops) {
             match Operation::from_op(ctx, operation) {
@@ -3995,6 +4004,21 @@ mod tests {
         let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(
             messages(&result).contains("duplicate operation declaration"),
+            "{result}"
+        );
+
+        let split = DECLARED_PERFORM.replacen(
+            "  ability.decl",
+            r#"  ability.decl {ability_ref = core.ability_ref<{name = "State"}>, sym_name = "Other"} {
+    ability.operation {kind = "op", op_name = "set", param_types = [core.i32], result_type = core.nil}
+  }
+  ability.decl"#,
+            1,
+        );
+        let (ctx, module) = parse_fixture(&split);
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(
+            messages(&result).contains("duplicate ability.decl"),
             "{result}"
         );
     }
