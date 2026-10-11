@@ -207,7 +207,7 @@ impl ExpandDispatches {
     ) -> Option<()> {
         let location = ctx.op(op).location;
         let evidence = ctx.op_operands(op)[0];
-        let ability_ref = ctx.op(op).attributes.get_symbol_ref("ability_ref")?.clone();
+        let ability = ctx.op(op).attributes.get_symbol_ref("ability")?.clone();
         let op_name = ctx.op(op).attributes.get_string_ref("op_name")?;
         let types = self.frames.of(ctx, ctx.value_ty(frame))?;
         let block = make_block(ctx, location, &[]);
@@ -218,17 +218,9 @@ impl ExpandDispatches {
         let dispatch = frame_dispatch(ctx, block, location, &types, frame);
         detach_into(ctx, block, rewriter);
         let anyref = tribute_rt::anyref(ctx).as_type_ref();
-        let payload = pack_payload(
-            ctx,
-            rewriter,
-            location,
-            &ability_ref,
-            op_name,
-            values,
-            anyref,
-        );
+        let payload = pack_payload(ctx, rewriter, location, &ability, op_name, values, anyref);
         let dispatch = effect::DispatchCps::operands(evidence, dispatch, resume, payload)
-            .ability_ref(ability_ref)
+            .ability(ability)
             .op_name(op_name)
             .answer_type(types.answer)
             .build(ctx, location);

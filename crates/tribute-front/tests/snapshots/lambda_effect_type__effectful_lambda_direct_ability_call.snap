@@ -13,13 +13,13 @@ core.module @test {
         ^bb2(%3: core.i32):
           tribute_control.yield %3
       } {
-          tribute_control.handler {ability_ref = @ability_2_5_State_3_int, kind = "op", op_name = "get", operation_result_type = core.i32} {
+          tribute_control.handler {ability = @ability_2_5_State_3_int, kind = "op", op_name = "get", operation_result_type = core.i32} {
             ^bb4(%4: tribute_control.resume_token<core.i32, core.i32>):
               %5 = arith.const {value = 42} : core.i32
               %6 = tribute_control.resume %4, %5 : core.i32
               tribute_control.yield %6
           }
-          tribute_control.handler {ability_ref = @ability_2_5_State_3_int, kind = "op", op_name = "set", operation_result_type = core.nil} {
+          tribute_control.handler {ability = @ability_2_5_State_3_int, kind = "op", op_name = "set", operation_result_type = core.nil} {
             ^bb5(%7: core.i32, %8: tribute_control.resume_token<core.nil, core.i32>):
               %9 = core.nil_value : core.nil
               %10 = tribute_control.resume %8, %9 : core.i32
@@ -30,7 +30,7 @@ core.module @test {
   }
   tribute_control.func @main() -> core.i32 convention(direct) {
       %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
-          %1 = tribute_control.perform {ability_ref = @ability_2_5_State_3_int, op_name = "get", operation_kind = "op"} : core.i32
+          %1 = tribute_control.perform {ability = @ability_2_5_State_3_int, op_name = "get", operation_kind = "op"} : core.i32
           tribute_control.return %1
       }
       %2 = tribute_control.call %0 {callee = @run_with_state} : core.i32

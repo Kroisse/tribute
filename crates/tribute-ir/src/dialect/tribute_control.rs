@@ -129,7 +129,7 @@ mod tribute_control {
 
     // Direct-style control operations
     fn perform(
-        ability_ref: Attr<SymbolRef>,
+        ability: Attr<SymbolRef>,
         op_name: Attr<String>,
         operation_kind: Attr<String>,
         args: Variadic<_>,
@@ -147,7 +147,7 @@ mod tribute_control {
     }
 
     fn handler(
-        ability_ref: Attr<SymbolRef>,
+        ability: Attr<SymbolRef>,
         op_name: Attr<String>,
         kind: Attr<String>,
         operation_result_type: Attr<Type>,
@@ -1122,7 +1122,7 @@ inventory::submit! {
 /// validation reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OperationDeclaration {
-    pub ability_ref: SymbolPath,
+    pub ability: SymbolPath,
     pub op_name: StringRef,
     pub kind: StringRef,
     pub parameter_types: Vec<TypeRef>,
@@ -1153,14 +1153,14 @@ impl CompilerIntrinsicDeclaration {
 
 impl OperationDeclaration {
     pub fn new(
-        ability_ref: impl Into<SymbolPath>,
+        ability: impl Into<SymbolPath>,
         op_name: StringRef,
         kind: StringRef,
         parameter_types: impl IntoIterator<Item = TypeRef>,
         result_type: TypeRef,
     ) -> Self {
         Self {
-            ability_ref: ability_ref.into(),
+            ability: ability.into(),
             op_name,
             kind,
             parameter_types: parameter_types.into_iter().collect(),
@@ -1184,11 +1184,11 @@ pub fn declare_operations(
         .expect("a module that declares ability operations has a body block");
     let mut instances = Vec::new();
     for declaration in declarations {
-        if !instances.contains(&&declaration.ability_ref) {
-            instances.push(&declaration.ability_ref);
+        if !instances.contains(&&declaration.ability) {
+            instances.push(&declaration.ability);
         }
     }
-    for ability_ref in instances {
+    for ability in instances {
         let block = ctx.create_block(BlockData {
             location,
             args: vec![],
@@ -1197,7 +1197,7 @@ pub fn declare_operations(
         });
         for declaration in declarations
             .iter()
-            .filter(|declaration| declaration.ability_ref == *ability_ref)
+            .filter(|declaration| declaration.ability == *ability)
         {
             let operation = crate::dialect::ability::Operation::operands()
                 .op_name(declaration.op_name)
@@ -1213,11 +1213,11 @@ pub fn declare_operations(
             parent_op: None,
         });
         debug_assert!(
-            ability_ref.modules().is_empty(),
+            ability.modules().is_empty(),
             "an ability instance is declared in the root module"
         );
         let decl = crate::dialect::ability::Decl::operands()
-            .sym_name(ability_ref.leaf().to_string())
+            .sym_name(ability.leaf().to_string())
             .regions(operations)
             .build(ctx, location);
         ctx.push_op(module_block, decl.op_ref());
@@ -1242,14 +1242,14 @@ fn declared_operations(
         let Ok(decl) = Decl::from_op(ctx, op) else {
             continue;
         };
-        let Some(ability_ref) = qualified_name(ctx, op) else {
+        let Some(ability) = qualified_name(ctx, op) else {
             continue;
         };
         let blocks = &ctx.region(decl.operations(ctx)).blocks;
         for &operation in blocks.iter().flat_map(|block| &ctx.block(*block).ops) {
             match Operation::from_op(ctx, operation) {
                 Ok(operation) => declarations.push(OperationDeclaration {
-                    ability_ref: ability_ref.clone(),
+                    ability: ability.clone(),
                     op_name: operation.op_name_ref(ctx),
                     kind: operation.kind_ref(ctx),
                     parameter_types: operation.param_types(ctx).collect(),
@@ -1943,7 +1943,7 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
         }
         let data = ctx.op(child);
         if let (Some(ability), Some(name)) = (
-            data.attributes.get_symbol_ref("ability_ref"),
+            data.attributes.get_symbol_ref("ability"),
             data.attributes.get_string_ref("op_name"),
         ) && !clauses.insert((ability, name))
         {
@@ -2439,13 +2439,13 @@ fn declaration_map<'a>(
 ) -> HashMap<(&'a SymbolPath, StringRef), &'a OperationDeclaration> {
     let mut map = HashMap::default();
     for declaration in declarations {
-        let key = (&declaration.ability_ref, declaration.op_name);
+        let key = (&declaration.ability, declaration.op_name);
         if map.insert(key, declaration).is_some() {
             push_type_error(
                 errors,
                 format!(
                     "duplicate operation declaration for {}::{}",
-                    declaration.ability_ref,
+                    declaration.ability,
                     ctx.str(declaration.op_name)
                 ),
             );
@@ -2875,7 +2875,7 @@ fn callable_block_arg_has_source_contract(
     if is_control_op(ctx, owner, "handler") && ctx.op_regions(owner).eq([region]) {
         let data = ctx.op(owner);
         if let (Some(ability), Some(name), Some(kind)) = (
-            data.attributes.get_symbol_ref("ability_ref"),
+            data.attributes.get_symbol_ref("ability"),
             data.attributes.get_string_ref("op_name"),
             data.attributes.get_string_ref("kind"),
         ) {
@@ -3196,7 +3196,7 @@ fn validate_declaration_uses(
         };
         let data = ctx.op(op);
         let (Some(ability), Some(name)) = (
-            data.attributes.get_symbol_ref("ability_ref"),
+            data.attributes.get_symbol_ref("ability"),
             data.attributes.get_string_ref("op_name"),
         ) else {
             return;
@@ -3758,7 +3758,7 @@ mod tests {
 
         let body_block = block(&mut ctx, loc, &[]);
         let perform = Perform::operands([x])
-            .ability_ref(ability.clone())
+            .ability(ability.clone())
             .op_name("get")
             .operation_kind("op")
             .results(i32_ty)
@@ -3786,7 +3786,7 @@ mod tests {
         ctx.push_op(handler_block, handler_yield.op_ref());
         let handler_body = region(&mut ctx, loc, handler_block);
         let handler = Handler::operands()
-            .ability_ref(ability.clone())
+            .ability(ability.clone())
             .op_name("get")
             .kind("op")
             .operation_result_type(i32_ty)
@@ -3844,13 +3844,13 @@ mod tests {
       tribute_control.return %value
     }
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %value {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %value {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^completion(%completed: core.i32):
         tribute_control.yield %completed
     } {
-      tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+      tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^handler(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
@@ -3896,9 +3896,9 @@ mod tests {
         let handler_body = ctx.op_region(handler, 0).unwrap();
         let handler_block = ctx.region(handler_body).blocks[0];
         let handler_data = ctx.op(handler);
-        let ability_ref = handler_data
+        let ability = handler_data
             .attributes
-            .get_symbol_ref("ability_ref")
+            .get_symbol_ref("ability")
             .cloned()
             .expect("handler ability");
         let op_name = handler_data
@@ -3915,7 +3915,7 @@ mod tests {
             .expect("handler operation result");
         let parameter_types = block_arg_types(&ctx, handler_block);
         let declarations = vec![OperationDeclaration::new(
-            ability_ref,
+            ability,
             op_name,
             kind,
             parameter_types[..parameter_types.len() - 1].iter().copied(),
@@ -3934,7 +3934,7 @@ mod tests {
 
     const DECLARED_PERFORM: &str = r#"core.module @test {
   tribute_control.func @run() -> core.i32 convention(cps) {
-    %value = tribute_control.perform {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
+    %value = tribute_control.perform {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
     tribute_control.return %value
   }
   ability.decl {sym_name = "State"} {
@@ -4446,8 +4446,8 @@ mod tests {
   tribute_control.func @malformed() -> core.i32 convention(direct)
   %ref = tribute_control.func_ref {func_ref = 1} : !callable
   %call = tribute_control.call {callee = 1} : core.i32
-  %perform = tribute_control.perform {ability_ref = 1, op_name = 2, operation_kind = 3} : core.i32
-  tribute_control.handler {ability_ref = 1, op_name = 2, kind = 3, operation_result_type = 4} {
+  %perform = tribute_control.perform {ability = 1, op_name = 2, operation_kind = 3} : core.i32
+  tribute_control.handler {ability = 1, op_name = 2, kind = 3, operation_result_type = 4} {
     %constant = arith.const {value = 0} : core.i32
     tribute_control.yield %constant
   }
@@ -4487,7 +4487,7 @@ mod tests {
             &result,
             control_op(&ctx, module, "perform"),
             &[
-                "attribute `ability_ref` must be a SymbolRef attribute",
+                "attribute `ability` must be a SymbolRef attribute",
                 "attribute `op_name` must be a String attribute",
                 "attribute `operation_kind` must be a String attribute",
             ],
@@ -4496,7 +4496,7 @@ mod tests {
             &result,
             control_op(&ctx, module, "handler"),
             &[
-                "attribute `ability_ref` must be a SymbolRef attribute",
+                "attribute `ability` must be a SymbolRef attribute",
                 "attribute `op_name` must be a String attribute",
                 "attribute `kind` must be a String attribute",
                 "attribute `operation_result_type` must be a Type attribute",
@@ -4512,7 +4512,7 @@ mod tests {
   !never = core.never
   %value = arith.const {value = 0} : !wrapper
   %call = tribute_control.call %value {callee = @id} : !wrapper
-  %perform = tribute_control.perform %value {ability_ref = @State, op_name = "get", operation_kind = "op"} : !wrapper
+  %perform = tribute_control.perform %value {ability = @State, op_name = "get", operation_kind = "op"} : !wrapper
 }"#,
         );
         let never = ctx
@@ -4610,8 +4610,8 @@ mod tests {
   %non_callable = tribute_control.call_indirect %integer, %boolean : core.i32
   %callable = tribute_control.func_ref {func_ref = @bad_func} : !direct
   %mismatched = tribute_control.call_indirect %callable, %boolean : core.i1
-  %bad_perform = tribute_control.perform %integer {ability_ref = @State, op_name = "get", operation_kind = "bogus"} : core.i32
-  tribute_control.handler {ability_ref = @State, op_name = "get", kind = "bogus", operation_result_type = core.i32} {
+  %bad_perform = tribute_control.perform %integer {ability = @State, op_name = "get", operation_kind = "bogus"} : core.i32
+  tribute_control.handler {ability = @State, op_name = "get", kind = "bogus", operation_result_type = core.i32} {
     ^clause(%argument: core.i32):
       tribute_control.yield %argument
   }
@@ -4810,7 +4810,7 @@ mod tests {
       tribute_control.yield %value
   } {
     %not_a_handler = arith.const {value = 0} : core.i32
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i1, core.i1>):
         %wrong = arith.const {value = false} : core.i1
         tribute_control.yield %wrong
@@ -4842,7 +4842,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "fn", op_name = "get", operation_result_type = core.i1} {
+    tribute_control.handler {ability = @State, kind = "fn", op_name = "get", operation_result_type = core.i1} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         tribute_control.yield %argument
     }
@@ -5009,8 +5009,8 @@ mod tests {
   %missing_call = tribute_control.call {callee = @missing} : core.i32
   %false = arith.const {value = false} : core.i1
   %bad_call = tribute_control.call %false {callee = @id} : core.i1
-  %unknown_perform = tribute_control.perform {ability_ref = @State, op_name = "missing", operation_kind = "op"} : core.i32
-  %bad_perform = tribute_control.perform %false {ability_ref = @State, op_name = "get", operation_kind = "fn"} : core.i1
+  %unknown_perform = tribute_control.perform {ability = @State, op_name = "missing", operation_kind = "op"} : core.i32
+  %bad_perform = tribute_control.perform %false {ability = @State, op_name = "get", operation_kind = "fn"} : core.i1
   %duplicate_capture = tribute_control.lambda() -> core.i1 convention(direct) captures [%false, %false] {
     tribute_control.return %false
   }
@@ -5027,7 +5027,7 @@ mod tests {
             .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
             .expect("core.i32");
         let declaration = OperationDeclaration {
-            ability_ref: SymbolPath::from("State"),
+            ability: SymbolPath::from("State"),
             op_name: ctx.intern_str("get"),
             kind: ctx.intern_str("op"),
             parameter_types: vec![i32_ty],
@@ -5066,18 +5066,18 @@ mod tests {
             r#"core.module @test {
   %handled = tribute_control.handle : core.i32 {
     %input = arith.const {value = 0} : core.i32
-    %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
+    %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
     tribute_control.yield %performed
   } {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^first(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %resumed = tribute_control.resume %token, %argument : core.i32
         tribute_control.yield %resumed
     }
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^duplicate(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %resumed = tribute_control.resume %token, %argument : core.i32
         tribute_control.yield %resumed
@@ -5091,7 +5091,7 @@ mod tests {
         let declarations = [OperationDeclaration::new(
             handler_data
                 .attributes
-                .get_symbol_ref("ability_ref")
+                .get_symbol_ref("ability")
                 .cloned()
                 .unwrap(),
             handler_data.attributes.get_string_ref("op_name").unwrap(),
@@ -5126,7 +5126,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %first = tribute_control.resume %token, %argument : core.i32
         %second = tribute_control.resume %token, %argument : core.i32
@@ -5150,7 +5150,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %inner = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
           %resumed = tribute_control.resume %token, %argument : core.i32
@@ -5198,7 +5198,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %first = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
           %resumed = tribute_control.resume %token, %argument : core.i32
@@ -5231,7 +5231,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %flag = arith.const {value = true} : core.i1
         %value = scf.if %flag : core.i32 {
@@ -5277,7 +5277,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %choice = arith.const {value = 0} : core.i32
         scf.switch %choice {
@@ -5342,7 +5342,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %continuation = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
           %resumed = tribute_control.resume %token, %argument : core.i32
@@ -5372,7 +5372,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         tribute_control.yield %token
     }
@@ -5393,7 +5393,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.never} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.never} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %resumed = tribute_control.resume %token, %argument : core.i32
         tribute_control.yield %resumed
@@ -5426,7 +5426,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !malformed = tribute_control.resume_token<core.i32>
-  tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+  tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
     ^clause(%value: core.i32, %token: !malformed):
       %resumed = tribute_control.resume %token, %value : core.i32
       tribute_control.yield %resumed
@@ -5476,7 +5476,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %inner = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
           %resumed = tribute_control.resume %token, %argument : core.i32
@@ -5511,7 +5511,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
+    tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
       ^outer_clause(%argument: core.i32, %outer_token: tribute_control.resume_token<core.i32, core.i32>):
         %nested = tribute_control.handle : core.i32 {
           tribute_control.yield %argument
@@ -5519,7 +5519,7 @@ mod tests {
           ^nested_completion(%value: core.i32):
             tribute_control.yield %value
         } {
-          tribute_control.handler {ability_ref = @State, kind = "fn", op_name = "get", operation_result_type = core.i32} {
+          tribute_control.handler {ability = @State, kind = "fn", op_name = "get", operation_result_type = core.i32} {
             ^inner_clause(%inner_argument: core.i32):
               %crossed = tribute_control.resume %outer_token, %inner_argument : core.i32
               tribute_control.yield %crossed
@@ -5970,7 +5970,7 @@ mod tests {
       ^completion(%completed: core.i32):
         tribute_control.yield %completed
     } {
-      tribute_control.handler {ability_ref = @Callback, kind = "fn", op_name = "apply", operation_result_type = core.i32} {
+      tribute_control.handler {ability = @Callback, kind = "fn", op_name = "apply", operation_result_type = core.i32} {
         ^handler(%callback: !F):
           %called = tribute_control.call_indirect %callback, %value : core.i32
           tribute_control.yield %called
@@ -5987,7 +5987,7 @@ mod tests {
         let ability = ctx
             .op(handler)
             .attributes
-            .get_symbol_ref("ability_ref")
+            .get_symbol_ref("ability")
             .cloned()
             .unwrap();
         let operation_result = ctx

@@ -428,7 +428,7 @@ control을 다른 runtime 장치로 구현한다면 이 pass 대신 자기 lower
 
 ```text
 %result = ability.call %arg
-  { ability_ref = @Logger, op_name = "log" }
+  { ability = @Logger, op_name = "log" }
 ```
 
 `lower_ability_call`은 enclosing callable의 exact `EvidenceDirect`/`Cps`
@@ -449,7 +449,7 @@ payload를 pack한다.
 %product = pack %args into the canonical operation payload product
 %payload = cast %product to anyref
 effect.dispatch_cps %ev, %dispatch, %resume, %payload
-  { ability_ref = @State, op_name = "get", answer_type = R }
+  { ability = @State, op_name = "get", answer_type = R }
 ```
 
 필수 `answer_type: Type`은 `ContinuationFrame<R>`의 의미적 `R`이다. 호출 결과,
@@ -630,7 +630,7 @@ CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 
 
 ```text
 %ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %outer
-  { ability_ref = @State }
+  { ability = @State }
 ```
 
 Concrete Marker layout은 backend가 소유한다. Native는
@@ -862,16 +862,16 @@ semantics and concrete runtime layout.
 Operations:
 
 - `effect.extend(evidence, prompt_tag, tr_dispatch_fn, outer)
-  { ability_ref } -> evidence`
-- `effect.mask(evidence) { ability_ref } -> evidence`
-- `effect.dup(evidence) { ability_ref } -> evidence`
-- `effect.outer(evidence) { ability_ref } -> evidence`
+  { ability } -> evidence`
+- `effect.mask(evidence) { ability } -> evidence`
+- `effect.dup(evidence) { ability } -> evidence`
+- `effect.outer(evidence) { ability } -> evidence`
 - `effect.tail(evidence) { index } -> evidence`
 - `effect.with_tail(evidence, tail) { index } -> evidence`
-- `effect.push(evidence, source) { ability_ref } -> evidence`
-- `effect.dispatch_tail(evidence, payload) { ability_ref, op_name } -> result`
+- `effect.push(evidence, source) { ability } -> evidence`
+- `effect.dispatch_tail(evidence, payload) { ability, op_name } -> result`
 - `effect.dispatch_cps(evidence, dispatch, resume, payload)
-  { ability_ref, op_name, answer_type } -> ()`
+  { ability, op_name, answer_type } -> ()`
 
 Rules:
 

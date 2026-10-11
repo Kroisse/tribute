@@ -104,26 +104,26 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
         ));
     }
-    let Some(Attribute::List(ability_refs)) = data.attributes.get("ability_refs") else {
+    let Some(Attribute::List(abilities)) = data.attributes.get("abilities") else {
         return Err(error(
-            "final ability.handle_dispatch requires an ability_refs list".into(),
+            "final ability.handle_dispatch requires an abilities list".into(),
         ));
     };
-    if ability_refs.len() != dispatchers.len() {
+    if abilities.len() != dispatchers.len() {
         return Err(error(format!(
-            "ability_refs cardinality {} does not match {} dispatcher operands",
-            ability_refs.len(),
+            "abilities cardinality {} does not match {} dispatcher operands",
+            abilities.len(),
             dispatchers.len()
         )));
     }
-    let mut handled = Vec::with_capacity(ability_refs.len());
-    for (ability_ref, &tr_dispatch) in ability_refs.iter().zip(dispatchers) {
-        let Attribute::SymbolRef(ability_ref) = ability_ref else {
+    let mut handled = Vec::with_capacity(abilities.len());
+    for (ability, &tr_dispatch) in abilities.iter().zip(dispatchers) {
+        let Attribute::SymbolRef(ability) = ability else {
             return Err(error(
-                "every ability_refs entry must name an ability instance".into(),
+                "every abilities entry must name an ability instance".into(),
             ));
         };
-        handled.push((ability_ref.clone(), tr_dispatch));
+        handled.push((ability.clone(), tr_dispatch));
     }
     let Ok(body) = ctx.op_regions(op).exactly_one() else {
         return Err(error(
@@ -281,19 +281,19 @@ fn apply_evidence_plan(
         selected = match step {
             EvidenceStep::Mask(instance) => {
                 let mask = effect::Mask::operands(selected)
-                    .ability_ref(instance.clone())
+                    .ability(instance.clone())
                     .build(ctx, location);
                 stack_op(ctx, (mask.op_ref(), mask.result(ctx)))
             }
             EvidenceStep::Dup(instance) => {
                 let dup = effect::Dup::operands(selected)
-                    .ability_ref(instance.clone())
+                    .ability(instance.clone())
                     .build(ctx, location);
                 stack_op(ctx, (dup.op_ref(), dup.result(ctx)))
             }
             EvidenceStep::Outer(instance) => {
                 let outer = effect::Outer::operands(selected)
-                    .ability_ref(instance.clone())
+                    .ability(instance.clone())
                     .build(ctx, location);
                 source = stack_op(ctx, (outer.op_ref(), outer.result(ctx)));
                 source
@@ -306,7 +306,7 @@ fn apply_evidence_plan(
             }
             EvidenceStep::Push(instance) => {
                 let push = effect::Push::operands(selected, source)
-                    .ability_ref(instance.clone())
+                    .ability(instance.clone())
                     .build(ctx, location);
                 stack_op(ctx, (push.op_ref(), push.result(ctx)))
             }
@@ -400,14 +400,14 @@ fn resolve_delimiters(
                     erase_op(ctx, prompt_op);
                     prompt_tag = resolved;
                 }
-                for (ability_ref, tr_dispatch) in shape.dispatchers {
+                for (ability, tr_dispatch) in shape.dispatchers {
                     let extend = effect::Extend::operands(
                         current_ev,
                         prompt_tag,
                         tr_dispatch,
                         shape.evidence,
                     )
-                    .ability_ref(ability_ref)
+                    .ability(ability)
                     .build(ctx, location);
                     current_ev = extend.result(ctx);
                     ctx.insert_op_before(block, op, extend.op_ref());
@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn final_handle_dispatch_extends_each_ability_and_lowers_resultlessly() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt, %tr, %tr2 {ability_refs = [@State, @Console]} {
+            r#"ability.handle_dispatch %ev, %prompt, %tr, %tr2 {abilities = [@State, @Console]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn handle_selection_masks_the_outer_evidence_before_extending() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [@State], evidence_plan = [{mask = @State}]} {
+            r#"ability.handle_dispatch %ev, %prompt, %tr {abilities = [@State], evidence_plan = [{mask = @State}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -575,8 +575,8 @@ mod tests {
         assert_eq!(
             body[..2],
             [
-                r#"%4 = effect.mask %0 {ability_ref = @State} : !evidence"#,
-                r#"%5 = effect.extend %4, %1, %2, %0 {ability_ref = @State} : !evidence"#,
+                r#"%4 = effect.mask %0 {ability = @State} : !evidence"#,
+                r#"%5 = effect.extend %4, %1, %2, %0 {ability = @State} : !evidence"#,
             ],
             "{body:#?}"
         );
@@ -598,10 +598,10 @@ mod tests {
         assert_eq!(
             body,
             [
-                r#"%4 = effect.mask %0 {ability_ref = @State} : !evidence"#,
-                r#"%5 = effect.dup %4 {ability_ref = @Console} : !evidence"#,
+                r#"%4 = effect.mask %0 {ability = @State} : !evidence"#,
+                r#"%5 = effect.dup %4 {ability = @Console} : !evidence"#,
                 r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
-                r#"%7 = effect.dup %0 {ability_ref = @State} : !evidence"#,
+                r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
                 r#"func.tail_call_indirect %2, %7, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
             ],
             "{body:#?}"
@@ -624,11 +624,11 @@ mod tests {
             body,
             [
                 r#"%4 = effect.tail %0 {index = 1} : !evidence"#,
-                r#"%5 = effect.push %4, %0 {ability_ref = @State} : !evidence"#,
+                r#"%5 = effect.push %4, %0 {ability = @State} : !evidence"#,
                 r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
-                r#"%7 = effect.dup %0 {ability_ref = @State} : !evidence"#,
+                r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
                 r#"%8 = effect.with_tail %7, %0 {index = 0} : !evidence"#,
-                r#"%9 = effect.mask %0 {ability_ref = @State} : !evidence"#,
+                r#"%9 = effect.mask %0 {ability = @State} : !evidence"#,
                 r#"%10 = effect.with_tail %8, %9 {index = 1} : !evidence"#,
                 r#"func.tail_call_indirect %2, %10, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
             ],
@@ -654,7 +654,7 @@ mod tests {
     fn final_handle_dispatch_materializes_a_fresh_prompt_tag_once() {
         let input = final_dispatch_fixture(
             r#"%fresh = effect.fresh_prompt_tag : core.i32
-    ability.handle_dispatch %ev, %fresh, %tr {ability_refs = [@State]} {
+    ability.handle_dispatch %ev, %fresh, %tr {abilities = [@State]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -697,14 +697,14 @@ mod tests {
     fn malformed_final_handle_dispatches_fail_before_mutation() {
         let malformed = [
             (
-                r#"%result = ability.handle_dispatch %ev, %prompt {ability_refs = []} : core.i32 {
+                r#"%result = ability.handle_dispatch %ev, %prompt {abilities = []} : core.i32 {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "must be resultless",
             ),
             (
-                r#"ability.handle_dispatch {ability_refs = []} {
+                r#"ability.handle_dispatch {abilities = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -718,7 +718,7 @@ mod tests {
                 "requires a prompt-tag operand",
             ),
             (
-                r#"ability.handle_dispatch %ev, %tr {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %tr {abilities = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -729,43 +729,43 @@ mod tests {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
-                "requires an ability_refs list",
+                "requires an abilities list",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {abilities = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "cardinality",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [1]} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {abilities = [1]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "must name an ability instance",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.i32]} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {abilities = [core.i32]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "must name an ability instance",
             ),
             (
-                r#"ability.handle_dispatch %prompt, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %prompt, %prompt {abilities = []} {
       ^body(%inner: core.i32):
         func.unreachable
     }"#,
                 "must have the evidence type",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
     }"#,
                 "exactly one block",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^first(%inner: !evidence):
         func.unreachable
       ^second:
@@ -774,20 +774,20 @@ mod tests {
                 "exactly one block",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body:
         func.unreachable
     }"#,
                 "one evidence argument",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body(%inner: !evidence):
     }"#,
                 "must end in a proper tail transfer",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body(%inner: !evidence):
         func.return
     }"#,
@@ -809,7 +809,7 @@ mod tests {
     #[test]
     fn structured_final_delimiter_is_a_valid_proper_tail_body() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+            r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body(%inner: !evidence):
         %choice = arith.const {value = 0} : core.i32
         scf.switch %choice {
@@ -827,9 +827,9 @@ mod tests {
     #[test]
     fn final_delimiter_accepts_resultless_effect_cps_dispatch() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+            r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body(%inner: !evidence):
-        effect.dispatch_cps %inner, %tr, %tr2, %tr2 {ability_ref = @State, op_name = "get"}
+        effect.dispatch_cps %inner, %tr, %tr2, %tr2 {ability = @State, op_name = "get"}
     }"#,
         );
         let mut ctx = IrContext::new();
@@ -845,7 +845,7 @@ mod tests {
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
   func.func @body(%ev: !evidence, %prompt: core.i32) -> core.never {
-    ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+    ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body(%inner: !evidence):
         func.tail_call %inner {callee = @finish}
     }

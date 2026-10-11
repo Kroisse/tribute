@@ -25,15 +25,15 @@ pub(crate) fn i32_type(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
 }
 
-/// Insert the stable ability id of `ability_ref` as an `i32` constant.
+/// Insert the stable ability id of `ability` as an `i32` constant.
 pub(crate) fn insert_ability_id(
     ctx: &mut IrContext,
     loc: Location,
-    ability_ref: &SymbolPath,
+    ability: &SymbolPath,
     rewriter: &mut PatternRewriter<'_>,
 ) -> ValueRef {
     let i32_ty = i32_type(ctx);
-    let ability_id = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
+    let ability_id = ability::ability_id_const(ctx, loc, i32_ty, ability);
     rewriter.insert_op(ability_id.op_ref());
     ability_id.result(ctx)
 }
@@ -41,12 +41,12 @@ pub(crate) fn insert_ability_id(
 fn insert_op_idx(
     ctx: &mut IrContext,
     loc: Location,
-    ability_ref: &SymbolPath,
+    ability: &SymbolPath,
     op_name: StringRef,
     rewriter: &mut PatternRewriter<'_>,
 ) -> ValueRef {
     let i32_ty = i32_type(ctx);
-    let op_idx = compute_op_idx(ability_ref, ctx.str(op_name));
+    let op_idx = compute_op_idx(ability, ctx.str(op_name));
     let constant = arith::Const::operands()
         .value(Attribute::Int(op_idx as i128))
         .results(i32_ty)
@@ -93,11 +93,7 @@ pub(crate) fn is_valid_tail_dispatch(
     let results = ctx.op_result_types(op).to_vec();
     if operands.len() != 2
         || results.len() != 1
-        || ctx
-            .op(op)
-            .attributes
-            .get_symbol_ref("ability_ref")
-            .is_none()
+        || ctx.op(op).attributes.get_symbol_ref("ability").is_none()
         || ctx.op(op).attributes.get_string_ref("op_name").is_none()
     {
         return false;
@@ -123,14 +119,8 @@ pub(crate) fn lower_tail_dispatch(
     let loc = ctx.op(op).location;
     let evidence = dispatch_op.evidence(ctx);
     let payload = dispatch_op.payload(ctx);
-    let ability_ref = dispatch_op.ability_ref(ctx).clone();
-    let op_idx = insert_op_idx(
-        ctx,
-        loc,
-        &ability_ref,
-        dispatch_op.op_name_ref(ctx),
-        rewriter,
-    );
+    let ability = dispatch_op.ability(ctx).clone();
+    let op_idx = insert_op_idx(ctx, loc, &ability, dispatch_op.op_name_ref(ctx), rewriter);
     let (function, env) = insert_closure_parts(ctx, loc, dispatch_closure, rewriter);
     let result_ty = ctx.op_result_types(op)[0];
     let args = [evidence, env, op_idx, payload];
@@ -189,11 +179,7 @@ pub(crate) fn is_valid_cps_dispatch(
 ) -> bool {
     if !ctx.op_result_types(op).is_empty()
         || ctx.op(op).attributes.get_type("answer_type").is_none()
-        || ctx
-            .op(op)
-            .attributes
-            .get_symbol_ref("ability_ref")
-            .is_none()
+        || ctx.op(op).attributes.get_symbol_ref("ability").is_none()
         || ctx.op(op).attributes.get_string_ref("op_name").is_none()
         || ctx.op_operands(op).len() != 4
     {
@@ -224,14 +210,8 @@ pub(crate) fn lower_cps_dispatch(
 ) {
     let dispatch_op = effect::DispatchCps::from_op(ctx, op).expect("CPS dispatch");
     let loc = ctx.op(op).location;
-    let ability_ref = dispatch_op.ability_ref(ctx).clone();
-    let op_idx = insert_op_idx(
-        ctx,
-        loc,
-        &ability_ref,
-        dispatch_op.op_name_ref(ctx),
-        rewriter,
-    );
+    let ability = dispatch_op.ability(ctx).clone();
+    let op_idx = insert_op_idx(ctx, loc, &ability, dispatch_op.op_name_ref(ctx), rewriter);
     let (function, env) = insert_closure_parts(ctx, loc, dispatch_op.dispatch(ctx), rewriter);
 
     // Closure lowering keeps a packed continuation at its semantic closure
@@ -268,17 +248,13 @@ pub(crate) fn pack_payload(
     ctx: &mut IrContext,
     rewriter: &mut PatternRewriter<'_>,
     location: trunk_ir::types::Location,
-    ability_ref: &SymbolPath,
+    ability: &SymbolPath,
     op_name: StringRef,
     values: &[ValueRef],
     anyref: TypeRef,
 ) -> ValueRef {
-    let payload_type = ability::operation_payload_type_ref(
-        ctx,
-        ability_ref,
-        op_name,
-        values.iter().map(|_| anyref),
-    );
+    let payload_type =
+        ability::operation_payload_type_ref(ctx, ability, op_name, values.iter().map(|_| anyref));
     let dynamic_values = values
         .iter()
         .map(|&value| {

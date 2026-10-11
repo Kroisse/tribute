@@ -546,9 +546,9 @@ fn main() -> Nil { }
     let instance = |name: &str| {
         let function = logical_function(&ir_text, name);
         let start = function
-            .find("ability_ref = @")
+            .find("ability = @")
             .unwrap_or_else(|| panic!("{name} performs an ability:\n{function}"))
-            + "ability_ref = @".len();
+            + "ability = @".len();
         let symbol = &function[start..];
         symbol[..symbol.find([',', '}']).unwrap()].to_owned()
     };

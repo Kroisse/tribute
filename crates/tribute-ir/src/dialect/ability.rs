@@ -32,14 +32,14 @@ mod ability {
     /// Resultless proper-tail handler delimiter emitted by
     /// `lower_continuation_frames`.
     ///
-    /// `ability_refs` is ordered to match `dispatchers`: one `tr_dispatch_fn`
+    /// `abilities` is ordered to match `dispatchers`: one `tr_dispatch_fn`
     /// per handled ability instance, which rejects when the instance has no
     /// `fn` operation handled here. `resolve_evidence` allocates one
     /// runtime-unique prompt identity for the delimiter and shares it across
     /// every instance. The body entry block receives the extended evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
     fn handle_dispatch(
-        ability_refs: Attr<[SymbolRef]>,
+        abilities: Attr<[SymbolRef]>,
         evidence: Value<_>,
         prompt_tag: Value<_>,
         dispatchers: Variadic<_>,
@@ -55,11 +55,11 @@ mod ability {
     ///
     /// ```text
     /// %result = ability.call %args...
-    ///   { ability_ref = @State, op_name = "get" }
+    ///   { ability = @State, op_name = "get" }
     /// ```
     ///
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
-    fn call(ability_ref: Attr<SymbolRef>, op_name: Attr<String>, values: Variadic<_>) -> Value<_> {}
+    fn call(ability: Attr<SymbolRef>, op_name: Attr<String>, values: Variadic<_>) -> Value<_> {}
 
     // === Abstract continuation frames ===
     //
@@ -116,7 +116,7 @@ mod ability {
     /// the rest of the computation with no one-shot check. Expanding the
     /// operation adds the check.
     fn perform<F: Frame, C>(
-        ability_ref: Attr<SymbolRef>,
+        ability: Attr<SymbolRef>,
         op_name: Attr<String>,
         evidence: Value<Evidence>,
         frame: Value<F>,
@@ -130,7 +130,7 @@ mod ability {
     /// Perform an operation returning `core.never` through the frame's
     /// dispatcher, with no resumption.
     fn abort<F: Frame>(
-        ability_ref: Attr<SymbolRef>,
+        ability: Attr<SymbolRef>,
         op_name: Attr<String>,
         evidence: Value<Evidence>,
         frame: Value<F>,
@@ -250,7 +250,7 @@ impl CallableExitModel for Perform {
         let data = ctx.op(self.op_ref());
         if !ctx.op_has_regions(self.op_ref())
             && ctx.op_operands(self.op_ref()).len() >= 3
-            && data.attributes.get_symbol_ref("ability_ref").is_some()
+            && data.attributes.get_symbol_ref("ability").is_some()
             && data.attributes.get_string_ref("op_name").is_some()
         {
             Ok(())
@@ -278,10 +278,10 @@ impl CallableExitModel for HandleDispatch {
                 .is_some_and(|region| ctx.region(region).blocks.len() == 1)
             && ctx.op_operands(self.op_ref()).len() >= 2
             && matches!(
-                data.attributes.get("ability_refs"),
-                Some(trunk_ir::types::Attribute::List(ability_refs))
-                    if ability_refs.iter().all(|ability_ref| matches!(
-                        ability_ref,
+                data.attributes.get("abilities"),
+                Some(trunk_ir::types::Attribute::List(abilities))
+                    if abilities.iter().all(|ability| matches!(
+                        ability,
                         trunk_ir::types::Attribute::SymbolRef(_)
                     ))
             )
@@ -695,15 +695,15 @@ mod tests {
     }
 
     #[test]
-    fn callable_exit_rejects_malformed_ability_refs_attribute() {
-        for ability_refs in ["@not_a_list", "[1]"] {
+    fn callable_exit_rejects_malformed_abilities_attribute() {
+        for abilities in ["@not_a_list", "[1]"] {
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
   func.func @main(%evidence: core.ptr, %prompt: core.i32) {{
-    ability.handle_dispatch %evidence, %prompt {{ability_refs = {ability_refs}}} {{
+    ability.handle_dispatch %evidence, %prompt {{abilities = {abilities}}} {{
       func.unreachable
     }}
   }}

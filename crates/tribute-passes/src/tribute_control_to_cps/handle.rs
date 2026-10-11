@@ -117,11 +117,11 @@ impl Converter<'_> {
             .iter()
             .map(|arg| mapping.get(arg).copied().unwrap_or(*arg))
             .collect();
-        let ability_ref = self
+        let ability = self
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref("ability_ref")
+            .get_symbol_ref("ability")
             .cloned()
             .expect("pre-CPS validation checked perform ability");
         let op_name = self
@@ -140,7 +140,7 @@ impl Converter<'_> {
         })?;
         let perform = if type_is(self.ctx, input_type, "core", "never") {
             ability::Abort::operands(evidence, frame, args)
-                .ability_ref(ability_ref)
+                .ability(ability)
                 .op_name(op_name)
                 .build(self.ctx, location)
                 .op_ref()
@@ -149,7 +149,7 @@ impl Converter<'_> {
                 self.build_raw_resumption(rest, old_result, input_type, mapping, flow, location)?;
             self.ctx.push_op(block, raw_op);
             ability::Perform::operands(evidence, frame, raw, args)
-                .ability_ref(ability_ref)
+                .ability(ability)
                 .op_name(op_name)
                 .build(self.ctx, location)
                 .op_ref()
@@ -225,11 +225,11 @@ impl Converter<'_> {
         handle_answer: TypeRef,
     ) -> Result<(closure::Lambda, ability::HandlerBinding), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
-        let ability_ref = self
+        let ability = self
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref("ability_ref")
+            .get_symbol_ref("ability")
             .cloned()
             .unwrap();
         let op_name = self
@@ -326,7 +326,7 @@ impl Converter<'_> {
         let closure_type = physical_closure_type(self.ctx, function, convention);
         let lambda = closure_over(self.ctx, location, region, closure_type, convention);
         let binding = ability::HandlerBinding {
-            ability_ref,
+            ability,
             op_name,
             kind: if general {
                 ability::OperationKind::Op
@@ -419,7 +419,7 @@ impl Converter<'_> {
         // Inside the body, an enclosing arm's evidence is the evidence this
         // handle is installed on. A handle that handles nothing installs no
         // marker and leaves the evidence as it is.
-        let handled = handlers.first().map(|binding| binding.ability_ref.clone());
+        let handled = handlers.first().map(|binding| binding.ability.clone());
         let body_arm = flow.arm.clone().map(|arm| ArmResume {
             evidence: match (arm.evidence, handled) {
                 (evidence, None) => evidence,
@@ -482,11 +482,11 @@ impl Converter<'_> {
             .map(|arg| mapping.get(arg).copied().unwrap_or(*arg))
             .collect();
         let result_type = self.convert_type(self.ctx.op_result_types(source)[0]);
-        let ability_ref = self
+        let ability = self
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref("ability_ref")
+            .get_symbol_ref("ability")
             .cloned()
             .expect("pre-CPS validation checked perform ability");
         let op_name = self
@@ -496,7 +496,7 @@ impl Converter<'_> {
             .get_string_ref("op_name")
             .expect("pre-CPS validation checked perform operation");
         let call = ability::Call::operands(args)
-            .ability_ref(ability_ref)
+            .ability(ability)
             .op_name(op_name)
             .results(result_type)
             .build(self.ctx, location);

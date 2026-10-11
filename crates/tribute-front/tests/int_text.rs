@@ -496,14 +496,14 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     assert_eq!(ir.str(declarations[0].kind), "op");
     assert_eq!(ir.str(declarations[1].op_name), "echo");
     assert_eq!(ir.str(declarations[1].kind), "fn");
-    assert_eq!(declarations[0].ability_ref, declarations[1].ability_ref);
+    assert_eq!(declarations[0].ability, declarations[1].ability);
     assert_eq!(ir.str(declarations[2].op_name), "bounce");
     assert_eq!(ir.str(declarations[2].kind), "op");
     assert_eq!(ir.str(declarations[3].op_name), "echo");
     assert_eq!(ir.str(declarations[3].kind), "fn");
-    assert_eq!(declarations[2].ability_ref, declarations[3].ability_ref);
+    assert_eq!(declarations[2].ability, declarations[3].ability);
     assert_ne!(
-        declarations[0].ability_ref, declarations[2].ability_ref,
+        declarations[0].ability, declarations[2].ability,
         "equal operation names at distinct ability instantiations must not dedupe"
     );
     for declaration in declarations.iter().take(2) {

@@ -42,11 +42,11 @@ impl OperationKind {
 
 /// One element of `ability.handle`'s `handlers`: the operation an arm handles.
 ///
-/// Written `{ability_ref = @State, op_name = "get", kind = "op",
+/// Written `{ability = @State, op_name = "get", kind = "op",
 /// operation_result_type = core.i32}`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct HandlerBinding {
-    pub ability_ref: SymbolPath,
+    pub ability: SymbolPath,
     pub op_name: StringRef,
     pub kind: OperationKind,
     pub operation_result_type: TypeRef,
@@ -60,14 +60,14 @@ impl HandlerBinding {
         };
         if entries.len() != 4 {
             return Err(format!(
-                "handlers element must have exactly ability_ref, op_name, kind, and \
+                "handlers element must have exactly ability, op_name, kind, and \
                  operation_result_type, found {} entries",
                 entries.len()
             ));
         }
-        let ability_ref = match entries.get("ability_ref") {
+        let ability = match entries.get("ability") {
             Some(Attribute::SymbolRef(ability)) => ability.clone(),
-            _ => return Err("handlers ability_ref must be a symbol reference".into()),
+            _ => return Err("handlers ability must be a symbol reference".into()),
         };
         let op_name = match entries.get("op_name") {
             Some(Attribute::String(name)) => *name,
@@ -83,7 +83,7 @@ impl HandlerBinding {
             _ => return Err("handlers operation_result_type must be a type".into()),
         };
         Ok(Self {
-            ability_ref,
+            ability,
             op_name,
             kind,
             operation_result_type,
@@ -93,10 +93,7 @@ impl HandlerBinding {
     pub fn to_attribute(&self, ctx: &mut IrContext) -> Attribute {
         let kind = ctx.string_attr(self.kind.keyword());
         let mut entries = AttributeMap::new();
-        entries.insert(
-            "ability_ref",
-            Attribute::SymbolRef(self.ability_ref.clone()),
-        );
+        entries.insert("ability", Attribute::SymbolRef(self.ability.clone()));
         entries.insert("op_name", Attribute::String(self.op_name));
         entries.insert("kind", kind);
         entries.insert(
@@ -267,7 +264,7 @@ impl trunk_ir::ops::Verify for Handle {
             .collect::<Result<Vec<_>, _>>()?;
         let mut seen = HashSet::default();
         for binding in &bindings {
-            if !seen.insert((binding.ability_ref.clone(), binding.op_name)) {
+            if !seen.insert((binding.ability.clone(), binding.op_name)) {
                 return Err(format!(
                     "ability.handle binds operation {} twice",
                     ctx.str(binding.op_name)
@@ -441,7 +438,7 @@ mod tests {
 
     fn binding(kind: &str, op_name: &str, result: &str) -> String {
         format!(
-            r#"{{ability_ref = @State, kind = "{kind}", op_name = "{op_name}", operation_result_type = {result}}}"#
+            r#"{{ability = @State, kind = "{kind}", op_name = "{op_name}", operation_result_type = {result}}}"#
         )
     }
 
@@ -478,7 +475,7 @@ mod tests {
         let text = module(
             ", %k: !completion, %arg: core.i32",
             r#"    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{mask = @State}]} : !frame_nil
-    ability.abort %ev, %exit, %arg {ability_ref = @State, op_name = "fail"}"#,
+    ability.abort %ev, %exit, %arg {ability = @State, op_name = "fail"}"#,
         );
         let (ctx, module) = parse(&text);
         let result = validate_operation_verifiers(&ctx, module);
@@ -496,7 +493,7 @@ mod tests {
             module(
                 params,
                 &format!(
-                    r#"    ability.perform %ev, %exit, {resumption}, %arg {{ability_ref = @State, op_name = "set"}}"#
+                    r#"    ability.perform %ev, %exit, {resumption}, %arg {{ability = @State, op_name = "set"}}"#
                 ),
             )
         };
@@ -651,7 +648,7 @@ mod tests {
                 module(
                     ARMS,
                     &handle(
-                        &[r#"{ability_ref = @State, kind = "ctl", op_name = "get", operation_result_type = core.i32}"#.to_string()],
+                        &[r#"{ability = @State, kind = "ctl", op_name = "get", operation_result_type = core.i32}"#.to_string()],
                         ", %get",
                         "",
                     ),
@@ -681,7 +678,7 @@ mod tests {
             (super::OperationKind::Fn, i32_ty, false),
         ] {
             let binding = super::HandlerBinding {
-                ability_ref: state.clone(),
+                ability: state.clone(),
                 op_name,
                 kind,
                 operation_result_type: result,
@@ -770,35 +767,35 @@ mod tests {
             (
                 "binding with an extra entry",
                 raw_binding(
-                    r#"ability_ref = @State, extra = 1, kind = "op", op_name = "get", operation_result_type = core.i32"#,
+                    r#"ability = @State, extra = 1, kind = "op", op_name = "get", operation_result_type = core.i32"#,
                 ),
                 "must have exactly",
             ),
             (
                 "binding without an ability",
                 raw_binding(
-                    r#"ability_ref = core.i32, kind = "op", op_name = "get", operation_result_type = core.i32"#,
+                    r#"ability = core.i32, kind = "op", op_name = "get", operation_result_type = core.i32"#,
                 ),
-                "ability_ref must be a symbol reference",
+                "ability must be a symbol reference",
             ),
             (
                 "binding with a numeric name",
                 raw_binding(
-                    r#"ability_ref = @State, kind = "op", op_name = 1, operation_result_type = core.i32"#,
+                    r#"ability = @State, kind = "op", op_name = 1, operation_result_type = core.i32"#,
                 ),
                 "op_name must be a string",
             ),
             (
                 "binding with a numeric kind",
                 raw_binding(
-                    r#"ability_ref = @State, kind = 1, op_name = "get", operation_result_type = core.i32"#,
+                    r#"ability = @State, kind = 1, op_name = "get", operation_result_type = core.i32"#,
                 ),
                 "kind must be fn or op",
             ),
             (
                 "binding without a result type",
                 raw_binding(
-                    r#"ability_ref = @State, kind = "op", op_name = "get", operation_result_type = 1"#,
+                    r#"ability = @State, kind = "op", op_name = "get", operation_result_type = 1"#,
                 ),
                 "operation_result_type must be a type",
             ),

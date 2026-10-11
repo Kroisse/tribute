@@ -270,8 +270,8 @@ impl RewritePattern for LowerEffectExtendToNative {
         let ptr_ty = core_ptr_type(ctx);
         let i32_ty = core_i32_type(ctx);
 
-        let ability_ref = extend_op.ability_ref(ctx).clone();
-        let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, &ability_ref);
+        let ability = extend_op.ability(ctx).clone();
+        let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, &ability);
         let ability_id_val = ability_id_op.result(ctx);
         rewriter.insert_op(ability_id_op.op_ref());
 
@@ -309,22 +309,22 @@ impl RewritePattern for LowerEffectStackOpToNative {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let (helper, ability_ref, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
+        let (helper, ability, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
             (
                 evidence_abi::MASK,
-                mask.ability_ref(ctx).clone(),
+                mask.ability(ctx).clone(),
                 mask.evidence(ctx),
             )
         } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
             (
                 evidence_abi::DUP,
-                dup.ability_ref(ctx).clone(),
+                dup.ability(ctx).clone(),
                 dup.evidence(ctx),
             )
         } else if let Ok(outer) = effect::Outer::from_op(ctx, op) {
             (
                 evidence_abi::OUTER,
-                outer.ability_ref(ctx).clone(),
+                outer.ability(ctx).clone(),
                 outer.evidence(ctx),
             )
         } else {
@@ -332,7 +332,7 @@ impl RewritePattern for LowerEffectStackOpToNative {
         };
 
         let loc = ctx.op(op).location;
-        let ability_id = effect_dispatch::insert_ability_id(ctx, loc, &ability_ref, rewriter);
+        let ability_id = effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter);
         let call = func::Call::operands([evidence, ability_id])
             .callee(SymbolPath::from(helper))
             .results([ctx.op_result_types(op)[0]])
@@ -375,8 +375,8 @@ impl RewritePattern for LowerEffectTailOpToNative {
             )
         } else if let Ok(push) = effect::Push::from_op(ctx, op) {
             let ability_id = {
-                let ability_ref = push.ability_ref(ctx).clone();
-                effect_dispatch::insert_ability_id(ctx, loc, &ability_ref, rewriter)
+                let ability = push.ability(ctx).clone();
+                effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
             };
             (
                 evidence_abi::PUSH,
@@ -414,8 +414,8 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
 
         let loc = ctx.op(op).location;
         let ability_id = {
-            let ability_ref = dispatch_op.ability_ref(ctx).clone();
-            effect_dispatch::insert_ability_id(ctx, loc, &ability_ref, rewriter)
+            let ability = dispatch_op.ability(ctx).clone();
+            effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
         };
         // The runtime hands over one unit of the closure it looks up.
         let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
@@ -449,8 +449,8 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let loc = ctx.op(op).location;
         let i32_ty = core_i32_type(ctx);
         let ability_id = {
-            let ability_ref = dispatch_op.ability_ref(ctx).clone();
-            effect_dispatch::insert_ability_id(ctx, loc, &ability_ref, rewriter)
+            let ability = dispatch_op.ability(ctx).clone();
+            effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
         };
         let prompt = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
             .callee(SymbolPath::from(evidence_abi::LOOKUP))
@@ -553,11 +553,11 @@ mod tests {
     fn dispatch_module() -> &'static str {
         r#"core.module @test {
   func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = @Console, op_name = "read"} : core.ptr
+    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : core.ptr
     func.return %result
   }
   func.func @untouched(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = @Console, op_name = "print"} : core.ptr
+    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "print"} : core.ptr
     func.return %result
   }
 }"#
@@ -681,7 +681,7 @@ mod tests {
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @external(%ev: !evidence) -> !marker
   func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = @Console, op_name = "read"} : core.ptr
+    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : core.ptr
     func.return %result
   }
 }"#,
@@ -717,8 +717,8 @@ mod tests {
   !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @select(%ev: !evidence) -> !evidence {
-    %masked = effect.mask %ev {ability_ref = @State} : !evidence
-    %dup = effect.dup %masked {ability_ref = @State} : !evidence
+    %masked = effect.mask %ev {ability = @State} : !evidence
+    %dup = effect.dup %masked {ability = @State} : !evidence
     func.return %dup
   }
 }"#,
@@ -774,7 +774,7 @@ mod tests {
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @select(%ev: !evidence) -> !evidence {
     %tail = effect.tail %ev {index = 1} : !evidence
-    %pushed = effect.push %tail, %ev {ability_ref = @State} : !evidence
+    %pushed = effect.push %tail, %ev {ability = @State} : !evidence
     %attached = effect.with_tail %ev, %pushed {index = 0} : !evidence
     func.return %attached
   }
@@ -862,7 +862,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @__tribute_evidence_empty(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = @Console, op_name = "read"} : core.ptr
+    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : core.ptr
     func.return %result
   }
 }"#,
@@ -890,7 +890,7 @@ mod tests {
             r#"core.module @test {
   func.func @outer(%outer_ev: core.ptr, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
     func.func @inner(%inner_ev: core.ptr, %inner_payload: tribute_rt.anyref) -> core.ptr {
-      %result = effect.dispatch_tail %inner_ev, %inner_payload {ability_ref = @Console, op_name = "read"} : core.ptr
+      %result = effect.dispatch_tail %inner_ev, %inner_payload {ability = @Console, op_name = "read"} : core.ptr
       func.return %result
     }
     func.return %payload
@@ -938,7 +938,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = @State, op_name = "get"} : tribute_rt.anyref
+    %result = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability = @State, op_name = "get"} : tribute_rt.anyref
     func.return %result
   }
 }"#,
@@ -958,10 +958,10 @@ mod tests {
         let mut ctx = IrContext::new();
         let source = r#"core.module @test {
           func.func @first(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) {
-            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = @State, op_name = "get", answer_type = core.i32}
+            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.i32}
           }
           func.func @second(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) {
-            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = @State, op_name = "get", answer_type = core.i64}
+            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.i64}
           }
         }"#;
         let module = parse_test_module(&mut ctx, source);
@@ -1011,7 +1011,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) -> core.never {
-    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = @State, op_name = "get", answer_type = core.i32}
+    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.i32}
   }
 }"#,
         );

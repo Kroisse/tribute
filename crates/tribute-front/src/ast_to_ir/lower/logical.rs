@@ -90,10 +90,9 @@ impl<'db> Declarations<'db> {
         location: Location,
         db: &dyn salsa::Database,
     ) {
-        self.instance(&declaration.ability_ref, ability, arguments);
+        self.instance(&declaration.ability, ability, arguments);
         if let Some(existing) = self.values.iter().find(|candidate| {
-            candidate.ability_ref == declaration.ability_ref
-                && candidate.op_name == declaration.op_name
+            candidate.ability == declaration.ability && candidate.op_name == declaration.op_name
         }) {
             if existing != &declaration {
                 Diagnostic::new(
@@ -169,15 +168,15 @@ fn lower_evidence_step<'db>(
     declarations: &mut Declarations<'db>,
 ) -> tribute_control::EvidenceStep {
     use crate::typeck::EvidenceStep;
-    let mut ability_ref = |instance: &crate::ast::Effect<'db>| {
+    let mut symbol_of = |instance: &crate::ast::Effect<'db>| {
         let symbol = ctx.ability_symbol(instance.ability_id.qualified(ctx.db), &instance.args);
         declarations.instance(&symbol, instance.ability_id, &instance.args);
         symbol
     };
     match step {
-        EvidenceStep::Mask(instance) => tribute_control::EvidenceStep::Mask(ability_ref(instance)),
-        EvidenceStep::Dup(instance) => tribute_control::EvidenceStep::Dup(ability_ref(instance)),
-        EvidenceStep::Push(instance) => tribute_control::EvidenceStep::Push(ability_ref(instance)),
+        EvidenceStep::Mask(instance) => tribute_control::EvidenceStep::Mask(symbol_of(instance)),
+        EvidenceStep::Dup(instance) => tribute_control::EvidenceStep::Dup(symbol_of(instance)),
+        EvidenceStep::Push(instance) => tribute_control::EvidenceStep::Push(symbol_of(instance)),
         EvidenceStep::Select(index) => tribute_control::EvidenceStep::Select(*index),
         EvidenceStep::Tails(plans) => tribute_control::EvidenceStep::Tails(
             plans
@@ -469,7 +468,7 @@ fn instance_operations<'db>(
         }
     };
     let mut operations = Vec::new();
-    for (ability_ref, ability, arguments) in &declarations.instances {
+    for (instance, ability, arguments) in &declarations.instances {
         let schema = &declarations.schemas[ability];
         let mut declared: Vec<_> = schema.operations.values().collect();
         declared.sort_by(|a, b| a.name.with_str(|a| b.name.with_str(|b| a.cmp(b))));
@@ -482,7 +481,7 @@ fn instance_operations<'db>(
             let result =
                 ctx.convert_logical_type(ir, instantiate(operation.return_type, arguments));
             operations.push(OperationDeclaration::new(
-                ability_ref.clone(),
+                instance.clone(),
                 ir.intern_symbol_text(&operation.name),
                 ir.intern_str(operation_kind_text(operation.kind)),
                 parameters,
@@ -1357,7 +1356,7 @@ fn call_operation_metadata<'db>(
             semantic.params, semantic.result
         );
     }
-    let ability_ref = builder
+    let instance = builder
         .ctx
         .ability_symbol(ability.qualified(builder.db()), &args);
     let parameters = semantic
@@ -1369,9 +1368,9 @@ fn call_operation_metadata<'db>(
         .ctx
         .convert_logical_type(builder.ir, semantic.result);
     (
-        ability_ref.clone(),
+        instance.clone(),
         OperationDeclaration::new(
-            ability_ref,
+            instance,
             builder.ir.intern_symbol_text(&operation),
             builder.ir.intern_str(operation_kind_text(kind)),
             parameters,
@@ -2418,7 +2417,7 @@ fn lower_call<'db>(
                         panic!("missing exact typed metadata for ability operation call")
                     });
                 let ability_arguments = semantic.ability_args.clone();
-                let (ability_ref, declaration) = call_operation_metadata(
+                let (instance, declaration) = call_operation_metadata(
                     builder,
                     declarations,
                     PerformMetadata {
@@ -2443,7 +2442,7 @@ fn lower_call<'db>(
                     builder
                         .operands(values)
                         .result(declaration.result_type)
-                        .attr("ability_ref", Attribute::SymbolRef(ability_ref))
+                        .attr("ability", Attribute::SymbolRef(instance))
                         .attr("op_name", Attribute::String(declaration.op_name))
                         .attr("operation_kind", Attribute::String(declaration.kind))
                 });
@@ -2810,7 +2809,7 @@ fn lower_handler<'db>(
     if params.len() != semantic.params.len() {
         panic!("handler parameter arity disagrees with typed semantic signature");
     }
-    let ability_ref = ctx.ability_symbol(ability_id.qualified(ctx.db), &arguments);
+    let instance = ctx.ability_symbol(ability_id.qualified(ctx.db), &arguments);
     let parameter_types: Vec<_> = expected_params
         .into_iter()
         .map(|ty| ctx.convert_logical_type(ir, ty))
@@ -2819,7 +2818,7 @@ fn lower_handler<'db>(
     let op_name = ir.intern_symbol_text(&operation);
     let kind_name = ir.intern_str(operation_kind_text(kind));
     let declaration = OperationDeclaration::new(
-        ability_ref.clone(),
+        instance.clone(),
         op_name,
         kind_name,
         parameter_types.clone(),
@@ -2891,7 +2890,7 @@ fn lower_handler<'db>(
     });
     op(ir, table, location, "handler", |builder| {
         builder
-            .attr("ability_ref", Attribute::SymbolRef(ability_ref))
+            .attr("ability", Attribute::SymbolRef(instance))
             .attr("op_name", Attribute::String(op_name))
             .attr("kind", Attribute::String(kind_name))
             .attr("operation_result_type", Attribute::Type(operation_result))
