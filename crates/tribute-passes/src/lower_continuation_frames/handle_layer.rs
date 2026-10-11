@@ -12,7 +12,6 @@ use tribute_core::calling_convention::{
 use tribute_core::{CallingConvention, physical_closure_type, set_calling_convention};
 use tribute_ir::dialect::ability::{HandlerBinding, OperationKind};
 use tribute_ir::dialect::{ability, adt, effect, tribute_control, tribute_rt};
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -20,6 +19,7 @@ use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, PatternRewriter, RewritePattern};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
+use trunk_ir::{Symbol, SymbolPath};
 
 use super::suffix_layer::{
     DispatchAdapters, LayerFrames, SuffixLayer, build_done_adapter, build_suffix_rebound,
@@ -80,10 +80,7 @@ impl HandlerArm {
     }
 
     fn op_index(&self, ctx: &IrContext) -> u32 {
-        ability::compute_op_idx(
-            ability::ability_name(ctx, self.binding.ability_ref),
-            Some(ctx.str(self.binding.op_name)),
-        )
+        ability::compute_op_idx(&self.binding.ability, ctx.str(self.binding.op_name))
     }
 }
 
@@ -236,14 +233,14 @@ fn push_layer_frame(
 }
 
 /// The ability instances a handle handles, in first-arm order.
-fn layer_ability_refs(layer: &HandleLayer) -> Vec<TypeRef> {
-    let mut ability_refs = Vec::new();
+fn layer_abilities(layer: &HandleLayer) -> Vec<SymbolPath> {
+    let mut abilities = Vec::new();
     for arm in &layer.arms {
-        if !ability_refs.contains(&arm.binding.ability_ref) {
-            ability_refs.push(arm.binding.ability_ref);
+        if !abilities.contains(&arm.binding.ability) {
+            abilities.push(arm.binding.ability.clone());
         }
     }
-    ability_refs
+    abilities
 }
 
 /// Install a handle layer: extend `outer_evidence` for `body`, with marker
@@ -259,14 +256,14 @@ fn push_handle_dispatch(
     outer_evidence: ValueRef,
     body: RegionRef,
 ) -> Result<(), TributeControlToCpsError> {
-    let ability_refs = layer_ability_refs(layer);
+    let abilities = layer_abilities(layer);
     let mut dispatchers = Vec::new();
-    for &ability_ref in &ability_refs {
+    for ability in &abilities {
         let arms: Vec<_> = layer
             .arms
             .iter()
             .zip(values.arms.iter().copied())
-            .filter(|(arm, _)| arm.binding.ability_ref == ability_ref && !arm.general())
+            .filter(|(arm, _)| arm.binding.ability == *ability && !arm.general())
             .collect();
         let (dispatcher_op, dispatcher) =
             build_tail_dispatcher(ctx, location, &arms, outer_evidence)?;
@@ -274,7 +271,7 @@ fn push_handle_dispatch(
         dispatchers.push(dispatcher);
     }
     let dispatch = ability::HandleDispatch::operands(outer_evidence, values.prompt, dispatchers)
-        .ability_refs(ability_refs)
+        .abilities(abilities)
         .regions(body)
         .build(ctx, location);
     set_evidence_plan(ctx, dispatch.op_ref(), layer.plan.clone());
@@ -627,7 +624,7 @@ fn unpack_handler_payload(
     let anyref = anyref_type(ctx);
     let payload_type = ability::operation_payload_type_ref(
         ctx,
-        arm.binding.ability_ref,
+        &arm.binding.ability,
         arm.binding.op_name,
         value_params.iter().map(|_| anyref),
     );

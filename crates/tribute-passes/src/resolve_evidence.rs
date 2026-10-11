@@ -63,7 +63,7 @@ impl Error for ResolveEvidenceError {}
 struct FinalHandleDispatchShape {
     evidence: ValueRef,
     prompt_tag: ValueRef,
-    dispatchers: Vec<(TypeRef, ValueRef)>,
+    dispatchers: Vec<(SymbolPath, ValueRef)>,
     body_evidence: ValueRef,
 }
 
@@ -104,30 +104,26 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
         ));
     }
-    let Some(Attribute::List(ability_refs)) = data.attributes.get("ability_refs") else {
+    let Some(Attribute::List(abilities)) = data.attributes.get("abilities") else {
         return Err(error(
-            "final ability.handle_dispatch requires an ability_refs list".into(),
+            "final ability.handle_dispatch requires an abilities list".into(),
         ));
     };
-    if ability_refs.len() != dispatchers.len() {
+    if abilities.len() != dispatchers.len() {
         return Err(error(format!(
-            "ability_refs cardinality {} does not match {} dispatcher operands",
-            ability_refs.len(),
+            "abilities cardinality {} does not match {} dispatcher operands",
+            abilities.len(),
             dispatchers.len()
         )));
     }
-    let mut handled = Vec::with_capacity(ability_refs.len());
-    for (ability_ref, &tr_dispatch) in ability_refs.iter().zip(dispatchers) {
-        let Attribute::Type(ability_ref) = ability_ref else {
-            return Err(error("every ability_refs entry must be a type".into()));
-        };
-        let ty = ctx.get_type(*ability_ref);
-        if ty.dialect != "core" || ty.name != "ability_ref" {
+    let mut handled = Vec::with_capacity(abilities.len());
+    for (ability, &tr_dispatch) in abilities.iter().zip(dispatchers) {
+        let Attribute::SymbolRef(ability) = ability else {
             return Err(error(
-                "every ability_refs entry must be a core.ability_ref type".into(),
+                "every abilities entry must name an ability instance".into(),
             ));
-        }
-        handled.push((*ability_ref, tr_dispatch));
+        };
+        handled.push((ability.clone(), tr_dispatch));
     }
     let Ok(body) = ctx.op_regions(op).exactly_one() else {
         return Err(error(
@@ -258,7 +254,7 @@ fn take_evidence_plan(
     items
         .iter()
         .map(|item| {
-            EvidenceStep::from_attribute(ctx, item).map_err(|error| resolve_error(ctx, op, error))
+            EvidenceStep::from_attribute(item).map_err(|error| resolve_error(ctx, op, error))
         })
         .collect()
 }
@@ -285,19 +281,19 @@ fn apply_evidence_plan(
         selected = match step {
             EvidenceStep::Mask(instance) => {
                 let mask = effect::Mask::operands(selected)
-                    .ability_ref(*instance)
+                    .ability(instance.clone())
                     .build(ctx, location);
                 stack_op(ctx, (mask.op_ref(), mask.result(ctx)))
             }
             EvidenceStep::Dup(instance) => {
                 let dup = effect::Dup::operands(selected)
-                    .ability_ref(*instance)
+                    .ability(instance.clone())
                     .build(ctx, location);
                 stack_op(ctx, (dup.op_ref(), dup.result(ctx)))
             }
             EvidenceStep::Outer(instance) => {
                 let outer = effect::Outer::operands(selected)
-                    .ability_ref(*instance)
+                    .ability(instance.clone())
                     .build(ctx, location);
                 source = stack_op(ctx, (outer.op_ref(), outer.result(ctx)));
                 source
@@ -310,7 +306,7 @@ fn apply_evidence_plan(
             }
             EvidenceStep::Push(instance) => {
                 let push = effect::Push::operands(selected, source)
-                    .ability_ref(*instance)
+                    .ability(instance.clone())
                     .build(ctx, location);
                 stack_op(ctx, (push.op_ref(), push.result(ctx)))
             }
@@ -404,14 +400,14 @@ fn resolve_delimiters(
                     erase_op(ctx, prompt_op);
                     prompt_tag = resolved;
                 }
-                for (ability_ref, tr_dispatch) in shape.dispatchers {
+                for (ability, tr_dispatch) in shape.dispatchers {
                     let extend = effect::Extend::operands(
                         current_ev,
                         prompt_tag,
                         tr_dispatch,
                         shape.evidence,
                     )
-                    .ability_ref(ability_ref)
+                    .ability(ability)
                     .build(ctx, location);
                     current_ev = extend.result(ctx);
                     ctx.insert_op_before(block, op, extend.op_ref());
@@ -472,67 +468,18 @@ mod tests {
     use std::ops::ControlFlow;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
-    use trunk_ir::types::TypeDataBuilder;
     use trunk_ir::walk::{WalkAction, walk_op};
 
     #[test]
     fn test_compute_ability_id() {
-        let mut ctx = IrContext::new();
-        let state = ctx.intern_str("State");
-        let console = ctx.intern_str("Console");
+        let state = SymbolPath::from("State");
+        let console = SymbolPath::from("Console");
 
-        let state_ref = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::String(state))
-                .build(),
-        );
-        let console_ref = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::String(console))
-                .build(),
-        );
-
-        let state_id = ability::compute_ability_id(&ctx, state_ref);
-        let console_id = ability::compute_ability_id(&ctx, console_ref);
-
-        // Same ability should have same ID (interning gives same TypeRef)
-        let state_ref2 = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::String(state))
-                .build(),
-        );
-        let state_id2 = ability::compute_ability_id(&ctx, state_ref2);
-        assert_eq!(state_id, state_id2);
-
-        // Different abilities should have different IDs
-        assert_ne!(state_id, console_id);
-    }
-
-    #[test]
-    fn test_compute_ability_id_with_type_params() {
-        let mut ctx = IrContext::new();
-        let state = ctx.intern_str("State");
-
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-
-        let state_i32 = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::String(state))
-                .param(i32_ty)
-                .build(),
-        );
-
-        let state_no_params = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::String(state))
-                .build(),
-        );
-
-        let id_with_params = ability::compute_ability_id(&ctx, state_i32);
-        let id_no_params = ability::compute_ability_id(&ctx, state_no_params);
-
-        // Same ability name but different type params should produce different IDs
-        assert_ne!(id_with_params, id_no_params);
+        let state_id = ability::compute_ability_id(&state);
+        assert_eq!(state_id, ability::compute_ability_id(&state));
+        assert_ne!(state_id, ability::compute_ability_id(&console));
+        // The id is positive: negative ids are the row tail slots.
+        assert!(i32::try_from(state_id).is_ok());
     }
 
     fn final_dispatch_fixture(operation: &str) -> String {
@@ -550,7 +497,7 @@ mod tests {
     #[test]
     fn final_handle_dispatch_extends_each_ability_and_lowers_resultlessly() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt, %tr, %tr2 {ability_refs = [core.ability_ref<{name = "State"}>, core.ability_ref<{name = "Console"}>]} {
+            r#"ability.handle_dispatch %ev, %prompt, %tr, %tr2 {abilities = [@State, @Console]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -614,7 +561,7 @@ mod tests {
     #[test]
     fn handle_selection_masks_the_outer_evidence_before_extending() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.ability_ref<{name = "State"}>], evidence_plan = [{mask = core.ability_ref<{name = "State"}>}]} {
+            r#"ability.handle_dispatch %ev, %prompt, %tr {abilities = [@State], evidence_plan = [{mask = @State}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -628,8 +575,8 @@ mod tests {
         assert_eq!(
             body[..2],
             [
-                r#"%4 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
-                r#"%5 = effect.extend %4, %1, %2, %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%4 = effect.mask %0 {ability = @State} : !evidence"#,
+                r#"%5 = effect.extend %4, %1, %2, %0 {ability = @State} : !evidence"#,
             ],
             "{body:#?}"
         );
@@ -639,8 +586,8 @@ mod tests {
     #[test]
     fn call_selections_apply_in_order_to_the_passed_evidence() {
         let input = final_dispatch_fixture(
-            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = 1, evidence_plan = [{mask = core.ability_ref<{name = "State"}>}, {dup = core.ability_ref<{name = "Console"}>}]} : core.i32
-    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2, evidence_plan = [{dup = core.ability_ref<{name = "State"}>}]}"#,
+            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = 1, evidence_plan = [{mask = @State}, {dup = @Console}]} : core.i32
+    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2, evidence_plan = [{dup = @State}]}"#,
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
@@ -651,10 +598,10 @@ mod tests {
         assert_eq!(
             body,
             [
-                r#"%4 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
-                r#"%5 = effect.dup %4 {ability_ref = core.ability_ref<{name = "Console"}>} : !evidence"#,
+                r#"%4 = effect.mask %0 {ability = @State} : !evidence"#,
+                r#"%5 = effect.dup %4 {ability = @Console} : !evidence"#,
                 r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
-                r#"%7 = effect.dup %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
                 r#"func.tail_call_indirect %2, %7, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
             ],
             "{body:#?}"
@@ -664,8 +611,8 @@ mod tests {
     #[test]
     fn row_tail_selections_read_the_evidence_the_call_starts_from() {
         let input = final_dispatch_fixture(
-            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = 1, evidence_plan = [{select = 1}, {push = core.ability_ref<{name = "State"}>}]} : core.i32
-    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2, evidence_plan = [{dup = core.ability_ref<{name = "State"}>}, {tails = [[], [{mask = core.ability_ref<{name = "State"}>}]]}]}"#,
+            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = 1, evidence_plan = [{select = 1}, {push = @State}]} : core.i32
+    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2, evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]}"#,
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
@@ -677,11 +624,11 @@ mod tests {
             body,
             [
                 r#"%4 = effect.tail %0 {index = 1} : !evidence"#,
-                r#"%5 = effect.push %4, %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%5 = effect.push %4, %0 {ability = @State} : !evidence"#,
                 r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
-                r#"%7 = effect.dup %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
                 r#"%8 = effect.with_tail %7, %0 {index = 0} : !evidence"#,
-                r#"%9 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%9 = effect.mask %0 {ability = @State} : !evidence"#,
                 r#"%10 = effect.with_tail %8, %9 {index = 1} : !evidence"#,
                 r#"func.tail_call_indirect %2, %10, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
             ],
@@ -692,7 +639,7 @@ mod tests {
     #[test]
     fn selection_on_a_call_that_passes_no_evidence_is_rejected() {
         let input = final_dispatch_fixture(
-            r#"%direct = func.call %prompt {callee = @callee, tribute.calling_convention = 0, evidence_plan = [{mask = core.ability_ref<{name = "State"}>}]} : core.i32
+            r#"%direct = func.call %prompt {callee = @callee, tribute.calling_convention = 0, evidence_plan = [{mask = @State}]} : core.i32
     func.unreachable"#,
         );
         let mut ctx = IrContext::new();
@@ -707,7 +654,7 @@ mod tests {
     fn final_handle_dispatch_materializes_a_fresh_prompt_tag_once() {
         let input = final_dispatch_fixture(
             r#"%fresh = effect.fresh_prompt_tag : core.i32
-    ability.handle_dispatch %ev, %fresh, %tr {ability_refs = [core.ability_ref<{name = "State"}>]} {
+    ability.handle_dispatch %ev, %fresh, %tr {abilities = [@State]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -750,14 +697,14 @@ mod tests {
     fn malformed_final_handle_dispatches_fail_before_mutation() {
         let malformed = [
             (
-                r#"%result = ability.handle_dispatch %ev, %prompt {ability_refs = []} : core.i32 {
+                r#"%result = ability.handle_dispatch %ev, %prompt {abilities = []} : core.i32 {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "must be resultless",
             ),
             (
-                r#"ability.handle_dispatch {ability_refs = []} {
+                r#"ability.handle_dispatch {abilities = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -771,7 +718,7 @@ mod tests {
                 "requires a prompt-tag operand",
             ),
             (
-                r#"ability.handle_dispatch %ev, %tr {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %tr {abilities = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -782,43 +729,43 @@ mod tests {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
-                "requires an ability_refs list",
+                "requires an abilities list",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {abilities = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "cardinality",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [1]} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {abilities = [1]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
-                "entry must be a type",
+                "must name an ability instance",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.i32]} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {abilities = [core.i32]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
-                "core.ability_ref type",
+                "must name an ability instance",
             ),
             (
-                r#"ability.handle_dispatch %prompt, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %prompt, %prompt {abilities = []} {
       ^body(%inner: core.i32):
         func.unreachable
     }"#,
                 "must have the evidence type",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
     }"#,
                 "exactly one block",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^first(%inner: !evidence):
         func.unreachable
       ^second:
@@ -827,20 +774,20 @@ mod tests {
                 "exactly one block",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body:
         func.unreachable
     }"#,
                 "one evidence argument",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body(%inner: !evidence):
     }"#,
                 "must end in a proper tail transfer",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body(%inner: !evidence):
         func.return
     }"#,
@@ -862,7 +809,7 @@ mod tests {
     #[test]
     fn structured_final_delimiter_is_a_valid_proper_tail_body() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+            r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body(%inner: !evidence):
         %choice = arith.const {value = 0} : core.i32
         scf.switch %choice {
@@ -880,9 +827,9 @@ mod tests {
     #[test]
     fn final_delimiter_accepts_resultless_effect_cps_dispatch() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+            r#"ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body(%inner: !evidence):
-        effect.dispatch_cps %inner, %tr, %tr2, %tr2 {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get"}
+        effect.dispatch_cps %inner, %tr, %tr2, %tr2 {ability = @State, op_name = "get"}
     }"#,
         );
         let mut ctx = IrContext::new();
@@ -898,7 +845,7 @@ mod tests {
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
   func.func @body(%ev: !evidence, %prompt: core.i32) -> core.never {
-    ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+    ability.handle_dispatch %ev, %prompt {abilities = []} {
       ^body(%inner: !evidence):
         func.tail_call %inner {callee = @finish}
     }

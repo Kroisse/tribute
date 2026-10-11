@@ -799,11 +799,11 @@ typechecking 결과로 복사한다. `call`, `call_indirect`, `tail_call`,
 evidence를 만들기 전에 적용하며 `mask`만 담는다.
 
 ```text
-{evidence_plan = [{mask = core.ability_ref<{name = "State", ...}>}, {dup = ...}]}
+{evidence_plan = [{mask = @"<instance key>"}, {dup = ...}]}
 ```
 
 - 원소는 key 하나짜리 dictionary다. Key `mask` 또는 `dup`이 연산을, 값이 exact
-  ability instance(`core.ability_ref` type)를 나타내며 원소는 순서대로 적용한다.
+  ability instance([`ability.decl`](#abilitydecl)의 symbol 참조)를 나타내며 원소는 순서대로 적용한다.
   한 instance는 한 번만 나온다.
 - Key `outer`는 그 instance의 가장 위 handler를 설치한 지점의 evidence로 바꾼다.
   Source-logical operation은 이 key를 쓰지 않는다. CPS legalization이 arm 본문에
@@ -819,8 +819,8 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
   읽는다.
 
   ```text
-  {evidence_plan = [{select = 0}, {push = !state}]}
-  {evidence_plan = [{dup = !state}, {tails = [[], [{mask = !state}]]}]}
+  {evidence_plan = [{select = 0}, {push = @State}]}
+  {evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]}
   ```
 
 - 속성이 없으면 그대로 전달한다. 빈 목록은 쓰지 않는다.
@@ -856,17 +856,14 @@ Callable operation의 physical lowering은
 #### `ability.decl`
 
 ```text
-ability.decl {
-  sym_name = "<instance key>",
-  ability_ref = core.ability_ref<..., {name = "State", instance = "<instance key>"}>
-} {
+ability.decl {sym_name = "<instance key>"} {
   ability.operation {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
   ability.operation {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
 }
 ```
 
 - **역할:** Module이 사용하는 ability instance 하나와 그 operation 전체를 선언하는
-  symbol 정의다. Frontend는 module 안의 `perform`이나 handler arm이 이름을 대는
+  symbol 정의다. Frontend는 module 안의 operation이나 evidence plan이 이름을 대는
   instance마다 정확히 하나를 module 본문에 내보낸다. 선언은 IR 밖의 table이 아니라
   module의 일부이므로 textual IR만으로 검증에 필요한 사실이 모두 전달된다.
 - **단위:** 선언은 ability가 아니라 **instance** 단위다. Operation signature는 그
@@ -875,6 +872,11 @@ ability.decl {
 - **이름:** `sym_name`은 instance key다. Instance key는 checked source 인자에서
   만들며, 같은 lowered representation을 가진 서로 다른 source 인자를 구별한다.
   Runtime ability id도 같은 key에서 계산한다.
+- **참조:** Ability instance를 이름으로 대는 모든 자리는 이 정의에 대한 symbol
+  참조다. `perform`, handler arm, `ability.*`와 `effect.*` operation의 `ability`,
+  `ability.handle_dispatch`의 `abilities`, evidence plan의 원소가 여기에 해당한다.
+  Instance를 나타내는 type은 없으며 instance의 타입 인자는 IR에 나타나지 않는다.
+  Value type 변환은 instance identity를 바꿀 수 없다.
 - **영역:** `operations` 영역 하나를 가지며 그 block은 `ability.operation`만
   담는다. `ability.operation`은 `sym_name`을 갖지 않는다. 서로 다른 instance가 같은
   operation 이름을 선언하므로 operation은 symbol namespace에 들어가지 않고 선언
@@ -882,9 +884,9 @@ ability.decl {
 - **`ability.operation` 속성:** `op_name: String`, `kind: String`(`fn` 또는 `op`),
   `param_types: [Type]`, `result_type: Type`. Source declaration 순서의 parameter
   type과 result type이다.
-- **검증:** 한 module에서 같은 `ability_ref`를 선언하는 `ability.decl`은 하나이고,
-  한 선언 안에서 `op_name`은 중복되지 않는다. `perform`과 handler arm은 자신의
-  `ability_ref`와 `op_name`이 가리키는 선언의 kind, parameter type, result type과
+- **검증:** 한 선언 안에서 `op_name`은 중복되지 않는다. Instance마다 선언이
+  하나라는 것은 symbol 정의의 유일성이 보장한다. `perform`과 handler arm은 자신의
+  `ability`와 `op_name`이 가리키는 선언의 kind, parameter type, result type과
   일치해야 한다.
 - **수명:** 선언은 instance를 이름으로 대는 operation이 남아 있는 동안 module에
   남는다. Target의 evidence lowering이 마지막 참조를 소비하고 선언을 제거한다.
@@ -894,7 +896,7 @@ ability.decl {
 
 ```text
 %result = tribute_control.perform %arg0, ... {
-  ability_ref = !State,
+  ability = @State,
   op_name = "get",
   operation_kind = "op"
 } : ResultType
@@ -904,7 +906,7 @@ ability.decl {
   값은 logical type을 유지하며 tuple packing과 erasure는 conversion이 담당한다.
 - **결과:** logical operation result 하나만 만든다. Source `Never` result는
   `core.never`이며 physical `Never` control carrier를 선택하지 않는다.
-- **속성:** `ability_ref: Type`, `op_name: String`,
+- **속성:** `ability: SymbolRef`, `op_name: String`,
   `operation_kind: String`이 필수다. `operation_kind`는 정확히 `fn` 또는 `op`이며
   typecheck된 operation declaration에서 복사한다. 이는 body나 use site에서
   추론하는 lowering hint가 아니라 source-semantic metadata다. 모든 source
@@ -925,7 +927,7 @@ ability.decl {
 - **지역 검증:** 세 attribute를 요구하고 `operation_kind` domain을
   검사하며, result가 정확히 하나이고 region은 없으며 operand/result type이
   inference variable이 아니라 resolve되었는지 확인한다. Symbol-aware frontend
-  적합성 검사는 `ability_ref`와 `op_name`이 가리키는 [`ability.decl`](#abilitydecl)의
+  적합성 검사는 `ability`와 `op_name`이 가리키는 [`ability.decl`](#abilitydecl)의
   `fn`/`op` kind, parameter type, result type이 attribute, operand, result와
   일치하는지도 확인한다. 어떤 verifier도 control flow, handler, result type,
   calling convention에서 kind를 추론해서는 안 된다.
@@ -982,7 +984,7 @@ ability.decl {
   computation에 자동으로 공급되는 operation result를 반환한다.
 - **지역 검증:** 고정된 region 개수, single-block 형상, block-argument
   개수, terminator, yield type equality를 강제한다. 또한 `handlers`의 모든
-  direct child가 유일한 `(ability_ref, op_name)`
+  direct child가 유일한 `(ability, op_name)`
   `tribute_control.handler`인지 확인한다. Result type은 completion yield type과
   모든 general handler의 answer type과 같아야 한다.
 - **소유권과 값 흐름:** 이 operation은 body가 resumptive general
@@ -1001,7 +1003,7 @@ Frontend는 항상 completion region을 materialize한다. Source에 `do` arm이
 
 ```text
 tribute_control.handler {
-  ability_ref = !State,
+  ability = @State,
   op_name = "get",
   kind = "op",
   operation_result_type = ResultType
@@ -1014,7 +1016,7 @@ tribute_control.handler {
 
 - **피연산자와 결과:** 없다. Surrounding `tribute_control.handle`이 소유하는
   declarative entry다.
-- **속성:** `ability_ref: Type`, `op_name: String`, `kind: String`,
+- **속성:** `ability: SymbolRef`, `op_name: String`, `kind: String`,
   `operation_result_type: Type`이 필수다. `kind`는 정확히 `fn` 또는 `op`이다.
 - **영역:** block 하나를 가진 실행 가능한 `body` region 하나만 있다.
 - **Block argument:** source operation argument가 declaration 순서와 logical
@@ -1153,8 +1155,8 @@ ability.handle %outer_ev, %exit, %completion, %arm0, ... {handlers = [...]} {
 ^body(%ev: Evidence, %f: !ability.frame<M>):
   ...
 }
-ability.perform %ev, %f, %resumption, %arg0, ... {ability_ref = !State, op_name = "get"}
-ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
+ability.perform %ev, %f, %resumption, %arg0, ... {ability = @State, op_name = "get"}
+ability.abort %ev, %f, %arg0, ... {ability = @Fail, op_name = "fail"}
 %r = ability.delimit %body, %ev : R
 ```
 
@@ -1170,9 +1172,9 @@ ability.abort %ev, %f, %arg0, ... {ability_ref = !Fail, op_name = "fail"}
 - **`ability.handle`:** 결과 없는 terminator이며 region 하나를 가진다. `outer_ev`는
   handle을 설치한 지점의 Evidence, `exit`는 `ability.frame<R>`, `completion`은
   `Completion<M, R>`다. 나머지 operand는 arm closure이고 `handlers`는 같은 순서의
-  arm 표다. 원소는 `ability_ref`(Type), `op_name`(String), `kind`(`"fn"` 또는
+  arm 표다. 원소는 `ability`(SymbolRef), `op_name`(String), `kind`(`"fn"` 또는
   `"op"`), `operation_result_type`(Type)을 가진 dictionary이며 한
-  `(ability_ref, op_name)`은 한 번만 나온다. `I`가 `operation_result_type`일 때
+  `(ability, op_name)`은 한 번만 나온다. `I`가 `operation_result_type`일 때
   `kind = "op"` arm은 다음 `Cps` closure이며, token 둘은 `I`가 `core.never`가 아닐
   때만 있다.
 
@@ -1641,7 +1643,7 @@ Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `un
 Symbol 참조는 symbol table의 정의를 qualified path로 가리킨다(`callee = @foo`). 참조가
 아닌 이름 값은 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
-`predicate = "slt"`로 쓴다. Ability 이름(`core.ability_ref`의 `name`)과 operation
+`predicate = "slt"`로 쓴다. Operation
 이름(`op_name`), operation kind(`"fn"`, `"op"`), compiler intrinsic identity
 (`tribute.compiler_intrinsic`)도 symbol table의 정의가 아니므로 문자열이다. 기계 호출
 규약(`call_conv = "tail"`), 매개변수 ownership 계약(`tribute.ownership = "consumed"`),

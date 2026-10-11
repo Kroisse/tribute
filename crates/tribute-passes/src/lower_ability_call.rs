@@ -3,12 +3,12 @@
 //! ```text
 //! // Input:
 //! %result = ability.call [%args...]
-//!   { ability_ref: core.ability_ref<{name = "State"}>, op_name: "get" }
+//!   { ability: @State, op_name: "get" }
 //!
 //! // Output:
 //! %payload = pack %args into the canonical operation product
 //! %erased = effect.dispatch_tail %evidence, %payload
-//!   { ability_ref: core.ability_ref<{name = "State"}>, op_name: "get" }
+//!   { ability: @State, op_name: "get" }
 //! ```
 //!
 //! `lower_continuation_frames` lowers `ability.perform` and `ability.abort`
@@ -97,7 +97,12 @@ impl RewritePattern for LowerCallPattern {
         }
 
         let location = ctx.op(op).location;
-        let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
+        let ability = ctx
+            .op(op)
+            .attributes
+            .get_symbol_ref("ability")
+            .cloned()
+            .unwrap();
         let op_name = ctx.op(op).attributes.get_string_ref("op_name").unwrap();
         let result_types = ctx.op_result_types(op).to_vec();
         let [result_type] = result_types.as_slice() else {
@@ -121,7 +126,7 @@ impl RewritePattern for LowerCallPattern {
             ctx,
             rewriter,
             location,
-            ability_ref_type,
+            &ability,
             op_name,
             value_operands,
             t.anyref,
@@ -129,7 +134,7 @@ impl RewritePattern for LowerCallPattern {
 
         // === 3. Dispatch through target-independent effect ABI ===
         let dispatch_op = effect::DispatchTail::operands(evidence_val, shift_value_val)
-            .ability_ref(ability_ref_type)
+            .ability(ability)
             .op_name(op_name)
             .results(t.anyref)
             .build(ctx, location);
@@ -213,7 +218,7 @@ mod tests {
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
     %msg = arith.const {{value = 1}} : tribute_rt.anyref
-    %result = ability.call %msg {{ability_ref = core.ability_ref<{{name = "Console"}}>, op_name = "print"}} : tribute_rt.anyref
+    %result = ability.call %msg {{ability = @Console, op_name = "print"}} : tribute_rt.anyref
     func.return %result
   }}
 }}"#
@@ -254,7 +259,7 @@ mod tests {
                     r#"core.module @test {{
   !Evidence = {evidence}
   func.func @test_fn({params}) -> core.i32 {attributes} {{
-    %result = ability.call {{ability_ref = core.ability_ref<{{name = "Counter"}}>, op_name = "next"}} : core.i32
+    %result = ability.call {{ability = @Counter, op_name = "next"}} : core.i32
     func.return %result
   }}
 }}"#
@@ -277,7 +282,7 @@ mod tests {
             &format!(
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> core.i32 attributes {{tribute.calling_convention = 1}} {{
-    %result = ability.call {{ability_ref = core.ability_ref<{{name = "Counter"}}>, op_name = "next"}} : core.i32
+    %result = ability.call {{ability = @Counter, op_name = "next"}} : core.i32
     func.return %result
   }}
 }}"#
