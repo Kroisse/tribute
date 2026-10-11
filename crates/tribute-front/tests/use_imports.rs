@@ -567,7 +567,7 @@ fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
         (
             "use a::size\nuse b::size\n\
              fn main() -> Nil {\n    let _ = size(A { n: 1 }, 2)\n}\n",
-            "call arity mismatch: expected 1 arguments, found 2",
+            "call arity mismatch: expected 1 argument, found 2",
         ),
         (
             "use a::size\nuse b::size\n\
