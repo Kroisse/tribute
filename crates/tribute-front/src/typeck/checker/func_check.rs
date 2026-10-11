@@ -753,14 +753,14 @@ impl<'db> TypeChecker<'db> {
         let receiver = solver.type_subst().apply(self.db(), call.receiver_ty);
         let message = match self.select_method(&call.method, call.path.as_ref(), receiver) {
             super::expr::MethodSelection::Ambiguous(functions) => format!(
-                "ambiguous path `{}` for a receiver of type `{receiver}`: it names {}",
+                "ambiguous path `{}` for a first argument of type `{receiver}`: it names {}",
                 call.method,
                 functions.iter().format_with(", ", |function, f| {
                     f(&format_args!("`{}`", function.qualified(self.db())))
                 }),
             ),
             _ => format!(
-                "unresolved path `{}`: no function it names takes a receiver of type `{receiver}`",
+                "unresolved path `{}`: no function it names takes a first argument of type `{receiver}`",
                 call.method
             ),
         };

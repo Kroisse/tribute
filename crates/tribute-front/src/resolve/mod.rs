@@ -21,6 +21,7 @@ mod resolver;
 pub use env::{Binding, ModuleEnv};
 pub use resolver::Resolver;
 
+use itertools::Itertools;
 use trunk_ir::Symbol;
 
 use crate::ast::{
@@ -88,33 +89,7 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
         .collect();
 
     for (import_name, path) in module_imports {
-        // A path into a library namespace continues from its package path,
-        // unless the package declares the first segment itself.
-        let path = match path.split_first() {
-            Some((first, rest))
-                if !env.declares(first.clone())
-                    && let Some(library) = env.library_namespace(first) =>
-            {
-                library
-                    .to_string()
-                    .split("::")
-                    .map(Symbol::new)
-                    .chain(rest.iter().cloned())
-                    .collect()
-            }
-            _ => path,
-        };
-        let target_name = path.last().unwrap().clone();
-        let ns = Symbol::new(
-            &path[..path.len() - 1]
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join("::"),
-        );
-
-        // Look up the actual binding in the namespace
-        let Some(binding) = env.lookup_qualified(&ns, &target_name).cloned() else {
+        let Some((path, binding)) = use_target(env, path) else {
             continue;
         };
 
@@ -134,6 +109,52 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
         // Replace the Module placeholder with the actual binding
         env.replace_import(import_name, binding, path);
     }
+
+    // A name that several `use`s give different functions imports them all.
+    let repeated = env.take_repeated_uses();
+    for (name, paths) in &repeated {
+        let mut functions = Vec::new();
+        for path in paths {
+            match use_target(env, path.clone()) {
+                Some((_, Binding::Function { id })) if !functions.contains(&id) => {
+                    functions.push(id);
+                }
+                Some((_, Binding::Function { .. })) => {}
+                _ => {
+                    functions.clear();
+                    break;
+                }
+            }
+        }
+        if functions.len() > 1 {
+            env.set_imported_functions(name.clone(), functions);
+        }
+    }
+    env.set_repeated_uses(repeated);
+}
+
+/// The package path a `use` of `path` names and what is declared there.
+fn use_target<'db>(env: &ModuleEnv<'db>, path: Vec<Symbol>) -> Option<(Vec<Symbol>, Binding<'db>)> {
+    // A path into a library namespace continues from its package path,
+    // unless the package declares the first segment itself.
+    let path: Vec<Symbol> = match path.split_first() {
+        Some((first, rest))
+            if !env.declares(first.clone())
+                && let Some(library) = env.library_namespace(first) =>
+        {
+            library
+                .to_string()
+                .split("::")
+                .map(Symbol::new)
+                .chain(rest.iter().cloned())
+                .collect()
+        }
+        _ => path,
+    };
+    let (target_name, namespace) = path.split_last()?;
+    let namespace = Symbol::new(&namespace.iter().format("::").to_string());
+    let binding = env.lookup_qualified(&namespace, target_name)?.clone();
+    Some((path, binding))
 }
 
 /// Build a module environment from AST declarations.
@@ -353,7 +374,7 @@ fn collect_definition<'db>(
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| u.path.clone());
-                env.add_import(import_name, Binding::Module { path });
+                env.add_use(import_name, path);
             }
         }
 

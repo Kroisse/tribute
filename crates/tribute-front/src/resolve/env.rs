@@ -77,6 +77,12 @@ pub struct ModuleEnv<'db> {
     /// Original paths for resolved `use` imports (import name → original path).
     /// Used to rewrite effect annotations from imported names to qualified paths.
     use_paths: HashMap<Symbol, Vec<Symbol>>,
+    /// The paths of the names that several `use`s import, in declaration
+    /// order.
+    repeated_uses: HashMap<Symbol, Vec<Vec<Symbol>>>,
+    /// The functions a name imports when several `use`s give it different
+    /// ones. A call selects one by the type of its first argument.
+    imported_functions: HashMap<Symbol, Vec<FuncDefId<'db>>>,
     /// Names the prelude and the compiler supply, visible in every module.
     library: HashMap<Symbol, Binding<'db>>,
     /// First segments of the namespaces the prelude and the compiler supply.
@@ -132,6 +138,46 @@ impl<'db> ModuleEnv<'db> {
     /// Add an import.
     pub fn add_import(&mut self, name: Symbol, binding: Binding<'db>) {
         self.imports.insert(name, binding);
+    }
+
+    /// Add the placeholder of a `use` that imports `path` as `name`.
+    pub fn add_use(&mut self, name: Symbol, path: Vec<Symbol>) {
+        if let Some(Binding::Module { path: earlier }) = self.imports.get(&name)
+            && *earlier != path
+        {
+            let paths = self
+                .repeated_uses
+                .entry(name.clone())
+                .or_insert_with(|| vec![earlier.clone()]);
+            if !paths.contains(&path) {
+                paths.push(path.clone());
+            }
+        }
+        self.add_import(name, Binding::Module { path });
+    }
+
+    /// Take the paths of the names that several `use`s import, to put back
+    /// with [`Self::set_repeated_uses`].
+    pub fn take_repeated_uses(&mut self) -> HashMap<Symbol, Vec<Vec<Symbol>>> {
+        std::mem::take(&mut self.repeated_uses)
+    }
+
+    pub fn set_repeated_uses(&mut self, repeated: HashMap<Symbol, Vec<Vec<Symbol>>>) {
+        self.repeated_uses = repeated;
+    }
+
+    /// Record the functions that several `use`s import as `name`.
+    pub fn set_imported_functions(&mut self, name: Symbol, functions: Vec<FuncDefId<'db>>) {
+        self.imported_functions.insert(name, functions);
+    }
+
+    /// The functions `name` imports when it imports several and the module
+    /// declares none of that name.
+    pub fn imported_functions(&self, name: &Symbol) -> Option<&[FuncDefId<'db>]> {
+        if self.definitions.contains_key(name) {
+            return None;
+        }
+        self.imported_functions.get(name).map(Vec::as_slice)
     }
 
     /// Add an import only if no binding exists for that name.
