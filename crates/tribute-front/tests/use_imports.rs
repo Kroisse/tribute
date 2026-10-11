@@ -699,7 +699,7 @@ use b::tag
 
 /// Reading a field is calling its getter: `x.f` selects like any other
 /// call, also before its receiver is typed. A function that takes the struct
-/// alone under the field's name would be a second `x.f`, so declaring it is
+/// first under the field's name would be a second `x.f`, so declaring it is
 /// an error.
 #[salsa_test]
 fn a_field_read_is_a_call_of_its_getter(db: &salsa::DatabaseImpl) {
@@ -735,16 +735,29 @@ fn shown(name: Name) -> String { name.text }
         ),
         [
             "function `text` conflicts with field `text` of struct `Name`: \
-          `.text` on a `Name` would name both"
+          `.text` on a `Name` names the field"
         ],
     );
-    // More parameters, or another type's, are another function.
+    // More parameters do not make it another name for the receiver.
+    assert_eq!(
+        errors(
+            db,
+            "struct Name { text: String }\n\
+             fn text(name: Name, suffix: String) -> String { name.text <> suffix }\n\
+             fn main() -> Nil { }\n",
+        ),
+        [
+            "function `text` conflicts with field `text` of struct `Name`: \
+          `.text` on a `Name` names the field"
+        ],
+    );
+    // A function of another type's is another function.
     let errors = errors(
         db,
         "struct Name { text: String }\n\
-         fn text(name: Name, suffix: String) -> String { name.text <> suffix }\n\
+         fn text(size: Nat, name: Name) -> String { name.text }\n\
          fn size(text: String) -> Nat { 1 }\n\
-         fn main() -> Nil { let _ = Name { text: \"a\" }.text(\"b\") }\n",
+         fn main() -> Nil { let _ = 1.text(Name { text: \"a\" }) }\n",
     );
     assert!(errors.is_empty(), "{errors:#?}");
 }

@@ -312,17 +312,19 @@ Receiver는 첫 번째 인자이며 다른 인자와 다르지 않다. Receiver�
 필드를 가진 모든 struct의 getter가 들어간다. 따라서 필드 `f`를 가진 struct가
 하나뿐이고 같은 이름의 함수가 없으면 `x.f`는 `x`의 타입 없이도 정해진다.
 
-Struct 하나만을 받고 그 struct의 필드와 이름이 같은 함수는 선언할 수 없다. 그런
-함수는 `x.f`가 가리킬 둘째 함수가 되어, 필드를 읽는 `x.f`를 모호하게 만든다.
-매개변수가 더 있거나 다른 타입을 받는 함수는 `x.f`의 후보가 아니므로 선언할 수
-있다:
+Struct를 첫 번째 인자로 받고 그 struct의 필드와 이름이 같은 함수는, 나머지
+매개변수가 무엇이든 선언할 수 없다. 한 타입의 값 `x`에 대해 `x.f`가 가리키는 것은
+하나여야 한다. 그런 함수가 있으면 `x.f`는 필드를 읽는지 함수를 부르는지,
+`x.f(y)`는 필드에 든 함수를 부르는지 그 함수를 부르는지 이름만으로 알 수 없게
+된다. 다른 타입을 첫 번째 인자로 받는 함수는 선언할 수 있다:
 
 ```rust
 struct Name { text: String }
 
 fn text(name: Name) -> String { name.text }                 // Error: 필드 text와 충돌
+fn text(name: Name, suffix: String) -> String { ... }       // Error: 필드 text와 충돌
 fn shown(name: Name) -> String { name.text }                // OK
-fn text(name: Name, suffix: String) -> String { ... }       // OK: name.text("!")
+fn text(label: Label) -> String { ... }                     // OK: 다른 타입
 ```
 
 ```rust

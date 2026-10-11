@@ -461,7 +461,7 @@ fn main() -> Nil {
         [
             (
                 "function `name` conflicts with field `name` of struct `User`: \
-                 `.name` on a `User` would name both"
+                 `.name` on a `User` names the field"
                     .to_owned(),
                 "pub fn name(user: pkg::User) -> String { \"audit\" }".to_owned()
             ),
