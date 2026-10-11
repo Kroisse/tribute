@@ -1761,13 +1761,14 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Report a method call whose receiver and explicit arguments do not
-    /// match the selected function's parameters.
     /// Report a call that passes `args` arguments to a function of `params`
     /// parameters.
     pub(crate) fn report_call_arity(&self, node: NodeId, params: usize, args: usize) {
         Diagnostic::new(
-            format!("call arity mismatch: expected {params} arguments, found {args}"),
+            format!(
+                "call arity mismatch: expected {params} argument{}, found {args}",
+                if params == 1 { "" } else { "s" }
+            ),
             self.get_span(node),
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,

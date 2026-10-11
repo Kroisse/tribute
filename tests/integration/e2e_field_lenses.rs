@@ -495,7 +495,7 @@ fn main() -> Nil {
                 "user.name::set(\"a\", \"b\")".to_owned()
             ),
             (
-                "call arity mismatch: expected 1 arguments, found 2".to_owned(),
+                "call arity mismatch: expected 1 argument, found 2".to_owned(),
                 "user.User::name(\"x\")".to_owned()
             ),
         ]
