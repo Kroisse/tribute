@@ -359,8 +359,8 @@ fn solved_later(name: Name) -> String { id(name).text("a", "b") }
     assert_eq!(
         errors(db, text),
         [
-            "call arity mismatch: expected 1 arguments, found 2",
-            "call arity mismatch: expected 1 arguments, found 3",
+            "call arity mismatch: expected 1 argument, found 2",
+            "call arity mismatch: expected 1 argument, found 3",
         ]
     );
 }
