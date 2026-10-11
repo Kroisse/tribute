@@ -83,6 +83,8 @@ pub fn tribute_control_pre_cps_target() -> ConversionTarget {
         .legal_dialect("list")
         .legal_dialect("tribute_rt")
         .legal_dialect("tribute_io")
+        .legal_op("ability", "decl")
+        .recursive_legal_op("ability", "decl")
 }
 
 /// Partial post-legalization target. Unknown operations belong to later passes.
@@ -557,13 +559,11 @@ pub(super) fn verify_source_conversion_shapes(
 pub fn verify_tribute_control_pre_cps(
     ctx: &IrContext,
     module: Module,
-    declarations: &[tribute_control::OperationDeclaration],
     compiler_intrinsics: &[tribute_control::CompilerIntrinsicDeclaration],
     analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
     let mut failures = Vec::new();
-    let validation =
-        tribute_control::validate(ctx, module, declarations, compiler_intrinsics, analyses);
+    let validation = tribute_control::validate(ctx, module, compiler_intrinsics, analyses);
     failures.extend(validation.errors.into_iter().map(|error| BoundaryFailure {
         op: error.op,
         location: error.location,

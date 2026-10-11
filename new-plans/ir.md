@@ -853,6 +853,43 @@ tribute_control.return %value
 Callable operation의 physical lowering은
 [cps-effects.md](cps-effects.md#pre-cps-callable-shape)에만 정의한다.
 
+#### `ability.decl`
+
+```text
+ability.decl {
+  sym_name = "<instance key>",
+  ability_ref = core.ability_ref<..., {name = "State", instance = "<instance key>"}>
+} {
+  ability.operation {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
+  ability.operation {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
+}
+```
+
+- **역할:** Module이 사용하는 ability instance 하나와 그 operation 전체를 선언하는
+  symbol 정의다. Frontend는 module 안의 `perform`이나 handler arm이 이름을 대는
+  instance마다 정확히 하나를 module 본문에 내보낸다. 선언은 IR 밖의 table이 아니라
+  module의 일부이므로 textual IR만으로 검증에 필요한 사실이 모두 전달된다.
+- **단위:** 선언은 ability가 아니라 **instance** 단위다. Operation signature는 그
+  instance의 타입 인자로 instantiate한 logical type이다. Logical type은 source
+  type variable을 표현하지 않으므로 generic 선언을 두지 않는다.
+- **이름:** `sym_name`은 instance key다. Instance key는 checked source 인자에서
+  만들며, 같은 lowered representation을 가진 서로 다른 source 인자를 구별한다.
+  Runtime ability id도 같은 key에서 계산한다.
+- **영역:** `operations` 영역 하나를 가지며 그 block은 `ability.operation`만
+  담는다. `ability.operation`은 `sym_name`을 갖지 않는다. 서로 다른 instance가 같은
+  operation 이름을 선언하므로 operation은 symbol namespace에 들어가지 않고 선언
+  안에서 `op_name`으로 찾는다.
+- **`ability.operation` 속성:** `op_name: String`, `kind: String`(`fn` 또는 `op`),
+  `param_types: [Type]`, `result_type: Type`. Source declaration 순서의 parameter
+  type과 result type이다.
+- **검증:** 한 module에서 같은 `ability_ref`를 선언하는 `ability.decl`은 하나이고,
+  한 선언 안에서 `op_name`은 중복되지 않는다. `perform`과 handler arm은 자신의
+  `ability_ref`와 `op_name`이 가리키는 선언의 kind, parameter type, result type과
+  일치해야 한다.
+- **수명:** 선언은 instance를 이름으로 대는 operation이 남아 있는 동안 module에
+  남는다. Target의 evidence lowering이 마지막 참조를 소비하고 선언을 제거한다.
+  선언은 호출 가능한 정의가 아니므로 global DCE의 제거 대상이 아니다.
+
 #### `tribute_control.perform`
 
 ```text
@@ -888,7 +925,7 @@ Callable operation의 physical lowering은
 - **지역 검증:** 세 attribute를 요구하고 `operation_kind` domain을
   검사하며, result가 정확히 하나이고 region은 없으며 operand/result type이
   inference variable이 아니라 resolve되었는지 확인한다. Symbol-aware frontend
-  적합성 검사는 `ability_ref`와 `op_name`이 resolve한 operation declaration의
+  적합성 검사는 `ability_ref`와 `op_name`이 가리키는 [`ability.decl`](#abilitydecl)의
   `fn`/`op` kind, parameter type, result type이 attribute, operand, result와
   일치하는지도 확인한다. 어떤 verifier도 control flow, handler, result type,
   calling convention에서 kind를 추론해서는 안 된다.

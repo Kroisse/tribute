@@ -135,7 +135,6 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,
         module.module,
-        &module.operation_declarations,
         &module.compiler_intrinsics,
         &mut Default::default(),
     );

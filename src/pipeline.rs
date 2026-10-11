@@ -380,7 +380,6 @@ fn merge_and_lower_to_ir<'db>(
     FrontendCompilation {
         context,
         module: frontend.module,
-        operation_declarations: frontend.operation_declarations,
         compiler_intrinsics: frontend.compiler_intrinsics,
     }
 }
@@ -665,14 +664,13 @@ fn merge_and_lower_to_ir_with<'db, M>(
     (ir, module)
 }
 
-/// Arena IR together with the exact semantic metadata required by the shared
-/// CPS conversion. The metadata stays private; [`run_shared_middle_end`] is
-/// its only consumer.
+/// Arena IR together with the registered compiler intrinsics the shared CPS
+/// conversion checks. They stay private; [`run_shared_middle_end`] is their
+/// only consumer.
 #[derive(Clone)]
 pub struct FrontendCompilation {
     context: IrContext,
     module: Module,
-    operation_declarations: Vec<tribute_ir::dialect::tribute_control::OperationDeclaration>,
     compiler_intrinsics: Vec<tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration>,
 }
 
@@ -786,8 +784,7 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
 
 /// Run frontend, source-logical CPS conversion, and lambda lifting (for testing).
 ///
-/// Evidence params are introduced by the physical CPS conversion. Keep frontend
-/// metadata in the same arena so the conversion can authenticate declarations.
+/// Evidence params are introduced by the physical CPS conversion.
 pub fn run_through_cps_lowering(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -795,7 +792,6 @@ pub fn run_through_cps_lowering(
     let Some(FrontendCompilation {
         context,
         module: m,
-        operation_declarations,
         compiler_intrinsics,
     }) = compile_frontend_for_shared_route(db, source)
     else {
@@ -804,7 +800,7 @@ pub fn run_through_cps_lowering(
     let mut ctx = context;
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
-    let mut pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
+    let mut pm = structural_pass_pipeline(compiler_intrinsics);
     pm.run(&mut ctx, core_module, &mut Default::default())?;
     Ok(Some((ctx, m)))
 }
@@ -831,12 +827,11 @@ fn eliminate_unreferenced_source_functions(ctx: &mut IrContext, m: Module) {
 /// Build the shared structural pass pipeline that legalizes source-logical
 /// callable/control IR into CPS with explicit evidence.
 fn structural_pass_pipeline(
-    operation_declarations: Vec<tribute_ir::dialect::tribute_control::OperationDeclaration>,
     compiler_intrinsics: Vec<tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration>,
 ) -> PassManager {
     let mut pm = PassManager::new();
     pm.add_pass(
-        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
+        tribute_passes::tribute_control_to_cps::TributeControlToCps::new()
             .with_compiler_intrinsics(compiler_intrinsics),
     )
     .add_pass(tribute_passes::lower_continuation_frames::LowerContinuationFrames)
@@ -899,7 +894,6 @@ fn shared_middle_end(
     let FrontendCompilation {
         context,
         module: m,
-        operation_declarations,
         compiler_intrinsics,
     } = frontend;
     let mut ctx = context;
@@ -914,7 +908,7 @@ fn shared_middle_end(
         eliminate_unreferenced_source_functions(&mut ctx, m);
     }
     let mut analyses = AnalysisCache::new();
-    let mut structural_pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
+    let mut structural_pm = structural_pass_pipeline(compiler_intrinsics);
     structural_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     // CPS effect handling, function-local phase: lower_ability_call produces
@@ -2074,14 +2068,23 @@ fn main() -> Nil {
         db: &crate::TributeDatabaseImpl,
         target: tribute_passes::abi_boundary::TargetKind,
     ) {
+        let mut declared = false;
         for (path, text) in BOUNDARY_EXIT_PROGRAMS {
             let source = source_from_str(path, text);
             let (mut ctx, module) = run_shared_pipeline(db, source)
                 .expect("shared pipeline must succeed")
                 .unwrap_or_else(|| panic!("{path} must lower"));
+            let shared = trunk_ir::printer::print_module(&ctx, module.op());
             run_target_to_boundary_exit(&mut ctx, module, target)
                 .unwrap_or_else(|error| panic!("{path}: target boundary failed: {error}"));
+            let exit = trunk_ir::printer::print_module(&ctx, module.op());
+            assert!(
+                !exit.contains("ability.decl"),
+                "{path}: evidence lowering removes ability declarations:\n{exit}"
+            );
+            declared |= shared.contains("ability.decl");
         }
+        assert!(declared, "a boundary program declares an ability instance");
     }
 
     #[salsa_test]
@@ -2755,19 +2758,16 @@ fn main() -> Nil {
             logical.contains("tribute_control.perform"),
             "frontend must retain source logical perform:\n{logical}"
         );
-        let throw = frontend
-            .operation_declarations
-            .iter()
-            .position(|declaration| frontend.context.str(declaration.op_name) == "throw")
-            .expect("prelude Throw declaration");
-        let next = frontend
-            .operation_declarations
-            .iter()
-            .position(|declaration| frontend.context.str(declaration.op_name) == "next")
-            .expect("source Counter declaration");
+        let declared = |operation: &str| {
+            logical
+                .find(&format!(
+                    "ability.operation {{kind = \"op\", op_name = \"{operation}\""
+                ))
+                .unwrap_or_else(|| panic!("missing declaration of `{operation}`:\n{logical}"))
+        };
         assert!(
-            throw < next,
-            "operation declarations must preserve prelude-before-source order"
+            declared("throw") < declared("next"),
+            "ability declarations must preserve prelude-before-source order"
         );
         let (ctx, module) = compile_ast(db, source)
             .expect("shared lowering should succeed")
@@ -3388,7 +3388,6 @@ fn main() -> Nil {}
                 tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
                     &mut ir,
                     logical.module,
-                    &logical.operation_declarations,
                     &logical.compiler_intrinsics,
                     &mut Default::default(),
                 )
@@ -3519,7 +3518,6 @@ fn main() -> Nil {}
                 tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
                     &mut ir,
                     logical.module,
-                    &logical.operation_declarations,
                     &logical.compiler_intrinsics,
                     &mut Default::default(),
                 )
@@ -3617,7 +3615,6 @@ fn main() -> Nil {}
         let validation = tribute_control::validate(
             &ir,
             logical.module,
-            &logical.operation_declarations,
             &logical.compiler_intrinsics,
             &mut Default::default(),
         );

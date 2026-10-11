@@ -4,9 +4,10 @@ expression: ir_text
 ---
 core.module @test {
   !t0 = tribute_control.func_sig<() -> core.i32, {tribute.calling_convention = 2}>
+  !t1 = core.ability_ref<{instance = "ability_1_7_Counter", name = "Counter"}>
 
   tribute_control.func @get_count() -> core.i32 convention(cps) {
-      %0 = tribute_control.perform {ability_ref = core.ability_ref<{instance = "ability_1_7_Counter", name = "Counter"}>, op_name = "inc", operation_kind = "op"} : core.i32
+      %0 = tribute_control.perform {ability_ref = !t1, op_name = "inc", operation_kind = "op"} : core.i32
       tribute_control.return %0
   }
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
@@ -19,5 +20,8 @@ core.module @test {
   tribute_control.func @main() -> core.nil convention(direct) {
       %0 = core.nil_value : core.nil
       tribute_control.return %0
+  }
+  ability.decl {ability_ref = !t1, sym_name = "ability_1_7_Counter"} {
+      ability.operation {kind = "op", op_name = "inc", param_types = [], result_type = core.i32}
   }
 }

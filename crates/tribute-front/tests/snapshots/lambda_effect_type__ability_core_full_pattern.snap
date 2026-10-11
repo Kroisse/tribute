@@ -5,15 +5,15 @@ expression: ir_text
 core.module @test {
   !t0 = tribute_control.func_sig<() -> tribute_rt.anyref, {tribute.calling_convention = 2}>
   !t1 = core.ability_ref<tribute_rt.anyref, {instance = "ability_2_5_State_11_bound_1_1_1", name = "State"}>
-  !t2 = tribute_control.func_sig<() -> core.i32, {tribute.calling_convention = 2}>
-  !t3 = core.ability_ref<core.i32, {instance = "ability_2_5_State_3_int", name = "State"}>
+  !t2 = core.ability_ref<core.i32, {instance = "ability_2_5_State_3_int", name = "State"}>
+  !t3 = tribute_control.func_sig<() -> core.i32, {tribute.calling_convention = 2}>
 
   tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @counter() -> core.i32 convention(cps) {
-      %0 = tribute_control.perform {ability_ref = !t3, op_name = "get", operation_kind = "op"} : core.i32
+      %0 = tribute_control.perform {ability_ref = !t2, op_name = "get", operation_kind = "op"} : core.i32
       %1 = arith.const {value = 1} : core.i32
       %2 = tribute_control.call %0, %1 {callee = @"std::Int::+"} : core.i32
-      %3 = tribute_control.perform %2 {ability_ref = !t3, op_name = "set", operation_kind = "op"} : core.nil
+      %3 = tribute_control.perform %2 {ability_ref = !t2, op_name = "set", operation_kind = "op"} : core.nil
       tribute_control.return %0
   }
   tribute_control.func @run_state(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref convention(cps) {
@@ -59,5 +59,13 @@ core.module @test {
       %7 = tribute_control.call %5, %6 {callee = @run_state} : tribute_rt.anyref
       %8 = core.unrealized_conversion_cast %7 : core.i32
       tribute_control.return %8
+  }
+  ability.decl {ability_ref = !t2, sym_name = "ability_2_5_State_3_int"} {
+      ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
+      ability.operation {kind = "op", op_name = "set", param_types = [core.i32], result_type = core.nil}
+  }
+  ability.decl {ability_ref = !t1, sym_name = "ability_2_5_State_11_bound_1_1_1"} {
+      ability.operation {kind = "op", op_name = "get", param_types = [], result_type = tribute_rt.anyref}
+      ability.operation {kind = "op", op_name = "set", param_types = [tribute_rt.anyref], result_type = core.nil}
   }
 }

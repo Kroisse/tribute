@@ -27,4 +27,7 @@ core.module @test {
       %6 = core.nil_value : core.nil
       tribute_control.return %6
   }
+  ability.decl {ability_ref = !t0, sym_name = "ability_1_3_Ask"} {
+      ability.operation {kind = "op", op_name = "ask", param_types = [], result_type = core.i32}
+  }
 }

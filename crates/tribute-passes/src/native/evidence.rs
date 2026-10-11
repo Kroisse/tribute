@@ -41,6 +41,7 @@ pub fn lower_evidence_to_native(ctx: &mut IrContext, module: Module) {
 
 /// Prepare native evidence runtime declarations at module scope.
 pub fn prepare_native_evidence_runtime(ctx: &mut IrContext, module: Module) {
+    ability::remove_declarations(ctx, module);
     declare_evidence_runtime(ctx, module);
 }
 

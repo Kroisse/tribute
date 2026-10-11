@@ -1128,8 +1128,8 @@ inventory::submit! {
 
 // === Explicit Tribute validation entry point ===
 
-/// One resolved source ability-operation declaration used by symbol-aware
-/// whole-IR validation.
+/// One operation an `ability.decl` of the module declares, as whole-IR
+/// validation reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OperationDeclaration {
     pub ability_ref: TypeRef,
@@ -1177,6 +1177,109 @@ impl OperationDeclaration {
             result_type,
         }
     }
+}
+
+/// Add an `ability.decl` to `module` for each ability instance of
+/// `declarations`, holding the operations given for it, in first-use order.
+pub fn declare_operations(
+    ctx: &mut IrContext,
+    module: Module,
+    declarations: &[OperationDeclaration],
+) {
+    use trunk_ir::context::{BlockData, RegionData};
+
+    let location = ctx.op(module.op()).location;
+    let module_block = module
+        .first_block(ctx)
+        .expect("a module that declares ability operations has a body block");
+    let mut instances = Vec::new();
+    for declaration in declarations {
+        if !instances.contains(&declaration.ability_ref) {
+            instances.push(declaration.ability_ref);
+        }
+    }
+    for ability_ref in instances {
+        let block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        for declaration in declarations
+            .iter()
+            .filter(|declaration| declaration.ability_ref == ability_ref)
+        {
+            let operation = crate::dialect::ability::Operation::operands()
+                .op_name(declaration.op_name)
+                .kind(declaration.kind)
+                .param_types(declaration.parameter_types.iter().copied())
+                .result_type(declaration.result_type)
+                .build(ctx, location);
+            ctx.push_op(block, operation.op_ref());
+        }
+        let operations = ctx.create_region(RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![block],
+            parent_op: None,
+        });
+        let symbol = crate::dialect::ability::declaration_symbol(ctx, ability_ref);
+        let decl = crate::dialect::ability::Decl::operands()
+            .sym_name(symbol)
+            .ability_ref(ability_ref)
+            .regions(operations)
+            .build(ctx, location);
+        ctx.push_op(module_block, decl.op_ref());
+    }
+}
+
+/// The operations the `ability.decl` definitions of `module` declare, in
+/// module order.
+pub fn operation_declarations(ctx: &IrContext, module: Module) -> Vec<OperationDeclaration> {
+    declared_operations(ctx, module, &mut Vec::new())
+}
+
+fn declared_operations(
+    ctx: &IrContext,
+    module: Module,
+    errors: &mut Vec<ValidationError>,
+) -> Vec<OperationDeclaration> {
+    use crate::dialect::ability::{Decl, Operation};
+
+    let mut declarations = Vec::new();
+    let mut declared = HashSet::default();
+    for &op in module.ops(ctx) {
+        let Ok(decl) = Decl::from_op(ctx, op) else {
+            continue;
+        };
+        let ability_ref = decl.ability_ref(ctx);
+        if !declared.insert(ability_ref) {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!("duplicate ability.decl for {ability_ref}"),
+            );
+        }
+        let blocks = &ctx.region(decl.operations(ctx)).blocks;
+        for &operation in blocks.iter().flat_map(|block| &ctx.block(*block).ops) {
+            match Operation::from_op(ctx, operation) {
+                Ok(operation) => declarations.push(OperationDeclaration {
+                    ability_ref,
+                    op_name: operation.op_name_ref(ctx),
+                    kind: operation.kind_ref(ctx),
+                    parameter_types: operation.param_types(ctx).collect(),
+                    result_type: operation.result_type(ctx),
+                }),
+                Err(_) => push_op_error(
+                    ctx,
+                    operation,
+                    errors,
+                    "ability.decl may hold only ability.operation",
+                ),
+            }
+        }
+    }
+    declarations
 }
 
 /// A focused `tribute_control` validation failure.
@@ -3477,14 +3580,12 @@ fn validate_token_placements(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
 pub fn validate_whole_ir(
     ctx: &IrContext,
     module: Module,
-    declarations: &[OperationDeclaration],
     compiler_intrinsics: &[CompilerIntrinsicDeclaration],
 ) -> ValidationResult {
     whole_ir(
         ctx,
         module,
         &SymbolTable::collect(ctx, module),
-        declarations,
         compiler_intrinsics,
     )
 }
@@ -3493,13 +3594,13 @@ fn whole_ir(
     ctx: &IrContext,
     module: Module,
     symbols: &SymbolTable,
-    declarations: &[OperationDeclaration],
     compiler_intrinsics: &[CompilerIntrinsicDeclaration],
 ) -> ValidationResult {
     let mut errors = Vec::new();
     let Some(body) = module.body(ctx) else {
         return ValidationResult { errors };
     };
+    let declarations = &declared_operations(ctx, module, &mut errors);
     validate_module_symbols(ctx, module, symbols, &mut errors);
     validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(ctx, declarations, &mut errors);
@@ -3531,13 +3632,11 @@ fn whole_ir(
 
 /// Run the complete local and whole-IR `tribute_control` validation.
 ///
-/// The caller supplies resolved source operation declarations because those
-/// declarations are frontend semantic metadata rather than TrunkIR operations.
-/// The [`SymbolTable`] is queried through `analyses`.
+/// Ability operations are checked against the module's `ability.decl`
+/// definitions. The [`SymbolTable`] is queried through `analyses`.
 pub fn validate(
     ctx: &IrContext,
     module: Module,
-    declarations: &[OperationDeclaration],
     compiler_intrinsics: &[CompilerIntrinsicDeclaration],
     analyses: &mut AnalysisCache,
 ) -> ValidationResult {
@@ -3545,7 +3644,7 @@ pub fn validate(
     let mut local = validate_local(ctx, module);
     local
         .errors
-        .extend(whole_ir(ctx, module, &symbols, declarations, compiler_intrinsics).errors);
+        .extend(whole_ir(ctx, module, &symbols, compiler_intrinsics).errors);
     local
 }
 
@@ -3636,7 +3735,6 @@ mod tests {
     struct ValidFixture {
         ctx: IrContext,
         module: Module,
-        declarations: Vec<OperationDeclaration>,
         handle: OpRef,
         handler: OpRef,
     }
@@ -3742,10 +3840,11 @@ mod tests {
             i32_ty,
         )];
 
+        declare_operations(&mut ctx, module, &declarations);
+
         ValidFixture {
             ctx,
             module,
-            declarations,
             handle: handle.op_ref(),
             handler: handler.op_ref(),
         }
@@ -3811,7 +3910,7 @@ mod tests {
     }
 
     fn valid_fixture() -> ValidFixture {
-        let (ctx, module) = parse_fixture(VALID_CONTROL_MODULE);
+        let (mut ctx, module) = parse_fixture(VALID_CONTROL_MODULE);
         let handle = control_op(&ctx, module, "handle");
         let handler = control_op(&ctx, module, "handler");
         let handler_body = ctx.op_region(handler, 0).unwrap();
@@ -3842,13 +3941,86 @@ mod tests {
             result_type,
         )];
 
+        declare_operations(&mut ctx, module, &declarations);
+
         ValidFixture {
             ctx,
             module,
-            declarations,
             handle,
             handler,
         }
+    }
+
+    const DECLARED_PERFORM: &str = r#"core.module @test {
+  tribute_control.func @run() -> core.i32 convention(cps) {
+    %value = tribute_control.perform {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+    tribute_control.return %value
+  }
+  ability.decl {ability_ref = core.ability_ref<{name = "State"}>, sym_name = "State"} {
+    ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
+  }
+}"#;
+
+    #[test]
+    fn a_textual_module_declares_the_operations_it_performs() {
+        let (ctx, module) = parse_fixture(DECLARED_PERFORM);
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(result.is_ok(), "{result}");
+
+        let printed = assert_round_trip(&ctx, module);
+        assert!(printed.contains("ability.decl"), "{printed}");
+    }
+
+    #[test]
+    fn an_operation_is_checked_against_the_declaration_of_its_instance() {
+        let undeclared = DECLARED_PERFORM.replace(
+            r#"op_name = "get", param_types"#,
+            r#"op_name = "set", param_types"#,
+        );
+        let (ctx, module) = parse_fixture(&undeclared);
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(
+            messages(&result).contains("no resolved operation declaration"),
+            "{result}"
+        );
+
+        let other_kind = DECLARED_PERFORM.replace(r#"{kind = "op""#, r#"{kind = "fn""#);
+        let (ctx, module) = parse_fixture(&other_kind);
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(
+            !result.is_ok(),
+            "a perform must agree with the declared kind"
+        );
+
+        let twice = DECLARED_PERFORM.replacen(
+            "  ability.decl",
+            r#"  ability.decl {ability_ref = core.ability_ref<{name = "State"}>, sym_name = "State"} {
+    ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
+  }
+  ability.decl"#,
+            1,
+        );
+        let (ctx, module) = parse_fixture(&twice);
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(
+            messages(&result).contains("duplicate operation declaration"),
+            "{result}"
+        );
+
+        let split = DECLARED_PERFORM.replacen(
+            "  ability.decl",
+            r#"  ability.decl {ability_ref = core.ability_ref<{name = "State"}>, sym_name = "Other"} {
+    ability.operation {kind = "op", op_name = "set", param_types = [core.i32], result_type = core.nil}
+  }
+  ability.decl"#,
+            1,
+        );
+        let (ctx, module) = parse_fixture(&split);
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(
+            messages(&result).contains("duplicate ability.decl"),
+            "{result}"
+        );
     }
 
     fn assert_round_trip(ctx: &IrContext, module: Module) -> String {
@@ -4206,13 +4378,7 @@ mod tests {
     #[test]
     fn generic_control_operations_round_trip_and_validate() {
         let fixture = valid_fixture();
-        let result = validate(
-            &fixture.ctx,
-            fixture.module,
-            &fixture.declarations,
-            &[],
-            &mut Default::default(),
-        );
+        let result = validate(&fixture.ctx, fixture.module, &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
 
         let printed = assert_round_trip(&fixture.ctx, fixture.module);
@@ -4764,7 +4930,7 @@ mod tests {
   }
 }"#,
         );
-        let missing = validate_whole_ir(&missing_ctx, missing_module, &[], &[]);
+        let missing = validate_whole_ir(&missing_ctx, missing_module, &[]);
         assert!(messages(&missing).contains("capture list is missing external value"));
 
         let (excess_ctx, excess_module) = parse_fixture(
@@ -4778,7 +4944,7 @@ mod tests {
   }
 }"#,
         );
-        let excess = validate_whole_ir(&excess_ctx, excess_module, &[], &[]);
+        let excess = validate_whole_ir(&excess_ctx, excess_module, &[]);
         assert!(messages(&excess).contains("capture list contains unused external value"));
     }
 
@@ -4813,7 +4979,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert!(result.is_ok(), "{:?}", result.errors);
 
         // A reference is never resolved relative to its own nested module.
@@ -4830,7 +4996,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert!(
             messages(&result).contains("unresolved callee @id"),
             "{:?}",
@@ -4895,7 +5061,10 @@ mod tests {
             result_type: i32_ty,
         };
         let declarations = [declaration.clone(), declaration];
-        let result = validate_whole_ir(&ctx, module, &declarations, &[]);
+        let result = {
+            declare_operations(&mut ctx, module, &declarations);
+            validate_whole_ir(&ctx, module, &[])
+        };
         assert_diagnostics(
             &result,
             &[
@@ -4946,7 +5115,6 @@ mod tests {
         let handler = control_ops(&ctx, module, "handler")[0];
         let fn_kind = ctx.intern_str("fn");
         let handler_data = ctx.op(handler);
-        // The declaration table is semantic verifier input, not textual IR.
         let declarations = [OperationDeclaration::new(
             handler_data.attributes.get_type("ability_ref").unwrap(),
             handler_data.attributes.get_string_ref("op_name").unwrap(),
@@ -4960,7 +5128,10 @@ mod tests {
                 .get_type("operation_result_type")
                 .unwrap(),
         )];
-        let result = validate(&ctx, module, &declarations, &[], &mut Default::default());
+        let result = {
+            declare_operations(&mut ctx, module, &declarations);
+            validate(&ctx, module, &[], &mut Default::default())
+        };
         let messages = messages(&result);
         assert!(messages.contains("duplicate handler clause"));
         assert!(messages.contains("kind does not match the resolved declaration"));
@@ -4987,7 +5158,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert!(messages(&result).contains("more than one tribute_control.resume"));
     }
 
@@ -5028,7 +5199,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert_diagnostics(
             &result,
             &[
@@ -5065,7 +5236,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert_diagnostics(
             &result,
             &["resume token is copied into multiple capture paths"],
@@ -5106,7 +5277,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let result = validate_whole_ir(&ctx, module, &[]);
         let diagnostics = messages(&result);
         for forbidden in [
             "resume token is copied into multiple capture paths",
@@ -5155,7 +5326,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let result = validate_whole_ir(&ctx, module, &[]);
         let diagnostics = messages(&result);
         for forbidden in [
             "resume token is copied into multiple capture paths",
@@ -5207,7 +5378,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert!(
             messages(&result).contains("multiple static terminal uses"),
             "{result}"
@@ -5233,7 +5404,7 @@ mod tests {
         );
         let local = validate_local(&ctx, module);
         assert!(messages(&local).contains("must not yield a resume token"));
-        let whole = validate_whole_ir(&ctx, module, &[], &[]);
+        let whole = validate_whole_ir(&ctx, module, &[]);
         assert!(messages(&whole).contains("forbidden use"));
 
         let (ctx, module) = parse_fixture(
@@ -5345,7 +5516,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert!(
             messages(&result).contains("multiple static terminal uses"),
             "{result}"
@@ -5382,7 +5553,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert!(
             messages(&result).contains("crosses into a different handler"),
             "{result}"
@@ -5469,7 +5640,6 @@ mod tests {
             validate(
                 &ctx,
                 module,
-                &[],
                 std::slice::from_ref(&exact),
                 &mut Default::default()
             )
@@ -5481,16 +5651,10 @@ mod tests {
             exact.identity,
             ctx.get_type(func_sig_type).params[0],
         );
-        let result = validate(
-            &ctx,
-            module,
-            &[],
-            &[wrong_signature],
-            &mut Default::default(),
-        );
+        let result = validate(&ctx, module, &[wrong_signature], &mut Default::default());
         assert!(messages(&result).contains("complete signature"), "{result}");
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(
             messages(&result).contains("unregistered declaration"),
             "{result}"
@@ -5513,7 +5677,7 @@ mod tests {
             func_sig_type,
         );
 
-        let result = validate(&ctx, module, &[], &[declaration], &mut Default::default());
+        let result = validate(&ctx, module, &[declaration], &mut Default::default());
         assert!(
             messages(&result).contains("must use Direct calling convention"),
             "{result}"
@@ -5551,7 +5715,7 @@ mod tests {
             func_sig_type,
         );
 
-        let result = validate(&ctx, module, &[], &[declaration], &mut Default::default());
+        let result = validate(&ctx, module, &[declaration], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5592,7 +5756,6 @@ mod tests {
         let result = validate(
             &ctx,
             module,
-            &[],
             &[nat.clone(), int, nat],
             &mut Default::default(),
         );
@@ -5634,7 +5797,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         let diagnostics = messages(&result);
         assert!(
             diagnostics.contains("requires nominal name metadata"),
@@ -5668,7 +5831,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5688,7 +5851,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         let diagnostics = messages(&result);
         assert!(diagnostics.contains("bodyless external"), "{result}");
         assert!(diagnostics.contains("core.ptr cast chain"), "{result}");
@@ -5706,7 +5869,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5719,7 +5882,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5738,7 +5901,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(
             messages(&result).contains("compatible managed nominal reference types"),
             "{result}"
@@ -5757,7 +5920,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"
@@ -5783,7 +5946,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"
@@ -5814,7 +5977,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5858,7 +6021,10 @@ mod tests {
             operation_result,
         );
 
-        let result = validate(&ctx, module, &[declaration], &[], &mut Default::default());
+        let result = {
+            declare_operations(&mut ctx, module, &[declaration]);
+            validate(&ctx, module, &[], &mut Default::default())
+        };
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5882,7 +6048,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5906,7 +6072,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert_eq!(
             messages(&result).matches("callable provenance").count(),
             2,
@@ -5931,7 +6097,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         let diagnostics = messages(&result);
         assert!(diagnostics.contains("nominal layout \"Tuple\" is declared more than once"));
         assert!(diagnostics.contains("callable provenance"), "{result}");
@@ -5949,7 +6115,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5967,7 +6133,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut Default::default());
+        let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"

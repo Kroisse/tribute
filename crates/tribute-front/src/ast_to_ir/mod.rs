@@ -31,7 +31,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::sync::LazyLock;
 
-use tribute_ir::dialect::tribute_control::{CompilerIntrinsicDeclaration, OperationDeclaration};
+use tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::rewrite::Module as IrModule;
@@ -43,14 +43,10 @@ use crate::ast::{
 
 pub use context::IrLoweringCtx;
 
-/// The source-logical frontend boundary.
-///
-/// `operation_declarations` is semantic metadata, deliberately kept outside
-/// textual TrunkIR.  The shared CPS conversion consumes this exact set rather
-/// than attempting to reconstruct source declarations from lowered ops.
+/// The source-logical frontend boundary. The module declares the ability
+/// instances it names with `ability.decl`.
 pub struct FrontendIrModule {
     pub module: IrModule,
-    pub operation_declarations: Vec<OperationDeclaration>,
     pub compiler_intrinsics: Vec<CompilerIntrinsicDeclaration>,
 }
 

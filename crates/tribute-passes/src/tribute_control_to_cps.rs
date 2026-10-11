@@ -428,11 +428,10 @@ fn verify_candidate_or_restore_aliases(
 pub fn tribute_control_to_cps(
     ctx: &mut IrContext,
     module: Module,
-    declarations: &[tribute_control::OperationDeclaration],
     compiler_intrinsics: &[tribute_control::CompilerIntrinsicDeclaration],
     analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
-    verify_tribute_control_pre_cps(ctx, module, declarations, compiler_intrinsics, analyses)?;
+    verify_tribute_control_pre_cps(ctx, module, compiler_intrinsics, analyses)?;
     let funcs = collect_callable_graph(ctx, &analyses.require::<SymbolTable>(ctx, module.op()));
     let source_region = module.body(ctx).ok_or_else(|| {
         TributeControlToCpsError::one(
@@ -516,20 +515,15 @@ pub fn tribute_control_to_cps(
     Ok(())
 }
 
-/// Pass-manager wrapper carrying the verified source operation declarations.
+/// Pass-manager wrapper carrying the registered compiler intrinsics.
+#[derive(Default)]
 pub struct TributeControlToCps {
-    declarations: Vec<tribute_control::OperationDeclaration>,
     compiler_intrinsics: Vec<tribute_control::CompilerIntrinsicDeclaration>,
 }
 
 impl TributeControlToCps {
-    pub fn new(
-        declarations: impl IntoIterator<Item = tribute_control::OperationDeclaration>,
-    ) -> Self {
-        Self {
-            declarations: declarations.into_iter().collect(),
-            compiler_intrinsics: Vec::new(),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn with_compiler_intrinsics(
@@ -554,13 +548,7 @@ impl Pass for TributeControlToCps {
         target: core::Module,
         analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        tribute_control_to_cps(
-            ctx,
-            target.into(),
-            &self.declarations,
-            &self.compiler_intrinsics,
-            analyses,
-        )
-        .map_err(|error| Box::new(error) as _)
+        tribute_control_to_cps(ctx, target.into(), &self.compiler_intrinsics, analyses)
+            .map_err(|error| Box::new(error) as _)
     }
 }
