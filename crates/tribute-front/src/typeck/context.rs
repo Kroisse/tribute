@@ -311,11 +311,26 @@ impl<'db> ModuleTypeEnv<'db> {
         Some(matched)
     }
 
-    /// The functions a method call may name by `method_name`.
-    pub fn methods_named(&self, method_name: &Symbol) -> &[MethodEntry<'db>] {
-        self.method_index
-            .get(method_name)
-            .map_or(&[], Vec::as_slice)
+    /// The functions a method call may name by `method_name`: the functions
+    /// of that name, and the getter of every struct with a field of that
+    /// name.
+    pub fn methods_named(&self, method_name: &Symbol) -> Vec<MethodEntry<'db>> {
+        let functions = self.method_index.get(method_name).into_iter().flatten();
+        let getters = self
+            .struct_fields
+            .iter()
+            .filter(|(_, (_, fields))| fields.iter().any(|(field, _)| field == method_name))
+            .filter_map(|(owner, _)| {
+                let mut prefix = owner.qualified(self.db).to_string();
+                let getter =
+                    FuncDefId::new(self.db, crate::qualified_symbol(&mut prefix, method_name));
+                let function = self.field_function(getter)?;
+                Some(MethodEntry {
+                    func_id: getter,
+                    func_ty: function.scheme.body(self.db),
+                })
+            });
+        functions.copied().chain(getters).collect()
     }
 
     /// Register a constructor's type scheme.

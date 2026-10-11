@@ -1830,16 +1830,7 @@ impl<'db> TypeChecker<'db> {
                     })
                 })
                 .collect(),
-            // A call without further arguments may read a field of its
-            // receiver, so the receiver's type has to be known.
-            None if call.arity == 1
-                && call.args.first().is_none_or(|receiver| {
-                    matches!(receiver.kind(self.db()), TypeKind::UniVar { .. })
-                }) =>
-            {
-                Vec::new()
-            }
-            None => self.env.methods_named(method).to_vec(),
+            None => self.env.methods_named(method),
         };
         // One function leaves nothing to select: the call is checked against
         // it, and what does not fit is an ordinary type error.
