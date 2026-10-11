@@ -617,7 +617,7 @@ impl<'db> TypeChecker<'db> {
                     new_constraints.add_row_eq(crate::ast::EffectRow::pure(self.db()), mc.effect);
                     solver.resolve_producer(mc.node_id);
                 } else if let super::expr::MethodSelection::One(entry) =
-                    self.select_method(&mc.method, mc.path.as_ref(), resolved_receiver)
+                    self.select_deferred_method(solver, &mc)
                 {
                     // Method found — instantiate the TypeScheme to get fresh types
                     let func_ty = if let Some((scheme, origin)) =
@@ -740,6 +740,29 @@ impl<'db> TypeChecker<'db> {
         (resolved, waiting_errors)
     }
 
+    /// Select the function a deferred call names with the types `solver`
+    /// has inferred for its arguments and its result.
+    fn select_deferred_method(
+        &self,
+        solver: &TypeSolver<'db>,
+        call: &crate::typeck::func_context::DeferredMethodCall<'db>,
+    ) -> super::expr::MethodSelection<'db> {
+        let args: Vec<_> = call
+            .arg_types
+            .iter()
+            .map(|ty| solver.type_subst().apply(self.db(), *ty))
+            .collect();
+        self.select_method(
+            &call.method,
+            call.path.as_ref(),
+            super::expr::CallTypes {
+                args: &args,
+                arity: args.len(),
+                result: Some(solver.expected_type(call.result_ty)),
+            },
+        )
+    }
+
     /// Report a qualified method call whose path names no single function
     /// for its receiver's type.
     fn report_unresolved_method_path(
@@ -750,17 +773,22 @@ impl<'db> TypeChecker<'db> {
         let Some((path, _)) = &call.path else {
             return;
         };
-        let receiver = solver.type_subst().apply(self.db(), call.receiver_ty);
-        let message = match self.select_method(&call.method, call.path.as_ref(), receiver) {
+        let arguments = call
+            .arg_types
+            .iter()
+            .map(|ty| solver.type_subst().apply(self.db(), *ty))
+            .format_with(", ", |ty, f| f(&format_args!("`{ty}`")))
+            .to_string();
+        let message = match self.select_deferred_method(solver, call) {
             super::expr::MethodSelection::Ambiguous(functions) => format!(
-                "ambiguous path `{}` for a first argument of type `{receiver}`: it names {}",
+                "ambiguous path `{}` for arguments of types ({arguments}): it names {}",
                 call.method,
                 functions.iter().format_with(", ", |function, f| {
                     f(&format_args!("`{}`", function.qualified(self.db())))
                 }),
             ),
             _ => format!(
-                "unresolved path `{}`: no function it names takes a first argument of type `{receiver}`",
+                "unresolved path `{}`: no function it names takes arguments of types ({arguments})",
                 call.method
             ),
         };

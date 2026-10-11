@@ -119,6 +119,37 @@ pub fn receiver_type_matches<'db>(
     same_constructor(db, declared, actual)
 }
 
+/// Whether a parameter declared as `declared` takes an argument of type
+/// `actual` when a call selects among several functions.
+///
+/// Nominal types match by declaration and primitives by name, as for a
+/// receiver; function types and tuples match by their number of items. A
+/// type variable of the declaration takes any type, and a type not inferred
+/// yet excludes no declaration.
+pub fn parameter_type_matches<'db>(
+    db: &'db dyn salsa::Database,
+    declared: Type<'db>,
+    actual: Type<'db>,
+) -> bool {
+    match (declared.kind(db), actual.kind(db)) {
+        (TypeKind::BoundVar { .. }, _)
+        | (_, TypeKind::UniVar { .. } | TypeKind::Never | TypeKind::Error) => true,
+        (
+            TypeKind::Func {
+                params: declared, ..
+            },
+            TypeKind::Func { params: actual, .. },
+        ) => declared.len() == actual.len(),
+        (TypeKind::Tuple(declared), TypeKind::Tuple(actual)) => declared.len() == actual.len(),
+        (TypeKind::App { ctor, .. }, _) => parameter_type_matches(db, *ctor, actual),
+        (_, TypeKind::App { ctor, .. }) => parameter_type_matches(db, declared, *ctor),
+        (TypeKind::Named { id: left, .. }, TypeKind::Named { id: right, .. }) => left == right,
+        (left, right) => {
+            left.primitive_name().is_some() && left.primitive_name() == right.primitive_name()
+        }
+    }
+}
+
 /// A function a struct has for one of its named fields.
 #[derive(Clone, Debug)]
 pub struct FieldFunction<'db> {
@@ -278,6 +309,20 @@ impl<'db> ModuleTypeEnv<'db> {
             return None; // ambiguous
         }
         Some(matched)
+    }
+
+    /// The functions named `method_name` that take a receiver of type
+    /// `receiver_ty`.
+    pub fn lookup_methods(
+        &self,
+        method_name: &Symbol,
+        receiver_ty: Type<'db>,
+    ) -> impl Iterator<Item = &MethodEntry<'db>> {
+        self.method_index
+            .get(method_name)
+            .into_iter()
+            .flatten()
+            .filter(move |entry| receiver_type_matches(self.db, entry, receiver_ty))
     }
 
     /// Register a constructor's type scheme.
@@ -1397,6 +1442,72 @@ mod tests {
             extract_type_name_from_type(&db, Type::new(&db, TypeKind::UniVar { id })),
             None
         );
+    }
+
+    #[test]
+    fn parameter_type_matches_by_declaration_and_shape() {
+        let db = salsa::DatabaseImpl::new();
+        let int = Type::new(&db, TypeKind::Int);
+        let bool = Type::new(&db, TypeKind::Bool);
+        let foo = named(&db, "Foo");
+        let bar = named(&db, "Bar");
+        let app = |ctor, arg| {
+            Type::new(
+                &db,
+                TypeKind::App {
+                    ctor,
+                    args: vec![arg],
+                },
+            )
+        };
+        let id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
+        let unknown = Type::new(&db, TypeKind::UniVar { id });
+        let variable = Type::new(&db, TypeKind::BoundVar { index: 0 });
+
+        // A nominal type matches its declaration, whatever its arguments.
+        assert!(super::parameter_type_matches(&db, foo, foo));
+        assert!(!super::parameter_type_matches(&db, foo, bar));
+        assert!(super::parameter_type_matches(
+            &db,
+            app(foo, int),
+            app(foo, bool)
+        ));
+        assert!(super::parameter_type_matches(&db, app(foo, int), foo));
+        assert!(super::parameter_type_matches(&db, foo, app(foo, int)));
+        assert!(!super::parameter_type_matches(
+            &db,
+            app(foo, int),
+            app(bar, int)
+        ));
+        assert!(super::parameter_type_matches(&db, int, int));
+        assert!(!super::parameter_type_matches(&db, int, bool));
+        // Functions and tuples match by their number of items.
+        let unary = func(&db, &[int], int);
+        assert!(super::parameter_type_matches(
+            &db,
+            unary,
+            func(&db, &[bool], bool)
+        ));
+        assert!(!super::parameter_type_matches(
+            &db,
+            unary,
+            func(&db, &[int, int], int)
+        ));
+        assert!(!super::parameter_type_matches(&db, unary, int));
+        assert!(super::parameter_type_matches(
+            &db,
+            Type::new(&db, TypeKind::Tuple(vec![int, int])),
+            Type::new(&db, TypeKind::Tuple(vec![bool, foo]))
+        ));
+        assert!(!super::parameter_type_matches(
+            &db,
+            Type::new(&db, TypeKind::Tuple(vec![int, int])),
+            Type::new(&db, TypeKind::Tuple(vec![int]))
+        ));
+        // A type variable takes any type, and an unknown type excludes none.
+        assert!(super::parameter_type_matches(&db, variable, foo));
+        assert!(super::parameter_type_matches(&db, foo, unknown));
+        assert!(!super::parameter_type_matches(&db, foo, variable));
     }
 
     #[test]

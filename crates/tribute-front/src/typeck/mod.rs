@@ -33,7 +33,7 @@ pub use checker::{Mode, TypeChecker};
 pub use constraint::{Constraint, ConstraintSet};
 pub use context::{
     AbilityInfo, AbilityOpInfo, MethodEntry, ModuleTypeEnv, extract_type_name_from_type,
-    receiver_type_matches,
+    parameter_type_matches, receiver_type_matches,
 };
 
 use crate::SortedMap;
