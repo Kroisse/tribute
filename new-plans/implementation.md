@@ -981,8 +981,8 @@ lookup은 GC Evidence reference와 concrete Marker reference를 사용한다.
 
 `ability::compute_ability_id`는 ability instance를 선언하는 `ability.decl`의
 symbol, 곧 instance key의 hash로 31-bit runtime key를 만든다. Operation index는 그
-symbol과 operation 이름의 hash다. 둘 다 참조만으로 계산하며 선언을 읽지 않는다. Marker의 `i32` slot에 음수가 아닌 값으로
-저장하고, 음수 key는 [row tail 칸](cps-effects.md#row-directed-evidence)이 쓴다.
+symbol과 operation 이름의 hash다. 둘 다 참조만으로 계산하며 선언을 읽지 않는다.
+Marker의 `i32` slot에 음수가 아닌 값으로 저장하고, 음수 key는 [row tail 칸](cps-effects.md#row-directed-evidence)이 쓴다.
 Call-site와 handler 설치가 같은 함수를 사용한다. Type parameter가 다른
 ability instance는 별도 key를 가진다.
 

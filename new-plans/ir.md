@@ -819,8 +819,8 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
   읽는다.
 
   ```text
-  {evidence_plan = [{select = 0}, {push = !state}]}
-  {evidence_plan = [{dup = !state}, {tails = [[], [{mask = !state}]]}]}
+  {evidence_plan = [{select = 0}, {push = @State}]}
+  {evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]}
   ```
 
 - 속성이 없으면 그대로 전달한다. 빈 목록은 쓰지 않는다.
