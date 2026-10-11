@@ -3,10 +3,8 @@ source: crates/tribute-front/tests/evidence_lowering.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = core.ability_ref<{instance = "ability_1_3_Ask", name = "Ask"}>
-
   tribute_control.func @use_ask() -> core.i32 convention(cps) {
-      %0 = tribute_control.perform {ability_ref = !t0, op_name = "ask", operation_kind = "op"} : core.i32
+      %0 = tribute_control.perform {ability_ref = @ability_1_3_Ask, op_name = "ask", operation_kind = "op"} : core.i32
       tribute_control.return %0
   }
   tribute_control.func @main() -> core.nil convention(direct) {
@@ -17,7 +15,7 @@ core.module @test {
         ^bb2(%2: core.i32):
           tribute_control.yield %2
       } {
-          tribute_control.handler {ability_ref = !t0, kind = "op", op_name = "ask", operation_result_type = core.i32} {
+          tribute_control.handler {ability_ref = @ability_1_3_Ask, kind = "op", op_name = "ask", operation_result_type = core.i32} {
             ^bb4(%3: tribute_control.resume_token<core.i32, core.i32>):
               %4 = arith.const {value = 42} : core.i32
               %5 = tribute_control.resume %3, %4 : core.i32
@@ -27,7 +25,7 @@ core.module @test {
       %6 = core.nil_value : core.nil
       tribute_control.return %6
   }
-  ability.decl {ability_ref = !t0, sym_name = "ability_1_3_Ask"} {
+  ability.decl {sym_name = "ability_1_3_Ask"} {
       ability.operation {kind = "op", op_name = "ask", param_types = [], result_type = core.i32}
   }
 }

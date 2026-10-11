@@ -1,6 +1,7 @@
 use super::*;
 use tribute_core::calling_convention::cps_closure_function_type;
 use tribute_ir::dialect::effect;
+use trunk_ir::SymbolPath;
 use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
@@ -61,6 +62,18 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
     }
 }
 
+/// The first ability instance an operation of `module` names.
+fn first_ability(ctx: &IrContext, module: Module) -> SymbolPath {
+    let mut found = None;
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
+        if found.is_none() {
+            found = ctx.op(op).attributes.get_symbol_ref("ability_ref").cloned();
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    found.expect("test module names an ability instance")
+}
+
 fn operation_declarations(
     ctx: &mut IrContext,
     operations: &[(&str, &str)],
@@ -73,18 +86,8 @@ fn operation_declarations(
     operations
         .iter()
         .map(|&(ability_name, op_name)| {
-            let ability_ref = ctx
-                .types()
-                .iter()
-                .find_map(|(ty, data)| {
-                    (data.dialect == "core"
-                        && data.name == "ability_ref"
-                        && data.attrs.get_str(ctx, "name") == Some(ability_name))
-                    .then_some(ty)
-                })
-                .unwrap_or_else(|| panic!("test module declares {ability_name}"));
             tribute_control::OperationDeclaration::new(
-                ability_ref,
+                SymbolPath::from(ability_name),
                 ctx.intern_str(op_name),
                 ctx.intern_str("op"),
                 [i32_type],
@@ -1059,7 +1062,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
   !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !tr = closure.closure<func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>>
   func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr) -> core.never attributes {tribute.calling_convention = 2} {
-    ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.ability_ref<{name = "State"}>]} {
+    ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [@State]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -1080,7 +1083,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     %tr = closure.lambda(%inner: !evidence) -> tribute_rt.anyref {tribute.calling_convention = 1} {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.ability_ref<{name = "State"}>]} {
+    ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [@State]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -1100,7 +1103,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     %tr = closure.lambda(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 0} {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.ability_ref<{name = "State"}>]} {
+    ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [@State]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -1134,13 +1137,13 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     let input = r#"core.module @test {
   tribute_control.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
@@ -1151,11 +1154,11 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
 }"#;
     let (mut ctx, module) = parse(input);
     let mut ability_ref = None;
-    fn find_ability(ctx: &IrContext, region: RegionRef, found: &mut Option<TypeRef>) {
+    fn find_ability(ctx: &IrContext, region: RegionRef, found: &mut Option<SymbolPath>) {
         for block in ctx.region(region).blocks.iter().copied() {
             for op in ctx.block(block).ops.iter().copied() {
                 if tribute_control::Handler::matches(ctx, op) {
-                    *found = ctx.op(op).attributes.get_type("ability_ref");
+                    *found = ctx.op(op).attributes.get_symbol_ref("ability_ref").cloned();
                 }
                 for nested in ctx.op_regions(op) {
                     find_ability(ctx, nested, found);
@@ -1264,7 +1267,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     // every resumption of the handle shares to install the layer again.
     assert_eq!(printed.matches("effect.fresh_prompt_tag").count(), 1);
     assert_eq!(printed.matches("ability.handle_dispatch").count(), 2);
-    assert!(printed.contains("ability_refs = [core.ability_ref"));
+    assert!(printed.contains("ability_refs = [@State]"), "{printed}");
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(printed.contains("adt.struct_set"));
     assert!(!printed.contains("tribute_control."));
@@ -1278,18 +1281,18 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
     let input = r#"core.module @test {
   tribute_control.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
       }
-      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "set", operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = @State, kind = "op", op_name = "set", operation_result_type = core.i32} {
         ^set(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %fallback = arith.const {value = 9} : core.i32
           tribute_control.yield %fallback
@@ -1299,11 +1302,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let ability_ref = ctx
-        .types()
-        .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "ability_ref").then_some(ty))
-        .unwrap();
+    let ability_ref = first_ability(&ctx, module);
     let i32_type = ctx
         .types()
         .iter()
@@ -1311,14 +1310,14 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
         .unwrap();
     let declarations = [
         tribute_control::OperationDeclaration::new(
-            ability_ref,
+            ability_ref.clone(),
             ctx.intern_str("get"),
             ctx.intern_str("op"),
             [i32_type],
             i32_type,
         ),
         tribute_control::OperationDeclaration::new(
-            ability_ref,
+            ability_ref.clone(),
             ctx.intern_str("set"),
             ctx.intern_str("op"),
             [i32_type],
@@ -1394,7 +1393,7 @@ fn textual_scf_branch_captures_only_the_selected_suffix() {
   tribute_control.func @branch(%input: core.i32) -> core.i32 convention(cps) {
     %condition = arith.const {value = true} : core.i1
     %selected = scf.if %condition : core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
       scf.yield %performed
     } {
       %fallback = arith.const {value = 7} : core.i32
@@ -1406,18 +1405,14 @@ fn textual_scf_branch_captures_only_the_selected_suffix() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let ability_ref = ctx
-        .types()
-        .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "ability_ref").then_some(ty))
-        .unwrap();
+    let ability_ref = first_ability(&ctx, module);
     let i32_type = ctx
         .types()
         .iter()
         .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
-        ability_ref,
+        ability_ref.clone(),
         ctx.intern_str("get"),
         ctx.intern_str("op"),
         vec![i32_type],
@@ -1456,21 +1451,17 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
       tribute_control.return %selected
     }
     scf.if %condition {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
       scf.yield
     } {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "set", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = @State, op_name = "set", operation_kind = "op"} : core.i32
       scf.yield
     }
     tribute_control.return %input
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let ability_ref = ctx
-        .types()
-        .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "ability_ref").then_some(ty))
-        .unwrap();
+    let ability_ref = first_ability(&ctx, module);
     let i32_type = ctx
         .types()
         .iter()
@@ -1478,14 +1469,14 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
         .unwrap();
     let declarations = [
         tribute_control::OperationDeclaration::new(
-            ability_ref,
+            ability_ref.clone(),
             ctx.intern_str("get"),
             ctx.intern_str("op"),
             [i32_type],
             i32_type,
         ),
         tribute_control::OperationDeclaration::new(
-            ability_ref,
+            ability_ref.clone(),
             ctx.intern_str("set"),
             ctx.intern_str("op"),
             [i32_type],
@@ -1620,7 +1611,7 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
     let input = r#"core.module @test {
   tribute_control.func @broken(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
     %left, %right = scf.if %condition : core.i32, core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
       scf.yield %performed, %input
     } {
       scf.yield %input, %input
@@ -1629,18 +1620,14 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let ability_ref = ctx
-        .types()
-        .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "ability_ref").then_some(ty))
-        .unwrap();
+    let ability_ref = first_ability(&ctx, module);
     let i32_type = ctx
         .types()
         .iter()
         .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
-        ability_ref,
+        ability_ref.clone(),
         ctx.intern_str("get"),
         ctx.intern_str("op"),
         [i32_type],
@@ -2014,25 +2001,25 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
   tribute_control.func @nested_same(%input: core.i32) -> core.i32 convention(cps) {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
-        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+        %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
         tribute_control.yield %performed
       } {
         ^inner_completion(%value: core.i32):
           tribute_control.yield %value
       } {
-        tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+        tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
           ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.yield %resumed
         }
       }
-      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %inner {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^outer_completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
@@ -2059,25 +2046,25 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
   tribute_control.func @nested_cross(%input: core.i32) -> core.i32 convention(cps) {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
-        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "Console"}>, op_name = "read", operation_kind = "op"} : core.i32
+        %performed = tribute_control.perform %input {ability_ref = @Console, op_name = "read", operation_kind = "op"} : core.i32
         tribute_control.yield %performed
       } {
         ^inner_completion(%value: core.i32):
           tribute_control.yield %value
       } {
-        tribute_control.handler {ability_ref = core.ability_ref<{name = "Console"}>, kind = "op", op_name = "read", operation_result_type = core.i32} {
+        tribute_control.handler {ability_ref = @Console, kind = "op", op_name = "read", operation_result_type = core.i32} {
           ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.yield %resumed
         }
       }
-      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %inner {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^outer_completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
@@ -2102,14 +2089,14 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     let input = r#"core.module @test {
   tribute_control.func @abortable(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %never = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "Abort"}>, op_name = "abort", operation_kind = "op"} : core.never
+      %never = tribute_control.perform %input {ability_ref = @Abort, op_name = "abort", operation_kind = "op"} : core.never
       %unreachable_suffix = arith.const {value = 99} : core.i32
       tribute_control.yield %unreachable_suffix
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = "Abort"}>, kind = "op", op_name = "abort", operation_result_type = core.never} {
+      tribute_control.handler {ability_ref = @Abort, kind = "op", op_name = "abort", operation_result_type = core.never} {
         ^arm(%argument: core.i32):
           %fallback = arith.const {value = 7} : core.i32
           tribute_control.yield %fallback
@@ -2119,11 +2106,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let ability_ref = ctx
-        .types()
-        .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "ability_ref").then_some(ty))
-        .unwrap();
+    let ability_ref = first_ability(&ctx, module);
     let i32_type = ctx
         .types()
         .iter()
@@ -2135,7 +2118,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
         .find_map(|(ty, data)| (data.dialect == "core" && data.name == "never").then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
-        ability_ref,
+        ability_ref.clone(),
         ctx.intern_str("abort"),
         ctx.intern_str("op"),
         vec![i32_type],
@@ -2234,13 +2217,13 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
     let input = r#"core.module @test {
   tribute_control.func @read(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %value = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "Reader"}>, op_name = "read", operation_kind = "fn"} : core.i32
+      %value = tribute_control.perform %input {ability_ref = @Reader, op_name = "read", operation_kind = "fn"} : core.i32
       tribute_control.yield %value
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = "Reader"}>, kind = "fn", op_name = "read", operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = @Reader, kind = "fn", op_name = "read", operation_result_type = core.i32} {
         ^arm(%argument: core.i32):
           tribute_control.yield %argument
       }
@@ -2249,18 +2232,14 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let ability_ref = ctx
-        .types()
-        .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "ability_ref").then_some(ty))
-        .unwrap();
+    let ability_ref = first_ability(&ctx, module);
     let i32_type = ctx
         .types()
         .iter()
         .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
-        ability_ref,
+        ability_ref.clone(),
         ctx.intern_str("read"),
         ctx.intern_str("fn"),
         vec![i32_type],
@@ -2316,7 +2295,7 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
     %choice = arith.const {value = 0} : core.i32
     scf.switch %choice {
       scf.case {value = 0} {
-        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+        %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
         scf.yield
       }
       scf.default {
@@ -2327,18 +2306,14 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let ability_ref = ctx
-        .types()
-        .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "ability_ref").then_some(ty))
-        .unwrap();
+    let ability_ref = first_ability(&ctx, module);
     let i32_type = ctx
         .types()
         .iter()
         .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
-        ability_ref,
+        ability_ref.clone(),
         ctx.intern_str("get"),
         ctx.intern_str("op"),
         vec![i32_type],
@@ -2447,13 +2422,13 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     let input = r#"core.module @test {
   tribute_control.func @run(%input: core.i32) -> core.i32 convention(direct) {
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
@@ -2483,7 +2458,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
 fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
     let input = r#"core.module @test {
   tribute_control.func @run(%input: core.i32) -> core.i32 convention(direct) {
-    %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
+    %performed = tribute_control.perform %input {ability_ref = @State, op_name = "get", operation_kind = "op"} : core.i32
     tribute_control.return %performed
   }
 }"#;

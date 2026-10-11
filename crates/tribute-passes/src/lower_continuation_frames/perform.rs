@@ -207,7 +207,7 @@ impl ExpandDispatches {
     ) -> Option<()> {
         let location = ctx.op(op).location;
         let evidence = ctx.op_operands(op)[0];
-        let ability_ref = ctx.op(op).attributes.get_type("ability_ref")?;
+        let ability_ref = ctx.op(op).attributes.get_symbol_ref("ability_ref")?.clone();
         let op_name = ctx.op(op).attributes.get_string_ref("op_name")?;
         let types = self.frames.of(ctx, ctx.value_ty(frame))?;
         let block = make_block(ctx, location, &[]);
@@ -222,7 +222,7 @@ impl ExpandDispatches {
             ctx,
             rewriter,
             location,
-            ability_ref,
+            &ability_ref,
             op_name,
             values,
             anyref,

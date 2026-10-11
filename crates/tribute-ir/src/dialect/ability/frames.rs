@@ -1,12 +1,12 @@
 //! Verification of the abstract continuation frame operations.
 
 use rustc_hash::FxHashSet as HashSet;
-use trunk_ir::IrContext;
 use trunk_ir::dialect::core::Never;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
+use trunk_ir::{IrContext, SymbolPath};
 
 use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
 use crate::dialect::tribute_control::{
@@ -42,11 +42,11 @@ impl OperationKind {
 
 /// One element of `ability.handle`'s `handlers`: the operation an arm handles.
 ///
-/// Written `{ability_ref = !State, op_name = "get", kind = "op",
+/// Written `{ability_ref = @State, op_name = "get", kind = "op",
 /// operation_result_type = core.i32}`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct HandlerBinding {
-    pub ability_ref: TypeRef,
+    pub ability_ref: SymbolPath,
     pub op_name: StringRef,
     pub kind: OperationKind,
     pub operation_result_type: TypeRef,
@@ -66,8 +66,8 @@ impl HandlerBinding {
             ));
         }
         let ability_ref = match entries.get("ability_ref") {
-            Some(Attribute::Type(ty)) if is_ability_ref(ctx, *ty) => *ty,
-            _ => return Err("handlers ability_ref must be a core.ability_ref type".into()),
+            Some(Attribute::SymbolRef(ability)) => ability.clone(),
+            _ => return Err("handlers ability_ref must be a symbol reference".into()),
         };
         let op_name = match entries.get("op_name") {
             Some(Attribute::String(name)) => *name,
@@ -90,10 +90,13 @@ impl HandlerBinding {
         })
     }
 
-    pub fn to_attribute(self, ctx: &mut IrContext) -> Attribute {
+    pub fn to_attribute(&self, ctx: &mut IrContext) -> Attribute {
         let kind = ctx.string_attr(self.kind.keyword());
         let mut entries = AttributeMap::new();
-        entries.insert("ability_ref", Attribute::Type(self.ability_ref));
+        entries.insert(
+            "ability_ref",
+            Attribute::SymbolRef(self.ability_ref.clone()),
+        );
         entries.insert("op_name", Attribute::String(self.op_name));
         entries.insert("kind", kind);
         entries.insert(
@@ -104,7 +107,7 @@ impl HandlerBinding {
     }
 
     /// Whether the arm receives resume tokens.
-    pub fn is_resumptive(self, ctx: &IrContext) -> bool {
+    pub fn is_resumptive(&self, ctx: &IrContext) -> bool {
         self.kind == OperationKind::Op && !is_never(ctx, self.operation_result_type)
     }
 }
@@ -123,11 +126,6 @@ impl trunk_ir::attr_kind::AttrKind for HandlerBinding {
     fn write(ctx: &mut IrContext, value: HandlerBinding) -> Attribute {
         value.to_attribute(ctx)
     }
-}
-
-fn is_ability_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "ability_ref"
 }
 
 fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -269,7 +267,7 @@ impl trunk_ir::ops::Verify for Handle {
             .collect::<Result<Vec<_>, _>>()?;
         let mut seen = HashSet::default();
         for binding in &bindings {
-            if !seen.insert((binding.ability_ref, binding.op_name)) {
+            if !seen.insert((binding.ability_ref.clone(), binding.op_name)) {
                 return Err(format!(
                     "ability.handle binds operation {} twice",
                     ctx.str(binding.op_name)
@@ -403,7 +401,6 @@ mod tests {
 
     const TYPES: &str = r#"  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
   !ev = core.array<!marker, {layout = "evidence"}>
-  !state = core.ability_ref<{name = "State"}>
   !frame_i32 = ability.frame<core.i32>
   !frame_nil = ability.frame<core.nil>
   !completion = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
@@ -444,7 +441,7 @@ mod tests {
 
     fn binding(kind: &str, op_name: &str, result: &str) -> String {
         format!(
-            r#"{{ability_ref = !state, kind = "{kind}", op_name = "{op_name}", operation_result_type = {result}}}"#
+            r#"{{ability_ref = @State, kind = "{kind}", op_name = "{op_name}", operation_result_type = {result}}}"#
         )
     }
 
@@ -480,8 +477,8 @@ mod tests {
     fn frame_operations_round_trip_and_verify() {
         let text = module(
             ", %k: !completion, %arg: core.i32",
-            r#"    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{mask = !state}]} : !frame_nil
-    ability.abort %ev, %exit, %arg {ability_ref = !state, op_name = "fail"}"#,
+            r#"    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{mask = @State}]} : !frame_nil
+    ability.abort %ev, %exit, %arg {ability_ref = @State, op_name = "fail"}"#,
         );
         let (ctx, module) = parse(&text);
         let result = validate_operation_verifiers(&ctx, module);
@@ -499,7 +496,7 @@ mod tests {
             module(
                 params,
                 &format!(
-                    r#"    ability.perform %ev, %exit, {resumption}, %arg {{ability_ref = !state, op_name = "set"}}"#
+                    r#"    ability.perform %ev, %exit, {resumption}, %arg {{ability_ref = @State, op_name = "set"}}"#
                 ),
             )
         };
@@ -548,7 +545,7 @@ mod tests {
     fn suffix_frame_may_select_the_evidence_a_handle_was_installed_on() {
         let text = module(
             ", %k: !completion",
-            "    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{outer = !state}]} : !frame_nil\n    func.unreachable",
+            "    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{outer = @State}]} : !frame_nil\n    func.unreachable",
         );
         assert_eq!(errors(&text), "");
     }
@@ -644,7 +641,7 @@ mod tests {
                     &handle(
                         &[binding("op", "get", "core.i32")],
                         ", %get",
-                        ", evidence_plan = [{dup = !state}]",
+                        ", evidence_plan = [{dup = @State}]",
                     ),
                 ),
                 "evidence_plan",
@@ -654,7 +651,7 @@ mod tests {
                 module(
                     ARMS,
                     &handle(
-                        &[r#"{ability_ref = !state, kind = "ctl", op_name = "get", operation_result_type = core.i32}"#.to_string()],
+                        &[r#"{ability_ref = @State, kind = "ctl", op_name = "get", operation_result_type = core.i32}"#.to_string()],
                         ", %get",
                         "",
                     ),
@@ -674,12 +671,7 @@ mod tests {
     #[test]
     fn handler_binding_round_trips_through_its_attribute() {
         let mut ctx = IrContext::new();
-        let name = ctx.intern_str("State");
-        let state = ctx.intern_type(
-            trunk_ir::types::TypeDataBuilder::new("core", "ability_ref")
-                .attr("name", trunk_ir::types::Attribute::String(name))
-                .build(),
-        );
+        let state = trunk_ir::SymbolPath::from("State");
         let never = ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "never").build());
         let i32_ty = ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
         let op_name = ctx.intern_str("get");
@@ -689,13 +681,15 @@ mod tests {
             (super::OperationKind::Fn, i32_ty, false),
         ] {
             let binding = super::HandlerBinding {
-                ability_ref: state,
+                ability_ref: state.clone(),
                 op_name,
                 kind,
                 operation_result_type: result,
             };
-            let attr =
-                <super::HandlerBinding as trunk_ir::attr_kind::AttrKind>::write(&mut ctx, binding);
+            let attr = <super::HandlerBinding as trunk_ir::attr_kind::AttrKind>::write(
+                &mut ctx,
+                binding.clone(),
+            );
             let read = <super::HandlerBinding as trunk_ir::attr_kind::AttrKind>::read(&ctx, &attr);
             assert_eq!(read, binding);
             assert_eq!(read.is_resumptive(&ctx), resumptive);
@@ -776,7 +770,7 @@ mod tests {
             (
                 "binding with an extra entry",
                 raw_binding(
-                    r#"ability_ref = !state, extra = 1, kind = "op", op_name = "get", operation_result_type = core.i32"#,
+                    r#"ability_ref = @State, extra = 1, kind = "op", op_name = "get", operation_result_type = core.i32"#,
                 ),
                 "must have exactly",
             ),
@@ -785,26 +779,26 @@ mod tests {
                 raw_binding(
                     r#"ability_ref = core.i32, kind = "op", op_name = "get", operation_result_type = core.i32"#,
                 ),
-                "ability_ref must be a core.ability_ref",
+                "ability_ref must be a symbol reference",
             ),
             (
                 "binding with a numeric name",
                 raw_binding(
-                    r#"ability_ref = !state, kind = "op", op_name = 1, operation_result_type = core.i32"#,
+                    r#"ability_ref = @State, kind = "op", op_name = 1, operation_result_type = core.i32"#,
                 ),
                 "op_name must be a string",
             ),
             (
                 "binding with a numeric kind",
                 raw_binding(
-                    r#"ability_ref = !state, kind = 1, op_name = "get", operation_result_type = core.i32"#,
+                    r#"ability_ref = @State, kind = 1, op_name = "get", operation_result_type = core.i32"#,
                 ),
                 "kind must be fn or op",
             ),
             (
                 "binding without a result type",
                 raw_binding(
-                    r#"ability_ref = !state, kind = "op", op_name = "get", operation_result_type = 1"#,
+                    r#"ability_ref = @State, kind = "op", op_name = "get", operation_result_type = 1"#,
                 ),
                 "operation_result_type must be a type",
             ),

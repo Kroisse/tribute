@@ -12,9 +12,9 @@ mod ability {
 
     /// One ability instance the module names, and its operations.
     ///
-    /// `sym_name` is the instance key of `ability_ref`. The `operations`
-    /// region holds one `ability.operation` per operation of the instance.
-    fn decl(sym_name: Attr<String>, ability_ref: Attr<Type>) {
+    /// `sym_name` is the instance key. The `operations` region holds one
+    /// `ability.operation` per operation of the instance.
+    fn decl(sym_name: Attr<String>) {
         #[region(operations)]
         {}
     }
@@ -39,7 +39,7 @@ mod ability {
     /// every instance. The body entry block receives the extended evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
     fn handle_dispatch(
-        ability_refs: Attr<[Type]>,
+        ability_refs: Attr<[SymbolRef]>,
         evidence: Value<_>,
         prompt_tag: Value<_>,
         dispatchers: Variadic<_>,
@@ -55,11 +55,11 @@ mod ability {
     ///
     /// ```text
     /// %result = ability.call %args...
-    ///   { ability_ref = core.ability_ref<{name = "State"}>, op_name = "get" }
+    ///   { ability_ref = @State, op_name = "get" }
     /// ```
     ///
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
-    fn call(ability_ref: Attr<Type>, op_name: Attr<String>, values: Variadic<_>) -> Value<_> {}
+    fn call(ability_ref: Attr<SymbolRef>, op_name: Attr<String>, values: Variadic<_>) -> Value<_> {}
 
     // === Abstract continuation frames ===
     //
@@ -116,7 +116,7 @@ mod ability {
     /// the rest of the computation with no one-shot check. Expanding the
     /// operation adds the check.
     fn perform<F: Frame, C>(
-        ability_ref: Attr<Type>,
+        ability_ref: Attr<SymbolRef>,
         op_name: Attr<String>,
         evidence: Value<Evidence>,
         frame: Value<F>,
@@ -130,7 +130,7 @@ mod ability {
     /// Perform an operation returning `core.never` through the frame's
     /// dispatcher, with no resumption.
     fn abort<F: Frame>(
-        ability_ref: Attr<Type>,
+        ability_ref: Attr<SymbolRef>,
         op_name: Attr<String>,
         evidence: Value<Evidence>,
         frame: Value<F>,
@@ -154,17 +154,15 @@ mod ability {
 
 // === Hash-Based Dispatch ===
 
-/// Compute operation index using hash-based dispatch.
+/// The index of operation `op_name` of the ability instance `ability`.
 ///
-/// Computes a stable, handler-independent index from ability name and
-/// operation name. Both shift sites and handler dispatch use this function,
-/// ensuring they always agree on the op index regardless of handler
-/// registration order.
-pub fn compute_op_idx(ability_ref: Option<&str>, op_name: Option<&str>) -> u32 {
+/// It is a hash of the instance's symbol and the operation name, so perform
+/// sites and handler dispatch agree without consulting the declaration.
+pub fn compute_op_idx(ability: &SymbolPath, op_name: &str) -> u32 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = rustc_hash::FxHasher::default();
-    ability_ref.hash(&mut hasher);
+    ability.to_string().hash(&mut hasher);
     op_name.hash(&mut hasher);
 
     (hasher.finish() % 0x7FFFFFFF) as u32
@@ -176,11 +174,11 @@ pub fn compute_op_idx(ability_ref: Option<&str>, op_name: Option<&str>) -> u32 {
 /// needs a null or another in-band sentinel for an empty payload.
 pub fn operation_payload_type_ref(
     ctx: &mut trunk_ir::IrContext,
-    ability_ref: trunk_ir::TypeRef,
+    ability: &SymbolPath,
     op_name: StringRef,
     fields: impl IntoIterator<Item = trunk_ir::TypeRef>,
 ) -> trunk_ir::TypeRef {
-    let op_idx = compute_op_idx(ability_name(ctx, ability_ref), Some(ctx.str(op_name)));
+    let op_idx = compute_op_idx(ability, ctx.str(op_name));
     let fields = fields
         .into_iter()
         .enumerate()
@@ -194,34 +192,13 @@ pub fn operation_payload_type_ref(
     .as_type_ref()
 }
 
-/// Compute the stable runtime ability ID for an ability reference type.
-///
-/// The frontend records the source-level instance key as the `instance`
-/// type attribute, and the ID is derived from it so later type conversions of
-/// the reference's parameters cannot change it. A reference without that key
-/// (hand-written IR) falls back to the parameters' structural hash.
-pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
+/// The runtime id of the ability instance `ability`: a hash of its symbol,
+/// which is the instance key the frontend derives from the source arguments.
+pub fn compute_ability_id(ability: &SymbolPath) -> u32 {
     use std::hash::{Hash, Hasher};
 
-    let data = ctx.get_type(ability_ref);
-    let name = match ability_name(ctx, ability_ref) {
-        Some(s) => s,
-        _ => panic!(
-            "ICE: compute_ability_id: ability type has no name: {:?}",
-            data
-        ),
-    };
-
     let mut hasher = rustc_hash::FxHasher::default();
-    name.hash(&mut hasher);
-    if let Some(instance) = ability_instance(ctx, ability_ref) {
-        instance.hash(&mut hasher);
-    } else {
-        data.params.len().hash(&mut hasher);
-        for &param in data.params.iter() {
-            hash_type(ctx, param).hash(&mut hasher);
-        }
-    }
+    ability.to_string().hash(&mut hasher);
 
     // Negative identifiers are the row tail slots (`tail_slot_id`).
     (hasher.finish() as u32) >> 1
@@ -236,24 +213,6 @@ pub fn tail_slot_id(index: u32) -> i32 {
     -1 - index
 }
 
-/// Return the source-level instance key attached to an ability reference type.
-pub fn ability_instance(ctx: &IrContext, ability_ref: TypeRef) -> Option<&str> {
-    ctx.get_type(ability_ref).attrs.get_str(ctx, "instance")
-}
-
-/// The symbol that names the declaration of an ability instance: its instance
-/// key, or for a reference built without one, its name and runtime id.
-pub fn declaration_symbol(ctx: &IrContext, ability_ref: TypeRef) -> String {
-    match ability_instance(ctx, ability_ref) {
-        Some(instance) => instance.to_owned(),
-        None => format!(
-            "{}.{:x}",
-            ability_name(ctx, ability_ref).unwrap_or_default(),
-            compute_ability_id(ctx, ability_ref)
-        ),
-    }
-}
-
 /// Remove the `ability.decl` definitions of `module`, once nothing names an
 /// ability instance any more.
 pub fn remove_declarations(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
@@ -264,44 +223,23 @@ pub fn remove_declarations(ctx: &mut IrContext, module: trunk_ir::rewrite::Modul
     }
 }
 
-/// Return the source-level ability name attached to an ability reference type.
-pub fn ability_name(ctx: &IrContext, ability_ref: TypeRef) -> Option<&str> {
-    ctx.get_type(ability_ref).attrs.get_str(ctx, "name")
-}
-
 /// Build an `arith.const` for the stable runtime ability ID.
 pub fn ability_id_const(
     ctx: &mut IrContext,
     loc: Location,
     i32_ty: TypeRef,
-    ability_ref: TypeRef,
+    ability: &SymbolPath,
 ) -> arith::Const {
-    let ability_id = compute_ability_id(ctx, ability_ref);
+    let ability_id = compute_ability_id(ability);
     arith::Const::operands()
         .value(Attribute::Int(ability_id as i128))
         .results(i32_ty)
         .build(ctx, loc)
 }
 
-fn hash_type(ctx: &IrContext, ty: TypeRef) -> u32 {
-    use std::hash::{Hash, Hasher};
-
-    let data = ctx.get_type(ty);
-    let mut hasher = rustc_hash::FxHasher::default();
-    data.dialect.hash(&mut hasher);
-    data.name.hash(&mut hasher);
-    data.params.len().hash(&mut hasher);
-
-    for &param in data.params.iter() {
-        hash_type(ctx, param).hash(&mut hasher);
-    }
-
-    hasher.finish() as u32
-}
-
 // === Pure operation registrations ===
 
-use trunk_ir::attr_kind::Type;
+use trunk_ir::attr_kind::{SymbolRef, Type};
 use trunk_ir::op_interface::{CallableExitModel, CallableExitOps, ControlFlowInterfaceError};
 
 impl CallableExitModel for Perform {
@@ -312,7 +250,7 @@ impl CallableExitModel for Perform {
         let data = ctx.op(self.op_ref());
         if !ctx.op_has_regions(self.op_ref())
             && ctx.op_operands(self.op_ref()).len() >= 3
-            && data.attributes.get_type("ability_ref").is_some()
+            && data.attributes.get_symbol_ref("ability_ref").is_some()
             && data.attributes.get_string_ref("op_name").is_some()
         {
             Ok(())
@@ -344,7 +282,7 @@ impl CallableExitModel for HandleDispatch {
                 Some(trunk_ir::types::Attribute::List(ability_refs))
                     if ability_refs.iter().all(|ability_ref| matches!(
                         ability_ref,
-                        trunk_ir::types::Attribute::Type(_)
+                        trunk_ir::types::Attribute::SymbolRef(_)
                     ))
             )
         {
@@ -376,11 +314,11 @@ inventory::submit! { CallableExitOps::register::<Handle>() }
 // === ADT Type Functions ===
 
 use crate::runtime_layout;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, Location, StringRef, TypeDataBuilder};
+use trunk_ir::{Symbol, SymbolPath};
 
 /// Canonical field identifiers for the `_Marker` ADT used by ability evidence.
 #[repr(u32)]

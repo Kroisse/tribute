@@ -76,7 +76,6 @@ pub const NEXT_TAG: &str = "__tribute_next_tag";
 /// Run once on the module before [`LowerEvidenceToWasm`]. Only helpers that
 /// some operation needs are declared, so the target binds no unused runtime.
 pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
-    ability::remove_declarations(ctx, module);
     let needs = evidence_helper_requirements(ctx, module);
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
@@ -301,8 +300,10 @@ impl RewritePattern for LowerEffectExtendToWasm {
             return false;
         };
         let loc = ctx.op(op).location;
-        let ability_id =
-            effect_dispatch::insert_ability_id(ctx, loc, extend_op.ability_ref(ctx), rewriter);
+        let ability_id = {
+            let ability_ref = extend_op.ability_ref(ctx).clone();
+            effect_dispatch::insert_ability_id(ctx, loc, &ability_ref, rewriter)
+        };
         let tr_dispatch = as_canonical_closure(ctx, loc, extend_op.tr_dispatch_fn(ctx), rewriter);
         let result_ty = ctx.op_result_types(op)[0];
         let call = func::Call::operands([
@@ -335,22 +336,26 @@ impl RewritePattern for LowerEffectStackOpToWasm {
         let (helper, ability_ref, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
             (
                 evidence_abi::MASK,
-                mask.ability_ref(ctx),
+                mask.ability_ref(ctx).clone(),
                 mask.evidence(ctx),
             )
         } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
-            (evidence_abi::DUP, dup.ability_ref(ctx), dup.evidence(ctx))
+            (
+                evidence_abi::DUP,
+                dup.ability_ref(ctx).clone(),
+                dup.evidence(ctx),
+            )
         } else if let Ok(outer) = effect::Outer::from_op(ctx, op) {
             (
                 evidence_abi::OUTER,
-                outer.ability_ref(ctx),
+                outer.ability_ref(ctx).clone(),
                 outer.evidence(ctx),
             )
         } else {
             return false;
         };
         let loc = ctx.op(op).location;
-        let ability_id = effect_dispatch::insert_ability_id(ctx, loc, ability_ref, rewriter);
+        let ability_id = effect_dispatch::insert_ability_id(ctx, loc, &ability_ref, rewriter);
         let result_ty = ctx.op_result_types(op)[0];
         let call = func::Call::operands([evidence, ability_id])
             .callee(SymbolPath::from(helper))
@@ -393,8 +398,10 @@ impl RewritePattern for LowerEffectTailOpToWasm {
                 vec![with_tail.evidence(ctx), slot, with_tail.tail(ctx)],
             )
         } else if let Ok(push) = effect::Push::from_op(ctx, op) {
-            let ability_id =
-                effect_dispatch::insert_ability_id(ctx, loc, push.ability_ref(ctx), rewriter);
+            let ability_id = {
+                let ability_ref = push.ability_ref(ctx).clone();
+                effect_dispatch::insert_ability_id(ctx, loc, &ability_ref, rewriter)
+            };
             (
                 evidence_abi::PUSH,
                 vec![push.evidence(ctx), push.source(ctx), ability_id],
@@ -433,8 +440,10 @@ impl RewritePattern for LowerEffectDispatchTailToWasm {
 
         let loc = ctx.op(op).location;
         let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let ability_id =
-            effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
+        let ability_id = {
+            let ability_ref = dispatch_op.ability_ref(ctx).clone();
+            effect_dispatch::insert_ability_id(ctx, loc, &ability_ref, rewriter)
+        };
         let dispatch_closure = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
             .callee(SymbolPath::from(evidence_abi::LOOKUP_TR))
             .results([closure_ty])
@@ -465,8 +474,10 @@ impl RewritePattern for LowerEffectDispatchCpsToWasm {
 
         let loc = ctx.op(op).location;
         let i32_ty = effect_dispatch::i32_type(ctx);
-        let ability_id =
-            effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
+        let ability_id = {
+            let ability_ref = dispatch_op.ability_ref(ctx).clone();
+            effect_dispatch::insert_ability_id(ctx, loc, &ability_ref, rewriter)
+        };
         let prompt = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
             .callee(SymbolPath::from(evidence_abi::LOOKUP))
             .results([i32_ty])
@@ -1406,22 +1417,22 @@ mod tests {
     }
 
     const TAIL: &str = r#"  func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref<{name = "Console"}>, op_name = "read"} : tribute_rt.anyref
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = @Console, op_name = "read"} : tribute_rt.anyref
     func.return %result
   }"#;
 
     const CPS: &str = r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
-    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", answer_type = core.i32}
+    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = @State, op_name = "get", answer_type = core.i32}
   }"#;
 
     const EXTEND: &str = r#"  func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure) -> !Evidence {
-    %extended = effect.extend %ev, %prompt, %tr, %ev {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
+    %extended = effect.extend %ev, %prompt, %tr, %ev {ability_ref = @State} : !Evidence
     func.return %extended
   }"#;
 
     const SELECT: &str = r#"  func.func @select(%ev: !Evidence) -> !Evidence {
-    %masked = effect.mask %ev {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
-    %dup = effect.dup %masked {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
+    %masked = effect.mask %ev {ability_ref = @State} : !Evidence
+    %dup = effect.dup %masked {ability_ref = @State} : !Evidence
     func.return %dup
   }"#;
 
@@ -1515,7 +1526,7 @@ mod tests {
             &mut ctx,
             &module_text(
                 r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
-    %bad = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", answer_type = core.i32} : core.i32
+    %bad = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = @State, op_name = "get", answer_type = core.i32} : core.i32
   }"#,
             ),
         );

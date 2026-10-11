@@ -121,7 +121,8 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_type("ability_ref")
+            .get_symbol_ref("ability_ref")
+            .cloned()
             .expect("pre-CPS validation checked perform ability");
         let op_name = self
             .ctx
@@ -228,7 +229,8 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_type("ability_ref")
+            .get_symbol_ref("ability_ref")
+            .cloned()
             .unwrap();
         let op_name = self
             .ctx
@@ -417,7 +419,7 @@ impl Converter<'_> {
         // Inside the body, an enclosing arm's evidence is the evidence this
         // handle is installed on. A handle that handles nothing installs no
         // marker and leaves the evidence as it is.
-        let handled = handlers.first().map(|binding| binding.ability_ref);
+        let handled = handlers.first().map(|binding| binding.ability_ref.clone());
         let body_arm = flow.arm.clone().map(|arm| ArmResume {
             evidence: match (arm.evidence, handled) {
                 (evidence, None) => evidence,
@@ -484,7 +486,8 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_type("ability_ref")
+            .get_symbol_ref("ability_ref")
+            .cloned()
             .expect("pre-CPS validation checked perform ability");
         let op_name = self
             .ctx

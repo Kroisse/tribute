@@ -13,13 +13,13 @@ use tribute_ir::dialect::{
     list,
     tribute_control::{self, CompilerIntrinsicDeclaration, OperationDeclaration},
 };
-use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
 use trunk_ir::dialect::{arith, core, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::types::{Attribute, Location};
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::SortedMap;
 use crate::ast::{
@@ -40,7 +40,7 @@ struct Declarations<'db> {
     values: Vec<OperationDeclaration>,
     /// The ability instances operations were recorded for, in first-use order.
     instances: Vec<(
-        TypeRef,
+        SymbolPath,
         crate::ast::AbilityId<'db>,
         Vec<crate::ast::Type<'db>>,
     )>,
@@ -68,6 +68,19 @@ struct PerformMetadata<'a, 'db> {
 }
 
 impl<'db> Declarations<'db> {
+    /// Note that the module names the ability instance `symbol`.
+    fn instance(
+        &mut self,
+        symbol: &SymbolPath,
+        ability: crate::ast::AbilityId<'db>,
+        arguments: &[crate::ast::Type<'db>],
+    ) {
+        if !self.instances.iter().any(|(known, ..)| known == symbol) {
+            self.instances
+                .push((symbol.clone(), ability, arguments.to_vec()));
+        }
+    }
+
     fn record(
         &mut self,
         ir: &IrContext,
@@ -77,14 +90,7 @@ impl<'db> Declarations<'db> {
         location: Location,
         db: &dyn salsa::Database,
     ) {
-        if !self
-            .instances
-            .iter()
-            .any(|(ability_ref, ..)| *ability_ref == declaration.ability_ref)
-        {
-            self.instances
-                .push((declaration.ability_ref, ability, arguments.to_vec()));
-        }
+        self.instance(&declaration.ability_ref, ability, arguments);
         if let Some(existing) = self.values.iter().find(|candidate| {
             candidate.ability_ref == declaration.ability_ref
                 && candidate.op_name == declaration.op_name
@@ -141,14 +147,14 @@ fn attach_evidence_plan<'db>(
     ir: &mut IrContext,
     op: OpRef,
     node: crate::ast::NodeId,
-    declarations: &Declarations<'db>,
+    declarations: &mut Declarations<'db>,
 ) {
-    let Some(plan) = declarations.evidence_plans.get(&node) else {
+    let Some(plan) = declarations.evidence_plans.get(&node).cloned() else {
         return;
     };
     let steps: Vec<_> = plan
         .iter()
-        .map(|step| lower_evidence_step(ctx, ir, step))
+        .map(|step| lower_evidence_step(ctx, step, declarations))
         .collect();
     if let Some(plan) = tribute_control::EvidenceStep::plan_attribute(steps) {
         ir.op_mut(op)
@@ -159,12 +165,14 @@ fn attach_evidence_plan<'db>(
 
 fn lower_evidence_step<'db>(
     ctx: &IrLoweringCtx<'db>,
-    ir: &mut IrContext,
     step: &crate::typeck::EvidenceStep<'db>,
+    declarations: &mut Declarations<'db>,
 ) -> tribute_control::EvidenceStep {
     use crate::typeck::EvidenceStep;
     let mut ability_ref = |instance: &crate::ast::Effect<'db>| {
-        ctx.ability_ref_type(ir, instance.ability_id.qualified(ctx.db), &instance.args)
+        let symbol = ctx.ability_symbol(instance.ability_id.qualified(ctx.db), &instance.args);
+        declarations.instance(&symbol, instance.ability_id, &instance.args);
+        symbol
     };
     match step {
         EvidenceStep::Mask(instance) => tribute_control::EvidenceStep::Mask(ability_ref(instance)),
@@ -176,7 +184,7 @@ fn lower_evidence_step<'db>(
                 .iter()
                 .map(|plan| {
                     plan.iter()
-                        .map(|step| lower_evidence_step(ctx, ir, step))
+                        .map(|step| lower_evidence_step(ctx, step, declarations))
                         .collect()
                 })
                 .collect(),
@@ -474,7 +482,7 @@ fn instance_operations<'db>(
             let result =
                 ctx.convert_logical_type(ir, instantiate(operation.return_type, arguments));
             operations.push(OperationDeclaration::new(
-                *ability_ref,
+                ability_ref.clone(),
                 ir.intern_symbol_text(&operation.name),
                 ir.intern_str(operation_kind_text(operation.kind)),
                 parameters,
@@ -1297,7 +1305,7 @@ fn call_operation_metadata<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     declarations: &Declarations<'db>,
     metadata: PerformMetadata<'_, 'db>,
-) -> (TypeRef, OperationDeclaration) {
+) -> (SymbolPath, OperationDeclaration) {
     let PerformMetadata {
         ability,
         operation,
@@ -1349,10 +1357,9 @@ fn call_operation_metadata<'db>(
             semantic.params, semantic.result
         );
     }
-    let ability_ref =
-        builder
-            .ctx
-            .ability_ref_type(builder.ir, &ability.qualified(builder.db()).clone(), &args);
+    let ability_ref = builder
+        .ctx
+        .ability_symbol(ability.qualified(builder.db()), &args);
     let parameters = semantic
         .params
         .iter()
@@ -1362,7 +1369,7 @@ fn call_operation_metadata<'db>(
         .ctx
         .convert_logical_type(builder.ir, semantic.result);
     (
-        ability_ref,
+        ability_ref.clone(),
         OperationDeclaration::new(
             ability_ref,
             builder.ir.intern_symbol_text(&operation),
@@ -2436,7 +2443,7 @@ fn lower_call<'db>(
                     builder
                         .operands(values)
                         .result(declaration.result_type)
-                        .attr("ability_ref", Attribute::Type(ability_ref))
+                        .attr("ability_ref", Attribute::SymbolRef(ability_ref))
                         .attr("op_name", Attribute::String(declaration.op_name))
                         .attr("operation_kind", Attribute::String(declaration.kind))
                 });
@@ -2505,7 +2512,7 @@ fn finish_call<'db>(
     call: OpRef,
     call_id: crate::ast::NodeId,
     result_ty: TypeRef,
-    declarations: &Declarations<'db>,
+    declarations: &mut Declarations<'db>,
     position: CallPosition,
 ) -> Option<ValueRef> {
     attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
@@ -2803,7 +2810,7 @@ fn lower_handler<'db>(
     if params.len() != semantic.params.len() {
         panic!("handler parameter arity disagrees with typed semantic signature");
     }
-    let ability_ref = ctx.ability_ref_type(ir, ability_id.qualified(ctx.db), &arguments);
+    let ability_ref = ctx.ability_symbol(ability_id.qualified(ctx.db), &arguments);
     let parameter_types: Vec<_> = expected_params
         .into_iter()
         .map(|ty| ctx.convert_logical_type(ir, ty))
@@ -2812,7 +2819,7 @@ fn lower_handler<'db>(
     let op_name = ir.intern_symbol_text(&operation);
     let kind_name = ir.intern_str(operation_kind_text(kind));
     let declaration = OperationDeclaration::new(
-        ability_ref,
+        ability_ref.clone(),
         op_name,
         kind_name,
         parameter_types.clone(),
@@ -2884,7 +2891,7 @@ fn lower_handler<'db>(
     });
     op(ir, table, location, "handler", |builder| {
         builder
-            .attr("ability_ref", Attribute::Type(ability_ref))
+            .attr("ability_ref", Attribute::SymbolRef(ability_ref))
             .attr("op_name", Attribute::String(op_name))
             .attr("kind", Attribute::String(kind_name))
             .attr("operation_result_type", Attribute::Type(operation_result))
@@ -2928,7 +2935,7 @@ mod tests {
         let value = value.result(&ir);
         let parameter = ctx.adt_typeref(&mut ir, &Symbol::new("String"));
         let declaration = OperationDeclaration::new(
-            parameter,
+            SymbolPath::from("Test"),
             ir.intern_str("throw"),
             ir.intern_str("op"),
             [parameter],
@@ -2948,7 +2955,7 @@ mod tests {
         assert_eq!(builder.ir.value_ty(adapted[0]), parameter);
 
         let mismatch = OperationDeclaration::new(
-            parameter,
+            SymbolPath::from("Test"),
             declaration.op_name,
             declaration.kind,
             [],

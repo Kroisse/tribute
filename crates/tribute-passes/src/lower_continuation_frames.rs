@@ -458,7 +458,6 @@ mod tests {
 
     const TYPES: &str = r#"  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
   !ev = core.array<!marker, {layout = "evidence"}>
-  !state = core.ability_ref<{name = "State"}>
   !frame = ability.frame<core.i32>
   !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
   !nested = ability.frame<!resume>"#;
@@ -482,7 +481,7 @@ mod tests {
     fn a_perform_dispatches_through_the_frame_with_a_one_shot_resumption() {
         let printed = lowered(
             ", %f: !frame, %k: !resume, %arg: core.i32",
-            r#"    ability.perform %ev, %f, %k, %arg {ability_ref = !state, op_name = "set"}"#,
+            r#"    ability.perform %ev, %f, %k, %arg {ability_ref = @State, op_name = "set"}"#,
         );
         assert!(!printed.contains("ability.perform"), "{printed}");
         assert_eq!(
@@ -507,7 +506,7 @@ mod tests {
     fn an_abort_dispatches_with_a_resumption_that_captures_nothing() {
         let (mut ctx, module) = frame_module(
             ", %f: !frame, %arg: core.i32",
-            r#"    ability.abort %ev, %f, %arg {ability_ref = !state, op_name = "fail"}"#,
+            r#"    ability.abort %ev, %f, %arg {ability_ref = @State, op_name = "fail"}"#,
         );
         lower_continuation_frames(&mut ctx, module).unwrap();
         let printed = trunk_ir::printer::print_module(&ctx, module.op());
@@ -555,7 +554,7 @@ mod tests {
             ", %outer: !frame, %k: !resume",
             r#"    %a = ability.suffix_frame %ev, %outer, %k : !frame
     %b = ability.suffix_frame %ev, %outer, %k : !frame
-    %c = ability.suffix_frame %ev, %outer, %k {evidence_plan = [{mask = !state}]} : !frame
+    %c = ability.suffix_frame %ev, %outer, %k {evidence_plan = [{mask = @State}]} : !frame
     func.unreachable"#,
         );
         assert!(!printed.contains("ability.suffix_frame"), "{printed}");
@@ -579,7 +578,7 @@ mod tests {
     fn a_perform_without_an_exact_resumption_is_rejected() {
         let (mut ctx, module) = frame_module(
             ", %f: !frame, %k: core.i32",
-            r#"    ability.perform %ev, %f, %k {ability_ref = !state, op_name = "get"}"#,
+            r#"    ability.perform %ev, %f, %k {ability_ref = @State, op_name = "get"}"#,
         );
         assert!(lower_continuation_frames(&mut ctx, module).is_err());
     }
