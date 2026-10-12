@@ -65,7 +65,7 @@ impl<'db> BecomeSites<'_, 'db> {
                 // the `become` arm of expression checking.
                 _ => None,
             },
-            ExprKind::Functions { .. } | ExprKind::Error => None,
+            ExprKind::Error => None,
             ExprKind::Cons { .. } | ExprKind::Record { .. } => {
                 Some("`become` cannot call a constructor")
             }

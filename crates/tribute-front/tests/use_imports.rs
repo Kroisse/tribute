@@ -580,6 +580,11 @@ fn a_function_value_is_selected_by_the_type_it_is_used_at(db: &salsa::DatabaseIm
             "fn main() -> Nil {\n    let _ = size\n}\n",
             "ambiguous path `size` used as a value: it names `a::size`, `b::size`",
         ),
+        // A local is one function, selected by its first use.
+        (
+            "fn main() -> Nil {\n    let f = size\n    let _ = f(A { n: 1 }) + f(B { n: 2 })\n}\n",
+            "type error at call site in function 'main': expected `A`, found `B`",
+        ),
     ] {
         assert_eq!(
             errors(db, &format!("{SIZES}{USES}{body}")),
