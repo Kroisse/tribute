@@ -271,6 +271,12 @@ component, a root definition whose name contains `::`. The printer writes
 `@left::@helper` for the nested path and `@"left::helper"` for the single
 name. Read a path with `leaf()`, `modules()`, `components()`, and
 `as_simple()`; `*path == "main"` holds only for the root definition `main`.
+The path without components, `SymbolPath::root()`, is the root module, and
+`parent()` is the module that encloses a path. Build a nested path with
+`module.child(name)`, replace the last component with `sibling(name)`, and
+walk nested modules with `push` and `pop`. A definition's path and a symbol
+reference have at least one component, so `leaf()` is `None` only for the
+root module; IR validation rejects a reference to it.
 `SymbolTable` and the analyses that name functions (call graph, global DCE,
 backends' function tables) are keyed by `SymbolPath`, so take `&SymbolPath`
 rather than joining it back into one symbol.

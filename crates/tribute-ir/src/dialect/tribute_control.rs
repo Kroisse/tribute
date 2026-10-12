@@ -1212,12 +1212,11 @@ pub fn declare_operations(
             blocks: trunk_ir::smallvec::smallvec![block],
             parent_op: None,
         });
-        debug_assert!(
-            ability.modules().is_empty(),
-            "an ability instance is declared in the root module"
-        );
+        let name = ability
+            .as_simple()
+            .expect("an ability instance is declared in the root module");
         let decl = crate::dialect::ability::Decl::operands()
-            .sym_name(ability.leaf().to_string())
+            .sym_name(name.to_string())
             .regions(operations)
             .build(ctx, location);
         ctx.push_op(module_block, decl.op_ref());

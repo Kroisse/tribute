@@ -356,6 +356,7 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     // The root module is not visited by the body walk, so check its own
     // schema (including a missing body region) first.
     validate_op_schema(ctx, module.op(), &mut errors);
+    validate_symbol_refs(ctx, module.op(), &mut errors);
 
     let body = match module.body(ctx) {
         Some(r) => r,
@@ -365,6 +366,7 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     };
 
     walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
+        validate_symbol_refs(ctx, op, &mut errors);
         if !validate_op_schema(ctx, op, &mut errors) {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
@@ -412,6 +414,21 @@ fn validate_op_schema(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationErr
         return true;
     };
     report_schema_violations(ctx, op, def.verify(ctx, op), errors)
+}
+
+/// A symbol reference names a definition, so it is never the root module.
+fn validate_symbol_refs(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let mut root_refs = 0;
+    ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
+        root_refs += usize::from(reference.is_root());
+    });
+    if root_refs != 0 {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "a symbol reference has no component",
+        ));
+    }
 }
 
 /// Record each violation as an operation error; returns whether there were
@@ -3679,6 +3696,34 @@ mod tests {
             verifiers.errors
         );
     }
+    #[test]
+    fn operation_verifiers_reject_a_symbol_reference_to_the_root_module() {
+        let input = r#"core.module @test {
+  func.func @main() -> core.i32 {
+    %r = func.call {callee = @main} : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        assert!(validate_operation_verifiers(&ctx, module).is_ok());
+
+        let attribute = Attribute::List(vec![Attribute::SymbolRef(SymbolPath::root())]);
+        ctx.op_mut(module.op())
+            .attributes
+            .insert("referenced", attribute);
+        let verifiers = validate_operation_verifiers(&ctx, module);
+        assert_eq!(
+            operation_error_messages(&verifiers)
+                .iter()
+                .filter(|message| message.contains("a symbol reference has no component"))
+                .count(),
+            1,
+            "{:?}",
+            verifiers.errors
+        );
+    }
+
     #[test]
     fn function_contracts_resolve_callees_by_root_qualified_path() {
         let errors = |callee: &str| {

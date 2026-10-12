@@ -227,47 +227,84 @@ impl std::fmt::Display for Symbol {
 /// The name of a symbol table definition: the names of its enclosing modules
 /// below the root, then its own name.
 ///
+/// A path without components is the root module, and a path without its last
+/// component is the module that encloses it. A definition's path and a
+/// reference to one have at least one component.
+///
 /// Each component is one name, taken as it is: a name that contains `::` is
 /// still a single component, so a path built from one qualified name differs
 /// from the path that spells the same text as nested modules. Up to two
 /// components are stored inline.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "salsa", derive(salsa::SalsaValue))]
 pub struct SymbolPath(SmallVec<[Symbol; 2]>);
 
 impl SymbolPath {
     /// The separator between components in the textual form.
     pub const SEPARATOR: &'static str = "::";
 
-    /// A path from its components, outermost module first.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `components` is empty.
-    pub fn new(components: impl IntoIterator<Item = impl Into<Symbol>>) -> Self {
-        let components: SmallVec<[Symbol; 2]> = components.into_iter().map(Into::into).collect();
-        assert!(!components.is_empty(), "a symbol path has a component");
-        SymbolPath(components)
+    /// The path of the root module.
+    pub const fn root() -> Self {
+        SymbolPath(SmallVec::new_const())
     }
 
-    /// The path of the definition named `name` inside the modules `modules`.
-    pub fn in_modules(modules: &[Symbol], name: Symbol) -> Self {
-        let mut components: SmallVec<[Symbol; 2]> = modules.iter().cloned().collect();
-        components.push(name);
-        SymbolPath(components)
+    /// A path from its components, outermost module first. No component
+    /// gives the root module.
+    pub fn new(components: impl IntoIterator<Item = impl Into<Symbol>>) -> Self {
+        SymbolPath(components.into_iter().map(Into::into).collect())
+    }
+
+    /// Whether this is the root module.
+    pub fn is_root(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn components(&self) -> &[Symbol] {
         &self.0
     }
 
-    /// The definition's own name, without its modules.
-    pub fn leaf(&self) -> &Symbol {
-        self.0.last().expect("a symbol path has a component")
+    /// The path's own name, without its modules. The root module has none.
+    pub fn leaf(&self) -> Option<&Symbol> {
+        self.0.last()
     }
 
     /// The enclosing modules, outermost first.
     pub fn modules(&self) -> &[Symbol] {
-        &self.0[..self.0.len() - 1]
+        &self.0[..self.0.len().saturating_sub(1)]
+    }
+
+    /// The path of `name` inside this module.
+    pub fn child(&self, name: impl Into<Symbol>) -> Self {
+        let mut path = self.clone();
+        path.push(name);
+        path
+    }
+
+    /// The enclosing module. The root module has none.
+    pub fn parent(&self) -> Option<Self> {
+        let (_, modules) = self.0.split_last()?;
+        Some(SymbolPath(modules.iter().cloned().collect()))
+    }
+
+    /// The path of `name` in the module that encloses this path.
+    ///
+    /// # Panics
+    ///
+    /// Panics on the root module, which no module encloses.
+    pub fn sibling(&self, name: impl Into<Symbol>) -> Self {
+        let mut path = self.clone();
+        *path.0.last_mut().expect("the root module has no sibling") = name.into();
+        path
+    }
+
+    /// Enters `name`, making this the path of `name` inside this module.
+    pub fn push(&mut self, name: impl Into<Symbol>) {
+        self.0.push(name.into());
+    }
+
+    /// Leaves the last component for its enclosing module and returns it.
+    pub fn pop(&mut self) -> Option<Symbol> {
+        self.0.pop()
     }
 
     /// The name of a definition directly in the root module.
@@ -406,7 +443,7 @@ mod tests {
     fn symbol_paths_keep_each_name_as_one_component() {
         let path = SymbolPath::new(["outer", "inner", "same"]);
         assert_eq!(path.components().len(), 3);
-        assert_eq!(path.leaf(), "same");
+        assert_eq!(path.leaf(), Some(&Symbol::new("same")));
         assert_eq!(path.modules(), [Symbol::new("outer"), Symbol::new("inner")]);
         assert_eq!(path.to_string(), "outer::inner::same");
         assert_eq!(path.as_simple(), None);
@@ -419,14 +456,51 @@ mod tests {
         assert_ne!(path, "outer::inner::same");
         assert_eq!(flat.to_symbol(), path.to_symbol());
 
-        assert_eq!(
-            SymbolPath::in_modules(path.modules(), Symbol::new("same")),
-            path
-        );
-        let root = SymbolPath::from("a");
-        assert!(root < SymbolPath::new(["a", "b"]));
+        let simple = SymbolPath::from("a");
+        assert!(simple < SymbolPath::new(["a", "b"]));
         assert_eq!(std::mem::size_of::<SymbolPath>(), 24);
         assert_eq!(std::mem::size_of::<crate::types::Attribute>(), 32);
+    }
+
+    #[test]
+    fn the_root_module_is_the_path_without_components() {
+        let root = SymbolPath::root();
+        assert!(root.is_root());
+        assert_eq!(root, SymbolPath::new(<[Symbol; 0]>::default()));
+        assert_eq!(root.leaf(), None);
+        assert!(root.modules().is_empty());
+        assert_eq!(root.parent(), None);
+        assert_eq!(root.as_simple(), None);
+        assert!(!root.is_simple());
+        assert_eq!(root.to_string(), "");
+
+        let outer = root.child("outer");
+        assert!(root < outer);
+        assert_eq!(outer, "outer");
+        assert_eq!(outer.parent(), Some(root));
+        let same = outer.child("inner").child("same");
+        assert_eq!(same, SymbolPath::new(["outer", "inner", "same"]));
+        assert_eq!(same.parent(), Some(SymbolPath::new(["outer", "inner"])));
+        assert_eq!(
+            same.sibling("other"),
+            SymbolPath::new(["outer", "inner", "other"])
+        );
+        assert_eq!(outer.sibling("other"), "other");
+
+        let mut stack = SymbolPath::root();
+        stack.push("outer");
+        stack.push("inner");
+        assert_eq!(stack.child("same"), same);
+        assert_eq!(stack.pop(), Some(Symbol::new("inner")));
+        assert_eq!(stack, outer);
+        assert_eq!(stack.pop(), Some(Symbol::new("outer")));
+        assert_eq!(stack.pop(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "the root module has no sibling")]
+    fn the_root_module_has_no_sibling() {
+        SymbolPath::root().sibling("a");
     }
 
     #[test]

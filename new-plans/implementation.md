@@ -196,9 +196,13 @@ A qualified path and a local unqualified reference select the same declaration
 identity. Generic type collection and rewrite maps are keyed by
 that identity rather than by display symbols.
 
-Specialization mangling uses the declaration's qualified identity when needed
-to distinguish same-spelled declarations. When the qualified identity equals
-the existing display name, the ordinary mangle remains unchanged.
+선언 identity가 담는 이름은 component의 path다. Frontend는 중첩된 이름을 component를
+덧붙여 만들고, 선언 자신의 이름은 마지막 component에서 읽는다. Path를 텍스트로
+이어 붙인 표기는 진단과 IR symbol을 만들 때만 쓰며, 그 텍스트를 다시 나누어
+path나 identity를 복원하지 않는다.
+
+Specialization mangling은 같은 표기의 선언을 구별해야 할 때 선언의 path를 쓴다.
+Path가 기존 표시 이름과 같으면 맹글링 결과는 달라지지 않는다.
 
 Specialization mangle은 type argument의 identity에 대해 단사(injective)다. 서로
 다른 type argument 목록은 서로 다른 이름을 얻는다. 함수 타입, 튜플, bound type
