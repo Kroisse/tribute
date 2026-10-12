@@ -46,7 +46,7 @@ impl<'db> TypeChecker<'db> {
         let func_id = self.func_def_id(&func.name);
         let mut ctx = FunctionInferenceContext::new(self.db(), &self.env, func_id);
         // Only the exact root `main` is an entrypoint.
-        let is_root_main = crate::is_root_main(&func.name, self.current_prefix().is_empty());
+        let is_root_main = crate::is_root_main(&func.name, self.current_prefix().is_root());
 
         // 2. Get the function's registered type scheme and instantiate it
 

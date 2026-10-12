@@ -8,6 +8,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use trunk_ir::SymbolPath;
 
 use trunk_ir::Symbol;
 
@@ -269,7 +270,11 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Look up a type definition from a lexical module scope.
-    pub fn lookup_type_def_in_scope(&self, name: &Symbol, prefix: &str) -> Option<TypeScheme<'db>> {
+    pub fn lookup_type_def_in_scope(
+        &self,
+        name: &Symbol,
+        prefix: &SymbolPath,
+    ) -> Option<TypeScheme<'db>> {
         let spelling = name.to_string();
         if spelling.contains("::") {
             return self.lookup_type_def(name);
@@ -277,12 +282,10 @@ impl<'db> ModuleTypeEnv<'db> {
 
         // Name resolution leaves a bare name only for a declaration of the
         // current module; the package root holds the rest.
-        let scope = prefix.trim_end_matches("::");
-        if !scope.is_empty() {
-            let candidate = Symbol::new(&format!("{scope}::{spelling}"));
-            if let Some(scheme) = self.lookup_type_def(&candidate) {
-                return Some(scheme);
-            }
+        if !prefix.is_root()
+            && let Some(scheme) = self.lookup_type_def(&crate::qualified_symbol(prefix, name))
+        {
+            return Some(scheme);
         }
 
         self.lookup_type_def(name)
@@ -742,7 +745,7 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Create a named type.
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
-        self.named_type_in_scope(name, args, "")
+        self.named_type_in_scope(name, args, &SymbolPath::root())
     }
 
     /// The named type a type annotation's path names. Name resolution spells
@@ -751,7 +754,7 @@ impl<'db> ModuleTypeEnv<'db> {
     pub fn path_type(&self, path: &[Symbol]) -> Type<'db> {
         crate::qualified_path_symbol(path).map_or_else(
             || self.error_type(),
-            |name| self.named_type_in_scope(name, vec![], ""),
+            |name| self.named_type_in_scope(name, vec![], &SymbolPath::root()),
         )
     }
 
@@ -760,7 +763,7 @@ impl<'db> ModuleTypeEnv<'db> {
         &self,
         name: Symbol,
         args: Vec<Type<'db>>,
-        prefix: &str,
+        prefix: &SymbolPath,
     ) -> Type<'db> {
         let id = self
             .lookup_type_def_in_scope(&name, prefix)

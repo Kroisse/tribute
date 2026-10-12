@@ -38,6 +38,7 @@ use crate::ast::SpanMap;
 pub use func_context::FunctionInferenceContext;
 use rustc_hash::FxHashMap as HashMap;
 pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
+use trunk_ir::SymbolPath;
 
 use trunk_ir::Symbol;
 
@@ -231,14 +232,10 @@ impl FieldFunctionKind {
     /// The qualified name of this function for the field `field` of the
     /// struct named `owner`.
     pub fn qualified(self, owner: &Symbol, field: &Symbol) -> Symbol {
-        let mut prefix = owner.to_string();
-        let getter = crate::qualified_symbol(&mut prefix, field);
+        let getter = SymbolPath::from(owner).child(field.clone());
         match self.name() {
-            None => getter,
-            Some(name) => {
-                let mut prefix = getter.to_string();
-                crate::qualified_symbol(&mut prefix, &Symbol::new(name))
-            }
+            None => getter.to_symbol(),
+            Some(name) => getter.child(name).to_symbol(),
         }
     }
 }

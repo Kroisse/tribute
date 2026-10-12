@@ -30,6 +30,7 @@ mod lower;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::sync::LazyLock;
+use trunk_ir::SymbolPath;
 
 use tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration;
 use trunk_ir::Symbol;
@@ -115,7 +116,7 @@ pub fn registered_compiler_intrinsics<V>(
 ) -> Result<HashMap<NodeId, Symbol>, Vec<UnsupportedCompilerIntrinsic>> {
     fn collect<V>(
         declarations: &[crate::ast::Decl<V>],
-        prefix: &mut String,
+        prefix: &mut SymbolPath,
         result: &mut HashMap<NodeId, Symbol>,
         unsupported: &mut Vec<UnsupportedCompilerIntrinsic>,
     ) {
@@ -134,9 +135,9 @@ pub fn registered_compiler_intrinsics<V>(
                 }
                 crate::ast::Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(prefix, &module.name);
+                        prefix.push(module.name.clone());
                         collect(body, prefix, result, unsupported);
-                        prefix.truncate(saved);
+                        prefix.pop();
                     }
                 }
                 _ => {}
@@ -148,7 +149,7 @@ pub fn registered_compiler_intrinsics<V>(
     let mut unsupported = Vec::new();
     collect(
         &module.decls,
-        &mut String::new(),
+        &mut SymbolPath::root(),
         &mut result,
         &mut unsupported,
     );

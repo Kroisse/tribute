@@ -3,6 +3,7 @@
 
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
+use trunk_ir::SymbolPath;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -84,7 +85,7 @@ impl<'db> InstanceKeys<'db> {
             .map(|(name, scheme)| (name, *scheme))
             .collect();
         let mut definitions = Vec::new();
-        let mut prefix = String::new();
+        let mut prefix = SymbolPath::root();
         let mut accessors = HashMap::default();
         for_each_function(&module.decls, &mut prefix, &mut |name, function| {
             if let Some(scheme) = schemes.get(&name) {
@@ -271,7 +272,7 @@ impl<'db> InstanceKeys<'db> {
 
 fn for_each_function<'a, 'db>(
     decls: &'a [Decl<TypedRef<'db>>],
-    prefix: &mut String,
+    prefix: &mut SymbolPath,
     f: &mut impl FnMut(Symbol, &'a FuncDecl<TypedRef<'db>>),
 ) {
     for decl in decls {
@@ -281,9 +282,9 @@ fn for_each_function<'a, 'db>(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let len = crate::push_prefix(prefix, &module.name);
+                    prefix.push(module.name.clone());
                     for_each_function(body, prefix, f);
-                    prefix.truncate(len);
+                    prefix.pop();
                 }
             }
             _ => {}

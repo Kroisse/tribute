@@ -33,6 +33,7 @@ mod func_check;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use trunk_ir::SymbolPath;
 
 use trunk_ir::{Span, Symbol};
 
@@ -121,7 +122,7 @@ pub struct TypeChecker<'db> {
     /// Module-level type environment (function signatures, constructors, type defs).
     pub(crate) env: ModuleTypeEnv<'db>,
     /// Current module prefix for qualified function names (e.g., "foo::bar").
-    pub(crate) prefix: String,
+    pub(crate) prefix: SymbolPath,
     /// Span map for converting NodeId to Span in diagnostics.
     pub(crate) span_map: SpanMap,
     /// Accumulated node types from all functions.
@@ -152,12 +153,12 @@ impl<'db> TypeChecker<'db> {
     ) -> Option<WellKnownType<'db>> {
         let name = key.name();
         // The prelude's root items are inside its package module.
-        let mut prefix = String::new();
+        let mut prefix = SymbolPath::root();
         let mut decls = &module.decls;
         if let [Decl::Module(package)] = decls.as_slice()
             && let Some(body) = &package.body
         {
-            crate::push_prefix(&mut prefix, &package.name);
+            prefix.push(package.name.clone());
             decls = body;
         }
         let declaration = decls.iter().find_map(|decl| match decl {
@@ -165,7 +166,7 @@ impl<'db> TypeChecker<'db> {
             Decl::Enum(decl) if decl.name == name => Some(decl.id),
             _ => None,
         })?;
-        let qualified = crate::qualified_symbol(&mut prefix, &name);
+        let qualified = crate::qualified_symbol(&prefix, &name);
         let ty = self.env.lookup_type_def(&qualified)?.body(self.db());
         Some(WellKnownType {
             ty,
@@ -182,16 +183,14 @@ impl<'db> TypeChecker<'db> {
         let string = self.prelude_well_known_type(module, StringType);
         // `==` of a prelude type is the function of that name in the type's
         // module.
-        let mut prefix = String::new();
+        let mut prefix = SymbolPath::root();
         if let [Decl::Module(package)] = module.decls.as_slice() {
-            crate::push_prefix(&mut prefix, &package.name);
+            prefix.push(package.name.clone());
         }
         let equality = |type_name: &str| {
-            let mut path = prefix.clone();
-            crate::push_prefix(&mut path, &Symbol::new(type_name));
             let function = FuncDefId::new(
                 self.db(),
-                crate::qualified_symbol(&mut path, &Symbol::new("==")),
+                crate::qualified_symbol(&prefix.child(type_name), &Symbol::new("==")),
             );
             self.env.lookup_function(function).map(|_| function)
         };
@@ -206,7 +205,7 @@ impl<'db> TypeChecker<'db> {
     pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap) -> Self {
         Self {
             env: ModuleTypeEnv::new(db),
-            prefix: String::new(),
+            prefix: SymbolPath::root(),
             span_map,
             node_types: HashMap::default(),
             function_instances: HashMap::default(),
@@ -228,17 +227,14 @@ impl<'db> TypeChecker<'db> {
         self.span_map.get_or_default(node_id)
     }
 
-    /// Get the current module prefix string (e.g., "foo::bar").
-    pub(crate) fn current_prefix(&self) -> &str {
+    /// The path of the module being checked.
+    pub(crate) fn current_prefix(&self) -> &SymbolPath {
         &self.prefix
     }
 
     /// Create a FuncDefId from the current prefix and function name.
     pub(crate) fn func_def_id(&self, name: &Symbol) -> FuncDefId<'db> {
-        FuncDefId::new(
-            self.db(),
-            crate::qualified_symbol(&mut self.prefix.clone(), name),
-        )
+        FuncDefId::new(self.db(), crate::qualified_symbol(&self.prefix, name))
     }
 
     /// Get the database.
@@ -402,7 +398,7 @@ impl<'db> TypeChecker<'db> {
         module: &crate::ast::ModuleDecl<ResolvedRef<'db>>,
     ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
         // Push module name to prefix
-        let prev_len = crate::push_prefix(&mut self.prefix, &module.name);
+        self.prefix.push(module.name.clone());
 
         let body = module
             .body
@@ -410,7 +406,7 @@ impl<'db> TypeChecker<'db> {
             .map(|decls| decls.iter().map(|d| self.check_decl(d)).collect());
 
         // Restore prefix
-        self.prefix.truncate(prev_len);
+        self.prefix.pop();
 
         crate::ast::ModuleDecl {
             id: module.id,
