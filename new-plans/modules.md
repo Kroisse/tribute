@@ -58,6 +58,12 @@ prelude는 패키지 `std`의 루트 모듈이다. 선언의 식별자는 그 �
 `std::Option::map`, `std::Int::+`처럼 `std`로 시작하고, 사용자 패키지의 같은 경로
 선언과 섞이지 않는다. prelude 안에서 `pkg`는 `std`를 가리킨다.
 
+선언의 식별자는 텍스트 하나가 아니라 component의 path다. 둘러싼 모듈의 이름들이
+바깥쪽부터 차례로 오고 선언의 이름이 마지막에 온다. `std::Int::+`는 component
+`std`, `Int`, `+`의 path다. Component가 없는 path는 루트 모듈을 가리킨다.
+한정된 참조는 표기한 텍스트를 `::`로 다시 나누지 않고 component 단위로 해석하며,
+component 하나의 이름에 `::`가 들어 있어도 그 이름은 component 하나다.
+
 모든 모듈은 prelude 루트 항목을 짧은 이름으로 본다. 값과 타입(`Option`, `Some`,
 `String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
 (`Option::map`, `Int::to_string`, `abilities::Throw`). 사용자 선언이 같은 이름을 가지면

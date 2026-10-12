@@ -425,6 +425,11 @@ IR 생성에 전달하지 않는다. 이 한도는 함수의 다형적 재귀 �
 복원하지 않는다. 예를 들어 `identity`와 `[Int]`는 `identity$Int`로 표현하고, 중첩
 타입 인자는 `$0`/`$1`로 감싸지만 특수화 키는 정확한 선언 ID와 타입 인자로 유지한다.
 
+인스턴스의 path는 선언의 path에서 마지막 component만 맹글링한 것이다. 둘러싼
+모듈의 component는 그대로 둔다. 맹글링에 쓰인 타입 인자나 ability의 표기에 `::`가
+들어 있어도 맹글링된 이름은 component 하나다. `A::identity`와 `[B::Thing]`의
+인스턴스는 component `A`와 `identity$B::Thing`의 path다.
+
 Import alias와 prelude의 짧은 조회 이름은 선언의 canonical path를 대체하지
 않는다. `List::prepend`가 표준 binding을 선택했다면 특수화 대상은
 `std::collections::List::prepend`이며, 완전한 경로로 선택한 동일 인스턴스와

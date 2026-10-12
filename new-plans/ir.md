@@ -468,7 +468,10 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
 - `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.const`는
   nil을 만들지 않는다.
 - Operation과 type의 이름은 `Symbol`이다. Symbol table 정의의 qualified path는
-  component마다 `Symbol` 하나인 `SymbolPath`로 저장한다.
+  component마다 `Symbol` 하나인 `SymbolPath`로 저장한다. Component가 없는
+  `SymbolPath`는 root module을 가리키며, 어떤 path에서 마지막 component를 뺀 path는
+  그 정의를 둘러싼 module의 path다. 정의의 qualified path와 symbol 참조에는
+  component가 하나 이상 있고, component 없는 symbol 참조는 IR 오류다.
 - `Symbol`은 8바이트 atom이며 세 형태 중 하나다. 7바이트 이하의 이름은 값 안에
   직접 담는다. IR 기반 계층이 선언한 dialect, operation, type, 속성 이름은 빌드
   때 만든 static 집합의 색인이다. 그 밖의 이름은 프로세스 전역 동적 집합의

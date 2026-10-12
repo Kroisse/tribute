@@ -21,6 +21,8 @@ selection, and specialization must still compare declaration identity.
 특수화된 nominal 타입은 해석된 선언의 qualified name을 기준으로 타입 인자를
 맹글링한 normalized symbol을 사용한다. 예를 들어 서로 다른 선언
 `A::Token(Nat)`과 `B::Token(Nat)`은 각각 `A::Token$Nat`, `B::Token$Nat`이다.
+특수화된 타입의 path는 선언의 모듈 component를 유지하고 마지막 component만
+맹글링한다.
 중첩 타입 인자는 기존 `$0`/`$1` 맹글링 규칙을 따른다. 이 symbol은 IR의
 `adt.typeref`와 대응하는 struct/enum layout의 `name`에 동일하게 사용하며,
 선언 identity나 타입 인자를 이름에서 역으로 복원하는 근거로 쓰지 않는다.
@@ -396,6 +398,9 @@ user.age::modify(fn(n) n + 1)    // User::age::modify(user, fn(n) n + 1)
 - `T::f`는 값 namespace의 getter이면서 `set`·`modify`를 담는 모듈 `T::f`이기도
   하다. Companion `mod T`가 `f::set`이나 `f::modify`를 직접 선언하면 생성된
   함수와 충돌하는 중복 정의 오류이다.
+- 세 함수의 path에서 struct와 필드는 각각 component 하나다. `T`의 path에 `f`를
+  덧붙인 것이 getter이고, 거기에 `set`이나 `modify`를 덧붙인 것이 setter와
+  modifier다.
 - 생성된 `set`·`modify`는 경로로만 호출한다. 비한정 UFCS `x.set(v)`의 후보가
   아니다.
 - 세 함수에는 source 선언이 없다. Name resolution은 struct의 필드에서 이름을
