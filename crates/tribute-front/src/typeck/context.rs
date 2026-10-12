@@ -49,75 +49,14 @@ pub struct AbilityInfo<'db> {
     pub operations: HashMap<Symbol, AbilityOpInfo<'db>>,
 }
 
-/// A candidate method entry for UFCS resolution.
-///
-/// Stored in the method index, keyed by method name. Receiver type
-/// disambiguation happens at lookup time via `receiver_type_matches`.
+/// A function a call may name, with its type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct MethodEntry<'db> {
     pub func_id: FuncDefId<'db>,
     pub func_ty: Type<'db>,
 }
 
-impl<'db> MethodEntry<'db> {
-    /// Extract the receiver type from the function type's first parameter.
-    pub fn receiver_ty(&self, db: &'db dyn salsa::Database) -> Option<Type<'db>> {
-        match self.func_ty.kind(db) {
-            TypeKind::Func { params, .. } => params.first().copied(),
-            _ => None,
-        }
-    }
-}
-
-/// Extract the type constructor name from a `Type` value.
-///
-/// Handles `Named`, `App` (recursing into the constructor), and primitive
-/// type kinds. Used for receiver type matching in UFCS resolution.
-pub fn extract_type_name_from_type<'db>(
-    db: &'db dyn salsa::Database,
-    ty: Type<'db>,
-) -> Option<Symbol> {
-    let kind = ty.kind(db);
-    if let Some(name) = kind.primitive_name() {
-        return Some(Symbol::new(name));
-    }
-    match kind {
-        TypeKind::Named { name, .. } => Some(name.clone()),
-        TypeKind::App { ctor, .. } => extract_type_name_from_type(db, *ctor),
-        _ => None,
-    }
-}
-
-/// Check if a method entry's receiver type matches an actual receiver type.
-///
-/// Compares nominal types by declaration identity, allowing their generic
-/// arguments to differ (e.g., `Option(a)` matches `Option(Int)`). Primitive
-/// receivers continue to match by their compiler-defined names.
-pub fn receiver_type_matches<'db>(
-    db: &'db dyn salsa::Database,
-    entry: &MethodEntry<'db>,
-    actual: Type<'db>,
-) -> bool {
-    let Some(declared) = entry.receiver_ty(db) else {
-        return false;
-    };
-    fn same_constructor<'db>(
-        db: &'db dyn salsa::Database,
-        declared: Type<'db>,
-        actual: Type<'db>,
-    ) -> bool {
-        match (declared.kind(db), actual.kind(db)) {
-            (TypeKind::App { ctor: left, .. }, _) => same_constructor(db, *left, actual),
-            (_, TypeKind::App { ctor: right, .. }) => same_constructor(db, declared, *right),
-            (TypeKind::Named { id: left, .. }, TypeKind::Named { id: right, .. }) => left == right,
-            (left, right) => {
-                left.primitive_name().is_some() && left.primitive_name() == right.primitive_name()
-            }
-        }
-    }
-
-    same_constructor(db, declared, actual)
-}
+impl<'db> MethodEntry<'db> {}
 
 /// Whether a parameter declared as `declared` takes an argument of type
 /// `actual` when a call selects among several functions.
@@ -202,11 +141,6 @@ pub struct ModuleTypeEnv<'db> {
     /// Used for handler arm type checking.
     ability_defs: HashMap<AbilityId<'db>, AbilityInfo<'db>>,
 
-    /// Method index for UFCS resolution: method_name → candidates.
-    /// Populated from function declarations (first param = receiver)
-    /// and struct field accessors.
-    method_index: HashMap<Symbol, Vec<MethodEntry<'db>>>,
-
     well_known_types: super::WellKnownTypes<'db>,
 }
 
@@ -254,7 +188,6 @@ impl<'db> ModuleTypeEnv<'db> {
             enum_variants: HashMap::default(),
             constructor_field_names: HashMap::default(),
             ability_defs,
-            method_index: HashMap::default(),
             well_known_types: super::WellKnownTypes::empty(),
         }
     }
@@ -281,34 +214,6 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Whether a function was declared `extern`.
     pub fn is_extern_function(&self, id: FuncDefId<'db>) -> bool {
         self.extern_functions.contains(&id)
-    }
-
-    /// Register a method for UFCS resolution.
-    pub fn register_method(&mut self, method_name: Symbol, entry: MethodEntry<'db>) {
-        self.method_index
-            .entry(method_name)
-            .or_default()
-            .push(entry);
-    }
-
-    /// Look up UFCS method candidates by method name and receiver type.
-    ///
-    /// Returns the matching `MethodEntry` if exactly one candidate matches,
-    /// `None` if no candidates or ambiguous (multiple matches).
-    pub fn lookup_method(
-        &self,
-        method_name: &Symbol,
-        receiver_ty: Type<'db>,
-    ) -> Option<&MethodEntry<'db>> {
-        let candidates = self.method_index.get(method_name)?;
-        let mut iter = candidates
-            .iter()
-            .filter(|entry| receiver_type_matches(self.db, entry, receiver_ty));
-        let matched = iter.next()?;
-        if iter.next().is_some() {
-            return None; // ambiguous
-        }
-        Some(matched)
     }
 
     /// Register a constructor's type scheme.
@@ -575,12 +480,6 @@ impl<'db> ModuleTypeEnv<'db> {
         for (id, names) in exports.constructor_field_names(self.db) {
             self.constructor_field_names.insert(*id, names.clone());
         }
-        for (name, entries) in exports.method_index(self.db) {
-            self.method_index
-                .entry(name.clone())
-                .or_default()
-                .extend(entries.iter().copied());
-        }
         for (ability, type_params, operations) in exports.ability_definitions(self.db) {
             self.ability_defs.insert(
                 *ability,
@@ -705,19 +604,6 @@ impl<'db> ModuleTypeEnv<'db> {
             a.qualified(self.db)
                 .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
         });
-        result
-    }
-
-    /// Export method index for PreludeExports.
-    ///
-    /// Results are sorted alphabetically by method name for deterministic output.
-    pub fn export_method_index(&self) -> Vec<(Symbol, Vec<MethodEntry<'db>>)> {
-        let mut result: Vec<_> = self
-            .method_index
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
         result
     }
 
@@ -1233,63 +1119,10 @@ mod tests {
         );
     }
 
-    #[salsa_test]
-    fn test_export_method_index_sorted(db: &dyn salsa::Database) {
-        use super::MethodEntry;
-        use crate::ast::EffectRow;
-
-        let mut env = ModuleTypeEnv::new(db);
-        let int_ty = Type::new(db, TypeKind::Int);
-        let effect = EffectRow::pure(db);
-
-        // Insert in non-alphabetical order
-        for name in ["zebra", "alpha", "middle"] {
-            let receiver = Type::new(
-                db,
-                TypeKind::Named {
-                    id: crate::ast::TypeDefId::synthetic(db, Symbol::new(name)),
-                    name: Symbol::new(name),
-                    args: vec![],
-                },
-            );
-            let func_ty = Type::new(
-                db,
-                TypeKind::Func {
-                    params: vec![receiver],
-                    result: int_ty,
-                    effect,
-                },
-            );
-            env.register_method(
-                Symbol::new(name),
-                MethodEntry {
-                    func_id: FuncDefId::new(db, Symbol::new(name)),
-                    func_ty,
-                },
-            );
-        }
-
-        let exported = env.export_method_index();
-        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
-        assert_eq!(
-            names,
-            vec![
-                Symbol::new("alpha"),
-                Symbol::new("middle"),
-                Symbol::new("zebra"),
-            ]
-        );
-        // Each entry should have exactly one MethodEntry
-        for (_, entries) in &exported {
-            assert_eq!(entries.len(), 1);
-        }
-    }
-
     // =========================================================================
     // UFCS utility function tests
     // =========================================================================
 
-    use super::{MethodEntry, extract_type_name_from_type, receiver_type_matches};
     use crate::ast::EffectRow;
 
     /// Test helper: create a Named type from a string.
@@ -1318,116 +1151,6 @@ mod tests {
                 effect: EffectRow::pure(db),
             },
         )
-    }
-
-    /// Test helper: create a MethodEntry.
-    fn method_entry<'db>(
-        db: &'db dyn salsa::Database,
-        name: &str,
-        func_ty: Type<'db>,
-    ) -> MethodEntry<'db> {
-        MethodEntry {
-            func_id: FuncDefId::new(db, Symbol::new(name)),
-            func_ty,
-        }
-    }
-
-    #[test]
-    fn test_extract_type_name_named() {
-        let db = salsa::DatabaseImpl::new();
-        assert_eq!(
-            extract_type_name_from_type(&db, named(&db, "Foo")),
-            Some(Symbol::new("Foo"))
-        );
-    }
-
-    #[test]
-    fn test_extract_type_name_app() {
-        let db = salsa::DatabaseImpl::new();
-        let list = named(&db, "List");
-        let int = Type::new(&db, TypeKind::Int);
-        let app = Type::new(
-            &db,
-            TypeKind::App {
-                ctor: list,
-                args: vec![int],
-            },
-        );
-        assert_eq!(
-            extract_type_name_from_type(&db, app),
-            Some(Symbol::new("List"))
-        );
-    }
-
-    #[test]
-    fn test_extract_type_name_nested_app() {
-        let db = salsa::DatabaseImpl::new();
-        let map = named(&db, "Map");
-        let int = Type::new(&db, TypeKind::Int);
-        let inner = Type::new(
-            &db,
-            TypeKind::App {
-                ctor: map,
-                args: vec![int],
-            },
-        );
-        let string = Type::new(&db, TypeKind::string(&db));
-        let outer = Type::new(
-            &db,
-            TypeKind::App {
-                ctor: inner,
-                args: vec![string],
-            },
-        );
-        assert_eq!(
-            extract_type_name_from_type(&db, outer),
-            Some(Symbol::new("Map"))
-        );
-    }
-
-    #[test]
-    fn test_extract_type_name_primitive() {
-        let db = salsa::DatabaseImpl::new();
-        let cases = [
-            (TypeKind::Int, "Int"),
-            (TypeKind::Nat, "Nat"),
-            (TypeKind::Float, "Float"),
-            (TypeKind::Bool, "Bool"),
-            (TypeKind::string(&db), "String"),
-            (TypeKind::Bytes, "Bytes"),
-            (TypeKind::Rune, "Rune"),
-            (TypeKind::Nil, "Nil"),
-        ];
-        for (kind, expected) in cases {
-            assert_eq!(
-                extract_type_name_from_type(&db, Type::new(&db, kind)),
-                Some(Symbol::new(expected)),
-                "type name of primitive {expected}",
-            );
-        }
-    }
-
-    #[test]
-    fn test_extract_type_name_tuple_returns_none() {
-        let db = salsa::DatabaseImpl::new();
-        let tuple = Type::new(
-            &db,
-            TypeKind::Tuple(vec![
-                Type::new(&db, TypeKind::Int),
-                Type::new(&db, TypeKind::Bool),
-            ]),
-        );
-        assert_eq!(extract_type_name_from_type(&db, tuple), None);
-    }
-
-    #[test]
-    fn test_extract_type_name_univar_returns_none() {
-        let db = salsa::DatabaseImpl::new();
-        let id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
-        assert_eq!(
-            extract_type_name_from_type(&db, Type::new(&db, TypeKind::UniVar { id })),
-            None
-        );
     }
 
     #[test]
@@ -1494,95 +1217,6 @@ mod tests {
         assert!(super::parameter_type_matches(&db, variable, foo));
         assert!(super::parameter_type_matches(&db, foo, unknown));
         assert!(!super::parameter_type_matches(&db, foo, variable));
-    }
-
-    #[test]
-    fn test_receiver_type_matches_same_type() {
-        let db = salsa::DatabaseImpl::new();
-        let foo = named(&db, "Foo");
-        let entry = method_entry(&db, "bar", func(&db, &[foo], Type::new(&db, TypeKind::Int)));
-        assert!(receiver_type_matches(&db, &entry, foo));
-    }
-
-    #[test]
-    fn test_receiver_type_matches_different_type() {
-        let db = salsa::DatabaseImpl::new();
-        let foo = named(&db, "Foo");
-        let bar = named(&db, "Bar");
-        let entry = method_entry(&db, "m", func(&db, &[foo], Type::new(&db, TypeKind::Int)));
-        assert!(!receiver_type_matches(&db, &entry, bar));
-    }
-
-    #[test]
-    fn test_receiver_type_rejects_same_spelling_from_different_declarations() {
-        let db = salsa::DatabaseImpl::new();
-        let name = Symbol::new("Thing");
-        let first = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::source(
-                    &db,
-                    name.clone(),
-                    crate::ast::NodeId::from_raw(1),
-                ),
-                name: name.clone(),
-                args: vec![],
-            },
-        );
-        let second = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::source(
-                    &db,
-                    name.clone(),
-                    crate::ast::NodeId::from_raw(2),
-                ),
-                name,
-                args: vec![],
-            },
-        );
-        let entry = method_entry(
-            &db,
-            "method",
-            func(&db, &[first], Type::new(&db, TypeKind::Int)),
-        );
-        assert!(!receiver_type_matches(&db, &entry, second));
-    }
-
-    #[salsa_test]
-    fn test_lookup_method_single_match(db: &dyn salsa::Database) {
-        let mut env = ModuleTypeEnv::new(db);
-        let foo = named(db, "Foo");
-        let ft = func(db, &[foo], Type::new(db, TypeKind::Int));
-        env.register_method(Symbol::new("bar"), method_entry(db, "bar", ft));
-        assert!(env.lookup_method(&Symbol::new("bar"), foo).is_some());
-    }
-
-    #[salsa_test]
-    fn test_lookup_method_no_match(db: &dyn salsa::Database) {
-        let env = ModuleTypeEnv::new(db);
-        assert!(
-            env.lookup_method(&Symbol::new("x"), named(db, "Foo"))
-                .is_none()
-        );
-    }
-
-    #[salsa_test]
-    fn test_lookup_method_ambiguous(db: &dyn salsa::Database) {
-        let mut env = ModuleTypeEnv::new(db);
-        let foo = named(db, "Foo");
-        let int = Type::new(db, TypeKind::Int);
-        let float = Type::new(db, TypeKind::Float);
-        env.register_method(
-            Symbol::new("m"),
-            method_entry(db, "m1", func(db, &[foo], int)),
-        );
-        env.register_method(
-            Symbol::new("m"),
-            method_entry(db, "m2", func(db, &[foo], float)),
-        );
-        // Two candidates with same receiver → ambiguous → None
-        assert!(env.lookup_method(&Symbol::new("m"), foo).is_none());
     }
 
     // =========================================================================
