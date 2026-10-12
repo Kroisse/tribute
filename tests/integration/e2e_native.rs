@@ -3344,6 +3344,47 @@ fn main() ->{Io} Nil {
     );
 }
 
+/// A name several `use`s give different functions, used as a value, is the
+/// function of the type the value is used at.
+#[test]
+fn a_function_value_is_selected_by_the_type_it_is_used_at() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "function_value_selection.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct A { n: Int }
+struct B { n: Int }
+
+mod a {
+    use super::A
+    pub fn size(x: A) -> Int { x.n }
+}
+
+mod b {
+    use super::B
+    pub fn size(x: B) -> Int { x.n + +100 }
+}
+
+use a::size
+use b::size
+
+fn apply(x: t, f: fn(t) ->{e} u) ->{e} u { f(x) }
+fn on_b(f: fn(B) ->{e} Int) ->{e} Int { f(B { n: +2 }) }
+
+fn main() ->{Io} Nil {
+    let late = size
+    print_line(Int::to_string(apply(A { n: +1 }, size)))
+    print_line(Int::to_string(on_b(size)))
+    print_line(Int::to_string(late(B { n: +4 })))
+    let passed = size
+    print_line(Int::to_string(apply(A { n: +5 }, passed)))
+}
+"#,
+        "1\n102\n104\n5",
+    );
+}
+
 /// A receiver not typed yet is an argument like the others: the rest of a
 /// method call selects the function, and the receiver's type follows.
 #[test]

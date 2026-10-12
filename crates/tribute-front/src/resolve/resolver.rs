@@ -313,20 +313,6 @@ impl<'db> Resolver<'db> {
         .accumulate(self.db);
     }
 
-    fn report_unselected_import(&self, name: &UnresolvedName) {
-        Diagnostic::new(
-            format!(
-                "`{}` imports several functions and is not called, so no argument type \
-                 selects one; name the function by its path",
-                name.name()
-            ),
-            self.span_map.get_or_default(name.id),
-            DiagnosticSeverity::Error,
-            CompilationPhase::NameResolution,
-        )
-        .accumulate(self.db);
-    }
-
     /// The functions the path of a qualified method call `x.a::b(y)` may
     /// name: `a::b` as the call's scope resolves it, and `m::a::b` for each
     /// module `m` in that scope. A declaration's name counts as the module
@@ -1244,11 +1230,17 @@ impl<'db> Resolver<'db> {
     pub fn resolve_expr(&mut self, expr: &Expr<UnresolvedName>) -> Expr<ResolvedRef<'db>> {
         let kind = match &*expr.kind {
             ExprKind::Var(name) => {
-                if self.imported_functions(name).is_some() {
-                    self.report_unselected_import(name);
-                    ExprKind::Var(ResolvedRef::local(LocalId::UNRESOLVED, name.name()))
-                } else {
-                    ExprKind::Var(self.resolve_name(name))
+                // The type the name is used at selects among the functions
+                // several `use`s give it.
+                match self.imported_functions(name) {
+                    Some(functions) => ExprKind::Functions {
+                        name: name.qualified.clone(),
+                        candidates: functions
+                            .iter()
+                            .map(|id| ResolvedRef::Function { id: *id })
+                            .collect(),
+                    },
+                    None => ExprKind::Var(self.resolve_name(name)),
                 }
             }
 

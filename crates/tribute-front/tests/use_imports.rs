@@ -552,6 +552,63 @@ fn a_call_selects_among_imported_functions_by_its_first_argument(db: &salsa::Dat
     }
 }
 
+/// A name several `use`s give different functions, used as a value, is the
+/// function whose type the value is used at.
+#[salsa_test]
+fn a_function_value_is_selected_by_the_type_it_is_used_at(db: &salsa::DatabaseImpl) {
+    const USES: &str = "use a::size\nuse b::size\n\
+        fn apply(x: t, f: fn(t) ->{e} u) ->{e} u { f(x) }\n\
+        fn on_b(f: fn(B) ->{e} Nat) ->{e} Nat { f(B { n: 2 }) }\n";
+    for body in [
+        // The parameter's type, also one solved from another argument.
+        "fn main() -> Nil {\n    let _ = on_b(size)\n}\n",
+        "fn main() -> Nil {\n    let _ = apply(A { n: 1 }, size) + apply(B { n: 2 }, size)\n}\n",
+        // The declared result.
+        "fn pick() -> fn(A) -> Nat { size }\nfn main() -> Nil { }\n",
+        // A local takes the type its use gives it.
+        "fn main() -> Nil {\n    let f = size\n    let _ = f(A { n: 1 })\n}\n",
+        "fn main() -> Nil {\n    let f = size\n    let _ = apply(A { n: 1 }, f)\n}\n",
+    ] {
+        let errors = errors(db, &format!("{SIZES}{USES}{body}"));
+        assert!(errors.is_empty(), "{body}: {errors:#?}");
+    }
+    for (body, expected) in [
+        (
+            "fn main() -> Nil {\n    let _ = apply(1, size)\n}\n",
+            "unresolved path `size`: no function it names has type `fn(Nat) -> _`",
+        ),
+        (
+            "fn main() -> Nil {\n    let _ = size\n}\n",
+            "ambiguous path `size` used as a value: it names `a::size`, `b::size`",
+        ),
+        // The result has to fit too; no function is picked by its
+        // parameters alone.
+        (
+            "fn text(f: fn(A) ->{e} String) ->{e} String { f(A { n: 1 }) }\n\
+             fn main() -> Nil {\n    let _ = text(size)\n}\n",
+            "unresolved path `size`: no function it names has type `fn(A) -> std::String`",
+        ),
+        // A function type both fit selects neither.
+        (
+            "fn any(f: fn(t) ->{e} Nat) -> Nat { 0 }\n\
+             fn main() -> Nil {\n    let _ = any(size)\n}\n",
+            "ambiguous path `size` used as a value of type `fn(_) -> Nat`: \
+             it names `a::size`, `b::size`",
+        ),
+        // A local is one function, selected by its first use.
+        (
+            "fn main() -> Nil {\n    let f = size\n    let _ = f(A { n: 1 }) + f(B { n: 2 })\n}\n",
+            "type error at call site in function 'main': expected `A`, found `B`",
+        ),
+    ] {
+        assert_eq!(
+            errors(db, &format!("{SIZES}{USES}{body}")),
+            [expected],
+            "{body}"
+        );
+    }
+}
+
 /// Where no type of the call selects one, a name that imports several
 /// functions has to be written as a path.
 #[salsa_test]
@@ -565,8 +622,7 @@ fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
         (
             "use a::size\nuse b::size\n\
              fn main() -> Nil {\n    let _ = size\n}\n",
-            "`size` imports several functions and is not called, \
-             so no argument type selects one; name the function by its path",
+            "ambiguous path `size` used as a value: it names `a::size`, `b::size`",
         ),
         // A call with the wrong number of arguments still names the function
         // its arguments select.

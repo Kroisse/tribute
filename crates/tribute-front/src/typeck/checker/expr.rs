@@ -280,7 +280,9 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 spread,
             } => self.infer_record_type_with_ctx(ctx, expr.id, type_name, fields, spread.as_ref()),
-            ExprKind::Functions { .. } => ctx.error_type(),
+            ExprKind::Functions { candidates, name } => {
+                self.infer_function_value_with_ctx(ctx, expr.id, name, candidates)
+            }
             ExprKind::BinOp { op, lhs, rhs } => {
                 let lhs_ty = self.infer_expr_type_with_ctx(ctx, lhs);
                 let rhs_ty = self.infer_expr_type_with_ctx(ctx, rhs);
@@ -879,7 +881,9 @@ impl<'db> TypeChecker<'db> {
                 ctx.finish_result_join(expr.id);
                 result_ty
             }
-            ExprKind::Functions { .. } => ctx.error_type(),
+            ExprKind::Functions { candidates, name } => {
+                self.infer_function_value_with_ctx(ctx, expr.id, name, candidates)
+            }
             ExprKind::Lambda { .. } | ExprKind::Handle { .. } => {
                 // These constructs need their scoped bodies checked before a
                 // surrounding let can solve/generalize the result relation.
@@ -1558,12 +1562,41 @@ impl<'db> TypeChecker<'db> {
         ctx.merge_effect_at(effect, node);
         ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
             node_id: node,
+            value: false,
             syntax: *syntax,
             method: method.clone(),
             callee: callee.id,
             candidates,
             result_ty,
             arg_types,
+            effect,
+        });
+        result_ty
+    }
+
+    /// Infer a name that stands for several functions and is used as a
+    /// value. The type it is used at selects the function, so its type is
+    /// left open and the selection deferred.
+    fn infer_function_value_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        node: NodeId,
+        name: &Symbol,
+        candidates: &[ResolvedRef<'db>],
+    ) -> Type<'db> {
+        let result_ty = ctx.fresh_type_var();
+        let effect = ctx
+            .deferred_method_effect(node)
+            .unwrap_or_else(|| ctx.fresh_effect_row());
+        ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
+            node_id: node,
+            value: true,
+            syntax: crate::ast::CallSyntax::Call,
+            method: name.clone(),
+            callee: node,
+            candidates: candidate_functions(candidates),
+            result_ty,
+            arg_types: Vec::new(),
             effect,
         });
         result_ty
@@ -1822,6 +1855,25 @@ impl<'db> TypeChecker<'db> {
         candidates: &[crate::ast::FuncDefId<'db>],
         call: CallTypes<'_, 'db>,
     ) -> MethodSelection<'db> {
+        match self.select_function(candidates, call) {
+            // A call that passes the wrong number of arguments still names
+            // the function its arguments select, which reports the number.
+            (MethodSelection::None, Some(by_arguments)) => MethodSelection::One(by_arguments),
+            (selection, _) => selection,
+        }
+    }
+
+    /// The function among `candidates` whose whole signature takes `call`,
+    /// and, where none does, the one function whose parameters take the
+    /// arguments the call has, whatever their number and its result.
+    pub(crate) fn select_function(
+        &self,
+        candidates: &[crate::ast::FuncDefId<'db>],
+        call: CallTypes<'_, 'db>,
+    ) -> (
+        MethodSelection<'db>,
+        Option<crate::typeck::MethodEntry<'db>>,
+    ) {
         let candidates: Vec<crate::typeck::MethodEntry<'db>> = candidates
             .iter()
             .filter_map(|candidate| {
@@ -1832,11 +1884,6 @@ impl<'db> TypeChecker<'db> {
                 })
             })
             .collect();
-        // One function leaves nothing to select: the call is checked against
-        // it, and what does not fit is an ordinary type error.
-        if let [entry] = candidates[..] {
-            return MethodSelection::One(entry);
-        }
         let signatures: Vec<_> = candidates
             .iter()
             .filter_map(|entry| match entry.func_ty.kind(self.db()) {
@@ -1862,15 +1909,15 @@ impl<'db> TypeChecker<'db> {
             }
         };
         match select(&|params, result| call.matches(self.db(), params, result)) {
-            // A call that passes the wrong number of arguments still names
-            // the function its arguments select, which reports the number.
             MethodSelection::None => {
-                match select(&|params, _| call.arguments_match(self.db(), params)) {
-                    selection @ MethodSelection::One(_) => selection,
-                    _ => MethodSelection::None,
-                }
+                let by_arguments =
+                    match select(&|params, _| call.arguments_match(self.db(), params)) {
+                        MethodSelection::One(entry) => Some(entry),
+                        _ => None,
+                    };
+                (MethodSelection::None, by_arguments)
             }
-            selection => selection,
+            selection => (selection, None),
         }
     }
 
@@ -2393,17 +2440,7 @@ impl<'db> TypeChecker<'db> {
     ) -> bool {
         let mut resolved = false;
         for call in ctx.deferred_methods().to_vec() {
-            let args: Vec<_> = call
-                .arg_types
-                .iter()
-                .map(|ty| solver.type_subst().apply(self.db(), *ty))
-                .collect();
-            let types = CallTypes {
-                args: &args,
-                arity: args.len(),
-                result: Some(solver.expected_type(call.result_ty)),
-            };
-            let MethodSelection::One(entry) = self.select_method(&call.candidates, types) else {
+            let MethodSelection::One(entry) = self.select_deferred_method(solver, &call) else {
                 continue;
             };
             let Some(callee_ty) = ctx.instantiate_function_reference(call.callee, entry.func_id)

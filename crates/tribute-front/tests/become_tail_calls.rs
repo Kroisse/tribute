@@ -212,3 +212,29 @@ fn late() -> Int {
         ["`become` cannot call extern function `make`, which uses a foreign calling convention",]
     );
 }
+
+/// A name that stands for several functions is not a call either.
+#[salsa_test]
+fn become_requires_a_call_of_a_function_value(db: &salsa::DatabaseImpl) {
+    let messages = errors(
+        db,
+        r#"
+mod a {
+    pub fn step(n: Int) -> Int { n }
+}
+mod b {
+    pub fn step(n: Bool) -> Bool { n }
+}
+use a::step
+use b::step
+
+fn value() -> fn(Int) -> Int {
+    become step
+}
+"#,
+    );
+    assert_eq!(
+        messages,
+        ["`become` requires a function call with an argument list"]
+    );
+}

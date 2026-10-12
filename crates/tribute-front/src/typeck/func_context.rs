@@ -214,7 +214,10 @@ pub struct FunctionInferenceContext<'a, 'db> {
 pub struct DeferredMethodCall<'db> {
     /// The call expression's node.
     pub node_id: NodeId,
-    /// How the call was written, for diagnostics.
+    /// Whether this is a name used as a value, not called: `result_ty` is
+    /// then the type of the function itself and there are no arguments.
+    pub value: bool,
+    /// How the call was written, for diagnostics. Unused for a value.
     pub syntax: crate::ast::CallSyntax,
     /// The method name being called.
     pub method: Symbol,
