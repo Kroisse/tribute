@@ -182,9 +182,10 @@ impl<'db> InstanceKeys<'db> {
         metadata: &MonomorphizeMetadata<'db>,
     ) -> bool {
         let mut changed = false;
-        for decl in decls {
-            let Decl::Function(function) = decl else {
-                continue;
+        let mut module = SymbolPath::root();
+        for_each_declaration(decls, &mut module, &mut |name, decl| {
+            let (Some(name), Decl::Function(function)) = (name, decl) else {
+                return;
             };
             // The lambda each `let` binds, by its pattern.
             let mut bound = HashMap::default();
@@ -200,7 +201,7 @@ impl<'db> InstanceKeys<'db> {
                     }
                 }
             });
-            let enclosing = self.row_classes.get(&function.name);
+            let enclosing = self.row_classes.get(name);
             let mut classes = enclosing.cloned().unwrap_or_default();
             let mut locals: Vec<(EffectVar, CallingConvention)> = Vec::new();
             function.body.for_each(|expr| {
@@ -238,15 +239,15 @@ impl<'db> InstanceKeys<'db> {
                 }
             });
             if locals.is_empty() {
-                continue;
+                return;
             }
             classes.retain(|(variable, _)| !locals.iter().any(|(local, _)| local == variable));
             classes.extend(locals);
             if enclosing != Some(&classes) {
-                self.row_classes.insert(function.name.clone(), classes);
+                self.row_classes.insert(name.clone(), classes);
                 changed = true;
             }
-        }
+        });
         changed
     }
 
@@ -267,6 +268,54 @@ impl<'db> InstanceKeys<'db> {
             .zip(key.class_args.iter().copied())
             .collect();
         self.row_classes.insert(name, classes);
+    }
+}
+
+/// Calls `f` on each declaration of `decls` and of their modules that is not
+/// itself a module, with the qualified name of a function. That name is the
+/// instance its references are inside.
+pub(super) fn for_each_declaration<'a, 'db>(
+    decls: &'a [Decl<TypedRef<'db>>],
+    module: &mut SymbolPath,
+    f: &mut impl FnMut(Option<&Symbol>, &'a Decl<TypedRef<'db>>),
+) {
+    for decl in decls {
+        match decl {
+            Decl::Function(function) => {
+                f(Some(&crate::qualified_symbol(module, &function.name)), decl)
+            }
+            Decl::Module(inner) => {
+                if let Some(body) = &inner.body {
+                    module.push(inner.name.clone());
+                    for_each_declaration(body, module, f);
+                    module.pop();
+                }
+            }
+            _ => f(None, decl),
+        }
+    }
+}
+
+/// [`for_each_declaration`] over declarations to change.
+pub(super) fn for_each_declaration_mut<'db>(
+    decls: &mut [Decl<TypedRef<'db>>],
+    module: &mut SymbolPath,
+    f: &mut impl FnMut(Option<&Symbol>, &mut Decl<TypedRef<'db>>),
+) {
+    for decl in decls {
+        match decl {
+            Decl::Function(function) => {
+                f(Some(&crate::qualified_symbol(module, &function.name)), decl)
+            }
+            Decl::Module(inner) => {
+                if let Some(body) = &mut inner.body {
+                    module.push(inner.name.clone());
+                    for_each_declaration_mut(body, module, f);
+                    module.pop();
+                }
+            }
+            _ => f(None, decl),
+        }
     }
 }
 

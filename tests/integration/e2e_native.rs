@@ -3537,3 +3537,38 @@ fn main() ->{Io} Nil {
         "42",
     );
 }
+
+/// A let-bound lambda of a function inside a module is emitted once per
+/// class in use, as in a root function.
+#[test]
+fn a_let_bound_lambda_in_a_module_is_emitted_per_class_in_use() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "let_bound_lambda_in_module.trb",
+        r#"
+use std::io::{Io, print_line}
+
+mod m {
+    use std::io::{Io, print_line}
+
+    pub fn app(x: Int, f: fn(Int) ->{e} Int) ->{e} Int { f(x) }
+
+    pub fn each(n: Int) -> Int {
+        let step = fn(m: Int) -> Int { m + +1 }
+        step(n)
+    }
+
+    pub fn run() ->{Io} Int {
+        let both = fn(x: Int, f: fn(Int) ->{e} Int) app(x, f)
+        let pure = both(+1, fn(n) n + +1)
+        let effectful = both(+2, fn(n) { print_line("io") n })
+        pure + effectful + each(+3)
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(m::run()))
+}
+"#,
+        "io\n8",
+    );
+}

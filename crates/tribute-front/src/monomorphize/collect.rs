@@ -1,13 +1,11 @@
-use super::instance::{InstanceKey, InstanceKeys};
+use super::instance::{InstanceKey, InstanceKeys, for_each_declaration};
 use super::nominal_index::NominalIndex;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::visit::{RefSite, Refs, walk_decl, walk_module};
-use crate::ast::{
-    Decl, FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
-};
+use crate::ast::{FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef};
 
 /// Collect all generic function instantiations from a typed module.
 ///
@@ -22,8 +20,8 @@ pub(super) fn collect_instantiations<'db>(
     keys: &InstanceKeys<'db>,
 ) -> HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>> {
     let mut collector = InstantiationCollector::new(db, function_types, function_instances, keys);
-    for decl in &module.decls {
-        let enclosing = enclosing_instance(decl);
+    let mut root = SymbolPath::root();
+    for_each_declaration(&module.decls, &mut root, &mut |enclosing, decl| {
         walk_decl(
             &mut Refs(|site, node, value: &TypedRef<'db>| {
                 // Only a function reference in expression position is a call site.
@@ -33,17 +31,8 @@ pub(super) fn collect_instantiations<'db>(
             }),
             decl,
         );
-    }
+    });
     collector.instantiations
-}
-
-/// The name under which a declaration's references look up the classes of
-/// their enclosing instance. Instances are root functions.
-pub(super) fn enclosing_instance<'a>(decl: &'a Decl<TypedRef<'_>>) -> Option<&'a Symbol> {
-    match decl {
-        Decl::Function(function) => Some(&function.name),
-        _ => None,
-    }
 }
 
 /// Extract concrete type arguments by walking the scheme body and concrete type
