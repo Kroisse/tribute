@@ -408,9 +408,9 @@ impl<'db> Definition<'db> {
         mut callable_tails: Vec<EffectVar>,
     ) -> Self {
         collect_ability_argument_tails(db, scheme.body(db), &mut excluded);
-        if let TypeKind::Func { params, .. } = scheme.body(db).kind(db) {
-            for param in params {
-                collect_callable_tails(db, *param, &mut callable_tails);
+        if let TypeKind::Func { params, result, .. } = scheme.body(db).kind(db) {
+            for ty in params.iter().chain([result]) {
+                collect_callable_tails(db, *ty, &mut callable_tails);
             }
         }
         let candidates: Vec<_> = scheme
@@ -434,9 +434,9 @@ impl<'db> Definition<'db> {
 }
 
 /// Select the class variables of every definition: a candidate that is the
-/// row tail of a function type inside a parameter type, of a lambda or a local
-/// binding in the body, or of a row the body passes for a class variable of a
-/// definition it references.
+/// row tail of a function type inside a parameter type or the result type,
+/// of a lambda or a local binding in the body, or of a row the body passes
+/// for a class variable of a definition it references.
 fn settle_class_variables<'db>(
     mut definitions: Vec<(FuncDefId<'db>, Definition<'db>)>,
 ) -> HashMap<FuncDefId<'db>, Vec<(usize, EffectVar)>> {
@@ -633,14 +633,25 @@ mod tests {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
         let own_row = func(&db, vec![int], int, open(&db, 1));
-        let returned = func(&db, vec![], int, open(&db, 1));
-        let result = func(&db, vec![int], returned, EffectRow::pure(&db));
-        let settled = settle_class_variables(vec![
-            (id(&db, "own_row"), definition(&db, &[1], own_row)),
-            (id(&db, "result"), definition(&db, &[1], result)),
-        ]);
+        let settled =
+            settle_class_variables(vec![(id(&db, "own_row"), definition(&db, &[1], own_row))]);
 
         assert!(settled.is_empty());
+    }
+
+    #[test]
+    fn the_tail_of_a_returned_function_type_is_a_class_variable() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let returned = func(&db, vec![], int, open(&db, 1));
+        let result = func(&db, vec![int], returned, EffectRow::pure(&db));
+        let settled =
+            settle_class_variables(vec![(id(&db, "result"), definition(&db, &[1], result))]);
+
+        assert_eq!(
+            settled.get(&id(&db, "result")),
+            Some(&vec![(0, EffectVar { id: 1 })])
+        );
     }
 
     #[test]
