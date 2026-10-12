@@ -56,8 +56,6 @@ pub struct MethodEntry<'db> {
     pub func_ty: Type<'db>,
 }
 
-impl<'db> MethodEntry<'db> {}
-
 /// Whether a parameter declared as `declared` takes an argument of type
 /// `actual` when a call selects among several functions.
 ///
