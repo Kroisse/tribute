@@ -45,24 +45,21 @@ impl SymbolTable {
         table
     }
 
-    fn collect_region(&mut self, ctx: &IrContext, region: RegionRef, path: &[Symbol]) {
+    fn collect_region(&mut self, ctx: &IrContext, region: RegionRef, path: &SymbolPath) {
         for &block in &ctx.region(region).blocks {
             for &op in &ctx.block(block).ops {
                 if core::Module::matches(ctx, op) {
-                    let mut nested = path.to_vec();
-                    nested.extend(
-                        ctx.op(op)
-                            .attributes
-                            .get_str(ctx, SYM_NAME)
-                            .map(Symbol::new),
-                    );
+                    let mut nested = path.clone();
+                    if let Some(name) = ctx.op(op).attributes.get_str(ctx, SYM_NAME) {
+                        nested.push(name);
+                    }
                     for region in ctx.op_regions(op) {
                         self.collect_region(ctx, region, &nested);
                     }
                 } else {
                     if let Some(name) = ctx.op(op).attributes.get_str(ctx, SYM_NAME) {
                         self.definitions
-                            .entry(SymbolPath::in_modules(path, Symbol::new(name)))
+                            .entry(path.child(name))
                             .or_default()
                             .push(op);
                     }
@@ -133,13 +130,14 @@ impl InfallibleAnalysis for SymbolTable {}
 /// `sym_name`.
 pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
     let name = ctx.op(op).attributes.get_str(ctx, SYM_NAME)?;
-    let path = parent_op(ctx, op).map_or_else(Vec::new, |parent| module_path(ctx, parent));
-    Some(SymbolPath::in_modules(&path, Symbol::new(name)))
+    let module =
+        parent_op(ctx, op).map_or_else(SymbolPath::root, |parent| module_path(ctx, parent));
+    Some(module.child(name))
 }
 
 /// The root-qualified path of the modules enclosing `op`, including `op`
 /// itself if it is a module.
-fn module_path(ctx: &IrContext, op: OpRef) -> Vec<Symbol> {
+fn module_path(ctx: &IrContext, op: OpRef) -> SymbolPath {
     let mut path = Vec::new();
     let mut current = Some(op);
     while let Some(op) = current {
@@ -155,8 +153,7 @@ fn module_path(ctx: &IrContext, op: OpRef) -> Vec<Symbol> {
         }
         current = parent;
     }
-    path.reverse();
-    path
+    SymbolPath::new(path.into_iter().rev())
 }
 
 fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
