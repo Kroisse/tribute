@@ -588,6 +588,13 @@ fn a_function_value_is_selected_by_the_type_it_is_used_at(db: &salsa::DatabaseIm
              fn main() -> Nil {\n    let _ = text(size)\n}\n",
             "unresolved path `size`: no function it names has type `fn(A) -> std::String`",
         ),
+        // A function type both fit selects neither.
+        (
+            "fn any(f: fn(t) ->{e} Nat) -> Nat { 0 }\n\
+             fn main() -> Nil {\n    let _ = any(size)\n}\n",
+            "ambiguous path `size` used as a value of type `fn(_) -> Nat`: \
+             it names `a::size`, `b::size`",
+        ),
         // A local is one function, selected by its first use.
         (
             "fn main() -> Nil {\n    let f = size\n    let _ = f(A { n: 1 }) + f(B { n: 2 })\n}\n",

@@ -1584,9 +1584,6 @@ impl<'db> TypeChecker<'db> {
         name: &Symbol,
         candidates: &[ResolvedRef<'db>],
     ) -> Type<'db> {
-        if let Some((_, callee_ty)) = ctx.get_resolved_method(node) {
-            return callee_ty;
-        }
         let result_ty = ctx.fresh_type_var();
         let effect = ctx
             .deferred_method_effect(node)
@@ -1887,11 +1884,6 @@ impl<'db> TypeChecker<'db> {
                 })
             })
             .collect();
-        // One function leaves nothing to select: the call is checked against
-        // it, and what does not fit is an ordinary type error.
-        if let [entry] = candidates[..] {
-            return (MethodSelection::One(entry), None);
-        }
         let signatures: Vec<_> = candidates
             .iter()
             .filter_map(|entry| match entry.func_ty.kind(self.db()) {
@@ -2119,15 +2111,6 @@ impl<'db> TypeChecker<'db> {
                     .as_ref()
                     .map(|e| self.check_expr_with_ctx(ctx, e, Mode::Infer)),
             },
-            ExprKind::Functions { .. } if ctx.get_resolved_method(expr_id).is_some() => {
-                let (func_id, callee_ty) = ctx
-                    .get_resolved_method(expr_id)
-                    .expect("checked by the guard");
-                ExprKind::Var(TypedRef {
-                    resolved: ResolvedRef::Function { id: func_id },
-                    ty: callee_ty,
-                })
-            }
             ExprKind::Functions { name, candidates } => ExprKind::Functions {
                 name: name.clone(),
                 // Unselected, so the candidates have no type.
