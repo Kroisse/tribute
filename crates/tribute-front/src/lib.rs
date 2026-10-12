@@ -30,44 +30,17 @@ pub use query::{ParsedCst, parse_cst};
 pub use sorted_map::SortedMap;
 pub use source_file::{SourceCst, derive_module_name_from_path, path_to_uri};
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
-/// Build a qualified symbol by joining `prefix` and `name` with `::`.
-///
-/// If `prefix` is empty, returns `name` directly (no allocation).
-/// Otherwise, temporarily appends `::name` to the buffer, creates the symbol,
-/// then restores the buffer to its original length.
-pub fn qualified_symbol(prefix: &mut String, name: &Symbol) -> Symbol {
-    if prefix.is_empty() {
-        name.clone()
-    } else {
-        let len = prefix.len();
-        prefix.push_str("::");
-        name.with_str(|s| prefix.push_str(s));
-        let sym = Symbol::new(prefix);
-        prefix.truncate(len);
-        sym
-    }
+/// The qualified symbol of `name` in `module`, its components joined with
+/// `::`.
+pub fn qualified_symbol(module: &SymbolPath, name: &Symbol) -> Symbol {
+    module.child(name.clone()).to_symbol()
 }
 
 /// Build a qualified symbol from parsed path segments.
 pub fn qualified_path_symbol(path: &[Symbol]) -> Option<Symbol> {
-    let (name, prefix) = path.split_last()?;
-    let mut buf = String::new();
-    for segment in prefix {
-        push_prefix(&mut buf, segment);
-    }
-    Some(qualified_symbol(&mut buf, name))
-}
-
-/// Push a segment onto a prefix buffer. Returns the length before push (for truncate).
-pub fn push_prefix(prefix: &mut String, name: &Symbol) -> usize {
-    let len = prefix.len();
-    if !prefix.is_empty() {
-        prefix.push_str("::");
-    }
-    name.with_str(|s| prefix.push_str(s));
-    len
+    (!path.is_empty()).then(|| SymbolPath::new(path.iter().cloned()).to_symbol())
 }
 
 /// Whether a declaration is the exact root program entrypoint.

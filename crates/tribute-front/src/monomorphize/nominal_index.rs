@@ -1,5 +1,6 @@
 //! Source nominal declarations shared by collection and generation in one preparation.
 use rustc_hash::FxHashMap as HashMap;
+use trunk_ir::SymbolPath;
 
 use crate::ast::{CtorId, Decl, EnumDecl, Module, NodeId, StructDecl, TypeDefId, TypedRef};
 
@@ -43,7 +44,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
             module: module.id,
             declarations: HashMap::default(),
         };
-        index.collect(db, &module.decls, &mut String::new());
+        index.collect(db, &module.decls, &mut SymbolPath::root());
         index
     }
 
@@ -57,7 +58,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
         &mut self,
         db: &'db dyn salsa::Database,
         decls: &'ast [Decl<TypedRef<'db>>],
-        prefix: &mut String,
+        prefix: &mut SymbolPath,
     ) {
         for decl in decls {
             let (name, node, declaration) = match decl {
@@ -91,9 +92,9 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                 ),
                 Decl::Module(m) => {
                     if let Some(body) = &m.body {
-                        let saved = crate::push_prefix(prefix, &m.name);
+                        prefix.push(m.name.clone());
                         self.collect(db, body, prefix);
-                        prefix.truncate(saved);
+                        prefix.pop();
                     }
                     continue;
                 }

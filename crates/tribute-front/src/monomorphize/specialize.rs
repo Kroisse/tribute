@@ -3,6 +3,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
+use trunk_ir::SymbolPath;
 
 use trunk_ir::Symbol;
 
@@ -441,14 +442,14 @@ fn collect_func_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
 ) -> HashMap<Symbol, &'a FuncDecl<TypedRef<'db>>> {
     let mut map = HashMap::default();
-    let mut prefix = String::new();
+    let mut prefix = SymbolPath::root();
     collect_func_decls_inner(&module.decls, &mut prefix, &mut map);
     map
 }
 
 fn collect_func_decls_inner<'a, 'db>(
     decls: &'a [Decl<TypedRef<'db>>],
-    prefix: &mut String,
+    prefix: &mut SymbolPath,
     map: &mut HashMap<Symbol, &'a FuncDecl<TypedRef<'db>>>,
 ) {
     for decl in decls {
@@ -459,9 +460,9 @@ fn collect_func_decls_inner<'a, 'db>(
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
-                    let len = crate::push_prefix(prefix, &m.name);
+                    prefix.push(m.name.clone());
                     collect_func_decls_inner(body, prefix, map);
-                    prefix.truncate(len);
+                    prefix.pop();
                 }
             }
             _ => {}
@@ -473,14 +474,14 @@ fn collect_extern_function_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
 ) -> HashMap<Symbol, &'a ExternFuncDecl> {
     let mut declarations = HashMap::default();
-    let mut prefix = String::new();
+    let mut prefix = SymbolPath::root();
     collect_extern_function_decls_inner(&module.decls, &mut prefix, &mut declarations);
     declarations
 }
 
 fn collect_extern_function_decls_inner<'a, 'db>(
     decls: &'a [Decl<TypedRef<'db>>],
-    prefix: &mut String,
+    prefix: &mut SymbolPath,
     declarations: &mut HashMap<Symbol, &'a ExternFuncDecl>,
 ) {
     for decl in decls {
@@ -490,9 +491,9 @@ fn collect_extern_function_decls_inner<'a, 'db>(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let len = crate::push_prefix(prefix, &module.name);
+                    prefix.push(module.name.clone());
                     collect_extern_function_decls_inner(body, prefix, declarations);
-                    prefix.truncate(len);
+                    prefix.pop();
                 }
             }
             _ => {}

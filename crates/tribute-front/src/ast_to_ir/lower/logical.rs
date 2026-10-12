@@ -325,7 +325,7 @@ fn lower_expr_for_callable_parameter<'db>(
     }
 }
 
-fn declaration_name(prefix: &mut String, name: Symbol) -> Symbol {
+fn declaration_name(prefix: &mut SymbolPath, name: Symbol) -> Symbol {
     if name.with_str(|text| text.contains("::")) {
         name
     } else {
@@ -408,14 +408,14 @@ pub(super) fn lower_module<'db>(
         local_callables: local_callables::Plan::default(),
         function_local_callables: HashMap::default(),
     };
-    prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
+    prescan_definition_conventions(&mut ctx, &ast.decls, &mut SymbolPath::root());
     let mut well_known_type_prescan = super::decl::WellKnownTypePrescan::new(well_known_types);
-    collect_logical_nominal_identities(&mut ctx, &ast.decls, &mut String::new());
+    collect_logical_nominal_identities(&mut ctx, &ast.decls, &mut SymbolPath::root());
     prescan_logical_nominal_layouts(
         &mut ctx,
         ir,
         &ast.decls,
-        &mut String::new(),
+        &mut SymbolPath::root(),
         &mut well_known_type_prescan,
         &constructor_types,
         &specialized_enum_variants,
@@ -426,7 +426,7 @@ pub(super) fn lower_module<'db>(
         &mut ctx,
         ir,
         &ast.decls,
-        &mut String::new(),
+        &mut SymbolPath::root(),
         &mut declarations,
     );
     let well_known_types = well_known_type_prescan.finish();
@@ -498,7 +498,7 @@ fn instance_operations<'db>(
 fn prescan_definition_conventions<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     declarations: &[Decl<TypedRef<'db>>],
-    prefix: &mut String,
+    prefix: &mut SymbolPath,
 ) {
     for declaration in declarations {
         match declaration {
@@ -515,7 +515,7 @@ fn prescan_definition_conventions<'db>(
                 // An omitted row's tail asks for nothing unless it is a
                 // class variable of the definition.
                 if (function.effects.is_none()
-                    || crate::is_root_main(&function.name, prefix.is_empty()))
+                    || crate::is_root_main(&function.name, prefix.is_root()))
                     && let TypeKind::Func { effect, .. } = body.kind(ctx.db)
                 {
                     let tail = effect
@@ -530,7 +530,7 @@ fn prescan_definition_conventions<'db>(
             }
             // A field's modifier performs whatever its callback performs.
             Decl::Struct(declaration) => {
-                let saved = crate::push_prefix(prefix, &declaration.name);
+                prefix.push(declaration.name.clone());
                 for field in declaration
                     .fields
                     .iter()
@@ -542,13 +542,13 @@ fn prescan_definition_conventions<'db>(
                         ctx.register_definition_convention(modifier, class);
                     }
                 }
-                prefix.truncate(saved);
+                prefix.pop();
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let saved = crate::push_prefix(prefix, &module.name);
+                    prefix.push(module.name.clone());
                     prescan_definition_conventions(ctx, body, prefix);
-                    prefix.truncate(saved);
+                    prefix.pop();
                 }
             }
             _ => {}
@@ -563,7 +563,7 @@ fn plan_local_callables<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     ast: &[Decl<TypedRef<'db>>],
-    prefix: &mut String,
+    prefix: &mut SymbolPath,
     declarations: &mut Declarations<'db>,
 ) {
     for declaration in ast {
@@ -588,9 +588,9 @@ fn plan_local_callables<'db>(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let saved = crate::push_prefix(prefix, &module.name);
+                    prefix.push(module.name.clone());
                     plan_local_callables(ctx, ir, body, prefix, declarations);
-                    prefix.truncate(saved);
+                    prefix.pop();
                 }
             }
             _ => {}
@@ -648,7 +648,7 @@ fn prescan_logical_nominal_layouts<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     declarations: &[Decl<TypedRef<'db>>],
-    prefix: &mut String,
+    prefix: &mut SymbolPath,
     well_known_types: &mut super::decl::WellKnownTypePrescan,
     constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
     specialized_enum_variants: &SortedMap<crate::ast::NodeId, crate::ast::TypeScheme<'db>>,
@@ -733,7 +733,7 @@ fn prescan_logical_nominal_layouts<'db>(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let saved = crate::push_prefix(prefix, &module.name);
+                    prefix.push(module.name.clone());
                     prescan_logical_nominal_layouts(
                         ctx,
                         ir,
@@ -743,7 +743,7 @@ fn prescan_logical_nominal_layouts<'db>(
                         constructors,
                         specialized_enum_variants,
                     );
-                    prefix.truncate(saved);
+                    prefix.pop();
                 }
             }
             Decl::Function(_) | Decl::ExternFunction(_) | Decl::Ability(_) | Decl::Use(_) => {}
@@ -757,7 +757,7 @@ fn prescan_logical_nominal_layouts<'db>(
 fn collect_logical_nominal_identities<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     declarations: &[Decl<TypedRef<'db>>],
-    prefix: &mut String,
+    prefix: &mut SymbolPath,
 ) {
     for declaration in declarations {
         match declaration {
@@ -781,9 +781,9 @@ fn collect_logical_nominal_identities<'db>(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let saved = crate::push_prefix(prefix, &module.name);
+                    prefix.push(module.name.clone());
                     collect_logical_nominal_identities(ctx, body, prefix);
-                    prefix.truncate(saved);
+                    prefix.pop();
                 }
             }
             Decl::Function(_) | Decl::ExternFunction(_) | Decl::Ability(_) | Decl::Use(_) => {}
@@ -854,11 +854,8 @@ fn prescan_struct_accessor_signatures<'db>(
     for declaration in declarations {
         match declaration {
             Decl::Struct(declaration) => {
-                let mut prefix = String::new();
-                for segment in ctx.module_path().iter().skip(1) {
-                    crate::push_prefix(&mut prefix, segment);
-                }
-                let qualified = crate::qualified_symbol(&mut prefix, &declaration.name);
+                let prefix = SymbolPath::new(ctx.module_path().iter().skip(1).cloned());
+                let qualified = crate::qualified_symbol(&prefix, &declaration.name);
                 let type_name = super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
                 let struct_type = ctx.adt_typeref(ir, &type_name);
                 let layout = ctx
@@ -868,11 +865,10 @@ fn prescan_struct_accessor_signatures<'db>(
                     .unwrap_or_else(|| panic!("malformed logical struct layout"));
                 for (index, field) in declaration.fields.iter().enumerate() {
                     let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
-                    let getter_name = if prefix.is_empty() {
-                        Symbol::new(&format!("{}::{}", declaration.name, field_name))
-                    } else {
-                        Symbol::new(&format!("{}::{}::{}", prefix, declaration.name, field_name))
-                    };
+                    let getter_name = prefix
+                        .child(declaration.name.clone())
+                        .child(field_name.clone())
+                        .to_symbol();
                     let field_type = layout_fields
                         .get(index)
                         .map(|(_, ty)| *ty)
@@ -956,11 +952,8 @@ fn lower_struct_accessors<'db>(
     declaration: crate::ast::StructDecl,
 ) {
     let location = ctx.location(declaration.id);
-    let mut prefix = String::new();
-    for segment in ctx.module_path().iter().skip(1) {
-        crate::push_prefix(&mut prefix, segment);
-    }
-    let qualified = crate::qualified_symbol(&mut prefix, &declaration.name);
+    let prefix = SymbolPath::new(ctx.module_path().iter().skip(1).cloned());
+    let qualified = crate::qualified_symbol(&prefix, &declaration.name);
     let type_name = super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
     let struct_type = ctx.adt_typeref(ir, &type_name);
     let layout_type = ctx
@@ -968,11 +961,10 @@ fn lower_struct_accessors<'db>(
         .unwrap_or_else(|| panic!("prescan did not register struct layout {type_name}"));
     for (index, field) in declaration.fields.iter().enumerate() {
         let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
-        let getter_name = if prefix.is_empty() {
-            Symbol::new(&format!("{}::{}", declaration.name, field_name))
-        } else {
-            Symbol::new(&format!("{}::{}::{}", prefix, declaration.name, field_name))
-        };
+        let getter_name = prefix
+            .child(declaration.name.clone())
+            .child(field_name.clone())
+            .to_symbol();
         let field_type = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout_type)
             .and_then(|fields| fields.get(index).map(|(_, ty)| *ty))
             .unwrap_or_else(|| panic!("missing logical struct accessor field type"));

@@ -107,14 +107,14 @@ impl<'db> TypeChecker<'db> {
                     }) {
                         continue;
                     }
-                    let qualified = crate::qualified_symbol(&mut self.prefix, &name);
+                    let qualified = crate::qualified_symbol(&self.prefix, &name);
                     self.env.register_type_def(qualified, scheme);
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(&mut self.prefix, &module.name);
+                        self.prefix.push(module.name.clone());
                         self.collect_type_imports(body);
-                        self.prefix.truncate(saved);
+                        self.prefix.pop();
                     }
                 }
                 _ => {}
@@ -147,7 +147,7 @@ impl<'db> TypeChecker<'db> {
                     // For inline modules, recursively collect from nested declarations
                     if let Some(body) = &m.body {
                         // Push module name to prefix
-                        let prev_len = crate::push_prefix(&mut self.prefix, &m.name);
+                        self.prefix.push(m.name.clone());
                         // Create a temporary module to reuse collect_declarations
                         let inner_module = Module {
                             id: m.id,
@@ -156,7 +156,7 @@ impl<'db> TypeChecker<'db> {
                         };
                         self.collect_declarations_in_order(&inner_module);
                         // Restore prefix
-                        self.prefix.truncate(prev_len);
+                        self.prefix.pop();
                     }
                 }
             }
@@ -175,9 +175,9 @@ impl<'db> TypeChecker<'db> {
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(&mut self.prefix, &module.name);
+                        self.prefix.push(module.name.clone());
                         self.predeclare_nominal_types(body);
-                        self.prefix.truncate(saved);
+                        self.prefix.pop();
                     }
                 }
                 _ => {}
@@ -191,7 +191,7 @@ impl<'db> TypeChecker<'db> {
         declaration: crate::ast::NodeId,
         params: &[crate::ast::TypeParamDecl],
     ) {
-        let qualified = crate::qualified_symbol(&mut self.current_prefix().to_owned(), name);
+        let qualified = crate::qualified_symbol(self.current_prefix(), name);
         let type_params: Vec<TypeParam> = params
             .iter()
             .map(|param| TypeParam::named(param.name.clone()))
@@ -355,7 +355,7 @@ impl<'db> TypeChecker<'db> {
     /// Collect a struct definition.
     fn collect_struct_def(&mut self, s: &StructDecl) {
         let name = s.name.clone();
-        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), &name);
+        let qualified_name = crate::qualified_symbol(self.current_prefix(), &name);
         let type_params: Vec<TypeParam> = s
             .type_params
             .iter()
@@ -428,7 +428,7 @@ impl<'db> TypeChecker<'db> {
     /// Collect an enum definition.
     fn collect_enum_def(&mut self, e: &EnumDecl) {
         let name = e.name.clone();
-        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), &name);
+        let qualified_name = crate::qualified_symbol(self.current_prefix(), &name);
         let type_params: Vec<TypeParam> = e
             .type_params
             .iter()
@@ -482,7 +482,7 @@ impl<'db> TypeChecker<'db> {
                 TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
             let ctor_id = CtorId::new(
                 self.db(),
-                crate::qualified_symbol(&mut self.current_prefix().to_owned(), &variant.name),
+                crate::qualified_symbol(self.current_prefix(), &variant.name),
             );
             self.env.register_constructor(ctor_id, ctor_scheme);
             if let Some(names) = field_names(&variant.fields) {
@@ -499,7 +499,7 @@ impl<'db> TypeChecker<'db> {
         // Create AbilityId for this ability
         let ability_id = AbilityId::source(
             self.db(),
-            crate::qualified_symbol(&mut self.current_prefix().to_owned(), &a.name),
+            crate::qualified_symbol(self.current_prefix(), &a.name),
         );
 
         // Build type parameter info

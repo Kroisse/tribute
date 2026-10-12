@@ -6,6 +6,7 @@ use crate::ast::{
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InstanceErrorKind {
@@ -45,7 +46,7 @@ pub(super) fn validate<'db>(
     fn declarations<'a, 'db>(
         db: &'db dyn salsa::Database,
         decls: &'a [Decl<TypedRef<'db>>],
-        prefix: &mut String,
+        prefix: &mut SymbolPath,
         functions: &mut HashMap<FuncDefId<'db>, &'a FuncDecl<TypedRef<'db>>>,
         fields: &mut HashSet<(crate::ast::TypeDefId<'db>, Symbol)>,
     ) {
@@ -66,9 +67,9 @@ pub(super) fn validate<'db>(
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(prefix, &module.name);
+                        prefix.push(module.name.clone());
                         declarations(db, body, prefix, functions, fields);
-                        prefix.truncate(saved);
+                        prefix.pop();
                     }
                 }
                 _ => {}
@@ -80,7 +81,7 @@ pub(super) fn validate<'db>(
     declarations(
         db,
         &module.decls,
-        &mut String::new(),
+        &mut SymbolPath::root(),
         &mut functions,
         &mut fields,
     );

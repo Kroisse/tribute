@@ -11,6 +11,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use trunk_ir::SymbolPath;
 
 use trunk_ir::Symbol;
 
@@ -1366,7 +1367,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &self,
         name: Symbol,
         args: Vec<Type<'db>>,
-        prefix: &str,
+        prefix: &SymbolPath,
     ) -> Type<'db> {
         self.env.named_type_in_scope(name, args, prefix)
     }

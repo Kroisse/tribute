@@ -11,6 +11,7 @@
 mod display;
 
 use std::borrow::Cow;
+use trunk_ir::SymbolPath;
 
 use trunk_ir::Symbol;
 
@@ -664,12 +665,12 @@ fn ability_path(path: &[Symbol]) -> Option<Symbol> {
 pub fn annotation_to_effect<'db>(
     db: &'db dyn salsa::Database,
     annotation: &TypeAnnotation,
-    prefix: &str,
+    prefix: &SymbolPath,
     convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
 ) -> Option<Effect<'db>> {
     match &annotation.kind {
         TypeAnnotationKind::Named(name) if !is_type_variable(name) => {
-            let qualified = crate::qualified_symbol(&mut prefix.to_owned(), name);
+            let qualified = crate::qualified_symbol(prefix, name);
             let ability_id = super::AbilityId::source(db, qualified);
             Some(Effect {
                 ability_id,
@@ -686,7 +687,7 @@ pub fn annotation_to_effect<'db>(
         TypeAnnotationKind::App { ctor, args } => {
             let qualified = match &ctor.kind {
                 TypeAnnotationKind::Named(n) if !is_type_variable(n) => {
-                    crate::qualified_symbol(&mut prefix.to_owned(), n)
+                    crate::qualified_symbol(prefix, n)
                 }
                 TypeAnnotationKind::Path(path) => ability_path(path)?,
                 _ => return None,
@@ -715,7 +716,7 @@ pub fn annotation_to_effect<'db>(
 pub fn abilities_to_effect_row<'db>(
     db: &'db dyn salsa::Database,
     abilities: &[TypeAnnotation],
-    prefix: &str,
+    prefix: &SymbolPath,
     convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
     fresh_row_var: impl FnOnce() -> EffectVar,
 ) -> EffectRow<'db> {
@@ -729,7 +730,7 @@ pub fn abilities_to_effect_row<'db>(
 pub fn abilities_to_effect_row_with_origins<'db>(
     db: &'db dyn salsa::Database,
     abilities: &[TypeAnnotation],
-    prefix: &str,
+    prefix: &SymbolPath,
     convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
     fresh_row_var: impl FnOnce() -> EffectVar,
 ) -> EffectRowConversion<'db> {

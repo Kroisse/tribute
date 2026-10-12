@@ -23,12 +23,13 @@ pub use resolver::Resolver;
 
 use itertools::Itertools;
 use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 
 use crate::ast::{
     AbilityId, CtorId, Decl, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ResolvedRef, SpanMap,
     TypeDefId, UnresolvedName,
 };
-use crate::{push_prefix, qualified_symbol};
+use crate::qualified_symbol;
 
 /// Resolve names in a module.
 ///
@@ -169,7 +170,7 @@ pub fn build_env<'db>(
     // but top-level functions within the file should use simple names.
     // The file-derived name is for external references, not internal ones.
     // Only nested `mod foo { ... }` declarations extend the module path.
-    let mut prefix = String::new();
+    let mut prefix = SymbolPath::root();
 
     for decl in &module.decls {
         collect_definition(db, &mut env, decl, &mut prefix);
@@ -265,7 +266,7 @@ fn collect_definition<'db>(
     db: &'db dyn salsa::Database,
     env: &mut ModuleEnv<'db>,
     decl: &Decl<UnresolvedName>,
-    prefix: &mut String,
+    prefix: &mut SymbolPath,
 ) {
     match decl {
         Decl::Function(func) => {
@@ -290,7 +291,7 @@ fn collect_definition<'db>(
 
             // Register field accessors in struct's namespace
             // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
-            let saved = push_prefix(prefix, &s.name);
+            prefix.push(s.name.clone());
             for field in &s.fields {
                 if let Some(field_name) = field.name.clone() {
                     let field_qualified = qualified_symbol(prefix, &field_name);
@@ -301,16 +302,16 @@ fn collect_definition<'db>(
 
                     // The field's setter and modifier, e.g. Point::x::set
                     let namespace = Symbol::new(&format!("{}::{}", s.name, field_name));
-                    let field_saved = push_prefix(prefix, &field_name);
+                    prefix.push(field_name.clone());
                     for name in FIELD_LENS_FUNCTIONS {
                         let name = Symbol::new(name);
                         let id = FuncDefId::new(db, qualified_symbol(prefix, &name));
                         env.add_to_namespace(namespace.clone(), name, Binding::Function { id });
                     }
-                    prefix.truncate(field_saved);
+                    prefix.pop();
                 }
             }
-            prefix.truncate(saved);
+            prefix.pop();
         }
 
         Decl::Enum(e) => {
@@ -365,12 +366,7 @@ fn collect_definition<'db>(
                 let import_name = u.alias.clone().unwrap_or(name);
                 // A path keyword names a package-root path; the resolver
                 // reports a keyword that names none.
-                let module: Vec<Symbol> = prefix
-                    .split("::")
-                    .filter(|segment| !segment.is_empty())
-                    .map(Symbol::new)
-                    .collect();
-                let path = path::absolute_path(0, &module, &u.path)
+                let path = path::absolute_path(0, prefix.components(), &u.path)
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| u.path.clone());
@@ -383,7 +379,7 @@ fn collect_definition<'db>(
             // then register them under the module's namespace
             if let Some(body) = &m.body {
                 // Build nested module path by appending current module name
-                let saved = push_prefix(prefix, &m.name);
+                prefix.push(m.name.clone());
 
                 // Collect inner declarations into a temporary environment
                 let mut inner_env = ModuleEnv::new();
@@ -391,7 +387,7 @@ fn collect_definition<'db>(
                     collect_definition(db, &mut inner_env, inner_decl, prefix);
                 }
 
-                prefix.truncate(saved);
+                prefix.pop();
 
                 // Register each inner definition under the module's namespace
                 // e.g., `mod Foo { fn bar() {} }` makes `Foo::bar` available
