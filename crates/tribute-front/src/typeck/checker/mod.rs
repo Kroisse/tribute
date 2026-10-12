@@ -177,19 +177,28 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// The semantic identities the prelude supplies to later phases. Literal
-    /// pattern equalities are the `==` methods of their types, resolved the
-    /// same way as an `==` expression on such a receiver.
+    /// pattern equalities are the `==` functions of their types' modules.
     fn prelude_well_known_types(&self, module: &Module<ResolvedRef<'db>>) -> WellKnownTypes<'db> {
         let string = self.prelude_well_known_type(module, StringType);
-        let equality = |ty: Type<'db>| {
-            self.env
-                .lookup_method(&Symbol::new("=="), ty)
-                .map(|entry| entry.func_id)
+        // `==` of a prelude type is the function of that name in the type's
+        // module.
+        let mut prefix = String::new();
+        if let [Decl::Module(package)] = module.decls.as_slice() {
+            crate::push_prefix(&mut prefix, &package.name);
+        }
+        let equality = |type_name: &str| {
+            let mut path = prefix.clone();
+            crate::push_prefix(&mut path, &Symbol::new(type_name));
+            let function = FuncDefId::new(
+                self.db(),
+                crate::qualified_symbol(&mut path, &Symbol::new("==")),
+            );
+            self.env.lookup_function(function).map(|_| function)
         };
         WellKnownTypes {
             string,
-            string_equality: string.and_then(|string| equality(string.ty)),
-            bytes_equality: equality(self.env.bytes_type()),
+            string_equality: string.and_then(|_| equality("String")),
+            bytes_equality: equality("Bytes"),
         }
     }
 
@@ -255,7 +264,7 @@ impl<'db> TypeChecker<'db> {
     /// Type check the prelude module once.
     ///
     /// Returns the typed prelude, and the exports that user modules inject:
-    /// function types, constructors, type definitions, and the method index.
+    /// function types, constructors, and type definitions.
     pub fn check_prelude(
         mut self,
         module: &Module<ResolvedRef<'db>>,
@@ -348,7 +357,6 @@ impl<'db> TypeChecker<'db> {
             self.env.export_struct_fields(),
             self.env.export_enum_variants(),
             self.env.export_constructor_field_names(),
-            self.env.export_method_index(),
             self.env.export_ability_defs_for_prelude(),
             well_known_types,
         )

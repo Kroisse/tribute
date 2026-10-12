@@ -31,10 +31,7 @@ pub mod subst;
 
 pub use checker::{Mode, TypeChecker};
 pub use constraint::{Constraint, ConstraintSet};
-pub use context::{
-    AbilityInfo, AbilityOpInfo, MethodEntry, ModuleTypeEnv, extract_type_name_from_type,
-    parameter_type_matches, receiver_type_matches,
-};
+pub use context::{AbilityInfo, AbilityOpInfo, MethodEntry, ModuleTypeEnv, parameter_type_matches};
 
 use crate::SortedMap;
 use crate::ast::SpanMap;
@@ -439,9 +436,6 @@ pub struct PreludeExports<'db> {
     #[returns(deref)]
     pub constructor_field_names: Vec<(CtorId<'db>, Vec<Symbol>)>,
 
-    /// Method index for UFCS resolution: method_name → candidates.
-    #[returns(deref)]
-    pub method_index: Vec<(Symbol, Vec<MethodEntry<'db>>)>,
     /// Ability operation schemas exported by the prelude as deterministic
     /// vectors (the module environment rebuilds its lookup map on injection).
     #[returns(deref)]

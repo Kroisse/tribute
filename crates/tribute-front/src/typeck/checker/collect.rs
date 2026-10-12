@@ -14,7 +14,7 @@ use crate::ast::{
     ResolvedRef, StructDecl, Type, TypeKind, TypeParam, TypeScheme, collect_effect_vars,
     is_type_variable,
 };
-use crate::typeck::context::{AbilityInfo, AbilityOpInfo, MethodEntry};
+use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
 
 use super::TypeChecker;
 
@@ -286,11 +286,6 @@ impl<'db> TypeChecker<'db> {
         self.signature_type_names.insert(func_id, vars.types);
         self.env.register_function(func_id, scheme);
 
-        // Register as UFCS method candidate if function has parameters
-        if !func.params.is_empty() {
-            self.env
-                .register_method(func.name.clone(), MethodEntry { func_id, func_ty });
-        }
         self.function_decls.push((func.id, func_id));
     }
 
@@ -354,11 +349,6 @@ impl<'db> TypeChecker<'db> {
         self.env.register_function(func_id, scheme);
         self.env.register_extern_function(func_id);
 
-        // Register as UFCS method candidate if function has parameters
-        if !func.params.is_empty() {
-            self.env
-                .register_method(func.name.clone(), MethodEntry { func_id, func_ty });
-        }
         self.function_decls.push((func.id, func_id));
     }
 
