@@ -2222,8 +2222,8 @@ impl<'db> TypeChecker<'db> {
                 let converted = self.check_expr_with_ctx(ctx, call, Mode::Infer);
                 if matches!(&*call.kind, ExprKind::Call { callee, .. } if matches!(&*callee.kind, ExprKind::Functions { .. }))
                 {
-                    match &*converted.kind {
-                        ExprKind::Call { callee, .. } => match &*callee.kind {
+                    if let ExprKind::Call { callee, .. } = &*converted.kind {
+                        match &*callee.kind {
                             ExprKind::Var(TypedRef {
                                 resolved: ResolvedRef::Function { id },
                                 ..
@@ -2231,8 +2231,7 @@ impl<'db> TypeChecker<'db> {
                             // Still unselected; checked once the solver
                             // has selected its function.
                             _ => ctx.record_become_method_operand(call.id),
-                        },
-                        _ => {}
+                        }
                     }
                 }
                 ExprKind::Become { call: converted }
