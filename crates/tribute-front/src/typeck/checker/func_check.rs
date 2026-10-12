@@ -740,14 +740,18 @@ impl<'db> TypeChecker<'db> {
             let TypeKind::Func { params, result, .. } = expected.kind(self.db()) else {
                 return super::expr::MethodSelection::Ambiguous(call.candidates.clone());
             };
-            return self.select_method(
-                &call.candidates,
-                super::expr::CallTypes {
-                    args: params,
-                    arity: params.len(),
-                    result: Some(*result),
-                },
-            );
+            // A value has no arguments of its own to report the number
+            // of, so only a whole signature selects.
+            return self
+                .select_function(
+                    &call.candidates,
+                    super::expr::CallTypes {
+                        args: params,
+                        arity: params.len(),
+                        result: Some(*result),
+                    },
+                )
+                .0;
         }
         let args: Vec<_> = call
             .arg_types

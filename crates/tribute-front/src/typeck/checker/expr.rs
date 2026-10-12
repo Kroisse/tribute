@@ -1858,6 +1858,25 @@ impl<'db> TypeChecker<'db> {
         candidates: &[crate::ast::FuncDefId<'db>],
         call: CallTypes<'_, 'db>,
     ) -> MethodSelection<'db> {
+        match self.select_function(candidates, call) {
+            // A call that passes the wrong number of arguments still names
+            // the function its arguments select, which reports the number.
+            (MethodSelection::None, Some(by_arguments)) => MethodSelection::One(by_arguments),
+            (selection, _) => selection,
+        }
+    }
+
+    /// The function among `candidates` whose whole signature takes `call`,
+    /// and, where none does, the one function whose parameters take the
+    /// arguments the call has, whatever their number and its result.
+    pub(crate) fn select_function(
+        &self,
+        candidates: &[crate::ast::FuncDefId<'db>],
+        call: CallTypes<'_, 'db>,
+    ) -> (
+        MethodSelection<'db>,
+        Option<crate::typeck::MethodEntry<'db>>,
+    ) {
         let candidates: Vec<crate::typeck::MethodEntry<'db>> = candidates
             .iter()
             .filter_map(|candidate| {
@@ -1871,7 +1890,7 @@ impl<'db> TypeChecker<'db> {
         // One function leaves nothing to select: the call is checked against
         // it, and what does not fit is an ordinary type error.
         if let [entry] = candidates[..] {
-            return MethodSelection::One(entry);
+            return (MethodSelection::One(entry), None);
         }
         let signatures: Vec<_> = candidates
             .iter()
@@ -1898,15 +1917,15 @@ impl<'db> TypeChecker<'db> {
             }
         };
         match select(&|params, result| call.matches(self.db(), params, result)) {
-            // A call that passes the wrong number of arguments still names
-            // the function its arguments select, which reports the number.
             MethodSelection::None => {
-                match select(&|params, _| call.arguments_match(self.db(), params)) {
-                    selection @ MethodSelection::One(_) => selection,
-                    _ => MethodSelection::None,
-                }
+                let by_arguments =
+                    match select(&|params, _| call.arguments_match(self.db(), params)) {
+                        MethodSelection::One(entry) => Some(entry),
+                        _ => None,
+                    };
+                (MethodSelection::None, by_arguments)
             }
-            selection => selection,
+            selection => (selection, None),
         }
     }
 
