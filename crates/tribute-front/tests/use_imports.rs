@@ -560,7 +560,7 @@ fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
         (
             "use a::make\nuse b::make\n\
              fn main() -> Nil {\n    let _ = make()\n}\n",
-            "ambiguous path `make` for arguments of types (): it names `a::make`, `b::make`",
+            "ambiguous path `make` for no arguments: it names `a::make`, `b::make`",
         ),
         (
             "use a::size\nuse b::size\n\

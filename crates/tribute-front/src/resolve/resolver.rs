@@ -1333,6 +1333,11 @@ impl<'db> Resolver<'db> {
                     self.method_candidates(&UnresolvedName::new(name.clone(), expr.id))
                 };
                 match candidates {
+                    // One function is the callee, as a name that resolves to
+                    // it would be.
+                    MethodCandidates::Functions(candidates) if candidates.len() == 1 => {
+                        ExprKind::Var(candidates.into_iter().next().expect("one candidate"))
+                    }
                     MethodCandidates::Functions(candidates) => ExprKind::Functions {
                         name: name.clone(),
                         candidates,

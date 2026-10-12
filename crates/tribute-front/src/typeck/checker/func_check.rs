@@ -746,22 +746,27 @@ impl<'db> TypeChecker<'db> {
         solver: &TypeSolver<'db>,
         call: &crate::typeck::func_context::DeferredMethodCall<'db>,
     ) {
-        let arguments = call
-            .arg_types
-            .iter()
-            .map(|ty| solver.type_subst().apply(self.db(), *ty))
-            .format_with(", ", |ty, f| f(&format_args!("`{ty}`")))
-            .to_string();
+        let arguments = if call.arg_types.is_empty() {
+            "no arguments".to_owned()
+        } else {
+            format!(
+                "arguments of types ({})",
+                call.arg_types
+                    .iter()
+                    .map(|ty| solver.type_subst().apply(self.db(), *ty))
+                    .format_with(", ", |ty, f| f(&format_args!("`{ty}`")))
+            )
+        };
         let message = match self.select_deferred_method(solver, call) {
             super::expr::MethodSelection::Ambiguous(functions) => format!(
-                "ambiguous path `{}` for arguments of types ({arguments}): it names {}",
+                "ambiguous path `{}` for {arguments}: it names {}",
                 call.method,
                 functions.iter().format_with(", ", |function, f| {
                     f(&format_args!("`{}`", function.qualified(self.db())))
                 }),
             ),
             _ => format!(
-                "unresolved path `{}`: no function it names takes arguments of types ({arguments})",
+                "unresolved path `{}`: no function it names takes {arguments}",
                 call.method
             ),
         };
