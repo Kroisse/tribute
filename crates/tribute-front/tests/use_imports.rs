@@ -552,16 +552,15 @@ fn a_call_selects_among_imported_functions_by_its_first_argument(db: &salsa::Dat
     }
 }
 
-/// Without a first argument whose type selects one, a name that imports
-/// several functions has to be written as a path.
+/// Where no type of the call selects one, a name that imports several
+/// functions has to be written as a path.
 #[salsa_test]
 fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
     for (body, expected) in [
         (
             "use a::make\nuse b::make\n\
              fn main() -> Nil {\n    let _ = make()\n}\n",
-            "`make` imports several functions and is called without an argument, \
-             so no argument type selects one; name the function by its path",
+            "ambiguous path `make` for arguments of types (): it names `a::make`, `b::make`",
         ),
         (
             "use a::size\nuse b::size\n\

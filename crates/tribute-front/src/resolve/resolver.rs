@@ -313,11 +313,11 @@ impl<'db> Resolver<'db> {
         .accumulate(self.db);
     }
 
-    fn report_unselected_import(&self, name: &UnresolvedName, usage: &str) {
+    fn report_unselected_import(&self, name: &UnresolvedName) {
         Diagnostic::new(
             format!(
-                "`{}` imports several functions and {usage}, so no argument type selects one; \
-                 name the function by its path",
+                "`{}` imports several functions and is not called, so no argument type \
+                 selects one; name the function by its path",
                 name.name()
             ),
             self.span_map.get_or_default(name.id),
@@ -1245,7 +1245,7 @@ impl<'db> Resolver<'db> {
         let kind = match &*expr.kind {
             ExprKind::Var(name) => {
                 if self.imported_functions(name).is_some() {
-                    self.report_unselected_import(name, "is not called");
+                    self.report_unselected_import(name);
                     ExprKind::Var(ResolvedRef::local(LocalId::UNRESOLVED, name.name()))
                 } else {
                     ExprKind::Var(self.resolve_name(name))
@@ -1265,9 +1265,9 @@ impl<'db> Resolver<'db> {
                 let args: Vec<_> = args.iter().map(|a| self.resolve_expr(a)).collect();
                 let callee = match &*callee.kind {
                     ExprKind::Var(name) => match self.imported_functions(name) {
-                        // The first argument selects the function by its
-                        // type, as the receiver of a method call does.
-                        Some(functions) if !args.is_empty() => {
+                        // The call's types select the function, as they do
+                        // for a method call.
+                        Some(functions) => {
                             let candidates = functions
                                 .iter()
                                 .map(|id| ResolvedRef::Function { id: *id })
@@ -1279,11 +1279,6 @@ impl<'db> Resolver<'db> {
                                     candidates,
                                 },
                             )
-                        }
-                        Some(_) => {
-                            self.report_unselected_import(name, "is called without an argument");
-                            let unresolved = ResolvedRef::local(LocalId::UNRESOLVED, name.name());
-                            Expr::new(callee.id, ExprKind::Var(unresolved))
                         }
                         None => self.resolve_expr(callee),
                     },

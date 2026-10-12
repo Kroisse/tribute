@@ -1471,30 +1471,29 @@ impl<'db> TypeChecker<'db> {
         else {
             unreachable!("the caller matched a callee naming functions");
         };
-        let [receiver, args @ ..] = args.as_slice() else {
-            unreachable!("a callee naming functions has a first argument");
-        };
         let node = expr.id;
-        let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
         let candidates = candidate_functions(candidates);
-        let arity = args.len() + 1;
+        let arity = args.len();
+        let first_ty = args
+            .first()
+            .map(|first| self.infer_expr_type_with_ctx(ctx, first));
         let selection = self.select_method(
             &candidates,
             CallTypes {
-                args: &[receiver_ty],
+                args: first_ty.as_slice(),
                 arity,
                 result: None,
             },
         );
         if let MethodSelection::One(entry) = selection {
             let callee_ty = self.select_callee(ctx, node, entry.func_id);
-            let mut arg_types = vec![receiver_ty];
+            let mut arg_types: Vec<Type<'db>> = first_ty.into_iter().collect();
             let params = match callee_ty.kind(self.db()) {
                 TypeKind::Func { params, .. } => params.as_slice(),
                 _ => &[],
             };
-            for (index, arg) in args.iter().enumerate() {
-                arg_types.push(match params.get(index + 1) {
+            for (index, arg) in args.iter().enumerate().skip(1) {
+                arg_types.push(match params.get(index) {
                     Some(expected) => self.infer_expr_with_expected(ctx, arg, *expected),
                     None => self.infer_expr_type_with_ctx(ctx, arg),
                 });
@@ -1502,8 +1501,13 @@ impl<'db> TypeChecker<'db> {
             return self.infer_call_with_ctx(ctx, callee_ty, &arg_types, node);
         }
 
-        let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
-            .chain(args.iter().map(|a| self.infer_deferred_argument(ctx, a)))
+        let arg_types: Vec<Type<'db>> = first_ty
+            .into_iter()
+            .chain(
+                args.iter()
+                    .skip(1)
+                    .map(|a| self.infer_deferred_argument(ctx, a)),
+            )
             .collect();
         let selection = self.select_method(
             &candidates,
@@ -1520,17 +1524,13 @@ impl<'db> TypeChecker<'db> {
 
         // For known operator methods, add type constraints eagerly so that
         // type inference can propagate before the method is selected.
-        let result_ty = match method.to_string().as_str() {
-            "+" | "-" | "*" | "/" | "%" => {
-                if let Some(rhs_ty) = arg_types.get(1) {
-                    ctx.constrain_eq(receiver_ty, *rhs_ty);
-                }
-                receiver_ty
+        let result_ty = match (method.to_string().as_str(), &arg_types[..]) {
+            ("+" | "-" | "*" | "/" | "%", [lhs, rhs]) => {
+                ctx.constrain_eq(*lhs, *rhs);
+                *lhs
             }
-            "==" | "!=" | "<" | "<=" | ">" | ">=" => {
-                if let Some(rhs_ty) = arg_types.get(1) {
-                    ctx.constrain_eq(receiver_ty, *rhs_ty);
-                }
+            ("==" | "!=" | "<" | "<=" | ">" | ">=", [lhs, rhs]) => {
+                ctx.constrain_eq(*lhs, *rhs);
                 ctx.bool_type()
             }
             _ => ctx.fresh_type_var(),
@@ -1542,7 +1542,6 @@ impl<'db> TypeChecker<'db> {
         ctx.merge_effect_at(effect, node);
         ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
             node_id: node,
-            receiver_ty,
             method: method.clone(),
             callee: callee.id,
             candidates,

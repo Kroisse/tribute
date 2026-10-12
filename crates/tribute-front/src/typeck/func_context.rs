@@ -212,8 +212,6 @@ pub struct FunctionInferenceContext<'a, 'db> {
 pub struct DeferredMethodCall<'db> {
     /// The call expression's node.
     pub node_id: NodeId,
-    /// The receiver expression's type (UniVar at creation, resolved after solving).
-    pub receiver_ty: Type<'db>,
     /// The method name being called.
     pub method: Symbol,
     /// The callee's node, for span lookup in diagnostics.

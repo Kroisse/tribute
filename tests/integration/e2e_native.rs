@@ -3308,20 +3308,25 @@ mod a {
     use super::A
     pub fn pair(x: super::A, y: Int) -> Int { x.n + y }
     pub fn pick(x: Int) -> Int { x }
+    pub fn make() -> Int { +9 }
 }
 
 mod b {
     use super::A
     pub fn pair(x: super::A, y: String) -> Int { x.n + +100 }
     pub fn pick(x: Int) -> String { "picked" }
+    pub fn make() -> String { "made" }
 }
 
 use a::pair
 use b::pair
 use a::pick
 use b::pick
+use a::make
+use b::make
 
 fn text(s: String) -> String { s }
+fn made() -> Int { make() }
 
 fn main() ->{Io} Nil {
     let late = fn(x) { pair(x, +5) }
@@ -3331,9 +3336,11 @@ fn main() ->{Io} Nil {
     print_line(Int::to_string(late(A { n: +1 })))
     print_line(text(pick(+1)))
     print_line(Int::to_string(pick(+7) + +1))
+    print_line(make())
+    print_line(Int::to_string(made()))
 }
 "#,
-        "3\n101\n101\n6\npicked\n8",
+        "3\n101\n101\n6\npicked\n8\nmade\n9",
     );
 }
 
