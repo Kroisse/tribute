@@ -699,6 +699,13 @@ impl<'db> TypeChecker<'db> {
         else {
             return Vec::new();
         };
+        let origin = ConstraintOrigin {
+            node_id: call.node_id,
+            kind: ConstraintOriginKind::Call,
+        };
+        if call.value {
+            return vec![Constraint::TypeEqAt(call.result_ty, callee, origin)];
+        }
         if params.len() != call.arg_types.len() {
             self.report_call_arity(
                 call.node_id,
@@ -707,10 +714,6 @@ impl<'db> TypeChecker<'db> {
                 call.arg_types.len(),
             );
         }
-        let origin = ConstraintOrigin {
-            node_id: call.node_id,
-            kind: ConstraintOriginKind::Call,
-        };
         let mut constraints = vec![Constraint::TypeEqAt(call.result_ty, *result, origin)];
         constraints.extend(
             call.arg_types
@@ -724,11 +727,28 @@ impl<'db> TypeChecker<'db> {
 
     /// Select the function a deferred call names with the types `solver`
     /// has inferred for its arguments and its result.
-    fn select_deferred_method(
+    pub(crate) fn select_deferred_method(
         &self,
         solver: &TypeSolver<'db>,
         call: &crate::typeck::func_context::DeferredMethodCall<'db>,
     ) -> super::expr::MethodSelection<'db> {
+        if call.value {
+            // A name used as a value is selected like a call of it would
+            // be: by the parameters and the result of the function type it
+            // is used at.
+            let expected = solver.expected_type(call.result_ty);
+            let TypeKind::Func { params, result, .. } = expected.kind(self.db()) else {
+                return super::expr::MethodSelection::Ambiguous(call.candidates.clone());
+            };
+            return self.select_method(
+                &call.candidates,
+                super::expr::CallTypes {
+                    args: params,
+                    arity: params.len(),
+                    result: Some(*result),
+                },
+            );
+        }
         let args: Vec<_> = call
             .arg_types
             .iter()
@@ -762,15 +782,42 @@ impl<'db> TypeChecker<'db> {
                     .format_with(", ", |ty, f| f(&format_args!("`{ty}`")))
             )
         };
-        let message = match self.select_deferred_method(solver, call) {
-            super::expr::MethodSelection::Ambiguous(functions) => format!(
+        let selection = self.select_deferred_method(solver, call);
+        let names = |functions: &[crate::ast::FuncDefId<'db>]| {
+            functions
+                .iter()
+                .format_with(", ", |function, f| {
+                    f(&format_args!("`{}`", function.qualified(self.db())))
+                })
+                .to_string()
+        };
+        let message = match (selection, call.value) {
+            (super::expr::MethodSelection::Ambiguous(functions), true) => {
+                let expected = solver.expected_type(call.result_ty);
+                match expected.kind(self.db()) {
+                    TypeKind::Func { .. } => format!(
+                        "ambiguous path `{}` used as a value of type `{expected}`: it names {}",
+                        call.method,
+                        names(&functions),
+                    ),
+                    _ => format!(
+                        "ambiguous path `{}` used as a value: it names {}",
+                        call.method,
+                        names(&functions),
+                    ),
+                }
+            }
+            (_, true) => format!(
+                "unresolved path `{}`: no function it names has type `{}`",
+                call.method,
+                solver.expected_type(call.result_ty),
+            ),
+            (super::expr::MethodSelection::Ambiguous(functions), false) => format!(
                 "ambiguous path `{}` for {arguments}: it names {}",
                 call.method,
-                functions.iter().format_with(", ", |function, f| {
-                    f(&format_args!("`{}`", function.qualified(self.db())))
-                }),
+                names(&functions),
             ),
-            _ => format!(
+            (_, false) => format!(
                 "unresolved path `{}`: no function it names takes {arguments}",
                 call.method
             ),

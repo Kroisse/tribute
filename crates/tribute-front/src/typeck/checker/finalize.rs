@@ -118,6 +118,15 @@ impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
                     }),
                 );
             }
+            ExprKind::Functions { .. } => {
+                // A name used as a value becomes the function selected for it.
+                if let Some(&(func_id, callee_ty)) = self.deferred_resolutions.get(&expr.id) {
+                    *expr.kind = ExprKind::Var(TypedRef {
+                        resolved: ResolvedRef::Function { id: func_id },
+                        ty: self.apply(callee_ty),
+                    });
+                }
+            }
             ExprKind::Case { scrutinee, arms } => {
                 if let Some(scrutinee_ty) = self.node_types.get(&scrutinee.id).copied()
                     && self.checker.check_exhaustiveness(
