@@ -3385,6 +3385,62 @@ fn main() ->{Io} Nil {
     );
 }
 
+/// A named function returned as a value is called and passed on like any
+/// other function value, whatever the caller's own effects are.
+#[test]
+fn a_named_function_is_returned_as_a_value() {
+    common::assert_output_on_both_targets_with_native_asan(
+        "returned_function_value.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct A { n: Int }
+struct B { n: Int }
+
+mod a {
+    use super::A
+    pub fn size(x: A) -> Int { x.n }
+}
+
+mod b {
+    use super::B
+    pub fn size(x: B) -> Int { x.n + +100 }
+}
+
+use a::size
+use b::size
+
+ability Ask { op ask() -> Int }
+
+fn apply(x: t, f: fn(t) ->{e} u) ->{e} u { f(x) }
+fn asking(x: A, f: fn(A) ->{Ask} Int) ->{Ask} Int { f(x) + Ask::ask() }
+fn answer(comp: fn() ->{e, Ask} Int) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Ask::ask() { answer(fn() { resume +10 }) }
+    }
+}
+fn named() -> fn(A) -> Int { a::size }
+fn selected() -> fn(B) -> Int { size }
+fn pure_call() -> Int {
+    let f = named()
+    f(A { n: +7 })
+}
+
+fn main() ->{Io} Nil {
+    let f = named()
+    print_line(Int::to_string(f(A { n: +1 })))
+    print_line(Int::to_string(apply(A { n: +2 }, named())))
+    let g = selected()
+    print_line(Int::to_string(g(B { n: +3 })))
+    print_line(Int::to_string(pure_call()))
+    print_line(Int::to_string(answer(fn() { asking(A { n: +4 }, named()) })))
+}
+"#,
+        "1\n2\n103\n7\n14",
+    );
+}
+
 /// A receiver not typed yet is an argument like the others: the rest of a
 /// method call selects the function, and the receiver's type follows.
 #[test]

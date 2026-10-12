@@ -9,9 +9,11 @@ mod logical;
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_ir::dialect::tribute_control;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::Location;
 
@@ -114,12 +116,49 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
             return value;
         }
 
+        // A named function takes the callable type its use expects: a
+        // conversion cast cannot change a calling convention.
+        if let Some(value) = self.function_ref_as(location, value, target_ty) {
+            return value;
+        }
+
         // Insert unrealized_conversion_cast
         let cast_op = core::UnrealizedConversionCast::operands(value)
             .results(target_ty)
             .build(self.ir, location);
         self.ir.push_op(self.block, cast_op.op_ref());
         cast_op.result(self.ir)
+    }
+
+    /// `value` again as a reference to the same function under the callable
+    /// type `target_ty`, if `value` is a function reference and `target_ty`
+    /// has its parameters and result under a convention at least as strong.
+    fn function_ref_as(
+        &mut self,
+        location: Location,
+        value: ValueRef,
+        target_ty: TypeRef,
+    ) -> Option<ValueRef> {
+        let trunk_ir::refs::ValueDef::OpResult(producer, _) = self.ir.value_def(value) else {
+            return None;
+        };
+        let named = tribute_control::FuncRef::from_op(self.ir, producer).ok()?;
+        let source = tribute_control::FuncSig::from_type_ref(self.ir, self.ir.value_ty(value))?;
+        let target = tribute_control::FuncSig::from_type_ref(self.ir, target_ty)?;
+        if target.result(self.ir) != source.result(self.ir)
+            || target.inputs(self.ir) != source.inputs(self.ir)
+            || tribute_control::func_sig_convention(self.ir, target_ty)
+                < tribute_control::func_sig_convention(self.ir, self.ir.value_ty(value))
+        {
+            return None;
+        }
+        let function = named.func_ref(self.ir).clone();
+        let reference = tribute_control::FuncRef::operands()
+            .func_ref(function)
+            .results(target_ty)
+            .build(self.ir, location);
+        self.ir.push_op(self.block, reference.op_ref());
+        Some(reference.result(self.ir))
     }
 }
 
