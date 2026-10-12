@@ -552,16 +552,15 @@ fn a_call_selects_among_imported_functions_by_its_first_argument(db: &salsa::Dat
     }
 }
 
-/// Without a first argument whose type selects one, a name that imports
-/// several functions has to be written as a path.
+/// Where no type of the call selects one, a name that imports several
+/// functions has to be written as a path.
 #[salsa_test]
 fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
     for (body, expected) in [
         (
             "use a::make\nuse b::make\n\
              fn main() -> Nil {\n    let _ = make()\n}\n",
-            "`make` imports several functions and is called without an argument, \
-             so no argument type selects one; name the function by its path",
+            "ambiguous path `make` for no arguments: it names `a::make`, `b::make`",
         ),
         (
             "use a::size\nuse b::size\n\
@@ -690,12 +689,28 @@ use b::tag
         let errors = check(body);
         assert!(errors.is_empty(), "{body}: {errors:#?}");
     }
-    for (method, call) in [
-        ("let _ = A { n: 1 }.pair()", "let _ = pair(A { n: 1 })"),
+    // The same errors, each counted the way its call is written.
+    for (body, expected) in [
+        (
+            "let _ = A { n: 1 }.pair()",
+            "call arity mismatch: expected 1 argument after the receiver, found 0",
+        ),
+        (
+            "let _ = pair(A { n: 1 })",
+            "call arity mismatch: expected 2 arguments, found 1",
+        ),
         (
             "let _ = A { n: 1 }.pair(1, 2)",
-            "let _ = pair(A { n: 1 }, 1, 2)",
+            "call arity mismatch: expected 1 argument after the receiver, found 2",
         ),
+        (
+            "let _ = pair(A { n: 1 }, 1, 2)",
+            "call arity mismatch: expected 2 arguments, found 3",
+        ),
+    ] {
+        assert_eq!(check(body), [expected], "{body}");
+    }
+    for (method, call) in [
         ("let _ = 1.pair(2)", "let _ = pair(1, 2)"),
         (
             "let _ = A { n: 1 }.pair(True)",

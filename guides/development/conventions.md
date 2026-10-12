@@ -100,7 +100,9 @@ Two-phase resolution:
 1. **Basic resolution**: Resolves names and paths, builds `ModuleEnv`, and
    records on each call the functions its scope names
 2. **Type-directed (TDNR)**: Type checking selects one of them by the call's
-   types (`expr.method(args)` → `Type::method(expr, args)`)
+   types (`expr.method(args)` → `Type::method(expr, args)`). A method call is
+   an `ExprKind::Call` whose callee is `ExprKind::Functions`; the selected
+   function replaces that callee
 
 ## Dialect Operations
 

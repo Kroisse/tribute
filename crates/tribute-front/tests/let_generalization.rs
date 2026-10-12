@@ -112,7 +112,7 @@ fn body_node_ids(expr: &Expr<TypedRef<'_>>, ids: &mut Vec<NodeId>) {
                 body_node_ids(element, ids);
             }
         }
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             body_node_ids(callee, ids);
             for arg in args {
                 body_node_ids(arg, ids);

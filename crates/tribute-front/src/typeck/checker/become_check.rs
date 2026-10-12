@@ -61,11 +61,11 @@ impl<'db> BecomeSites<'_, 'db> {
                 ExprKind::Var(ResolvedRef::AbilityOp { .. }) => {
                     Some("`become` cannot perform an ability operation")
                 }
+                // Selection among several functions decides the callee; see
+                // the `become` arm of expression checking.
                 _ => None,
             },
-            // Method selection decides the callee; see the `become` arm of
-            // expression checking.
-            ExprKind::MethodCall { .. } | ExprKind::Error => None,
+            ExprKind::Functions { .. } | ExprKind::Error => None,
             ExprKind::Cons { .. } | ExprKind::Record { .. } => {
                 Some("`become` cannot call a constructor")
             }

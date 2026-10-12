@@ -394,18 +394,20 @@ fn ambiguous(xs: List(Int), ys: OtherList(Int)) {
 ```
 
 여러 함수를 `use`한 이름은 호출해야 쓸 수 있다. 호출하지 않고 값으로 쓰면
-오류이며, 함수를 경로로 지정해야 한다. 인자 없는 호출도 같다:
+오류이며, 함수를 경로로 지정해야 한다. 인자 없는 호출은 결과에 기대되는 타입으로
+고르고, 그 타입이 하나로 좁히지 못하면 모호성 오류다:
 
 ```rust
 use a::size   // fn size(x: A) -> Nat
 use b::size   // fn size(x: B) -> Nat
 use a::make   // fn make() -> Nat
-use b::make
+use b::make   // fn make() -> String
 
 size(A { n: 1 })    // OK: a::size
 size(B { n: 2 })    // OK: b::size
 size(1)             // Error: 어느 size도 Nat 하나를 받지 않는다
-make()              // Error: 고를 인자가 없다. a::make()로 지정
+count(make())       // OK: count가 Nat을 받으면 a::make
+let _ = make()      // Error: 결과 타입이 정해지지 않아 모호하다. a::make()로 지정
 apply(x, size)      // Error: 값으로 쓰면 고를 인자가 없다. a::size로 지정
 ```
 

@@ -142,7 +142,7 @@ pub fn walk_expr<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(visitor: &mut T, exp
     visitor.visit_node_id(expr.id);
     match &*expr.kind {
         ExprKind::Var(value) => visitor.visit_ref(RefSite::Var, expr.id, value),
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             visitor.visit_expr(callee);
             for arg in args {
                 visitor.visit_expr(arg);
@@ -168,12 +168,7 @@ pub fn walk_expr<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(visitor: &mut T, exp
                 visitor.visit_expr(spread);
             }
         }
-        ExprKind::MethodCall { receiver, args, .. } => {
-            visitor.visit_expr(receiver);
-            for arg in args {
-                visitor.visit_expr(arg);
-            }
-        }
+        ExprKind::Functions { .. } => {}
         ExprKind::Block { stmts, value } => {
             for stmt in stmts {
                 visitor.visit_stmt(stmt);
@@ -448,7 +443,7 @@ pub fn walk_expr_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, expr: &mut Exp
     let id = expr.id;
     match &mut *expr.kind {
         ExprKind::Var(value) => visitor.visit_ref_mut(RefSite::Var, id, value),
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             visitor.visit_expr_mut(callee);
             for arg in args {
                 visitor.visit_expr_mut(arg);
@@ -474,12 +469,7 @@ pub fn walk_expr_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, expr: &mut Exp
                 visitor.visit_expr_mut(spread);
             }
         }
-        ExprKind::MethodCall { receiver, args, .. } => {
-            visitor.visit_expr_mut(receiver);
-            for arg in args {
-                visitor.visit_expr_mut(arg);
-            }
-        }
+        ExprKind::Functions { .. } => {}
         ExprKind::Block { stmts, value } => {
             for stmt in stmts {
                 visitor.visit_stmt_mut(stmt);

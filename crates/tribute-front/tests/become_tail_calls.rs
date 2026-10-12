@@ -185,3 +185,30 @@ fn g(n: Int) -> Bool {
     );
     assert_eq!(messages.len(), 1, "{messages:?}");
 }
+
+/// A callee still to be selected among several functions is checked once
+/// the call's types have selected it.
+#[salsa_test]
+fn become_checks_a_callee_selected_late(db: &salsa::DatabaseImpl) {
+    let messages = errors(
+        db,
+        r#"
+mod a {
+    pub extern "C" fn make() -> Int
+}
+mod b {
+    pub fn make() -> Bool { True }
+}
+use a::make
+use b::make
+
+fn late() -> Int {
+    become make()
+}
+"#,
+    );
+    assert_eq!(
+        messages,
+        ["`become` cannot call extern function `make`, which uses a foreign calling convention",]
+    );
+}

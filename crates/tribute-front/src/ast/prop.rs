@@ -398,7 +398,8 @@ fn call_variant(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<Unresol
             id,
             ExprKind::Call {
                 callee,
-                args: vec![]
+                args: vec![],
+                syntax: crate::ast::CallSyntax::Call,
             }
         )),
         // 1 arg
@@ -412,6 +413,7 @@ fn call_variant(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<Unresol
                 ExprKind::Call {
                     callee,
                     args: vec![a],
+                    syntax: crate::ast::CallSyntax::Call,
                 },
             )),
         // 2 args
@@ -426,6 +428,7 @@ fn call_variant(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<Unresol
                 ExprKind::Call {
                     callee,
                     args: vec![a, b],
+                    syntax: crate::ast::CallSyntax::Call,
                 },
             )),
     ]
@@ -570,6 +573,7 @@ fn two_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                     ExprKind::Call {
                         callee: callee_expr,
                         args: vec![arg],
+                        syntax: crate::ast::CallSyntax::Call,
                     },
                 );
                 let main_fn = FuncDecl {
@@ -664,6 +668,7 @@ fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                     ExprKind::Call {
                         callee: beta_callee,
                         args: vec![arg],
+                        syntax: crate::ast::CallSyntax::Call,
                     },
                 );
                 let alpha_callee = Expr::new(
@@ -678,6 +683,7 @@ fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                     ExprKind::Call {
                         callee: alpha_callee,
                         args: vec![inner_call],
+                        syntax: crate::ast::CallSyntax::Call,
                     },
                 );
                 let main_fn = FuncDecl {
@@ -724,7 +730,7 @@ fn expr_depth(expr: &Expr<UnresolvedName>) -> usize {
             1 + stmt_max.max(expr_depth(value))
         }
         ExprKind::Lambda { body, .. } => 1 + expr_depth(body),
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             let arg_max = args.iter().map(expr_depth).max().unwrap_or(0);
             1 + expr_depth(callee).max(arg_max)
         }
@@ -779,7 +785,7 @@ fn all_vars_bound<'a>(expr: &'a Expr<UnresolvedName>, bound: &[&'a Symbol]) -> b
             scope.extend(params.iter().map(|p| &p.name));
             all_vars_bound(body, &scope)
         }
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             all_vars_bound(callee, bound) && args.iter().all(|a| all_vars_bound(a, bound))
         }
         ExprKind::Tuple(elems) => elems.iter().all(|e| all_vars_bound(e, bound)),

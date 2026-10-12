@@ -617,7 +617,7 @@ impl<'db> TypeChecker<'db> {
                         );
                         let callable = instance.ty;
                         instances.insert(
-                            mc.node_id,
+                            mc.callee,
                             crate::typeck::FunctionInstance {
                                 origin,
                                 function: entry.func_id,
@@ -632,7 +632,7 @@ impl<'db> TypeChecker<'db> {
                         entry.func_ty
                     };
 
-                    // Record the resolution for MethodCall → Call conversion
+                    // Record the selection for the callee rewrite
                     resolved.insert(mc.node_id, (entry.func_id, func_ty));
 
                     solver.resolve_producer(mc.node_id);
@@ -700,7 +700,12 @@ impl<'db> TypeChecker<'db> {
             return Vec::new();
         };
         if params.len() != call.arg_types.len() {
-            self.report_call_arity(call.node_id, params.len(), call.arg_types.len());
+            self.report_call_arity(
+                call.node_id,
+                call.syntax,
+                params.len(),
+                call.arg_types.len(),
+            );
         }
         let origin = ConstraintOrigin {
             node_id: call.node_id,
@@ -730,7 +735,7 @@ impl<'db> TypeChecker<'db> {
             .map(|ty| solver.type_subst().apply(self.db(), *ty))
             .collect();
         self.select_method(
-            call.path.as_ref(),
+            &call.candidates,
             super::expr::CallTypes {
                 args: &args,
                 arity: args.len(),
@@ -746,31 +751,33 @@ impl<'db> TypeChecker<'db> {
         solver: &TypeSolver<'db>,
         call: &crate::typeck::func_context::DeferredMethodCall<'db>,
     ) {
-        let Some((path, _)) = &call.path else {
-            return;
+        let arguments = if call.arg_types.is_empty() {
+            "no arguments".to_owned()
+        } else {
+            format!(
+                "arguments of types ({})",
+                call.arg_types
+                    .iter()
+                    .map(|ty| solver.type_subst().apply(self.db(), *ty))
+                    .format_with(", ", |ty, f| f(&format_args!("`{ty}`")))
+            )
         };
-        let arguments = call
-            .arg_types
-            .iter()
-            .map(|ty| solver.type_subst().apply(self.db(), *ty))
-            .format_with(", ", |ty, f| f(&format_args!("`{ty}`")))
-            .to_string();
         let message = match self.select_deferred_method(solver, call) {
             super::expr::MethodSelection::Ambiguous(functions) => format!(
-                "ambiguous path `{}` for arguments of types ({arguments}): it names {}",
+                "ambiguous path `{}` for {arguments}: it names {}",
                 call.method,
                 functions.iter().format_with(", ", |function, f| {
                     f(&format_args!("`{}`", function.qualified(self.db())))
                 }),
             ),
             _ => format!(
-                "unresolved path `{}`: no function it names takes arguments of types ({arguments})",
+                "unresolved path `{}`: no function it names takes {arguments}",
                 call.method
             ),
         };
         Diagnostic::new(
             message,
-            self.get_span(*path),
+            self.get_span(call.callee),
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )

@@ -460,7 +460,7 @@ fn main() -> Nil {
             "ambiguous path `name` for arguments of types (`User`): it names `User::name`, \
              `audit::name`"
                 .to_owned(),
-            "user.name".to_owned()
+            "name".to_owned()
         )]
     );
 }
@@ -519,15 +519,15 @@ fn main() -> Nil {
         diagnostics,
         [
             (
-                "call arity mismatch: expected 2 arguments, found 1".to_owned(),
+                "call arity mismatch: expected 1 argument after the receiver, found 0".to_owned(),
                 "user.name::set()".to_owned()
             ),
             (
-                "call arity mismatch: expected 2 arguments, found 3".to_owned(),
+                "call arity mismatch: expected 1 argument after the receiver, found 2".to_owned(),
                 "user.name::set(\"a\", \"b\")".to_owned()
             ),
             (
-                "call arity mismatch: expected 1 argument, found 2".to_owned(),
+                "call arity mismatch: expected 0 arguments after the receiver, found 1".to_owned(),
                 "user.User::name(\"x\")".to_owned()
             ),
         ]

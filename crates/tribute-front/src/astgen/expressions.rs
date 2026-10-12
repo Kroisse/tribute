@@ -5,7 +5,7 @@ use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, BinOpKind, Expr, ExprKind, FieldInit, FloatBits, HandlerArm, HandlerKind, MethodPath,
+    Arm, BinOpKind, CallSyntax, Expr, ExprKind, FieldInit, FloatBits, HandlerArm, HandlerKind,
     Param, Pattern, Stmt, UnresolvedName,
 };
 
@@ -165,7 +165,7 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
     let rhs = lower_expr(ctx, rhs_node);
     let op_text = ctx.node_text(&op_node);
 
-    // Desugar arithmetic, comparison, and concatenation operators to MethodCall.
+    // Desugar arithmetic, comparison, and concatenation operators to method calls.
     // TDNR resolves these to type-specific intrinsic functions (e.g., Int::(+), Float::(==)).
     // Only boolean operators (&&, ||) remain as BinOp for future short-circuit evaluation.
     let method_sym = match &*op_text {
@@ -184,12 +184,7 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
         _ => None,
     };
     if let Some(method) = method_sym {
-        return ExprKind::MethodCall {
-            receiver: lhs,
-            method,
-            path: None,
-            args: vec![rhs],
-        };
+        return method_call(ctx, &op_node, method, lhs, vec![rhs], CallSyntax::Operator);
     }
 
     let op = match &*op_text {
@@ -218,7 +213,11 @@ fn lower_call_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unresol
         .map(|args| lower_argument_list(ctx, args))
         .unwrap_or_default();
 
-    ExprKind::Call { callee, args }
+    ExprKind::Call {
+        callee,
+        args,
+        syntax: CallSyntax::Call,
+    }
 }
 
 fn lower_method_call(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
@@ -241,27 +240,39 @@ fn lower_method_call(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
         .map(|args| lower_argument_list(ctx, args))
         .unwrap_or_default();
 
-    let path = method_path(ctx, &method, &method_node);
-
-    ExprKind::MethodCall {
-        receiver,
+    method_call(
+        ctx,
+        &method_node,
         method,
-        path,
+        receiver,
         args,
-    }
+        CallSyntax::Method,
+    )
 }
 
-/// The path of a qualified method `x.a::b(y)`. It names its function by
-/// path; the receiver's type selects among the functions the path may name.
-fn method_path(
+/// `receiver.method(args)` as the call `method(receiver, args)`, whose
+/// callee names the functions `method` may be.
+fn method_call(
     ctx: &mut AstLoweringCtx<'_>,
-    method: &Symbol,
-    node: &Node,
-) -> Option<MethodPath<UnresolvedName>> {
-    (!method.is_simple()).then(|| MethodPath {
-        id: ctx.fresh_id_with_span(node),
-        candidates: Vec::new(),
-    })
+    method_node: &Node,
+    method: Symbol,
+    receiver: Expr<UnresolvedName>,
+    mut args: Vec<Expr<UnresolvedName>>,
+    syntax: CallSyntax,
+) -> ExprKind<UnresolvedName> {
+    let callee = Expr::new(
+        ctx.fresh_id_with_span(method_node),
+        ExprKind::Functions {
+            name: method,
+            candidates: Vec::new(),
+        },
+    );
+    args.insert(0, receiver);
+    ExprKind::Call {
+        callee,
+        args,
+        syntax,
+    }
 }
 
 fn lower_constructor_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
@@ -356,15 +367,8 @@ fn lower_field_access(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unre
     let expr = lower_expr(ctx, expr_node);
     let field = ctx.node_symbol(&field_node);
 
-    let path = method_path(ctx, &field, &field_node);
-
     // Field access is syntactic sugar for a zero-arg method call: expr.field → expr.field()
-    ExprKind::MethodCall {
-        receiver: expr,
-        method: field,
-        path,
-        args: vec![],
-    }
+    method_call(ctx, &field_node, field, expr, vec![], CallSyntax::Method)
 }
 
 /// Returns true if the node is a statement-like construct that should be

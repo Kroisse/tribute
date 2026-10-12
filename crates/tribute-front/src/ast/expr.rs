@@ -87,9 +87,13 @@ pub enum ExprKind<V> {
     // === Calls and Construction ===
     /// Function call: `foo(a, b)`
     ///
-    /// Also used for UFCS method calls after desugaring:
-    /// `x.foo(a, b)` becomes `Call { callee: "foo", args: [x, a, b] }`
-    Call { callee: Expr<V>, args: Vec<Expr<V>> },
+    /// A method call `x.foo(a, b)` is this call with `x` as the first
+    /// argument and a [`Functions`](Self::Functions) callee for `foo`.
+    Call {
+        callee: Expr<V>,
+        args: Vec<Expr<V>>,
+        syntax: CallSyntax,
+    },
 
     /// Constructor application: `Some(42)`, `None`, `Ok(value)`
     Cons { ctor: V, args: Vec<Expr<V>> },
@@ -102,18 +106,18 @@ pub enum ExprKind<V> {
         spread: Option<Expr<V>>,
     },
 
-    /// Method call: `expr.method(args)`
+    /// A name that stands for one of several declared functions: `f` in
+    /// `x.f(y)`, or a name several `use`s give different functions.
     ///
-    /// Type checking selects its function and converts it to a Call.
-    MethodCall {
-        receiver: Expr<V>,
-        method: Symbol,
-        /// The path of a qualified call `expr.a::b(args)`, which `method`
-        /// spells in full.
+    /// Parsing writes the method of `x.f(y)` as the callee of a call whose
+    /// first argument is `x`, without candidates. Name resolution collects
+    /// the functions the name may be from the call's scope, and type checking
+    /// selects one, replacing the expression with a reference to it.
+    Functions {
+        name: Symbol,
         // V is the only phase-dependent value.
         #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
-        path: Option<MethodPath<V>>,
-        args: Vec<Expr<V>>,
+        candidates: Vec<V>,
     },
 
     // === Control Flow ===
@@ -241,20 +245,24 @@ pub struct Param {
     pub local_id: Option<super::phases::LocalId>,
 }
 
-/// The path a qualified method call names its function by.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct MethodPath<V> {
-    /// The path's node, for span lookup.
-    pub id: NodeId,
-    /// The functions the path may name, found from the call's scope. Name
-    /// resolution fills this in; the receiver's type selects one.
-    pub candidates: Vec<V>,
+/// How a call was written.
+///
+/// Diagnostics and tools read this to speak of a call the way the source
+/// wrote it. What a call means does not depend on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub enum CallSyntax {
+    /// `f(x, y)`
+    Call,
+    /// `x.f(y)` or `x.f`
+    Method,
+    /// `x + y`
+    Operator,
 }
 
 /// Binary operators.
 ///
 /// Only boolean operators remain here. Arithmetic and comparison operators
-/// are desugared to MethodCall in astgen and resolved via TDNR.
+/// are desugared to calls of the operator's name in astgen and resolved via TDNR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BinOpKind {
     And,

@@ -102,31 +102,21 @@ impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
         // Children first: the rewrites below read substituted subtrees.
         walk_expr_mut(self, expr);
         match &mut *expr.kind {
-            ExprKind::MethodCall { .. } => {
-                // A deferred method resolved during solving becomes a call;
-                // an unresolved one was reported and stays a MethodCall.
+            ExprKind::Call { callee, .. }
+                if matches!(&*callee.kind, ExprKind::Functions { .. }) =>
+            {
+                // A function selected during solving becomes the callee; a
+                // call left unselected was reported and stays as it is.
                 let Some(&(func_id, callee_ty)) = self.deferred_resolutions.get(&expr.id) else {
                     return;
                 };
-                let callee = Expr::new(
-                    expr.id,
+                *callee = Expr::new(
+                    callee.id,
                     ExprKind::Var(TypedRef {
                         resolved: ResolvedRef::Function { id: func_id },
                         ty: self.apply(callee_ty),
                     }),
                 );
-                let ExprKind::MethodCall { receiver, args, .. } =
-                    std::mem::replace(&mut *expr.kind, ExprKind::Error)
-                else {
-                    unreachable!("matched above");
-                };
-                let mut all_args = Vec::with_capacity(args.len() + 1);
-                all_args.push(receiver);
-                all_args.extend(args);
-                *expr.kind = ExprKind::Call {
-                    callee,
-                    args: all_args,
-                };
             }
             ExprKind::Case { scrutinee, arms } => {
                 if let Some(scrutinee_ty) = self.node_types.get(&scrutinee.id).copied()

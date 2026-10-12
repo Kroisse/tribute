@@ -227,7 +227,7 @@ fn test(n: Int) -> Int {
 }
 
 // ========================================================================
-// TDNR AST Tests (verify MethodCall -> Call before IR lowering)
+// TDNR AST Tests (verify each call has its function before IR lowering)
 // ========================================================================
 
 /// Covers the resolved, ambiguous, and nested-module paths.

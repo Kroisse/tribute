@@ -201,8 +201,8 @@ fn tdnr_function_summary_inner(
 
 /// Run the AST pipeline through TDNR and summarize one function body.
 ///
-/// This intentionally stops before IR lowering so tests can inspect unresolved
-/// `MethodCall` nodes. IR lowering panics on those nodes by design.
+/// This intentionally stops before IR lowering so tests can inspect calls
+/// left without a selected function.
 pub fn tdnr_function_summary(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -240,7 +240,7 @@ fn collect_tdnr_summary<'db>(
     summary: &mut TdnrSummary,
 ) {
     match &*expr.kind {
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             if let ExprKind::Var(TypedRef {
                 resolved: ResolvedRef::Function { id },
                 ..
@@ -256,18 +256,7 @@ fn collect_tdnr_summary<'db>(
                 collect_tdnr_summary(db, arg, summary);
             }
         }
-        ExprKind::MethodCall {
-            receiver,
-            method,
-            args,
-            ..
-        } => {
-            summary.method_calls.push(method.to_string());
-            collect_tdnr_summary(db, receiver, summary);
-            for arg in args {
-                collect_tdnr_summary(db, arg, summary);
-            }
-        }
+        ExprKind::Functions { name, .. } => summary.method_calls.push(name.to_string()),
         ExprKind::Record { fields, spread, .. } => {
             for field in fields {
                 collect_tdnr_summary(db, &field.value, summary);

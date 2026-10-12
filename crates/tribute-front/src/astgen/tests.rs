@@ -1,6 +1,37 @@
 use super::*;
-use crate::ast::{Decl, ExprKind, HandlerKind, PatternKind, Stmt, TypeAnnotationKind};
+use crate::ast::{
+    Decl, Expr, ExprKind, HandlerKind, NodeId, PatternKind, Stmt, TypeAnnotationKind,
+};
 use tree_sitter::Parser;
+use trunk_ir::Symbol;
+
+/// `receiver.method(args)` as parsing writes it: a call of the functions
+/// `method` names, with the receiver as its first argument.
+struct MethodCall<'a> {
+    receiver: &'a Expr<UnresolvedName>,
+    method: &'a Symbol,
+    callee: NodeId,
+    args: &'a [Expr<UnresolvedName>],
+}
+
+fn method_call(expr: &Expr<UnresolvedName>) -> Option<MethodCall<'_>> {
+    let ExprKind::Call { callee, args, .. } = expr.kind.as_ref() else {
+        return None;
+    };
+    let ExprKind::Functions { name, candidates } = callee.kind.as_ref() else {
+        return None;
+    };
+    assert!(candidates.is_empty());
+    let [receiver, args @ ..] = args.as_slice() else {
+        return None;
+    };
+    Some(MethodCall {
+        receiver,
+        method: name,
+        callee: callee.id,
+        args,
+    })
+}
 
 fn parse_and_lower(source: &str) -> Module<UnresolvedName> {
     let mut parser = Parser::new();
@@ -404,7 +435,7 @@ fn test_binary_all_arithmetic() {
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        let ExprKind::MethodCall { method, args, .. } = value.kind.as_ref() else {
+        let Some(MethodCall { method, args, .. }) = method_call(value) else {
             panic!("Expected MethodCall for {}, got {:?}", op_str, value.kind);
         };
         assert_eq!(
@@ -430,7 +461,7 @@ fn test_binary_all_comparison() {
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        let ExprKind::MethodCall { method, args, .. } = value.kind.as_ref() else {
+        let Some(MethodCall { method, args, .. }) = method_call(value) else {
             panic!("Expected MethodCall for {}, got {:?}", op_str, value.kind);
         };
         assert_eq!(
@@ -482,7 +513,7 @@ fn test_binary_concat() {
         panic!("Expected block");
     };
     // `<>` is desugared to a MethodCall in astgen
-    let ExprKind::MethodCall { method, args, .. } = value.kind.as_ref() else {
+    let Some(MethodCall { method, args, .. }) = method_call(value) else {
         panic!("Expected method call, got {:?}", value.kind);
     };
     assert_eq!(method.to_string(), "<>");
@@ -504,7 +535,7 @@ fn test_call_expression_no_args() {
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
         panic!("Expected block");
     };
-    let ExprKind::Call { callee, args } = value.kind.as_ref() else {
+    let ExprKind::Call { callee, args, .. } = value.kind.as_ref() else {
         panic!("Expected call expression, got {:?}", value.kind);
     };
     let ExprKind::Var(name) = callee.kind.as_ref() else {
@@ -525,7 +556,7 @@ fn test_call_expression_with_args() {
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
         panic!("Expected block");
     };
-    let ExprKind::Call { callee, args } = value.kind.as_ref() else {
+    let ExprKind::Call { callee, args, .. } = value.kind.as_ref() else {
         panic!("Expected call expression, got {:?}", value.kind);
     };
     let ExprKind::Var(name) = callee.kind.as_ref() else {
@@ -547,12 +578,12 @@ fn test_method_call() {
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
         panic!("Expected block");
     };
-    let ExprKind::MethodCall {
+    let Some(MethodCall {
         receiver,
         method,
         args,
         ..
-    } = value.kind.as_ref()
+    }) = method_call(value)
     else {
         panic!("Expected method call, got {:?}", value.kind);
     };
@@ -575,7 +606,7 @@ fn test_method_call_with_args() {
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
         panic!("Expected block");
     };
-    let ExprKind::MethodCall { method, args, .. } = value.kind.as_ref() else {
+    let Some(MethodCall { method, args, .. }) = method_call(value) else {
         panic!("Expected method call, got {:?}", value.kind);
     };
     assert_eq!(method.to_string(), "map");
@@ -601,25 +632,22 @@ fn test_qualified_method_keeps_its_path() {
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        let ExprKind::MethodCall {
+        let Some(MethodCall {
             receiver,
             method,
-            path,
+            callee: path,
             args,
-        } = value.kind.as_ref()
+        }) = method_call(value)
         else {
             panic!("Expected method call, got {:?}", value.kind);
         };
         let ExprKind::Var(receiver) = receiver.kind.as_ref() else {
             panic!("Expected var receiver");
         };
-        let path = path.as_ref().expect("a qualified method has a path");
-
         assert_eq!(method.to_string(), expected);
         assert_eq!(receiver.name().to_string(), "user");
         assert_eq!(args.len(), arg_count);
-        assert_ne!(path.id, value.id);
-        assert!(path.candidates.is_empty());
+        assert_ne!(path, value.id);
     }
 }
 
@@ -634,12 +662,12 @@ fn test_method_call_with_multiple_args() {
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
         panic!("Expected block");
     };
-    let ExprKind::MethodCall {
+    let Some(MethodCall {
         receiver,
         method,
         args,
         ..
-    } = value.kind.as_ref()
+    }) = method_call(value)
     else {
         panic!("Expected method call, got {:?}", value.kind);
     };
@@ -668,12 +696,12 @@ fn test_chained_method_call_with_args() {
         panic!("Expected block");
     };
     // Outermost: .baz() — no args
-    let ExprKind::MethodCall {
+    let Some(MethodCall {
         receiver: baz_recv,
         method: baz_method,
         args: baz_args,
         ..
-    } = value.kind.as_ref()
+    }) = method_call(value)
     else {
         panic!("Expected method call, got {:?}", value.kind);
     };
@@ -681,12 +709,12 @@ fn test_chained_method_call_with_args() {
     assert_eq!(baz_args.len(), 0);
 
     // Middle: .bar(1, 2) — 2 args
-    let ExprKind::MethodCall {
+    let Some(MethodCall {
         receiver: bar_recv,
         method: bar_method,
         args: bar_args,
         ..
-    } = baz_recv.kind.as_ref()
+    }) = method_call(baz_recv)
     else {
         panic!("Expected method call, got {:?}", baz_recv.kind);
     };
@@ -694,11 +722,11 @@ fn test_chained_method_call_with_args() {
     assert_eq!(bar_args.len(), 2, "bar should have 2 explicit arguments");
 
     // Innermost: .foo() — no args
-    let ExprKind::MethodCall {
+    let Some(MethodCall {
         method: foo_method,
         args: foo_args,
         ..
-    } = bar_recv.kind.as_ref()
+    }) = method_call(bar_recv)
     else {
         panic!("Expected method call, got {:?}", bar_recv.kind);
     };
@@ -833,14 +861,13 @@ fn test_field_access() {
     };
     assert_eq!(stmts.len(), 1);
     // Value expression should be a method call now (field access is syntactic sugar)
-    match value.kind.as_ref() {
-        ExprKind::MethodCall { method, .. } => {
-            assert_eq!(method.to_string(), "x");
-        }
-        _ => {
-            panic!("Expected MethodCall for field access, got {:?}", value.kind);
-        }
-    }
+    let Some(MethodCall { method, .. }) = method_call(value) else {
+        panic!(
+            "Expected method call for field access, got {:?}",
+            value.kind
+        );
+    };
+    assert_eq!(method.to_string(), "x");
 }
 
 // =============================================================================
@@ -859,7 +886,7 @@ fn test_block_with_multiple_statements() {
         panic!("Expected block");
     };
     assert_eq!(stmts.len(), 2);
-    let ExprKind::MethodCall { .. } = value.kind.as_ref() else {
+    let Some(MethodCall { .. }) = method_call(value) else {
         panic!("Expected method call (desugared binary op) as value");
     };
 }
@@ -1114,11 +1141,11 @@ fn test_block_as_expression() {
         panic!("Expected outer block");
     };
     // {1 + 2} * 3 is desugared to MethodCall with receiver={1 + 2}, method="*"
-    let ExprKind::MethodCall {
-        method,
+    let Some(MethodCall {
         receiver: lhs,
+        method,
         ..
-    } = value.kind.as_ref()
+    }) = method_call(value)
     else {
         panic!("Expected MethodCall, got {:?}", value.kind);
     };
@@ -1130,10 +1157,10 @@ fn test_block_as_expression() {
     else {
         panic!("Expected inner block, got {:?}", lhs.kind);
     };
-    let ExprKind::MethodCall {
+    let Some(MethodCall {
         method: inner_method,
         ..
-    } = inner_value.kind.as_ref()
+    }) = method_call(inner_value)
     else {
         panic!("Expected inner MethodCall");
     };
@@ -1190,7 +1217,7 @@ fn test_block_trailing_expression() {
     assert_eq!(stmts.len(), 1);
 
     // The block value should be a MethodCall (x + 1 is desugared)
-    let ExprKind::MethodCall { method, .. } = value.kind.as_ref() else {
+    let Some(MethodCall { method, .. }) = method_call(value) else {
         panic!("Expected MethodCall as block value, got {:?}", value.kind);
     };
     assert_eq!(method.to_string(), "+");
@@ -2630,4 +2657,28 @@ fn test_raw_string_pattern_is_decoded() {
         *arms[0].pattern.kind,
         PatternKind::Literal(crate::ast::LiteralPattern::String(r#"a"b"#.into()))
     );
+}
+
+#[test]
+fn test_call_records_how_it_was_written() {
+    use crate::ast::CallSyntax;
+
+    for (source, expected) in [
+        ("fn main() -> Nil { f(x) }", CallSyntax::Call),
+        ("fn main() -> Nil { x.f(y) }", CallSyntax::Method),
+        ("fn main() -> Nil { x.f }", CallSyntax::Method),
+        ("fn main() -> Nil { x + y }", CallSyntax::Operator),
+    ] {
+        let module = parse_and_lower(source);
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Call { syntax, .. } = value.kind.as_ref() else {
+            panic!("Expected call, got {:?}", value.kind);
+        };
+        assert_eq!(*syntax, expected, "{source}");
+    }
 }

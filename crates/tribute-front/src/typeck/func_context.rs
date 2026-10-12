@@ -192,6 +192,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Calls whose number of arguments was reported; inference may visit a
     /// call more than once.
     reported_arities: HashSet<NodeId>,
+    /// The calls written as `x.f(y)`, for diagnostics.
+    method_syntax_calls: HashSet<NodeId>,
 
     /// Deferred UFCS method calls whose receiver type is still a UniVar.
     /// Resolved after constraint solving when UniVars have been substituted.
@@ -210,14 +212,16 @@ pub struct FunctionInferenceContext<'a, 'db> {
 /// enabling method lookup and additional type constraints.
 #[derive(Clone)]
 pub struct DeferredMethodCall<'db> {
-    /// The NodeId of the MethodCall expression (for span lookup in diagnostics).
+    /// The call expression's node.
     pub node_id: NodeId,
-    /// The receiver expression's type (UniVar at creation, resolved after solving).
-    pub receiver_ty: Type<'db>,
+    /// How the call was written, for diagnostics.
+    pub syntax: crate::ast::CallSyntax,
     /// The method name being called.
     pub method: Symbol,
-    /// For a qualified call, the path's node and the functions it may name.
-    pub path: Option<(NodeId, Vec<FuncDefId<'db>>)>,
+    /// The callee's node, for span lookup in diagnostics.
+    pub callee: NodeId,
+    /// The functions the callee may name.
+    pub candidates: Vec<FuncDefId<'db>>,
     /// Fresh UniVar for the method's return type — will be constrained after resolution.
     pub result_ty: Type<'db>,
     /// Argument types including receiver as first element.
@@ -277,6 +281,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             handle_ctx_stack: Vec::new(),
             resolved_methods: HashMap::default(),
             reported_arities: HashSet::default(),
+            method_syntax_calls: HashSet::default(),
             deferred_methods: Vec::new(),
             resolved_deferred_methods: Vec::new(),
             evidence: Default::default(),
@@ -493,6 +498,22 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         callee_ty: Type<'db>,
     ) {
         self.resolved_methods.insert(node, (func_id, callee_ty));
+    }
+
+    /// Remember how the call at `node` was written, for its diagnostics.
+    pub fn note_call_syntax(&mut self, node: NodeId, syntax: crate::ast::CallSyntax) {
+        if syntax == crate::ast::CallSyntax::Method {
+            self.method_syntax_calls.insert(node);
+        }
+    }
+
+    /// How the call at `node` was written.
+    pub fn call_syntax(&self, node: NodeId) -> crate::ast::CallSyntax {
+        if self.method_syntax_calls.contains(&node) {
+            crate::ast::CallSyntax::Method
+        } else {
+            crate::ast::CallSyntax::Call
+        }
     }
 
     /// Whether the number of arguments of the call at `node` is reported
