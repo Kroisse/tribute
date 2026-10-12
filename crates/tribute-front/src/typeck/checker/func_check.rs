@@ -700,7 +700,12 @@ impl<'db> TypeChecker<'db> {
             return Vec::new();
         };
         if params.len() != call.arg_types.len() {
-            self.report_call_arity(call.node_id, params.len(), call.arg_types.len());
+            self.report_call_arity(
+                call.node_id,
+                call.syntax,
+                params.len(),
+                call.arg_types.len(),
+            );
         }
         let origin = ConstraintOrigin {
             node_id: call.node_id,

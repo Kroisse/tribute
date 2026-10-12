@@ -1261,7 +1261,11 @@ impl<'db> Resolver<'db> {
             ExprKind::Nil => ExprKind::Nil,
             ExprKind::RuneLit(c) => ExprKind::RuneLit(*c),
 
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call {
+                callee,
+                args,
+                syntax,
+            } => {
                 let args: Vec<_> = args.iter().map(|a| self.resolve_expr(a)).collect();
                 let callee = match &*callee.kind {
                     ExprKind::Var(name) => match self.imported_functions(name) {
@@ -1284,7 +1288,11 @@ impl<'db> Resolver<'db> {
                     },
                     _ => self.resolve_expr(callee),
                 };
-                ExprKind::Call { callee, args }
+                ExprKind::Call {
+                    callee,
+                    args,
+                    syntax: *syntax,
+                }
             }
 
             ExprKind::Cons { ctor, args } => {

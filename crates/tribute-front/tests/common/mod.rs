@@ -240,7 +240,7 @@ fn collect_tdnr_summary<'db>(
     summary: &mut TdnrSummary,
 ) {
     match &*expr.kind {
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             if let ExprKind::Var(TypedRef {
                 resolved: ResolvedRef::Function { id },
                 ..

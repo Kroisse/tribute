@@ -192,6 +192,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Calls whose number of arguments was reported; inference may visit a
     /// call more than once.
     reported_arities: HashSet<NodeId>,
+    /// The calls written as `x.f(y)`, for diagnostics.
+    method_syntax_calls: HashSet<NodeId>,
 
     /// Deferred UFCS method calls whose receiver type is still a UniVar.
     /// Resolved after constraint solving when UniVars have been substituted.
@@ -212,6 +214,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
 pub struct DeferredMethodCall<'db> {
     /// The call expression's node.
     pub node_id: NodeId,
+    /// How the call was written, for diagnostics.
+    pub syntax: crate::ast::CallSyntax,
     /// The method name being called.
     pub method: Symbol,
     /// The callee's node, for span lookup in diagnostics.
@@ -277,6 +281,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             handle_ctx_stack: Vec::new(),
             resolved_methods: HashMap::default(),
             reported_arities: HashSet::default(),
+            method_syntax_calls: HashSet::default(),
             deferred_methods: Vec::new(),
             resolved_deferred_methods: Vec::new(),
             evidence: Default::default(),
@@ -493,6 +498,22 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         callee_ty: Type<'db>,
     ) {
         self.resolved_methods.insert(node, (func_id, callee_ty));
+    }
+
+    /// Remember how the call at `node` was written, for its diagnostics.
+    pub fn note_call_syntax(&mut self, node: NodeId, syntax: crate::ast::CallSyntax) {
+        if syntax == crate::ast::CallSyntax::Method {
+            self.method_syntax_calls.insert(node);
+        }
+    }
+
+    /// How the call at `node` was written.
+    pub fn call_syntax(&self, node: NodeId) -> crate::ast::CallSyntax {
+        if self.method_syntax_calls.contains(&node) {
+            crate::ast::CallSyntax::Method
+        } else {
+            crate::ast::CallSyntax::Call
+        }
     }
 
     /// Whether the number of arguments of the call at `node` is reported

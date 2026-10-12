@@ -1,7 +1,9 @@
 use trunk_ir::Symbol;
 
 use super::*;
-use crate::ast::{BinOpKind, FieldInit, FieldPattern, LiteralPattern, ModuleDecl, Param};
+use crate::ast::{
+    BinOpKind, CallSyntax, FieldInit, FieldPattern, LiteralPattern, ModuleDecl, Param,
+};
 
 fn id(raw: usize) -> NodeId {
     NodeId::from_raw(raw)
@@ -107,6 +109,7 @@ fn sample() -> Module<u32> {
                                     args: vec![leaf(8)],
                                 },
                             )],
+                            syntax: CallSyntax::Call,
                         },
                     ),
                 },
@@ -138,6 +141,7 @@ fn sample() -> Module<u32> {
                                 },
                             ),
                             args: vec![leaf(15), leaf(16)],
+                            syntax: CallSyntax::Method,
                         },
                     ),
                 },

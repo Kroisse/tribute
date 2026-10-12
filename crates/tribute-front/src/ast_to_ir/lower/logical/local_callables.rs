@@ -69,7 +69,7 @@ impl<'db> Plan<'db> {
         // call's checked effect instance is pure.
         let mut expected = HashMap::default();
         for expr in &nodes {
-            if let ExprKind::Call { callee, args } = &*expr.kind {
+            if let ExprKind::Call { callee, args, .. } = &*expr.kind {
                 let parameters = match &*callee.kind {
                     ExprKind::Var(reference) => match reference.resolved {
                         ResolvedRef::Function { id } => {

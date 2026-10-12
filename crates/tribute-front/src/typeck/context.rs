@@ -1605,7 +1605,7 @@ mod tests {
     fn has_method_call(expr: &crate::ast::Expr<crate::ast::TypedRef<'_>>) -> bool {
         match &*expr.kind {
             ExprKind::Functions { .. } => true,
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call { callee, args, .. } => {
                 has_method_call(callee) || args.iter().any(has_method_call)
             }
             ExprKind::Block { stmts, value } => {

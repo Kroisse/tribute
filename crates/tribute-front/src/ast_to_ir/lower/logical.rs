@@ -1581,7 +1581,7 @@ fn lower_expr<'db>(
             builder.ir.push_op(builder.block, branch.op_ref());
             Some(branch.result(builder.ir))
         }
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             let result_ty = builder
                 .ctx
                 .get_node_type(expr.id)
@@ -2318,7 +2318,7 @@ fn lower_become<'db>(
     call: Expr<TypedRef<'db>>,
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
-    let ExprKind::Call { callee, args } = *call.kind else {
+    let ExprKind::Call { callee, args, .. } = *call.kind else {
         // Typechecking has reported any other operand.
         return Some(builder.emit_nil(location));
     };

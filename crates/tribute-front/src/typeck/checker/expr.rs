@@ -215,7 +215,12 @@ impl<'db> TypeChecker<'db> {
             {
                 self.infer_method_call_with_ctx(ctx, expr)
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call {
+                callee,
+                args,
+                syntax,
+            } => {
+                ctx.note_call_syntax(expr.id, *syntax);
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
                 // Conversion re-visits the callee. Keep this one ability-op
                 // inference instance connected to that visit through dedicated
@@ -788,7 +793,12 @@ impl<'db> TypeChecker<'db> {
             {
                 self.infer_method_call_with_ctx(ctx, expr)
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call {
+                callee,
+                args,
+                syntax,
+            } => {
+                ctx.note_call_syntax(expr.id, *syntax);
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
                 if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::AbilityOp { .. })) {
                     ctx.record_ability_op_callee_type(callee.id, callee_ty);
@@ -1461,9 +1471,15 @@ impl<'db> TypeChecker<'db> {
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         expr: &Expr<ResolvedRef<'db>>,
     ) -> Type<'db> {
-        let ExprKind::Call { callee, args } = &*expr.kind else {
+        let ExprKind::Call {
+            callee,
+            args,
+            syntax,
+        } = &*expr.kind
+        else {
             unreachable!("the caller matched a call");
         };
+        ctx.note_call_syntax(expr.id, *syntax);
         let ExprKind::Functions {
             name: method,
             candidates,
@@ -1542,6 +1558,7 @@ impl<'db> TypeChecker<'db> {
         ctx.merge_effect_at(effect, node);
         ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
             node_id: node,
+            syntax: *syntax,
             method: method.clone(),
             callee: callee.id,
             candidates,
@@ -1594,7 +1611,12 @@ impl<'db> TypeChecker<'db> {
             && params.len() != arg_types.len()
         {
             if ctx.report_arity_once(origin) {
-                self.report_call_arity(origin, params.len(), arg_types.len());
+                self.report_call_arity(
+                    origin,
+                    ctx.call_syntax(origin),
+                    params.len(),
+                    arg_types.len(),
+                );
             }
             for (param_ty, arg_ty) in params.iter().zip(arg_types) {
                 ctx.constrain_coerce_at(*arg_ty, *param_ty, origin, ConstraintOriginKind::Call);
@@ -1763,11 +1785,24 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Report a call that passes `args` arguments to a function of `params`
-    /// parameters.
-    pub(crate) fn report_call_arity(&self, node: NodeId, params: usize, args: usize) {
+    /// parameters. A method call counts the arguments after its receiver,
+    /// as it is written.
+    pub(crate) fn report_call_arity(
+        &self,
+        node: NodeId,
+        syntax: crate::ast::CallSyntax,
+        params: usize,
+        args: usize,
+    ) {
+        let (params, args, receiver) = match syntax {
+            crate::ast::CallSyntax::Method if params > 0 && args > 0 => {
+                (params - 1, args - 1, " after the receiver")
+            }
+            _ => (params, args, ""),
+        };
         Diagnostic::new(
             format!(
-                "call arity mismatch: expected {params} argument{}, found {args}",
+                "call arity mismatch: expected {params} argument{}{receiver}, found {args}",
                 if params == 1 { "" } else { "s" }
             ),
             self.get_span(node),
@@ -1916,9 +1951,11 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Var(resolved) => {
                 ExprKind::Var(self.convert_ref_with_ctx(ctx, Some(expr_id), resolved))
             }
-            ExprKind::Call { callee, args }
-                if matches!(&*callee.kind, ExprKind::Functions { .. }) =>
-            {
+            ExprKind::Call {
+                callee,
+                args,
+                syntax,
+            } if matches!(&*callee.kind, ExprKind::Functions { .. }) => {
                 let args = args
                     .iter()
                     .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
@@ -1938,9 +1975,17 @@ impl<'db> TypeChecker<'db> {
                         self.convert_expr_kind_with_ctx(ctx, callee.id, &callee.kind),
                     ),
                 };
-                ExprKind::Call { callee, args }
+                ExprKind::Call {
+                    callee,
+                    args,
+                    syntax: *syntax,
+                }
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call {
+                callee,
+                args,
+                syntax,
+            } => {
                 let inferred_ability_op_callee = ctx.get_ability_op_callee_type(callee.id);
                 // First, process callee so its type gets recorded
                 let converted_callee = self.check_expr_with_ctx(ctx, callee, Mode::Infer);
@@ -1986,6 +2031,7 @@ impl<'db> TypeChecker<'db> {
                 ExprKind::Call {
                     callee: converted_callee,
                     args: converted_args,
+                    syntax: *syntax,
                 }
             }
             ExprKind::Cons { ctor, args } => ExprKind::Cons {

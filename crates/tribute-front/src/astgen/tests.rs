@@ -15,7 +15,7 @@ struct MethodCall<'a> {
 }
 
 fn method_call(expr: &Expr<UnresolvedName>) -> Option<MethodCall<'_>> {
-    let ExprKind::Call { callee, args } = expr.kind.as_ref() else {
+    let ExprKind::Call { callee, args, .. } = expr.kind.as_ref() else {
         return None;
     };
     let ExprKind::Functions { name, candidates } = callee.kind.as_ref() else {
@@ -535,7 +535,7 @@ fn test_call_expression_no_args() {
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
         panic!("Expected block");
     };
-    let ExprKind::Call { callee, args } = value.kind.as_ref() else {
+    let ExprKind::Call { callee, args, .. } = value.kind.as_ref() else {
         panic!("Expected call expression, got {:?}", value.kind);
     };
     let ExprKind::Var(name) = callee.kind.as_ref() else {
@@ -556,7 +556,7 @@ fn test_call_expression_with_args() {
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
         panic!("Expected block");
     };
-    let ExprKind::Call { callee, args } = value.kind.as_ref() else {
+    let ExprKind::Call { callee, args, .. } = value.kind.as_ref() else {
         panic!("Expected call expression, got {:?}", value.kind);
     };
     let ExprKind::Var(name) = callee.kind.as_ref() else {
@@ -2657,4 +2657,28 @@ fn test_raw_string_pattern_is_decoded() {
         *arms[0].pattern.kind,
         PatternKind::Literal(crate::ast::LiteralPattern::String(r#"a"b"#.into()))
     );
+}
+
+#[test]
+fn test_call_records_how_it_was_written() {
+    use crate::ast::CallSyntax;
+
+    for (source, expected) in [
+        ("fn main() -> Nil { f(x) }", CallSyntax::Call),
+        ("fn main() -> Nil { x.f(y) }", CallSyntax::Method),
+        ("fn main() -> Nil { x.f }", CallSyntax::Method),
+        ("fn main() -> Nil { x + y }", CallSyntax::Operator),
+    ] {
+        let module = parse_and_lower(source);
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Call { syntax, .. } = value.kind.as_ref() else {
+            panic!("Expected call, got {:?}", value.kind);
+        };
+        assert_eq!(*syntax, expected, "{source}");
+    }
 }

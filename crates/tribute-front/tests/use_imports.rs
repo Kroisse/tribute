@@ -689,12 +689,28 @@ use b::tag
         let errors = check(body);
         assert!(errors.is_empty(), "{body}: {errors:#?}");
     }
-    for (method, call) in [
-        ("let _ = A { n: 1 }.pair()", "let _ = pair(A { n: 1 })"),
+    // The same errors, each counted the way its call is written.
+    for (body, expected) in [
+        (
+            "let _ = A { n: 1 }.pair()",
+            "call arity mismatch: expected 1 argument after the receiver, found 0",
+        ),
+        (
+            "let _ = pair(A { n: 1 })",
+            "call arity mismatch: expected 2 arguments, found 1",
+        ),
         (
             "let _ = A { n: 1 }.pair(1, 2)",
-            "let _ = pair(A { n: 1 }, 1, 2)",
+            "call arity mismatch: expected 1 argument after the receiver, found 2",
         ),
+        (
+            "let _ = pair(A { n: 1 }, 1, 2)",
+            "call arity mismatch: expected 2 arguments, found 3",
+        ),
+    ] {
+        assert_eq!(check(body), [expected], "{body}");
+    }
+    for (method, call) in [
         ("let _ = 1.pair(2)", "let _ = pair(1, 2)"),
         (
             "let _ = A { n: 1 }.pair(True)",
