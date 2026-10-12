@@ -6,7 +6,7 @@ use std::num::NonZero;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::MonomorphizeMetadata;
-use super::instance::InstanceKeys;
+use super::instance::{InstanceKeys, for_each_declaration_mut};
 use crate::ast::visit::{
     RefSite, Visit, VisitMut, walk_expr, walk_expr_mut, walk_handler_arm, walk_pattern,
     walk_pattern_mut, walk_stmt, walk_stmt_mut,
@@ -16,6 +16,7 @@ use crate::ast::{
     LocalId, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypedRef, collect_effect_vars,
 };
 use crate::typeck::{RowSubst, TypeSubst};
+use trunk_ir::SymbolPath;
 
 /// Give every let-bound lambda of `decls` one class per binding, copying a
 /// binding whose uses select several.
@@ -55,9 +56,10 @@ fn split_local_lambdas<'db>(
     keys: &InstanceKeys<'db>,
 ) -> bool {
     let mut split = false;
-    for decl in decls {
-        let Decl::Function(function) = decl else {
-            continue;
+    let mut module = SymbolPath::root();
+    for_each_declaration_mut(decls, &mut module, &mut |name, decl| {
+        let (Some(name), Decl::Function(function)) = (name, decl) else {
+            return;
         };
         // The lambdas a `let` binds, by the local they bind.
         let mut bindings = HashMap::default();
@@ -78,7 +80,7 @@ fn split_local_lambdas<'db>(
             }
         });
         if bindings.is_empty() {
-            continue;
+            return;
         }
         // The classes each use selects, in source order. A use the checker
         // recorded no instance for reads the binding as it is.
@@ -118,7 +120,7 @@ fn split_local_lambdas<'db>(
             });
             match (instance, spelled) {
                 (Some(instance), Some(spelled)) => {
-                    let classes = keys.classes_of_rows(&instance.row_arguments, &function.name);
+                    let classes = keys.classes_of_rows(&instance.row_arguments, name);
                     uses.entry(*id).or_default().push((expr.id, classes));
                     rows.insert(*binding, spelled);
                 }
@@ -166,7 +168,7 @@ fn split_local_lambdas<'db>(
             }
         }
         if copies.is_empty() {
-            continue;
+            return;
         }
         Split {
             db,
@@ -177,7 +179,7 @@ fn split_local_lambdas<'db>(
         }
         .visit_expr_mut(&mut function.body);
         split = true;
-    }
+    });
     split
 }
 

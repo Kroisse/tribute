@@ -7,14 +7,14 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_module_mut};
 use crate::ast::{
     CtorId, Decl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypedRef,
 };
 
-use super::instance::{InstanceKey, InstanceKeys};
+use super::instance::{InstanceKey, InstanceKeys, for_each_declaration_mut};
 use super::mangle::mangle_type_name;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
@@ -42,20 +42,20 @@ pub fn rewrite_decls<'db>(
     instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     keys: &InstanceKeys<'db>,
 ) {
-    for decl in decls {
-        let enclosing = super::collect::enclosing_instance(decl).cloned();
+    let mut module = SymbolPath::root();
+    for_each_declaration_mut(decls, &mut module, &mut |enclosing, decl| {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
             // Only a function reference in expression position is a call site.
             if site == RefSite::Var
                 && let Some(instance) = instances.get(&node)
                 && let Some(callee) =
-                    specialized_callee(db, rewrite_map, keys, instance, enclosing.as_ref(), value)
+                    specialized_callee(db, rewrite_map, keys, instance, enclosing, value)
             {
                 *value = callee;
             }
         });
         walk_decl_mut(&mut rewrite, decl);
-    }
+    });
 }
 
 /// The specialized function the reference `instance` inside `enclosing`
@@ -124,8 +124,8 @@ pub fn rewrite_field_function_refs<'db>(
     instances: &mut HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     keys: &mut InstanceKeys<'db>,
 ) {
-    for decl in &mut module.decls {
-        let enclosing = super::collect::enclosing_instance(decl).cloned();
+    let mut root = SymbolPath::root();
+    for_each_declaration_mut(&mut module.decls, &mut root, &mut |enclosing, decl| {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
             if site != RefSite::Var {
                 return;
@@ -140,7 +140,7 @@ pub fn rewrite_field_function_refs<'db>(
                 return;
             }
             let classes = keys
-                .key(instance, enclosing.as_ref())
+                .key(instance, enclosing)
                 .filter(InstanceKey::has_weaker_class);
             let original = instance.function;
             let crate::typeck::FunctionInstanceOrigin::FieldAccessor { owner, field, kind } =
@@ -168,7 +168,7 @@ pub fn rewrite_field_function_refs<'db>(
             value.resolved = ResolvedRef::Function { id: function };
         });
         walk_decl_mut(&mut rewrite, decl);
-    }
+    });
 }
 
 /// Rewrite all Named types with type arguments to their mangled monomorphic versions

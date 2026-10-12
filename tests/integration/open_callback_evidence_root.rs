@@ -281,3 +281,60 @@ fn generic_callback_evidence_root_executes_native() {
     );
     assert!(output.stdout.is_empty());
 }
+
+/// A function inside a module is the instance its let-bound lambdas and
+/// references are inside, as a root function is.
+#[salsa_test]
+fn let_bound_lambdas_in_a_module_are_emitted_per_class_in_use(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+use std::io::Io
+
+mod m {
+    use std::io::{Io, print_line}
+
+    pub fn app(x: Int, f: fn(Int) ->{e} Int) ->{e} Int { f(x) }
+
+    pub fn each(n: Int) -> Int {
+        let step = fn(m: Int) -> Int { m + +1 }
+        step(n)
+    }
+
+    pub fn run() ->{Io} Nil {
+        let both = fn(x: Int, f: fn(Int) ->{e} Int) app(x, f)
+        let _ = both(+1, fn(n) n + +1)
+        let _ = both(+2, fn(n) { print_line("io") n })
+        let _ = each(+3)
+        Nil
+    }
+}
+
+fn main() ->{Io} Nil {
+    m::run()
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let function = |name: &str| {
+        ir.split(&format!("tribute_control.func @\"{name}\"("))
+            .nth(1)
+            .and_then(|rest| rest.split("\n  }\n").next())
+            .unwrap_or_else(|| panic!("{name} in\n{ir}"))
+    };
+    let run = function("m::run");
+    assert!(run.contains("callee = @\"m::app$9D\""), "{run}");
+    assert!(run.contains("callee = @\"m::app$9E\""), "{run}");
+    assert!(!run.contains("callee = @\"m::app\"}"), "{run}");
+    let each = function("m::each");
+    assert!(
+        each.starts_with("%0: core.i32) -> core.i32 convention(direct)"),
+        "{each}"
+    );
+    assert!(
+        each.contains("tribute_control.lambda") && !each.contains("convention(cps)"),
+        "{each}"
+    );
+}
