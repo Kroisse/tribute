@@ -3377,9 +3377,11 @@ fn main() ->{Io} Nil {
     print_line(Int::to_string(apply(A { n: +1 }, size)))
     print_line(Int::to_string(on_b(size)))
     print_line(Int::to_string(late(B { n: +4 })))
+    let passed = size
+    print_line(Int::to_string(apply(A { n: +5 }, passed)))
 }
 "#,
-        "1\n102\n104",
+        "1\n102\n104\n5",
     );
 }
 

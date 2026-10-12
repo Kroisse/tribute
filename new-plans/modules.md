@@ -410,7 +410,9 @@ size(1)             // Error: 어느 size도 Nat 하나를 받지 않는다
 count(make())       // OK: count가 Nat을 받으면 a::make
 let _ = make()      // Error: 결과 타입이 정해지지 않아 모호하다. a::make()로 지정
 apply(A { n: 1 }, size)   // OK: apply가 fn(A) -> b를 기대하므로 a::size
-let f = size              // Error: 기대되는 타입이 없어 모호하다. a::size로 지정
+let f = size
+apply(A { n: 1 }, f)      // OK: f가 쓰이는 자리의 타입으로 a::size
+let g = size              // Error: g가 어디에도 쓰이지 않아 모호하다. a::size로 지정
 ```
 
 ### Use 범위 제한

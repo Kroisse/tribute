@@ -567,6 +567,7 @@ fn a_function_value_is_selected_by_the_type_it_is_used_at(db: &salsa::DatabaseIm
         "fn pick() -> fn(A) -> Nat { size }\nfn main() -> Nil { }\n",
         // A local takes the type its use gives it.
         "fn main() -> Nil {\n    let f = size\n    let _ = f(A { n: 1 })\n}\n",
+        "fn main() -> Nil {\n    let f = size\n    let _ = apply(A { n: 1 }, f)\n}\n",
     ] {
         let errors = errors(db, &format!("{SIZES}{USES}{body}"));
         assert!(errors.is_empty(), "{body}: {errors:#?}");
