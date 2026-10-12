@@ -617,7 +617,7 @@ impl<'db> TypeChecker<'db> {
                         );
                         let callable = instance.ty;
                         instances.insert(
-                            mc.node_id,
+                            mc.callee,
                             crate::typeck::FunctionInstance {
                                 origin,
                                 function: entry.func_id,

@@ -1502,7 +1502,7 @@ impl<'db> TypeChecker<'db> {
             },
         );
         if let MethodSelection::One(entry) = selection {
-            let callee_ty = self.select_callee(ctx, node, entry.func_id);
+            let callee_ty = self.select_callee(ctx, node, callee.id, entry.func_id);
             let mut arg_types: Vec<Type<'db>> = first_ty.into_iter().collect();
             let params = match callee_ty.kind(self.db()) {
                 TypeKind::Func { params, .. } => params.as_slice(),
@@ -1534,7 +1534,7 @@ impl<'db> TypeChecker<'db> {
             },
         );
         if let MethodSelection::One(entry) = selection {
-            let callee_ty = self.select_callee(ctx, node, entry.func_id);
+            let callee_ty = self.select_callee(ctx, node, callee.id, entry.func_id);
             return self.infer_call_with_ctx(ctx, callee_ty, &arg_types, node);
         }
 
@@ -1569,15 +1569,17 @@ impl<'db> TypeChecker<'db> {
         result_ty
     }
 
-    /// The instance of `function` that the call at `node` selected.
+    /// The instance of `function` that the call at `node` selected for its
+    /// callee at `callee`.
     fn select_callee(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         node: NodeId,
+        callee: NodeId,
         function: crate::ast::FuncDefId<'db>,
     ) -> Type<'db> {
         let callee_ty = ctx
-            .instantiate_function_reference(node, function)
+            .instantiate_function_reference(callee, function)
             .unwrap_or_else(|| ctx.fresh_type_var());
         ctx.record_resolved_method(node, function, callee_ty);
         callee_ty
@@ -1964,7 +1966,7 @@ impl<'db> TypeChecker<'db> {
                 // still unselected stays for the solver to decide.
                 let callee = match ctx.get_resolved_method(expr_id) {
                     Some((func_id, callee_ty)) => Expr::new(
-                        expr_id,
+                        callee.id,
                         ExprKind::Var(TypedRef {
                             resolved: ResolvedRef::Function { id: func_id },
                             ty: callee_ty,
@@ -2406,7 +2408,7 @@ impl<'db> TypeChecker<'db> {
             let MethodSelection::One(entry) = self.select_method(&call.candidates, types) else {
                 continue;
             };
-            let Some(callee_ty) = ctx.instantiate_function_reference(call.node_id, entry.func_id)
+            let Some(callee_ty) = ctx.instantiate_function_reference(call.callee, entry.func_id)
             else {
                 continue;
             };

@@ -111,7 +111,7 @@ impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
                     return;
                 };
                 *callee = Expr::new(
-                    expr.id,
+                    callee.id,
                     ExprKind::Var(TypedRef {
                         resolved: ResolvedRef::Function { id: func_id },
                         ty: self.apply(callee_ty),
