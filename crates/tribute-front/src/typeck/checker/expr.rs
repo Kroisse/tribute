@@ -2223,16 +2223,16 @@ impl<'db> TypeChecker<'db> {
                 if matches!(&*call.kind, ExprKind::Call { callee, .. } if matches!(&*callee.kind, ExprKind::Functions { .. }))
                 {
                     match &*converted.kind {
-                        ExprKind::Call { callee, .. } => {
-                            if let ExprKind::Var(TypedRef {
+                        ExprKind::Call { callee, .. } => match &*callee.kind {
+                            ExprKind::Var(TypedRef {
                                 resolved: ResolvedRef::Function { id },
                                 ..
-                            }) = &*callee.kind
-                            {
-                                self.check_become_callee(expr_id, *id);
-                            }
-                        }
-                        _ => ctx.record_become_method_operand(call.id),
+                            }) => self.check_become_callee(expr_id, *id),
+                            // Still unselected; checked once the solver
+                            // has selected its function.
+                            _ => ctx.record_become_method_operand(call.id),
+                        },
+                        _ => {}
                     }
                 }
                 ExprKind::Become { call: converted }
