@@ -17,6 +17,8 @@ pub(super) enum NominalDeclaration<'ast> {
 
 pub(super) struct Declaration<'ast, 'db> {
     pub source: NominalDeclaration<'ast>,
+    /// The module that declares it.
+    pub module: SymbolPath,
     pub constructors: Vec<Constructor<'db>>,
 }
 
@@ -67,6 +69,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                     s.id,
                     Declaration {
                         source: NominalDeclaration::Struct(s),
+                        module: prefix.clone(),
                         constructors: vec![Constructor {
                             node: s.id,
                             id: CtorId::new(db, crate::qualified_symbol(prefix, &s.name)),
@@ -79,6 +82,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                     e.id,
                     Declaration {
                         source: NominalDeclaration::Enum(e),
+                        module: prefix.clone(),
                         constructors: e
                             .variants
                             .iter()

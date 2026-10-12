@@ -1681,9 +1681,39 @@ mod tests {
     use rustc_hash::FxHashSet as HashSet;
     use salsa_test_macros::salsa_test;
     use std::ops::ControlFlow;
+    use trunk_ir::SymbolPath;
     use trunk_ir::dialect::clif;
     use trunk_ir::ops::DialectType;
     use trunk_ir::walk::{WalkAction, walk_region};
+
+    /// `decl` and the declarations of its modules that are not modules, each
+    /// with its qualified name. `decl` is inside `module`.
+    fn declarations_with_names<'a, 'db>(
+        decl: &'a tribute_front::ast::Decl<tribute_front::ast::TypedRef<'db>>,
+        module: &SymbolPath,
+    ) -> Vec<(
+        trunk_ir::Symbol,
+        &'a tribute_front::ast::Decl<tribute_front::ast::TypedRef<'db>>,
+    )> {
+        use tribute_front::ast::Decl;
+        let name = match decl {
+            Decl::Module(inner) => {
+                let module = module.child(inner.name.clone());
+                return inner
+                    .body
+                    .iter()
+                    .flatten()
+                    .flat_map(|decl| declarations_with_names(decl, &module))
+                    .collect();
+            }
+            Decl::Function(function) => &function.name,
+            Decl::ExternFunction(function) => &function.name,
+            Decl::Struct(structure) => &structure.name,
+            Decl::Enum(enumeration) => &enumeration.name,
+            _ => return Vec::new(),
+        };
+        vec![(tribute_front::qualified_symbol(module, name), decl)]
+    }
 
     fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
         let mut ctx = IrContext::new();
@@ -3177,9 +3207,8 @@ fn main() -> Nil {
                 .ast
                 .decls
                 .iter()
-                .filter(|decl| {
-                    matches!(decl, Decl::Function(function) if function.name == specialized)
-                })
+                .flat_map(|decl| declarations_with_names(decl, &SymbolPath::root()))
+                .filter(|(name, decl)| matches!(decl, Decl::Function(_)) && *name == specialized)
                 .count(),
             1,
             "all import paths must share one specialized definition"
@@ -3288,7 +3317,10 @@ fn main() -> Nil {}
             prepare_frontend_for_lowering(db, typed, source).expect("closed nominal dependencies");
         let schemas = &prepared.constructor_types(db).specialized_enum_variants;
         let mut seen = HashSet::default();
-        for declaration in &prepared.module(db).decls {
+        let declarations = prepared.module(db).decls.iter();
+        for (name, declaration) in
+            declarations.flat_map(|decl| declarations_with_names(decl, &SymbolPath::root()))
+        {
             if let Decl::Enum(e) = declaration
                 && e.id.variant().is_some()
             {
@@ -3309,7 +3341,7 @@ fn main() -> Nil {}
                         }
                     };
                     assert!(matches!(result.kind(db), TypeKind::Named { id, args, .. }
-                        if id.qualified(db) == e.name && args.is_empty()));
+                        if *id.qualified(db) == name && args.is_empty()));
                 }
             }
         }

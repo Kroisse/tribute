@@ -9,18 +9,57 @@ use trunk_ir::Symbol;
 
 use crate::ast::visit::{RefSite, Visit, VisitMut};
 use crate::ast::{
-    Decl, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId, Module, NodeId, StructDecl,
-    Type, TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme, TypedRef,
-    VariantDecl,
+    Decl, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId, Module, ModuleDecl, NodeId,
+    StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme,
+    TypedRef, VariantDecl,
 };
 use crate::typeck::subst::substitute_bound_vars;
 
 use super::instance::InstanceKey;
-use super::mangle::{mangle_instance_name, mangle_type_name};
+use super::mangle::{mangle_instance_name, mangle_name, mangle_type_name};
+
+/// Where a generated declaration goes: the module of its source declaration
+/// and its name there. Until it is placed, the declaration is named by its
+/// qualified name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Placement {
+    module: SymbolPath,
+    name: Symbol,
+}
+
+impl Placement {
+    /// `declaration` under its own name inside this placement's modules,
+    /// each a module declaration with the node `id`.
+    pub(super) fn place<'db>(
+        self,
+        id: NodeId,
+        mut declaration: Decl<TypedRef<'db>>,
+    ) -> Decl<TypedRef<'db>> {
+        match &mut declaration {
+            Decl::Function(function) => function.name = self.name,
+            Decl::ExternFunction(function) => function.name = self.name,
+            Decl::Struct(structure) => structure.name = self.name,
+            Decl::Enum(enumeration) => enumeration.name = self.name,
+            _ => unreachable!("only functions and nominal types are specialized"),
+        }
+        self.module
+            .components()
+            .iter()
+            .rev()
+            .fold(declaration, |declaration, name| {
+                Decl::Module(ModuleDecl {
+                    id,
+                    name: name.clone(),
+                    is_pub: false,
+                    body: Some(vec![declaration]),
+                })
+            })
+    }
+}
 
 pub(super) struct GeneratedSpecializations<'db> {
-    pub(super) specialized_declarations: Vec<FuncDecl<TypedRef<'db>>>,
-    pub(super) specialized_extern_declarations: Vec<ExternFuncDecl>,
+    pub(super) specialized_declarations: Vec<(Placement, FuncDecl<TypedRef<'db>>)>,
+    pub(super) specialized_extern_declarations: Vec<(Placement, ExternFuncDecl)>,
     pub(super) specialized_function_types: Vec<(Symbol, TypeScheme<'db>)>,
     /// The name, key, and source nodes of each generated function.
     pub(super) metadata_origins: Vec<(InstanceKey<'db>, HashSet<NodeId>)>,
@@ -29,6 +68,7 @@ pub(super) struct GeneratedSpecializations<'db> {
 
 struct SpecializationEntry<'db> {
     name: Symbol,
+    placement: Placement,
     declaration: FuncDecl<TypedRef<'db>>,
     scheme: TypeScheme<'db>,
     key: InstanceKey<'db>,
@@ -57,11 +97,16 @@ pub(super) fn generate_specializations<'db>(
 
     for (func_id, keys) in instantiations {
         let qualified = func_id.qualified(db);
-        let func = func_decls.get(qualified).copied();
-        let extern_function = extern_functions.get(qualified).copied();
-        if func.is_none() && extern_function.is_none() {
+        let func = func_decls.get(qualified);
+        let extern_function = extern_functions.get(qualified);
+        let Some((module, source_name)) = func
+            .map(|(module, func)| (module, &func.name))
+            .or(extern_function.map(|(module, function)| (module, &function.name)))
+        else {
             continue;
-        }
+        };
+        let func = func.map(|(_, func)| *func);
+        let extern_function = extern_function.map(|(_, function)| *function);
         let Some(scheme) = scheme_map.get(qualified) else {
             continue;
         };
@@ -70,6 +115,10 @@ pub(super) fn generate_specializations<'db>(
         for key in keys {
             let type_args = key.type_args.as_slice();
             let mangled = mangle_instance_name(db, qualified, key);
+            let placement = Placement {
+                module: module.clone(),
+                name: mangle_instance_name(db, source_name, key),
+            };
             let specialized_scheme = scheme
                 .to_builder(db)
                 .map_types(db, |ty| {
@@ -86,6 +135,7 @@ pub(super) fn generate_specializations<'db>(
                 let specialized = specialize_func_decl(db, func, key, mangled.clone());
                 entries.push(SpecializationEntry {
                     name: mangled,
+                    placement,
                     declaration: specialized,
                     scheme: specialized_scheme,
                     key: key.clone(),
@@ -100,7 +150,7 @@ pub(super) fn generate_specializations<'db>(
                 if let Some(identity) = compiler_intrinsics.get(&extern_function.id).cloned() {
                     let declaration = specialize_extern_decl(extern_function, key, mangled);
                     compiler_intrinsic_specializations.push((declaration.id, identity));
-                    specialized_extern_declarations.push(declaration);
+                    specialized_extern_declarations.push((placement, declaration));
                 }
             }
         }
@@ -113,13 +163,13 @@ pub(super) fn generate_specializations<'db>(
     let mut new_function_types = Vec::with_capacity(entries.len() + extern_function_types.len());
     let mut metadata_origins = Vec::with_capacity(entries.len());
     for entry in entries {
-        new_decls.push(entry.declaration);
+        new_decls.push((entry.placement, entry.declaration));
         new_function_types.push((entry.name, entry.scheme));
         metadata_origins.push((entry.key, entry.origins));
     }
     new_function_types.extend(extern_function_types);
     new_function_types.sort_by_key(|(name, _)| name.clone());
-    specialized_extern_declarations.sort_by_key(|declaration| declaration.name.clone());
+    specialized_extern_declarations.sort_by_key(|(_, declaration)| declaration.name.clone());
     compiler_intrinsic_specializations.sort_by_key(|(id, identity)| (identity.clone(), *id));
 
     GeneratedSpecializations {
@@ -148,11 +198,12 @@ fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
 // ============================================================================
 
 /// Generate specialized struct declarations for each type instantiation.
-pub fn generate_struct_specializations<'db>(
+#[cfg(test)]
+pub(super) fn generate_struct_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
-) -> Vec<StructDecl> {
+) -> Vec<(Placement, StructDecl)> {
     let index = NominalIndex::new(db, module);
     generate_struct_specializations_with_index(db, &index, instantiations)
 }
@@ -161,12 +212,13 @@ pub(super) fn generate_struct_specializations_with_index<'db>(
     db: &'db dyn salsa::Database,
     index: &NominalIndex<'_, 'db>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
-) -> Vec<StructDecl> {
-    let mut entries: Vec<(Symbol, StructDecl)> = Vec::new();
+) -> Vec<(Placement, StructDecl)> {
+    let mut entries: Vec<(Symbol, Placement, StructDecl)> = Vec::new();
 
     for (id, type_arg_sets) in instantiations {
         let Some(Declaration {
             source: NominalDeclaration::Struct(decl),
+            module,
             ..
         }) = index.declarations.get(id)
         else {
@@ -179,20 +231,28 @@ pub(super) fn generate_struct_specializations_with_index<'db>(
         for type_args in type_arg_sets {
             let mangled = mangle_type_name(db, *id, id.qualified(db).clone(), type_args);
             let specialized = specialize_struct_decl(db, decl, type_args, mangled.clone());
-            entries.push((mangled, specialized));
+            let placement = Placement {
+                module: module.clone(),
+                name: mangle_name(db, &decl.name, type_args),
+            };
+            entries.push((mangled, placement, specialized));
         }
     }
 
     entries.sort_by_key(|e| e.0.clone());
-    entries.into_iter().map(|(_, decl)| decl).collect()
+    entries
+        .into_iter()
+        .map(|(_, placement, decl)| (placement, decl))
+        .collect()
 }
 
 /// Generate specialized enum declarations for each type instantiation.
-pub fn generate_enum_specializations<'db>(
+#[cfg(test)]
+pub(super) fn generate_enum_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
-) -> Vec<EnumDecl> {
+) -> Vec<(Placement, EnumDecl)> {
     let index = NominalIndex::new(db, module);
     generate_enum_specializations_with_index(db, &index, instantiations)
 }
@@ -201,12 +261,13 @@ pub(super) fn generate_enum_specializations_with_index<'db>(
     db: &'db dyn salsa::Database,
     index: &NominalIndex<'_, 'db>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
-) -> Vec<EnumDecl> {
-    let mut entries: Vec<(Symbol, EnumDecl)> = Vec::new();
+) -> Vec<(Placement, EnumDecl)> {
+    let mut entries: Vec<(Symbol, Placement, EnumDecl)> = Vec::new();
 
     for (id, type_arg_sets) in instantiations {
         let Some(Declaration {
             source: NominalDeclaration::Enum(decl),
+            module,
             ..
         }) = index.declarations.get(id)
         else {
@@ -219,12 +280,19 @@ pub(super) fn generate_enum_specializations_with_index<'db>(
         for type_args in type_arg_sets {
             let mangled = mangle_type_name(db, *id, id.qualified(db).clone(), type_args);
             let specialized = specialize_enum_decl(db, decl, type_args, mangled.clone());
-            entries.push((mangled, specialized));
+            let placement = Placement {
+                module: module.clone(),
+                name: mangle_name(db, &decl.name, type_args),
+            };
+            entries.push((mangled, placement, specialized));
         }
     }
 
     entries.sort_by_key(|e| e.0.clone());
-    entries.into_iter().map(|(_, decl)| decl).collect()
+    entries
+        .into_iter()
+        .map(|(_, placement, decl)| (placement, decl))
+        .collect()
 }
 
 fn specialize_struct_decl<'db>(
@@ -440,7 +508,7 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
 
 fn collect_func_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
-) -> HashMap<Symbol, &'a FuncDecl<TypedRef<'db>>> {
+) -> HashMap<Symbol, (SymbolPath, &'a FuncDecl<TypedRef<'db>>)> {
     let mut map = HashMap::default();
     let mut prefix = SymbolPath::root();
     collect_func_decls_inner(&module.decls, &mut prefix, &mut map);
@@ -450,13 +518,13 @@ fn collect_func_decls<'a, 'db>(
 fn collect_func_decls_inner<'a, 'db>(
     decls: &'a [Decl<TypedRef<'db>>],
     prefix: &mut SymbolPath,
-    map: &mut HashMap<Symbol, &'a FuncDecl<TypedRef<'db>>>,
+    map: &mut HashMap<Symbol, (SymbolPath, &'a FuncDecl<TypedRef<'db>>)>,
 ) {
     for decl in decls {
         match decl {
             Decl::Function(func) => {
                 let qualified = crate::qualified_symbol(prefix, &func.name);
-                map.insert(qualified, func);
+                map.insert(qualified, (prefix.clone(), func));
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
@@ -472,7 +540,7 @@ fn collect_func_decls_inner<'a, 'db>(
 
 fn collect_extern_function_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
-) -> HashMap<Symbol, &'a ExternFuncDecl> {
+) -> HashMap<Symbol, (SymbolPath, &'a ExternFuncDecl)> {
     let mut declarations = HashMap::default();
     let mut prefix = SymbolPath::root();
     collect_extern_function_decls_inner(&module.decls, &mut prefix, &mut declarations);
@@ -482,12 +550,15 @@ fn collect_extern_function_decls<'a, 'db>(
 fn collect_extern_function_decls_inner<'a, 'db>(
     decls: &'a [Decl<TypedRef<'db>>],
     prefix: &mut SymbolPath,
-    declarations: &mut HashMap<Symbol, &'a ExternFuncDecl>,
+    declarations: &mut HashMap<Symbol, (SymbolPath, &'a ExternFuncDecl)>,
 ) {
     for decl in decls {
         match decl {
             Decl::ExternFunction(func) => {
-                declarations.insert(crate::qualified_symbol(prefix, &func.name), func);
+                declarations.insert(
+                    crate::qualified_symbol(prefix, &func.name),
+                    (prefix.clone(), func),
+                );
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
@@ -910,7 +981,7 @@ mod tests {
         let names: HashSet<String> = specializations
             .specialized_declarations
             .iter()
-            .map(|d| d.name.to_string())
+            .map(|d| d.1.name.to_string())
             .collect();
         assert!(names.contains("identity$Int"));
         assert!(names.contains("identity$Float"));
