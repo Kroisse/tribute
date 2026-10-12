@@ -460,7 +460,7 @@ fn main() -> Nil {
             "ambiguous path `name` for arguments of types (`User`): it names `User::name`, \
              `audit::name`"
                 .to_owned(),
-            "user.name".to_owned()
+            "name".to_owned()
         )]
     );
 }

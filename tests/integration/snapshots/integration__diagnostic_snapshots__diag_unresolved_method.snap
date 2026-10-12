@@ -4,7 +4,7 @@ expression: result.diagnostics
 ---
 - message: "unresolved method `missing`: the scope names no function `missing`, and no module or type in it has one"
   span:
-    start: 65
-    end: 80
+    start: 71
+    end: 78
   severity: Error
   phase: NameResolution

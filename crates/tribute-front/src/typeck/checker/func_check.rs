@@ -632,7 +632,7 @@ impl<'db> TypeChecker<'db> {
                         entry.func_ty
                     };
 
-                    // Record the resolution for MethodCall → Call conversion
+                    // Record the selection for the callee rewrite
                     resolved.insert(mc.node_id, (entry.func_id, func_ty));
 
                     solver.resolve_producer(mc.node_id);
@@ -730,7 +730,7 @@ impl<'db> TypeChecker<'db> {
             .map(|ty| solver.type_subst().apply(self.db(), *ty))
             .collect();
         self.select_method(
-            call.path.as_ref(),
+            &call.candidates,
             super::expr::CallTypes {
                 args: &args,
                 arity: args.len(),
@@ -746,9 +746,6 @@ impl<'db> TypeChecker<'db> {
         solver: &TypeSolver<'db>,
         call: &crate::typeck::func_context::DeferredMethodCall<'db>,
     ) {
-        let Some((path, _)) = &call.path else {
-            return;
-        };
         let arguments = call
             .arg_types
             .iter()
@@ -770,7 +767,7 @@ impl<'db> TypeChecker<'db> {
         };
         Diagnostic::new(
             message,
-            self.get_span(*path),
+            self.get_span(call.callee),
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )

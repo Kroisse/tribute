@@ -210,14 +210,16 @@ pub struct FunctionInferenceContext<'a, 'db> {
 /// enabling method lookup and additional type constraints.
 #[derive(Clone)]
 pub struct DeferredMethodCall<'db> {
-    /// The NodeId of the MethodCall expression (for span lookup in diagnostics).
+    /// The call expression's node.
     pub node_id: NodeId,
     /// The receiver expression's type (UniVar at creation, resolved after solving).
     pub receiver_ty: Type<'db>,
     /// The method name being called.
     pub method: Symbol,
-    /// For a qualified call, the path's node and the functions it may name.
-    pub path: Option<(NodeId, Vec<FuncDefId<'db>>)>,
+    /// The callee's node, for span lookup in diagnostics.
+    pub callee: NodeId,
+    /// The functions the callee may name.
+    pub candidates: Vec<FuncDefId<'db>>,
     /// Fresh UniVar for the method's return type — will be constrained after resolution.
     pub result_ty: Type<'db>,
     /// Argument types including receiver as first element.

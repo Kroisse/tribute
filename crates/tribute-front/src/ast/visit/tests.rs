@@ -129,11 +129,15 @@ fn sample() -> Module<u32> {
                     id: id(13),
                     expr: expr(
                         14,
-                        ExprKind::MethodCall {
-                            receiver: leaf(15),
-                            method: Symbol::new("m"),
-                            path: None,
-                            args: vec![leaf(16)],
+                        ExprKind::Call {
+                            callee: expr(
+                                63,
+                                ExprKind::Functions {
+                                    name: Symbol::new("m"),
+                                    candidates: vec![],
+                                },
+                            ),
+                            args: vec![leaf(15), leaf(16)],
                         },
                     ),
                 },
@@ -273,7 +277,7 @@ fn visits_every_phase_value_and_node_identity_in_source_order() {
         ]
     );
     // Every node from 1 to 50 in source order, plus the field name nodes (60 to
-    // 62) after the record they belong to; parameters (99), the module (0), and
+    // 62) after the record they belong to and a method call's callee (63); parameters (99), the module (0), and
     // the inline module declaration (98) are not visited.
     let mut expected = (1..=50).collect::<Vec<_>>();
     let after = |expected: &mut Vec<usize>, anchor: usize, extra: &[usize]| {
@@ -281,6 +285,7 @@ fn visits_every_phase_value_and_node_identity_in_source_order() {
         expected.splice(at..at, extra.iter().copied());
     };
     after(&mut expected, 10, &[60]);
+    after(&mut expected, 14, &[63]);
     after(&mut expected, 22, &[61]);
     after(&mut expected, 24, &[62]);
     assert_eq!(record.ids, expected);

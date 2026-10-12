@@ -1601,10 +1601,10 @@ mod tests {
             .module(db)
     }
 
-    /// Check that no MethodCall nodes remain in the typed AST (all resolved to Call).
+    /// Check that no call is left without a selected function.
     fn has_method_call(expr: &crate::ast::Expr<crate::ast::TypedRef<'_>>) -> bool {
         match &*expr.kind {
-            ExprKind::MethodCall { .. } => true,
+            ExprKind::Functions { .. } => true,
             ExprKind::Call { callee, args } => {
                 has_method_call(callee) || args.iter().any(has_method_call)
             }
@@ -1642,7 +1642,7 @@ mod tests {
             if let crate::ast::Decl::Function(func) = decl {
                 assert!(
                     !has_method_call(&func.body),
-                    "MethodCall should be resolved in function '{}'",
+                    "a call should have its function selected in function '{}'",
                     func.name
                 );
             }

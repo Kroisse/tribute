@@ -86,19 +86,17 @@ impl<'db> CallTypes<'_, 'db> {
     }
 }
 
-/// A qualified method call's path as its node and the functions it may name.
-pub(crate) fn method_path_functions<'db>(
-    path: &crate::ast::MethodPath<ResolvedRef<'db>>,
-) -> (NodeId, Vec<crate::ast::FuncDefId<'db>>) {
-    let functions = path
-        .candidates
+/// The functions name resolution found for a call's callee.
+pub(crate) fn candidate_functions<'db>(
+    candidates: &[ResolvedRef<'db>],
+) -> Vec<crate::ast::FuncDefId<'db>> {
+    candidates
         .iter()
         .filter_map(|candidate| match candidate {
             ResolvedRef::Function { id } => Some(*id),
             _ => None,
         })
-        .collect();
-    (path.id, functions)
+        .collect()
 }
 
 /// Check if a type contains any unification variables (UniVar).
@@ -212,6 +210,11 @@ impl<'db> TypeChecker<'db> {
                 self.infer_local_reference_with_ctx(ctx, expr.id, resolved)
             }
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, Some(expr.id), resolved),
+            ExprKind::Call { callee, .. }
+                if matches!(&*callee.kind, ExprKind::Functions { .. }) =>
+            {
+                self.infer_method_call_with_ctx(ctx, expr)
+            }
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
                 // Conversion re-visits the callee. Keep this one ability-op
@@ -272,7 +275,7 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 spread,
             } => self.infer_record_type_with_ctx(ctx, expr.id, type_name, fields, spread.as_ref()),
-            ExprKind::MethodCall { .. } => self.infer_method_call_with_ctx(ctx, expr),
+            ExprKind::Functions { .. } => ctx.error_type(),
             ExprKind::BinOp { op, lhs, rhs } => {
                 let lhs_ty = self.infer_expr_type_with_ctx(ctx, lhs);
                 let rhs_ty = self.infer_expr_type_with_ctx(ctx, rhs);
@@ -695,7 +698,6 @@ impl<'db> TypeChecker<'db> {
         // Record node type
         ctx.record_node_type(expr.id, ty);
 
-        // Convert expression (MethodCall needs special handling for expr.id)
         let kind = self.convert_expr_kind_with_ctx(ctx, expr.id, &expr.kind);
         let expr = Expr::new(expr.id, kind);
         if is_lambda {
@@ -781,6 +783,11 @@ impl<'db> TypeChecker<'db> {
                 self.infer_local_reference_with_ctx(ctx, expr.id, resolved)
             }
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, Some(expr.id), resolved),
+            ExprKind::Call { callee, .. }
+                if matches!(&*callee.kind, ExprKind::Functions { .. }) =>
+            {
+                self.infer_method_call_with_ctx(ctx, expr)
+            }
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
                 if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::AbilityOp { .. })) {
@@ -862,7 +869,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.finish_result_join(expr.id);
                 result_ty
             }
-            ExprKind::MethodCall { .. } => self.infer_method_call_with_ctx(ctx, expr),
+            ExprKind::Functions { .. } => ctx.error_type(),
             ExprKind::Lambda { .. } | ExprKind::Handle { .. } => {
                 // These constructs need their scoped bodies checked before a
                 // surrounding let can solve/generalize the result relation.
@@ -1442,10 +1449,10 @@ impl<'db> TypeChecker<'db> {
             .unwrap_or_else(|| ctx.fresh_type_var())
     }
 
-    /// Infer a call written `receiver.method(args)`: `method(receiver, args)`
-    /// once the function it names is selected.
+    /// Infer a call whose callee names several functions, written
+    /// `receiver.method(args)` or `method(receiver, args)`.
     ///
-    /// The receiver alone is tried first, so that the other arguments are
+    /// The first argument alone is tried first, so that the other arguments are
     /// inferred against the selected function's parameters. A call it does
     /// not decide infers them on their own and tries again with all of them;
     /// one still undecided is deferred.
@@ -1454,21 +1461,25 @@ impl<'db> TypeChecker<'db> {
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         expr: &Expr<ResolvedRef<'db>>,
     ) -> Type<'db> {
-        let ExprKind::MethodCall {
-            receiver,
-            method,
-            path,
-            args,
-        } = &*expr.kind
+        let ExprKind::Call { callee, args } = &*expr.kind else {
+            unreachable!("the caller matched a call");
+        };
+        let ExprKind::Functions {
+            name: method,
+            candidates,
+        } = &*callee.kind
         else {
-            unreachable!("the caller matched a method call");
+            unreachable!("the caller matched a callee naming functions");
+        };
+        let [receiver, args @ ..] = args.as_slice() else {
+            unreachable!("a callee naming functions has a first argument");
         };
         let node = expr.id;
         let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
-        let path = path.as_ref().map(method_path_functions);
+        let candidates = candidate_functions(candidates);
         let arity = args.len() + 1;
         let selection = self.select_method(
-            path.as_ref(),
+            &candidates,
             CallTypes {
                 args: &[receiver_ty],
                 arity,
@@ -1495,7 +1506,7 @@ impl<'db> TypeChecker<'db> {
             .chain(args.iter().map(|a| self.infer_deferred_argument(ctx, a)))
             .collect();
         let selection = self.select_method(
-            path.as_ref(),
+            &candidates,
             CallTypes {
                 args: &arg_types,
                 arity,
@@ -1533,7 +1544,8 @@ impl<'db> TypeChecker<'db> {
             node_id: node,
             receiver_ty,
             method: method.clone(),
-            path,
+            callee: callee.id,
+            candidates,
             result_ty,
             arg_types,
             effect,
@@ -1771,23 +1783,19 @@ impl<'db> TypeChecker<'db> {
     /// call.
     pub(crate) fn select_method(
         &self,
-        path: Option<&(NodeId, Vec<crate::ast::FuncDefId<'db>>)>,
+        candidates: &[crate::ast::FuncDefId<'db>],
         call: CallTypes<'_, 'db>,
     ) -> MethodSelection<'db> {
-        let candidates: Vec<crate::typeck::MethodEntry<'db>> = match path {
-            Some((_, candidates)) => candidates
-                .iter()
-                .filter_map(|candidate| {
-                    let (scheme, _) = self.env.function_scheme(*candidate)?;
-                    Some(crate::typeck::MethodEntry {
-                        func_id: *candidate,
-                        func_ty: scheme.body(self.db()),
-                    })
+        let candidates: Vec<crate::typeck::MethodEntry<'db>> = candidates
+            .iter()
+            .filter_map(|candidate| {
+                let (scheme, _) = self.env.function_scheme(*candidate)?;
+                Some(crate::typeck::MethodEntry {
+                    func_id: *candidate,
+                    func_ty: scheme.body(self.db()),
                 })
-                .collect(),
-            // Name resolution gives every method call its candidates.
-            None => Vec::new(),
-        };
+            })
+            .collect();
         // One function leaves nothing to select: the call is checked against
         // it, and what does not fit is an ordinary type error.
         if let [entry] = candidates[..] {
@@ -1909,6 +1917,30 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Var(resolved) => {
                 ExprKind::Var(self.convert_ref_with_ctx(ctx, Some(expr_id), resolved))
             }
+            ExprKind::Call { callee, args }
+                if matches!(&*callee.kind, ExprKind::Functions { .. }) =>
+            {
+                let args = args
+                    .iter()
+                    .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
+                    .collect();
+                // A function selected during inference is the callee; one
+                // still unselected stays for the solver to decide.
+                let callee = match ctx.get_resolved_method(expr_id) {
+                    Some((func_id, callee_ty)) => Expr::new(
+                        expr_id,
+                        ExprKind::Var(TypedRef {
+                            resolved: ResolvedRef::Function { id: func_id },
+                            ty: callee_ty,
+                        }),
+                    ),
+                    None => Expr::new(
+                        callee.id,
+                        self.convert_expr_kind_with_ctx(ctx, callee.id, &callee.kind),
+                    ),
+                };
+                ExprKind::Call { callee, args }
+            }
             ExprKind::Call { callee, args } => {
                 let inferred_ability_op_callee = ctx.get_ability_op_callee_type(callee.id);
                 // First, process callee so its type gets recorded
@@ -1985,55 +2017,17 @@ impl<'db> TypeChecker<'db> {
                     .as_ref()
                     .map(|e| self.check_expr_with_ctx(ctx, e, Mode::Infer)),
             },
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                path,
-                args,
-            } => {
-                let converted_receiver = self.check_expr_with_ctx(ctx, receiver, Mode::Infer);
-
-                if let Some((func_id, callee_ty)) = ctx.get_resolved_method(expr_id) {
-                    // Resolved during inference — transform to Call
-                    let callee_ref = TypedRef {
-                        resolved: ResolvedRef::Function { id: func_id },
-                        ty: callee_ty,
-                    };
-                    let callee = Expr::new(expr_id, ExprKind::Var(callee_ref));
-
-                    let mut all_args = vec![converted_receiver];
-                    all_args.extend(
-                        args.iter()
-                            .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer)),
-                    );
-                    ExprKind::Call {
-                        callee,
-                        args: all_args,
-                    }
-                } else {
-                    // Unresolved — keep as MethodCall
-                    ExprKind::MethodCall {
-                        receiver: converted_receiver,
-                        method: method.clone(),
-                        // Still unselected, so the candidates have no type.
-                        path: path.as_ref().map(|path| crate::ast::MethodPath {
-                            id: path.id,
-                            candidates: path
-                                .candidates
-                                .iter()
-                                .map(|candidate| TypedRef {
-                                    resolved: candidate.clone(),
-                                    ty: ctx.error_type(),
-                                })
-                                .collect(),
-                        }),
-                        args: args
-                            .iter()
-                            .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
-                            .collect(),
-                    }
-                }
-            }
+            ExprKind::Functions { name, candidates } => ExprKind::Functions {
+                name: name.clone(),
+                // Unselected, so the candidates have no type.
+                candidates: candidates
+                    .iter()
+                    .map(|candidate| TypedRef {
+                        resolved: candidate.clone(),
+                        ty: ctx.error_type(),
+                    })
+                    .collect(),
+            },
             ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op: *op,
                 lhs: self.check_expr_with_ctx(ctx, lhs, Mode::Infer),
@@ -2179,7 +2173,8 @@ impl<'db> TypeChecker<'db> {
             }
             ExprKind::Become { call } => {
                 let converted = self.check_expr_with_ctx(ctx, call, Mode::Infer);
-                if let ExprKind::MethodCall { .. } = &*call.kind {
+                if matches!(&*call.kind, ExprKind::Call { callee, .. } if matches!(&*callee.kind, ExprKind::Functions { .. }))
+                {
                     match &*converted.kind {
                         ExprKind::Call { callee, .. } => {
                             if let ExprKind::Var(TypedRef {
@@ -2363,7 +2358,7 @@ impl<'db> TypeChecker<'db> {
                 arity: args.len(),
                 result: Some(solver.expected_type(call.result_ty)),
             };
-            let MethodSelection::One(entry) = self.select_method(call.path.as_ref(), types) else {
+            let MethodSelection::One(entry) = self.select_method(&call.candidates, types) else {
                 continue;
             };
             let Some(callee_ty) = ctx.instantiate_function_reference(call.node_id, entry.func_id)

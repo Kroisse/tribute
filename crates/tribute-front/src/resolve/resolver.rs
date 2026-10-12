@@ -13,9 +13,9 @@ use trunk_ir::Symbol;
 
 use crate::ast::{
     Arm, Decl, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit, FieldPattern, FuncDecl,
-    HandlerArm, HandlerKind, LocalId, LocalIdGen, MethodPath, Module, ModulePath, NodeId, Param,
-    ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation,
-    TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName, UseDecl,
+    HandlerArm, HandlerKind, LocalId, LocalIdGen, Module, ModulePath, NodeId, Param, ParamDecl,
+    Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind,
+    TypeParamDecl, UnresolvedName, UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
@@ -1262,42 +1262,34 @@ impl<'db> Resolver<'db> {
             ExprKind::RuneLit(c) => ExprKind::RuneLit(*c),
 
             ExprKind::Call { callee, args } => {
-                let candidates = match &*callee.kind {
-                    ExprKind::Var(name) => self.imported_functions(name).map(|functions| {
-                        let candidates = functions
-                            .iter()
-                            .map(|id| ResolvedRef::Function { id: *id })
-                            .collect();
-                        (name, candidates)
-                    }),
-                    _ => None,
-                };
-                let mut args: Vec<_> = args.iter().map(|a| self.resolve_expr(a)).collect();
-                match candidates {
-                    // The first argument selects the function by its type,
-                    // as the receiver of a method call does.
-                    Some((name, candidates)) if !args.is_empty() => ExprKind::MethodCall {
-                        receiver: args.remove(0),
-                        method: name.qualified.clone(),
-                        path: Some(MethodPath {
-                            id: callee.id,
-                            candidates,
-                        }),
-                        args,
-                    },
-                    Some((name, _)) => {
-                        self.report_unselected_import(name, "is called without an argument");
-                        let unresolved = ResolvedRef::local(LocalId::UNRESOLVED, name.name());
-                        ExprKind::Call {
-                            callee: Expr::new(callee.id, ExprKind::Var(unresolved)),
-                            args,
+                let args: Vec<_> = args.iter().map(|a| self.resolve_expr(a)).collect();
+                let callee = match &*callee.kind {
+                    ExprKind::Var(name) => match self.imported_functions(name) {
+                        // The first argument selects the function by its
+                        // type, as the receiver of a method call does.
+                        Some(functions) if !args.is_empty() => {
+                            let candidates = functions
+                                .iter()
+                                .map(|id| ResolvedRef::Function { id: *id })
+                                .collect();
+                            Expr::new(
+                                callee.id,
+                                ExprKind::Functions {
+                                    name: name.qualified.clone(),
+                                    candidates,
+                                },
+                            )
                         }
-                    }
-                    None => {
-                        let callee = self.resolve_expr(callee);
-                        ExprKind::Call { callee, args }
-                    }
-                }
+                        Some(_) => {
+                            self.report_unselected_import(name, "is called without an argument");
+                            let unresolved = ResolvedRef::local(LocalId::UNRESOLVED, name.name());
+                            Expr::new(callee.id, ExprKind::Var(unresolved))
+                        }
+                        None => self.resolve_expr(callee),
+                    },
+                    _ => self.resolve_expr(callee),
+                };
+                ExprKind::Call { callee, args }
             }
 
             ExprKind::Cons { ctor, args } => {
@@ -1331,61 +1323,28 @@ impl<'db> Resolver<'db> {
                 }
             }
 
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                path,
-                args,
-            } => {
-                let receiver = self.resolve_expr(receiver);
-                let mut args: Vec<_> = args.iter().map(|a| self.resolve_expr(a)).collect();
-                let candidates = path.as_ref().map(|path| {
-                    let name = UnresolvedName::new(method.clone(), path.id);
-                    (path.id, self.method_candidates(&name))
-                });
-                match candidates {
-                    None => {
-                        let candidates: Vec<_> = self
-                            .method_functions(method, expr.id)
-                            .into_iter()
-                            .map(ResolvedRef::function)
-                            .collect();
-                        if candidates.is_empty() {
-                            self.report_unresolved_method(expr.id, method);
-                            args.insert(0, receiver);
-                            let callee = ResolvedRef::local(LocalId::UNRESOLVED, method.clone());
-                            ExprKind::Call {
-                                callee: Expr::new(expr.id, ExprKind::Var(callee)),
-                                args,
-                            }
-                        } else {
-                            ExprKind::MethodCall {
-                                receiver,
-                                method: method.clone(),
-                                path: Some(MethodPath {
-                                    id: expr.id,
-                                    candidates,
-                                }),
-                                args,
-                            }
-                        }
+            ExprKind::Functions { name, .. } => {
+                let candidates = if name.is_simple() {
+                    let functions = self.method_functions(name, expr.id);
+                    if functions.is_empty() {
+                        self.report_unresolved_method(expr.id, name);
+                        MethodCandidates::Unresolved
+                    } else {
+                        MethodCandidates::Functions(
+                            functions.into_iter().map(ResolvedRef::function).collect(),
+                        )
                     }
-                    Some((id, MethodCandidates::Functions(candidates))) => ExprKind::MethodCall {
-                        receiver,
-                        method: method.clone(),
-                        path: Some(MethodPath { id, candidates }),
-                        args,
+                } else {
+                    self.method_candidates(&UnresolvedName::new(name.clone(), expr.id))
+                };
+                match candidates {
+                    MethodCandidates::Functions(candidates) => ExprKind::Functions {
+                        name: name.clone(),
+                        candidates,
                     },
-                    Some((id, candidates)) => {
-                        let callee = match candidates {
-                            MethodCandidates::Callee(callee) => callee,
-                            _ => ResolvedRef::local(LocalId::UNRESOLVED, method.last_segment()),
-                        };
-                        args.insert(0, receiver);
-                        ExprKind::Call {
-                            callee: Expr::new(id, ExprKind::Var(callee)),
-                            args,
-                        }
+                    MethodCandidates::Callee(callee) => ExprKind::Var(callee),
+                    MethodCandidates::Unresolved => {
+                        ExprKind::Var(ResolvedRef::local(LocalId::UNRESOLVED, name.last_segment()))
                     }
                 }
             }
