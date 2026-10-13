@@ -92,7 +92,6 @@ pub fn calling_convention_for_function_type_in<'db>(
 mod tests {
     use super::*;
     use crate::ast::{Effect, EffectVar};
-    use trunk_ir::Symbol;
 
     #[test]
     fn joins_to_the_strongest_requirement() {
@@ -109,8 +108,8 @@ mod tests {
     #[test]
     fn effect_rows_use_ability_level_upper_bounds() {
         let db = salsa::DatabaseImpl::new();
-        let logger = AbilityId::source(&db, Symbol::new("Logger"));
-        let state = AbilityId::source(&db, Symbol::new("State"));
+        let logger = AbilityId::source(&db, trunk_ir::SymbolPath::from("Logger"));
+        let state = AbilityId::source(&db, trunk_ir::SymbolPath::from("State"));
         let mut abilities = HashMap::default();
         abilities.insert(logger, CallingConvention::EvidenceDirect);
         abilities.insert(state, CallingConvention::Cps);
@@ -144,7 +143,7 @@ mod tests {
     #[test]
     fn open_and_unknown_rows_are_cps() {
         let db = salsa::DatabaseImpl::new();
-        let unknown = AbilityId::source(&db, Symbol::new("Unknown"));
+        let unknown = AbilityId::source(&db, trunk_ir::SymbolPath::from("Unknown"));
         let unknown_row = EffectRow::new(
             &db,
             vec![Effect {

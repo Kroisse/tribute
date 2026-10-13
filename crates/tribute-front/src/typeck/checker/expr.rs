@@ -1228,7 +1228,7 @@ impl<'db> TypeChecker<'db> {
     ) {
         let name = match resolved {
             ResolvedRef::TypeDef { id } => id.qualified(self.db()),
-            ResolvedRef::Local { id, name } if !id.is_unresolved() => name,
+            ResolvedRef::Local { id, name } if !id.is_unresolved() => name.clone(),
             _ => return,
         };
         if ctx.mark_record_shape_checked(pattern_id) {
@@ -3615,7 +3615,7 @@ impl<'db> TypeChecker<'db> {
     ) -> InstantiatedHandlerOperation<'db> {
         let error = ctx.error_type();
         InstantiatedHandlerOperation {
-            ability: AbilityId::source(self.db(), Symbol::new("__invalid_handler_ability")),
+            ability: AbilityId::source(self.db(), SymbolPath::from("__invalid_handler_ability")),
             ability_args: Vec::new(),
             kind,
             params: vec![error; parameter_count],
@@ -3824,10 +3824,7 @@ impl<'db> TypeChecker<'db> {
             ResolvedRef::TypeDef { id } => {
                 // TypeDef might be an ability reference in handler context
                 // Create an AbilityId with the same qualified name
-                Some(AbilityId::source(
-                    self.db(),
-                    id.qualified(self.db()).clone(),
-                ))
+                Some(AbilityId::source(self.db(), id.path(self.db()).clone()))
             }
             // Other reference types are not abilities
             _ => None,
@@ -3886,7 +3883,7 @@ mod tests {
         db: &'db dyn salsa::Database,
         env: &'a ModuleTypeEnv<'db>,
     ) -> FunctionInferenceContext<'a, 'db> {
-        let func_id = FuncDefId::new(db, Symbol::new("test_func"));
+        let func_id = FuncDefId::new(db, trunk_ir::SymbolPath::from("test_func"));
         FunctionInferenceContext::new(db, env, func_id)
     }
 
@@ -4022,7 +4019,7 @@ mod tests {
         let mut checker = make_test_checker(db);
         let name = Symbol::new("result");
         let body_ty = Type::new(db, TypeKind::Nat);
-        let ability_id = AbilityId::source(db, Symbol::new("Test"));
+        let ability_id = AbilityId::source(db, trunk_ir::SymbolPath::from("Test"));
         let get = Symbol::new("get");
         checker.env.register_ability(
             ability_id,
@@ -4106,7 +4103,7 @@ mod tests {
     #[salsa_test]
     fn test_same_name_handler_bindings_are_independent(db: &dyn salsa::Database) {
         let mut checker = make_test_checker(db);
-        let ability_id = AbilityId::source(db, Symbol::new("Choice"));
+        let ability_id = AbilityId::source(db, trunk_ir::SymbolPath::from("Choice"));
         let nat_op = Symbol::new("nat");
         let bool_op = Symbol::new("bool");
         let nat_ty = Type::new(db, TypeKind::Nat);
@@ -4468,7 +4465,7 @@ mod tests {
                 Type::new(
                     db,
                     TypeKind::Named {
-                        id: TypeDefId::synthetic(db, Symbol::new("Option")),
+                        id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::from("Option")),
                         name: Symbol::new("Option"),
                         args: vec![int_ty],
                     },

@@ -226,23 +226,25 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 ("Nested::Choice", true),
                 ("Nested::Plain", false),
             ] {
-                let name = Symbol::new(&format!("{prefix}::{suffix}"));
+                let path =
+                    trunk_ir::SymbolPath::new(std::iter::once(prefix).chain(suffix.split("::")));
+                let name = path.to_symbol();
                 let (id, entry) = index
                     .declarations
                     .iter()
-                    .find(|(id, _)| *id.qualified(db) == name)
+                    .find(|(id, _)| id.qualified(db) == name)
                     .unwrap();
                 assert_eq!(index.is_generic(*id), generic);
                 match entry.source {
                     NominalDeclaration::Struct(s) => {
-                        assert_eq!(*id, TypeDefId::source(db, name.clone(), s.id));
+                        assert_eq!(*id, TypeDefId::source(db, path.clone(), s.id));
                         assert_eq!(entry.constructors.len(), 1);
                         assert_eq!(entry.constructors[0].id.qualified(db), name);
                         assert_eq!(entry.constructors[0].node, s.id);
                         assert_eq!(entry.constructors[0].fields, s.fields.len());
                     }
                     NominalDeclaration::Enum(e) => {
-                        assert_eq!(*id, TypeDefId::source(db, name, e.id));
+                        assert_eq!(*id, TypeDefId::source(db, path, e.id));
                         assert_eq!(entry.constructors.len(), 2);
                         for (constructor, variant) in entry.constructors.iter().zip(&e.variants) {
                             assert_eq!(
@@ -303,7 +305,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .iter()
             .copied()
             .collect();
-        let source_ctor = CtorId::new(db, Symbol::new("nested::Holder"));
+        let source_ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["nested", "Holder"]));
         let source_scheme = schemas[&source_ctor];
         let seeds = collect::collect_type_instantiations_with_index(
             db,
@@ -365,7 +367,11 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 _ => None,
             })
             .unwrap();
-        let hidden_id = TypeDefId::source(db, hidden_decl.name.clone(), hidden_decl.id);
+        let hidden_id = TypeDefId::source(
+            db,
+            trunk_ir::SymbolPath::from(&hidden_decl.name),
+            hidden_decl.id,
+        );
         let hidden = Type::new(
             db,
             TypeKind::Named {
@@ -377,11 +383,11 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         let row = EffectRow::single(
             db,
             Effect {
-                ability_id: AbilityId::source(db, Symbol::new("Marker")),
+                ability_id: AbilityId::source(db, trunk_ir::SymbolPath::from("Marker")),
                 args: vec![hidden],
             },
         );
-        let ctor = CtorId::new(db, Symbol::new("Value"));
+        let ctor = CtorId::new(db, trunk_ir::SymbolPath::from("Value"));
         for removal in [false, true] {
             let mut schemas: HashMap<_, _> = input
                 .constructor_types(db)
@@ -566,7 +572,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .iter()
                 .copied()
                 .collect();
-            let ctor = CtorId::new(db, Symbol::new(constructor));
+            let ctor = CtorId::new(db, trunk_ir::SymbolPath::from(constructor));
             for kind in [
                 InstanceErrorKind::MissingInstance,
                 InstanceErrorKind::WrongDeclaration,

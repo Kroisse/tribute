@@ -266,7 +266,11 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module,
         span_map: checked.span_map(db),
-        function_types: mono.function_types.into_iter().collect(),
+        function_types: mono
+            .function_types
+            .into_iter()
+            .map(|(path, scheme)| (path.to_symbol(), scheme))
+            .collect(),
         constructor_types: mono.metadata.constructor_types,
         specialized_enum_variants: mono
             .metadata
@@ -373,7 +377,11 @@ fn lower_specialized_source(
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module,
         span_map: checked.span_map(db),
-        function_types: mono.function_types.into_iter().collect(),
+        function_types: mono
+            .function_types
+            .into_iter()
+            .map(|(path, scheme)| (path.to_symbol(), scheme))
+            .collect(),
         constructor_types: mono.metadata.constructor_types,
         specialized_enum_variants: mono
             .metadata
@@ -441,7 +449,11 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .cloned()
             .collect(),
         span_map: checked.span_map(db),
-        function_types: checked.function_types(db).iter().cloned().collect(),
+        function_types: checked
+            .function_types(db)
+            .iter()
+            .map(|(path, scheme)| (path.to_symbol(), *scheme))
+            .collect(),
         constructor_types: checked
             .constructor_types(db)
             .schemes

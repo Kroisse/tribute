@@ -399,7 +399,7 @@ fn pair() -> Nil {
     let effect = EffectRow::single(
         db,
         Effect {
-            ability_id: AbilityId::source(db, Symbol::new("Source")),
+            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::from("Source")),
             args: vec![local, univar],
         },
     );
@@ -490,12 +490,16 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
     let continuation_writer = computation_effect
         .effects(db)
         .iter()
-        .find(|effect| effect.ability_id == AbilityId::source(db, Symbol::new("Writer")))
+        .find(|effect| {
+            effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::from("Writer"))
+        })
         .expect("the enclosing computation must retain Writer(w)");
     let lambda_writer = lambda_effect
         .effects(db)
         .iter()
-        .find(|effect| effect.ability_id == AbilityId::source(db, Symbol::new("Writer")))
+        .find(|effect| {
+            effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::from("Writer"))
+        })
         .expect("the resume lambda must retain Writer(w)");
     assert_eq!(
         lambda_writer.args, continuation_writer.args,
@@ -505,7 +509,8 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
         lambda_effect
             .effects(db)
             .iter()
-            .any(|effect| effect.ability_id == AbilityId::source(db, Symbol::new("Audit"))),
+            .any(|effect| effect.ability_id
+                == AbilityId::source(db, trunk_ir::SymbolPath::from("Audit"))),
         "the resume lambda must retain its independently performed Audit effect"
     );
 }

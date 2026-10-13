@@ -52,7 +52,7 @@ pub struct ModuleCheckResult<'db> {
     /// The typed module AST.
     pub module: Module<TypedRef<'db>>,
     /// Function type schemes (name → polymorphic type).
-    pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
+    pub function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
     /// Constructor type schemes retain exact nominal field types for logical
     /// layout construction.
     pub constructor_types: Vec<(crate::ast::CtorId<'db>, TypeScheme<'db>)>,
@@ -166,8 +166,11 @@ impl<'db> TypeChecker<'db> {
             Decl::Enum(decl) if decl.name == name => Some(decl.id),
             _ => None,
         })?;
-        let qualified = crate::qualified_symbol(&prefix, &name);
-        let ty = self.env.lookup_type_def(&qualified)?.body(self.db());
+        let qualified = prefix.child(name.clone());
+        let ty = self
+            .env
+            .lookup_type_def(&qualified.to_symbol())?
+            .body(self.db());
         Some(WellKnownType {
             ty,
             definition: DefinitionIdentity::new(
@@ -188,10 +191,7 @@ impl<'db> TypeChecker<'db> {
             prefix.push(package.name.clone());
         }
         let equality = |type_name: &str| {
-            let function = FuncDefId::new(
-                self.db(),
-                crate::qualified_symbol(&prefix.child(type_name), &Symbol::new("==")),
-            );
+            let function = FuncDefId::new(self.db(), prefix.child(type_name).child("=="));
             self.env.lookup_function(function).map(|_| function)
         };
         WellKnownTypes {
@@ -234,7 +234,7 @@ impl<'db> TypeChecker<'db> {
 
     /// Create a FuncDefId from the current prefix and function name.
     pub(crate) fn func_def_id(&self, name: &Symbol) -> FuncDefId<'db> {
-        FuncDefId::new(self.db(), crate::qualified_symbol(&self.prefix, name))
+        FuncDefId::new(self.db(), self.prefix.child(name.clone()))
     }
 
     /// Get the database.

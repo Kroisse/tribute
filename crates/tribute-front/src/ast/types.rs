@@ -170,7 +170,7 @@ impl<'db> TypeKind<'db> {
     pub fn string(db: &'db dyn salsa::Database) -> Self {
         let name = Symbol::new("String");
         Self::Named {
-            id: TypeDefId::synthetic(db, name.clone()),
+            id: TypeDefId::synthetic(db, SymbolPath::from(&name)),
             name,
             args: vec![],
         }
@@ -648,11 +648,10 @@ pub fn is_type_variable(name: &Symbol) -> bool {
 
 /// The qualified name of the ability an annotation path names; `None` for a
 /// row variable such as `e`.
-fn ability_path(path: &[Symbol]) -> Option<Symbol> {
+fn ability_path(path: &[Symbol]) -> Option<SymbolPath> {
     path.last()
         .is_some_and(|name| !is_type_variable(name))
-        .then(|| crate::qualified_path_symbol(path))
-        .flatten()
+        .then(|| SymbolPath::new(path.iter().cloned()))
 }
 
 /// Convert a single type annotation to an `Effect`.
@@ -670,8 +669,7 @@ pub fn annotation_to_effect<'db>(
 ) -> Option<Effect<'db>> {
     match &annotation.kind {
         TypeAnnotationKind::Named(name) if !is_type_variable(name) => {
-            let qualified = crate::qualified_symbol(prefix, name);
-            let ability_id = super::AbilityId::source(db, qualified);
+            let ability_id = super::AbilityId::source(db, prefix.child(name.clone()));
             Some(Effect {
                 ability_id,
                 args: vec![],
@@ -686,9 +684,7 @@ pub fn annotation_to_effect<'db>(
         }
         TypeAnnotationKind::App { ctor, args } => {
             let qualified = match &ctor.kind {
-                TypeAnnotationKind::Named(n) if !is_type_variable(n) => {
-                    crate::qualified_symbol(prefix, n)
-                }
+                TypeAnnotationKind::Named(n) if !is_type_variable(n) => prefix.child(n.clone()),
                 TypeAnnotationKind::Path(path) => ability_path(path)?,
                 _ => return None,
             };

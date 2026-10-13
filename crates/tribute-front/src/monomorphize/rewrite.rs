@@ -15,13 +15,13 @@ use crate::ast::{
 };
 
 use super::instance::{InstanceKey, InstanceKeys, for_each_declaration_mut};
-use super::mangle::mangle_type_name;
+use super::mangle::mangle_type_path;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
-pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(InstanceKey<'db>, Symbol)>>;
+pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(InstanceKey<'db>, SymbolPath)>>;
 
 /// Type rewrite map: declaration identity → specialized argument/name pairs.
-pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
+pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, SymbolPath)>>;
 
 /// Rewrite all generic function call sites in a module to use specialized versions.
 pub fn rewrite_module<'db>(
@@ -96,14 +96,11 @@ pub fn build_type_rewrite_map<'db>(
 ) -> TypeRewriteMap<'db> {
     let mut map = TypeRewriteMap::default();
     for (id, type_arg_sets) in instantiations {
-        let mut entries: Vec<(Vec<Type<'db>>, Symbol)> = type_arg_sets
+        let mut entries: Vec<(Vec<Type<'db>>, SymbolPath)> = type_arg_sets
             .iter()
-            .map(|type_args| {
-                let mangled = mangle_type_name(db, *id, id.qualified(db).clone(), type_args);
-                (type_args.clone(), mangled)
-            })
+            .map(|type_args| (type_args.clone(), mangle_type_path(db, *id, type_args)))
             .collect();
-        entries.sort_by_key(|e| e.1.clone());
+        entries.sort_by_cached_key(|e| e.1.to_symbol());
         map.insert(*id, entries);
     }
     map
@@ -155,14 +152,13 @@ pub fn rewrite_field_function_refs<'db>(
                     .find(|(args, _)| *args == instance.type_arguments)
             }) && !instance.type_arguments.is_empty()
             {
-                function = FuncDefId::new(db, kind.qualified(mangled, field));
-                *owner = owner.with_qualified(db, mangled.clone());
+                function = FuncDefId::new(db, kind.path(mangled, field));
+                *owner = owner.with_path(db, mangled.clone());
             }
             if let Some(key) = classes {
-                let name =
-                    super::mangle::class_instance_name(function.qualified(db), &key.class_args);
-                keys.record(name.clone(), original, &key);
-                function = FuncDefId::new(db, name);
+                let path = super::mangle::class_instance_path(function.path(db), &key.class_args);
+                keys.record(path.to_symbol(), original, &key);
+                function = FuncDefId::new(db, path);
             }
             instance.function = function;
             value.resolved = ResolvedRef::Function { id: function };
@@ -203,8 +199,8 @@ pub fn rewrite_type<'db>(
                 return Type::new(
                     db,
                     TypeKind::Named {
-                        id: id.with_qualified(db, mangled.clone()),
-                        name: mangled.clone(),
+                        id: id.with_path(db, mangled.clone()),
+                        name: mangled.to_symbol(),
                         args: vec![],
                     },
                 );
@@ -343,7 +339,7 @@ fn rewrite_typed_ref_type<'db>(
         ResolvedRef::TypeDef { id } => {
             if let Some(mangled) = find_mangled_for_typedef(db, *id, tr.ty, map) {
                 ResolvedRef::TypeDef {
-                    id: id.with_qualified(db, mangled),
+                    id: id.with_path(db, mangled),
                 }
             } else {
                 tr.resolved.clone()
@@ -359,7 +355,7 @@ fn find_mangled_for_ctor<'db>(
     _ctor_id: CtorId<'db>,
     ty: Type<'db>,
     map: &TypeRewriteMap<'db>,
-) -> Option<Symbol> {
+) -> Option<SymbolPath> {
     // Extract the result type from the constructor's function type
     let result_ty = match ty.kind(db) {
         TypeKind::Func { result, .. } => *result,
@@ -382,7 +378,7 @@ fn find_mangled_for_typedef<'db>(
     _type_def_id: TypeDefId<'db>,
     ty: Type<'db>,
     map: &TypeRewriteMap<'db>,
-) -> Option<Symbol> {
+) -> Option<SymbolPath> {
     match ty.kind(db) {
         TypeKind::Named { id, args, .. } if !args.is_empty() => {
             let entries = map.get(id)?;
@@ -418,8 +414,10 @@ mod tests {
     ) -> TypeRewriteMap<'db> {
         let mut map = TypeRewriteMap::default();
         for (name, args, mangled) in entries {
-            let id = TypeDefId::synthetic(db, name);
-            map.entry(id).or_default().push((args, mangled));
+            let id = TypeDefId::synthetic(db, SymbolPath::from(name));
+            map.entry(id)
+                .or_default()
+                .push((args, SymbolPath::from(mangled)));
         }
         map
     }
@@ -431,7 +429,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Option")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int],
             },
@@ -456,7 +454,11 @@ mod tests {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
         let source = |name: &str, node| {
-            TypeDefId::source(&db, Symbol::new(name), crate::ast::NodeId::from_raw(node))
+            TypeDefId::source(
+                &db,
+                trunk_ir::SymbolPath::from(name),
+                crate::ast::NodeId::from_raw(node),
+            )
         };
         let cases = [
             (
@@ -497,7 +499,7 @@ mod tests {
             Type::new(
                 &db,
                 TypeKind::Named {
-                    id: crate::ast::TypeDefId::synthetic(&db, Symbol::new(name)),
+                    id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from(name)),
                     name: Symbol::new(name),
                     args,
                 },
@@ -520,7 +522,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Option")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int],
             },
@@ -562,7 +564,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Option")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int],
             },
@@ -570,7 +572,7 @@ mod tests {
         let pair_option_int_bool = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Pair")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Pair")),
                 name: Symbol::new("Pair"),
                 args: vec![option_int, bool_ty],
             },

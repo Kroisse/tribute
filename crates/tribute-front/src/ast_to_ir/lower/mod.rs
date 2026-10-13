@@ -297,7 +297,7 @@ pub(super) fn resolve_enum_type_attr_for_constructor<'db>(
     fallback_ctor_ty: crate::ast::Type<'db>,
 ) -> TypeRef {
     match resolved {
-        ResolvedRef::Constructor { id, .. } => ctx.get_type(id.qualified(ctx.db)),
+        ResolvedRef::Constructor { id, .. } => ctx.get_type(&id.qualified(ctx.db)),
         _ => None,
     }
     .unwrap_or_else(|| resolve_enum_type_attr(ctx, ir, fallback_ctor_ty))

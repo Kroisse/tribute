@@ -13,7 +13,7 @@ fn test_db() -> salsa::DatabaseImpl {
 
 /// Create an AbilityId for testing (with empty module path).
 fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-    AbilityId::source(db, Symbol::new(name))
+    AbilityId::source(db, trunk_ir::SymbolPath::from(name))
 }
 
 /// Create a fresh type variable for testing.
@@ -170,7 +170,11 @@ fn test_unify_named_types_rejects_builtin_and_source_with_same_spelling() {
     let source = Type::new(
         &db,
         TypeKind::Named {
-            id: TypeDefId::source(&db, name.clone(), crate::ast::NodeId::from_raw(1)),
+            id: TypeDefId::source(
+                &db,
+                trunk_ir::SymbolPath::from(&name),
+                crate::ast::NodeId::from_raw(1),
+            ),
             name,
             args: vec![int_ty],
         },
@@ -193,7 +197,7 @@ fn test_unify_named_types_rejects_same_spelled_source_declarations() {
         TypeKind::Named {
             id: TypeDefId::source(
                 &db,
-                Symbol::new("A::Thing"),
+                trunk_ir::SymbolPath::new(["A", "Thing"]),
                 crate::ast::NodeId::from_raw(1),
             ),
             name: name.clone(),
@@ -205,7 +209,7 @@ fn test_unify_named_types_rejects_same_spelled_source_declarations() {
         TypeKind::Named {
             id: TypeDefId::source(
                 &db,
-                Symbol::new("B::Thing"),
+                trunk_ir::SymbolPath::new(["B", "Thing"]),
                 crate::ast::NodeId::from_raw(2),
             ),
             name,

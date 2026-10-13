@@ -619,7 +619,11 @@ fn merge_and_lower_to_ir_with<'db, M>(
             ast: typed.module(db).clone(),
             local_instances: typed.expression_types(db).local_instances.clone(),
             span_map: typed.span_map(db).clone(),
-            function_types: typed.function_types(db).iter().cloned().collect(),
+            function_types: typed
+                .function_types(db)
+                .iter()
+                .map(|(path, scheme)| (path.to_symbol(), *scheme))
+                .collect(),
             constructor_types: typed
                 .constructor_types(db)
                 .schemes
@@ -2879,7 +2883,7 @@ fn main() ->{std::io::Io} Nil {
             let (_, definition) = typed
                 .function_types(db)
                 .iter()
-                .find(|(name, _)| *name == id.qualified(db))
+                .find(|(path, _)| path == id.path(db))
                 .expect("exported function has a typed declaration");
             assert_eq!(exported, definition, "{}", id.qualified(db));
         }
@@ -3125,7 +3129,7 @@ fn main() -> Nil {
                 "monomorphization must retain the concrete intrinsic scheme"
             );
             assert!(
-                ast.contains(concrete),
+                ast.contains("__tribute_list_prepend_intrinsic$std::String"),
                 "specialized List body must call the concrete intrinsic:\n{ast}"
             );
             assert!(
@@ -3341,7 +3345,7 @@ fn main() -> Nil {}
                         }
                     };
                     assert!(matches!(result.kind(db), TypeKind::Named { id, args, .. }
-                        if *id.qualified(db) == name && args.is_empty()));
+                        if id.qualified(db) == name && args.is_empty()));
                 }
             }
         }
