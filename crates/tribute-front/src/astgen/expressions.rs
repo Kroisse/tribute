@@ -1,8 +1,7 @@
 //! CST to AST lowering for expressions.
 
 use tree_sitter::Node;
-use tribute_ir::ModulePathExt;
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
     Arm, BinOpKind, CallSyntax, Expr, ExprKind, FieldInit, FloatBits, HandlerArm, HandlerKind,
@@ -72,7 +71,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
         "operator_fn" => match node.child_by_field_name("operator") {
             Some(op_node) => {
                 // Qualified operators such as Int::+ are single tokens, too.
-                let name = ctx.node_symbol(&op_node);
+                let name = ctx.node_path(&op_node);
                 let name_id = ctx.fresh_id_with_span(&op_node);
                 ExprKind::Var(UnresolvedName::new(name, name_id))
             }
@@ -81,7 +80,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
 
         // === Identifiers ===
         "identifier" => {
-            let name = ctx.node_symbol(&node);
+            let name = ctx.node_path(&node);
             let name_id = ctx.fresh_id_with_span(&node);
             ExprKind::Var(UnresolvedName::new(name, name_id))
         }
@@ -135,7 +134,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
 
         // === Value path ===
         "value_path" => {
-            let sym = ctx.node_symbol(&node);
+            let sym = ctx.node_path(&node);
             let name_id = ctx.fresh_id_with_span(&node);
             ExprKind::Var(UnresolvedName::new(sym, name_id))
         }
@@ -184,7 +183,14 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
         _ => None,
     };
     if let Some(method) = method_sym {
-        return method_call(ctx, &op_node, method, lhs, vec![rhs], CallSyntax::Operator);
+        return method_call(
+            ctx,
+            &op_node,
+            SymbolPath::from(method),
+            lhs,
+            vec![rhs],
+            CallSyntax::Operator,
+        );
     }
 
     let op = match &*op_text {
@@ -235,7 +241,7 @@ fn lower_method_call(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
     };
 
     let receiver = lower_expr(ctx, receiver_node);
-    let method = ctx.node_symbol(&method_node);
+    let method = ctx.node_path(&method_node);
     let args = args_node
         .map(|args| lower_argument_list(ctx, args))
         .unwrap_or_default();
@@ -255,7 +261,7 @@ fn lower_method_call(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
 fn method_call(
     ctx: &mut AstLoweringCtx<'_>,
     method_node: &Node,
-    method: Symbol,
+    method: SymbolPath,
     receiver: Expr<UnresolvedName>,
     mut args: Vec<Expr<UnresolvedName>>,
     syntax: CallSyntax,
@@ -287,7 +293,7 @@ fn lower_constructor_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<
         return ExprKind::Error;
     };
 
-    let sym = ctx.node_symbol(&name_node);
+    let sym = ctx.node_path(&name_node);
     let name_id = ctx.fresh_id_with_span(&name_node);
     let ctor = UnresolvedName::new(sym, name_id);
 
@@ -306,7 +312,7 @@ fn lower_record_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
         return ExprKind::Error;
     };
 
-    let type_name_sym = ctx.node_symbol(&type_node);
+    let type_name_sym = ctx.node_path(&type_node);
     let type_name_id = ctx.fresh_id_with_span(&type_node);
     let type_name = UnresolvedName::new(type_name_sym, type_name_id);
 
@@ -368,7 +374,14 @@ fn lower_field_access(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unre
     let field = ctx.node_symbol(&field_node);
 
     // Field access is syntactic sugar for a zero-arg method call: expr.field → expr.field()
-    method_call(ctx, &field_node, field, expr, vec![], CallSyntax::Method)
+    method_call(
+        ctx,
+        &field_node,
+        SymbolPath::from(field),
+        expr,
+        vec![],
+        CallSyntax::Method,
+    )
 }
 
 /// Returns true if the node is a statement-like construct that should be
@@ -730,12 +743,14 @@ fn lower_handler_operation_path(
     node: Node,
 ) -> Option<(UnresolvedName, Symbol)> {
     let op_node = node.child_by_field_name("operation")?;
-    let op_text = ctx.node_text(&op_node).to_string();
-    let op_symbol = Symbol::new(&op_text);
-    let op_name = op_symbol.last_segment();
-    let ability_sym = op_symbol.parent_path().unwrap_or_else(|| Symbol::new("_"));
+    let operation = ctx.node_path(&op_node);
+    let op_name = operation.leaf()?.clone();
+    let ability = operation
+        .parent()
+        .filter(|ability| !ability.is_root())
+        .unwrap_or_else(|| SymbolPath::from("_"));
     let ability_id = ctx.fresh_id_with_span(&op_node);
-    Some((UnresolvedName::new(ability_sym, ability_id), op_name))
+    Some((UnresolvedName::new(ability, ability_id), op_name))
 }
 
 /// Parse handler parameters (identifiers) from a fn_handler or op_handler node.

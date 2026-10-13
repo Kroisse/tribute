@@ -1,4 +1,4 @@
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use super::*;
 use crate::ast::{
@@ -136,7 +136,7 @@ fn sample() -> Module<u32> {
                             callee: expr(
                                 63,
                                 ExprKind::Functions {
-                                    name: Symbol::new("m"),
+                                    name: SymbolPath::from("m"),
                                     candidates: vec![],
                                 },
                             ),

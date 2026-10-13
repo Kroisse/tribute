@@ -6,7 +6,7 @@
 //! - `ResolvedRef`: After name resolution
 //! - `TypedRef`: After type checking
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use super::node_id::NodeId;
 use super::pattern::Pattern;
@@ -114,7 +114,7 @@ pub enum ExprKind<V> {
     /// the functions the name may be from the call's scope, and type checking
     /// selects one, replacing the expression with a reference to it.
     Functions {
-        name: Symbol,
+        name: SymbolPath,
         // V is the only phase-dependent value.
         #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
         candidates: Vec<V>,

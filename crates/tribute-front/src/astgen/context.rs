@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use ropey::Rope;
 use salsa::Accumulator;
 use tree_sitter::Node;
-use trunk_ir::{Span, Symbol};
+use trunk_ir::{Span, Symbol, SymbolPath};
 
 use crate::ast::{NodeId, SpanMapBuilder};
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -111,6 +111,31 @@ impl<'db> AstLoweringCtx<'db> {
         let start = node.start_byte();
         let end = node.end_byte();
         self.source.byte_slice(start..end).to_string()
+    }
+
+    /// The path a name node spells, one component per segment.
+    pub fn node_path(&self, node: &Node) -> SymbolPath {
+        let mut cursor = node.walk();
+        let segments: Vec<Symbol> = node
+            .named_children(&mut cursor)
+            .filter(|child| {
+                matches!(
+                    child.kind(),
+                    "path_segment" | "path_keyword" | "identifier" | "type_identifier"
+                )
+            })
+            .map(|child| self.node_symbol(&child))
+            .collect();
+        if !segments.is_empty() {
+            return SymbolPath::new(segments);
+        }
+        // A qualified operator such as `Int::+` is a single token.
+        if node.kind() == "qualified_operator"
+            && let Some((owner, operator)) = self.node_text(node).split_once("::")
+        {
+            return SymbolPath::new([owner, operator]);
+        }
+        SymbolPath::from(self.node_symbol(node))
     }
 
     /// Get a Symbol from a node's text, without the `r#` of raw identifiers.
