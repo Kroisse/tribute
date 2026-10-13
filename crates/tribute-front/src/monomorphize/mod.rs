@@ -141,10 +141,11 @@ pub fn monomorphize_functions<'db>(
             &metadata.function_instances,
             &keys,
         );
-        let mut specialized_decls: Vec<Decl<TypedRef<'db>>> = specialized_declarations
-            .into_iter()
-            .map(Decl::Function)
-            .collect();
+        let (placements, mut specialized_decls): (Vec<_>, Vec<Decl<TypedRef<'db>>>) =
+            specialized_declarations
+                .into_iter()
+                .map(|(placement, declaration)| (placement, Decl::Function(declaration)))
+                .unzip();
         local::settle_local_lambdas(db, &mut specialized_decls, &mut metadata, &mut keys);
         rewrite::rewrite_decls(
             db,
@@ -154,12 +155,22 @@ pub fn monomorphize_functions<'db>(
             &keys,
         );
 
-        module.decls.extend(specialized_decls);
+        let id = module.id;
         module.decls.extend(
-            specialized_extern_declarations
+            placements
                 .into_iter()
-                .map(Decl::ExternFunction),
+                .zip(specialized_decls)
+                .map(|(placement, declaration)| placement.place(id, declaration)),
         );
+        module
+            .decls
+            .extend(
+                specialized_extern_declarations
+                    .into_iter()
+                    .map(|(placement, declaration)| {
+                        placement.place(id, Decl::ExternFunction(declaration))
+                    }),
+            );
         all_function_types.extend(specialized_function_types);
     }
     if !reached_fixpoint {
@@ -326,12 +337,17 @@ pub fn monomorphize_functions<'db>(
         rewrite::rewrite_types_in_module(db, &mut module, &type_rewrite_map);
 
         // Append specialized types to module
-        module
-            .decls
-            .extend(specialized_structs.into_iter().map(Decl::Struct));
-        module
-            .decls
-            .extend(specialized_enums.into_iter().map(Decl::Enum));
+        let id = module.id;
+        module.decls.extend(
+            specialized_structs
+                .into_iter()
+                .map(|(placement, declaration)| placement.place(id, Decl::Struct(declaration))),
+        );
+        module.decls.extend(
+            specialized_enums
+                .into_iter()
+                .map(|(placement, declaration)| placement.place(id, Decl::Enum(declaration))),
+        );
         module
     } else {
         rewrite::rewrite_field_function_refs(

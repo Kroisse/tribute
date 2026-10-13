@@ -340,7 +340,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             &collected.instances,
         );
         assert_eq!(declarations.len(), 1);
-        assert_eq!(declarations[0].name, name);
+        assert_eq!(declarations[0].1.name, name);
         assert_eq!(schemas[&source_ctor], source_scheme);
         assert_eq!(source_scheme.type_params(db).len(), 1);
     }

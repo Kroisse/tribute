@@ -325,14 +325,6 @@ fn lower_expr_for_callable_parameter<'db>(
     }
 }
 
-fn declaration_name(prefix: &mut SymbolPath, name: Symbol) -> Symbol {
-    if name.with_str(|text| text.contains("::")) {
-        name
-    } else {
-        crate::qualified_symbol(prefix, &name)
-    }
-}
-
 pub(super) fn lower_module<'db>(
     typed: TypedModule<'db>,
     db: &'db dyn salsa::Database,
@@ -503,7 +495,7 @@ fn prescan_definition_conventions<'db>(
     for declaration in declarations {
         match declaration {
             Decl::Function(function) => {
-                let name = declaration_name(prefix, function.name.clone());
+                let name = crate::qualified_symbol(prefix, &function.name);
                 let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
                     continue;
                 };
@@ -536,7 +528,7 @@ fn prescan_definition_conventions<'db>(
                     .iter()
                     .filter_map(|field| field.name.clone())
                 {
-                    let getter = declaration_name(prefix, field);
+                    let getter = crate::qualified_symbol(prefix, &field);
                     let [_, modifier] = field_update_names(&getter);
                     for (modifier, class) in modifier_instances(ctx, modifier) {
                         ctx.register_definition_convention(modifier, class);
@@ -569,7 +561,7 @@ fn plan_local_callables<'db>(
     for declaration in ast {
         match declaration {
             Decl::Function(function) => {
-                let name = declaration_name(prefix, function.name.clone());
+                let name = crate::qualified_symbol(prefix, &function.name);
                 let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
                     continue;
                 };
