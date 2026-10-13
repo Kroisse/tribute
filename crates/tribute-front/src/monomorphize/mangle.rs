@@ -102,15 +102,6 @@ pub(crate) fn class_instance_name(name: &Symbol, classes: &[CallingConvention]) 
     Symbol::new(&buf)
 }
 
-pub fn mangle_type_name(
-    db: &dyn salsa::Database,
-    id: TypeDefId<'_>,
-    name: Symbol,
-    type_args: &[Type<'_>],
-) -> Symbol {
-    mangle_name(db, &nominal_mangle_base(db, id, name), type_args)
-}
-
 fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol) -> Symbol {
     if id.is_builtin_list(db) {
         Symbol::new("5$List")
@@ -601,7 +592,7 @@ mod tests {
         let id = TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from(&name));
         let mangle = |effect: &str| {
             let row = EffectRow::single(&db, ability(&db, effect, vec![]));
-            mangle_type_name(&db, id, name.clone(), &[thunk(&db, row)]).to_string()
+            mangle_type_path(&db, id, &[thunk(&db, row)]).to_string()
         };
 
         assert_eq!(mangle("Ask"), "Holder$6$0$$1$2$Ask$1$Nat");
@@ -907,8 +898,7 @@ mod laws {
                 mangle_name(&db, &base, &[constructed])
             );
         }
-        let type_name =
-            |id, args: &[Type<'_>]| mangle_type_name(&db, id, Symbol::new("List"), args);
+        let type_name = |id, args: &[Type<'_>]| mangle_type_path(&db, id, args).to_symbol();
         let source_list = TypeDefId::source(
             &db,
             trunk_ir::SymbolPath::from("BuiltinList"),

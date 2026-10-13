@@ -329,12 +329,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         assert!(
             matches!(result.kind(db), TypeKind::Named { id, args, .. } if id == owner && args == &[int])
         );
-        let name = super::super::mangle::mangle_type_name(
-            db,
-            *owner,
-            owner.qualified(db).clone(),
-            arguments,
-        );
+        let name = super::super::mangle::mangle_type_path(db, *owner, arguments).to_symbol();
         assert_eq!(name, Symbol::new("nested::Holder$Int"));
         let declarations = specialize::generate_struct_specializations_with_index(
             db,
