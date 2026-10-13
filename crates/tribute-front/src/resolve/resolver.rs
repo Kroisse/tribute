@@ -273,7 +273,7 @@ impl<'db> Resolver<'db> {
             });
         }
         Ok(self
-            .namespace_in_scope(namespace.to_symbol())
+            .namespace_in_scope(namespace)
             .and_then(|namespace| self.env.lookup_qualified(&namespace, &sym)))
     }
 
