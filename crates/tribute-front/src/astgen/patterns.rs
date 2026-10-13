@@ -87,7 +87,7 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<Unreso
 
         // === Type identifier (could be unit variant) ===
         "type_identifier" => {
-            let name = ctx.node_symbol(&node);
+            let name = ctx.node_path(&node);
             let ctor_id = ctx.fresh_id_with_span(&node);
             let ctor = UnresolvedName::new(name, ctor_id);
             PatternKind::Variant {
@@ -131,7 +131,7 @@ fn lower_constructor_pattern(
         return PatternKind::Error;
     };
 
-    let name = ctx.node_symbol(&name_node);
+    let name = ctx.node_path(&name_node);
     let ctor_id = ctx.fresh_id_with_span(&name_node);
     let ctor = UnresolvedName::new(name, ctor_id);
 
@@ -296,6 +296,7 @@ mod tests {
     use crate::ast::{Decl, ExprKind, Module, Stmt, UnresolvedName};
     use ropey::Rope;
     use tree_sitter::Parser;
+    use trunk_ir::SymbolPath;
 
     use crate::astgen::{ParsedCst, lower_cst_to_ast};
 
@@ -603,7 +604,7 @@ mod tests {
         let PatternKind::Variant { ctor, fields } = pattern else {
             panic!("Expected variant pattern, got {:?}", pattern);
         };
-        assert_eq!(ctor.qualified.to_string(), "std::io::ReadLine");
+        assert_eq!(ctor.path, SymbolPath::new(["std", "io", "ReadLine"]));
         assert_eq!(fields.len(), 1);
     }
 

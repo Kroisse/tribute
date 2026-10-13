@@ -220,8 +220,8 @@ pub struct DeferredMethodCall<'db> {
     pub value: bool,
     /// How the call was written, for diagnostics. Unused for a value.
     pub syntax: crate::ast::CallSyntax,
-    /// The method name being called.
-    pub method: Symbol,
+    /// The method path being called.
+    pub method: SymbolPath,
     /// The callee's node, for span lookup in diagnostics.
     pub callee: NodeId,
     /// The functions the callee may name.

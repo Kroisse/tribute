@@ -11,7 +11,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use tribute_ir::ModulePathExt as _;
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use super::decl::OpDeclKind;
 use super::node_id::NodeId;
@@ -26,47 +26,47 @@ use super::types::Type;
 /// At this stage, we don't know whether `foo` refers to a local variable,
 /// a function, a constructor, or something else.
 ///
-/// The qualified symbol is stored as-is (e.g. `"std::io::println"`),
-/// and split lazily via `ModulePathExt` methods on `Symbol`.
+/// The path holds one component per segment the source wrote:
 ///
-/// # Examples
-///
-/// - `foo` → `{ qualified: "foo" }`
-/// - `State::get` → `{ qualified: "State::get" }`
-/// - `a::b::c` → `{ qualified: "a::b::c" }`
+/// - `foo` → `[foo]`
+/// - `State::get` → `[State, get]`
+/// - `a::b::c` → `[a, b, c]`
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct UnresolvedName {
-    /// The full qualified symbol (e.g. `"std::io::State"` or `"foo"`).
-    pub qualified: Symbol,
+    /// The path as written, one component per segment.
+    pub path: SymbolPath,
     /// Node ID for looking up the span in SpanMap.
     pub id: NodeId,
 }
 
 impl UnresolvedName {
     /// Create a new name reference (simple or qualified).
-    pub fn new(qualified: Symbol, id: NodeId) -> Self {
-        Self { qualified, id }
+    pub fn new(path: SymbolPath, id: NodeId) -> Self {
+        Self { path, id }
     }
 
     /// Returns true if this is a simple (unqualified) name.
     pub fn is_simple(&self) -> bool {
-        self.qualified.is_simple()
+        self.path.is_simple()
     }
 
-    /// Returns the final name segment (e.g. `"println"` from `"std::io::println"`).
+    /// Returns the final name segment (e.g. `println` from `std::io::println`).
     pub fn name(&self) -> Symbol {
-        self.qualified.last_segment()
+        self.path
+            .leaf()
+            .expect("a name reference has a segment")
+            .clone()
     }
 
-    /// Returns the namespace prefix, if any (e.g. `"std::io"` from `"std::io::println"`).
-    pub fn namespace(&self) -> Option<Symbol> {
-        self.qualified.parent_path()
+    /// Returns the namespace prefix, if any (e.g. `std::io` from `std::io::println`).
+    pub fn namespace(&self) -> Option<SymbolPath> {
+        self.path.parent().filter(|namespace| !namespace.is_root())
     }
 }
 
 impl Display for UnresolvedName {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.qualified.with_str(|s| f.write_str(s))
+        Display::fmt(&self.path, f)
     }
 }
 

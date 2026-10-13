@@ -8,8 +8,7 @@ use rustc_hash::FxHashMap as HashMap;
 use itertools::Itertools;
 use salsa::Accumulator as _;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_ir::ModulePathExt as _;
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
     Arm, Decl, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit, FieldPattern, FuncDecl,
@@ -261,8 +260,11 @@ impl<'db> Resolver<'db> {
         let Some(namespace) = name.namespace() else {
             return Ok(None);
         };
-        let segments: Vec<Symbol> = namespace.to_string().split("::").map(Symbol::new).collect();
-        if let Some(path) = absolute_path(self.package_depth, &self.module_path, &segments)? {
+        if let Some(path) = absolute_path(
+            self.package_depth,
+            &self.module_path,
+            namespace.components(),
+        )? {
             return Ok(if path.is_empty() {
                 self.env.lookup(&sym)
             } else {
@@ -271,7 +273,7 @@ impl<'db> Resolver<'db> {
             });
         }
         Ok(self
-            .namespace_in_scope(namespace)
+            .namespace_in_scope(namespace.to_symbol())
             .and_then(|namespace| self.env.lookup_qualified(&namespace, &sym)))
     }
 
@@ -334,7 +336,11 @@ impl<'db> Resolver<'db> {
         }
         for module in self.names_in_scope() {
             let nested = UnresolvedName::new(
-                Symbol::new(&format!("{module}::{}", path.qualified)),
+                SymbolPath::new(
+                    std::iter::once(&module)
+                        .chain(path.path.components())
+                        .cloned(),
+                ),
                 path.id,
             );
             if let Ok(Some(Binding::Function { id })) = self.lookup_qualified_name(&nested)
@@ -376,7 +382,7 @@ impl<'db> Resolver<'db> {
                 },
             };
         for module in self.names_in_scope() {
-            let nested = UnresolvedName::new(Symbol::new(&format!("{module}::{method}")), node);
+            let nested = UnresolvedName::new(SymbolPath::new([module, method.clone()]), node);
             if let Ok(Some(Binding::Function { id })) = self.lookup_qualified_name(&nested)
                 && !functions.contains(id)
             {
@@ -1234,7 +1240,7 @@ impl<'db> Resolver<'db> {
                 // several `use`s give it.
                 match self.imported_functions(name) {
                     Some(functions) => ExprKind::Functions {
-                        name: name.qualified.clone(),
+                        name: name.path.clone(),
                         candidates: functions
                             .iter()
                             .map(|id| ResolvedRef::Function { id: *id })
@@ -1271,7 +1277,7 @@ impl<'db> Resolver<'db> {
                             Expr::new(
                                 callee.id,
                                 ExprKind::Functions {
-                                    name: name.qualified.clone(),
+                                    name: name.path.clone(),
                                     candidates,
                                 },
                             )
@@ -1319,7 +1325,7 @@ impl<'db> Resolver<'db> {
             }
 
             ExprKind::Functions { name, .. } => {
-                let candidates = if name.is_simple() {
+                let candidates = if let Some(name) = name.as_simple() {
                     let functions = self.method_functions(name, expr.id);
                     if functions.is_empty() {
                         self.report_unresolved_method(expr.id, name);
@@ -1344,7 +1350,8 @@ impl<'db> Resolver<'db> {
                     },
                     MethodCandidates::Callee(callee) => ExprKind::Var(callee),
                     MethodCandidates::Unresolved => {
-                        ExprKind::Var(ResolvedRef::local(LocalId::UNRESOLVED, name.last_segment()))
+                        let name = name.leaf().expect("a method path has a segment");
+                        ExprKind::Var(ResolvedRef::local(LocalId::UNRESOLVED, name.clone()))
                     }
                 }
             }
@@ -1536,8 +1543,8 @@ impl<'db> Resolver<'db> {
     /// Resolve ability reference in a handler arm.
     /// Skips "_" placeholder (unqualified ops) without emitting diagnostics.
     fn resolve_handler_ability(&mut self, ability: &UnresolvedName) -> ResolvedRef<'db> {
-        if ability.qualified == "_" {
-            ResolvedRef::local(LocalId::UNRESOLVED, ability.qualified.clone())
+        if ability.path == "_" {
+            ResolvedRef::local(LocalId::UNRESOLVED, ability.name())
         } else {
             self.resolve_name(ability)
         }
@@ -1680,7 +1687,7 @@ mod tests {
         resolver.bind_local(param_name.clone());
 
         // Create unresolved reference to the parameter
-        let body_var = UnresolvedName::new(param_name.clone(), NodeId::from_raw(2));
+        let body_var = UnresolvedName::new(SymbolPath::from(&param_name), NodeId::from_raw(2));
 
         // Resolve the variable reference
         let resolved = resolver.resolve_name(&body_var);
@@ -1711,7 +1718,7 @@ mod tests {
         resolver.pop_scope();
 
         // After popping inner scope, x should still be visible
-        let x_ref = UnresolvedName::new(x, NodeId::from_raw(1));
+        let x_ref = UnresolvedName::new(SymbolPath::from(x), NodeId::from_raw(1));
         let resolved = resolver.resolve_name(&x_ref);
 
         match resolved {
@@ -1742,8 +1749,8 @@ mod tests {
         let y_id = resolver.bind_local(y.clone());
 
         // Both x and y should be visible from inner scope
-        let x_ref = UnresolvedName::new(x, NodeId::from_raw(1));
-        let y_ref = UnresolvedName::new(y, NodeId::from_raw(2));
+        let x_ref = UnresolvedName::new(SymbolPath::from(x), NodeId::from_raw(1));
+        let y_ref = UnresolvedName::new(SymbolPath::from(y), NodeId::from_raw(2));
 
         let resolved_x = resolver.resolve_name(&x_ref);
         let resolved_y = resolver.resolve_name(&y_ref);

@@ -3,13 +3,13 @@ use crate::ast::{
     Decl, Expr, ExprKind, HandlerKind, NodeId, PatternKind, Stmt, TypeAnnotationKind,
 };
 use tree_sitter::Parser;
-use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 
 /// `receiver.method(args)` as parsing writes it: a call of the functions
 /// `method` names, with the receiver as its first argument.
 struct MethodCall<'a> {
     receiver: &'a Expr<UnresolvedName>,
-    method: &'a Symbol,
+    method: &'a SymbolPath,
     callee: NodeId,
     args: &'a [Expr<UnresolvedName>],
 }
@@ -71,7 +71,7 @@ fn operator_values_preserve_names_in_bindings_and_arguments() {
             let ExprKind::Var(reference) = expr.kind.as_ref() else {
                 panic!("expected operator reference {name}, got {:?}", expr.kind);
             };
-            assert_eq!(reference.qualified.to_string(), name);
+            assert_eq!(reference.path.to_string(), name);
         }
     }
 }
@@ -769,7 +769,10 @@ fn test_qualified_constructor_expression() {
     let ExprKind::Cons { ctor, .. } = value.kind.as_ref() else {
         panic!("Expected constructor, got {:?}", value.kind);
     };
-    assert_eq!(ctor.qualified.to_string(), "std::io::Error::EndOfFile");
+    assert_eq!(
+        ctor.path,
+        SymbolPath::new(["std", "io", "Error", "EndOfFile"])
+    );
 }
 
 #[test]
@@ -823,7 +826,10 @@ fn test_qualified_record_expression() {
     let ExprKind::Record { type_name, .. } = value.kind.as_ref() else {
         panic!("Expected record, got {:?}", value.kind);
     };
-    assert_eq!(type_name.qualified.to_string(), "std::io::SystemError");
+    assert_eq!(
+        type_name.path,
+        SymbolPath::new(["std", "io", "SystemError"])
+    );
 }
 
 #[test]
@@ -1242,7 +1248,7 @@ fn test_qualified_identifier() {
         panic!("Expected var for path, got {:?}", value.kind);
     };
     // Qualified identifier stored as single symbol
-    assert_eq!(name.qualified.to_string(), "std::io::println");
+    assert_eq!(name.path, SymbolPath::new(["std", "io", "println"]));
 }
 
 // =============================================================================

@@ -11,7 +11,7 @@ use super::{
     BinOpKind, Decl, Expr, ExprKind, FloatBits, FuncDecl, Module, NodeId, Param, ParamDecl,
     Pattern, PatternKind, Stmt, UnresolvedName,
 };
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 /// Fixed pool of variable names. `env_size` indexes into this array:
 /// `env_size=2` means `VAR_NAMES[0..2]` ("foo", "bar") are in scope.
@@ -72,7 +72,7 @@ fn var_expr(env_size: usize) -> BoxedStrategy<Expr<UnresolvedName>> {
     assert!(env_size > 0, "var_expr requires env_size > 0");
     (node_id(), node_id(), 0..env_size)
         .prop_map(|(expr_id, name_id, idx)| {
-            let name = UnresolvedName::new(Symbol::new(VAR_NAMES[idx]), name_id);
+            let name = UnresolvedName::new(SymbolPath::from(VAR_NAMES[idx]), name_id);
             Expr::new(expr_id, ExprKind::Var(name))
         })
         .boxed()
@@ -566,7 +566,7 @@ fn two_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                     effects: None,
                     body: h_body,
                 };
-                let callee_name = UnresolvedName::new(Symbol::new(FUNC_NAMES[0]), callee_nid);
+                let callee_name = UnresolvedName::new(SymbolPath::from(FUNC_NAMES[0]), callee_nid);
                 let callee_expr = Expr::new(callee_expr_id, ExprKind::Var(callee_name));
                 let main_body = Expr::new(
                     call_id,
@@ -659,7 +659,7 @@ fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                 let beta_callee = Expr::new(
                     beta_callee_expr_id,
                     ExprKind::Var(UnresolvedName::new(
-                        Symbol::new(FUNC_NAMES[1]),
+                        SymbolPath::from(FUNC_NAMES[1]),
                         beta_callee_name_id,
                     )),
                 );
@@ -674,7 +674,7 @@ fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                 let alpha_callee = Expr::new(
                     alpha_callee_expr_id,
                     ExprKind::Var(UnresolvedName::new(
-                        Symbol::new(FUNC_NAMES[0]),
+                        SymbolPath::from(FUNC_NAMES[0]),
                         alpha_callee_name_id,
                     )),
                 );

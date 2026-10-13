@@ -9,7 +9,7 @@ use rustc_hash::FxHashSet as HashSet;
 use itertools::Itertools;
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
     AbilityId, Arm, BinOpKind, Effect, EffectRow, Expr, ExprKind, FieldInit, FieldPattern,
@@ -1581,7 +1581,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         node: NodeId,
-        name: &Symbol,
+        name: &SymbolPath,
         candidates: &[ResolvedRef<'db>],
     ) -> Type<'db> {
         let result_ty = ctx.fresh_type_var();
