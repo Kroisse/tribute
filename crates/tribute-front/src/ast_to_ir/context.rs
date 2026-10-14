@@ -459,12 +459,11 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Qualify a name with the current module path.
     ///
-    /// Matches resolve::build_env convention: the top-level module name
-    /// (derived from filename) is NOT part of internal qualified names.
-    /// Only nested `pub mod` blocks contribute to the path.
+    /// The module path is the declaration's entry module, which holds only
+    /// inline modules; the file-derived module name is not part of it.
     ///
-    /// - `["test", "String"]` + `"to_bytes"` → `"String::to_bytes"`
-    /// - `["test"]` + `"print_line"` → `"print_line"` (top-level, unchanged)
+    /// - `["String"]` + `"to_bytes"` → `"String::to_bytes"`
+    /// - `[]` + `"print_line"` → `"print_line"`
     pub fn qualify_name(&self, name: &Symbol) -> Symbol {
         self.module_path.child(name.clone()).to_symbol()
     }
