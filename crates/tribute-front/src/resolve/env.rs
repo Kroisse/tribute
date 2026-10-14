@@ -356,10 +356,10 @@ impl<'db> ModuleEnv<'db> {
         }
 
         for (ns, bindings) in other.iter_namespaces() {
-            if let Some(root) = ns.components().first() {
+            if let Some(root) = ns.first() {
                 self.add_library_root(root.clone());
             }
-            if let [root, alias, ..] = ns.components()
+            if let [root, alias, ..] = &ns[..]
                 && root == package
             {
                 self.add_library_namespace(

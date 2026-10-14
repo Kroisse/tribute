@@ -377,13 +377,10 @@ pub struct TypeCheckOutput<'db> {
     #[returns(deref)]
     pub ability_definitions: Vec<AbilitySchema<'db>>,
     /// Exact semantic operation instances for handler arms.
-    #[returns(ref)]
     pub handler_operations: SortedMap<NodeId, InstantiatedHandlerOperation<'db>>,
     /// Exact semantic operation instances for ability-operation calls.
-    #[returns(ref)]
     pub perform_operations: SortedMap<NodeId, InstantiatedPerformOperation<'db>>,
     /// Fully solved callable signatures for lambda expressions.
-    #[returns(ref)]
     pub lambda_signatures: SortedMap<NodeId, LambdaSignature<'db>>,
     /// Case expressions which type checking proved exhaustive.
     #[returns(deref)]

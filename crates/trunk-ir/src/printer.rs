@@ -618,7 +618,7 @@ fn write_symbol(f: &mut dyn Write, sym: &crate::symbol::Symbol) -> fmt::Result {
 /// Write a symbol path as `@outer::@name`, each component quoted when
 /// needed.
 fn write_symbol_path(f: &mut dyn Write, path: &crate::symbol::SymbolPath) -> fmt::Result {
-    for (index, component) in path.components().iter().enumerate() {
+    for (index, component) in path.iter().enumerate() {
         if index != 0 {
             f.write_str(crate::symbol::SymbolPath::SEPARATOR)?;
         }
@@ -1596,7 +1596,7 @@ mod tests {
             parsed
                 .iter()
                 .map(String::as_str)
-                .eq(nested.components().iter().map(Symbol::as_str))
+                .eq(nested.iter().map(Symbol::as_str))
         );
 
         // Empty symbol (should quote)

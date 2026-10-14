@@ -286,7 +286,7 @@ impl<'db> AbilityId<'db> {
 
     /// Resolve a fully-qualified source path through the builtin registry.
     pub fn from_resolved_path(db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
-        Self::builtin_from_path(db, path.components()).unwrap_or_else(|| Self::source(db, path))
+        Self::builtin_from_path(db, &path).unwrap_or_else(|| Self::source(db, path))
     }
 
     /// The path's components joined with `::`, for IR symbols and messages.

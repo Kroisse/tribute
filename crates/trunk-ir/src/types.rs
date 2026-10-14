@@ -243,7 +243,6 @@ impl Attribute {
             Attribute::String(s) => strings.get(*s).len() + 2,
             Attribute::Bytes(b) => b.len() * 4 + 7,
             Attribute::SymbolRef(path) => path
-                .components()
                 .iter()
                 .map(|name| name.as_str().len() + 3)
                 .sum(),

@@ -259,10 +259,6 @@ impl SymbolPath {
         self.0.is_empty()
     }
 
-    pub fn components(&self) -> &[Symbol] {
-        &self.0
-    }
-
     /// The path's own name, without its modules. The root module has none.
     pub fn leaf(&self) -> Option<&Symbol> {
         self.0.last()
@@ -461,7 +457,7 @@ mod tests {
     #[test]
     fn symbol_paths_keep_each_name_as_one_component() {
         let path = SymbolPath::new(["outer", "inner", "same"]);
-        assert_eq!(path.components().len(), 3);
+        assert_eq!(path.len(), 3);
         assert_eq!(path.leaf(), Some(&Symbol::new("same")));
         assert_eq!(path.modules(), [Symbol::new("outer"), Symbol::new("inner")]);
         assert_eq!(path.to_string(), "outer::inner::same");

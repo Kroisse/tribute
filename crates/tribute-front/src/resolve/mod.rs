@@ -138,7 +138,7 @@ fn use_target<'db>(env: &ModuleEnv<'db>, path: Vec<Symbol>) -> Option<(Vec<Symbo
             if !env.declares(first.clone())
                 && let Some(library) = env.library_namespace(first) =>
         {
-            library.components().iter().chain(rest).cloned().collect()
+            library.iter().chain(rest).cloned().collect()
         }
         _ => path,
     };
@@ -366,7 +366,7 @@ fn collect_definition<'db>(
                 let import_name = u.alias.clone().unwrap_or(name);
                 // A path keyword names a package-root path; the resolver
                 // reports a keyword that names none.
-                let path = path::absolute_path(0, prefix.components(), &u.path)
+                let path = path::absolute_path(0, prefix, &u.path)
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| u.path.clone());
@@ -401,7 +401,7 @@ fn collect_definition<'db>(
                     // Create qualified namespace path: Foo::Bar
                     let qualified_ns = SymbolPath::new(
                         std::iter::once(&m.name)
-                            .chain(inner_ns.components())
+                            .chain(inner_ns.iter())
                             .cloned(),
                     );
                     for (name, binding) in inner_bindings {
