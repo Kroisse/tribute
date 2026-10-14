@@ -619,6 +619,11 @@ row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 �
 binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 드러내지
 않으므로 따로 표시한다.
 
+Tail의 class는 binder 종류에 따라 읽는다. `param`은 그 인스턴스가 고정한 class,
+`ability_arg`와 `body`는 `Cps`다. `local`의 class는 `let`에 묶인 람다를 생성한
+복사본마다 정해지며, IR에서는 그 복사본의 callable type에 쓰인 convention으로만
+나타난다.
+
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
 인자, operation 결과, tuple layout의 원소가 모두 같다. Type은 binder를 도입하지
 않는다. Module 수준의 type에는 둘러싼 정의가 없으므로 [`ability.operation`](#abilitydecl)의
