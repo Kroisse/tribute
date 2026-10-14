@@ -100,7 +100,7 @@ pub fn build_type_rewrite_map<'db>(
             .iter()
             .map(|type_args| (type_args.clone(), mangle_type_path(db, *id, type_args)))
             .collect();
-        entries.sort_by_cached_key(|e| e.1.to_symbol());
+        entries.sort_by(|left, right| left.1.cmp(&right.1));
         map.insert(*id, entries);
     }
     map

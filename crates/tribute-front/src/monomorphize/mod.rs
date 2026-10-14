@@ -267,7 +267,7 @@ pub fn monomorphize_functions<'db>(
                 )
             })
             .collect();
-        struct_constructors.sort_by_key(|(id, _)| id.qualified(db));
+        struct_constructors.sort_by_key(|(id, _)| id.path(db));
         for (ctor, scheme) in struct_constructors {
             metadata.constructor_types.entry(ctor).or_insert(scheme);
         }
@@ -594,7 +594,7 @@ fn build_rewrite_map<'db>(
             .iter()
             .map(|key| (key.clone(), mangle::mangle_instance_path(db, path, key)))
             .collect();
-        entries.sort_by_cached_key(|e| e.1.to_symbol());
+        entries.sort_by(|left, right| left.1.cmp(&right.1));
         rewrite_map.insert(*func_id, entries);
     }
 

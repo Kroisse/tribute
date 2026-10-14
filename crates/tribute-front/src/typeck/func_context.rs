@@ -808,7 +808,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     /// Look up a type definition.
-    pub fn lookup_type_def(&self, path: &SymbolPath) -> Option<TypeScheme<'db>> {
+    pub fn lookup_type_def(&self, path: &[Symbol]) -> Option<TypeScheme<'db>> {
         self.env.lookup_type_def(path)
     }
 

@@ -94,8 +94,7 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
 
         // Transfer the imported name's sub-namespace entries.
         // e.g., `use abilities::Abort` makes `Abort::abort` available.
-        let qualified_ns = SymbolPath::new(path.iter().cloned());
-        for (op_name, op_binding) in env.collect_namespace(&qualified_ns) {
+        for (op_name, op_binding) in env.collect_namespace(&path) {
             env.add_to_namespace_if_absent(
                 SymbolPath::new([import_name.clone()]),
                 op_name,
@@ -144,8 +143,7 @@ fn use_target<'db>(env: &ModuleEnv<'db>, path: Vec<Symbol>) -> Option<(Vec<Symbo
         _ => path,
     };
     let (target_name, namespace) = path.split_last()?;
-    let namespace = SymbolPath::new(namespace.iter().cloned());
-    let binding = env.lookup_qualified(&namespace, target_name)?.clone();
+    let binding = env.lookup_qualified(namespace, target_name)?.clone();
     Some((path, binding))
 }
 
