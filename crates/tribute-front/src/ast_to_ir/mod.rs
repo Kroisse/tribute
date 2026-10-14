@@ -115,14 +115,16 @@ pub fn registered_compiler_intrinsics<V>(
     module: &AstModule<V>,
 ) -> Result<HashMap<NodeId, Symbol>, Vec<UnsupportedCompilerIntrinsic>> {
     fn collect<V>(
-        declarations: &[crate::ast::Decl<V>],
+        declarations: &[crate::ast::ModuleItem<V>],
         prefix: &mut SymbolPath,
         result: &mut HashMap<NodeId, Symbol>,
         unsupported: &mut Vec<UnsupportedCompilerIntrinsic>,
     ) {
         for declaration in declarations {
             match declaration {
-                crate::ast::Decl::ExternFunction(function) if function.abi == "intrinsic" => {
+                crate::ast::ModuleItem::Decl(crate::ast::Decl::ExternFunction(function))
+                    if function.abi == "intrinsic" =>
+                {
                     let symbol = prefix.child(function.name.clone()).to_symbol();
                     if is_supported_compiler_intrinsic(&symbol) {
                         result.insert(function.id, symbol);
@@ -133,7 +135,7 @@ pub fn registered_compiler_intrinsics<V>(
                         });
                     }
                 }
-                crate::ast::Decl::Module(module) => {
+                crate::ast::ModuleItem::Module(module) => {
                     if let Some(body) = &module.body {
                         prefix.push(module.name.clone());
                         collect(body, prefix, result, unsupported);

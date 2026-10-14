@@ -6,7 +6,7 @@
 use trunk_ir::{Span, Symbol};
 
 use tribute_front::SourceCst;
-use tribute_front::ast::{AbilityId, Decl, TypeAnnotation, TypeAnnotationKind};
+use tribute_front::ast::{AbilityId, Decl, ModuleItem, TypeAnnotation, TypeAnnotationKind};
 use tribute_front::query as ast_query;
 
 // =============================================================================
@@ -82,21 +82,21 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
 
     for decl in &module.decls {
         match decl {
-            Decl::Function(func) => {
+            ModuleItem::Decl(Decl::Function(func)) => {
                 items.push(AstCompletionItem {
                     name: func.name.clone(),
                     kind: CompletionKind::Function,
                     detail: None,
                 });
             }
-            Decl::Struct(s) => {
+            ModuleItem::Decl(Decl::Struct(s)) => {
                 items.push(AstCompletionItem {
                     name: s.name.clone(),
                     kind: CompletionKind::Struct,
                     detail: None,
                 });
             }
-            Decl::Enum(e) => {
+            ModuleItem::Decl(Decl::Enum(e)) => {
                 items.push(AstCompletionItem {
                     name: e.name.clone(),
                     kind: CompletionKind::Enum,
@@ -111,21 +111,21 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
                     });
                 }
             }
-            Decl::ExternFunction(func) => {
+            ModuleItem::Decl(Decl::ExternFunction(func)) => {
                 items.push(AstCompletionItem {
                     name: func.name.clone(),
                     kind: CompletionKind::Function,
                     detail: None,
                 });
             }
-            Decl::Ability(a) => {
+            ModuleItem::Decl(Decl::Ability(a)) => {
                 items.push(AstCompletionItem {
                     name: a.name.clone(),
                     kind: CompletionKind::Ability,
                     detail: None,
                 });
             }
-            Decl::Use(use_decl) => {
+            ModuleItem::Decl(Decl::Use(use_decl)) => {
                 if let Some(ability) = AbilityId::builtin_from_path(db, &use_decl.path) {
                     let name = use_decl.alias.clone().unwrap_or_else(|| ability.name(db));
                     if !items.iter().any(|item| item.name == name) {
@@ -140,7 +140,7 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
                     }
                 }
             }
-            Decl::Module(_) => {}
+            ModuleItem::Module(_) => {}
         }
     }
 
@@ -201,7 +201,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
 
     for decl in &module.decls {
         match decl {
-            Decl::Function(func) => {
+            ModuleItem::Decl(Decl::Function(func)) => {
                 symbols.push(DocumentSymbolInfo {
                     name: func.name.clone(),
                     kind: SymbolKind::Function,
@@ -209,7 +209,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     children: vec![],
                 });
             }
-            Decl::Struct(s) => {
+            ModuleItem::Decl(Decl::Struct(s)) => {
                 let children: Vec<_> = s
                     .fields
                     .iter()
@@ -230,7 +230,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     children,
                 });
             }
-            Decl::Enum(e) => {
+            ModuleItem::Decl(Decl::Enum(e)) => {
                 let children: Vec<_> = e
                     .variants
                     .iter()
@@ -249,7 +249,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     children,
                 });
             }
-            Decl::Ability(a) => {
+            ModuleItem::Decl(Decl::Ability(a)) => {
                 let children: Vec<_> = a
                     .operations
                     .iter()
@@ -268,7 +268,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     children,
                 });
             }
-            Decl::ExternFunction(func) => {
+            ModuleItem::Decl(Decl::ExternFunction(func)) => {
                 symbols.push(DocumentSymbolInfo {
                     name: func.name.clone(),
                     kind: SymbolKind::Function,
@@ -276,7 +276,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     children: vec![],
                 });
             }
-            Decl::Use(_) | Decl::Module(_) => {}
+            ModuleItem::Decl(Decl::Use(_)) | ModuleItem::Module(_) => {}
         }
     }
 
@@ -347,7 +347,7 @@ pub fn function_signatures(db: &dyn salsa::Database, source: SourceCst) -> Vec<F
     let mut signatures = Vec::new();
 
     for decl in &module.decls {
-        if let Decl::Function(func) = decl {
+        if let ModuleItem::Decl(Decl::Function(func)) = decl {
             let params: Vec<_> = func
                 .params
                 .iter()

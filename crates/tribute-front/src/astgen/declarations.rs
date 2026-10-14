@@ -4,9 +4,9 @@ use tree_sitter::Node;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityDecl, Decl, EnumDecl, FieldDecl, FuncDecl, Module, ModuleDecl, OpDecl, OpDeclKind,
-    ParamDecl, StructDecl, TypeAnnotation, TypeAnnotationKind, TypeParamDecl, UnresolvedName,
-    UseDecl, VariantDecl,
+    AbilityDecl, Decl, EnumDecl, FieldDecl, FuncDecl, Module, ModuleDecl, ModuleItem, OpDecl,
+    OpDeclKind, ParamDecl, StructDecl, TypeAnnotation, TypeAnnotationKind, TypeParamDecl,
+    UnresolvedName, UseDecl, VariantDecl,
 };
 
 use super::context::AstLoweringCtx;
@@ -43,10 +43,10 @@ pub fn lower_module(
     Module { id, name, decls }
 }
 
-/// Lower a CST declaration node to an AST Decl.
+/// Lower a CST declaration node to module items.
 /// Returns a Vec because use declarations can expand to multiple items.
-fn lower_decl(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Decl<UnresolvedName>> {
-    match node.kind() {
+fn lower_decl(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ModuleItem<UnresolvedName>> {
+    let decls: Vec<Decl<UnresolvedName>> = match node.kind() {
         "function_definition" => lower_function(ctx, node).into_iter().collect(),
         "struct_declaration" => lower_struct(ctx, node)
             .map(Decl::Struct)
@@ -57,10 +57,16 @@ fn lower_decl(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Decl<UnresolvedNa
             .map(Decl::Ability)
             .into_iter()
             .collect(),
-        "mod_declaration" => lower_mod(ctx, node).map(Decl::Module).into_iter().collect(),
+        "mod_declaration" => {
+            return lower_mod(ctx, node)
+                .map(ModuleItem::Module)
+                .into_iter()
+                .collect();
+        }
         "use_declaration" => lower_use(ctx, node).into_iter().map(Decl::Use).collect(),
         _ => Vec::new(),
-    }
+    };
+    decls.into_iter().map(ModuleItem::Decl).collect()
 }
 
 /// Lower a function definition.

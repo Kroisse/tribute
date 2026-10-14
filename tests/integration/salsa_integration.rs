@@ -7,7 +7,7 @@ use tree_sitter::{InputEdit, Parser, Point};
 use tribute::pipeline::compile_with_diagnostics;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_front::ast::{Decl, ExprKind, NodeId};
+use tribute_front::ast::{Decl, ExprKind, ModuleItem, NodeId};
 use tribute_ir::dialect::tribute_control;
 use trunk_ir::Span;
 use trunk_ir::dialect::arith;
@@ -232,7 +232,7 @@ fn record_shape_diagnostics_follow_incremental_declaration_edits_slow() {
             .decls
             .iter()
             .find_map(|decl| match decl {
-                Decl::Function(function) => Some(function),
+                ModuleItem::Decl(Decl::Function(function)) => Some(function),
                 _ => None,
             })
             .expect("test function");

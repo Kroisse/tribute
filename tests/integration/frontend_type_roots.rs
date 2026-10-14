@@ -5,8 +5,8 @@ use tribute_core::Diagnostic;
 use tribute_front::{
     SourceCst,
     ast::{
-        AbilityId, Decl, Effect, EffectRow, EffectVar, RowRemoval, RowUnion, Type, TypeDefId,
-        TypeKind, TypeParam,
+        AbilityId, Decl, Effect, EffectRow, EffectVar, ModuleItem, RowRemoval, RowUnion, Type,
+        TypeDefId, TypeKind, TypeParam,
     },
     typeck::TypeCheckOutput,
 };
@@ -32,7 +32,7 @@ fn prepare_root<'db>(
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Struct(decl) if decl.name == "Packet" => Some(decl),
+            ModuleItem::Decl(Decl::Struct(decl)) if decl.name == "Packet" => Some(decl),
             _ => None,
         })
         .unwrap();
@@ -151,7 +151,7 @@ fn main() -> Nil { marker() }
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Struct(decl) if decl.name == "Packet$Nat" => Some(decl),
+            ModuleItem::Decl(Decl::Struct(decl)) if decl.name == "Packet$Nat" => Some(decl),
             _ => None,
         })
         .unwrap_or_else(|| panic!("{root:?} did not materialize Packet(Nat)"));
@@ -198,7 +198,7 @@ fn main() -> Nil { marker() }
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Struct(decl) if decl.name == "Packet" => Some(decl),
+            ModuleItem::Decl(Decl::Struct(decl)) if decl.name == "Packet" => Some(decl),
             _ => None,
         })
         .unwrap();

@@ -293,7 +293,7 @@ fn lower_pattern_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Pattern<U
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Decl, ExprKind, Module, Stmt, UnresolvedName};
+    use crate::ast::{Decl, ExprKind, Module, ModuleItem, Stmt, UnresolvedName};
     use ropey::Rope;
     use tree_sitter::Parser;
     use trunk_ir::SymbolPath;
@@ -313,7 +313,7 @@ mod tests {
 
     fn get_let_pattern(source: &str) -> PatternKind<UnresolvedName> {
         let module = parse_and_lower(source);
-        let Decl::Function(func) = &module.decls[0] else {
+        let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
             panic!("Expected function");
         };
         let ExprKind::Block { stmts, .. } = func.body.kind.as_ref() else {
@@ -327,7 +327,7 @@ mod tests {
 
     fn get_case_pattern(source: &str, arm_index: usize) -> PatternKind<UnresolvedName> {
         let module = parse_and_lower(source);
-        let Decl::Function(func) = &module.decls[0] else {
+        let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
             panic!("Expected function");
         };
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {

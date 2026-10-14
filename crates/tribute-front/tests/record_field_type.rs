@@ -11,7 +11,7 @@ use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::{
     SourceCst,
-    ast::{Decl, Expr, ExprKind, Module, Type, TypeDefId, TypeKind, TypedRef},
+    ast::{Decl, Expr, ExprKind, Module, ModuleItem, Type, TypeDefId, TypeKind, TypedRef},
     typeck::ExpressionTypeMetadata,
 };
 use trunk_ir::Span;
@@ -39,7 +39,9 @@ fn typed_function_body<'a, 'db>(
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Function(function) if function.name.with_str(|candidate| candidate == name) => {
+            ModuleItem::Decl(Decl::Function(function))
+                if function.name.with_str(|candidate| candidate == name) =>
+            {
                 Some(&function.body)
             }
             _ => None,
@@ -67,7 +69,9 @@ fn declared_struct_id<'db>(
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Struct(structure) if structure.name.with_str(|candidate| candidate == name) => {
+            ModuleItem::Decl(Decl::Struct(structure))
+                if structure.name.with_str(|candidate| candidate == name) =>
+            {
                 Some(structure)
             }
             _ => None,

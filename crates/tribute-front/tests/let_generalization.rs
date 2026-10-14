@@ -3,8 +3,8 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::{
     SourceCst,
     ast::{
-        AbilityId, Decl, Effect, EffectRow, Expr, ExprKind, Module, NodeId, Type, TypeKind,
-        TypedRef, UniVarId, UniVarSource,
+        AbilityId, Decl, Effect, EffectRow, Expr, ExprKind, Module, ModuleItem, NodeId, Type,
+        TypeKind, TypedRef, UniVarId, UniVarSource,
     },
 };
 use trunk_ir::Symbol;
@@ -166,7 +166,9 @@ fn typed_function_body<'a, 'db>(
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Function(function) if function.name == name => Some(&function.body),
+            ModuleItem::Decl(Decl::Function(function)) if function.name == name => {
+                Some(&function.body)
+            }
             _ => None,
         })
         .unwrap_or_else(|| panic!("missing typed function body for {name}"))

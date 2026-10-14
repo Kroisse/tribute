@@ -11,7 +11,7 @@ use itertools::Itertools;
 use salsa_test_macros::salsa_test;
 use tribute_front::{
     SourceCst,
-    ast::{Decl, ExprKind},
+    ast::{Decl, ExprKind, ModuleItem},
 };
 
 // ========================================================================
@@ -226,7 +226,7 @@ fn observe(values: List(Item)) -> Nat {
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Function(function) => Some(function),
+            ModuleItem::Decl(Decl::Function(function)) => Some(function),
             _ => None,
         })
         .expect("observe function");
@@ -273,7 +273,9 @@ fn nested_case_ids(
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Function(function) if function.name == "nested" => Some(&function.body),
+            ModuleItem::Decl(Decl::Function(function)) if function.name == "nested" => {
+                Some(&function.body)
+            }
             _ => None,
         })
         .expect("nested function should be typechecked");

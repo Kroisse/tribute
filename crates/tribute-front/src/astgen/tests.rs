@@ -1,6 +1,6 @@
 use super::*;
 use crate::ast::{
-    Decl, Expr, ExprKind, HandlerKind, NodeId, PatternKind, Stmt, TypeAnnotationKind,
+    Decl, Expr, ExprKind, HandlerKind, ModuleItem, NodeId, PatternKind, Stmt, TypeAnnotationKind,
 };
 use tree_sitter::Parser;
 use trunk_ir::SymbolPath;
@@ -55,7 +55,7 @@ fn operator_values_preserve_names_in_bindings_and_arguments() {
         let tree = parser.parse(&source, None).unwrap();
         assert!(!tree.root_node().has_error(), "{source}");
         let module = lower_cst_to_ast(&Rope::from_str(&source), &ParsedCst::new(tree));
-        let Decl::Function(function) = &module.decls[0] else {
+        let ModuleItem::Decl(Decl::Function(function)) = &module.decls[0] else {
             panic!("expected function");
         };
         let ExprKind::Block { stmts, value } = function.body.kind.as_ref() else {
@@ -82,7 +82,7 @@ fn test_simple_function() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 1);
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function declaration");
     };
     assert_eq!(func.name.to_string(), "main");
@@ -104,7 +104,7 @@ fn test_function_with_params() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 1);
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function declaration");
     };
     assert_eq!(func.name.to_string(), "add");
@@ -118,7 +118,7 @@ fn test_let_binding() {
     let source = "fn main() -> Nil { let x = 10; x }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
@@ -152,7 +152,7 @@ fn test_binary_expression() {
     let source = "fn main() -> Nil { 1 + 2 * 3 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     // Just verify it parsed successfully
@@ -172,7 +172,7 @@ fn test_struct_declaration() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 1);
-    let Decl::Struct(struct_decl) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Struct(struct_decl)) = &module.decls[0] else {
         panic!("Expected struct declaration");
     };
     assert_eq!(struct_decl.name.to_string(), "Point");
@@ -202,7 +202,7 @@ fn test_enum_declaration() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 1);
-    let Decl::Enum(enum_decl) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Enum(enum_decl)) = &module.decls[0] else {
         panic!("Expected enum declaration");
     };
     assert_eq!(enum_decl.name.to_string(), "Option");
@@ -224,7 +224,7 @@ fn test_case_expression() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -241,7 +241,7 @@ fn test_lambda_expression() {
     let source = "fn main() -> Nil { fn(x) { x + 1 } }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -262,7 +262,7 @@ fn test_use_declaration() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 2);
-    let Decl::Use(use_decl) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Use(use_decl)) = &module.decls[0] else {
         panic!("Expected use declaration");
     };
     assert!(!use_decl.path.is_empty());
@@ -273,7 +273,7 @@ fn test_tuple_pattern() {
     let source = "fn main() -> Nil { let #(a, b) = #(1, 2); a }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
@@ -298,7 +298,7 @@ fn test_list_expression() {
     let source = "fn main() -> Nil { [1, 2, 3] }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -321,7 +321,7 @@ fn test_ability_declaration() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 1);
-    let Decl::Ability(ability) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Ability(ability)) = &module.decls[0] else {
         panic!("Expected ability declaration");
     };
     assert_eq!(ability.name.to_string(), "State");
@@ -339,7 +339,7 @@ fn test_int_literal() {
     let source = "fn main() -> Nil { -42 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -356,7 +356,7 @@ fn test_float_literal() {
     let source = "fn main() -> Nil { 2.5 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -373,7 +373,7 @@ fn test_unit_literal() {
     let source = "fn main() -> Nil { () }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -389,7 +389,7 @@ fn test_nat_literal_hex() {
     let source = "fn main() -> Nil { 0xFF }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -406,7 +406,7 @@ fn test_nat_literal_binary() {
     let source = "fn main() -> Nil { 0b1010 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -429,7 +429,7 @@ fn test_binary_all_arithmetic() {
         let source = format!("fn main() -> Nil {{ 1 {} 2 }}", op_str);
         let module = parse_and_lower(&source);
 
-        let Decl::Function(func) = &module.decls[0] else {
+        let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
             panic!("Expected function");
         };
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -455,7 +455,7 @@ fn test_binary_all_comparison() {
         let source = format!("fn main() -> Nil {{ 1 {} 2 }}", op_str);
         let module = parse_and_lower(&source);
 
-        let Decl::Function(func) = &module.decls[0] else {
+        let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
             panic!("Expected function");
         };
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -484,7 +484,7 @@ fn test_binary_logical() {
         let source = format!("fn main() -> Nil {{ a {} b }}", op_str);
         let module = parse_and_lower(&source);
 
-        let Decl::Function(func) = &module.decls[0] else {
+        let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
             panic!("Expected function");
         };
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -506,7 +506,7 @@ fn test_binary_concat() {
     let source = r#"fn main() -> Nil { "a" <> "b" }"#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -529,7 +529,7 @@ fn test_call_expression_no_args() {
     let source = "fn main() -> Nil { foo() }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -550,7 +550,7 @@ fn test_call_expression_with_args() {
     let source = "fn main() -> Nil { add(1, 2, 3) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -572,7 +572,7 @@ fn test_method_call() {
     let source = "fn main() -> Nil { x.to_string() }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -600,7 +600,7 @@ fn test_method_call_with_args() {
     let source = "fn main() -> Nil { list.map(inc) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -626,7 +626,7 @@ fn test_qualified_method_keeps_its_path() {
     for (source, expected, arg_count) in cases {
         let module = parse_and_lower(source);
 
-        let Decl::Function(func) = &module.decls[0] else {
+        let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
             panic!("Expected function");
         };
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -656,7 +656,7 @@ fn test_method_call_with_multiple_args() {
     let source = "fn main() -> Nil { bytes.slice(0, 5) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -689,7 +689,7 @@ fn test_chained_method_call_with_args() {
     let source = "fn main() -> Nil { x.foo().bar(1, 2).baz() }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -743,7 +743,7 @@ fn test_constructor_expression() {
     let source = "fn main() -> Nil { Some(42) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -760,7 +760,7 @@ fn test_qualified_constructor_expression() {
     let source = "fn main() -> Nil { std::io::Error::EndOfFile }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -780,7 +780,7 @@ fn test_constructor_no_args() {
     let source = "fn main() -> Nil { None() }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -800,7 +800,7 @@ fn test_record_expression() {
     let source = "fn main() -> Nil { Point { x: 1, y: 2 } }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -817,7 +817,7 @@ fn test_qualified_record_expression() {
     let source = "fn main() -> Nil { std::io::SystemError { code: 1 } }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -837,7 +837,7 @@ fn test_qualified_type_annotation() {
     let source = "fn identity(error: std::io::Error) -> std::io::Error { error }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     assert!(matches!(
@@ -859,7 +859,7 @@ fn test_field_access() {
     let source = "fn main() -> Nil { let p = pt; p.x }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
@@ -885,7 +885,7 @@ fn test_block_with_multiple_statements() {
     let source = "fn main() -> Nil { let a = 1; let b = 2; a + b }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
@@ -902,7 +902,7 @@ fn test_empty_block() {
     let source = "fn main() -> Nil { }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
@@ -920,7 +920,7 @@ fn test_expression_statement() {
     let source = "fn main() -> Nil { foo(); bar() }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { stmts, .. } = func.body.kind.as_ref() else {
@@ -951,7 +951,7 @@ fn test_case_with_patterns() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -979,7 +979,7 @@ fn test_case_with_wildcard() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1008,7 +1008,7 @@ fn test_case_guard_chain_is_one_guard_expression() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1037,7 +1037,7 @@ fn test_lambda_no_params() {
     let source = "fn main() -> Nil { fn() { 42 } }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1054,7 +1054,7 @@ fn test_lambda_multiple_params() {
     let source = "fn main() -> Nil { fn(a, b, c) { a + b + c } }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1078,7 +1078,7 @@ fn test_tuple_expression() {
     let source = "fn main() -> Nil { #(1, 2, 3) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1095,7 +1095,7 @@ fn test_empty_list() {
     let source = "fn main() -> Nil { [] }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1112,7 +1112,7 @@ fn test_nested_list() {
     let source = "fn main() -> Nil { [[1, 2], [3, 4]] }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1140,7 +1140,7 @@ fn test_block_as_expression() {
     let source = "fn main() -> Nil { {1 + 2} * 3 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1180,7 +1180,7 @@ fn test_block_trailing_let_statement() {
     let source = "fn main() -> Nil { let x = 42 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
@@ -1212,7 +1212,7 @@ fn test_block_trailing_expression() {
 }"#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
@@ -1238,7 +1238,7 @@ fn test_qualified_identifier() {
     let source = "fn main() -> Nil { std::io::println }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1267,7 +1267,7 @@ fn test_constructor_pattern() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1293,7 +1293,7 @@ fn test_literal_pattern() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1319,7 +1319,7 @@ fn test_list_pattern() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1355,7 +1355,7 @@ fn test_use_group_expands_to_multiple_decls() {
         .decls
         .iter()
         .map(|d| {
-            let Decl::Use(use_decl) = d else {
+            let ModuleItem::Decl(Decl::Use(use_decl)) = d else {
                 panic!("Expected Use declaration");
             };
             use_decl.path.clone()
@@ -1383,7 +1383,7 @@ fn test_use_path_keyword_prefixes() {
         .decls
         .iter()
         .map(|d| {
-            let Decl::Use(use_decl) = d else {
+            let ModuleItem::Decl(Decl::Use(use_decl)) = d else {
                 panic!("Expected Use declaration");
             };
             let path = use_decl
@@ -1425,7 +1425,7 @@ fn test_use_nested_group() {
         .decls
         .iter()
         .map(|d| {
-            let Decl::Use(use_decl) = d else {
+            let ModuleItem::Decl(Decl::Use(use_decl)) = d else {
                 panic!("Expected Use declaration");
             };
             use_decl
@@ -1460,7 +1460,7 @@ fn test_use_single_path_unchanged() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 1);
-    let Decl::Use(use_decl) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Use(use_decl)) = &module.decls[0] else {
         panic!("Expected Use declaration");
     };
     assert_eq!(use_decl.path.len(), 2);
@@ -1479,7 +1479,7 @@ fn test_function_type_annotation_preserved() {
     let source = "fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
 
@@ -1514,7 +1514,7 @@ fn test_generic_type_annotation_preserved() {
     let source = "fn first(list: List(Int)) -> Int { 0 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
 
@@ -1548,7 +1548,7 @@ fn test_nested_generic_type_annotation() {
     let source = "fn nested(x: List(Option(Int))) -> Int { 0 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
 
@@ -1595,7 +1595,7 @@ fn test_return_type_annotation_preserved() {
     let source = "fn get_list() -> List(Int) { [] }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
 
@@ -1628,7 +1628,7 @@ fn test_bytes_literal_simple() {
     let source = r#"fn main() -> Nil { b"hello" }"#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1647,7 +1647,7 @@ fn test_bytes_literal_raw() {
     let source = r#"fn main() -> Nil { rb"hello\n" }"#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1667,7 +1667,7 @@ fn test_bytes_literal_with_single_hash() {
     let source = r###"fn main() -> Nil { b#"test"# }"###;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1686,7 +1686,7 @@ fn test_bytes_literal_with_multiple_hashes() {
     let source = r####"fn main() -> Nil { b##"hello"## }"####;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1705,7 +1705,7 @@ fn test_bytes_literal_with_embedded_quote() {
     let source = r###"fn main() -> Nil { b#"say "hello""# }"###;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1728,7 +1728,7 @@ fn test_rune_literal_simple() {
     let source = "fn main() -> Nil { ?a }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1747,7 +1747,7 @@ fn test_rune_literal_unicode() {
     let source = "fn main() -> Nil { ?😀 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1766,7 +1766,7 @@ fn test_rune_literal_escape_newline() {
     let source = r"fn main() -> Nil { ?\n }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1783,7 +1783,7 @@ fn test_rune_literal_escape_newline() {
 /// Lower `source` and return the value expression of its first function body.
 fn first_body_value(source: &str) -> ExprKind<UnresolvedName> {
     let module = parse_and_lower(source);
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1838,7 +1838,7 @@ fn test_lambda_param_name_with_type_annotation() {
     let source = "fn main() -> Nil { fn(x: Int) { x } }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1862,7 +1862,7 @@ fn test_lambda_multiple_typed_params() {
     let source = "fn main() -> Nil { fn(a: Int, b: Float) { a } }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1883,7 +1883,7 @@ fn test_lambda_untyped_params() {
     let source = "fn main() -> Nil { fn(x) { x } }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -1906,7 +1906,7 @@ fn test_type_annotation_named() {
     let source = "fn id(x: Int) -> Int { x }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     // Parameter type annotation
@@ -1932,7 +1932,7 @@ fn test_type_annotation_generic() {
     let source = "fn first(xs: List(a)) -> a { xs }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -1958,7 +1958,7 @@ fn test_type_annotation_generic_multi_arg() {
     let source = "fn foo(m: Map(String, Int)) -> Int { 0 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -1980,7 +1980,7 @@ fn test_type_annotation_function_type() {
     let source = "fn apply(f: fn(Int) -> Bool, x: Int) -> Bool { f(x) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2014,7 +2014,7 @@ fn test_type_annotation_function_type_multi_params() {
     let source = "fn apply2(f: fn(Int, String) -> Bool) -> Bool { f(1, 2) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2032,7 +2032,7 @@ fn test_type_annotation_function_type_no_params() {
     let source = "fn thunk(f: fn() -> Int) -> Int { f() }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2062,7 +2062,7 @@ fn test_type_annotation_tuple_type() {
     let source = "fn pair(x: #(Int, String)) -> Int { 0 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2088,7 +2088,7 @@ fn test_type_annotation_tuple_type_three_elements() {
     let source = "fn triple(x: #(Int, Bool, String)) -> Int { 0 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2106,7 +2106,7 @@ fn test_type_annotation_function_with_effects() {
     let source = "fn run(f: fn(Int) ->{State} Bool) -> Bool { f(0) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2139,7 +2139,7 @@ fn test_type_annotation_function_with_parameterized_effect() {
     let source = "fn run(f: fn() ->{State(Int)} Nil) -> Nil { f() }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2174,7 +2174,7 @@ fn test_type_annotation_function_with_multiple_effects() {
     let source = "fn run(f: fn() ->{State, Console} Nil) -> Nil { f() }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2193,7 +2193,7 @@ fn test_type_annotation_function_pure() {
     let source = "fn run(f: fn(Int) ->{} Bool) -> Bool { f(0) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2215,7 +2215,7 @@ fn test_type_annotation_function_effect_polymorphic() {
     let source = "fn apply(f: fn(Int) -> Bool, x: Int) -> Bool { f(x) }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2238,7 +2238,7 @@ fn test_type_annotation_nested_generic_in_function() {
     let source = "fn foo(f: fn(List(a)) -> Option(a)) -> Int { 0 }";
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ty = func.params[0]
@@ -2279,7 +2279,7 @@ fn test_struct_field_tuple_type() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Struct(s) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Struct(s)) = &module.decls[0] else {
         panic!("Expected struct");
     };
     let field_ty = &s.fields[0].ty;
@@ -2299,7 +2299,7 @@ fn test_extern_function_with_abi() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 1);
-    let Decl::ExternFunction(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::ExternFunction(func)) = &module.decls[0] else {
         panic!(
             "Expected extern function declaration, got {:?}",
             module.decls[0]
@@ -2318,7 +2318,7 @@ fn test_extern_function_default_abi() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 1);
-    let Decl::ExternFunction(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::ExternFunction(func)) = &module.decls[0] else {
         panic!(
             "Expected extern function declaration, got {:?}",
             module.decls[0]
@@ -2334,7 +2334,7 @@ fn test_extern_function_no_return_type() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 1);
-    let Decl::ExternFunction(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::ExternFunction(func)) = &module.decls[0] else {
         panic!(
             "Expected extern function declaration, got {:?}",
             module.decls[0]
@@ -2354,8 +2354,14 @@ fn test_extern_and_regular_functions_coexist() {
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 2);
-    assert!(matches!(&module.decls[0], Decl::ExternFunction(_)));
-    assert!(matches!(&module.decls[1], Decl::Function(_)));
+    assert!(matches!(
+        &module.decls[0],
+        ModuleItem::Decl(Decl::ExternFunction(_))
+    ));
+    assert!(matches!(
+        &module.decls[1],
+        ModuleItem::Decl(Decl::Function(_))
+    ));
 }
 
 #[test]
@@ -2377,7 +2383,7 @@ fn test_handle_expression() {
     let module = parse_and_lower(source);
 
     // Find the main function
-    let Decl::Function(func) = &module.decls[1] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[1] else {
         panic!("Expected function declaration");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -2428,7 +2434,7 @@ fn test_handle_with_op_handler() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[1] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[1] else {
         panic!("Expected function declaration");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -2465,7 +2471,7 @@ fn test_resume_expression() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[1] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[1] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -2503,7 +2509,7 @@ fn test_record_with_spread() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[1] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[1] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -2533,7 +2539,7 @@ fn test_as_pattern() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[1] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[1] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -2650,7 +2656,7 @@ fn test_block_literals_strip_indentation() {
 fn test_raw_string_pattern_is_decoded() {
     let source = r##"fn f(s: String) -> Nat { case s { r#"a"b"# -> 1, _ -> 0 } }"##;
     let module = parse_and_lower(source);
-    let Decl::Function(func) = &module.decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
@@ -2676,7 +2682,7 @@ fn test_call_records_how_it_was_written() {
         ("fn main() -> Nil { x + y }", CallSyntax::Operator),
     ] {
         let module = parse_and_lower(source);
-        let Decl::Function(func) = &module.decls[0] else {
+        let ModuleItem::Decl(Decl::Function(func)) = &module.decls[0] else {
             panic!("Expected function");
         };
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {

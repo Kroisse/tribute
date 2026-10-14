@@ -392,7 +392,9 @@ fn collect_from_type_inner<'db>(
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{AbilityId, Decl, Effect, EffectRow, EffectVar, NodeId, TypeParam};
+    use crate::ast::{
+        AbilityId, Decl, Effect, EffectRow, EffectVar, ModuleItem, NodeId, TypeParam,
+    };
     use trunk_ir::Symbol;
 
     use super::*;
@@ -596,7 +598,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, (name, arity))| {
-                Decl::Struct(crate::ast::StructDecl {
+                ModuleItem::Decl(Decl::Struct(crate::ast::StructDecl {
                     id: NodeId::from_raw(i + 1),
                     is_pub: false,
                     name: Symbol::new(name),
@@ -608,7 +610,7 @@ mod tests {
                         })
                         .collect(),
                     fields: vec![],
-                })
+                }))
             })
             .collect(),
         }

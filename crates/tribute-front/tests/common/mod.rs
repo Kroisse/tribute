@@ -4,7 +4,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
-use tribute_front::ast::{Decl, Expr, ExprKind, Module, ResolvedRef, Stmt, TypedRef};
+use tribute_front::ast::{Decl, Expr, ExprKind, Module, ModuleItem, ResolvedRef, Stmt, TypedRef};
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
 
@@ -220,7 +220,7 @@ fn function_body<'db>(module: &'db Module<TypedRef<'db>>, name: &str) -> &'db Ex
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Function(func) if func.name == name => Some(&func.body),
+            ModuleItem::Decl(Decl::Function(func)) if func.name == name => Some(&func.body),
             _ => None,
         })
         .expect("function should exist")

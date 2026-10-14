@@ -4,7 +4,7 @@ use tribute::pipeline::{compile_frontend, parse_and_lower_ast, prepare_frontend_
 use tribute_core::Diagnostic;
 use tribute_front::{
     SourceCst,
-    ast::{Decl, ExprKind, PatternKind, Stmt, Type, TypeKind},
+    ast::{Decl, ExprKind, ModuleItem, PatternKind, Stmt, Type, TypeKind},
 };
 
 #[salsa_test]
@@ -40,7 +40,9 @@ fn main() -> Nil {
                 .decls
                 .iter()
                 .find_map(|decl| match decl {
-                    Decl::Function(function) if function.name == name => Some(function),
+                    ModuleItem::Decl(Decl::Function(function)) if function.name == name => {
+                        Some(function)
+                    }
                     _ => None,
                 })
                 .unwrap();
@@ -104,7 +106,9 @@ fn let_variant_pattern_preserves_its_constrained_constructor(db: &salsa::Databas
             .decls
             .iter()
             .find_map(|decl| match decl {
-                Decl::Function(function) if function.name == "unpack" => Some(function),
+                ModuleItem::Decl(Decl::Function(function)) if function.name == "unpack" => {
+                    Some(function)
+                }
                 _ => None,
             })
             .unwrap();

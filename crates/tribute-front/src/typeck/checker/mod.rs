@@ -39,7 +39,8 @@ use trunk_ir::{Span, Symbol};
 
 use crate::SortedMap;
 use crate::ast::{
-    Decl, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef, UniVarId,
+    Decl, FuncDefId, Module, ModuleItem, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef,
+    UniVarId,
 };
 
 use super::context::ModuleTypeEnv;
@@ -155,15 +156,15 @@ impl<'db> TypeChecker<'db> {
         // The prelude's root items are inside its package module.
         let mut prefix = SymbolPath::root();
         let mut decls = &module.decls;
-        if let [Decl::Module(package)] = decls.as_slice()
+        if let [ModuleItem::Module(package)] = decls.as_slice()
             && let Some(body) = &package.body
         {
             prefix.push(package.name.clone());
             decls = body;
         }
-        let declaration = decls.iter().find_map(|decl| match decl {
-            Decl::Struct(decl) if decl.name == name => Some(decl.id),
-            Decl::Enum(decl) if decl.name == name => Some(decl.id),
+        let declaration = decls.iter().find_map(|item| match item {
+            ModuleItem::Decl(Decl::Struct(decl)) if decl.name == name => Some(decl.id),
+            ModuleItem::Decl(Decl::Enum(decl)) if decl.name == name => Some(decl.id),
             _ => None,
         })?;
         let qualified = prefix.child(name.clone());
@@ -184,7 +185,7 @@ impl<'db> TypeChecker<'db> {
         // `==` of a prelude type is the function of that name in the type's
         // module.
         let mut prefix = SymbolPath::root();
-        if let [Decl::Module(package)] = module.decls.as_slice() {
+        if let [ModuleItem::Module(package)] = module.decls.as_slice() {
             prefix.push(package.name.clone());
         }
         let equality = |type_name: &str| {
@@ -296,11 +297,20 @@ impl<'db> TypeChecker<'db> {
     /// Phase 2: Type check each declaration with per-function inference.
     /// Each function gets its own FunctionInferenceContext with isolated
     /// constraints, so no global solve follows.
-    fn check_decls(&mut self, module: &Module<ResolvedRef<'db>>) -> Vec<Decl<TypedRef<'db>>> {
-        module
-            .decls
+    fn check_decls(&mut self, module: &Module<ResolvedRef<'db>>) -> Vec<ModuleItem<TypedRef<'db>>> {
+        self.check_items(&module.decls)
+    }
+
+    fn check_items(
+        &mut self,
+        items: &[ModuleItem<ResolvedRef<'db>>],
+    ) -> Vec<ModuleItem<TypedRef<'db>>> {
+        items
             .iter()
-            .map(|decl| self.check_decl(decl))
+            .map(|item| match item {
+                ModuleItem::Decl(decl) => ModuleItem::Decl(self.check_decl(decl)),
+                ModuleItem::Module(module) => ModuleItem::Module(self.check_module_decl(module)),
+            })
             .collect()
     }
 
@@ -308,7 +318,7 @@ impl<'db> TypeChecker<'db> {
     fn into_module_result(
         mut self,
         module: &Module<ResolvedRef<'db>>,
-        decls: Vec<Decl<TypedRef<'db>>>,
+        decls: Vec<ModuleItem<TypedRef<'db>>>,
     ) -> ModuleCheckResult<'db> {
         // Export the function types (already finalized during per-function checking)
         let function_types = self.env.export_function_types();
@@ -373,7 +383,6 @@ impl<'db> TypeChecker<'db> {
             Decl::Enum(e) => Decl::Enum(e.clone()),
             Decl::Ability(a) => Decl::Ability(a.clone()),
             Decl::Use(u) => Decl::Use(u.clone()),
-            Decl::Module(m) => Decl::Module(self.check_module_decl(m)),
         }
     }
 
@@ -397,10 +406,7 @@ impl<'db> TypeChecker<'db> {
         // Push module name to prefix
         self.prefix.push(module.name.clone());
 
-        let body = module
-            .body
-            .as_ref()
-            .map(|decls| decls.iter().map(|d| self.check_decl(d)).collect());
+        let body = module.body.as_ref().map(|items| self.check_items(items));
 
         // Restore prefix
         self.prefix.pop();

@@ -25,8 +25,8 @@ use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
 
 use crate::ast::{
-    AbilityId, CtorId, Decl, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ResolvedRef, SpanMap,
-    TypeDefId, UnresolvedName,
+    AbilityId, CtorId, Decl, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ModuleDecl, ModuleItem,
+    ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
 };
 
 /// Resolve names in a module.
@@ -161,8 +161,8 @@ pub fn build_env<'db>(
     // Only nested `mod foo { ... }` declarations extend the module path.
     let mut prefix = SymbolPath::root();
 
-    for decl in &module.decls {
-        collect_definition(db, &mut env, decl, &mut prefix);
+    for item in &module.decls {
+        collect_item(db, &mut env, item, &mut prefix);
     }
 
     inject_builtin_bindings(db, &mut env);
@@ -184,7 +184,7 @@ pub fn library_package_module(module: &Module<UnresolvedName>) -> Module<Unresol
     Module {
         id: module.id,
         name: module.name.clone(),
-        decls: vec![Decl::Module(crate::ast::ModuleDecl {
+        decls: vec![ModuleItem::Module(ModuleDecl {
             id: module.id,
             name: Symbol::new(LIBRARY_PACKAGE),
             is_pub: true,
@@ -251,6 +251,19 @@ fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEn
             id: AbilityId::builtin_io(db),
         },
     );
+}
+
+/// Collect the definitions of a module item into the environment.
+fn collect_item<'db>(
+    db: &'db dyn salsa::Database,
+    env: &mut ModuleEnv<'db>,
+    item: &ModuleItem<UnresolvedName>,
+    prefix: &mut SymbolPath,
+) {
+    match item {
+        ModuleItem::Decl(decl) => collect_definition(db, env, decl, prefix),
+        ModuleItem::Module(module) => collect_module(db, env, module, prefix),
+    }
 }
 
 /// Collect a definition from a declaration into the environment.
@@ -373,62 +386,69 @@ fn collect_definition<'db>(
                 env.add_use(import_name, path);
             }
         }
+    }
+}
 
-        Decl::Module(m) => {
-            // For inline modules, collect bindings into a temporary environment
-            // then register them under the module's namespace
-            if let Some(body) = &m.body {
-                // Build nested module path by appending current module name
-                prefix.push(m.name.clone());
+/// Collect the definitions of an inline module into the environment, under
+/// the module's namespace.
+fn collect_module<'db>(
+    db: &'db dyn salsa::Database,
+    env: &mut ModuleEnv<'db>,
+    m: &ModuleDecl<UnresolvedName>,
+    prefix: &mut SymbolPath,
+) {
+    // For inline modules, collect bindings into a temporary environment
+    // then register them under the module's namespace
+    if let Some(body) = &m.body {
+        // Build nested module path by appending current module name
+        prefix.push(m.name.clone());
 
-                // Collect inner declarations into a temporary environment
-                let mut inner_env = ModuleEnv::new();
-                for inner_decl in body {
-                    collect_definition(db, &mut inner_env, inner_decl, prefix);
-                }
+        // Collect inner declarations into a temporary environment
+        let mut inner_env = ModuleEnv::new();
+        for inner in body {
+            collect_item(db, &mut inner_env, inner, prefix);
+        }
 
-                prefix.pop();
+        prefix.pop();
 
-                // Register each inner definition under the module's namespace
-                // e.g., `mod Foo { fn bar() {} }` makes `Foo::bar` available
-                for (name, binding) in inner_env.iter_definitions() {
-                    env.add_to_namespace(SymbolPath::new([m.name.clone()]), name, binding.clone());
-                }
+        // Register each inner definition under the module's namespace
+        // e.g., `mod Foo { fn bar() {} }` makes `Foo::bar` available
+        for (name, binding) in inner_env.iter_definitions() {
+            env.add_to_namespace(SymbolPath::new([m.name.clone()]), name, binding.clone());
+        }
 
-                // Also transfer any nested namespaces
-                // e.g., `mod Foo { enum Bar { Baz } }` makes `Foo::Bar::Baz` available
-                for (inner_ns, inner_bindings) in inner_env.iter_namespaces() {
-                    // Create qualified namespace path: Foo::Bar
-                    let qualified_ns =
-                        SymbolPath::new(std::iter::once(&m.name).chain(inner_ns.iter()).cloned());
-                    for (name, binding) in inner_bindings {
-                        env.add_to_namespace(qualified_ns.clone(), name, binding.clone());
-                    }
-                    // Also add the inner namespace itself under the module
-                    // so Foo::Bar resolves to the Bar namespace
-                    // A type definition and its member namespace share a name
-                    // (`Point` and `Point::x`, `Error` and `Error::Variant`).
-                    // Preserve the type binding already transferred above.
-                    if let Some(inner) = inner_ns.as_simple() {
-                        env.add_to_namespace_if_absent(
-                            SymbolPath::new([m.name.clone()]),
-                            inner.clone(),
-                            Binding::Module {
-                                path: vec![m.name.clone(), inner.clone()],
-                            },
-                        );
-                    }
-                }
-
-                // Register the module itself as a namespace binding
-                env.add_import(
-                    m.name.clone(),
+        // Also transfer any nested namespaces
+        // e.g., `mod Foo { enum Bar { Baz } }` makes `Foo::Bar::Baz` available
+        for (inner_ns, inner_bindings) in inner_env.iter_namespaces() {
+            // Create qualified namespace path: Foo::Bar
+            let qualified_ns =
+                SymbolPath::new(std::iter::once(&m.name).chain(inner_ns.iter()).cloned());
+            for (name, binding) in inner_bindings {
+                env.add_to_namespace(qualified_ns.clone(), name, binding.clone());
+            }
+            // Also add the inner namespace itself under the module
+            // so Foo::Bar resolves to the Bar namespace
+            // A type definition and its member namespace share a name
+            // (`Point` and `Point::x`, `Error` and `Error::Variant`).
+            // Preserve the type binding already transferred above.
+            if let Some(inner) = inner_ns.as_simple() {
+                env.add_to_namespace_if_absent(
+                    SymbolPath::new([m.name.clone()]),
+                    inner.clone(),
                     Binding::Module {
-                        path: vec![m.name.clone()],
+                        path: vec![m.name.clone(), inner.clone()],
                     },
                 );
             }
         }
+
+        // Register the module itself as a namespace binding
+        env.add_import(
+            m.name.clone(),
+            Binding::Module {
+                path: vec![m.name.clone()],
+            },
+        );
     }
 }
 
@@ -672,12 +692,15 @@ mod tests {
     }
 
     /// Create an inline module declaration for testing.
-    fn inline_module(name: &str, decls: Vec<Decl<UnresolvedName>>) -> ModuleDecl<UnresolvedName> {
+    fn inline_module(
+        name: &str,
+        items: Vec<ModuleItem<UnresolvedName>>,
+    ) -> ModuleDecl<UnresolvedName> {
         ModuleDecl {
             id: fresh_node_id(),
             name: Symbol::new(name),
             is_pub: false,
-            body: Some(decls),
+            body: Some(items),
         }
     }
 
@@ -691,9 +714,9 @@ mod tests {
         let module = Module::new(
             fresh_node_id(),
             Some(Symbol::new("test")),
-            vec![Decl::Module(inline_module(
+            vec![ModuleItem::Module(inline_module(
                 "Math",
-                vec![Decl::Function(simple_func("add"))],
+                vec![ModuleItem::Decl(Decl::Function(simple_func("add")))],
             ))],
         );
 
@@ -707,9 +730,9 @@ mod tests {
         let module = Module::new(
             fresh_node_id(),
             Some(Symbol::new("test")),
-            vec![Decl::Module(inline_module(
+            vec![ModuleItem::Module(inline_module(
                 "Types",
-                vec![Decl::Struct(simple_struct("Point"))],
+                vec![ModuleItem::Decl(Decl::Struct(simple_struct("Point")))],
             ))],
         );
 
@@ -723,9 +746,12 @@ mod tests {
         let module = Module::new(
             fresh_node_id(),
             Some(Symbol::new("test")),
-            vec![Decl::Module(inline_module(
+            vec![ModuleItem::Module(inline_module(
                 "Types",
-                vec![Decl::Enum(simple_enum("Color", &["Red", "Green", "Blue"]))],
+                vec![ModuleItem::Decl(Decl::Enum(simple_enum(
+                    "Color",
+                    &["Red", "Green", "Blue"],
+                )))],
             ))],
         );
 
@@ -743,12 +769,12 @@ mod tests {
         let module = Module::new(
             fresh_node_id(),
             Some(Symbol::new("test")),
-            vec![Decl::Module(inline_module(
+            vec![ModuleItem::Module(inline_module(
                 "Utils",
                 vec![
-                    Decl::Function(simple_func("helper")),
-                    Decl::Function(simple_func("another")),
-                    Decl::Struct(simple_struct("Data")),
+                    ModuleItem::Decl(Decl::Function(simple_func("helper"))),
+                    ModuleItem::Decl(Decl::Function(simple_func("another"))),
+                    ModuleItem::Decl(Decl::Struct(simple_struct("Data"))),
                 ],
             ))],
         );
@@ -765,8 +791,14 @@ mod tests {
             fresh_node_id(),
             Some(Symbol::new("test")),
             vec![
-                Decl::Module(inline_module("A", vec![Decl::Function(simple_func("foo"))])),
-                Decl::Module(inline_module("B", vec![Decl::Function(simple_func("foo"))])),
+                ModuleItem::Module(inline_module(
+                    "A",
+                    vec![ModuleItem::Decl(Decl::Function(simple_func("foo")))],
+                )),
+                ModuleItem::Module(inline_module(
+                    "B",
+                    vec![ModuleItem::Decl(Decl::Function(simple_func("foo")))],
+                )),
             ],
         );
 
@@ -784,9 +816,12 @@ mod tests {
         let module = Module::new(
             fresh_node_id(),
             Some(Symbol::new("test")),
-            vec![Decl::Module(inline_module(
+            vec![ModuleItem::Module(inline_module(
                 "Outer",
-                vec![Decl::Enum(simple_enum("Inner", &["Variant"]))],
+                vec![ModuleItem::Decl(Decl::Enum(simple_enum(
+                    "Inner",
+                    &["Variant"],
+                )))],
             ))],
         );
 
@@ -801,11 +836,11 @@ mod tests {
         let module = Module::new(
             fresh_node_id(),
             Some(Symbol::new("test")),
-            vec![Decl::Module(inline_module(
+            vec![ModuleItem::Module(inline_module(
                 "std",
-                vec![Decl::Module(inline_module(
+                vec![ModuleItem::Module(inline_module(
                     "io",
-                    vec![Decl::Struct(simple_struct("SystemError"))],
+                    vec![ModuleItem::Decl(Decl::Struct(simple_struct("SystemError")))],
                 ))],
             ))],
         );
@@ -825,8 +860,11 @@ mod tests {
             fresh_node_id(),
             Some(Symbol::new("test")),
             vec![
-                Decl::Function(simple_func("foo")),
-                Decl::Module(inline_module("M", vec![Decl::Function(simple_func("bar"))])),
+                ModuleItem::Decl(Decl::Function(simple_func("foo"))),
+                ModuleItem::Module(inline_module(
+                    "M",
+                    vec![ModuleItem::Decl(Decl::Function(simple_func("bar")))],
+                )),
             ],
         );
 

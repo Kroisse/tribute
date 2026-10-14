@@ -24,8 +24,8 @@ use trunk_ir::{Symbol, SymbolPath};
 use crate::SortedMap;
 use crate::ast::{
     Arm, CallingConvention, CtorId, Decl, EffectRow, Expr, ExprKind, ExternFuncDecl, FieldInit,
-    FuncDecl, HandlerArm, HandlerKind, OpDeclKind, Pattern, PatternKind, ResolvedRef, Stmt,
-    TypeKind, TypedRef,
+    FuncDecl, HandlerArm, HandlerKind, ModuleItem, OpDeclKind, Pattern, PatternKind, ResolvedRef,
+    Stmt, TypeKind, TypedRef,
 };
 
 use super::super::context::IrLoweringCtx;
@@ -483,12 +483,12 @@ fn instance_operations<'db>(
 /// expose an open-row callable at a first-class call site.
 fn prescan_definition_conventions<'db>(
     ctx: &mut IrLoweringCtx<'db>,
-    declarations: &[Decl<TypedRef<'db>>],
+    declarations: &[ModuleItem<TypedRef<'db>>],
     prefix: &mut SymbolPath,
 ) {
     for declaration in declarations {
         match declaration {
-            Decl::Function(function) => {
+            ModuleItem::Decl(Decl::Function(function)) => {
                 let name = prefix.child(function.name.clone()).to_symbol();
                 let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
                     continue;
@@ -515,7 +515,7 @@ fn prescan_definition_conventions<'db>(
                 ctx.register_definition_convention(name, convention);
             }
             // A field's modifier performs whatever its callback performs.
-            Decl::Struct(declaration) => {
+            ModuleItem::Decl(Decl::Struct(declaration)) => {
                 prefix.push(declaration.name.clone());
                 for field in declaration
                     .fields
@@ -530,7 +530,7 @@ fn prescan_definition_conventions<'db>(
                 }
                 prefix.pop();
             }
-            Decl::Module(module) => {
+            ModuleItem::Module(module) => {
                 if let Some(body) = &module.body {
                     prefix.push(module.name.clone());
                     prescan_definition_conventions(ctx, body, prefix);
@@ -548,13 +548,13 @@ fn prescan_definition_conventions<'db>(
 fn plan_local_callables<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
-    ast: &[Decl<TypedRef<'db>>],
+    ast: &[ModuleItem<TypedRef<'db>>],
     prefix: &mut SymbolPath,
     declarations: &mut Declarations<'db>,
 ) {
     for declaration in ast {
         match declaration {
-            Decl::Function(function) => {
+            ModuleItem::Decl(Decl::Function(function)) => {
                 let name = prefix.child(function.name.clone()).to_symbol();
                 let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
                     continue;
@@ -572,7 +572,7 @@ fn plan_local_callables<'db>(
                     .insert(function.id, plan);
                 ctx.leave_definition(outer);
             }
-            Decl::Module(module) => {
+            ModuleItem::Module(module) => {
                 if let Some(body) = &module.body {
                     prefix.push(module.name.clone());
                     plan_local_callables(ctx, ir, body, prefix, declarations);
@@ -599,9 +599,22 @@ fn lower_decl<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     top: BlockRef,
-    declaration: Decl<TypedRef<'db>>,
+    item: ModuleItem<TypedRef<'db>>,
     declarations: &mut Declarations<'db>,
 ) {
+    let declaration = match item {
+        ModuleItem::Decl(declaration) => declaration,
+        ModuleItem::Module(module) => {
+            if let Some(body) = module.body {
+                ctx.enter_module(module.name);
+                for item in body {
+                    lower_decl(ctx, ir, top, item, declarations);
+                }
+                ctx.exit_module();
+            }
+            return;
+        }
+    };
     match declaration {
         Decl::Function(function) => {
             let outer = ctx.enter_definition(&ctx.qualify_name(&function.name));
@@ -610,15 +623,6 @@ fn lower_decl<'db>(
         }
         Decl::ExternFunction(function) => lower_extern(ctx, ir, top, function, declarations),
         Decl::Struct(declaration) => lower_struct_accessors(ctx, ir, top, declaration),
-        Decl::Module(module) => {
-            if let Some(body) = module.body {
-                ctx.enter_module(module.name);
-                for declaration in body {
-                    lower_decl(ctx, ir, top, declaration, declarations);
-                }
-                ctx.exit_module();
-            }
-        }
         // Nominal declarations remain types used by ordinary ADT value ops.
         // Struct accessors are emitted above as source-logical callables.
         Decl::Enum(_) | Decl::Ability(_) | Decl::Use(_) => {}
@@ -633,7 +637,7 @@ fn lower_decl<'db>(
 fn prescan_logical_nominal_layouts<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
-    declarations: &[Decl<TypedRef<'db>>],
+    declarations: &[ModuleItem<TypedRef<'db>>],
     prefix: &mut SymbolPath,
     well_known_types: &mut super::decl::WellKnownTypePrescan,
     constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
@@ -641,7 +645,7 @@ fn prescan_logical_nominal_layouts<'db>(
 ) {
     for declaration in declarations {
         match declaration {
-            Decl::Struct(structure) => {
+            ModuleItem::Decl(Decl::Struct(structure)) => {
                 let qualified = prefix.child(structure.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
                 let field_types =
@@ -662,7 +666,7 @@ fn prescan_logical_nominal_layouts<'db>(
                 ctx.register_type(name.clone(), layout);
                 ir.register_type_alias(name, layout);
             }
-            Decl::Enum(enumeration) => {
+            ModuleItem::Decl(Decl::Enum(enumeration)) => {
                 let qualified = prefix.child(enumeration.name.clone());
                 let enum_ctor = CtorId::new(ctx.db, qualified.clone());
                 let variants = enumeration
@@ -717,7 +721,7 @@ fn prescan_logical_nominal_layouts<'db>(
                     well_known_types.record_string(layout);
                 }
             }
-            Decl::Module(module) => {
+            ModuleItem::Module(module) => {
                 if let Some(body) = &module.body {
                     prefix.push(module.name.clone());
                     prescan_logical_nominal_layouts(
@@ -732,7 +736,7 @@ fn prescan_logical_nominal_layouts<'db>(
                     prefix.pop();
                 }
             }
-            Decl::Function(_) | Decl::ExternFunction(_) | Decl::Ability(_) | Decl::Use(_) => {}
+            ModuleItem::Decl(_) => {}
         }
     }
 }
@@ -742,12 +746,12 @@ fn prescan_logical_nominal_layouts<'db>(
 /// values even while their concrete layout is still being assembled.
 fn collect_logical_nominal_identities<'db>(
     ctx: &mut IrLoweringCtx<'db>,
-    declarations: &[Decl<TypedRef<'db>>],
+    declarations: &[ModuleItem<TypedRef<'db>>],
     prefix: &mut SymbolPath,
 ) {
     for declaration in declarations {
         match declaration {
-            Decl::Struct(structure) => {
+            ModuleItem::Decl(Decl::Struct(structure)) => {
                 let qualified = prefix.child(structure.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
                 ctx.declare_logical_nominal(super::qualified_type_name(ctx.db, &ctor));
@@ -760,19 +764,19 @@ fn collect_logical_nominal_identities<'db>(
                         .collect(),
                 );
             }
-            Decl::Enum(enumeration) => {
+            ModuleItem::Decl(Decl::Enum(enumeration)) => {
                 let qualified = prefix.child(enumeration.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
                 ctx.declare_logical_nominal(super::qualified_type_name(ctx.db, &ctor));
             }
-            Decl::Module(module) => {
+            ModuleItem::Module(module) => {
                 if let Some(body) = &module.body {
                     prefix.push(module.name.clone());
                     collect_logical_nominal_identities(ctx, body, prefix);
                     prefix.pop();
                 }
             }
-            Decl::Function(_) | Decl::ExternFunction(_) | Decl::Ability(_) | Decl::Use(_) => {}
+            ModuleItem::Decl(_) => {}
         }
     }
 }
@@ -835,11 +839,11 @@ fn modifier_instances(
 fn prescan_struct_accessor_signatures<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
-    declarations: &[Decl<TypedRef<'db>>],
+    declarations: &[ModuleItem<TypedRef<'db>>],
 ) {
     for declaration in declarations {
         match declaration {
-            Decl::Struct(declaration) => {
+            ModuleItem::Decl(Decl::Struct(declaration)) => {
                 let prefix = SymbolPath::new(ctx.module_path().iter().skip(1).cloned());
                 let qualified = prefix.child(declaration.name.clone());
                 let type_name = super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
@@ -887,46 +891,42 @@ fn prescan_struct_accessor_signatures<'db>(
                     }
                 }
             }
-            Decl::Module(module) => {
+            ModuleItem::Module(module) => {
                 if let Some(body) = &module.body {
                     ctx.enter_module(module.name.clone());
                     prescan_struct_accessor_signatures(ctx, ir, body);
                     ctx.exit_module();
                 }
             }
-            Decl::Function(_)
-            | Decl::ExternFunction(_)
-            | Decl::Enum(_)
-            | Decl::Ability(_)
-            | Decl::Use(_) => {}
+            ModuleItem::Decl(_) => {}
         }
     }
 }
 
 fn prescan_source_functions<'db>(
     ctx: &mut IrLoweringCtx<'db>,
-    declarations: &[Decl<TypedRef<'db>>],
+    declarations: &[ModuleItem<TypedRef<'db>>],
 ) {
     for declaration in declarations {
         match declaration {
-            Decl::Function(function) => {
+            ModuleItem::Decl(Decl::Function(function)) => {
                 ctx.register_logical_source_function(ctx.qualify_name(&function.name));
             }
-            Decl::ExternFunction(function) => {
+            ModuleItem::Decl(Decl::ExternFunction(function)) => {
                 let qualified = ctx.qualify_name(&function.name);
                 ctx.register_logical_source_function(qualified.clone());
                 if function.abi == "C" {
                     ctx.register_c_symbol(qualified, function.name.clone());
                 }
             }
-            Decl::Module(module) => {
+            ModuleItem::Module(module) => {
                 if let Some(body) = &module.body {
                     ctx.enter_module(module.name.clone());
                     prescan_source_functions(ctx, body);
                     ctx.exit_module();
                 }
             }
-            Decl::Struct(_) | Decl::Enum(_) | Decl::Ability(_) | Decl::Use(_) => {}
+            ModuleItem::Decl(_) => {}
         }
     }
 }

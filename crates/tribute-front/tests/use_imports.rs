@@ -384,7 +384,7 @@ fn main() -> Nil {
 /// name.
 #[salsa_test]
 fn inline_module_definition_wins_over_an_imported_ability(db: &salsa::DatabaseImpl) {
-    use tribute_front::ast::{Decl, TypeAnnotationKind};
+    use tribute_front::ast::{Decl, ModuleItem, TypeAnnotationKind};
 
     let source = SourceCst::from_source_str(
         db,
@@ -412,12 +412,14 @@ mod outer {
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Module(outer) => outer.body.as_ref(),
+            ModuleItem::Module(outer) => outer.body.as_ref(),
             _ => None,
         })
         .and_then(|body| {
             body.iter().find_map(|decl| match decl {
-                Decl::Function(function) if function.name == "noop" => function.effects.clone(),
+                ModuleItem::Decl(Decl::Function(function)) if function.name == "noop" => {
+                    function.effects.clone()
+                }
                 _ => None,
             })
         })

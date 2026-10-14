@@ -650,7 +650,7 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
             Decl::Struct(s) => self.collect_struct(s),
             Decl::Enum(e) => self.collect_enum(e),
             Decl::Ability(a) => self.collect_ability(a),
-            Decl::Function(_) | Decl::Use(_) | Decl::Module(_) => {}
+            Decl::Function(_) | Decl::Use(_) => {}
         }
         walk_decl(self, decl);
     }

@@ -11,7 +11,7 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_module_mut};
 use crate::ast::{
-    CtorId, Decl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypedRef,
+    CtorId, FuncDefId, Module, ModuleItem, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypedRef,
 };
 
 use super::instance::{InstanceKey, InstanceKeys, for_each_declaration_mut};
@@ -37,7 +37,7 @@ pub fn rewrite_module<'db>(
 /// Rewrite call sites in a list of declarations (e.g., specialized function bodies).
 pub fn rewrite_decls<'db>(
     db: &'db dyn salsa::Database,
-    decls: &mut [Decl<TypedRef<'db>>],
+    decls: &mut [ModuleItem<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
     instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     keys: &InstanceKeys<'db>,

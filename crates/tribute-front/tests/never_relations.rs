@@ -6,7 +6,7 @@ use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
 use salsa_test_macros::salsa_test;
 use tribute_front::{
     SourceCst,
-    ast::{Decl, ExprKind, Type, TypeKind},
+    ast::{Decl, ExprKind, ModuleItem, Type, TypeKind},
 };
 
 fn type_errors(db: &salsa::DatabaseImpl, name: &str, text: &str) -> Vec<String> {
@@ -28,7 +28,9 @@ fn function_tail_type<'db>(
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Function(function) if function.name.with_str(|name| name == function_name) => {
+            ModuleItem::Decl(Decl::Function(function))
+                if function.name.with_str(|name| name == function_name) =>
+            {
                 Some(&function.body)
             }
             _ => None,
@@ -606,7 +608,9 @@ fn factory() -> fn() ->{Stop} Nat { fn() { Stop::stop() } }
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Function(function) if function.name.with_str(|name| name == "factory") => {
+            ModuleItem::Decl(Decl::Function(function))
+                if function.name.with_str(|name| name == "factory") =>
+            {
                 Some(function)
             }
             _ => None,
@@ -763,7 +767,9 @@ fn result() ->{Stop} Nat {
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Function(function) if function.name.with_str(|name| name == "result") => {
+            ModuleItem::Decl(Decl::Function(function))
+                if function.name.with_str(|name| name == "result") =>
+            {
                 Some(function)
             }
             _ => None,

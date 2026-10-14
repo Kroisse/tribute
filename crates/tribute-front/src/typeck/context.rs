@@ -1207,7 +1207,7 @@ mod tests {
         "#,
         );
         for decl in &module.decls {
-            if let crate::ast::Decl::Function(func) = decl {
+            if let crate::ast::ModuleItem::Decl(crate::ast::Decl::Function(func)) = decl {
                 assert!(
                     !has_method_call(&func.body),
                     "a call should have its function selected in function '{}'",
@@ -1239,7 +1239,7 @@ mod tests {
         "#,
         );
         for decl in &module.decls {
-            if let crate::ast::Decl::Function(func) = decl
+            if let crate::ast::ModuleItem::Decl(crate::ast::Decl::Function(func)) = decl
                 && func.name == "main"
             {
                 assert!(
