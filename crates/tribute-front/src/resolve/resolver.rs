@@ -224,7 +224,7 @@ impl<'db> Resolver<'db> {
     /// variables.
     fn lookup_simple(&self, sym: &Symbol) -> Option<&Binding<'db>> {
         if !self.module_path.is_empty() {
-            let namespace = Symbol::new(&self.module_path.iter().format("::").to_string());
+            let namespace = SymbolPath::new(self.module_path.iter().cloned());
             if let Some(binding) = self.env.lookup_qualified(&namespace, sym) {
                 return Some(binding);
             }
@@ -268,12 +268,12 @@ impl<'db> Resolver<'db> {
             return Ok(if path.is_empty() {
                 self.env.lookup(&sym)
             } else {
-                let namespace = Symbol::new(&path.iter().format("::").to_string());
+                let namespace = SymbolPath::new(path.iter().cloned());
                 self.env.lookup_qualified(&namespace, &sym)
             });
         }
         Ok(self
-            .namespace_in_scope(namespace.to_symbol())
+            .namespace_in_scope(namespace)
             .and_then(|namespace| self.env.lookup_qualified(&namespace, &sym)))
     }
 
@@ -405,7 +405,7 @@ impl<'db> Resolver<'db> {
         if self.module_path.is_empty() {
             return self.env.iter_all_names().collect();
         }
-        let namespace = Symbol::new(&self.module_path.iter().format("::").to_string());
+        let namespace = SymbolPath::new(self.module_path.iter().cloned());
         let imports = self.module_imports.last();
         self.env
             .iter_namespace(&namespace)
@@ -422,7 +422,7 @@ impl<'db> Resolver<'db> {
     /// Whether the enclosing inline module itself defines `name`.
     fn defined_in_module(&self, name: &Symbol) -> bool {
         !self.module_path.is_empty() && {
-            let namespace = Symbol::new(&self.module_path.iter().format("::").to_string());
+            let namespace = SymbolPath::new(self.module_path.iter().cloned());
             self.env.lookup_qualified(&namespace, name).is_some()
         }
     }
@@ -436,19 +436,11 @@ impl<'db> Resolver<'db> {
     /// `namespace` with its first segment replaced by the path an import of
     /// the enclosing inline module gives it, e.g. `Abort` after
     /// `use outer::abilities::Abort` becomes `outer::abilities::Abort`.
-    fn imported_namespace(&self, namespace: &Symbol) -> Option<Symbol> {
+    fn imported_namespace(&self, namespace: &SymbolPath) -> Option<SymbolPath> {
         let imports = self.module_imports.last()?;
-        let (first, rest) = namespace.with_str(|path| {
-            let (first, rest) = path.split_once("::").unwrap_or((path, ""));
-            (first.to_owned(), rest.to_owned())
-        });
-        let target = imports.get(&Symbol::new(&first))?;
-        let mut path = target.iter().format("::").to_string();
-        if !rest.is_empty() {
-            path.push_str("::");
-            path.push_str(&rest);
-        }
-        Some(Symbol::new(&path))
+        let (first, rest) = namespace.components().split_first()?;
+        let target = imports.get(first)?;
+        Some(SymbolPath::new(target.iter().chain(rest).cloned()))
     }
 
     /// The package-root namespace a qualified path's namespace names.
@@ -456,13 +448,11 @@ impl<'db> Resolver<'db> {
     /// Inside an inline module the path starts from one of its imports, from
     /// the module, or from a namespace the prelude supplies. At the package
     /// root it is already a package-root namespace.
-    fn namespace_in_scope(&self, namespace: Symbol) -> Option<Symbol> {
+    fn namespace_in_scope(&self, namespace: SymbolPath) -> Option<SymbolPath> {
         if let Some(imported) = self.imported_namespace(&namespace) {
             return Some(imported);
         }
-        let spelling = namespace.to_string();
-        let (first, rest) = spelling.split_once("::").unwrap_or((&spelling, ""));
-        let first = Symbol::new(first);
+        let (first, rest) = namespace.components().split_first()?;
         if self.module_path.is_empty() {
             if self.env.has_namespace(&namespace) {
                 return Some(namespace);
@@ -470,48 +460,38 @@ impl<'db> Resolver<'db> {
             // A `use` gives the imported name's own namespace; a namespace
             // nested in it continues from the imported path.
             if !rest.is_empty()
-                && let Some(path) = self.env.get_use_path(&first)
+                && let Some(path) = self.env.get_use_path(first)
             {
-                return Some(Symbol::new(&format!(
-                    "{}::{rest}",
-                    path.iter().format("::")
-                )));
+                return Some(SymbolPath::new(path.iter().chain(rest).cloned()));
             }
             if self.env.declares(first.clone()) {
                 return Some(namespace);
             }
         } else {
-            let nested = Symbol::new(&format!(
-                "{}::{namespace}",
-                self.module_path.iter().format("::")
-            ));
-            if self.env.has_namespace(&nested) || self.defined_in_module(&first) {
+            let nested = SymbolPath::new(
+                self.module_path
+                    .iter()
+                    .chain(namespace.components())
+                    .cloned(),
+            );
+            if self.env.has_namespace(&nested) || self.defined_in_module(first) {
                 return Some(nested);
             }
         }
-        if let Some(library) = self.env.library_namespace(&first) {
-            let mut path = library.to_string();
-            if !rest.is_empty() {
-                path.push_str("::");
-                path.push_str(rest);
-            }
-            return Some(Symbol::new(&path));
+        if let Some(library) = self.env.library_namespace(first) {
+            return Some(SymbolPath::new(
+                library.components().iter().chain(rest).cloned(),
+            ));
         }
-        (self.module_path.is_empty() || self.env.is_library_root(&first)).then_some(namespace)
+        (self.module_path.is_empty() || self.env.is_library_root(first)).then_some(namespace)
     }
 
     /// The package path a path starting with a library namespace alias
     /// continues to, e.g. `Option::Some` → `std::Option::Some`.
     fn library_namespace_path(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
         let (first, rest) = path.split_first()?;
-        let namespace = self.env.library_namespace(first)?.to_string();
-        Some(
-            namespace
-                .split("::")
-                .map(Symbol::new)
-                .chain(rest.iter().cloned())
-                .collect(),
-        )
+        let namespace = self.env.library_namespace(first)?;
+        Some(namespace.components().iter().chain(rest).cloned().collect())
     }
 
     /// The binding a package-root path names.
@@ -520,7 +500,7 @@ impl<'db> Resolver<'db> {
         if namespace.is_empty() {
             return self.env.lookup(last);
         }
-        let namespace = Symbol::new(&namespace.iter().format("::").to_string());
+        let namespace = SymbolPath::new(namespace.iter().cloned());
         self.env.lookup_qualified(&namespace, last)
     }
 
@@ -676,7 +656,7 @@ impl<'db> Resolver<'db> {
         if parent.is_empty() {
             return self.env.lookup(name);
         }
-        let namespace = Symbol::new(&parent.iter().format("::").to_string());
+        let namespace = SymbolPath::new(parent.iter().cloned());
         self.env.lookup_qualified(&namespace, name)
     }
 
@@ -1081,30 +1061,15 @@ impl<'db> Resolver<'db> {
     /// - `Named(sym)` → sym (e.g., `Abort`)
     /// - `Path(segs)` → qualified symbol (e.g., `abilities::Throw`)
     /// - `App { ctor, .. }` → recurse into ctor (e.g., `Throw` from `Throw(Nat)`)
-    fn extract_ability_name(ann: &TypeAnnotation) -> Option<Symbol> {
+    fn extract_ability_name(ann: &TypeAnnotation) -> Option<SymbolPath> {
         match &ann.kind {
             TypeAnnotationKind::Named(sym) => {
                 // Row tail variables (lowercase, e.g., `e`) are not concrete abilities
-                sym.with_str(|s| {
-                    if s.starts_with(|c: char| c.is_ascii_uppercase()) {
-                        Some(sym.clone())
-                    } else {
-                        None
-                    }
-                })
+                sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
+                    .then(|| SymbolPath::from(sym))
             }
             TypeAnnotationKind::Path(segs) => {
-                if segs.is_empty() {
-                    None
-                } else {
-                    Some(Symbol::new(
-                        &segs
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect::<Vec<_>>()
-                            .join("::"),
-                    ))
-                }
+                (!segs.is_empty()).then(|| SymbolPath::new(segs.iter().cloned()))
             }
             TypeAnnotationKind::App { ctor, .. } => Self::extract_ability_name(ctor),
             _ => None,
@@ -1183,13 +1148,13 @@ impl<'db> Resolver<'db> {
             let Some((last, namespace)) = path.split_last() else {
                 return false;
             };
-            let full = Symbol::new(&path.iter().format("::").to_string());
+            let full = SymbolPath::new(path.iter().cloned());
             // A single-segment path must name a definition: `env.lookup`
             // would also find the module placeholder this import inserted.
             let found = if namespace.is_empty() {
                 self.env.has_definition(last)
             } else {
-                let namespace = Symbol::new(&namespace.iter().format("::").to_string());
+                let namespace = SymbolPath::new(namespace.iter().cloned());
                 self.env.lookup_qualified(&namespace, last).is_some()
             };
             found || self.env.has_namespace(&full)

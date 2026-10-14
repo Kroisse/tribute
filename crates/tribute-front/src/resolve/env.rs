@@ -6,7 +6,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId};
 
@@ -73,7 +73,7 @@ pub struct ModuleEnv<'db> {
     /// Names imported via `use` statements (simple name → binding).
     imports: HashMap<Symbol, Binding<'db>>,
     /// Qualified paths (namespace → name → binding).
-    namespaces: HashMap<Symbol, HashMap<Symbol, Binding<'db>>>,
+    namespaces: HashMap<SymbolPath, HashMap<Symbol, Binding<'db>>>,
     /// Original paths for resolved `use` imports (import name → original path).
     /// Used to rewrite effect annotations from imported names to qualified paths.
     use_paths: HashMap<Symbol, Vec<Symbol>>,
@@ -91,7 +91,7 @@ pub struct ModuleEnv<'db> {
     library_paths: HashMap<Symbol, Vec<Symbol>>,
     /// Library namespaces under their short first segment, e.g. `Option` →
     /// `std::Option` and `List` → `std::collections::List`.
-    library_namespaces: HashMap<Symbol, Symbol>,
+    library_namespaces: HashMap<Symbol, SymbolPath>,
 }
 
 impl<'db> ModuleEnv<'db> {
@@ -128,7 +128,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Add a qualified name to a namespace.
-    pub fn add_to_namespace(&mut self, namespace: Symbol, name: Symbol, binding: Binding<'db>) {
+    pub fn add_to_namespace(&mut self, namespace: SymbolPath, name: Symbol, binding: Binding<'db>) {
         self.namespaces
             .entry(namespace)
             .or_default()
@@ -199,7 +199,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Let `alias` start a path into the library namespace `namespace`.
-    pub fn add_library_namespace(&mut self, alias: Symbol, namespace: Symbol) {
+    pub fn add_library_namespace(&mut self, alias: Symbol, namespace: SymbolPath) {
         self.library_namespaces.entry(alias).or_insert(namespace);
     }
 
@@ -209,8 +209,8 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// The library namespace a path starting with `alias` continues in.
-    pub fn library_namespace(&self, alias: &Symbol) -> Option<Symbol> {
-        self.library_namespaces.get(alias).cloned()
+    pub fn library_namespace(&self, alias: &Symbol) -> Option<&SymbolPath> {
+        self.library_namespaces.get(alias)
     }
 
     /// Mark the namespaces under `root` as supplied to every module.
@@ -236,7 +236,7 @@ impl<'db> ModuleEnv<'db> {
     /// Add a qualified name to a namespace only if it doesn't already exist.
     pub fn add_to_namespace_if_absent(
         &mut self,
-        namespace: Symbol,
+        namespace: SymbolPath,
         name: Symbol,
         binding: Binding<'db>,
     ) {
@@ -263,14 +263,14 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Look up a qualified path (e.g., "List::map").
-    pub fn lookup_qualified(&self, namespace: &Symbol, name: &Symbol) -> Option<&Binding<'db>> {
+    pub fn lookup_qualified(&self, namespace: &SymbolPath, name: &Symbol) -> Option<&Binding<'db>> {
         self.namespaces.get(namespace)?.get(name)
     }
 
     /// Iterate over all bindings in a namespace.
     pub fn iter_namespace(
         &self,
-        namespace: &Symbol,
+        namespace: &SymbolPath,
     ) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
         self.namespaces
             .get(namespace)
@@ -279,7 +279,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Collect all bindings in a namespace (owned, avoids borrow issues).
-    pub fn collect_namespace(&self, namespace: &Symbol) -> Vec<(Symbol, Binding<'db>)> {
+    pub fn collect_namespace(&self, namespace: &SymbolPath) -> Vec<(Symbol, Binding<'db>)> {
         self.namespaces
             .get(namespace)
             .map(|bindings| {
@@ -292,7 +292,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Check whether a namespace exists.
-    pub fn has_namespace(&self, namespace: &Symbol) -> bool {
+    pub fn has_namespace(&self, namespace: &SymbolPath) -> bool {
         self.namespaces.contains_key(namespace)
     }
 
@@ -300,7 +300,7 @@ impl<'db> ModuleEnv<'db> {
     /// namespace, or a module, which may define no namespace entries.
     pub fn declares(&self, name: Symbol) -> bool {
         self.has_definition(&name)
-            || self.has_namespace(&name)
+            || self.has_namespace(&SymbolPath::from(&name))
             || matches!(self.imports.get(&name), Some(Binding::Module { path }) if path[..] == [name])
     }
 
@@ -328,7 +328,7 @@ impl<'db> ModuleEnv<'db> {
     /// Iterate over all namespaces in this environment.
     pub fn iter_namespaces(
         &self,
-    ) -> impl Iterator<Item = (Symbol, impl Iterator<Item = (Symbol, &Binding<'db>)>)> {
+    ) -> impl Iterator<Item = (SymbolPath, impl Iterator<Item = (Symbol, &Binding<'db>)>)> {
         self.namespaces
             .iter()
             .map(|(ns, bindings)| (ns.clone(), bindings.iter().map(|(k, v)| (k.clone(), v))))
@@ -351,28 +351,25 @@ impl<'db> ModuleEnv<'db> {
     /// module sees under their short names, and whose namespaces a path may
     /// enter by their first segment below the package root.
     pub fn merge(&mut self, other: &ModuleEnv<'db>, package: &Symbol) {
-        for (name, binding) in other.iter_namespace(package) {
+        for (name, binding) in other.iter_namespace(&SymbolPath::from(package)) {
             self.add_library(name.clone(), binding.clone(), vec![package.clone(), name]);
         }
 
-        let prefix = format!("{package}::");
         for (ns, bindings) in other.iter_namespaces() {
-            self.add_library_root(namespace_root(&ns));
-            let spelling = ns.to_string();
-            if let Some(rest) = spelling.strip_prefix(&prefix) {
-                let alias = rest.split("::").next().unwrap_or_default();
-                let namespace = Symbol::new(&format!("{prefix}{alias}"));
-                self.add_library_namespace(Symbol::new(alias), namespace);
+            if let Some(root) = ns.components().first() {
+                self.add_library_root(root.clone());
+            }
+            if let [root, alias, ..] = ns.components()
+                && root == package
+            {
+                self.add_library_namespace(
+                    alias.clone(),
+                    SymbolPath::new([package.clone(), alias.clone()]),
+                );
             }
             for (name, binding) in bindings {
                 self.add_to_namespace_if_absent(ns.clone(), name, binding.clone());
             }
         }
     }
-}
-
-/// The first segment of a qualified namespace.
-fn namespace_root(namespace: &Symbol) -> Symbol {
-    let spelling = namespace.to_string();
-    Symbol::new(spelling.split("::").next().unwrap_or_default())
 }
