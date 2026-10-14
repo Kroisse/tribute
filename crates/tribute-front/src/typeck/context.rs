@@ -1061,15 +1061,8 @@ mod tests {
         let exported = env.export_enum_variants();
 
         // Should be sorted alphabetically by enum name
-        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
-        assert_eq!(
-            names,
-            vec![
-                Symbol::new("Alpha"),
-                Symbol::new("Middle"),
-                Symbol::new("Zebra")
-            ]
-        );
+        let names: Vec<_> = exported.iter().map(|(path, _)| path.to_string()).collect();
+        assert_eq!(names, vec!["Alpha", "Middle", "Zebra"]);
     }
 
     #[salsa_test]
