@@ -46,7 +46,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
                 (ctx.op(op)
                     .attributes
                     .get_str(ctx, COMPILER_INTRINSIC_ATTR)
-                    .is_some_and(|identity| symbol.is_root_name(identity))
+                    .is_some_and(|identity| symbol == [identity])
                     && intrinsic_map.get(&symbol).is_some_and(|mapping| {
                         exact_signature(ctx, function.r#type(ctx), &symbol, mapping)
                     }))

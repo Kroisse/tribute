@@ -315,12 +315,6 @@ impl SymbolPath {
         }
     }
 
-    /// Whether this is the definition `name` in the root module. It compares
-    /// the text of the only component.
-    pub fn is_root_name(&self, name: &str) -> bool {
-        self.as_simple().is_some_and(|leaf| leaf == name)
-    }
-
     /// Whether the path has no enclosing module.
     pub fn is_simple(&self) -> bool {
         self.0.len() == 1
@@ -382,6 +376,27 @@ impl From<&str> for SymbolPath {
 impl From<&SymbolPath> for SymbolPath {
     fn from(path: &SymbolPath) -> Self {
         path.clone()
+    }
+}
+
+/// A path equals an array of the same number of components, each equal to
+/// its component: `path == ["std", "io", "Io"]` compares text component by
+/// component, and `path == [symbol!("main")]` compares atoms.
+impl<T, const N: usize> PartialEq<[T; N]> for SymbolPath
+where
+    Symbol: PartialEq<T>,
+{
+    fn eq(&self, other: &[T; N]) -> bool {
+        self.0[..] == other[..]
+    }
+}
+
+impl<T, const N: usize> PartialEq<[T; N]> for &SymbolPath
+where
+    Symbol: PartialEq<T>,
+{
+    fn eq(&self, other: &[T; N]) -> bool {
+        **self == *other
     }
 }
 
@@ -464,6 +479,20 @@ mod tests {
         assert_eq!(stack, outer);
         assert_eq!(stack.pop(), Some(Symbol::new("outer")));
         assert_eq!(stack.pop(), None);
+    }
+
+    #[test]
+    fn a_path_equals_an_array_of_its_components() {
+        let path = SymbolPath::new(["std", "io", "Io"]);
+        assert!(path == ["std", "io", "Io"]);
+        assert!(path != ["std::io::Io"]);
+        assert!(path != ["std", "io"]);
+        assert!(SymbolPath::from("std::io::Io") == ["std::io::Io"]);
+        assert!(SymbolPath::from("main") == [crate::symbol!("main")]);
+        let root = SymbolPath::root();
+        assert!(root == <[&str; 0]>::default());
+        let by_ref: &SymbolPath = &path;
+        assert!(by_ref == ["std", "io", "Io"]);
     }
 
     #[test]

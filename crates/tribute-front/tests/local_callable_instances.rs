@@ -41,7 +41,7 @@ fn main() -> Nil {{
             if let Ok(call) = tribute_control::Call::from_op(&ir, op)
                 && ["pure", "open"]
                     .iter()
-                    .any(|name| call.callee(&ir).is_root_name(name))
+                    .any(|name| call.callee(&ir) == [*name])
             {
                 let callback = ir.op_operands(op)[0];
                 let ValueDef::OpResult(producer, _) = ir.value_def(callback) else {

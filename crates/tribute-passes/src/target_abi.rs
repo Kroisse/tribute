@@ -1903,8 +1903,7 @@ mod tests {
     }
 
     fn is_worker_call(ctx: &IrContext, op: OpRef) -> bool {
-        func::Call::from_op(ctx, op)
-            .is_ok_and(|call| call.callee(ctx).is_root_name(ROOT_MAIN_SYMBOL))
+        func::Call::from_op(ctx, op).is_ok_and(|call| call.callee(ctx) == [ROOT_MAIN_SYMBOL])
     }
 
     fn dispatch_fixture(answer_name: &str, frame_name: &str) -> (IrContext, Module, OpRef) {

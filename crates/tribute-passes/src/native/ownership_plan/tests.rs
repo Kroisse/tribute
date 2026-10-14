@@ -456,7 +456,7 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
     let transfer = plan
         .functions
         .iter_mut()
-        .find(|function| function.symbol.is_root_name("install"))
+        .find(|function| function.symbol == ["install"])
         .expect("install ownership plan")
         .actions
         .iter_mut()
@@ -759,7 +759,7 @@ fn stale_grouped_into_raw_plan_fails_before_materialization() {
     let actions = &mut plan
         .functions
         .iter_mut()
-        .find(|function| function.symbol.is_root_name("transfers"))
+        .find(|function| function.symbol == ["transfers"])
         .unwrap()
         .actions;
     let second = actions
@@ -1548,7 +1548,7 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
     let tail_index = plan
         .functions
         .iter()
-        .position(|function| function.symbol.is_root_name("tail"))
+        .position(|function| function.symbol == ["tail"])
         .unwrap();
     let body = ctx
         .op_region(plan.functions[tail_index].operation, 0)

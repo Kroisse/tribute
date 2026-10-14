@@ -88,7 +88,7 @@ pub(super) fn validate<'db>(
     let mut queue: Vec<_> = functions
         .iter()
         .filter(|(id, func)| {
-            id.path(db).is_root_name("main")
+            id.path(db) == ["main"]
                 || (func.is_pub
                     && schemes
                         .get(id.path(db))

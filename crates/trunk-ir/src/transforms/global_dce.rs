@@ -171,8 +171,8 @@ fn run(
 /// function definition with an `abi` attribute (externally callable), or a
 /// configured extra entry point.
 fn is_root(ctx: &IrContext, name: &SymbolPath, op: OpRef, config: &GlobalDceConfig) -> bool {
-    name.as_simple()
-        .is_some_and(|name| *name == crate::symbol!("main") || *name == crate::symbol!("_start"))
+    *name == [crate::symbol!("main")]
+        || *name == [crate::symbol!("_start")]
         || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
         || config.extra_entry_points.contains(name)
 }
