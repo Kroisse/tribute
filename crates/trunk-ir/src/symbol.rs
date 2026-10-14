@@ -372,6 +372,12 @@ impl std::borrow::Borrow<[Symbol]> for SymbolPath {
     }
 }
 
+impl AsRef<[Symbol]> for SymbolPath {
+    fn as_ref(&self) -> &[Symbol] {
+        &self.0
+    }
+}
+
 impl From<&SymbolPath> for SymbolPath {
     fn from(path: &SymbolPath) -> Self {
         path.clone()
@@ -544,6 +550,17 @@ mod tests {
         assert_eq!(ordered.get(&components[..]), Some(&1));
         assert_eq!(path.len(), 2);
         assert_eq!(path.first(), Some(&Symbol::new("outer")));
+    }
+
+    #[test]
+    fn a_path_is_passed_where_components_are_generic() {
+        fn component_count(path: impl AsRef<[Symbol]>) -> usize {
+            path.as_ref().len()
+        }
+        let path = SymbolPath::new(["outer", "inner"]);
+        assert_eq!(component_count(&path), 2);
+        assert_eq!(component_count(path), 2);
+        assert_eq!(component_count([Symbol::new("outer")]), 1);
     }
 
     #[test]
