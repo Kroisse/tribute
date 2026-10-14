@@ -95,12 +95,11 @@ mod tests {
         assert_eq!(result_type(&ctx, frame), Some(i32_ty));
         assert_eq!(result_type(&ctx, layout), Some(i32_ty));
         assert_eq!(adt::nominal_name(&ctx, frame), Some(name));
-        assert_eq!(
+        itertools::assert_equal(
             adt::Struct::from_type_ref(&ctx, layout)
                 .unwrap()
-                .fields(&ctx)
-                .collect::<Vec<_>>(),
-            [("done", done), ("dispatch", dispatch)]
+                .fields(&ctx),
+            [("done", done), ("dispatch", dispatch)],
         );
     }
 

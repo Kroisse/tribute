@@ -630,9 +630,9 @@ mod tests {
         assert_eq!(lifted_type.inputs(&ctx).len(), 2); // environment + x
         assert!(lifted_type.single_result(&ctx).is_some());
         // The inserted environment has no attributes; `x` keeps its own.
-        assert_eq!(
-            lifted_type.inputs_with_attrs(&ctx).collect::<Vec<_>>(),
-            [(anyref_ty, &AttributeMap::new()), (i32_ty, &marked)]
+        itertools::assert_equal(
+            lifted_type.inputs_with_attrs(&ctx),
+            [(anyref_ty, &AttributeMap::new()), (i32_ty, &marked)],
         );
     }
 

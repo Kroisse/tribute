@@ -657,7 +657,7 @@ fn list_attributes_build_read_and_verify_their_elements() {
         .labels(["left", "right"])
         .sizes([4, 8])
         .build(&mut ctx, loc);
-    assert_eq!(op.labels(&ctx).collect::<Vec<_>>(), ["left", "right"]);
+    itertools::assert_equal(op.labels(&ctx), ["left", "right"]);
     let right = op.labels_ref(&ctx).nth(1).unwrap();
     assert_eq!(ctx.str(right), "right");
     assert_eq!(
@@ -682,12 +682,9 @@ fn list_attributes_build_read_and_verify_their_elements() {
         .attributes
         .insert("labels", Attribute::List(vec![label, Attribute::Int(1)]));
     let violations = test_typed::Labeled::DEF.verify(&ctx, mixed);
-    assert_eq!(
-        violations
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        ["attribute `labels` must be a [String] attribute"]
+    itertools::assert_equal(
+        violations.iter().map(ToString::to_string),
+        ["attribute `labels` must be a [String] attribute"],
     );
 }
 
@@ -743,9 +740,9 @@ fn dict_attributes_build_read_and_verify_their_values() {
     assert_eq!(notes.len(), 2);
     assert_eq!(notes.get("b"), Some("second"));
     assert_eq!(notes.get("missing"), None);
-    assert_eq!(
-        notes.iter().collect::<Vec<_>>(),
-        [(Symbol::new("a"), "first"), (Symbol::new("b"), "second")]
+    itertools::assert_equal(
+        notes.iter(),
+        [(Symbol::new("a"), "first"), (Symbol::new("b"), "second")],
     );
     let sizes = op.sizes(&ctx).unwrap();
     assert_eq!(
@@ -766,12 +763,9 @@ fn dict_attributes_build_read_and_verify_their_values() {
         .attributes
         .insert("notes", Attribute::Dict(entries));
     let violations = test_typed::Annotated::DEF.verify(&ctx, mixed);
-    assert_eq!(
-        violations
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        ["attribute `notes` must be a Dict<String> attribute"]
+    itertools::assert_equal(
+        violations.iter().map(ToString::to_string),
+        ["attribute `notes` must be a Dict<String> attribute"],
     );
 }
 

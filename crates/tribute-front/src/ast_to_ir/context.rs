@@ -1283,10 +1283,7 @@ mod tests {
                 adt::Struct::from_type_ref(&ir, ty).filter(|layout| layout.name(&ir) == tuple_name)
             })
             .expect("logical tuple layout");
-        assert_eq!(
-            layout.fields(&ir).collect::<Vec<_>>(),
-            [("0", anyref), ("1", nominal_list)]
-        );
+        itertools::assert_equal(layout.fields(&ir), [("0", anyref), ("1", nominal_list)]);
 
         let generated = Symbol::new("Forward::value");
         ctx.register_logical_generated_signature(

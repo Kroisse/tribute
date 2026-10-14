@@ -468,12 +468,9 @@ fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
         .expect("exact indirect signature");
     let signature = func::FuncSig::from_type_ref(ctx, signature).expect("complete signature");
     let operands = ctx.op_operands(call);
-    assert_eq!(
-        operands[1..]
-            .iter()
-            .map(|&arg| ctx.value_ty(arg))
-            .collect::<Vec<_>>(),
-        signature.inputs(ctx)
+    itertools::assert_equal(
+        operands[1..].iter().map(|&arg| ctx.value_ty(arg)),
+        signature.inputs(ctx).iter().copied(),
     );
     if func::TailCallIndirect::matches(ctx, call) {
         assert!(ctx.op_results(call).is_empty());
@@ -672,7 +669,7 @@ fn test_closure_lowering() {
         let signature = func::FuncSig::from_type_ref(&ctx, callable.func_type(&ctx)).unwrap();
         let mut expected = signature.inputs(&ctx).to_vec();
         expected.insert(env_index, ctx.value_ty(env.result(&ctx)));
-        assert_eq!(expected, operands.iter().map(|&value| ctx.value_ty(value)).collect::<Vec<_>>());
+        itertools::assert_equal(expected, operands.iter().map(|&value| ctx.value_ty(value)));
         let entry = ctx.region(apply.body(&ctx)).blocks[0];
         assert!(ctx.block_args(entry).contains(&callback));
         assert_eq!(operands.last(), ctx.block_args(entry).last());

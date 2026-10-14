@@ -283,7 +283,7 @@ mod tests {
             assert_matches_model(&map, &model);
 
             let expected: Vec<(u8, u32)> = model.into_iter().collect();
-            assert_eq!(map.clone().into_iter().collect::<Vec<_>>(), expected);
+            itertools::assert_equal(map.clone(), expected.iter().copied());
             assert_eq!(map.into_vec(), expected);
         }
     }

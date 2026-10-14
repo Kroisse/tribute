@@ -49,12 +49,9 @@ fn assert_source_signature(
     );
     assert_eq!(ctx.get_type(signature.result(ctx)).name, result);
     let entry = ctx.region(function.body(ctx)).blocks[0];
-    assert_eq!(
-        ctx.block_args(entry)
-            .iter()
-            .map(|&arg| ctx.value_ty(arg))
-            .collect::<Vec<_>>(),
-        signature.inputs(ctx)
+    itertools::assert_equal(
+        ctx.block_args(entry).iter().map(|&arg| ctx.value_ty(arg)),
+        signature.inputs(ctx).iter().copied(),
     );
 }
 

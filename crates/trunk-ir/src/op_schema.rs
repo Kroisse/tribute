@@ -1134,10 +1134,7 @@ mod tests {
     fn macro_generated_schemas_describe_declared_entities() {
         let schema = &arith::Cmpi::DEF.schema;
         assert_eq!((schema.dialect, schema.name), ("arith", "cmpi"));
-        assert_eq!(
-            schema.operands.iter().map(|o| o.name).collect::<Vec<_>>(),
-            ["lhs", "rhs"],
-        );
+        itertools::assert_equal(schema.operands.iter().map(|o| o.name), ["lhs", "rhs"]);
         assert!(matches!(schema.results, ResultSchema::Fixed(["result"])));
         assert_eq!(schema.attributes.len(), 1);
         assert_eq!(schema.attributes[0].name, "predicate");

@@ -242,11 +242,7 @@ impl Attribute {
             Attribute::FloatBits(_) => 8,
             Attribute::String(s) => strings.get(*s).len() + 2,
             Attribute::Bytes(b) => b.len() * 4 + 7,
-            Attribute::SymbolRef(path) => path
-                .components()
-                .iter()
-                .map(|name| name.as_str().len() + 3)
-                .sum(),
+            Attribute::SymbolRef(path) => path.iter().map(|name| name.as_str().len() + 3).sum(),
             Attribute::Type(_) => 10, // rough estimate; actual depends on type
             Attribute::List(list) => {
                 list.iter()
@@ -1177,9 +1173,9 @@ mod tests {
         let data = ctx.get_type(with_attrs);
         assert!(data.param_attrs(0).is_empty());
         assert_eq!(data.param_attrs(1), &marked);
-        assert_eq!(
-            data.params_with_attrs().collect::<Vec<_>>(),
-            vec![(i32_ty, &AttributeMap::new()), (i32_ty, &marked)]
+        itertools::assert_equal(
+            data.params_with_attrs(),
+            vec![(i32_ty, &AttributeMap::new()), (i32_ty, &marked)],
         );
         assert_eq!(data.validate_param_attrs(), Ok(()));
     }

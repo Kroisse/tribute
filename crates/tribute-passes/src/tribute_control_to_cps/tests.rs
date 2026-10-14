@@ -1709,12 +1709,11 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
     // source result is replaced by `core.never` and loses its attributes.
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     let logical = adapter_type(&ctx);
-    assert_eq!(
+    itertools::assert_equal(
         logical
             .inputs_with_attrs(&ctx)
-            .map(|(_, attrs)| attrs.clone())
-            .collect::<Vec<_>>(),
-        [empty(), empty(), empty(), marked.clone()]
+            .map(|(_, attrs)| attrs.clone()),
+        [empty(), empty(), empty(), marked.clone()],
     );
     assert!(logical.result_attrs(&ctx).all(AttributeMap::is_empty));
 
@@ -1729,12 +1728,11 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
     let consumed = || contract.clone();
     let mut marked_consumed = marked;
     marked_consumed.extend(consumed());
-    assert_eq!(
+    itertools::assert_equal(
         physical
             .inputs_with_attrs(&ctx)
-            .map(|(_, attrs)| attrs.clone())
-            .collect::<Vec<_>>(),
-        [consumed(), consumed(), consumed(), marked_consumed]
+            .map(|(_, attrs)| attrs.clone()),
+        [consumed(), consumed(), consumed(), marked_consumed],
     );
     assert!(physical.results(&ctx).is_empty());
     let mut references = Vec::new();

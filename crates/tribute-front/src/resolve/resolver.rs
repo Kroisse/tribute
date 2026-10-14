@@ -259,11 +259,7 @@ impl<'db> Resolver<'db> {
         let Some(namespace) = name.namespace() else {
             return Ok(None);
         };
-        if let Some(path) = absolute_path(
-            self.package_depth,
-            &self.module_path,
-            namespace.components(),
-        )? {
+        if let Some(path) = absolute_path(self.package_depth, &self.module_path, &namespace)? {
             return Ok(if path.is_empty() {
                 self.env.lookup(&sym)
             } else {
@@ -334,11 +330,7 @@ impl<'db> Resolver<'db> {
         }
         for module in self.names_in_scope() {
             let nested = UnresolvedName::new(
-                SymbolPath::new(
-                    std::iter::once(&module)
-                        .chain(path.path.components())
-                        .cloned(),
-                ),
+                SymbolPath::new(std::iter::once(&module).chain(path.path.iter()).cloned()),
                 path.id,
             );
             if let Ok(Some(Binding::Function { id })) = self.lookup_qualified_name(&nested)
@@ -428,7 +420,7 @@ impl<'db> Resolver<'db> {
     /// `use outer::abilities::Abort` becomes `outer::abilities::Abort`.
     fn imported_namespace(&self, namespace: &SymbolPath) -> Option<SymbolPath> {
         let imports = self.module_imports.last()?;
-        let (first, rest) = namespace.components().split_first()?;
+        let (first, rest) = namespace.split_first()?;
         let target = imports.get(first)?;
         Some(SymbolPath::new(target.iter().chain(rest).cloned()))
     }
@@ -442,7 +434,7 @@ impl<'db> Resolver<'db> {
         if let Some(imported) = self.imported_namespace(&namespace) {
             return Some(imported);
         }
-        let (first, rest) = namespace.components().split_first()?;
+        let (first, rest) = namespace.split_first()?;
         if self.module_path.is_empty() {
             if self.env.has_namespace(&namespace) {
                 return Some(namespace);
@@ -458,20 +450,13 @@ impl<'db> Resolver<'db> {
                 return Some(namespace);
             }
         } else {
-            let nested = SymbolPath::new(
-                self.module_path
-                    .iter()
-                    .chain(namespace.components())
-                    .cloned(),
-            );
+            let nested = SymbolPath::new(self.module_path.iter().chain(namespace.iter()).cloned());
             if self.env.has_namespace(&nested) || self.defined_in_module(first) {
                 return Some(nested);
             }
         }
         if let Some(library) = self.env.library_namespace(first) {
-            return Some(SymbolPath::new(
-                library.components().iter().chain(rest).cloned(),
-            ));
+            return Some(SymbolPath::new(library.iter().chain(rest).cloned()));
         }
         (self.module_path.is_empty() || self.env.is_library_root(first)).then_some(namespace)
     }
@@ -481,7 +466,7 @@ impl<'db> Resolver<'db> {
     fn library_namespace_path(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
         let (first, rest) = path.split_first()?;
         let namespace = self.env.library_namespace(first)?;
-        Some(namespace.components().iter().chain(rest).cloned().collect())
+        Some(namespace.iter().chain(rest).cloned().collect())
     }
 
     /// The binding a package-root path names.

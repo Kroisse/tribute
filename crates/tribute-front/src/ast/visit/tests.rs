@@ -315,18 +315,14 @@ fn rewrites_every_phase_value_and_node_identity_in_place() {
     walk_module_mut(&mut Shift, &mut module);
     let original = record(&sample());
     let shifted = record(&module);
-    assert_eq!(
+    itertools::assert_equal(
         shifted.refs,
         original
             .refs
             .iter()
-            .map(|(site, node, value)| (*site, node + 100, value + 10))
-            .collect::<Vec<_>>()
+            .map(|(site, node, value)| (*site, node + 100, value + 10)),
     );
-    assert_eq!(
-        shifted.ids,
-        original.ids.iter().map(|id| id + 100).collect::<Vec<_>>()
-    );
+    itertools::assert_equal(shifted.ids, original.ids.iter().map(|id| id + 100));
 }
 
 /// Records the inline modules enclosing each visited function.

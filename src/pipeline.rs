@@ -3754,12 +3754,11 @@ mod Nested {
         assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
         let diagnostics =
             prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, typed, source);
-        assert_eq!(
+        itertools::assert_equal(
             diagnostics
                 .iter()
-                .map(|diagnostic| diagnostic.inner.message.as_str())
-                .collect::<Vec<_>>(),
-            ["unsupported compiler intrinsic directive `__bytes_get_or_panic`"]
+                .map(|diagnostic| diagnostic.inner.message.as_str()),
+            ["unsupported compiler intrinsic directive `__bytes_get_or_panic`"],
         );
     }
 

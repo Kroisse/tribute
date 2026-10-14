@@ -1278,7 +1278,7 @@ mod tests {
                 _ => panic!("declared elements must be function indices"),
             })
             .collect::<Vec<_>>();
-        assert_eq!(declared, (0..8).collect::<Vec<u32>>());
+        itertools::assert_equal(declared, 0..8);
     }
 
     #[test]
