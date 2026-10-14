@@ -322,7 +322,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
     fn family(&self, ty: TypeDefId<'db>, name: &Symbol, id: CtorId<'db>) -> Option<Family> {
         let db = self.checker.db();
         // Test for an enum first: a variant may share its enum's name.
-        if let Some(variants) = self.checker.env.lookup_enum_variants(name) {
+        if let Some(variants) = self.checker.env.lookup_enum_variants(ty.path(db)) {
             // Variants are registered in the enum's module, not under the enum.
             let variants = variants
                 .iter()

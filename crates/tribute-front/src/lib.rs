@@ -30,18 +30,7 @@ pub use query::{ParsedCst, parse_cst};
 pub use sorted_map::SortedMap;
 pub use source_file::{SourceCst, derive_module_name_from_path, path_to_uri};
 
-use trunk_ir::{Symbol, SymbolPath};
-
-/// The qualified symbol of `name` in `module`, its components joined with
-/// `::`.
-pub fn qualified_symbol(module: &SymbolPath, name: &Symbol) -> Symbol {
-    module.child(name.clone()).to_symbol()
-}
-
-/// Build a qualified symbol from parsed path segments.
-pub fn qualified_path_symbol(path: &[Symbol]) -> Option<Symbol> {
-    (!path.is_empty()).then(|| SymbolPath::new(path.iter().cloned()).to_symbol())
-}
+use trunk_ir::Symbol;
 
 /// Whether a declaration is the exact root program entrypoint.
 pub(crate) fn is_root_main(name: &Symbol, is_root_module: bool) -> bool {

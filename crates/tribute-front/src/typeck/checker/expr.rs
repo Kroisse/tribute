@@ -1117,7 +1117,7 @@ impl<'db> TypeChecker<'db> {
     ) {
         let is_variant = matches!(
             result.kind(self.db()),
-            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(name).is_some()
+            TypeKind::Named { id, .. } if self.env.lookup_enum_variants(id.path(self.db())).is_some()
         );
         if !is_variant || !ctx.mark_record_shape_checked(record_id) {
             return;
@@ -1298,7 +1298,7 @@ impl<'db> TypeChecker<'db> {
         };
         let is_variant = matches!(
             result.kind(self.db()),
-            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(name).is_some()
+            TypeKind::Named { id, .. } if self.env.lookup_enum_variants(id.path(self.db())).is_some()
         );
         let kind = if is_variant { "variant" } else { "struct" };
         self.report_field_shape(
@@ -3662,7 +3662,7 @@ impl<'db> TypeChecker<'db> {
                 } else if *name == "Never" {
                     ctx.never_type()
                 } else {
-                    ctx.named_type_in_scope(name.clone(), vec![], self.current_prefix())
+                    ctx.named_type_in_scope(SymbolPath::from(name), vec![], self.current_prefix())
                 }
             }
             TypeAnnotationKind::Path(parts) => ctx.path_type(parts),

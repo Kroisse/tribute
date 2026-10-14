@@ -167,10 +167,7 @@ impl<'db> TypeChecker<'db> {
             _ => None,
         })?;
         let qualified = prefix.child(name.clone());
-        let ty = self
-            .env
-            .lookup_type_def(&qualified.to_symbol())?
-            .body(self.db());
+        let ty = self.env.lookup_type_def(&qualified)?.body(self.db());
         Some(WellKnownType {
             ty,
             definition: DefinitionIdentity::new(
