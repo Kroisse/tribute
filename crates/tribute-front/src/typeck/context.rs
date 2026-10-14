@@ -515,7 +515,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(id, scheme)| (id.path(self.db).clone(), *scheme))
             .collect();
-        result.sort_by_cached_key(|(path, _)| path.to_symbol());
+        result.sort_by(|(left, _), (right, _)| left.cmp(right));
         result
     }
 
@@ -524,10 +524,7 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Results are sorted by fully qualified function name for deterministic output.
     pub fn export_function_types_with_ids(&self) -> Vec<(FuncDefId<'db>, TypeScheme<'db>)> {
         let mut result: Vec<_> = self.function_types.iter().map(|(k, v)| (*k, *v)).collect();
-        result.sort_by(|(a, _), (b, _)| {
-            a.qualified(self.db)
-                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
-        });
+        result.sort_by(|(a, ..), (b, ..)| a.path(self.db).cmp(b.path(self.db)));
         result
     }
 
@@ -540,10 +537,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(k, v)| (*k, *v))
             .collect();
-        result.sort_by(|(a, _), (b, _)| {
-            a.qualified(self.db)
-                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
-        });
+        result.sort_by(|(a, ..), (b, ..)| a.path(self.db).cmp(b.path(self.db)));
         result
     }
 
@@ -556,7 +550,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(k, v)| (k.clone(), *v))
             .collect();
-        result.sort_by_cached_key(|(path, _)| path.to_symbol());
+        result.sort_by(|(left, _), (right, _)| left.cmp(right));
         result
     }
 
@@ -569,10 +563,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();
-        result.sort_by(|(a, _), (b, _)| {
-            a.qualified(self.db)
-                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
-        });
+        result.sort_by(|(a, ..), (b, ..)| a.path(self.db).cmp(b.path(self.db)));
         result
     }
 
@@ -585,7 +576,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        result.sort_by_cached_key(|(path, _)| path.to_symbol());
+        result.sort_by(|(left, _), (right, _)| left.cmp(right));
         result
     }
 
@@ -598,10 +589,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();
-        result.sort_by(|(a, _), (b, _)| {
-            a.qualified(self.db)
-                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
-        });
+        result.sort_by(|(a, ..), (b, ..)| a.path(self.db).cmp(b.path(self.db)));
         result
     }
 
@@ -617,12 +605,9 @@ impl<'db> ModuleTypeEnv<'db> {
             .map(|(k, v)| (*k, v.clone()))
             .collect();
         result.sort_by(|(a, _), (b, _)| {
-            a.qualified(self.db)
-                .with_str(|a_str| b.qualified(self.db).with_str(|b_str| a_str.cmp(b_str)))
-                .then_with(|| {
-                    ability_origin_rank(a.origin(self.db))
-                        .cmp(&ability_origin_rank(b.origin(self.db)))
-                })
+            a.path(self.db).cmp(b.path(self.db)).then_with(|| {
+                ability_origin_rank(a.origin(self.db)).cmp(&ability_origin_rank(b.origin(self.db)))
+            })
         });
         result
     }
@@ -641,12 +626,9 @@ impl<'db> ModuleTypeEnv<'db> {
             })
             .collect();
         result.sort_by(|(a, ..), (b, ..)| {
-            a.qualified(self.db)
-                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
-                .then_with(|| {
-                    ability_origin_rank(a.origin(self.db))
-                        .cmp(&ability_origin_rank(b.origin(self.db)))
-                })
+            a.path(self.db).cmp(b.path(self.db)).then_with(|| {
+                ability_origin_rank(a.origin(self.db)).cmp(&ability_origin_rank(b.origin(self.db)))
+            })
         });
         result
     }
@@ -654,10 +636,7 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Export the `extern` functions sorted by fully qualified name.
     pub fn export_extern_functions(&self) -> Vec<FuncDefId<'db>> {
         let mut result: Vec<_> = self.extern_functions.iter().copied().collect();
-        result.sort_by(|a, b| {
-            a.qualified(self.db)
-                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
-        });
+        result.sort_by(|a, b| a.path(self.db).cmp(b.path(self.db)));
         result
     }
 

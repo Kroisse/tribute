@@ -21,22 +21,13 @@ use super::mangle::{mangle_instance_path, mangle_type_path};
 /// Where a generated declaration goes: the module of its source declaration
 /// and its name there. Until it is placed, the declaration is named by its
 /// qualified name.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Placement {
-    module: SymbolPath,
-    name: Symbol,
-}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Placement(SymbolPath);
 
 impl Placement {
     /// The placement of the declaration at `path`.
-    fn at(path: &SymbolPath) -> Self {
-        Self {
-            module: path.parent().unwrap_or_else(SymbolPath::root),
-            name: path
-                .leaf()
-                .expect("a declaration's path has its name")
-                .clone(),
-        }
+    fn at(path: SymbolPath) -> Self {
+        Self(path)
     }
 
     /// `declaration` under its own name inside this placement's modules,
@@ -46,15 +37,20 @@ impl Placement {
         id: NodeId,
         mut declaration: Decl<TypedRef<'db>>,
     ) -> Decl<TypedRef<'db>> {
+        let name = self
+            .0
+            .leaf()
+            .expect("a declaration's path has its name")
+            .clone();
         match &mut declaration {
-            Decl::Function(function) => function.name = self.name,
-            Decl::ExternFunction(function) => function.name = self.name,
-            Decl::Struct(structure) => structure.name = self.name,
-            Decl::Enum(enumeration) => enumeration.name = self.name,
+            Decl::Function(function) => function.name = name,
+            Decl::ExternFunction(function) => function.name = name,
+            Decl::Struct(structure) => structure.name = name,
+            Decl::Enum(enumeration) => enumeration.name = name,
             _ => unreachable!("only functions and nominal types are specialized"),
         }
-        self.module
-            .components()
+        self.0
+            .modules()
             .iter()
             .rev()
             .fold(declaration, |declaration, name| {
@@ -78,7 +74,6 @@ pub(super) struct GeneratedSpecializations<'db> {
 }
 
 struct SpecializationEntry<'db> {
-    name: Symbol,
     path: SymbolPath,
     placement: Placement,
     declaration: FuncDecl<TypedRef<'db>>,
@@ -124,7 +119,7 @@ pub(super) fn generate_specializations<'db>(
             let type_args = key.type_args.as_slice();
             let mangled_path = mangle_instance_path(db, path, key);
             let mangled = mangled_path.to_symbol();
-            let placement = Placement::at(&mangled_path);
+            let placement = Placement::at(mangled_path.clone());
             let specialized_scheme = scheme
                 .to_builder(db)
                 .map_types(db, |ty| {
@@ -140,7 +135,6 @@ pub(super) fn generate_specializations<'db>(
             if let Some(func) = func {
                 let specialized = specialize_func_decl(db, func, key, mangled.clone());
                 entries.push(SpecializationEntry {
-                    name: mangled,
                     path: mangled_path,
                     placement,
                     declaration: specialized,
@@ -164,7 +158,7 @@ pub(super) fn generate_specializations<'db>(
     }
 
     // Sort by mangled name for deterministic output (HashMap/HashSet iteration is unordered)
-    entries.sort_by_key(|entry| entry.name.clone());
+    entries.sort_by(|left, right| left.placement.cmp(&right.placement));
 
     let mut new_decls = Vec::with_capacity(entries.len());
     let mut new_function_types = Vec::with_capacity(entries.len() + extern_function_types.len());
@@ -175,8 +169,8 @@ pub(super) fn generate_specializations<'db>(
         metadata_origins.push((entry.key, entry.origins));
     }
     new_function_types.extend(extern_function_types);
-    new_function_types.sort_by_cached_key(|(path, _)| path.to_symbol());
-    specialized_extern_declarations.sort_by_key(|(_, declaration)| declaration.name.clone());
+    new_function_types.sort_by(|(left, _), (right, _)| left.cmp(right));
+    specialized_extern_declarations.sort_by(|(left, _), (right, _)| left.cmp(right));
     compiler_intrinsic_specializations.sort_by_key(|(id, identity)| (identity.clone(), *id));
 
     GeneratedSpecializations {
@@ -220,7 +214,7 @@ pub(super) fn generate_struct_specializations_with_index<'db>(
     index: &NominalIndex<'_, 'db>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<(Placement, StructDecl)> {
-    let mut entries: Vec<(Symbol, Placement, StructDecl)> = Vec::new();
+    let mut entries: Vec<(Placement, StructDecl)> = Vec::new();
 
     for (id, type_arg_sets) in instantiations {
         let Some(Declaration {
@@ -236,18 +230,13 @@ pub(super) fn generate_struct_specializations_with_index<'db>(
 
         for type_args in type_arg_sets {
             let path = mangle_type_path(db, *id, type_args);
-            let mangled = path.to_symbol();
-            let specialized = specialize_struct_decl(db, decl, type_args, mangled.clone());
-            let placement = Placement::at(&path);
-            entries.push((mangled, placement, specialized));
+            let specialized = specialize_struct_decl(db, decl, type_args, path.to_symbol());
+            entries.push((Placement::at(path), specialized));
         }
     }
 
-    entries.sort_by_key(|e| e.0.clone());
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
     entries
-        .into_iter()
-        .map(|(_, placement, decl)| (placement, decl))
-        .collect()
 }
 
 /// Generate specialized enum declarations for each type instantiation.
@@ -266,7 +255,7 @@ pub(super) fn generate_enum_specializations_with_index<'db>(
     index: &NominalIndex<'_, 'db>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<(Placement, EnumDecl)> {
-    let mut entries: Vec<(Symbol, Placement, EnumDecl)> = Vec::new();
+    let mut entries: Vec<(Placement, EnumDecl)> = Vec::new();
 
     for (id, type_arg_sets) in instantiations {
         let Some(Declaration {
@@ -282,18 +271,13 @@ pub(super) fn generate_enum_specializations_with_index<'db>(
 
         for type_args in type_arg_sets {
             let path = mangle_type_path(db, *id, type_args);
-            let mangled = path.to_symbol();
-            let specialized = specialize_enum_decl(db, decl, type_args, mangled.clone());
-            let placement = Placement::at(&path);
-            entries.push((mangled, placement, specialized));
+            let specialized = specialize_enum_decl(db, decl, type_args, path.to_symbol());
+            entries.push((Placement::at(path), specialized));
         }
     }
 
-    entries.sort_by_key(|e| e.0.clone());
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
     entries
-        .into_iter()
-        .map(|(_, placement, decl)| (placement, decl))
-        .collect()
 }
 
 fn specialize_struct_decl<'db>(

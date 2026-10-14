@@ -351,10 +351,7 @@ impl<'db> Resolver<'db> {
             self.report_unresolved_name(path);
             return MethodCandidates::Unresolved;
         }
-        functions.sort_by(|left, right| {
-            left.qualified(self.db)
-                .with_str(|left| right.qualified(self.db).with_str(|right| left.cmp(right)))
-        });
+        functions.sort_by(|left, right| left.path(self.db).cmp(right.path(self.db)));
         MethodCandidates::Functions(functions.into_iter().map(ResolvedRef::function).collect())
     }
 
@@ -387,10 +384,7 @@ impl<'db> Resolver<'db> {
                 functions.push(*id);
             }
         }
-        functions.sort_by(|left, right| {
-            left.qualified(self.db)
-                .with_str(|left| right.qualified(self.db).with_str(|right| left.cmp(right)))
-        });
+        functions.sort_by(|left, right| left.path(self.db).cmp(right.path(self.db)));
         if let Some(scope) = self.method_functions.last_mut() {
             scope.insert(method.clone(), functions.clone());
         }
