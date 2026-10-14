@@ -4,8 +4,10 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use trunk_ir::{Symbol, SymbolPath};
 
-use crate::ast::visit::{RefSite, Refs, walk_decl, walk_module};
-use crate::ast::{FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef};
+use crate::ast::visit::{RefSite, Refs, walk_decl, walk_decl_table};
+use crate::ast::{
+    DeclTable, FuncDefId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
+};
 
 /// Collect all generic function instantiations from a typed module.
 ///
@@ -14,14 +16,13 @@ use crate::ast::{FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, Type
 /// `FuncDefId` to the set of concrete type argument lists used.
 pub(super) fn collect_instantiations<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
+    module: &DeclTable<TypedRef<'db>>,
     function_types: &[(SymbolPath, TypeScheme<'db>)],
     function_instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
     keys: &InstanceKeys<'db>,
 ) -> HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>> {
     let mut collector = InstantiationCollector::new(db, function_types, function_instances, keys);
-    let mut root = SymbolPath::root();
-    for_each_declaration(&module.decls, &mut root, &mut |enclosing, decl| {
+    for_each_declaration(&module.entries, &mut |enclosing, decl| {
         walk_decl(
             &mut Refs(|site, node, value: &TypedRef<'db>| {
                 // Only a function reference in expression position is a call site.
@@ -280,7 +281,7 @@ fn is_concrete_effect_row_cached<'db>(
 /// declarations (those with non-empty `type_params`), matched by TypeDefId.
 pub fn collect_type_instantiations<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
+    module: &DeclTable<TypedRef<'db>>,
     extra_types: impl IntoIterator<Item = Type<'db>>,
 ) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
     let index = NominalIndex::new(db, module);
@@ -289,13 +290,13 @@ pub fn collect_type_instantiations<'db>(
 
 pub(super) fn collect_type_instantiations_with_index<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
+    module: &DeclTable<TypedRef<'db>>,
     extra_types: impl IntoIterator<Item = Type<'db>>,
     index: &NominalIndex<'_, 'db>,
 ) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
     let mut result: HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> = HashMap::default();
 
-    walk_module(
+    walk_decl_table(
         &mut Refs(|site, _, value: &TypedRef<'db>| {
             // Patterns and handler abilities are not collected.
             if matches!(site, RefSite::Var | RefSite::ConsCtor | RefSite::RecordType) {
@@ -393,7 +394,7 @@ fn collect_from_type_inner<'db>(
 #[cfg(test)]
 mod tests {
     use crate::ast::{
-        AbilityId, Decl, Effect, EffectRow, EffectVar, ModuleItem, NodeId, TypeParam,
+        AbilityId, Decl, Effect, EffectRow, EffectVar, Module, ModuleItem, NodeId, TypeParam,
     };
     use trunk_ir::Symbol;
 
@@ -584,8 +585,8 @@ mod tests {
     // collect_type_instantiations tests
     // ========================================================================
 
-    fn nominal_module<'db>() -> Module<TypedRef<'db>> {
-        Module {
+    fn nominal_module<'db>() -> DeclTable<TypedRef<'db>> {
+        DeclTable::from_module(Module {
             id: NodeId::from_raw(0),
             name: None,
             decls: [
@@ -613,7 +614,7 @@ mod tests {
                 }))
             })
             .collect(),
-        }
+        })
     }
 
     fn nominal_id<'db>(

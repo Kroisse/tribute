@@ -11,7 +11,7 @@ use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::{
     SourceCst,
-    ast::{Decl, Expr, ExprKind, Module, ModuleItem, Type, TypeDefId, TypeKind, TypedRef},
+    ast::{Decl, DeclTable, Expr, ExprKind, Type, TypeDefId, TypeKind, TypedRef},
     typeck::ExpressionTypeMetadata,
 };
 use trunk_ir::Span;
@@ -32,16 +32,13 @@ fn shape_error(text: &str, record: &str, occurrence: usize, message: &str) -> Di
 }
 
 fn typed_function_body<'a, 'db>(
-    module: &'a Module<TypedRef<'db>>,
+    module: &'a DeclTable<TypedRef<'db>>,
     name: &str,
 ) -> &'a Expr<TypedRef<'db>> {
     module
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Function(function))
-                if function.name.with_str(|candidate| candidate == name) =>
-            {
+            Decl::Function(function) if function.name.with_str(|candidate| candidate == name) => {
                 Some(&function.body)
             }
             _ => None,
@@ -50,7 +47,7 @@ fn typed_function_body<'a, 'db>(
 }
 
 fn typed_function_tail<'a, 'db>(
-    module: &'a Module<TypedRef<'db>>,
+    module: &'a DeclTable<TypedRef<'db>>,
     name: &str,
 ) -> &'a Expr<TypedRef<'db>> {
     let body = typed_function_body(module, name);
@@ -62,16 +59,13 @@ fn typed_function_tail<'a, 'db>(
 
 fn declared_struct_id<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
+    module: &DeclTable<TypedRef<'db>>,
     name: &str,
 ) -> TypeDefId<'db> {
     let structure = module
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Struct(structure))
-                if structure.name.with_str(|candidate| candidate == name) =>
-            {
+            Decl::Struct(structure) if structure.name.with_str(|candidate| candidate == name) => {
                 Some(structure)
             }
             _ => None,

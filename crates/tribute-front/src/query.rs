@@ -239,7 +239,14 @@ pub fn typed_func<'db>(
     source: SourceCst,
     name: &Symbol,
 ) -> Option<&'db FuncDecl<TypedRef<'db>>> {
-    find_func(type_check_output(db, source)?.module(db), name)
+    type_check_output(db, source)?
+        .module(db)
+        .entries
+        .iter()
+        .find_map(|entry| match &entry.decl {
+            Decl::Function(f) if entry.module.is_root() && f.name == *name => Some(f),
+            _ => None,
+        })
 }
 
 // =============================================================================
@@ -443,7 +450,10 @@ fn explicit() ->{} Nil { Nil }
         let output = output.unwrap();
         // Module should have declarations
         let module = output.module(&db);
-        assert!(!module.decls.is_empty(), "Module should have declarations");
+        assert!(
+            !module.entries.is_empty(),
+            "Module should have declarations"
+        );
 
         // function_types should be a valid Vec (possibly empty for simple cases)
         let _ft = output.function_types(&db);

@@ -9,8 +9,8 @@ use trunk_ir::Symbol;
 
 use crate::ast::visit::{RefSite, Visit, VisitMut};
 use crate::ast::{
-    Decl, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId, Module, ModuleDecl, ModuleItem,
-    NodeId, StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme,
+    Decl, DeclEntry, DeclTable, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId, NodeId,
+    StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme,
     TypedRef, VariantDecl,
 };
 use crate::typeck::subst::substitute_bound_vars;
@@ -30,37 +30,25 @@ impl Placement {
         Self(path)
     }
 
-    /// `declaration` under its own name inside this placement's modules,
-    /// each a module declaration with the node `id`.
+    /// The table entry for `declaration` under its own name in this
+    /// placement's module.
     pub(super) fn place<'db>(
         self,
-        id: NodeId,
-        mut declaration: ModuleItem<TypedRef<'db>>,
-    ) -> ModuleItem<TypedRef<'db>> {
-        let name = self
-            .0
-            .leaf()
-            .expect("a declaration's path has its name")
-            .clone();
+        mut declaration: Decl<TypedRef<'db>>,
+    ) -> DeclEntry<TypedRef<'db>> {
+        let mut module = self.0;
+        let name = module.pop().expect("a declaration's path has its name");
         match &mut declaration {
-            ModuleItem::Decl(Decl::Function(function)) => function.name = name,
-            ModuleItem::Decl(Decl::ExternFunction(function)) => function.name = name,
-            ModuleItem::Decl(Decl::Struct(structure)) => structure.name = name,
-            ModuleItem::Decl(Decl::Enum(enumeration)) => enumeration.name = name,
+            Decl::Function(function) => function.name = name,
+            Decl::ExternFunction(function) => function.name = name,
+            Decl::Struct(structure) => structure.name = name,
+            Decl::Enum(enumeration) => enumeration.name = name,
             _ => unreachable!("only functions and nominal types are specialized"),
         }
-        self.0
-            .modules()
-            .iter()
-            .rev()
-            .fold(declaration, |declaration, name| {
-                ModuleItem::Module(ModuleDecl {
-                    id,
-                    name: name.clone(),
-                    is_pub: false,
-                    body: Some(vec![declaration]),
-                })
-            })
+        DeclEntry {
+            module,
+            decl: declaration,
+        }
     }
 }
 
@@ -88,7 +76,7 @@ struct SpecializationEntry<'db> {
 /// `(Symbol, TypeScheme)` entries for `function_types`.
 pub(super) fn generate_specializations<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
+    module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
     function_types: &[(SymbolPath, TypeScheme<'db>)],
     compiler_intrinsics: &HashMap<NodeId, Symbol>,
@@ -202,7 +190,7 @@ fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
 #[cfg(test)]
 pub(super) fn generate_struct_specializations<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
+    module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<(Placement, StructDecl)> {
     let index = NominalIndex::new(db, module);
@@ -243,7 +231,7 @@ pub(super) fn generate_struct_specializations_with_index<'db>(
 #[cfg(test)]
 pub(super) fn generate_enum_specializations<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
+    module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<(Placement, EnumDecl)> {
     let index = NominalIndex::new(db, module);
@@ -492,66 +480,29 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
 // ============================================================================
 
 fn collect_func_decls<'a, 'db>(
-    module: &'a Module<TypedRef<'db>>,
+    module: &'a DeclTable<TypedRef<'db>>,
 ) -> HashMap<SymbolPath, &'a FuncDecl<TypedRef<'db>>> {
-    let mut map = HashMap::default();
-    let mut prefix = SymbolPath::root();
-    collect_func_decls_inner(&module.decls, &mut prefix, &mut map);
-    map
-}
-
-fn collect_func_decls_inner<'a, 'db>(
-    decls: &'a [ModuleItem<TypedRef<'db>>],
-    prefix: &mut SymbolPath,
-    map: &mut HashMap<SymbolPath, &'a FuncDecl<TypedRef<'db>>>,
-) {
-    for decl in decls {
-        match decl {
-            ModuleItem::Decl(Decl::Function(func)) => {
-                let qualified = prefix.child(func.name.clone());
-                map.insert(qualified, func);
-            }
-            ModuleItem::Module(m) => {
-                if let Some(body) = &m.body {
-                    prefix.push(m.name.clone());
-                    collect_func_decls_inner(body, prefix, map);
-                    prefix.pop();
-                }
-            }
-            _ => {}
-        }
-    }
+    module
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.decl {
+            Decl::Function(func) => Some((entry.module.child(func.name.clone()), func)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn collect_extern_function_decls<'a, 'db>(
-    module: &'a Module<TypedRef<'db>>,
+    module: &'a DeclTable<TypedRef<'db>>,
 ) -> HashMap<SymbolPath, &'a ExternFuncDecl> {
-    let mut declarations = HashMap::default();
-    let mut prefix = SymbolPath::root();
-    collect_extern_function_decls_inner(&module.decls, &mut prefix, &mut declarations);
-    declarations
-}
-
-fn collect_extern_function_decls_inner<'a, 'db>(
-    decls: &'a [ModuleItem<TypedRef<'db>>],
-    prefix: &mut SymbolPath,
-    declarations: &mut HashMap<SymbolPath, &'a ExternFuncDecl>,
-) {
-    for decl in decls {
-        match decl {
-            ModuleItem::Decl(Decl::ExternFunction(func)) => {
-                declarations.insert(prefix.child(func.name.clone()), func);
-            }
-            ModuleItem::Module(module) => {
-                if let Some(body) = &module.body {
-                    prefix.push(module.name.clone());
-                    collect_extern_function_decls_inner(body, prefix, declarations);
-                    prefix.pop();
-                }
-            }
-            _ => {}
-        }
-    }
+    module
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.decl {
+            Decl::ExternFunction(func) => Some((entry.module.child(func.name.clone()), func)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn specialize_extern_decl(
@@ -646,7 +597,7 @@ impl<'db> VisitMut<TypedRef<'db>> for Substitute<'_, 'db> {
 mod tests {
     use super::super::mangle::mangle_name;
     use crate::ast::{
-        Arm, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind, Pattern,
+        Arm, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind, Module, Pattern,
         PatternKind, ResolvedRef, Stmt, TypeParam,
     };
 
@@ -909,7 +860,7 @@ mod tests {
             body,
         };
 
-        let module = Module::new(node_id(0), None, vec![Decl::Function(func)]);
+        let module = DeclTable::from_module(Module::new(node_id(0), None, [Decl::Function(func)]));
 
         let scheme_body = Type::new(
             &db,

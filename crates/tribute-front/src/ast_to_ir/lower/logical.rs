@@ -23,8 +23,8 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use crate::SortedMap;
 use crate::ast::{
-    Arm, CallingConvention, CtorId, Decl, EffectRow, Expr, ExprKind, ExternFuncDecl, FieldInit,
-    FuncDecl, HandlerArm, HandlerKind, ModuleItem, OpDeclKind, Pattern, PatternKind, ResolvedRef,
+    Arm, CallingConvention, CtorId, Decl, DeclEntry, EffectRow, Expr, ExprKind, ExternFuncDecl,
+    FieldInit, FuncDecl, HandlerArm, HandlerKind, OpDeclKind, Pattern, PatternKind, ResolvedRef,
     Stmt, TypeKind, TypedRef,
 };
 
@@ -363,7 +363,6 @@ pub(super) fn lower_module<'db>(
         span_map,
         function_types,
         ability_conventions,
-        smallvec::smallvec![module_name.clone()],
         node_types,
     )
     .with_compiler_intrinsics(compiler_intrinsics)
@@ -394,31 +393,25 @@ pub(super) fn lower_module<'db>(
         local_callables: local_callables::Plan::default(),
         function_local_callables: HashMap::default(),
     };
-    prescan_definition_conventions(&mut ctx, &ast.decls, &mut SymbolPath::root());
+    prescan_definition_conventions(&mut ctx, &ast.entries);
     let mut well_known_type_prescan = super::decl::WellKnownTypePrescan::new(well_known_types);
-    collect_logical_nominal_identities(&mut ctx, &ast.decls, &mut SymbolPath::root());
+    collect_logical_nominal_identities(&mut ctx, &ast.entries);
     prescan_logical_nominal_layouts(
         &mut ctx,
         ir,
-        &ast.decls,
-        &mut SymbolPath::root(),
+        &ast.entries,
         &mut well_known_type_prescan,
         &constructor_types,
         &specialized_enum_variants,
     );
-    prescan_struct_accessor_signatures(&mut ctx, ir, &ast.decls);
-    prescan_source_functions(&mut ctx, &ast.decls);
-    plan_local_callables(
-        &mut ctx,
-        ir,
-        &ast.decls,
-        &mut SymbolPath::root(),
-        &mut declarations,
-    );
+    prescan_struct_accessor_signatures(&mut ctx, ir, &ast.entries);
+    prescan_source_functions(&mut ctx, &ast.entries);
+    plan_local_callables(&mut ctx, ir, &ast.entries, &mut declarations);
     let well_known_types = well_known_type_prescan.finish();
-    for declaration in ast.decls {
-        lower_decl(&mut ctx, ir, module_block, declaration, &mut declarations);
+    for entry in ast.entries {
+        lower_decl(&mut ctx, ir, module_block, entry, &mut declarations);
     }
+    ctx.set_module(SymbolPath::root());
     let region = ir.create_region(RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![module_block],
@@ -483,12 +476,12 @@ fn instance_operations<'db>(
 /// expose an open-row callable at a first-class call site.
 fn prescan_definition_conventions<'db>(
     ctx: &mut IrLoweringCtx<'db>,
-    declarations: &[ModuleItem<TypedRef<'db>>],
-    prefix: &mut SymbolPath,
+    entries: &[DeclEntry<TypedRef<'db>>],
 ) {
-    for declaration in declarations {
-        match declaration {
-            ModuleItem::Decl(Decl::Function(function)) => {
+    for entry in entries {
+        let prefix = &entry.module;
+        match &entry.decl {
+            Decl::Function(function) => {
                 let name = prefix.child(function.name.clone()).to_symbol();
                 let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
                     continue;
@@ -515,26 +508,18 @@ fn prescan_definition_conventions<'db>(
                 ctx.register_definition_convention(name, convention);
             }
             // A field's modifier performs whatever its callback performs.
-            ModuleItem::Decl(Decl::Struct(declaration)) => {
-                prefix.push(declaration.name.clone());
+            Decl::Struct(declaration) => {
+                let owner = prefix.child(declaration.name.clone());
                 for field in declaration
                     .fields
                     .iter()
                     .filter_map(|field| field.name.clone())
                 {
-                    let getter = prefix.child(field.clone()).to_symbol();
+                    let getter = owner.child(field.clone()).to_symbol();
                     let [_, modifier] = field_update_names(&getter);
                     for (modifier, class) in modifier_instances(ctx, modifier) {
                         ctx.register_definition_convention(modifier, class);
                     }
-                }
-                prefix.pop();
-            }
-            ModuleItem::Module(module) => {
-                if let Some(body) = &module.body {
-                    prefix.push(module.name.clone());
-                    prescan_definition_conventions(ctx, body, prefix);
-                    prefix.pop();
                 }
             }
             _ => {}
@@ -548,39 +533,30 @@ fn prescan_definition_conventions<'db>(
 fn plan_local_callables<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
-    ast: &[ModuleItem<TypedRef<'db>>],
-    prefix: &mut SymbolPath,
+    entries: &[DeclEntry<TypedRef<'db>>],
     declarations: &mut Declarations<'db>,
 ) {
-    for declaration in ast {
-        match declaration {
-            ModuleItem::Decl(Decl::Function(function)) => {
-                let name = prefix.child(function.name.clone()).to_symbol();
-                let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
-                    continue;
-                };
-                let outer = ctx.enter_definition(&name);
-                let plan = local_callables::Plan::collect(
-                    ctx,
-                    ir,
-                    &function.body,
-                    declarations,
-                    scheme.type_params(ctx.db).len(),
-                );
-                declarations
-                    .function_local_callables
-                    .insert(function.id, plan);
-                ctx.leave_definition(outer);
-            }
-            ModuleItem::Module(module) => {
-                if let Some(body) = &module.body {
-                    prefix.push(module.name.clone());
-                    plan_local_callables(ctx, ir, body, prefix, declarations);
-                    prefix.pop();
-                }
-            }
-            _ => {}
-        }
+    for entry in entries {
+        let prefix = &entry.module;
+        let Decl::Function(function) = &entry.decl else {
+            continue;
+        };
+        let name = prefix.child(function.name.clone()).to_symbol();
+        let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
+            continue;
+        };
+        let outer = ctx.enter_definition(&name);
+        let plan = local_callables::Plan::collect(
+            ctx,
+            ir,
+            &function.body,
+            declarations,
+            scheme.type_params(ctx.db).len(),
+        );
+        declarations
+            .function_local_callables
+            .insert(function.id, plan);
+        ctx.leave_definition(outer);
     }
 }
 
@@ -599,23 +575,11 @@ fn lower_decl<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     top: BlockRef,
-    item: ModuleItem<TypedRef<'db>>,
+    entry: DeclEntry<TypedRef<'db>>,
     declarations: &mut Declarations<'db>,
 ) {
-    let declaration = match item {
-        ModuleItem::Decl(declaration) => declaration,
-        ModuleItem::Module(module) => {
-            if let Some(body) = module.body {
-                ctx.enter_module(module.name);
-                for item in body {
-                    lower_decl(ctx, ir, top, item, declarations);
-                }
-                ctx.exit_module();
-            }
-            return;
-        }
-    };
-    match declaration {
+    ctx.set_module(entry.module);
+    match entry.decl {
         Decl::Function(function) => {
             let outer = ctx.enter_definition(&ctx.qualify_name(&function.name));
             lower_function(ctx, ir, top, function, declarations);
@@ -637,15 +601,15 @@ fn lower_decl<'db>(
 fn prescan_logical_nominal_layouts<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
-    declarations: &[ModuleItem<TypedRef<'db>>],
-    prefix: &mut SymbolPath,
+    entries: &[DeclEntry<TypedRef<'db>>],
     well_known_types: &mut super::decl::WellKnownTypePrescan,
     constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
     specialized_enum_variants: &SortedMap<crate::ast::NodeId, crate::ast::TypeScheme<'db>>,
 ) {
-    for declaration in declarations {
-        match declaration {
-            ModuleItem::Decl(Decl::Struct(structure)) => {
+    for entry in entries {
+        let prefix = &entry.module;
+        match &entry.decl {
+            Decl::Struct(structure) => {
                 let qualified = prefix.child(structure.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
                 let field_types =
@@ -666,7 +630,7 @@ fn prescan_logical_nominal_layouts<'db>(
                 ctx.register_type(name.clone(), layout);
                 ir.register_type_alias(name, layout);
             }
-            ModuleItem::Decl(Decl::Enum(enumeration)) => {
+            Decl::Enum(enumeration) => {
                 let qualified = prefix.child(enumeration.name.clone());
                 let enum_ctor = CtorId::new(ctx.db, qualified.clone());
                 let variants = enumeration
@@ -721,22 +685,7 @@ fn prescan_logical_nominal_layouts<'db>(
                     well_known_types.record_string(layout);
                 }
             }
-            ModuleItem::Module(module) => {
-                if let Some(body) = &module.body {
-                    prefix.push(module.name.clone());
-                    prescan_logical_nominal_layouts(
-                        ctx,
-                        ir,
-                        body,
-                        prefix,
-                        well_known_types,
-                        constructors,
-                        specialized_enum_variants,
-                    );
-                    prefix.pop();
-                }
-            }
-            ModuleItem::Decl(_) => {}
+            _ => {}
         }
     }
 }
@@ -746,12 +695,12 @@ fn prescan_logical_nominal_layouts<'db>(
 /// values even while their concrete layout is still being assembled.
 fn collect_logical_nominal_identities<'db>(
     ctx: &mut IrLoweringCtx<'db>,
-    declarations: &[ModuleItem<TypedRef<'db>>],
-    prefix: &mut SymbolPath,
+    entries: &[DeclEntry<TypedRef<'db>>],
 ) {
-    for declaration in declarations {
-        match declaration {
-            ModuleItem::Decl(Decl::Struct(structure)) => {
+    for entry in entries {
+        let prefix = &entry.module;
+        match &entry.decl {
+            Decl::Struct(structure) => {
                 let qualified = prefix.child(structure.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
                 ctx.declare_logical_nominal(super::qualified_type_name(ctx.db, &ctor));
@@ -764,19 +713,12 @@ fn collect_logical_nominal_identities<'db>(
                         .collect(),
                 );
             }
-            ModuleItem::Decl(Decl::Enum(enumeration)) => {
+            Decl::Enum(enumeration) => {
                 let qualified = prefix.child(enumeration.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
                 ctx.declare_logical_nominal(super::qualified_type_name(ctx.db, &ctor));
             }
-            ModuleItem::Module(module) => {
-                if let Some(body) = &module.body {
-                    prefix.push(module.name.clone());
-                    collect_logical_nominal_identities(ctx, body, prefix);
-                    prefix.pop();
-                }
-            }
-            ModuleItem::Decl(_) => {}
+            _ => {}
         }
     }
 }
@@ -839,94 +781,80 @@ fn modifier_instances(
 fn prescan_struct_accessor_signatures<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
-    declarations: &[ModuleItem<TypedRef<'db>>],
+    entries: &[DeclEntry<TypedRef<'db>>],
 ) {
-    for declaration in declarations {
-        match declaration {
-            ModuleItem::Decl(Decl::Struct(declaration)) => {
-                let prefix = SymbolPath::new(ctx.module_path().iter().skip(1).cloned());
-                let qualified = prefix.child(declaration.name.clone());
-                let type_name = super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
-                let struct_type = ctx.adt_typeref(ir, &type_name);
-                let layout = ctx
-                    .get_type(&type_name)
-                    .unwrap_or_else(|| panic!("missing logical struct layout for accessor"));
-                let layout_fields = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout)
-                    .unwrap_or_else(|| panic!("malformed logical struct layout"));
-                for (index, field) in declaration.fields.iter().enumerate() {
-                    let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
-                    let getter_name = prefix
-                        .child(declaration.name.clone())
-                        .child(field_name.clone())
-                        .to_symbol();
-                    let field_type = layout_fields
-                        .get(index)
-                        .map(|(_, ty)| *ty)
-                        .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
-                    ctx.register_logical_generated_signature(
-                        &getter_name,
-                        vec![struct_type],
-                        field_type,
-                        CallingConvention::Direct,
-                    );
-                    if field.name.is_none() {
-                        continue;
-                    }
-                    let [setter_name, modifier_name] = field_update_names(&getter_name);
-                    ctx.register_logical_generated_signature(
-                        &setter_name,
-                        vec![struct_type, field_type],
-                        struct_type,
-                        CallingConvention::Direct,
-                    );
-                    // The modifier performs whatever its callback performs.
-                    for (modifier_name, class) in modifier_instances(ctx, modifier_name) {
-                        let callback = func_sig_type(ir, field_type, [field_type], class);
-                        ctx.register_logical_generated_signature(
-                            &modifier_name,
-                            vec![struct_type, callback],
-                            struct_type,
-                            class,
-                        );
-                    }
-                }
+    for entry in entries {
+        ctx.set_module(entry.module.clone());
+        let Decl::Struct(declaration) = &entry.decl else {
+            continue;
+        };
+        let prefix = ctx.module_path().clone();
+        let qualified = prefix.child(declaration.name.clone());
+        let type_name = super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
+        let struct_type = ctx.adt_typeref(ir, &type_name);
+        let layout = ctx
+            .get_type(&type_name)
+            .unwrap_or_else(|| panic!("missing logical struct layout for accessor"));
+        let layout_fields = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout)
+            .unwrap_or_else(|| panic!("malformed logical struct layout"));
+        for (index, field) in declaration.fields.iter().enumerate() {
+            let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
+            let getter_name = prefix
+                .child(declaration.name.clone())
+                .child(field_name.clone())
+                .to_symbol();
+            let field_type = layout_fields
+                .get(index)
+                .map(|(_, ty)| *ty)
+                .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
+            ctx.register_logical_generated_signature(
+                &getter_name,
+                vec![struct_type],
+                field_type,
+                CallingConvention::Direct,
+            );
+            if field.name.is_none() {
+                continue;
             }
-            ModuleItem::Module(module) => {
-                if let Some(body) = &module.body {
-                    ctx.enter_module(module.name.clone());
-                    prescan_struct_accessor_signatures(ctx, ir, body);
-                    ctx.exit_module();
-                }
+            let [setter_name, modifier_name] = field_update_names(&getter_name);
+            ctx.register_logical_generated_signature(
+                &setter_name,
+                vec![struct_type, field_type],
+                struct_type,
+                CallingConvention::Direct,
+            );
+            // The modifier performs whatever its callback performs.
+            for (modifier_name, class) in modifier_instances(ctx, modifier_name) {
+                let callback = func_sig_type(ir, field_type, [field_type], class);
+                ctx.register_logical_generated_signature(
+                    &modifier_name,
+                    vec![struct_type, callback],
+                    struct_type,
+                    class,
+                );
             }
-            ModuleItem::Decl(_) => {}
         }
     }
 }
 
 fn prescan_source_functions<'db>(
     ctx: &mut IrLoweringCtx<'db>,
-    declarations: &[ModuleItem<TypedRef<'db>>],
+    entries: &[DeclEntry<TypedRef<'db>>],
 ) {
-    for declaration in declarations {
-        match declaration {
-            ModuleItem::Decl(Decl::Function(function)) => {
+    for entry in entries {
+        ctx.set_module(entry.module.clone());
+        match &entry.decl {
+            Decl::Function(function) => {
                 ctx.register_logical_source_function(ctx.qualify_name(&function.name));
             }
-            ModuleItem::Decl(Decl::ExternFunction(function)) => {
+            Decl::ExternFunction(function) => {
                 let qualified = ctx.qualify_name(&function.name);
                 ctx.register_logical_source_function(qualified.clone());
                 if function.abi == "C" {
                     ctx.register_c_symbol(qualified, function.name.clone());
                 }
             }
-            ModuleItem::Module(module) => {
-                if let Some(body) = &module.body {
-                    ctx.enter_module(module.name.clone());
-                    prescan_source_functions(ctx, body);
-                    ctx.exit_module();
-                }
-            }
-            ModuleItem::Decl(_) => {}
+            _ => {}
         }
     }
 }
@@ -938,7 +866,7 @@ fn lower_struct_accessors<'db>(
     declaration: crate::ast::StructDecl,
 ) {
     let location = ctx.location(declaration.id);
-    let prefix = SymbolPath::new(ctx.module_path().iter().skip(1).cloned());
+    let prefix = ctx.module_path().clone();
     let qualified = prefix.child(declaration.name.clone());
     let type_name = super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
     let struct_type = ctx.adt_typeref(ir, &type_name);
@@ -2897,7 +2825,6 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::default(),
             HashMap::default(),
-            smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
         let location = Location::new(path, Span::new(0, 0));

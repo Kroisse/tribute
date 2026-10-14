@@ -5,8 +5,8 @@ use tribute_core::Diagnostic;
 use tribute_front::{
     SourceCst,
     ast::{
-        AbilityId, Decl, Effect, EffectRow, EffectVar, ModuleItem, RowRemoval, RowUnion, Type,
-        TypeDefId, TypeKind, TypeParam,
+        AbilityId, Decl, Effect, EffectRow, EffectVar, RowRemoval, RowUnion, Type, TypeDefId,
+        TypeKind, TypeParam,
     },
     typeck::TypeCheckOutput,
 };
@@ -29,10 +29,9 @@ fn prepare_root<'db>(
     let typed = parse_and_lower_ast(db, source).unwrap();
     let packet_decl = typed
         .module(db)
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Struct(decl)) if decl.name == "Packet" => Some(decl),
+            Decl::Struct(decl) if decl.name == "Packet" => Some(decl),
             _ => None,
         })
         .unwrap();
@@ -148,10 +147,9 @@ fn main() -> Nil { marker() }
     let prepared = prepare_root(db, source, root);
     let declaration = prepared
         .module(db)
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Struct(decl)) if decl.name == "Packet$Nat" => Some(decl),
+            Decl::Struct(decl) if decl.name == "Packet$Nat" => Some(decl),
             _ => None,
         })
         .unwrap_or_else(|| panic!("{root:?} did not materialize Packet(Nat)"));
@@ -195,10 +193,9 @@ fn main() -> Nil { marker() }
     assert_eq!(id.qualified(db), declaration.name);
     let original = prepared
         .module(db)
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Struct(decl)) if decl.name == "Packet" => Some(decl),
+            Decl::Struct(decl) if decl.name == "Packet" => Some(decl),
             _ => None,
         })
         .unwrap();

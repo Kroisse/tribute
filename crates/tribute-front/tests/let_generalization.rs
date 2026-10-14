@@ -3,8 +3,8 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::{
     SourceCst,
     ast::{
-        AbilityId, Decl, Effect, EffectRow, Expr, ExprKind, Module, ModuleItem, NodeId, Type,
-        TypeKind, TypedRef, UniVarId, UniVarSource,
+        AbilityId, Decl, DeclTable, Effect, EffectRow, Expr, ExprKind, NodeId, Type, TypeKind,
+        TypedRef, UniVarId, UniVarSource,
     },
 };
 use trunk_ir::Symbol;
@@ -159,16 +159,13 @@ fn local_identity_scope(db: &dyn salsa::Database, ty: Type<'_>) -> Option<NodeId
 }
 
 fn typed_function_body<'a, 'db>(
-    module: &'a Module<TypedRef<'db>>,
+    module: &'a DeclTable<TypedRef<'db>>,
     name: &Symbol,
 ) -> &'a Expr<TypedRef<'db>> {
     module
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Function(function)) if function.name == name => {
-                Some(&function.body)
-            }
+            Decl::Function(function) if function.name == name => Some(&function.body),
             _ => None,
         })
         .unwrap_or_else(|| panic!("missing typed function body for {name}"))

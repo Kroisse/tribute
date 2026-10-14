@@ -28,8 +28,8 @@
 //! pattern variant fails to compile here until its traversal is written.
 
 use super::{
-    Arm, Decl, Expr, ExprKind, FieldPattern, FuncDecl, HandlerArm, HandlerKind, Module, ModuleDecl,
-    ModuleItem, NodeId, Pattern, PatternKind, Stmt,
+    Arm, Decl, DeclTable, Expr, ExprKind, FieldPattern, FuncDecl, HandlerArm, HandlerKind, Module,
+    ModuleDecl, ModuleItem, NodeId, Pattern, PatternKind, Stmt,
 };
 
 /// Where a phase value sits in the tree.
@@ -106,6 +106,16 @@ pub fn walk_module<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
 ) {
     for item in &module.decls {
         walk_module_item(visitor, item);
+    }
+}
+
+/// Visit every declaration of a declaration table.
+pub fn walk_decl_table<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
+    visitor: &mut T,
+    table: &'ast DeclTable<V>,
+) {
+    for decl in table.decls() {
+        visitor.visit_decl(decl);
     }
 }
 
@@ -418,6 +428,13 @@ pub trait VisitMut<V> {
 pub fn walk_module_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, module: &mut Module<V>) {
     for item in &mut module.decls {
         walk_module_item_mut(visitor, item);
+    }
+}
+
+/// Rewrite every declaration of a declaration table in place.
+pub fn walk_decl_table_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, table: &mut DeclTable<V>) {
+    for entry in &mut table.entries {
+        visitor.visit_decl_mut(&mut entry.decl);
     }
 }
 

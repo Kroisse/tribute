@@ -11,7 +11,6 @@ use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
-use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
@@ -96,7 +95,7 @@ pub struct IrLoweringCtx<'db> {
     /// worker while its first-class function type requires a CPS adapter.
     definition_conventions: HashMap<Symbol, CallingConvention>,
     /// Module path as a vector of segments (e.g., ["std", "Option"]).
-    module_path: SymbolVec,
+    module_path: SymbolPath,
     /// Module's top-level block, used for in-place insertion of lifted lambdas.
     module_block: Option<BlockRef>,
     /// Struct field order: CtorId → [field_names in definition order].
@@ -146,7 +145,6 @@ impl<'db> IrLoweringCtx<'db> {
         span_map: SpanMap,
         function_types: HashMap<Symbol, TypeScheme<'db>>,
         ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
-        module_path: SymbolVec,
         node_types: SortedMap<NodeId, crate::ast::Type<'db>>,
     ) -> Self {
         Self {
@@ -164,7 +162,7 @@ impl<'db> IrLoweringCtx<'db> {
             logical_emitted_externs: HashSet::default(),
             ability_conventions,
             definition_conventions: HashMap::default(),
-            module_path,
+            module_path: SymbolPath::root(),
             module_block: None,
             struct_fields: HashMap::default(),
             variant_field_names: HashMap::default(),
@@ -233,18 +231,13 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Get the current module path.
-    pub fn module_path(&self) -> &SymbolVec {
+    pub fn module_path(&self) -> &SymbolPath {
         &self.module_path
     }
 
-    /// Enter a nested module, updating the module path.
-    pub fn enter_module(&mut self, name: Symbol) {
-        self.module_path.push(name);
-    }
-
-    /// Exit a nested module, restoring the parent module path.
-    pub fn exit_module(&mut self) {
-        self.module_path.pop();
+    /// Lower the declarations of `module` next.
+    pub fn set_module(&mut self, module: SymbolPath) {
+        self.module_path = module;
     }
 
     /// Set the module-level block for in-place insertion of lifted functions.
@@ -473,11 +466,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// - `["test", "String"]` + `"to_bytes"` → `"String::to_bytes"`
     /// - `["test"]` + `"print_line"` → `"print_line"` (top-level, unchanged)
     pub fn qualify_name(&self, name: &Symbol) -> Symbol {
-        // Skip the first segment (top-level module name from filename).
-        // Only nested module segments contribute to the qualified name.
-        SymbolPath::new(self.module_path.iter().skip(1).cloned())
-            .child(name.clone())
-            .to_symbol()
+        self.module_path.child(name.clone()).to_symbol()
     }
 
     /// Register struct field order for lowering Record expressions.
@@ -1020,7 +1009,6 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::default(),
             HashMap::default(),
-            smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         )
     }
@@ -1142,7 +1130,6 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::default(),
             HashMap::default(),
-            smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
 
@@ -1166,7 +1153,6 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::default(),
             HashMap::default(),
-            smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
         let int = AstType::new(&db, TypeKind::Int);
@@ -1314,12 +1300,12 @@ mod tests {
         assert!(ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
         assert!(!ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
 
-        ctx.enter_module(Symbol::new("Nested"));
+        ctx.set_module(SymbolPath::new(["Nested"]));
         assert_eq!(
             ctx.qualify_name(&Symbol::new("run")),
             Symbol::new("Nested::run")
         );
-        ctx.exit_module();
+        ctx.set_module(SymbolPath::root());
 
         let erased_cases = [
             AstType::new(&db, TypeKind::BoundVar { index: 0 }),
@@ -1459,7 +1445,6 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::default(),
             HashMap::default(),
-            smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
 
@@ -1510,7 +1495,6 @@ mod tests {
             crate::ast::SpanMap::default(),
             ft,
             HashMap::default(),
-            smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
         assert_eq!(ctx.lookup_function_type(&name), Some(&scheme));

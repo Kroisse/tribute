@@ -1,12 +1,10 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
 use super::{MonomorphizeMetadata, collect::is_concrete_type};
 use crate::ast::{
-    Decl, ExprKind, FuncDecl, FuncDefId, Module, ModuleItem, NodeId, ResolvedRef, Type, TypeScheme,
-    TypedRef,
+    Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, Type, TypeScheme, TypedRef,
 };
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
-use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -40,52 +38,30 @@ fn substitute<'db>(
 
 pub(super) fn validate<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
+    module: &DeclTable<TypedRef<'db>>,
     schemes: &HashMap<SymbolPath, TypeScheme<'db>>,
     metadata: &MonomorphizeMetadata<'db>,
 ) -> Vec<InstanceError> {
-    fn declarations<'a, 'db>(
-        db: &'db dyn salsa::Database,
-        decls: &'a [ModuleItem<TypedRef<'db>>],
-        prefix: &mut SymbolPath,
-        functions: &mut HashMap<FuncDefId<'db>, &'a FuncDecl<TypedRef<'db>>>,
-        fields: &mut HashSet<(crate::ast::TypeDefId<'db>, Symbol)>,
-    ) {
-        for decl in decls {
-            match decl {
-                ModuleItem::Decl(Decl::Function(func)) => {
-                    let name = prefix.child(func.name.clone());
-                    functions.insert(FuncDefId::new(db, name), func);
-                }
-                ModuleItem::Decl(Decl::Struct(decl)) => {
-                    let name = prefix.child(decl.name.clone());
-                    let owner = crate::ast::TypeDefId::source(db, name, decl.id);
-                    for field in &decl.fields {
-                        if let Some(name) = field.name.clone() {
-                            fields.insert((owner, name));
-                        }
-                    }
-                }
-                ModuleItem::Module(module) => {
-                    if let Some(body) = &module.body {
-                        prefix.push(module.name.clone());
-                        declarations(db, body, prefix, functions, fields);
-                        prefix.pop();
-                    }
-                }
-                _ => {}
+    let mut functions: HashMap<FuncDefId<'db>, &FuncDecl<TypedRef<'db>>> = HashMap::default();
+    let mut fields = HashSet::default();
+    for entry in &module.entries {
+        match &entry.decl {
+            Decl::Function(func) => {
+                let name = entry.module.child(func.name.clone());
+                functions.insert(FuncDefId::new(db, name), func);
             }
+            Decl::Struct(decl) => {
+                let name = entry.module.child(decl.name.clone());
+                let owner = crate::ast::TypeDefId::source(db, name, decl.id);
+                for field in &decl.fields {
+                    if let Some(name) = field.name.clone() {
+                        fields.insert((owner, name));
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    let mut functions = HashMap::default();
-    let mut fields = HashSet::default();
-    declarations(
-        db,
-        &module.decls,
-        &mut SymbolPath::root(),
-        &mut functions,
-        &mut fields,
-    );
     let mut queue: Vec<_> = functions
         .iter()
         .filter(|(id, func)| {

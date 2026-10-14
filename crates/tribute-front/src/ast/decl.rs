@@ -299,6 +299,8 @@ pub struct DeclEntry<V> {
 pub struct DeclTable<V> {
     /// Node ID of the module the table was built from.
     pub id: NodeId,
+    /// The name of that module (derived from the file path).
+    pub name: Option<Symbol>,
     /// The entries, in table order.
     pub entries: Vec<DeclEntry<V>>,
 }
@@ -332,8 +334,19 @@ impl<V> DeclTable<V> {
         flatten(module.decls, &mut SymbolPath::root(), &mut entries);
         Self {
             id: module.id,
+            name: module.name,
             entries,
         }
+    }
+
+    /// The declarations, in table order.
+    pub fn decls(&self) -> impl Iterator<Item = &Decl<V>> {
+        self.entries.iter().map(|entry| &entry.decl)
+    }
+
+    /// Append `decl` to the table, in `module`.
+    pub fn push(&mut self, module: SymbolPath, decl: Decl<V>) {
+        self.entries.push(DeclEntry { module, decl });
     }
 }
 

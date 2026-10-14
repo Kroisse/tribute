@@ -30,7 +30,6 @@ mod lower;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::sync::LazyLock;
-use trunk_ir::SymbolPath;
 
 use tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration;
 use trunk_ir::Symbol;
@@ -39,7 +38,7 @@ use trunk_ir::rewrite::Module as IrModule;
 
 use crate::SortedMap;
 use crate::ast::{
-    AbilityId, CallingConvention, Module as AstModule, NodeId, SpanMap, Type, TypeScheme, TypedRef,
+    AbilityId, CallingConvention, DeclTable, NodeId, SpanMap, Type, TypeScheme, TypedRef,
 };
 
 pub use context::IrLoweringCtx;
@@ -112,49 +111,27 @@ pub struct UnsupportedCompilerIntrinsic {
 /// requests lowering under its qualified name. The fixed supported set remains
 /// the validation boundary; return every unknown directive for source diagnostics.
 pub fn registered_compiler_intrinsics<V>(
-    module: &AstModule<V>,
+    module: &DeclTable<V>,
 ) -> Result<HashMap<NodeId, Symbol>, Vec<UnsupportedCompilerIntrinsic>> {
-    fn collect<V>(
-        declarations: &[crate::ast::ModuleItem<V>],
-        prefix: &mut SymbolPath,
-        result: &mut HashMap<NodeId, Symbol>,
-        unsupported: &mut Vec<UnsupportedCompilerIntrinsic>,
-    ) {
-        for declaration in declarations {
-            match declaration {
-                crate::ast::ModuleItem::Decl(crate::ast::Decl::ExternFunction(function))
-                    if function.abi == "intrinsic" =>
-                {
-                    let symbol = prefix.child(function.name.clone()).to_symbol();
-                    if is_supported_compiler_intrinsic(&symbol) {
-                        result.insert(function.id, symbol);
-                    } else {
-                        unsupported.push(UnsupportedCompilerIntrinsic {
-                            node: function.id,
-                            identity: symbol,
-                        });
-                    }
-                }
-                crate::ast::ModuleItem::Module(module) => {
-                    if let Some(body) = &module.body {
-                        prefix.push(module.name.clone());
-                        collect(body, prefix, result, unsupported);
-                        prefix.pop();
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
     let mut result = HashMap::default();
     let mut unsupported = Vec::new();
-    collect(
-        &module.decls,
-        &mut SymbolPath::root(),
-        &mut result,
-        &mut unsupported,
-    );
+    for entry in &module.entries {
+        let crate::ast::Decl::ExternFunction(function) = &entry.decl else {
+            continue;
+        };
+        if function.abi != "intrinsic" {
+            continue;
+        }
+        let symbol = entry.module.child(function.name.clone()).to_symbol();
+        if is_supported_compiler_intrinsic(&symbol) {
+            result.insert(function.id, symbol);
+        } else {
+            unsupported.push(UnsupportedCompilerIntrinsic {
+                node: function.id,
+                identity: symbol,
+            });
+        }
+    }
     if unsupported.is_empty() {
         Ok(result)
     } else {
@@ -167,7 +144,7 @@ pub fn registered_compiler_intrinsics<V>(
 /// This models the boundary between the typed frontend and IR lowering as one
 /// value, instead of passing parallel metadata collections positionally.
 pub struct TypedModule<'db> {
-    pub ast: AstModule<TypedRef<'db>>,
+    pub ast: DeclTable<TypedRef<'db>>,
     pub span_map: SpanMap,
     pub function_types: HashMap<Symbol, TypeScheme<'db>>,
     pub constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
@@ -242,7 +219,6 @@ mod tests {
             span_map,
             HashMap::default(),
             HashMap::default(),
-            smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
 
@@ -287,7 +263,6 @@ mod tests {
             SpanMap::default(),
             HashMap::default(),
             HashMap::default(),
-            smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
 
@@ -319,7 +294,6 @@ mod tests {
             SpanMap::default(),
             HashMap::default(),
             HashMap::default(),
-            smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
 
@@ -354,7 +328,6 @@ mod tests {
             span_map,
             HashMap::default(),
             HashMap::default(),
-            smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
 

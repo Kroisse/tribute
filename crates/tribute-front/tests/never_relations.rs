@@ -6,7 +6,7 @@ use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
 use salsa_test_macros::salsa_test;
 use tribute_front::{
     SourceCst,
-    ast::{Decl, ExprKind, ModuleItem, Type, TypeKind},
+    ast::{Decl, ExprKind, Type, TypeKind},
 };
 
 fn type_errors(db: &salsa::DatabaseImpl, name: &str, text: &str) -> Vec<String> {
@@ -25,12 +25,9 @@ fn function_tail_type<'db>(
         .expect("type checking should produce output");
     let body = checked
         .module(db)
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Function(function))
-                if function.name.with_str(|name| name == function_name) =>
-            {
+            Decl::Function(function) if function.name.with_str(|name| name == function_name) => {
                 Some(&function.body)
             }
             _ => None,
@@ -605,12 +602,9 @@ fn factory() -> fn() ->{Stop} Nat { fn() { Stop::stop() } }
     assert!(matches!(result.kind(db), TypeKind::Nat));
     let factory = checked
         .module(db)
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Function(function))
-                if function.name.with_str(|name| name == "factory") =>
-            {
+            Decl::Function(function) if function.name.with_str(|name| name == "factory") => {
                 Some(function)
             }
             _ => None,
@@ -764,12 +758,9 @@ fn result() ->{Stop} Nat {
     ));
     let function = checked
         .module(db)
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Function(function))
-                if function.name.with_str(|name| name == "result") =>
-            {
+            Decl::Function(function) if function.name.with_str(|name| name == "result") => {
                 Some(function)
             }
             _ => None,

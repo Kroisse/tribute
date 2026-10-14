@@ -176,7 +176,7 @@ fn close_dependencies<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Decl, ModuleItem};
+    use crate::ast::Decl;
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
@@ -355,10 +355,9 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         );
         let hidden_decl = input
             .module(db)
-            .decls
-            .iter()
+            .decls()
             .find_map(|d| match d {
-                ModuleItem::Decl(Decl::Struct(s)) => Some(s),
+                Decl::Struct(s) => Some(s),
                 _ => None,
             })
             .unwrap();

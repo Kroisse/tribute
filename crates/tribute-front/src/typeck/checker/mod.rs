@@ -39,8 +39,8 @@ use trunk_ir::{Span, Symbol};
 
 use crate::SortedMap;
 use crate::ast::{
-    Decl, FuncDefId, Module, ModuleItem, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef,
-    UniVarId,
+    Decl, DeclTable, FuncDefId, Module, ModuleItem, NodeId, ResolvedRef, SpanMap, Type, TypeScheme,
+    TypedRef, UniVarId,
 };
 
 use super::context::ModuleTypeEnv;
@@ -51,7 +51,7 @@ use super::{
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
     /// The typed module AST.
-    pub module: Module<TypedRef<'db>>,
+    pub module: DeclTable<TypedRef<'db>>,
     /// Function type schemes (name → polymorphic type).
     pub function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
     /// Constructor type schemes retain exact nominal field types for logical
@@ -329,11 +329,11 @@ impl<'db> TypeChecker<'db> {
         self.exhaustive_cases.sort();
 
         ModuleCheckResult {
-            module: Module {
+            module: DeclTable::from_module(Module {
                 id: module.id,
                 name: module.name.clone(),
                 decls,
-            },
+            }),
             function_types,
             constructor_types,
             node_types: self.node_types.into_iter().collect(),

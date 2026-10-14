@@ -18,7 +18,7 @@ use trunk_ir::{Symbol, SymbolPath};
 pub use self::instance::InstanceRowClasses;
 use self::instance::{InstanceKey, InstanceKeys};
 use crate::ast::{
-    CtorId, Decl, EffectRow, FuncDefId, Module, ModuleItem, NodeId, Type, TypeScheme, TypedRef,
+    CtorId, Decl, DeclTable, EffectRow, FuncDefId, NodeId, Type, TypeScheme, TypedRef,
 };
 use crate::typeck::subst::{BoundVarOutOfBounds, substitute_bound_vars, substitute_effect_row};
 use crate::typeck::{
@@ -49,7 +49,7 @@ pub struct MonomorphizeMetadata<'db> {
 
 /// Result of monomorphization: updated module + function types.
 pub struct MonomorphizeResult<'db> {
-    pub module: Module<TypedRef<'db>>,
+    pub module: DeclTable<TypedRef<'db>>,
     pub function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
     pub metadata: MonomorphizeMetadata<'db>,
     /// The convention class of each class variable of every function instance.
@@ -65,7 +65,7 @@ pub struct MonomorphizeResult<'db> {
 /// 4. Appends specialized functions/types to the module
 pub fn monomorphize_functions<'db>(
     db: &'db dyn salsa::Database,
-    module: Module<TypedRef<'db>>,
+    module: DeclTable<TypedRef<'db>>,
     function_types: HashMap<SymbolPath, TypeScheme<'db>>,
     mut metadata: MonomorphizeMetadata<'db>,
 ) -> Result<MonomorphizeResult<'db>, Vec<InstanceError>> {
@@ -86,7 +86,7 @@ pub fn monomorphize_functions<'db>(
     let mut instantiations: HashMap<_, HashSet<_>> = HashMap::default();
     let mut reached_fixpoint = false;
     let mut keys = InstanceKeys::new(db, &module, &source_function_types, &metadata);
-    local::settle_local_lambdas(db, &mut module.decls, &mut metadata, &mut keys);
+    local::settle_local_lambdas(db, &mut module.entries, &mut metadata, &mut keys);
 
     // A concrete clone can reveal direct calls that were abstract in its
     // source body. Clone the metadata first, then collect only unseen keys.
@@ -143,13 +143,10 @@ pub fn monomorphize_functions<'db>(
             &metadata.function_instances,
             &keys,
         );
-        let (placements, mut specialized_decls): (Vec<_>, Vec<ModuleItem<TypedRef<'db>>>) =
-            specialized_declarations
-                .into_iter()
-                .map(|(placement, declaration)| {
-                    (placement, ModuleItem::Decl(Decl::Function(declaration)))
-                })
-                .unzip();
+        let mut specialized_decls: Vec<_> = specialized_declarations
+            .into_iter()
+            .map(|(placement, declaration)| placement.place(Decl::Function(declaration)))
+            .collect();
         local::settle_local_lambdas(db, &mut specialized_decls, &mut metadata, &mut keys);
         rewrite::rewrite_decls(
             db,
@@ -159,22 +156,12 @@ pub fn monomorphize_functions<'db>(
             &keys,
         );
 
-        let id = module.id;
-        module.decls.extend(
-            placements
+        module.entries.extend(specialized_decls);
+        module.entries.extend(
+            specialized_extern_declarations
                 .into_iter()
-                .zip(specialized_decls)
-                .map(|(placement, declaration)| placement.place(id, declaration)),
+                .map(|(placement, declaration)| placement.place(Decl::ExternFunction(declaration))),
         );
-        module
-            .decls
-            .extend(
-                specialized_extern_declarations
-                    .into_iter()
-                    .map(|(placement, declaration)| {
-                        placement.place(id, Decl::ExternFunction(declaration).into())
-                    }),
-            );
         all_function_types.extend(specialized_function_types);
     }
     if !reached_fixpoint {
@@ -342,20 +329,15 @@ pub fn monomorphize_functions<'db>(
         rewrite::rewrite_types_in_module(db, &mut module, &type_rewrite_map);
 
         // Append specialized types to module
-        let id = module.id;
-        module.decls.extend(
+        module.entries.extend(
             specialized_structs
                 .into_iter()
-                .map(|(placement, declaration)| {
-                    placement.place(id, Decl::Struct(declaration).into())
-                }),
+                .map(|(placement, declaration)| placement.place(Decl::Struct(declaration))),
         );
-        module.decls.extend(
+        module.entries.extend(
             specialized_enums
                 .into_iter()
-                .map(|(placement, declaration)| {
-                    placement.place(id, Decl::Enum(declaration).into())
-                }),
+                .map(|(placement, declaration)| placement.place(Decl::Enum(declaration))),
         );
         module
     } else {

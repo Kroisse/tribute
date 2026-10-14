@@ -2,7 +2,7 @@
 
 use tribute_front::SourceCst;
 use tribute_front::ast::{
-    AbilityId, Decl, Module, ModuleItem, SpanMap, TypeAnnotation, TypeAnnotationKind, TypedRef,
+    AbilityId, Decl, DeclTable, SpanMap, TypeAnnotation, TypeAnnotationKind, TypedRef,
 };
 use tribute_front::query as ast_query;
 use trunk_ir::{Span, Symbol};
@@ -41,28 +41,15 @@ pub fn builtin_at(entries: &[BuiltinSymbolEntry], offset: usize) -> Option<&Buil
 
 fn collect_module(
     db: &dyn salsa::Database,
-    module: &Module<TypedRef<'_>>,
+    module: &DeclTable<TypedRef<'_>>,
     span_map: &SpanMap,
     entries: &mut Vec<BuiltinSymbolEntry>,
 ) {
-    for decl in &module.decls {
-        match decl {
-            ModuleItem::Decl(Decl::Function(func)) => {
-                for effect in func.effects.iter().flatten() {
-                    collect_effect(db, effect, span_map, entries);
-                }
+    for decl in module.decls() {
+        if let Decl::Function(func) = decl {
+            for effect in func.effects.iter().flatten() {
+                collect_effect(db, effect, span_map, entries);
             }
-            ModuleItem::Module(module) => {
-                if let Some(body) = &module.body {
-                    let nested = Module::new(module.id, Some(module.name.clone()), body.clone());
-                    collect_module(db, &nested, span_map, entries);
-                }
-            }
-            ModuleItem::Decl(Decl::ExternFunction(_))
-            | ModuleItem::Decl(Decl::Struct(_))
-            | ModuleItem::Decl(Decl::Enum(_))
-            | ModuleItem::Decl(Decl::Ability(_))
-            | ModuleItem::Decl(Decl::Use(_)) => {}
         }
     }
 }

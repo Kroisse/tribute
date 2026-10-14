@@ -1162,7 +1162,7 @@ mod tests {
     fn parse_and_typecheck<'db>(
         db: &'db dyn salsa::Database,
         src: &str,
-    ) -> &'db crate::ast::Module<crate::ast::TypedRef<'db>> {
+    ) -> &'db crate::ast::DeclTable<crate::ast::TypedRef<'db>> {
         let source = crate::SourceCst::from_source_str(db, "test.trb", src);
         crate::query::type_check_output(db, source)
             .expect("should typecheck successfully")
@@ -1206,8 +1206,8 @@ mod tests {
             }
         "#,
         );
-        for decl in &module.decls {
-            if let crate::ast::ModuleItem::Decl(crate::ast::Decl::Function(func)) = decl {
+        for decl in module.decls() {
+            if let crate::ast::Decl::Function(func) = decl {
                 assert!(
                     !has_method_call(&func.body),
                     "a call should have its function selected in function '{}'",
@@ -1238,8 +1238,8 @@ mod tests {
             }
         "#,
         );
-        for decl in &module.decls {
-            if let crate::ast::ModuleItem::Decl(crate::ast::Decl::Function(func)) = decl
+        for decl in module.decls() {
+            if let crate::ast::Decl::Function(func) = decl
                 && func.name == "main"
             {
                 assert!(

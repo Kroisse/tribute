@@ -11,7 +11,7 @@ use itertools::Itertools;
 use salsa_test_macros::salsa_test;
 use tribute_front::{
     SourceCst,
-    ast::{Decl, ExprKind, ModuleItem},
+    ast::{Decl, ExprKind},
 };
 
 // ========================================================================
@@ -223,10 +223,9 @@ fn observe(values: List(Item)) -> Nat {
     let checked = tribute_front::query::type_check_output(db, source).expect("typed fixture");
     let function = checked
         .module(db)
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Function(function)) => Some(function),
+            Decl::Function(function) => Some(function),
             _ => None,
         })
         .expect("observe function");
@@ -267,15 +266,12 @@ fn observe(values: List(Item)) -> Nat {
 }
 
 fn nested_case_ids(
-    module: &tribute_front::ast::Module<tribute_front::ast::TypedRef<'_>>,
+    module: &tribute_front::ast::DeclTable<tribute_front::ast::TypedRef<'_>>,
 ) -> (tribute_front::ast::NodeId, tribute_front::ast::NodeId) {
     let function_body = module
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Function(function)) if function.name == "nested" => {
-                Some(&function.body)
-            }
+            Decl::Function(function) if function.name == "nested" => Some(&function.body),
             _ => None,
         })
         .expect("nested function should be typechecked");
