@@ -531,8 +531,9 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 It uses flat `[inputs..., results...]` storage with mandatory `num_inputs` and
 `num_results` u32 delimiters; its source-owned validated API requires exactly
 one result. `Result`와 `Params`는 source-logical type이며 기존 code `Direct = 0`,
-`EvidenceDirect = 1`, `Cps = 2`를 그대로 사용한다. 이 metadata는 typechecking
-결과를 복사한 것으로 body에서 추론하지 않는다. Legalization은 이를 기존
+`EvidenceDirect = 1`, `Cps = 2`를 그대로 사용한다. Convention은
+[CPS 전략](cps-effects.md#row와-호출-규약)이 [effect row](#effect-row)에서 계산한
+값이며 body에서 추론하지 않는다. Legalization은 이를 기존
 `CallableAbi`와 physical `func.func_sig`, `closure.closure` 및
 `tribute.calling_convention` operation attribute로 바꾼다. Type verifier는
 result 하나와 parameter 0개 이상, convention domain, 모든 component type의
@@ -579,6 +580,81 @@ canonical `core.never` TypeRef를 사용하고 resumption을 만들지 않으며
 non-resumptive case를 식별해야 하므로 `Never`용 `anyref` placeholder는 이
 경계에서 valid하지 않다.
 
+### Effect row
+
+`tribute_control.func_sig`는 callable의 effect row를 `tribute.row` type 속성으로
+가진다.
+
+```text
+tribute_control.func_sig<(T) -> R, {tribute.calling_convention = 2,
+    tribute.row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}>
+```
+
+- **값:** `instances`는 [`ability.decl`](#abilitydecl)에 대한 symbol 참조 목록이고
+  `tail`은 둘러싼 정의의 [row binder](#row-binder) index다. 둘 다 없으면 닫힌 빈
+  row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬한다. 같은
+  instance가 두 번 나오면 두 번 둔다. Evidence 선택이 instance의 위치 수를 세기
+  때문이다.
+- **정체성:** signature의 정체성은 입력, 결과, row, convention의 조합이다. 같은
+  row도 인스턴스가 고정한 class에 따라 convention이 다를 수 있다
+  ([cps-effects.md](cps-effects.md#row와-호출-규약)).
+- **범위:** row는 source-logical 경계 안에만 있다. CPS legalization은
+  `func.func_sig`를 만들 때 row를 버리며, representation/ABI 경계의 출구는 row와
+  아래 속성들을 거부한다.
+
+#### Row binder
+
+`tribute_control.func`는 자기 row binder를 `row_binders` 속성으로 선언한다. 원소는
+binder의 종류를 나타내는 문자열이다.
+
+| 종류 | 뜻 |
+| ---- | ---- |
+| `param` | 정의의 scheme이 양화한 row 변수 |
+| `ability_arg` | scheme이 양화했고 signature나 본문의 ability 인자 안에 나타나는 row 변수 |
+| `local` | `let`에 묶인 람다의 지역 scheme이 양화한 row 변수 |
+| `body` | 어느 scheme도 양화하지 않은 row 변수 |
+
+양화된 binder(`param`, `ability_arg`)가 scheme의 binder 순서로 먼저 오며, 그 위치가
+row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 뒤에 온다. 속성이 없으면
+binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 드러내지
+않으므로 따로 표시한다.
+
+정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
+인자, operation 결과, tuple layout의 원소가 모두 같다. Type은 binder를 도입하지
+않는다. Module 수준의 type에는 둘러싼 정의가 없으므로 [`ability.operation`](#abilitydecl)의
+type은 tail을 가질 수 없다.
+
+#### Tail의 합집합
+
+Row tail이 여러 tail의 합집합으로 선언된 정의는 `row_unions` 속성으로 그 합집합을
+적는다. 원소는 `{result = i, sources = [j, k, ...]}`이며 `sources`는 열린 source의
+tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에 넣지 않는다.
+
+이 순서가 evidence tail 칸의 번호다. 정의 안의 [`{select = i}`](#evidence-선택-속성)는
+자기 row tail을 결과로 하는 합집합의 `i`번째 source를 가리키고, 호출의
+`{tails = [...]}`는 callee 합집합의 source마다 선택 하나를 같은 순서로 담는다.
+
+#### 추론된 row
+
+`inferred_row = true`는 effect 주석을 생략한 정의와 root `main`에 붙는다. 이런
+정의 자신의 convention은 row tail이 그 인스턴스의 class 변수일 때만 tail을 읽는다
+([cps-effects.md](cps-effects.md#row와-호출-규약)). 정의의 type이 가진 row는
+그대로다.
+
+#### Row 인자와 치환
+
+Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_args`로 callee의
+양화된 binder마다 row 하나를 넘긴다. 각 row는 `tribute.row`와 같은 형식이며 tail은
+참조하는 쪽 정의의 binder index다. Callee에 양화된 binder가 없으면 속성을 생략한다.
+
+참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
+type 안의 모든 `func_sig`(자기 자신 포함)에서 tail이 양화된 binder `t`인 row
+`(I, t)`를 `(I ⊎ args[t].instances, args[t].tail)`로 바꾸고 정렬한다. Convention과
+다른 속성은 바꾸지 않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
+만든다([layout 이름](#compiler-generated-tuple-layout)). `call_indirect`와
+`tail_call_indirect`의 callee type은 이미 caller의 binder로 쓰여 있으므로 row 인자가
+없다.
+
 ### 사용자 정의 어셈블리 형식
 
 `tribute_control.func`와 `tribute_control.lambda`만 custom parse/print를 요구한다.
@@ -618,7 +694,20 @@ attribute와 body를 출력하고 entry label을 생략한다. `captures [...]`�
 없어도 `captures []`로 항상 출력하며 canonical 순서는 convention, captures,
 선택적 attributes, body다.
 
-간결한 형식은 non-reserved type attribute가 없는 source signature에만 쓴다.
+Row는 convention 앞에 `row(@A, @B | 1)` 형식으로 쓴다. Instance 목록과 `|` 뒤의
+tail binder index이며, instance가 없으면 `row(| 1)`, tail이 없으면 `row(@A)`다. 닫힌
+빈 row는 쓰지 않는다. `row_binders`, `row_unions`, `inferred_row`는 선택적
+`attributes {...}`에 둔다.
+
+```text
+tribute_control.func @map(%xs: !List, %f: !F) -> !List row(| 0) convention(cps)
+    attributes {row_binders = ["param"]} {
+  ...
+}
+```
+
+간결한 형식은 `tribute.row` 외의 non-reserved type attribute가 없는 source
+signature에만 쓴다.
 그런 attribute가 있으면 `func`/`lambda`는 generic assembly를 써서 complete
 `type` attribute 또는 result type expression을 출력한다. Metadata의 소유자는 항상
 그 `tribute_control.func_sig` type/alias 하나이며, 같은 alias를 참조하는 여러
@@ -639,10 +728,14 @@ tribute_control.func {sym_name = "id", type = !Callable} (%x: T) { ... }
   없고 정의는 source parameter만 block argument로 받는 single-block `body`
   하나이며 `tribute_control.return`으로 끝난다. Foreign ABI 같은 비제어
   attribute는 보존한다.
-- **의미:** source named function의 logical signature와 typechecking이 선택한
+- **의미:** source named function의 logical signature와 그 row에서 계산한
   convention을 정의하며 hidden evidence, environment, `ContinuationFrame<R>`를 포함하지 않는다.
 - **검증:** local verifier는 attribute, region, block argument, return type을
-  callable type과 맞춘다. Whole-IR verifier는 symbol uniqueness를 검사한다.
+  callable type과 맞춘다. Whole-IR verifier는 symbol uniqueness와, 정의 안의 모든
+  tail이 `row_binders` 범위 안인지, `row_unions`의 index가 범위 안인지, row의
+  instance가 `ability.decl`로 해소되는지를 검사한다.
+- **Row 속성:** 선택적 [`row_binders`](#row-binder), [`row_unions`](#tail의-합집합),
+  [`inferred_row`](#추론된-row)를 가진다.
 - **소유권과 값 흐름:** body는 isolated-from-above다. Source local과 parameter만
   block argument로 들어온다.
 - **위치:** source function 또는 extern declaration 전체 span이다.
@@ -710,8 +803,9 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
   function을 higher-order value로 사용할 수 있으므로 필요하다. Result는 대상과
   같은 source signature이며 convention은 대상 worker와 같거나 더 강할 수 있다.
 - **검증:** local verifier는 attribute와 result 형상을 검사한다. Whole-IR
-  verifier는 symbol resolution, source signature 일치와 convention 순서를
-  검사한다.
+  verifier는 symbol resolution과, result가 대상 type에 [`row_args`](#row-인자와-치환)를
+  치환한 signature와 바깥 convention을 빼고 같은지, 바깥 convention이 대상보다
+  약하지 않은지를 검사한다.
 - **소유권과 값 흐름:** 결과는 일반 SSA value다.
 - **위치:** named function을 값으로 사용한 source reference span이다.
 
@@ -722,11 +816,12 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 ```
 
 - **형상:** declaration 순서의 source argument, source-logical result 하나,
-  `callee: Symbol`, 선택적 [`evidence_plan`](#evidence-선택-속성)을 가지며 region이
-  없는 non-terminator다.
+  `callee: Symbol`, 선택적 [`evidence_plan`](#evidence-선택-속성)과
+  [`row_args`](#row-인자와-치환)를 가지며 region이 없는 non-terminator다.
 - **의미:** named source callable을 직접 호출한다.
 - **검증:** local verifier는 attribute와 resolved operand/result를 검사한다.
-  Whole-IR verifier는 callee `tribute_control.func`의 arity/type을 맞춘다.
+  Whole-IR verifier는 `row_args`의 개수가 callee의 양화된 binder 수와 같은지, operand와
+  result가 callee type에 `row_args`를 치환한 signature와 같은지 검사한다.
 - **소유권과 값 흐름:** argument/result는 일반 SSA value이고 hidden operand는
   없다.
 - **위치:** callee와 argument를 포함한 source call span이다.
@@ -753,8 +848,8 @@ tribute_control.tail_call %arg0, ... {callee = @f}
 ```
 
 - **형상:** declaration 순서의 source argument, `callee: Symbol`, 선택적
-  [`evidence_plan`](#evidence-선택-속성)을 가진다. 결과와 region은 없는
-  terminator이며 `CallableExit`를 등록한다.
+  [`evidence_plan`](#evidence-선택-속성)과 [`row_args`](#row-인자와-치환)를 가진다.
+  결과와 region은 없는 terminator이며 `CallableExit`를 등록한다.
 - **위치 규칙:** `tribute_control.func` 또는 `lambda` body를 끝낼 수 있고, 꼬리
   위치에 있는 결과 하나인 `scf.if`의 arm을 `scf.yield` 대신 끝낼 수 있다. 그
   arm은 terminal region이며 operation의 결과는 `scf.yield`로 끝나는 arm만 낸다.
@@ -766,7 +861,8 @@ tribute_control.tail_call %arg0, ... {callee = @f}
   결과가 감싼 callable의 결과가 되며 caller frame은 남지 않는다.
 - **검증:** local verifier는 attribute, 위치 규칙, callee result type과 감싼
   callable result type의 일치를 검사한다. Whole-IR verifier는
-  `tribute_control.call`과 같이 callee의 arity/type과 convention 순서를 맞춘다.
+  `tribute_control.call`과 같이 `row_args`를 치환한 callee signature와 operand,
+  감싼 callable의 result를 맞추고 convention 순서를 검사한다.
   Tail position과 handler 규칙의 소스 진단은 typechecking이 책임지며 이 검사는
   lowering이 그 결과를 보존했는지 확인한다.
 - **소유권과 값 흐름:** argument는 일반 SSA use이고 hidden operand는 없다.
@@ -827,8 +923,10 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
   ```
 
 - 속성이 없으면 그대로 전달한다. 빈 목록은 쓰지 않는다.
-- Verifier는 원소 형상과 위치, `handle`의 `mask` 전용 규칙, instance 중복만 검사한다.
-  Row 정보는 IR에 없으므로 선택의 옳고 그름은 typechecking이 책임진다.
+- Verifier는 원소 형상과 위치, `handle`의 `mask` 전용 규칙, instance 중복을
+  검사한다. `select`의 index는 둘러싼 정의의 [합집합](#tail의-합집합) source 수보다
+  작아야 하고, `tails`의 선택 수는 callee 합집합의 source 수와 같아야 한다. 선택이
+  row와 맞는지는 typechecking이 책임진다.
 - CPS legalization은 선택을 바꾸지 않고 옮긴다. 호출과 `resume`의 선택은 그것이
   만든 evidence-taking `func.call`, `func.tail_call`, `func.call_indirect`,
   `func.tail_call_indirect`와 그 suffix의 `ability.suffix_frame`에, `handle`의 선택은
@@ -886,7 +984,8 @@ ability.decl {sym_name = "<instance key>"} {
   안에서 `op_name`으로 찾는다.
 - **`ability.operation` 속성:** `op_name: String`, `kind: String`(`fn` 또는 `op`),
   `param_types: [Type]`, `result_type: Type`. Source declaration 순서의 parameter
-  type과 result type이다.
+  type과 result type이다. 이 type은 module 수준이므로 [row tail](#row-binder)을 가질 수
+  없다.
 - **검증:** 한 선언 안에서 `op_name`은 중복되지 않는다. Instance마다 선언이
   하나라는 것은 symbol 정의의 유일성이 보장한다. `perform`과 handler arm은 자신의
   `ability`와 `op_name`이 가리키는 선언의 kind, parameter type, result type과
@@ -1304,6 +1403,14 @@ Source-logical frontend는 nominal layout을 생성할 때 실제 `adt.struct` �
 생성 연산 없이 signature에만 등장하는 특수화도 같은 계약을 따르며, 필드에서
 참조하는 compiler-generated nominal tuple layout도 게시한다. Frontend 내부
 type map이나 type interner에만 존재하는 layout은 게시된 정의가 아니다.
+
+<!-- markdownlint-disable-next-line MD033 -->
+<a id="compiler-generated-tuple-layout"></a>
+
+Compiler-generated tuple layout의 이름은 원소의 logical type에서 정해지는 함수이며,
+원소가 callable type이면 그 [row](#effect-row)와 convention을 포함한다. 그래서 row만
+다른 두 tuple은 다른 layout이고, [row 치환](#row-인자와-치환)은 원소를 치환한 layout을
+같은 함수로 다시 만든다. 이 함수는 IR 계층이 소유하며 frontend와 pass가 함께 쓴다.
 
 특수화된 enum의 variant 필드 타입은 해당 인스턴스에 함께 치환된 constructor
 스킴에서 가져온다. 원본 generic 스킴이나 생성·패턴 표현식으로 필드 표현을

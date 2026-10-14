@@ -658,7 +658,7 @@ open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
 escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
 받은 람다와, 본문에서 effect를 수행한 람다의 convention은 이 결과에서 그대로
 계산한다. 본문의 `handle`은 람다의 convention을 바꾸지 않는다
-([implementation.md](implementation.md#selective-transformation)).
+([cps-effects.md](cps-effects.md#row와-호출-규약)).
 
 #### 함수 적용 (Infer)
 
