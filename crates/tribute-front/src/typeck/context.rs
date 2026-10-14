@@ -122,14 +122,14 @@ pub struct ModuleTypeEnv<'db> {
     constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
 
     /// Type definitions (struct/enum names to their types).
-    type_defs: HashMap<Symbol, TypeScheme<'db>>,
+    type_defs: HashMap<SymbolPath, TypeScheme<'db>>,
 
     /// Struct field definitions keyed by nominal declaration identity.
     struct_fields: HashMap<TypeDefId<'db>, StructFieldInfo<'db>>,
 
     /// Enum variant information: enum_name → [variant_names]
     /// Used for exhaustiveness checking in case expressions.
-    enum_variants: HashMap<Symbol, Vec<Symbol>>,
+    enum_variants: HashMap<SymbolPath, Vec<Symbol>>,
 
     /// Field names of constructors whose fields are all named, in
     /// declaration order: structs, named-field variants, and constructors
@@ -174,8 +174,8 @@ impl<'db> ModuleTypeEnv<'db> {
             list_ty,
         );
         let mut type_defs = HashMap::default();
-        type_defs.insert(list_name, list_scheme);
-        type_defs.insert(Symbol::new("std::collections::List"), list_scheme);
+        type_defs.insert(SymbolPath::from(list_name), list_scheme);
+        type_defs.insert(SymbolPath::new(["std", "collections", "List"]), list_scheme);
 
         Self {
             db,
@@ -221,8 +221,8 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Register a type definition.
-    pub fn register_type_def(&mut self, name: Symbol, scheme: TypeScheme<'db>) {
-        self.type_defs.insert(name, scheme);
+    pub fn register_type_def(&mut self, path: SymbolPath, scheme: TypeScheme<'db>) {
+        self.type_defs.insert(path, scheme);
     }
 
     /// Register struct field information.
@@ -236,8 +236,8 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Register enum variant information.
-    pub fn register_enum_variants(&mut self, enum_name: Symbol, variants: Vec<Symbol>) {
-        self.enum_variants.insert(enum_name, variants);
+    pub fn register_enum_variants(&mut self, enum_path: SymbolPath, variants: Vec<Symbol>) {
+        self.enum_variants.insert(enum_path, variants);
     }
 
     /// Register the field names of a constructor whose fields are all named.
@@ -265,30 +265,26 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Look up a type definition.
-    pub fn lookup_type_def(&self, name: &Symbol) -> Option<TypeScheme<'db>> {
-        self.type_defs.get(name).copied()
+    pub fn lookup_type_def(&self, path: &SymbolPath) -> Option<TypeScheme<'db>> {
+        self.type_defs.get(path).copied()
     }
 
     /// Look up a type definition from a lexical module scope.
     pub fn lookup_type_def_in_scope(
         &self,
-        name: &Symbol,
+        path: &SymbolPath,
         prefix: &SymbolPath,
     ) -> Option<TypeScheme<'db>> {
-        let spelling = name.to_string();
-        if spelling.contains("::") {
-            return self.lookup_type_def(name);
-        }
-
         // Name resolution leaves a bare name only for a declaration of the
         // current module; the package root holds the rest.
-        if !prefix.is_root()
-            && let Some(scheme) = self.lookup_type_def(&crate::qualified_symbol(prefix, name))
+        if let Some(name) = path.as_simple()
+            && !prefix.is_root()
+            && let Some(scheme) = self.lookup_type_def(&prefix.child(name.clone()))
         {
             return Some(scheme);
         }
 
-        self.lookup_type_def(name)
+        self.lookup_type_def(path)
     }
 
     /// Look up fields in declaration order using the exact struct identity.
@@ -331,10 +327,10 @@ impl<'db> ModuleTypeEnv<'db> {
             .find(|kind| kind.name().is_some_and(|name| leaf == name))
             .and_then(|kind| {
                 let owner = parent.parent().filter(|owner| !owner.is_root())?;
-                Some((kind, owner.to_symbol(), parent.leaf()?.clone()))
+                Some((kind, owner, parent.leaf()?.clone()))
             })
             .filter(|(_, owner, field)| self.struct_field(owner, field).is_some())
-            .unwrap_or_else(|| (FieldFunctionKind::Get, parent.to_symbol(), leaf));
+            .unwrap_or((FieldFunctionKind::Get, parent, leaf));
         let (owner, parameters, field_ty) = self.struct_field(&owner_name, &field)?;
 
         let receiver = self.named_type_with_id(
@@ -374,11 +370,11 @@ impl<'db> ModuleTypeEnv<'db> {
         })
     }
 
-    /// The named field `field` of the struct named `owner`: the struct's
+    /// The named field `field` of the struct at `owner`: the struct's
     /// identity and type parameters, and the field's type.
     fn struct_field(
         &self,
-        owner: &Symbol,
+        owner: &SymbolPath,
         field: &Symbol,
     ) -> Option<(TypeDefId<'db>, Vec<TypeParam>, Type<'db>)> {
         let TypeKind::Named { id, .. } = self.lookup_type_def(owner)?.body(self.db).kind(self.db)
@@ -415,8 +411,8 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Look up enum variants by enum name.
-    pub fn lookup_enum_variants(&self, enum_name: &Symbol) -> Option<&[Symbol]> {
-        self.enum_variants.get(enum_name).map(|v| v.as_slice())
+    pub fn lookup_enum_variants(&self, enum_path: &SymbolPath) -> Option<&[Symbol]> {
+        self.enum_variants.get(enum_path).map(|v| v.as_slice())
     }
 
     /// Field names of a constructor in declaration order, or `None` if its
@@ -554,13 +550,13 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Export type definitions for PreludeExports.
     ///
     /// Results are sorted alphabetically by name for deterministic output.
-    pub fn export_type_defs(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
+    pub fn export_type_defs(&self) -> Vec<(SymbolPath, TypeScheme<'db>)> {
         let mut result: Vec<_> = self
             .type_defs
             .iter()
             .map(|(k, v)| (k.clone(), *v))
             .collect();
-        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result.sort_by_cached_key(|(path, _)| path.to_symbol());
         result
     }
 
@@ -583,13 +579,13 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Export enum variant information for PreludeExports.
     ///
     /// Results are sorted alphabetically by enum name for deterministic output.
-    pub fn export_enum_variants(&self) -> Vec<(Symbol, Vec<Symbol>)> {
+    pub fn export_enum_variants(&self) -> Vec<(SymbolPath, Vec<Symbol>)> {
         let mut result: Vec<_> = self
             .enum_variants
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result.sort_by_cached_key(|(path, _)| path.to_symbol());
         result
     }
 
@@ -746,33 +742,35 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Create a named type.
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
-        self.named_type_in_scope(name, args, &SymbolPath::root())
+        self.named_type_in_scope(SymbolPath::from(name), args, &SymbolPath::root())
     }
 
     /// The named type a type annotation's path names. Name resolution spells
     /// the path from the package root, so it is not read through the
     /// enclosing modules.
     pub fn path_type(&self, path: &[Symbol]) -> Type<'db> {
-        crate::qualified_path_symbol(path).map_or_else(
-            || self.error_type(),
-            |name| self.named_type_in_scope(name, vec![], &SymbolPath::root()),
-        )
+        if path.is_empty() {
+            return self.error_type();
+        }
+        let path = SymbolPath::new(path.iter().cloned());
+        self.named_type_in_scope(path, vec![], &SymbolPath::root())
     }
 
     /// Create a named type using lexical module lookup.
     pub fn named_type_in_scope(
         &self,
-        name: Symbol,
+        path: SymbolPath,
         args: Vec<Type<'db>>,
         prefix: &SymbolPath,
     ) -> Type<'db> {
+        let name = path.to_symbol();
         let id = self
-            .lookup_type_def_in_scope(&name, prefix)
+            .lookup_type_def_in_scope(&path, prefix)
             .and_then(|scheme| match scheme.body(self.db).kind(self.db) {
                 TypeKind::Named { id, .. } => Some(*id),
                 _ => None,
             })
-            .unwrap_or_else(|| TypeDefId::synthetic(self.db, SymbolPath::from(&name)));
+            .unwrap_or_else(|| TypeDefId::synthetic(self.db, path));
         self.named_type_with_id(id, name, args)
     }
 
@@ -821,7 +819,10 @@ mod tests {
         let name = Symbol::new("String");
         let user_id = TypeDefId::source(db, trunk_ir::SymbolPath::from(&name), NodeId::from_raw(1));
         let user_ty = env.named_type_with_id(user_id, name.clone(), vec![]);
-        env.register_type_def(name, TypeScheme::mono(db, user_ty));
+        env.register_type_def(
+            trunk_ir::SymbolPath::from(name),
+            TypeScheme::mono(db, user_ty),
+        );
 
         let string_ty = env.string_type();
         let TypeKind::Named { id, .. } = string_ty.kind(db) else {
@@ -1005,23 +1006,17 @@ mod tests {
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
 
-        env.register_type_def(Symbol::new("Zebra"), scheme);
-        env.register_type_def(Symbol::new("Alpha"), scheme);
-        env.register_type_def(Symbol::new("Middle"), scheme);
+        env.register_type_def(trunk_ir::SymbolPath::from("Zebra"), scheme);
+        env.register_type_def(trunk_ir::SymbolPath::from("Alpha"), scheme);
+        env.register_type_def(trunk_ir::SymbolPath::from("Middle"), scheme);
 
         let exported = env.export_type_defs();
 
         // Should be sorted alphabetically by name
-        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
+        let names: Vec<_> = exported.iter().map(|(path, _)| path.to_string()).collect();
         assert_eq!(
             names,
-            vec![
-                Symbol::new("Alpha"),
-                Symbol::new("List"),
-                Symbol::new("Middle"),
-                Symbol::new("Zebra"),
-                Symbol::new("std::collections::List"),
-            ]
+            vec!["Alpha", "List", "Middle", "Zebra", "std::collections::List",]
         );
     }
 
@@ -1059,9 +1054,9 @@ mod tests {
 
         let variants = vec![Symbol::new("A"), Symbol::new("B")];
 
-        env.register_enum_variants(Symbol::new("Zebra"), variants.clone());
-        env.register_enum_variants(Symbol::new("Alpha"), variants.clone());
-        env.register_enum_variants(Symbol::new("Middle"), variants);
+        env.register_enum_variants(trunk_ir::SymbolPath::from("Zebra"), variants.clone());
+        env.register_enum_variants(trunk_ir::SymbolPath::from("Alpha"), variants.clone());
+        env.register_enum_variants(trunk_ir::SymbolPath::from("Middle"), variants);
 
         let exported = env.export_enum_variants();
 

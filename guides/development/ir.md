@@ -12,7 +12,7 @@ TrunkIR is Tribute's multi-level dialect IR, inspired by MLIR's dialect concept.
   `Copy`). Take `&Symbol` where the name is only read, and clone it only to
   store it. Names of at most 7 bytes are inline, trunk-ir's own declared names
   are static, and other names are reference-counted and released with their
-  last symbol. Qualified paths via `ModulePathExt` trait in `tribute-ir`.
+  last symbol. A qualified name is a `SymbolPath`, one `Symbol` per component.
 
 ## Dialect Organization
 

@@ -1716,7 +1716,7 @@ mod tests {
             Decl::Enum(enumeration) => &enumeration.name,
             _ => return Vec::new(),
         };
-        vec![(tribute_front::qualified_symbol(module, name), decl)]
+        vec![(module.child(name.clone()).to_symbol(), decl)]
     }
 
     fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
