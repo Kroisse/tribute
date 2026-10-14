@@ -850,15 +850,8 @@ mod tests {
         let exported = env.export_function_types();
 
         // Should be sorted alphabetically by name
-        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
-        assert_eq!(
-            names,
-            vec![
-                Symbol::new("alpha"),
-                Symbol::new("middle"),
-                Symbol::new("zebra")
-            ]
-        );
+        let names: Vec<_> = exported.iter().map(|(path, _)| path.to_string()).collect();
+        assert_eq!(names, vec!["alpha", "middle", "zebra"]);
     }
 
     #[salsa_test]
@@ -1103,22 +1096,13 @@ mod tests {
         let second = env.export_function_types();
         let third = env.export_function_types();
 
-        let first_names: Vec<_> = first.iter().map(|(n, _)| n.clone()).collect();
-        let second_names: Vec<_> = second.iter().map(|(n, _)| n.clone()).collect();
-        let third_names: Vec<_> = third.iter().map(|(n, _)| n.clone()).collect();
+        let first_names: Vec<_> = first.iter().map(|(n, _)| n.to_string()).collect();
+        let second_names: Vec<_> = second.iter().map(|(n, _)| n.to_string()).collect();
+        let third_names: Vec<_> = third.iter().map(|(n, _)| n.to_string()).collect();
 
         assert_eq!(first_names, second_names);
         assert_eq!(second_names, third_names);
-        assert_eq!(
-            first_names,
-            vec![
-                Symbol::new("a"),
-                Symbol::new("b"),
-                Symbol::new("c"),
-                Symbol::new("d"),
-                Symbol::new("e")
-            ]
-        );
+        assert_eq!(first_names, vec!["a", "b", "c", "d", "e"]);
     }
 
     // =========================================================================

@@ -404,18 +404,6 @@ impl PartialEq<SymbolPath> for &str {
     }
 }
 
-impl PartialEq<Symbol> for SymbolPath {
-    fn eq(&self, other: &Symbol) -> bool {
-        self.as_simple() == Some(other)
-    }
-}
-
-impl PartialEq<Symbol> for &SymbolPath {
-    fn eq(&self, other: &Symbol) -> bool {
-        **self == *other
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

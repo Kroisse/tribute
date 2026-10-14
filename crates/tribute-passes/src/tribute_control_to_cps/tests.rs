@@ -533,7 +533,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
     else {
         panic!("function metadata must preserve its nested source signature");
     };
-    assert_eq!(*function_tag, Symbol::new("function"));
+    assert_eq!(*function_tag, SymbolPath::from("function"));
     assert!(closure::Closure::matches(&ctx, *function_nested));
     assert!(
         ctx.get_type(physical.as_type_ref())

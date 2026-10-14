@@ -734,12 +734,12 @@ mod tests {
             .iter()
             .filter_map(|&op| func::Call::from_op(&ctx, op).ok())
             .collect();
-        let callees: Vec<_> = calls.iter().map(|call| call.callee(&ctx)).collect();
+        let callees: Vec<_> = calls.iter().map(|call| call.callee(&ctx).clone()).collect();
         assert_eq!(
             callees,
             [
-                Symbol::new(evidence_abi::MASK),
-                Symbol::new(evidence_abi::DUP)
+                SymbolPath::from(evidence_abi::MASK),
+                SymbolPath::from(evidence_abi::DUP)
             ]
         );
         let ability_ids: Vec<_> = calls
@@ -791,13 +791,13 @@ mod tests {
             .iter()
             .filter_map(|&op| func::Call::from_op(&ctx, op).ok())
             .collect();
-        let callees: Vec<_> = calls.iter().map(|call| call.callee(&ctx)).collect();
+        let callees: Vec<_> = calls.iter().map(|call| call.callee(&ctx).clone()).collect();
         assert_eq!(
             callees,
             [
-                Symbol::new(evidence_abi::TAIL),
-                Symbol::new(evidence_abi::PUSH),
-                Symbol::new(evidence_abi::WITH_TAIL)
+                SymbolPath::from(evidence_abi::TAIL),
+                SymbolPath::from(evidence_abi::PUSH),
+                SymbolPath::from(evidence_abi::WITH_TAIL)
             ]
         );
         let constant = |value: ValueRef| match ctx.value_def(value) {

@@ -86,11 +86,17 @@ fn both_planner_modes_reuse_one_cached_fact_set() {
 
     // The policy differs, so the plans differ...
     assert_eq!(
-        preserved.function(&Symbol::new("load")).unwrap().entries(),
+        preserved
+            .function(&SymbolPath::from("load"))
+            .unwrap()
+            .entries(),
         [EntryOwnership::Retained]
     );
     assert_eq!(
-        elided.function(&Symbol::new("load")).unwrap().entries(),
+        elided
+            .function(&SymbolPath::from("load"))
+            .unwrap()
+            .entries(),
         [EntryOwnership::Borrowed]
     );
     // ...while the policy-neutral facts are computed once and shared.

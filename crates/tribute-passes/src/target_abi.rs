@@ -2426,7 +2426,7 @@ mod tests {
             .copied()
             .find_map(|op| func::Call::from_op(ctx, op).ok())
             .expect("entry bridge must call the root worker");
-        assert_eq!(call.callee(ctx), Symbol::new(ROOT_MAIN_SYMBOL));
+        assert_eq!(*call.callee(ctx), SymbolPath::from(ROOT_MAIN_SYMBOL));
         assert_eq!(ctx.op_operands(call.op_ref()), [empty.result(ctx)]);
         // The bridge reads the worker's convention and does not record it on
         // the call it builds.
@@ -2457,7 +2457,7 @@ mod tests {
             .into_iter()
             .find_map(|op| func::Call::from_op(&ctx, op).ok())
             .unwrap();
-        assert_eq!(call.callee(&ctx), Symbol::new(ROOT_MAIN_SYMBOL));
+        assert_eq!(*call.callee(&ctx), SymbolPath::from(ROOT_MAIN_SYMBOL));
     }
 
     #[test]
@@ -2488,7 +2488,7 @@ mod tests {
         let [call] = calls.as_slice() else {
             panic!("Direct wrapper must make exactly one call");
         };
-        assert_eq!(call.callee(&ctx), Symbol::new(ROOT_MAIN_SYMBOL));
+        assert_eq!(*call.callee(&ctx), SymbolPath::from(ROOT_MAIN_SYMBOL));
         assert!(ctx.op_operands(call.op_ref()).is_empty());
         assert!(
             !ops.iter()
@@ -2499,7 +2499,10 @@ mod tests {
             .into_iter()
             .find_map(|op| func::Call::from_op(&ctx, op).ok())
             .unwrap();
-        assert_eq!(caller_call.callee(&ctx), Symbol::new(ROOT_MAIN_SYMBOL));
+        assert_eq!(
+            *caller_call.callee(&ctx),
+            SymbolPath::from(ROOT_MAIN_SYMBOL)
+        );
     }
 
     #[test]

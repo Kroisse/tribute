@@ -8,7 +8,7 @@ use tribute_front::SourceCst;
 fn named_operator_preserves_target_and_consumer_conventions(db: &salsa::DatabaseImpl) {
     use std::ops::ControlFlow;
     use tribute_ir::dialect::tribute_control::{self, CallingConvention};
-    use trunk_ir::Symbol;
+    use trunk_ir::SymbolPath;
     use trunk_ir::context::IrContext;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
@@ -48,7 +48,7 @@ fn main() -> Nil {{
                     panic!("expected named callback: {text}");
                 };
                 let reference = tribute_control::FuncRef::from_op(&ir, producer).unwrap();
-                assert_eq!(reference.func_ref(&ir), Symbol::new("std::Int::+"));
+                assert_eq!(*reference.func_ref(&ir), SymbolPath::from("std::Int::+"));
                 conventions.push(tribute_control::func_sig_convention(
                     &ir,
                     ir.value_ty(callback),

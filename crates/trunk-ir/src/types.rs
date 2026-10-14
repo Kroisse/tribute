@@ -1272,7 +1272,7 @@ mod tests {
         attrs.visit_symbol_refs(&mut |symbol| visited.push(symbol.clone()));
         assert_eq!(
             visited,
-            ["direct", "first", "nested"].map(Symbol::new).to_vec()
+            ["direct", "first", "nested"].map(SymbolPath::from).to_vec()
         );
     }
 

@@ -179,7 +179,7 @@ impl NativeOwnershipPlan {
         &self.rtti_types
     }
 
-    pub fn function(&self, symbol: &Symbol) -> Option<&FunctionOwnershipPlan> {
+    pub fn function(&self, symbol: &SymbolPath) -> Option<&FunctionOwnershipPlan> {
         self.functions
             .iter()
             .find(|function| function.symbol == *symbol)
