@@ -130,9 +130,9 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
         }
     }"#,
     );
-    assert!(plan.function(&SymbolPath::from("external")).is_none());
+    assert!(plan.function(&SymbolPath::new(["external"])).is_none());
     assert!(
-        plan.function(&SymbolPath::from("caller"))
+        plan.function(&SymbolPath::new(["caller"]))
             .unwrap()
             .actions()
             .is_empty()
@@ -277,8 +277,8 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
     .expect("preserved typed plan");
     let elided = production_plan(&ctx, module).expect("elided typed plan");
 
-    let preserved_forward = preserved.function(&SymbolPath::from("forward")).unwrap();
-    let elided_forward = elided.function(&SymbolPath::from("forward")).unwrap();
+    let preserved_forward = preserved.function(&SymbolPath::new(["forward"])).unwrap();
+    let elided_forward = elided.function(&SymbolPath::new(["forward"])).unwrap();
     assert_eq!(preserved_forward.entries(), [EntryOwnership::Retained]);
     assert_eq!(elided_forward.entries(), [EntryOwnership::Borrowed]);
     assert_eq!(count(preserved_forward, ActionKind::EntryAcquire), 1);
@@ -287,7 +287,7 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
     let load_op = ctx
         .op_region(
             elided
-                .function(&SymbolPath::from("load"))
+                .function(&SymbolPath::new(["load"]))
                 .unwrap()
                 .operation(),
             0,
@@ -295,8 +295,8 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
         .unwrap();
     let load = ctx.op_result(ctx.block(ctx.region(load_op).blocks[0]).ops[0], 0);
     let projection = ctx.block(ctx.region(load_op).blocks[0]).ops[0];
-    let preserved_load = preserved.function(&SymbolPath::from("load")).unwrap();
-    let elided_load = elided.function(&SymbolPath::from("load")).unwrap();
+    let preserved_load = preserved.function(&SymbolPath::new(["load"])).unwrap();
+    let elided_load = elided.function(&SymbolPath::new(["load"])).unwrap();
     assert!(preserved_load.actions().iter().any(|action| {
         action.kind == ActionKind::CopyAcquire
             && action.value == load
@@ -334,7 +334,7 @@ fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
   }
 }"#,
     );
-    let function = plan.function(&SymbolPath::from("capture")).unwrap();
+    let function = plan.function(&SymbolPath::new(["capture"])).unwrap();
     assert_eq!(
         function.entries(),
         [EntryOwnership::Retained, EntryOwnership::Plain]
@@ -362,7 +362,7 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
-    let capture = plan.function(&SymbolPath::from("capture")).unwrap();
+    let capture = plan.function(&SymbolPath::new(["capture"])).unwrap();
     assert_eq!(
         count(capture, ActionKind::EntryAcquire) + count(capture, ActionKind::StoreAcquire),
         2
@@ -428,7 +428,7 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
     );
     lower_evidence_to_native(&mut ctx, module);
     let mut plan = production_plan(&ctx, module).expect("typed ownership plan");
-    let install = plan.function(&SymbolPath::from("install")).unwrap();
+    let install = plan.function(&SymbolPath::new(["install"])).unwrap();
     let transfer = install
         .actions()
         .iter()
@@ -487,7 +487,7 @@ fn native_evidence_lowers_a_managed_dispatcher_to_into_raw() {
     );
     lower_evidence_to_native(&mut ctx, module);
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
-    let install = plan.function(&SymbolPath::from("install")).unwrap();
+    let install = plan.function(&SymbolPath::new(["install"])).unwrap();
     assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
     let lowered = print_module(&ctx, module.op());
     assert_eq!(
@@ -532,7 +532,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
   }
 }"#,
     );
-    let install = plan.function(&SymbolPath::from("install")).unwrap();
+    let install = plan.function(&SymbolPath::new(["install"])).unwrap();
     assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
     let transferred = install
         .actions()
@@ -597,7 +597,7 @@ fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
   }
 }"#,
     );
-    let function = plan.function(&SymbolPath::from("load")).unwrap();
+    let function = plan.function(&SymbolPath::new(["load"])).unwrap();
     let body = ctx.op_region(function.operation(), 0).unwrap();
     let block = ctx.region(body).blocks[0];
     let box_layout = ctx.type_alias_by_text("Box").unwrap();
@@ -633,7 +633,7 @@ fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfe
         ),
     ] {
         let (mut ctx, module, plan) = build(&into_raw_fixture(transfers));
-        let function = plan.function(&SymbolPath::from("transfers")).unwrap();
+        let function = plan.function(&SymbolPath::new(["transfers"])).unwrap();
         let transfer_actions = function
             .actions()
             .iter()
@@ -700,7 +700,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
         &mut Default::default(),
     )
     .expect("typed ownership plan with preserved field borrows");
-    let function = plan.function(&SymbolPath::from("transfers")).unwrap();
+    let function = plan.function(&SymbolPath::new(["transfers"])).unwrap();
     let transfers = function
         .actions()
         .iter()
@@ -850,14 +850,14 @@ fn duplicate_owning_destinations_and_null_are_explicit() {
   }
 }"#,
     );
-    let duplicate = plan.function(&SymbolPath::from("duplicate")).unwrap();
+    let duplicate = plan.function(&SymbolPath::new(["duplicate"])).unwrap();
     assert_eq!(count(duplicate, ActionKind::StoreAcquire), 2);
     assert_eq!(count(duplicate, ActionKind::ReturnTransfer), 1);
-    let null = plan.function(&SymbolPath::from("null")).unwrap();
+    let null = plan.function(&SymbolPath::new(["null"])).unwrap();
     assert_eq!(count(null, ActionKind::ReturnTransfer), 1);
     assert_eq!(count(null, ActionKind::EntryAcquire), 0);
     assert_eq!(count(null, ActionKind::FinalRelease), 0);
-    let replace = plan.function(&SymbolPath::from("replace")).unwrap();
+    let replace = plan.function(&SymbolPath::new(["replace"])).unwrap();
     assert_eq!(count(replace, ActionKind::StoreAcquire), 1);
     assert_eq!(count(replace, ActionKind::ReleaseReplacedField), 1);
 }
@@ -876,7 +876,7 @@ fn borrowed_load_return_acquires_a_transfer_unit() {
   }
 }"#,
     );
-    let function = plan.function(&SymbolPath::from("load")).unwrap();
+    let function = plan.function(&SymbolPath::new(["load"])).unwrap();
     assert_eq!(function.entries(), [EntryOwnership::Borrowed]);
     assert_eq!(count(function, ActionKind::BorrowLoad), 1);
     assert_eq!(count(function, ActionKind::CopyAcquire), 1);
@@ -890,7 +890,7 @@ fn box_child_projection(
     plan: &NativeOwnershipPlan,
     name: &'static str,
 ) -> (OpRef, ValueRef) {
-    let function = plan.function(&SymbolPath::from(name)).unwrap();
+    let function = plan.function(&SymbolPath::new([name])).unwrap();
     let body = ctx.op_region(function.operation(), 0).unwrap();
     let entry = ctx.region(body).blocks[0];
     let get = ctx.block(entry).ops[0];
@@ -926,7 +926,7 @@ fn projection_of_a_written_layout_keeps_its_own_unit() {
     // A writer in the same function, or anywhere else in the module, releases
     // the previous field value, so neither reader of `Box` may borrow it.
     for name in ["read_then_replace", "read_only"] {
-        let function = plan.function(&SymbolPath::from(name)).unwrap();
+        let function = plan.function(&SymbolPath::new([name])).unwrap();
         let (get, child) = box_child_projection(&ctx, &plan, name);
         assert_eq!(count(function, ActionKind::BorrowLoad), 0, "{name}");
         assert!(
@@ -938,7 +938,7 @@ fn projection_of_a_written_layout_keeps_its_own_unit() {
             "{name}"
         );
     }
-    let unwritten = plan.function(&SymbolPath::from("read_unwritten")).unwrap();
+    let unwritten = plan.function(&SymbolPath::new(["read_unwritten"])).unwrap();
     assert_eq!(count(unwritten, ActionKind::BorrowLoad), 1);
 
     let (get, old) = box_child_projection(&ctx, &plan, "read_then_replace");
@@ -961,7 +961,7 @@ fn borrowed_projection(
     plan: &NativeOwnershipPlan,
     name: &'static str,
 ) -> (OpRef, ValueRef, ValueRef) {
-    let function = plan.function(&SymbolPath::from(name)).unwrap();
+    let function = plan.function(&SymbolPath::new([name])).unwrap();
     let body = ctx.op_region(function.operation(), 0).unwrap();
     let mut gets = ctx.region(body).blocks.iter().flat_map(|&block| {
         ctx.block(block).ops.iter().copied().filter(|&op| {
@@ -1042,7 +1042,7 @@ fn borrowed_projection_proper_tail_transfer_acquires_before_the_owner_dies() {
     let (get, child, owner) = borrowed_projection(&ctx, &plan, "owner_dies");
     let (block, _) = op_position(&ctx, get);
     let tail = *ctx.block(block).ops.last().unwrap();
-    let dies = plan.function(&SymbolPath::from("owner_dies")).unwrap();
+    let dies = plan.function(&SymbolPath::new(["owner_dies"])).unwrap();
     assert!(has_action(
         dies,
         ActionKind::CopyAcquire,
@@ -1065,7 +1065,7 @@ fn borrowed_projection_proper_tail_transfer_acquires_before_the_owner_dies() {
     let (moves_get, moves_child, moves_owner) = borrowed_projection(&ctx, &plan, "owner_moves");
     let (moves_block, _) = op_position(&ctx, moves_get);
     let moves_tail = *ctx.block(moves_block).ops.last().unwrap();
-    let moves = plan.function(&SymbolPath::from("owner_moves")).unwrap();
+    let moves = plan.function(&SymbolPath::new(["owner_moves"])).unwrap();
     assert!(has_action(
         moves,
         ActionKind::CopyAcquire,
@@ -1119,7 +1119,7 @@ fn borrowed_projection_ordinary_call_to_a_consumed_parameter_acquires_its_unit()
     let (block, get_position) = op_position(&ctx, get);
     let call = ctx.block(block).ops[get_position + 1];
     assert!(func::Call::matches(&ctx, call));
-    let function = plan.function(&SymbolPath::from("load")).unwrap();
+    let function = plan.function(&SymbolPath::new(["load"])).unwrap();
     assert!(has_action(
         function,
         ActionKind::CallAcquire,
@@ -1168,7 +1168,7 @@ fn borrowed_projection_stored_in_an_aggregate_acquires_the_field_unit() {
     let (block, get_position) = op_position(&ctx, get);
     let store = ctx.block(block).ops[get_position + 1];
     assert!(adt::StructNew::matches(&ctx, store));
-    let function = plan.function(&SymbolPath::from("capture")).unwrap();
+    let function = plan.function(&SymbolPath::new(["capture"])).unwrap();
     assert!(has_action(
         function,
         ActionKind::StoreAcquire,
@@ -1210,7 +1210,7 @@ fn loop_carried_borrowed_projection_acquires_before_the_previous_owner_dies() {
 }"#,
     );
     let (_, next, current) = borrowed_projection(&ctx, &plan, "walk");
-    let function = plan.function(&SymbolPath::from("walk")).unwrap();
+    let function = plan.function(&SymbolPath::new(["walk"])).unwrap();
     let body = ctx.op_region(function.operation(), 0).unwrap();
     let latch = ctx.region(body).blocks[2];
     let back_edge = *ctx.block(latch).ops.last().unwrap();
@@ -1279,7 +1279,7 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
   }
 }"#,
     );
-    let function = plan.function(&SymbolPath::from("load")).unwrap();
+    let function = plan.function(&SymbolPath::new(["load"])).unwrap();
     assert_eq!(function.entries(), [EntryOwnership::Borrowed]);
     assert_eq!(count(function, ActionKind::BorrowLoad), 1);
     assert_eq!(count(function, ActionKind::CopyAcquire), 1);
@@ -1486,7 +1486,7 @@ fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
   }
 }"#,
     );
-    let function = plan.function(&SymbolPath::from("load")).unwrap();
+    let function = plan.function(&SymbolPath::new(["load"])).unwrap();
     let body = ctx.op_region(function.operation(), 0).unwrap();
     let [entry, next] = ctx.region(body).blocks.as_slice() else {
         panic!("two-block fixture")
@@ -1533,10 +1533,10 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
   }
 }"#,
     );
-    let branch = plan.function(&SymbolPath::from("branch")).unwrap();
+    let branch = plan.function(&SymbolPath::new(["branch"])).unwrap();
     assert_eq!(count(branch, ActionKind::CopyAcquire), 1);
     assert_eq!(count(branch, ActionKind::FinalRelease), 2);
-    let tail = plan.function(&SymbolPath::from("tail")).unwrap();
+    let tail = plan.function(&SymbolPath::new(["tail"])).unwrap();
     assert_eq!(count(tail, ActionKind::TailTransfer), 1);
     assert_eq!(count(tail, ActionKind::FinalRelease), 1);
     assert!(
@@ -1612,7 +1612,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
 }"#,
     );
     let branch_source = |name: &'static str| {
-        let function = plan.function(&SymbolPath::from(name)).unwrap();
+        let function = plan.function(&SymbolPath::new([name])).unwrap();
         let body = ctx.op_region(function.operation(), 0).unwrap();
         let entry = ctx.region(body).blocks[0];
         let branch = *ctx.block(entry).ops.last().unwrap();
@@ -1659,7 +1659,7 @@ fn function_blocks(
     plan: &NativeOwnershipPlan,
     name: &'static str,
 ) -> trunk_ir::BlockList {
-    let function = plan.function(&SymbolPath::from(name)).unwrap();
+    let function = plan.function(&SymbolPath::new([name])).unwrap();
     let body = ctx.op_region(function.operation(), 0).unwrap();
     ctx.region(body).blocks.clone()
 }
@@ -1754,7 +1754,7 @@ fn value_dying_on_an_edge_is_released_at_the_successor_start() {
     let value = entry_value("one_arm");
     let mut released_on_entry = vec![(*skip, value)];
     let call = ctx.block(*used).ops[0];
-    let one_arm = plan.function(&SymbolPath::from("one_arm")).unwrap();
+    let one_arm = plan.function(&SymbolPath::new(["one_arm"])).unwrap();
     assert_eq!(
         final_releases(one_arm, value),
         [ActionAnchor::After(call), ActionAnchor::BlockStart(*skip)]
@@ -1774,7 +1774,7 @@ fn value_dying_on_an_edge_is_released_at_the_successor_start() {
     let value = entry_value("nested");
     released_on_entry.extend([(*inner_skip, value), (*outer_skip, value)]);
     let call = ctx.block(*used).ops[0];
-    let nested = plan.function(&SymbolPath::from("nested")).unwrap();
+    let nested = plan.function(&SymbolPath::new(["nested"])).unwrap();
     assert_eq!(
         final_releases(nested, value),
         [
@@ -1791,7 +1791,7 @@ fn value_dying_on_an_edge_is_released_at_the_successor_start() {
     };
     let value = entry_value("loop_exit");
     released_on_entry.push((*exit, value));
-    let loop_exit = plan.function(&SymbolPath::from("loop_exit")).unwrap();
+    let loop_exit = plan.function(&SymbolPath::new(["loop_exit"])).unwrap();
     assert_eq!(
         final_releases(loop_exit, value),
         [ActionAnchor::BlockStart(*exit)]
@@ -1831,7 +1831,7 @@ fn borrowed_projection_owner_dying_on_an_edge_follows_the_selected_liveness_view
     // Borrowing keeps the owner live into the arm that reads the projection,
     // so the owner dies after that read or on the edge into the other arm.
     let elided = elided
-        .function(&SymbolPath::from("projection_one_arm"))
+        .function(&SymbolPath::new(["projection_one_arm"]))
         .unwrap();
     assert_eq!(
         final_releases(elided, owner),
@@ -1842,7 +1842,7 @@ fn borrowed_projection_owner_dying_on_an_edge_follows_the_selected_liveness_view
     // Without the borrow the projection owns a unit, and that unit is the one
     // that dies on the edge.
     let preserved = preserved
-        .function(&SymbolPath::from("projection_one_arm"))
+        .function(&SymbolPath::new(["projection_one_arm"]))
         .unwrap();
     assert_eq!(final_releases(preserved, owner), [ActionAnchor::After(get)]);
     assert_eq!(
@@ -1926,7 +1926,7 @@ fn cfg_accepts_conditional_branch_with_duplicate_successors() {
 }"#,
     );
     let function = plan
-        .function(&SymbolPath::from("duplicate_successor"))
+        .function(&SymbolPath::new(["duplicate_successor"]))
         .unwrap();
     assert_eq!(count(function, ActionKind::EntryAcquire), 0);
     assert_eq!(count(function, ActionKind::FinalRelease), 1);
@@ -1972,7 +1972,7 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
   }
 }"#,
     );
-    let function = plan.function(&SymbolPath::from("raw")).unwrap();
+    let function = plan.function(&SymbolPath::new(["raw"])).unwrap();
     assert_eq!(function.entries(), [EntryOwnership::Plain; 4]);
     assert!(function.actions().is_empty());
     for ty in ctx
@@ -2003,7 +2003,7 @@ fn bytes_is_a_managed_reference_with_its_own_units() {
 
     // `from_raw` yields a fresh owned value: the field takes its own unit and
     // the local one is released.
-    let wrap = plan.function(&SymbolPath::from("wrap")).unwrap();
+    let wrap = plan.function(&SymbolPath::new(["wrap"])).unwrap();
     let [from_raw, new, _] = ctx.block(function_blocks(&ctx, &plan, "wrap")[0]).ops[..] else {
         panic!("three-operation fixture")
     };
@@ -2080,7 +2080,7 @@ fn evidence_is_a_managed_reference_the_runtime_returns_owned() {
   }
 }"#,
     );
-    let derive = plan.function(&SymbolPath::from("derive")).unwrap();
+    let derive = plan.function(&SymbolPath::new(["derive"])).unwrap();
     let [mask, lookup, _] = ctx.block(function_blocks(&ctx, &plan, "derive")[0]).ops[..] else {
         panic!("three-operation fixture")
     };
@@ -2155,11 +2155,11 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
   }
 }"#,
     );
-    let caller = plan.function(&SymbolPath::from("caller")).unwrap();
+    let caller = plan.function(&SymbolPath::new(["caller"])).unwrap();
     assert_eq!(count(caller, ActionKind::CallBorrow), 1);
     assert_eq!(count(caller, ActionKind::CallRetain), 2);
     assert_eq!(count(caller, ActionKind::ReturnTransfer), 1);
-    let tail = plan.function(&SymbolPath::from("tail")).unwrap();
+    let tail = plan.function(&SymbolPath::new(["tail"])).unwrap();
     assert_eq!(count(tail, ActionKind::TailTransfer), 1);
     assert!(
         !tail
@@ -2193,13 +2193,13 @@ fn retained_parameter_calls_balance_retains_and_releases() {
 }"#,
     );
     assert_eq!(
-        plan.function(&SymbolPath::from("keep")).unwrap().entries(),
+        plan.function(&SymbolPath::new(["keep"])).unwrap().entries(),
         [EntryOwnership::Retained]
     );
     for caller in ["direct", "indirect"] {
         assert_eq!(
             count(
-                plan.function(&SymbolPath::from(caller)).unwrap(),
+                plan.function(&SymbolPath::new([caller])).unwrap(),
                 ActionKind::CallRetain
             ),
             1
@@ -2258,21 +2258,21 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     // A consumed managed input is Consumed; the marker on an unmanaged input
     // is inert.
     assert_eq!(
-        plan.function(&SymbolPath::from("sink")).unwrap().entries(),
+        plan.function(&SymbolPath::new(["sink"])).unwrap().entries(),
         [EntryOwnership::Consumed, EntryOwnership::Plain]
     );
     // An ordinary call acquires one unit per consumed destination, direct or
     // indirect, and leaves the caller's own unit live.
     assert_eq!(
         count(
-            plan.function(&SymbolPath::from("direct")).unwrap(),
+            plan.function(&SymbolPath::new(["direct"])).unwrap(),
             ActionKind::CallAcquire
         ),
         2
     );
     assert_eq!(
         count(
-            plan.function(&SymbolPath::from("indirect")).unwrap(),
+            plan.function(&SymbolPath::new(["indirect"])).unwrap(),
             ActionKind::CallAcquire
         ),
         1
@@ -2281,12 +2281,12 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     // parameters transfers one unit and acquires the other.
     assert_eq!(
         count(
-            plan.function(&SymbolPath::from("tail")).unwrap(),
+            plan.function(&SymbolPath::new(["tail"])).unwrap(),
             ActionKind::TailTransfer
         ),
         1
     );
-    let duplicate = plan.function(&SymbolPath::from("duplicate")).unwrap();
+    let duplicate = plan.function(&SymbolPath::new(["duplicate"])).unwrap();
     assert_eq!(count(duplicate, ActionKind::TailTransfer), 2);
     assert_eq!(count(duplicate, ActionKind::CopyAcquire), 1);
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
@@ -2347,7 +2347,7 @@ fn bodyless_c_ffi_borrows_managed_arguments_and_transfers_managed_results() {
   }
 }"#,
     );
-    let caller = plan.function(&SymbolPath::from("caller")).unwrap();
+    let caller = plan.function(&SymbolPath::new(["caller"])).unwrap();
     assert_eq!(count(caller, ActionKind::CallBorrow), 1);
     assert_eq!(count(caller, ActionKind::CallRetain), 0);
     assert_eq!(count(caller, ActionKind::ReturnTransfer), 1);
@@ -2655,7 +2655,7 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     stale_anchor.functions[0].actions[0].anchor = ActionAnchor::Before(module.op());
     assert!(stale_anchor.validate_against(&ctx, module).is_err());
 
-    let other = plan.function(&SymbolPath::from("other")).unwrap();
+    let other = plan.function(&SymbolPath::new(["other"])).unwrap();
     let other_body = ctx.op_region(other.operation, 0).unwrap();
     let other_entry = ctx.region(other_body).blocks[0];
     let mut stale_value = plan.clone();

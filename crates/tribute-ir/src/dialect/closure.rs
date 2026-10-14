@@ -308,7 +308,7 @@ mod tests {
 
         // Create closure.new with func_ref attribute
         let op = super::New::operands(env_val)
-            .func_ref(SymbolPath::from("my_func"))
+            .func_ref(SymbolPath::new(["my_func"]))
             .results(closure_ty)
             .build(&mut ctx, loc);
 
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(op.op_ref(), op2.op_ref());
 
         // Verify func_ref attribute
-        assert_eq!(*op.func_ref(&ctx), SymbolPath::from("my_func"));
+        assert_eq!(*op.func_ref(&ctx), SymbolPath::new(["my_func"]));
 
         // Verify result type
         let result = op.result(&ctx);
@@ -338,7 +338,7 @@ mod tests {
             .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
         let closure_op = super::New::operands(env_val)
-            .func_ref(SymbolPath::from("f"))
+            .func_ref(SymbolPath::new(["f"]))
             .results(closure_ty)
             .build(&mut ctx, loc);
         let closure_val = closure_op.result(&ctx);
@@ -375,7 +375,7 @@ mod tests {
             .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
         let closure_op = super::New::operands(env_val)
-            .func_ref(SymbolPath::from("f"))
+            .func_ref(SymbolPath::new(["f"]))
             .results(closure_ty)
             .build(&mut ctx, loc);
         let closure_val = closure_op.result(&ctx);
@@ -498,7 +498,7 @@ mod tests {
         let env_val = env_op.result(&ctx);
 
         let closure_new = super::New::operands(env_val)
-            .func_ref(SymbolPath::from("f"))
+            .func_ref(SymbolPath::new(["f"]))
             .results(closure_ty)
             .build(&mut ctx, loc);
 

@@ -349,7 +349,7 @@ mod tests {
         });
         for callee in callees {
             let call = func::Call::operands(std::iter::empty())
-                .callee(SymbolPath::from(*callee))
+                .callee(SymbolPath::new([*callee]))
                 .results([i32_ty])
                 .build(ctx, loc);
             ctx.push_op(entry, call.op_ref());
@@ -422,9 +422,10 @@ mod tests {
         );
 
         let g = build_call_graph(&ctx, module);
-        let [called, captured, listed] = ["called", "captured", "listed"].map(SymbolPath::from);
+        let [called, captured, listed] =
+            ["called", "captured", "listed"].map(|name| SymbolPath::new([name]));
         assert_eq!(
-            g.edges[&SymbolPath::from("holder")],
+            g.edges[&SymbolPath::new(["holder"])],
             [called.clone(), captured.clone(), listed.clone()]
                 .into_iter()
                 .collect::<HashSet<_>>()
@@ -453,14 +454,17 @@ mod tests {
         let module = build_module(&mut ctx, loc, vec![leaf, other, caller]);
         let mut analyses = AnalysisCache::new();
         let old = analyses.require::<CallGraph>(&ctx, module.op());
-        assert_eq!(old.call_site_count.get(&SymbolPath::from("leaf")), Some(&1));
+        assert_eq!(
+            old.call_site_count.get(&SymbolPath::new(["leaf"])),
+            Some(&1)
+        );
 
         let body = ctx.op_region(caller, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let call = ctx.block(block).ops[0];
         ctx.op_mut(call).attributes.insert(
             Symbol::new("callee"),
-            Attribute::SymbolRef(SymbolPath::from("other")),
+            Attribute::SymbolRef(SymbolPath::new(["other"])),
         );
         assert!(
             analyses
@@ -468,12 +472,15 @@ mod tests {
                 .is_none()
         );
         let fresh = analyses.require::<CallGraph>(&ctx, module.op());
-        assert_eq!(fresh.call_site_count.get(&SymbolPath::from("leaf")), None);
+        assert_eq!(fresh.call_site_count.get(&SymbolPath::new(["leaf"])), None);
         assert_eq!(
-            fresh.call_site_count.get(&SymbolPath::from("other")),
+            fresh.call_site_count.get(&SymbolPath::new(["other"])),
             Some(&1)
         );
-        assert_eq!(old.call_site_count.get(&SymbolPath::from("leaf")), Some(&1));
+        assert_eq!(
+            old.call_site_count.get(&SymbolPath::new(["leaf"])),
+            Some(&1)
+        );
         assert!(!std::sync::Arc::ptr_eq(&old, &fresh));
     }
 
@@ -495,9 +502,9 @@ mod tests {
             g.func_ops.keys().collect::<Vec<_>>()
         );
         // Unqualified symbol should not leak through.
-        assert!(!g.func_ops.contains_key(&SymbolPath::from("foo")));
+        assert!(!g.func_ops.contains_key(&SymbolPath::new(["foo"])));
         // Top-level function stays unqualified.
-        assert!(g.func_ops.contains_key(&SymbolPath::from("top")));
+        assert!(g.func_ops.contains_key(&SymbolPath::new(["top"])));
     }
 
     #[test]
@@ -527,8 +534,8 @@ mod tests {
         for (caller, callees) in &direct.edges {
             assert_eq!(Some(callees), cached.edges.get(caller));
         }
-        assert!(cached.func_ops.contains_key(&SymbolPath::from("leaf")));
-        assert!(cached.edges.contains_key(&SymbolPath::from("main")));
+        assert!(cached.func_ops.contains_key(&SymbolPath::new(["leaf"])));
+        assert!(cached.edges.contains_key(&SymbolPath::new(["main"])));
 
         // Second call should hit the cache.
         let cached2 = am.require::<CallGraph>(&ctx, module.op());
@@ -562,7 +569,7 @@ mod tests {
         let g = build_call_graph(&ctx, module);
         let outer = SymbolPath::new(["outer", "same"]);
         let inner = SymbolPath::new(["outer", "inner", "same"]);
-        assert!(g.edges[&SymbolPath::from("main")].contains(&outer));
+        assert!(g.edges[&SymbolPath::new(["main"])].contains(&outer));
         assert!(g.edges[&outer].contains(&inner));
         assert_eq!(g.call_site_count[&inner], 2);
         // Only the innermost function calls itself.
@@ -591,8 +598,8 @@ mod tests {
 }"#,
         );
         let g = build_call_graph(&ctx, module);
-        assert!(!g.func_ops.contains_key(&SymbolPath::from("twice")));
+        assert!(!g.func_ops.contains_key(&SymbolPath::new(["twice"])));
         // Calls in each duplicate body are still recorded.
-        assert_eq!(g.call_site_count[&SymbolPath::from("leaf")], 1);
+        assert_eq!(g.call_site_count[&SymbolPath::new(["leaf"])], 1);
     }
 }

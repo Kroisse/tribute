@@ -159,7 +159,7 @@ pub(super) fn build_suffix_rebound(
     ctx.push_op(block, done_op);
     let outer_dispatch = frame_dispatch(ctx, block, location, &boundary, args[1]);
     let dispatch = func::Call::operands([completion, outer_dispatch])
-        .callee(dispatch_factory.into())
+        .callee(trunk_ir::SymbolPath::new([dispatch_factory]))
         .results([value.dispatch])
         .build(ctx, location);
     set_calling_convention(ctx, dispatch.op_ref(), CallingConvention::Direct);
@@ -398,7 +398,7 @@ impl ExpandSuffixFrames {
             .build(ctx, location);
         ctx.push_op(block, completion.op_ref());
         let dispatch = func::Call::operands([completion.result(ctx), outer_dispatch])
-            .callee(symbol.into())
+            .callee(trunk_ir::SymbolPath::new([symbol]))
             .results([value.dispatch])
             .build(ctx, location);
         tribute_core::set_calling_convention(

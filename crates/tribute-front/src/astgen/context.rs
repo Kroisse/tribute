@@ -135,7 +135,7 @@ impl<'db> AstLoweringCtx<'db> {
         {
             return SymbolPath::new([owner, operator]);
         }
-        SymbolPath::from(self.node_symbol(node))
+        SymbolPath::new([self.node_symbol(node)])
     }
 
     /// Get a Symbol from a node's text, without the `r#` of raw identifiers.

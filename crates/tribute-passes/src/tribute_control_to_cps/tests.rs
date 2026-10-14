@@ -87,7 +87,7 @@ fn operation_declarations(
         .iter()
         .map(|&(ability_name, op_name)| {
             tribute_control::OperationDeclaration::new(
-                SymbolPath::from(ability_name),
+                SymbolPath::new([ability_name]),
                 ctx.intern_str(op_name),
                 ctx.intern_str("op"),
                 [i32_type],
@@ -533,7 +533,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
     else {
         panic!("function metadata must preserve its nested source signature");
     };
-    assert_eq!(*function_tag, SymbolPath::from("function"));
+    assert_eq!(*function_tag, SymbolPath::new(["function"]));
     assert!(closure::Closure::matches(&ctx, *function_nested));
     assert!(
         ctx.get_type(physical.as_type_ref())
@@ -1587,7 +1587,7 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
     let never = core::never(&mut ctx).as_type_ref();
     let raw_type = func::func_sig(&mut ctx, [], [never]).as_type_ref();
     let raw = func::Constant::operands()
-        .func_ref(SymbolPath::from("raw"))
+        .func_ref(SymbolPath::new(["raw"]))
         .results(raw_type)
         .build(&mut ctx, location);
     let before = ctx.block(module_block).ops.clone();
@@ -1687,7 +1687,7 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
     let (mut ctx, module) = parse(input);
     let marked: AttributeMap = [(
         Symbol::new("k"),
-        Attribute::SymbolRef(SymbolPath::from("v")),
+        Attribute::SymbolRef(SymbolPath::new(["v"])),
     )]
     .into_iter()
     .collect();

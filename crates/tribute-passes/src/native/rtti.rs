@@ -299,7 +299,7 @@ pub(crate) fn generate_rtti(
 
 /// The release function of an RTTI index.
 fn release_fn_symbol(rtti_idx: u32) -> SymbolPath {
-    SymbolPath::from(format!("{RELEASE_FN_PREFIX}{rtti_idx}").as_str())
+    SymbolPath::new([format!("{RELEASE_FN_PREFIX}{rtti_idx}").as_str()])
 }
 
 /// Build `__tribute_deep_release(payload_ptr, alloc_size)`.
@@ -379,7 +379,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
         .build(ctx, loc);
     push(ctx, entry, entry_offset.op_ref());
     let table = clif::SymbolAddr::operands()
-        .sym(SymbolPath::from(RTTI_TABLE))
+        .sym(SymbolPath::new([RTTI_TABLE]))
         .results(tys.ptr)
         .build(ctx, loc);
     push(ctx, entry, table.op_ref());
@@ -426,7 +426,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
     push(ctx, shallow, branch.op_ref());
 
     let call = clif::Call::operands([raw_ptr, alloc_size])
-        .callee(SymbolPath::from(DEALLOC_FN))
+        .callee(SymbolPath::new([DEALLOC_FN]))
         .results([tys.nil])
         .build(ctx, loc);
     push(ctx, dealloc, call.op_ref());
@@ -854,7 +854,7 @@ fn generate_reference_array_release_function(
         .build(ctx, loc);
     ctx.push_op(done, raw_ptr.op_ref());
     let dealloc = clif::Call::operands([raw_ptr.result(ctx), size.result(ctx)])
-        .callee(SymbolPath::from(DEALLOC_FN))
+        .callee(SymbolPath::new([DEALLOC_FN]))
         .results([tys.nil])
         .build(ctx, loc);
     ctx.push_op(done, dealloc.op_ref());
@@ -918,7 +918,7 @@ fn gen_dealloc_and_return_with_size(
     }
 
     let dealloc_call = clif::Call::operands([raw_ptr.result(ctx), size])
-        .callee(SymbolPath::from(DEALLOC_FN))
+        .callee(SymbolPath::new([DEALLOC_FN]))
         .results([nil_ty])
         .build(ctx, loc);
     ctx.push_op(block, dealloc_call.op_ref());

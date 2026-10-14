@@ -321,10 +321,10 @@ impl ModuleSpec {
                 if function.nested {
                     SymbolPath::new(["m", function.name.as_str()])
                 } else {
-                    SymbolPath::from(function.name.as_str())
+                    SymbolPath::new([function.name.as_str()])
                 }
             })
-            .chain((0..EXTERNALS).map(|index| SymbolPath::from(format!("ext{index}").as_str())))
+            .chain((0..EXTERNALS).map(|index| SymbolPath::new([format!("ext{index}").as_str()])))
             .collect()
     }
 

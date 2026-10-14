@@ -101,7 +101,7 @@ fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: boo
     init_calls.push(init_sym);
     for callee in init_calls.into_iter().rev() {
         let call = func::Call::operands([])
-            .callee(callee.into())
+            .callee(trunk_ir::SymbolPath::new([callee]))
             .results([nil_ty])
             .build(ctx, loc);
         prepend_op(ctx, entry, call.op_ref());
@@ -121,7 +121,7 @@ fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: boo
             if sanitize {
                 // Report the allocations the program left live.
                 let exit = func::Call::operands([])
-                    .callee(asan_exit_sym.clone().into())
+                    .callee(trunk_ir::SymbolPath::new([asan_exit_sym.clone()]))
                     .results([nil_ty])
                     .build(ctx, location);
                 ctx.insert_op_before(block, ret, exit.op_ref());

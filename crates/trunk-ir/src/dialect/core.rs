@@ -335,7 +335,7 @@ mod canonicalize_tests {
         let metadata = AttributeMap::from_iter([
             (
                 Symbol::new("tag"),
-                Attribute::SymbolRef(SymbolPath::from("kept")),
+                Attribute::SymbolRef(SymbolPath::new(["kept"])),
             ),
             (
                 Symbol::new("nested"),

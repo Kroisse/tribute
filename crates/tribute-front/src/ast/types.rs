@@ -170,7 +170,7 @@ impl<'db> TypeKind<'db> {
     pub fn string(db: &'db dyn salsa::Database) -> Self {
         let name = Symbol::new("String");
         Self::Named {
-            id: TypeDefId::synthetic(db, SymbolPath::from(&name)),
+            id: TypeDefId::synthetic(db, SymbolPath::new([name.clone()])),
             name,
             args: vec![],
         }

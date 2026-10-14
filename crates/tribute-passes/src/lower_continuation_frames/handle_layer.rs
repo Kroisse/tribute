@@ -217,7 +217,7 @@ fn push_layer_frame(
     let mut args = vec![values.completion, exit_frame, values.prompt, outer_evidence];
     args.extend(values.arms.iter().copied());
     let dispatch = func::Call::operands(args)
-        .callee(layer.dispatch_factory.clone().into())
+        .callee(SymbolPath::new([layer.dispatch_factory.clone()]))
         .results([value.dispatch])
         .build(ctx, location);
     set_calling_convention(ctx, dispatch.op_ref(), CallingConvention::Direct);
@@ -367,7 +367,7 @@ fn call_layer_resume_factory(
     let anyref = anyref_type(ctx);
     let resume_type = cps_resume_type(ctx, evidence_type, layer.frames.boundary.reference, anyref);
     let resume = func::Call::operands(args)
-        .callee(symbol.into())
+        .callee(SymbolPath::new([symbol]))
         .results([resume_type])
         .build(ctx, location);
     set_calling_convention(ctx, resume.op_ref(), CallingConvention::Direct);

@@ -199,7 +199,7 @@ impl RewritePattern for WritePattern {
             return false;
         };
         let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
-            .callee(SymbolPath::from(WRITE_HELPER))
+            .callee(SymbolPath::new([WRITE_HELPER]))
             .results([ctx.op_result_types(op)[0]])
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(call.op_ref());
@@ -473,7 +473,7 @@ fn write_loop(
     let one_iovec = i32_const(ctx, loop_block, loc, i32_ty, 1);
     let nwritten = i32_const(ctx, loop_block, loc, i32_ty, NWRITTEN_OFFSET);
     let call = wasm_dialect::Call::operands([stdout, iovec, one_iovec, nwritten])
-        .callee(SymbolPath::from(FD_WRITE))
+        .callee(SymbolPath::new([FD_WRITE]))
         .results([i32_ty])
         .build(ctx, loc);
     ctx.push_op(loop_block, call.op_ref());

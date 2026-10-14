@@ -924,7 +924,7 @@ mod tests {
         let mut attrs = AttributeMap::new();
         attrs.insert(
             Symbol::new("note"),
-            Attribute::SymbolRef(SymbolPath::from("kept")),
+            Attribute::SymbolRef(SymbolPath::new(["kept"])),
         );
         let platform = func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs);
         assert_eq!(platform.call_conv(&ctx), Some(CallConv::Platform));
@@ -945,7 +945,7 @@ mod tests {
         let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
         let marked: AttributeMap = [(
             Symbol::new("k"),
-            Attribute::SymbolRef(SymbolPath::from("v")),
+            Attribute::SymbolRef(SymbolPath::new(["v"])),
         )]
         .into_iter()
         .collect();
@@ -1172,12 +1172,12 @@ mod result_list_tests {
         for results in [vec![], vec![nil]] {
             let signature = func_sig(&mut ctx, [], results.clone()).as_type_ref();
             let callee = Constant::operands()
-                .func_ref(SymbolPath::from("f"))
+                .func_ref(SymbolPath::new(["f"]))
                 .results(signature)
                 .build(&mut ctx, loc)
                 .result(&ctx);
             let direct = Call::operands([])
-                .callee(SymbolPath::from("f"))
+                .callee(SymbolPath::new(["f"]))
                 .results(results.clone())
                 .build(&mut ctx, loc);
             let indirect = CallIndirect::operands(callee, [])

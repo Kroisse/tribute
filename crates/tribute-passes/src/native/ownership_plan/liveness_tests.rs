@@ -365,11 +365,11 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
     assert_eq!(liveness.computed_views(), (true, true));
     assert_ne!(
         preserved
-            .function(&SymbolPath::from("load"))
+            .function(&SymbolPath::new(["load"]))
             .unwrap()
             .actions(),
         field_borrows
-            .function(&SymbolPath::from("load"))
+            .function(&SymbolPath::new(["load"]))
             .unwrap()
             .actions()
     );

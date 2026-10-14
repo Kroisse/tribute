@@ -136,7 +136,7 @@ fn sample() -> Module<u32> {
                             callee: expr(
                                 63,
                                 ExprKind::Functions {
-                                    name: SymbolPath::from("m"),
+                                    name: SymbolPath::new(["m"]),
                                     candidates: vec![],
                                 },
                             ),

@@ -227,7 +227,7 @@ impl Converter<'_> {
             .results(empty_env_ty)
             .build(self.ctx, location);
         let closure_new = closure::New::operands(empty_env.result(self.ctx))
-            .func_ref(adapter_symbol.into())
+            .func_ref(trunk_ir::SymbolPath::new([adapter_symbol]))
             .results(closure_ty)
             .build(self.ctx, location);
         set_calling_convention(self.ctx, closure_new.op_ref(), result_convention);

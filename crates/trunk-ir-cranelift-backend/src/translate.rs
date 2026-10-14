@@ -88,7 +88,8 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         // References name functions by root-qualified path; a foreign
         // declaration still links under its own external symbol.
         let local_name = func_wrapped.sym_name(ctx);
-        let name_sym = qualified_name(ctx, func_op).unwrap_or_else(|| SymbolPath::from(local_name));
+        let name_sym =
+            qualified_name(ctx, func_op).unwrap_or_else(|| SymbolPath::new([local_name]));
         let func_type_ref = func_wrapped.r#type(ctx);
 
         let shape = classify_callable_body(ctx, func_op).map_err(|error| {
@@ -126,7 +127,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     for data in collect_clif_data(ctx, module) {
         // References name data objects by root-qualified path, like functions.
         let symbol = qualified_name(ctx, data.op_ref())
-            .unwrap_or_else(|| SymbolPath::from(data.sym_name(ctx)));
+            .unwrap_or_else(|| SymbolPath::new([data.sym_name(ctx)]));
         let data_id = obj_module
             .declare_data(
                 &symbol.to_string(),
@@ -179,7 +180,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         let func_wrapped = clif::Func::from_op(ctx, func_op)
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = qualified_name(ctx, func_op)
-            .unwrap_or_else(|| SymbolPath::from(func_wrapped.sym_name(ctx)));
+            .unwrap_or_else(|| SymbolPath::new([func_wrapped.sym_name(ctx)]));
         let CallableBody::Definition {
             region: func_body, ..
         } = classify_callable_body(ctx, func_op).map_err(|error| {
@@ -415,7 +416,9 @@ fn declare_runtime_functions(
     alloc_sig.returns.push(cl_ir::AbiParam::new(ptr_ty));
 
     let alloc_sym = Symbol::new("__tribute_alloc");
-    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(alloc_sym.into()) {
+    if let std::collections::hash_map::Entry::Vacant(e) =
+        func_ids.entry(SymbolPath::new([alloc_sym]))
+    {
         let func_id = obj_module
             .declare_function("__tribute_alloc", Linkage::Import, &alloc_sig)
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
@@ -428,7 +431,9 @@ fn declare_runtime_functions(
     dealloc_sig.params.push(cl_ir::AbiParam::new(i64_ty));
 
     let dealloc_sym = Symbol::new("__tribute_dealloc");
-    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(dealloc_sym.into()) {
+    if let std::collections::hash_map::Entry::Vacant(e) =
+        func_ids.entry(SymbolPath::new([dealloc_sym]))
+    {
         let func_id = obj_module
             .declare_function("__tribute_dealloc", Linkage::Import, &dealloc_sig)
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;

@@ -578,7 +578,7 @@ mod mechanics {
         });
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(SymbolPath::from("helper"))
+                .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
             let result = call.result(ctx);
@@ -639,7 +639,7 @@ mod mechanics {
                 .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
             let call = func::Call::operands([c.result(ctx)])
-                .callee(SymbolPath::from("helper"))
+                .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
             let result = call.result(ctx);
@@ -724,7 +724,7 @@ mod mechanics {
                 .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
             let call = func::Call::operands([c.result(ctx)])
-                .callee(SymbolPath::from("helper"))
+                .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
             let result = call.result(ctx);
@@ -759,7 +759,7 @@ mod mechanics {
         });
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
             let tc = func::TailCall::operands(std::iter::empty())
-                .callee(SymbolPath::from("helper"))
+                .callee(SymbolPath::new(["helper"]))
                 .build(ctx, loc);
             ctx.push_op(entry, tc.op_ref());
         });
@@ -796,7 +796,7 @@ mod mechanics {
         );
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(SymbolPath::from("helper"))
+                .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
             let result = call.result(ctx);
@@ -932,10 +932,9 @@ mod pass {
         Module::new(ctx, module_op).unwrap()
     }
 
-    fn count_calls_to(ctx: &IrContext, func_op: OpRef, callee: impl Into<SymbolPath>) -> usize {
+    fn count_calls_to(ctx: &IrContext, func_op: OpRef, target: SymbolPath) -> usize {
         use crate::walk::{WalkAction, walk_region};
         use std::ops::ControlFlow;
-        let target = callee.into();
         let mut count = 0;
         let body = ctx.op_region(func_op, 0).unwrap();
         let _ = walk_region::<()>(ctx, body, &mut |op| {
@@ -967,7 +966,7 @@ mod pass {
         });
         let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(SymbolPath::from("helper"))
+                .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -980,7 +979,7 @@ mod pass {
         let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 1);
-        assert_eq!(count_calls_to(&ctx, main, "helper"), 0);
+        assert_eq!(count_calls_to(&ctx, main, SymbolPath::new(["helper"])), 0);
     }
 
     #[test]
@@ -1034,7 +1033,7 @@ mod pass {
 
         let f = build_func(&mut ctx, loc, "f", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(SymbolPath::from("f"))
+                .callee(SymbolPath::new(["f"]))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -1047,7 +1046,7 @@ mod pass {
         let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
-        assert_eq!(count_calls_to(&ctx, f, "f"), 1);
+        assert_eq!(count_calls_to(&ctx, f, SymbolPath::new(["f"])), 1);
     }
 
     #[test]
@@ -1075,7 +1074,7 @@ mod pass {
 
         let other = build_func(&mut ctx, loc, "other", &[], i32_ty, |ctx, entry, _args| {
             let c = func::Constant::operands()
-                .func_ref(SymbolPath::from("helper"))
+                .func_ref(SymbolPath::new(["helper"]))
                 .results(helper_fn_ty)
                 .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
@@ -1090,7 +1089,7 @@ mod pass {
 
         let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(SymbolPath::from("helper"))
+                .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -1105,7 +1104,7 @@ mod pass {
         let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
-        assert_eq!(count_calls_to(&ctx, main, "helper"), 1);
+        assert_eq!(count_calls_to(&ctx, main, SymbolPath::new(["helper"])), 1);
     }
 
     #[test]
@@ -1131,7 +1130,7 @@ mod pass {
         // Two call sites so single-call-site rule doesn't trigger.
         let a = build_func(&mut ctx, loc, "a", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(SymbolPath::from("helper"))
+                .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -1141,7 +1140,7 @@ mod pass {
         });
         let b = build_func(&mut ctx, loc, "b", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(SymbolPath::from("helper"))
+                .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -1193,7 +1192,7 @@ mod pass {
 
         let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(SymbolPath::from("helper"))
+                .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -1232,7 +1231,7 @@ mod pass {
         // Seed the cache by pulling the graph once.
         let pre = am.require::<CallGraph>(&ctx, module.op());
         assert_eq!(
-            pre.call_site_count.get(&SymbolPath::from("helper")),
+            pre.call_site_count.get(&SymbolPath::new(["helper"])),
             Some(&1)
         );
 
@@ -1246,7 +1245,7 @@ mod pass {
         let post = am
             .get_cached::<CallGraph>(&ctx, module.op())
             .expect("driver must leave a fresh graph cached after the pass");
-        assert_eq!(post.call_site_count.get(&SymbolPath::from("helper")), None);
+        assert_eq!(post.call_site_count.get(&SymbolPath::new(["helper"])), None);
         // And a subsequent explicit `get` must coincide with the cached
         // Arc (no recomputation).
         let fetched = am.require::<CallGraph>(&ctx, module.op());
@@ -1334,7 +1333,7 @@ mod pass {
         for name in ["a", "b"] {
             let f = post
                 .func_ops
-                .get(&SymbolPath::from(name))
+                .get(&SymbolPath::new([name]))
                 .copied()
                 .unwrap_or_else(|| panic!("{name} must be in the graph"));
             let body = ctx.op_region(f, 0).unwrap();
@@ -1453,7 +1452,7 @@ mod pass {
         // fold pattern erased it in the same applicator sweep.
         let main_op = graph
             .func_ops
-            .get(&SymbolPath::from("main"))
+            .get(&SymbolPath::new(["main"]))
             .copied()
             .expect("main must be in the graph");
         let body = ctx.op_region(main_op, 0).unwrap();

@@ -13,7 +13,7 @@ fn test_db() -> salsa::DatabaseImpl {
 
 /// Create an AbilityId for testing (with empty module path).
 fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-    AbilityId::source(db, trunk_ir::SymbolPath::from(name))
+    AbilityId::source(db, trunk_ir::SymbolPath::new([name]))
 }
 
 /// Create a fresh type variable for testing.
@@ -172,7 +172,7 @@ fn test_unify_named_types_rejects_builtin_and_source_with_same_spelling() {
         TypeKind::Named {
             id: TypeDefId::source(
                 &db,
-                trunk_ir::SymbolPath::from(&name),
+                trunk_ir::SymbolPath::new([name.clone()]),
                 crate::ast::NodeId::from_raw(1),
             ),
             name,

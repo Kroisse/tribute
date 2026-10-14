@@ -92,7 +92,7 @@ fn collect_clif_function_signatures(
                 let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
                 // References resolve by root-qualified path.
                 let name = qualified_name(ctx, op)
-                    .unwrap_or_else(|| SymbolPath::from(function.sym_name(ctx)));
+                    .unwrap_or_else(|| SymbolPath::new([function.sym_name(ctx)]));
                 let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
                     .expect("schema-verified clif.func_sig");
                 if functions.insert(name.clone(), signature).is_some() {
@@ -224,7 +224,7 @@ fn validate_clif_function(
     errors: &mut Vec<String>,
 ) -> Option<clif::FuncSig> {
     let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
-    let name = qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::from(function.sym_name(ctx)));
+    let name = qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::new([function.sym_name(ctx)]));
     let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
         .expect("schema-verified clif.func_sig");
     let has_abi = ctx.op(op).attributes.contains_key("abi");
@@ -297,8 +297,8 @@ fn validate_clif_region(
             }
             if let Ok(data) = clif::Data::from_op(ctx, op) {
                 // Data objects link under their root-qualified path.
-                let name =
-                    qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::from(data.sym_name(ctx)));
+                let name = qualified_name(ctx, op)
+                    .unwrap_or_else(|| SymbolPath::new([data.sym_name(ctx)]));
                 if name
                     .as_simple()
                     .is_some_and(|name| RESERVED_RUNTIME_SYMBOLS.contains(&name.as_str()))

@@ -102,7 +102,7 @@ impl<'db> InstanceKeys<'db> {
         let class_variables = settle_class_variables(definitions);
         // A definition is its own instance with every class `Cps`, except
         // root `main`: nothing instantiates its row, so its tail is empty.
-        let root = FuncDefId::new(db, SymbolPath::from(ROOT_MAIN));
+        let root = FuncDefId::new(db, SymbolPath::new([ROOT_MAIN]));
         let row_classes = class_variables
             .iter()
             .map(|(id, variables)| {
@@ -655,7 +655,7 @@ mod tests {
     }
 
     fn id<'db>(db: &'db TestDb, name: &str) -> FuncDefId<'db> {
-        FuncDefId::new(db, trunk_ir::SymbolPath::from(name))
+        FuncDefId::new(db, trunk_ir::SymbolPath::new([name]))
     }
 
     #[test]
@@ -734,7 +734,7 @@ mod tests {
         let int = Type::new(&db, TypeKind::Int);
         let stored = func(&db, vec![], int, open(&db, 1));
         let ability = Effect {
-            ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::from("State")),
+            ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::new(["State"])),
             args: vec![stored],
         };
         let callback = func(&db, vec![int], int, open(&db, 1));

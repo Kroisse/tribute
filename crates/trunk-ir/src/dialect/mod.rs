@@ -85,7 +85,7 @@ mod tests {
 
         // Create func.call with variadic args
         let call = super::func::Call::operands([v1, v2])
-            .callee(SymbolPath::from("add"))
+            .callee(SymbolPath::new(["add"]))
             .results([i32_ty])
             .build(&mut ctx, loc);
 
@@ -95,7 +95,7 @@ mod tests {
         assert_eq!(call.op_ref(), call2.op_ref());
 
         // Verify callee attribute
-        assert_eq!(*call.callee(&ctx), crate::SymbolPath::from("add"));
+        assert_eq!(*call.callee(&ctx), crate::SymbolPath::new(["add"]));
 
         // Verify variadic args
         let args = call.args(&ctx);
@@ -348,7 +348,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         let call = super::wasm::Call::operands([])
-            .callee(SymbolPath::from("multi_return"))
+            .callee(SymbolPath::new(["multi_return"]))
             .results([i32_ty, i32_ty])
             .build(&mut ctx, loc);
 
@@ -632,7 +632,7 @@ mod tests {
                     &[
                         (
                             NUM_INPUTS_ATTR,
-                            Attribute::SymbolRef(SymbolPath::from("one")),
+                            Attribute::SymbolRef(SymbolPath::new(["one"])),
                         ),
                         (NUM_RESULTS_ATTR, Attribute::Int(0)),
                     ],

@@ -364,7 +364,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .unwrap();
         let hidden_id = TypeDefId::source(
             db,
-            trunk_ir::SymbolPath::from(&hidden_decl.name),
+            trunk_ir::SymbolPath::new([hidden_decl.name.clone()]),
             hidden_decl.id,
         );
         let hidden = Type::new(
@@ -378,11 +378,11 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         let row = EffectRow::single(
             db,
             Effect {
-                ability_id: AbilityId::source(db, trunk_ir::SymbolPath::from("Marker")),
+                ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Marker"])),
                 args: vec![hidden],
             },
         );
-        let ctor = CtorId::new(db, trunk_ir::SymbolPath::from("Value"));
+        let ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["Value"]));
         for removal in [false, true] {
             let mut schemas: HashMap<_, _> = input
                 .constructor_types(db)
@@ -567,7 +567,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .iter()
                 .copied()
                 .collect();
-            let ctor = CtorId::new(db, trunk_ir::SymbolPath::from(constructor));
+            let ctor = CtorId::new(db, trunk_ir::SymbolPath::new([constructor]));
             for kind in [
                 InstanceErrorKind::MissingInstance,
                 InstanceErrorKind::WrongDeclaration,

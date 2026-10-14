@@ -268,7 +268,7 @@ mod tests {
         );
         ctx.op_mut(module.op()).attributes.insert(
             "entry",
-            Attribute::SymbolRef(SymbolPath::from("named_by_module")),
+            Attribute::SymbolRef(SymbolPath::new(["named_by_module"])),
         );
 
         eliminate_dead_functions(&mut ctx, module, &mut Default::default());
@@ -276,7 +276,7 @@ mod tests {
         assert_eq!(
             surviving_functions(&ctx, module),
             ["exported", "captured", "named_by_module"]
-                .map(SymbolPath::from)
+                .map(|name| SymbolPath::new([name]))
                 .into_iter()
                 .collect::<HashSet<_>>()
         );
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(result.removed_functions, [SymbolPath::new(["b", "same"])]);
         assert_eq!(
             surviving_functions(&ctx, module),
-            [SymbolPath::from("main"), SymbolPath::new(["a", "same"])]
+            [SymbolPath::new(["main"]), SymbolPath::new(["a", "same"])]
                 .into_iter()
                 .collect::<HashSet<_>>()
         );
@@ -378,8 +378,8 @@ mod tests {
         assert_eq!(
             HashSet::<SymbolPath>::from_iter(result.removed_functions),
             [
-                SymbolPath::from("dead_host"),
-                SymbolPath::from("dead_inner")
+                SymbolPath::new(["dead_host"]),
+                SymbolPath::new(["dead_inner"])
             ]
             .into_iter()
             .collect::<HashSet<_>>()
@@ -387,9 +387,9 @@ mod tests {
         assert_eq!(
             surviving_functions(&ctx, module),
             [
-                SymbolPath::from("main"),
-                SymbolPath::from("host"),
-                SymbolPath::from("inner")
+                SymbolPath::new(["main"]),
+                SymbolPath::new(["host"]),
+                SymbolPath::new(["inner"])
             ]
             .into_iter()
             .collect::<HashSet<_>>()

@@ -354,25 +354,6 @@ impl std::fmt::Debug for SymbolPath {
     }
 }
 
-/// A single name is the path of a definition in the root module.
-impl From<Symbol> for SymbolPath {
-    fn from(name: Symbol) -> Self {
-        SymbolPath(smallvec::smallvec![name])
-    }
-}
-
-impl From<&Symbol> for SymbolPath {
-    fn from(name: &Symbol) -> Self {
-        SymbolPath::from(name.clone())
-    }
-}
-
-impl From<&str> for SymbolPath {
-    fn from(name: &str) -> Self {
-        SymbolPath::from(Symbol::new(name))
-    }
-}
-
 impl From<&SymbolPath> for SymbolPath {
     fn from(path: &SymbolPath) -> Self {
         path.clone()
@@ -463,14 +444,14 @@ mod tests {
         assert_eq!(path.as_simple(), None);
 
         // A qualified name is one component, not the modules it spells.
-        let flat = SymbolPath::from("outer::inner::same");
+        let flat = SymbolPath::new(["outer::inner::same"]);
         assert!(flat.is_simple());
         assert_eq!(flat.as_simple(), Some(&Symbol::new("outer::inner::same")));
         assert_ne!(flat, path);
-        assert_ne!(path, SymbolPath::from("outer::inner::same"));
+        assert_ne!(path, SymbolPath::new(["outer::inner::same"]));
         assert_eq!(flat.to_symbol(), path.to_symbol());
 
-        let simple = SymbolPath::from("a");
+        let simple = SymbolPath::new(["a"]);
         assert!(simple < SymbolPath::new(["a", "b"]));
         assert_eq!(std::mem::size_of::<SymbolPath>(), 24);
         assert_eq!(std::mem::size_of::<crate::types::Attribute>(), 32);
@@ -490,7 +471,7 @@ mod tests {
 
         let outer = root.child("outer");
         assert!(root < outer);
-        assert_eq!(outer, SymbolPath::from("outer"));
+        assert_eq!(outer, SymbolPath::new(["outer"]));
         assert_eq!(outer.parent(), Some(root));
         let same = outer.child("inner").child("same");
         assert_eq!(same, SymbolPath::new(["outer", "inner", "same"]));
@@ -499,7 +480,7 @@ mod tests {
             same.sibling("other"),
             SymbolPath::new(["outer", "inner", "other"])
         );
-        assert_eq!(outer.sibling("other"), SymbolPath::from("other"));
+        assert_eq!(outer.sibling("other"), SymbolPath::new(["other"]));
 
         let mut stack = SymbolPath::root();
         stack.push("outer");
@@ -517,8 +498,8 @@ mod tests {
         assert!(path == ["std", "io", "Io"]);
         assert!(path != ["std::io::Io"]);
         assert!(path != ["std", "io"]);
-        assert!(SymbolPath::from("std::io::Io") == ["std::io::Io"]);
-        assert!(SymbolPath::from("main") == [crate::symbol!("main")]);
+        assert!(SymbolPath::new(["std::io::Io"]) == ["std::io::Io"]);
+        assert!(SymbolPath::new(["main"]) == [crate::symbol!("main")]);
         let root = SymbolPath::root();
         assert!(root == <[&str; 0]>::default());
         let by_ref: &SymbolPath = &path;

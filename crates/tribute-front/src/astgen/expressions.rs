@@ -186,7 +186,7 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
         return method_call(
             ctx,
             &op_node,
-            SymbolPath::from(method),
+            SymbolPath::new([method]),
             lhs,
             vec![rhs],
             CallSyntax::Operator,
@@ -377,7 +377,7 @@ fn lower_field_access(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unre
     method_call(
         ctx,
         &field_node,
-        SymbolPath::from(field),
+        SymbolPath::new([field]),
         expr,
         vec![],
         CallSyntax::Method,
@@ -748,7 +748,7 @@ fn lower_handler_operation_path(
     let ability = operation
         .parent()
         .filter(|ability| !ability.is_root())
-        .unwrap_or_else(|| SymbolPath::from("_"));
+        .unwrap_or_else(|| SymbolPath::new(["_"]));
     let ability_id = ctx.fresh_id_with_span(&op_node);
     Some((UnresolvedName::new(ability, ability_id), op_name))
 }

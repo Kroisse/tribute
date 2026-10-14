@@ -1204,7 +1204,7 @@ fn collect_function_signatures(
             let Some(sym_name) = data
                 .attributes
                 .get_str(ctx, &sym_name_key)
-                .map(SymbolPath::from)
+                .map(|name| SymbolPath::new([name]))
             else {
                 continue;
             };
@@ -1436,7 +1436,7 @@ mod tests {
         let bodyless = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
             .attr(
                 Symbol::new("sym_name"),
-                Attribute::SymbolRef(SymbolPath::from("m")),
+                Attribute::SymbolRef(SymbolPath::new(["m"])),
             )
             .build(&mut ctx);
         let bodyless = ctx.create_op(bodyless);

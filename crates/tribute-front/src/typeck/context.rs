@@ -174,7 +174,7 @@ impl<'db> ModuleTypeEnv<'db> {
             list_ty,
         );
         let mut type_defs = HashMap::default();
-        type_defs.insert(SymbolPath::from(list_name), list_scheme);
+        type_defs.insert(SymbolPath::new([list_name]), list_scheme);
         type_defs.insert(SymbolPath::new(["std", "collections", "List"]), list_scheme);
 
         Self {
@@ -742,7 +742,7 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Create a named type.
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
-        self.named_type_in_scope(SymbolPath::from(name), args, &SymbolPath::root())
+        self.named_type_in_scope(SymbolPath::new([name]), args, &SymbolPath::root())
     }
 
     /// The named type a type annotation's path names. Name resolution spells
@@ -817,10 +817,14 @@ mod tests {
     fn string_type_fallback_ignores_user_string(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
         let name = Symbol::new("String");
-        let user_id = TypeDefId::source(db, trunk_ir::SymbolPath::from(&name), NodeId::from_raw(1));
+        let user_id = TypeDefId::source(
+            db,
+            trunk_ir::SymbolPath::new([name.clone()]),
+            NodeId::from_raw(1),
+        );
         let user_ty = env.named_type_with_id(user_id, name.clone(), vec![]);
         env.register_type_def(
-            trunk_ir::SymbolPath::from(name),
+            trunk_ir::SymbolPath::new([name]),
             TypeScheme::mono(db, user_ty),
         );
 
@@ -837,9 +841,9 @@ mod tests {
         let mut env = ModuleTypeEnv::new(db);
 
         // Insert in non-alphabetical order
-        let func_z = FuncDefId::new(db, trunk_ir::SymbolPath::from("zebra"));
-        let func_a = FuncDefId::new(db, trunk_ir::SymbolPath::from("alpha"));
-        let func_m = FuncDefId::new(db, trunk_ir::SymbolPath::from("middle"));
+        let func_z = FuncDefId::new(db, trunk_ir::SymbolPath::new(["zebra"]));
+        let func_a = FuncDefId::new(db, trunk_ir::SymbolPath::new(["alpha"]));
+        let func_m = FuncDefId::new(db, trunk_ir::SymbolPath::new(["middle"]));
 
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
@@ -861,9 +865,9 @@ mod tests {
     fn test_export_function_types_with_ids_sorted(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
 
-        let func_z = FuncDefId::new(db, trunk_ir::SymbolPath::from("zebra"));
-        let func_a = FuncDefId::new(db, trunk_ir::SymbolPath::from("alpha"));
-        let func_m = FuncDefId::new(db, trunk_ir::SymbolPath::from("middle"));
+        let func_z = FuncDefId::new(db, trunk_ir::SymbolPath::new(["zebra"]));
+        let func_a = FuncDefId::new(db, trunk_ir::SymbolPath::new(["alpha"]));
+        let func_m = FuncDefId::new(db, trunk_ir::SymbolPath::new(["middle"]));
 
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
@@ -885,9 +889,9 @@ mod tests {
     fn test_export_constructor_types_sorted(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
 
-        let ctor_z = CtorId::new(db, trunk_ir::SymbolPath::from("Zebra"));
-        let ctor_a = CtorId::new(db, trunk_ir::SymbolPath::from("Alpha"));
-        let ctor_m = CtorId::new(db, trunk_ir::SymbolPath::from("Middle"));
+        let ctor_z = CtorId::new(db, trunk_ir::SymbolPath::new(["Zebra"]));
+        let ctor_a = CtorId::new(db, trunk_ir::SymbolPath::new(["Alpha"]));
+        let ctor_m = CtorId::new(db, trunk_ir::SymbolPath::new(["Middle"]));
 
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
@@ -992,9 +996,9 @@ mod tests {
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
 
-        env.register_type_def(trunk_ir::SymbolPath::from("Zebra"), scheme);
-        env.register_type_def(trunk_ir::SymbolPath::from("Alpha"), scheme);
-        env.register_type_def(trunk_ir::SymbolPath::from("Middle"), scheme);
+        env.register_type_def(trunk_ir::SymbolPath::new(["Zebra"]), scheme);
+        env.register_type_def(trunk_ir::SymbolPath::new(["Alpha"]), scheme);
+        env.register_type_def(trunk_ir::SymbolPath::new(["Middle"]), scheme);
 
         let exported = env.export_type_defs();
 
@@ -1016,9 +1020,9 @@ mod tests {
         let int_ty = Type::new(db, TypeKind::Int);
         let fields = vec![(Symbol::new("x"), int_ty)];
 
-        let zebra = TypeDefId::synthetic(db, trunk_ir::SymbolPath::from("Zebra"));
-        let alpha = TypeDefId::synthetic(db, trunk_ir::SymbolPath::from("Alpha"));
-        let middle = TypeDefId::synthetic(db, trunk_ir::SymbolPath::from("Middle"));
+        let zebra = TypeDefId::synthetic(db, trunk_ir::SymbolPath::new(["Zebra"]));
+        let alpha = TypeDefId::synthetic(db, trunk_ir::SymbolPath::new(["Alpha"]));
+        let middle = TypeDefId::synthetic(db, trunk_ir::SymbolPath::new(["Middle"]));
         env.register_struct_fields(zebra, vec![], fields.clone());
         env.register_struct_fields(alpha, vec![], fields.clone());
         env.register_struct_fields(middle, vec![], fields);
@@ -1038,9 +1042,9 @@ mod tests {
 
         let variants = vec![Symbol::new("A"), Symbol::new("B")];
 
-        env.register_enum_variants(trunk_ir::SymbolPath::from("Zebra"), variants.clone());
-        env.register_enum_variants(trunk_ir::SymbolPath::from("Alpha"), variants.clone());
-        env.register_enum_variants(trunk_ir::SymbolPath::from("Middle"), variants);
+        env.register_enum_variants(trunk_ir::SymbolPath::new(["Zebra"]), variants.clone());
+        env.register_enum_variants(trunk_ir::SymbolPath::new(["Alpha"]), variants.clone());
+        env.register_enum_variants(trunk_ir::SymbolPath::new(["Middle"]), variants);
 
         let exported = env.export_enum_variants();
 
@@ -1061,7 +1065,7 @@ mod tests {
 
         // Add items in random order
         for name in ["d", "b", "e", "a", "c"] {
-            let func_id = FuncDefId::new(db, trunk_ir::SymbolPath::from(name));
+            let func_id = FuncDefId::new(db, trunk_ir::SymbolPath::new([name]));
             env.register_function(func_id, scheme);
         }
 
@@ -1089,7 +1093,7 @@ mod tests {
         Type::new(
             db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(db, trunk_ir::SymbolPath::from(name)),
+                id: crate::ast::TypeDefId::synthetic(db, trunk_ir::SymbolPath::new([name])),
                 name: Symbol::new(name),
                 args: vec![],
             },

@@ -440,7 +440,7 @@ mod tests {
         assert!(wasm_dialect::Return::matches(&ctx, ret));
         ctx.op_mut(ret).attributes.insert(
             Symbol::new("callee"),
-            Attribute::SymbolRef(SymbolPath::from("helper")),
+            Attribute::SymbolRef(SymbolPath::new(["helper"])),
         );
 
         let error = collect_function_references(&ctx, module)

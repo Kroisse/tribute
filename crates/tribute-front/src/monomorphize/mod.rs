@@ -702,7 +702,7 @@ mod tests {
                 effect: EffectRow::pure(&db),
             },
         );
-        let ability = AbilityId::source(&db, trunk_ir::SymbolPath::from("Audit"));
+        let ability = AbilityId::source(&db, trunk_ir::SymbolPath::new(["Audit"]));
         let operation = |kind| InstantiatedHandlerOperation {
             ability,
             ability_args: vec![bound],

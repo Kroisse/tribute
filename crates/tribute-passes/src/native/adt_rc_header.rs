@@ -138,7 +138,7 @@ impl RewritePattern for StructNewPattern {
 
         // 2. Call __tribute_alloc
         let call_op = clif::Call::operands([size_val])
-            .callee(SymbolPath::from(ALLOC_FN))
+            .callee(SymbolPath::new([ALLOC_FN]))
             .results([self.ptr_ty])
             .build(ctx, loc);
         let raw_ptr = call_op.results(ctx)[0];
@@ -297,7 +297,7 @@ impl RewritePattern for VariantNewPattern {
 
         // 2. Call __tribute_alloc
         let call_op = clif::Call::operands([size_val])
-            .callee(SymbolPath::from(ALLOC_FN))
+            .callee(SymbolPath::new([ALLOC_FN]))
             .results([self.ptr_ty])
             .build(ctx, loc);
         let raw_ptr = call_op.results(ctx)[0];

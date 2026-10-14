@@ -436,7 +436,7 @@ fn gen_deep_release_call(
 
     // call @__tribute_deep_release(payload_ptr, size)
     let call = clif::Call::operands([payload_ptr, size.result(ctx)])
-        .callee(SymbolPath::from(DEEP_RELEASE_FN))
+        .callee(SymbolPath::new([DEEP_RELEASE_FN]))
         .results([nil_ty])
         .build(ctx, loc);
     ctx.push_op(block, call.op_ref());

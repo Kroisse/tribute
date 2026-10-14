@@ -414,10 +414,10 @@ mod tests {
     ) -> TypeRewriteMap<'db> {
         let mut map = TypeRewriteMap::default();
         for (name, args, mangled) in entries {
-            let id = TypeDefId::synthetic(db, SymbolPath::from(name));
+            let id = TypeDefId::synthetic(db, SymbolPath::new([name]));
             map.entry(id)
                 .or_default()
-                .push((args, SymbolPath::from(mangled)));
+                .push((args, SymbolPath::new([mangled])));
         }
         map
     }
@@ -429,7 +429,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Option")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Option"])),
                 name: Symbol::new("Option"),
                 args: vec![int],
             },
@@ -456,7 +456,7 @@ mod tests {
         let source = |name: &str, node| {
             TypeDefId::source(
                 &db,
-                trunk_ir::SymbolPath::from(name),
+                trunk_ir::SymbolPath::new([name]),
                 crate::ast::NodeId::from_raw(node),
             )
         };
@@ -499,7 +499,7 @@ mod tests {
             Type::new(
                 &db,
                 TypeKind::Named {
-                    id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from(name)),
+                    id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new([name])),
                     name: Symbol::new(name),
                     args,
                 },
@@ -522,7 +522,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Option")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Option"])),
                 name: Symbol::new("Option"),
                 args: vec![int],
             },
@@ -564,7 +564,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Option")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Option"])),
                 name: Symbol::new("Option"),
                 args: vec![int],
             },
@@ -572,7 +572,7 @@ mod tests {
         let pair_option_int_bool = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Pair")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Pair"])),
                 name: Symbol::new("Pair"),
                 args: vec![option_int, bool_ty],
             },

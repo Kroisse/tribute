@@ -27,7 +27,7 @@ fn is_prepend_intrinsic(name: &SymbolPath) -> bool {
 }
 
 fn intrinsic_declaration(name: &SymbolPath) -> Option<SymbolPath> {
-    is_prepend_intrinsic(name).then(|| SymbolPath::from(PREPEND_INTRINSIC))
+    is_prepend_intrinsic(name).then(|| SymbolPath::new([PREPEND_INTRINSIC]))
 }
 
 #[derive(Default)]
@@ -58,8 +58,10 @@ impl Pass for LowerListIntrinsics {
                 continue;
             };
             let name = Symbol::new(function.sym_name(ctx));
-            intrinsic_declarations.all.insert(name.clone().into());
-            if is_prepend_intrinsic(&SymbolPath::from(&name))
+            intrinsic_declarations
+                .all
+                .insert(SymbolPath::new([name.clone()]));
+            if is_prepend_intrinsic(&SymbolPath::new([name.clone()]))
                 && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
                     == Some(PREPEND_INTRINSIC)
                 && {
@@ -79,7 +81,9 @@ impl Pass for LowerListIntrinsics {
                         && ctx.op(op).attributes.get_str(ctx, "abi") == Some("intrinsic")
                 }
             {
-                intrinsic_declarations.eligible.insert(name.into());
+                intrinsic_declarations
+                    .eligible
+                    .insert(SymbolPath::new([name]));
             }
         }
         let intrinsic_declarations = Rc::new(intrinsic_declarations);
@@ -157,7 +161,9 @@ impl RewritePattern for PrependDeclarationPattern {
         if !self
             .intrinsic_declarations
             .eligible
-            .contains(&SymbolPath::from(&Symbol::new(function.sym_name(ctx))))
+            .contains(&SymbolPath::new([
+                Symbol::new(function.sym_name(ctx)).clone()
+            ]))
         {
             return false;
         }

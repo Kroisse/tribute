@@ -416,8 +416,8 @@ pub fn compose_root_entry_bridge(
         return Ok(());
     };
     let top_level_ops = ctx.block(module_block).ops.clone();
-    let main = SymbolPath::from("main");
-    let root_main = SymbolPath::from(ROOT_MAIN_SYMBOL);
+    let main = SymbolPath::new(["main"]);
+    let root_main = SymbolPath::new([ROOT_MAIN_SYMBOL]);
     let mut roots = top_level_ops.iter().copied().filter(|&op| {
         func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == "main")
     });
@@ -861,7 +861,7 @@ impl TerminalFunctions {
         let closure_struct_ty = crate::closure_lower::closure_struct_type_ref(ctx);
         let mut member = |ctx: &mut IrContext, symbol: &Symbol, function_ty, closure_ty| {
             let constant = func::Constant::operands()
-                .func_ref(symbol.clone().into())
+                .func_ref(SymbolPath::new([symbol.clone()]))
                 .results(function_ty)
                 .build(ctx, location);
             ops.push(constant.op_ref());
@@ -2296,7 +2296,7 @@ mod tests {
         assert!(func::Call::from_op(&ctx, call).is_ok());
         assert_eq!(
             ctx.op(call).attributes.get_symbol_ref("callee"),
-            Some(&SymbolPath::from(ROOT_MAIN_SYMBOL))
+            Some(&SymbolPath::new([ROOT_MAIN_SYMBOL]))
         );
         let worker_callable = func::FuncSig::from_type_ref(&ctx, worker.r#type(&ctx)).unwrap();
         let [worker_evidence, worker_frame] = worker_callable.inputs(&ctx) else {
@@ -2427,7 +2427,7 @@ mod tests {
             .copied()
             .find_map(|op| func::Call::from_op(ctx, op).ok())
             .expect("entry bridge must call the root worker");
-        assert_eq!(*call.callee(ctx), SymbolPath::from(ROOT_MAIN_SYMBOL));
+        assert_eq!(*call.callee(ctx), SymbolPath::new([ROOT_MAIN_SYMBOL]));
         assert_eq!(ctx.op_operands(call.op_ref()), [empty.result(ctx)]);
         // The bridge reads the worker's convention and does not record it on
         // the call it builds.
@@ -2458,7 +2458,7 @@ mod tests {
             .into_iter()
             .find_map(|op| func::Call::from_op(&ctx, op).ok())
             .unwrap();
-        assert_eq!(*call.callee(&ctx), SymbolPath::from(ROOT_MAIN_SYMBOL));
+        assert_eq!(*call.callee(&ctx), SymbolPath::new([ROOT_MAIN_SYMBOL]));
     }
 
     #[test]
@@ -2489,7 +2489,7 @@ mod tests {
         let [call] = calls.as_slice() else {
             panic!("Direct wrapper must make exactly one call");
         };
-        assert_eq!(*call.callee(&ctx), SymbolPath::from(ROOT_MAIN_SYMBOL));
+        assert_eq!(*call.callee(&ctx), SymbolPath::new([ROOT_MAIN_SYMBOL]));
         assert!(ctx.op_operands(call.op_ref()).is_empty());
         assert!(
             !ops.iter()
@@ -2502,7 +2502,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             *caller_call.callee(&ctx),
-            SymbolPath::from(ROOT_MAIN_SYMBOL)
+            SymbolPath::new([ROOT_MAIN_SYMBOL])
         );
     }
 

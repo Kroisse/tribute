@@ -201,7 +201,7 @@ mod tests {
 }"#,
         );
         let table = SymbolTable::collect(&ctx, module);
-        let flat = SymbolPath::from("outer::flat");
+        let flat = SymbolPath::new(["outer::flat"]);
         let nested = SymbolPath::new(["outer", "nested"]);
         for path in [&flat, &nested] {
             let op = table
@@ -210,7 +210,7 @@ mod tests {
             assert_eq!(qualified_name(&ctx, op).as_ref(), Some(path));
         }
         assert_eq!(table.resolve(&SymbolPath::new(["outer", "flat"])), None);
-        assert_eq!(table.resolve(&SymbolPath::from("outer::nested")), None);
+        assert_eq!(table.resolve(&SymbolPath::new(["outer::nested"])), None);
     }
 
     #[test]
@@ -220,7 +220,7 @@ mod tests {
         let table = SymbolTable::collect(&ctx, module);
 
         for path in [
-            SymbolPath::from("top"),
+            SymbolPath::new(["top"]),
             SymbolPath::new(["outer", "same"]),
             SymbolPath::new(["outer", "inner", "same"]),
         ] {
@@ -230,9 +230,9 @@ mod tests {
             assert_eq!(qualified_name(&ctx, op), Some(path));
         }
         // A reference is never resolved relative to a nested module.
-        assert_eq!(table.resolve(&SymbolPath::from("same")), None);
+        assert_eq!(table.resolve(&SymbolPath::new(["same"])), None);
         assert!(table.duplicates().is_empty());
-        assert_eq!(table.definitions_of(&SymbolPath::from("same")), &[]);
+        assert_eq!(table.definitions_of(&SymbolPath::new(["same"])), &[]);
     }
 
     #[test]
@@ -251,7 +251,7 @@ mod tests {
             assert_eq!(qualified_name(&ctx, op), Some(name).cloned());
         }
         assert!(table.resolve(&SymbolPath::new(["outer", "same"])).is_some());
-        assert!(table.resolve(&SymbolPath::from("same")).is_none());
+        assert!(table.resolve(&SymbolPath::new(["same"])).is_none());
     }
 
     #[test]
