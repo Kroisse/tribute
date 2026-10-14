@@ -419,13 +419,14 @@ pub fn compose_root_entry_bridge(
     let main = SymbolPath::from("main");
     let root_main = SymbolPath::from(ROOT_MAIN_SYMBOL);
     let mut roots = top_level_ops.iter().copied().filter(|&op| {
-        func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == main)
+        func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == "main")
     });
     let Some(worker_op) = roots.next() else {
         return Ok(());
     };
     if top_level_ops.iter().any(|&op| {
-        func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == root_main)
+        func::Func::from_op(ctx, op)
+            .is_ok_and(|function| function.sym_name(ctx) == ROOT_MAIN_SYMBOL)
     }) {
         return Err(TargetAbiError::new(
             "target root bridge: reserved root symbol collision",
@@ -1902,7 +1903,8 @@ mod tests {
     }
 
     fn is_worker_call(ctx: &IrContext, op: OpRef) -> bool {
-        func::Call::from_op(ctx, op).is_ok_and(|call| call.callee(ctx) == ROOT_MAIN_SYMBOL)
+        func::Call::from_op(ctx, op)
+            .is_ok_and(|call| call.callee(ctx).is_root_name(ROOT_MAIN_SYMBOL))
     }
 
     fn dispatch_fixture(answer_name: &str, frame_name: &str) -> (IrContext, Module, OpRef) {

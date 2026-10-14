@@ -96,7 +96,11 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         })?;
         let linkage = match shape {
             CallableBody::Declaration => Linkage::Import,
-            CallableBody::Definition { .. } if name_sym == "main" => Linkage::Export,
+            CallableBody::Definition { .. }
+                if name_sym.as_simple() == Some(&trunk_ir::symbol!("main")) =>
+            {
+                Linkage::Export
+            }
             CallableBody::Definition { .. } => Linkage::Local,
         };
 

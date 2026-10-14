@@ -54,7 +54,7 @@ impl RewritePattern for IoCallPattern {
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op).first().copied();
 
-        let replacement = if callee == WRITE_INTRINSIC {
+        let replacement = if callee.is_root_name(WRITE_INTRINSIC) {
             let (Some(result_ty), [bytes, newline]) = (result_ty, ctx.op_operands(op)) else {
                 return false;
             };
@@ -63,7 +63,7 @@ impl RewritePattern for IoCallPattern {
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if callee == READ_LINE_INTRINSIC {
+        } else if callee.is_root_name(READ_LINE_INTRINSIC) {
             let (Some(result_ty), []) = (result_ty, ctx.op_operands(op)) else {
                 return false;
             };

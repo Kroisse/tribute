@@ -315,6 +315,12 @@ impl SymbolPath {
         }
     }
 
+    /// Whether this is the definition `name` in the root module. It compares
+    /// the text of the only component.
+    pub fn is_root_name(&self, name: &str) -> bool {
+        self.as_simple().is_some_and(|leaf| leaf == name)
+    }
+
     /// Whether the path has no enclosing module.
     pub fn is_simple(&self) -> bool {
         self.0.len() == 1
@@ -379,31 +385,6 @@ impl From<&SymbolPath> for SymbolPath {
     }
 }
 
-/// A path equals a name when it is that name in the root module.
-impl PartialEq<str> for SymbolPath {
-    fn eq(&self, other: &str) -> bool {
-        self.as_simple().is_some_and(|name| name == other)
-    }
-}
-
-impl PartialEq<&str> for SymbolPath {
-    fn eq(&self, other: &&str) -> bool {
-        *self == **other
-    }
-}
-
-impl PartialEq<SymbolPath> for str {
-    fn eq(&self, other: &SymbolPath) -> bool {
-        other == self
-    }
-}
-
-impl PartialEq<SymbolPath> for &str {
-    fn eq(&self, other: &SymbolPath) -> bool {
-        other == *self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,9 +420,9 @@ mod tests {
         // A qualified name is one component, not the modules it spells.
         let flat = SymbolPath::from("outer::inner::same");
         assert!(flat.is_simple());
-        assert_eq!(flat, "outer::inner::same");
+        assert_eq!(flat.as_simple(), Some(&Symbol::new("outer::inner::same")));
         assert_ne!(flat, path);
-        assert_ne!(path, "outer::inner::same");
+        assert_ne!(path, SymbolPath::from("outer::inner::same"));
         assert_eq!(flat.to_symbol(), path.to_symbol());
 
         let simple = SymbolPath::from("a");
@@ -464,7 +445,7 @@ mod tests {
 
         let outer = root.child("outer");
         assert!(root < outer);
-        assert_eq!(outer, "outer");
+        assert_eq!(outer, SymbolPath::from("outer"));
         assert_eq!(outer.parent(), Some(root));
         let same = outer.child("inner").child("same");
         assert_eq!(same, SymbolPath::new(["outer", "inner", "same"]));
@@ -473,7 +454,7 @@ mod tests {
             same.sibling("other"),
             SymbolPath::new(["outer", "inner", "other"])
         );
-        assert_eq!(outer.sibling("other"), "other");
+        assert_eq!(outer.sibling("other"), SymbolPath::from("other"));
 
         let mut stack = SymbolPath::root();
         stack.push("outer");

@@ -68,7 +68,7 @@ fn local(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
     let scheme = output
         .function_types(db)
         .iter()
-        .find(|(name, _)| *name == "local")
+        .find(|(name, _)| name.is_root_name("local"))
         .unwrap()
         .1;
     let TypeKind::Func { params, .. } = scheme.body(db).kind(db) else {
@@ -182,7 +182,7 @@ fn main() ->{{}} Nil {{ handled({callback}) }}
         let scheme = output
             .function_types(db)
             .iter()
-            .find(|(name, _)| *name == "handled")
+            .find(|(name, _)| name.is_root_name("handled"))
             .unwrap()
             .1;
         assert!(scheme.row_removals(db).is_empty());
@@ -283,7 +283,7 @@ fn main() -> Nil { print(run_writer(fn() { relay(use_writer) })) }
     let main = output
         .function_types(db)
         .iter()
-        .find(|(name, _)| *name == "main")
+        .find(|(name, _)| name.is_root_name("main"))
         .unwrap()
         .1;
     assert!(

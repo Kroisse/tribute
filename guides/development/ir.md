@@ -270,7 +270,8 @@ module, and `SymbolPath::new(["left", "helper"])` is `helper` in the module
 component, a root definition whose name contains `::`. The printer writes
 `@left::@helper` for the nested path and `@"left::helper"` for the single
 name. Read a path with `leaf()`, `modules()`, `components()`, and
-`as_simple()`; `*path == "main"` holds only for the root definition `main`.
+`as_simple()`. A path is compared only with another path: `path.as_simple()` reads
+a root definition's name, which compares with a `Symbol` by its atom.
 The path without components, `SymbolPath::root()`, is the root module, and
 `parent()` is the module that encloses a path. Build a nested path with
 `module.child(name)`, replace the last component with `sibling(name)`, and

@@ -6211,7 +6211,7 @@ mod tests {
 
         let call = Call::from_op(&ctx, control_op(&ctx, module, "call")).unwrap();
         match call.evidence_plan(&ctx).unwrap().next() {
-            Some(EvidenceStep::Mask(state)) => assert_eq!(state, "State"),
+            Some(EvidenceStep::Mask(state)) => assert_eq!(state, SymbolPath::from("State")),
             other => panic!("expected a leading mask, found {other:?}"),
         }
         let steps: Vec<_> = call.evidence_plan(&ctx).unwrap().collect();

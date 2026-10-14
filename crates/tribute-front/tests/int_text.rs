@@ -682,7 +682,7 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         assert_eq!(signature.inputs(&ir), [data_type]);
         assert_eq!(signature.result(&ir), data_type);
         assert_eq!(signature.convention(&ir), CallingConvention::Direct);
-        assert_eq!(calls[0].callee(&ir), consumer.sym_name(&ir));
+        assert!(calls[0].callee(&ir).is_root_name(consumer.sym_name(&ir)));
         assert_eq!(
             calls[0].args(&ir)[0],
             value,

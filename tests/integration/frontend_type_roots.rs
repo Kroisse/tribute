@@ -64,7 +64,7 @@ fn prepare_root<'db>(
     let mut metadata = typed.expression_types(db).clone();
     let (_, scheme) = functions
         .iter_mut()
-        .find(|(name, _)| *name == "marker")
+        .find(|(name, _)| name.is_root_name("marker"))
         .unwrap();
     let instance = &mut metadata
         .function_instances
@@ -159,7 +159,7 @@ fn main() -> Nil { marker() }
     let marker = prepared
         .function_types(db)
         .iter()
-        .find(|(name, _)| *name == "marker")
+        .find(|(name, _)| name.is_root_name("marker"))
         .unwrap()
         .1;
     let instance = &prepared

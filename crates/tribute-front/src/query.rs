@@ -396,7 +396,7 @@ mod tests {
 
         let schemes = schemes.unwrap();
         assert!(
-            schemes.iter().any(|(name, _)| *name == "foo"),
+            schemes.iter().any(|(name, _)| name.is_root_name("foo")),
             "function_schemes should contain 'foo', got: {:?}",
             schemes
                 .iter()
@@ -420,7 +420,7 @@ fn explicit() ->{} Nil { Nil }
         let effect_of = |name: &str| {
             let (_, scheme) = schemes
                 .iter()
-                .find(|(symbol, _)| *symbol == name)
+                .find(|(symbol, _)| symbol.is_root_name(name))
                 .expect("function scheme should exist");
             let crate::ast::TypeKind::Func { effect, .. } = scheme.body(&db).kind(&db) else {
                 panic!("expected function type");
@@ -567,7 +567,7 @@ fn explicit() ->{} Nil { Nil }
         let schemes = schemes.unwrap();
         let add = schemes
             .iter()
-            .find(|(name, _)| *name == "add")
+            .find(|(name, _)| name.is_root_name("add"))
             .expect("should have 'add' scheme");
 
         let body = add.1.body(&db);
@@ -589,7 +589,7 @@ fn explicit() ->{} Nil { Nil }
         let schemes = schemes.unwrap();
         let inc_scheme = schemes
             .iter()
-            .find(|(name, _)| *name == "inc")
+            .find(|(name, _)| name.is_root_name("inc"))
             .expect("should have 'inc' scheme");
 
         let body = inc_scheme.1.body(&db);
@@ -628,7 +628,7 @@ fn explicit() ->{} Nil { Nil }
         let schemes = schemes.unwrap();
         let apply = schemes
             .iter()
-            .find(|(name, _)| *name == "apply")
+            .find(|(name, _)| name.is_root_name("apply"))
             .expect("should have 'apply' scheme");
 
         // type_params should contain a and b (in declaration order)

@@ -990,7 +990,11 @@ mod tests {
                 scheme.is_mono(&db),
                 "specialized scheme should have no type params"
             );
-            let expected = if *name == "identity$Int" { int } else { float };
+            let expected = if name.is_root_name("identity$Int") {
+                int
+            } else {
+                float
+            };
             assert_eq!(
                 scheme.row_unions(&db),
                 &vec![crate::ast::RowUnion {

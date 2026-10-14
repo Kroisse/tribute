@@ -565,7 +565,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
         let [Attribute::Type(nested), Attribute::SymbolRef(tag)] = pair.as_slice() else {
             return None;
         };
-        (*tag == "lambda").then_some(*nested)
+        tag.is_root_name("lambda").then_some(*nested)
     });
     assert!(
         lambda_metadata.is_some_and(|nested| closure::Closure::matches(&ctx, nested)),
@@ -1740,7 +1740,9 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
     let mut references = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
         if let Ok(constant) = func::Constant::from_op(&ctx, op)
-            && constant.func_ref(&ctx) == "__tribute_func_ref_adapter_0"
+            && constant
+                .func_ref(&ctx)
+                .is_root_name("__tribute_func_ref_adapter_0")
         {
             references.push(ctx.op_result_types(op)[0]);
         }

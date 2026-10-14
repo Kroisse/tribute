@@ -230,7 +230,9 @@ fn validate_clif_function(
     let has_abi = ctx.op(op).attributes.contains_key("abi");
     // External callers of foreign bindings and the exported entry point use
     // the platform convention.
-    if signature.call_conv(ctx) == Some(func::CallConv::Tail) && (has_abi || name == "main") {
+    if signature.call_conv(ctx) == Some(func::CallConv::Tail)
+        && (has_abi || name.as_simple() == Some(&trunk_ir::symbol!("main")))
+    {
         errors.push(format!(
             "clif.func @{name} is an external boundary and cannot use call_conv = \"tail\""
         ));
