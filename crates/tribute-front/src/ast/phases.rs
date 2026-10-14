@@ -113,7 +113,6 @@ impl LocalId {
 pub struct FuncDefId<'db> {
     /// The enclosing modules' names, then the function's own (e.g.
     /// `[foo, bar, func_name]`).
-    #[returns(ref)]
     pub path: SymbolPath,
 }
 
@@ -165,7 +164,6 @@ pub struct TypeDefId<'db> {
     pub origin: TypeOrigin,
     /// The enclosing modules' names, then the type's own (e.g.
     /// `[std, Option]`).
-    #[returns(ref)]
     pub path: SymbolPath,
 }
 
@@ -218,7 +216,6 @@ impl<'db> TypeDefId<'db> {
 pub struct CtorId<'db> {
     /// The enclosing modules' names, then the constructor's own (e.g.
     /// `[std, Some]`).
-    #[returns(ref)]
     pub path: SymbolPath,
 }
 
@@ -260,7 +257,6 @@ pub struct AbilityId<'db> {
     pub origin: AbilityOrigin,
     /// The enclosing modules' names, then the ability's own (e.g.
     /// `[std, state, State]`).
-    #[returns(ref)]
     pub path: SymbolPath,
 }
 
