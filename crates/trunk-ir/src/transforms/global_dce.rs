@@ -130,7 +130,7 @@ fn run(
 
     // A function containing a reachable function definition is kept with it.
     let mut kept = HashSet::default();
-    for (_, op) in functions().filter(|(name, _)| reachable.contains(name)) {
+    for (_, op) in functions().filter(|(name, _)| reachable.contains(*name)) {
         let mut current = Some(op);
         while let Some(op) = current
             && op != module.op()

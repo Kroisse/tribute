@@ -76,7 +76,7 @@ impl SymbolTable {
     /// The unique definition named by a root-qualified reference.
     ///
     /// Returns `None` for an unknown name or one defined more than once.
-    pub fn resolve(&self, reference: &SymbolPath) -> Option<OpRef> {
+    pub fn resolve(&self, reference: &[Symbol]) -> Option<OpRef> {
         match self.definitions_of(reference) {
             &[op] => Some(op),
             _ => None,
@@ -88,7 +88,7 @@ impl SymbolTable {
     ///
     /// For diagnostics that continue after [`Self::duplicates`] has already
     /// been reported; lowering must use [`Self::resolve`].
-    pub fn definitions_of(&self, reference: &SymbolPath) -> &[OpRef] {
+    pub fn definitions_of(&self, reference: &[Symbol]) -> &[OpRef] {
         self.definitions.get(reference).map_or(&[], |ops| ops)
     }
 

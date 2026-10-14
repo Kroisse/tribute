@@ -354,6 +354,24 @@ impl std::fmt::Debug for SymbolPath {
     }
 }
 
+/// A path reads as the slice of its components, so a function that only
+/// reads a path takes `&[Symbol]`.
+impl std::ops::Deref for SymbolPath {
+    type Target = [Symbol];
+
+    fn deref(&self) -> &[Symbol] {
+        &self.0
+    }
+}
+
+/// A map keyed by paths is looked up with a slice of components, which
+/// hashes and compares as the path does.
+impl std::borrow::Borrow<[Symbol]> for SymbolPath {
+    fn borrow(&self) -> &[Symbol] {
+        &self.0
+    }
+}
+
 impl From<&SymbolPath> for SymbolPath {
     fn from(path: &SymbolPath) -> Self {
         path.clone()
@@ -511,6 +529,21 @@ mod tests {
         assert!(path == components);
         assert!(by_ref == components);
         assert!(path != components[..2]);
+    }
+
+    #[test]
+    fn a_map_of_paths_is_looked_up_by_components() {
+        let path = SymbolPath::new(["outer", "inner"]);
+        let components = [Symbol::new("outer"), Symbol::new("inner")];
+        let mut map = rustc_hash::FxHashMap::default();
+        map.insert(path.clone(), 1);
+        assert_eq!(map.get(&components[..]), Some(&1));
+        assert_eq!(map.get(&components[..1]), None);
+        let mut ordered = std::collections::BTreeMap::new();
+        ordered.insert(path.clone(), 1);
+        assert_eq!(ordered.get(&components[..]), Some(&1));
+        assert_eq!(path.len(), 2);
+        assert_eq!(path.first(), Some(&Symbol::new("outer")));
     }
 
     #[test]

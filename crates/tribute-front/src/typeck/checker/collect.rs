@@ -86,15 +86,11 @@ impl<'db> TypeChecker<'db> {
                     // Name resolution recorded what the import names; a path
                     // written relative to the enclosing module must not be
                     // reread from the package root.
-                    let Some(target) = import
-                        .target
-                        .as_deref()
-                        .filter(|target| !target.is_empty())
-                        .map(|target| SymbolPath::new(target.iter().cloned()))
+                    let Some(target) = import.target.as_deref().filter(|target| !target.is_empty())
                     else {
                         continue;
                     };
-                    let Some(scheme) = self.env.lookup_type_def(&target) else {
+                    let Some(scheme) = self.env.lookup_type_def(target) else {
                         continue;
                     };
                     let name = import

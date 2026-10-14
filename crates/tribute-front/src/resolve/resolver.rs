@@ -223,11 +223,10 @@ impl<'db> Resolver<'db> {
     /// The binding a simple name has in the current scope, apart from local
     /// variables.
     fn lookup_simple(&self, sym: &Symbol) -> Option<&Binding<'db>> {
-        if !self.module_path.is_empty() {
-            let namespace = SymbolPath::new(self.module_path.iter().cloned());
-            if let Some(binding) = self.env.lookup_qualified(&namespace, sym) {
-                return Some(binding);
-            }
+        if !self.module_path.is_empty()
+            && let Some(binding) = self.env.lookup_qualified(&self.module_path, sym)
+        {
+            return Some(binding);
         }
 
         // Then the enclosing inline module's imports.
@@ -268,8 +267,7 @@ impl<'db> Resolver<'db> {
             return Ok(if path.is_empty() {
                 self.env.lookup(&sym)
             } else {
-                let namespace = SymbolPath::new(path.iter().cloned());
-                self.env.lookup_qualified(&namespace, &sym)
+                self.env.lookup_qualified(&path, &sym)
             });
         }
         Ok(self
@@ -405,10 +403,9 @@ impl<'db> Resolver<'db> {
         if self.module_path.is_empty() {
             return self.env.iter_all_names().collect();
         }
-        let namespace = SymbolPath::new(self.module_path.iter().cloned());
         let imports = self.module_imports.last();
         self.env
-            .iter_namespace(&namespace)
+            .iter_namespace(&self.module_path)
             .map(|(name, _)| name)
             .chain(
                 imports
@@ -422,8 +419,7 @@ impl<'db> Resolver<'db> {
     /// Whether the enclosing inline module itself defines `name`.
     fn defined_in_module(&self, name: &Symbol) -> bool {
         !self.module_path.is_empty() && {
-            let namespace = SymbolPath::new(self.module_path.iter().cloned());
-            self.env.lookup_qualified(&namespace, name).is_some()
+            self.env.lookup_qualified(&self.module_path, name).is_some()
         }
     }
 
@@ -500,8 +496,7 @@ impl<'db> Resolver<'db> {
         if namespace.is_empty() {
             return self.env.lookup(last);
         }
-        let namespace = SymbolPath::new(namespace.iter().cloned());
-        self.env.lookup_qualified(&namespace, last)
+        self.env.lookup_qualified(namespace, last)
     }
 
     /// Report a path whose keywords do not denote a module.
@@ -656,8 +651,7 @@ impl<'db> Resolver<'db> {
         if parent.is_empty() {
             return self.env.lookup(name);
         }
-        let namespace = SymbolPath::new(parent.iter().cloned());
-        self.env.lookup_qualified(&namespace, name)
+        self.env.lookup_qualified(parent, name)
     }
 
     /// Report a type or ability name an annotation cannot see.
@@ -1148,16 +1142,14 @@ impl<'db> Resolver<'db> {
             let Some((last, namespace)) = path.split_last() else {
                 return false;
             };
-            let full = SymbolPath::new(path.iter().cloned());
             // A single-segment path must name a definition: `env.lookup`
             // would also find the module placeholder this import inserted.
             let found = if namespace.is_empty() {
                 self.env.has_definition(last)
             } else {
-                let namespace = SymbolPath::new(namespace.iter().cloned());
-                self.env.lookup_qualified(&namespace, last).is_some()
+                self.env.lookup_qualified(namespace, last).is_some()
             };
-            found || self.env.has_namespace(&full)
+            found || self.env.has_namespace(path)
         };
         match absolute_path(self.package_depth, &self.module_path, path) {
             Ok(Some(path)) => return names(&path).then_some(path),

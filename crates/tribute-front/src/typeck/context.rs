@@ -265,19 +265,19 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Look up a type definition.
-    pub fn lookup_type_def(&self, path: &SymbolPath) -> Option<TypeScheme<'db>> {
+    pub fn lookup_type_def(&self, path: &[Symbol]) -> Option<TypeScheme<'db>> {
         self.type_defs.get(path).copied()
     }
 
     /// Look up a type definition from a lexical module scope.
     pub fn lookup_type_def_in_scope(
         &self,
-        path: &SymbolPath,
+        path: &[Symbol],
         prefix: &SymbolPath,
     ) -> Option<TypeScheme<'db>> {
         // Name resolution leaves a bare name only for a declaration of the
         // current module; the package root holds the rest.
-        if let Some(name) = path.as_simple()
+        if let [name] = path
             && !prefix.is_root()
             && let Some(scheme) = self.lookup_type_def(&prefix.child(name.clone()))
         {
@@ -374,7 +374,7 @@ impl<'db> ModuleTypeEnv<'db> {
     /// identity and type parameters, and the field's type.
     fn struct_field(
         &self,
-        owner: &SymbolPath,
+        owner: &[Symbol],
         field: &Symbol,
     ) -> Option<(TypeDefId<'db>, Vec<TypeParam>, Type<'db>)> {
         let TypeKind::Named { id, .. } = self.lookup_type_def(owner)?.body(self.db).kind(self.db)
@@ -411,7 +411,7 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Look up enum variants by enum name.
-    pub fn lookup_enum_variants(&self, enum_path: &SymbolPath) -> Option<&[Symbol]> {
+    pub fn lookup_enum_variants(&self, enum_path: &[Symbol]) -> Option<&[Symbol]> {
         self.enum_variants.get(enum_path).map(|v| v.as_slice())
     }
 

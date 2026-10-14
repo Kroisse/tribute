@@ -263,14 +263,14 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Look up a qualified path (e.g., "List::map").
-    pub fn lookup_qualified(&self, namespace: &SymbolPath, name: &Symbol) -> Option<&Binding<'db>> {
+    pub fn lookup_qualified(&self, namespace: &[Symbol], name: &Symbol) -> Option<&Binding<'db>> {
         self.namespaces.get(namespace)?.get(name)
     }
 
     /// Iterate over all bindings in a namespace.
     pub fn iter_namespace(
         &self,
-        namespace: &SymbolPath,
+        namespace: &[Symbol],
     ) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
         self.namespaces
             .get(namespace)
@@ -279,7 +279,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Collect all bindings in a namespace (owned, avoids borrow issues).
-    pub fn collect_namespace(&self, namespace: &SymbolPath) -> Vec<(Symbol, Binding<'db>)> {
+    pub fn collect_namespace(&self, namespace: &[Symbol]) -> Vec<(Symbol, Binding<'db>)> {
         self.namespaces
             .get(namespace)
             .map(|bindings| {
@@ -292,7 +292,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Check whether a namespace exists.
-    pub fn has_namespace(&self, namespace: &SymbolPath) -> bool {
+    pub fn has_namespace(&self, namespace: &[Symbol]) -> bool {
         self.namespaces.contains_key(namespace)
     }
 
@@ -300,7 +300,7 @@ impl<'db> ModuleEnv<'db> {
     /// namespace, or a module, which may define no namespace entries.
     pub fn declares(&self, name: Symbol) -> bool {
         self.has_definition(&name)
-            || self.has_namespace(&SymbolPath::new([name.clone()]))
+            || self.has_namespace(std::slice::from_ref(&name))
             || matches!(self.imports.get(&name), Some(Binding::Module { path }) if path[..] == [name])
     }
 
@@ -351,7 +351,7 @@ impl<'db> ModuleEnv<'db> {
     /// module sees under their short names, and whose namespaces a path may
     /// enter by their first segment below the package root.
     pub fn merge(&mut self, other: &ModuleEnv<'db>, package: &Symbol) {
-        for (name, binding) in other.iter_namespace(&SymbolPath::new([package.clone()])) {
+        for (name, binding) in other.iter_namespace(std::slice::from_ref(package)) {
             self.add_library(name.clone(), binding.clone(), vec![package.clone(), name]);
         }
 
