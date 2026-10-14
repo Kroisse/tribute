@@ -6,7 +6,6 @@ use self::common::{ast_pipeline_error_messages, run_ast_pipeline, run_ast_pipeli
 use rustc_hash::FxHashMap as HashMap;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
 
@@ -519,27 +518,19 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         assert_eq!(declaration.parameter_types.len(), 1);
         let parameter = ir.get_type(declaration.parameter_types[0]);
         let result = ir.get_type(declaration.result_type);
-        assert_eq!(
-            (parameter.dialect.clone(), parameter.name.clone()),
-            (Symbol::new("core"), Symbol::new("i32"))
-        );
-        assert_eq!(
-            (result.dialect.clone(), result.name.clone()),
-            (Symbol::new("core"), Symbol::new("i32"))
-        );
+        assert_eq!(parameter.dialect, "core");
+        assert_eq!(parameter.name, "i32");
+        assert_eq!(result.dialect, "core");
+        assert_eq!(result.name, "i32");
     }
     for declaration in declarations.iter().skip(2) {
         assert_eq!(declaration.parameter_types.len(), 1);
         let parameter = ir.get_type(declaration.parameter_types[0]);
         let result = ir.get_type(declaration.result_type);
-        assert_eq!(
-            (parameter.dialect.clone(), parameter.name.clone()),
-            (Symbol::new("core"), Symbol::new("i1"))
-        );
-        assert_eq!(
-            (result.dialect.clone(), result.name.clone()),
-            (Symbol::new("core"), Symbol::new("i1"))
-        );
+        assert_eq!(parameter.dialect, "core");
+        assert_eq!(parameter.name, "i1");
+        assert_eq!(result.dialect, "core");
+        assert_eq!(result.name, "i1");
     }
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,
@@ -661,8 +652,8 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         let parent_signature = FuncSig::from_type_ref(&ir, parent.r#type(&ir)).unwrap();
         let data_type = parent_signature.result(&ir);
         assert_eq!(parent_signature.inputs(&ir), [data_type]);
-        assert_eq!(ir.get_type(data_type).dialect, Symbol::new("core"));
-        assert_eq!(ir.get_type(data_type).name, Symbol::new(primitive));
+        assert_eq!(ir.get_type(data_type).dialect, "core");
+        assert_eq!(ir.get_type(data_type).name, primitive);
         let mut lambdas = Vec::new();
         let mut calls = Vec::new();
         let _: ControlFlow<()> = trunk_ir::walk::walk_region(&ir, parent.body(&ir), &mut |op| {
@@ -682,7 +673,7 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         assert_eq!(signature.inputs(&ir), [data_type]);
         assert_eq!(signature.result(&ir), data_type);
         assert_eq!(signature.convention(&ir), CallingConvention::Direct);
-        assert!(calls[0].callee(&ir) == [consumer.sym_name(&ir)]);
+        assert_eq!(calls[0].callee(&ir), [consumer.sym_name(&ir)]);
         assert_eq!(
             calls[0].args(&ir)[0],
             value,
