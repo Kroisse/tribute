@@ -267,7 +267,7 @@ pub fn monomorphize_functions<'db>(
                 )
             })
             .collect();
-        struct_constructors.sort_by(|(left, _), (right, _)| left.path(db).cmp(right.path(db)));
+        struct_constructors.sort_by_key(|(id, _)| id.path(db));
         for (ctor, scheme) in struct_constructors {
             metadata.constructor_types.entry(ctor).or_insert(scheme);
         }

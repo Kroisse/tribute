@@ -524,7 +524,7 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Results are sorted by fully qualified function name for deterministic output.
     pub fn export_function_types_with_ids(&self) -> Vec<(FuncDefId<'db>, TypeScheme<'db>)> {
         let mut result: Vec<_> = self.function_types.iter().map(|(k, v)| (*k, *v)).collect();
-        result.sort_by(|(a, ..), (b, ..)| a.path(self.db).cmp(b.path(self.db)));
+        result.sort_by_key(|(id, ..)| id.path(self.db));
         result
     }
 
@@ -537,7 +537,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(k, v)| (*k, *v))
             .collect();
-        result.sort_by(|(a, ..), (b, ..)| a.path(self.db).cmp(b.path(self.db)));
+        result.sort_by_key(|(id, ..)| id.path(self.db));
         result
     }
 
@@ -563,7 +563,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();
-        result.sort_by(|(a, ..), (b, ..)| a.path(self.db).cmp(b.path(self.db)));
+        result.sort_by_key(|(id, ..)| id.path(self.db));
         result
     }
 
@@ -589,7 +589,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();
-        result.sort_by(|(a, ..), (b, ..)| a.path(self.db).cmp(b.path(self.db)));
+        result.sort_by_key(|(id, ..)| id.path(self.db));
         result
     }
 
@@ -604,11 +604,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();
-        result.sort_by(|(a, _), (b, _)| {
-            a.path(self.db).cmp(b.path(self.db)).then_with(|| {
-                ability_origin_rank(a.origin(self.db)).cmp(&ability_origin_rank(b.origin(self.db)))
-            })
-        });
+        result.sort_by_key(|(id, ..)| (id.path(self.db), ability_origin_rank(id.origin(self.db))));
         result
     }
 
@@ -625,18 +621,14 @@ impl<'db> ModuleTypeEnv<'db> {
                 (*id, info.type_params.clone(), operations)
             })
             .collect();
-        result.sort_by(|(a, ..), (b, ..)| {
-            a.path(self.db).cmp(b.path(self.db)).then_with(|| {
-                ability_origin_rank(a.origin(self.db)).cmp(&ability_origin_rank(b.origin(self.db)))
-            })
-        });
+        result.sort_by_key(|(id, ..)| (id.path(self.db), ability_origin_rank(id.origin(self.db))));
         result
     }
 
     /// Export the `extern` functions sorted by fully qualified name.
     pub fn export_extern_functions(&self) -> Vec<FuncDefId<'db>> {
         let mut result: Vec<_> = self.extern_functions.iter().copied().collect();
-        result.sort_by(|a, b| a.path(self.db).cmp(b.path(self.db)));
+        result.sort_by_key(|id| id.path(self.db));
         result
     }
 
