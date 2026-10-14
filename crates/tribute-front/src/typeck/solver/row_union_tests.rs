@@ -3,7 +3,7 @@ use salsa_test_macros::salsa_test;
 
 #[salsa_test]
 fn row_removal_defers_ambiguous_types(db: &salsa::DatabaseImpl) {
-    let ability = crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::from("Writer"));
+    let ability = crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"]));
     let nat = Type::new(db, TypeKind::Nat);
     let int = Type::new(db, TypeKind::Int);
     let row = |ty| {
@@ -87,9 +87,9 @@ fn row_removal_uses_exact_ability_identity(db: &salsa::DatabaseImpl) {
     let builtin = crate::ast::AbilityId::new(
         db,
         crate::ast::AbilityOrigin::Builtin(crate::ast::BuiltinAbility::Io),
-        trunk_ir::SymbolPath::from(&name),
+        trunk_ir::SymbolPath::new([name.clone()]),
     );
-    let source = crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::from(name));
+    let source = crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new([name]));
     let effect = |ability_id| Effect {
         ability_id,
         args: vec![],
@@ -111,7 +111,7 @@ fn label<'db>(db: &'db dyn salsa::Database, name: &str) -> EffectRow<'db> {
     EffectRow::single(
         db,
         Effect {
-            ability_id: crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::from(name)),
+            ability_id: crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new([name])),
             args: vec![],
         },
     )
@@ -150,7 +150,7 @@ fn scheme_row_dependencies_follow_shared_effect_type_arguments(db: &salsa::Datab
     let result = EffectRow::single(
         db,
         Effect {
-            ability_id: crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::from("Writer")),
+            ability_id: crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"])),
             args: vec![variable],
         },
     );
@@ -296,7 +296,7 @@ fn row_union_defers_ambiguous_instance_until_type_constraint_arrives(db: &salsa:
     );
     let nat = Type::new(db, TypeKind::Nat);
     let int = Type::new(db, TypeKind::Int);
-    let ability = crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::from("Writer"));
+    let ability = crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"]));
     let effect = |arg| Effect {
         ability_id: ability,
         args: vec![arg],

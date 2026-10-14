@@ -120,7 +120,7 @@ mod test_typed {
 
         fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> Linkage {
             match attr {
-                Attribute::SymbolRef(name) if *name == SymbolPath::from("public") => {
+                Attribute::SymbolRef(name) if *name == SymbolPath::new(["public"]) => {
                     Linkage::Public
                 }
                 _ => Linkage::Private,
@@ -128,13 +128,10 @@ mod test_typed {
         }
 
         fn write(_: &mut IrContext, value: Linkage) -> Attribute {
-            Attribute::SymbolRef(
-                Symbol::new(match value {
-                    Linkage::Private => "private",
-                    Linkage::Public => "public",
-                })
-                .into(),
-            )
+            Attribute::SymbolRef(SymbolPath::new([match value {
+                Linkage::Private => "private",
+                Linkage::Public => "public",
+            }]))
         }
     }
 
@@ -719,7 +716,7 @@ fn a_dialect_defines_its_own_attribute_kind() {
     );
     assert_eq!(
         ctx.op(op.op_ref()).attributes.get("linkage"),
-        Some(&Attribute::SymbolRef(SymbolPath::from("public")))
+        Some(&Attribute::SymbolRef(SymbolPath::new(["public"])))
     );
     assert!(test_typed::Export::DEF.verify(&ctx, op.op_ref()).is_empty());
 }

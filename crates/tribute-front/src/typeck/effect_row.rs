@@ -216,7 +216,7 @@ mod tests {
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::source(db, trunk_ir::SymbolPath::from(name))
+        AbilityId::source(db, trunk_ir::SymbolPath::new([name]))
     }
 
     #[test]

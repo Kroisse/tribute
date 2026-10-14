@@ -391,7 +391,7 @@ fn resolve_delimiters(
                     ensure_prompt_tag_runtime(ctx, module);
                     let i32_ty = i32_type_ref(ctx);
                     let prompt = func::Call::operands(std::iter::empty::<ValueRef>())
-                        .callee(SymbolPath::from("__tribute_next_tag"))
+                        .callee(SymbolPath::new(["__tribute_next_tag"]))
                         .results([i32_ty])
                         .build(ctx, location);
                     let resolved = prompt.result(ctx);
@@ -472,8 +472,8 @@ mod tests {
 
     #[test]
     fn test_compute_ability_id() {
-        let state = SymbolPath::from("State");
-        let console = SymbolPath::from("Console");
+        let state = SymbolPath::new(["State"]);
+        let console = SymbolPath::new(["Console"]);
 
         let state_id = ability::compute_ability_id(&state);
         assert_eq!(state_id, ability::compute_ability_id(&state));

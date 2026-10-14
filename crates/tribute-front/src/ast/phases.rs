@@ -180,7 +180,7 @@ impl<'db> TypeDefId<'db> {
         Self::new(
             db,
             TypeOrigin::Builtin(BuiltinType::List),
-            SymbolPath::from("List"),
+            SymbolPath::new(["List"]),
         )
     }
 

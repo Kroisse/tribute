@@ -255,7 +255,7 @@ fn lower_function_ref<'db>(
     let op = op(builder.ir, builder.block, location, "func_ref", |builder| {
         builder
             .result(ty)
-            .attr("func_ref", Attribute::SymbolRef(symbol.into()))
+            .attr("func_ref", Attribute::SymbolRef(SymbolPath::new([symbol])))
     });
     result(builder.ir, op)
 }
@@ -1220,7 +1220,11 @@ fn lower_extern<'db>(
         );
         declarations
             .compiler_intrinsics
-            .push(CompilerIntrinsicDeclaration::new(name, identity, callable));
+            .push(CompilerIntrinsicDeclaration::new(
+                SymbolPath::new([name]),
+                identity,
+                callable,
+            ));
         declarations
             .compiler_intrinsics
             .sort_by_key(|declaration| (declaration.symbol.clone(), declaration.identity.clone()));
@@ -2224,7 +2228,7 @@ fn named_call(
         .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
         .collect();
     let symbol = builder.ctx.function_symbol(&name);
-    let callee = Attribute::SymbolRef(symbol.into());
+    let callee = Attribute::SymbolRef(SymbolPath::new([symbol]));
     match position {
         CallPosition::Value => op(builder.ir, builder.block, location, "call", |builder| {
             builder
@@ -2912,7 +2916,7 @@ mod tests {
         let value = value.result(&ir);
         let parameter = ctx.adt_typeref(&mut ir, &Symbol::new("String"));
         let declaration = OperationDeclaration::new(
-            SymbolPath::from("Test"),
+            SymbolPath::new(["Test"]),
             ir.intern_str("throw"),
             ir.intern_str("op"),
             [parameter],
@@ -2932,7 +2936,7 @@ mod tests {
         assert_eq!(builder.ir.value_ty(adapted[0]), parameter);
 
         let mismatch = OperationDeclaration::new(
-            SymbolPath::from("Test"),
+            SymbolPath::new(["Test"]),
             declaration.op_name,
             declaration.kind,
             [],

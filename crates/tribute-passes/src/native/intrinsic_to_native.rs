@@ -44,7 +44,7 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
     let result_ty = ctx.op_result_types(call)[0];
     let loc = ctx.op(call).location;
     let read = func::Call::operands([bytes, index])
-        .callee(SymbolPath::from(GET_OR_PANIC_FN))
+        .callee(SymbolPath::new([GET_OR_PANIC_FN]))
         .results([result_ty])
         .build(ctx, loc);
     let value = read.results(ctx)[0];

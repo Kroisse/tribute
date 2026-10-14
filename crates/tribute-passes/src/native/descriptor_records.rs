@@ -349,7 +349,7 @@ mod tests {
 
         let block = module.first_block(&ctx).unwrap();
         let loc = ctx.op(module.op()).location;
-        let release = SymbolPath::from("__tribute_release_7");
+        let release = SymbolPath::new(["__tribute_release_7"]);
         generate(
             &mut ctx,
             block,

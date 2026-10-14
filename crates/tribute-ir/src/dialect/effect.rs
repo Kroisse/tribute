@@ -157,7 +157,7 @@ mod tests {
     }
 
     fn ability(_: &mut IrContext, name: &str) -> trunk_ir::SymbolPath {
-        trunk_ir::SymbolPath::from(name)
+        trunk_ir::SymbolPath::new([name])
     }
 
     fn const_i32(

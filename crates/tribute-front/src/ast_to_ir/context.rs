@@ -907,9 +907,9 @@ impl<'db> IrLoweringCtx<'db> {
         ability_name: &Symbol,
         arguments: &[crate::ast::Type<'db>],
     ) -> SymbolPath {
-        SymbolPath::from(Symbol::new(
+        SymbolPath::new([Symbol::new(
             &self.ability_instance_key(ability_name, arguments),
-        ))
+        )])
     }
 
     /// Create an `adt.struct` type with name and fields.
@@ -1051,7 +1051,7 @@ mod tests {
         let ctx = lowering_ctx(&db, &mut ir);
         let ability = Symbol::new("State");
         let effect = |name: &str| Effect {
-            ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::from(name)),
+            ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::new([name])),
             args: vec![],
         };
         let open = |id, effects| EffectRow::new(&db, effects, Some(EffectVar { id }));
@@ -1224,7 +1224,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(
                     &db,
-                    trunk_ir::SymbolPath::from(&nominal_name),
+                    trunk_ir::SymbolPath::new([nominal_name.clone()]),
                 ),
                 name: Symbol::new("Forward"),
                 args: vec![],
@@ -1242,7 +1242,10 @@ mod tests {
         let source_list = AstType::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from(&list_name)),
+                id: crate::ast::TypeDefId::synthetic(
+                    &db,
+                    trunk_ir::SymbolPath::new([list_name.clone()]),
+                ),
                 name: list_name.clone(),
                 args: vec![],
             },

@@ -42,7 +42,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
             .copied()
             .filter_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
-                let symbol = SymbolPath::from(function.sym_name(ctx));
+                let symbol = SymbolPath::new([function.sym_name(ctx)]);
                 (ctx.op(op)
                     .attributes
                     .get_str(ctx, COMPILER_INTRINSIC_ATTR)
@@ -75,7 +75,9 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         .copied()
         .filter(|&op| {
             func::Func::from_op(ctx, op).is_ok_and(|function| {
-                eligible.contains(&SymbolPath::from(&Symbol::new(function.sym_name(ctx))))
+                eligible.contains(&SymbolPath::new([
+                    Symbol::new(function.sym_name(ctx)).clone()
+                ]))
             })
         })
         .collect();
@@ -152,17 +154,17 @@ impl ArithIntrinsicPattern {
 
         macro_rules! binary {
             ($name:expr, $op_fn:expr) => {
-                map.insert(SymbolPath::from($name), ArithMapping::BinaryOp($op_fn));
+                map.insert(SymbolPath::new([$name]), ArithMapping::BinaryOp($op_fn));
             };
         }
         macro_rules! cmpi {
             ($name:expr, $pred:expr) => {
-                map.insert(SymbolPath::from($name), ArithMapping::CmpI($pred));
+                map.insert(SymbolPath::new([$name]), ArithMapping::CmpI($pred));
             };
         }
         macro_rules! cmpf {
             ($name:expr, $pred:expr) => {
-                map.insert(SymbolPath::from($name), ArithMapping::CmpF($pred));
+                map.insert(SymbolPath::new([$name]), ArithMapping::CmpF($pred));
             };
         }
 
@@ -323,10 +325,10 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 
         // Check if this is one of our known arithmetic intrinsics
         let sym_name = Symbol::new(func_op.sym_name(ctx));
-        if !self.eligible.contains(&SymbolPath::from(&sym_name)) {
+        if !self.eligible.contains(&SymbolPath::new([sym_name.clone()])) {
             return false;
         }
-        let Some(mapping) = self.intrinsic_map.get(&SymbolPath::from(&sym_name)) else {
+        let Some(mapping) = self.intrinsic_map.get(&SymbolPath::new([sym_name.clone()])) else {
             return false;
         };
 

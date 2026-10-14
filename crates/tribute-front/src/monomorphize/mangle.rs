@@ -80,7 +80,7 @@ pub fn mangle_type_path(
     type_args: &[Type<'_>],
 ) -> SymbolPath {
     if id.is_builtin_list(db) {
-        return SymbolPath::from(mangle_name(db, &Symbol::new("5$List"), type_args));
+        return SymbolPath::new([mangle_name(db, &Symbol::new("5$List"), type_args)]);
     }
     let path = id.path(db);
     path.sibling(mangle_name(db, own_name(path), type_args))
@@ -261,7 +261,7 @@ mod tests {
         let text_ty = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Text")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Text"])),
                 name: Symbol::new("Text"),
                 args: vec![],
             },
@@ -278,7 +278,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Option")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Option"])),
                 name: Symbol::new("Option"),
                 args: vec![int_ty],
             },
@@ -295,7 +295,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Option")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Option"])),
                 name: Symbol::new("Option"),
                 args: vec![int_ty],
             },
@@ -331,7 +331,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::source(
                     &db,
-                    trunk_ir::SymbolPath::from(&name),
+                    trunk_ir::SymbolPath::new([name.clone()]),
                     crate::ast::NodeId::from_raw(1),
                 ),
                 name,
@@ -398,7 +398,7 @@ mod tests {
         let text_ty = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Text")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Text"])),
                 name: Symbol::new("Text"),
                 args: vec![],
             },
@@ -406,7 +406,7 @@ mod tests {
         let pair = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Pair")),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Pair"])),
                 name: Symbol::new("Pair"),
                 args: vec![int_ty, text_ty],
             },
@@ -435,7 +435,7 @@ mod tests {
 
     fn ability<'db>(db: &'db TestDb, name: &str, args: Vec<Type<'db>>) -> crate::ast::Effect<'db> {
         crate::ast::Effect {
-            ability_id: crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::from(name)),
+            ability_id: crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new([name])),
             args,
         }
     }
@@ -589,7 +589,7 @@ mod tests {
     fn test_type_names_mangle_effect_rows_distinctly() {
         let db = TestDb::default();
         let name = Symbol::new("Holder");
-        let id = TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from(&name));
+        let id = TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new([name.clone()]));
         let mangle = |effect: &str| {
             let row = EffectRow::single(&db, ability(&db, effect, vec![]));
             mangle_type_path(&db, id, &[thunk(&db, row)]).to_string()
@@ -836,7 +836,7 @@ mod laws {
             TypeKind::Named {
                 id: TypeDefId::source(
                     &db,
-                    trunk_ir::SymbolPath::from(&name),
+                    trunk_ir::SymbolPath::new([name.clone()]),
                     crate::ast::NodeId::from_raw(1),
                 ),
                 name,
@@ -864,7 +864,7 @@ mod laws {
                 TypeKind::Named {
                     id: TypeDefId::source(
                         &db,
-                        trunk_ir::SymbolPath::from(&name),
+                        trunk_ir::SymbolPath::new([name.clone()]),
                         crate::ast::NodeId::from_raw(node),
                     ),
                     name,
@@ -901,7 +901,7 @@ mod laws {
         let type_name = |id, args: &[Type<'_>]| mangle_type_path(&db, id, args).to_symbol();
         let source_list = TypeDefId::source(
             &db,
-            trunk_ir::SymbolPath::from("BuiltinList"),
+            trunk_ir::SymbolPath::new(["BuiltinList"]),
             crate::ast::NodeId::from_raw(3),
         );
         assert_ne!(

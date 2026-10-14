@@ -172,16 +172,13 @@ mod tests {
 
     #[test]
     fn resolve_callee_reports_missing_symbols() {
-        let found = SymbolPath::from("found");
+        let found = SymbolPath::new(["found"]);
         let module_info = ModuleInfo {
             func_indices: [(found.clone(), 7)].into_iter().collect::<HashMap<_, _>>(),
             ..ModuleInfo::default()
         };
 
-        assert_eq!(
-            resolve_callee(&SymbolPath::from(&found), &module_info).unwrap(),
-            7
-        );
-        assert!(resolve_callee(&SymbolPath::from("missing"), &module_info).is_err());
+        assert_eq!(resolve_callee(&found, &module_info).unwrap(), 7);
+        assert!(resolve_callee(&SymbolPath::new(["missing"]), &module_info).is_err());
     }
 }

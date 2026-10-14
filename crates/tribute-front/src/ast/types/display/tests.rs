@@ -10,7 +10,7 @@ fn effect<'db>(
     args: Vec<Type<'db>>,
 ) -> Effect<'db> {
     Effect {
-        ability_id: AbilityId::source(db, trunk_ir::SymbolPath::from(name)),
+        ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new([name])),
         args,
     }
 }
@@ -21,7 +21,7 @@ fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
     let bool_ty = Type::new(db, TypeKind::Bool);
     let pure = EffectRow::pure(db);
     let named = |name, args| TypeKind::Named {
-        id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::from(name)),
+        id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::new([name])),
         name: Symbol::new(name),
         args,
     };
@@ -123,7 +123,7 @@ fn effect_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
     let named = |declaration| TypeKind::Named {
         id: TypeDefId::source(
             db,
-            trunk_ir::SymbolPath::from("T"),
+            trunk_ir::SymbolPath::new(["T"]),
             NodeId::from_raw(declaration),
         ),
         name: Symbol::new("T"),

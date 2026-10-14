@@ -441,7 +441,7 @@ mod tests {
         let row = EffectRow::new(
             &db,
             vec![Effect {
-                ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::from("State")),
+                ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::new(["State"])),
                 args: vec![int],
             }],
             None,
@@ -475,7 +475,7 @@ mod tests {
         let row = EffectRow::new(
             &db,
             vec![Effect {
-                ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::from("State")),
+                ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::new(["State"])),
                 args: vec![error],
             }],
             None,
@@ -506,7 +506,7 @@ mod tests {
             Type::new(
                 &db,
                 TypeKind::Named {
-                    id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from(name)),
+                    id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new([name])),
                     name: trunk_ir::Symbol::new(name),
                     args,
                 },
@@ -718,7 +718,7 @@ mod tests {
         // Neither an unknown type nor an indexed non-generic declaration qualifies,
         // even if the type carries arguments.
         for id in [
-            TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Unknown")),
+            TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Unknown"])),
             nominal_id(&index, &db, "Plain"),
         ] {
             assert!(!index.is_generic(id));

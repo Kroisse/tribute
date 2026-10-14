@@ -262,7 +262,7 @@ fn lower_single_lambda(
 
     // Create closure.new replacing the lambda.
     let closure_new_op = closure::New::operands(closure_env)
-        .func_ref(lifted_name.into())
+        .func_ref(trunk_ir::SymbolPath::new([lifted_name]))
         .results(result_ty)
         .build(ctx, location);
     if let Some(convention) = convention {
@@ -555,7 +555,7 @@ mod tests {
         // carries a parameter attribute.
         let marked: AttributeMap = [(
             Symbol::new("k"),
-            Attribute::SymbolRef(SymbolPath::from("v")),
+            Attribute::SymbolRef(SymbolPath::new(["v"])),
         )]
         .into_iter()
         .collect();

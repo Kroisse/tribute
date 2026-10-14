@@ -264,10 +264,12 @@ names:
 ctx.op(op).attributes.visit_symbol_refs(&mut |path| referenced.push(path.clone()));
 ```
 
-`SymbolPath::from("main")` (or a `Symbol`) is a definition in the root
-module, and `SymbolPath::new(["left", "helper"])` is `helper` in the module
-`left`. A name is never split: `SymbolPath::from("left::helper")` is one
-component, a root definition whose name contains `::`. The printer writes
+A path is built from its components: `SymbolPath::new(["main"])` is a
+definition in the root module, and `SymbolPath::new(["left", "helper"])` is
+`helper` in the module `left`. Text and symbols do not convert into a path,
+so the components are always spelled out. A name is never split:
+`SymbolPath::new(["left::helper"])` is one component, a root definition whose
+name contains `::`. The printer writes
 `@left::@helper` for the nested path and `@"left::helper"` for the single
 name. Read a path with `leaf()`, `modules()`, `components()`, and
 `as_simple()`. A path compares with another path, or with an array of its

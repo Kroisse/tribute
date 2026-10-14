@@ -1066,7 +1066,7 @@ impl<'db> Resolver<'db> {
             TypeAnnotationKind::Named(sym) => {
                 // Row tail variables (lowercase, e.g., `e`) are not concrete abilities
                 sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
-                    .then(|| SymbolPath::from(sym))
+                    .then(|| SymbolPath::new([sym.clone()]))
             }
             TypeAnnotationKind::Path(segs) => {
                 (!segs.is_empty()).then(|| SymbolPath::new(segs.iter().cloned()))
@@ -1652,7 +1652,8 @@ mod tests {
         resolver.bind_local(param_name.clone());
 
         // Create unresolved reference to the parameter
-        let body_var = UnresolvedName::new(SymbolPath::from(&param_name), NodeId::from_raw(2));
+        let body_var =
+            UnresolvedName::new(SymbolPath::new([param_name.clone()]), NodeId::from_raw(2));
 
         // Resolve the variable reference
         let resolved = resolver.resolve_name(&body_var);
@@ -1683,7 +1684,7 @@ mod tests {
         resolver.pop_scope();
 
         // After popping inner scope, x should still be visible
-        let x_ref = UnresolvedName::new(SymbolPath::from(x), NodeId::from_raw(1));
+        let x_ref = UnresolvedName::new(SymbolPath::new([x]), NodeId::from_raw(1));
         let resolved = resolver.resolve_name(&x_ref);
 
         match resolved {
@@ -1714,8 +1715,8 @@ mod tests {
         let y_id = resolver.bind_local(y.clone());
 
         // Both x and y should be visible from inner scope
-        let x_ref = UnresolvedName::new(SymbolPath::from(x), NodeId::from_raw(1));
-        let y_ref = UnresolvedName::new(SymbolPath::from(y), NodeId::from_raw(2));
+        let x_ref = UnresolvedName::new(SymbolPath::new([x]), NodeId::from_raw(1));
+        let y_ref = UnresolvedName::new(SymbolPath::new([y]), NodeId::from_raw(2));
 
         let resolved_x = resolver.resolve_name(&x_ref);
         let resolved_y = resolver.resolve_name(&y_ref);

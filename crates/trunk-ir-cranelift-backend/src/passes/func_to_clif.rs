@@ -635,7 +635,7 @@ mod tests {
         let mut inner_attrs = AttributeMap::new();
         inner_attrs.insert(
             Symbol::new("tag"),
-            Attribute::SymbolRef(SymbolPath::from("preserved")),
+            Attribute::SymbolRef(SymbolPath::new(["preserved"])),
         );
         inner_attrs.insert(
             Symbol::new("nested"),

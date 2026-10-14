@@ -750,7 +750,7 @@ impl<'db> TypeChecker<'db> {
             self.env.never_type()
         } else {
             self.env
-                .named_type_in_scope(SymbolPath::from(name), vec![], self.current_prefix())
+                .named_type_in_scope(SymbolPath::new([name]), vec![], self.current_prefix())
         }
     }
 }

@@ -233,7 +233,7 @@ impl<'a> Verifier<'a> {
     /// the platform convention.
     fn check_root_entry(&mut self, functions: &SymbolTable) {
         let ctx = self.ctx;
-        let Some(main) = functions.resolve(&SymbolPath::from("main")) else {
+        let Some(main) = functions.resolve(&SymbolPath::new(["main"])) else {
             return;
         };
         let Ok(function) = func::Func::from_op(ctx, main) else {

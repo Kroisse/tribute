@@ -155,7 +155,7 @@ impl RewritePattern for CheckMemoryAccess {
             .build(ctx, loc);
         rewriter.insert_op(width.op_ref());
         let check = clif::Call::operands([addr, width.result(ctx)])
-            .callee(SymbolPath::from(access.check))
+            .callee(SymbolPath::new([access.check]))
             .results([nil_ty])
             .build(ctx, loc);
         rewriter.insert_op(check.op_ref());

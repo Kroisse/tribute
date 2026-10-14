@@ -828,7 +828,7 @@ mod tests {
 
         let tr = TypedRef::new(
             ResolvedRef::Function {
-                id: FuncDefId::new(&db, trunk_ir::SymbolPath::from("f")),
+                id: FuncDefId::new(&db, trunk_ir::SymbolPath::new(["f"])),
             },
             bv0,
         );
@@ -899,7 +899,7 @@ mod tests {
         let float = Type::new(&db, TypeKind::Float);
 
         let func_name = Symbol::new("identity");
-        let func_id = FuncDefId::new(&db, SymbolPath::from(&func_name));
+        let func_id = FuncDefId::new(&db, SymbolPath::new([func_name.clone()]));
 
         // Build function
         let body_ref = TypedRef::new(
@@ -935,7 +935,7 @@ mod tests {
                 effect: pure_effect(&db),
             },
         );
-        let writer = crate::ast::AbilityId::source(&db, trunk_ir::SymbolPath::from("Writer"));
+        let writer = crate::ast::AbilityId::source(&db, trunk_ir::SymbolPath::new(["Writer"]));
         let row = |ty| {
             crate::ast::EffectRow::single(
                 &db,
@@ -956,7 +956,7 @@ mod tests {
                 result: pure_effect(&db),
             }])
             .build(&db);
-        let function_types = vec![(SymbolPath::from(func_name), scheme)];
+        let function_types = vec![(SymbolPath::new([func_name]), scheme)];
 
         let mut type_arg_sets = HashSet::default();
         type_arg_sets.insert(InstanceKey::of_types(vec![int]));
@@ -1018,7 +1018,7 @@ mod tests {
         let db = TestDb::default();
         let id = node_id(1);
         let named = |name: &str, args| TypeKind::Named {
-            id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from(name)),
+            id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new([name])),
             name: Symbol::new(name),
             args,
         };

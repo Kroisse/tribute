@@ -300,7 +300,7 @@ impl<'db> ModuleEnv<'db> {
     /// namespace, or a module, which may define no namespace entries.
     pub fn declares(&self, name: Symbol) -> bool {
         self.has_definition(&name)
-            || self.has_namespace(&SymbolPath::from(&name))
+            || self.has_namespace(&SymbolPath::new([name.clone()]))
             || matches!(self.imports.get(&name), Some(Binding::Module { path }) if path[..] == [name])
     }
 
@@ -351,7 +351,7 @@ impl<'db> ModuleEnv<'db> {
     /// module sees under their short names, and whose namespaces a path may
     /// enter by their first segment below the package root.
     pub fn merge(&mut self, other: &ModuleEnv<'db>, package: &Symbol) {
-        for (name, binding) in other.iter_namespace(&SymbolPath::from(package)) {
+        for (name, binding) in other.iter_namespace(&SymbolPath::new([package.clone()])) {
             self.add_library(name.clone(), binding.clone(), vec![package.clone(), name]);
         }
 

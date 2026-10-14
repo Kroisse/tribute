@@ -41,7 +41,7 @@ fn prepare_root<'db>(
         TypeKind::Named {
             id: TypeDefId::source(
                 db,
-                trunk_ir::SymbolPath::from(&packet_decl.name),
+                trunk_ir::SymbolPath::new([packet_decl.name.clone()]),
                 packet_decl.id,
             ),
             name: packet_decl.name.clone(),
@@ -51,7 +51,7 @@ fn prepare_root<'db>(
     let row = EffectRow::single(
         db,
         Effect {
-            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::from("Marker")),
+            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Marker"])),
             args: vec![packet],
         },
     );
@@ -204,7 +204,12 @@ fn main() -> Nil { marker() }
         .unwrap();
     assert_eq!(
         id.origin(db),
-        TypeDefId::source(db, trunk_ir::SymbolPath::from(&original.name), original.id).origin(db)
+        TypeDefId::source(
+            db,
+            trunk_ir::SymbolPath::new([original.name.clone()]),
+            original.id
+        )
+        .origin(db)
     );
 }
 

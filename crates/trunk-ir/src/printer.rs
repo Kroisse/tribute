@@ -1569,7 +1569,7 @@ mod tests {
         write_attribute(
             &ctx,
             &mut out,
-            &Attribute::SymbolRef(SymbolPath::from("foo")),
+            &Attribute::SymbolRef(SymbolPath::new(["foo"])),
         )
         .unwrap();
         assert_eq!(out, "@foo");
@@ -1579,7 +1579,7 @@ mod tests {
         write_attribute(
             &ctx,
             &mut out,
-            &Attribute::SymbolRef(SymbolPath::from("std::List::map")),
+            &Attribute::SymbolRef(SymbolPath::new(["std::List::map"])),
         )
         .unwrap();
         assert_eq!(out, r#"@"std::List::map""#);

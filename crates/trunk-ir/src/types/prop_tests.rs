@@ -66,7 +66,7 @@ fn build_value(ctx: &mut IrContext, spec: &ValueSpec) -> Attribute {
         ValueSpec::Bool(b) => Attribute::Bool(*b),
         ValueSpec::Int(v) => Attribute::Int(*v),
         ValueSpec::Str(s) => ctx.string_attr(s),
-        ValueSpec::Symbol(s) => Attribute::SymbolRef(SymbolPath::from(s.as_str())),
+        ValueSpec::Symbol(s) => Attribute::SymbolRef(SymbolPath::new([s.as_str()])),
     }
 }
 
@@ -188,7 +188,7 @@ fn expected_value(ctx: &IrContext, spec: &ValueSpec) -> Attribute {
         ValueSpec::Bool(b) => Attribute::Bool(*b),
         ValueSpec::Int(v) => Attribute::Int(*v),
         ValueSpec::Str(s) => Attribute::String(ctx.lookup_str(s).expect("interned value")),
-        ValueSpec::Symbol(s) => Attribute::SymbolRef(SymbolPath::from(s.as_str())),
+        ValueSpec::Symbol(s) => Attribute::SymbolRef(SymbolPath::new([s.as_str()])),
     }
 }
 

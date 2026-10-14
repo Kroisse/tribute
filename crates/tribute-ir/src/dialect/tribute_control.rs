@@ -1142,9 +1142,9 @@ pub struct CompilerIntrinsicDeclaration {
 }
 
 impl CompilerIntrinsicDeclaration {
-    pub fn new(symbol: impl Into<SymbolPath>, identity: Symbol, callable_type: TypeRef) -> Self {
+    pub fn new(symbol: SymbolPath, identity: Symbol, callable_type: TypeRef) -> Self {
         Self {
-            symbol: symbol.into(),
+            symbol,
             identity,
             callable_type,
         }
@@ -1153,14 +1153,14 @@ impl CompilerIntrinsicDeclaration {
 
 impl OperationDeclaration {
     pub fn new(
-        ability: impl Into<SymbolPath>,
+        ability: SymbolPath,
         op_name: StringRef,
         kind: StringRef,
         parameter_types: impl IntoIterator<Item = TypeRef>,
         result_type: TypeRef,
     ) -> Self {
         Self {
-            ability: ability.into(),
+            ability,
             op_name,
             kind,
             parameter_types: parameter_types.into_iter().collect(),
@@ -3652,7 +3652,7 @@ mod tests {
     }
 
     fn ability_type(_: &mut IrContext, name: &str) -> SymbolPath {
-        SymbolPath::from(name)
+        SymbolPath::new([name])
     }
 
     fn block(ctx: &mut IrContext, loc: Location, args: &[TypeRef]) -> BlockRef {
@@ -3731,13 +3731,13 @@ mod tests {
         let x = ctx.block_arg(entry, 0);
 
         let function_ref = FuncRef::operands()
-            .func_ref(SymbolPath::from("id"))
+            .func_ref(SymbolPath::new(["id"]))
             .results(direct)
             .build(&mut ctx, loc);
         ctx.push_op(entry, function_ref.op_ref());
         let function_ref_value = function_ref.result(&ctx);
         let direct_call = Call::operands([x])
-            .callee(SymbolPath::from("id"))
+            .callee(SymbolPath::new(["id"]))
             .results(i32_ty)
             .build(&mut ctx, loc);
         ctx.push_op(entry, direct_call.op_ref());
@@ -4302,7 +4302,7 @@ mod tests {
         ));
         assert_eq!(
             ctx.op(declaration).attributes.get_symbol_ref("metadata"),
-            Some(&SymbolPath::from("declaration"))
+            Some(&SymbolPath::new(["declaration"]))
         );
 
         let inline = r#"core.module @test {
@@ -5026,7 +5026,7 @@ mod tests {
             .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
             .expect("core.i32");
         let declaration = OperationDeclaration {
-            ability: SymbolPath::from("State"),
+            ability: SymbolPath::new(["State"]),
             op_name: ctx.intern_str("get"),
             kind: ctx.intern_str("op"),
             parameter_types: vec![i32_ty],
@@ -5608,7 +5608,7 @@ mod tests {
         let function = control_op(&ctx, module, "func");
         let func_sig_type = ctx.op(function).attributes.get_type("type").unwrap();
         let exact = CompilerIntrinsicDeclaration::new(
-            Symbol::new("Nat::+"),
+            SymbolPath::new(["Nat::+"]),
             Symbol::new("Nat::+"),
             func_sig_type,
         );
@@ -5648,7 +5648,7 @@ mod tests {
         let function = control_op(&ctx, module, "func");
         let func_sig_type = ctx.op(function).attributes.get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
-            Symbol::new("read"),
+            SymbolPath::new(["read"]),
             Symbol::new("read"),
             func_sig_type,
         );
@@ -5686,7 +5686,7 @@ mod tests {
             .unwrap();
         let func_sig_type = ctx.op(intrinsic).attributes.get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
-            Symbol::new("Nat::+"),
+            SymbolPath::new(["Nat::+"]),
             Symbol::new("Nat::+"),
             func_sig_type,
         );
@@ -5721,7 +5721,7 @@ mod tests {
                 })
                 .unwrap();
             CompilerIntrinsicDeclaration::new(
-                symbol.clone(),
+                SymbolPath::new([symbol.clone()]),
                 symbol,
                 ctx.op(function).attributes.get_type("type").unwrap(),
             )
@@ -6211,7 +6211,7 @@ mod tests {
 
         let call = Call::from_op(&ctx, control_op(&ctx, module, "call")).unwrap();
         match call.evidence_plan(&ctx).unwrap().next() {
-            Some(EvidenceStep::Mask(state)) => assert_eq!(state, SymbolPath::from("State")),
+            Some(EvidenceStep::Mask(state)) => assert_eq!(state, SymbolPath::new(["State"])),
             other => panic!("expected a leading mask, found {other:?}"),
         }
         let steps: Vec<_> = call.evidence_plan(&ctx).unwrap().collect();

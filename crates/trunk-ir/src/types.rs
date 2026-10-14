@@ -302,12 +302,6 @@ impl From<Vec<Attribute>> for Attribute {
     }
 }
 
-impl From<Symbol> for Attribute {
-    fn from(value: Symbol) -> Self {
-        Attribute::SymbolRef(value.into())
-    }
-}
-
 impl From<SymbolPath> for Attribute {
     fn from(value: SymbolPath) -> Self {
         Attribute::SymbolRef(value)
@@ -1141,7 +1135,7 @@ mod tests {
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let marked: AttributeMap = [(
             Symbol::new("k"),
-            Attribute::SymbolRef(SymbolPath::from("v")),
+            Attribute::SymbolRef(SymbolPath::new(["v"])),
         )]
         .into_iter()
         .collect();
@@ -1252,7 +1246,7 @@ mod tests {
     #[test]
     fn symbol_refs_are_visited_through_lists_and_dicts() {
         let mut ctx = IrContext::new();
-        let reference = |name| Attribute::SymbolRef(SymbolPath::from(name));
+        let reference = |name| Attribute::SymbolRef(SymbolPath::new([name]));
         let mut attrs = AttributeMap::new();
         attrs.insert("callee", reference("direct"));
         attrs.insert("name", ctx.string_attr("not_a_reference"));
@@ -1272,7 +1266,9 @@ mod tests {
         attrs.visit_symbol_refs(&mut |symbol| visited.push(symbol.clone()));
         assert_eq!(
             visited,
-            ["direct", "first", "nested"].map(SymbolPath::from).to_vec()
+            ["direct", "first", "nested"]
+                .map(|name| SymbolPath::new([name]))
+                .to_vec()
         );
     }
 
@@ -1287,7 +1283,7 @@ mod tests {
                     (Symbol::new("ty"), Attribute::Type(ty)),
                     (
                         Symbol::new("tag"),
-                        Attribute::SymbolRef(SymbolPath::from("keep")),
+                        Attribute::SymbolRef(SymbolPath::new(["keep"])),
                     ),
                 ]
                 .into_iter()

@@ -1373,7 +1373,7 @@ core.module @test {
             parent_region: None,
         });
         let call = func::Call::operands([])
-            .callee(SymbolPath::from("callee"))
+            .callee(SymbolPath::new(["callee"]))
             .results([i32_ty])
             .build(&mut ctx, loc);
         ctx.push_op(entry2, call.op_ref());
