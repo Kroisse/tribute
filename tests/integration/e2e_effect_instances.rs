@@ -17,7 +17,7 @@ fn nested_writer_instance_is_concrete_before_erasure(db: &salsa::DatabaseImpl) {
     let main = typed
         .function_types(db)
         .iter()
-        .find(|(name, _)| *name == "main")
+        .find(|(name, _)| name == ["main"])
         .unwrap()
         .1;
     assert!(main.type_params(db).is_empty());

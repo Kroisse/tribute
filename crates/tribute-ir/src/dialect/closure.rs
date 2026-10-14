@@ -274,7 +274,6 @@ inventory::submit! { trunk_ir::op_interface::CallableOwnerOps::register::<Lambda
 #[cfg(test)]
 mod tests {
     use trunk_ir::Span;
-    use trunk_ir::Symbol;
     use trunk_ir::SymbolPath;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::refs::PathRef;
@@ -318,7 +317,7 @@ mod tests {
         assert_eq!(op.op_ref(), op2.op_ref());
 
         // Verify func_ref attribute
-        assert_eq!(op.func_ref(&ctx), Symbol::new("my_func"));
+        assert_eq!(*op.func_ref(&ctx), SymbolPath::from("my_func"));
 
         // Verify result type
         let result = op.result(&ctx);

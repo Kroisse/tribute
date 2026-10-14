@@ -228,11 +228,11 @@ fn pass(value: a) -> a {
 
     let output = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output");
-    let scheme = |name| {
+    let scheme = |name: &str| {
         output
             .function_types(db)
             .iter()
-            .find_map(|(candidate, scheme)| (*candidate == name).then_some(*scheme))
+            .find_map(|(candidate, scheme)| (candidate == [name]).then_some(*scheme))
             .unwrap_or_else(|| panic!("missing function scheme for {name}"))
     };
 
@@ -461,7 +461,7 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
     let run_writer = output
         .function_types(db)
         .iter()
-        .find_map(|(name, scheme)| (*name == "run_writer").then_some(*scheme))
+        .find_map(|(name, scheme)| (name == ["run_writer"]).then_some(*scheme))
         .expect("run_writer scheme should be present");
     let TypeKind::Func { params, .. } = run_writer.body(db).kind(db) else {
         panic!("run_writer scheme must be callable");
@@ -702,7 +702,7 @@ fn make() ->{} fn(a) ->{} a {
     let scheme = output
         .function_types(db)
         .iter()
-        .find(|(name, _)| *name == "make")
+        .find(|(name, _)| name == ["make"])
         .unwrap()
         .1;
     assert_eq!(scheme.type_params(db).len(), 1);

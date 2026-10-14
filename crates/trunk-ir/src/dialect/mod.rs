@@ -95,7 +95,7 @@ mod tests {
         assert_eq!(call.op_ref(), call2.op_ref());
 
         // Verify callee attribute
-        assert_eq!(call.callee(&ctx), Symbol::new("add"));
+        assert_eq!(*call.callee(&ctx), crate::SymbolPath::from("add"));
 
         // Verify variadic args
         let args = call.args(&ctx);

@@ -120,7 +120,9 @@ mod test_typed {
 
         fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> Linkage {
             match attr {
-                Attribute::SymbolRef(name) if *name == "public" => Linkage::Public,
+                Attribute::SymbolRef(name) if *name == SymbolPath::from("public") => {
+                    Linkage::Public
+                }
                 _ => Linkage::Private,
             }
         }

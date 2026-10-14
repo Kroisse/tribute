@@ -3142,7 +3142,7 @@ fn main() -> Nil {
             let concrete_symbol = trunk_ir::Symbol::new(concrete);
             assert!(
                 frontend.compiler_intrinsics.iter().any(|declaration| {
-                    declaration.symbol == concrete_symbol
+                    declaration.symbol == SymbolPath::from(&concrete_symbol)
                         && declaration.identity
                             == trunk_ir::Symbol::new(
                                 "std::collections::List::__tribute_list_prepend_intrinsic",

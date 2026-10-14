@@ -107,7 +107,7 @@ fn is_checked(ctx: &IrContext, op: OpRef, access: &Access) -> bool {
         .map(|position| ops[position]);
     previous
         .and_then(|previous| clif::Call::from_op(ctx, previous).ok())
-        .is_some_and(|call| *call.callee(ctx) == access.check)
+        .is_some_and(|call| call.callee(ctx) == [access.check])
 }
 
 /// Puts a runtime check before each memory access.

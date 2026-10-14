@@ -851,14 +851,9 @@ mod tests {
         let exported = env.export_function_types();
 
         // Should be sorted alphabetically by name
-        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
-        assert_eq!(
-            names,
-            vec![
-                Symbol::new("alpha"),
-                Symbol::new("middle"),
-                Symbol::new("zebra")
-            ]
+        itertools::assert_equal(
+            exported.iter().map(|(path, _)| path),
+            [["alpha"], ["middle"], ["zebra"]],
         );
     }
 
@@ -880,14 +875,9 @@ mod tests {
         let exported = env.export_function_types_with_ids();
 
         // Should be sorted alphabetically by function name
-        let names: Vec<_> = exported.iter().map(|(id, _)| id.name(db)).collect();
-        assert_eq!(
-            names,
-            vec![
-                Symbol::new("alpha"),
-                Symbol::new("middle"),
-                Symbol::new("zebra")
-            ]
+        itertools::assert_equal(
+            exported.iter().map(|(id, _)| id.name(db)),
+            ["alpha", "middle", "zebra"],
         );
     }
 
@@ -909,14 +899,9 @@ mod tests {
         let exported = env.export_constructor_types();
 
         // Should be sorted alphabetically by constructor name
-        let names: Vec<_> = exported.iter().map(|(id, _)| id.name(db)).collect();
-        assert_eq!(
-            names,
-            vec![
-                Symbol::new("Alpha"),
-                Symbol::new("Middle"),
-                Symbol::new("Zebra")
-            ]
+        itertools::assert_equal(
+            exported.iter().map(|(id, _)| id.name(db)),
+            ["Alpha", "Middle", "Zebra"],
         );
     }
 
@@ -929,30 +914,24 @@ mod tests {
         let function_a = FuncDefId::new(db, trunk_ir::SymbolPath::new(["a", "same"]));
         env.register_function(function_z, scheme);
         env.register_function(function_a, scheme);
-        let functions: Vec<_> = env
-            .export_function_types_with_ids()
-            .into_iter()
-            .filter(|(id, _)| id.name(db) == "same")
-            .map(|(id, _)| id.qualified(db))
-            .collect();
-        assert_eq!(
-            functions,
-            vec![Symbol::new("a::same"), Symbol::new("z::same")]
+        itertools::assert_equal(
+            env.export_function_types_with_ids()
+                .into_iter()
+                .map(|(id, _)| id.path(db))
+                .filter(|path| path.leaf().is_some_and(|name| name == "same")),
+            [["a", "same"], ["z", "same"]],
         );
 
         let constructor_z = CtorId::new(db, trunk_ir::SymbolPath::new(["z", "same"]));
         let constructor_a = CtorId::new(db, trunk_ir::SymbolPath::new(["a", "same"]));
         env.register_constructor(constructor_z, scheme);
         env.register_constructor(constructor_a, scheme);
-        let constructors: Vec<_> = env
-            .export_constructor_types()
-            .into_iter()
-            .filter(|(id, _)| id.name(db) == "same")
-            .map(|(id, _)| id.qualified(db))
-            .collect();
-        assert_eq!(
-            constructors,
-            vec![Symbol::new("a::same"), Symbol::new("z::same")]
+        itertools::assert_equal(
+            env.export_constructor_types()
+                .into_iter()
+                .map(|(id, _)| id.path(db))
+                .filter(|path| path.leaf().is_some_and(|name| name == "same")),
+            [["a", "same"], ["z", "same"]],
         );
 
         let ability_a = AbilityId::source(db, trunk_ir::SymbolPath::new(["a", "Audit"]));
@@ -1020,11 +999,14 @@ mod tests {
         let exported = env.export_type_defs();
 
         // Should be sorted alphabetically by name
-        let names: Vec<_> = exported.iter().map(|(path, _)| path.to_string()).collect();
-        assert_eq!(
-            names,
-            vec!["Alpha", "List", "Middle", "Zebra", "std::collections::List",]
-        );
+        let expected: [&[&str]; 5] = [
+            &["Alpha"],
+            &["List"],
+            &["Middle"],
+            &["Zebra"],
+            &["std", "collections", "List"],
+        ];
+        itertools::assert_equal(exported.iter().map(|(path, _)| path), expected);
     }
 
     #[salsa_test]
@@ -1044,14 +1026,9 @@ mod tests {
         let exported = env.export_struct_fields();
 
         // Should be sorted alphabetically by struct name
-        let names: Vec<_> = exported.iter().map(|(id, _)| id.qualified(db)).collect();
-        assert_eq!(
-            names,
-            vec![
-                Symbol::new("Alpha"),
-                Symbol::new("Middle"),
-                Symbol::new("Zebra")
-            ]
+        itertools::assert_equal(
+            exported.iter().map(|(id, _)| id.path(db)),
+            [["Alpha"], ["Middle"], ["Zebra"]],
         );
     }
 
@@ -1068,14 +1045,9 @@ mod tests {
         let exported = env.export_enum_variants();
 
         // Should be sorted alphabetically by enum name
-        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
-        assert_eq!(
-            names,
-            vec![
-                Symbol::new("Alpha"),
-                Symbol::new("Middle"),
-                Symbol::new("Zebra")
-            ]
+        itertools::assert_equal(
+            exported.iter().map(|(path, _)| path),
+            [["Alpha"], ["Middle"], ["Zebra"]],
         );
     }
 
@@ -1098,21 +1070,11 @@ mod tests {
         let second = env.export_function_types();
         let third = env.export_function_types();
 
-        let first_names: Vec<_> = first.iter().map(|(n, _)| n.clone()).collect();
-        let second_names: Vec<_> = second.iter().map(|(n, _)| n.clone()).collect();
-        let third_names: Vec<_> = third.iter().map(|(n, _)| n.clone()).collect();
-
-        assert_eq!(first_names, second_names);
-        assert_eq!(second_names, third_names);
-        assert_eq!(
-            first_names,
-            vec![
-                Symbol::new("a"),
-                Symbol::new("b"),
-                Symbol::new("c"),
-                Symbol::new("d"),
-                Symbol::new("e")
-            ]
+        assert_eq!(first, second);
+        assert_eq!(second, third);
+        itertools::assert_equal(
+            first.iter().map(|(path, _)| path),
+            [["a"], ["b"], ["c"], ["d"], ["e"]],
         );
     }
 

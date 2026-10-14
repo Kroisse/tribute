@@ -379,7 +379,7 @@ fn assert_source_allocation_field_releases(ir: &str) {
                 break None;
             };
             if let Ok(call) = clif::Call::from_op(&ctx, def) {
-                break (call.callee(&ctx) == "__tribute_alloc").then_some(value);
+                break (call.callee(&ctx) == ["__tribute_alloc"]).then_some(value);
             }
             if core::UnrealizedConversionCast::matches(&ctx, def) || clif::Iadd::matches(&ctx, def)
             {

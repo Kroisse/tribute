@@ -122,7 +122,8 @@ fn materialize_nested_callable_value_types(
             func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op);
         let converted_attributes =
             convert_nested_callable_attributes(ctx, &attributes, converter, |key| {
-                (key == "type" && is_func) || (key == "signature" && is_indirect)
+                (*key == trunk_ir::symbol!("type") && is_func)
+                    || (*key == trunk_ir::symbol!("signature") && is_indirect)
             });
         if let Some(converted_attributes) = converted_attributes
             && converted_attributes != attributes
@@ -304,14 +305,14 @@ fn convert_nested_callable_attributes(
     ctx: &mut IrContext,
     attributes: &trunk_ir::AttributeMap,
     converter: &TypeConverter,
-    skip: impl Fn(SymbolPath) -> bool,
+    skip: impl Fn(&Symbol) -> bool,
 ) -> Option<trunk_ir::AttributeMap> {
     attributes
         .iter()
         .map(|(key, value)| {
             Some((
                 key.clone(),
-                if skip(key.clone().into()) {
+                if skip(key) {
                     value.clone()
                 } else {
                     convert_nested_callable_attribute(ctx, value, converter)?

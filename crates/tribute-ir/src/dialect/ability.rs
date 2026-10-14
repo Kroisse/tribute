@@ -432,21 +432,11 @@ pub mod evidence_abi {
     pub const TAIL: &str = "__tribute_evidence_tail";
     pub const WITH_TAIL: &str = "__tribute_evidence_with_tail";
     pub const PUSH: &str = "__tribute_evidence_push";
-}
 
-pub fn evidence_runtime_symbols() -> [Symbol; 10] {
-    [
-        Symbol::new(evidence_abi::EMPTY),
-        Symbol::new(evidence_abi::LOOKUP),
-        Symbol::new(evidence_abi::EXTEND),
-        Symbol::new(evidence_abi::MASK),
-        Symbol::new(evidence_abi::DUP),
-        Symbol::new(evidence_abi::OUTER),
-        Symbol::new(evidence_abi::LOOKUP_TR),
-        Symbol::new(evidence_abi::TAIL),
-        Symbol::new(evidence_abi::WITH_TAIL),
-        Symbol::new(evidence_abi::PUSH),
-    ]
+    /// Every runtime function above.
+    pub const ALL: [&str; 10] = [
+        EMPTY, LOOKUP, EXTEND, MASK, DUP, OUTER, LOOKUP_TR, TAIL, WITH_TAIL, PUSH,
+    ];
 }
 
 /// Get the canonical Marker ADT type for evidence-based dispatch.
@@ -611,25 +601,6 @@ mod tests {
                     symbol_name: "outer",
                     field_type: MarkerFieldType::Ptr,
                 },
-            ]
-        );
-    }
-
-    #[test]
-    fn test_evidence_runtime_symbols_are_canonical() {
-        assert_eq!(
-            evidence_runtime_symbols(),
-            [
-                Symbol::new(evidence_abi::EMPTY),
-                Symbol::new(evidence_abi::LOOKUP),
-                Symbol::new(evidence_abi::EXTEND),
-                Symbol::new(evidence_abi::MASK),
-                Symbol::new(evidence_abi::DUP),
-                Symbol::new(evidence_abi::OUTER),
-                Symbol::new(evidence_abi::LOOKUP_TR),
-                Symbol::new(evidence_abi::TAIL),
-                Symbol::new(evidence_abi::WITH_TAIL),
-                Symbol::new(evidence_abi::PUSH),
             ]
         );
     }

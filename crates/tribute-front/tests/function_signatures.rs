@@ -307,7 +307,7 @@ fn instances_use_the_declared_scheme(db: &salsa::DatabaseImpl) {
         let (_, scheme) = output
             .function_types(db)
             .iter()
-            .find(|(candidate, _)| *candidate == name)
+            .find(|(candidate, _)| candidate == instance.function.path(db))
             .unwrap_or_else(|| panic!("no scheme for {name}"));
         assert_eq!(instance.scheme, *scheme, "{name}");
     }
@@ -338,7 +338,7 @@ fn main() -> Nil { }
     let (_, scheme) = output
         .function_types(db)
         .iter()
-        .find(|(name, _)| *name == "run_state")
+        .find(|(name, _)| name == ["run_state"])
         .unwrap();
     assert_eq!(scheme.effect_params(db).len(), 1);
     assert!(scheme.row_unions(db).is_empty());

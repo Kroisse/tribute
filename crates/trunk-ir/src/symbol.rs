@@ -379,40 +379,54 @@ impl From<&SymbolPath> for SymbolPath {
     }
 }
 
-/// A path equals a name when it is that name in the root module.
-impl PartialEq<str> for SymbolPath {
-    fn eq(&self, other: &str) -> bool {
-        self.as_simple().is_some_and(|name| name == other)
+/// A path equals a slice or array of the same number of components, each
+/// equal to its component, as a `Vec` equals one: `path == ["std", "io",
+/// "Io"]` compares text component by component, and `path ==
+/// [symbol!("main")]` compares atoms. A `&SymbolPath` compares with a
+/// reference through the standard impl for references.
+macro_rules! component_eq {
+    ($($path:ty => $components:ty),* $(,)?) => {$(
+        impl<T, const N: usize> PartialEq<$components> for $path
+        where
+            Symbol: PartialEq<T>,
+        {
+            fn eq(&self, other: &$components) -> bool {
+                self.0[..] == other[..]
+            }
+        }
+    )*};
+}
+
+component_eq! {
+    SymbolPath => [T; N],
+    SymbolPath => &[T; N],
+    &SymbolPath => [T; N],
+}
+
+impl<T> PartialEq<[T]> for SymbolPath
+where
+    Symbol: PartialEq<T>,
+{
+    fn eq(&self, other: &[T]) -> bool {
+        self.0[..] == *other
     }
 }
 
-impl PartialEq<&str> for SymbolPath {
-    fn eq(&self, other: &&str) -> bool {
-        *self == **other
+impl<T> PartialEq<&[T]> for SymbolPath
+where
+    Symbol: PartialEq<T>,
+{
+    fn eq(&self, other: &&[T]) -> bool {
+        self.0[..] == **other
     }
 }
 
-impl PartialEq<SymbolPath> for str {
-    fn eq(&self, other: &SymbolPath) -> bool {
-        other == self
-    }
-}
-
-impl PartialEq<SymbolPath> for &str {
-    fn eq(&self, other: &SymbolPath) -> bool {
-        other == *self
-    }
-}
-
-impl PartialEq<Symbol> for SymbolPath {
-    fn eq(&self, other: &Symbol) -> bool {
-        self.as_simple() == Some(other)
-    }
-}
-
-impl PartialEq<Symbol> for &SymbolPath {
-    fn eq(&self, other: &Symbol) -> bool {
-        **self == *other
+impl<T> PartialEq<[T]> for &SymbolPath
+where
+    Symbol: PartialEq<T>,
+{
+    fn eq(&self, other: &[T]) -> bool {
+        self.0[..] == *other
     }
 }
 
@@ -451,9 +465,9 @@ mod tests {
         // A qualified name is one component, not the modules it spells.
         let flat = SymbolPath::from("outer::inner::same");
         assert!(flat.is_simple());
-        assert_eq!(flat, "outer::inner::same");
+        assert_eq!(flat.as_simple(), Some(&Symbol::new("outer::inner::same")));
         assert_ne!(flat, path);
-        assert_ne!(path, "outer::inner::same");
+        assert_ne!(path, SymbolPath::from("outer::inner::same"));
         assert_eq!(flat.to_symbol(), path.to_symbol());
 
         let simple = SymbolPath::from("a");
@@ -476,7 +490,7 @@ mod tests {
 
         let outer = root.child("outer");
         assert!(root < outer);
-        assert_eq!(outer, "outer");
+        assert_eq!(outer, SymbolPath::from("outer"));
         assert_eq!(outer.parent(), Some(root));
         let same = outer.child("inner").child("same");
         assert_eq!(same, SymbolPath::new(["outer", "inner", "same"]));
@@ -485,7 +499,7 @@ mod tests {
             same.sibling("other"),
             SymbolPath::new(["outer", "inner", "other"])
         );
-        assert_eq!(outer.sibling("other"), "other");
+        assert_eq!(outer.sibling("other"), SymbolPath::from("other"));
 
         let mut stack = SymbolPath::root();
         stack.push("outer");
@@ -495,6 +509,27 @@ mod tests {
         assert_eq!(stack, outer);
         assert_eq!(stack.pop(), Some(Symbol::new("outer")));
         assert_eq!(stack.pop(), None);
+    }
+
+    #[test]
+    fn a_path_equals_an_array_of_its_components() {
+        let path = SymbolPath::new(["std", "io", "Io"]);
+        assert!(path == ["std", "io", "Io"]);
+        assert!(path != ["std::io::Io"]);
+        assert!(path != ["std", "io"]);
+        assert!(SymbolPath::from("std::io::Io") == ["std::io::Io"]);
+        assert!(SymbolPath::from("main") == [crate::symbol!("main")]);
+        let root = SymbolPath::root();
+        assert!(root == <[&str; 0]>::default());
+        let by_ref: &SymbolPath = &path;
+        assert!(by_ref == ["std", "io", "Io"]);
+        let array = &["std", "io", "Io"];
+        assert!(path == array);
+        let components: &[&str] = &["std", "io", "Io"];
+        assert!(path == *components);
+        assert!(path == components);
+        assert!(by_ref == components);
+        assert!(path != components[..2]);
     }
 
     #[test]

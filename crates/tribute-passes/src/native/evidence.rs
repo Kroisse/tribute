@@ -9,9 +9,8 @@
 use std::ops::ControlFlow;
 
 use tribute_core::get_physical_closure_convention;
-use tribute_ir::dialect::ability::{self, evidence_abi, evidence_runtime_symbols};
+use tribute_ir::dialect::ability::{self, evidence_abi};
 use tribute_ir::dialect::{effect, tribute_rt};
-use trunk_ir::Symbol;
 
 use crate::effect_dispatch;
 use trunk_ir::SymbolPath;
@@ -51,7 +50,7 @@ pub fn lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) {
 }
 
 fn try_lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) -> PassRunResult {
-    if is_evidence_runtime_fn(&Symbol::new(func_op.sym_name(ctx))) {
+    if is_evidence_runtime_fn(func_op.sym_name(ctx)) {
         return Ok(());
     }
     lower_effect_abi_to_native(ctx, func_op)?;
@@ -133,8 +132,8 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
 // Phase 2: Rewrite evidence ops inside function bodies
 // =============================================================================
 
-fn is_evidence_runtime_fn(name: &Symbol) -> bool {
-    evidence_runtime_symbols().contains(name)
+fn is_evidence_runtime_fn(name: &str) -> bool {
+    evidence_abi::ALL.contains(&name)
 }
 
 fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: Module) {
@@ -564,7 +563,6 @@ mod tests {
     }
 
     fn func_by_name_recursive(ctx: &IrContext, module: Module, name: &'static str) -> func::Func {
-        let name = Symbol::new(name);
         let mut found = None;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             if let Ok(func_op) = func::Func::from_op(ctx, op)
@@ -734,13 +732,9 @@ mod tests {
             .iter()
             .filter_map(|&op| func::Call::from_op(&ctx, op).ok())
             .collect();
-        let callees: Vec<_> = calls.iter().map(|call| call.callee(&ctx)).collect();
-        assert_eq!(
-            callees,
-            [
-                Symbol::new(evidence_abi::MASK),
-                Symbol::new(evidence_abi::DUP)
-            ]
+        itertools::assert_equal(
+            calls.iter().map(|call| call.callee(&ctx)),
+            [[evidence_abi::MASK], [evidence_abi::DUP]],
         );
         let ability_ids: Vec<_> = calls
             .iter()
@@ -791,14 +785,13 @@ mod tests {
             .iter()
             .filter_map(|&op| func::Call::from_op(&ctx, op).ok())
             .collect();
-        let callees: Vec<_> = calls.iter().map(|call| call.callee(&ctx)).collect();
-        assert_eq!(
-            callees,
+        itertools::assert_equal(
+            calls.iter().map(|call| call.callee(&ctx)),
             [
-                Symbol::new(evidence_abi::TAIL),
-                Symbol::new(evidence_abi::PUSH),
-                Symbol::new(evidence_abi::WITH_TAIL)
-            ]
+                [evidence_abi::TAIL],
+                [evidence_abi::PUSH],
+                [evidence_abi::WITH_TAIL],
+            ],
         );
         let constant = |value: ValueRef| match ctx.value_def(value) {
             trunk_ir::refs::ValueDef::OpResult(op, _) => arith::Const::from_op(&ctx, op)

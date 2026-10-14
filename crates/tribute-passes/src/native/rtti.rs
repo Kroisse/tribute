@@ -1212,7 +1212,7 @@ mod tests {
                     released.push(clif::Load::from_op(&ctx, load).unwrap().offset(&ctx));
                 }
                 if let Ok(call) = clif::Call::from_op(&ctx, op)
-                    && call.callee(&ctx) == DEALLOC_FN
+                    && call.callee(&ctx) == [DEALLOC_FN]
                     && let trunk_ir::ValueDef::OpResult(size, _) =
                         ctx.value_def(ctx.op_operands(op)[1])
                 {
