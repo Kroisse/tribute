@@ -2,7 +2,7 @@
 
 use tribute_front::SourceCst;
 use tribute_front::ast::{
-    AbilityId, Decl, Module, SpanMap, TypeAnnotation, TypeAnnotationKind, TypedRef,
+    AbilityId, Decl, Module, ModuleItem, SpanMap, TypeAnnotation, TypeAnnotationKind, TypedRef,
 };
 use tribute_front::query as ast_query;
 use trunk_ir::{Span, Symbol};
@@ -47,22 +47,22 @@ fn collect_module(
 ) {
     for decl in &module.decls {
         match decl {
-            Decl::Function(func) => {
+            ModuleItem::Decl(Decl::Function(func)) => {
                 for effect in func.effects.iter().flatten() {
                     collect_effect(db, effect, span_map, entries);
                 }
             }
-            Decl::Module(module) => {
+            ModuleItem::Module(module) => {
                 if let Some(body) = &module.body {
                     let nested = Module::new(module.id, Some(module.name.clone()), body.clone());
                     collect_module(db, &nested, span_map, entries);
                 }
             }
-            Decl::ExternFunction(_)
-            | Decl::Struct(_)
-            | Decl::Enum(_)
-            | Decl::Ability(_)
-            | Decl::Use(_) => {}
+            ModuleItem::Decl(Decl::ExternFunction(_))
+            | ModuleItem::Decl(Decl::Struct(_))
+            | ModuleItem::Decl(Decl::Enum(_))
+            | ModuleItem::Decl(Decl::Ability(_))
+            | ModuleItem::Decl(Decl::Use(_)) => {}
         }
     }
 }

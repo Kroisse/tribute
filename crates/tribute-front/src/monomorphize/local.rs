@@ -13,7 +13,8 @@ use crate::ast::visit::{
 };
 use crate::ast::{
     CallingConvention, Decl, EffectRow, EffectVar, Expr, ExprKind, HandlerArm, HandlerKind,
-    LocalId, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypedRef, collect_effect_vars,
+    LocalId, ModuleItem, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypedRef,
+    collect_effect_vars,
 };
 use crate::typeck::{RowSubst, TypeSubst};
 use trunk_ir::SymbolPath;
@@ -25,7 +26,7 @@ use trunk_ir::SymbolPath;
 /// are settled again after each round of copies.
 pub(super) fn settle_local_lambdas<'db>(
     db: &'db dyn salsa::Database,
-    decls: &mut [Decl<TypedRef<'db>>],
+    decls: &mut [ModuleItem<TypedRef<'db>>],
     metadata: &mut MonomorphizeMetadata<'db>,
     keys: &mut InstanceKeys<'db>,
 ) {
@@ -51,7 +52,7 @@ struct LambdaCopy {
 /// a binding was copied.
 fn split_local_lambdas<'db>(
     db: &'db dyn salsa::Database,
-    decls: &mut [Decl<TypedRef<'db>>],
+    decls: &mut [ModuleItem<TypedRef<'db>>],
     metadata: &mut MonomorphizeMetadata<'db>,
     keys: &InstanceKeys<'db>,
 ) -> bool {

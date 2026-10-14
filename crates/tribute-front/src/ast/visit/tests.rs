@@ -2,7 +2,7 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use super::*;
 use crate::ast::{
-    BinOpKind, CallSyntax, FieldInit, FieldPattern, LiteralPattern, ModuleDecl, Param,
+    BinOpKind, CallSyntax, FieldInit, FieldPattern, LiteralPattern, ModuleDecl, ModuleItem, Param,
 };
 
 fn id(raw: usize) -> NodeId {
@@ -234,11 +234,11 @@ fn sample() -> Module<u32> {
     Module::new(
         id(0),
         None,
-        vec![Decl::Module(ModuleDecl {
+        vec![ModuleItem::Module(ModuleDecl {
             id: id(98),
             name: Symbol::new("inner"),
             is_pub: false,
-            body: Some(vec![Decl::Function(func)]),
+            body: Some(vec![ModuleItem::Decl(Decl::Function(func))]),
         })],
     )
 }
@@ -365,13 +365,13 @@ fn closures_visit_phase_values_through_refs() {
 #[test]
 fn for_each_visits_expressions_in_pre_order() {
     let module = sample();
-    let Decl::Module(ModuleDecl {
+    let ModuleItem::Module(ModuleDecl {
         body: Some(decls), ..
     }) = &module.decls[0]
     else {
         unreachable!()
     };
-    let Decl::Function(func) = &decls[0] else {
+    let ModuleItem::Decl(Decl::Function(func)) = &decls[0] else {
         unreachable!()
     };
     let mut ids = Vec::new();

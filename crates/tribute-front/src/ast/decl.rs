@@ -8,7 +8,7 @@
 //! - Imports: `use std::collections::List`
 //! - Modules: `mod math { ... }`
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use super::expr::Expr;
 use super::node_id::NodeId;
@@ -23,18 +23,48 @@ pub struct Module<V> {
     pub id: NodeId,
     /// The module name (derived from file path or explicit module declaration).
     pub name: Option<Symbol>,
-    /// The declarations in the module.
-    pub decls: Vec<Decl<V>>,
+    /// The items in the module.
+    pub decls: Vec<ModuleItem<V>>,
 }
 
 impl<V> Module<V> {
     /// Create a new module.
-    pub fn new(id: NodeId, name: Option<Symbol>, decls: Vec<Decl<V>>) -> Self {
-        Self { id, name, decls }
+    pub fn new(
+        id: NodeId,
+        name: Option<Symbol>,
+        decls: impl IntoIterator<Item = impl Into<ModuleItem<V>>>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            decls: decls.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
-/// A declaration in a module.
+/// An item of a module body: a declaration or a nested module.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub enum ModuleItem<V> {
+    /// A declaration.
+    Decl(Decl<V>),
+    /// Inline module declaration.
+    Module(ModuleDecl<V>),
+}
+
+impl<V> From<Decl<V>> for ModuleItem<V> {
+    fn from(decl: Decl<V>) -> Self {
+        ModuleItem::Decl(decl)
+    }
+}
+
+impl<V> From<ModuleDecl<V>> for ModuleItem<V> {
+    fn from(module: ModuleDecl<V>) -> Self {
+        ModuleItem::Module(module)
+    }
+}
+
+/// A declaration. Modules are not declarations; they group them in the
+/// source tree (see [`ModuleItem`]) and give them their path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Decl<V> {
     /// Function declaration.
@@ -49,8 +79,6 @@ pub enum Decl<V> {
     Ability(AbilityDecl),
     /// Import declaration.
     Use(UseDecl),
-    /// Inline module declaration.
-    Module(ModuleDecl<V>),
 }
 
 /// Extern function declaration: `extern "abi" fn name(params) -> ReturnType`
@@ -249,7 +277,64 @@ pub struct ModuleDecl<V> {
     /// Module body (declarations). None for external modules (file-based).
     // Inline modules own their nested declarations; V is the only phase-dependent value.
     #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
-    pub body: Option<Vec<Decl<V>>>,
+    pub body: Option<Vec<ModuleItem<V>>>,
+}
+
+/// A declaration with the path of the module that encloses it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct DeclEntry<V> {
+    /// The enclosing module: the path of the declaration without its own
+    /// name. A top-level declaration is in the root module.
+    pub module: SymbolPath,
+    /// The declaration.
+    pub decl: Decl<V>,
+}
+
+/// The declarations of a module tree, each with its module path.
+///
+/// Entries are in a fixed order: the source declarations in source order,
+/// as a preorder walk of the tree visits them, followed by any entries a
+/// later phase appends.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct DeclTable<V> {
+    /// Node ID of the module the table was built from.
+    pub id: NodeId,
+    /// The entries, in table order.
+    pub entries: Vec<DeclEntry<V>>,
+}
+
+impl<V> DeclTable<V> {
+    /// Flatten a module tree. A file-based module without an inline body
+    /// contributes no entries.
+    pub fn from_module(module: Module<V>) -> Self {
+        fn flatten<V>(
+            items: Vec<ModuleItem<V>>,
+            module: &mut SymbolPath,
+            entries: &mut Vec<DeclEntry<V>>,
+        ) {
+            for item in items {
+                match item {
+                    ModuleItem::Decl(decl) => entries.push(DeclEntry {
+                        module: module.clone(),
+                        decl,
+                    }),
+                    ModuleItem::Module(inner) => {
+                        let Some(body) = inner.body else { continue };
+                        module.push(inner.name);
+                        flatten(body, module, entries);
+                        module.pop();
+                    }
+                }
+            }
+        }
+
+        let mut entries = Vec::new();
+        flatten(module.decls, &mut SymbolPath::root(), &mut entries);
+        Self {
+            id: module.id,
+            entries,
+        }
+    }
 }
 
 // ============================================================================
@@ -284,3 +369,70 @@ pub type ResolvedFuncDecl<'db> = FuncDecl<ResolvedRef<'db>>;
 
 /// Function declaration after type checking.
 pub type TypedFuncDecl<'db> = FuncDecl<TypedRef<'db>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn structure(id: usize, name: &str) -> ModuleItem<u32> {
+        Decl::Struct(StructDecl {
+            id: NodeId::from_raw(id),
+            is_pub: false,
+            name: Symbol::new(name),
+            type_params: vec![],
+            fields: vec![],
+        })
+        .into()
+    }
+
+    fn module(id: usize, name: &str, body: Option<Vec<ModuleItem<u32>>>) -> ModuleItem<u32> {
+        ModuleDecl {
+            id: NodeId::from_raw(id),
+            name: Symbol::new(name),
+            is_pub: false,
+            body,
+        }
+        .into()
+    }
+
+    #[test]
+    fn a_table_lists_declarations_in_source_order_with_their_modules() {
+        let tree = Module::new(
+            NodeId::from_raw(0),
+            None,
+            [
+                structure(1, "A"),
+                module(
+                    2,
+                    "outer",
+                    Some(vec![
+                        structure(3, "B"),
+                        module(4, "inner", Some(vec![structure(5, "C")])),
+                        structure(6, "D"),
+                    ]),
+                ),
+                module(7, "file", None),
+                structure(8, "E"),
+            ],
+        );
+
+        let table = DeclTable::from_module(tree);
+
+        assert_eq!(table.id, NodeId::from_raw(0));
+        itertools::assert_equal(
+            table.entries.iter().map(|entry| {
+                let Decl::Struct(declaration) = &entry.decl else {
+                    panic!("only structs were declared");
+                };
+                (entry.module.clone(), declaration.name.clone())
+            }),
+            [
+                (SymbolPath::root(), Symbol::new("A")),
+                (SymbolPath::new(["outer"]), Symbol::new("B")),
+                (SymbolPath::new(["outer", "inner"]), Symbol::new("C")),
+                (SymbolPath::new(["outer"]), Symbol::new("D")),
+                (SymbolPath::root(), Symbol::new("E")),
+            ],
+        );
+    }
+}

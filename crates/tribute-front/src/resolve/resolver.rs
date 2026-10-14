@@ -12,9 +12,9 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
     Arm, Decl, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit, FieldPattern, FuncDecl,
-    HandlerArm, HandlerKind, LocalId, LocalIdGen, Module, ModulePath, NodeId, Param, ParamDecl,
-    Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind,
-    TypeParamDecl, UnresolvedName, UseDecl,
+    HandlerArm, HandlerKind, LocalId, LocalIdGen, Module, ModuleItem, ModulePath, NodeId, Param,
+    ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation,
+    TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName, UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
@@ -732,11 +732,7 @@ impl<'db> Resolver<'db> {
     /// Resolve a module, transforming all declarations.
     pub fn resolve_module(&mut self, module: &Module<UnresolvedName>) -> Module<ResolvedRef<'db>> {
         self.report_field_lens_redefinitions(&module.decls);
-        let decls = module
-            .decls
-            .iter()
-            .map(|decl| self.resolve_decl(decl))
-            .collect();
+        let decls = self.resolve_items(&module.decls);
 
         Module {
             id: module.id,
@@ -780,7 +776,6 @@ impl<'db> Resolver<'db> {
                 Decl::Ability(a)
             }
             Decl::Use(u) => Decl::Use(self.resolve_use_decl(u)),
-            Decl::Module(m) => Decl::Module(self.resolve_module_decl(m)),
         }
     }
 
@@ -799,8 +794,8 @@ impl<'db> Resolver<'db> {
             .body
             .iter()
             .flatten()
-            .filter_map(|decl| match decl {
-                Decl::Use(import) => Some(import),
+            .filter_map(|item| match item {
+                ModuleItem::Decl(Decl::Use(import)) => Some(import),
                 _ => None,
             })
             .collect();
@@ -857,7 +852,7 @@ impl<'db> Resolver<'db> {
             .collect();
         self.module_imported_functions.push(functions);
         self.method_functions.push(HashMap::default());
-        let body = module.body.as_ref().map(|decls| self.resolve_decls(decls));
+        let body = module.body.as_ref().map(|items| self.resolve_items(items));
         self.method_functions.pop();
         self.module_imported_functions.pop();
         self.module_imports.pop();
@@ -874,16 +869,18 @@ impl<'db> Resolver<'db> {
     /// Report a companion module that declares a function the struct beside
     /// it already has, `T::f::set` or `T::f::modify` for a named field `f`,
     /// and record the function as a redefinition.
-    fn report_field_lens_redefinitions(&mut self, decls: &[Decl<UnresolvedName>]) {
-        let companions = decls.iter().filter_map(|decl| match decl {
-            Decl::Module(module) => Some(module),
-            _ => None,
+    fn report_field_lens_redefinitions(&mut self, items: &[ModuleItem<UnresolvedName>]) {
+        let companions = items.iter().filter_map(|item| match item {
+            ModuleItem::Module(module) => Some(module),
+            ModuleItem::Decl(_) => None,
         });
         for companion in companions {
-            let fields: Vec<&Symbol> = decls
+            let fields: Vec<&Symbol> = items
                 .iter()
-                .filter_map(|decl| match decl {
-                    Decl::Struct(declaration) if declaration.name == companion.name => {
+                .filter_map(|item| match item {
+                    ModuleItem::Decl(Decl::Struct(declaration))
+                        if declaration.name == companion.name =>
+                    {
                         Some(&declaration.fields)
                     }
                     _ => None,
@@ -895,15 +892,17 @@ impl<'db> Resolver<'db> {
                 .body
                 .iter()
                 .flatten()
-                .filter_map(|decl| match decl {
-                    Decl::Module(field) if fields.contains(&&field.name) => Some(field),
+                .filter_map(|item| match item {
+                    ModuleItem::Module(field) if fields.contains(&&field.name) => Some(field),
                     _ => None,
                 });
             for field in lenses {
-                for decl in field.body.iter().flatten() {
-                    let (id, name) = match decl {
-                        Decl::Function(function) => (function.id, &function.name),
-                        Decl::ExternFunction(function) => (function.id, &function.name),
+                for item in field.body.iter().flatten() {
+                    let (id, name) = match item {
+                        ModuleItem::Decl(Decl::Function(function)) => (function.id, &function.name),
+                        ModuleItem::Decl(Decl::ExternFunction(function)) => {
+                            (function.id, &function.name)
+                        }
                         _ => continue,
                     };
                     if !FIELD_LENS_FUNCTIONS.iter().any(|lens| name == lens) {
@@ -925,19 +924,29 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Resolve the declarations of a module body, without the functions
-    /// reported as redefinitions.
-    fn resolve_decls(&mut self, decls: &[Decl<UnresolvedName>]) -> Vec<Decl<ResolvedRef<'db>>> {
-        let mut resolved = Vec::with_capacity(decls.len());
-        for decl in decls {
-            let redefinition = match decl {
-                Decl::Function(function) => self.redefinitions.contains(&function.id),
-                Decl::ExternFunction(function) => self.redefinitions.contains(&function.id),
-                _ => false,
+    /// Resolve the items of a module body, without the functions reported
+    /// as redefinitions.
+    fn resolve_items(
+        &mut self,
+        items: &[ModuleItem<UnresolvedName>],
+    ) -> Vec<ModuleItem<ResolvedRef<'db>>> {
+        let mut resolved = Vec::with_capacity(items.len());
+        for item in items {
+            let resolved_item = match item {
+                ModuleItem::Decl(Decl::Function(function))
+                    if self.redefinitions.contains(&function.id) =>
+                {
+                    continue;
+                }
+                ModuleItem::Decl(Decl::ExternFunction(function))
+                    if self.redefinitions.contains(&function.id) =>
+                {
+                    continue;
+                }
+                ModuleItem::Decl(decl) => ModuleItem::Decl(self.resolve_decl(decl)),
+                ModuleItem::Module(module) => ModuleItem::Module(self.resolve_module_decl(module)),
             };
-            if !redefinition {
-                resolved.push(self.resolve_decl(decl));
-            }
+            resolved.push(resolved_item);
         }
         resolved
     }

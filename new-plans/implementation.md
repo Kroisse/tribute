@@ -915,10 +915,22 @@ keep the origin recorded at their shared annotation-to-row conversion point.
 | 경계 | 소유하는 정보와 책임 |
 | --- | --- |
 | 구문 분석 | unresolved AST, 원본 위치, 구문 진단 |
-| 이름 해석 | 선언과 참조의 identity, lexical binding |
-| 타입 검사 | typed AST, type schemes, 표현식 타입, 선택된 callable과 operation 인스턴스 |
-| 특수화 | 구체 인스턴스의 AST, 함께 치환된 메타데이터, 원본 위치 대응 |
+| 이름 해석 | 선언과 참조의 identity, lexical binding, 선언 테이블 |
+| 타입 검사 | typed 선언 테이블, type schemes, 표현식 타입, 선택된 callable과 operation 인스턴스 |
+| 특수화 | 구체 인스턴스를 더한 선언 테이블, 함께 치환된 메타데이터, 원본 위치 대응 |
 | 논리 IR 생성 | source-logical callable/control IR, 검증에 필요한 선언 메타데이터 |
+
+모듈 계층은 구문 분석과 이름 해석에서만 의미를 가진다. Scope, `use`,
+companion 모듈과 visibility는 이 계층을 따라 해석한다. 이름 해석은 그 결과를
+선언 테이블로 내보낸다. 테이블의 각 항목은 선언 하나와 그 선언을 둘러싼 모듈의
+path를 가지며, 모듈 path는 선언 identity의 path에서 마지막 component를 뺀 것과
+같다. 이후 단계는 모듈 트리를 다시 걸어 path를 재구성하지 않고 테이블 항목에서
+읽는다. Scope에 따라 달라지는 타입 조회도 항목의 모듈 path를 기준으로 한다.
+
+테이블의 순서는 명시적이다. 원본 선언은 소스 순서를 따르고, 특수화가 만든
+인스턴스는 정해진 정렬 순서로 뒤에 덧붙는다. 해시 순서는 테이블 순서나 IR 선언
+순서에 영향을 주지 않는다. 특수화는 인스턴스를 그 path의 모듈에 속한 새 항목으로
+더하며, 모듈 path를 표현하기 위한 합성 모듈 선언을 만들지 않는다.
 
 타입 검사 결과와 특수화 결과는 서로 다른 단계의 계약이다. Lowering 입력은
 특수화 결과에서 구성하며, AST 복제와 대응 메타데이터의 복제·치환을 하나의

@@ -1,7 +1,8 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
 use super::{MonomorphizeMetadata, collect::is_concrete_type};
 use crate::ast::{
-    Decl, ExprKind, FuncDecl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeScheme, TypedRef,
+    Decl, ExprKind, FuncDecl, FuncDefId, Module, ModuleItem, NodeId, ResolvedRef, Type, TypeScheme,
+    TypedRef,
 };
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -45,18 +46,18 @@ pub(super) fn validate<'db>(
 ) -> Vec<InstanceError> {
     fn declarations<'a, 'db>(
         db: &'db dyn salsa::Database,
-        decls: &'a [Decl<TypedRef<'db>>],
+        decls: &'a [ModuleItem<TypedRef<'db>>],
         prefix: &mut SymbolPath,
         functions: &mut HashMap<FuncDefId<'db>, &'a FuncDecl<TypedRef<'db>>>,
         fields: &mut HashSet<(crate::ast::TypeDefId<'db>, Symbol)>,
     ) {
         for decl in decls {
             match decl {
-                Decl::Function(func) => {
+                ModuleItem::Decl(Decl::Function(func)) => {
                     let name = prefix.child(func.name.clone());
                     functions.insert(FuncDefId::new(db, name), func);
                 }
-                Decl::Struct(decl) => {
+                ModuleItem::Decl(Decl::Struct(decl)) => {
                     let name = prefix.child(decl.name.clone());
                     let owner = crate::ast::TypeDefId::source(db, name, decl.id);
                     for field in &decl.fields {
@@ -65,7 +66,7 @@ pub(super) fn validate<'db>(
                         }
                     }
                 }
-                Decl::Module(module) => {
+                ModuleItem::Module(module) => {
                     if let Some(body) = &module.body {
                         prefix.push(module.name.clone());
                         declarations(db, body, prefix, functions, fields);

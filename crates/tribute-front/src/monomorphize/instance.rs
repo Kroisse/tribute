@@ -13,8 +13,8 @@ use super::MonomorphizeMetadata;
 use crate::ast::visit::{Visit, walk_expr, walk_pattern};
 use crate::ast::{
     AbilityId, CallingConvention, Decl, EffectVar, Expr, ExprKind, FuncDecl, FuncDefId, Module,
-    NodeId, Pattern, PatternKind, RowClasses, Stmt, Type, TypeKind, TypeScheme, TypedRef,
-    calling_convention_for_effect_row_in, collect_effect_vars,
+    ModuleItem, NodeId, Pattern, PatternKind, RowClasses, Stmt, Type, TypeKind, TypeScheme,
+    TypedRef, calling_convention_for_effect_row_in, collect_effect_vars,
 };
 use crate::typeck::{FunctionInstance, FunctionInstanceOrigin};
 
@@ -178,7 +178,7 @@ impl<'db> InstanceKeys<'db> {
     /// its uses select. Returns whether a class changed.
     pub(crate) fn settle_local_classes(
         &mut self,
-        decls: &[Decl<TypedRef<'db>>],
+        decls: &[ModuleItem<TypedRef<'db>>],
         metadata: &MonomorphizeMetadata<'db>,
     ) -> bool {
         let mut changed = false;
@@ -275,59 +275,66 @@ impl<'db> InstanceKeys<'db> {
 /// itself a module, with the qualified name of a function. That name is the
 /// instance its references are inside.
 pub(super) fn for_each_declaration<'a, 'db>(
-    decls: &'a [Decl<TypedRef<'db>>],
+    items: &'a [ModuleItem<TypedRef<'db>>],
     module: &mut SymbolPath,
     f: &mut impl FnMut(Option<&Symbol>, &'a Decl<TypedRef<'db>>),
 ) {
-    for decl in decls {
-        match decl {
-            Decl::Function(function) => {
+    for item in items {
+        match item {
+            ModuleItem::Decl(decl @ Decl::Function(function)) => {
                 f(Some(&module.child(function.name.clone()).to_symbol()), decl)
             }
-            Decl::Module(inner) => {
+            ModuleItem::Module(inner) => {
                 if let Some(body) = &inner.body {
                     module.push(inner.name.clone());
                     for_each_declaration(body, module, f);
                     module.pop();
                 }
             }
-            _ => f(None, decl),
+            ModuleItem::Decl(decl) => f(None, decl),
         }
     }
 }
 
 /// [`for_each_declaration`] over declarations to change.
 pub(super) fn for_each_declaration_mut<'db>(
-    decls: &mut [Decl<TypedRef<'db>>],
+    items: &mut [ModuleItem<TypedRef<'db>>],
     module: &mut SymbolPath,
     f: &mut impl FnMut(Option<&Symbol>, &mut Decl<TypedRef<'db>>),
 ) {
-    for decl in decls {
-        match decl {
-            Decl::Function(function) => {
-                f(Some(&module.child(function.name.clone()).to_symbol()), decl)
+    for item in items {
+        match item {
+            ModuleItem::Decl(decl) => {
+                let name = match decl {
+                    Decl::Function(function) => {
+                        Some(module.child(function.name.clone()).to_symbol())
+                    }
+                    _ => None,
+                };
+                f(name.as_ref(), decl)
             }
-            Decl::Module(inner) => {
+            ModuleItem::Module(inner) => {
                 if let Some(body) = &mut inner.body {
                     module.push(inner.name.clone());
                     for_each_declaration_mut(body, module, f);
                     module.pop();
                 }
             }
-            _ => f(None, decl),
         }
     }
 }
 
 fn for_each_function<'a, 'db>(
-    decls: &'a [Decl<TypedRef<'db>>],
+    items: &'a [ModuleItem<TypedRef<'db>>],
     prefix: &mut SymbolPath,
     f: &mut impl FnMut(SymbolPath, &'a FuncDecl<TypedRef<'db>>),
 ) {
-    for decl in decls {
-        match decl {
-            Decl::Function(function) => f(prefix.child(function.name.clone()), function),
-            Decl::Module(module) => {
+    for item in items {
+        match item {
+            ModuleItem::Decl(Decl::Function(function)) => {
+                f(prefix.child(function.name.clone()), function)
+            }
+            ModuleItem::Module(module) => {
                 if let Some(body) = &module.body {
                     prefix.push(module.name.clone());
                     for_each_function(body, prefix, f);

@@ -17,7 +17,9 @@ use trunk_ir::{Symbol, SymbolPath};
 
 pub use self::instance::InstanceRowClasses;
 use self::instance::{InstanceKey, InstanceKeys};
-use crate::ast::{CtorId, Decl, EffectRow, FuncDefId, Module, NodeId, Type, TypeScheme, TypedRef};
+use crate::ast::{
+    CtorId, Decl, EffectRow, FuncDefId, Module, ModuleItem, NodeId, Type, TypeScheme, TypedRef,
+};
 use crate::typeck::subst::{BoundVarOutOfBounds, substitute_bound_vars, substitute_effect_row};
 use crate::typeck::{
     EvidenceStep, InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature,
@@ -141,10 +143,12 @@ pub fn monomorphize_functions<'db>(
             &metadata.function_instances,
             &keys,
         );
-        let (placements, mut specialized_decls): (Vec<_>, Vec<Decl<TypedRef<'db>>>) =
+        let (placements, mut specialized_decls): (Vec<_>, Vec<ModuleItem<TypedRef<'db>>>) =
             specialized_declarations
                 .into_iter()
-                .map(|(placement, declaration)| (placement, Decl::Function(declaration)))
+                .map(|(placement, declaration)| {
+                    (placement, ModuleItem::Decl(Decl::Function(declaration)))
+                })
                 .unzip();
         local::settle_local_lambdas(db, &mut specialized_decls, &mut metadata, &mut keys);
         rewrite::rewrite_decls(
@@ -168,7 +172,7 @@ pub fn monomorphize_functions<'db>(
                 specialized_extern_declarations
                     .into_iter()
                     .map(|(placement, declaration)| {
-                        placement.place(id, Decl::ExternFunction(declaration))
+                        placement.place(id, Decl::ExternFunction(declaration).into())
                     }),
             );
         all_function_types.extend(specialized_function_types);
@@ -342,12 +346,16 @@ pub fn monomorphize_functions<'db>(
         module.decls.extend(
             specialized_structs
                 .into_iter()
-                .map(|(placement, declaration)| placement.place(id, Decl::Struct(declaration))),
+                .map(|(placement, declaration)| {
+                    placement.place(id, Decl::Struct(declaration).into())
+                }),
         );
         module.decls.extend(
             specialized_enums
                 .into_iter()
-                .map(|(placement, declaration)| placement.place(id, Decl::Enum(declaration))),
+                .map(|(placement, declaration)| {
+                    placement.place(id, Decl::Enum(declaration).into())
+                }),
         );
         module
     } else {

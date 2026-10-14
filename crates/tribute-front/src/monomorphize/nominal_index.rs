@@ -2,7 +2,9 @@
 use rustc_hash::FxHashMap as HashMap;
 use trunk_ir::SymbolPath;
 
-use crate::ast::{CtorId, Decl, EnumDecl, Module, NodeId, StructDecl, TypeDefId, TypedRef};
+use crate::ast::{
+    CtorId, Decl, EnumDecl, Module, ModuleItem, NodeId, StructDecl, TypeDefId, TypedRef,
+};
 
 pub(super) struct Constructor<'db> {
     pub node: NodeId,
@@ -57,12 +59,12 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
     fn collect(
         &mut self,
         db: &'db dyn salsa::Database,
-        decls: &'ast [Decl<TypedRef<'db>>],
+        decls: &'ast [ModuleItem<TypedRef<'db>>],
         prefix: &mut SymbolPath,
     ) {
         for decl in decls {
             let (name, node, declaration) = match decl {
-                Decl::Struct(s) => (
+                ModuleItem::Decl(Decl::Struct(s)) => (
                     s.name.clone(),
                     s.id,
                     Declaration {
@@ -74,7 +76,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                         }],
                     },
                 ),
-                Decl::Enum(e) => (
+                ModuleItem::Decl(Decl::Enum(e)) => (
                     e.name.clone(),
                     e.id,
                     Declaration {
@@ -90,7 +92,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                             .collect(),
                     },
                 ),
-                Decl::Module(m) => {
+                ModuleItem::Module(m) => {
                     if let Some(body) = &m.body {
                         prefix.push(m.name.clone());
                         self.collect(db, body, prefix);

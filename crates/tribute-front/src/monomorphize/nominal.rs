@@ -176,7 +176,7 @@ fn close_dependencies<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Decl;
+    use crate::ast::{Decl, ModuleItem};
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
@@ -358,7 +358,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .decls
             .iter()
             .find_map(|d| match d {
-                Decl::Struct(s) => Some(s),
+                ModuleItem::Decl(Decl::Struct(s)) => Some(s),
                 _ => None,
             })
             .unwrap();

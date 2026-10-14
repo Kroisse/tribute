@@ -9,8 +9,8 @@ use trunk_ir::Symbol;
 
 use crate::ast::visit::{RefSite, Visit, VisitMut};
 use crate::ast::{
-    Decl, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId, Module, ModuleDecl, NodeId,
-    StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme,
+    Decl, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId, Module, ModuleDecl, ModuleItem,
+    NodeId, StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme,
     TypedRef, VariantDecl,
 };
 use crate::typeck::subst::substitute_bound_vars;
@@ -35,18 +35,18 @@ impl Placement {
     pub(super) fn place<'db>(
         self,
         id: NodeId,
-        mut declaration: Decl<TypedRef<'db>>,
-    ) -> Decl<TypedRef<'db>> {
+        mut declaration: ModuleItem<TypedRef<'db>>,
+    ) -> ModuleItem<TypedRef<'db>> {
         let name = self
             .0
             .leaf()
             .expect("a declaration's path has its name")
             .clone();
         match &mut declaration {
-            Decl::Function(function) => function.name = name,
-            Decl::ExternFunction(function) => function.name = name,
-            Decl::Struct(structure) => structure.name = name,
-            Decl::Enum(enumeration) => enumeration.name = name,
+            ModuleItem::Decl(Decl::Function(function)) => function.name = name,
+            ModuleItem::Decl(Decl::ExternFunction(function)) => function.name = name,
+            ModuleItem::Decl(Decl::Struct(structure)) => structure.name = name,
+            ModuleItem::Decl(Decl::Enum(enumeration)) => enumeration.name = name,
             _ => unreachable!("only functions and nominal types are specialized"),
         }
         self.0
@@ -54,7 +54,7 @@ impl Placement {
             .iter()
             .rev()
             .fold(declaration, |declaration, name| {
-                Decl::Module(ModuleDecl {
+                ModuleItem::Module(ModuleDecl {
                     id,
                     name: name.clone(),
                     is_pub: false,
@@ -501,17 +501,17 @@ fn collect_func_decls<'a, 'db>(
 }
 
 fn collect_func_decls_inner<'a, 'db>(
-    decls: &'a [Decl<TypedRef<'db>>],
+    decls: &'a [ModuleItem<TypedRef<'db>>],
     prefix: &mut SymbolPath,
     map: &mut HashMap<SymbolPath, &'a FuncDecl<TypedRef<'db>>>,
 ) {
     for decl in decls {
         match decl {
-            Decl::Function(func) => {
+            ModuleItem::Decl(Decl::Function(func)) => {
                 let qualified = prefix.child(func.name.clone());
                 map.insert(qualified, func);
             }
-            Decl::Module(m) => {
+            ModuleItem::Module(m) => {
                 if let Some(body) = &m.body {
                     prefix.push(m.name.clone());
                     collect_func_decls_inner(body, prefix, map);
@@ -533,16 +533,16 @@ fn collect_extern_function_decls<'a, 'db>(
 }
 
 fn collect_extern_function_decls_inner<'a, 'db>(
-    decls: &'a [Decl<TypedRef<'db>>],
+    decls: &'a [ModuleItem<TypedRef<'db>>],
     prefix: &mut SymbolPath,
     declarations: &mut HashMap<SymbolPath, &'a ExternFuncDecl>,
 ) {
     for decl in decls {
         match decl {
-            Decl::ExternFunction(func) => {
+            ModuleItem::Decl(Decl::ExternFunction(func)) => {
                 declarations.insert(prefix.child(func.name.clone()), func);
             }
-            Decl::Module(module) => {
+            ModuleItem::Module(module) => {
                 if let Some(body) = &module.body {
                     prefix.push(module.name.clone());
                     collect_extern_function_decls_inner(body, prefix, declarations);

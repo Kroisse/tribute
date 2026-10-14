@@ -22,7 +22,7 @@ use tree_sitter::{Node, Tree};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    Decl, FuncDecl, Module, ResolvedRef, SpanMap, TypeScheme, TypedRef, UnresolvedName,
+    Decl, FuncDecl, Module, ModuleItem, ResolvedRef, SpanMap, TypeScheme, TypedRef, UnresolvedName,
 };
 use crate::source_file::SourceCst;
 use crate::typeck::TypeCheckOutput;
@@ -152,7 +152,7 @@ pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
         .decls
         .iter()
         .filter_map(|decl| match decl {
-            Decl::Function(f) => Some(f.name.clone()),
+            ModuleItem::Decl(Decl::Function(f)) => Some(f.name.clone()),
             _ => None,
         })
         .collect()
@@ -206,7 +206,7 @@ pub fn function_schemes<'db>(
 /// Find the function declaration named `name` in `module`.
 fn find_func<'a, V>(module: &'a Module<V>, name: &Symbol) -> Option<&'a FuncDecl<V>> {
     module.decls.iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == *name => Some(f),
+        ModuleItem::Decl(Decl::Function(f)) if f.name == *name => Some(f),
         _ => None,
     })
 }
@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(module.decls.len(), 1);
 
         // Verify span_map has entries for the module's nodes
-        if let crate::ast::Decl::Function(func) = &module.decls[0] {
+        if let crate::ast::ModuleItem::Decl(crate::ast::Decl::Function(func)) = &module.decls[0] {
             assert!(sm.get(func.id).is_some(), "Span map should have entries");
         }
     }
@@ -380,7 +380,7 @@ mod tests {
         let sm = sm.unwrap();
 
         // The function decl should have a valid span in the map
-        if let crate::ast::Decl::Function(func) = &module.decls[0] {
+        if let crate::ast::ModuleItem::Decl(crate::ast::Decl::Function(func)) = &module.decls[0] {
             let func_span = sm.get(func.id);
             assert!(func_span.is_some(), "Function decl should have span in map");
         }

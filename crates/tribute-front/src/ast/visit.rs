@@ -29,7 +29,7 @@
 
 use super::{
     Arm, Decl, Expr, ExprKind, FieldPattern, FuncDecl, HandlerArm, HandlerKind, Module, ModuleDecl,
-    NodeId, Pattern, PatternKind, Stmt,
+    ModuleItem, NodeId, Pattern, PatternKind, Stmt,
 };
 
 /// Where a phase value sits in the tree.
@@ -104,15 +104,24 @@ pub fn walk_module<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
     visitor: &mut T,
     module: &'ast Module<V>,
 ) {
-    for decl in &module.decls {
-        visitor.visit_decl(decl);
+    for item in &module.decls {
+        walk_module_item(visitor, item);
+    }
+}
+
+pub fn walk_module_item<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
+    visitor: &mut T,
+    item: &'ast ModuleItem<V>,
+) {
+    match item {
+        ModuleItem::Decl(decl) => visitor.visit_decl(decl),
+        ModuleItem::Module(module) => visitor.visit_module_decl(module),
     }
 }
 
 pub fn walk_decl<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(visitor: &mut T, decl: &'ast Decl<V>) {
     match decl {
         Decl::Function(func) => visitor.visit_func_decl(func),
-        Decl::Module(module) => visitor.visit_module_decl(module),
         Decl::ExternFunction(_)
         | Decl::Struct(_)
         | Decl::Enum(_)
@@ -125,8 +134,8 @@ pub fn walk_module_decl<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
     visitor: &mut T,
     module: &'ast ModuleDecl<V>,
 ) {
-    for decl in module.body.iter().flatten() {
-        visitor.visit_decl(decl);
+    for item in module.body.iter().flatten() {
+        walk_module_item(visitor, item);
     }
 }
 
@@ -407,15 +416,21 @@ pub trait VisitMut<V> {
 /// Rewrite every declaration of a source module in place. A source module has
 /// no hook of its own; this is the entry point for walking one.
 pub fn walk_module_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, module: &mut Module<V>) {
-    for decl in &mut module.decls {
-        visitor.visit_decl_mut(decl);
+    for item in &mut module.decls {
+        walk_module_item_mut(visitor, item);
+    }
+}
+
+pub fn walk_module_item_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, item: &mut ModuleItem<V>) {
+    match item {
+        ModuleItem::Decl(decl) => visitor.visit_decl_mut(decl),
+        ModuleItem::Module(module) => visitor.visit_module_decl_mut(module),
     }
 }
 
 pub fn walk_decl_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, decl: &mut Decl<V>) {
     match decl {
         Decl::Function(func) => visitor.visit_func_decl_mut(func),
-        Decl::Module(module) => visitor.visit_module_decl_mut(module),
         Decl::ExternFunction(_)
         | Decl::Struct(_)
         | Decl::Enum(_)
@@ -428,8 +443,8 @@ pub fn walk_module_decl_mut<V, T: VisitMut<V> + ?Sized>(
     visitor: &mut T,
     module: &mut ModuleDecl<V>,
 ) {
-    for decl in module.body.iter_mut().flatten() {
-        visitor.visit_decl_mut(decl);
+    for item in module.body.iter_mut().flatten() {
+        walk_module_item_mut(visitor, item);
     }
 }
 

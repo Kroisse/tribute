@@ -1690,26 +1690,29 @@ mod tests {
     use trunk_ir::ops::DialectType;
     use trunk_ir::walk::{WalkAction, walk_region};
 
-    /// `decl` and the declarations of its modules that are not modules, each
-    /// with its qualified name. `decl` is inside `module`.
+    /// The declarations of `item` and of its modules, each with its
+    /// qualified name. `item` is inside `module`.
     fn declarations_with_names<'a, 'db>(
-        decl: &'a tribute_front::ast::Decl<tribute_front::ast::TypedRef<'db>>,
+        item: &'a tribute_front::ast::ModuleItem<tribute_front::ast::TypedRef<'db>>,
         module: &SymbolPath,
     ) -> Vec<(
         trunk_ir::Symbol,
         &'a tribute_front::ast::Decl<tribute_front::ast::TypedRef<'db>>,
     )> {
-        use tribute_front::ast::Decl;
-        let name = match decl {
-            Decl::Module(inner) => {
+        use tribute_front::ast::{Decl, ModuleItem};
+        let decl = match item {
+            ModuleItem::Module(inner) => {
                 let module = module.child(inner.name.clone());
                 return inner
                     .body
                     .iter()
                     .flatten()
-                    .flat_map(|decl| declarations_with_names(decl, &module))
+                    .flat_map(|item| declarations_with_names(item, &module))
                     .collect();
             }
+            ModuleItem::Decl(decl) => decl,
+        };
+        let name = match decl {
             Decl::Function(function) => &function.name,
             Decl::ExternFunction(function) => &function.name,
             Decl::Struct(structure) => &structure.name,
@@ -3244,7 +3247,11 @@ fn main() -> Nil {
                         .decls
                         .iter()
                         .find_map(|d| match d {
-                            Decl::Enum(e) if e.name == "Boxed$Int" => Some(e.variants[0].id),
+                            tribute_front::ast::ModuleItem::Decl(Decl::Enum(e))
+                                if e.name == "Boxed$Int" =>
+                            {
+                                Some(e.variants[0].id)
+                            }
                             _ => None,
                         })
                         .unwrap();
@@ -3657,11 +3664,9 @@ fn main() -> Nil {
                 .decls
                 .iter()
                 .find_map(|decl| match decl {
-                    tribute_front::ast::Decl::Function(function)
-                        if function.name == specialized =>
-                    {
-                        Some(function)
-                    }
+                    tribute_front::ast::ModuleItem::Decl(tribute_front::ast::Decl::Function(
+                        function,
+                    )) if function.name == specialized => Some(function),
                     _ => None,
                 })
                 .expect("monomorphization must materialize the concrete run_state body");
