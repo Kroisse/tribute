@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap as HashMap;
 
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
     AbilityDecl, AbilityId, CtorId, Decl, EffectRow, EffectVar, EnumDecl, FuncDecl, Module,
@@ -89,7 +89,8 @@ impl<'db> TypeChecker<'db> {
                     let Some(target) = import
                         .target
                         .as_deref()
-                        .and_then(crate::qualified_path_symbol)
+                        .filter(|target| !target.is_empty())
+                        .map(|target| SymbolPath::new(target.iter().cloned()))
                     else {
                         continue;
                     };
@@ -107,7 +108,7 @@ impl<'db> TypeChecker<'db> {
                     }) {
                         continue;
                     }
-                    let qualified = self.prefix.child(name.clone()).to_symbol();
+                    let qualified = self.prefix.child(name.clone());
                     self.env.register_type_def(qualified, scheme);
                 }
                 Decl::Module(module) => {
@@ -205,7 +206,7 @@ impl<'db> TypeChecker<'db> {
             args,
         );
         self.env.register_type_def(
-            qualified.to_symbol(),
+            qualified,
             TypeScheme::new(self.db(), type_params, Vec::new(), ty),
         );
     }
@@ -381,8 +382,7 @@ impl<'db> TypeChecker<'db> {
         );
 
         let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), struct_ty);
-        self.env
-            .register_type_def(qualified_name.to_symbol(), scheme);
+        self.env.register_type_def(qualified_name.clone(), scheme);
 
         // Register struct constructor
         // Constructor type is: fn(field_types...) -> StructType
@@ -447,13 +447,12 @@ impl<'db> TypeChecker<'db> {
         );
 
         let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), enum_ty);
-        self.env
-            .register_type_def(qualified_name.to_symbol(), scheme);
+        self.env.register_type_def(qualified_name.clone(), scheme);
 
         // Register enum variant names for exhaustiveness checking
         let variant_names: Vec<Symbol> = e.variants.iter().map(|v| v.name.clone()).collect();
         self.env
-            .register_enum_variants(qualified_name.to_symbol(), variant_names);
+            .register_enum_variants(qualified_name, variant_names);
 
         // Register constructors for each variant
         // Build name → BoundVar index lookup for type parameter resolution
@@ -751,7 +750,7 @@ impl<'db> TypeChecker<'db> {
             self.env.never_type()
         } else {
             self.env
-                .named_type_in_scope(name, vec![], self.current_prefix())
+                .named_type_in_scope(SymbolPath::from(name), vec![], self.current_prefix())
         }
     }
 }

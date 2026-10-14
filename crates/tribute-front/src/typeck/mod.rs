@@ -419,7 +419,7 @@ pub struct PreludeExports<'db> {
 
     /// Type definitions keyed by name.
     #[returns(deref)]
-    pub type_defs: Vec<(Symbol, TypeScheme<'db>)>,
+    pub type_defs: Vec<(SymbolPath, TypeScheme<'db>)>,
 
     /// Struct field definitions keyed by nominal declaration identity.
     #[returns(deref)]
@@ -427,7 +427,7 @@ pub struct PreludeExports<'db> {
 
     /// Enum variant information: enum_name → [variant_names].
     #[returns(deref)]
-    pub enum_variants: Vec<(Symbol, Vec<Symbol>)>,
+    pub enum_variants: Vec<(SymbolPath, Vec<Symbol>)>,
 
     /// Field names of constructors whose fields are all named.
     #[returns(deref)]

@@ -808,8 +808,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     /// Look up a type definition.
-    pub fn lookup_type_def(&self, name: &Symbol) -> Option<TypeScheme<'db>> {
-        self.env.lookup_type_def(name)
+    pub fn lookup_type_def(&self, path: &SymbolPath) -> Option<TypeScheme<'db>> {
+        self.env.lookup_type_def(path)
     }
 
     /// Instantiate a function's type scheme with fresh type variables.
@@ -1365,11 +1365,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Create a named type using lexical module lookup.
     pub fn named_type_in_scope(
         &self,
-        name: Symbol,
+        path: SymbolPath,
         args: Vec<Type<'db>>,
         prefix: &SymbolPath,
     ) -> Type<'db> {
-        self.env.named_type_in_scope(name, args, prefix)
+        self.env.named_type_in_scope(path, args, prefix)
     }
 
     pub fn path_type(&self, path: &[Symbol]) -> Type<'db> {
