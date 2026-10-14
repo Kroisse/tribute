@@ -379,24 +379,54 @@ impl From<&SymbolPath> for SymbolPath {
     }
 }
 
-/// A path equals an array of the same number of components, each equal to
-/// its component: `path == ["std", "io", "Io"]` compares text component by
-/// component, and `path == [symbol!("main")]` compares atoms.
-impl<T, const N: usize> PartialEq<[T; N]> for SymbolPath
+/// A path equals a slice or array of the same number of components, each
+/// equal to its component, as a `Vec` equals one: `path == ["std", "io",
+/// "Io"]` compares text component by component, and `path ==
+/// [symbol!("main")]` compares atoms. A `&SymbolPath` compares with a
+/// reference through the standard impl for references.
+macro_rules! component_eq {
+    ($($path:ty => $components:ty),* $(,)?) => {$(
+        impl<T, const N: usize> PartialEq<$components> for $path
+        where
+            Symbol: PartialEq<T>,
+        {
+            fn eq(&self, other: &$components) -> bool {
+                self.0[..] == other[..]
+            }
+        }
+    )*};
+}
+
+component_eq! {
+    SymbolPath => [T; N],
+    SymbolPath => &[T; N],
+    &SymbolPath => [T; N],
+}
+
+impl<T> PartialEq<[T]> for SymbolPath
 where
     Symbol: PartialEq<T>,
 {
-    fn eq(&self, other: &[T; N]) -> bool {
-        self.0[..] == other[..]
+    fn eq(&self, other: &[T]) -> bool {
+        self.0[..] == *other
     }
 }
 
-impl<T, const N: usize> PartialEq<[T; N]> for &SymbolPath
+impl<T> PartialEq<&[T]> for SymbolPath
 where
     Symbol: PartialEq<T>,
 {
-    fn eq(&self, other: &[T; N]) -> bool {
-        **self == *other
+    fn eq(&self, other: &&[T]) -> bool {
+        self.0[..] == **other
+    }
+}
+
+impl<T> PartialEq<[T]> for &SymbolPath
+where
+    Symbol: PartialEq<T>,
+{
+    fn eq(&self, other: &[T]) -> bool {
+        self.0[..] == *other
     }
 }
 
@@ -493,6 +523,13 @@ mod tests {
         assert!(root == <[&str; 0]>::default());
         let by_ref: &SymbolPath = &path;
         assert!(by_ref == ["std", "io", "Io"]);
+        let array = &["std", "io", "Io"];
+        assert!(path == array);
+        let components: &[&str] = &["std", "io", "Io"];
+        assert!(path == *components);
+        assert!(path == components);
+        assert!(by_ref == components);
+        assert!(path != components[..2]);
     }
 
     #[test]
