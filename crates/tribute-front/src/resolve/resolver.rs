@@ -259,11 +259,7 @@ impl<'db> Resolver<'db> {
         let Some(namespace) = name.namespace() else {
             return Ok(None);
         };
-        if let Some(path) = absolute_path(
-            self.package_depth,
-            &self.module_path,
-            &namespace,
-        )? {
+        if let Some(path) = absolute_path(self.package_depth, &self.module_path, &namespace)? {
             return Ok(if path.is_empty() {
                 self.env.lookup(&sym)
             } else {
@@ -334,11 +330,7 @@ impl<'db> Resolver<'db> {
         }
         for module in self.names_in_scope() {
             let nested = UnresolvedName::new(
-                SymbolPath::new(
-                    std::iter::once(&module)
-                        .chain(path.path.iter())
-                        .cloned(),
-                ),
+                SymbolPath::new(std::iter::once(&module).chain(path.path.iter()).cloned()),
                 path.id,
             );
             if let Ok(Some(Binding::Function { id })) = self.lookup_qualified_name(&nested)
@@ -458,20 +450,13 @@ impl<'db> Resolver<'db> {
                 return Some(namespace);
             }
         } else {
-            let nested = SymbolPath::new(
-                self.module_path
-                    .iter()
-                    .chain(namespace.iter())
-                    .cloned(),
-            );
+            let nested = SymbolPath::new(self.module_path.iter().chain(namespace.iter()).cloned());
             if self.env.has_namespace(&nested) || self.defined_in_module(first) {
                 return Some(nested);
             }
         }
         if let Some(library) = self.env.library_namespace(first) {
-            return Some(SymbolPath::new(
-                library.iter().chain(rest).cloned(),
-            ));
+            return Some(SymbolPath::new(library.iter().chain(rest).cloned()));
         }
         (self.module_path.is_empty() || self.env.is_library_root(first)).then_some(namespace)
     }

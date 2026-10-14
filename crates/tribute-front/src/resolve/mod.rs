@@ -399,11 +399,8 @@ fn collect_definition<'db>(
                 // e.g., `mod Foo { enum Bar { Baz } }` makes `Foo::Bar::Baz` available
                 for (inner_ns, inner_bindings) in inner_env.iter_namespaces() {
                     // Create qualified namespace path: Foo::Bar
-                    let qualified_ns = SymbolPath::new(
-                        std::iter::once(&m.name)
-                            .chain(inner_ns.iter())
-                            .cloned(),
-                    );
+                    let qualified_ns =
+                        SymbolPath::new(std::iter::once(&m.name).chain(inner_ns.iter()).cloned());
                     for (name, binding) in inner_bindings {
                         env.add_to_namespace(qualified_ns.clone(), name, binding.clone());
                     }
