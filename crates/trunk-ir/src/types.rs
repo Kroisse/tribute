@@ -1173,9 +1173,9 @@ mod tests {
         let data = ctx.get_type(with_attrs);
         assert!(data.param_attrs(0).is_empty());
         assert_eq!(data.param_attrs(1), &marked);
-        assert_eq!(
-            data.params_with_attrs().collect::<Vec<_>>(),
-            vec![(i32_ty, &AttributeMap::new()), (i32_ty, &marked)]
+        itertools::assert_equal(
+            data.params_with_attrs(),
+            vec![(i32_ty, &AttributeMap::new()), (i32_ty, &marked)],
         );
         assert_eq!(data.validate_param_attrs(), Ok(()));
     }

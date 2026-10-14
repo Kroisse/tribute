@@ -977,10 +977,7 @@ mod tests {
             .collect();
         let point = Struct::from_type_ref(&ctx, aliases["point"]).unwrap();
         assert_eq!(point.name(&ctx), Symbol::new("Point"));
-        assert_eq!(
-            point.fields(&ctx).map(|(name, _)| name).collect::<Vec<_>>(),
-            ["x", "y"]
-        );
+        itertools::assert_equal(point.fields(&ctx).map(|(name, _)| name), ["x", "y"]);
         assert_eq!(point.field_attrs(&ctx, 1).count(), 1);
         let empty = Struct::from_type_ref(&ctx, aliases["empty"]).unwrap();
         assert_eq!(empty.field_count(&ctx), 0);

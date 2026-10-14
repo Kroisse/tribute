@@ -645,12 +645,11 @@ mod tests {
             "tribute.cps_continuation_frame_result",
             Attribute::Type(nil),
         );
-        assert_eq!(
+        itertools::assert_equal(
             verify_boundary_exit(&ctx, module, TargetKind::Native)
                 .into_iter()
-                .map(|violation| violation.kind)
-                .collect::<Vec<_>>(),
-            [attribute("tribute.cps_continuation_frame_result")]
+                .map(|violation| violation.kind),
+            [attribute("tribute.cps_continuation_frame_result")],
         );
     }
 
@@ -861,15 +860,12 @@ mod tests {
 }"#,
             true,
         );
-        assert_eq!(
-            plain
-                .iter()
-                .map(|(kind, _)| kind.clone())
-                .collect::<Vec<_>>(),
+        itertools::assert_equal(
+            plain.iter().map(|(kind, _)| kind.clone()),
             [
                 attribute("tribute.calling_convention"),
-                ViolationKind::IdentityCast
-            ]
+                ViolationKind::IdentityCast,
+            ],
         );
         assert_eq!(annotated, plain);
     }

@@ -1176,16 +1176,13 @@ mod tests {
         let indirect = analyses.get::<IndirectCycleFirst>(&ctx, op).unwrap_err();
         let indirect_queries = indirect.cycle().unwrap().queries();
         assert_eq!(indirect_queries.len(), 3);
-        assert_eq!(
-            indirect_queries
-                .iter()
-                .map(AnalysisQuery::analysis_type)
-                .collect::<Vec<_>>(),
+        itertools::assert_equal(
+            indirect_queries.iter().map(AnalysisQuery::analysis_type),
             vec![
                 type_name::<IndirectCycleFirst>(),
                 type_name::<IndirectCycleSecond>(),
                 type_name::<IndirectCycleFirst>(),
-            ]
+            ],
         );
         assert!(analyses.is_empty());
         assert!(analyses.dependencies.is_empty());

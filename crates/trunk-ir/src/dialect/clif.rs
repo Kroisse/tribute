@@ -711,21 +711,15 @@ mod branch_table_tests {
             .successors(blocks[1], [blocks[2], blocks[3]])
             .build(&mut ctx, location);
         assert_eq!(br_table.default(&ctx), blocks[1]);
-        assert_eq!(
-            br_table.table(&ctx).collect::<Vec<_>>(),
-            [blocks[2], blocks[3]]
-        );
+        itertools::assert_equal(br_table.table(&ctx), [blocks[2], blocks[3]]);
 
         let switch = Switch::operands(index)
             .cases([3, 9])
             .successors(blocks[1], [blocks[2], blocks[3]])
             .build(&mut ctx, location);
         assert_eq!(switch.default(&ctx), blocks[1]);
-        assert_eq!(
-            switch.targets(&ctx).collect::<Vec<_>>(),
-            [blocks[2], blocks[3]]
-        );
-        assert_eq!(switch.cases(&ctx).collect::<Vec<_>>(), [3, 9]);
+        itertools::assert_equal(switch.targets(&ctx), [blocks[2], blocks[3]]);
+        itertools::assert_equal(switch.cases(&ctx), [3, 9]);
     }
 
     #[test]

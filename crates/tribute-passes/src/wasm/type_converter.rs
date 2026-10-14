@@ -785,12 +785,11 @@ mod tests {
         assert_eq!(converter.convert_type_or_identity(&ctx, generic), generic);
         let anyref = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("anyref"));
         let i32_ty = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("i32"));
-        assert_eq!(
+        itertools::assert_equal(
             adt::Struct::from_type_ref(&ctx, target)
                 .unwrap()
-                .fields(&ctx)
-                .collect::<Vec<_>>(),
-            [("table_idx", i32_ty), ("env", anyref)]
+                .fields(&ctx),
+            [("table_idx", i32_ty), ("env", anyref)],
         );
     }
 }
