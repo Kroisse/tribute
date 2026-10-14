@@ -10,7 +10,6 @@ use tribute_front::{
     },
     typeck::TypeCheckOutput,
 };
-use trunk_ir::Symbol;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Root {
@@ -40,7 +39,11 @@ fn prepare_root<'db>(
     let packet = Type::new(
         db,
         TypeKind::Named {
-            id: TypeDefId::source(db, packet_decl.name.clone(), packet_decl.id),
+            id: TypeDefId::source(
+                db,
+                trunk_ir::SymbolPath::from(&packet_decl.name),
+                packet_decl.id,
+            ),
             name: packet_decl.name.clone(),
             args: vec![Type::new(db, TypeKind::Nat)],
         },
@@ -48,7 +51,7 @@ fn prepare_root<'db>(
     let row = EffectRow::single(
         db,
         Effect {
-            ability_id: AbilityId::source(db, Symbol::new("Marker")),
+            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::from("Marker")),
             args: vec![packet],
         },
     );
@@ -201,7 +204,7 @@ fn main() -> Nil { marker() }
         .unwrap();
     assert_eq!(
         id.origin(db),
-        TypeDefId::source(db, original.name.clone(), original.id).origin(db)
+        TypeDefId::source(db, trunk_ir::SymbolPath::from(&original.name), original.id).origin(db)
     );
 }
 

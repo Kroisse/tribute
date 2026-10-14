@@ -10,7 +10,6 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use tribute_ir::ModulePathExt as _;
 use trunk_ir::{Symbol, SymbolPath};
 
 use super::decl::OpDeclKind;
@@ -112,15 +111,28 @@ impl LocalId {
 /// always produces the same FuncDefId, regardless of where it's created.
 #[salsa::interned(debug)]
 pub struct FuncDefId<'db> {
-    /// The fully qualified name (e.g., `"foo::bar::func_name"`).
-    pub qualified: Symbol,
+    /// The enclosing modules' names, then the function's own (e.g.
+    /// `[foo, bar, func_name]`).
+    pub path: SymbolPath,
 }
 
 impl<'db> FuncDefId<'db> {
+    /// The path's components joined with `::`, for IR symbols and messages.
+    pub fn qualified(self, db: &'db dyn salsa::Database) -> Symbol {
+        self.path(db).to_symbol()
+    }
+
     /// Returns the unqualified function name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).last_segment()
+        definition_name(self.path(db))
     }
+}
+
+/// The own name of the definition at `path`.
+fn definition_name(path: &SymbolPath) -> Symbol {
+    path.leaf()
+        .expect("a definition's path has its name")
+        .clone()
 }
 
 /// Compiler-owned nominal types whose identity cannot be supplied by source.
@@ -150,29 +162,36 @@ pub enum TypeOrigin {
 pub struct TypeDefId<'db> {
     #[returns(copy)]
     pub origin: TypeOrigin,
-    /// The fully qualified name (e.g., `"std::option::Option"`).
-    pub qualified: Symbol,
+    /// The enclosing modules' names, then the type's own (e.g.
+    /// `[std, Option]`).
+    pub path: SymbolPath,
 }
 
 impl<'db> TypeDefId<'db> {
-    pub fn source(db: &'db dyn salsa::Database, qualified: Symbol, declaration: NodeId) -> Self {
-        Self::new(db, TypeOrigin::Source(declaration), qualified)
+    pub fn source(db: &'db dyn salsa::Database, path: SymbolPath, declaration: NodeId) -> Self {
+        Self::new(db, TypeOrigin::Source(declaration), path)
     }
 
-    pub fn synthetic(db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
-        Self::new(db, TypeOrigin::Synthetic, qualified)
+    pub fn synthetic(db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
+        Self::new(db, TypeOrigin::Synthetic, path)
     }
 
     pub fn builtin_list(db: &'db dyn salsa::Database) -> Self {
         Self::new(
             db,
             TypeOrigin::Builtin(BuiltinType::List),
-            Symbol::new("List"),
+            SymbolPath::from("List"),
         )
     }
 
-    pub fn with_qualified(self, db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
-        Self::new(db, self.origin(db), qualified)
+    /// The type of the same origin at `path`.
+    pub fn with_path(self, db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
+        Self::new(db, self.origin(db), path)
+    }
+
+    /// The path's components joined with `::`, for IR symbols and messages.
+    pub fn qualified(self, db: &'db dyn salsa::Database) -> Symbol {
+        self.path(db).to_symbol()
     }
 
     pub fn is_builtin_list(self, db: &'db dyn salsa::Database) -> bool {
@@ -181,7 +200,7 @@ impl<'db> TypeDefId<'db> {
 
     /// Returns the unqualified type name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).last_segment()
+        definition_name(self.path(db))
     }
 }
 
@@ -195,14 +214,20 @@ impl<'db> TypeDefId<'db> {
 /// always produces the same CtorId, regardless of where it's created.
 #[salsa::interned(debug)]
 pub struct CtorId<'db> {
-    /// The fully qualified name (e.g., `"std::option::Some"`).
-    pub qualified: Symbol,
+    /// The enclosing modules' names, then the constructor's own (e.g.
+    /// `[std, Some]`).
+    pub path: SymbolPath,
 }
 
 impl<'db> CtorId<'db> {
+    /// The path's components joined with `::`, for IR symbols and messages.
+    pub fn qualified(self, db: &'db dyn salsa::Database) -> Symbol {
+        self.path(db).to_symbol()
+    }
+
     /// Returns the unqualified constructor name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).last_segment()
+        definition_name(self.path(db))
     }
 }
 
@@ -230,36 +255,43 @@ pub enum AbilityOrigin {
 pub struct AbilityId<'db> {
     #[returns(copy)]
     pub origin: AbilityOrigin,
-    /// The fully qualified name (e.g., `"std::state::State"`).
-    pub qualified: Symbol,
+    /// The enclosing modules' names, then the ability's own (e.g.
+    /// `[std, state, State]`).
+    pub path: SymbolPath,
 }
 
+/// The path of the compiler-owned `Io` ability.
+const BUILTIN_IO: [&str; 3] = ["std", "io", "Io"];
+
 impl<'db> AbilityId<'db> {
-    pub fn source(db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
-        Self::new(db, AbilityOrigin::Source, qualified)
+    pub fn source(db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
+        Self::new(db, AbilityOrigin::Source, path)
     }
 
     pub fn builtin_io(db: &'db dyn salsa::Database) -> Self {
         Self::new(
             db,
             AbilityOrigin::Builtin(BuiltinAbility::Io),
-            Symbol::new("std::io::Io"),
+            SymbolPath::new(BUILTIN_IO),
         )
     }
 
     /// Look up a compiler-owned ability by its source path segments.
     pub fn builtin_from_path(db: &'db dyn salsa::Database, path: &[Symbol]) -> Option<Self> {
-        (path == [Symbol::new("std"), Symbol::new("io"), Symbol::new("Io")])
+        path.iter()
+            .map(Symbol::as_str)
+            .eq(BUILTIN_IO)
             .then(|| Self::builtin_io(db))
     }
 
     /// Resolve a fully-qualified source path through the builtin registry.
-    pub fn from_resolved_path(db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
-        if qualified == "std::io::Io" {
-            Self::builtin_io(db)
-        } else {
-            Self::source(db, qualified)
-        }
+    pub fn from_resolved_path(db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
+        Self::builtin_from_path(db, path.components()).unwrap_or_else(|| Self::source(db, path))
+    }
+
+    /// The path's components joined with `::`, for IR symbols and messages.
+    pub fn qualified(self, db: &'db dyn salsa::Database) -> Symbol {
+        self.path(db).to_symbol()
     }
 
     pub fn is_builtin_io(self, db: &'db dyn salsa::Database) -> bool {
@@ -268,7 +300,7 @@ impl<'db> AbilityId<'db> {
 
     /// Returns the unqualified ability name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).last_segment()
+        definition_name(self.path(db))
     }
 }
 
@@ -454,7 +486,7 @@ mod tests {
     fn builtin_and_source_abilities_with_the_same_path_are_distinct() {
         let db = salsa::DatabaseImpl::default();
         let builtin = AbilityId::builtin_io(&db);
-        let source = AbilityId::source(&db, Symbol::new("std::io::Io"));
+        let source = AbilityId::source(&db, trunk_ir::SymbolPath::new(["std", "io", "Io"]));
 
         assert_ne!(builtin, source);
         assert!(builtin.is_builtin_io(&db));

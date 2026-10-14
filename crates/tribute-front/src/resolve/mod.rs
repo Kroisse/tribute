@@ -28,7 +28,6 @@ use crate::ast::{
     AbilityId, CtorId, Decl, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ResolvedRef, SpanMap,
     TypeDefId, UnresolvedName,
 };
-use crate::qualified_symbol;
 
 /// Resolve names in a module.
 ///
@@ -261,20 +260,20 @@ fn collect_definition<'db>(
 ) {
     match decl {
         Decl::Function(func) => {
-            let qualified = qualified_symbol(prefix, &func.name);
+            let qualified = prefix.child(func.name.clone());
             let id = FuncDefId::new(db, qualified);
             env.add_function(func.name.clone(), id);
         }
 
         Decl::ExternFunction(func) => {
-            let qualified = qualified_symbol(prefix, &func.name);
+            let qualified = prefix.child(func.name.clone());
             let id = FuncDefId::new(db, qualified);
             env.add_function(func.name.clone(), id);
         }
 
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
-            let qualified = qualified_symbol(prefix, &s.name);
+            let qualified = prefix.child(s.name.clone());
             let type_def_id = TypeDefId::source(db, qualified.clone(), s.id);
             let ctor_id = CtorId::new(db, qualified);
             env.add_type(s.name.clone(), type_def_id);
@@ -285,7 +284,7 @@ fn collect_definition<'db>(
             prefix.push(s.name.clone());
             for field in &s.fields {
                 if let Some(field_name) = field.name.clone() {
-                    let field_qualified = qualified_symbol(prefix, &field_name);
+                    let field_qualified = prefix.child(field_name.clone());
                     let func_id = FuncDefId::new(db, field_qualified);
                     let binding = Binding::Function { id: func_id };
                     // Add to namespace (e.g., Point::x)
@@ -296,7 +295,7 @@ fn collect_definition<'db>(
                     prefix.push(field_name.clone());
                     for name in FIELD_LENS_FUNCTIONS {
                         let name = Symbol::new(name);
-                        let id = FuncDefId::new(db, qualified_symbol(prefix, &name));
+                        let id = FuncDefId::new(db, prefix.child(name.clone()));
                         env.add_to_namespace(namespace.clone(), name, Binding::Function { id });
                     }
                     prefix.pop();
@@ -307,13 +306,13 @@ fn collect_definition<'db>(
 
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
-            let qualified = qualified_symbol(prefix, &e.name);
+            let qualified = prefix.child(e.name.clone());
             let type_def_id = TypeDefId::source(db, qualified, e.id);
             env.add_type(e.name.clone(), type_def_id);
 
             // Add each variant as a constructor in the enum's namespace
             for variant in &e.variants {
-                let variant_qualified = qualified_symbol(prefix, &variant.name);
+                let variant_qualified = prefix.child(variant.name.clone());
                 let variant_id = CtorId::new(db, variant_qualified);
                 let binding = Binding::Constructor {
                     id: variant_id,
@@ -338,7 +337,7 @@ fn collect_definition<'db>(
 
         Decl::Ability(a) => {
             // Create AbilityId for this ability
-            let qualified = qualified_symbol(prefix, &a.name);
+            let qualified = prefix.child(a.name.clone());
             let ability_id = AbilityId::source(db, qualified);
 
             // Register the ability itself (for handler pattern resolution)

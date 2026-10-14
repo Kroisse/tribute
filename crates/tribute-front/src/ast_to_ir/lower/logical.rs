@@ -169,7 +169,7 @@ fn lower_evidence_step<'db>(
 ) -> tribute_control::EvidenceStep {
     use crate::typeck::EvidenceStep;
     let mut symbol_of = |instance: &crate::ast::Effect<'db>| {
-        let symbol = ctx.ability_symbol(instance.ability_id.qualified(ctx.db), &instance.args);
+        let symbol = ctx.ability_symbol(&instance.ability_id.qualified(ctx.db), &instance.args);
         declarations.instance(&symbol, instance.ability_id, &instance.args);
         symbol
     };
@@ -370,14 +370,8 @@ pub(super) fn lower_module<'db>(
     .with_row_classes(row_classes)
     .with_source_paths(source_paths)
     .with_literal_equalities(crate::ast_to_ir::context::LiteralEqualities {
-        string: well_known_types
-            .string_equality
-            .map(|id| id.qualified(db))
-            .cloned(),
-        bytes: well_known_types
-            .bytes_equality
-            .map(|id| id.qualified(db))
-            .cloned(),
+        string: well_known_types.string_equality.map(|id| id.qualified(db)),
+        bytes: well_known_types.bytes_equality.map(|id| id.qualified(db)),
     });
     let module_block = ir.create_block(BlockData {
         location,
@@ -495,7 +489,7 @@ fn prescan_definition_conventions<'db>(
     for declaration in declarations {
         match declaration {
             Decl::Function(function) => {
-                let name = crate::qualified_symbol(prefix, &function.name);
+                let name = prefix.child(function.name.clone()).to_symbol();
                 let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
                     continue;
                 };
@@ -528,7 +522,7 @@ fn prescan_definition_conventions<'db>(
                     .iter()
                     .filter_map(|field| field.name.clone())
                 {
-                    let getter = crate::qualified_symbol(prefix, &field);
+                    let getter = prefix.child(field.clone()).to_symbol();
                     let [_, modifier] = field_update_names(&getter);
                     for (modifier, class) in modifier_instances(ctx, modifier) {
                         ctx.register_definition_convention(modifier, class);
@@ -561,7 +555,7 @@ fn plan_local_callables<'db>(
     for declaration in ast {
         match declaration {
             Decl::Function(function) => {
-                let name = crate::qualified_symbol(prefix, &function.name);
+                let name = prefix.child(function.name.clone()).to_symbol();
                 let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
                     continue;
                 };
@@ -648,7 +642,7 @@ fn prescan_logical_nominal_layouts<'db>(
     for declaration in declarations {
         match declaration {
             Decl::Struct(structure) => {
-                let qualified = crate::qualified_symbol(prefix, &structure.name);
+                let qualified = prefix.child(structure.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
                 let field_types =
                     constructor_fields(ctx, constructors, ctor, structure.fields.len());
@@ -669,14 +663,14 @@ fn prescan_logical_nominal_layouts<'db>(
                 ir.register_type_alias(name, layout);
             }
             Decl::Enum(enumeration) => {
-                let qualified = crate::qualified_symbol(prefix, &enumeration.name);
+                let qualified = prefix.child(enumeration.name.clone());
                 let enum_ctor = CtorId::new(ctx.db, qualified.clone());
                 let variants = enumeration
                     .variants
                     .iter()
                     .map(|variant| {
                         let variant_ctor =
-                            CtorId::new(ctx.db, crate::qualified_symbol(prefix, &variant.name));
+                            CtorId::new(ctx.db, prefix.child(variant.name.clone()));
                         let fields = if enumeration.id.variant().is_some() {
                             let scheme = *specialized_enum_variants.get(&variant.id)
                                 .expect("missing specialized enum variant schema");
@@ -685,7 +679,7 @@ fn prescan_logical_nominal_layouts<'db>(
                                 _ => scheme.body(ctx.db),
                             };
                             assert!(matches!(result.kind(ctx.db), TypeKind::Named { id, args, .. }
-                                if args.is_empty() && *id.qualified(ctx.db) == qualified
+                                if args.is_empty() && *id.path(ctx.db) == qualified
                                     && id.origin(ctx.db) == crate::ast::TypeOrigin::Source(enumeration.id.origin())),
                                 "specialized enum variant schema has wrong owner");
                             constructor_schema_fields(ctx, scheme, variant.fields.len())
@@ -754,7 +748,7 @@ fn collect_logical_nominal_identities<'db>(
     for declaration in declarations {
         match declaration {
             Decl::Struct(structure) => {
-                let qualified = crate::qualified_symbol(prefix, &structure.name);
+                let qualified = prefix.child(structure.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
                 ctx.declare_logical_nominal(super::qualified_type_name(ctx.db, &ctor));
                 ctx.register_struct_fields(
@@ -767,7 +761,7 @@ fn collect_logical_nominal_identities<'db>(
                 );
             }
             Decl::Enum(enumeration) => {
-                let qualified = crate::qualified_symbol(prefix, &enumeration.name);
+                let qualified = prefix.child(enumeration.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
                 ctx.declare_logical_nominal(super::qualified_type_name(ctx.db, &ctor));
             }
@@ -847,7 +841,7 @@ fn prescan_struct_accessor_signatures<'db>(
         match declaration {
             Decl::Struct(declaration) => {
                 let prefix = SymbolPath::new(ctx.module_path().iter().skip(1).cloned());
-                let qualified = crate::qualified_symbol(&prefix, &declaration.name);
+                let qualified = prefix.child(declaration.name.clone());
                 let type_name = super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
                 let struct_type = ctx.adt_typeref(ir, &type_name);
                 let layout = ctx
@@ -945,7 +939,7 @@ fn lower_struct_accessors<'db>(
 ) {
     let location = ctx.location(declaration.id);
     let prefix = SymbolPath::new(ctx.module_path().iter().skip(1).cloned());
-    let qualified = crate::qualified_symbol(&prefix, &declaration.name);
+    let qualified = prefix.child(declaration.name.clone());
     let type_name = super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
     let struct_type = ctx.adt_typeref(ir, &type_name);
     let layout_type = ctx
@@ -1342,7 +1336,7 @@ fn call_operation_metadata<'db>(
     }
     let instance = builder
         .ctx
-        .ability_symbol(ability.qualified(builder.db()), &args);
+        .ability_symbol(&ability.qualified(builder.db()), &args);
     let parameters = semantic
         .params
         .iter()
@@ -2342,7 +2336,7 @@ fn lower_call<'db>(
             ResolvedRef::Function { id } => {
                 let name = id.qualified(builder.ctx.db);
                 Some(
-                    FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
+                    FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
                         .unwrap_or_else(|| panic!("missing logical signature for call {name}")),
                 )
             }
@@ -2416,7 +2410,7 @@ fn lower_call<'db>(
                     location,
                     values,
                     &declaration,
-                    ability.qualified(builder.db()),
+                    &ability.qualified(builder.db()),
                     &operation,
                 ) {
                     Ok(values) => values,
@@ -2739,7 +2733,7 @@ fn lower_handler<'db>(
     let ability_id = match ability.resolved {
         ResolvedRef::Ability { id } => id,
         ResolvedRef::TypeDef { id } => {
-            crate::ast::AbilityId::source(ctx.db, id.qualified(ctx.db).clone())
+            crate::ast::AbilityId::source(ctx.db, id.path(ctx.db).clone())
         }
         _ => panic!("handler ability did not resolve to an ability definition"),
     };
@@ -2793,7 +2787,7 @@ fn lower_handler<'db>(
     if params.len() != semantic.params.len() {
         panic!("handler parameter arity disagrees with typed semantic signature");
     }
-    let instance = ctx.ability_symbol(ability_id.qualified(ctx.db), &arguments);
+    let instance = ctx.ability_symbol(&ability_id.qualified(ctx.db), &arguments);
     let parameter_types: Vec<_> = expected_params
         .into_iter()
         .map(|ty| ctx.convert_logical_type(ir, ty))

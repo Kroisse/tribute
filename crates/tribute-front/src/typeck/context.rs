@@ -323,17 +323,18 @@ impl<'db> ModuleTypeEnv<'db> {
     /// the struct's own type parameters.
     pub fn field_function(&self, id: FuncDefId<'db>) -> Option<FieldFunction<'db>> {
         use super::FieldFunctionKind;
-        use tribute_ir::ModulePathExt as _;
-
-        let qualified = id.qualified(self.db);
-        let leaf = qualified.last_segment();
-        let parent = qualified.parent_path()?;
+        let path = id.path(self.db);
+        let leaf = path.leaf()?.clone();
+        let parent = path.parent().filter(|parent| !parent.is_root())?;
         let (kind, owner_name, field) = [FieldFunctionKind::Set, FieldFunctionKind::Modify]
             .into_iter()
             .find(|kind| kind.name().is_some_and(|name| leaf == name))
-            .and_then(|kind| Some((kind, parent.parent_path()?, parent.last_segment())))
+            .and_then(|kind| {
+                let owner = parent.parent().filter(|owner| !owner.is_root())?;
+                Some((kind, owner.to_symbol(), parent.leaf()?.clone()))
+            })
             .filter(|(_, owner, field)| self.struct_field(owner, field).is_some())
-            .unwrap_or((FieldFunctionKind::Get, parent, leaf));
+            .unwrap_or_else(|| (FieldFunctionKind::Get, parent.to_symbol(), leaf));
         let (owner, parameters, field_ty) = self.struct_field(&owner_name, &field)?;
 
         let receiver = self.named_type_with_id(
@@ -512,13 +513,13 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Export function type schemes as a Vec keyed by Symbol (fully qualified function name).
     ///
     /// Results are sorted alphabetically by name for deterministic output.
-    pub fn export_function_types(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
+    pub fn export_function_types(&self) -> Vec<(SymbolPath, TypeScheme<'db>)> {
         let mut result: Vec<_> = self
             .function_types
             .iter()
-            .map(|(id, scheme)| (id.qualified(self.db).clone(), *scheme))
+            .map(|(id, scheme)| (id.path(self.db).clone(), *scheme))
             .collect();
-        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result.sort_by_cached_key(|(path, _)| path.to_symbol());
         result
     }
 
@@ -771,7 +772,7 @@ impl<'db> ModuleTypeEnv<'db> {
                 TypeKind::Named { id, .. } => Some(*id),
                 _ => None,
             })
-            .unwrap_or_else(|| TypeDefId::synthetic(self.db, name.clone()));
+            .unwrap_or_else(|| TypeDefId::synthetic(self.db, SymbolPath::from(&name)));
         self.named_type_with_id(id, name, args)
     }
 
@@ -818,7 +819,7 @@ mod tests {
     fn string_type_fallback_ignores_user_string(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
         let name = Symbol::new("String");
-        let user_id = TypeDefId::source(db, name.clone(), NodeId::from_raw(1));
+        let user_id = TypeDefId::source(db, trunk_ir::SymbolPath::from(&name), NodeId::from_raw(1));
         let user_ty = env.named_type_with_id(user_id, name.clone(), vec![]);
         env.register_type_def(name, TypeScheme::mono(db, user_ty));
 
@@ -835,9 +836,9 @@ mod tests {
         let mut env = ModuleTypeEnv::new(db);
 
         // Insert in non-alphabetical order
-        let func_z = FuncDefId::new(db, Symbol::new("zebra"));
-        let func_a = FuncDefId::new(db, Symbol::new("alpha"));
-        let func_m = FuncDefId::new(db, Symbol::new("middle"));
+        let func_z = FuncDefId::new(db, trunk_ir::SymbolPath::from("zebra"));
+        let func_a = FuncDefId::new(db, trunk_ir::SymbolPath::from("alpha"));
+        let func_m = FuncDefId::new(db, trunk_ir::SymbolPath::from("middle"));
 
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
@@ -864,9 +865,9 @@ mod tests {
     fn test_export_function_types_with_ids_sorted(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
 
-        let func_z = FuncDefId::new(db, Symbol::new("zebra"));
-        let func_a = FuncDefId::new(db, Symbol::new("alpha"));
-        let func_m = FuncDefId::new(db, Symbol::new("middle"));
+        let func_z = FuncDefId::new(db, trunk_ir::SymbolPath::from("zebra"));
+        let func_a = FuncDefId::new(db, trunk_ir::SymbolPath::from("alpha"));
+        let func_m = FuncDefId::new(db, trunk_ir::SymbolPath::from("middle"));
 
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
@@ -893,9 +894,9 @@ mod tests {
     fn test_export_constructor_types_sorted(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
 
-        let ctor_z = CtorId::new(db, Symbol::new("Zebra"));
-        let ctor_a = CtorId::new(db, Symbol::new("Alpha"));
-        let ctor_m = CtorId::new(db, Symbol::new("Middle"));
+        let ctor_z = CtorId::new(db, trunk_ir::SymbolPath::from("Zebra"));
+        let ctor_a = CtorId::new(db, trunk_ir::SymbolPath::from("Alpha"));
+        let ctor_m = CtorId::new(db, trunk_ir::SymbolPath::from("Middle"));
 
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
@@ -923,8 +924,8 @@ mod tests {
         let mut env = ModuleTypeEnv::new(db);
         let scheme = TypeScheme::mono(db, Type::new(db, TypeKind::Int));
 
-        let function_z = FuncDefId::new(db, Symbol::new("z::same"));
-        let function_a = FuncDefId::new(db, Symbol::new("a::same"));
+        let function_z = FuncDefId::new(db, trunk_ir::SymbolPath::new(["z", "same"]));
+        let function_a = FuncDefId::new(db, trunk_ir::SymbolPath::new(["a", "same"]));
         env.register_function(function_z, scheme);
         env.register_function(function_a, scheme);
         let functions: Vec<_> = env
@@ -938,8 +939,8 @@ mod tests {
             vec![Symbol::new("a::same"), Symbol::new("z::same")]
         );
 
-        let constructor_z = CtorId::new(db, Symbol::new("z::same"));
-        let constructor_a = CtorId::new(db, Symbol::new("a::same"));
+        let constructor_z = CtorId::new(db, trunk_ir::SymbolPath::new(["z", "same"]));
+        let constructor_a = CtorId::new(db, trunk_ir::SymbolPath::new(["a", "same"]));
         env.register_constructor(constructor_z, scheme);
         env.register_constructor(constructor_a, scheme);
         let constructors: Vec<_> = env
@@ -953,12 +954,12 @@ mod tests {
             vec![Symbol::new("a::same"), Symbol::new("z::same")]
         );
 
-        let ability_a = AbilityId::source(db, Symbol::new("a::Audit"));
-        let ability_source = AbilityId::source(db, Symbol::new("z::Audit"));
+        let ability_a = AbilityId::source(db, trunk_ir::SymbolPath::new(["a", "Audit"]));
+        let ability_source = AbilityId::source(db, trunk_ir::SymbolPath::new(["z", "Audit"]));
         let ability_builtin = AbilityId::new(
             db,
             AbilityOrigin::Builtin(BuiltinAbility::Io),
-            Symbol::new("z::Audit"),
+            trunk_ir::SymbolPath::new(["z", "Audit"]),
         );
         for ability in [ability_source, ability_builtin, ability_a] {
             env.register_ability(
@@ -1038,9 +1039,9 @@ mod tests {
         let int_ty = Type::new(db, TypeKind::Int);
         let fields = vec![(Symbol::new("x"), int_ty)];
 
-        let zebra = TypeDefId::synthetic(db, Symbol::new("Zebra"));
-        let alpha = TypeDefId::synthetic(db, Symbol::new("Alpha"));
-        let middle = TypeDefId::synthetic(db, Symbol::new("Middle"));
+        let zebra = TypeDefId::synthetic(db, trunk_ir::SymbolPath::from("Zebra"));
+        let alpha = TypeDefId::synthetic(db, trunk_ir::SymbolPath::from("Alpha"));
+        let middle = TypeDefId::synthetic(db, trunk_ir::SymbolPath::from("Middle"));
         env.register_struct_fields(zebra, vec![], fields.clone());
         env.register_struct_fields(alpha, vec![], fields.clone());
         env.register_struct_fields(middle, vec![], fields);
@@ -1093,7 +1094,7 @@ mod tests {
 
         // Add items in random order
         for name in ["d", "b", "e", "a", "c"] {
-            let func_id = FuncDefId::new(db, Symbol::new(name));
+            let func_id = FuncDefId::new(db, trunk_ir::SymbolPath::from(name));
             env.register_function(func_id, scheme);
         }
 
@@ -1131,7 +1132,7 @@ mod tests {
         Type::new(
             db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(db, Symbol::new(name)),
+                id: crate::ast::TypeDefId::synthetic(db, trunk_ir::SymbolPath::from(name)),
                 name: Symbol::new(name),
                 args: vec![],
             },

@@ -229,13 +229,13 @@ impl FieldFunctionKind {
         }
     }
 
-    /// The qualified name of this function for the field `field` of the
-    /// struct named `owner`.
-    pub fn qualified(self, owner: &Symbol, field: &Symbol) -> Symbol {
-        let getter = SymbolPath::from(owner).child(field.clone());
+    /// The path of this function for the field `field` of the struct at
+    /// `owner`.
+    pub fn path(self, owner: &SymbolPath, field: &Symbol) -> SymbolPath {
+        let getter = owner.child(field.clone());
         match self.name() {
-            None => getter.to_symbol(),
-            Some(name) => getter.child(name).to_symbol(),
+            None => getter,
+            Some(name) => getter.child(name),
         }
     }
 }
@@ -366,7 +366,7 @@ pub struct TypeCheckOutput<'db> {
     /// Function type schemes collected during type checking.
     /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
     #[returns(deref)]
-    pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
+    pub function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
     /// Constructor schemes used to build logical nominal layouts without
     /// reinterpreting source annotations.
     pub constructor_types: ConstructorTypeMetadata<'db>,

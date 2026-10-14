@@ -17,8 +17,6 @@ pub(super) enum NominalDeclaration<'ast> {
 
 pub(super) struct Declaration<'ast, 'db> {
     pub source: NominalDeclaration<'ast>,
-    /// The module that declares it.
-    pub module: SymbolPath,
     pub constructors: Vec<Constructor<'db>>,
 }
 
@@ -69,10 +67,9 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                     s.id,
                     Declaration {
                         source: NominalDeclaration::Struct(s),
-                        module: prefix.clone(),
                         constructors: vec![Constructor {
                             node: s.id,
-                            id: CtorId::new(db, crate::qualified_symbol(prefix, &s.name)),
+                            id: CtorId::new(db, prefix.child(s.name.clone())),
                             fields: s.fields.len(),
                         }],
                     },
@@ -82,13 +79,12 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                     e.id,
                     Declaration {
                         source: NominalDeclaration::Enum(e),
-                        module: prefix.clone(),
                         constructors: e
                             .variants
                             .iter()
                             .map(|v| Constructor {
                                 node: v.id,
-                                id: CtorId::new(db, crate::qualified_symbol(prefix, &v.name)),
+                                id: CtorId::new(db, prefix.child(v.name.clone())),
                                 fields: v.fields.len(),
                             })
                             .collect(),
@@ -104,7 +100,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                 }
                 _ => continue,
             };
-            let id = TypeDefId::source(db, crate::qualified_symbol(prefix, &name), node);
+            let id = TypeDefId::source(db, prefix.child(name.clone()), node);
             self.declarations.insert(id, declaration);
         }
     }

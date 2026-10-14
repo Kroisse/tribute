@@ -7,7 +7,6 @@ use tribute_front::{
     ast::{FuncDefId, Type, TypeKind},
     typeck::TypeCheckOutput,
 };
-use trunk_ir::Symbol;
 
 #[salsa::tracked(returns(copy))]
 fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> bool {
@@ -27,7 +26,7 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
     } else {
         let instance = metadata.function_instances.get_mut(&node).unwrap();
         match damage {
-            1 => instance.function = FuncDefId::new(db, Symbol::new("wrong")),
+            1 => instance.function = FuncDefId::new(db, trunk_ir::SymbolPath::from("wrong")),
             2 => instance.type_arguments.clear(),
             3 => instance.row_arguments.clear(),
             4 => instance.type_arguments[0] = Type::new(db, TypeKind::BoundVar { index: 0 }),

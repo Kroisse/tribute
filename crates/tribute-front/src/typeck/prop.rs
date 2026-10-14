@@ -84,7 +84,7 @@ pub(crate) fn ability_id<'db>(db: &'db dyn salsa::Database, index: usize) -> Abi
     if builtin {
         AbilityId::builtin_io(db)
     } else {
-        AbilityId::source(db, Symbol::new(name))
+        AbilityId::source(db, trunk_ir::SymbolPath::new(name.split("::")))
     }
 }
 
@@ -92,10 +92,14 @@ fn nominal_id<'db>(db: &'db dyn salsa::Database, index: usize) -> (TypeDefId<'db
     let (origin, qualified, name, _) = NOMINALS[index];
     let id = match origin {
         NominalOrigin::BuiltinList => TypeDefId::builtin_list(db),
-        NominalOrigin::Synthetic => TypeDefId::synthetic(db, Symbol::new(qualified)),
-        NominalOrigin::Source(node) => {
-            TypeDefId::source(db, Symbol::new(qualified), NodeId::from_raw(node))
+        NominalOrigin::Synthetic => {
+            TypeDefId::synthetic(db, trunk_ir::SymbolPath::new(qualified.split("::")))
         }
+        NominalOrigin::Source(node) => TypeDefId::source(
+            db,
+            trunk_ir::SymbolPath::new(qualified.split("::")),
+            NodeId::from_raw(node),
+        ),
     };
     (id, Symbol::new(name))
 }

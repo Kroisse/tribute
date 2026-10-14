@@ -77,10 +77,10 @@ impl<'db> InstanceKeys<'db> {
     pub(crate) fn new(
         db: &'db dyn salsa::Database,
         module: &Module<TypedRef<'db>>,
-        function_types: &[(Symbol, TypeScheme<'db>)],
+        function_types: &[(SymbolPath, TypeScheme<'db>)],
         metadata: &MonomorphizeMetadata<'db>,
     ) -> Self {
-        let schemes: HashMap<&Symbol, TypeScheme<'db>> = function_types
+        let schemes: HashMap<&SymbolPath, TypeScheme<'db>> = function_types
             .iter()
             .map(|(name, scheme)| (name, *scheme))
             .collect();
@@ -102,7 +102,7 @@ impl<'db> InstanceKeys<'db> {
         let class_variables = settle_class_variables(definitions);
         // A definition is its own instance with every class `Cps`, except
         // root `main`: nothing instantiates its row, so its tail is empty.
-        let root = FuncDefId::new(db, Symbol::new(ROOT_MAIN));
+        let root = FuncDefId::new(db, SymbolPath::from(ROOT_MAIN));
         let row_classes = class_variables
             .iter()
             .map(|(id, variables)| {
@@ -282,7 +282,7 @@ pub(super) fn for_each_declaration<'a, 'db>(
     for decl in decls {
         match decl {
             Decl::Function(function) => {
-                f(Some(&crate::qualified_symbol(module, &function.name)), decl)
+                f(Some(&module.child(function.name.clone()).to_symbol()), decl)
             }
             Decl::Module(inner) => {
                 if let Some(body) = &inner.body {
@@ -305,7 +305,7 @@ pub(super) fn for_each_declaration_mut<'db>(
     for decl in decls {
         match decl {
             Decl::Function(function) => {
-                f(Some(&crate::qualified_symbol(module, &function.name)), decl)
+                f(Some(&module.child(function.name.clone()).to_symbol()), decl)
             }
             Decl::Module(inner) => {
                 if let Some(body) = &mut inner.body {
@@ -322,13 +322,11 @@ pub(super) fn for_each_declaration_mut<'db>(
 fn for_each_function<'a, 'db>(
     decls: &'a [Decl<TypedRef<'db>>],
     prefix: &mut SymbolPath,
-    f: &mut impl FnMut(Symbol, &'a FuncDecl<TypedRef<'db>>),
+    f: &mut impl FnMut(SymbolPath, &'a FuncDecl<TypedRef<'db>>),
 ) {
     for decl in decls {
         match decl {
-            Decl::Function(function) => {
-                f(crate::qualified_symbol(prefix, &function.name), function)
-            }
+            Decl::Function(function) => f(prefix.child(function.name.clone()), function),
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
                     prefix.push(module.name.clone());
@@ -657,7 +655,7 @@ mod tests {
     }
 
     fn id<'db>(db: &'db TestDb, name: &str) -> FuncDefId<'db> {
-        FuncDefId::new(db, Symbol::new(name))
+        FuncDefId::new(db, trunk_ir::SymbolPath::from(name))
     }
 
     #[test]
@@ -736,7 +734,7 @@ mod tests {
         let int = Type::new(&db, TypeKind::Int);
         let stored = func(&db, vec![], int, open(&db, 1));
         let ability = Effect {
-            ability_id: AbilityId::source(&db, Symbol::new("State")),
+            ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::from("State")),
             args: vec![stored],
         };
         let callback = func(&db, vec![int], int, open(&db, 1));

@@ -15,7 +15,7 @@ use crate::ast::{FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, Type
 pub(super) fn collect_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
-    function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
+    function_types: &[(SymbolPath, TypeScheme<'db>)],
     function_instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
     keys: &InstanceKeys<'db>,
 ) -> HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>> {
@@ -146,7 +146,7 @@ struct InstantiationCollector<'a, 'db> {
 impl<'a, 'db> InstantiationCollector<'a, 'db> {
     fn new(
         db: &'db dyn salsa::Database,
-        function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
+        function_types: &[(SymbolPath, TypeScheme<'db>)],
         function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
         keys: &'a InstanceKeys<'db>,
     ) -> Self {
@@ -441,7 +441,7 @@ mod tests {
         let row = EffectRow::new(
             &db,
             vec![Effect {
-                ability_id: AbilityId::source(&db, Symbol::new("State")),
+                ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::from("State")),
                 args: vec![int],
             }],
             None,
@@ -475,7 +475,7 @@ mod tests {
         let row = EffectRow::new(
             &db,
             vec![Effect {
-                ability_id: AbilityId::source(&db, Symbol::new("State")),
+                ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::from("State")),
                 args: vec![error],
             }],
             None,
@@ -506,7 +506,7 @@ mod tests {
             Type::new(
                 &db,
                 TypeKind::Named {
-                    id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new(name)),
+                    id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from(name)),
                     name: trunk_ir::Symbol::new(name),
                     args,
                 },
@@ -718,7 +718,7 @@ mod tests {
         // Neither an unknown type nor an indexed non-generic declaration qualifies,
         // even if the type carries arguments.
         for id in [
-            TypeDefId::synthetic(&db, Symbol::new("Unknown")),
+            TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from("Unknown")),
             nominal_id(&index, &db, "Plain"),
         ] {
             assert!(!index.is_generic(id));

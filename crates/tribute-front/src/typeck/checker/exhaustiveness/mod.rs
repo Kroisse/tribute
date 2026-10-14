@@ -13,7 +13,6 @@ use rustc_hash::FxHashSet as HashSet;
 use itertools::Itertools;
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 
 use self::matrix::{Analyzer, Ctor, Family, FamilyId, GiveUp, Pat, VariantInfo, Witness};
@@ -303,7 +302,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         let family = match self.family_ids.get(&name) {
             Some(family) => *family,
             None => {
-                let family = self.family(name.clone(), id)?;
+                let family = self.family(type_id, &name, id)?;
                 let family_id = FamilyId(self.families.len());
                 self.families.push(family);
                 self.family_types.push(type_id);
@@ -318,20 +317,19 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         Some((Ctor::Variant { family, index }, arity))
     }
 
-    /// The constructors of the nominal type `name`, which `id` constructs.
-    fn family(&self, name: Symbol, id: CtorId<'db>) -> Option<Family> {
+    /// The constructors of the nominal type `ty` named `name`, which `id`
+    /// constructs.
+    fn family(&self, ty: TypeDefId<'db>, name: &Symbol, id: CtorId<'db>) -> Option<Family> {
         let db = self.checker.db();
         // Test for an enum first: a variant may share its enum's name.
-        if let Some(variants) = self.checker.env.lookup_enum_variants(&name) {
+        if let Some(variants) = self.checker.env.lookup_enum_variants(name) {
             // Variants are registered in the enum's module, not under the enum.
             let variants = variants
                 .iter()
                 .map(|variant| {
                     let variant = variant.clone();
-                    let qualified = name
-                        .parent_path()
-                        .map_or(variant.clone(), |module| module.join_path(&variant));
-                    let (arity, _) = self.constructor_shape(CtorId::new(db, qualified))?;
+                    let constructor = CtorId::new(db, ty.path(db).sibling(variant.clone()));
+                    let (arity, _) = self.constructor_shape(constructor)?;
                     Some(VariantInfo {
                         name: variant,
                         arity,
@@ -340,13 +338,13 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                 .collect::<Option<_>>()?;
             return Some(Family { variants });
         }
-        if *id.qualified(db) != name {
+        if id.qualified(db) != *name {
             return None;
         }
         let (arity, _) = self.constructor_shape(id)?;
         Some(Family {
             variants: vec![VariantInfo {
-                name: name.last_segment(),
+                name: id.name(db),
                 arity,
             }],
         })

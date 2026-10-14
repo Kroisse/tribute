@@ -216,7 +216,7 @@ mod tests {
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::source(db, Symbol::new(name))
+        AbilityId::source(db, trunk_ir::SymbolPath::from(name))
     }
 
     #[test]
@@ -256,12 +256,8 @@ mod tests {
         module_path: &[&str],
         name: &str,
     ) -> AbilityId<'db> {
-        let mut qualified = module_path.join("::");
-        if !qualified.is_empty() {
-            qualified.push_str("::");
-        }
-        qualified.push_str(name);
-        AbilityId::source(db, Symbol::new(&qualified))
+        let path = trunk_ir::SymbolPath::new(module_path.iter().copied().chain([name]));
+        AbilityId::source(db, path)
     }
 
     #[test]

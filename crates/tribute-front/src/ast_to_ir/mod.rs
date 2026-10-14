@@ -123,7 +123,7 @@ pub fn registered_compiler_intrinsics<V>(
         for declaration in declarations {
             match declaration {
                 crate::ast::Decl::ExternFunction(function) if function.abi == "intrinsic" => {
-                    let symbol = crate::qualified_symbol(prefix, &function.name);
+                    let symbol = prefix.child(function.name.clone()).to_symbol();
                     if is_supported_compiler_intrinsic(&symbol) {
                         result.insert(function.id, symbol);
                     } else {

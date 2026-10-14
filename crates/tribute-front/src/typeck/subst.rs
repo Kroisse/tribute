@@ -498,11 +498,10 @@ mod tests {
     use crate::ast::{AbilityId, EffectRow};
     use crate::typeck::TypeSolver;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::Symbol;
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::source(db, Symbol::new(name))
+        AbilityId::source(db, trunk_ir::SymbolPath::from(name))
     }
 
     // Substitution laws are properties in `laws` below.

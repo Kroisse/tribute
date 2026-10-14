@@ -13,7 +13,7 @@ pub mod specialize;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 pub use self::instance::InstanceRowClasses;
 use self::instance::{InstanceKey, InstanceKeys};
@@ -48,7 +48,7 @@ pub struct MonomorphizeMetadata<'db> {
 /// Result of monomorphization: updated module + function types.
 pub struct MonomorphizeResult<'db> {
     pub module: Module<TypedRef<'db>>,
-    pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
+    pub function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
     pub metadata: MonomorphizeMetadata<'db>,
     /// The convention class of each class variable of every function instance.
     pub row_classes: InstanceRowClasses,
@@ -64,14 +64,14 @@ pub struct MonomorphizeResult<'db> {
 pub fn monomorphize_functions<'db>(
     db: &'db dyn salsa::Database,
     module: Module<TypedRef<'db>>,
-    function_types: HashMap<Symbol, TypeScheme<'db>>,
+    function_types: HashMap<SymbolPath, TypeScheme<'db>>,
     mut metadata: MonomorphizeMetadata<'db>,
 ) -> Result<MonomorphizeResult<'db>, Vec<InstanceError>> {
     let errors = validate::validate(db, &module, &function_types, &metadata);
     if !errors.is_empty() {
         return Err(errors);
     }
-    let fn_types_vec: Vec<(Symbol, TypeScheme<'db>)> = function_types
+    let fn_types_vec: Vec<(SymbolPath, TypeScheme<'db>)> = function_types
         .iter()
         .map(|(k, v)| (k.clone(), *v))
         .collect();
@@ -101,7 +101,7 @@ pub fn monomorphize_functions<'db>(
             let known = instantiations.entry(func_id).or_default();
             for key in discovered {
                 if known.insert(key.clone()) {
-                    let name = mangle::mangle_instance_name(db, func_id.qualified(db), &key);
+                    let name = mangle::mangle_instance_name(db, &func_id.qualified(db), &key);
                     keys.record(name, func_id, &key);
                     new_instantiations.entry(func_id).or_default().insert(key);
                 }
@@ -261,9 +261,10 @@ pub fn monomorphize_functions<'db>(
             .struct_constructors
             .into_iter()
             .map(|(owner, arguments, scheme)| {
-                let name =
-                    mangle::mangle_type_name(db, owner, owner.qualified(db).clone(), &arguments);
-                (CtorId::new(db, name), scheme)
+                (
+                    CtorId::new(db, mangle::mangle_type_path(db, owner, &arguments)),
+                    scheme,
+                )
             })
             .collect();
         struct_constructors.sort_by_key(|(id, _)| id.qualified(db));
@@ -578,25 +579,22 @@ fn substitute_row<'db>(
 fn build_rewrite_map<'db>(
     db: &'db dyn salsa::Database,
     instantiations: &HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
-    function_types: &[(Symbol, TypeScheme<'db>)],
+    function_types: &[(SymbolPath, TypeScheme<'db>)],
 ) -> rewrite::RewriteMap<'db> {
-    let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
+    let scheme_map: HashMap<SymbolPath, TypeScheme<'db>> = function_types.iter().cloned().collect();
     let mut rewrite_map = rewrite::RewriteMap::default();
 
     for (func_id, keys) in instantiations {
-        let qualified = func_id.qualified(db);
-        if !scheme_map.contains_key(qualified) {
+        let path = func_id.path(db);
+        if !scheme_map.contains_key(path) {
             continue;
         }
 
-        let mut entries: Vec<(InstanceKey<'db>, Symbol)> = keys
+        let mut entries: Vec<(InstanceKey<'db>, SymbolPath)> = keys
             .iter()
-            .map(|key| {
-                let mangled = mangle::mangle_instance_name(db, qualified, key);
-                (key.clone(), mangled)
-            })
+            .map(|key| (key.clone(), mangle::mangle_instance_path(db, path, key)))
             .collect();
-        entries.sort_by_key(|e| e.1.clone());
+        entries.sort_by_cached_key(|e| e.1.to_symbol());
         rewrite_map.insert(*func_id, entries);
     }
 
@@ -704,7 +702,7 @@ mod tests {
                 effect: EffectRow::pure(&db),
             },
         );
-        let ability = AbilityId::source(&db, Symbol::new("Audit"));
+        let ability = AbilityId::source(&db, trunk_ir::SymbolPath::from("Audit"));
         let operation = |kind| InstantiatedHandlerOperation {
             ability,
             ability_args: vec![bound],

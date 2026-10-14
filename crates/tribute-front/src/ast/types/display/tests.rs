@@ -10,7 +10,7 @@ fn effect<'db>(
     args: Vec<Type<'db>>,
 ) -> Effect<'db> {
     Effect {
-        ability_id: AbilityId::source(db, Symbol::new(name)),
+        ability_id: AbilityId::source(db, trunk_ir::SymbolPath::from(name)),
         args,
     }
 }
@@ -21,7 +21,7 @@ fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
     let bool_ty = Type::new(db, TypeKind::Bool);
     let pure = EffectRow::pure(db);
     let named = |name, args| TypeKind::Named {
-        id: TypeDefId::synthetic(db, Symbol::new(name)),
+        id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::from(name)),
         name: Symbol::new(name),
         args,
     };
@@ -121,7 +121,11 @@ fn effect_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
     let pure = EffectRow::pure(db);
     let open = EffectRow::open(db, EffectVar { id: 987 });
     let named = |declaration| TypeKind::Named {
-        id: TypeDefId::source(db, Symbol::new("T"), NodeId::from_raw(declaration)),
+        id: TypeDefId::source(
+            db,
+            trunk_ir::SymbolPath::from("T"),
+            NodeId::from_raw(declaration),
+        ),
         name: Symbol::new("T"),
         args: vec![],
     };
@@ -179,7 +183,10 @@ fn effect_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
         let row = EffectRow::new(db, vec![a, b], None);
         assert_eq!(row.to_string(), expected);
     }
-    let source = effect(db, "std::io::Io", vec![]);
+    let source = Effect {
+        ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["std", "io", "Io"])),
+        args: vec![],
+    };
     let builtin = Effect {
         ability_id: AbilityId::builtin_io(db),
         args: vec![],

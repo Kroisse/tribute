@@ -107,7 +107,7 @@ impl<'db> TypeChecker<'db> {
                     }) {
                         continue;
                     }
-                    let qualified = crate::qualified_symbol(&self.prefix, &name);
+                    let qualified = self.prefix.child(name.clone()).to_symbol();
                     self.env.register_type_def(qualified, scheme);
                 }
                 Decl::Module(module) => {
@@ -191,7 +191,7 @@ impl<'db> TypeChecker<'db> {
         declaration: crate::ast::NodeId,
         params: &[crate::ast::TypeParamDecl],
     ) {
-        let qualified = crate::qualified_symbol(self.current_prefix(), name);
+        let qualified = self.current_prefix().child(name.clone());
         let type_params: Vec<TypeParam> = params
             .iter()
             .map(|param| TypeParam::named(param.name.clone()))
@@ -201,11 +201,11 @@ impl<'db> TypeChecker<'db> {
             .collect();
         let ty = self.env.named_type_with_id(
             crate::ast::TypeDefId::source(self.db(), qualified.clone(), declaration),
-            qualified.clone(),
+            qualified.to_symbol(),
             args,
         );
         self.env.register_type_def(
-            qualified,
+            qualified.to_symbol(),
             TypeScheme::new(self.db(), type_params, Vec::new(), ty),
         );
     }
@@ -355,7 +355,7 @@ impl<'db> TypeChecker<'db> {
     /// Collect a struct definition.
     fn collect_struct_def(&mut self, s: &StructDecl) {
         let name = s.name.clone();
-        let qualified_name = crate::qualified_symbol(self.current_prefix(), &name);
+        let qualified_name = self.current_prefix().child(name.clone());
         let type_params: Vec<TypeParam> = s
             .type_params
             .iter()
@@ -376,12 +376,13 @@ impl<'db> TypeChecker<'db> {
             .collect();
         let struct_ty = self.env.named_type_with_id(
             crate::ast::TypeDefId::source(self.db(), qualified_name.clone(), s.id),
-            qualified_name.clone(),
+            qualified_name.to_symbol(),
             args,
         );
 
         let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), struct_ty);
-        self.env.register_type_def(qualified_name.clone(), scheme);
+        self.env
+            .register_type_def(qualified_name.to_symbol(), scheme);
 
         // Register struct constructor
         // Constructor type is: fn(field_types...) -> StructType
@@ -428,7 +429,7 @@ impl<'db> TypeChecker<'db> {
     /// Collect an enum definition.
     fn collect_enum_def(&mut self, e: &EnumDecl) {
         let name = e.name.clone();
-        let qualified_name = crate::qualified_symbol(self.current_prefix(), &name);
+        let qualified_name = self.current_prefix().child(name.clone());
         let type_params: Vec<TypeParam> = e
             .type_params
             .iter()
@@ -441,17 +442,18 @@ impl<'db> TypeChecker<'db> {
             .collect();
         let enum_ty = self.env.named_type_with_id(
             crate::ast::TypeDefId::source(self.db(), qualified_name.clone(), e.id),
-            qualified_name.clone(),
+            qualified_name.to_symbol(),
             args,
         );
 
         let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), enum_ty);
-        self.env.register_type_def(qualified_name.clone(), scheme);
+        self.env
+            .register_type_def(qualified_name.to_symbol(), scheme);
 
         // Register enum variant names for exhaustiveness checking
         let variant_names: Vec<Symbol> = e.variants.iter().map(|v| v.name.clone()).collect();
         self.env
-            .register_enum_variants(qualified_name, variant_names);
+            .register_enum_variants(qualified_name.to_symbol(), variant_names);
 
         // Register constructors for each variant
         // Build name → BoundVar index lookup for type parameter resolution
@@ -480,10 +482,7 @@ impl<'db> TypeChecker<'db> {
             let effect_params = collect_effect_vars(self.db(), ctor_ty);
             let ctor_scheme =
                 TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
-            let ctor_id = CtorId::new(
-                self.db(),
-                crate::qualified_symbol(self.current_prefix(), &variant.name),
-            );
+            let ctor_id = CtorId::new(self.db(), self.current_prefix().child(variant.name.clone()));
             self.env.register_constructor(ctor_id, ctor_scheme);
             if let Some(names) = field_names(&variant.fields) {
                 self.env.register_constructor_field_names(ctor_id, names);
@@ -497,10 +496,7 @@ impl<'db> TypeChecker<'db> {
     /// handler arm type checking.
     fn collect_ability_def(&mut self, a: &AbilityDecl) {
         // Create AbilityId for this ability
-        let ability_id = AbilityId::source(
-            self.db(),
-            crate::qualified_symbol(self.current_prefix(), &a.name),
-        );
+        let ability_id = AbilityId::source(self.db(), self.current_prefix().child(a.name.clone()));
 
         // Build type parameter info
         let type_params: Vec<TypeParam> = a

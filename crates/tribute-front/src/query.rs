@@ -19,7 +19,7 @@
 use std::hash::{Hash, Hasher};
 
 use tree_sitter::{Node, Tree};
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
     Decl, FuncDecl, Module, ResolvedRef, SpanMap, TypeScheme, TypedRef, UnresolvedName,
@@ -192,7 +192,7 @@ pub fn type_check_output<'db>(
 pub fn function_schemes<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-) -> Option<&'db [(Symbol, TypeScheme<'db>)]> {
+) -> Option<&'db [(SymbolPath, TypeScheme<'db>)]> {
     type_check_output(db, source).map(|o| o.function_types(db))
 }
 
@@ -501,7 +501,7 @@ fn explicit() ->{} Nil { Nil }
         let effect = crate::ast::EffectRow::new(
             &db,
             vec![crate::ast::Effect {
-                ability_id: crate::ast::AbilityId::source(&db, Symbol::new("State")),
+                ability_id: crate::ast::AbilityId::source(&db, trunk_ir::SymbolPath::from("State")),
                 args: vec![var],
             }],
             None,

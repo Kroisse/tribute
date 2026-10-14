@@ -572,12 +572,12 @@ impl<'db> IrLoweringCtx<'db> {
             | TypeKind::UniVar { .. } => self.anyref_type(ir),
             TypeKind::Named { id, .. } if id.is_builtin_list(self.db) => self.anyref_type(ir),
             TypeKind::Named { id, .. }
-                if self.get_type(id.qualified(self.db)).is_some()
+                if self.get_type(&id.qualified(self.db)).is_some()
                     || self
                         .logical_nominal_declarations
-                        .contains(id.qualified(self.db)) =>
+                        .contains(&id.qualified(self.db)) =>
             {
-                self.adt_typeref(ir, id.qualified(self.db))
+                self.adt_typeref(ir, &id.qualified(self.db))
             }
             TypeKind::Named { .. } => self.anyref_type(ir),
             TypeKind::Func { params, result, .. } => {
@@ -1051,7 +1051,7 @@ mod tests {
         let ctx = lowering_ctx(&db, &mut ir);
         let ability = Symbol::new("State");
         let effect = |name: &str| Effect {
-            ability_id: AbilityId::source(&db, Symbol::new(name)),
+            ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::from(name)),
             args: vec![],
         };
         let open = |id, effects| EffectRow::new(&db, effects, Some(EffectVar { id }));
@@ -1101,7 +1101,10 @@ mod tests {
             AstType::new(
                 &db,
                 TypeKind::App {
-                    ctor: named(crate::ast::TypeDefId::synthetic(&db, Symbol::new("a::Box"))),
+                    ctor: named(crate::ast::TypeDefId::synthetic(
+                        &db,
+                        trunk_ir::SymbolPath::new(["a", "Box"]),
+                    )),
                     args: vec![nat],
                 },
             ),
@@ -1114,8 +1117,14 @@ mod tests {
                 },
             ),
             named(crate::ast::TypeDefId::builtin_list(&db)),
-            named(crate::ast::TypeDefId::synthetic(&db, Symbol::new("a::Box"))),
-            named(crate::ast::TypeDefId::synthetic(&db, Symbol::new("b::Box"))),
+            named(crate::ast::TypeDefId::synthetic(
+                &db,
+                trunk_ir::SymbolPath::new(["a", "Box"]),
+            )),
+            named(crate::ast::TypeDefId::synthetic(
+                &db,
+                trunk_ir::SymbolPath::new(["b", "Box"]),
+            )),
         ]
         .map(|arg| ctx.ability_instance_key(&ability, &[arg]));
         let distinct: HashSet<_> = keys.iter().collect();
@@ -1213,7 +1222,10 @@ mod tests {
         let forward = AstType::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, nominal_name.clone()),
+                id: crate::ast::TypeDefId::synthetic(
+                    &db,
+                    trunk_ir::SymbolPath::from(&nominal_name),
+                ),
                 name: Symbol::new("Forward"),
                 args: vec![],
             },
@@ -1230,7 +1242,7 @@ mod tests {
         let source_list = AstType::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, list_name.clone()),
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::from(&list_name)),
                 name: list_name.clone(),
                 args: vec![],
             },
@@ -1383,7 +1395,10 @@ mod tests {
                 id: crate::ast::UniVarId::new(
                     &db,
                     crate::ast::UniVarSource::FunctionLocal {
-                        func_id: crate::ast::FuncDefId::new(&db, Symbol::new("Nested::key")),
+                        func_id: crate::ast::FuncDefId::new(
+                            &db,
+                            trunk_ir::SymbolPath::new(["Nested", "key"]),
+                        ),
                         index: 2,
                     },
                     0,
