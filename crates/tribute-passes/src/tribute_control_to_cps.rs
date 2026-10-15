@@ -29,7 +29,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionMode, ConversionTarget, Module};
-use trunk_ir::symbol_table::{SymbolTable, nearest_table};
+use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
@@ -89,7 +89,6 @@ struct Converter<'a> {
     /// resolved before conversion moves anything.
     targets: HashMap<OpRef, OpRef>,
     /// Source operations whose references are looked up in a nested module.
-    nested_references: HashSet<OpRef>,
     converted_types: HashMap<TypeRef, TypeRef>,
     helper_index: u32,
 }
@@ -163,7 +162,6 @@ impl<'a> Converter<'a> {
             module_block,
             funcs: graph.funcs,
             targets: graph.targets,
-            nested_references: graph.nested_references,
             converted_types: HashMap::default(),
             helper_index: 0,
         }
@@ -381,7 +379,6 @@ impl<'a> Converter<'a> {
 struct CallableGraph {
     funcs: HashMap<OpRef, CallableInfo>,
     targets: HashMap<OpRef, OpRef>,
-    nested_references: HashSet<OpRef>,
 }
 
 /// Every source callable by its defining operation, and the callable each
@@ -414,30 +411,19 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         })
         .collect();
     let mut targets = HashMap::default();
-    let mut nested_references = HashSet::default();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         let attributes = &ctx.op(op).attributes;
-        if let Some(reference) = attributes
+        if let Some(target) = attributes
             .get_symbol_ref("callee")
             .or_else(|| attributes.get_symbol_ref("func_ref"))
+            .and_then(|reference| symbols.resolve(ctx, op, reference))
+            .filter(|target| funcs.contains_key(target))
         {
-            if let Some(target) = symbols
-                .resolve(ctx, op, reference)
-                .filter(|target| funcs.contains_key(target))
-            {
-                targets.insert(op, target);
-            }
-            if nearest_table(ctx, op) != Some(module.op()) {
-                nested_references.insert(op);
-            }
+            targets.insert(op, target);
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
-    CallableGraph {
-        funcs,
-        targets,
-        nested_references,
-    }
+    CallableGraph { funcs, targets }
 }
 
 fn verify_candidate_or_restore_aliases(
