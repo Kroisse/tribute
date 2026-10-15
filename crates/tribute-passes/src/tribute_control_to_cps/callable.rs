@@ -119,7 +119,7 @@ impl Converter<'_> {
         self.ctx
             .op(source)
             .attributes
-            .get_symbol_ref("callee")
+            .get_symbol_ref(self.ctx, "callee")
             .expect("pre-CPS validation checked direct callee")
             .clone()
     }
@@ -133,7 +133,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref("func_ref")
+            .get_symbol_ref(self.ctx, "func_ref")
             .expect("pre-CPS validation checked func_ref target")
             .clone();
         let target = self
@@ -265,7 +265,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_type("type")
+            .get_type(self.ctx, "type")
             .expect("pre-CPS validation checked function type");
         let info = self
             .funcs
@@ -282,7 +282,7 @@ impl Converter<'_> {
                     )
                     .attr("type", Attribute::Type(physical_type));
             for (key, value) in self.convert_attrs(&self.ctx.op(source).attributes.clone()) {
-                if !matches!(key.as_str(), "sym_name" | "type") {
+                if !matches!(self.ctx.str(key), "sym_name" | "type") {
                     builder = builder.attr(key, value);
                 }
             }
@@ -375,7 +375,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref("callee")
+            .get_symbol_ref(self.ctx, "callee")
             .expect("pre-CPS validation checked direct callee")
             .clone();
         let target = self
@@ -438,7 +438,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref("callee")
+            .get_symbol_ref(self.ctx, "callee")
             .expect("pre-CPS validation checked tail callee")
             .clone();
         let target = self

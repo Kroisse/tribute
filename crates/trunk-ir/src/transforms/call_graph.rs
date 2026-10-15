@@ -308,7 +308,7 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     /// A call graph with each symbol spelled by its root-qualified path.
@@ -484,8 +484,9 @@ mod tests {
         let body = ctx.op_region(caller, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let call = ctx.block(block).ops[0];
-        ctx.op_mut(call).attributes.insert(
-            Symbol::new("callee"),
+        ctx.set_attr(
+            call,
+            "callee",
             Attribute::SymbolRef(SymbolPath::new(["other"])),
         );
         assert!(

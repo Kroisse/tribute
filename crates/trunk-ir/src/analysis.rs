@@ -573,7 +573,7 @@ mod tests {
                 .ir()
                 .op(target)
                 .attributes
-                .get("marker")
+                .get(ctx.ir(), "marker")
                 .and_then(|a| a.as_i128());
             Ok(Self(marker))
         }
@@ -757,9 +757,7 @@ mod tests {
         let _ = analyses.get::<OtherAnalysis>(&ctx, op).unwrap();
         assert_eq!(analyses.len(), 5);
 
-        ctx.op_mut(op)
-            .attributes
-            .insert("marker", crate::types::Attribute::Int(7));
+        ctx.set_attr(op, "marker", crate::types::Attribute::Int(7));
         assert!(analyses.get_cached::<MarkerAnalysis>(&ctx, op).is_none());
         assert!(analyses.cache.is_empty());
         assert!(analyses.dependencies.is_empty());
@@ -782,8 +780,8 @@ mod tests {
         use crate::types::TypeDataBuilder;
 
         let (mut ctx, module) = test_ctx();
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
         let location = ctx.op(module).location;
         let source_data =
             OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))
@@ -834,14 +832,8 @@ mod tests {
     fn cache_rebinds_even_when_contexts_have_equal_revisions_and_op_refs() {
         let (mut first_ctx, first_op) = test_ctx();
         let (mut second_ctx, second_op) = test_ctx();
-        first_ctx
-            .op_mut(first_op)
-            .attributes
-            .insert("marker", crate::types::Attribute::Int(1));
-        second_ctx
-            .op_mut(second_op)
-            .attributes
-            .insert("marker", crate::types::Attribute::Int(2));
+        first_ctx.set_attr(first_op, "marker", crate::types::Attribute::Int(1));
+        second_ctx.set_attr(second_op, "marker", crate::types::Attribute::Int(2));
         assert_eq!(first_op, second_op);
         assert_eq!(first_ctx.analysis_stamp().1, second_ctx.analysis_stamp().1);
         assert_ne!(first_ctx.analysis_stamp().0, second_ctx.analysis_stamp().0);
@@ -888,7 +880,7 @@ mod tests {
             crate::symbol::Symbol::new("test"),
             crate::symbol::Symbol::new("fresh"),
         )
-        .build();
+        .build(&mut ctx);
         let interned = ctx.intern_type(ty.clone());
         assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
         let after_type = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
@@ -950,17 +942,13 @@ mod tests {
         let (mut ctx, op) = test_ctx();
         AnalysisCache::scope(&mut ctx, |ctx, analyses| {
             let before = analyses.get::<MarkerAnalysis>(ctx, op).unwrap();
-            ctx.op_mut(op)
-                .attributes
-                .insert("marker", crate::types::Attribute::Int(3));
+            ctx.set_attr(op, "marker", crate::types::Attribute::Int(3));
             let after = analyses.get::<MarkerAnalysis>(ctx, op).unwrap();
             assert_eq!(before.0, None);
             assert_eq!(after.0, Some(3));
 
             let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                ctx.op_mut(op)
-                    .attributes
-                    .insert("marker", crate::types::Attribute::Int(4));
+                ctx.set_attr(op, "marker", crate::types::Attribute::Int(4));
                 panic!("pass failed after partial mutation");
             }));
             assert!(failed.is_err());

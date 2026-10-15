@@ -58,7 +58,7 @@ fn carry_evidence_plan(ctx: &mut IrContext, source: OpRef, target: OpRef) {
 fn evidence_plan_of(ctx: &IrContext, source: OpRef) -> Option<Attribute> {
     ctx.op(source)
         .attributes
-        .get(tribute_control::EVIDENCE_PLAN_ATTR)
+        .get(ctx, tribute_control::EVIDENCE_PLAN_ATTR)
         .cloned()
 }
 
@@ -393,7 +393,7 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
             let logical_type = ctx
                 .op(op)
                 .attributes
-                .get_type("type")
+                .get_type(ctx, "type")
                 .expect("pre-CPS validation checked function type");
             let callable = tribute_control::FuncSig::from_type_ref(ctx, logical_type)
                 .expect("pre-CPS validation checked callable type");
@@ -405,7 +405,7 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
                     convention: convert_convention(convention),
                     source_result: callable.result(ctx),
                     source_params: callable.inputs(ctx).to_vec(),
-                    platform: ctx.op(op).attributes.contains_key(Symbol::new("abi")),
+                    platform: ctx.op(op).attributes.contains_key(ctx, "abi"),
                 },
             )
         })
@@ -414,8 +414,8 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         let attributes = &ctx.op(op).attributes;
         if let Some(target) = attributes
-            .get_symbol_ref("callee")
-            .or_else(|| attributes.get_symbol_ref("func_ref"))
+            .get_symbol_ref(ctx, "callee")
+            .or_else(|| attributes.get_symbol_ref(ctx, "func_ref"))
             .and_then(|reference| symbols.resolve(ctx, op, reference))
             .filter(|target| funcs.contains_key(target))
         {

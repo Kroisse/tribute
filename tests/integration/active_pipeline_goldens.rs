@@ -113,7 +113,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
 
     fn type_shape(ctx: &IrContext, ty: TypeRef) -> String {
         let data = ctx.get_type(ty);
-        if let Some(result) = data.attrs.get_type(continuation_frame::RESULT_ATTR) {
+        if let Some(result) = data.attrs.get_type(ctx, continuation_frame::RESULT_ATTR) {
             return format!("Frame<{}>", type_shape(ctx, result));
         }
         // Physicalization consumes the frame answer type, and the generated

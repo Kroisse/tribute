@@ -36,9 +36,9 @@ mod tests {
     fn sequence_ops_round_trip() {
         let mut ctx = IrContext::new();
         let loc = location();
-        let element_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let list_ty = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
-        let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
+        let element_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let list_ty = TypeDataBuilder::new("tribute_rt", "anyref").intern(&mut ctx);
+        let bool_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
         let element = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(element_ty)

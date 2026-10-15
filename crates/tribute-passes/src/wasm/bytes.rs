@@ -26,23 +26,22 @@ pub const LEN_FIELD: u32 = 2;
 
 /// The bytes backing array: `core.array<core.i8, {layout = "bytes_data"}>`.
 pub fn bytes_data_type(ctx: &mut IrContext) -> TypeRef {
-    let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
+    let i8_ty = TypeDataBuilder::new("core", "i8").intern(ctx);
     let layout = ctx.string_attr(BYTES_DATA);
-    ctx.intern_type(
-        TypeDataBuilder::new("core", "array")
-            .param(i8_ty)
-            .attr(LAYOUT_ATTR, layout)
-            .build(),
-    )
+    TypeDataBuilder::new("core", "array")
+        .param(i8_ty)
+        .attr(LAYOUT_ATTR, layout)
+        .intern(ctx)
 }
 
 /// The bytes struct: backing array, start offset, and length, with
 /// `layout = "bytes"`.
 pub fn bytes_struct_type(ctx: &mut IrContext) -> TypeRef {
     let data_ty = bytes_data_type(ctx);
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
     let mut attrs = AttributeMap::new();
-    attrs.insert(LAYOUT_ATTR, ctx.string_attr(BYTES));
+    let layout = ctx.string_attr(BYTES);
+    attrs.insert(ctx, LAYOUT_ATTR, layout);
     adt::struct_type(
         ctx,
         "_Bytes",
@@ -76,7 +75,7 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
     let loc = ctx.op(call).location;
     let bytes_ty = bytes_struct_type(ctx);
     let data_ty = bytes_data_type(ctx);
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
 
     // View the opaque `core.bytes` as its Wasm layout. Wasm type conversion
     // maps both to the same type, so the cast folds away.
@@ -128,7 +127,7 @@ mod tests {
         let data = bytes_data_type(&mut ctx);
         assert!(has_runtime_layout(&ctx, bytes, BYTES));
         assert!(has_runtime_layout(&ctx, data, BYTES_DATA));
-        let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
+        let i8_ty = TypeDataBuilder::new("core", "i8").intern(&mut ctx);
         let plain_i8_array = core::array(&mut ctx, i8_ty).as_type_ref();
         assert_ne!(plain_i8_array, data);
     }

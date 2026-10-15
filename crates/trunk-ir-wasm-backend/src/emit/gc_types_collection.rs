@@ -133,7 +133,7 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
     if marker.params.len() != expected.len() {
         return Err(invalid());
     }
-    for (((ty, attrs), expected), role) in marker.params_with_attrs().zip(expected).zip([
+    for (((ty, attrs), expected), role) in marker.params_with_attrs(ctx).zip(expected).zip([
         "ability_id",
         "prompt_tag",
         "tr_dispatch_fn",
@@ -194,7 +194,7 @@ fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     // Wasm has no i1 storage type. Match type_to_valtype before comparing
     // constructor, getter, and setter observations of the same field.
     if helpers::is_type(ctx, ty, "core", "i1") {
-        return ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
+        return trunk_ir::types::TypeDataBuilder::new("core", "i32").intern(ctx);
     }
 
     ty
@@ -377,7 +377,8 @@ pub(crate) fn collect_gc_types(
 
     // The GC types that received user indices, in index order. A structural
     // struct type declares its fields, so its builder starts complete.
-    let declared_types: Vec<TypeRef> = match ctx.op(module.op()).attributes.get(GC_TYPES_ATTR) {
+    let declared_types: Vec<TypeRef> = match ctx.op(module.op()).attributes.get(ctx, GC_TYPES_ATTR)
+    {
         Some(Attribute::List(types)) => types
             .iter()
             .map(|attr| match attr {
@@ -786,13 +787,11 @@ mod tests {
                     let b_ty = ctx.type_alias_by_text("B").unwrap();
                     assert_eq!(map.get(&a_ty), Some(&a));
                     assert_eq!(map.get(&b_ty), Some(&b));
-                    let abstract_ty = ctx.intern_type(
-                        TypeDataBuilder::new(
-                            Symbol::new("wasm"),
-                            Symbol::new(reference.strip_prefix("wasm.").unwrap()),
-                        )
-                        .build(),
-                    );
+                    let abstract_ty = TypeDataBuilder::new(
+                        Symbol::new("wasm"),
+                        Symbol::new(reference.strip_prefix("wasm.").unwrap()),
+                    )
+                    .intern(&mut ctx);
                     assert!(!map.contains_key(&abstract_ty), "{reference}: {projection}");
                     let binary = crate::emit_module_to_wasm(&mut ctx, module).unwrap();
                     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
@@ -947,7 +946,7 @@ wasm.return
     fn record_struct_field_widens_concrete_to_anyref() {
         let mut ctx = IrContext::new();
         let concrete = intern_wasm_structref(&mut ctx);
-        let anyref = ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
+        let anyref = TypeDataBuilder::new("wasm", "anyref").intern(&mut ctx);
         let mut builder = GcTypeBuilder::new();
 
         record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, concrete)
@@ -961,7 +960,7 @@ wasm.return
     #[test]
     fn structural_struct_fields_compare_as_the_struct_supertype() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
         let structural = wasm_gc::r#struct(&mut ctx, [i32_ty]).as_type_ref();
         let structref = intern_wasm_structref(&mut ctx);
 
@@ -974,20 +973,16 @@ wasm.return
         let mut ctx = IrContext::new();
         let mut closure_layout = |name: &'static str| {
             let layout = ctx.string_attr(crate::gc_types::CLOSURE_LAYOUT);
-            ctx.intern_type(
-                TypeDataBuilder::new("test", name)
-                    .attr(trunk_ir::types::LAYOUT_ATTR, layout)
-                    .build(),
-            )
+            TypeDataBuilder::new("test", name)
+                .attr(trunk_ir::types::LAYOUT_ATTR, layout)
+                .intern(&mut ctx)
         };
         let reference = closure_layout("reference");
         let declaration = closure_layout("declaration");
         let bytes_layout = ctx.string_attr(crate::gc_types::BYTES_LAYOUT);
-        let bytes = ctx.intern_type(
-            TypeDataBuilder::new("test", "bytes")
-                .attr(trunk_ir::types::LAYOUT_ATTR, bytes_layout)
-                .build(),
-        );
+        let bytes = TypeDataBuilder::new("test", "bytes")
+            .attr(trunk_ir::types::LAYOUT_ATTR, bytes_layout)
+            .intern(&mut ctx);
         let types_before = ctx.types().iter().count();
 
         assert!(types_equivalent_for_gc(&mut ctx, reference, declaration));
@@ -1000,19 +995,15 @@ wasm.return
     fn same_named_types_with_different_attributes_are_not_gc_equivalent() {
         let mut ctx = IrContext::new();
         let name_attr = ctx.string_attr("String");
-        let canonical = ctx.intern_type(
-            TypeDataBuilder::new("test", "named")
-                .attr("name", name_attr)
-                .attr("layout", Attribute::Bool(true))
-                .build(),
-        );
+        let canonical = TypeDataBuilder::new("test", "named")
+            .attr("name", name_attr)
+            .attr("layout", Attribute::Bool(true))
+            .intern(&mut ctx);
         let name_attr = ctx.string_attr("String");
-        let unrelated = ctx.intern_type(
-            TypeDataBuilder::new("test", "named")
-                .attr("name", name_attr)
-                .attr("layout", Attribute::Bool(false))
-                .build(),
-        );
+        let unrelated = TypeDataBuilder::new("test", "named")
+            .attr("name", name_attr)
+            .attr("layout", Attribute::Bool(false))
+            .intern(&mut ctx);
 
         assert!(!types_equivalent_for_gc(&mut ctx, canonical, unrelated));
     }

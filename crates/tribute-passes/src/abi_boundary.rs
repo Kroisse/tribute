@@ -263,6 +263,7 @@ impl<'a> Verifier<'a> {
             );
         }
         for (name, value) in data.attributes.iter() {
+            let name = ctx.str(name);
             let context = format!("{op_name} attribute {name}");
             self.check_attribute_name(name, Some(op), &context);
             self.check_attribute(value, Some(op), &context);
@@ -276,6 +277,7 @@ impl<'a> Verifier<'a> {
                     let context = format!("{op_name} block argument");
                     self.check_type(argument.ty, Some(op), &context);
                     for (name, value) in argument.attrs.iter() {
+                        let name = ctx.str(name);
                         let context = format!("{context} attribute {name}");
                         self.check_attribute_name(name, Some(op), &context);
                         self.check_attribute(value, Some(op), &context);
@@ -314,7 +316,7 @@ impl<'a> Verifier<'a> {
         }
     }
 
-    fn check_attribute_name(&mut self, name: &Symbol, op: Option<OpRef>, context: &str) {
+    fn check_attribute_name(&mut self, name: &str, op: Option<OpRef>, context: &str) {
         if let Some(kind) = classify_attribute_name(name) {
             self.report(kind, op, context.to_owned());
         }
@@ -349,6 +351,7 @@ impl<'a> Verifier<'a> {
             }
             Attribute::Dict(entries) => {
                 for (name, value) in entries.iter() {
+                    let name = self.ctx.str(name);
                     let location = format!("{location} key {name}");
                     if let Some(kind) = classify_attribute_name(name) {
                         found.push((kind, location.clone()));
@@ -399,6 +402,7 @@ impl<'a> Verifier<'a> {
             found.extend(ownership_violations(ctx, signature));
         }
         for (name, value) in data.attrs.iter() {
+            let name = ctx.str(name);
             let location = format!(" type attribute {name}");
             if let Some(kind) = classify_attribute_name(name) {
                 found.push((kind, location.clone()));
@@ -417,12 +421,11 @@ impl<'a> Verifier<'a> {
 
 /// Violations of the parameter ownership contract `signature` states.
 fn ownership_violations(ctx: &IrContext, signature: func::FuncSig) -> Vec<TypeViolation> {
-    let ownership = Symbol::new(crate::target_abi::OWNERSHIP_ATTR);
     let tail = signature.call_conv(ctx) == Some(func::CallConv::Tail);
     let mut found = Vec::new();
     for (index, attrs) in signature.input_attrs(ctx).enumerate() {
         let location = format!(" input {index}");
-        match attrs.get(ownership.clone()) {
+        match attrs.get(ctx, crate::target_abi::OWNERSHIP_ATTR) {
             Some(Attribute::String(mode)) if ctx.str(*mode) == crate::target_abi::CONSUMED => {}
             Some(Attribute::String(mode)) => found.push((
                 ViolationKind::UnknownOwnership(ctx.str(*mode).to_owned()),
@@ -440,14 +443,11 @@ fn ownership_violations(ctx: &IrContext, signature: func::FuncSig) -> Vec<TypeVi
 }
 
 /// The violation a language-specific attribute name represents, if any.
-fn classify_attribute_name(name: &Symbol) -> Option<ViolationKind> {
-    let name = name.to_string();
-    if FORBIDDEN_ATTRIBUTES.contains(&name.as_str()) {
-        Some(ViolationKind::ForbiddenAttribute(name))
-    } else if name.starts_with(LANGUAGE_ATTRIBUTE_PREFIX)
-        && !PRESERVED_ATTRIBUTES.contains(&name.as_str())
-    {
-        Some(ViolationKind::UnclassifiedAttribute(name))
+fn classify_attribute_name(name: &str) -> Option<ViolationKind> {
+    if FORBIDDEN_ATTRIBUTES.contains(&name) {
+        Some(ViolationKind::ForbiddenAttribute(name.to_owned()))
+    } else if name.starts_with(LANGUAGE_ATTRIBUTE_PREFIX) && !PRESERVED_ATTRIBUTES.contains(&name) {
+        Some(ViolationKind::UnclassifiedAttribute(name.to_owned()))
     } else {
         None
     }
@@ -633,7 +633,9 @@ mod tests {
         let function = module.ops(&ctx)[0];
         let entry = ctx.region(ctx.op_region(function, 0).unwrap()).blocks[0];
         let nil = core::nil(&mut ctx).as_type_ref();
-        ctx.block_mut(entry).args[0].attrs.insert(
+        ctx.set_block_arg_attr(
+            entry,
+            0,
             "tribute.cps_continuation_frame_result",
             Attribute::Type(nil),
         );

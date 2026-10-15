@@ -252,7 +252,7 @@ fn should_inline(
     }
     // Skip extern/ABI functions: they are externally callable and the body
     // may be empty or have calling-convention constraints.
-    if ctx.op(callee_op).attributes.contains_key("abi") {
+    if ctx.op(callee_op).attributes.contains_key(ctx, "abi") {
         return false;
     }
     // Skip recursive functions to avoid unbounded instantiation.
@@ -416,7 +416,7 @@ impl RewritePattern for InlineCallSite {
             return false;
         }
 
-        let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
+        let Some(callee) = ctx.op(op).attributes.get_symbol_ref(ctx, "callee") else {
             return false;
         };
         let Some(callee_op) = self.symbols.resolve(ctx, op, callee) else {
@@ -476,7 +476,7 @@ mod mechanics {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     /// Build `func.func @name(params) -> ret_ty { body_builder }`.
@@ -877,7 +877,7 @@ mod pass {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     fn build_func<F>(
@@ -952,7 +952,7 @@ mod pass {
         let body = ctx.op_region(func_op, 0).unwrap();
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if func::Call::matches(ctx, op)
-                && ctx.op(op).attributes.get_symbol_ref("callee") == Some(&target)
+                && ctx.op(op).attributes.get_symbol_ref(ctx, "callee") == Some(&target)
             {
                 count += 1;
             }
@@ -1042,7 +1042,7 @@ mod pass {
             .block(ctx.region(body).blocks[0])
             .ops
             .iter()
-            .filter_map(|&op| ctx.op(op).attributes.get("value").cloned())
+            .filter_map(|&op| ctx.op(op).attributes.get(&ctx, "value").cloned())
             .collect();
         assert_eq!(consts, [Attribute::Int(7)]);
     }
@@ -1091,7 +1091,7 @@ mod pass {
         let helper_fn_ty = ctx
             .op(helper)
             .attributes
-            .get_type("type")
+            .get_type(&ctx, "type")
             .expect("expected type attr");
 
         let other = build_func(&mut ctx, loc, "other", &[], i32_ty, |ctx, entry, _args| {

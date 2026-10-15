@@ -159,7 +159,7 @@ fn is_root(ctx: &IrContext, module: Module, op: OpRef) -> bool {
             ctx.op(op).attributes.get_str(ctx, "sym_name"),
             Some("main" | "_start")
         );
-    entry || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
+    entry || (ctx.op(op).attributes.contains_key(ctx, "abi") && ctx.op_has_regions(op))
 }
 
 /// Functions reachable from `roots` via BFS over call and reference edges.
@@ -219,7 +219,8 @@ mod tests {
   }
 }"#,
         );
-        ctx.op_mut(module.op()).attributes.insert(
+        ctx.set_attr(
+            module.op(),
             "entry",
             Attribute::SymbolRef(SymbolPath::new(["named_by_module"])),
         );

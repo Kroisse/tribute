@@ -585,7 +585,7 @@ pub trait CallLikeModel: DialectOp {
     fn direct_callee(self, ctx: &IrContext) -> Option<SymbolPath> {
         ctx.op(self.op_ref())
             .attributes
-            .get_symbol_ref("callee")
+            .get_symbol_ref(ctx, "callee")
             .cloned()
     }
 }

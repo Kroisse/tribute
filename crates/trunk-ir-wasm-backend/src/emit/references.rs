@@ -122,7 +122,7 @@ fn collect_op(
 
     match kind {
         Some(kind) => {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref(attribute) else {
+            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref(ctx, attribute) else {
                 return Err(CompilationError::invalid_module(format!(
                     "wasm.{} requires a symbol `{}` attribute",
                     ctx.op(op).name,
@@ -136,7 +136,7 @@ fn collect_op(
         }
         None => {
             for owned in FUNCTION_SYMBOL_ATTRIBUTES {
-                if ctx.op(op).attributes.get(owned).is_some() {
+                if ctx.op(op).attributes.get(ctx, owned).is_some() {
                     return Err(CompilationError::invalid_module(format!(
                         "wasm.{} owns `{}` but is not a modeled function-symbol user",
                         ctx.op(op).name,
@@ -218,7 +218,6 @@ pub(super) fn function_body(
 mod tests {
     use super::*;
     use trunk_ir::Attribute;
-    use trunk_ir::Symbol;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use wasmparser::{Parser, Payload, Validator, WasmFeatures};
@@ -411,7 +410,7 @@ mod tests {
         let inner = ctx.region(ctx.op_region(main, 0).unwrap()).blocks[0];
         let call = ctx.block(inner).ops[0];
         assert!(wasm_dialect::Call::matches(&ctx, call));
-        ctx.op_mut(call).attributes.remove("callee");
+        ctx.remove_attr(call, "callee");
 
         let error = collect_function_references(&ctx, module)
             .err()
@@ -438,8 +437,9 @@ mod tests {
         let inner = ctx.region(ctx.op_region(main, 0).unwrap()).blocks[0];
         let ret = ctx.block(inner).ops[0];
         assert!(wasm_dialect::Return::matches(&ctx, ret));
-        ctx.op_mut(ret).attributes.insert(
-            Symbol::new("callee"),
+        ctx.set_attr(
+            ret,
+            "callee",
             Attribute::SymbolRef(SymbolPath::new(["helper"])),
         );
 

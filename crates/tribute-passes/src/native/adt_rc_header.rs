@@ -47,8 +47,8 @@ fn lower(
     let rtti_map = &tribute_ir::dialect::tribute_rtti::Layout::declared_indices(ctx, module);
     // Pre-intern types
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i64_ty = TypeDataBuilder::new("core", "i64").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
 
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern {
@@ -432,7 +432,7 @@ mod tests {
     }
 
     fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+        TypeDataBuilder::new(dialect, name).intern(ctx)
     }
 
     fn build_and_lower(
@@ -527,9 +527,7 @@ mod tests {
         let ptr_ty = intern_ty(ctx, "core", "ptr");
         let erased_func_ty =
             func::func_sig(ctx, field_types.iter().copied(), [ptr_ty]).as_type_ref();
-        ctx.op_mut(func_op.op_ref())
-            .attributes
-            .insert(Symbol::new("type"), Attribute::Type(erased_func_ty));
+        ctx.set_attr(func_op.op_ref(), "type", Attribute::Type(erased_func_ty));
         crate::native::rtti::declare_rtti_layouts(ctx, module, plan.rtti_types());
         crate::native::rtti::generate_rtti(ctx, module, &tc).expect("declared layouts");
 

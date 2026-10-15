@@ -464,7 +464,7 @@ fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
     let signature = ctx
         .op(call)
         .attributes
-        .get_type("signature")
+        .get_type(ctx, "signature")
         .expect("exact indirect signature");
     let signature = func::FuncSig::from_type_ref(ctx, signature).expect("complete signature");
     let operands = ctx.op_operands(call);
@@ -499,7 +499,7 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
     let signature = func::FuncSig::from_type_ref(ctx, callable.func_type(ctx)).unwrap();
     assert_eq!(
         signature.as_type_ref(),
-        ctx.op(call).attributes.get_type("signature").unwrap()
+        ctx.op(call).attributes.get_type(ctx, "signature").unwrap()
     );
     let environment_index =
         tribute_core::calling_convention::get_physical_closure_environment_index(ctx, closure_ty)

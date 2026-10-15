@@ -21,19 +21,17 @@ pub const NAME_PREFIX: &str = "__tribute_continuation_frame_";
 /// Its paired layout may recursively use this reference.
 pub fn ref_type(ctx: &mut IrContext, name: impl Into<StringArg>, result: TypeRef) -> TypeRef {
     let name = ctx.intern_string_arg(name.into());
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-            .attr("name", Attribute::String(name))
-            .attr(RESULT_ATTR, Attribute::Type(result))
-            .build(),
-    )
+    TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+        .attr("name", Attribute::String(name))
+        .attr(RESULT_ATTR, Attribute::Type(result))
+        .intern(ctx)
 }
 
 /// Read the result type only from an explicit frame reference or layout.
 pub fn result_type(ctx: &IrContext, frame: TypeRef) -> Option<TypeRef> {
     let data = ctx.get_type(frame);
     (data.dialect == "adt" && (matches!(data.name.as_str(), "typeref" | "struct")))
-        .then(|| data.attrs.get_type(RESULT_ATTR))
+        .then(|| data.attrs.get_type(ctx, RESULT_ATTR))
         .flatten()
 }
 
@@ -46,7 +44,7 @@ pub fn layout_type(
     dispatch: TypeRef,
 ) -> TypeRef {
     let mut attrs = AttributeMap::new();
-    attrs.insert(RESULT_ATTR, Attribute::Type(result));
+    attrs.insert(ctx, RESULT_ATTR, Attribute::Type(result));
     adt::struct_type(ctx, name, [("done", done), ("dispatch", dispatch)], attrs).as_type_ref()
 }
 
@@ -85,9 +83,9 @@ mod tests {
     #[test]
     fn frame_reference_and_layout_carry_the_result_type() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let done = ctx.intern_type(TypeDataBuilder::new("test", "done").build());
-        let dispatch = ctx.intern_type(TypeDataBuilder::new("test", "dispatch").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let done = TypeDataBuilder::new("test", "done").intern(&mut ctx);
+        let dispatch = TypeDataBuilder::new("test", "dispatch").intern(&mut ctx);
         let name = "ContinuationFrameI32";
         let frame = ref_type(&mut ctx, name, i32_ty);
         let layout = layout_type(&mut ctx, name, i32_ty, done, dispatch);
@@ -107,17 +105,13 @@ mod tests {
     fn result_type_fails_closed_on_unmarked_or_foreign_types() {
         let mut ctx = IrContext::new();
         let name = ctx.string_attr("ContinuationFrame");
-        let unmarked = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-                .attr("name", name)
-                .build(),
-        );
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let foreign = ctx.intern_type(
-            TypeDataBuilder::new("test", "frame")
-                .attr(RESULT_ATTR, Attribute::Type(i32_ty))
-                .build(),
-        );
+        let unmarked = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+            .attr("name", name)
+            .intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let foreign = TypeDataBuilder::new("test", "frame")
+            .attr(RESULT_ATTR, Attribute::Type(i32_ty))
+            .intern(&mut ctx);
 
         assert_eq!(result_type(&ctx, unmarked), None);
         assert_eq!(result_type(&ctx, foreign), None);

@@ -77,14 +77,14 @@ impl NativeTypeRefs {
             tribute_rt_float: tribute_rt::float(ctx).as_type_ref(),
             tribute_rt_intref: tribute_rt::intref(ctx).as_type_ref(),
             tribute_rt_anyref: tribute_rt::anyref(ctx).as_type_ref(),
-            core_i1: ctx.intern_type(TypeDataBuilder::new("core", "i1").build()),
+            core_i1: TypeDataBuilder::new("core", "i1").intern(ctx),
 
-            core_i32: ctx.intern_type(TypeDataBuilder::new("core", "i32").build()),
-            core_i64: ctx.intern_type(TypeDataBuilder::new("core", "i64").build()),
-            core_f64: ctx.intern_type(TypeDataBuilder::new("core", "f64").build()),
+            core_i32: TypeDataBuilder::new("core", "i32").intern(ctx),
+            core_i64: TypeDataBuilder::new("core", "i64").intern(ctx),
+            core_f64: TypeDataBuilder::new("core", "f64").intern(ctx),
             core_ptr: core::ptr(ctx).as_type_ref(),
             core_nil: core::nil(ctx).as_type_ref(),
-            core_i8: ctx.intern_type(TypeDataBuilder::new("core", "i8").build()),
+            core_i8: TypeDataBuilder::new("core", "i8").intern(ctx),
 
             evidence_ty: ability::evidence_adt_type_ref(ctx),
             marker_ty: ability::marker_adt_type_ref(ctx),
@@ -238,7 +238,7 @@ fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     }
     // struct, enum, typeref, variant instance
     matches!(data.name.as_str(), "typeref" | "struct" | "enum")
-        || data.attrs.get_bool("is_variant") == Some(true)
+        || data.attrs.get_bool(ctx, "is_variant") == Some(true)
 }
 
 /// Helper: Check if a type is closure.closure.

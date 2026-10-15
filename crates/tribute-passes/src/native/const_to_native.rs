@@ -91,7 +91,7 @@ impl ConstCollector {
                     self.has_string_consts = true;
                 }
             } else if data.name == "bytes_const"
-                && let Some(Attribute::Bytes(b)) = data.attributes.get("value")
+                && let Some(Attribute::Bytes(b)) = data.attributes.get(ctx, "value")
             {
                 self.intern(b);
             }
@@ -169,8 +169,8 @@ fn lower(
     }
 
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i64_ty = TypeDataBuilder::new("core", "i64").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
 
     let content_to_symbol = declare_rodata(ctx, module, &analysis.contents);
     let string_enum_ty = analysis.string_enum_ty;

@@ -48,13 +48,11 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
 
 /// The native closure layout: `{ func_ptr: i64, env: ptr }`.
 fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
-    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+    let i64_ty = TypeDataBuilder::new("core", "i64").intern(ctx);
     let ptr_ty = core::ptr(ctx).as_type_ref();
     let mut attrs = AttributeMap::new();
-    attrs.insert(
-        tribute_ir::runtime_layout::LAYOUT_ATTR,
-        ctx.string_attr(tribute_ir::runtime_layout::CLOSURE),
-    );
+    let layout = ctx.string_attr(tribute_ir::runtime_layout::CLOSURE);
+    attrs.insert(ctx, tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
     adt::struct_type(
         ctx,
         "_closure",
@@ -82,9 +80,7 @@ impl RewritePattern for ClosureStructAdaptPattern {
                 return false;
             }
             let new_op = rebuild_op_as(ctx, op, Symbol::new("adt"), Symbol::new("struct_new"));
-            ctx.op_mut(new_op)
-                .attributes
-                .insert("type", Attribute::Type(native_ty));
+            ctx.set_attr(new_op, "type", Attribute::Type(native_ty));
             let Some(&original_ty) = ctx.op_result_types(new_op).first() else {
                 rewriter.replace_op(new_op);
                 return true;
@@ -112,11 +108,9 @@ impl RewritePattern for ClosureStructAdaptPattern {
             let original_ty = struct_get.result(ctx);
             let original_ty = ctx.value_ty(original_ty);
             let new_op = rebuild_op_as(ctx, op, Symbol::new("adt"), Symbol::new("struct_get"));
-            ctx.op_mut(new_op)
-                .attributes
-                .insert("type", Attribute::Type(native_ty));
+            ctx.set_attr(new_op, "type", Attribute::Type(native_ty));
             let adapted_ty = match field_idx {
-                0 => ctx.intern_type(TypeDataBuilder::new("core", "i64").build()),
+                0 => TypeDataBuilder::new("core", "i64").intern(ctx),
                 1 => core::ptr(ctx).as_type_ref(),
                 _ => original_ty,
             };

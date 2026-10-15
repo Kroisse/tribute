@@ -108,7 +108,7 @@ where
 - `Attr<Dict<V>>` (`attr_kind::Dict`) is a dictionary whose every value has
   kind `V`. Its accessor returns a view with `get(key)`, `len()`, and
   `iter()` in key order, and its builder setter takes the
-  `(Symbol, value)` entries.
+  `(StringArg, value)` entries.
 - Regions and successors are declared in the body: `#[region(name)] {}`,
   `#[region(name?)] {}` for an optional last region such as the body of an
   external function, and `#[successor(name)] {}`. `#[successors(name)] {}`
@@ -216,7 +216,7 @@ not carry a `StringRef` to another context:
 
 ```rust
 let abi = ctx.string_attr("C");
-attrs.insert("abi", abi);
+attrs.insert(ctx, "abi", abi);
 let is_c = ctx.op(op).attributes.get_str(ctx, "abi") == Some("C");
 let value: &str = string_const.value(ctx); // generated accessor
 ```
@@ -243,6 +243,34 @@ let copy = adt::StringConst::operands()
     .results(ty)
     .build(ctx, loc);
 ```
+
+Attribute keys are names, not symbols: an `AttributeMap` keys its entries by
+`StringRef` in the same pool, ordered by their text. Look a key up through the
+context by its text or by its handle, and insert through the context, which
+interns the key. An entry being moved from another map of the same context
+keeps its handle through `insert_ref` or `AttributeMap::from_refs`:
+
+```rust
+let attrs = AttributeMap::from_entries(ctx, [("bind_name", name)]);
+let callee = ctx.op(op).attributes.get_symbol_ref(ctx, "callee");
+let copied = AttributeMap::from_refs(ctx, source.iter().map(|(key, value)| (key, value.clone())));
+```
+
+An operation's own map is changed through the context, because inserting a
+key borrows the context while the map is part of it:
+
+```rust
+ctx.set_attr(op, "type", Attribute::Type(ty));
+ctx.remove_attr(op, "signature");
+ctx.extend_attrs(op, preserved);
+ctx.set_block_arg_attr(block, 0, "bind_name", name);
+```
+
+Iteration yields each key's `StringRef`; read its text with `ctx.str(key)`.
+`Debug` cannot resolve keys or string values, so diagnostics format a map
+with `attrs.display(ctx)`. A type is built with `TypeDataBuilder`, whose
+`attr` keys are interned when it is built: `TypeDataBuilder::new("core",
+"i32").intern(ctx)` builds and interns it.
 
 Attributes that embed types (directly or inside `List`/`Dict` values) are
 converted and inspected through the shared traversal instead of matching

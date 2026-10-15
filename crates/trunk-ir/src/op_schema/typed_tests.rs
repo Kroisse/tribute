@@ -151,7 +151,7 @@ fn location(ctx: &mut IrContext) -> Location {
 }
 
 fn scalar(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", name).build())
+    TypeDataBuilder::new("core", name).intern(ctx)
 }
 
 fn block_args(ctx: &mut IrContext, loc: Location, tys: &[TypeRef]) -> Vec<ValueRef> {
@@ -275,11 +275,9 @@ fn generated_type_constraints_check_parameters_and_project() {
     let i32_ty = scalar(&mut ctx, "i32");
     let i1_ty = scalar(&mut ctx, "i1");
     let pair = test_typed::pair(&mut ctx, i32_ty, i1_ty).as_type_ref();
-    let malformed = ctx.intern_type(
-        TypeDataBuilder::new("test_typed", "pair")
-            .param(i32_ty)
-            .build(),
-    );
+    let malformed = TypeDataBuilder::new("test_typed", "pair")
+        .param(i32_ty)
+        .intern(&mut ctx);
 
     let desc = <test_typed::Pair as TypeConstraint>::DESC;
     assert!(desc.exact);
@@ -314,7 +312,7 @@ fn generated_type_constraints_check_parameters_and_project() {
         if let Some(attr) = attr {
             builder = builder.attr("nullable", attr);
         }
-        ctx.intern_type(builder.build())
+        builder.intern(ctx)
     };
     let nullable = ref_with(&mut ctx, Some(crate::Attribute::Bool(true)));
     let missing = ref_with(&mut ctx, None);
@@ -367,7 +365,12 @@ fn fluent_builders_group_inputs_by_kind() {
         .build(&mut ctx, loc);
     assert!(ctx.op_result_types(declared.op_ref()).is_empty());
     assert_eq!(ctx.op_region_count(declared.op_ref()), 1);
-    assert!(ctx.op(declared.op_ref()).attributes.get("label").is_none());
+    assert!(
+        ctx.op(declared.op_ref())
+            .attributes
+            .get(&ctx, "label")
+            .is_none()
+    );
 
     let then_region = empty_region(&mut ctx, loc);
     let else_region = empty_region(&mut ctx, loc);
@@ -678,9 +681,11 @@ fn list_attributes_build_read_and_verify_their_elements() {
 
     let mixed = op.op_ref();
     let label = ctx.string_attr("label");
-    ctx.op_mut(mixed)
-        .attributes
-        .insert("labels", Attribute::List(vec![label, Attribute::Int(1)]));
+    ctx.set_attr(
+        mixed,
+        "labels",
+        Attribute::List(vec![label, Attribute::Int(1)]),
+    );
     let violations = test_typed::Labeled::DEF.verify(&ctx, mixed);
     itertools::assert_equal(
         violations.iter().map(ToString::to_string),
@@ -712,7 +717,7 @@ fn a_dialect_defines_its_own_attribute_kind() {
         ])
     );
     assert_eq!(
-        ctx.op(op.op_ref()).attributes.get("linkage"),
+        ctx.op(op.op_ref()).attributes.get(&ctx, "linkage"),
         Some(&Attribute::SymbolRef(SymbolPath::new(["public"])))
     );
     assert!(test_typed::Export::DEF.verify(&ctx, op.op_ref()).is_empty());
@@ -731,18 +736,18 @@ fn dict_attributes_build_read_and_verify_their_values() {
 
     let op = test_typed::Annotated::operands()
         .notes(vec![
-            (Symbol::new("b"), "second".into()),
-            (Symbol::new("a"), "first".into()),
+            ("b".into(), "second".into()),
+            ("a".into(), "first".into()),
         ])
-        .sizes(vec![(Symbol::new("a"), vec![1, 2])])
+        .sizes(vec![("a".into(), vec![1, 2])])
         .build(&mut ctx, loc);
     let notes = op.notes(&ctx);
     assert_eq!(notes.len(), 2);
     assert_eq!(notes.get("b"), Some("second"));
     assert_eq!(notes.get("missing"), None);
     itertools::assert_equal(
-        notes.iter(),
-        [(Symbol::new("a"), "first"), (Symbol::new("b"), "second")],
+        notes.iter().map(|(key, value)| (ctx.str(key), value)),
+        [("a", "first"), ("b", "second")],
     );
     let sizes = op.sizes(&ctx).unwrap();
     assert_eq!(
@@ -756,12 +761,8 @@ fn dict_attributes_build_read_and_verify_their_values() {
     );
 
     let mixed = op.op_ref();
-    let entries = [(Symbol::new("a"), Attribute::Int(1))]
-        .into_iter()
-        .collect();
-    ctx.op_mut(mixed)
-        .attributes
-        .insert("notes", Attribute::Dict(entries));
+    let entries = crate::AttributeMap::from_entries(&mut ctx, [("a", Attribute::Int(1))]);
+    ctx.set_attr(mixed, "notes", Attribute::Dict(entries));
     let violations = test_typed::Annotated::DEF.verify(&ctx, mixed);
     itertools::assert_equal(
         violations.iter().map(ToString::to_string),

@@ -107,7 +107,7 @@ mod tests {
     }
 
     fn type_ref(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", name).build())
+        TypeDataBuilder::new("core", name).intern(ctx)
     }
 
     fn make_module(ctx: &mut IrContext, loc: trunk_ir::types::Location, ops: Vec<OpRef>) -> Module {
@@ -180,14 +180,16 @@ mod tests {
             let ptr = type_ref(&mut ctx, "ptr");
             let mut attrs = trunk_ir::AttributeMap::new();
             attrs.insert(
-                Symbol::new("nested"),
+                &mut ctx,
+                "nested",
                 Attribute::List(vec![
                     Attribute::Type(i32),
                     Attribute::List(vec![Attribute::Type(i32)]),
                 ]),
             );
             attrs.insert(
-                Symbol::new("tag"),
+                &mut ctx,
+                "tag",
                 Attribute::SymbolRef(SymbolPath::new(["keep"])),
             );
             let signature = wasm::func_sig_with_attrs(
@@ -203,9 +205,7 @@ mod tests {
             )
             .as_type_ref();
             let func = make_wasm_func(&mut ctx, loc, "f", signature, &[i32, ptr]);
-            ctx.op_mut(func)
-                .attributes
-                .insert(Symbol::new("custom"), Attribute::Int(7));
+            ctx.set_attr(func, "custom", Attribute::Int(7));
             let module = make_module(&mut ctx, loc, vec![func]);
 
             let result = PatternApplicator::new(i32_to_i64(i32, i64))
@@ -226,24 +226,26 @@ mod tests {
                     _ => unreachable!(),
                 }
             );
-            let attrs = signature
-                .non_reserved_attrs(&ctx)
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect::<trunk_ir::AttributeMap>();
+            let attrs = trunk_ir::AttributeMap::from_refs(
+                &ctx,
+                signature
+                    .non_reserved_attrs(&ctx)
+                    .map(|(key, value)| (key, value.clone())),
+            );
             assert_eq!(
-                attrs.get("nested"),
+                attrs.get(&ctx, "nested"),
                 Some(&Attribute::List(vec![
                     Attribute::Type(i64),
                     Attribute::List(vec![Attribute::Type(i64)]),
                 ])),
             );
             assert_eq!(
-                attrs.get_symbol_ref("tag"),
+                attrs.get_symbol_ref(&ctx, "tag"),
                 Some(&SymbolPath::new(["keep"]))
             );
             assert_eq!(ctx.get_type(function.r#type(&ctx)).attrs.len(), 4);
             assert_eq!(
-                ctx.op(module.ops(&ctx)[0]).attributes.get("custom"),
+                ctx.op(module.ops(&ctx)[0]).attributes.get(&ctx, "custom"),
                 Some(&Attribute::Int(7))
             );
             let entry = ctx.region(function.body(&ctx)).blocks[0];
@@ -291,7 +293,7 @@ mod tests {
             assert!(!ctx.op_has_regions(*op));
             let converted = wasm::FuncSig::from_type_ref(
                 &ctx,
-                ctx.op(*op).attributes.get_type("type").unwrap(),
+                ctx.op(*op).attributes.get_type(&ctx, "type").unwrap(),
             )
             .unwrap();
             assert_eq!(converted.inputs(&ctx), [i64]);
@@ -332,7 +334,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32 = type_ref(&mut ctx, "i32");
         let i64 = type_ref(&mut ctx, "i64");
-        let malformed = ctx.intern_type(TypeDataBuilder::new("wasm", "func_sig").build());
+        let malformed = TypeDataBuilder::new("wasm", "func_sig").intern(&mut ctx);
         let bad = ctx.intern_str("bad");
         let func = make_bodyless_wasm_func(&mut ctx, loc, bad, malformed);
         let module = make_module(&mut ctx, loc, vec![func]);
@@ -345,7 +347,9 @@ mod tests {
             .unwrap();
         assert!(result.reached_fixpoint);
         assert_eq!(
-            ctx.op(module.ops(&ctx)[0]).attributes.get_type("type"),
+            ctx.op(module.ops(&ctx)[0])
+                .attributes
+                .get_type(&ctx, "type"),
             Some(malformed)
         );
         assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);

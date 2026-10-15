@@ -51,7 +51,7 @@ fn push_one_shot_resume(
                 "ability.perform resumption lacks an exact callable input",
             )
         })?;
-    let i1_type = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
+    let i1_type = TypeDataBuilder::new("core", "i1").intern(ctx);
     let state_name = ctx.intern_str("__tribute_one_shot_state");
     let state_type = adt::struct_type(
         ctx,
@@ -207,8 +207,12 @@ impl ExpandDispatches {
     ) -> Option<()> {
         let location = ctx.op(op).location;
         let evidence = ctx.op_operands(op)[0];
-        let ability = ctx.op(op).attributes.get_symbol_ref("ability")?.clone();
-        let op_name = ctx.op(op).attributes.get_string_ref("op_name")?;
+        let ability = ctx
+            .op(op)
+            .attributes
+            .get_symbol_ref(ctx, "ability")?
+            .clone();
+        let op_name = ctx.op(op).attributes.get_string_ref(ctx, "op_name")?;
         let types = self.frames.of(ctx, ctx.value_ty(frame))?;
         let block = make_block(ctx, location, &[]);
         let resume = match resumption {

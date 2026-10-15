@@ -317,9 +317,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
         });
         indices.insert(ty, idx);
     }
-    ctx.op_mut(module.op())
-        .attributes
-        .insert(GC_TYPES_ATTR, Attribute::List(user_types));
+    ctx.set_attr(module.op(), GC_TYPES_ATTR, Attribute::List(user_types));
 
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerTypedGcPattern { indices })
@@ -399,7 +397,7 @@ mod tests {
         // A struct named only by a signature or by another struct's field
         // still receives an index, so every value type naming it is concrete.
         assert_eq!(
-            ctx.op(module.op()).attributes.get(GC_TYPES_ATTR),
+            ctx.op(module.op()).attributes.get(&ctx, GC_TYPES_ATTR),
             Some(&Attribute::List(expected.to_vec()))
         );
     }

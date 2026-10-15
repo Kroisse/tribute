@@ -558,8 +558,8 @@ impl FuncSig {
     pub(crate) fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
         let data = ctx.get_type(ty);
         debug_assert!(data.dialect == DIALECT_NAME() && data.name == FUNC_SIG());
-        let num_inputs = read_count(&data.attrs, NUM_INPUTS_ATTR)?;
-        let num_results = read_count(&data.attrs, NUM_RESULTS_ATTR)?;
+        let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)?;
+        let num_results = read_count(ctx, &data.attrs, NUM_RESULTS_ATTR)?;
         let total = num_inputs
             .checked_add(num_results)
             .ok_or(FuncSigTypeError::CountOverflow)?;
@@ -576,12 +576,12 @@ impl FuncSig {
     fn counts(self, ctx: &IrContext) -> (usize, usize) {
         let data = ctx.get_type(self.0);
         let inputs = usize::try_from(
-            read_count(&data.attrs, NUM_INPUTS_ATTR)
+            read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)
                 .expect("validated wasm.func_sig must retain num_inputs"),
         )
         .expect("u32 must fit usize");
         let results = usize::try_from(
-            read_count(&data.attrs, NUM_RESULTS_ATTR)
+            read_count(ctx, &data.attrs, NUM_RESULTS_ATTR)
                 .expect("validated wasm.func_sig must retain num_results"),
         )
         .expect("u32 must fit usize");
@@ -610,16 +610,16 @@ impl FuncSig {
     pub fn non_reserved_attrs(
         self,
         ctx: &IrContext,
-    ) -> impl Iterator<Item = (&Symbol, &Attribute)> {
+    ) -> impl Iterator<Item = (crate::StringRef, &Attribute)> {
         ctx.get_type(self.0)
             .attrs
             .iter()
-            .filter(|(key, _)| **key != NUM_INPUTS_ATTR && **key != NUM_RESULTS_ATTR)
+            .filter(|&(key, _)| ![NUM_INPUTS_ATTR, NUM_RESULTS_ATTR].contains(&ctx.str(key)))
     }
 
-    pub fn remove_reserved_attrs(attrs: &mut AttributeMap) {
-        attrs.remove(NUM_INPUTS_ATTR);
-        attrs.remove(NUM_RESULTS_ATTR);
+    pub fn remove_reserved_attrs(ctx: &crate::IrContext, attrs: &mut AttributeMap) {
+        attrs.remove(ctx, NUM_INPUTS_ATTR);
+        attrs.remove(ctx, NUM_RESULTS_ATTR);
     }
 }
 
@@ -644,8 +644,12 @@ impl From<FuncSig> for TypeRef {
     }
 }
 
-fn read_count(attrs: &AttributeMap, name: &'static str) -> Result<u32, FuncSigTypeError> {
-    match attrs.get(name) {
+fn read_count(
+    ctx: &crate::IrContext,
+    attrs: &AttributeMap,
+    name: &'static str,
+) -> Result<u32, FuncSigTypeError> {
+    match attrs.get(ctx, name) {
         None => Err(FuncSigTypeError::MissingCount(name)),
         Some(Attribute::Int(value)) => {
             u32::try_from(*value).map_err(|_| FuncSigTypeError::InvalidCount(name))
@@ -671,7 +675,7 @@ pub fn func_sig_with_attrs(
     attrs: AttributeMap,
 ) -> FuncSig {
     assert!(
-        !attrs.contains_key(NUM_INPUTS_ATTR) && !attrs.contains_key(NUM_RESULTS_ATTR),
+        !attrs.contains_key(ctx, NUM_INPUTS_ATTR) && !attrs.contains_key(ctx, NUM_RESULTS_ATTR),
         "wasm.func_sig count attributes are reserved"
     );
     let inputs: Vec<_> = inputs.into_iter().collect();
@@ -684,12 +688,10 @@ pub fn func_sig_with_attrs(
     for (key, value) in attrs {
         builder = builder.attr(key, value);
     }
-    let ty = ctx.intern_type(
-        builder
-            .attr(NUM_INPUTS_ATTR, Attribute::from(num_inputs))
-            .attr(NUM_RESULTS_ATTR, Attribute::from(num_results))
-            .build(),
-    );
+    let ty = builder
+        .attr(NUM_INPUTS_ATTR, Attribute::from(num_inputs))
+        .attr(NUM_RESULTS_ATTR, Attribute::from(num_results))
+        .intern(ctx);
     FuncSig(ty)
 }
 
@@ -749,18 +751,12 @@ pub fn set_indirect_call_signature(
     {
         return false;
     }
-    set_indirect_call_signature_attribute(&mut ctx.op_mut(op).attributes, signature);
-    true
-}
-
-fn set_indirect_call_signature_attribute(
-    attributes: &mut crate::AttributeMap,
-    signature: crate::TypeRef,
-) {
-    attributes.insert(
-        crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
+    ctx.set_attr(
+        op,
+        INDIRECT_CALL_SIGNATURE_ATTR,
         crate::Attribute::Type(signature),
     );
+    true
 }
 
 #[cfg(test)]
@@ -830,7 +826,7 @@ mod tests {
     fn func_sig_constructor_rejects_reserved_count_attributes() {
         let mut ctx = crate::IrContext::new();
         let mut attrs = crate::AttributeMap::new();
-        attrs.insert(NUM_INPUTS_ATTR, crate::Attribute::Int(0));
+        attrs.insert(&mut ctx, NUM_INPUTS_ATTR, crate::Attribute::Int(0));
         let _ = func_sig_with_attrs(&mut ctx, [], [], attrs);
     }
 }

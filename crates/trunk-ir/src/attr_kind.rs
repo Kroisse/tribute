@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 use crate::context::IrContext;
 use crate::op_schema::AttributeKind;
 use crate::refs::TypeRef;
-use crate::symbol::{Symbol, SymbolPath};
+use crate::symbol::SymbolPath;
 use crate::types::{Attribute, AttributeIter, AttributeKey, AttributeMap, StringArg, StringRef};
 
 /// The value domain and typed access of a declared attribute.
@@ -265,7 +265,7 @@ pub struct Dict<V: ?Sized>(PhantomData<fn() -> V>);
 impl<V: AttrKind + ?Sized> AttrKind for Dict<V> {
     const KIND: AttributeKind = AttributeKind::Dict(&V::KIND);
     type Out<'ctx> = DictView<'ctx, V>;
-    type In = Vec<(Symbol, V::In)>;
+    type In = Vec<(StringArg, V::In)>;
 
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> DictView<'ctx, V> {
         match attr {
@@ -278,13 +278,13 @@ impl<V: AttrKind + ?Sized> AttrKind for Dict<V> {
         }
     }
 
-    fn write(ctx: &mut IrContext, value: Vec<(Symbol, V::In)>) -> Attribute {
-        Attribute::Dict(
-            value
-                .into_iter()
-                .map(|(key, entry)| (key, V::write(ctx, entry)))
-                .collect(),
-        )
+    fn write(ctx: &mut IrContext, value: Vec<(StringArg, V::In)>) -> Attribute {
+        let mut entries = AttributeMap::new();
+        for (key, entry) in value {
+            let entry = V::write(ctx, entry);
+            entries.insert(ctx, key, entry);
+        }
+        Attribute::Dict(entries)
     }
 }
 
@@ -297,7 +297,9 @@ pub struct DictView<'ctx, V: ?Sized> {
 
 impl<'ctx, V: AttrKind + ?Sized> DictView<'ctx, V> {
     pub fn get(&self, key: impl AttributeKey) -> Option<V::Out<'ctx>> {
-        self.entries.get(key).map(|attr| V::read(self.ctx, attr))
+        self.entries
+            .get(self.ctx, key)
+            .map(|attr| V::read(self.ctx, attr))
     }
 
     pub fn len(&self) -> usize {
@@ -319,7 +321,7 @@ impl<'ctx, V: AttrKind + ?Sized> DictView<'ctx, V> {
 }
 
 impl<'ctx, V: AttrKind + ?Sized> IntoIterator for DictView<'ctx, V> {
-    type Item = (Symbol, V::Out<'ctx>);
+    type Item = (StringRef, V::Out<'ctx>);
     type IntoIter = DictIter<'ctx, V>;
 
     fn into_iter(self) -> DictIter<'ctx, V> {
@@ -335,12 +337,12 @@ pub struct DictIter<'ctx, V: ?Sized> {
 }
 
 impl<'ctx, V: AttrKind + ?Sized> Iterator for DictIter<'ctx, V> {
-    type Item = (Symbol, V::Out<'ctx>);
+    type Item = (StringRef, V::Out<'ctx>);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.entries
             .next()
-            .map(|(key, attr)| (key.clone(), V::read(self.ctx, attr)))
+            .map(|(key, attr)| (key, V::read(self.ctx, attr)))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

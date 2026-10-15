@@ -97,12 +97,12 @@ fn print_closure_lambda(
     }
 
     // " {key = val, ...}" — attributes (if any)
-    let attrs: Vec<(trunk_ir::Symbol, trunk_ir::Attribute)> = h
-        .ctx()
+    let ctx = h.ctx();
+    let attrs: Vec<(String, trunk_ir::Attribute)> = ctx
         .op(op)
         .attributes
         .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(k, v)| (ctx.str(k).to_owned(), v.clone()))
         .collect();
     if !attrs.is_empty() {
         write!(h, " {{")?;
@@ -285,11 +285,11 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     fn make_closure_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("closure", "closure").build())
+        TypeDataBuilder::new("closure", "closure").intern(ctx)
     }
 
     #[test]

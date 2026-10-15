@@ -1294,21 +1294,16 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
     });
     let projection = projection.expect("variant projection");
     let missing_tag = ctx.string_attr("Missing");
-    for (key, invalid) in [
-        (Symbol::new("tag"), missing_tag),
-        (Symbol::new("field"), trunk_ir::Attribute::Int(1)),
-    ] {
+    for (key, invalid) in [("tag", missing_tag), ("field", trunk_ir::Attribute::Int(1))] {
         let original = ctx
             .op(projection)
             .attributes
-            .get(key.clone())
+            .get(&ctx, key)
             .expect("projection attribute")
             .clone();
-        ctx.op_mut(projection)
-            .attributes
-            .insert(key.clone(), invalid);
+        ctx.set_attr(projection, key, invalid);
         assert_unchanged_on_error(&mut ctx, module, |ctx, module| production_plan(ctx, module));
-        ctx.op_mut(projection).attributes.insert(key, original);
+        ctx.set_attr(projection, key, original);
     }
 }
 
@@ -1978,7 +1973,7 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
     for ty in ctx
         .op(function.operation())
         .attributes
-        .get_type("type")
+        .get_type(&ctx, "type")
         .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
         .unwrap()
         .inputs(&ctx)
@@ -2541,7 +2536,7 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
   func.func @f(%value: !R) -> !R { func.return %value }
 }"#,
     );
-    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+    let i64_ty = TypeDataBuilder::new("core", "i64").intern(&mut ctx);
     let stale = tribute_ir::dialect::adt::struct_type(
         &mut ctx,
         "R",
@@ -2770,9 +2765,7 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
 
     let (type_converter, _) = native_type_converter(&mut ctx);
     for &candidate in &candidates {
-        ctx.op_mut(allocation)
-            .attributes
-            .insert("type", trunk_ir::Attribute::Type(candidate));
+        ctx.set_attr(allocation, "type", trunk_ir::Attribute::Type(candidate));
         assert!(plan.validate_against(&ctx, module).is_err());
         assert!(
             crate::native::rtti::generate_rtti(&mut ctx, module, &type_converter).is_err(),

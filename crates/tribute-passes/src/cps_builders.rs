@@ -17,9 +17,7 @@ use crate::tribute_control_to_cps::TributeControlToCpsError;
 /// Put a selection on the operation that passes the evidence it selects.
 pub(crate) fn set_evidence_plan(ctx: &mut IrContext, target: OpRef, plan: Option<Attribute>) {
     if let Some(plan) = plan {
-        ctx.op_mut(target)
-            .attributes
-            .insert(tribute_control::EVIDENCE_PLAN_ATTR, plan);
+        ctx.set_attr(target, tribute_control::EVIDENCE_PLAN_ATTR, plan);
     }
 }
 

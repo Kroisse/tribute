@@ -926,13 +926,13 @@ pub(crate) fn type_suffix(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> 
 /// Intern a core.i32 type.
 pub(crate) fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+    TypeDataBuilder::new("core", "i32").intern(ctx)
 }
 
 /// Intern a core.i64 type.
 pub(crate) fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.intern_type(TypeDataBuilder::new("core", "i64").build())
+    TypeDataBuilder::new("core", "i64").intern(ctx)
 }
 
 #[cfg(test)]

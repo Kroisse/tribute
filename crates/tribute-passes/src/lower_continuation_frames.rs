@@ -173,7 +173,7 @@ fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameType
         .collect();
     let evidence = ability::evidence_adt_type_ref(ctx);
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
-    let i32_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_type = TypeDataBuilder::new("core", "i32").intern(ctx);
     let mut resolved = HashMap::default();
     let mut layouts = Vec::with_capacity(answers.len());
     for source_answer in answers {
@@ -371,7 +371,7 @@ mod tests {
     }
 
     fn frame_of_answer(ctx: &mut IrContext, answer: &str) -> TypeRef {
-        let answer = ctx.intern_type(TypeDataBuilder::new("core", answer).build());
+        let answer = TypeDataBuilder::new("core", answer).intern(ctx);
         ability::frame(ctx, answer).as_type_ref()
     }
 
@@ -408,11 +408,12 @@ mod tests {
         let function = module.ops(&ctx)[0];
         let body = ctx.op_region(function, 0).expect("function body");
         let block = ctx.region(body).blocks[0];
-        ctx.block_mut(block).args[0]
-            .attrs
-            .insert("frame", Attribute::Type(frame));
+        ctx.set_block_arg_attr(block, 0, "frame", Attribute::Type(frame));
         lower_continuation_frames(&mut ctx, module).unwrap();
-        let converted = ctx.block(block).args[0].attrs.get_type("frame").unwrap();
+        let converted = ctx.block(block).args[0]
+            .attrs
+            .get_type(&ctx, "frame")
+            .unwrap();
         assert!(continuation_frame::result_type(&ctx, converted).is_some());
     }
 
@@ -424,11 +425,9 @@ mod tests {
             let mut ctx = IrContext::new();
             for index in 0..unrelated_types {
                 let name = ctx.string_attr(&format!("unrelated{index}"));
-                ctx.intern_type(
-                    TypeDataBuilder::new("test", "unrelated")
-                        .attr("name", name)
-                        .build(),
-                );
+                TypeDataBuilder::new("test", "unrelated")
+                    .attr("name", name)
+                    .intern(&mut ctx);
             }
             frame_of_answer(&mut ctx, second);
             let module = parse_test_module(

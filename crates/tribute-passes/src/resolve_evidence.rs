@@ -32,7 +32,7 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 // ============================================================================
 
 fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+    TypeDataBuilder::new("core", "i32").intern(ctx)
 }
 
 #[derive(Debug)]
@@ -104,7 +104,7 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
         ));
     }
-    let Some(Attribute::List(abilities)) = data.attributes.get("abilities") else {
+    let Some(Attribute::List(abilities)) = data.attributes.get(ctx, "abilities") else {
         return Err(error(
             "final ability.handle_dispatch requires an abilities list".into(),
         ));
@@ -245,7 +245,7 @@ fn take_evidence_plan(
     ctx: &mut IrContext,
     op: OpRef,
 ) -> Result<Vec<EvidenceStep>, ResolveEvidenceError> {
-    let Some(plan) = ctx.op_mut(op).attributes.remove(EVIDENCE_PLAN_ATTR) else {
+    let Some(plan) = ctx.remove_attr(op, EVIDENCE_PLAN_ATTR) else {
         return Ok(Vec::new());
     };
     let Attribute::List(items) = plan else {
@@ -254,7 +254,7 @@ fn take_evidence_plan(
     items
         .iter()
         .map(|item| {
-            EvidenceStep::from_attribute(item).map_err(|error| resolve_error(ctx, op, error))
+            EvidenceStep::from_attribute(ctx, item).map_err(|error| resolve_error(ctx, op, error))
         })
         .collect()
 }
@@ -351,7 +351,7 @@ fn resolve_call_selection(
     block: BlockRef,
     op: OpRef,
 ) -> Result<(), ResolveEvidenceError> {
-    if !ctx.op(op).attributes.contains_key(EVIDENCE_PLAN_ATTR) {
+    if !ctx.op(op).attributes.contains_key(ctx, EVIDENCE_PLAN_ATTR) {
         return Ok(());
     }
     let Some(index) = call_evidence_operand(ctx, op) else {

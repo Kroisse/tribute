@@ -482,14 +482,14 @@ fn gen_map_attr_accessor(
         if attr.optional {
             quote! {
                 pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> Option<#out> {
-                    #attrs.get(#name_str).map(|attr| #read)
+                    #attrs.get(ctx, #name_str).map(|attr| #read)
                 }
             }
         } else {
             quote! {
                 pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> #out {
                     let attr = #attrs
-                        .get(#name_str)
+                        .get(ctx, #name_str)
                         .expect(concat!("missing attribute: ", #name_str));
                     #read
                 }
@@ -715,14 +715,14 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
         if attr.optional {
             build_stmts.push(quote! {
                 if let Some(value) = #field {
-                    __builder = __builder.attr(#crate_path::Symbol::new(#name_str), value);
+                    __builder = __builder.attr(#name_str, value);
                 }
             });
         } else {
             let missing = format!("{full_name}: missing attribute `{name_str}`");
             build_stmts.push(quote! {
                 __builder = __builder.attr(
-                    #crate_path::Symbol::new(#name_str),
+                    #name_str,
                     #field.expect(#missing),
                 );
             });
@@ -985,9 +985,9 @@ fn gen_type_constraint(
         let kind = attr_kind_trait(crate_path, attr);
         let kind = quote!(#kind::KIND);
         if attr.optional {
-            quote!(attrs.get(#name).is_none_or(|attr| #kind.accepts(attr)))
+            quote!(attrs.get(ctx, #name).is_none_or(|attr| #kind.accepts(attr)))
         } else {
-            quote!(attrs.get(#name).is_some_and(|attr| #kind.accepts(attr)))
+            quote!(attrs.get(ctx, #name).is_some_and(|attr| #kind.accepts(attr)))
         }
     });
     let count_ok = if td.params.iter().any(|p| p.variadic) {
@@ -1016,7 +1016,7 @@ fn gen_type_constraint(
     // A type without parameters or attributes has exactly one instance.
     let fixed_type = if td.params.is_empty() && td.attrs.is_empty() {
         quote!(Some(|ctx| {
-            ctx.intern_type(#crate_path::TypeDataBuilder::new(#dialect, #type_name).build())
+            #crate_path::TypeDataBuilder::new(#dialect, #type_name).intern(ctx)
         }))
     } else {
         quote!(None)
@@ -1223,7 +1223,7 @@ fn gen_type_constructor(
             body_stmts.push(quote! {
                 if let ::core::option::Option::Some(__attr_val) = #name {
                     __builder = __builder.attr(
-                        #crate_path::Symbol::new(#name_str),
+                        #name_str,
                         #attr_conv,
                     );
                 }
@@ -1233,7 +1233,7 @@ fn gen_type_constructor(
             let attr_conv = to_attr_expr(quote!(#name));
             body_stmts.push(quote! {
                 __builder = __builder.attr(
-                    #crate_path::Symbol::new(#name_str),
+                    #name_str,
                     #attr_conv,
                 );
             });
@@ -1256,9 +1256,7 @@ fn gen_type_constructor(
                 #type_name,
             );
             #(#body_stmts)*
-            let __data = __builder.build();
-            let __type_ref = ctx.intern_type(__data);
-            #sname(__type_ref)
+            #sname(__builder.intern(ctx))
         }
     }
 }

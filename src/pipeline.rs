@@ -2279,7 +2279,7 @@ fn main() -> Nil {
         let signature = ctx
             .op(call)
             .attributes
-            .get_type("sig")
+            .get_type(ctx, "sig")
             .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty))
             .expect("indirect call must have an exact signature");
         let operands = ctx.op_operands(call);
@@ -2387,7 +2387,9 @@ fn main() ->{Io} Nil {
         };
         assert!(clif::ReturnCallIndirect::matches(&ctx, call));
         assert_eq!(
-            ctx.op(call).attributes.get("tribute.calling_convention"),
+            ctx.op(call)
+                .attributes
+                .get(&ctx, "tribute.calling_convention"),
             None
         );
         let trunk_ir::refs::ValueDef::OpResult(environment_load, 0) =
@@ -2668,8 +2670,7 @@ fn main() ->{Io} Nil {
                 let add_op = ctx.block(func_block).ops[0];
                 // Retype the result without touching use-chains, so only the
                 // `T` binding of `arith.addi` is violated.
-                let i64_ty =
-                    ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i64").build());
+                let i64_ty = trunk_ir::types::TypeDataBuilder::new("core", "i64").intern(ctx);
                 ctx.set_op_result_type(add_op, 0, i64_ty);
                 Ok(())
             },
@@ -3817,7 +3818,10 @@ mod Nested {
 
             for &op in module.ops(&ctx) {
                 assert!(
-                    ctx.op(op).attributes.get(COMPILER_INTRINSIC_ATTR).is_none(),
+                    ctx.op(op)
+                        .attributes
+                        .get(&ctx, COMPILER_INTRINSIC_ATTR)
+                        .is_none(),
                     "{target:?}: the identity is consumed at the boundary exit"
                 );
                 let declares_intrinsic = func::Func::from_op(&ctx, op)
@@ -4000,7 +4004,7 @@ fn main() ->{std::io::Io} Nil {
         // and knows no other `adt` type.
         let builtin_layout_or_not_adt = |ctx: &IrContext, ty| {
             let data = ctx.get_type(ty);
-            data.dialect != "adt" || data.attrs.get(trunk_ir::types::LAYOUT_ATTR).is_some()
+            data.dialect != "adt" || data.attrs.get(ctx, trunk_ir::types::LAYOUT_ATTR).is_some()
         };
         for (path, text) in [
             (
@@ -4047,8 +4051,8 @@ fn main() ->{std::io::Io} Nil {
         let mut unexpected = std::collections::BTreeSet::new();
         let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
             for name in ctx.op(op).attributes.keys() {
-                let name = name.to_string();
-                if name.starts_with("tribute.") && !is_preserved_attribute(&name) {
+                let name = ctx.str(name);
+                if name.starts_with("tribute.") && !is_preserved_attribute(name) {
                     unexpected.insert(format!("{}.{} {name}", ctx.op(op).dialect, ctx.op(op).name));
                 }
             }
@@ -4086,7 +4090,7 @@ fn main() -> String { "hello" }
         let string_data = ctx.get_type(string_ty);
 
         let Some(trunk_ir::Attribute::Location(definition)) =
-            string_data.attrs.get("tribute.definition")
+            string_data.attrs.get(&ctx, "tribute.definition")
         else {
             panic!("String IR type records its definition location");
         };

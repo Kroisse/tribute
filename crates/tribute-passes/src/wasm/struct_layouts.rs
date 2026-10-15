@@ -102,7 +102,7 @@ fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
 }
 
 fn intern(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+    TypeDataBuilder::new(dialect, name).intern(ctx)
 }
 
 #[cfg(test)]

@@ -370,7 +370,10 @@ fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
             return None;
         }
         if scf::Case::matches(ctx, arm) {
-            cases.push((ctx.op(arm).attributes.get("value")?.clone(), arm_region));
+            cases.push((
+                ctx.op(arm).attributes.get(ctx, "value")?.clone(),
+                arm_region,
+            ));
         } else if scf::Default::matches(ctx, arm) {
             if default_region.replace(arm_region).is_some() {
                 return None;
@@ -769,11 +772,11 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     fn i1_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i1").build())
+        TypeDataBuilder::new("core", "i1").intern(ctx)
     }
 
     fn nil_type(ctx: &mut IrContext) -> TypeRef {

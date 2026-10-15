@@ -267,7 +267,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
             let data = ctx.op(op);
             // Check for func.func or wasm.func operations
             if data.dialect == func::DIALECT_NAME() && data.name == "func" {
-                if let Some(fn_ty) = data.attributes.get_type("type") {
+                if let Some(fn_ty) = data.attributes.get_type(ctx, "type") {
                     let Some(function) = func::FuncSig::from_type_ref(ctx, fn_ty) else {
                         continue;
                     };
@@ -284,7 +284,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                 }
             } else if data.dialect == wasm_dialect::DIALECT_NAME()
                 && data.name == "func"
-                && let Some(fn_ty) = data.attributes.get_type("type")
+                && let Some(fn_ty) = data.attributes.get_type(ctx, "type")
             {
                 let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty) else {
                     continue;
@@ -477,7 +477,7 @@ mod tests {
     use trunk_ir::types::TypeDataBuilder;
 
     fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+        TypeDataBuilder::new(dialect, name).intern(ctx)
     }
 
     fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
@@ -757,7 +757,7 @@ mod tests {
         assert!(lowerer.memory_plan.has_exported_memory);
         assert!(lowerer.saw_main);
 
-        ctx.op_mut(main.op_ref()).attributes.remove("sym_name");
+        ctx.remove_attr(main.op_ref(), "sym_name");
         lowerer.saw_main = false;
         lowerer.scan_wasm_func(&ctx, main.op_ref());
         assert!(!lowerer.saw_main);

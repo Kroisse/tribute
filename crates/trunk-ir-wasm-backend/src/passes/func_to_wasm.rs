@@ -277,11 +277,12 @@ fn convert_nested_callable_type(
         .iter()
         .map(|(key, value)| {
             Some((
-                key.clone(),
+                key,
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
-        .collect::<Option<_>>()?;
+        .collect::<Option<Vec<_>>>()?;
+    let attrs = trunk_ir::AttributeMap::from_refs(ctx, attrs);
     if params.as_slice() == data.params.as_slice() && attrs == data.attrs {
         return Some(ty);
     }
@@ -305,21 +306,22 @@ fn convert_nested_callable_attributes(
     ctx: &mut IrContext,
     attributes: &trunk_ir::AttributeMap,
     converter: &TypeConverter,
-    skip: impl Fn(&Symbol) -> bool,
+    skip: impl Fn(&str) -> bool,
 ) -> Option<trunk_ir::AttributeMap> {
-    attributes
+    let converted = attributes
         .iter()
         .map(|(key, value)| {
             Some((
-                key.clone(),
-                if skip(key) {
+                key,
+                if skip(ctx.str(key)) {
                     value.clone()
                 } else {
                     convert_nested_callable_attribute(ctx, value, converter)?
                 },
             ))
         })
-        .collect()
+        .collect::<Option<Vec<_>>>()?;
+    Some(trunk_ir::AttributeMap::from_refs(ctx, converted))
 }
 
 /// Recursively materialize target types, including shared callable values and
@@ -349,11 +351,12 @@ fn convert_type_to_wasm(
         .iter()
         .map(|(key, value)| {
             Some((
-                key.clone(),
+                key,
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
-        .collect::<Option<_>>()?;
+        .collect::<Option<Vec<_>>>()?;
+    let attrs = trunk_ir::AttributeMap::from_refs(ctx, attrs);
     if params.as_slice() == data.params.as_slice() && attrs == data.attrs {
         return Some(ty);
     }
@@ -433,7 +436,7 @@ impl RewritePattern for FuncFuncPattern {
                 ctx.create_op(data)
             }
         };
-        ctx.op_mut(new_op).attributes.extend(attrs_to_preserve);
+        ctx.extend_attrs(new_op, attrs_to_preserve);
         rewriter.replace_op(new_op);
         true
     }
@@ -607,9 +610,9 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         };
 
         let mut converted_attrs = ctx.op(op).attributes.clone();
-        func::remove_indirect_call_signature(&mut converted_attrs);
-        converted_attrs.remove("table");
-        converted_attrs.remove("type_idx");
+        func::remove_indirect_call_signature(ctx, &mut converted_attrs);
+        converted_attrs.remove(ctx, "table");
+        converted_attrs.remove(ctx, "type_idx");
 
         // This is intentionally checked before creating any replacement.
         // Missing or malformed metadata remains a residual `func.*` op and is
@@ -642,9 +645,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             .table(0)
             .signature(Some(signature))
             .build(ctx, loc);
-        ctx.op_mut(new_op.op_ref())
-            .attributes
-            .extend(converted_attrs);
+        ctx.extend_attrs(new_op.op_ref(), converted_attrs);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -719,7 +720,7 @@ impl RewritePattern for FuncConstantPattern {
 
 /// Intern a core.i32 type.
 fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+    TypeDataBuilder::new("core", "i32").intern(ctx)
 }
 
 /// Intern a wasm.funcref type.
@@ -746,16 +747,14 @@ mod tests {
 }"#,
         );
         let original = module.ops(&ctx)[0];
-        ctx.op_mut(original)
-            .attributes
-            .insert(Symbol::new("custom"), Attribute::Int(7));
+        ctx.set_attr(original, "custom", Attribute::Int(7));
 
         lower(&mut ctx, module, TypeConverter::new());
 
         let lowered = module.ops(&ctx)[0];
         assert!(wasm_dialect::Func::from_op(&ctx, lowered).is_ok());
         assert_eq!(
-            ctx.op(lowered).attributes.get("custom"),
+            ctx.op(lowered).attributes.get(&ctx, "custom"),
             Some(&Attribute::Int(7))
         );
     }
@@ -779,7 +778,7 @@ mod tests {
         let original = ctx
             .op(function)
             .attributes
-            .get_type("type")
+            .get_type(&ctx, "type")
             .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
             .unwrap();
         let inputs = original.inputs(&ctx).to_vec();
@@ -787,12 +786,12 @@ mod tests {
         let nested = inputs[0];
         let mut attrs = trunk_ir::AttributeMap::new();
         attrs.insert(
-            Symbol::new("metadata"),
+            &mut ctx,
+            "metadata",
             Attribute::List(vec![Attribute::Type(nested)]),
         );
-        let input_attrs: trunk_ir::AttributeMap = [(Symbol::new("marker"), Attribute::Unit)]
-            .into_iter()
-            .collect();
+        let input_attrs =
+            trunk_ir::AttributeMap::from_entries(&mut ctx, [("marker", Attribute::Unit)]);
         let outer = func::func_sig_with_param_attrs(
             &mut ctx,
             inputs.into_iter().map(|ty| (ty, input_attrs.clone())),
@@ -802,14 +801,10 @@ mod tests {
             attrs,
         )
         .as_type_ref();
-        ctx.op_mut(function)
-            .attributes
-            .insert(Symbol::new("type"), Attribute::Type(outer));
+        ctx.set_attr(function, "type", Attribute::Type(outer));
         let original_body = ctx.op_region(function, 0).unwrap();
         let original_block = ctx.region(original_body).blocks[0];
-        ctx.block_mut(original_block).args[0]
-            .attrs
-            .insert(Symbol::new("metadata"), Attribute::Type(nested));
+        ctx.set_block_arg_attr(original_block, 0, "metadata", Attribute::Type(nested));
 
         lower(&mut ctx, module, TypeConverter::new());
 
@@ -824,7 +819,10 @@ mod tests {
         let body = ctx.op_region(lowered, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         assert_eq!(ctx.value_ty(ctx.block_args(block)[0]), nested_input);
-        let block_metadata = ctx.block(block).args[0].attrs.get_type("metadata").unwrap();
+        let block_metadata = ctx.block(block).args[0]
+            .attrs
+            .get_type(&ctx, "metadata")
+            .unwrap();
         assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, block_metadata).is_some());
         assert_eq!(
             signature.non_reserved_attrs(&ctx).count(),
@@ -851,9 +849,7 @@ mod tests {
         let original_ops = module.ops(&ctx);
         let declaration_location = ctx.op(original_ops[0]).location;
         let definition_location = ctx.op(original_ops[1]).location;
-        ctx.op_mut(original_ops[0])
-            .attributes
-            .insert(Symbol::new("custom"), Attribute::Int(7));
+        ctx.set_attr(original_ops[0], "custom", Attribute::Int(7));
 
         lower(&mut ctx, module, TypeConverter::new());
 
@@ -870,7 +866,7 @@ mod tests {
         assert!(!ctx.op_has_regions(lowered_ops[0]));
         assert_eq!(ctx.op_region_count(lowered_ops[1]), 1);
         assert_eq!(
-            ctx.op(lowered_ops[0]).attributes.get("custom"),
+            ctx.op(lowered_ops[0]).attributes.get(&ctx, "custom"),
             Some(&Attribute::Int(7))
         );
 
@@ -1045,8 +1041,8 @@ mod tests {
 }"#,
         );
 
-        let anyref_ty = ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
-        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
+        let anyref_ty = TypeDataBuilder::new("wasm", "anyref").intern(&mut ctx);
+        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             (ctx.types().is_dialect(ty, "tribute_rt", "anyref")).then_some(anyref_ty)
@@ -1098,8 +1094,8 @@ mod tests {
 }"#,
         );
 
-        let anyref_ty = ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
-        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
+        let anyref_ty = TypeDataBuilder::new("wasm", "anyref").intern(&mut ctx);
+        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             (ctx.types().is_dialect(ty, "tribute_rt", "anyref")).then_some(anyref_ty)
@@ -1200,7 +1196,7 @@ mod tests {
 }"#,
         );
 
-        let structref_ty = ctx.intern_type(TypeDataBuilder::new("wasm", "structref").build());
+        let structref_ty = TypeDataBuilder::new("wasm", "structref").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()

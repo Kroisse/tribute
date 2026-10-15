@@ -270,7 +270,7 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
             return None;
         }
         if scf::Case::matches(ctx, arm) {
-            cases.push((ctx.op(arm).attributes.get("value")?.clone(), body));
+            cases.push((ctx.op(arm).attributes.get(ctx, "value")?.clone(), body));
         } else if scf::Default::matches(ctx, arm) {
             if default.replace(body).is_some() {
                 return None;
@@ -1481,13 +1481,11 @@ mod tests {
 
     /// Convert `core.array` to the abstract `wasm.arrayref` type.
     fn array_to_arrayref_converter(ctx: &mut IrContext) -> TypeConverter {
-        let arrayref_ty = ctx.intern_type(
-            trunk_ir::types::TypeDataBuilder::new(
-                trunk_ir::Symbol::new("wasm"),
-                trunk_ir::Symbol::new("arrayref"),
-            )
-            .build(),
-        );
+        let arrayref_ty = trunk_ir::types::TypeDataBuilder::new(
+            trunk_ir::Symbol::new("wasm"),
+            trunk_ir::Symbol::new("arrayref"),
+        )
+        .intern(ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()

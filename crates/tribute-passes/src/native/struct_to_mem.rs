@@ -107,9 +107,7 @@ pub(crate) fn lower(
                 structural
             }
         };
-        ctx.op_mut(op)
-            .attributes
-            .insert("type", Attribute::Type(structural));
+        ctx.set_attr(op, "type", Attribute::Type(structural));
     }
 
     // A variant holds only its own fields, so its layout is a struct's.
@@ -312,7 +310,7 @@ mod tests {
         };
 
         let scalar = |ctx: &mut IrContext, name: &'static str| {
-            ctx.intern_type(TypeDataBuilder::new("core", name).build())
+            TypeDataBuilder::new("core", name).intern(ctx)
         };
         let i8_ty = scalar(&mut ctx, "i8");
         let i16_ty = scalar(&mut ctx, "i16");

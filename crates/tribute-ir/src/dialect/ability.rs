@@ -250,8 +250,8 @@ impl CallableExitModel for Perform {
         let data = ctx.op(self.op_ref());
         if !ctx.op_has_regions(self.op_ref())
             && ctx.op_operands(self.op_ref()).len() >= 3
-            && data.attributes.get_symbol_ref("ability").is_some()
-            && data.attributes.get_string_ref("op_name").is_some()
+            && data.attributes.get_symbol_ref(ctx, "ability").is_some()
+            && data.attributes.get_string_ref(ctx, "op_name").is_some()
         {
             Ok(())
         } else {
@@ -278,7 +278,7 @@ impl CallableExitModel for HandleDispatch {
                 .is_some_and(|region| ctx.region(region).blocks.len() == 1)
             && ctx.op_operands(self.op_ref()).len() >= 2
             && matches!(
-                data.attributes.get("abilities"),
+                data.attributes.get(ctx, "abilities"),
                 Some(trunk_ir::types::Attribute::List(abilities))
                     if abilities.iter().all(|ability| matches!(
                         ability,
@@ -350,7 +350,7 @@ impl MarkerFieldType {
             Self::I32 => Symbol::new("i32"),
             Self::Ptr => Symbol::new("ptr"),
         };
-        ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+        TypeDataBuilder::new(dialect, name).intern(ctx)
     }
 }
 
@@ -463,10 +463,8 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
         .map(|spec| (spec.symbol_name, spec.type_ref(ctx)))
         .collect();
     let mut attrs = trunk_ir::types::AttributeMap::new();
-    attrs.insert(
-        runtime_layout::LAYOUT_ATTR,
-        ctx.string_attr(runtime_layout::EVIDENCE_MARKER),
-    );
+    let layout = ctx.string_attr(runtime_layout::EVIDENCE_MARKER);
+    attrs.insert(ctx, runtime_layout::LAYOUT_ATTR, layout);
     crate::dialect::adt::struct_type(ctx, "_Marker", fields, attrs).as_type_ref()
 }
 
@@ -475,12 +473,10 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
 pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let marker_ty = marker_adt_type_ref(ctx);
     let layout = ctx.string_attr(runtime_layout::EVIDENCE);
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-            .param(marker_ty)
-            .attr(runtime_layout::LAYOUT_ATTR, layout)
-            .build(),
-    )
+    TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
+        .param(marker_ty)
+        .attr(runtime_layout::LAYOUT_ATTR, layout)
+        .intern(ctx)
 }
 
 /// Whether a type is the evidence marker layout, identified by its runtime
@@ -519,11 +515,9 @@ mod tests {
     fn evidence_layouts_are_identified_by_layout_not_name() {
         let mut ctx = IrContext::new();
         let name_attr = ctx.string_attr("_Marker");
-        let named_marker = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-                .attr("name", name_attr)
-                .build(),
-        );
+        let named_marker = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .attr("name", name_attr)
+            .intern(&mut ctx);
         let plain_array = core::array(&mut ctx, named_marker).as_type_ref();
         assert!(!is_marker_type_ref(&ctx, named_marker));
         assert!(!is_evidence_type_ref(&ctx, plain_array));
@@ -628,15 +622,13 @@ mod tests {
 
         // Non-marker struct should return false
         let name_attr = ctx.string_attr("OtherStruct");
-        let other_struct = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-                .attr("name", name_attr)
-                .build(),
-        );
+        let other_struct = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .attr("name", name_attr)
+            .intern(&mut ctx);
         assert!(!is_marker_type_ref(&ctx, other_struct));
 
         // Non-struct type should return false
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
         assert!(!is_marker_type_ref(&ctx, i32_ty));
     }
 
@@ -645,7 +637,7 @@ mod tests {
         let mut ctx = IrContext::new();
 
         // Array of non-marker should return false
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
         let other_array = core::array(&mut ctx, i32_ty).as_type_ref();
         assert!(!is_evidence_type_ref(&ctx, other_array));
 

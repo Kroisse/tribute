@@ -63,7 +63,7 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
     let is_cps = ctx
         .op(func_op.op_ref())
         .attributes
-        .get("tribute.calling_convention")
+        .get(ctx, "tribute.calling_convention")
         .is_some_and(|attr| *attr == trunk_ir::Attribute::Int(2));
     let hidden_count = usize::from(has_evidence) + usize::from(has_evidence && is_cps);
     let has_done_k = is_cps;
@@ -108,7 +108,7 @@ fn is_i32(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
 fn is_continuation_frame(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
     ctx.get_type(ty)
         .attrs
-        .contains_key("tribute.cps_continuation_frame_result")
+        .contains_key(ctx, "tribute.cps_continuation_frame_result")
 }
 
 #[test]

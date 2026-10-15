@@ -155,10 +155,8 @@ fn attach_evidence_plan<'db>(
         .iter()
         .map(|step| lower_evidence_step(ctx, step, declarations))
         .collect();
-    if let Some(plan) = tribute_control::EvidenceStep::plan_attribute(steps) {
-        ir.op_mut(op)
-            .attributes
-            .insert(tribute_control::EVIDENCE_PLAN_ATTR, plan);
+    if let Some(plan) = tribute_control::EvidenceStep::plan_attribute(ir, steps) {
+        ir.set_attr(op, tribute_control::EVIDENCE_PLAN_ATTR, plan);
     }
 }
 
@@ -1052,7 +1050,7 @@ fn lower_function<'db>(
         .map(|(parameter, ty)| {
             let mut attrs = trunk_ir::types::AttributeMap::default();
             let name = parameter.name.with_str(|name| ir.string_attr(name));
-            attrs.insert(Symbol::new("bind_name"), name);
+            attrs.insert(ir, "bind_name", name);
             BlockArgData { ty: *ty, attrs }
         })
         .collect();
@@ -1144,8 +1142,9 @@ fn lower_extern<'db>(
     let function = tribute_control::func_declaration(ir, location, &name, callable);
     if let Some(identity) = ctx.compiler_intrinsic(decl.id) {
         let identity_text = ir.intern_symbol_text(&identity);
-        ir.op_mut(function.op_ref()).attributes.insert(
-            Symbol::new(tribute_control::COMPILER_INTRINSIC_ATTR),
+        ir.set_attr(
+            function.op_ref(),
+            tribute_control::COMPILER_INTRINSIC_ATTR,
             Attribute::String(identity_text),
         );
         declarations
@@ -1160,15 +1159,14 @@ fn lower_extern<'db>(
             .sort_by_key(|declaration| (declaration.symbol.clone(), declaration.identity.clone()));
     }
     let abi = decl.abi.with_str(|abi| ir.string_attr(abi));
-    ir.op_mut(function.op_ref())
-        .attributes
-        .insert(Symbol::new("abi"), abi);
+    ir.set_attr(function.op_ref(), "abi", abi);
     // C linkage has one flat namespace: the declaration links under its
     // declared name, wherever it is declared.
     if decl.abi == "C" {
         let link_name = ir.intern_symbol_text(&decl.name);
-        ir.op_mut(function.op_ref()).attributes.insert(
-            Symbol::new(trunk_ir::symbol_table::LINK_NAME),
+        ir.set_attr(
+            function.op_ref(),
+            trunk_ir::symbol_table::LINK_NAME,
             Attribute::String(link_name),
         );
     }
@@ -2756,15 +2754,13 @@ fn lower_handler<'db>(
         })
         .collect();
     if kind == OpDeclKind::Op && !is_never {
-        let token = ir.intern_type(
-            trunk_ir::types::TypeDataBuilder::new(
-                Symbol::new("tribute_control"),
-                Symbol::new("resume_token"),
-            )
-            .param(operation_result)
-            .param(answer_ty)
-            .build(),
-        );
+        let token = trunk_ir::types::TypeDataBuilder::new(
+            Symbol::new("tribute_control"),
+            Symbol::new("resume_token"),
+        )
+        .param(operation_result)
+        .param(answer_ty)
+        .intern(ir);
         block_args.push(BlockArgData {
             ty: token,
             attrs: Default::default(),

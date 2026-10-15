@@ -447,7 +447,7 @@ fn report_schema_violations(
 
 fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     for (ty, data) in ctx.types().iter() {
-        if let Err(error) = data.validate_param_attrs() {
+        if let Err(error) = data.validate_param_attrs(ctx) {
             errors.push(ValidationError::Operation {
                 message: format!(
                     "type verifier failed for {}.{} ({ty}): {error}",
@@ -476,7 +476,7 @@ fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationE
         let Some(signature) = ctx
             .op(op)
             .attributes
-            .get_type("type")
+            .get_type(ctx, "type")
             .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
         else {
             errors.push(operation_verifier_error(
@@ -630,7 +630,7 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
         Some(
             ctx.op(found)
                 .attributes
-                .get_type("type")
+                .get_type(ctx, "type")
                 .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty)),
         )
     };
@@ -673,7 +673,7 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
             }
             let operands = ctx.op_operands(op);
             let (signature, args) = if direct {
-                let Some(name) = ctx.op(op).attributes.get_symbol_ref("callee") else {
+                let Some(name) = ctx.op(op).attributes.get_symbol_ref(ctx, "callee") else {
                     return;
                 };
                 let Some(signature) = resolve(op, name) else {
@@ -695,7 +695,7 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
                 let signature = ctx
                     .op(op)
                     .attributes
-                    .get_type("signature")
+                    .get_type(ctx, "signature")
                     .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
                     .or_else(|| typed_callee_signature(ctx, callee));
                 let Some(signature) = signature else {
@@ -1187,7 +1187,7 @@ fn parameter_count(ctx: &IrContext, op: OpRef) -> Option<usize> {
     if !is_arity_checked_function(ctx, op) {
         return None;
     }
-    let func_ty = ctx.op(op).attributes.get_type(crate::symbol!("type"))?;
+    let func_ty = ctx.op(op).attributes.get_type(ctx, "type")?;
     let func_ty = crate::dialect::func::FuncSig::from_type_ref(ctx, func_ty)?;
     Some(func_ty.inputs(ctx).len())
 }
@@ -1202,7 +1202,6 @@ fn check_call_arity_in_region(
     let func_dialect = Symbol::new("func");
     let call_name = Symbol::new("call");
     let tail_call_name = Symbol::new("tail_call");
-    let callee_key = Symbol::new("callee");
 
     walk::walk_region::<std::convert::Infallible>(ctx, region, &mut |op| {
         let data = ctx.op(op);
@@ -1216,7 +1215,7 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
 
-        let Some(callee_sym) = data.attributes.get_symbol_ref(callee_key.clone()) else {
+        let Some(callee_sym) = data.attributes.get_symbol_ref(ctx, "callee") else {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 
@@ -1275,7 +1274,7 @@ pub fn link_name_conflicts(ctx: &IrContext, module: Module) -> Vec<String> {
     let mut errors = Vec::new();
     let _ = walk::walk_op::<()>(ctx, module.op(), &mut |op| {
         if !ctx.op_has_regions(op)
-            && let Some(ty) = ctx.op(op).attributes.get_type(crate::symbol!("type"))
+            && let Some(ty) = ctx.op(op).attributes.get_type(ctx, "type")
             && let Some(name) = link_name(ctx, op)
             && let Some(path) = qualified_name(ctx, op)
         {
@@ -1348,7 +1347,7 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> super::super::refs::TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     fn make_func_type(
@@ -1404,7 +1403,7 @@ mod tests {
             &mut ctx,
             "core.module @m { func.func @f() { func.return } }",
         );
-        ctx.op_mut(module.op()).attributes.remove("sym_name");
+        ctx.remove_attr(module.op(), "sym_name");
         let text = validate_all(&ctx, module, &mut Default::default()).to_string();
         assert!(
             text.contains("core.module") && text.contains("missing required attribute `sym_name`"),
@@ -1413,10 +1412,7 @@ mod tests {
 
         let loc = test_location(&mut ctx);
         let bodyless = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr(
-                Symbol::new("sym_name"),
-                Attribute::SymbolRef(SymbolPath::new(["m"])),
-            )
+            .attr("sym_name", Attribute::SymbolRef(SymbolPath::new(["m"])))
             .build(&mut ctx);
         let bodyless = ctx.create_op(bodyless);
         let bodyless = Module::new(&ctx, bodyless).unwrap();
@@ -1504,7 +1500,7 @@ mod tests {
         for (case, builder, expected) in cases {
             let mut ctx = IrContext::new();
             let module = empty_module(&mut ctx);
-            let malformed = ctx.intern_type(builder.build());
+            let malformed = builder.intern(&mut ctx);
             assert!(
                 func::FuncSig::from_type_ref(&ctx, malformed).is_none(),
                 "{case} must fail typed validation"
@@ -1913,7 +1909,7 @@ mod tests {
         });
 
         // Create a bool condition
-        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
+        let i1_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
         let cond = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
@@ -2157,7 +2153,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
+        let i1_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -3498,7 +3494,7 @@ mod tests {
             let mut ctx = IrContext::new();
             let loc = test_location(&mut ctx);
             let i32_ty = make_i32_type(&mut ctx);
-            let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
+            let i1_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
 
             let entry = ctx.create_block(BlockData {
                 location: loc,
@@ -3688,9 +3684,7 @@ mod tests {
         assert!(validate_operation_verifiers(&ctx, module).is_ok());
 
         let attribute = Attribute::List(vec![Attribute::SymbolRef(SymbolPath::root())]);
-        ctx.op_mut(module.op())
-            .attributes
-            .insert("referenced", attribute);
+        ctx.set_attr(module.op(), "referenced", attribute);
         let verifiers = validate_operation_verifiers(&ctx, module);
         assert_eq!(
             operation_error_messages(&verifiers)

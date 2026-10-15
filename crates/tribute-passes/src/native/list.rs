@@ -29,7 +29,7 @@ fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
 }
 
 fn node_type(ctx: &mut IrContext, element_ty: TypeRef) -> TypeRef {
-    let list_ty = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
+    let list_ty = TypeDataBuilder::new("tribute_rt", "anyref").intern(ctx);
     adt::struct_type(
         ctx,
         "__native_list_node",
@@ -113,7 +113,7 @@ fn lower_observation(
     ctx.block_mut(trap_block).parent_region = Some(region);
     ctx.block_mut(projection_block).parent_region = Some(region);
 
-    let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
+    let bool_ty = TypeDataBuilder::new("core", "i1").intern(ctx);
     let empty = adt::RefIsNull::operands(list)
         .results(bool_ty)
         .build(ctx, location);

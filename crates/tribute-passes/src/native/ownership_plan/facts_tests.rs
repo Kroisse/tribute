@@ -217,9 +217,11 @@ fn ir_revision_change_recomputes_function_and_module_facts() {
         .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
         .expect("module prerequisite");
 
-    ctx.op_mut(module.op())
-        .attributes
-        .insert("revision_probe", trunk_ir::types::Attribute::Unit);
+    ctx.set_attr(
+        module.op(),
+        "revision_probe",
+        trunk_ir::types::Attribute::Unit,
+    );
     assert!(
         cache
             .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)

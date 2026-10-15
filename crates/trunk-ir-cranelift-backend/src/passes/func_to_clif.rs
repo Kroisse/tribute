@@ -25,7 +25,7 @@ use trunk_ir::rewrite::{
     TypeConverter,
 };
 use trunk_ir::symbol_table::SymbolTable;
-use trunk_ir::types::Attribute;
+use trunk_ir::types::{Attribute, AttributeMap};
 
 /// Lower func dialect to clif dialect.
 pub fn lower(
@@ -80,11 +80,12 @@ fn convert_nested_callable_type(
         .iter()
         .map(|(key, value)| {
             Some((
-                key.clone(),
+                key,
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
-        .collect::<Option<_>>()?;
+        .collect::<Option<Vec<_>>>()?;
+    let attrs = AttributeMap::from_refs(ctx, attrs);
     if params.as_slice() == data.params.as_slice() && attrs == data.attrs {
         return Some(ty);
     }
@@ -114,12 +115,13 @@ fn convert_type_to_clif(
         let results = shared.results(ctx).to_vec();
         let type_attrs = shared
             .non_reserved_attrs(ctx)
-            .map(|(key, value)| (key.clone(), value.clone()))
+            .map(|(key, value)| (key, value.clone()))
             .collect::<Vec<_>>();
         let attrs = type_attrs
             .into_iter()
             .map(|(key, value)| Some((key, convert_attribute_to_clif(ctx, &value, converter)?)))
-            .collect::<Option<_>>()?;
+            .collect::<Option<Vec<_>>>()?;
+        let attrs = AttributeMap::from_refs(ctx, attrs);
         let inputs = inputs
             .into_iter()
             .map(|ty| convert_type_to_clif(ctx, ty, converter))
@@ -145,11 +147,12 @@ fn convert_type_to_clif(
         .iter()
         .map(|(key, value)| {
             Some((
-                key.clone(),
+                key,
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
-        .collect::<Option<_>>()?;
+        .collect::<Option<Vec<_>>>()?;
+    let attrs = AttributeMap::from_refs(ctx, attrs);
     if params.as_slice() == data.params.as_slice() && attrs == data.attrs {
         return Some(ty);
     }
@@ -196,7 +199,7 @@ impl RewritePattern for FuncFuncPattern {
 
         // Convert parameter and return types in the function signature
         let data = ctx.op(op);
-        let func_type_attr = data.attributes.get_type("type");
+        let func_type_attr = data.attributes.get_type(ctx, "type");
 
         let mut new_attrs = data.attributes.clone();
         let Some(func_ty) = func_type_attr else {
@@ -205,7 +208,7 @@ impl RewritePattern for FuncFuncPattern {
         let Some(new_func_ty) = convert_to_clif_func_type(ctx, func_ty, tc) else {
             return false;
         };
-        new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
+        new_attrs.insert(ctx, "type", Attribute::Type(new_func_ty));
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
@@ -245,9 +248,7 @@ impl RewritePattern for FuncCallPattern {
         for (index, result_ty) in rewriter.result_types(ctx, op).into_iter().enumerate() {
             ctx.set_op_result_type(new_op, index as u32, result_ty);
         }
-        ctx.op_mut(new_op)
-            .attributes
-            .insert(Symbol::new("callee"), Attribute::SymbolRef(callee));
+        ctx.set_attr(new_op, "callee", Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
         true
     }
@@ -302,7 +303,9 @@ impl RewritePattern for FuncCallIndirectPattern {
             Symbol::new("clif"),
             Symbol::new("call_indirect"),
         );
-        func::remove_indirect_call_signature(&mut ctx.op_mut(new_op).attributes);
+        let mut attributes = std::mem::take(&mut ctx.op_mut(new_op).attributes);
+        func::remove_indirect_call_signature(ctx, &mut attributes);
+        ctx.op_mut(new_op).attributes = attributes;
         if !clif::set_indirect_call_signature(ctx, new_op, sig_ty) {
             return false;
         }
@@ -359,9 +362,7 @@ impl RewritePattern for FuncTailCallPattern {
             Symbol::new("clif"),
             Symbol::new("return_call"),
         );
-        ctx.op_mut(new_op)
-            .attributes
-            .insert(Symbol::new("callee"), Attribute::SymbolRef(callee));
+        ctx.set_attr(new_op, "callee", Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
         true
     }
@@ -416,7 +417,9 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             Symbol::new("clif"),
             Symbol::new("return_call_indirect"),
         );
-        func::remove_indirect_call_signature(&mut ctx.op_mut(new_op).attributes);
+        let mut attributes = std::mem::take(&mut ctx.op_mut(new_op).attributes);
+        func::remove_indirect_call_signature(ctx, &mut attributes);
+        ctx.op_mut(new_op).attributes = attributes;
         if !clif::set_indirect_call_signature(ctx, new_op, signature) {
             return false;
         }
@@ -535,7 +538,7 @@ mod tests {
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::TypeConverter;
     use trunk_ir::types::TypeDataBuilder;
-    use trunk_ir::{Attribute, AttributeMap, Symbol};
+    use trunk_ir::{Attribute, AttributeMap};
 
     const TAIL_TRANSFERS: &str = r#"core.module @test {
   func.func @direct_target(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
@@ -568,12 +571,10 @@ mod tests {
             );
             let op = module.ops(&ctx)[0];
             if malformed {
-                let ty = ctx.intern_type(TypeDataBuilder::new("func", "func_sig").build());
-                ctx.op_mut(op)
-                    .attributes
-                    .insert(Symbol::new("type"), trunk_ir::Attribute::Type(ty));
+                let ty = TypeDataBuilder::new("func", "func_sig").intern(&mut ctx);
+                ctx.set_attr(op, "type", trunk_ir::Attribute::Type(ty));
             } else {
-                ctx.op_mut(op).attributes.remove("type");
+                ctx.remove_attr(op, "type");
             }
             let before = print_module(&ctx, module.op());
             let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
@@ -611,7 +612,7 @@ mod tests {
   }
 }"#,
         );
-        let anyref_ty = ctx.intern_type(TypeDataBuilder::new("test", "anyref").build());
+        let anyref_ty = TypeDataBuilder::new("test", "anyref").intern(&mut ctx);
         let ptr_ty = core::ptr(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == anyref_ty).then_some(ptr_ty));
@@ -630,25 +631,28 @@ mod tests {
     #[test]
     fn nested_callable_metadata_uses_the_native_owned_signature() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i64_ty = TypeDataBuilder::new("core", "i64").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
 
         let mut inner_attrs = AttributeMap::new();
         inner_attrs.insert(
-            Symbol::new("tag"),
+            &mut ctx,
+            "tag",
             Attribute::SymbolRef(SymbolPath::new(["preserved"])),
         );
         inner_attrs.insert(
-            Symbol::new("nested"),
+            &mut ctx,
+            "nested",
             Attribute::List(vec![Attribute::Type(i32_ty)]),
         );
         let nested =
             func::func_sig_with_attrs(&mut ctx, [i32_ty], [i32_ty], inner_attrs).as_type_ref();
         let mut attrs = AttributeMap::new();
         attrs.insert(
-            Symbol::new("evidence"),
+            &mut ctx,
+            "evidence",
             Attribute::List(vec![Attribute::Type(nested)]),
         );
         let source = func::func_sig_with_attrs(&mut ctx, [i32_ty], [i32_ty], attrs).as_type_ref();
@@ -658,7 +662,7 @@ mod tests {
         assert!(signature.inputs(&ctx) == [i64_ty] && signature.results(&ctx) == [i64_ty]);
         let Some(Attribute::List(evidence)) = signature
             .non_reserved_attrs(&ctx)
-            .find_map(|(key, value)| (*key == "evidence").then_some(value))
+            .find_map(|(key, value)| (ctx.str(key) == "evidence").then_some(value))
         else {
             panic!("missing nested target contract");
         };
@@ -674,18 +678,17 @@ mod tests {
     #[test]
     fn parameter_attributes_are_preserved_and_their_types_converted() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i64_ty = TypeDataBuilder::new("core", "i64").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
-        let dict = |ty| -> AttributeMap {
-            [(Symbol::new("witness"), Attribute::Type(ty))]
-                .into_iter()
-                .collect()
-        };
+        let witness = ctx.intern_str("witness");
+        let dict =
+            |ctx: &IrContext, ty| AttributeMap::from_refs(ctx, [(witness, Attribute::Type(ty))]);
+        let witness_i32 = dict(&ctx, i32_ty);
         let source = func::func_sig_with_param_attrs(
             &mut ctx,
-            [(i32_ty, dict(i32_ty)), (i32_ty, AttributeMap::new())],
+            [(i32_ty, witness_i32), (i32_ty, AttributeMap::new())],
             [(i32_ty, AttributeMap::new())],
             AttributeMap::new(),
         )
@@ -693,8 +696,8 @@ mod tests {
         let converted = super::convert_to_clif_func_type(&mut ctx, source, &type_converter)
             .expect("target callable contract");
         let data = ctx.get_type(converted);
-        assert_eq!(data.param_attrs(0), &dict(i64_ty));
-        assert!(data.param_attrs(1).is_empty() && data.param_attrs(2).is_empty());
+        assert_eq!(data.param_attrs(&ctx, 0), &dict(&ctx, i64_ty));
+        assert!(data.param_attrs(&ctx, 1).is_empty() && data.param_attrs(&ctx, 2).is_empty());
     }
 
     #[test]

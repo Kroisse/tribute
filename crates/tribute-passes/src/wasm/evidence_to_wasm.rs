@@ -510,10 +510,10 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         if !is_function || ctx.op_has_regions(op) {
             continue;
         }
-        let Some(name_ref) = data.attributes.get_string_ref("sym_name") else {
+        let Some(name_ref) = data.attributes.get_string_ref(ctx, "sym_name") else {
             continue;
         };
-        let Some(signature) = data.attributes.get_type("type") else {
+        let Some(signature) = data.attributes.get_type(ctx, "type") else {
             continue;
         };
         let location = data.location;
@@ -1355,12 +1355,12 @@ fn evidence_ref_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a `core.i32` type.
 fn intern_i32(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+    TypeDataBuilder::new("core", "i32").intern(ctx)
 }
 
 /// Intern a `wasm.anyref` type.
 fn intern_anyref(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build())
+    TypeDataBuilder::new("wasm", "anyref").intern(ctx)
 }
 
 fn empty_block(ctx: &mut IrContext, location: Location) -> BlockRef {

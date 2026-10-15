@@ -59,7 +59,8 @@ pub(crate) fn physical_parameter_attrs(
     _convention: CallingConvention,
 ) -> AttributeMap {
     let mut attrs = AttributeMap::new();
-    attrs.insert(OWNERSHIP_ATTR, ctx.string_attr(CONSUMED));
+    let ownership = ctx.string_attr(CONSUMED);
+    attrs.insert(ctx, OWNERSHIP_ATTR, ownership);
     attrs
 }
 
@@ -145,7 +146,7 @@ pub fn lower_cps_signatures_to_physical(
                 .ctx
                 .op(op)
                 .attributes
-                .contains_key(Symbol::new("abi"));
+                .contains_key(converter.ctx, "abi");
             let converted = match convention {
                 Some(convention) if platform => {
                     converter.convert_platform_callable(signature, convention)?
@@ -163,9 +164,9 @@ pub fn lower_cps_signatures_to_physical(
                 .ctx
                 .op(op)
                 .attributes
-                .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
+                .contains_key(converter.ctx, CLOSURE_ENVIRONMENT_INDEX_ATTR)
             {
-                consumed_attributes.push((op, Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR)));
+                consumed_attributes.push((op, CLOSURE_ENVIRONMENT_INDEX_ATTR));
             }
         }
 
@@ -210,7 +211,7 @@ pub fn lower_cps_signatures_to_physical(
                     "target ABI: indirect callable signature cannot be set",
                 ));
             }
-            func::remove_indirect_call_signature(&mut converted_attributes);
+            func::remove_indirect_call_signature(converter.ctx, &mut converted_attributes);
             indirect_signatures.push((op, signature));
         }
         // Transfers were validated against their callee above. Closure
@@ -221,27 +222,27 @@ pub fn lower_cps_signatures_to_physical(
                 .ctx
                 .op(op)
                 .attributes
-                .contains_key(CALLING_CONVENTION_ATTR)
+                .contains_key(converter.ctx, CALLING_CONVENTION_ATTR)
             && IndirectCallLikeOps::callee(converter.ctx, op).is_none_or(|callee| {
                 crate::closure_lower::physical_closure_type_for_callee(converter.ctx, callee)
                     .is_none()
             })
         {
-            consumed_attributes.push((op, Symbol::new(CALLING_CONVENTION_ATTR)));
+            consumed_attributes.push((op, CALLING_CONVENTION_ATTR));
         }
         let op_attributes: Vec<_> = converted_attributes
             .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
+            .map(|(name, value)| (name, value.clone()))
             .collect();
         for (name, value) in op_attributes {
-            if func::Func::matches(converter.ctx, op) && name == "type" {
+            if func::Func::matches(converter.ctx, op) && converter.ctx.str(name) == "type" {
                 continue;
             }
             let converted = converter.convert_attribute(value)?;
-            converted_attributes.insert(name, converted);
+            converted_attributes.insert_ref(converter.ctx, name, converted);
         }
         for (name, value) in converted_attributes {
-            if original_attributes.get(name.clone()) != Some(&value) {
+            if original_attributes.get(converter.ctx, name) != Some(&value) {
                 attributes.push((op, name, value));
             }
         }
@@ -264,8 +265,8 @@ pub fn lower_cps_signatures_to_physical(
                 {
                     let mut converted_attrs = argument.attrs.clone();
                     for (name, value) in argument.attrs.iter() {
-                        converted_attrs
-                            .insert(name.clone(), converter.convert_attribute(value.clone())?);
+                        let value = converter.convert_attribute(value.clone())?;
+                        converted_attrs.insert_ref(converter.ctx, name, value);
                     }
                     if converted_attrs != argument.attrs {
                         block_attributes.push((block, index, converted_attrs));
@@ -284,18 +285,16 @@ pub fn lower_cps_signatures_to_physical(
         ctx.register_type_alias(name, ty);
     }
     for (op, ty) in function_types {
-        ctx.op_mut(op)
-            .attributes
-            .insert("type", Attribute::Type(ty));
+        ctx.set_attr(op, "type", Attribute::Type(ty));
     }
     for (op, index, ty) in result_types {
         ctx.set_op_result_type(op, index, ty);
     }
     for (op, name, value) in attributes {
-        ctx.op_mut(op).attributes.insert(name, value);
+        ctx.set_attr(op, name, value);
     }
     for (op, name) in consumed_attributes {
-        ctx.op_mut(op).attributes.remove(name);
+        ctx.remove_attr(op, name);
     }
     for (op, signature) in indirect_signatures {
         assert!(IndirectCallLikeOps::set_exact_signature(ctx, op, signature));
@@ -463,9 +462,7 @@ pub fn compose_root_entry_bridge(
 
     let location = ctx.op(worker_op).location;
     let root_main_name = ctx.intern_str(ROOT_MAIN_SYMBOL);
-    ctx.op_mut(worker_op)
-        .attributes
-        .insert("sym_name", Attribute::String(root_main_name));
+    ctx.set_attr(worker_op, "sym_name", Attribute::String(root_main_name));
     for &op in &top_level_ops {
         rewrite_symbol_refs(ctx, op, &main, &root_main);
     }
@@ -917,7 +914,7 @@ fn build_initial_evidence(
     location: Location,
     evidence_ty: TypeRef,
 ) -> ValueRef {
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
     let zero = arith::Const::operands()
         .value(Attribute::Int(0))
         .results(i32_ty)
@@ -1027,7 +1024,7 @@ pub(crate) fn validate_dispatch_contracts(
         let answer = ctx
             .op(op)
             .attributes
-            .get_type("answer_type")
+            .get_type(ctx, "answer_type")
             .ok_or_else(|| TargetAbiError::new("CPS dispatch requires answer_type: Type"))?;
         if !ctx.op_result_types(op).is_empty()
             || dispatch_answer_type(ctx, *evidence, *dispatch, *resume)? != answer
@@ -1217,24 +1214,25 @@ fn is_parameterless_dialect_type(ctx: &IrContext, ty: TypeRef, dialect: &str, na
 }
 
 fn set_root_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
-    ctx.op_mut(op)
-        .attributes
-        .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
+    ctx.set_attr(
+        op,
+        CALLING_CONVENTION_ATTR,
+        Attribute::Int(convention as i128),
+    );
 }
 
 fn bind_name(ctx: &mut IrContext, name: &str) -> AttributeMap {
-    [(Symbol::new("bind_name"), ctx.string_attr(name))]
-        .into_iter()
-        .collect()
+    let name = ctx.string_attr(name);
+    AttributeMap::from_entries(ctx, [("bind_name", name)])
 }
 
 fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: &SymbolPath, new: &SymbolPath) {
     if core::Module::from_op(ctx, op).is_ok() {
         return;
     }
-    for key in [Symbol::new("callee"), Symbol::new("func_ref")] {
-        if ctx.op(op).attributes.get_symbol_ref(key.clone()) == Some(old) {
-            ctx.op_mut(op).attributes.insert(key, new.clone());
+    for key in ["callee", "func_ref"] {
+        if ctx.op(op).attributes.get_symbol_ref(ctx, key) == Some(old) {
+            ctx.set_attr(op, key, new.clone());
         }
     }
     let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
@@ -1256,7 +1254,7 @@ fn exact_convention(
     let present = ctx
         .op(op)
         .attributes
-        .get(Symbol::new(CALLING_CONVENTION_ATTR))
+        .get(ctx, CALLING_CONVENTION_ATTR)
         .is_some();
     let convention = get_calling_convention(ctx, op);
     if present && convention.is_none() {
@@ -1318,7 +1316,7 @@ fn validate_transfers(
             let callee = ctx
                 .op(op)
                 .attributes
-                .get_symbol_ref("callee")
+                .get_symbol_ref(ctx, "callee")
                 .ok_or_else(|| {
                     TargetAbiError::new("target ABI: direct transfer lacks callee metadata")
                 })?;
@@ -1370,7 +1368,7 @@ fn validate_transfers(
         let signature = IndirectCallLikeOps::exact_signature(ctx, op);
         let convention = exact_convention(ctx, op)?;
         // An invalid signature attribute is rejected below, not skipped.
-        let has_signature = ctx.op(op).attributes.contains_key(Symbol::new("signature"));
+        let has_signature = ctx.op(op).attributes.contains_key(ctx, "signature");
         if !has_signature && convention.is_none() {
             continue;
         }
@@ -1575,10 +1573,10 @@ fn environment_index(
 ) -> Result<Option<usize>, TargetAbiError> {
     let attributes = &ctx.op(function).attributes;
     let present = attributes
-        .get(Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR))
+        .get(ctx, CLOSURE_ENVIRONMENT_INDEX_ATTR)
         .is_some();
     let declared = attributes
-        .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
+        .get_u32(ctx, CLOSURE_ENVIRONMENT_INDEX_ATTR)
         .ok()
         .flatten()
         .map(|index| index as usize);
@@ -1728,7 +1726,7 @@ impl<'a> PhysicalTypeConverter<'a> {
         if !platform {
             let contract = physical_parameter_attrs(self.ctx, convention);
             for (_, attrs) in &mut inputs {
-                attrs.extend(contract.clone());
+                attrs.extend(self.ctx, contract.clone());
             }
         }
         // A physical Cps callable has no result, so the logical result's
@@ -1743,7 +1741,7 @@ impl<'a> PhysicalTypeConverter<'a> {
             self.convert_params(results)?
         };
         let mut attrs = self.convert_func_attributes(callable)?;
-        if attrs.contains_key(func::CALL_CONV_ATTR) {
+        if attrs.contains_key(self.ctx, func::CALL_CONV_ATTR) {
             return Err(TargetAbiError::new(
                 "target ABI: logical callable already carries a machine call_conv",
             ));
@@ -1812,7 +1810,9 @@ impl<'a> PhysicalTypeConverter<'a> {
         // root contract checks, which run before conversion. Physical frames
         // are ordinary nominal layouts.
         if continuation_frame::result_type(self.ctx, ty).is_some() {
-            converted.attrs.remove(continuation_frame::RESULT_ATTR);
+            converted
+                .attrs
+                .remove(self.ctx, continuation_frame::RESULT_ATTR);
         }
         let converted = self.intern_if_changed(ty, converted);
         self.embedded.insert(ty, converted);
@@ -1825,22 +1825,24 @@ impl<'a> PhysicalTypeConverter<'a> {
     ) -> Result<AttributeMap, TargetAbiError> {
         let attributes = callable
             .non_reserved_attrs(self.ctx)
-            .map(|(name, value)| (name.clone(), value.clone()))
+            .map(|(name, value)| (name, value.clone()))
             .collect::<Vec<_>>();
-        attributes
+        let attributes = attributes
             .into_iter()
             .map(|(name, value)| Ok((name, self.convert_attribute(value)?)))
-            .collect()
+            .collect::<Result<Vec<_>, TargetAbiError>>()?;
+        Ok(AttributeMap::from_refs(self.ctx, attributes))
     }
 
     fn convert_type_attributes(&mut self, data: &mut TypeData) -> Result<(), TargetAbiError> {
         let attributes: Vec<_> = data
             .attrs
             .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
+            .map(|(name, value)| (name, value.clone()))
             .collect();
         for (name, value) in attributes {
-            data.attrs.insert(name, self.convert_attribute(value)?);
+            let value = self.convert_attribute(value)?;
+            data.attrs.insert_ref(self.ctx, name, value);
         }
         Ok(())
     }
@@ -1859,7 +1861,8 @@ impl<'a> PhysicalTypeConverter<'a> {
                 let attrs = attrs
                     .into_iter()
                     .map(|(name, value)| Ok((name, self.convert_attribute(value)?)))
-                    .collect::<Result<_, TargetAbiError>>()?;
+                    .collect::<Result<Vec<_>, TargetAbiError>>()?;
+                let attrs = AttributeMap::from_refs(self.ctx, attrs);
                 Ok((self.convert_embedded(ty)?, attrs))
             })
             .collect()
@@ -1955,11 +1958,15 @@ mod tests {
     fn dispatch_answer_contract_survives_atomic_physicalization() {
         for answer in ["i32", "i64", "nil"] {
             let (mut ctx, module, dispatch) = dispatch_fixture(answer, "frame");
-            let semantic_answer = ctx.op(dispatch).attributes.get_type("answer_type").unwrap();
+            let semantic_answer = ctx
+                .op(dispatch)
+                .attributes
+                .get_type(&ctx, "answer_type")
+                .unwrap();
             validate_dispatch_contracts(&mut ctx, module).unwrap();
             lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
             assert_eq!(
-                ctx.op(dispatch).attributes.get_type("answer_type"),
+                ctx.op(dispatch).attributes.get_type(&ctx, "answer_type"),
                 Some(semantic_answer)
             );
             let printed = print_module(&ctx, module.op());
@@ -1982,32 +1989,36 @@ mod tests {
             let (mut ctx, module, dispatch) = dispatch_fixture("i32", "frame");
             match mutation {
                 0 => {
-                    ctx.op_mut(dispatch).attributes.remove("answer_type");
+                    ctx.remove_attr(dispatch, "answer_type");
                 }
                 1 => {
-                    ctx.op_mut(dispatch)
-                        .attributes
-                        .insert("answer_type", Attribute::Int(0));
+                    ctx.set_attr(dispatch, "answer_type", Attribute::Int(0));
                 }
                 2 => {
                     let wrong = core::nil(&mut ctx).as_type_ref();
-                    ctx.op_mut(dispatch)
-                        .attributes
-                        .insert("answer_type", Attribute::Type(wrong));
+                    ctx.set_attr(dispatch, "answer_type", Attribute::Type(wrong));
                 }
                 3..=6 => {
                     let index = if mutation == 3 { 1 } else { 2 };
                     let value = ctx.op_operands(dispatch)[index];
                     let mut ty = ctx.get_type(ctx.value_ty(value)).clone();
                     if mutation == 3 || mutation == 4 {
-                        ty.attrs
-                            .insert(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(9));
+                        ty.attrs.insert(
+                            &mut ctx,
+                            CLOSURE_ENVIRONMENT_INDEX_ATTR,
+                            Attribute::Int(9),
+                        );
                     } else if mutation == 5 {
-                        ty.attrs.insert(CALLING_CONVENTION_ATTR, Attribute::Int(0));
+                        ty.attrs
+                            .insert(&mut ctx, CALLING_CONVENTION_ATTR, Attribute::Int(0));
                     } else {
                         let signature = func::FuncSig::from_type_ref(&ctx, ty.params[0]).unwrap();
                         let mut inputs = signature.inputs(&ctx).to_vec();
-                        let answer = ctx.op(dispatch).attributes.get_type("answer_type").unwrap();
+                        let answer = ctx
+                            .op(dispatch)
+                            .attributes
+                            .get_type(&ctx, "answer_type")
+                            .unwrap();
                         inputs[1] = tribute_ir::continuation_frame::ref_type(
                             &mut ctx,
                             "other_nominal_frame",
@@ -2022,9 +2033,8 @@ mod tests {
                 }
                 7 | 8 => {
                     let ty = if mutation == 7 {
-                        ctx.intern_type(
-                            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
-                        )
+                        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
+                            .intern(&mut ctx)
                     } else {
                         core::ptr(&mut ctx).as_type_ref()
                     };
@@ -2095,18 +2105,18 @@ mod tests {
                 // convention; only its results matter here.
                 let mut attributes = ctx.op(op).attributes.clone();
                 if is_transfer(&ctx, op) {
-                    attributes.remove(CALLING_CONVENTION_ATTR);
+                    attributes.remove(&ctx, CALLING_CONVENTION_ATTR);
                 }
-                attributes.remove(Symbol::new("type"));
-                attributes.remove(Symbol::new("signature"));
+                attributes.remove(&ctx, "type");
+                attributes.remove(&ctx, "signature");
                 (op, attributes, ctx.op_result_types(op).to_vec())
             })
             .collect();
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         for (op, before, results) in unchanged {
             let mut after = ctx.op(op).attributes.clone();
-            after.remove(Symbol::new("type"));
-            after.remove(Symbol::new("signature"));
+            after.remove(&ctx, "type");
+            after.remove(&ctx, "signature");
             assert_eq!(after, before);
             assert_eq!(ctx.op_result_types(op).len(), results.len());
         }
@@ -2198,9 +2208,11 @@ mod tests {
         let body = run.body_if_present(&ctx).unwrap();
         let indirect = ctx.block(ctx.region(body).blocks[0]).ops[0];
         let signature = IndirectCallLikeOps::exact_signature(&ctx, indirect).unwrap();
-        ctx.op_mut(indirect)
-            .attributes
-            .insert("unrelated_callable_metadata", Attribute::Type(signature));
+        ctx.set_attr(
+            indirect,
+            "unrelated_callable_metadata",
+            Attribute::Type(signature),
+        );
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
@@ -2235,7 +2247,7 @@ mod tests {
         let frame_name = "__tribute_continuation_frame_root_nil";
         let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
             &mut ctx, evidence, frame, anyref, i32_ty,
         );
@@ -2243,9 +2255,7 @@ mod tests {
             tribute_ir::continuation_frame::layout_type(&mut ctx, frame_name, nil, done, dispatch);
         ctx.register_type_alias(Symbol::new(frame_name), layout);
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
-        ctx.op_mut(main.op_ref())
-            .attributes
-            .insert("type", Attribute::Type(worker));
+        ctx.set_attr(main.op_ref(), "type", Attribute::Type(worker));
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
@@ -2283,7 +2293,7 @@ mod tests {
             assert!(
                 !ctx.op(function.op_ref())
                     .attributes
-                    .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
+                    .contains_key(&ctx, CLOSURE_ENVIRONMENT_INDEX_ATTR)
             );
         }
 
@@ -2295,7 +2305,7 @@ mod tests {
             .expect("wrapper must make exactly one ordinary worker call");
         assert!(func::Call::from_op(&ctx, call).is_ok());
         assert_eq!(
-            ctx.op(call).attributes.get_symbol_ref("callee"),
+            ctx.op(call).attributes.get_symbol_ref(&ctx, "callee"),
             Some(&SymbolPath::new([ROOT_MAIN_SYMBOL]))
         );
         let worker_callable = func::FuncSig::from_type_ref(&ctx, worker.r#type(&ctx)).unwrap();
@@ -2567,7 +2577,7 @@ mod tests {
             let never = core::never(&mut ctx).as_type_ref();
             let evidence = ability::evidence_adt_type_ref(&mut ctx);
             let frame_name = "__tribute_malformed_root_frame";
-            let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+            let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
             let frame = tribute_ir::continuation_frame::ref_type(
                 &mut ctx,
                 frame_name,
@@ -2580,9 +2590,7 @@ mod tests {
                 ctx.register_type_alias(Symbol::new(frame_name), wrong);
             }
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
-            ctx.op_mut(main.op_ref())
-                .attributes
-                .insert("type", Attribute::Type(worker));
+            ctx.set_attr(main.op_ref(), "type", Attribute::Type(worker));
             let entry = ctx.region(main.body(&ctx)).blocks[0];
             ctx.set_block_arg_type(entry, 0, evidence);
             ctx.set_block_arg_type(entry, 1, frame);
@@ -2616,11 +2624,9 @@ mod tests {
         let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
         let done = tribute_core::calling_convention::cps_done_type(&mut ctx, nil);
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
-        let parameterized_i32 = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
-                .param(nil)
-                .build(),
-        );
+        let parameterized_i32 = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
+            .param(nil)
+            .intern(&mut ctx);
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
             &mut ctx,
             evidence,
@@ -2632,9 +2638,7 @@ mod tests {
             tribute_ir::continuation_frame::layout_type(&mut ctx, frame_name, nil, done, dispatch);
         ctx.register_type_alias(Symbol::new(frame_name), layout);
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
-        ctx.op_mut(main.op_ref())
-            .attributes
-            .insert("type", Attribute::Type(worker));
+        ctx.set_attr(main.op_ref(), "type", Attribute::Type(worker));
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
@@ -2904,9 +2908,7 @@ mod tests {
         let external = function(&ctx, module, "external");
         let entry = ctx.region(external.body(&ctx)).blocks[0];
         let environment_name = ctx.string_attr("__env");
-        ctx.block_mut(entry).args[1]
-            .attrs
-            .insert("bind_name", environment_name);
+        ctx.set_block_arg_attr(entry, 1, "bind_name", environment_name);
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
@@ -2919,13 +2921,14 @@ mod tests {
     fn malformed_zero_parameter_func_sig_fails_without_panicking() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, "core.module @test {}");
-        let malformed = ctx.intern_type(
+        let malformed =
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
-                .build(),
+                .intern(&mut ctx);
+        ctx.set_attr(
+            module.op(),
+            "malformed_callable",
+            Attribute::Type(malformed),
         );
-        ctx.op_mut(module.op())
-            .attributes
-            .insert("malformed_callable", Attribute::Type(malformed));
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
@@ -2945,9 +2948,7 @@ mod tests {
         );
         let broken = function(&ctx, module, "broken");
         let resultless = func::func_sig(&mut ctx, [], []).as_type_ref();
-        ctx.op_mut(broken.op_ref())
-            .attributes
-            .insert("type", Attribute::Type(resultless));
+        ctx.set_attr(broken.op_ref(), "type", Attribute::Type(resultless));
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
