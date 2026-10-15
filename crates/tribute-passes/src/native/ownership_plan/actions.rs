@@ -1,6 +1,6 @@
 use super::facts::{
-    NativeOwnershipFunctionFacts, borrowed_owner, is_core_ptr_type, is_internal_closure_layout,
-    root_value,
+    NativeOwnershipFunctionFacts, NativeOwnershipModuleFacts, borrowed_owner, is_core_ptr_type,
+    is_internal_closure_layout, root_value,
 };
 use super::*;
 
@@ -13,8 +13,8 @@ pub(super) fn plan_function_actions(
     ir: &IrContext,
     inputs: ActionInputs<'_>,
     entries: &[EntryOwnership],
-    entry_contracts: &HashMap<SymbolPath, Vec<EntryOwnership>>,
-    definitions: &HashMap<SymbolPath, OpRef>,
+    entry_contracts: &HashMap<OpRef, Vec<EntryOwnership>>,
+    module: &NativeOwnershipModuleFacts,
     managed_layouts: &HashSet<TypeRef>,
     elide_proven_field_borrows: bool,
 ) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
@@ -23,7 +23,7 @@ pub(super) fn plan_function_actions(
         inputs,
         entries,
         entry_contracts,
-        definitions,
+        module,
         managed_layouts,
         elide_proven_field_borrows,
     )
@@ -34,8 +34,8 @@ struct ActionPlanner<'a> {
     ir: &'a IrContext,
     facts: &'a NativeOwnershipFunctionFacts,
     entries: &'a [EntryOwnership],
-    entry_contracts: &'a HashMap<SymbolPath, Vec<EntryOwnership>>,
-    definitions: &'a HashMap<SymbolPath, OpRef>,
+    entry_contracts: &'a HashMap<OpRef, Vec<EntryOwnership>>,
+    module: &'a NativeOwnershipModuleFacts,
     managed_layouts: &'a HashSet<TypeRef>,
     borrowed: HashMap<ValueRef, ValueRef>,
     owned: HashSet<ValueRef>,
@@ -51,8 +51,8 @@ impl<'a> ActionPlanner<'a> {
         ir: &'a IrContext,
         inputs: ActionInputs<'a>,
         entries: &'a [EntryOwnership],
-        entry_contracts: &'a HashMap<SymbolPath, Vec<EntryOwnership>>,
-        definitions: &'a HashMap<SymbolPath, OpRef>,
+        entry_contracts: &'a HashMap<OpRef, Vec<EntryOwnership>>,
+        module: &'a NativeOwnershipModuleFacts,
         managed_layouts: &'a HashSet<TypeRef>,
         elide_proven_field_borrows: bool,
     ) -> Self {
@@ -90,7 +90,7 @@ impl<'a> ActionPlanner<'a> {
             facts,
             entries,
             entry_contracts,
-            definitions,
+            module,
             managed_layouts,
             borrowed,
             owned,
@@ -563,7 +563,7 @@ impl ActionPlanner<'_> {
                 .attributes
                 .get_symbol_ref("callee")
                 .ok_or_else(|| OwnershipPlanError::new("direct call lacks callee identity"))?;
-            if !self.definitions.contains_key(callee) {
+            let Some(callee_op) = self.module.callee(self.ir, op, callee) else {
                 if args
                     .iter()
                     .any(|&value| is_managed_value(self.ir, value, self.managed_layouts))
@@ -573,8 +573,7 @@ impl ActionPlanner<'_> {
                     )));
                 }
                 return Ok(());
-            }
-            let callee_op = self.definitions[callee];
+            };
             let signature = self
                 .ir
                 .op(callee_op)
@@ -584,7 +583,7 @@ impl ActionPlanner<'_> {
                 .ok_or_else(|| OwnershipPlanError::new("direct callee lacks exact signature"))?;
             validate_call_contract(self.ir, op, signature, args, self.managed_layouts)?;
             self.entry_contracts
-                .get(callee)
+                .get(&callee_op)
                 .cloned()
                 .ok_or_else(|| OwnershipPlanError::new("callee has no trusted entry contract"))?
         };

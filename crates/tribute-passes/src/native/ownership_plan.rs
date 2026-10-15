@@ -347,7 +347,6 @@ pub fn build_native_ownership_plan(
     let module_facts = analyses
         .get::<NativeOwnershipModuleFacts>(ctx, module.op())
         .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
-    let definitions = module_facts.definitions();
     let managed_layouts = module_facts.managed_layouts().clone();
     let entry_contracts = analyses
         .get::<NativeEntryContracts>(ctx, module.op())
@@ -367,7 +366,7 @@ pub fn build_native_ownership_plan(
             .get::<NativeManagedLiveness>(ctx, op)
             .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
         let entries = entry_contracts
-            .get(symbol)
+            .get(&op)
             .cloned()
             .ok_or_else(|| OwnershipPlanError::new("defined function has no entry contract"))?;
         let actions = plan_function_actions(
@@ -378,7 +377,7 @@ pub fn build_native_ownership_plan(
             },
             &entries,
             entry_contracts,
-            definitions,
+            &module_facts,
             &managed_layouts,
             options.elide_proven_field_borrows,
         )?;
