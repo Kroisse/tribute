@@ -8,7 +8,7 @@ use trunk_ir::transforms::call_graph::{CallGraph, recursive_functions};
 use super::*;
 use crate::target_abi::{CONSUMED, OWNERSHIP_ATTR};
 
-type Contracts = HashMap<SymbolPath, Vec<EntryOwnership>>;
+type Contracts = HashMap<OpRef, Vec<EntryOwnership>>;
 
 /// Parameter-entry contracts of every `func.func` in a module.
 ///
@@ -20,7 +20,7 @@ pub struct NativeEntryContracts {
     proven: Contracts,
     /// Functions with a body. Only their borrowed entries are proven rather
     /// than declared.
-    defined: HashSet<SymbolPath>,
+    defined: HashSet<OpRef>,
     retained: OnceLock<Contracts>,
 }
 
@@ -33,8 +33,8 @@ impl NativeEntryContracts {
         }
         self.retained.get_or_init(|| {
             let mut contracts = self.proven.clone();
-            for (symbol, entries) in &mut contracts {
-                if !self.defined.contains(symbol) {
+            for (function, entries) in &mut contracts {
+                if !self.defined.contains(function) {
                     continue;
                 }
                 for entry in entries {
@@ -52,33 +52,27 @@ impl Analysis for NativeEntryContracts {
     fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
         let module = ctx.get::<NativeOwnershipModuleFacts>(target)?;
         let call_graph = ctx.get::<CallGraph>(target)?;
-        compute_entry_contracts(
-            ctx.ir(),
-            &call_graph,
-            module.definitions(),
-            module.managed_layouts(),
-        )
-        .map_err(|error| AnalysisError::new::<Self>(target, error))
+        compute_entry_contracts(ctx.ir(), &call_graph, &module)
+            .map_err(|error| AnalysisError::new::<Self>(target, error))
     }
 }
 
 fn compute_entry_contracts(
     ctx: &IrContext,
     call_graph: &CallGraph,
-    definitions: &HashMap<SymbolPath, OpRef>,
-    managed_layouts: &HashSet<TypeRef>,
+    module: &NativeOwnershipModuleFacts,
 ) -> Result<NativeEntryContracts, OwnershipPlanError> {
+    let managed_layouts = module.managed_layouts();
     let recursive = recursive_functions(call_graph);
     let mut summaries = HashMap::default();
     let mut defined = HashSet::default();
-    for (symbol, &op) in definitions {
-        let symbol = symbol.clone();
+    for &(_, op) in module.functions() {
         let entry = match ownership_callable_body(ctx, op)? {
             CallableBody::Declaration => {
                 let signature = validate_bodyless_signature(ctx, op, managed_layouts)?;
                 let entries = bodyless_c_entry_contract(ctx, signature, op, managed_layouts)
                     .unwrap_or_else(|| vec![EntryOwnership::Plain; signature.inputs(ctx).len()]);
-                summaries.insert(symbol, entries);
+                summaries.insert(op, entries);
                 continue;
             }
             CallableBody::Definition { entry, .. } => entry,
@@ -96,9 +90,9 @@ fn compute_entry_contracts(
                 "function entry arity differs from its exact signature",
             ));
         }
-        defined.insert(symbol.clone());
+        defined.insert(op);
         summaries.insert(
-            symbol,
+            op,
             ctx.block_args(entry)
                 .iter()
                 .zip(consumed)
@@ -119,7 +113,7 @@ fn compute_entry_contracts(
 
     loop {
         let mut changed = false;
-        for (symbol, &op) in definitions {
+        for &(_, op) in module.functions() {
             let CallableBody::Definition {
                 region: body,
                 entry,
@@ -128,10 +122,17 @@ fn compute_entry_contracts(
                 continue;
             };
             for (index, &parameter) in ctx.block_args(entry).iter().enumerate() {
-                if summaries[symbol][index] == EntryOwnership::Borrowed
-                    && !value_is_borrowed(ctx, body, parameter, &summaries, &mut HashSet::default())
+                if summaries[&op][index] == EntryOwnership::Borrowed
+                    && !value_is_borrowed(
+                        ctx,
+                        body,
+                        parameter,
+                        module,
+                        &summaries,
+                        &mut HashSet::default(),
+                    )
                 {
-                    summaries.get_mut(symbol).unwrap()[index] = EntryOwnership::Retained;
+                    summaries.get_mut(&op).unwrap()[index] = EntryOwnership::Retained;
                     changed = true;
                 }
             }
@@ -199,6 +200,7 @@ fn value_is_borrowed(
     ctx: &IrContext,
     body: RegionRef,
     value: ValueRef,
+    module: &NativeOwnershipModuleFacts,
     summaries: &Contracts,
     visiting: &mut HashSet<ValueRef>,
 ) -> bool {
@@ -227,11 +229,12 @@ fn value_is_borrowed(
             && index == 0
             && ctx.op_results(op).len() == 1
         {
-            return value_is_borrowed(ctx, body, ctx.op_result(op, 0), summaries, visiting);
+            return value_is_borrowed(ctx, body, ctx.op_result(op, 0), module, summaries, visiting);
         }
         if let Ok(call) = func::Call::from_op(ctx, op) {
-            return summaries
-                .get(call.callee(ctx))
+            return module
+                .callee(ctx, op, call.callee(ctx))
+                .and_then(|callee| summaries.get(&callee))
                 .and_then(|entries| entries.get(index))
                 == Some(&EntryOwnership::Borrowed);
         }

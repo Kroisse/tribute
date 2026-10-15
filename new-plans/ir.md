@@ -362,8 +362,9 @@ Native ownership planning의 policy-neutral 입력은 `scf_to_cf` 이후,
 `func_to_clif` 이전 경계에서 fallible 분석이 소유한다. Module 범위 분석은
 module body, `func.func` 목록, 중복 없는 function 정의, 검증된 managed
 nominal layout, 유일한 semantic closure 할당 layout, 할당 순서의 RTTI
-descriptor를 담는다. Function 이름은 같은 module의 symbol table 분석이
-정한 root-qualified path다. Function 범위 분석은 그 module 분석에 의존하며,
+descriptor를 담는다. Function은 정의 operation으로 식별하고, 직접 호출의
+callee는 같은 module의 symbol table 분석으로 그 호출에서 해석한다.
+Root-qualified path는 표시 이름일 뿐이다. Function 범위 분석은 그 module 분석에 의존하며,
 검증된 flat CFG, type erasure 이전의 managed 값, typed 계약에서 유도한
 exact managed alias root, 검증된 managed projection-owner 관계, liveness가
 소비하는 policy-neutral block use/definition 입력을 담는다. Alias root는
@@ -1653,8 +1654,9 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_con
 Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `unit`, bool,
 정수, 부동소수점, 문자열, bytes, symbol 참조, type, location, list, dictionary.
 
-Symbol 참조는 symbol table의 정의를 qualified path로 가리킨다(`callee = @foo`). 참조가
-아닌 이름 값은 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
+Symbol 참조는 symbol table의 정의를 component path로 가리키며(`callee = @foo`),
+참조를 가진 operation에서 가장 가까운 module부터 해석한다. 참조가 아닌 이름 값은
+문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
 `predicate = "slt"`로 쓴다. Operation
 이름(`op_name`), operation kind(`"fn"`, `"op"`), compiler intrinsic identity

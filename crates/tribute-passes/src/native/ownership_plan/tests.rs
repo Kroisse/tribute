@@ -2796,11 +2796,43 @@ fn nested_same_named_functions_are_distinct_qualified_definitions() {
     }
   }
   func.func @main(%value: core.i32) -> core.i32 {
-    %left = func.call %value {callee = @"left::helper"} : core.i32
-    %right = func.call %left {callee = @"right::helper"} : core.i32
+    %left = func.call %value {callee = @left::@helper} : core.i32
+    %right = func.call %left {callee = @right::@helper} : core.i32
     func.return %right
   }
 }"#,
     );
     assert_eq!(plan.functions().len(), 3);
+}
+
+#[test]
+fn nested_callers_use_the_contract_of_the_callee_their_module_names() {
+    let (_, _, plan) = build(
+        r#"core.module @test {
+  func.func @observe(%value: adt.typeref<{name = "R"}>) -> core.i32 {
+    %seen = adt.struct_get %value {field = 0, type = adt.struct<R(x: core.i32)>} : core.i32
+    func.return %seen
+  }
+  core.module @inner {
+    func.func @observe(%value: adt.typeref<{name = "R"}>) -> adt.typeref<{name = "R"}> {
+      func.return %value
+    }
+    func.func @caller(%value: adt.typeref<{name = "R"}>) -> adt.typeref<{name = "R"}> {
+      %kept = func.call %value {callee = @observe} : adt.typeref<{name = "R"}>
+      func.return %kept
+    }
+  }
+}"#,
+    );
+    assert_eq!(
+        plan.function(&SymbolPath::new(["observe"]))
+            .unwrap()
+            .entries(),
+        [EntryOwnership::Borrowed]
+    );
+    let caller = plan
+        .function(&SymbolPath::new(["inner", "caller"]))
+        .unwrap();
+    assert_eq!(count(caller, ActionKind::CallBorrow), 0);
+    assert_eq!(count(caller, ActionKind::CallRetain), 1);
 }

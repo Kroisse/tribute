@@ -141,7 +141,7 @@ fn entry_contract_views_share_one_proof_and_keep_declared_borrows() {
     assert!(Arc::ptr_eq(&contracts, &build(&mut cache, true)));
 
     let entries =
-        |elide, name: &'static str| contracts.view(elide)[&SymbolPath::new([name])].clone();
+        |elide, name: &'static str| contracts.view(elide)[&function_op(&ctx, module, name)].clone();
     assert_eq!(entries(true, "observe"), [EntryOwnership::Borrowed]);
     assert_eq!(entries(false, "observe"), [EntryOwnership::Retained]);
     assert_eq!(entries(true, "escape"), [EntryOwnership::Retained]);
