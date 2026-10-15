@@ -5,6 +5,7 @@ use trunk_ir::SymbolPath;
 use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
+use trunk_ir::symbol_table::nearest_table;
 
 use crate::lower_continuation_frames::lower_continuation_frames;
 use crate::test_support::assert_unchanged_on_error;
@@ -1799,7 +1800,7 @@ fn func_ref_adapters_cover_every_legal_convention_strengthening() {
 /// A func_ref adapter is defined in the root module, which a reference in a
 /// nested module cannot name.
 #[test]
-fn func_ref_in_a_nested_module_is_rejected() {
+fn func_ref_in_a_nested_module_is_adapted_in_that_module() {
     let input = r#"core.module @test {
   core.module @inner {
     !direct = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
@@ -1813,14 +1814,23 @@ fn func_ref_in_a_nested_module_is_rejected() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
-        .expect_err("a nested func_ref has no adapter its module can name");
-    assert!(
-        error
-            .to_string()
-            .contains("func_ref adapters are generated only for references in the root module"),
-        "{error}"
-    );
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+        .expect("a nested func_ref is adapted in its own module");
+    let symbols = SymbolTable::collect(&ctx, module);
+    let mut adapters = Vec::new();
+    let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
+        if let Ok(closure) = closure::New::from_op(&ctx, op) {
+            adapters.push(symbols.resolve(&ctx, op, closure.func_ref(&ctx)));
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    let [Some(adapter)] = adapters[..] else {
+        panic!("the closure names its adapter: {adapters:?}");
+    };
+    let inner = symbols
+        .resolve_in(&ctx, module.op(), &[Symbol::new("inner")])
+        .expect("inner module");
+    assert_eq!(nearest_table(&ctx, adapter), Some(inner));
 }
 
 #[test]
