@@ -45,6 +45,7 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
         let name = qualified_name(ctx, ops[0]).unwrap_or_else(SymbolPath::root);
         errors.push(format!("symbol @{name} is defined more than once"));
     }
+    errors.extend(trunk_ir::validation::link_name_conflicts(ctx, module));
     validate_region(ctx, body, 0, &symbols, &mut errors);
 
     if errors.is_empty() {
@@ -840,6 +841,41 @@ mod tests {
             error
                 .to_string()
                 .contains("symbol @inner::twice is defined more than once"),
+            "{error}"
+        );
+    }
+
+    /// Declarations in different modules may share a link name only with
+    /// the same signature: they name one external symbol.
+    #[test]
+    fn declarations_sharing_a_link_name_agree_on_its_signature() {
+        let module = |second: &str| {
+            format!(
+                r#"core.module @test {{
+  core.module @a {{
+    wasm.func {{abi = "C", link_name = "abs", sym_name = "abs", type = wasm.func_sig<(core.i32) -> core.i32>}}
+  }}
+  core.module @b {{
+    wasm.func {{abi = "C", link_name = "abs", sym_name = "abs", type = {second}}}
+  }}
+}}"#
+            )
+        };
+        let mut ctx = IrContext::new();
+        let agreeing =
+            parse_test_module(&mut ctx, &module("wasm.func_sig<(core.i32) -> core.i32>"));
+        validate_wasm_ir(&ctx, agreeing).expect("one signature for one external symbol");
+
+        let mut ctx = IrContext::new();
+        let disagreeing = parse_test_module(
+            &mut ctx,
+            &module("wasm.func_sig<(core.i32, core.i32) -> core.i32>"),
+        );
+        let error = validate_wasm_ir(&ctx, disagreeing).expect_err("conflicting signatures");
+        assert!(
+            error.to_string().contains(
+                "declarations @a::abs and @b::abs link as `abs` with different signatures"
+            ),
             "{error}"
         );
     }

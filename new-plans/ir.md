@@ -689,6 +689,14 @@ IR의 module 구조가 되지 않는다. 안쪽 module은 부모나 형제의 �
 둔다. 이 문자열에서 소스 경로를 다시 나누어 복원하지 않으며, 구조화된 경로는
 frontend가 가진다. 이 대응은 source lookup이나 외부 linkage 계약을 변경하지 않는다.
 
+정의의 이름(식별자)과 링크 이름은 다르다. 정의는 `link_name` 문자열 속성으로 링크
+이름을 따로 줄 수 있고, 없으면 `sym_name`이 링크 이름이다. 링크 이름은 symbol 방출과
+runtime 바인딩 판정만 읽으며, 참조와 symbol table은 `sym_name`을 쓴다. C linkage의
+이름 공간은 하나이므로 frontend는 `extern "C"` 선언에 선언한 이름을 `link_name`으로
+둔다. 그래서 다른 소스 module에 있는 같은 이름의 C 선언은 IR에서 서로 다른 정의이고
+링크 이름만 같다. 링크 이름이 같은 bodyless 선언은 하나의 외부 symbol을 가리키므로
+signature가 같아야 하며, 다르면 target 검증이 거부한다.
+
 Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutation 전에
 대조한다. Direct call은 qualified symbol을 유일하게 resolve하고 완전한 signature를
 맞춰야 한다. Indirect call은 exact `tribute_control.func_sig` signature와 source-logical
@@ -1546,7 +1554,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   이때 runtime 초기화, 종료 코드, sanitizer 초기화처럼 platform 고유 작업만 더하고,
   별도 진입 함수를 만들거나 `main`의 이름을 바꾸지 않는다.
 - **Runtime helper 바인딩:** 출구에서 참조가 남은 bodyless 선언은 명시적 바인딩
-  의도를 가진다. `abi = "C"` 선언은 C linkage이므로 선언의 symbol 이름이 곧 바인딩
+  의도를 가진다. `abi = "C"` 선언은 C linkage이므로 선언의 링크 이름이 곧 바인딩
   정체성이다. 이는 symbol 철자에서 의미를 추론하는 것이 아니라 FFI 선언이 명시한
   링크 이름이다. 각 target은 자신이 충족하는 C 바인딩을 명시적으로 선언한다. Native는
   runtime library와 링커가 C 이름을 해석하므로 모든 C 선언을 충족한다고 본다. Wasm은

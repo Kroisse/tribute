@@ -54,6 +54,7 @@ pub fn validate_clif_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
         .map(|op| format!("{} in boundary {}", op, NATIVE_BACKEND_READY_BOUNDARY))
         .collect();
     errors.extend(validate_clif_contracts(ctx, module));
+    errors.extend(trunk_ir::validation::link_name_conflicts(ctx, module));
 
     if errors.is_empty() {
         return Ok(());
@@ -489,6 +490,36 @@ mod tests {
         validate_clif_ir(&ctx, module)
             .expect_err("native contract must fail closed")
             .to_string()
+    }
+
+    /// Declarations in different modules may share a link name only with
+    /// the same signature: they import one external symbol.
+    #[test]
+    fn declarations_sharing_a_link_name_agree_on_its_signature() {
+        let module = |second: &str| {
+            format!(
+                r#"core.module @test {{
+  core.module @a {{
+    clif.func {{abi = "C", link_name = "abs", sym_name = "abs", type = clif.func_sig<(core.i32) -> core.i32>}}
+  }}
+  core.module @b {{
+    clif.func {{abi = "C", link_name = "abs", sym_name = "abs", type = {second}}}
+  }}
+}}"#
+            )
+        };
+        let mut ctx = IrContext::new();
+        let agreeing =
+            parse_test_module(&mut ctx, &module("clif.func_sig<(core.i32) -> core.i32>"));
+        validate_clif_ir(&ctx, agreeing).expect("one signature for one external symbol");
+
+        let error = validation_error(&module("clif.func_sig<(core.i32, core.i32) -> core.i32>"));
+        assert!(
+            error.contains(
+                "declarations @a::abs and @b::abs link as `abs` with different signatures"
+            ),
+            "{error}"
+        );
     }
 
     #[test]

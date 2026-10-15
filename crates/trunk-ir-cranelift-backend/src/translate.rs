@@ -20,7 +20,7 @@ use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
-use trunk_ir::symbol_table::qualified_name;
+use trunk_ir::symbol_table::{link_name, qualified_name};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::function::{FunctionTranslator, is_nil_type, translate_signature, translate_type};
@@ -86,7 +86,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         let func_wrapped = clif::Func::from_op(ctx, func_op)
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         // References name functions by root-qualified path; a foreign
-        // declaration still links under its own external symbol.
+        // declaration links under its link name.
         let local_name = func_wrapped.sym_name(ctx);
         let name_sym =
             qualified_name(ctx, func_op).unwrap_or_else(|| SymbolPath::new([local_name]));
@@ -109,7 +109,9 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
 
         let linker_name = match linkage {
             Linkage::Local => mangle_native_name(&name_sym.to_string()),
-            Linkage::Import => local_name.to_string(),
+            // Declarations sharing a link name import one external symbol.
+            Linkage::Import => link_name(ctx, func_op)
+                .map_or_else(|| local_name.to_string(), |name| name.to_string()),
             _ => name_sym.to_string(),
         };
 

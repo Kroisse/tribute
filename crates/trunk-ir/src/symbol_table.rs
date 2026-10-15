@@ -27,6 +27,10 @@ use crate::symbol::{Symbol, SymbolPath};
 /// The `sym_name` attribute of symbol definitions and modules.
 const SYM_NAME: &str = "sym_name";
 
+/// The attribute that gives a declaration its linker name when that differs
+/// from its `sym_name`.
+pub const LINK_NAME: &str = "link_name";
+
 /// The symbol tables of a module tree.
 #[derive(Debug, Default, Clone)]
 pub struct SymbolTable {
@@ -184,6 +188,17 @@ pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
     let module =
         parent_op(ctx, op).map_or_else(SymbolPath::root, |parent| module_path(ctx, parent));
     Some(module.child(name))
+}
+
+/// The name the definition `op` is linked under: its `link_name`, or its
+/// `sym_name` when it has none. Only symbol emission reads it; references and
+/// symbol tables use the `sym_name`.
+pub fn link_name(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
+    let attributes = &ctx.op(op).attributes;
+    attributes
+        .get_str(ctx, LINK_NAME)
+        .or_else(|| attributes.get_str(ctx, SYM_NAME))
+        .map(Symbol::new)
 }
 
 /// The root-qualified path of the modules enclosing `op`, including `op`

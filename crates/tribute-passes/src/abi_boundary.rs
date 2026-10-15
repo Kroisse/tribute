@@ -18,7 +18,7 @@ use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
-use trunk_ir::symbol_table::SymbolTable;
+use trunk_ir::symbol_table::{SymbolTable, link_name};
 use trunk_ir::types::Attribute;
 use trunk_ir::walk::{WalkAction, walk_op};
 
@@ -201,12 +201,7 @@ impl<'a> Verifier<'a> {
                 {
                     continue;
                 }
-                let Some(name) = ctx
-                    .op(declaration)
-                    .attributes
-                    .get_str(ctx, "sym_name")
-                    .map(Symbol::new)
-                else {
+                let Some(name) = link_name(ctx, declaration) else {
                     continue;
                 };
                 if !target.binds_c_helper(&name) {
@@ -215,12 +210,9 @@ impl<'a> Verifier<'a> {
             }
         }
         for declaration in unbound {
-            let name = ctx
-                .op(declaration)
-                .attributes
-                .get_str(ctx, "sym_name")
-                .map(Symbol::new);
-            let name = name.map(|name| name.to_string()).unwrap_or_default();
+            let name = link_name(ctx, declaration)
+                .map(|name| name.to_string())
+                .unwrap_or_default();
             self.report(
                 ViolationKind::UnsatisfiableRuntimeBinding(name.clone()),
                 Some(declaration),
