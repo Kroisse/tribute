@@ -384,7 +384,7 @@ fn main() -> Nil {
 /// name.
 #[salsa_test]
 fn inline_module_definition_wins_over_an_imported_ability(db: &salsa::DatabaseImpl) {
-    use tribute_front::ast::{Decl, ModuleItem, TypeAnnotationKind};
+    use tribute_front::ast::{Decl, TypeAnnotationKind};
 
     let source = SourceCst::from_source_str(
         db,
@@ -409,19 +409,13 @@ mod outer {
     );
     let module = tribute_front::query::resolved_module(db, source).expect("module resolves");
     let effects = module
-        .decls
+        .entries
         .iter()
-        .find_map(|decl| match decl {
-            ModuleItem::Module(outer) => outer.body.as_ref(),
+        .find_map(|entry| match &entry.decl {
+            Decl::Function(function) if entry.module == ["outer"] && function.name == "noop" => {
+                function.effects.clone()
+            }
             _ => None,
-        })
-        .and_then(|body| {
-            body.iter().find_map(|decl| match decl {
-                ModuleItem::Decl(Decl::Function(function)) if function.name == "noop" => {
-                    function.effects.clone()
-                }
-                _ => None,
-            })
         })
         .expect("noop declares effects");
     assert!(

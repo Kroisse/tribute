@@ -1,6 +1,6 @@
 //! Type checking for the AST.
 //!
-//! This module transforms `Module<ResolvedRef<'db>>` into `DeclTable<TypedRef<'db>>`
+//! This module transforms `DeclTable<ResolvedRef<'db>>` into `DeclTable<TypedRef<'db>>`
 //! by performing bidirectional type checking with row-polymorphic effects.
 //!
 //! ## Pipeline
@@ -43,8 +43,8 @@ use trunk_ir::SymbolPath;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, CtorId, DeclTable, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId,
-    TypeParam, TypeScheme, TypedRef,
+    AbilityId, CtorId, DeclTable, FuncDefId, NodeId, ResolvedRef, Type, TypeDefId, TypeParam,
+    TypeScheme, TypedRef,
 };
 
 /// Exact, monomorphic semantic signature selected for a handler arm.
@@ -448,7 +448,7 @@ pub struct PreludeExports<'db> {
 /// Returns both the typed AST and function type schemes.
 pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<ResolvedRef<'db>>,
+    module: &DeclTable<ResolvedRef<'db>>,
     span_map: SpanMap,
 ) -> TypeCheckOutput<'db> {
     let checker = TypeChecker::new(db, span_map.clone());

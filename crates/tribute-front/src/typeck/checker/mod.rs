@@ -1,7 +1,7 @@
 //! Type checker implementation.
 //!
 //! Performs bidirectional type checking on the AST, transforming
-//! `Module<ResolvedRef<'db>>` into `Module<TypedRef<'db>>`.
+//! `DeclTable<ResolvedRef<'db>>` into `DeclTable<TypedRef<'db>>`.
 //!
 //! ## Architecture
 //!
@@ -39,7 +39,7 @@ use trunk_ir::{Span, Symbol};
 
 use crate::SortedMap;
 use crate::ast::{
-    Decl, DeclEntry, DeclTable, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme,
+    Decl, DeclEntry, DeclTable, FuncDefId, NodeId, ResolvedRef, SpanMap, Type, TypeScheme,
     TypedRef, UniVarId,
 };
 
@@ -252,7 +252,7 @@ impl<'db> TypeChecker<'db> {
     /// Type check a module.
     ///
     /// Returns the typed module, function type schemes, and node types.
-    pub fn check_module(self, module: &Module<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
+    pub fn check_module(self, module: &DeclTable<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
         self.check_module_inner(module)
     }
 
@@ -262,13 +262,12 @@ impl<'db> TypeChecker<'db> {
     /// function types, constructors, and type definitions.
     pub fn check_prelude(
         mut self,
-        module: &Module<ResolvedRef<'db>>,
+        module: &DeclTable<ResolvedRef<'db>>,
     ) -> (ModuleCheckResult<'db>, PreludeExports<'db>) {
-        let table = DeclTable::from_module(module.clone());
-        self.collect_declarations(&table);
-        let well_known_types = self.prelude_well_known_types(&table);
+        self.collect_declarations(module);
+        let well_known_types = self.prelude_well_known_types(module);
         self.env.set_prelude_well_known_types(well_known_types);
-        let checked = self.check_decls(&table);
+        let checked = self.check_decls(module);
         let exports = self.prelude_exports(well_known_types);
         (self.into_module_result(checked), exports)
     }
@@ -280,13 +279,15 @@ impl<'db> TypeChecker<'db> {
     /// 2. For each function, create an isolated FunctionInferenceContext
     /// 3. Check the function body, solve constraints, and apply substitution
     /// 4. No global solve needed - each function's UniVars are resolved independently
-    fn check_module_inner(mut self, module: &Module<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
+    fn check_module_inner(
+        mut self,
+        module: &DeclTable<ResolvedRef<'db>>,
+    ) -> ModuleCheckResult<'db> {
         // Phase 1: Collect type definitions and function signatures into ModuleTypeEnv
         // Note: module_path starts empty because module.name is the file-derived name,
         // which is for external references, not internal function naming.
-        let table = DeclTable::from_module(module.clone());
-        self.collect_declarations(&table);
-        let checked = self.check_decls(&table);
+        self.collect_declarations(module);
+        let checked = self.check_decls(module);
         self.into_module_result(checked)
     }
 
