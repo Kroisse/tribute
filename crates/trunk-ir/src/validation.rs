@@ -1176,10 +1176,10 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
 /// Whether `op` is a `func`, `wasm` or `clif` function definition.
 fn is_arity_checked_function(ctx: &IrContext, op: OpRef) -> bool {
     let data = ctx.op(op);
-    (data.dialect == Symbol::new("func")
-        || data.dialect == Symbol::new("wasm")
-        || data.dialect == Symbol::new("clif"))
-        && data.name == Symbol::new("func")
+    (data.dialect == crate::symbol!("func")
+        || data.dialect == crate::symbol!("wasm")
+        || data.dialect == crate::symbol!("clif"))
+        && data.name == crate::symbol!("func")
 }
 
 /// The parameter count of each function definition in `symbols`, keyed by
