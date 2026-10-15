@@ -83,7 +83,7 @@ fn compute_entry_contracts(
             }
             CallableBody::Definition { entry, .. } => entry,
         };
-        let ineligible = recursive.contains(&symbol) || ctx.op(op).attributes.contains_key("abi");
+        let ineligible = recursive.contains(&op) || ctx.op(op).attributes.contains_key("abi");
         let signature = ctx
             .op(op)
             .attributes

@@ -189,8 +189,7 @@ fn splice_callee_body_before(
 
 use super::call_graph::{CallGraph, directly_recursive_functions};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
-use crate::symbol::SymbolPath;
-use crate::symbol_table::{absolute_reference, module_path};
+use crate::symbol_table::{SymbolTable, nearest_table};
 use rustc_hash::FxHashSet as HashSet;
 use std::sync::Arc;
 
@@ -243,15 +242,12 @@ fn region_op_count(ctx: &IrContext, region: RegionRef) -> usize {
 fn should_inline(
     graph: &CallGraph,
     config: &InlineConfig,
-    recursive: &HashSet<SymbolPath>,
+    recursive: &HashSet<OpRef>,
     ctx: &IrContext,
-    callee: &SymbolPath,
+    callee_op: OpRef,
 ) -> bool {
-    // Must have a body in this module.
-    let Some(&callee_op) = graph.func_ops.get(callee) else {
-        return false;
-    };
-    if !ctx.op_has_regions(callee_op) {
+    // Must be a function with a body.
+    if !func::Func::matches(ctx, callee_op) || !ctx.op_has_regions(callee_op) {
         return false;
     }
     // Skip extern/ABI functions: they are externally callable and the body
@@ -260,15 +256,15 @@ fn should_inline(
         return false;
     }
     // Skip recursive functions to avoid unbounded instantiation.
-    if recursive.contains(callee) {
+    if recursive.contains(&callee_op) {
         return false;
     }
-    let escapes = graph.address_taken.contains(callee);
+    let escapes = graph.address_taken.contains(&callee_op);
 
     // Single-call-site rule (only when the callee doesn't escape).
     if config.always_inline_single_call_site
         && !escapes
-        && graph.call_site_count.get(callee).copied().unwrap_or(0) == 1
+        && graph.call_site_count.get(&callee_op).copied().unwrap_or(0) == 1
     {
         return true;
     }
@@ -337,10 +333,11 @@ pub fn inline_functions_with_config(
     let mut inlined_count = 0usize;
 
     loop {
+        let symbols = am.require::<SymbolTable>(ctx, module.op());
         let graph = am.require::<CallGraph>(ctx, module.op());
         let recursive = directly_recursive_functions(&graph);
 
-        let pattern = InlineCallSite::new(Arc::clone(&graph), recursive, config.clone());
+        let pattern = InlineCallSite::new(symbols, Arc::clone(&graph), recursive, config.clone());
 
         let applicator = PatternApplicator::new(TypeConverter::new())
             .add_pattern(pattern)
@@ -353,6 +350,7 @@ pub fn inline_functions_with_config(
         // Rewrites happened this iteration — drop the cached graph so the
         // next `am.get::<CallGraph>` rebuilds against the current IR.
         am.invalidate::<CallGraph>(module.op());
+        am.invalidate::<SymbolTable>(module.op());
     }
 
     InlineResult { inlined_count }
@@ -381,19 +379,23 @@ pub fn inline_functions_with_config(
 /// do the same (rebuild + re-register) or accept the caveat that the
 /// single-call-site rule may fire on stale counts.
 pub struct InlineCallSite {
+    symbols: Arc<SymbolTable>,
     graph: Arc<CallGraph>,
-    recursive: HashSet<SymbolPath>,
+    recursive: HashSet<OpRef>,
     config: InlineConfig,
 }
 
 impl InlineCallSite {
-    /// Build a pattern against `graph` + `recursive` using `config`.
+    /// Build a pattern against `symbols`, `graph` and `recursive` using
+    /// `config`.
     pub fn new(
+        symbols: Arc<SymbolTable>,
         graph: Arc<CallGraph>,
-        recursive: HashSet<SymbolPath>,
+        recursive: HashSet<OpRef>,
         config: InlineConfig,
     ) -> Self {
         Self {
+            symbols,
             graph,
             recursive,
             config,
@@ -417,18 +419,15 @@ impl RewritePattern for InlineCallSite {
         let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
             return false;
         };
-        let callee = &absolute_reference(ctx, op, callee);
-
-        if !should_inline(&self.graph, &self.config, &self.recursive, ctx, callee) {
-            return false;
-        }
-
-        let Some(&callee_op) = self.graph.func_ops.get(callee) else {
+        let Some(callee_op) = self.symbols.resolve(ctx, op, callee) else {
             return false;
         };
         // The callee body's references are written for its own module; they
         // would name other symbols from the caller's.
-        if module_path(ctx, op) != module_path(ctx, callee_op) {
+        if nearest_table(ctx, op) != nearest_table(ctx, callee_op) {
+            return false;
+        }
+        if !should_inline(&self.graph, &self.config, &self.recursive, ctx, callee_op) {
             return false;
         }
 
@@ -863,6 +862,13 @@ mod pass {
     use crate::location::Span;
     use crate::*;
     use smallvec::smallvec;
+
+    /// The symbol named `name` in the root module of `module`.
+    fn root_symbol(ctx: &IrContext, module: Module, name: &str) -> OpRef {
+        SymbolTable::collect(ctx, module)
+            .resolve_in(ctx, module.op(), &SymbolPath::new([name]))
+            .unwrap_or_else(|| panic!("{name} must be a root symbol"))
+    }
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.intern_path("test.trb");
@@ -1246,10 +1252,8 @@ mod pass {
         let mut am = AnalysisCache::new();
         // Seed the cache by pulling the graph once.
         let pre = am.require::<CallGraph>(&ctx, module.op());
-        assert_eq!(
-            pre.call_site_count.get(&SymbolPath::new(["helper"])),
-            Some(&1)
-        );
+        let helper = root_symbol(&ctx, module, "helper");
+        assert_eq!(pre.call_site_count.get(&helper), Some(&1));
 
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 1);
@@ -1261,7 +1265,7 @@ mod pass {
         let post = am
             .get_cached::<CallGraph>(&ctx, module.op())
             .expect("driver must leave a fresh graph cached after the pass");
-        assert_eq!(post.call_site_count.get(&SymbolPath::new(["helper"])), None);
+        assert_eq!(post.call_site_count.get(&helper), None);
         // And a subsequent explicit `get` must coincide with the cached
         // Arc (no recomputation).
         let fetched = am.require::<CallGraph>(&ctx, module.op());
@@ -1345,13 +1349,8 @@ mod pass {
 
         // After the pass, `a` and `b` must still contain exactly one
         // `func.call` (to `@large`) — not a copy of `large`'s body.
-        let post = am.require::<CallGraph>(&ctx, module.op());
         for name in ["a", "b"] {
-            let f = post
-                .func_ops
-                .get(&SymbolPath::new([name]))
-                .copied()
-                .unwrap_or_else(|| panic!("{name} must be in the graph"));
+            let f = root_symbol(&ctx, module, name);
             let body = ctx.op_region(f, 0).unwrap();
             let mut calls = 0usize;
             let _ = crate::walk::walk_region::<()>(&ctx, body, &mut |op| {
@@ -1440,11 +1439,17 @@ mod pass {
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
         let mut am = AnalysisCache::new();
+        let symbols = am.require::<SymbolTable>(&ctx, module.op());
         let graph = am.require::<CallGraph>(&ctx, module.op());
         let recursive = directly_recursive_functions(&graph);
+        let main_op = root_symbol(&ctx, module, "main");
 
-        let inline_pattern =
-            InlineCallSite::new(Arc::clone(&graph), recursive, InlineConfig::default());
+        let inline_pattern = InlineCallSite::new(
+            symbols,
+            Arc::clone(&graph),
+            recursive,
+            InlineConfig::default(),
+        );
 
         let total_changes = {
             let dispatcher = FoldDispatchPattern::single("arith", "addi", fold_addi);
@@ -1466,11 +1471,6 @@ mod pass {
         // const + return left. This is the composition property: the
         // inliner exposed the `arith.addi %5, %0` inside `main`, and the
         // fold pattern erased it in the same applicator sweep.
-        let main_op = graph
-            .func_ops
-            .get(&SymbolPath::new(["main"]))
-            .copied()
-            .expect("main must be in the graph");
         let body = ctx.op_region(main_op, 0).unwrap();
         let (has_call, has_add) = scan_main_body(&ctx, body);
         assert!(!has_call, "main should not contain any calls after run");

@@ -105,7 +105,7 @@ impl RewritePattern for LowerClosureNewArena {
         let result_ty = ctx.op_result_types(op)[0];
         let Some(target_ty) = self
             .functions
-            .resolve_from(ctx, op, func_ref)
+            .resolve(ctx, op, func_ref)
             .and_then(|target| func::Func::from_op(ctx, target).ok())
             .map(|target| target.r#type(ctx))
         else {

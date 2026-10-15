@@ -1,19 +1,17 @@
-//! Symbols over a module tree, resolved by the MLIR rule.
+//! Symbol tables over a module tree, resolved by the MLIR rule.
 //!
-//! A `core.module` is a symbol table. A definition registers its `sym_name` in
-//! the module that directly encloses it, and a named nested module is itself a
-//! symbol of its parent. A reference's first component is looked up in the
-//! module nearest to the operation that holds it, never in an enclosing one;
-//! each further component descends into the module the previous one names.
-//! Every operation that carries a symbol `sym_name`, including a named
-//! `core.module`, is a symbol of the module that encloses it, and a name
-//! defined more than once in one module is an IR error. Consumers check the
-//! kind of the symbol they resolve.
+//! A `core.module` is a symbol table. Its symbols are the operations directly
+//! in its body that carry a `sym_name`, a named nested module included; an
+//! operation nested in another operation's region is not a symbol of any
+//! table. A name defined more than once in one table is an IR error.
 //!
-//! Definitions are keyed by their root-qualified name: the names of the nested
-//! `core.module`s that enclose the definition, excluding the root module
-//! itself, followed by its `sym_name`. Each name is one path component as it
-//! is written. [`absolute_reference`] turns a reference into that key.
+//! A reference's first component is looked up in the table nearest to the
+//! operation that holds it (the operation itself if it is a module), never in
+//! an enclosing one; each further component is looked up in the module the
+//! previous one names. Resolution yields the symbol operation, which is its
+//! identity; [`qualified_name`] spells a symbol's path from the root module
+//! for diagnostics and stable output. Consumers check the kind of the symbol
+//! they resolve.
 
 use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
@@ -22,7 +20,7 @@ use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalys
 use crate::context::IrContext;
 use crate::dialect::core;
 use crate::ops::DialectOp;
-use crate::refs::{OpRef, RegionRef};
+use crate::refs::OpRef;
 use crate::rewrite::Module;
 use crate::symbol::{Symbol, SymbolPath};
 
@@ -33,104 +31,126 @@ const SYM_NAME: &str = "sym_name";
 /// from its `sym_name`.
 pub const LINK_NAME: &str = "link_name";
 
-/// Definitions in a module tree, keyed by root-qualified name.
+/// The symbol tables of a module tree.
 #[derive(Debug, Default, Clone)]
 pub struct SymbolTable {
-    /// Every definition of each name, in traversal order. A name with more
-    /// than one definition is duplicated.
-    definitions: HashMap<SymbolPath, SmallVec<[OpRef; 1]>>,
+    /// The symbols of each table, by name. A name with more than one symbol is
+    /// duplicated.
+    tables: HashMap<OpRef, HashMap<Symbol, SmallVec<[OpRef; 1]>>>,
+    /// Every symbol of every table, in traversal order.
+    symbols: Vec<OpRef>,
 }
 
 impl SymbolTable {
-    /// Collect every definition in `module` and its nested modules. For a
-    /// nested `module`, names still start from the root module.
+    /// Collect the tables of `module` and of the modules nested in it.
     ///
     /// Within an [`AnalysisCache`](crate::analysis::AnalysisCache), query the
     /// table as an analysis instead.
     pub fn collect(ctx: &IrContext, module: Module) -> Self {
         let mut table = Self::default();
-        if let Some(body) = module.body(ctx) {
-            table.collect_region(ctx, body, &module_path(ctx, module.op()));
-        }
+        table.collect_table(ctx, module.op());
         table
     }
 
-    fn collect_region(&mut self, ctx: &IrContext, region: RegionRef, path: &SymbolPath) {
-        for &block in &ctx.region(region).blocks {
-            for &op in &ctx.block(block).ops {
-                if core::Module::matches(ctx, op) {
-                    let mut nested = path.clone();
+    fn collect_table(&mut self, ctx: &IrContext, table: OpRef) {
+        let mut names: HashMap<Symbol, SmallVec<[OpRef; 1]>> = HashMap::default();
+        let mut nested = Vec::new();
+        for region in ctx.op_regions(table) {
+            for &block in &ctx.region(region).blocks {
+                for &op in &ctx.block(block).ops {
                     if let Some(name) = ctx.op(op).attributes.get_str(ctx, SYM_NAME) {
-                        nested.push(name);
-                        // A named module is a symbol of its parent, so it
-                        // shares the parent's names with its definitions.
-                        self.definitions.entry(nested.clone()).or_default().push(op);
+                        names.entry(Symbol::new(name)).or_default().push(op);
+                        self.symbols.push(op);
                     }
-                    for region in ctx.op_regions(op) {
-                        self.collect_region(ctx, region, &nested);
-                    }
-                } else {
-                    if let Some(name) = ctx.op(op).attributes.get_str(ctx, SYM_NAME) {
-                        self.definitions
-                            .entry(path.child(name))
-                            .or_default()
-                            .push(op);
-                    }
-                    // Only modules contribute path components, as in
-                    // `qualified_name`.
-                    for region in ctx.op_regions(op) {
-                        self.collect_region(ctx, region, path);
+                    if core::Module::matches(ctx, op) {
+                        nested.push(op);
                     }
                 }
             }
         }
+        self.tables.insert(table, names);
+        for module in nested {
+            self.collect_table(ctx, module);
+        }
     }
 
-    /// The unique definition the reference `reference`, held by `op`, names.
-    ///
-    /// Returns `None` for an unknown name or one defined more than once.
-    pub fn resolve_from(&self, ctx: &IrContext, op: OpRef, reference: &[Symbol]) -> Option<OpRef> {
-        self.resolve(&absolute_reference(ctx, op, reference))
+    /// The symbols named `name` in the table `table`, in traversal order;
+    /// empty for an unknown name or a table outside the collected tree.
+    pub fn lookup(&self, table: OpRef, name: &Symbol) -> &[OpRef] {
+        self.tables
+            .get(&table)
+            .and_then(|names| names.get(name))
+            .map_or(&[], |ops| ops)
     }
 
-    /// The unique definition named by a root-qualified reference.
+    /// Every symbol the reference `reference` names when it is looked up in
+    /// `table`; empty when a component before the last does not name exactly
+    /// one module.
     ///
-    /// Returns `None` for an unknown name or one defined more than once.
-    pub fn resolve(&self, reference: &[Symbol]) -> Option<OpRef> {
-        match self.definitions_of(reference) {
+    /// For diagnostics that continue after [`Self::duplicates`] has already
+    /// been reported; lowering must use [`Self::resolve`] or
+    /// [`Self::resolve_in`].
+    pub fn definitions_in(&self, ctx: &IrContext, table: OpRef, reference: &[Symbol]) -> &[OpRef] {
+        let Some((last, modules)) = reference.split_last() else {
+            return &[];
+        };
+        let mut table = table;
+        for name in modules {
+            match self.lookup(table, name) {
+                &[module] if core::Module::matches(ctx, module) => table = module,
+                _ => return &[],
+            }
+        }
+        self.lookup(table, last)
+    }
+
+    /// The unique symbol the reference `reference` names when it is looked up
+    /// in `table`.
+    pub fn resolve_in(&self, ctx: &IrContext, table: OpRef, reference: &[Symbol]) -> Option<OpRef> {
+        match self.definitions_in(ctx, table, reference) {
             &[op] => Some(op),
             _ => None,
         }
     }
 
-    /// Every definition of a qualified name, in traversal order; empty for an
-    /// unknown name.
+    /// The unique symbol the reference `reference`, held by `op`, names.
     ///
-    /// For diagnostics that continue after [`Self::duplicates`] has already
-    /// been reported; lowering must use [`Self::resolve`].
-    pub fn definitions_of(&self, reference: &[Symbol]) -> &[OpRef] {
-        self.definitions.get(reference).map_or(&[], |ops| ops)
+    /// Returns `None` for an unknown name, one defined more than once, or an
+    /// operation outside every table.
+    pub fn resolve(&self, ctx: &IrContext, op: OpRef, reference: &[Symbol]) -> Option<OpRef> {
+        self.resolve_in(ctx, nearest_table(ctx, op)?, reference)
     }
 
-    /// Qualified names defined more than once, sorted by name, with every
-    /// definition in traversal order.
-    pub fn duplicates(&self) -> Vec<(&SymbolPath, &[OpRef])> {
-        let mut duplicates: Vec<_> = self.iter().filter(|(_, ops)| ops.len() > 1).collect();
-        duplicates.sort_unstable_by_key(|(a, _)| *a);
+    /// Every symbol the reference `reference`, held by `op`, names; see
+    /// [`Self::definitions_in`].
+    pub fn definitions(&self, ctx: &IrContext, op: OpRef, reference: &[Symbol]) -> &[OpRef] {
+        nearest_table(ctx, op).map_or(&[], |table| self.definitions_in(ctx, table, reference))
+    }
+
+    /// The symbols of each name defined more than once in one table, in
+    /// traversal order of their first symbol.
+    pub fn duplicates(&self) -> Vec<&[OpRef]> {
+        let order: HashMap<OpRef, usize> = self
+            .symbols
+            .iter()
+            .enumerate()
+            .map(|(index, &op)| (op, index))
+            .collect();
+        let mut duplicates: Vec<&[OpRef]> = self
+            .tables
+            .values()
+            .flat_map(|names| names.values())
+            .filter(|ops| ops.len() > 1)
+            .map(|ops| ops.as_slice())
+            .collect();
+        duplicates.sort_unstable_by_key(|ops| order[&ops[0]]);
         duplicates
     }
 
-    /// Every collected name with its definitions, in unspecified order.
-    pub fn iter(&self) -> impl Iterator<Item = (&SymbolPath, &[OpRef])> + '_ {
-        self.definitions
-            .iter()
-            .map(|(name, ops)| (name, ops.as_slice()))
-    }
-
-    /// Every collected definition, including each duplicate of a name.
-    pub fn all_definitions(&self) -> impl Iterator<Item = (&SymbolPath, OpRef)> + '_ {
-        self.iter()
-            .flat_map(|(name, ops)| ops.iter().map(move |&op| (name, op)))
+    /// Every symbol of every table, named modules included, in traversal
+    /// order.
+    pub fn symbols(&self) -> &[OpRef] {
+        &self.symbols
     }
 }
 
@@ -146,8 +166,23 @@ impl Analysis for SymbolTable {
 
 impl InfallibleAnalysis for SymbolTable {}
 
-/// The root-qualified name of the definition `op`, which must carry a
-/// `sym_name`.
+/// The table a reference held by `op` is looked up in: `op` itself if it is a
+/// module, and the nearest module enclosing it otherwise.
+pub fn nearest_table(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
+    let mut current = Some(op);
+    while let Some(op) = current {
+        if core::Module::matches(ctx, op) {
+            return Some(op);
+        }
+        current = parent_op(ctx, op);
+    }
+    None
+}
+
+/// The path of the symbol `op` from the root module: the names of the
+/// nested `core.module`s that enclose it, excluding the root module, then its
+/// own `sym_name`. For diagnostics and stable output; a symbol's identity is
+/// its operation.
 pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
     let name = ctx.op(op).attributes.get_str(ctx, SYM_NAME)?;
     let module =
@@ -166,20 +201,9 @@ pub fn link_name(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
         .map(Symbol::new)
 }
 
-/// The root-qualified name of the definition the reference `reference`,
-/// held by `op`, names: the reference resolved in the module nearest to `op`.
-pub fn absolute_reference(ctx: &IrContext, op: OpRef, reference: &[Symbol]) -> SymbolPath {
-    let mut path = module_path(ctx, op);
-    for component in reference {
-        path.push(component.clone());
-    }
-    path
-}
-
 /// The root-qualified path of the modules enclosing `op`, including `op`
-/// itself if it is a module: the module whose symbols a reference held by
-/// `op` names.
-pub fn module_path(ctx: &IrContext, op: OpRef) -> SymbolPath {
+/// itself if it is a module.
+fn module_path(ctx: &IrContext, op: OpRef) -> SymbolPath {
     let mut path = Vec::new();
     let mut current = Some(op);
     while let Some(op) = current {
@@ -224,6 +248,10 @@ mod tests {
   }
 }"#;
 
+    fn path(components: &[&str]) -> SymbolPath {
+        SymbolPath::new(components.iter().copied())
+    }
+
     /// A `sym_name` containing `::` is one component, distinct from the
     /// nested modules it spells out.
     #[test]
@@ -243,38 +271,22 @@ mod tests {
 }"#,
         );
         let table = SymbolTable::collect(&ctx, module);
-        let flat = SymbolPath::new(["outer::flat"]);
-        let nested = SymbolPath::new(["outer", "nested"]);
-        for path in [&flat, &nested] {
+        let root = module.op();
+        for components in [&["outer::flat"][..], &["outer", "nested"]] {
+            let reference = path(components);
             let op = table
-                .resolve(path)
-                .unwrap_or_else(|| panic!("{path} must resolve"));
-            assert_eq!(qualified_name(&ctx, op).as_ref(), Some(path));
+                .resolve_in(&ctx, root, &reference)
+                .unwrap_or_else(|| panic!("{reference} must resolve"));
+            assert_eq!(qualified_name(&ctx, op), Some(reference));
         }
-        assert_eq!(table.resolve(&SymbolPath::new(["outer", "flat"])), None);
-        assert_eq!(table.resolve(&SymbolPath::new(["outer::nested"])), None);
-    }
-
-    #[test]
-    fn definitions_are_keyed_by_root_qualified_path() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, NESTED);
-        let table = SymbolTable::collect(&ctx, module);
-
-        for path in [
-            SymbolPath::new(["top"]),
-            SymbolPath::new(["outer", "same"]),
-            SymbolPath::new(["outer", "inner", "same"]),
-        ] {
-            let op = table
-                .resolve(&path)
-                .unwrap_or_else(|| panic!("{path} must resolve"));
-            assert_eq!(qualified_name(&ctx, op), Some(path));
-        }
-        // Root-qualified keys name nothing for a bare nested name.
-        assert_eq!(table.resolve(&SymbolPath::new(["same"])), None);
-        assert!(table.duplicates().is_empty());
-        assert_eq!(table.definitions_of(&SymbolPath::new(["same"])), &[]);
+        assert_eq!(
+            table.resolve_in(&ctx, root, &path(&["outer", "flat"])),
+            None
+        );
+        assert_eq!(
+            table.resolve_in(&ctx, root, &path(&["outer::nested"])),
+            None
+        );
     }
 
     /// A reference is looked up in the module nearest to the operation that
@@ -284,30 +296,37 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, NESTED);
         let table = SymbolTable::collect(&ctx, module);
-        let definition = |path: &[&str]| {
+        let definition = |components: &[&str]| {
             table
-                .resolve(&SymbolPath::new(path.iter().copied()))
+                .resolve_in(&ctx, module.op(), &path(components))
                 .expect("definition")
         };
         let top = definition(&["top"]);
+        let outer = definition(&["outer"]);
         let outer_same = definition(&["outer", "same"]);
         let inner_same = definition(&["outer", "inner", "same"]);
-        let resolve = |from: OpRef, path: &[&str]| {
-            table.resolve_from(&ctx, from, &SymbolPath::new(path.iter().copied()))
-        };
+        assert_eq!(
+            qualified_name(&ctx, inner_same),
+            Some(path(&["outer", "inner", "same"]))
+        );
+        let resolve =
+            |from: OpRef, components: &[&str]| table.resolve(&ctx, from, &path(components));
 
-        // From the root: its own definitions and, through named modules,
-        // nested ones.
+        // From the root: its own symbols and, through named modules, nested
+        // ones.
         assert_eq!(resolve(top, &["top"]), Some(top));
+        assert_eq!(resolve(top, &["outer"]), Some(outer));
         assert_eq!(resolve(top, &["outer", "same"]), Some(outer_same));
         assert_eq!(resolve(top, &["outer", "inner", "same"]), Some(inner_same));
-        // From `outer`: its own and its nested definitions; the root's `top`
-        // is not visible.
+        // From `outer`: its own and its nested symbols; the root's `top` is not
+        // visible.
         assert_eq!(resolve(outer_same, &["same"]), Some(outer_same));
         assert_eq!(resolve(outer_same, &["inner", "same"]), Some(inner_same));
         assert_eq!(resolve(outer_same, &["top"]), None);
         assert_eq!(resolve(outer_same, &["outer", "same"]), None);
-        // From `inner`: only `inner`'s own definitions.
+        // A module's own reference attributes are looked up in its own table.
+        assert_eq!(resolve(outer, &["same"]), Some(outer_same));
+        // From `inner`: only `inner`'s own symbols.
         assert_eq!(resolve(inner_same, &["same"]), Some(inner_same));
         assert_eq!(resolve(inner_same, &["inner", "same"]), None);
         // A component before the last must name a module, not a function.
@@ -315,26 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_module_targets_keep_root_qualified_names() {
-        let mut ctx = IrContext::new();
-        let root = parse_test_module(&mut ctx, NESTED);
-        let outer = root
-            .ops(&ctx)
-            .iter()
-            .copied()
-            .find_map(|op| Module::new(&ctx, op))
-            .expect("outer module");
-        let table = SymbolTable::collect(&ctx, outer);
-
-        for (name, op) in table.all_definitions() {
-            assert_eq!(qualified_name(&ctx, op), Some(name).cloned());
-        }
-        assert!(table.resolve(&SymbolPath::new(["outer", "same"])).is_some());
-        assert!(table.resolve(&SymbolPath::new(["same"])).is_none());
-    }
-
-    #[test]
-    fn duplicated_qualified_names_do_not_resolve() {
+    fn duplicated_names_do_not_resolve() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -350,15 +350,17 @@ mod tests {
 }"#,
         );
         let table = SymbolTable::collect(&ctx, module);
-        let twice = SymbolPath::new(["outer", "twice"]);
-        assert_eq!(table.resolve(&twice), None);
+        let twice = path(&["outer", "twice"]);
+        assert_eq!(table.resolve_in(&ctx, module.op(), &twice), None);
         let duplicates = table.duplicates();
         assert_eq!(duplicates.len(), 1);
-        assert_eq!(duplicates[0].0, &twice);
-        assert_eq!(duplicates[0].1.len(), 2);
-        assert_eq!(table.definitions_of(&twice), duplicates[0].1);
+        assert_eq!(duplicates[0].len(), 2);
+        assert_eq!(
+            table.definitions_in(&ctx, module.op(), &twice),
+            duplicates[0]
+        );
         // `outer` itself and both definitions of `twice`.
-        assert_eq!(table.all_definitions().count(), 3);
+        assert_eq!(table.symbols().len(), 3);
     }
 
     /// A named module is a symbol of its parent: a definition of the same
@@ -380,16 +382,20 @@ mod tests {
 }"#,
         );
         let table = SymbolTable::collect(&ctx, module);
-        let item = SymbolPath::new(["item"]);
-        assert_eq!(table.resolve(&item), None);
-        assert_eq!(table.definitions_of(&item).len(), 2);
+        let item = path(&["item"]);
+        assert_eq!(table.resolve_in(&ctx, module.op(), &item), None);
+        assert_eq!(table.definitions_in(&ctx, module.op(), &item).len(), 2);
         assert_eq!(table.duplicates().len(), 1);
-        // Names inside the module still resolve through it.
-        assert!(table.resolve(&SymbolPath::new(["item", "inner"])).is_some());
+        // The module is not unique, so nothing resolves through it.
+        assert_eq!(
+            table.resolve_in(&ctx, module.op(), &path(&["item", "inner"])),
+            None
+        );
     }
 
+    /// Only the operations directly in a module's body are its symbols.
     #[test]
-    fn definitions_inside_non_module_regions_resolve_like_qualified_name() {
+    fn definitions_inside_non_module_regions_are_not_symbols() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -405,13 +411,16 @@ mod tests {
 }"#,
         );
         let table = SymbolTable::collect(&ctx, module);
-        let hidden = table
-            .resolve(&SymbolPath::new(["outer", "hidden"]))
-            .expect("a definition nested in a function body is still collected");
-        assert_eq!(
-            qualified_name(&ctx, hidden),
-            Some(SymbolPath::new(["outer", "hidden"]))
+        assert!(
+            table
+                .resolve_in(&ctx, module.op(), &path(&["outer", "host"]))
+                .is_some()
         );
+        assert_eq!(
+            table.resolve_in(&ctx, module.op(), &path(&["outer", "hidden"])),
+            None
+        );
+        assert_eq!(table.symbols().len(), 2);
     }
 
     #[test]
@@ -421,17 +430,6 @@ mod tests {
         let mut analyses = crate::analysis::AnalysisCache::new();
         let table = analyses.require::<SymbolTable>(&ctx, module.op());
         let direct = SymbolTable::collect(&ctx, module);
-
-        let mut names: Vec<_> = table
-            .iter()
-            .map(|(name, ops)| (name, ops.to_vec()))
-            .collect();
-        let mut expected: Vec<_> = direct
-            .iter()
-            .map(|(name, ops)| (name, ops.to_vec()))
-            .collect();
-        names.sort_unstable_by_key(|(a, _)| *a);
-        expected.sort_unstable_by_key(|(a, _)| *a);
-        assert_eq!(names, expected);
+        assert_eq!(table.symbols(), direct.symbols());
     }
 }

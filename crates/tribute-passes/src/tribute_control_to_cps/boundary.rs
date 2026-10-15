@@ -309,7 +309,8 @@ fn verify_physical_callable_graph(
     fn visit(
         ctx: &IrContext,
         op: OpRef,
-        signatures: &HashMap<SymbolPath, (TypeRef, Option<i64>)>,
+        symbols: &SymbolTable,
+        signatures: &HashMap<OpRef, (TypeRef, Option<i64>)>,
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let data = ctx.op(op);
@@ -347,7 +348,9 @@ fn verify_physical_callable_graph(
                 });
                 return;
             };
-            let Some((func_ty, convention)) = signatures.get(&absolute_reference(ctx, op, callee))
+            let Some((func_ty, convention)) = symbols
+                .resolve(ctx, op, callee)
+                .and_then(|target| signatures.get(&target))
             else {
                 failures.push(BoundaryFailure {
                     op: Some(op),
@@ -414,7 +417,10 @@ fn verify_physical_callable_graph(
         } else if data.dialect == "func" && data.name == "call" {
             let callee = data.attributes.get_symbol_ref("callee");
             if let Some(callee) = callee {
-                match signatures.get(&absolute_reference(ctx, op, callee)) {
+                match symbols
+                    .resolve(ctx, op, callee)
+                    .and_then(|target| signatures.get(&target))
+                {
                     Some((_, target_convention)) if *target_convention == op_convention => {}
                     Some(_) => failures.push(BoundaryFailure {
                         op: Some(op),
@@ -441,28 +447,28 @@ fn verify_physical_callable_graph(
         for region in ctx.op_regions(op) {
             for block in ctx.region(region).blocks.iter().copied() {
                 for child in ctx.block(block).ops.iter().copied() {
-                    visit(ctx, child, signatures, failures);
+                    visit(ctx, child, symbols, signatures, failures);
                 }
             }
         }
     }
 
-    // Callees resolve by root-qualified name across the whole module tree.
-    let signatures: HashMap<SymbolPath, (TypeRef, Option<i64>)> = symbols
+    // A callee resolves in the module nearest to the call.
+    let signatures: HashMap<OpRef, (TypeRef, Option<i64>)> = symbols
+        .symbols()
         .iter()
-        .filter_map(|(name, ops)| {
-            let &[op] = ops else { return None };
+        .filter_map(|&op| {
             if !func::Func::matches(ctx, op) {
                 return None;
             }
             let attributes = &ctx.op(op).attributes;
             let convention = attributes.get_i64(CALLING_CONVENTION_ATTR).ok().flatten();
-            Some((name.clone(), (attributes.get_type("type")?, convention)))
+            Some((op, (attributes.get_type("type")?, convention)))
         })
         .collect();
     let mut failures = Vec::new();
     for &op in module.ops(ctx) {
-        visit(ctx, op, &signatures, &mut failures);
+        visit(ctx, op, symbols, &signatures, &mut failures);
     }
     failures
 }

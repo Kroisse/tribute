@@ -10,7 +10,7 @@ use trunk_ir::Module;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::symbol_table::{SymbolTable, absolute_reference};
+use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::{CompilationError, CompilationResult};
@@ -39,9 +39,10 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
     let body = module
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
-    // Direct callees resolve by root-qualified path over the whole module.
+    // A direct callee resolves in the module nearest to the call.
     let symbols = SymbolTable::collect(ctx, module);
-    for (name, _) in symbols.duplicates() {
+    for ops in symbols.duplicates() {
+        let name = qualified_name(ctx, ops[0]).unwrap_or_else(SymbolPath::root);
         errors.push(format!("symbol @{name} is defined more than once"));
     }
     validate_region(ctx, body, 0, &symbols, &mut errors);
@@ -128,9 +129,8 @@ fn resolve_wasm_callee(
     op: OpRef,
     reference: &SymbolPath,
 ) -> Option<Option<wasm_dialect::FuncSig>> {
-    let name = &absolute_reference(ctx, op, reference);
-    let found = *symbols.definitions_of(name).first()?;
-    if symbols.resolve(name).is_none()
+    let found = *symbols.definitions(ctx, op, reference).first()?;
+    if symbols.resolve(ctx, op, reference).is_none()
         || (!wasm_dialect::Func::matches(ctx, found)
             && !wasm_dialect::ImportFunc::matches(ctx, found))
     {

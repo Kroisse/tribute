@@ -284,13 +284,14 @@ The path without components, `SymbolPath::root()`, is the root module, and
 walk nested modules with `push` and `pop`. A definition's path and a symbol
 reference have at least one component, so `leaf()` is `None` only for the
 root module; IR validation rejects a reference to it.
-`SymbolTable` and the analyses that name functions (call graph, global DCE,
-backends' function tables) are keyed by a definition's root-qualified
-`SymbolPath`, so take `&SymbolPath` rather than joining it back into one
-symbol. Resolve a reference with `SymbolTable::resolve_from(ctx, op, path)`,
-or turn it into that key with `symbol_table::absolute_reference`, rather than
-looking the written path up directly; the two agree only for an operation in
-the root module.
+A definition is identified by its operation, not by a path. `SymbolTable`
+holds one scope per symbol table operation, and the analyses that name
+functions (call graph, global DCE, the inliner) are keyed by the defining
+`OpRef`. Resolve a reference from the operation that holds it with
+`SymbolTable::resolve(ctx, op, path)`, or from a given table with
+`resolve_in(ctx, table, path)`; an unresolved or duplicated name yields
+`None`. `symbol_table::qualified_name` spells a definition's path from the
+root for diagnostics only; do not look a written reference up by it.
 
 A direct call operation registers `CallLike` so analyses can tell its callee
 from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;

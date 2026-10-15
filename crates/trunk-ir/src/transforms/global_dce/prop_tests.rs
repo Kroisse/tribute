@@ -46,9 +46,10 @@ fn expected_removed(spec: &ModuleSpec, recursive: bool, extra: &[bool]) -> HashS
 
 fn surviving_functions(ctx: &IrContext, module: Module) -> HashSet<SymbolPath> {
     SymbolTable::collect(ctx, module)
-        .all_definitions()
-        .filter(|&(_, op)| func::Func::matches(ctx, op))
-        .map(|(name, _)| name.clone())
+        .symbols()
+        .iter()
+        .filter(|&&op| func::Func::matches(ctx, op))
+        .filter_map(|&op| qualified_name(ctx, op))
         .collect()
 }
 
