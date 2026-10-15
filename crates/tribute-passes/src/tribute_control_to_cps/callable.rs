@@ -128,6 +128,14 @@ impl Converter<'_> {
         &mut self,
         source: OpRef,
     ) -> Result<(Vec<OpRef>, ValueRef), TributeControlToCpsError> {
+        // The adapter is defined in the root module, whose names a reference
+        // in a nested module cannot see.
+        if !module_path(self.ctx, source).is_root() {
+            return Err(self.malformed_source(
+                source,
+                "func_ref adapters are generated only for references in the root module",
+            ));
+        }
         let location = self.ctx.op(source).location;
         let target_symbol = self
             .ctx

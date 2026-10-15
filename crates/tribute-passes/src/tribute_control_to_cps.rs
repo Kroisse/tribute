@@ -29,7 +29,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionMode, ConversionTarget, Module};
-use trunk_ir::symbol_table::{SymbolTable, absolute_reference, qualified_name};
+use trunk_ir::symbol_table::{SymbolTable, absolute_reference, module_path, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
 

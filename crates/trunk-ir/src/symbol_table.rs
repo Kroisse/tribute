@@ -5,9 +5,10 @@
 //! symbol of its parent. A reference's first component is looked up in the
 //! module nearest to the operation that holds it, never in an enclosing one;
 //! each further component descends into the module the previous one names.
-//! Every operation other than a `core.module` that carries a symbol `sym_name`
-//! is a definition, and a name defined more than once in one module is an IR
-//! error. Consumers check the kind of the definition they resolve.
+//! Every operation that carries a symbol `sym_name`, including a named
+//! `core.module`, is a symbol of the module that encloses it, and a name
+//! defined more than once in one module is an IR error. Consumers check the
+//! kind of the symbol they resolve.
 //!
 //! Definitions are keyed by their root-qualified name: the names of the nested
 //! `core.module`s that enclose the definition, excluding the root module
@@ -57,6 +58,9 @@ impl SymbolTable {
                     let mut nested = path.clone();
                     if let Some(name) = ctx.op(op).attributes.get_str(ctx, SYM_NAME) {
                         nested.push(name);
+                        // A named module is a symbol of its parent, so it
+                        // shares the parent's names with its definitions.
+                        self.definitions.entry(nested.clone()).or_default().push(op);
                     }
                     for region in ctx.op_regions(op) {
                         self.collect_region(ctx, region, &nested);
@@ -158,8 +162,9 @@ pub fn absolute_reference(ctx: &IrContext, op: OpRef, reference: &[Symbol]) -> S
 }
 
 /// The root-qualified path of the modules enclosing `op`, including `op`
-/// itself if it is a module.
-fn module_path(ctx: &IrContext, op: OpRef) -> SymbolPath {
+/// itself if it is a module: the module whose symbols a reference held by
+/// `op` names.
+pub fn module_path(ctx: &IrContext, op: OpRef) -> SymbolPath {
     let mut path = Vec::new();
     let mut current = Some(op);
     while let Some(op) = current {
@@ -337,7 +342,35 @@ mod tests {
         assert_eq!(duplicates[0].0, &twice);
         assert_eq!(duplicates[0].1.len(), 2);
         assert_eq!(table.definitions_of(&twice), duplicates[0].1);
-        assert_eq!(table.all_definitions().count(), 2);
+        // `outer` itself and both definitions of `twice`.
+        assert_eq!(table.all_definitions().count(), 3);
+    }
+
+    /// A named module is a symbol of its parent: a definition of the same
+    /// name in the parent is a duplicate, not a separate namespace.
+    #[test]
+    fn a_named_module_shares_its_parents_names() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  func.func @item() {
+    func.return
+  }
+  core.module @item {
+    func.func @inner() {
+      func.return
+    }
+  }
+}"#,
+        );
+        let table = SymbolTable::collect(&ctx, module);
+        let item = SymbolPath::new(["item"]);
+        assert_eq!(table.resolve(&item), None);
+        assert_eq!(table.definitions_of(&item).len(), 2);
+        assert_eq!(table.duplicates().len(), 1);
+        // Names inside the module still resolve through it.
+        assert!(table.resolve(&SymbolPath::new(["item", "inner"])).is_some());
     }
 
     #[test]
