@@ -25,8 +25,8 @@ use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
 
 use crate::ast::{
-    AbilityId, CtorId, Decl, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ModuleDecl, ModuleItem,
-    ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
+    AbilityId, CtorId, Decl, DeclTable, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ModuleDecl,
+    ModuleItem, ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
 };
 
 /// Resolve names in a module.
@@ -36,7 +36,7 @@ pub fn resolve_module<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     span_map: SpanMap,
-) -> Module<ResolvedRef<'db>> {
+) -> DeclTable<ResolvedRef<'db>> {
     // Build the module environment from declarations
     let mut env = build_env(db, module);
     resolve_use_imports(&mut env);
@@ -56,7 +56,7 @@ pub fn resolve_with_env<'db>(
     module: &Module<UnresolvedName>,
     env: ModuleEnv<'db>,
     span_map: SpanMap,
-) -> Module<ResolvedRef<'db>> {
+) -> DeclTable<ResolvedRef<'db>> {
     let mut resolver = Resolver::new(db, env, span_map);
     resolver.resolve_module(module)
 }
@@ -208,7 +208,7 @@ pub fn resolve_library_with_env<'db>(
     module: &Module<UnresolvedName>,
     env: ModuleEnv<'db>,
     span_map: SpanMap,
-) -> Module<ResolvedRef<'db>> {
+) -> DeclTable<ResolvedRef<'db>> {
     Resolver::new(db, env, span_map)
         .with_package_depth(1)
         .resolve_module(module)

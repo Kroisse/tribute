@@ -11,10 +11,10 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    Arm, Decl, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit, FieldPattern, FuncDecl,
-    HandlerArm, HandlerKind, LocalId, LocalIdGen, Module, ModuleItem, ModulePath, NodeId, Param,
-    ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation,
-    TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName, UseDecl,
+    Arm, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit,
+    FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen, Module, ModuleItem,
+    ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt,
+    TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName, UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
@@ -729,15 +729,19 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Resolve a module, transforming all declarations.
-    pub fn resolve_module(&mut self, module: &Module<UnresolvedName>) -> Module<ResolvedRef<'db>> {
+    /// Resolve a module into the table of its declarations, each in the
+    /// module its scope follows.
+    pub fn resolve_module(
+        &mut self,
+        module: &Module<UnresolvedName>,
+    ) -> DeclTable<ResolvedRef<'db>> {
         self.report_field_lens_redefinitions(&module.decls);
-        let decls = self.resolve_items(&module.decls);
-
-        Module {
+        let mut entries = Vec::new();
+        self.resolve_items(&module.decls, &mut entries);
+        DeclTable {
             id: module.id,
             name: module.name.clone(),
-            decls,
+            entries,
         }
     }
 
@@ -779,11 +783,12 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Resolve a module declaration.
+    /// Resolve the declarations of an inline module in its scope.
     fn resolve_module_decl(
         &mut self,
         module: &crate::ast::ModuleDecl<UnresolvedName>,
-    ) -> crate::ast::ModuleDecl<ResolvedRef<'db>> {
+        entries: &mut Vec<DeclEntry<ResolvedRef<'db>>>,
+    ) {
         self.report_field_lens_redefinitions(module.body.as_deref().unwrap_or_default());
         // For inline modules, recursively resolve nested declarations
         self.module_path.push(module.name.clone());
@@ -852,18 +857,13 @@ impl<'db> Resolver<'db> {
             .collect();
         self.module_imported_functions.push(functions);
         self.method_functions.push(HashMap::default());
-        let body = module.body.as_ref().map(|items| self.resolve_items(items));
+        if let Some(items) = &module.body {
+            self.resolve_items(items, entries);
+        }
         self.method_functions.pop();
         self.module_imported_functions.pop();
         self.module_imports.pop();
         self.module_path.pop();
-
-        crate::ast::ModuleDecl {
-            id: module.id,
-            name: module.name.clone(),
-            is_pub: module.is_pub,
-            body,
-        }
     }
 
     /// Report a companion module that declares a function the struct beside
@@ -924,31 +924,29 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Resolve the items of a module body, without the functions reported
-    /// as redefinitions.
+    /// Resolve the items of a module body into `entries`, without the
+    /// functions reported as redefinitions.
     fn resolve_items(
         &mut self,
         items: &[ModuleItem<UnresolvedName>],
-    ) -> Vec<ModuleItem<ResolvedRef<'db>>> {
-        let mut resolved = Vec::with_capacity(items.len());
+        entries: &mut Vec<DeclEntry<ResolvedRef<'db>>>,
+    ) {
         for item in items {
-            let resolved_item = match item {
+            match item {
                 ModuleItem::Decl(Decl::Function(function))
-                    if self.redefinitions.contains(&function.id) =>
-                {
-                    continue;
-                }
+                    if self.redefinitions.contains(&function.id) => {}
                 ModuleItem::Decl(Decl::ExternFunction(function))
-                    if self.redefinitions.contains(&function.id) =>
-                {
-                    continue;
+                    if self.redefinitions.contains(&function.id) => {}
+                ModuleItem::Decl(decl) => {
+                    let decl = self.resolve_decl(decl);
+                    entries.push(DeclEntry {
+                        module: SymbolPath::new(self.module_path.iter().cloned()),
+                        decl,
+                    });
                 }
-                ModuleItem::Decl(decl) => ModuleItem::Decl(self.resolve_decl(decl)),
-                ModuleItem::Module(module) => ModuleItem::Module(self.resolve_module_decl(module)),
-            };
-            resolved.push(resolved_item);
+                ModuleItem::Module(module) => self.resolve_module_decl(module, entries),
+            }
         }
-        resolved
     }
 
     /// Resolve a function declaration.

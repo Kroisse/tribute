@@ -22,7 +22,8 @@ use tree_sitter::{Node, Tree};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    Decl, FuncDecl, Module, ModuleItem, ResolvedRef, SpanMap, TypeScheme, TypedRef, UnresolvedName,
+    Decl, DeclTable, FuncDecl, Module, ModuleItem, ResolvedRef, SpanMap, TypeScheme, TypedRef,
+    UnresolvedName,
 };
 use crate::source_file::SourceCst;
 use crate::typeck::TypeCheckOutput;
@@ -165,7 +166,7 @@ pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
 pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-) -> Option<Module<ResolvedRef<'db>>> {
+) -> Option<DeclTable<ResolvedRef<'db>>> {
     let module = parsed_module(db, source)?;
     let sm = span_map(db, source)?;
     Some(crate::resolve::resolve_module(db, module, sm))
@@ -211,6 +212,14 @@ fn find_func<'a, V>(module: &'a Module<V>, name: &Symbol) -> Option<&'a FuncDecl
     })
 }
 
+/// Find the function declaration named `name` in the root module of `table`.
+fn find_root_func<'a, V>(table: &'a DeclTable<V>, name: &Symbol) -> Option<&'a FuncDecl<V>> {
+    table.entries.iter().find_map(|entry| match &entry.decl {
+        Decl::Function(f) if entry.module.is_root() && f.name == *name => Some(f),
+        _ => None,
+    })
+}
+
 /// Get a parsed function by name.
 pub fn parsed_func<'db>(
     db: &'db dyn salsa::Database,
@@ -228,7 +237,7 @@ pub fn resolved_func<'db>(
     source: SourceCst,
     name: &Symbol,
 ) -> Option<&'db FuncDecl<ResolvedRef<'db>>> {
-    find_func(resolved_module(db, source)?, name)
+    find_root_func(resolved_module(db, source)?, name)
 }
 
 /// Type check a single function by name.
@@ -239,14 +248,7 @@ pub fn typed_func<'db>(
     source: SourceCst,
     name: &Symbol,
 ) -> Option<&'db FuncDecl<TypedRef<'db>>> {
-    type_check_output(db, source)?
-        .module(db)
-        .entries
-        .iter()
-        .find_map(|entry| match &entry.decl {
-            Decl::Function(f) if entry.module.is_root() && f.name == *name => Some(f),
-            _ => None,
-        })
+    find_root_func(type_check_output(db, source)?.module(db), name)
 }
 
 // =============================================================================
