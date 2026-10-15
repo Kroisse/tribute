@@ -251,10 +251,47 @@ mod tests {
                 .unwrap_or_else(|| panic!("{path} must resolve"));
             assert_eq!(qualified_name(&ctx, op), Some(path));
         }
-        // A reference is never resolved relative to a nested module.
+        // Root-qualified keys name nothing for a bare nested name.
         assert_eq!(table.resolve(&SymbolPath::new(["same"])), None);
         assert!(table.duplicates().is_empty());
         assert_eq!(table.definitions_of(&SymbolPath::new(["same"])), &[]);
+    }
+
+    /// A reference is looked up in the module nearest to the operation that
+    /// holds it, and descends into named modules, but never climbs out.
+    #[test]
+    fn references_resolve_in_the_nearest_module() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, NESTED);
+        let table = SymbolTable::collect(&ctx, module);
+        let definition = |path: &[&str]| {
+            table
+                .resolve(&SymbolPath::new(path.iter().copied()))
+                .expect("definition")
+        };
+        let top = definition(&["top"]);
+        let outer_same = definition(&["outer", "same"]);
+        let inner_same = definition(&["outer", "inner", "same"]);
+        let resolve = |from: OpRef, path: &[&str]| {
+            table.resolve_from(&ctx, from, &SymbolPath::new(path.iter().copied()))
+        };
+
+        // From the root: its own definitions and, through named modules,
+        // nested ones.
+        assert_eq!(resolve(top, &["top"]), Some(top));
+        assert_eq!(resolve(top, &["outer", "same"]), Some(outer_same));
+        assert_eq!(resolve(top, &["outer", "inner", "same"]), Some(inner_same));
+        // From `outer`: its own and its nested definitions; the root's `top`
+        // is not visible.
+        assert_eq!(resolve(outer_same, &["same"]), Some(outer_same));
+        assert_eq!(resolve(outer_same, &["inner", "same"]), Some(inner_same));
+        assert_eq!(resolve(outer_same, &["top"]), None);
+        assert_eq!(resolve(outer_same, &["outer", "same"]), None);
+        // From `inner`: only `inner`'s own definitions.
+        assert_eq!(resolve(inner_same, &["same"]), Some(inner_same));
+        assert_eq!(resolve(inner_same, &["inner", "same"]), None);
+        // A component before the last must name a module, not a function.
+        assert_eq!(resolve(top, &["top", "same"]), None);
     }
 
     #[test]
