@@ -32,9 +32,9 @@ use rustc_hash::FxHashSet as HashSet;
 use std::sync::LazyLock;
 
 use tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::rewrite::Module as IrModule;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::SortedMap;
 use crate::ast::{
@@ -146,7 +146,7 @@ pub fn registered_compiler_intrinsics<V>(
 pub struct TypedModule<'db> {
     pub ast: DeclTable<TypedRef<'db>>,
     pub span_map: SpanMap,
-    pub function_types: HashMap<Symbol, TypeScheme<'db>>,
+    pub function_types: HashMap<SymbolPath, TypeScheme<'db>>,
     pub constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
     pub specialized_enum_variants: SortedMap<NodeId, TypeScheme<'db>>,
     pub node_types: SortedMap<NodeId, Type<'db>>,
@@ -165,7 +165,7 @@ pub struct TypedModule<'db> {
     /// Exact intrinsic-directive declaration IDs and canonical identities.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
     /// Convention classes of the class variables of each function instance.
-    pub row_classes: HashMap<Symbol, Vec<(crate::ast::EffectVar, CallingConvention)>>,
+    pub row_classes: HashMap<SymbolPath, Vec<(crate::ast::EffectVar, CallingConvention)>>,
     /// URIs of the other sources whose declarations were merged into `ast`.
     pub merged_sources: Vec<String>,
 }

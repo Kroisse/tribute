@@ -13,7 +13,7 @@ use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
-use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
+use trunk_ir::refs::{BlockRef, OpRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
 use crate::SortedMap;
@@ -75,17 +75,19 @@ pub struct IrLoweringCtx<'db> {
     /// continuation rather than a source value.
     resume_scopes: Vec<HashSet<LocalId>>,
     /// Function type schemes from type checking, keyed by function name.
-    function_types: HashMap<Symbol, TypeScheme<'db>>,
+    function_types: HashMap<SymbolPath, TypeScheme<'db>>,
     /// Source-visible generated callables that have no source TypeScheme.
-    logical_generated_signatures: HashMap<Symbol, LogicalGeneratedSignature>,
+    logical_generated_signatures: HashMap<SymbolPath, LogicalGeneratedSignature>,
     /// Source declarations collected before logical lowering begins.
-    logical_source_functions: HashSet<Symbol>,
+    logical_source_functions: HashSet<SymbolPath>,
     /// IR symbols of `extern "C"` functions declared inside a module, keyed
     /// by their qualified name. C linkage has one flat namespace, so they keep
     /// their declared name.
-    c_symbols: HashMap<Symbol, Symbol>,
+    c_symbols: HashMap<SymbolPath, Symbol>,
+    /// The function each `func_ref` operation of the module names.
+    function_ref_paths: HashMap<OpRef, SymbolPath>,
     /// Extern declarations synthesized for referenced prelude functions.
-    logical_emitted_externs: HashSet<Symbol>,
+    logical_emitted_externs: HashSet<SymbolPath>,
     /// Ability-level calling-convention requirements.
     ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
     /// Physical worker conventions for named function definitions.
@@ -93,7 +95,7 @@ pub struct IrLoweringCtx<'db> {
     /// These are intentionally separate from semantic function-type
     /// conventions: an effect-polymorphic pure definition may have a Direct
     /// worker while its first-class function type requires a CPS adapter.
-    definition_conventions: HashMap<Symbol, CallingConvention>,
+    definition_conventions: HashMap<SymbolPath, CallingConvention>,
     /// Module path as a vector of segments (e.g., ["std", "Option"]).
     module_path: SymbolPath,
     /// Module's top-level block, used for in-place insertion of lifted lambdas.
@@ -115,7 +117,7 @@ pub struct IrLoweringCtx<'db> {
     /// Exact intrinsic-directive declaration ID to canonical identity.
     compiler_intrinsics: HashMap<NodeId, Symbol>,
     /// Convention classes of the class variables of each function instance.
-    row_classes: HashMap<Symbol, Vec<(EffectVar, CallingConvention)>>,
+    row_classes: HashMap<SymbolPath, Vec<(EffectVar, CallingConvention)>>,
     /// The classes of the definition whose types are being read.
     current_row_classes: Vec<(EffectVar, CallingConvention)>,
     /// The `==` functions that `String` and `Bytes` literal patterns call.
@@ -129,8 +131,8 @@ pub struct IrLoweringCtx<'db> {
 /// pattern, by their qualified names.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LiteralEqualities {
-    pub string: Option<Symbol>,
-    pub bytes: Option<Symbol>,
+    pub string: Option<SymbolPath>,
+    pub bytes: Option<SymbolPath>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -143,7 +145,7 @@ impl<'db> IrLoweringCtx<'db> {
         db: &'db dyn salsa::Database,
         path: PathRef,
         span_map: SpanMap,
-        function_types: HashMap<Symbol, TypeScheme<'db>>,
+        function_types: HashMap<SymbolPath, TypeScheme<'db>>,
         ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
         node_types: SortedMap<NodeId, crate::ast::Type<'db>>,
     ) -> Self {
@@ -159,6 +161,7 @@ impl<'db> IrLoweringCtx<'db> {
             logical_generated_signatures: HashMap::default(),
             logical_source_functions: HashSet::default(),
             c_symbols: HashMap::default(),
+            function_ref_paths: HashMap::default(),
             logical_emitted_externs: HashSet::default(),
             ability_conventions,
             definition_conventions: HashMap::default(),
@@ -187,14 +190,14 @@ impl<'db> IrLoweringCtx<'db> {
 
     pub(crate) fn with_row_classes(
         mut self,
-        row_classes: HashMap<Symbol, Vec<(EffectVar, CallingConvention)>>,
+        row_classes: HashMap<SymbolPath, Vec<(EffectVar, CallingConvention)>>,
     ) -> Self {
         self.row_classes = row_classes;
         self
     }
 
     /// The convention classes of the function instance `name`.
-    pub(crate) fn row_classes_of(&self, name: &Symbol) -> &RowClasses {
+    pub(crate) fn row_classes_of(&self, name: &[Symbol]) -> &RowClasses {
         self.row_classes.get(name).map_or(&[], Vec::as_slice)
     }
 
@@ -202,7 +205,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// to restore with [`Self::leave_definition`].
     pub(crate) fn enter_definition(
         &mut self,
-        name: &Symbol,
+        name: &[Symbol],
     ) -> Vec<(EffectVar, CallingConvention)> {
         let classes = self.row_classes.get(name).cloned().unwrap_or_default();
         std::mem::replace(&mut self.current_row_classes, classes)
@@ -331,13 +334,13 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Look up a function's type scheme by name.
-    pub fn lookup_function_type(&self, name: &Symbol) -> Option<&TypeScheme<'db>> {
+    pub fn lookup_function_type(&self, name: &[Symbol]) -> Option<&TypeScheme<'db>> {
         self.function_types.get(name)
     }
 
     pub(crate) fn register_logical_generated_signature(
         &mut self,
-        name: &Symbol,
+        name: &SymbolPath,
         param_types: Vec<TypeRef>,
         return_type: TypeRef,
         convention: CallingConvention,
@@ -362,34 +365,47 @@ impl<'db> IrLoweringCtx<'db> {
 
     pub(crate) fn lookup_logical_generated_signature(
         &self,
-        name: &Symbol,
+        name: &[Symbol],
     ) -> Option<&LogicalGeneratedSignature> {
         self.logical_generated_signatures.get(name)
     }
 
-    pub(crate) fn register_logical_source_function(&mut self, name: Symbol) {
+    pub(crate) fn register_logical_source_function(&mut self, name: SymbolPath) {
         self.logical_source_functions.insert(name);
     }
 
-    pub(crate) fn register_c_symbol(&mut self, qualified: Symbol, symbol: Symbol) {
-        if qualified != symbol {
+    pub(crate) fn register_c_symbol(&mut self, qualified: SymbolPath, symbol: Symbol) {
+        if qualified != [&symbol] {
             self.c_symbols.insert(qualified, symbol);
         }
     }
 
-    /// The IR symbol of the function with qualified name `name`: its declared
-    /// name for an `extern "C"` function, the qualified name otherwise.
-    pub(crate) fn function_symbol(&self, name: &Symbol) -> Symbol {
-        self.c_symbols.get(name).unwrap_or(name).clone()
+    /// The IR symbol of the function at `name`: its declared name for an
+    /// `extern "C"` function, the joined path otherwise.
+    pub(crate) fn function_symbol(&self, name: &[Symbol]) -> Symbol {
+        match self.c_symbols.get(name) {
+            Some(symbol) => symbol.clone(),
+            None => SymbolPath::new(name.iter().cloned()).to_symbol(),
+        }
     }
 
-    pub(crate) fn is_logical_source_function(&self, name: &Symbol) -> bool {
+    /// Record that the `func_ref` operation `op` names the function `path`.
+    pub(crate) fn record_function_ref(&mut self, op: OpRef, path: SymbolPath) {
+        self.function_ref_paths.insert(op, path);
+    }
+
+    /// The function the `func_ref` operation `op` names.
+    pub(crate) fn function_ref_path(&self, op: OpRef) -> Option<&SymbolPath> {
+        self.function_ref_paths.get(&op)
+    }
+
+    pub(crate) fn is_logical_source_function(&self, name: &[Symbol]) -> bool {
         self.logical_source_functions.contains(name)
     }
 
     /// Returns true exactly once for each prelude declaration that must be
     /// materialized in the logical module.
-    pub(crate) fn mark_logical_extern_emitted(&mut self, name: Symbol) -> bool {
+    pub(crate) fn mark_logical_extern_emitted(&mut self, name: SymbolPath) -> bool {
         self.logical_emitted_externs.insert(name)
     }
 
@@ -429,7 +445,7 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Look up a function definition and derive its ABI convention.
-    pub(crate) fn function_calling_convention(&self, name: &Symbol) -> Option<CallingConvention> {
+    pub(crate) fn function_calling_convention(&self, name: &[Symbol]) -> Option<CallingConvention> {
         if let Some(convention) = self.definition_conventions.get(name) {
             return Some(*convention);
         }
@@ -441,7 +457,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// Register the physical worker convention for a named definition.
     pub(crate) fn register_definition_convention(
         &mut self,
-        name: Symbol,
+        name: SymbolPath,
         convention: CallingConvention,
     ) {
         self.definition_conventions.insert(name, convention);
@@ -457,15 +473,13 @@ impl<'db> IrLoweringCtx<'db> {
         None
     }
 
-    /// Qualify a name with the current module path.
+    /// The path of `name` in the current module: the declaration's entry
+    /// module, which holds only inline modules.
     ///
-    /// The module path is the declaration's entry module, which holds only
-    /// inline modules; the file-derived module name is not part of it.
-    ///
-    /// - `["String"]` + `"to_bytes"` → `"String::to_bytes"`
-    /// - `[]` + `"print_line"` → `"print_line"`
-    pub fn qualify_name(&self, name: &Symbol) -> Symbol {
-        self.module_path.child(name.clone()).to_symbol()
+    /// - `["String"]` + `"to_bytes"` → `["String", "to_bytes"]`
+    /// - `[]` + `"print_line"` → `["print_line"]`
+    pub fn qualify_name(&self, name: &Symbol) -> SymbolPath {
+        self.module_path.child(name.clone())
     }
 
     /// Register struct field order for lowering Record expressions.
@@ -1270,7 +1284,7 @@ mod tests {
             .expect("logical tuple layout");
         itertools::assert_equal(layout.fields(&ir), [("0", anyref), ("1", nominal_list)]);
 
-        let generated = Symbol::new("Forward::value");
+        let generated = SymbolPath::new(["Forward", "value"]);
         ctx.register_logical_generated_signature(
             &generated,
             vec![i32_ty],
@@ -1293,17 +1307,14 @@ mod tests {
         assert_eq!(generated_signature.return_type, i32_ty);
         assert_eq!(generated_signature.convention, CallingConvention::Direct);
 
-        let source_function = Symbol::new("Forward::run");
+        let source_function = SymbolPath::new(["Forward", "run"]);
         ctx.register_logical_source_function(source_function.clone());
         assert!(ctx.is_logical_source_function(&source_function));
-        assert!(ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
-        assert!(!ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
+        assert!(ctx.mark_logical_extern_emitted(SymbolPath::new(["prelude", "id"])));
+        assert!(!ctx.mark_logical_extern_emitted(SymbolPath::new(["prelude", "id"])));
 
         ctx.set_module(SymbolPath::new(["Nested"]));
-        assert_eq!(
-            ctx.qualify_name(&Symbol::new("run")),
-            Symbol::new("Nested::run")
-        );
+        assert_eq!(ctx.qualify_name(&Symbol::new("run")), ["Nested", "run"]);
         ctx.set_module(SymbolPath::root());
 
         let erased_cases = [
@@ -1481,7 +1492,7 @@ mod tests {
         let db = test_db();
         let mut ir = IrContext::new();
         let path = ir.intern_path("test.trb");
-        let name = Symbol::new("foo");
+        let name = SymbolPath::new(["foo"]);
         let body = AstType::new(&db, TypeKind::Int);
         let scheme = TypeScheme::new(&db, vec![], vec![], body);
 
@@ -1497,6 +1508,6 @@ mod tests {
             SortedMap::default(),
         );
         assert_eq!(ctx.lookup_function_type(&name), Some(&scheme));
-        assert_eq!(ctx.lookup_function_type(&Symbol::new("missing")), None);
+        assert_eq!(ctx.lookup_function_type(&[Symbol::new("missing")]), None);
     }
 }

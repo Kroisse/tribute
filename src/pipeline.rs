@@ -619,11 +619,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             ast: typed.module(db).clone(),
             local_instances: typed.expression_types(db).local_instances.clone(),
             span_map: typed.span_map(db).clone(),
-            function_types: typed
-                .function_types(db)
-                .iter()
-                .map(|(path, scheme)| (path.to_symbol(), *scheme))
-                .collect(),
+            function_types: typed.function_types(db).iter().cloned().collect(),
             constructor_types: typed
                 .constructor_types(db)
                 .schemes
@@ -3112,9 +3108,12 @@ fn main() -> Nil {
             let concrete = "std::collections::List::__tribute_list_prepend_intrinsic$std::String";
 
             assert!(
-                monomorphized
-                    .function_types
-                    .contains_key(&trunk_ir::Symbol::new(concrete)),
+                monomorphized.function_types.contains_key(&SymbolPath::new([
+                    "std",
+                    "collections",
+                    "List",
+                    "__tribute_list_prepend_intrinsic$std::String",
+                ])),
                 "monomorphization must retain the concrete intrinsic scheme"
             );
             assert!(
@@ -3206,11 +3205,16 @@ fn main() -> Nil {
             1,
             "all import paths must share one specialized definition"
         );
-        assert!(prepared.function_types.contains_key(&specialized));
+        assert!(prepared.function_types.contains_key(&SymbolPath::new([
+            "std",
+            "collections",
+            "List",
+            "prepend$Nat"
+        ])));
         assert!(
             !prepared
                 .function_types
-                .contains_key(&Symbol::new("List::prepend$Nat"))
+                .contains_key(&SymbolPath::new(["List", "prepend$Nat"]))
         );
     }
 
@@ -3632,7 +3636,7 @@ fn main() -> Nil {
             let (_, monomorphized) =
                 merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
             // Root `main` selects the instance for an empty row tail.
-            let specialized = trunk_ir::Symbol::new("run_state$Nat$Nat$9D");
+            let specialized = SymbolPath::new(["run_state$Nat$Nat$9D"]);
             let scheme = monomorphized
                 .function_types
                 .get(&specialized)
@@ -3647,7 +3651,7 @@ fn main() -> Nil {
                 .decls()
                 .find_map(|decl| match decl {
                     tribute_front::ast::Decl::Function(function)
-                        if function.name == specialized =>
+                        if specialized == [&function.name] =>
                     {
                         Some(function)
                     }
