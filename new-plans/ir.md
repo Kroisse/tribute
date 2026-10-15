@@ -481,13 +481,19 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   텍스트 순서이므로 `Symbol`을 key로 정렬한 자료구조는 이름 순서로 순회한다.
   Hash 순회 순서는 출력에 영향을 주어서는 안 된다. `Symbol`은 `Copy`가 아니다.
   이름을 읽기만 하는 곳은 `&Symbol`을 받는다.
-- 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접 호출과 주소 참조)는
-  항상 root module 기준 qualified path이다. 정의는 자기 module 안의 `sym_name`을
-  가지며, 정의의 qualified path는 root module을 제외한 중첩 `core.module` 이름들과
-  `sym_name`을 차례로 component로 둔 것이다. 이름 없는 `core.module`은 경로에
-  기여하지 않는다. 참조는 참조하는 operation이 속한 module을 기준으로 해석하거나
-  바깥 module로 찾아 올라가지 않는다. Qualified path는 module tree 전체에서 유일해야
-  하며, 중복 정의는 모호한 참조가 아니라 IR 오류다.
+- Symbol 해석은 MLIR 규칙을 따른다. `core.module`은 symbol table이며, 정의는 자기를
+  직접 감싼 module에 `sym_name`을 등록한다. 이름 있는 `core.module`은 부모 table의
+  symbol이기도 하다. 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접
+  호출과 주소 참조)의 첫 component는 참조하는 operation을 감싼 가장 가까운 module의
+  table에서 찾는다. 찾지 못해도 바깥 module로 올라가지 않는다. 나머지 component는 앞
+  component가 가리킨 module의 table로 차례로 내려가며 찾으므로, 마지막이 아닌
+  component는 module이어야 한다. 그래서 바깥 module은 `@inner::@f`로 안쪽 정의를
+  가리킬 수 있지만, 안쪽 module의 operation은 부모나 형제 module의 정의를 가리킬 수
+  없다. 정의의 qualified path는 root module을 제외한 중첩 `core.module` 이름들과
+  `sym_name`을 차례로 component로 둔 것이며, 참조의 qualified path는 그 참조를
+  해석한 module의 path에 참조의 component를 이은 것이다. 이름 없는 `core.module`은
+  경로에 기여하지 않는다. 한 table 안에서 같은 이름의 정의가 둘 이상이면 모호한
+  참조가 아니라 IR 오류다.
 - `SymbolPath`의 component는 이름 하나를 쓰인 그대로 담는다. 이름이 `::`를
   포함해도 component 하나이며, 같은 텍스트를 중첩 module로 풀어 쓴 path와는 다른
   path다. Textual form은 component마다 `@`를 붙여 `::`로 잇는다
@@ -673,8 +679,12 @@ spelling, 위치 또는 printed IR만으로 generic specialization identity를 �
 Frontend는 해석된 canonical declaration과 specialization을 qualified symbol에
 대응시킨다. 정의, 직접 호출, 함수 참조와 intrinsic declaration metadata는 같은
 대응을 사용한다. Import alias나 prelude의 짧은 이름을 이 심볼의 선언 경로로
-사용하지 않는다. Qualified symbol은 module tree 전체에서 유일해야 하며, 이 대응은
-source lookup이나 외부 linkage 계약을 변경하지 않는다.
+사용하지 않는다. 컴파일 단위의 정의는 모두 `core.module` 하나에 있으며, 소스 module은
+IR의 module 구조가 되지 않는다. 안쪽 module은 부모나 형제의 정의를 가리킬 수 없으므로
+소스 module 사이의 참조를 module 중첩으로 표현할 수 없기 때문이다. 그래서 정의의
+`sym_name`은 소스 경로를 `::`로 이은 문자열이고 참조는 그 이름 하나를 component로
+둔다. 이 문자열에서 소스 경로를 다시 나누어 복원하지 않으며, 구조화된 경로는
+frontend가 가진다. 이 대응은 source lookup이나 외부 linkage 계약을 변경하지 않는다.
 
 Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutation 전에
 대조한다. Direct call은 qualified symbol을 유일하게 resolve하고 완전한 signature를
