@@ -60,7 +60,7 @@ pub(crate) const ROOT_MAIN: &str = "main";
 
 /// The convention class of each class variable of every function instance,
 /// by the instance's name.
-pub type InstanceRowClasses = HashMap<Symbol, Vec<(EffectVar, CallingConvention)>>;
+pub type InstanceRowClasses = HashMap<SymbolPath, Vec<(EffectVar, CallingConvention)>>;
 
 /// What a reference needs to select an instance: the class variables of each
 /// definition, the convention each ability requires, and the classes of the
@@ -115,7 +115,7 @@ impl<'db> InstanceKeys<'db> {
                     CallingConvention::Cps
                 };
                 let classes = variables.iter().map(|(_, variable)| (*variable, class));
-                (id.qualified(db).clone(), classes.collect())
+                (id.path(db).clone(), classes.collect())
             })
             .collect();
         Self {
@@ -131,7 +131,7 @@ impl<'db> InstanceKeys<'db> {
     pub(crate) fn key(
         &self,
         instance: &FunctionInstance<'db>,
-        enclosing: Option<&Symbol>,
+        enclosing: Option<&[Symbol]>,
     ) -> Option<InstanceKey<'db>> {
         let enclosing: &RowClasses = enclosing
             .and_then(|name| self.row_classes.get(name))
@@ -166,7 +166,7 @@ impl<'db> InstanceKeys<'db> {
     pub(crate) fn classes_of_rows(
         &self,
         rows: &[crate::ast::EffectRow<'db>],
-        enclosing: &Symbol,
+        enclosing: &[Symbol],
     ) -> Vec<CallingConvention> {
         let classes: &RowClasses = self.row_classes.get(enclosing).map_or(&[], Vec::as_slice);
         rows.iter()
@@ -246,7 +246,8 @@ impl<'db> InstanceKeys<'db> {
             classes.retain(|(variable, _)| !locals.iter().any(|(local, _)| local == variable));
             classes.extend(locals);
             if enclosing != Some(&classes) {
-                self.row_classes.insert(name.clone(), classes);
+                self.row_classes
+                    .insert(SymbolPath::new(name.iter().cloned()), classes);
                 changed = true;
             }
         });
@@ -257,7 +258,7 @@ impl<'db> InstanceKeys<'db> {
     /// selects.
     pub(crate) fn record(
         &mut self,
-        name: Symbol,
+        name: SymbolPath,
         function: FuncDefId<'db>,
         key: &InstanceKey<'db>,
     ) {
@@ -273,33 +274,33 @@ impl<'db> InstanceKeys<'db> {
     }
 }
 
-/// Calls `f` on each declaration of `entries`, with the qualified name of a
-/// function. That name is the instance its references are inside.
+/// Calls `f` on each declaration of `entries`, with the path of a function.
+/// That path is the instance its references are inside.
 pub(super) fn for_each_declaration<'a, 'db>(
     entries: &'a [DeclEntry<TypedRef<'db>>],
-    f: &mut impl FnMut(Option<&Symbol>, &'a Decl<TypedRef<'db>>),
+    f: &mut impl FnMut(Option<&[Symbol]>, &'a Decl<TypedRef<'db>>),
 ) {
     for entry in entries {
-        let name = function_symbol(entry);
-        f(name.as_ref(), &entry.decl);
+        let path = function_path(entry);
+        f(path.as_deref(), &entry.decl);
     }
 }
 
 /// [`for_each_declaration`] over declarations to change.
 pub(super) fn for_each_declaration_mut<'db>(
     entries: &mut [DeclEntry<TypedRef<'db>>],
-    f: &mut impl FnMut(Option<&Symbol>, &mut Decl<TypedRef<'db>>),
+    f: &mut impl FnMut(Option<&[Symbol]>, &mut Decl<TypedRef<'db>>),
 ) {
     for entry in entries {
-        let name = function_symbol(entry);
-        f(name.as_ref(), &mut entry.decl);
+        let path = function_path(entry);
+        f(path.as_deref(), &mut entry.decl);
     }
 }
 
-/// The qualified name of the function `entry` declares.
-fn function_symbol(entry: &DeclEntry<TypedRef<'_>>) -> Option<Symbol> {
+/// The path of the function `entry` declares.
+fn function_path(entry: &DeclEntry<TypedRef<'_>>) -> Option<SymbolPath> {
     match &entry.decl {
-        Decl::Function(function) => Some(entry.module.child(function.name.clone()).to_symbol()),
+        Decl::Function(function) => Some(entry.module.child(function.name.clone())),
         _ => None,
     }
 }

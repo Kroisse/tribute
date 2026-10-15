@@ -169,7 +169,7 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
         &mut self,
         node_id: crate::ast::NodeId,
         typed_ref: &TypedRef<'db>,
-        enclosing: Option<&Symbol>,
+        enclosing: Option<&[Symbol]>,
     ) {
         let ResolvedRef::Function { id } = &typed_ref.resolved else {
             return;

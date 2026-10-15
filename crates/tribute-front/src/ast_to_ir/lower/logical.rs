@@ -221,7 +221,7 @@ fn func_sig_type(
 fn lower_function_ref<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
-    name: Symbol,
+    name: SymbolPath,
     expected_ty: Option<TypeRef>,
 ) -> ValueRef {
     let mut signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
@@ -257,6 +257,7 @@ fn lower_function_ref<'db>(
             .result(ty)
             .attr("func_ref", Attribute::SymbolRef(SymbolPath::new([symbol])))
     });
+    builder.ctx.record_function_ref(op, name);
     result(builder.ir, op)
 }
 
@@ -279,9 +280,8 @@ fn lower_expr_for_callable_parameter<'db>(
                 if let Some(value) = builder.ctx.lookup(id)
                     && let trunk_ir::refs::ValueDef::OpResult(producer, _) =
                         builder.ir.value_def(value)
-                    && let Ok(named) = tribute_control::FuncRef::from_op(builder.ir, producer)
+                    && let Some(name) = builder.ctx.function_ref_path(producer).cloned()
                 {
-                    let name = named.func_ref(builder.ir).to_symbol();
                     return Some(lower_function_ref(
                         builder,
                         builder.location(expr.id),
@@ -299,7 +299,7 @@ fn lower_expr_for_callable_parameter<'db>(
                     lower_function_ref(
                         builder,
                         builder.location(expr.id),
-                        id.qualified(builder.ctx.db).clone(),
+                        id.path(builder.ctx.db).clone(),
                         Some(expected_ty),
                     )
                 })
@@ -369,8 +369,12 @@ pub(super) fn lower_module<'db>(
     .with_row_classes(row_classes)
     .with_source_paths(source_paths)
     .with_literal_equalities(crate::ast_to_ir::context::LiteralEqualities {
-        string: well_known_types.string_equality.map(|id| id.qualified(db)),
-        bytes: well_known_types.bytes_equality.map(|id| id.qualified(db)),
+        string: well_known_types
+            .string_equality
+            .map(|id| id.path(db).clone()),
+        bytes: well_known_types
+            .bytes_equality
+            .map(|id| id.path(db).clone()),
     });
     let module_block = ir.create_block(BlockData {
         location,
@@ -482,7 +486,7 @@ fn prescan_definition_conventions<'db>(
         let prefix = &entry.module;
         match &entry.decl {
             Decl::Function(function) => {
-                let name = prefix.child(function.name.clone()).to_symbol();
+                let name = prefix.child(function.name.clone());
                 let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
                     continue;
                 };
@@ -515,7 +519,7 @@ fn prescan_definition_conventions<'db>(
                     .iter()
                     .filter_map(|field| field.name.clone())
                 {
-                    let getter = owner.child(field.clone()).to_symbol();
+                    let getter = owner.child(field.clone());
                     let [_, modifier] = field_update_names(&getter);
                     for (modifier, class) in modifier_instances(ctx, modifier) {
                         ctx.register_definition_convention(modifier, class);
@@ -541,7 +545,7 @@ fn plan_local_callables<'db>(
         let Decl::Function(function) = &entry.decl else {
             continue;
         };
-        let name = prefix.child(function.name.clone()).to_symbol();
+        let name = prefix.child(function.name.clone());
         let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
             continue;
         };
@@ -756,20 +760,20 @@ fn constructor_schema_fields<'db>(
 
 /// The names of the setter and the modifier of the field whose getter is
 /// `getter`: `T::f::set` and `T::f::modify`.
-fn field_update_names(getter: &Symbol) -> [Symbol; 2] {
-    crate::ast::FIELD_LENS_FUNCTIONS.map(|name| Symbol::new(&format!("{getter}::{name}")))
+fn field_update_names(getter: &SymbolPath) -> [SymbolPath; 2] {
+    crate::ast::FIELD_LENS_FUNCTIONS.map(|name| getter.child(name))
 }
 
 /// The modifier `modifier` and its instances for the weaker convention
 /// classes of its callback that the module refers to, each with that class.
 fn modifier_instances(
     ctx: &IrLoweringCtx<'_>,
-    modifier: Symbol,
-) -> Vec<(Symbol, CallingConvention)> {
+    modifier: SymbolPath,
+) -> Vec<(SymbolPath, CallingConvention)> {
     let mut instances: Vec<_> = [CallingConvention::Direct, CallingConvention::EvidenceDirect]
         .into_iter()
         .map(|class| {
-            let name = crate::monomorphize::mangle::class_instance_name(&modifier, &[class]);
+            let name = crate::monomorphize::mangle::class_instance_path(&modifier, &[class]);
             (name, class)
         })
         .filter(|(name, _)| !ctx.row_classes_of(name).is_empty())
@@ -801,8 +805,7 @@ fn prescan_struct_accessor_signatures<'db>(
             let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
             let getter_name = prefix
                 .child(declaration.name.clone())
-                .child(field_name.clone())
-                .to_symbol();
+                .child(field_name.clone());
             let field_type = layout_fields
                 .get(index)
                 .map(|(_, ty)| *ty)
@@ -877,8 +880,7 @@ fn lower_struct_accessors<'db>(
         let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
         let getter_name = prefix
             .child(declaration.name.clone())
-            .child(field_name.clone())
-            .to_symbol();
+            .child(field_name.clone());
         let field_type = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout_type)
             .and_then(|fields| fields.get(index).map(|(_, ty)| *ty))
             .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
@@ -907,7 +909,8 @@ fn lower_struct_accessors<'db>(
             parent_op: None,
         });
         let callable = func_sig_type(ir, field_type, [struct_type], CallingConvention::Direct);
-        let getter = tribute_control::func_declaration(ir, location, &getter_name, callable);
+        let getter =
+            tribute_control::func_declaration(ir, location, &getter_name.to_symbol(), callable);
         ir.push_op_region(getter.op_ref(), body);
         ir.push_op(top, getter.op_ref());
 
@@ -990,7 +993,8 @@ fn lower_struct_accessors<'db>(
                 parent_op: None,
             });
             let callable = func_sig_type(ir, struct_type, [struct_type, argument_ty], convention);
-            let function = tribute_control::func_declaration(ir, location, &name, callable);
+            let function =
+                tribute_control::func_declaration(ir, location, &name.to_symbol(), callable);
             ir.push_op_region(function.op_ref(), body);
             ir.push_op(top, function.op_ref());
         }
@@ -1007,8 +1011,10 @@ fn function_signature<'db>(
     // short-name lookup can silently select an unrelated root declaration.
     let mut signature = FuncSignature::lookup_logical(ctx, ir, &qualified)
         .or_else(|| {
-            (qualified != function.name)
-                .then(|| FuncSignature::lookup_logical(ctx, ir, &function.name))
+            (qualified != [&function.name])
+                .then(|| {
+                    FuncSignature::lookup_logical(ctx, ir, std::slice::from_ref(&function.name))
+                })
                 .flatten()
         })
         .unwrap_or_else(|| {
@@ -1105,7 +1111,7 @@ fn lower_function<'db>(
         blocks: trunk_ir::smallvec::smallvec![entry],
         parent_op: None,
     });
-    let name = ctx.qualify_name(&function.name);
+    let name = ctx.qualify_name(&function.name).to_symbol();
     let function = tribute_control::func_declaration(ir, location, &name, callable);
     ir.push_op_region(function.op_ref(), body);
     ir.push_op(top, function.op_ref());
@@ -1120,11 +1126,11 @@ fn lower_extern<'db>(
 ) {
     let location = ctx.location(decl.id);
     let qualified = ctx.qualify_name(&decl.name);
-    let signature = if qualified == decl.name {
-        FuncSignature::lookup_logical(ctx, ir, &decl.name)
+    let signature = if qualified == [&decl.name] {
+        FuncSignature::lookup_logical(ctx, ir, &qualified)
     } else {
         FuncSignature::lookup_logical(ctx, ir, &qualified)
-            .or_else(|| FuncSignature::lookup_logical(ctx, ir, &decl.name))
+            .or_else(|| FuncSignature::lookup_logical(ctx, ir, std::slice::from_ref(&decl.name)))
     }
     .unwrap_or_else(|| {
         panic!(
@@ -1167,7 +1173,7 @@ fn lower_extern<'db>(
 fn ensure_prelude_declaration(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
-    name: &Symbol,
+    name: &SymbolPath,
     signature: &FuncSignature,
 ) {
     if builder.ctx.is_logical_source_function(name)
@@ -1416,7 +1422,7 @@ fn lower_expr<'db>(
                     .unwrap_or_else(|| panic!("missing logical binding for local {id:?}")),
             ),
             ResolvedRef::Function { id } => {
-                let name = id.qualified(builder.ctx.db);
+                let name = id.path(builder.ctx.db);
                 Some(lower_function_ref(builder, location, name.clone(), None))
             }
             ResolvedRef::AbilityOp { .. } => {
@@ -2123,7 +2129,7 @@ fn bind_pattern<'db>(
 pub(super) fn emit_named_call(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
-    name: Symbol,
+    name: SymbolPath,
     values: Vec<ValueRef>,
 ) -> ValueRef {
     let call = named_call(builder, location, name, values, CallPosition::Value);
@@ -2140,7 +2146,7 @@ enum CallPosition {
 fn named_call(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
-    name: Symbol,
+    name: SymbolPath,
     values: Vec<ValueRef>,
     position: CallPosition,
 ) -> OpRef {
@@ -2266,9 +2272,9 @@ fn lower_call<'db>(
     let named_signature = match &*callee.kind {
         ExprKind::Var(reference) => match reference.resolved {
             ResolvedRef::Function { id } => {
-                let name = id.qualified(builder.ctx.db);
+                let name = id.path(builder.ctx.db);
                 Some(
-                    FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
+                    FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
                         .unwrap_or_else(|| panic!("missing logical signature for call {name}")),
                 )
             }
@@ -2368,7 +2374,7 @@ fn lower_call<'db>(
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
             ResolvedRef::Function { id } => {
-                let name = id.qualified(builder.ctx.db);
+                let name = id.path(builder.ctx.db);
                 let call = named_call(builder, location, name.clone(), values, position);
                 finish_call(
                     builder,

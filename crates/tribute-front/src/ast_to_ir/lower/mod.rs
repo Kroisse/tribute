@@ -33,7 +33,7 @@ impl FuncSignature {
     pub fn lookup_logical<'db>(
         ctx: &mut IrLoweringCtx<'db>,
         ir: &mut IrContext,
-        name: &Symbol,
+        name: &[Symbol],
     ) -> Option<Self> {
         let outer = ctx.enter_definition(name);
         let signature = Self::lookup_in_definition(ctx, ir, name);
@@ -44,7 +44,7 @@ impl FuncSignature {
     fn lookup_in_definition<'db>(
         ctx: &IrLoweringCtx<'db>,
         ir: &mut IrContext,
-        name: &Symbol,
+        name: &[Symbol],
     ) -> Option<Self> {
         if let Some(signature) = ctx.lookup_logical_generated_signature(name) {
             return Some(Self {
@@ -158,6 +158,9 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
             .results(target_ty)
             .build(self.ir, location);
         self.ir.push_op(self.block, reference.op_ref());
+        if let Some(path) = self.ctx.function_ref_path(producer).cloned() {
+            self.ctx.record_function_ref(reference.op_ref(), path);
+        }
         Some(reference.result(self.ir))
     }
 }

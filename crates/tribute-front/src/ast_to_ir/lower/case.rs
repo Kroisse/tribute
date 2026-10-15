@@ -9,11 +9,11 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
 use tribute_ir::dialect::list;
-use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, scf};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location, StringRef};
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{LiteralPattern, NodeId, Pattern, PatternKind, ResolvedRef, TypedRef};
 
@@ -614,7 +614,7 @@ fn emit_cmpi_eq(
 fn emit_equality_call(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
-    equality: Option<Symbol>,
+    equality: Option<SymbolPath>,
     type_name: &str,
     scrutinee: ValueRef,
     literal: ValueRef,

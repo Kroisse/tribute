@@ -65,7 +65,7 @@ fn specialized_callee<'db>(
     rewrite_map: &RewriteMap<'db>,
     keys: &InstanceKeys<'db>,
     instance: &crate::typeck::FunctionInstance<'db>,
-    enclosing: Option<&Symbol>,
+    enclosing: Option<&[Symbol]>,
     typed_ref: &TypedRef<'db>,
 ) -> Option<TypedRef<'db>> {
     let ResolvedRef::Function { id } = &typed_ref.resolved else {
@@ -156,7 +156,7 @@ pub fn rewrite_field_function_refs<'db>(
             }
             if let Some(key) = classes {
                 let path = super::mangle::class_instance_path(function.path(db), &key.class_args);
-                keys.record(path.to_symbol(), original, &key);
+                keys.record(path.clone(), original, &key);
                 function = FuncDefId::new(db, path);
             }
             instance.function = function;

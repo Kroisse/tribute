@@ -90,11 +90,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
 
     let tdnr_ast = result.module;
 
-    let function_types_map: HashMap<_, _> = result
-        .function_types
-        .into_iter()
-        .map(|(path, scheme)| (path.to_symbol(), scheme))
-        .collect();
+    let function_types_map: HashMap<_, _> = result.function_types.into_iter().collect();
     let constructor_types: HashMap<_, _> = result.constructor_types.into_iter().collect();
     let ability_definitions: HashMap<_, _> = result.ability_definitions.into_iter().collect();
     let ability_conventions =

@@ -103,8 +103,8 @@ pub fn monomorphize_functions<'db>(
             let known = instantiations.entry(func_id).or_default();
             for key in discovered {
                 if known.insert(key.clone()) {
-                    let name = mangle::mangle_instance_name(db, &func_id.qualified(db), &key);
-                    keys.record(name, func_id, &key);
+                    let path = mangle::mangle_instance_path(db, func_id.path(db), &key);
+                    keys.record(path, func_id, &key);
                     new_instantiations.entry(func_id).or_default().insert(key);
                 }
             }
