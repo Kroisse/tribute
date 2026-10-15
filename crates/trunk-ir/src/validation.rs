@@ -31,7 +31,7 @@ use super::op_interface::{
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
-use super::symbol_table::SymbolTable;
+use super::symbol_table::{SymbolTable, qualified_name};
 use super::type_verifier::lookup_type_verifier;
 use super::walk;
 
@@ -618,12 +618,13 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
     let Some(body) = module.body(ctx) else {
         return ValidationResult { errors };
     };
-    // References name their targets by root-qualified path. None is genuinely
-    // undeclared. A found but invalid or duplicated declaration is Some(None),
-    // so compatibility cannot hide malformed known contracts.
-    let resolve = |name: SymbolPath| -> Option<Option<func::FuncSig>> {
-        let found = *symbols.definitions_of(&name).first()?;
-        if symbols.resolve(&name).is_none() || !func::Func::matches(ctx, found) {
+    // A reference is resolved in the module nearest to the operation that
+    // holds it. None is genuinely undeclared. A found but invalid or
+    // duplicated declaration is Some(None), so compatibility cannot hide
+    // malformed known contracts.
+    let resolve = |op: OpRef, name: &SymbolPath| -> Option<Option<func::FuncSig>> {
+        let found = *symbols.definitions(ctx, op, name).first()?;
+        if symbols.resolve(ctx, op, name).is_none() || !func::Func::matches(ctx, found) {
             return Some(None);
         }
         Some(
@@ -675,7 +676,7 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
                 let Some(name) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     return;
                 };
-                let Some(signature) = resolve(name.clone()) else {
+                let Some(signature) = resolve(op, name) else {
                     return;
                 };
                 let Some(signature) = signature else {
@@ -1172,63 +1173,31 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
 // Call arity validation
 // ============================================================================
 
-/// Collect function signatures from module-level function definitions.
-///
-/// Builds a map from function symbol to expected parameter count by inspecting
-/// `func.func`, `wasm.func`, and `clif.func` operations.
-fn collect_function_signatures(
-    ctx: &IrContext,
-    module_body: RegionRef,
-) -> HashMap<SymbolPath, usize> {
-    let func_name_sym = Symbol::new("func");
-    let func_dialect = Symbol::new("func");
-    let wasm_dialect = Symbol::new("wasm");
-    let clif_dialect = Symbol::new("clif");
+/// Whether `op` is a `func`, `wasm` or `clif` function definition.
+fn is_arity_checked_function(ctx: &IrContext, op: OpRef) -> bool {
+    let data = ctx.op(op);
+    (data.dialect == crate::symbol!("func")
+        || data.dialect == crate::symbol!("wasm")
+        || data.dialect == crate::symbol!("clif"))
+        && data.name == crate::symbol!("func")
+}
 
-    let sym_name_key = Symbol::new("sym_name");
-    let type_key = Symbol::new("type");
-
-    let mut signatures = HashMap::default();
-
-    for &block in &ctx.region(module_body).blocks {
-        for &op in &ctx.block(block).ops {
-            let data = ctx.op(op);
-            let is_function = (data.dialect == func_dialect
-                || data.dialect == wasm_dialect
-                || data.dialect == clif_dialect)
-                && data.name == func_name_sym;
-            if !is_function {
-                continue;
-            }
-
-            let Some(sym_name) = data
-                .attributes
-                .get_str(ctx, &sym_name_key)
-                .map(|name| SymbolPath::new([name]))
-            else {
-                continue;
-            };
-
-            let Some(func_ty) = data.attributes.get_type(&type_key) else {
-                continue;
-            };
-
-            let Some(func_ty) = crate::dialect::func::FuncSig::from_type_ref(ctx, func_ty) else {
-                continue;
-            };
-            signatures.insert(sym_name, func_ty.inputs(ctx).len());
-        }
+/// The parameter count of the function definition `op`.
+fn parameter_count(ctx: &IrContext, op: OpRef) -> Option<usize> {
+    if !is_arity_checked_function(ctx, op) {
+        return None;
     }
-
-    signatures
+    let func_ty = ctx.op(op).attributes.get_type(crate::symbol!("type"))?;
+    let func_ty = crate::dialect::func::FuncSig::from_type_ref(ctx, func_ty)?;
+    Some(func_ty.inputs(ctx).len())
 }
 
 /// Walk all operations in a region tree and check call arity.
 fn check_call_arity_in_region(
     ctx: &IrContext,
     region: RegionRef,
-    signatures: &HashMap<SymbolPath, usize>,
-    enclosing_fn: &str,
+    symbols: &SymbolTable,
+    enclosing_fn: &SymbolPath,
 ) {
     let func_dialect = Symbol::new("func");
     let call_name = Symbol::new("call");
@@ -1251,7 +1220,10 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 
-        if let Some(&expected) = signatures.get(callee_sym) {
+        if let Some(expected) = symbols
+            .resolve(ctx, op, callee_sym)
+            .and_then(|callee| parameter_count(ctx, callee))
+        {
             let actual = ctx.op_operands(op).len();
             if actual != expected {
                 ctx.report_warning(
@@ -1273,41 +1245,18 @@ fn check_call_arity_in_region(
 ///
 /// Arity mismatches are reported as warnings via `ctx.report_warning`.
 pub fn validate_call_arity(ctx: &IrContext, module: Module) {
-    let Some(body) = module.body(ctx) else {
-        return;
-    };
-
-    let signatures = collect_function_signatures(ctx, body);
-
-    // Walk each function definition and check call sites within
-    let func_name_sym = Symbol::new("func");
-    let func_dialect = Symbol::new("func");
-    let wasm_dialect = Symbol::new("wasm");
-    let clif_dialect = Symbol::new("clif");
-    let sym_name_key = Symbol::new("sym_name");
-
-    for &block in &ctx.region(body).blocks {
-        for &op in &ctx.block(block).ops {
-            let data = ctx.op(op);
-            let is_function = (data.dialect == func_dialect
-                || data.dialect == wasm_dialect
-                || data.dialect == clif_dialect)
-                && data.name == func_name_sym;
-            if !is_function {
-                continue;
-            }
-
-            let fn_name = data
-                .attributes
-                .get_str(ctx, &sym_name_key)
-                .map(str::to_owned)
-                .unwrap_or_else(|| "<unnamed>".to_string());
-
+    let symbols = SymbolTable::collect(ctx, module);
+    let _ = walk::walk_op::<std::convert::Infallible>(ctx, module.op(), &mut |op| {
+        if !is_arity_checked_function(ctx, op) {
+            return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
+        }
+        if let Some(name) = qualified_name(ctx, op) {
             for func_region in ctx.op_regions(op) {
-                check_call_arity_in_region(ctx, func_region, &signatures, &fn_name);
+                check_call_arity_in_region(ctx, func_region, &symbols, &name);
             }
         }
-    }
+        std::ops::ControlFlow::Continue(walk::WalkAction::Skip)
+    });
 }
 
 /// Run all validations and combine results.
@@ -3725,7 +3674,7 @@ mod tests {
     }
 
     #[test]
-    fn function_contracts_resolve_callees_by_root_qualified_path() {
+    fn function_contracts_resolve_callees_in_the_nearest_module() {
         let errors = |callee: &str| {
             let mut ctx = IrContext::new();
             let module = crate::parser::parse_test_module(
@@ -3749,8 +3698,11 @@ mod tests {
             );
             validate_function_contracts(&ctx, module).errors
         };
-        // The bare name names the root definition, not the sibling in `inner`.
-        assert!(errors("@target").is_empty());
-        assert!(!errors("@inner::@target").is_empty());
+        // The bare name names the sibling in `inner`, whose signature does not
+        // match; the root definition is not visible from `inner`.
+        assert!(!errors("@target").is_empty());
+        // `@inner::@target` is looked up in `inner`, which has no `inner`, so
+        // it names an undeclared target.
+        assert!(errors("@inner::@target").is_empty());
     }
 }

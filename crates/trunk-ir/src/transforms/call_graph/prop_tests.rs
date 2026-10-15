@@ -20,10 +20,28 @@ fn reaches(successors: &[Vec<usize>], from: usize, to: usize) -> bool {
     reachable_from(successors, successors[from].iter().copied(), None)[to]
 }
 
+use crate::symbol::SymbolPath;
+use crate::symbol_table::qualified_name;
+
 fn path_set(paths: &[SymbolPath], indices: impl IntoIterator<Item = usize>) -> HashSet<SymbolPath> {
     indices
         .into_iter()
         .map(|index| paths[index].clone())
+        .collect()
+}
+
+fn name(ctx: &IrContext, op: OpRef) -> SymbolPath {
+    qualified_name(ctx, op).expect("symbol")
+}
+
+fn names<'a>(ctx: &IrContext, ops: impl IntoIterator<Item = &'a OpRef>) -> HashSet<SymbolPath> {
+    ops.into_iter().map(|&op| name(ctx, op)).collect()
+}
+
+fn named_edges(ctx: &IrContext, edges: &Edges) -> HashMap<SymbolPath, HashSet<SymbolPath>> {
+    edges
+        .iter()
+        .map(|(&caller, callees)| (name(ctx, caller), names(ctx, callees)))
         .collect()
 }
 
@@ -38,42 +56,64 @@ proptest! {
         let paths = spec.paths();
         let functions = spec.functions.len();
 
-        prop_assert_eq!(
-            graph.func_ops.keys().cloned().collect::<HashSet<_>>(),
-            path_set(&paths, 0..functions)
-        );
+        prop_assert_eq!(names(ctx, &graph.functions), path_set(&paths, 0..functions));
+        // A reference that names a defined function, by its path; any other
+        // reference resolves to nothing and adds no edge.
+        let resolved = |nested: bool, target: usize| {
+            spec.resolved_target(nested, target)
+                .filter(|&index| index < functions)
+                .map(|index| paths[index].clone())
+        };
         for calls_only in [false, true] {
             let expected: HashMap<SymbolPath, HashSet<SymbolPath>> = spec
-                .successors(calls_only)
+                .functions
                 .iter()
                 .enumerate()
-                .filter(|(_, targets)| !targets.is_empty())
-                .map(|(index, targets)| {
-                    (paths[index].clone(), path_set(&paths, targets.iter().copied()))
+                .map(|(index, function)| {
+                    let targets: HashSet<SymbolPath> = function
+                        .refs
+                        .iter()
+                        .filter(|reference| !calls_only || reference.kind == RefKind::Call)
+                        .filter_map(|reference| resolved(function.nested, reference.target))
+                        .collect();
+                    (paths[index].clone(), targets)
                 })
+                .filter(|(_, targets)| !targets.is_empty())
                 .collect();
-            let actual = if calls_only { &graph.calls } else { &graph.edges };
-            prop_assert_eq!(actual, &expected, "calls_only = {}", calls_only);
+            let actual = named_edges(ctx, if calls_only { &graph.calls } else { &graph.edges });
+            prop_assert_eq!(actual, expected, "calls_only = {}", calls_only);
         }
 
         let mut call_sites: HashMap<SymbolPath, usize> = HashMap::default();
         let mut address_taken = HashSet::default();
-        for reference in spec.functions.iter().flat_map(|function| &function.refs) {
-            let target = paths[reference.target].clone();
+        for (function, reference) in spec
+            .functions
+            .iter()
+            .flat_map(|function| function.refs.iter().map(move |reference| (function, reference)))
+        {
+            let Some(target) = resolved(function.nested, reference.target) else {
+                continue;
+            };
             if reference.kind == RefKind::Call {
                 *call_sites.entry(target).or_default() += 1;
             } else {
                 address_taken.insert(target);
             }
         }
-        let module_references = path_set(
-            &paths,
-            spec.module_refs.iter().map(|reference| reference.target),
-        );
+        let module_references: HashSet<SymbolPath> = spec
+            .module_refs
+            .iter()
+            .filter_map(|reference| resolved(reference.nested, reference.target))
+            .collect();
         address_taken.extend(module_references.iter().cloned());
-        prop_assert_eq!(&graph.call_site_count, &call_sites);
-        prop_assert_eq!(&graph.module_references, &module_references);
-        prop_assert_eq!(&graph.address_taken, &address_taken);
+        let call_site_count: HashMap<SymbolPath, usize> = graph
+            .call_site_count
+            .iter()
+            .map(|(&callee, &count)| (name(ctx, callee), count))
+            .collect();
+        prop_assert_eq!(call_site_count, call_sites);
+        prop_assert_eq!(names(ctx, &graph.module_references), module_references);
+        prop_assert_eq!(names(ctx, &graph.address_taken), address_taken);
     }
 
     #[test]
@@ -85,7 +125,10 @@ proptest! {
         let functions = spec.functions.len();
         let successors = spec.successors(false);
 
-        let ids = tarjan_scc(&graph);
+        let ids: HashMap<SymbolPath, u32> = tarjan_scc(&graph)
+            .into_iter()
+            .map(|(op, id)| (name(ctx, op), id))
+            .collect();
         prop_assert_eq!(
             ids.keys().cloned().collect::<HashSet<_>>(),
             path_set(&paths, 0..functions)
@@ -113,7 +156,7 @@ proptest! {
                 &paths,
                 (0..functions).filter(|&index| reaches(&successors, index, index)),
             );
-            prop_assert_eq!(actual, expected, "calls_only = {}", calls_only);
+            prop_assert_eq!(names(ctx, &actual), expected, "calls_only = {}", calls_only);
         }
     }
 }

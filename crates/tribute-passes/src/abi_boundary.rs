@@ -146,7 +146,7 @@ pub fn verify_boundary_exit(
         verifier.check_op(op, &functions);
     }
     verifier.check_runtime_bindings(&ops, &functions, target);
-    verifier.check_root_entry(&functions);
+    verifier.check_root_entry(module, &functions);
     verifier.violations
 }
 
@@ -192,7 +192,7 @@ impl<'a> Verifier<'a> {
                 .attributes
                 .visit_symbol_refs(&mut |reference| references.push(reference.clone()));
             for reference in references {
-                let Some(declaration) = functions.resolve(&reference) else {
+                let Some(declaration) = functions.resolve(ctx, op, &reference) else {
                     continue;
                 };
                 if declaration == op
@@ -231,9 +231,9 @@ impl<'a> Verifier<'a> {
 
     /// Report a root `main` that is not a parameterless `Nil` definition with
     /// the platform convention.
-    fn check_root_entry(&mut self, functions: &SymbolTable) {
+    fn check_root_entry(&mut self, module: Module, functions: &SymbolTable) {
         let ctx = self.ctx;
-        let Some(main) = functions.resolve(&SymbolPath::new(["main"])) else {
+        let Some(main) = functions.resolve_in(ctx, module.op(), &SymbolPath::new(["main"])) else {
             return;
         };
         let Ok(function) = func::Func::from_op(ctx, main) else {
@@ -299,7 +299,7 @@ impl<'a> Verifier<'a> {
         if let Ok(constant) = func::Constant::from_op(ctx, op) {
             let target = constant.func_ref(ctx);
             let expected = functions
-                .resolve(target)
+                .resolve(ctx, op, target)
                 .and_then(|function| func::Func::from_op(ctx, function).ok())
                 .map(|function| function.r#type(ctx));
             if expected.is_none() || ctx.op_result_types(op) != [expected.unwrap()] {
@@ -871,7 +871,7 @@ mod tests {
     }
 
     #[test]
-    fn references_resolve_by_root_qualified_path() {
+    fn references_resolve_in_the_nearest_module() {
         let violations = kinds(
             r#"core.module @test {
   core.module @left {
@@ -879,7 +879,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @left::@same} : func.func_sig<(core.i32) -> ()>
+      %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
       func.return
     }
   }
@@ -892,13 +892,13 @@ mod tests {
         );
         assert_eq!(violations, []);
 
-        // A bare name does not resolve relative to the referencing module.
+        // A reference is not looked up in an enclosing module.
         let violations = kinds(
             r#"core.module @test {
+  func.func @same(%value: core.i32) {
+    func.return
+  }
   core.module @left {
-    func.func @same(%value: core.i32) {
-      func.return
-    }
     func.func @take() {
       %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
       func.return

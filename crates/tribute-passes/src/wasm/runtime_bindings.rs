@@ -45,14 +45,15 @@ pub fn is_c_declaration(ctx: &IrContext, op: OpRef) -> bool {
     !ctx.op_has_regions(op) && ctx.op(op).attributes.get_str(ctx, "abi") == Some("C")
 }
 
-/// The C link name of the declaration `callee` resolves to, if it is a
-/// bodyless `abi = "C"` declaration.
+/// The C link name of the declaration the reference `callee`, held by `op`,
+/// resolves to, if it is a bodyless `abi = "C"` declaration.
 pub(crate) fn c_helper(
     ctx: &IrContext,
     symbols: &SymbolTable,
+    op: OpRef,
     callee: &SymbolPath,
 ) -> Option<Symbol> {
-    let declaration = symbols.resolve(callee)?;
+    let declaration = symbols.resolve(ctx, op, callee)?;
     is_c_declaration(ctx, declaration)
         .then(|| {
             ctx.op(declaration)

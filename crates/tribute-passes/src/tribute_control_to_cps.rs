@@ -29,8 +29,9 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionMode, ConversionTarget, Module};
-use trunk_ir::symbol_table::{SymbolTable, qualified_name};
+use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
+use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
 
 mod boundary;
@@ -71,7 +72,6 @@ fn convert_convention(convention: tribute_control::CallingConvention) -> Calling
 
 #[derive(Clone)]
 struct CallableInfo {
-    symbol: SymbolPath,
     convention: CallingConvention,
     source_result: TypeRef,
     source_params: Vec<TypeRef>,
@@ -83,8 +83,12 @@ struct CallableInfo {
 struct Converter<'a> {
     ctx: &'a mut IrContext,
     module_block: BlockRef,
-    /// Callables by root-qualified name across the whole module tree.
-    funcs: HashMap<SymbolPath, CallableInfo>,
+    /// Every source callable, by its defining operation.
+    funcs: HashMap<OpRef, CallableInfo>,
+    /// The callable each source operation's callee or `func_ref` names,
+    /// resolved before conversion moves anything.
+    targets: HashMap<OpRef, OpRef>,
+    /// Source operations whose references are looked up in a nested module.
     converted_types: HashMap<TypeRef, TypeRef>,
     helper_index: u32,
 }
@@ -152,22 +156,24 @@ struct TailJoin {
 }
 
 impl<'a> Converter<'a> {
-    fn new(
-        ctx: &'a mut IrContext,
-        module_block: BlockRef,
-        funcs: HashMap<SymbolPath, CallableInfo>,
-    ) -> Self {
+    fn new(ctx: &'a mut IrContext, module_block: BlockRef, graph: CallableGraph) -> Self {
         Self {
             ctx,
             module_block,
-            funcs,
+            funcs: graph.funcs,
+            targets: graph.targets,
             converted_types: HashMap::default(),
             helper_index: 0,
         }
     }
 
-    fn current_func(&self, symbol: &SymbolPath) -> Option<CallableInfo> {
-        self.funcs.get(symbol).cloned()
+    /// The callable the callee or `func_ref` of the source operation `op`
+    /// names.
+    fn current_func(&self, op: OpRef) -> Option<CallableInfo> {
+        self.targets
+            .get(&op)
+            .and_then(|target| self.funcs.get(target))
+            .cloned()
     }
 
     fn malformed_source(
@@ -368,17 +374,22 @@ impl<'a> Converter<'a> {
     }
 }
 
-/// Every source callable, keyed by its root-qualified name.
-fn collect_callable_graph(
-    ctx: &IrContext,
-    symbols: &SymbolTable,
-) -> HashMap<SymbolPath, CallableInfo> {
-    symbols
+/// The source callables of a module and what its references name.
+#[derive(Default)]
+struct CallableGraph {
+    funcs: HashMap<OpRef, CallableInfo>,
+    targets: HashMap<OpRef, OpRef>,
+}
+
+/// Every source callable by its defining operation, and the callable each
+/// callee or `func_ref` in `module` resolves to.
+fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable) -> CallableGraph {
+    let funcs: HashMap<OpRef, CallableInfo> = symbols
+        .symbols()
         .iter()
-        .filter(|&(_, ops)| tribute_control::Func::matches(ctx, ops[0]))
-        .map(|(symbol, ops)| {
-            // Pre-CPS validation rejects duplicated qualified names.
-            let op = ops[0];
+        .copied()
+        .filter(|&op| tribute_control::Func::matches(ctx, op))
+        .map(|op| {
             let logical_type = ctx
                 .op(op)
                 .attributes
@@ -389,9 +400,8 @@ fn collect_callable_graph(
             let convention = tribute_control::func_sig_convention(ctx, logical_type)
                 .expect("pre-CPS validation checked callable convention");
             (
-                symbol.clone(),
+                op,
                 CallableInfo {
-                    symbol: symbol.clone(),
                     convention: convert_convention(convention),
                     source_result: callable.result(ctx),
                     source_params: callable.inputs(ctx).to_vec(),
@@ -399,7 +409,21 @@ fn collect_callable_graph(
                 },
             )
         })
-        .collect()
+        .collect();
+    let mut targets = HashMap::default();
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        let attributes = &ctx.op(op).attributes;
+        if let Some(target) = attributes
+            .get_symbol_ref("callee")
+            .or_else(|| attributes.get_symbol_ref("func_ref"))
+            .and_then(|reference| symbols.resolve(ctx, op, reference))
+            .filter(|target| funcs.contains_key(target))
+        {
+            targets.insert(op, target);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    CallableGraph { funcs, targets }
 }
 
 fn verify_candidate_or_restore_aliases(
@@ -432,7 +456,11 @@ pub fn tribute_control_to_cps(
     analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
     verify_tribute_control_pre_cps(ctx, module, compiler_intrinsics, analyses)?;
-    let funcs = collect_callable_graph(ctx, &analyses.require::<SymbolTable>(ctx, module.op()));
+    let graph = collect_callable_graph(
+        ctx,
+        module,
+        &analyses.require::<SymbolTable>(ctx, module.op()),
+    );
     let source_region = module.body(ctx).ok_or_else(|| {
         TributeControlToCpsError::one(
             PRE_CPS_BOUNDARY,
@@ -460,7 +488,7 @@ pub fn tribute_control_to_cps(
         parent_region: None,
     });
     {
-        let mut converter = Converter::new(ctx, new_block, funcs);
+        let mut converter = Converter::new(ctx, new_block, graph);
         let mut mapping = HashMap::default();
         let source_ops = converter.ctx.block(source_blocks[0]).ops.clone();
         for source in source_ops {

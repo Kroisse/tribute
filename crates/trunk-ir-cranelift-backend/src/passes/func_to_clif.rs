@@ -12,6 +12,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
+use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -25,7 +26,6 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::Attribute;
-use trunk_ir::{Symbol, SymbolPath};
 
 /// Lower func dialect to clif dialect.
 pub fn lower(
@@ -33,7 +33,8 @@ pub fn lower(
     module: Module,
     type_converter: TypeConverter,
 ) -> Result<(), ConversionError> {
-    let functions = function_signatures(ctx, module);
+    let symbols = SymbolTable::collect(ctx, module);
+    let functions = function_signatures(ctx, &symbols);
 
     let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
@@ -44,7 +45,7 @@ pub fn lower(
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern { functions })
+        .add_pattern(FuncConstantPattern { symbols, functions })
         .with_target(func_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "func-to-clif")?;
     Ok(())
@@ -471,16 +472,13 @@ impl RewritePattern for FuncUnreachablePattern {
     }
 }
 
-/// Each uniquely defined `func.func` by root-qualified name, with its exact
-/// signature captured before lowering converts it.
-fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<SymbolPath, TypeRef> {
-    let table = SymbolTable::collect(ctx, module);
-    table
+/// Each `func.func` symbol with its exact signature, captured before lowering
+/// converts it.
+fn function_signatures(ctx: &IrContext, symbols: &SymbolTable) -> HashMap<OpRef, TypeRef> {
+    symbols
+        .symbols()
         .iter()
-        .filter_map(|(name, ops)| match ops {
-            &[op] => Some((name.clone(), func::Func::from_op(ctx, op).ok()?.r#type(ctx))),
-            _ => None,
-        })
+        .filter_map(|&op| Some((op, func::Func::from_op(ctx, op).ok()?.r#type(ctx))))
         .collect()
 }
 
@@ -490,7 +488,8 @@ fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<SymbolPath, T
 /// reference must carry exactly its target's signature, calling convention
 /// included, before it is erased.
 struct FuncConstantPattern {
-    functions: HashMap<SymbolPath, TypeRef>,
+    symbols: SymbolTable,
+    functions: HashMap<OpRef, TypeRef>,
 }
 
 impl RewritePattern for FuncConstantPattern {
@@ -507,7 +506,11 @@ impl RewritePattern for FuncConstantPattern {
         let func_ref = const_op.func_ref(ctx).clone();
         if let &[result] = ctx.op_result_types(op)
             && func::FuncSig::matches(ctx, result)
-            && self.functions.get(&func_ref).copied() != Some(result)
+            && self
+                .symbols
+                .resolve(ctx, op, &func_ref)
+                .and_then(|target| self.functions.get(&target).copied())
+                != Some(result)
         {
             return false;
         }
@@ -1041,7 +1044,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_function_references_resolve_by_root_qualified_path() {
+    fn nested_function_references_resolve_in_the_nearest_module() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -1051,14 +1054,14 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @inner::@helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
       func.return
     }
   }
 }"#,
         );
         super::lower(&mut ctx, module, TypeConverter::new())
-            .expect("a nested reference resolves by its qualified path");
+            .expect("a nested reference resolves in its own module");
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("clif.symbol_addr"), "{printed}");
         assert!(!printed.contains("func.constant"), "{printed}");

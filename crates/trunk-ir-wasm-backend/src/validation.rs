@@ -10,7 +10,7 @@ use trunk_ir::Module;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::symbol_table::SymbolTable;
+use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::{CompilationError, CompilationResult};
@@ -39,9 +39,10 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
     let body = module
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
-    // Direct callees resolve by root-qualified path over the whole module.
+    // A direct callee resolves in the module nearest to the call.
     let symbols = SymbolTable::collect(ctx, module);
-    for (name, _) in symbols.duplicates() {
+    for ops in symbols.duplicates() {
+        let name = qualified_name(ctx, ops[0]).unwrap_or_else(SymbolPath::root);
         errors.push(format!("symbol @{name} is defined more than once"));
     }
     validate_region(ctx, body, 0, &symbols, &mut errors);
@@ -125,10 +126,11 @@ fn enclosing_wasm_func_signature(ctx: &IrContext, mut op: OpRef) -> Option<wasm_
 fn resolve_wasm_callee(
     ctx: &IrContext,
     symbols: &SymbolTable,
-    name: &SymbolPath,
+    op: OpRef,
+    reference: &SymbolPath,
 ) -> Option<Option<wasm_dialect::FuncSig>> {
-    let found = *symbols.definitions_of(name).first()?;
-    if symbols.resolve(name).is_none()
+    let found = *symbols.definitions(ctx, op, reference).first()?;
+    if symbols.resolve(ctx, op, reference).is_none()
         || (!wasm_dialect::Func::matches(ctx, found)
             && !wasm_dialect::ImportFunc::matches(ctx, found))
     {
@@ -260,7 +262,7 @@ fn validate_direct_callable_contracts(
         ));
         return;
     };
-    let Some(resolved) = resolve_wasm_callee(ctx, symbols, callee) else {
+    let Some(resolved) = resolve_wasm_callee(ctx, symbols, op, callee) else {
         return;
     };
     let Some(signature) = resolved else {
@@ -843,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_tail_calls_by_root_qualified_path() {
+    fn resolves_tail_calls_in_the_nearest_module() {
         let source = |callee: &str| {
             format!(
                 r#"core.module @outer {{
@@ -859,13 +861,10 @@ mod tests {
             )
         };
 
-        // A bare name names the root definition, not the sibling in `inner`.
+        // A bare name names the sibling in `inner`; the root definition is
+        // not visible from `inner`.
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &source("@target"));
-        validate_wasm_ir(&ctx, module).expect("root target has the caller's result");
-
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &source("@inner::@target"));
         let error = validate_wasm_ir(&ctx, module).expect_err("nested target has Unit result");
         assert!(
             error

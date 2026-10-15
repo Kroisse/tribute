@@ -5,6 +5,7 @@ use trunk_ir::SymbolPath;
 use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
+use trunk_ir::symbol_table::nearest_table;
 
 use crate::lower_continuation_frames::lower_continuation_frames;
 use crate::test_support::assert_unchanged_on_error;
@@ -40,7 +41,7 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
             AttributeMap::from_iter([(Symbol::new("nested"), Attribute::Type(source_callable))]);
         let source = func::func_sig_with_attrs(&mut ctx, [source_callable], results.clone(), attrs)
             .as_type_ref();
-        let mut converter = Converter::new(&mut ctx, block, HashMap::default());
+        let mut converter = Converter::new(&mut ctx, block, CallableGraph::default());
         let converted = converter.convert_type(source);
         assert_eq!(
             converter.convert_type(source),
@@ -417,7 +418,7 @@ fn nested_textual_module_converts_its_callable_graph_atomically() {
 }
 
 #[test]
-fn nested_modules_resolve_same_named_callables_by_qualified_path() {
+fn nested_modules_resolve_same_named_callables_in_their_own_module() {
     let input = r#"core.module @outer {
   tribute_control.func @same(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
@@ -431,7 +432,7 @@ fn nested_modules_resolve_same_named_callables_by_qualified_path() {
       tribute_control.return %value
     }
     tribute_control.func @inner_call(%value: core.i1) -> core.i1 convention(evidence_direct) {
-      %result = tribute_control.call %value {callee = @inner::@same} : core.i1
+      %result = tribute_control.call %value {callee = @same} : core.i1
       tribute_control.return %result
     }
   }
@@ -1794,6 +1795,42 @@ fn func_ref_adapters_cover_every_legal_convention_strengthening() {
         "{printed}"
     );
     assert!(!printed.contains("tribute_control."));
+}
+
+/// A func_ref adapter is defined in the root module, which a reference in a
+/// nested module cannot name.
+#[test]
+fn func_ref_in_a_nested_module_is_adapted_in_that_module() {
+    let input = r#"core.module @test {
+  core.module @inner {
+    !direct = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+    tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
+      tribute_control.return %value
+    }
+    tribute_control.func @refs(%value: core.i32) -> core.i32 convention(direct) {
+      %reference = tribute_control.func_ref {func_ref = @id} : !direct
+      tribute_control.return %value
+    }
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+        .expect("a nested func_ref is adapted in its own module");
+    let symbols = SymbolTable::collect(&ctx, module);
+    let mut adapters = Vec::new();
+    let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
+        if let Ok(closure) = closure::New::from_op(&ctx, op) {
+            adapters.push(symbols.resolve(&ctx, op, closure.func_ref(&ctx)));
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    let [Some(adapter)] = adapters[..] else {
+        panic!("the closure names its adapter: {adapters:?}");
+    };
+    let inner = symbols
+        .resolve_in(&ctx, module.op(), &[Symbol::new("inner")])
+        .expect("inner module");
+    assert_eq!(nearest_table(&ctx, adapter), Some(inner));
 }
 
 #[test]

@@ -362,8 +362,9 @@ Native ownership planning의 policy-neutral 입력은 `scf_to_cf` 이후,
 `func_to_clif` 이전 경계에서 fallible 분석이 소유한다. Module 범위 분석은
 module body, `func.func` 목록, 중복 없는 function 정의, 검증된 managed
 nominal layout, 유일한 semantic closure 할당 layout, 할당 순서의 RTTI
-descriptor를 담는다. Function 이름은 같은 module의 symbol table 분석이
-정한 root-qualified path다. Function 범위 분석은 그 module 분석에 의존하며,
+descriptor를 담는다. Function은 정의 operation으로 식별하고, 직접 호출의
+callee는 같은 module의 symbol table 분석으로 그 호출에서 해석한다.
+Root-qualified path는 표시 이름일 뿐이다. Function 범위 분석은 그 module 분석에 의존하며,
 검증된 flat CFG, type erasure 이전의 managed 값, typed 계약에서 유도한
 exact managed alias root, 검증된 managed projection-owner 관계, liveness가
 소비하는 policy-neutral block use/definition 입력을 담는다. Alias root는
@@ -481,13 +482,21 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   텍스트 순서이므로 `Symbol`을 key로 정렬한 자료구조는 이름 순서로 순회한다.
   Hash 순회 순서는 출력에 영향을 주어서는 안 된다. `Symbol`은 `Copy`가 아니다.
   이름을 읽기만 하는 곳은 `&Symbol`을 받는다.
-- 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접 호출과 주소 참조)는
-  항상 root module 기준 qualified path이다. 정의는 자기 module 안의 `sym_name`을
-  가지며, 정의의 qualified path는 root module을 제외한 중첩 `core.module` 이름들과
-  `sym_name`을 차례로 component로 둔 것이다. 이름 없는 `core.module`은 경로에
-  기여하지 않는다. 참조는 참조하는 operation이 속한 module을 기준으로 해석하거나
-  바깥 module로 찾아 올라가지 않는다. Qualified path는 module tree 전체에서 유일해야
-  하며, 중복 정의는 모호한 참조가 아니라 IR 오류다.
+- Symbol 해석은 MLIR 규칙을 따른다. `core.module`은 symbol table이며, 정의는 자기를
+  직접 감싼 module에 `sym_name`을 등록한다. 이름 있는 `core.module`은 부모 table의
+  symbol이기도 하다. 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접
+  호출과 주소 참조)의 첫 component는 참조하는 operation을 감싼 가장 가까운 module의
+  table에서 찾는다. 찾지 못해도 바깥 module로 올라가지 않는다. 나머지 component는 앞
+  component가 가리킨 module의 table로 차례로 내려가며 찾으므로, 마지막이 아닌
+  component는 module이어야 한다. 그래서 바깥 module은 `@inner::@f`로 안쪽 정의를
+  가리킬 수 있지만, 안쪽 module의 operation은 부모나 형제 module의 정의를 가리킬 수
+  없다. 정의의 qualified path는 root module을 제외한 중첩 `core.module` 이름들과
+  `sym_name`을 차례로 component로 둔 것이며, 이름 없는 `core.module`은 경로에
+  기여하지 않는다. Qualified path는 진단에 쓰는 표기일 뿐이다. 정의의 정체성은 정의
+  operation이므로, 참조를 다루는 분석은 참조를 그 operation으로 해석해 비교하고,
+  쓰인 참조를 qualified path로 바꿔 찾지 않는다. 한 table 안에서 같은 이름의
+  정의가 둘 이상이면 모호한 참조가 아니라 IR 오류이며, 그 이름은 어떤 정의로도
+  해석되지 않는다.
 - `SymbolPath`의 component는 이름 하나를 쓰인 그대로 담는다. 이름이 `::`를
   포함해도 component 하나이며, 같은 텍스트를 중첩 module로 풀어 쓴 path와는 다른
   path다. Textual form은 component마다 `@`를 붙여 `::`로 잇는다
@@ -673,8 +682,12 @@ spelling, 위치 또는 printed IR만으로 generic specialization identity를 �
 Frontend는 해석된 canonical declaration과 specialization을 qualified symbol에
 대응시킨다. 정의, 직접 호출, 함수 참조와 intrinsic declaration metadata는 같은
 대응을 사용한다. Import alias나 prelude의 짧은 이름을 이 심볼의 선언 경로로
-사용하지 않는다. Qualified symbol은 module tree 전체에서 유일해야 하며, 이 대응은
-source lookup이나 외부 linkage 계약을 변경하지 않는다.
+사용하지 않는다. 컴파일 단위의 정의는 모두 `core.module` 하나에 있으며, 소스 module은
+IR의 module 구조가 되지 않는다. 안쪽 module은 부모나 형제의 정의를 가리킬 수 없으므로
+소스 module 사이의 참조를 module 중첩으로 표현할 수 없기 때문이다. 그래서 정의의
+`sym_name`은 소스 경로를 `::`로 이은 문자열이고 참조는 그 이름 하나를 component로
+둔다. 이 문자열에서 소스 경로를 다시 나누어 복원하지 않으며, 구조화된 경로는
+frontend가 가진다. 이 대응은 source lookup이나 외부 linkage 계약을 변경하지 않는다.
 
 Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutation 전에
 대조한다. Direct call은 qualified symbol을 유일하게 resolve하고 완전한 signature를
@@ -1641,8 +1654,9 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_con
 Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `unit`, bool,
 정수, 부동소수점, 문자열, bytes, symbol 참조, type, location, list, dictionary.
 
-Symbol 참조는 symbol table의 정의를 qualified path로 가리킨다(`callee = @foo`). 참조가
-아닌 이름 값은 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
+Symbol 참조는 symbol table의 정의를 component path로 가리키며(`callee = @foo`),
+참조를 가진 operation에서 가장 가까운 module부터 해석한다. 참조가 아닌 이름 값은
+문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
 `predicate = "slt"`로 쓴다. Operation
 이름(`op_name`), operation kind(`"fn"`, `"op"`), compiler intrinsic identity

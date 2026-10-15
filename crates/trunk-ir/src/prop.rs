@@ -328,8 +328,39 @@ impl ModuleSpec {
             .collect()
     }
 
-    /// The targets of each function's references, by index, optionally only
-    /// its direct calls.
+    /// How an operation in the nested module `m` when `nested`, or in the
+    /// root module otherwise, writes a reference to `target`: relative to
+    /// `m` for a function of `m`, and as the target's root-qualified path
+    /// otherwise.
+    pub fn written(&self, nested: bool, target: usize) -> SymbolPath {
+        let path = self.paths().swap_remove(target);
+        match &path[..] {
+            [module, name] if nested && module == "m" => SymbolPath::new([name.clone()]),
+            _ => path,
+        }
+    }
+
+    /// The root-qualified name a reference written by [`Self::written`]
+    /// resolves to: inside `m`, the written path within `m`, since a
+    /// reference is never looked up in an enclosing module.
+    pub fn resolved(&self, nested: bool, target: usize) -> SymbolPath {
+        let written = self.written(nested, target);
+        if nested {
+            SymbolPath::new(std::iter::once(Symbol::new("m")).chain(written.iter().cloned()))
+        } else {
+            written
+        }
+    }
+
+    /// The index into [`Self::paths`] a reference resolves to, or `None` for
+    /// a name nothing defines.
+    pub fn resolved_target(&self, nested: bool, target: usize) -> Option<usize> {
+        let resolved = self.resolved(nested, target);
+        self.paths().iter().position(|path| *path == resolved)
+    }
+
+    /// The targets of each function's references that resolve, by index,
+    /// optionally only its direct calls.
     pub fn successors(&self, calls_only: bool) -> Vec<Vec<usize>> {
         let mut successors = vec![Vec::new(); self.functions.len() + EXTERNALS];
         for (index, function) in self.functions.iter().enumerate() {
@@ -337,7 +368,7 @@ impl ModuleSpec {
                 .refs
                 .iter()
                 .filter(|reference| !calls_only || reference.kind == RefKind::Call)
-                .map(|reference| reference.target)
+                .filter_map(|reference| self.resolved_target(function.nested, reference.target))
                 .collect();
         }
         successors
@@ -347,12 +378,11 @@ impl ModuleSpec {
 impl BuildIr for ModuleSpec {
     fn build(&self, ctx: &mut IrContext) -> Module {
         let loc = location(ctx);
-        let paths = self.paths();
         let sig = unit_sig(ctx);
         let root_block = empty_block(ctx, loc);
         let nested_block = empty_block(ctx, loc);
         for function in &self.functions {
-            let op = build_function(ctx, loc, sig, function, &paths);
+            let op = build_function(ctx, loc, sig, function, self);
             let block = if function.nested {
                 nested_block
             } else {
@@ -361,7 +391,7 @@ impl BuildIr for ModuleSpec {
             ctx.push_op(block, op);
         }
         for reference in &self.module_refs {
-            let target = paths[reference.target].clone();
+            let target = self.written(reference.nested, reference.target);
             let op = if reference.table {
                 table(ctx, loc, target)
             } else {
@@ -390,7 +420,7 @@ fn build_function(
     loc: Location,
     sig: TypeRef,
     function: &FunctionSpec,
-    paths: &[SymbolPath],
+    spec: &ModuleSpec,
 ) -> OpRef {
     // The generated builder requires a body, so build the operation
     // generically to allow a bodyless declaration.
@@ -409,7 +439,10 @@ fn build_function(
                 .refs
                 .iter()
                 .filter(|reference| reference.block == block)
-                .map(|reference| build_reference(ctx, loc, sig, reference, paths))
+                .map(|reference| {
+                    let target = spec.written(function.nested, reference.target);
+                    build_reference(ctx, loc, sig, reference, target)
+                })
                 .collect()
         });
         builder = builder.region(body);
@@ -423,9 +456,8 @@ fn build_reference(
     loc: Location,
     sig: TypeRef,
     reference: &Reference,
-    paths: &[SymbolPath],
+    target: SymbolPath,
 ) -> OpRef {
-    let target = paths[reference.target].clone();
     let op = match reference.kind {
         RefKind::Call => func::Call::operands(std::iter::empty())
             .callee(target)

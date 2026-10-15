@@ -254,11 +254,13 @@ attribute.visit_types(&mut |ty| seen.push(ty));
 ```
 
 A name that refers to a symbol table definition is an `Attribute::SymbolRef`
-(`callee = @foo`, declared `Attr<SymbolRef>`). It holds a `SymbolPath`: the
-enclosing module names, then the definition's own name, one `Symbol` each.
-Definition names and other fixed names are strings. Collect the references an
-operation makes with the shared traversal rather than by listing attribute
-names:
+(`callee = @foo`, declared `Attr<SymbolRef>`). It holds a `SymbolPath`, one
+`Symbol` per component, resolved as MLIR resolves symbols: the first component
+in the module nearest to the operation that holds the reference, never in an
+enclosing one, and each further component in the module the previous one
+names. Definition names and other fixed names are strings. Collect the
+references an operation makes with the shared traversal rather than by
+listing attribute names:
 
 ```rust
 ctx.op(op).attributes.visit_symbol_refs(&mut |path| referenced.push(path.clone()));
@@ -282,9 +284,14 @@ The path without components, `SymbolPath::root()`, is the root module, and
 walk nested modules with `push` and `pop`. A definition's path and a symbol
 reference have at least one component, so `leaf()` is `None` only for the
 root module; IR validation rejects a reference to it.
-`SymbolTable` and the analyses that name functions (call graph, global DCE,
-backends' function tables) are keyed by `SymbolPath`, so take `&SymbolPath`
-rather than joining it back into one symbol.
+A definition is identified by its operation, not by a path. `SymbolTable`
+holds one scope per symbol table operation, and the analyses that name
+functions (call graph, global DCE, the inliner) are keyed by the defining
+`OpRef`. Resolve a reference from the operation that holds it with
+`SymbolTable::resolve(ctx, op, path)`, or from a given table with
+`resolve_in(ctx, table, path)`; an unresolved or duplicated name yields
+`None`. `symbol_table::qualified_name` spells a definition's path from the
+root for diagnostics only; do not look a written reference up by it.
 
 A direct call operation registers `CallLike` so analyses can tell its callee
 from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;

@@ -7,8 +7,9 @@
 //! one cached computation per target.
 
 use super::*;
+use std::sync::Arc;
 use trunk_ir::analysis::{Analysis, AnalysisContext, AnalysisError};
-use trunk_ir::symbol_table::SymbolTable;
+use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 
 /// Module-scope, policy-neutral facts shared by every defined function.
 ///
@@ -19,7 +20,8 @@ use trunk_ir::symbol_table::SymbolTable;
 /// the module's [`SymbolTable`].
 pub struct NativeOwnershipModuleFacts {
     functions: Vec<(SymbolPath, OpRef)>,
-    definitions: HashMap<SymbolPath, OpRef>,
+    definitions: HashSet<OpRef>,
+    symbols: Arc<SymbolTable>,
     managed_layouts: HashSet<TypeRef>,
     closure_layout: Option<TypeRef>,
     rtti_types: Vec<RttiTypePlan>,
@@ -33,9 +35,12 @@ impl NativeOwnershipModuleFacts {
         &self.functions
     }
 
-    /// Unique function symbol to its operation.
-    pub fn definitions(&self) -> &HashMap<SymbolPath, OpRef> {
-        &self.definitions
+    /// The function the direct call `call` names by `callee`, resolved from
+    /// the call.
+    pub fn callee(&self, ctx: &IrContext, call: OpRef, callee: &[Symbol]) -> Option<OpRef> {
+        self.symbols
+            .resolve(ctx, call, callee)
+            .filter(|function| self.definitions.contains(function))
     }
 
     /// Validated managed nominal layouts reachable from the module.
@@ -71,7 +76,7 @@ impl Analysis for NativeOwnershipModuleFacts {
         let module = Module::new(ctx.ir(), target)
             .expect("native ownership module facts require a `core.module` target");
         let symbols = ctx.get::<SymbolTable>(target)?;
-        compute_module_facts(ctx.ir(), module, &symbols)
+        compute_module_facts(ctx.ir(), module, symbols)
             .map_err(|error| AnalysisError::new::<Self>(target, error))
     }
 }
@@ -169,7 +174,7 @@ pub(super) struct FlowEvent {
 fn compute_module_facts(
     ctx: &IrContext,
     module: Module,
-    symbols: &SymbolTable,
+    symbols: Arc<SymbolTable>,
 ) -> Result<NativeOwnershipModuleFacts, OwnershipPlanError> {
     module
         .first_block(ctx)
@@ -194,18 +199,17 @@ fn compute_module_facts(
     for &op in &function_ops {
         ownership_callable_body(ctx, op)?;
     }
-    // Direct callees name their targets by root-qualified path.
-    let names = symbols
-        .all_definitions()
-        .map(|(name, op)| (op, name))
-        .collect::<HashMap<_, _>>();
+    // Functions are named by their path from the root module.
+    let symbol_ops: HashSet<OpRef> = symbols.symbols().iter().copied().collect();
     let mut functions = Vec::with_capacity(function_ops.len());
-    let mut definitions = HashMap::default();
+    let mut names = HashSet::default();
     for op in function_ops {
-        let symbol = *names
-            .get(&op)
+        let symbol = &symbol_ops
+            .contains(&op)
+            .then(|| qualified_name(ctx, op))
+            .flatten()
             .ok_or_else(|| OwnershipPlanError::new("func.func has no symbol identity"))?;
-        if definitions.insert(symbol.clone(), op).is_some() {
+        if !names.insert(symbol.clone()) {
             return Err(OwnershipPlanError::new(format!(
                 "duplicate function identity @{symbol}"
             )));
@@ -216,8 +220,9 @@ fn compute_module_facts(
     let closure_layout = unique_closure_layout(closure_allocations, &managed_layouts)?;
     let rtti_types = build_rtti_plan(ctx, descriptors, &managed_layouts)?;
     Ok(NativeOwnershipModuleFacts {
+        definitions: functions.iter().map(|&(_, op)| op).collect(),
         functions,
-        definitions,
+        symbols,
         managed_layouts,
         closure_layout,
         rtti_types,

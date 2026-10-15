@@ -90,7 +90,7 @@ pub(crate) fn lower_get_or_panic(
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         if let Ok(call) = func::Call::from_op(ctx, op)
             && symbols
-                .resolve(call.callee(ctx))
+                .resolve(ctx, op, call.callee(ctx))
                 .is_some_and(|callee| declarations.contains(&callee))
         {
             calls.push(op);
