@@ -29,7 +29,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionMode, ConversionTarget, Module};
-use trunk_ir::symbol_table::{SymbolTable, qualified_name};
+use trunk_ir::symbol_table::{SymbolTable, absolute_reference, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
 
@@ -166,8 +166,11 @@ impl<'a> Converter<'a> {
         }
     }
 
-    fn current_func(&self, symbol: &SymbolPath) -> Option<CallableInfo> {
-        self.funcs.get(symbol).cloned()
+    /// The callable the reference `reference`, held by `op`, names.
+    fn current_func(&self, op: OpRef, reference: &[Symbol]) -> Option<CallableInfo> {
+        self.funcs
+            .get(&absolute_reference(self.ctx, op, reference))
+            .cloned()
     }
 
     fn malformed_source(

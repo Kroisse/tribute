@@ -22,7 +22,7 @@ use crate::ops::DialectOp;
 use crate::refs::{OpRef, RegionRef};
 use crate::rewrite::Module;
 use crate::symbol::SymbolPath;
-use crate::symbol_table::SymbolTable;
+use crate::symbol_table::{SymbolTable, absolute_reference};
 use crate::walk::{WalkAction, walk_op, walk_region};
 
 type Edges = HashMap<SymbolPath, HashSet<SymbolPath>>;
@@ -86,8 +86,9 @@ pub fn call_graph_over(
             return ControlFlow::Continue(WalkAction::Skip);
         }
         ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
+            let reference = absolute_reference(ctx, op, reference);
             graph.module_references.insert(reference.clone());
-            graph.address_taken.insert(reference.clone());
+            graph.address_taken.insert(reference);
         });
         ControlFlow::Continue(WalkAction::Advance)
     });
@@ -121,16 +122,18 @@ fn collect_calls(
         }
         let mut callee = CallLikeOps::callee(ctx, op);
         ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
-            if callee.as_ref() == Some(reference) {
+            let is_callee = callee.as_ref() == Some(reference);
+            let reference = absolute_reference(ctx, op, reference);
+            if is_callee {
                 callee = None;
-                record_call(graph, caller.clone(), reference.clone());
+                record_call(graph, caller.clone(), reference);
             } else {
                 graph
                     .edges
                     .entry(caller.clone())
                     .or_default()
                     .insert(reference.clone());
-                graph.address_taken.insert(reference.clone());
+                graph.address_taken.insert(reference);
             }
         });
         ControlFlow::Continue(WalkAction::Advance)
@@ -543,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn edges_use_root_qualified_callees_across_nested_modules() {
+    fn edges_resolve_callees_in_the_nearest_module() {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(
             &mut ctx,
@@ -554,12 +557,13 @@ mod tests {
   }
   core.module @outer {
     func.func @same() {
-      func.call {callee = @outer::@inner::@same}
+      func.call {callee = @inner::@same}
+      func.call {callee = @main}
       func.return
     }
     core.module @inner {
       func.func @same() {
-        func.call {callee = @outer::@inner::@same}
+        func.call {callee = @same}
         func.return
       }
     }
@@ -571,6 +575,9 @@ mod tests {
         let inner = SymbolPath::new(["outer", "inner", "same"]);
         assert!(g.edges[&SymbolPath::new(["main"])].contains(&outer));
         assert!(g.edges[&outer].contains(&inner));
+        // `@main` inside `outer` is looked up in `outer`, not in the root.
+        assert!(g.edges[&outer].contains(&SymbolPath::new(["outer", "main"])));
+        assert!(!g.edges[&outer].contains(&SymbolPath::new(["main"])));
         assert_eq!(g.call_site_count[&inner], 2);
         // Only the innermost function calls itself.
         assert_eq!(

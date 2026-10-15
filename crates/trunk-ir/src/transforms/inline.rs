@@ -190,6 +190,7 @@ fn splice_callee_body_before(
 use super::call_graph::{CallGraph, directly_recursive_functions};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::SymbolPath;
+use crate::symbol_table::absolute_reference;
 use rustc_hash::FxHashSet as HashSet;
 use std::sync::Arc;
 
@@ -416,6 +417,7 @@ impl RewritePattern for InlineCallSite {
         let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
             return false;
         };
+        let callee = &absolute_reference(ctx, op, callee);
 
         if !should_inline(&self.graph, &self.config, &self.recursive, ctx, callee) {
             return false;

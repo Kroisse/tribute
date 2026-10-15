@@ -417,7 +417,7 @@ fn nested_textual_module_converts_its_callable_graph_atomically() {
 }
 
 #[test]
-fn nested_modules_resolve_same_named_callables_by_qualified_path() {
+fn nested_modules_resolve_same_named_callables_in_their_own_module() {
     let input = r#"core.module @outer {
   tribute_control.func @same(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
@@ -431,7 +431,7 @@ fn nested_modules_resolve_same_named_callables_by_qualified_path() {
       tribute_control.return %value
     }
     tribute_control.func @inner_call(%value: core.i1) -> core.i1 convention(evidence_direct) {
-      %result = tribute_control.call %value {callee = @inner::@same} : core.i1
+      %result = tribute_control.call %value {callee = @same} : core.i1
       tribute_control.return %result
     }
   }

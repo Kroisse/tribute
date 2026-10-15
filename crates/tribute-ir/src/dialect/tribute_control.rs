@@ -21,7 +21,7 @@ use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
-use trunk_ir::symbol_table::{SymbolTable, qualified_name};
+use trunk_ir::symbol_table::{SymbolTable, absolute_reference, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{IrContext, Symbol, SymbolPath};
@@ -2215,7 +2215,7 @@ fn validate_symbol_use(
                 return;
             };
             let Some(target) = funcs
-                .definitions_of(symbol)
+                .definitions_of(&absolute_reference(ctx, op, symbol))
                 .first()
                 .copied()
                 .filter(|&target| is_control_op(ctx, target, "func"))
@@ -2258,7 +2258,7 @@ fn validate_symbol_use(
                 return;
             };
             let Some(target) = funcs
-                .definitions_of(symbol)
+                .definitions_of(&absolute_reference(ctx, op, symbol))
                 .first()
                 .copied()
                 .filter(|&target| is_control_op(ctx, target, "func"))
@@ -2293,7 +2293,7 @@ fn validate_symbol_use(
                 return;
             };
             let Some(target) = funcs
-                .definitions_of(symbol)
+                .definitions_of(&absolute_reference(ctx, op, symbol))
                 .first()
                 .copied()
                 .filter(|&target| is_control_op(ctx, target, "func"))
@@ -2933,7 +2933,7 @@ fn callable_has_semantic_provenance(
                         } else {
                             "callee"
                         })
-                        .and_then(|symbol| provenance.functions.resolve(symbol))
+                        .and_then(|symbol| provenance.functions.resolve_from(ctx, producer, symbol))
                         .filter(|&function| is_control_op(ctx, function, "func"))
                         .is_some_and(|function| {
                             verified_callable_declaration(ctx, function, provenance.registered)
@@ -4933,7 +4933,7 @@ mod tests {
     }
 
     #[test]
-    fn whole_ir_resolves_root_qualified_references_across_nested_modules() {
+    fn whole_ir_resolves_references_in_the_nearest_module() {
         let (ctx, module) = parse_fixture(
             r#"core.module @outer {
   core.module @integers {
@@ -4942,8 +4942,8 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i32) -> core.i32 convention(direct) {
-      %reference = tribute_control.func_ref {func_ref = @integers::@id} : !callable
-      %direct = tribute_control.call %value {callee = @integers::@id} : core.i32
+      %reference = tribute_control.func_ref {func_ref = @id} : !callable
+      %direct = tribute_control.call %value {callee = @id} : core.i32
       %indirect = tribute_control.call_indirect %reference, %direct : core.i32
       tribute_control.return %indirect
     }
@@ -4954,8 +4954,8 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i1) -> core.i1 convention(direct) {
-      %reference = tribute_control.func_ref {func_ref = @booleans::@id} : !callable
-      %direct = tribute_control.call %value {callee = @booleans::@id} : core.i1
+      %reference = tribute_control.func_ref {func_ref = @id} : !callable
+      %direct = tribute_control.call %value {callee = @id} : core.i1
       %indirect = tribute_control.call_indirect %reference, %direct : core.i1
       tribute_control.return %indirect
     }
@@ -4966,13 +4966,13 @@ mod tests {
         let result = validate_whole_ir(&ctx, module, &[]);
         assert!(result.is_ok(), "{:?}", result.errors);
 
-        // A reference is never resolved relative to its own nested module.
+        // A reference is never looked up in an enclosing module.
         let (ctx, module) = parse_fixture(
             r#"core.module @outer {
+  tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
   core.module @integers {
-    tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
-      tribute_control.return %value
-    }
     tribute_control.func @use(%value: core.i32) -> core.i32 convention(direct) {
       %direct = tribute_control.call %value {callee = @id} : core.i32
       tribute_control.return %direct

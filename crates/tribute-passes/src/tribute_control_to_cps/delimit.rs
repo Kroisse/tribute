@@ -18,7 +18,7 @@ impl Converter<'_> {
                 .op(source)
                 .attributes
                 .get_symbol_ref("callee")
-                .and_then(|callee| self.funcs.get(callee))
+                .and_then(|callee| self.current_func(source, callee))
                 .is_some_and(|target| target.convention == CallingConvention::Cps);
         }
         if tribute_control::CallIndirect::matches(self.ctx, source) {

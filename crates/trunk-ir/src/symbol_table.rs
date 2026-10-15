@@ -1,13 +1,18 @@
-//! Root-qualified symbols over a module tree.
+//! Symbols over a module tree, resolved by the MLIR rule.
 //!
-//! A symbol reference always names its target by its path from the root
-//! module: the names of the nested `core.module`s that enclose the
-//! definition, excluding the root module itself, followed by the definition's
-//! `sym_name`. Each name is one path component as it is written. References are never resolved relative to
-//! the referencing operation's module. Every operation other than a
-//! `core.module` that carries a symbol `sym_name` is a definition, and all
-//! definitions share one namespace: a qualified name defined more than once is
-//! an IR error. Consumers check the kind of the definition they resolve.
+//! A `core.module` is a symbol table. A definition registers its `sym_name` in
+//! the module that directly encloses it, and a named nested module is itself a
+//! symbol of its parent. A reference's first component is looked up in the
+//! module nearest to the operation that holds it, never in an enclosing one;
+//! each further component descends into the module the previous one names.
+//! Every operation other than a `core.module` that carries a symbol `sym_name`
+//! is a definition, and a name defined more than once in one module is an IR
+//! error. Consumers check the kind of the definition they resolve.
+//!
+//! Definitions are keyed by their root-qualified name: the names of the nested
+//! `core.module`s that enclose the definition, excluding the root module
+//! itself, followed by its `sym_name`. Each name is one path component as it
+//! is written. [`absolute_reference`] turns a reference into that key.
 
 use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
@@ -73,6 +78,13 @@ impl SymbolTable {
         }
     }
 
+    /// The unique definition the reference `reference`, held by `op`, names.
+    ///
+    /// Returns `None` for an unknown name or one defined more than once.
+    pub fn resolve_from(&self, ctx: &IrContext, op: OpRef, reference: &[Symbol]) -> Option<OpRef> {
+        self.resolve(&absolute_reference(ctx, op, reference))
+    }
+
     /// The unique definition named by a root-qualified reference.
     ///
     /// Returns `None` for an unknown name or one defined more than once.
@@ -133,6 +145,16 @@ pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
     let module =
         parent_op(ctx, op).map_or_else(SymbolPath::root, |parent| module_path(ctx, parent));
     Some(module.child(name))
+}
+
+/// The root-qualified name of the definition the reference `reference`,
+/// held by `op`, names: the reference resolved in the module nearest to `op`.
+pub fn absolute_reference(ctx: &IrContext, op: OpRef, reference: &[Symbol]) -> SymbolPath {
+    let mut path = module_path(ctx, op);
+    for component in reference {
+        path.push(component.clone());
+    }
+    path
 }
 
 /// The root-qualified path of the modules enclosing `op`, including `op`

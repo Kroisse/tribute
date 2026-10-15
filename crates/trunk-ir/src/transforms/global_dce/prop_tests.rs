@@ -33,7 +33,11 @@ fn expected_removed(spec: &ModuleSpec, recursive: bool, extra: &[bool]) -> HashS
             !candidate(index) || entry || exported || extra[index]
         })
         .map(|(index, _)| index)
-        .chain(spec.module_refs.iter().map(|reference| reference.target));
+        .chain(
+            spec.module_refs
+                .iter()
+                .filter_map(|reference| spec.resolved_target(reference.nested, reference.target)),
+        );
     let reachable = reachable_from(&spec.successors(false), roots, None);
     (0..spec.functions.len())
         .filter(|&index| candidate(index) && !reachable[index])

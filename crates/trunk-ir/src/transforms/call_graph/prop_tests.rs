@@ -44,13 +44,19 @@ proptest! {
         );
         for calls_only in [false, true] {
             let expected: HashMap<SymbolPath, HashSet<SymbolPath>> = spec
-                .successors(calls_only)
+                .functions
                 .iter()
                 .enumerate()
-                .filter(|(_, targets)| !targets.is_empty())
-                .map(|(index, targets)| {
-                    (paths[index].clone(), path_set(&paths, targets.iter().copied()))
+                .map(|(index, function)| {
+                    let targets: HashSet<SymbolPath> = function
+                        .refs
+                        .iter()
+                        .filter(|reference| !calls_only || reference.kind == RefKind::Call)
+                        .map(|reference| spec.resolved(function.nested, reference.target))
+                        .collect();
+                    (paths[index].clone(), targets)
                 })
+                .filter(|(_, targets)| !targets.is_empty())
                 .collect();
             let actual = if calls_only { &graph.calls } else { &graph.edges };
             prop_assert_eq!(actual, &expected, "calls_only = {}", calls_only);
@@ -58,18 +64,23 @@ proptest! {
 
         let mut call_sites: HashMap<SymbolPath, usize> = HashMap::default();
         let mut address_taken = HashSet::default();
-        for reference in spec.functions.iter().flat_map(|function| &function.refs) {
-            let target = paths[reference.target].clone();
+        for (function, reference) in spec
+            .functions
+            .iter()
+            .flat_map(|function| function.refs.iter().map(move |reference| (function, reference)))
+        {
+            let target = spec.resolved(function.nested, reference.target);
             if reference.kind == RefKind::Call {
                 *call_sites.entry(target).or_default() += 1;
             } else {
                 address_taken.insert(target);
             }
         }
-        let module_references = path_set(
-            &paths,
-            spec.module_refs.iter().map(|reference| reference.target),
-        );
+        let module_references: HashSet<SymbolPath> = spec
+            .module_refs
+            .iter()
+            .map(|reference| spec.resolved(reference.nested, reference.target))
+            .collect();
         address_taken.extend(module_references.iter().cloned());
         prop_assert_eq!(&graph.call_site_count, &call_sites);
         prop_assert_eq!(&graph.module_references, &module_references);

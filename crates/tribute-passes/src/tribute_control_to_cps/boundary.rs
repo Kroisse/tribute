@@ -347,7 +347,8 @@ fn verify_physical_callable_graph(
                 });
                 return;
             };
-            let Some((func_ty, convention)) = signatures.get(callee) else {
+            let Some((func_ty, convention)) = signatures.get(&absolute_reference(ctx, op, callee))
+            else {
                 failures.push(BoundaryFailure {
                     op: Some(op),
                     location: Some(data.location),
@@ -413,7 +414,7 @@ fn verify_physical_callable_graph(
         } else if data.dialect == "func" && data.name == "call" {
             let callee = data.attributes.get_symbol_ref("callee");
             if let Some(callee) = callee {
-                match signatures.get(callee) {
+                match signatures.get(&absolute_reference(ctx, op, callee)) {
                     Some((_, target_convention)) if *target_convention == op_convention => {}
                     Some(_) => failures.push(BoundaryFailure {
                         op: Some(op),

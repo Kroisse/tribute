@@ -103,7 +103,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
 /// bodyless `abi = "C"` declaration with that link name.
 fn calls_c_helper(ctx: &IrContext, symbols: &SymbolTable, op: OpRef, helper: &'static str) -> bool {
     wasm_dialect::Call::from_op(ctx, op).is_ok_and(|call| {
-        super::runtime_bindings::c_helper(ctx, symbols, call.callee(ctx))
+        super::runtime_bindings::c_helper(ctx, symbols, op, call.callee(ctx))
             .is_some_and(|name| name == helper)
     })
 }

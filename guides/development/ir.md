@@ -254,11 +254,13 @@ attribute.visit_types(&mut |ty| seen.push(ty));
 ```
 
 A name that refers to a symbol table definition is an `Attribute::SymbolRef`
-(`callee = @foo`, declared `Attr<SymbolRef>`). It holds a `SymbolPath`: the
-enclosing module names, then the definition's own name, one `Symbol` each.
-Definition names and other fixed names are strings. Collect the references an
-operation makes with the shared traversal rather than by listing attribute
-names:
+(`callee = @foo`, declared `Attr<SymbolRef>`). It holds a `SymbolPath`, one
+`Symbol` per component, resolved as MLIR resolves symbols: the first component
+in the module nearest to the operation that holds the reference, never in an
+enclosing one, and each further component in the module the previous one
+names. Definition names and other fixed names are strings. Collect the
+references an operation makes with the shared traversal rather than by
+listing attribute names:
 
 ```rust
 ctx.op(op).attributes.visit_symbol_refs(&mut |path| referenced.push(path.clone()));
@@ -283,8 +285,12 @@ walk nested modules with `push` and `pop`. A definition's path and a symbol
 reference have at least one component, so `leaf()` is `None` only for the
 root module; IR validation rejects a reference to it.
 `SymbolTable` and the analyses that name functions (call graph, global DCE,
-backends' function tables) are keyed by `SymbolPath`, so take `&SymbolPath`
-rather than joining it back into one symbol.
+backends' function tables) are keyed by a definition's root-qualified
+`SymbolPath`, so take `&SymbolPath` rather than joining it back into one
+symbol. Resolve a reference with `SymbolTable::resolve_from(ctx, op, path)`,
+or turn it into that key with `symbol_table::absolute_reference`, rather than
+looking the written path up directly; the two agree only for an operation in
+the root module.
 
 A direct call operation registers `CallLike` so analyses can tell its callee
 from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;
