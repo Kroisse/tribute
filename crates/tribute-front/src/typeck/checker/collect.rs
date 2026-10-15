@@ -4,15 +4,16 @@
 //! and type definitions before type checking function bodies.
 
 use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    AbilityDecl, AbilityId, CtorId, Decl, EffectRow, EffectVar, EnumDecl, FuncDecl, Module,
-    ModuleItem, ResolvedRef, StructDecl, Type, TypeKind, TypeParam, TypeScheme,
-    collect_effect_vars, is_type_variable,
+    AbilityDecl, AbilityId, CtorId, Decl, DeclTable, EffectRow, EffectVar, EnumDecl, FuncDecl,
+    ResolvedRef, StructDecl, Type, TypeKind, TypeParam, TypeScheme, collect_effect_vars,
+    is_type_variable,
 };
 use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
 
@@ -47,10 +48,10 @@ impl<'db> TypeChecker<'db> {
     // =========================================================================
 
     /// Collect type definitions and function signatures from declarations.
-    pub(crate) fn collect_declarations(&mut self, module: &Module<ResolvedRef<'db>>) {
-        self.predeclare_nominal_types(&module.decls);
-        self.collect_type_imports(&module.decls);
-        self.collect_declarations_in_order(&module.decls);
+    pub(crate) fn collect_declarations(&mut self, module: &DeclTable<ResolvedRef<'db>>) {
+        self.predeclare_nominal_types(module);
+        self.collect_type_imports(module);
+        self.collect_declarations_in_order(module);
         self.report_getter_redeclarations();
     }
 
@@ -79,61 +80,45 @@ impl<'db> TypeChecker<'db> {
 
     /// Import a type scheme without inventing a nominal identity for its alias.
     /// Local nominal declarations retain precedence, including forward ones.
-    fn collect_type_imports(&mut self, items: &[ModuleItem<ResolvedRef<'db>>]) {
-        for item in items {
-            match item {
-                ModuleItem::Decl(Decl::Use(import)) => {
-                    // Name resolution recorded what the import names; a path
-                    // written relative to the enclosing module must not be
-                    // reread from the package root.
-                    let Some(target) = import.target.as_deref().filter(|target| !target.is_empty())
-                    else {
-                        continue;
-                    };
-                    let Some(scheme) = self.env.lookup_type_def(target) else {
-                        continue;
-                    };
-                    let name = import
-                        .alias
-                        .clone()
-                        .unwrap_or(import.path.last().unwrap().clone());
-                    if items.iter().any(|item| match item {
-                        ModuleItem::Decl(Decl::Struct(decl)) => decl.name == name,
-                        ModuleItem::Decl(Decl::Enum(decl)) => decl.name == name,
-                        _ => false,
-                    }) {
-                        continue;
-                    }
-                    let qualified = self.prefix.child(name.clone());
-                    self.env.register_type_def(qualified, scheme);
-                }
-                ModuleItem::Module(module) => {
-                    if let Some(body) = &module.body {
-                        self.prefix.push(module.name.clone());
-                        self.collect_type_imports(body);
-                        self.prefix.pop();
-                    }
-                }
-                _ => {}
+    fn collect_type_imports(&mut self, module: &DeclTable<ResolvedRef<'db>>) {
+        let nominals: HashSet<(&SymbolPath, &Symbol)> = module
+            .entries
+            .iter()
+            .filter_map(|entry| match &entry.decl {
+                Decl::Struct(decl) => Some((&entry.module, &decl.name)),
+                Decl::Enum(decl) => Some((&entry.module, &decl.name)),
+                _ => None,
+            })
+            .collect();
+        for entry in &module.entries {
+            let Decl::Use(import) = &entry.decl else {
+                continue;
+            };
+            // Name resolution recorded what the import names; a path
+            // written relative to the enclosing module must not be
+            // reread from the package root.
+            let Some(target) = import.target.as_deref().filter(|target| !target.is_empty()) else {
+                continue;
+            };
+            let Some(scheme) = self.env.lookup_type_def(target) else {
+                continue;
+            };
+            let name = import
+                .alias
+                .clone()
+                .unwrap_or(import.path.last().unwrap().clone());
+            if nominals.contains(&(&entry.module, &name)) {
+                continue;
             }
+            let qualified = entry.module.child(name);
+            self.env.register_type_def(qualified, scheme);
         }
     }
 
-    fn collect_declarations_in_order(&mut self, items: &[ModuleItem<ResolvedRef<'db>>]) {
-        for item in items {
-            let decl = match item {
-                ModuleItem::Decl(decl) => decl,
-                ModuleItem::Module(m) => {
-                    // For inline modules, recursively collect from nested declarations
-                    if let Some(body) = &m.body {
-                        self.prefix.push(m.name.clone());
-                        self.collect_declarations_in_order(body);
-                        self.prefix.pop();
-                    }
-                    continue;
-                }
-            };
-            match decl {
+    fn collect_declarations_in_order(&mut self, module: &DeclTable<ResolvedRef<'db>>) {
+        for entry in &module.entries {
+            self.prefix = entry.module.clone();
+            match &entry.decl {
                 Decl::Function(func) => {
                     self.collect_function_signature(func);
                 }
@@ -154,28 +139,24 @@ impl<'db> TypeChecker<'db> {
                 }
             }
         }
+        self.prefix = SymbolPath::root();
     }
 
     /// Register every nominal declaration before converting any annotations.
-    fn predeclare_nominal_types(&mut self, items: &[ModuleItem<ResolvedRef<'db>>]) {
-        for item in items {
-            match item {
-                ModuleItem::Decl(Decl::Struct(s)) => {
+    fn predeclare_nominal_types(&mut self, module: &DeclTable<ResolvedRef<'db>>) {
+        for entry in &module.entries {
+            self.prefix = entry.module.clone();
+            match &entry.decl {
+                Decl::Struct(s) => {
                     self.predeclare_nominal_type(&s.name, s.id, &s.type_params);
                 }
-                ModuleItem::Decl(Decl::Enum(e)) => {
+                Decl::Enum(e) => {
                     self.predeclare_nominal_type(&e.name, e.id, &e.type_params);
-                }
-                ModuleItem::Module(module) => {
-                    if let Some(body) = &module.body {
-                        self.prefix.push(module.name.clone());
-                        self.predeclare_nominal_types(body);
-                        self.prefix.pop();
-                    }
                 }
                 _ => {}
             }
         }
+        self.prefix = SymbolPath::root();
     }
 
     fn predeclare_nominal_type(

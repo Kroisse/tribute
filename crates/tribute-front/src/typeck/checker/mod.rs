@@ -39,7 +39,7 @@ use trunk_ir::{Span, Symbol};
 
 use crate::SortedMap;
 use crate::ast::{
-    Decl, DeclTable, FuncDefId, Module, ModuleItem, NodeId, ResolvedRef, SpanMap, Type, TypeScheme,
+    Decl, DeclEntry, DeclTable, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme,
     TypedRef, UniVarId,
 };
 
@@ -147,27 +147,28 @@ pub struct TypeChecker<'db> {
 }
 
 impl<'db> TypeChecker<'db> {
+    /// The module whose items the prelude declares at its root: its package.
+    fn prelude_root() -> SymbolPath {
+        SymbolPath::new([crate::resolve::LIBRARY_PACKAGE])
+    }
+
     fn prelude_well_known_type(
         &self,
-        module: &Module<ResolvedRef<'db>>,
+        module: &DeclTable<ResolvedRef<'db>>,
         key: impl WellKnownTypeKey,
     ) -> Option<WellKnownType<'db>> {
         let name = key.name();
-        // The prelude's root items are inside its package module.
-        let mut prefix = SymbolPath::root();
-        let mut decls = &module.decls;
-        if let [ModuleItem::Module(package)] = decls.as_slice()
-            && let Some(body) = &package.body
-        {
-            prefix.push(package.name.clone());
-            decls = body;
-        }
-        let declaration = decls.iter().find_map(|item| match item {
-            ModuleItem::Decl(Decl::Struct(decl)) if decl.name == name => Some(decl.id),
-            ModuleItem::Decl(Decl::Enum(decl)) if decl.name == name => Some(decl.id),
-            _ => None,
-        })?;
-        let qualified = prefix.child(name.clone());
+        let root = Self::prelude_root();
+        let declaration = module
+            .entries
+            .iter()
+            .filter(|entry| entry.module == root)
+            .find_map(|entry| match &entry.decl {
+                Decl::Struct(decl) if decl.name == name => Some(decl.id),
+                Decl::Enum(decl) if decl.name == name => Some(decl.id),
+                _ => None,
+            })?;
+        let qualified = root.child(name.clone());
         let ty = self.env.lookup_type_def(&qualified)?.body(self.db());
         Some(WellKnownType {
             ty,
@@ -180,16 +181,16 @@ impl<'db> TypeChecker<'db> {
 
     /// The semantic identities the prelude supplies to later phases. Literal
     /// pattern equalities are the `==` functions of their types' modules.
-    fn prelude_well_known_types(&self, module: &Module<ResolvedRef<'db>>) -> WellKnownTypes<'db> {
+    fn prelude_well_known_types(
+        &self,
+        module: &DeclTable<ResolvedRef<'db>>,
+    ) -> WellKnownTypes<'db> {
         let string = self.prelude_well_known_type(module, StringType);
         // `==` of a prelude type is the function of that name in the type's
         // module.
-        let mut prefix = SymbolPath::root();
-        if let [ModuleItem::Module(package)] = module.decls.as_slice() {
-            prefix.push(package.name.clone());
-        }
+        let root = Self::prelude_root();
         let equality = |type_name: &str| {
-            let function = FuncDefId::new(self.db(), prefix.child(type_name).child("=="));
+            let function = FuncDefId::new(self.db(), root.child(type_name).child("=="));
             self.env.lookup_function(function).map(|_| function)
         };
         WellKnownTypes {
@@ -263,12 +264,13 @@ impl<'db> TypeChecker<'db> {
         mut self,
         module: &Module<ResolvedRef<'db>>,
     ) -> (ModuleCheckResult<'db>, PreludeExports<'db>) {
-        self.collect_declarations(module);
-        let well_known_types = self.prelude_well_known_types(module);
+        let table = DeclTable::from_module(module.clone());
+        self.collect_declarations(&table);
+        let well_known_types = self.prelude_well_known_types(&table);
         self.env.set_prelude_well_known_types(well_known_types);
-        let decls = self.check_decls(module);
+        let checked = self.check_decls(&table);
         let exports = self.prelude_exports(well_known_types);
-        (self.into_module_result(module, decls), exports)
+        (self.into_module_result(checked), exports)
     }
 
     /// Internal implementation for module type checking.
@@ -282,44 +284,37 @@ impl<'db> TypeChecker<'db> {
         // Phase 1: Collect type definitions and function signatures into ModuleTypeEnv
         // Note: module_path starts empty because module.name is the file-derived name,
         // which is for external references, not internal function naming.
-        self.collect_declarations(module);
-        self.check_collected_module(module)
-    }
-
-    fn check_collected_module(
-        mut self,
-        module: &Module<ResolvedRef<'db>>,
-    ) -> ModuleCheckResult<'db> {
-        let decls = self.check_decls(module);
-        self.into_module_result(module, decls)
+        let table = DeclTable::from_module(module.clone());
+        self.collect_declarations(&table);
+        let checked = self.check_decls(&table);
+        self.into_module_result(checked)
     }
 
     /// Phase 2: Type check each declaration with per-function inference.
     /// Each function gets its own FunctionInferenceContext with isolated
     /// constraints, so no global solve follows.
-    fn check_decls(&mut self, module: &Module<ResolvedRef<'db>>) -> Vec<ModuleItem<TypedRef<'db>>> {
-        self.check_items(&module.decls)
-    }
-
-    fn check_items(
-        &mut self,
-        items: &[ModuleItem<ResolvedRef<'db>>],
-    ) -> Vec<ModuleItem<TypedRef<'db>>> {
-        items
+    fn check_decls(&mut self, module: &DeclTable<ResolvedRef<'db>>) -> DeclTable<TypedRef<'db>> {
+        let entries = module
+            .entries
             .iter()
-            .map(|item| match item {
-                ModuleItem::Decl(decl) => ModuleItem::Decl(self.check_decl(decl)),
-                ModuleItem::Module(module) => ModuleItem::Module(self.check_module_decl(module)),
+            .map(|entry| {
+                self.prefix = entry.module.clone();
+                DeclEntry {
+                    module: entry.module.clone(),
+                    decl: self.check_decl(&entry.decl),
+                }
             })
-            .collect()
+            .collect();
+        self.prefix = SymbolPath::root();
+        DeclTable {
+            id: module.id,
+            name: module.name.clone(),
+            entries,
+        }
     }
 
     /// Assemble the result of checking `module` from its checked declarations.
-    fn into_module_result(
-        mut self,
-        module: &Module<ResolvedRef<'db>>,
-        decls: Vec<ModuleItem<TypedRef<'db>>>,
-    ) -> ModuleCheckResult<'db> {
+    fn into_module_result(mut self, module: DeclTable<TypedRef<'db>>) -> ModuleCheckResult<'db> {
         // Export the function types (already finalized during per-function checking)
         let function_types = self.env.export_function_types();
         let constructor_types = self.env.export_constructor_types();
@@ -329,11 +324,7 @@ impl<'db> TypeChecker<'db> {
         self.exhaustive_cases.sort();
 
         ModuleCheckResult {
-            module: DeclTable::from_module(Module {
-                id: module.id,
-                name: module.name.clone(),
-                decls,
-            }),
+            module,
             function_types,
             constructor_types,
             node_types: self.node_types.into_iter().collect(),
@@ -396,26 +387,5 @@ impl<'db> TypeChecker<'db> {
         self.perform_operations.extend(checked.perform_operations);
         self.lambda_signatures.extend(checked.lambda_signatures);
         self.exhaustive_cases.extend(checked.exhaustive_cases);
-    }
-
-    /// Type check a module declaration.
-    fn check_module_decl(
-        &mut self,
-        module: &crate::ast::ModuleDecl<ResolvedRef<'db>>,
-    ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
-        // Push module name to prefix
-        self.prefix.push(module.name.clone());
-
-        let body = module.body.as_ref().map(|items| self.check_items(items));
-
-        // Restore prefix
-        self.prefix.pop();
-
-        crate::ast::ModuleDecl {
-            id: module.id,
-            name: module.name.clone(),
-            is_pub: module.is_pub,
-            body,
-        }
     }
 }
