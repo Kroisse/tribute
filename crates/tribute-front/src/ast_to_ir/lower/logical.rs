@@ -851,11 +851,7 @@ fn prescan_source_functions<'db>(
                 ctx.register_logical_source_function(ctx.qualify_name(&function.name));
             }
             Decl::ExternFunction(function) => {
-                let qualified = ctx.qualify_name(&function.name);
-                ctx.register_logical_source_function(qualified.clone());
-                if function.abi == "C" {
-                    ctx.register_c_symbol(qualified, function.name.clone());
-                }
+                ctx.register_logical_source_function(ctx.qualify_name(&function.name));
             }
             _ => {}
         }
@@ -1167,6 +1163,15 @@ fn lower_extern<'db>(
     ir.op_mut(function.op_ref())
         .attributes
         .insert(Symbol::new("abi"), abi);
+    // C linkage has one flat namespace: the declaration links under its
+    // declared name, wherever it is declared.
+    if decl.abi == "C" {
+        let link_name = ir.intern_symbol_text(&decl.name);
+        ir.op_mut(function.op_ref()).attributes.insert(
+            Symbol::new(trunk_ir::symbol_table::LINK_NAME),
+            Attribute::String(link_name),
+        );
+    }
     ir.push_op(top, function.op_ref());
 }
 

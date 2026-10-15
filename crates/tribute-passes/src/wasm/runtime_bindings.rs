@@ -9,7 +9,7 @@
 use tribute_ir::dialect::ability::evidence_abi;
 use trunk_ir::context::IrContext;
 use trunk_ir::refs::OpRef;
-use trunk_ir::symbol_table::SymbolTable;
+use trunk_ir::symbol_table::{SymbolTable, link_name};
 use trunk_ir::{Symbol, SymbolPath};
 
 use super::evidence_to_wasm::NEXT_TAG;
@@ -55,11 +55,6 @@ pub(crate) fn c_helper(
 ) -> Option<Symbol> {
     let declaration = symbols.resolve_from(ctx, op, callee)?;
     is_c_declaration(ctx, declaration)
-        .then(|| {
-            ctx.op(declaration)
-                .attributes
-                .get_str(ctx, "sym_name")
-                .map(Symbol::new)
-        })
+        .then(|| link_name(ctx, declaration))
         .flatten()
 }
