@@ -53,7 +53,7 @@ pub(crate) fn c_helper(
     op: OpRef,
     callee: &SymbolPath,
 ) -> Option<Symbol> {
-    let declaration = symbols.resolve_from(ctx, op, callee)?;
+    let declaration = symbols.resolve(ctx, op, callee)?;
     is_c_declaration(ctx, declaration)
         .then(|| {
             ctx.op(declaration)

@@ -31,7 +31,7 @@ use super::op_interface::{
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
-use super::symbol_table::{SymbolTable, absolute_reference, qualified_name};
+use super::symbol_table::{SymbolTable, qualified_name};
 use super::type_verifier::lookup_type_verifier;
 use super::walk;
 
@@ -622,9 +622,9 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
     // holds it. None is genuinely undeclared. A found but invalid or
     // duplicated declaration is Some(None), so compatibility cannot hide
     // malformed known contracts.
-    let resolve = |name: SymbolPath| -> Option<Option<func::FuncSig>> {
-        let found = *symbols.definitions_of(&name).first()?;
-        if symbols.resolve(&name).is_none() || !func::Func::matches(ctx, found) {
+    let resolve = |op: OpRef, name: &SymbolPath| -> Option<Option<func::FuncSig>> {
+        let found = *symbols.definitions(ctx, op, name).first()?;
+        if symbols.resolve(ctx, op, name).is_none() || !func::Func::matches(ctx, found) {
             return Some(None);
         }
         Some(
@@ -676,7 +676,7 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
                 let Some(name) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     return;
                 };
-                let Some(signature) = resolve(absolute_reference(ctx, op, name)) else {
+                let Some(signature) = resolve(op, name) else {
                     return;
                 };
                 let Some(signature) = signature else {
@@ -1182,34 +1182,21 @@ fn is_arity_checked_function(ctx: &IrContext, op: OpRef) -> bool {
         && data.name == crate::symbol!("func")
 }
 
-/// The parameter count of each function definition in `symbols`, keyed by
-/// its root-qualified name.
-fn collect_function_signatures(
-    ctx: &IrContext,
-    symbols: &SymbolTable,
-) -> HashMap<SymbolPath, usize> {
-    let type_key = Symbol::new("type");
-    symbols
-        .iter()
-        .filter_map(|(name, ops)| {
-            let &[op] = ops else {
-                return None;
-            };
-            if !is_arity_checked_function(ctx, op) {
-                return None;
-            }
-            let func_ty = ctx.op(op).attributes.get_type(&type_key)?;
-            let func_ty = crate::dialect::func::FuncSig::from_type_ref(ctx, func_ty)?;
-            Some((name.clone(), func_ty.inputs(ctx).len()))
-        })
-        .collect()
+/// The parameter count of the function definition `op`.
+fn parameter_count(ctx: &IrContext, op: OpRef) -> Option<usize> {
+    if !is_arity_checked_function(ctx, op) {
+        return None;
+    }
+    let func_ty = ctx.op(op).attributes.get_type(crate::symbol!("type"))?;
+    let func_ty = crate::dialect::func::FuncSig::from_type_ref(ctx, func_ty)?;
+    Some(func_ty.inputs(ctx).len())
 }
 
 /// Walk all operations in a region tree and check call arity.
 fn check_call_arity_in_region(
     ctx: &IrContext,
     region: RegionRef,
-    signatures: &HashMap<SymbolPath, usize>,
+    symbols: &SymbolTable,
     enclosing_fn: &SymbolPath,
 ) {
     let func_dialect = Symbol::new("func");
@@ -1233,7 +1220,10 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 
-        if let Some(&expected) = signatures.get(&absolute_reference(ctx, op, callee_sym)) {
+        if let Some(expected) = symbols
+            .resolve(ctx, op, callee_sym)
+            .and_then(|callee| parameter_count(ctx, callee))
+        {
             let actual = ctx.op_operands(op).len();
             if actual != expected {
                 ctx.report_warning(
@@ -1256,14 +1246,13 @@ fn check_call_arity_in_region(
 /// Arity mismatches are reported as warnings via `ctx.report_warning`.
 pub fn validate_call_arity(ctx: &IrContext, module: Module) {
     let symbols = SymbolTable::collect(ctx, module);
-    let signatures = collect_function_signatures(ctx, &symbols);
     let _ = walk::walk_op::<std::convert::Infallible>(ctx, module.op(), &mut |op| {
         if !is_arity_checked_function(ctx, op) {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
         if let Some(name) = qualified_name(ctx, op) {
             for func_region in ctx.op_regions(op) {
-                check_call_arity_in_region(ctx, func_region, &signatures, &name);
+                check_call_arity_in_region(ctx, func_region, &symbols, &name);
             }
         }
         std::ops::ControlFlow::Continue(walk::WalkAction::Skip)

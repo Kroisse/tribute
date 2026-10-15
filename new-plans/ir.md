@@ -490,10 +490,12 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   component는 module이어야 한다. 그래서 바깥 module은 `@inner::@f`로 안쪽 정의를
   가리킬 수 있지만, 안쪽 module의 operation은 부모나 형제 module의 정의를 가리킬 수
   없다. 정의의 qualified path는 root module을 제외한 중첩 `core.module` 이름들과
-  `sym_name`을 차례로 component로 둔 것이며, 참조의 qualified path는 그 참조를
-  해석한 module의 path에 참조의 component를 이은 것이다. 이름 없는 `core.module`은
-  경로에 기여하지 않는다. 한 table 안에서 같은 이름의 정의가 둘 이상이면 모호한
-  참조가 아니라 IR 오류다.
+  `sym_name`을 차례로 component로 둔 것이며, 이름 없는 `core.module`은 경로에
+  기여하지 않는다. Qualified path는 진단에 쓰는 표기일 뿐이다. 정의의 정체성은 정의
+  operation이므로, 참조를 다루는 분석은 참조를 그 operation으로 해석해 비교하고,
+  쓰인 참조를 qualified path로 바꿔 찾지 않는다. 한 table 안에서 같은 이름의
+  정의가 둘 이상이면 모호한 참조가 아니라 IR 오류이며, 그 이름은 어떤 정의로도
+  해석되지 않는다.
 - `SymbolPath`의 component는 이름 하나를 쓰인 그대로 담는다. 이름이 `::`를
   포함해도 component 하나이며, 같은 텍스트를 중첩 module로 풀어 쓴 path와는 다른
   path다. Textual form은 component마다 `@`를 붙여 `::`로 잇는다

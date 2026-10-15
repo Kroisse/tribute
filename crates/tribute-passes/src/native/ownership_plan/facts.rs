@@ -8,7 +8,7 @@
 
 use super::*;
 use trunk_ir::analysis::{Analysis, AnalysisContext, AnalysisError};
-use trunk_ir::symbol_table::SymbolTable;
+use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 
 /// Module-scope, policy-neutral facts shared by every defined function.
 ///
@@ -194,16 +194,15 @@ fn compute_module_facts(
     for &op in &function_ops {
         ownership_callable_body(ctx, op)?;
     }
-    // Direct callees name their targets by root-qualified path.
-    let names = symbols
-        .all_definitions()
-        .map(|(name, op)| (op, name))
-        .collect::<HashMap<_, _>>();
+    // Functions are named by their path from the root module.
+    let symbol_ops: HashSet<OpRef> = symbols.symbols().iter().copied().collect();
     let mut functions = Vec::with_capacity(function_ops.len());
     let mut definitions = HashMap::default();
     for op in function_ops {
-        let symbol = *names
-            .get(&op)
+        let symbol = &symbol_ops
+            .contains(&op)
+            .then(|| qualified_name(ctx, op))
+            .flatten()
             .ok_or_else(|| OwnershipPlanError::new("func.func has no symbol identity"))?;
         if definitions.insert(symbol.clone(), op).is_some() {
             return Err(OwnershipPlanError::new(format!(

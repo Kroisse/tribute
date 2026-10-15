@@ -1,7 +1,7 @@
 //! Global Dead Code Elimination (DCE) pass for arena IR.
 //!
 //! Removes function definitions that are not reachable from reachability roots.
-//! Functions are keyed by root-qualified name. Reachability roots include:
+//! Reachability roots include:
 //! - The root module's `main` or `_start`
 //! - Functions referenced outside any function definition, such as by
 //!   `wasm.export_func`
@@ -19,12 +19,12 @@ use std::collections::VecDeque;
 
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
-use crate::dialect::{core, func};
+use crate::dialect::func;
 use crate::ops::DialectOp;
 use crate::refs::OpRef;
 use crate::rewrite::Module;
 use crate::symbol::SymbolPath;
-use crate::symbol_table::SymbolTable;
+use crate::symbol_table::{SymbolTable, nearest_table, qualified_name};
 use crate::transforms::call_graph::{CallGraph, FunctionDefinition, call_graph_over};
 
 /// Configuration for global dead code elimination.
@@ -101,9 +101,9 @@ pub fn eliminate_dead_definitions(
 
 /// Eliminate the functions of `module` not reachable from its roots.
 ///
-/// Functions are keyed by root-qualified name. Every definition of a
-/// duplicated name shares its reachability. With `recursive: false`, functions
-/// in nested modules are neither removed nor analyzed; they are kept as roots.
+/// Every definition of a duplicated name is a separate function, which no
+/// reference reaches. With `recursive: false`, functions in nested modules
+/// are neither removed nor analyzed; they are kept as roots.
 fn run(
     ctx: &mut IrContext,
     module: Module,
@@ -112,47 +112,30 @@ fn run(
     graph: &CallGraph,
     is_function: FunctionDefinition,
 ) -> GlobalDceResult {
-    let functions = || {
-        symbols
-            .all_definitions()
-            .filter(|&(_, op)| is_function(ctx, op))
-    };
-    let is_candidate = |op| config.recursive || !in_nested_module(ctx, module, op);
-    let candidates: Vec<(&SymbolPath, OpRef)> =
-        functions().filter(|&(_, op)| is_candidate(op)).collect();
-
-    let mut roots: HashSet<SymbolPath> = functions()
-        .filter(|(name, op)| !is_candidate(*op) || is_root(ctx, name, *op, config))
-        .map(|(name, _)| name.clone())
+    let is_candidate = |op| config.recursive || nearest_table(ctx, op) == Some(module.op());
+    let extra: HashSet<OpRef> = config
+        .extra_entry_points
+        .iter()
+        .filter_map(|path| symbols.resolve_in(ctx, module.op(), path))
         .collect();
-    roots.extend(graph.module_references.iter().cloned());
+    let mut roots: HashSet<OpRef> = graph
+        .functions
+        .iter()
+        .copied()
+        .filter(|&op| !is_candidate(op) || is_root(ctx, module, op) || extra.contains(&op))
+        .collect();
+    roots.extend(graph.module_references.iter().copied());
     let reachable = compute_reachable(graph, roots);
 
-    // A function containing a reachable function definition is kept with it.
-    let mut kept = HashSet::default();
-    for (_, op) in functions().filter(|(name, _)| reachable.contains(*name)) {
-        let mut current = Some(op);
-        while let Some(op) = current
-            && op != module.op()
-        {
-            kept.insert(op);
-            current = parent_op(ctx, op);
-        }
-    }
-    let dead: Vec<(SymbolPath, OpRef)> = candidates
-        .into_iter()
-        .filter(|(_, op)| !kept.contains(op))
-        .map(|(name, op)| (name.clone(), op))
+    let dead: Vec<OpRef> = graph
+        .functions
+        .iter()
+        .copied()
+        .filter(|&op| is_function(ctx, op) && is_candidate(op) && !reachable.contains(&op))
         .collect();
-    let dead_ops: HashSet<OpRef> = dead.iter().map(|&(_, op)| op).collect();
-
-    let mut removed = Vec::new();
-    for (name, op) in dead {
-        removed.push(name);
-        // A function inside a dead function goes with its container.
-        if has_ancestor_in(ctx, op, &dead_ops) {
-            continue;
-        }
+    let mut removed = Vec::with_capacity(dead.len());
+    for op in dead {
+        removed.extend(qualified_name(ctx, op));
         // Erase the unreachable function: `erase_op` clears the operand
         // use-chains of the func and its body subtree, so dead funcs don't
         // leave stale uses behind (#710). Func scopes are independent (SSA),
@@ -167,55 +150,25 @@ fn run(
     }
 }
 
-/// Whether `name` is a reachability root: the root `main` or `_start`, a
-/// function definition with an `abi` attribute (externally callable), or a
-/// configured extra entry point.
-fn is_root(ctx: &IrContext, name: &SymbolPath, op: OpRef, config: &GlobalDceConfig) -> bool {
-    *name == [crate::symbol!("main")]
-        || *name == [crate::symbol!("_start")]
-        || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
-        || config.extra_entry_points.contains(name)
-}
-
-/// Whether `op` lies inside a `core.module` nested in `module`.
-fn in_nested_module(ctx: &IrContext, module: Module, op: OpRef) -> bool {
-    let mut current = op;
-    while let Some(parent) = parent_op(ctx, current) {
-        if parent == module.op() {
-            return false;
-        }
-        if core::Module::matches(ctx, parent) {
-            return true;
-        }
-        current = parent;
-    }
-    false
-}
-
-/// Whether an operation enclosing `op` is in `ops`.
-fn has_ancestor_in(ctx: &IrContext, op: OpRef, ops: &HashSet<OpRef>) -> bool {
-    let mut current = parent_op(ctx, op);
-    while let Some(op) = current {
-        if ops.contains(&op) {
-            return true;
-        }
-        current = parent_op(ctx, op);
-    }
-    false
-}
-
-fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
-    let block = ctx.op(op).parent_block?;
-    ctx.region(ctx.block(block).parent_region?).parent_op
+/// Whether the function `op` is a reachability root: `main` or `_start` in
+/// the root module, or a function definition with an `abi` attribute
+/// (externally callable).
+fn is_root(ctx: &IrContext, module: Module, op: OpRef) -> bool {
+    let entry = nearest_table(ctx, op) == Some(module.op())
+        && matches!(
+            ctx.op(op).attributes.get_str(ctx, "sym_name"),
+            Some("main" | "_start")
+        );
+    entry || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
 }
 
 /// Functions reachable from `roots` via BFS over call and reference edges.
-fn compute_reachable(graph: &CallGraph, roots: HashSet<SymbolPath>) -> HashSet<SymbolPath> {
+fn compute_reachable(graph: &CallGraph, roots: HashSet<OpRef>) -> HashSet<OpRef> {
     let mut reachable = HashSet::default();
-    let mut worklist: VecDeque<SymbolPath> = roots.into_iter().collect();
+    let mut worklist: VecDeque<OpRef> = roots.into_iter().collect();
 
     while let Some(func) = worklist.pop_front() {
-        if !reachable.insert(func.clone()) {
+        if !reachable.insert(func) {
             continue;
         }
         if let Some(callees) = graph.edges.get(&func) {
@@ -223,7 +176,7 @@ fn compute_reachable(graph: &CallGraph, roots: HashSet<SymbolPath>) -> HashSet<S
                 callees
                     .iter()
                     .filter(|callee| !reachable.contains(*callee))
-                    .cloned(),
+                    .copied(),
             );
         }
     }
@@ -284,9 +237,10 @@ mod tests {
 
     fn surviving_functions(ctx: &IrContext, module: Module) -> HashSet<SymbolPath> {
         SymbolTable::collect(ctx, module)
-            .all_definitions()
-            .filter(|&(_, op)| func::Func::matches(ctx, op))
-            .map(|(name, _)| name.clone())
+            .symbols()
+            .iter()
+            .filter(|&&op| func::Func::matches(ctx, op))
+            .filter_map(|&op| qualified_name(ctx, op))
             .collect()
     }
 
@@ -349,13 +303,13 @@ mod tests {
     }
 
     #[test]
-    fn keeps_functions_containing_reachable_definitions() {
+    fn definitions_inside_function_bodies_go_with_their_host() {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @inner}
+    func.call {callee = @host}
     func.return
   }
   func.func @host() {
@@ -375,24 +329,12 @@ mod tests {
 
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
-        assert_eq!(
-            HashSet::<SymbolPath>::from_iter(result.removed_functions),
-            [
-                SymbolPath::new(["dead_host"]),
-                SymbolPath::new(["dead_inner"])
-            ]
-            .into_iter()
-            .collect::<HashSet<_>>()
-        );
+        assert_eq!(result.removed_functions, [SymbolPath::new(["dead_host"])]);
         assert_eq!(
             surviving_functions(&ctx, module),
-            [
-                SymbolPath::new(["main"]),
-                SymbolPath::new(["host"]),
-                SymbolPath::new(["inner"])
-            ]
-            .into_iter()
-            .collect::<HashSet<_>>()
+            [SymbolPath::new(["main"]), SymbolPath::new(["host"])]
+                .into_iter()
+                .collect::<HashSet<_>>()
         );
     }
 }

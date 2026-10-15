@@ -21,7 +21,7 @@ use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
-use trunk_ir::symbol_table::{SymbolTable, absolute_reference, qualified_name};
+use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{IrContext, Symbol, SymbolPath};
@@ -2215,7 +2215,7 @@ fn validate_symbol_use(
                 return;
             };
             let Some(target) = funcs
-                .definitions_of(&absolute_reference(ctx, op, symbol))
+                .definitions(ctx, op, symbol)
                 .first()
                 .copied()
                 .filter(|&target| is_control_op(ctx, target, "func"))
@@ -2258,7 +2258,7 @@ fn validate_symbol_use(
                 return;
             };
             let Some(target) = funcs
-                .definitions_of(&absolute_reference(ctx, op, symbol))
+                .definitions(ctx, op, symbol)
                 .first()
                 .copied()
                 .filter(|&target| is_control_op(ctx, target, "func"))
@@ -2293,7 +2293,7 @@ fn validate_symbol_use(
                 return;
             };
             let Some(target) = funcs
-                .definitions_of(&absolute_reference(ctx, op, symbol))
+                .definitions(ctx, op, symbol)
                 .first()
                 .copied()
                 .filter(|&target| is_control_op(ctx, target, "func"))
@@ -2352,14 +2352,15 @@ fn validate_symbol_use(
     }
 }
 
-/// Resolve every function reference in the module tree by root-qualified name.
+/// Resolve every function reference in the module tree from its nearest module.
 fn validate_module_symbols(
     ctx: &IrContext,
     module: Module,
     funcs: &SymbolTable,
     errors: &mut Vec<ValidationError>,
 ) {
-    for (symbol, ops) in funcs.duplicates() {
+    for ops in funcs.duplicates() {
+        let symbol = qualified_name(ctx, ops[0]).unwrap_or_else(SymbolPath::root);
         for &op in &ops[1..] {
             push_op_error(
                 ctx,
@@ -2933,7 +2934,7 @@ fn callable_has_semantic_provenance(
                         } else {
                             "callee"
                         })
-                        .and_then(|symbol| provenance.functions.resolve_from(ctx, producer, symbol))
+                        .and_then(|symbol| provenance.functions.resolve(ctx, producer, symbol))
                         .filter(|&function| is_control_op(ctx, function, "func"))
                         .is_some_and(|function| {
                             verified_callable_declaration(ctx, function, provenance.registered)
@@ -3271,11 +3272,18 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
         return false;
     };
-    let callee = absolute_reference(ctx, op, callee);
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
         if is_control_op(ctx, current, "func") {
-            return qualified_name(ctx, current) == Some(callee);
+            // The call is looked up in the module enclosing the function,
+            // where the function is a symbol under its own name.
+            return parent_op(ctx, current)
+                .is_some_and(|module| trunk_ir::dialect::core::Module::matches(ctx, module))
+                && ctx
+                    .op(current)
+                    .attributes
+                    .get_str(ctx, "sym_name")
+                    .is_some_and(|name| *callee == [name]);
         }
         owner = parent_op(ctx, current);
     }

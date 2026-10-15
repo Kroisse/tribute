@@ -130,7 +130,7 @@ impl Converter<'_> {
     ) -> Result<(Vec<OpRef>, ValueRef), TributeControlToCpsError> {
         // The adapter is defined in the root module, whose names a reference
         // in a nested module cannot see.
-        if !module_path(self.ctx, source).is_root() {
+        if self.nested_references.contains(&source) {
             return Err(self.malformed_source(
                 source,
                 "func_ref adapters are generated only for references in the root module",
@@ -142,9 +142,10 @@ impl Converter<'_> {
             .op(source)
             .attributes
             .get_symbol_ref("func_ref")
-            .expect("pre-CPS validation checked func_ref target");
+            .expect("pre-CPS validation checked func_ref target")
+            .clone();
         let target = self
-            .current_func(source, target_symbol)
+            .current_func(source)
             .expect("pre-CPS validation resolved func_ref target in this module");
         let result_logical_ty = self.ctx.op_result_types(source)[0];
         let result_convention = tribute_control::func_sig_convention(self.ctx, result_logical_ty)
@@ -192,7 +193,7 @@ impl Converter<'_> {
         let target_result = self.convert_type(target.source_result);
         if target.convention == CallingConvention::Cps {
             let tail = func::TailCall::operands(target_args)
-                .callee(target.symbol)
+                .callee(target_symbol.clone())
                 .build(self.ctx, location);
             set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
             self.ctx.push_op(block, tail.op_ref());
@@ -204,13 +205,13 @@ impl Converter<'_> {
             // `become` through the adapted callable value stays a proper
             // tail call.
             let tail = func::TailCall::operands(target_args)
-                .callee(target.symbol)
+                .callee(target_symbol.clone())
                 .build(self.ctx, location);
             set_calling_convention(self.ctx, tail.op_ref(), target.convention);
             self.ctx.push_op(block, tail.op_ref());
         } else {
             let call = func::Call::operands(target_args)
-                .callee(target.symbol)
+                .callee(target_symbol.clone())
                 .results([target_result])
                 .build(self.ctx, location);
             set_calling_convention(self.ctx, call.op_ref(), target.convention);
@@ -274,11 +275,9 @@ impl Converter<'_> {
             .attributes
             .get_type("type")
             .expect("pre-CPS validation checked function type");
-        let qualified =
-            qualified_name(self.ctx, source).expect("pre-CPS validation checked function symbol");
         let info = self
             .funcs
-            .get(&qualified)
+            .get(&source)
             .cloned()
             .expect("validated function is present in the callable graph");
         let physical_type = self.physical_function_type(logical_type);
@@ -388,7 +387,7 @@ impl Converter<'_> {
             .expect("pre-CPS validation checked direct callee")
             .clone();
         let target = self
-            .current_func(source, &target_symbol)
+            .current_func(source)
             .expect("pre-CPS validation resolved direct callee in this module");
         if target.convention == CallingConvention::Cps {
             if flow.convention != CallingConvention::Cps {
@@ -451,7 +450,7 @@ impl Converter<'_> {
             .expect("pre-CPS validation checked tail callee")
             .clone();
         let target = self
-            .current_func(source, &target_symbol)
+            .current_func(source)
             .expect("pre-CPS validation resolved tail callee in this module");
         let source_args = self
             .ctx
