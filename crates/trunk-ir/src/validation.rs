@@ -31,7 +31,7 @@ use super::op_interface::{
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
-use super::symbol_table::{SymbolTable, qualified_name};
+use super::symbol_table::{SymbolTable, link_name, qualified_name};
 use super::type_verifier::lookup_type_verifier;
 use super::walk;
 
@@ -1267,6 +1267,36 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 ///
 /// Shared analyses such as the [`SymbolTable`] are queried through
 /// `analyses`.
+/// Bodyless declarations that share a link name import one external symbol,
+/// so their `type` signatures must agree. Returns one message per declaration
+/// that disagrees with the first declaration of its link name.
+pub fn link_name_conflicts(ctx: &IrContext, module: Module) -> Vec<String> {
+    let mut declared: HashMap<Symbol, (SymbolPath, crate::refs::TypeRef)> = HashMap::default();
+    let mut errors = Vec::new();
+    let _ = walk::walk_op::<()>(ctx, module.op(), &mut |op| {
+        if !ctx.op_has_regions(op)
+            && let Some(ty) = ctx.op(op).attributes.get_type(crate::symbol!("type"))
+            && let Some(name) = link_name(ctx, op)
+            && let Some(path) = qualified_name(ctx, op)
+        {
+            match declared.get(&name) {
+                Some((first, first_ty)) if *first_ty != ty => errors.push(format!(
+                    "declarations @{first} and @{path} link as `{name}` with different \
+                     signatures {} and {}",
+                    crate::printer::print_type(ctx, *first_ty),
+                    crate::printer::print_type(ctx, ty),
+                )),
+                Some(_) => {}
+                None => {
+                    declared.insert(name, (path, ty));
+                }
+            }
+        }
+        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+    });
+    errors
+}
+
 pub fn validate_all(
     ctx: &IrContext,
     module: Module,
