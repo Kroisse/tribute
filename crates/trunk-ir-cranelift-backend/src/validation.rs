@@ -16,7 +16,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::printer::print_type;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionTarget, Module};
-use trunk_ir::symbol_table::qualified_name;
+use trunk_ir::symbol_table::{link_name, qualified_name};
 
 use crate::translate::RESERVED_RUNTIME_SYMBOLS;
 use crate::{CompilationError, CompilationResult};
@@ -54,6 +54,7 @@ pub fn validate_clif_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
         .map(|op| format!("{} in boundary {}", op, NATIVE_BACKEND_READY_BOUNDARY))
         .collect();
     errors.extend(validate_clif_contracts(ctx, module));
+    errors.extend(validate_link_names(ctx, module));
 
     if errors.is_empty() {
         return Ok(());
@@ -64,6 +65,40 @@ pub fn validate_clif_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
         errors.join("\n  - ")
     );
     Err(CompilationError::ir_validation(message))
+}
+
+/// Declarations that share a link name import one external symbol, so they
+/// must agree on its signature.
+fn validate_link_names(ctx: &IrContext, module: Module) -> Vec<String> {
+    let mut declared: HashMap<trunk_ir::Symbol, (SymbolPath, TypeRef)> = HashMap::default();
+    let mut errors = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
+        if let Ok(function) = clif::Func::from_op(ctx, op)
+            && matches!(
+                classify_callable_body(ctx, op),
+                Ok(CallableBody::Declaration)
+            )
+            && let Some(name) = link_name(ctx, op)
+        {
+            let path = qualified_name(ctx, op)
+                .unwrap_or_else(|| SymbolPath::new([function.sym_name(ctx)]));
+            let ty = function.r#type(ctx);
+            match declared.get(&name) {
+                Some((first, first_ty)) if *first_ty != ty => errors.push(format!(
+                    "declarations @{first} and @{path} link as `{name}` with different \
+                     signatures {} and {}",
+                    print_type(ctx, *first_ty),
+                    print_type(ctx, ty),
+                )),
+                Some(_) => {}
+                None => {
+                    declared.insert(name, (path, ty));
+                }
+            }
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    errors
 }
 
 /// Validate native callable contracts before instruction selection can erase
@@ -489,6 +524,36 @@ mod tests {
         validate_clif_ir(&ctx, module)
             .expect_err("native contract must fail closed")
             .to_string()
+    }
+
+    /// Declarations in different modules may share a link name only with
+    /// the same signature: they import one external symbol.
+    #[test]
+    fn declarations_sharing_a_link_name_agree_on_its_signature() {
+        let module = |second: &str| {
+            format!(
+                r#"core.module @test {{
+  core.module @a {{
+    clif.func {{abi = "C", link_name = "abs", sym_name = "abs", type = clif.func_sig<(core.i32) -> core.i32>}}
+  }}
+  core.module @b {{
+    clif.func {{abi = "C", link_name = "abs", sym_name = "abs", type = {second}}}
+  }}
+}}"#
+            )
+        };
+        let mut ctx = IrContext::new();
+        let agreeing =
+            parse_test_module(&mut ctx, &module("clif.func_sig<(core.i32) -> core.i32>"));
+        validate_clif_ir(&ctx, agreeing).expect("one signature for one external symbol");
+
+        let error = validation_error(&module("clif.func_sig<(core.i32, core.i32) -> core.i32>"));
+        assert!(
+            error.contains(
+                "declarations @a::abs and @b::abs link as `abs` with different signatures"
+            ),
+            "{error}"
+        );
     }
 
     #[test]
