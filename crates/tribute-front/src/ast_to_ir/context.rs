@@ -84,7 +84,10 @@ pub struct IrLoweringCtx<'db> {
     /// by their qualified name. C linkage has one flat namespace, so they keep
     /// their declared name.
     c_symbols: HashMap<SymbolPath, Symbol>,
-    /// The function each `func_ref` operation of the module names.
+    /// The function each `func_ref` operation of the module names. The IR
+    /// names a definition by its joined path as one component (or by its C
+    /// symbol), so the path cannot be read back from the operation. Remove
+    /// this once the IR names definitions by path.
     function_ref_paths: HashMap<OpRef, SymbolPath>,
     /// Extern declarations synthesized for referenced prelude functions.
     logical_emitted_externs: HashSet<SymbolPath>,
