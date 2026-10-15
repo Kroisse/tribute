@@ -1796,6 +1796,33 @@ fn func_ref_adapters_cover_every_legal_convention_strengthening() {
     assert!(!printed.contains("tribute_control."));
 }
 
+/// A func_ref adapter is defined in the root module, which a reference in a
+/// nested module cannot name.
+#[test]
+fn func_ref_in_a_nested_module_is_rejected() {
+    let input = r#"core.module @test {
+  core.module @inner {
+    !direct = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+    tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
+      tribute_control.return %value
+    }
+    tribute_control.func @refs(%value: core.i32) -> core.i32 convention(direct) {
+      %reference = tribute_control.func_ref {func_ref = @id} : !direct
+      tribute_control.return %value
+    }
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
+        .expect_err("a nested func_ref has no adapter its module can name");
+    assert!(
+        error
+            .to_string()
+            .contains("func_ref adapters are generated only for references in the root module"),
+        "{error}"
+    );
+}
+
 #[test]
 fn weaker_func_ref_adapter_is_rejected_before_mutation() {
     let input = r#"core.module @test {

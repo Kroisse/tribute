@@ -190,7 +190,7 @@ fn splice_callee_body_before(
 use super::call_graph::{CallGraph, directly_recursive_functions};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::SymbolPath;
-use crate::symbol_table::absolute_reference;
+use crate::symbol_table::{absolute_reference, module_path};
 use rustc_hash::FxHashSet as HashSet;
 use std::sync::Arc;
 
@@ -426,6 +426,11 @@ impl RewritePattern for InlineCallSite {
         let Some(&callee_op) = self.graph.func_ops.get(callee) else {
             return false;
         };
+        // The callee body's references are written for its own module; they
+        // would name other symbols from the caller's.
+        if module_path(ctx, op) != module_path(ctx, callee_op) {
+            return false;
+        }
 
         let call_loc = ctx.op(op).location;
         let ret_values = match splice_callee_body_before(ctx, op, callee_op) {
@@ -985,7 +990,7 @@ mod pass {
     }
 
     #[test]
-    fn inlines_nested_callee_by_root_qualified_name() {
+    fn inlines_only_within_one_module() {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(
             &mut ctx,
@@ -999,9 +1004,11 @@ mod pass {
       %0 = arith.const {value = 42} : core.i32
       func.return %0
     }
-  }
-  core.module @other {
-    func.func @helper() -> core.i32 {
+    func.func @caller() -> core.i32 {
+      %0 = func.call {callee = @local} : core.i32
+      func.return %0
+    }
+    func.func @local() -> core.i32 {
       %0 = arith.const {value = 7} : core.i32
       func.return %0
     }
@@ -1009,22 +1016,29 @@ mod pass {
 }"#,
         );
         let main = module.ops(&ctx)[0];
+        let inner = module.ops(&ctx)[1];
+        let caller = ctx
+            .block(ctx.region(ctx.op_region(inner, 0).unwrap()).blocks[0])
+            .ops[1];
 
         let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
+        // `helper`'s body is written for `inner`, so it stays a call from the
+        // root; `local` is in the caller's own module.
         assert_eq!(result.inlined_count, 1);
         assert_eq!(
             count_calls_to(&ctx, main, SymbolPath::new(["inner", "helper"])),
-            0
+            1
         );
-        let body = ctx.op_region(main, 0).unwrap();
+        assert_eq!(count_calls_to(&ctx, caller, SymbolPath::new(["local"])), 0);
+        let body = ctx.op_region(caller, 0).unwrap();
         let consts: Vec<_> = ctx
             .block(ctx.region(body).blocks[0])
             .ops
             .iter()
             .filter_map(|&op| ctx.op(op).attributes.get("value").cloned())
             .collect();
-        assert_eq!(consts, [Attribute::Int(42)]);
+        assert_eq!(consts, [Attribute::Int(7)]);
     }
 
     #[test]

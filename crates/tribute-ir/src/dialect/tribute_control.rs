@@ -3271,10 +3271,11 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
         return false;
     };
+    let callee = absolute_reference(ctx, op, callee);
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
         if is_control_op(ctx, current, "func") {
-            return qualified_name(ctx, current) == Some(callee.clone());
+            return qualified_name(ctx, current) == Some(callee);
         }
         owner = parent_op(ctx, current);
     }
@@ -6156,12 +6157,12 @@ mod tests {
     }
 
     #[test]
-    fn nested_self_calls_are_recognized_by_qualified_name() {
+    fn nested_self_calls_are_recognized_in_their_module() {
         let (ctx, module) = parse_fixture(
             r#"core.module @outer {
   core.module @inner {
     tribute_control.func @loop(%value: core.i32) -> core.i32 convention(direct) {
-      %again = tribute_control.call %value {callee = @inner::@loop} : core.i32
+      %again = tribute_control.call %value {callee = @loop} : core.i32
       tribute_control.return %again
     }
   }
