@@ -582,12 +582,12 @@ non-resumptive case를 식별해야 하므로 `Never`용 `anyref` placeholder는
 
 ### Effect row
 
-`tribute_control.func_sig`는 callable의 effect row를 `tribute.row` type 속성으로
+`tribute_control.func_sig`는 callable의 effect row를 `effect_row` type 속성으로
 가진다.
 
 ```text
 tribute_control.func_sig<(T) -> R, {tribute.calling_convention = 2,
-    tribute.row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}>
+    effect_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}>
 ```
 
 - **값:** `instances`는 [`ability.decl`](#abilitydecl)에 대한 symbol 참조 목록이고
@@ -649,7 +649,7 @@ tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에 넣�
 #### Row 인자와 치환
 
 Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_args`로 callee의
-양화된 binder마다 row 하나를 넘긴다. 각 row는 `tribute.row`와 같은 형식이며 tail은
+양화된 binder마다 row 하나를 넘긴다. 각 row는 `effect_row`와 같은 형식이며 tail은
 참조하는 쪽 정의의 binder index다. Callee에 양화된 binder가 없으면 속성을 생략한다.
 
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
@@ -711,7 +711,7 @@ tribute_control.func @map(%xs: !List, %f: !F) -> !List row(| 0) convention(cps)
 }
 ```
 
-간결한 형식은 `tribute.row` 외의 non-reserved type attribute가 없는 source
+간결한 형식은 `effect_row` 외의 non-reserved type attribute가 없는 source
 signature에만 쓴다.
 그런 attribute가 있으면 `func`/`lambda`는 generic assembly를 써서 complete
 `type` attribute 또는 result type expression을 출력한다. Metadata의 소유자는 항상
