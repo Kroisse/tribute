@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 use trunk_ir::Span;
 
 use tribute_front::SourceCst;
-use tribute_front::ast::visit::{RefSite, Visit, walk_expr, walk_module};
+use tribute_front::ast::visit::{RefSite, Visit, walk_decl_table, walk_expr};
 use tribute_front::ast::{
-    Expr, ExprKind, Module, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource,
+    DeclTable, Expr, ExprKind, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource,
 };
 use tribute_front::query as ast_query;
 
@@ -161,11 +161,11 @@ impl<'db> AstTypeIndex<'db> {
     /// Build a type index from a typed module.
     pub fn build(
         db: &'db dyn salsa::Database,
-        module: &Module<TypedRef<'db>>,
+        module: &DeclTable<TypedRef<'db>>,
         span_map: &SpanMap,
     ) -> Self {
         let mut collector = TypeCollector::new(db, span_map);
-        walk_module(&mut collector, module);
+        walk_decl_table(&mut collector, module);
 
         let mut entries = collector.entries;
 

@@ -4,7 +4,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
-use tribute_front::ast::{Decl, Expr, ExprKind, Module, ModuleItem, ResolvedRef, Stmt, TypedRef};
+use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
 
@@ -15,7 +15,7 @@ const PRELUDE_SOURCE: &str = include_str!("../../../../lib/std/prelude.trb");
 struct PreludeData<'db> {
     exports: tribute_front::typeck::PreludeExports<'db>,
     env: tribute_front::resolve::ModuleEnv<'db>,
-    typed_module: tribute_front::ast::Module<tribute_front::ast::TypedRef<'db>>,
+    typed_module: tribute_front::ast::DeclTable<tribute_front::ast::TypedRef<'db>>,
 }
 
 /// Load and type-check the prelude so tests can use arithmetic operators.
@@ -215,12 +215,14 @@ pub fn tdnr_function_summary(
     tdnr_function_summary_inner(db, source, function_name.to_owned())
 }
 
-fn function_body<'db>(module: &'db Module<TypedRef<'db>>, name: &str) -> &'db Expr<TypedRef<'db>> {
+fn function_body<'db>(
+    module: &'db DeclTable<TypedRef<'db>>,
+    name: &str,
+) -> &'db Expr<TypedRef<'db>> {
     module
-        .decls
-        .iter()
+        .decls()
         .find_map(|decl| match decl {
-            ModuleItem::Decl(Decl::Function(func)) if func.name == name => Some(&func.body),
+            Decl::Function(func) if func.name == name => Some(&func.body),
             _ => None,
         })
         .expect("function should exist")

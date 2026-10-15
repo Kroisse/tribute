@@ -12,8 +12,8 @@ use trunk_ir::Symbol;
 use super::MonomorphizeMetadata;
 use crate::ast::visit::{Visit, walk_expr, walk_pattern};
 use crate::ast::{
-    AbilityId, CallingConvention, Decl, EffectVar, Expr, ExprKind, FuncDecl, FuncDefId, Module,
-    ModuleItem, NodeId, Pattern, PatternKind, RowClasses, Stmt, Type, TypeKind, TypeScheme,
+    AbilityId, CallingConvention, Decl, DeclEntry, DeclTable, EffectVar, Expr, ExprKind, FuncDecl,
+    FuncDefId, NodeId, Pattern, PatternKind, RowClasses, Stmt, Type, TypeKind, TypeScheme,
     TypedRef, calling_convention_for_effect_row_in, collect_effect_vars,
 };
 use crate::typeck::{FunctionInstance, FunctionInstanceOrigin};
@@ -76,7 +76,7 @@ pub(crate) struct InstanceKeys<'db> {
 impl<'db> InstanceKeys<'db> {
     pub(crate) fn new(
         db: &'db dyn salsa::Database,
-        module: &Module<TypedRef<'db>>,
+        module: &DeclTable<TypedRef<'db>>,
         function_types: &[(SymbolPath, TypeScheme<'db>)],
         metadata: &MonomorphizeMetadata<'db>,
     ) -> Self {
@@ -85,15 +85,18 @@ impl<'db> InstanceKeys<'db> {
             .map(|(name, scheme)| (name, *scheme))
             .collect();
         let mut definitions = Vec::new();
-        let mut prefix = SymbolPath::root();
         let mut accessors = HashMap::default();
-        for_each_function(&module.decls, &mut prefix, &mut |name, function| {
+        for entry in &module.entries {
+            let Decl::Function(function) = &entry.decl else {
+                continue;
+            };
+            let name = entry.module.child(function.name.clone());
             if let Some(scheme) = schemes.get(&name) {
                 let id = FuncDefId::new(db, name);
                 let definition = Definition::new(db, *scheme, function, metadata, &mut accessors);
                 definitions.push((id, definition));
             }
-        });
+        }
         // A field function has no body, so its signature alone decides.
         definitions.extend(accessors.into_iter().map(|(id, scheme)| {
             let definition = Definition::of_signature(db, scheme, HashSet::default(), Vec::new());
@@ -178,12 +181,11 @@ impl<'db> InstanceKeys<'db> {
     /// its uses select. Returns whether a class changed.
     pub(crate) fn settle_local_classes(
         &mut self,
-        decls: &[ModuleItem<TypedRef<'db>>],
+        decls: &[DeclEntry<TypedRef<'db>>],
         metadata: &MonomorphizeMetadata<'db>,
     ) -> bool {
         let mut changed = false;
-        let mut module = SymbolPath::root();
-        for_each_declaration(decls, &mut module, &mut |name, decl| {
+        for_each_declaration(decls, &mut |name, decl| {
             let (Some(name), Decl::Function(function)) = (name, decl) else {
                 return;
             };
@@ -271,78 +273,34 @@ impl<'db> InstanceKeys<'db> {
     }
 }
 
-/// Calls `f` on each declaration of `decls` and of their modules that is not
-/// itself a module, with the qualified name of a function. That name is the
-/// instance its references are inside.
+/// Calls `f` on each declaration of `entries`, with the qualified name of a
+/// function. That name is the instance its references are inside.
 pub(super) fn for_each_declaration<'a, 'db>(
-    items: &'a [ModuleItem<TypedRef<'db>>],
-    module: &mut SymbolPath,
+    entries: &'a [DeclEntry<TypedRef<'db>>],
     f: &mut impl FnMut(Option<&Symbol>, &'a Decl<TypedRef<'db>>),
 ) {
-    for item in items {
-        match item {
-            ModuleItem::Decl(decl @ Decl::Function(function)) => {
-                f(Some(&module.child(function.name.clone()).to_symbol()), decl)
-            }
-            ModuleItem::Module(inner) => {
-                if let Some(body) = &inner.body {
-                    module.push(inner.name.clone());
-                    for_each_declaration(body, module, f);
-                    module.pop();
-                }
-            }
-            ModuleItem::Decl(decl) => f(None, decl),
-        }
+    for entry in entries {
+        let name = function_symbol(entry);
+        f(name.as_ref(), &entry.decl);
     }
 }
 
 /// [`for_each_declaration`] over declarations to change.
 pub(super) fn for_each_declaration_mut<'db>(
-    items: &mut [ModuleItem<TypedRef<'db>>],
-    module: &mut SymbolPath,
+    entries: &mut [DeclEntry<TypedRef<'db>>],
     f: &mut impl FnMut(Option<&Symbol>, &mut Decl<TypedRef<'db>>),
 ) {
-    for item in items {
-        match item {
-            ModuleItem::Decl(decl) => {
-                let name = match decl {
-                    Decl::Function(function) => {
-                        Some(module.child(function.name.clone()).to_symbol())
-                    }
-                    _ => None,
-                };
-                f(name.as_ref(), decl)
-            }
-            ModuleItem::Module(inner) => {
-                if let Some(body) = &mut inner.body {
-                    module.push(inner.name.clone());
-                    for_each_declaration_mut(body, module, f);
-                    module.pop();
-                }
-            }
-        }
+    for entry in entries {
+        let name = function_symbol(entry);
+        f(name.as_ref(), &mut entry.decl);
     }
 }
 
-fn for_each_function<'a, 'db>(
-    items: &'a [ModuleItem<TypedRef<'db>>],
-    prefix: &mut SymbolPath,
-    f: &mut impl FnMut(SymbolPath, &'a FuncDecl<TypedRef<'db>>),
-) {
-    for item in items {
-        match item {
-            ModuleItem::Decl(Decl::Function(function)) => {
-                f(prefix.child(function.name.clone()), function)
-            }
-            ModuleItem::Module(module) => {
-                if let Some(body) = &module.body {
-                    prefix.push(module.name.clone());
-                    for_each_function(body, prefix, f);
-                    prefix.pop();
-                }
-            }
-            _ => {}
-        }
+/// The qualified name of the function `entry` declares.
+fn function_symbol(entry: &DeclEntry<TypedRef<'_>>) -> Option<Symbol> {
+    match &entry.decl {
+        Decl::Function(function) => Some(entry.module.child(function.name.clone()).to_symbol()),
+        _ => None,
     }
 }
 

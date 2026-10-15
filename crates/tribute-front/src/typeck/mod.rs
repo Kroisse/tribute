@@ -1,6 +1,6 @@
 //! Type checking for the AST.
 //!
-//! This module transforms `Module<ResolvedRef<'db>>` into `Module<TypedRef<'db>>`
+//! This module transforms `Module<ResolvedRef<'db>>` into `DeclTable<TypedRef<'db>>`
 //! by performing bidirectional type checking with row-polymorphic effects.
 //!
 //! ## Pipeline
@@ -43,8 +43,8 @@ use trunk_ir::SymbolPath;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, CtorId, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeParam,
-    TypeScheme, TypedRef,
+    AbilityId, CtorId, DeclTable, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId,
+    TypeParam, TypeScheme, TypedRef,
 };
 
 /// Exact, monomorphic semantic signature selected for a handler arm.
@@ -362,7 +362,7 @@ impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<
 #[salsa::tracked]
 pub struct TypeCheckOutput<'db> {
     /// The type-checked AST module.
-    pub module: Module<TypedRef<'db>>,
+    pub module: DeclTable<TypedRef<'db>>,
     /// Function type schemes collected during type checking.
     /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
     #[returns(deref)]

@@ -400,7 +400,7 @@ fn prepare_frontend_details<'db>(
     typed: ast_typeck::TypeCheckOutput<'db>,
     _source: SourceCst,
 ) -> Option<PreparedFrontend<'db>> {
-    use tribute_front::ast::TypedRef;
+    use tribute_front::ast::{DeclTable, TypedRef};
 
     let user_module = typed.module(db);
     let user_fn_types = typed.function_types(db);
@@ -418,14 +418,14 @@ fn prepare_frontend_details<'db>(
             let prelude_span_map = prelude.span_map(db);
 
             // Prepend prelude decls before user decls
-            let mut merged_decls = prelude_module_ast.decls.clone();
-            merged_decls.extend(user_module.decls.iter().cloned());
-
-            let merged_ast = tribute_front::ast::Module::<TypedRef<'db>>::new(
-                user_module.id,
-                user_module.name.clone(),
-                merged_decls,
-            );
+            let mut merged_ast = DeclTable::<TypedRef<'db>> {
+                id: user_module.id,
+                name: user_module.name.clone(),
+                entries: prelude_module_ast.entries.clone(),
+            };
+            merged_ast
+                .entries
+                .extend(user_module.entries.iter().cloned());
 
             // Merge function_types: prelude first, user overrides
             let mut fn_types: HashMap<_, _> = prelude_fn_types.iter().cloned().collect();
@@ -1573,7 +1573,7 @@ pub fn parse_and_lower_ast<'db>(
 
     tracing::debug!(
         "Phase 4: after typecheck, {} declarations, {} function_types, {} node_types",
-        result.module.decls.len(),
+        result.module.entries.len(),
         result.function_types.len(),
         result.node_types.len()
     );
@@ -1690,36 +1690,22 @@ mod tests {
     use trunk_ir::ops::DialectType;
     use trunk_ir::walk::{WalkAction, walk_region};
 
-    /// The declarations of `item` and of its modules, each with its
-    /// qualified name. `item` is inside `module`.
-    fn declarations_with_names<'a, 'db>(
-        item: &'a tribute_front::ast::ModuleItem<tribute_front::ast::TypedRef<'db>>,
-        module: &SymbolPath,
-    ) -> Vec<(
+    /// The declaration of `entry` with its qualified name, if it has one.
+    fn declaration_with_name<'a, 'db>(
+        entry: &'a tribute_front::ast::DeclEntry<tribute_front::ast::TypedRef<'db>>,
+    ) -> Option<(
         trunk_ir::Symbol,
         &'a tribute_front::ast::Decl<tribute_front::ast::TypedRef<'db>>,
     )> {
-        use tribute_front::ast::{Decl, ModuleItem};
-        let decl = match item {
-            ModuleItem::Module(inner) => {
-                let module = module.child(inner.name.clone());
-                return inner
-                    .body
-                    .iter()
-                    .flatten()
-                    .flat_map(|item| declarations_with_names(item, &module))
-                    .collect();
-            }
-            ModuleItem::Decl(decl) => decl,
-        };
-        let name = match decl {
+        use tribute_front::ast::Decl;
+        let name = match &entry.decl {
             Decl::Function(function) => &function.name,
             Decl::ExternFunction(function) => &function.name,
             Decl::Struct(structure) => &structure.name,
             Decl::Enum(enumeration) => &enumeration.name,
-            _ => return Vec::new(),
+            _ => return None,
         };
-        vec![(module.child(name.clone()).to_symbol(), decl)]
+        Some((entry.module.child(name.clone()).to_symbol(), &entry.decl))
     }
 
     fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
@@ -3212,9 +3198,9 @@ fn main() -> Nil {
         assert_eq!(
             prepared
                 .ast
-                .decls
+                .entries
                 .iter()
-                .flat_map(|decl| declarations_with_names(decl, &SymbolPath::root()))
+                .filter_map(declaration_with_name)
                 .filter(|(name, decl)| matches!(decl, Decl::Function(_)) && *name == specialized)
                 .count(),
             1,
@@ -3244,14 +3230,9 @@ fn main() -> Nil {
                 merge_and_lower_to_ir_with(db, &typed, source, |mut input, db, ir, uri| {
                     let variant = input
                         .ast
-                        .decls
-                        .iter()
+                        .decls()
                         .find_map(|d| match d {
-                            tribute_front::ast::ModuleItem::Decl(Decl::Enum(e))
-                                if e.name == "Boxed$Int" =>
-                            {
-                                Some(e.variants[0].id)
-                            }
+                            Decl::Enum(e) if e.name == "Boxed$Int" => Some(e.variants[0].id),
                             _ => None,
                         })
                         .unwrap();
@@ -3328,9 +3309,11 @@ fn main() -> Nil {}
             prepare_frontend_for_lowering(db, typed, source).expect("closed nominal dependencies");
         let schemas = &prepared.constructor_types(db).specialized_enum_variants;
         let mut seen = HashSet::default();
-        let declarations = prepared.module(db).decls.iter();
-        for (name, declaration) in
-            declarations.flat_map(|decl| declarations_with_names(decl, &SymbolPath::root()))
+        for (name, declaration) in prepared
+            .module(db)
+            .entries
+            .iter()
+            .filter_map(declaration_with_name)
         {
             if let Decl::Enum(e) = declaration
                 && e.id.variant().is_some()
@@ -3661,12 +3644,13 @@ fn main() -> Nil {
             );
             let specialized_body = monomorphized
                 .ast
-                .decls
-                .iter()
+                .decls()
                 .find_map(|decl| match decl {
-                    tribute_front::ast::ModuleItem::Decl(tribute_front::ast::Decl::Function(
-                        function,
-                    )) if function.name == specialized => Some(function),
+                    tribute_front::ast::Decl::Function(function)
+                        if function.name == specialized =>
+                    {
+                        Some(function)
+                    }
                     _ => None,
                 })
                 .expect("monomorphization must materialize the concrete run_state body");

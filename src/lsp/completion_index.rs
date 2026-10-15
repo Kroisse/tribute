@@ -6,7 +6,9 @@
 use trunk_ir::{Span, Symbol};
 
 use tribute_front::SourceCst;
-use tribute_front::ast::{AbilityId, Decl, ModuleItem, TypeAnnotation, TypeAnnotationKind};
+use tribute_front::ast::{
+    AbilityId, Decl, DeclTable, ModuleItem, TypeAnnotation, TypeAnnotationKind, TypedRef,
+};
 use tribute_front::query as ast_query;
 
 // =============================================================================
@@ -70,6 +72,17 @@ pub fn complete_keywords(prefix: &str) -> Vec<AstCompletionItem> {
         .collect()
 }
 
+/// The declarations of the root module of `module`.
+fn root_decls<'a, 'db>(
+    module: &'a DeclTable<TypedRef<'db>>,
+) -> impl Iterator<Item = &'a Decl<TypedRef<'db>>> {
+    module
+        .entries
+        .iter()
+        .filter(|entry| entry.module.is_root())
+        .map(|entry| &entry.decl)
+}
+
 /// Build completion items from a typed module.
 #[salsa::tracked(returns(deref))]
 pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstCompletionItem> {
@@ -80,23 +93,23 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
 
     let mut items = Vec::new();
 
-    for decl in &module.decls {
+    for decl in root_decls(module) {
         match decl {
-            ModuleItem::Decl(Decl::Function(func)) => {
+            Decl::Function(func) => {
                 items.push(AstCompletionItem {
                     name: func.name.clone(),
                     kind: CompletionKind::Function,
                     detail: None,
                 });
             }
-            ModuleItem::Decl(Decl::Struct(s)) => {
+            Decl::Struct(s) => {
                 items.push(AstCompletionItem {
                     name: s.name.clone(),
                     kind: CompletionKind::Struct,
                     detail: None,
                 });
             }
-            ModuleItem::Decl(Decl::Enum(e)) => {
+            Decl::Enum(e) => {
                 items.push(AstCompletionItem {
                     name: e.name.clone(),
                     kind: CompletionKind::Enum,
@@ -111,21 +124,21 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
                     });
                 }
             }
-            ModuleItem::Decl(Decl::ExternFunction(func)) => {
+            Decl::ExternFunction(func) => {
                 items.push(AstCompletionItem {
                     name: func.name.clone(),
                     kind: CompletionKind::Function,
                     detail: None,
                 });
             }
-            ModuleItem::Decl(Decl::Ability(a)) => {
+            Decl::Ability(a) => {
                 items.push(AstCompletionItem {
                     name: a.name.clone(),
                     kind: CompletionKind::Ability,
                     detail: None,
                 });
             }
-            ModuleItem::Decl(Decl::Use(use_decl)) => {
+            Decl::Use(use_decl) => {
                 if let Some(ability) = AbilityId::builtin_from_path(db, &use_decl.path) {
                     let name = use_decl.alias.clone().unwrap_or_else(|| ability.name(db));
                     if !items.iter().any(|item| item.name == name) {
@@ -140,7 +153,6 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
                     }
                 }
             }
-            ModuleItem::Module(_) => {}
         }
     }
 
@@ -346,8 +358,8 @@ pub fn function_signatures(db: &dyn salsa::Database, source: SourceCst) -> Vec<F
 
     let mut signatures = Vec::new();
 
-    for decl in &module.decls {
-        if let ModuleItem::Decl(Decl::Function(func)) = decl {
+    for decl in root_decls(module) {
+        if let Decl::Function(func) = decl {
             let params: Vec<_> = func
                 .params
                 .iter()

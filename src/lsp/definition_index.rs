@@ -9,12 +9,12 @@ use trunk_ir::{Span, Symbol};
 
 use tribute_front::SourceCst;
 use tribute_front::ast::visit::{
-    RefSite, Visit, walk_decl, walk_expr, walk_field_pattern, walk_func_decl, walk_module,
+    RefSite, Visit, walk_decl, walk_decl_table, walk_expr, walk_field_pattern, walk_func_decl,
     walk_pattern,
 };
 use tribute_front::ast::{
-    AbilityDecl, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FieldPattern, FuncDecl, LocalId,
-    Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, StructDecl, TypedRef,
+    AbilityDecl, Decl, DeclTable, EnumDecl, Expr, ExprKind, ExternFuncDecl, FieldPattern, FuncDecl,
+    LocalId, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, StructDecl, TypedRef,
 };
 use tribute_front::query as ast_query;
 
@@ -158,11 +158,11 @@ impl<'db> AstDefinitionIndex<'db> {
     /// Build a definition index from an AST module.
     pub fn build(
         db: &'db dyn salsa::Database,
-        module: &Module<TypedRef<'db>>,
+        module: &DeclTable<TypedRef<'db>>,
         span_map: &SpanMap,
     ) -> Self {
         let mut collector = DefinitionCollector::new(db, span_map);
-        walk_module(&mut collector, module);
+        walk_decl_table(&mut collector, module);
 
         let mut definitions = collector.definitions;
         let mut references = collector.references;

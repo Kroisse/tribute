@@ -9,9 +9,10 @@ use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::{Symbol, SymbolPath};
 
-use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_module_mut};
+use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_decl_table_mut};
 use crate::ast::{
-    CtorId, FuncDefId, Module, ModuleItem, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypedRef,
+    CtorId, DeclEntry, DeclTable, FuncDefId, NodeId, ResolvedRef, Type, TypeDefId, TypeKind,
+    TypedRef,
 };
 
 use super::instance::{InstanceKey, InstanceKeys, for_each_declaration_mut};
@@ -26,24 +27,23 @@ pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, Symb
 /// Rewrite all generic function call sites in a module to use specialized versions.
 pub fn rewrite_module<'db>(
     db: &'db dyn salsa::Database,
-    module: &mut Module<TypedRef<'db>>,
+    module: &mut DeclTable<TypedRef<'db>>,
     rewrite_map: &RewriteMap<'db>,
     instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     keys: &InstanceKeys<'db>,
 ) {
-    rewrite_decls(db, &mut module.decls, rewrite_map, instances, keys);
+    rewrite_decls(db, &mut module.entries, rewrite_map, instances, keys);
 }
 
 /// Rewrite call sites in a list of declarations (e.g., specialized function bodies).
 pub fn rewrite_decls<'db>(
     db: &'db dyn salsa::Database,
-    decls: &mut [ModuleItem<TypedRef<'db>>],
+    decls: &mut [DeclEntry<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
     instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     keys: &InstanceKeys<'db>,
 ) {
-    let mut module = SymbolPath::root();
-    for_each_declaration_mut(decls, &mut module, &mut |enclosing, decl| {
+    for_each_declaration_mut(decls, &mut |enclosing, decl| {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
             // Only a function reference in expression position is a call site.
             if site == RefSite::Var
@@ -116,13 +116,12 @@ pub fn build_type_rewrite_map<'db>(
 /// rewritten, since the map is keyed by the original type arguments.
 pub fn rewrite_field_function_refs<'db>(
     db: &'db dyn salsa::Database,
-    module: &mut Module<TypedRef<'db>>,
+    module: &mut DeclTable<TypedRef<'db>>,
     type_rewrite_map: &TypeRewriteMap<'db>,
     instances: &mut HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     keys: &mut InstanceKeys<'db>,
 ) {
-    let mut root = SymbolPath::root();
-    for_each_declaration_mut(&mut module.decls, &mut root, &mut |enclosing, decl| {
+    for_each_declaration_mut(&mut module.entries, &mut |enclosing, decl| {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
             if site != RefSite::Var {
                 return;
@@ -171,10 +170,10 @@ pub fn rewrite_field_function_refs<'db>(
 /// throughout a module's expressions and patterns.
 pub fn rewrite_types_in_module<'db>(
     db: &'db dyn salsa::Database,
-    module: &mut Module<TypedRef<'db>>,
+    module: &mut DeclTable<TypedRef<'db>>,
     type_rewrite_map: &TypeRewriteMap<'db>,
 ) {
-    walk_module_mut(
+    walk_decl_table_mut(
         &mut Refs(|_, _, value: &mut TypedRef<'db>| {
             *value = rewrite_typed_ref_type(db, value.clone(), type_rewrite_map);
         }),

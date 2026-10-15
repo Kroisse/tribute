@@ -12,12 +12,11 @@ use crate::ast::visit::{
     walk_pattern_mut, walk_stmt, walk_stmt_mut,
 };
 use crate::ast::{
-    CallingConvention, Decl, EffectRow, EffectVar, Expr, ExprKind, HandlerArm, HandlerKind,
-    LocalId, ModuleItem, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypedRef,
+    CallingConvention, Decl, DeclEntry, EffectRow, EffectVar, Expr, ExprKind, HandlerArm,
+    HandlerKind, LocalId, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypedRef,
     collect_effect_vars,
 };
 use crate::typeck::{RowSubst, TypeSubst};
-use trunk_ir::SymbolPath;
 
 /// Give every let-bound lambda of `decls` one class per binding, copying a
 /// binding whose uses select several.
@@ -26,7 +25,7 @@ use trunk_ir::SymbolPath;
 /// are settled again after each round of copies.
 pub(super) fn settle_local_lambdas<'db>(
     db: &'db dyn salsa::Database,
-    decls: &mut [ModuleItem<TypedRef<'db>>],
+    decls: &mut [DeclEntry<TypedRef<'db>>],
     metadata: &mut MonomorphizeMetadata<'db>,
     keys: &mut InstanceKeys<'db>,
 ) {
@@ -52,13 +51,12 @@ struct LambdaCopy {
 /// a binding was copied.
 fn split_local_lambdas<'db>(
     db: &'db dyn salsa::Database,
-    decls: &mut [ModuleItem<TypedRef<'db>>],
+    decls: &mut [DeclEntry<TypedRef<'db>>],
     metadata: &mut MonomorphizeMetadata<'db>,
     keys: &InstanceKeys<'db>,
 ) -> bool {
     let mut split = false;
-    let mut module = SymbolPath::root();
-    for_each_declaration_mut(decls, &mut module, &mut |name, decl| {
+    for_each_declaration_mut(decls, &mut |name, decl| {
         let (Some(name), Decl::Function(function)) = (name, decl) else {
             return;
         };
