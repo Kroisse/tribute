@@ -352,4 +352,12 @@ mod tests {
         assert_eq!(split_qualified("a."), None);
         assert_eq!(split_qualified("plain"), None);
     }
+
+    #[test]
+    fn name_hash_is_64_bit_fnv1a() {
+        // Published FNV-1a 64-bit test vectors.
+        assert_eq!(fnv1a(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(fnv1a(b"foobar"), 0x8594_4171_f739_67e8);
+    }
 }
