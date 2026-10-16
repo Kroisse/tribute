@@ -2509,3 +2509,40 @@ fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
         "{error}"
     );
 }
+
+#[test]
+fn legalization_drops_effect_rows_and_row_metadata() {
+    let with_rows = r#"core.module @test {
+  !open = tribute_control.func_sig<(core.i32) -> core.i32, {effect_row = {tail = 0}, tribute.calling_convention = 2}>
+  ability.decl {sym_name = "A"} {
+    ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @apply(%f: !open, %x: core.i32) -> core.i32 row(| 0) convention(cps) attributes {inferred_row = true, row_binders = ["param", "body"], row_unions = [{result = 0, sources = [1]}]} {
+    %r = tribute_control.call_indirect %f, %x : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @main(%x: core.i32) -> core.i32 row(@A) convention(cps) {
+    %f = tribute_control.lambda(%y: core.i32) -> core.i32 row(@A) convention(cps) captures [] {
+      tribute_control.return %y
+    }
+    %r = tribute_control.call %f, %x {callee = @apply, row_args = [{instances = [@A]}]} : core.i32
+    tribute_control.return %r
+  }
+}"#;
+    let without_rows = with_rows
+        .replace("effect_row = {tail = 0}, ", "")
+        .replace(" row(| 0)", "")
+        .replace(" row(@A)", "")
+        .replace(
+            r#" attributes {inferred_row = true, row_binders = ["param", "body"], row_unions = [{result = 0, sources = [1]}]}"#,
+            "",
+        )
+        .replace(", row_args = [{instances = [@A]}]", "");
+    let legalize = |input: &str| {
+        let (mut ctx, module) = parse(input);
+        run_pre_cps(&mut ctx, module).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
+        print_module(&ctx, module.op())
+    };
+    assert_eq!(legalize(with_rows), legalize(&without_rows));
+}

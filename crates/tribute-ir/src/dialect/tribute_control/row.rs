@@ -538,3 +538,6 @@ fn visit_rows_in(
         visit_rows_in(ctx, *param, seen, visit);
     }
 }
+
+#[cfg(test)]
+mod tests;
