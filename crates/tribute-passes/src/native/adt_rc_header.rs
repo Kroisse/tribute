@@ -47,8 +47,8 @@ fn lower(
     let rtti_map = &tribute_ir::dialect::tribute_rtti::Layout::declared_indices(ctx, module);
     // Pre-intern types
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let i64_ty = TypeDataBuilder::new("core", "i64").intern(ctx);
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
 
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern {
@@ -65,8 +65,8 @@ fn lower(
         });
 
     let target = ConversionTarget::new()
-        .illegal_op("adt", "struct_new")
-        .illegal_op("adt", "variant_new");
+        .illegal_op("adt.struct_new")
+        .illegal_op("adt.variant_new");
     applicator
         .with_target(target)
         .apply_partial_conversion(ctx, module, "adt-rc-header")?;
@@ -415,8 +415,9 @@ impl trunk_ir::pass::Pass for AdtRcHeader {
 mod tests {
     use super::*;
     use trunk_ir::Span;
-    use trunk_ir::Symbol;
+
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
+    use trunk_ir::dialect::core;
     use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
@@ -429,10 +430,6 @@ mod tests {
         let path = ctx.intern_path("file:///test.trb");
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
-    }
-
-    fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(dialect, name).intern(ctx)
     }
 
     fn build_and_lower(
@@ -466,12 +463,11 @@ mod tests {
             .map(|i| ctx.block_arg(entry, i as u32))
             .collect();
 
-        let struct_new_data =
-            OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
-                .operands(field_vals)
-                .result(struct_ty)
-                .attr("type", Attribute::Type(struct_ty))
-                .build(ctx);
+        let struct_new_data = OperationDataBuilder::new(loc, "adt.struct_new")
+            .operands(field_vals)
+            .result(struct_ty)
+            .attr("type", Attribute::Type(struct_ty))
+            .build(ctx);
         let struct_new_ref = ctx.create_op(struct_new_data);
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
@@ -505,11 +501,10 @@ mod tests {
             parent_op: None,
         });
 
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(module_region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(module_region)
+            .build(ctx);
         let module_op = ctx.create_op(module_data);
         let module = Module::new(ctx, module_op).expect("valid arena module");
 
@@ -524,7 +519,7 @@ mod tests {
         .expect("typed ownership plan");
         // Model the representation-only signature rewrite that occurs after
         // planning in the production pipeline to isolate ADT lowering here.
-        let ptr_ty = intern_ty(ctx, "core", "ptr");
+        let ptr_ty = core::ptr(ctx).as_type_ref();
         let erased_func_ty =
             func::func_sig(ctx, field_types.iter().copied(), [ptr_ty]).as_type_ref();
         ctx.op_attrs_mut(func_op.op_ref())
@@ -541,7 +536,7 @@ mod tests {
     #[test]
     fn test_struct_new_to_clif() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let i32_ty = core::I32::type_ref(&mut ctx);
 
         // Point(x: i32, y: i32) - two scalar fields
         let point_ty =

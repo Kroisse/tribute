@@ -6,7 +6,6 @@
 //! - `cf.switch` -> `clif.switch`
 
 use trunk_ir::OperationDataBuilder;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{cf, clif, core};
 use trunk_ir::ops::DialectOp;
@@ -52,7 +51,7 @@ impl RewritePattern for CfBrPattern {
             return false;
         }
 
-        let new_op = rebuild_op_as(ctx, op, Symbol::new("clif"), Symbol::new("jump"));
+        let new_op = rebuild_op_as(ctx, op, "clif.jump");
         rewriter.replace_op(new_op);
         true
     }
@@ -72,7 +71,7 @@ impl RewritePattern for CfCondBrPattern {
             return false;
         }
 
-        let new_op = rebuild_op_as(ctx, op, Symbol::new("clif"), Symbol::new("brif"));
+        let new_op = rebuild_op_as(ctx, op, "clif.brif");
         rewriter.replace_op(new_op);
         true
     }
@@ -131,11 +130,15 @@ fn unsigned_case(width: u32, case: i64) -> Option<u64> {
     }
 }
 
-/// Rebuild an operation with a new dialect/name, transferring all operands,
+/// Rebuild an operation with a new name, transferring all operands,
 /// results, attributes, regions, and successors from the original.
 ///
 /// Regions are detached from the original operation and re-attached to the new one.
-pub fn rebuild_op_as(ctx: &mut IrContext, op: OpRef, dialect: Symbol, name: Symbol) -> OpRef {
+pub fn rebuild_op_as(
+    ctx: &mut IrContext,
+    op: OpRef,
+    name: impl Into<trunk_ir::OpNameArg>,
+) -> OpRef {
     let data = ctx.op(op);
     let loc = data.location;
     let attrs = data.attributes.clone();
@@ -149,7 +152,7 @@ pub fn rebuild_op_as(ctx: &mut IrContext, op: OpRef, dialect: Symbol, name: Symb
         ctx.detach_region(r);
     }
 
-    let mut builder = OperationDataBuilder::new(loc, dialect, name)
+    let mut builder = OperationDataBuilder::new(loc, name)
         .operands(operands)
         .results(result_types);
     for (k, v) in attrs {

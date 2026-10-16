@@ -5,9 +5,8 @@
 //! and callers outside this crate share it.
 
 use trunk_ir::IrContext;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
-
-use crate::emit::helpers::is_type;
 
 /// Whether this IR type is registered by the backend as a concrete WasmGC
 /// struct reference, and is therefore assignable to the abstract `wasm.structref`
@@ -21,7 +20,7 @@ fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
     if let Some(index) = crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) {
         return crate::gc_types::is_builtin_struct_index(index);
     }
-    is_type(ctx, ty, "wasm_gc", "struct")
+    trunk_ir::dialect::wasm_gc::Struct::matches(ctx, ty)
 }
 
 /// Whether this IR type is registered by the backend as a concrete WasmGC array
@@ -56,14 +55,16 @@ pub fn is_wasm_physical_argument_assignable(
     }
 
     // `core.i1` is represented by an i32 in the Wasm value space.
-    if is_type(ctx, argument, "core", "i1") && is_type(ctx, parameter, "core", "i32") {
+    if trunk_ir::dialect::core::I1::matches(ctx, argument)
+        && trunk_ir::dialect::core::I32::matches(ctx, parameter)
+    {
         return true;
     }
 
-    let argument_is_structref = is_type(ctx, argument, "wasm", "structref");
-    let parameter_is_structref = is_type(ctx, parameter, "wasm", "structref");
-    let parameter_is_arrayref = is_type(ctx, parameter, "wasm", "arrayref");
-    let parameter_is_anyref = is_type(ctx, parameter, "wasm", "anyref");
+    let argument_is_structref = trunk_ir::dialect::wasm::Structref::matches(ctx, argument);
+    let parameter_is_structref = trunk_ir::dialect::wasm::Structref::matches(ctx, parameter);
+    let parameter_is_arrayref = trunk_ir::dialect::wasm::Arrayref::matches(ctx, parameter);
+    let parameter_is_anyref = trunk_ir::dialect::wasm::Anyref::matches(ctx, parameter);
 
     // Registered concrete GC references widen to the abstract heap type the
     // emission chose for the slot. Reaching a concrete type from an abstract one
@@ -80,21 +81,21 @@ pub fn is_wasm_physical_argument_assignable(
     if parameter_is_anyref
         && (is_registered_gc_struct_reference(ctx, argument)
             || is_registered_gc_array_reference(ctx, argument)
-            || is_type(ctx, argument, "core", "array"))
+            || trunk_ir::dialect::core::Array::matches(ctx, argument))
     {
         return true;
     }
 
-    let argument_is_core_array = is_type(ctx, argument, "core", "array");
+    let argument_is_core_array = trunk_ir::dialect::core::Array::matches(ctx, argument);
     if argument_is_core_array && parameter_is_arrayref {
         return true;
     }
 
     // WasmGC abstract-reference upcasts. The reverse directions are checked
     // downcasts and therefore intentionally remain false here.
-    let argument_is_wasm_gc_ref = is_type(ctx, argument, "wasm", "i31ref")
+    let argument_is_wasm_gc_ref = trunk_ir::dialect::wasm::I31ref::matches(ctx, argument)
         || argument_is_structref
-        || is_type(ctx, argument, "wasm", "arrayref");
+        || trunk_ir::dialect::wasm::Arrayref::matches(ctx, argument);
     argument_is_wasm_gc_ref && parameter_is_anyref
 }
 

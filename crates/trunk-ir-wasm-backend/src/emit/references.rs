@@ -125,7 +125,7 @@ fn collect_op(
             let Some(symbol) = ctx.op_attrs(op).get_symbol_ref(attribute) else {
                 return Err(CompilationError::invalid_module(format!(
                     "wasm.{} requires a symbol `{}` attribute",
-                    ctx.op(op).name,
+                    ctx.op(op).name.display(ctx),
                     attribute,
                 )));
             };
@@ -139,7 +139,7 @@ fn collect_op(
                 if ctx.op_attrs(op).get(owned).is_some() {
                     return Err(CompilationError::invalid_module(format!(
                         "wasm.{} owns `{}` but is not a modeled function-symbol user",
-                        ctx.op(op).name,
+                        ctx.op(op).name.display(ctx),
                         owned,
                     )));
                 }

@@ -100,9 +100,8 @@ pub(crate) fn lower_get_or_panic(
     });
     if let Some(&op) = other_references.first() {
         return Err(BytesIntrinsicError::new(format!(
-            "the intrinsic is referenced by {}.{}, not only called",
-            ctx.op(op).dialect,
-            ctx.op(op).name,
+            "the intrinsic is referenced by {}, not only called",
+            ctx.op(op).name.display(ctx),
         )));
     }
     // Validate every call's shape before rewriting any of them.
@@ -145,7 +144,7 @@ pub(crate) fn replace_call(ctx: &mut IrContext, call: OpRef, ops: &[OpRef], valu
 /// The intrinsic's exact signature: `(core.bytes, core.i32) -> core.i32`.
 fn exact_signature(ctx: &mut IrContext) -> TypeRef {
     let bytes = core::bytes(ctx).as_type_ref();
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
     func::func_sig(ctx, [bytes, i32_ty], [i32_ty]).as_type_ref()
 }
 

@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 
 use crate::ops::DialectOp;
 use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
-use crate::{Symbol, SymbolPath};
+use crate::{OpName, SymbolPath};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
 ///
@@ -23,16 +23,15 @@ pub trait Pure {}
 ///
 /// Use `inventory::submit!` to register pure operations at the dialect definition site.
 pub struct PureOpRegistration {
-    dialect: &'static str,
-    op_name: &'static str,
+    name: OpName,
 }
 
 inventory::collect!(PureOpRegistration);
 
 /// Internal registry built from inventory at first access.
 struct PureOpRegistry {
-    /// Lookup: (dialect, op_name) -> is_pure
-    pure_ops: HashSet<(Symbol, Symbol)>,
+    /// Registered pure operations.
+    pure_ops: HashSet<OpName>,
 }
 
 impl PureOpRegistry {
@@ -42,8 +41,8 @@ impl PureOpRegistry {
         }
     }
 
-    fn lookup(&self, dialect: Symbol, op_name: Symbol) -> bool {
-        self.pure_ops.contains(&(dialect, op_name))
+    fn lookup(&self, name: OpName) -> bool {
+        self.pure_ops.contains(&name)
     }
 }
 
@@ -52,9 +51,7 @@ static REGISTRY: LazyLock<PureOpRegistry> = LazyLock::new(|| {
     let mut registry = PureOpRegistry::new();
 
     for reg in inventory::iter::<PureOpRegistration> {
-        let dialect = Symbol::new(reg.dialect);
-        let op_name = Symbol::new(reg.op_name);
-        registry.pure_ops.insert((dialect, op_name));
+        registry.pure_ops.insert(reg.name);
     }
 
     registry
@@ -72,16 +69,13 @@ impl PureOps {
     /// ```
     #[doc(hidden)]
     pub const fn register<T: DialectOp>() -> PureOpRegistration {
-        PureOpRegistration {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
-        }
+        PureOpRegistration { name: T::NAME }
     }
 
     /// Check if an arena operation is pure (no side effects, safe to remove if unused).
     pub fn is_pure(ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
-        REGISTRY.lookup(data.dialect.clone(), data.name.clone())
+        REGISTRY.lookup(data.name)
     }
 
     /// Check if an arena operation is pure and eligible for DCE removal.
@@ -141,16 +135,15 @@ pub trait IsolatedFromAbove {}
 ///
 /// Use `inventory::submit!` to register isolated operations at the dialect definition site.
 pub struct IsolatedFromAboveRegistration {
-    dialect: &'static str,
-    op_name: &'static str,
+    name: OpName,
 }
 
 inventory::collect!(IsolatedFromAboveRegistration);
 
 /// Internal registry built from inventory at first access.
 struct IsolatedFromAboveRegistry {
-    /// Lookup: (dialect, op_name) -> is_isolated
-    isolated_ops: HashSet<(Symbol, Symbol)>,
+    /// Registered isolated operations.
+    isolated_ops: HashSet<OpName>,
 }
 
 impl IsolatedFromAboveRegistry {
@@ -160,8 +153,8 @@ impl IsolatedFromAboveRegistry {
         }
     }
 
-    fn lookup(&self, dialect: Symbol, op_name: Symbol) -> bool {
-        self.isolated_ops.contains(&(dialect, op_name))
+    fn lookup(&self, name: OpName) -> bool {
+        self.isolated_ops.contains(&name)
     }
 }
 
@@ -170,9 +163,7 @@ static ISOLATED_REGISTRY: LazyLock<IsolatedFromAboveRegistry> = LazyLock::new(||
     let mut registry = IsolatedFromAboveRegistry::new();
 
     for reg in inventory::iter::<IsolatedFromAboveRegistration> {
-        let dialect = Symbol::new(reg.dialect);
-        let op_name = Symbol::new(reg.op_name);
-        registry.isolated_ops.insert((dialect, op_name));
+        registry.isolated_ops.insert(reg.name);
     }
 
     registry
@@ -190,16 +181,13 @@ impl IsolatedFromAboveOps {
     /// ```
     #[doc(hidden)]
     pub const fn register<T: DialectOp>() -> IsolatedFromAboveRegistration {
-        IsolatedFromAboveRegistration {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
-        }
+        IsolatedFromAboveRegistration { name: T::NAME }
     }
 
     /// Check if an arena operation's regions are isolated from above.
     pub fn is_isolated(ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
-        ISOLATED_REGISTRY.lookup(data.dialect.clone(), data.name.clone())
+        ISOLATED_REGISTRY.lookup(data.name)
     }
 }
 
@@ -397,8 +385,7 @@ pub trait CallableOwnerModel: DialectOp {
 }
 
 pub struct CallableOwnerRegistration {
-    dialect: &'static str,
-    op_name: &'static str,
+    name: OpName,
     signature: fn(&IrContext, OpRef) -> Option<crate::dialect::func::FuncSig>,
 }
 
@@ -411,29 +398,23 @@ fn callable_owner_signature<T: CallableOwnerModel>(
 
 inventory::collect!(CallableOwnerRegistration);
 
-static CALLABLE_OWNER_REGISTRY: LazyLock<
-    HashMap<(Symbol, Symbol), &'static CallableOwnerRegistration>,
-> = LazyLock::new(|| {
-    let mut registry = HashMap::default();
-    for registration in inventory::iter::<CallableOwnerRegistration> {
-        let key = (
-            Symbol::new(registration.dialect),
-            Symbol::new(registration.op_name),
-        );
-        assert!(
-            registry.insert(key, registration).is_none(),
-            "duplicate callable owner registration"
-        );
-    }
-    registry
-});
+static CALLABLE_OWNER_REGISTRY: LazyLock<HashMap<OpName, &'static CallableOwnerRegistration>> =
+    LazyLock::new(|| {
+        let mut registry = HashMap::default();
+        for registration in inventory::iter::<CallableOwnerRegistration> {
+            assert!(
+                registry.insert(registration.name, registration).is_none(),
+                "duplicate callable owner registration"
+            );
+        }
+        registry
+    });
 
 pub struct CallableOwnerOps;
 impl CallableOwnerOps {
     pub const fn register<T: CallableOwnerModel>() -> CallableOwnerRegistration {
         CallableOwnerRegistration {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
+            name: T::NAME,
             signature: callable_owner_signature::<T>,
         }
     }
@@ -442,7 +423,7 @@ impl CallableOwnerOps {
     pub fn signature(ctx: &IrContext, op: OpRef) -> Option<Option<crate::dialect::func::FuncSig>> {
         let data = ctx.op(op);
         CALLABLE_OWNER_REGISTRY
-            .get(&(data.dialect.clone(), data.name.clone()))
+            .get(&data.name)
             .map(|registration| (registration.signature)(ctx, op))
     }
 }
@@ -499,19 +480,14 @@ fn callable_exit_model<T: CallableExitModel>(
     op: OpRef,
 ) -> Result<(), ControlFlowInterfaceError> {
     let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!(
-            "malformed {}.{}: {error:?}",
-            T::DIALECT_NAME,
-            T::OP_NAME
-        ))
+        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
     })?;
     model.exits_callable(ctx)
 }
 
 /// Registry entry for [`CallableExit`].
 pub struct CallableExitRegistration {
-    dialect: &'static str,
-    op_name: &'static str,
+    name: OpName,
     exits_callable: fn(&IrContext, OpRef) -> Result<(), ControlFlowInterfaceError>,
 }
 
@@ -523,24 +499,18 @@ impl CallableExit for CallableExitRegistration {
 
 inventory::collect!(CallableExitRegistration);
 
-static CALLABLE_EXIT_REGISTRY: LazyLock<
-    HashMap<(Symbol, Symbol), &'static CallableExitRegistration>,
-> = LazyLock::new(|| {
-    let mut registry = HashMap::default();
-    for registration in inventory::iter::<CallableExitRegistration> {
-        let key = (
-            Symbol::new(registration.dialect),
-            Symbol::new(registration.op_name),
-        );
-        assert!(
-            registry.insert(key, registration).is_none(),
-            "duplicate CallableExit registration for '{}.{}'",
-            registration.dialect,
-            registration.op_name,
-        );
-    }
-    registry
-});
+static CALLABLE_EXIT_REGISTRY: LazyLock<HashMap<OpName, &'static CallableExitRegistration>> =
+    LazyLock::new(|| {
+        let mut registry = HashMap::default();
+        for registration in inventory::iter::<CallableExitRegistration> {
+            assert!(
+                registry.insert(registration.name, registration).is_none(),
+                "duplicate CallableExit registration for {:?}",
+                registration.name,
+            );
+        }
+        registry
+    });
 
 /// Dynamic query and registration entry point for [`CallableExit`].
 pub struct CallableExitOps;
@@ -549,8 +519,7 @@ impl CallableExitOps {
     #[doc(hidden)]
     pub const fn register<T: CallableExitModel>() -> CallableExitRegistration {
         CallableExitRegistration {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
+            name: T::NAME,
             exits_callable: callable_exit_model::<T>,
         }
     }
@@ -558,7 +527,7 @@ impl CallableExitOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn CallableExit> {
         let data = ctx.op(op);
         CALLABLE_EXIT_REGISTRY
-            .get(&(data.dialect.clone(), data.name.clone()))
+            .get(&data.name)
             .map(|registration| *registration as &dyn CallableExit)
     }
 
@@ -591,8 +560,7 @@ pub trait CallLikeModel: DialectOp {
 
 /// Registry entry for [`CallLikeModel`].
 pub struct CallLikeRegistration {
-    dialect: &'static str,
-    op_name: &'static str,
+    name: OpName,
     callee: fn(&IrContext, OpRef) -> Option<SymbolPath>,
 }
 
@@ -604,19 +572,14 @@ fn call_like_model_callee<T: CallLikeModel>(ctx: &IrContext, op: OpRef) -> Optio
 
 inventory::collect!(CallLikeRegistration);
 
-static CALL_LIKE_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static CallLikeRegistration>> =
+static CALL_LIKE_REGISTRY: LazyLock<HashMap<OpName, &'static CallLikeRegistration>> =
     LazyLock::new(|| {
         let mut registry = HashMap::default();
         for registration in inventory::iter::<CallLikeRegistration> {
-            let key = (
-                Symbol::new(registration.dialect),
-                Symbol::new(registration.op_name),
-            );
             assert!(
-                registry.insert(key, registration).is_none(),
-                "duplicate CallLike registration for '{}.{}'",
-                registration.dialect,
-                registration.op_name,
+                registry.insert(registration.name, registration).is_none(),
+                "duplicate CallLike registration for {:?}",
+                registration.name,
             );
         }
         registry
@@ -629,8 +592,7 @@ impl CallLikeOps {
     #[doc(hidden)]
     pub const fn register<T: CallLikeModel>() -> CallLikeRegistration {
         CallLikeRegistration {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
+            name: T::NAME,
             callee: call_like_model_callee::<T>,
         }
     }
@@ -640,7 +602,7 @@ impl CallLikeOps {
     pub fn callee(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
         let data = ctx.op(op);
         CALL_LIKE_REGISTRY
-            .get(&(data.dialect.clone(), data.name.clone()))
+            .get(&data.name)
             .and_then(|registration| (registration.callee)(ctx, op))
     }
 }
@@ -715,8 +677,7 @@ fn indirect_call_like_model_set_signature<T: IndirectCallLikeModel>(
 
 /// Registry entry for [`IndirectCallLike`].
 pub struct IndirectCallLikeRegistration {
-    dialect: &'static str,
-    op_name: &'static str,
+    name: OpName,
     callee: fn(&IrContext, OpRef) -> Option<ValueRef>,
     arguments: fn(&IrContext, OpRef) -> Option<&[ValueRef]>,
     exact_signature: fn(&IrContext, OpRef) -> Option<TypeRef>,
@@ -744,19 +705,14 @@ impl IndirectCallLike for IndirectCallLikeRegistration {
 inventory::collect!(IndirectCallLikeRegistration);
 
 static INDIRECT_CALL_LIKE_REGISTRY: LazyLock<
-    HashMap<(Symbol, Symbol), &'static IndirectCallLikeRegistration>,
+    HashMap<OpName, &'static IndirectCallLikeRegistration>,
 > = LazyLock::new(|| {
     let mut registry = HashMap::default();
     for registration in inventory::iter::<IndirectCallLikeRegistration> {
-        let key = (
-            Symbol::new(registration.dialect),
-            Symbol::new(registration.op_name),
-        );
         assert!(
-            registry.insert(key, registration).is_none(),
-            "duplicate IndirectCallLike registration for '{}.{}'",
-            registration.dialect,
-            registration.op_name,
+            registry.insert(registration.name, registration).is_none(),
+            "duplicate IndirectCallLike registration for {:?}",
+            registration.name,
         );
     }
     registry
@@ -769,8 +725,7 @@ impl IndirectCallLikeOps {
     #[doc(hidden)]
     pub const fn register<T: IndirectCallLikeModel>() -> IndirectCallLikeRegistration {
         IndirectCallLikeRegistration {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
+            name: T::NAME,
             callee: indirect_call_like_model_callee::<T>,
             arguments: indirect_call_like_model_arguments::<T>,
             exact_signature: indirect_call_like_model_signature::<T>,
@@ -781,7 +736,7 @@ impl IndirectCallLikeOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn IndirectCallLike> {
         let data = ctx.op(op);
         INDIRECT_CALL_LIKE_REGISTRY
-            .get(&(data.dialect.clone(), data.name.clone()))
+            .get(&data.name)
             .map(|registration| *registration as &dyn IndirectCallLike)
     }
 
@@ -826,11 +781,7 @@ fn branch_model_successors<T: BranchModel>(
     op: OpRef,
 ) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
     let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!(
-            "malformed {}.{}: {error:?}",
-            T::DIALECT_NAME,
-            T::OP_NAME
-        ))
+        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
     })?;
     model.successors(ctx)
 }
@@ -840,8 +791,7 @@ pub type BranchSuccessorsFn =
 
 /// Registry entry for [`Branch`].
 pub struct BranchRegistration {
-    dialect: &'static str,
-    op_name: &'static str,
+    name: OpName,
     successors: BranchSuccessorsFn,
 }
 
@@ -857,19 +807,14 @@ impl Branch for BranchRegistration {
 
 inventory::collect!(BranchRegistration);
 
-static BRANCH_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static BranchRegistration>> =
+static BRANCH_REGISTRY: LazyLock<HashMap<OpName, &'static BranchRegistration>> =
     LazyLock::new(|| {
         let mut registry = HashMap::default();
         for registration in inventory::iter::<BranchRegistration> {
-            let key = (
-                Symbol::new(registration.dialect),
-                Symbol::new(registration.op_name),
-            );
             assert!(
-                registry.insert(key, registration).is_none(),
-                "duplicate Branch registration for '{}.{}'",
-                registration.dialect,
-                registration.op_name,
+                registry.insert(registration.name, registration).is_none(),
+                "duplicate Branch registration for {:?}",
+                registration.name,
             );
         }
         registry
@@ -882,8 +827,7 @@ impl BranchOps {
     #[doc(hidden)]
     pub const fn register<T: BranchModel>() -> BranchRegistration {
         BranchRegistration {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
+            name: T::NAME,
             successors: branch_model_successors::<T>,
         }
     }
@@ -891,7 +835,7 @@ impl BranchOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn Branch> {
         let data = ctx.op(op);
         BRANCH_REGISTRY
-            .get(&(data.dialect.clone(), data.name.clone()))
+            .get(&data.name)
             .map(|registration| *registration as &dyn Branch)
     }
 }
@@ -934,11 +878,7 @@ fn region_branch_model_successors<T: RegionBranchModel>(
     point: RegionBranchPoint,
 ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
     let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!(
-            "malformed {}.{}: {error:?}",
-            T::DIALECT_NAME,
-            T::OP_NAME
-        ))
+        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
     })?;
     model.successors(ctx, point)
 }
@@ -949,11 +889,7 @@ fn region_branch_model_entry_operands<T: RegionBranchModel>(
     successor: RegionSuccessor,
 ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
     let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!(
-            "malformed {}.{}: {error:?}",
-            T::DIALECT_NAME,
-            T::OP_NAME
-        ))
+        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
     })?;
     model.entry_successor_operands(ctx, successor)
 }
@@ -965,8 +901,7 @@ pub type EntrySuccessorOperandsFn =
 
 /// Registry entry for [`RegionBranch`].
 pub struct RegionBranchRegistration {
-    dialect: &'static str,
-    op_name: &'static str,
+    name: OpName,
     successors: RegionSuccessorsFn,
     entry_successor_operands: EntrySuccessorOperandsFn,
 }
@@ -993,24 +928,18 @@ impl RegionBranch for RegionBranchRegistration {
 
 inventory::collect!(RegionBranchRegistration);
 
-static REGION_BRANCH_REGISTRY: LazyLock<
-    HashMap<(Symbol, Symbol), &'static RegionBranchRegistration>,
-> = LazyLock::new(|| {
-    let mut registry = HashMap::default();
-    for registration in inventory::iter::<RegionBranchRegistration> {
-        let key = (
-            Symbol::new(registration.dialect),
-            Symbol::new(registration.op_name),
-        );
-        assert!(
-            registry.insert(key, registration).is_none(),
-            "duplicate RegionBranch registration for '{}.{}'",
-            registration.dialect,
-            registration.op_name,
-        );
-    }
-    registry
-});
+static REGION_BRANCH_REGISTRY: LazyLock<HashMap<OpName, &'static RegionBranchRegistration>> =
+    LazyLock::new(|| {
+        let mut registry = HashMap::default();
+        for registration in inventory::iter::<RegionBranchRegistration> {
+            assert!(
+                registry.insert(registration.name, registration).is_none(),
+                "duplicate RegionBranch registration for {:?}",
+                registration.name,
+            );
+        }
+        registry
+    });
 
 /// Dyn query and transfer helpers for [`RegionBranch`].
 pub struct RegionBranchOps;
@@ -1019,8 +948,7 @@ impl RegionBranchOps {
     #[doc(hidden)]
     pub const fn register<T: RegionBranchModel>() -> RegionBranchRegistration {
         RegionBranchRegistration {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
+            name: T::NAME,
             successors: region_branch_model_successors::<T>,
             entry_successor_operands: region_branch_model_entry_operands::<T>,
         }
@@ -1029,7 +957,7 @@ impl RegionBranchOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn RegionBranch> {
         let data = ctx.op(op);
         REGION_BRANCH_REGISTRY
-            .get(&(data.dialect.clone(), data.name.clone()))
+            .get(&data.name)
             .map(|registration| *registration as &dyn RegionBranch)
     }
 
@@ -1099,11 +1027,7 @@ fn region_terminator_model_operands<T: RegionBranchTerminatorModel>(
     successor: RegionSuccessor,
 ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
     let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!(
-            "malformed {}.{}: {error:?}",
-            T::DIALECT_NAME,
-            T::OP_NAME
-        ))
+        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
     })?;
     model.successor_operands(ctx, successor)
 }
@@ -1113,8 +1037,7 @@ pub type RegionSuccessorOperandsFn =
 
 /// Registry entry for [`RegionBranchTerminator`].
 pub struct RegionBranchTerminatorRegistration {
-    dialect: &'static str,
-    op_name: &'static str,
+    name: OpName,
     successor_operands: RegionSuccessorOperandsFn,
 }
 
@@ -1132,19 +1055,14 @@ impl RegionBranchTerminator for RegionBranchTerminatorRegistration {
 inventory::collect!(RegionBranchTerminatorRegistration);
 
 static REGION_BRANCH_TERMINATOR_REGISTRY: LazyLock<
-    HashMap<(Symbol, Symbol), &'static RegionBranchTerminatorRegistration>,
+    HashMap<OpName, &'static RegionBranchTerminatorRegistration>,
 > = LazyLock::new(|| {
     let mut registry = HashMap::default();
     for registration in inventory::iter::<RegionBranchTerminatorRegistration> {
-        let key = (
-            Symbol::new(registration.dialect),
-            Symbol::new(registration.op_name),
-        );
         assert!(
-            registry.insert(key, registration).is_none(),
-            "duplicate RegionBranchTerminator registration for '{}.{}'",
-            registration.dialect,
-            registration.op_name,
+            registry.insert(registration.name, registration).is_none(),
+            "duplicate RegionBranchTerminator registration for {:?}",
+            registration.name,
         );
     }
     registry
@@ -1157,8 +1075,7 @@ impl RegionBranchTerminatorOps {
     #[doc(hidden)]
     pub const fn register<T: RegionBranchTerminatorModel>() -> RegionBranchTerminatorRegistration {
         RegionBranchTerminatorRegistration {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
+            name: T::NAME,
             successor_operands: region_terminator_model_operands::<T>,
         }
     }
@@ -1166,7 +1083,7 @@ impl RegionBranchTerminatorOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn RegionBranchTerminator> {
         let data = ctx.op(op);
         REGION_BRANCH_TERMINATOR_REGISTRY
-            .get(&(data.dialect.clone(), data.name.clone()))
+            .get(&data.name)
             .map(|registration| *registration as &dyn RegionBranchTerminator)
     }
 }

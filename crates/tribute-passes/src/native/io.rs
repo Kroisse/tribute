@@ -1,7 +1,6 @@
 //! Lower target-independent I/O operations to the native runtime ABI.
 
 use tribute_ir::dialect::adt;
-use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func, mem, scf};
 use trunk_ir::ops::DialectOp;
@@ -11,7 +10,7 @@ use trunk_ir::rewrite::{
     TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, Location};
 
 use tribute_ir::dialect::{tribute_io, tribute_rt};
 use trunk_ir::SymbolPath;
@@ -46,11 +45,8 @@ fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
 }
 
 fn find_read_line_result_type(ctx: &IrContext) -> Option<TypeRef> {
-    let adt = Symbol::new("adt");
-    let enum_name = Symbol::new("enum");
     ctx.types().iter().find_map(|(ty, data)| {
-        (data.dialect == adt
-            && data.name == enum_name
+        (data.name == <tribute_ir::dialect::adt::Enum as trunk_ir::ops::DialectType>::NAME
             && data.attrs.view(ctx).get_str("name") == Some(READ_LINE_RESULT_TYPE))
         .then_some(ty)
     })
@@ -62,7 +58,7 @@ fn ensure_runtime_declarations(ctx: &mut IrContext, module: Module) {
     };
     let loc = ctx.op(module.op()).location;
     let bytes_ty = core::bytes(ctx).as_type_ref();
-    let bool_ty = intern_type(ctx, "core", "i1");
+    let bool_ty = core::I1::type_ref(ctx);
     let ptr_ty = core::ptr(ctx).as_type_ref();
     let nil_ty = core::nil(ctx).as_type_ref();
 
@@ -90,10 +86,6 @@ fn has_function(ctx: &IrContext, block: trunk_ir::BlockRef, name: &str) -> bool 
         .iter()
         .copied()
         .any(|op| func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == name))
-}
-
-fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(dialect, name).intern(ctx)
 }
 
 struct NativeWritePattern;
@@ -141,7 +133,7 @@ impl RewritePattern for NativeReadLinePattern {
         let result_ty = ctx.op_result_types(op)[0];
         let ptr_ty = core::ptr(ctx).as_type_ref();
         let bytes_ty = core::bytes(ctx).as_type_ref();
-        let i32_ty = intern_type(ctx, "core", "i32");
+        let i32_ty = core::I32::type_ref(ctx);
         let nil_ty = core::nil(ctx).as_type_ref();
 
         let descriptor = func::Call::operands([])

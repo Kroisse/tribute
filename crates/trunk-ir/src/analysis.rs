@@ -770,28 +770,25 @@ mod tests {
     #[test]
     fn operand_and_type_setters_invalidate_only_on_changes() {
         use crate::context::{BlockArgData, BlockData, OperationDataBuilder};
-        use crate::symbol::Symbol;
+
         use crate::types::TypeDataBuilder;
 
         let (mut ctx, module) = test_ctx();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
-        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
         let location = ctx.op(module).location;
-        let source_data =
-            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))
-                .result(i32_ty)
-                .build(&mut ctx);
+        let source_data = OperationDataBuilder::new(location, "test.source")
+            .result(i32_ty)
+            .build(&mut ctx);
         let source_a = ctx.create_op(source_data);
-        let source_data =
-            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))
-                .result(i32_ty)
-                .build(&mut ctx);
+        let source_data = OperationDataBuilder::new(location, "test.source")
+            .result(i32_ty)
+            .build(&mut ctx);
         let source_b = ctx.create_op(source_data);
-        let consumer_data =
-            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("consumer"))
-                .operand(ctx.op_result(source_a, 0))
-                .result(i32_ty)
-                .build(&mut ctx);
+        let consumer_data = OperationDataBuilder::new(location, "test.consumer")
+            .operand(ctx.op_result(source_a, 0))
+            .result(i32_ty)
+            .build(&mut ctx);
         let consumer = ctx.create_op(consumer_data);
         let block = ctx.create_block(BlockData {
             location,
@@ -874,11 +871,7 @@ mod tests {
             &analyses.get::<DummyAnalysis>(&ctx, op).unwrap()
         ));
 
-        let ty = crate::types::TypeDataBuilder::new(
-            crate::symbol::Symbol::new("test"),
-            crate::symbol::Symbol::new("fresh"),
-        )
-        .build(&mut ctx);
+        let ty = crate::types::TypeDataBuilder::new("test.fresh").build(&mut ctx);
         let interned = ctx.intern_type(ty.clone());
         assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
         let after_type = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
@@ -901,14 +894,11 @@ mod tests {
     #[test]
     fn detached_builder_is_not_ir_but_raw_entity_access_invalidates() {
         use crate::context::{BlockData, OperationDataBuilder, RegionData};
-        use crate::symbol::Symbol;
 
         let (mut ctx, op) = test_ctx();
         let location = ctx.op(op).location;
         let stamp = ctx.analysis_stamp();
-        let _detached =
-            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("unused"))
-                .build(&mut ctx);
+        let _detached = OperationDataBuilder::new(location, "test.unused").build(&mut ctx);
         assert_eq!(ctx.analysis_stamp(), stamp);
 
         let block = ctx.create_block(BlockData {

@@ -6,6 +6,7 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::OpRef;
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
@@ -55,9 +56,9 @@ pub(crate) fn handle_struct_get(
     // - A continuation field is typed as structref but needs access to concrete struct fields
     let operand_abstract_type = operands.first().and_then(|op_val| {
         let ty = value_type(ctx, *op_val);
-        if helpers::is_type(ctx, ty, "wasm", "anyref") {
+        if trunk_ir::dialect::wasm::Anyref::matches(ctx, ty) {
             Some("anyref")
-        } else if helpers::is_type(ctx, ty, "wasm", "structref") {
+        } else if trunk_ir::dialect::wasm::Structref::matches(ctx, ty) {
             Some("structref")
         } else {
             None
@@ -165,7 +166,7 @@ fn check_struct_get_needs_boxing(
     // Check if the result expects anyref
     // Note: type variables are resolved at AST level before IR generation
     let expects_anyref = local_type
-        .map(|ty| helpers::is_type(ctx, ty, "wasm", "anyref"))
+        .map(|ty| trunk_ir::dialect::wasm::Anyref::matches(ctx, ty))
         .unwrap_or(false);
 
     // Check if the struct field is i64

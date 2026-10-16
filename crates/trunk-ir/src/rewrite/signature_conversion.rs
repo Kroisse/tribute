@@ -128,16 +128,15 @@ fn update_entry_block_args(
     }
 }
 
-/// Create a bodyless function declaration for a dialect whose generated
-/// constructor requires a body region.
+/// Create a bodyless `func.func` declaration; its generated constructor
+/// requires a body region.
 fn make_bodyless_function_op(
     ctx: &mut IrContext,
     loc: crate::types::Location,
-    dialect: crate::Symbol,
     sym_name: crate::types::StringRef,
     func_type: TypeRef,
 ) -> OpRef {
-    let data = OperationDataBuilder::new(loc, dialect, crate::Symbol::new("func"))
+    let data = OperationDataBuilder::new(loc, func::Func::DEF)
         .attr("sym_name", Attribute::String(sym_name))
         .attr("type", Attribute::Type(func_type))
         .build(ctx);
@@ -239,9 +238,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
                     .regions(body)
                     .build(ctx, loc)
                     .op_ref(),
-                None => {
-                    make_bodyless_function_op(ctx, loc, crate::Symbol::new("func"), sym_name, ty)
-                }
+                None => make_bodyless_function_op(ctx, loc, sym_name, ty),
             },
         )
     }
@@ -254,7 +251,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Symbol;
+
     use crate::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use crate::location::Span;
     use crate::printer::print_module;
@@ -269,11 +266,11 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn i64_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i64").intern(ctx)
+        TypeDataBuilder::new("core.i64").intern(ctx)
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
@@ -295,11 +292,10 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(region)
+            .build(ctx);
         let module_op = ctx.create_op(module_data);
         Module::new(ctx, module_op).expect("test module should be valid")
     }
@@ -341,7 +337,7 @@ mod tests {
     fn i32_to_i64_converter(i32_ty: TypeRef, i64_ty: TypeRef) -> TypeConverter {
         let mut tc = TypeConverter::new();
         tc.add_conversion(move |ctx, ty| {
-            if ctx.types().is_dialect(ty, "core", "i32") {
+            if crate::dialect::core::I32::matches(ctx, ty) {
                 Some(i64_ty)
             } else {
                 None
@@ -452,8 +448,7 @@ mod tests {
             let func_ty = func::func_sig(&mut ctx, [i32_ty], results.clone()).as_type_ref();
 
             let external = ctx.intern_str("external");
-            let func_decl =
-                make_bodyless_function_op(&mut ctx, loc, Symbol::new("func"), external, func_ty);
+            let func_decl = make_bodyless_function_op(&mut ctx, loc, external, func_ty);
             let func_def = make_func_op(&mut ctx, loc, "defined", func_ty, &[i32_ty]);
             let module = make_module(&mut ctx, loc, vec![func_decl, func_def]);
 

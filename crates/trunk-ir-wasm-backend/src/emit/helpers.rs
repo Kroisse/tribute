@@ -24,16 +24,6 @@ use crate::{CompilationError, CompilationResult};
 // Type checking helpers (arena)
 // ============================================================================
 
-/// Check if a TypeRef matches a specific dialect and name.
-pub(crate) fn is_type(
-    ctx: &IrContext,
-    ty: TypeRef,
-    dialect: &'static str,
-    name: &'static str,
-) -> bool {
-    ctx.types().is_dialect(ty, dialect, name)
-}
-
 // ============================================================================
 // Value type helpers
 // ============================================================================
@@ -49,7 +39,7 @@ pub(crate) fn value_type(ctx: &IrContext, value: ValueRef) -> TypeRef {
 
 /// Check if a type is the nil type (core.nil).
 pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, "core", "nil")
+    trunk_ir::dialect::core::Nil::matches(ctx, ty)
 }
 
 /// Whether a type carries the runtime layout identifier `layout`.
@@ -185,7 +175,7 @@ pub(crate) fn exact_return_call_indirect_signature_with(
             "wasm.return_call_indirect has malformed operands",
         ));
     };
-    if !is_type(ctx, value_type(ctx, table_index), "core", "i32") {
+    if !trunk_ir::dialect::core::I32::matches(ctx, value_type(ctx, table_index)) {
         return Err(CompilationError::invalid_module(
             "wasm.return_call_indirect first operand must be an i32 table index",
         ));
@@ -208,18 +198,18 @@ pub(crate) fn type_to_valtype(
     ty: TypeRef,
     type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> CompilationResult<ValType> {
-    if is_type(ctx, ty, "core", "i32")
-        || is_type(ctx, ty, "core", "i1")
-        || is_type(ctx, ty, "core", "i8")
-        || is_type(ctx, ty, "core", "i16")
+    if trunk_ir::dialect::core::I32::matches(ctx, ty)
+        || trunk_ir::dialect::core::I1::matches(ctx, ty)
+        || trunk_ir::dialect::core::I8::matches(ctx, ty)
+        || trunk_ir::dialect::core::I16::matches(ctx, ty)
     {
         // Narrow integers live in an `i32` with unspecified upper bits.
         Ok(ValType::I32)
-    } else if is_type(ctx, ty, "core", "i64") {
+    } else if trunk_ir::dialect::core::I64::matches(ctx, ty) {
         Ok(ValType::I64)
-    } else if is_type(ctx, ty, "core", "f32") {
+    } else if trunk_ir::dialect::core::F32::matches(ctx, ty) {
         Ok(ValType::F32)
-    } else if is_type(ctx, ty, "core", "f64") {
+    } else if trunk_ir::dialect::core::F64::matches(ctx, ty) {
         Ok(ValType::F64)
     } else if has_layout(ctx, ty, BYTES_LAYOUT) {
         // A Bytes value always exists; its struct is never null.
@@ -233,7 +223,7 @@ pub(crate) fn type_to_valtype(
             nullable: false,
             heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
         }))
-    } else if is_type(ctx, ty, "core", "ptr") {
+    } else if trunk_ir::dialect::core::Ptr::matches(ctx, ty) {
         Ok(ValType::I32)
     } else if let Some(type_idx) = builtin_layout_type_idx(ctx, ty) {
         Ok(ValType::Ref(RefType {
@@ -245,11 +235,10 @@ pub(crate) fn type_to_valtype(
             nullable: true,
             heap_type: HeapType::Concrete(type_idx),
         }))
-    } else if is_type(ctx, ty, "wasm", "func_sig") {
+    } else if trunk_ir::dialect::wasm::FuncSig::matches(ctx, ty) {
         Ok(ValType::Ref(RefType::FUNCREF))
-    } else if ctx.get_type(ty).dialect == "wasm" {
-        let name = ctx.get_type(ty).name.clone();
-        if name == "structref" {
+    } else if ctx.get_type(ty).name.dialect(ctx) == "wasm" {
+        if trunk_ir::dialect::wasm::Structref::matches(ctx, ty) {
             Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -257,11 +246,11 @@ pub(crate) fn type_to_valtype(
                     ty: AbstractHeapType::Struct,
                 },
             }))
-        } else if name == "funcref" {
+        } else if trunk_ir::dialect::wasm::Funcref::matches(ctx, ty) {
             Ok(ValType::Ref(RefType::FUNCREF))
-        } else if name == "anyref" {
+        } else if trunk_ir::dialect::wasm::Anyref::matches(ctx, ty) {
             Ok(ValType::Ref(RefType::ANYREF))
-        } else if name == "i31ref" {
+        } else if trunk_ir::dialect::wasm::I31ref::matches(ctx, ty) {
             Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -269,7 +258,7 @@ pub(crate) fn type_to_valtype(
                     ty: AbstractHeapType::I31,
                 },
             }))
-        } else if name == "arrayref" {
+        } else if trunk_ir::dialect::wasm::Arrayref::matches(ctx, ty) {
             Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -279,11 +268,11 @@ pub(crate) fn type_to_valtype(
             }))
         } else {
             Err(CompilationError::type_error(format!(
-                "unsupported wasm type: wasm.{}",
-                name
+                "unsupported wasm type: {}",
+                ctx.get_type(ty).name.display(ctx)
             )))
         }
-    } else if is_type(ctx, ty, "core", "array") {
+    } else if trunk_ir::dialect::core::Array::matches(ctx, ty) {
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Abstract {
@@ -307,8 +296,8 @@ pub(crate) fn type_to_valtype(
     } else {
         let data = ctx.get_type(ty);
         Err(CompilationError::type_error(format!(
-            "unsupported wasm value type: {}.{}",
-            data.dialect, data.name
+            "unsupported wasm value type: {}",
+            data.name.display(ctx)
         )))
     }
 }
@@ -352,9 +341,9 @@ pub(crate) fn attr_heap_type(
         Some(Attribute::String(name)) => symbol_to_abstract_heap_type(ctx.str(*name)),
         Some(Attribute::Type(ty)) => {
             let data = ctx.get_type(*ty);
-            if data.dialect == "wasm" {
-                let name = data.name.clone();
-                name.with_str(symbol_to_abstract_heap_type)
+            if data.name.dialect(ctx) == "wasm" {
+                let name = data.name.strip_dialect(ctx);
+                symbol_to_abstract_heap_type(name)
             } else {
                 Err(CompilationError::from(
                     CompilationErrorKind::MissingAttribute("non-wasm type for heap_type"),
@@ -443,12 +432,12 @@ mod tests {
     fn builtin_closure_is_identified_by_layout_not_name() {
         let mut ctx = IrContext::new();
         let name_attr = ctx.string_attr("_closure");
-        let named = TypeDataBuilder::new("test", "layout")
+        let named = TypeDataBuilder::new("test.layout")
             .attr("name", name_attr)
             .intern(&mut ctx);
         let closure_layout = ctx.string_attr(crate::gc_types::CLOSURE_LAYOUT);
         let name_attr = ctx.string_attr("Other");
-        let layout = TypeDataBuilder::new("test", "layout")
+        let layout = TypeDataBuilder::new("test.layout")
             .attr("name", name_attr)
             .attr(trunk_ir::types::LAYOUT_ATTR, closure_layout)
             .intern(&mut ctx);
@@ -460,8 +449,8 @@ mod tests {
     #[test]
     fn core_array_uses_nullable_abstract_array_value_type() {
         let mut ctx = IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
-        let array_ty = TypeDataBuilder::new("core", "array")
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let array_ty = TypeDataBuilder::new("core.array")
             .param(i32_ty)
             .intern(&mut ctx);
 
@@ -480,7 +469,7 @@ mod tests {
     #[test]
     fn func_sig_uses_nullable_funcref_value_type() {
         let mut ctx = IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let signature = wasm::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
 
         assert_eq!(

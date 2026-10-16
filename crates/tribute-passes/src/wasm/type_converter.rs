@@ -25,29 +25,22 @@
 use tribute_ir::dialect::ability::marker_adt_type_ref;
 use tribute_ir::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
 use tribute_ir::dialect::adt;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
-use trunk_ir::types::{AttributeMap, Location, TypeDataBuilder};
+use trunk_ir::types::{AttributeMap, Location};
 
 // =============================================================================
 // Helper: intern a simple type (no params, no attrs)
 // =============================================================================
 
-fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
-    TypeDataBuilder::new(dialect, name).intern(ctx)
-}
-
 // =============================================================================
 // Helper: check if a TypeRef matches a given dialect.name
 // =============================================================================
-
-fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
-    ctx.types().is_dialect(ty, dialect, name)
-}
 
 // =============================================================================
 // ADT type helpers (arena versions)
@@ -60,8 +53,8 @@ fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
 /// IMPORTANT: Must use wasm.anyref (not tribute_rt.anyref) to ensure consistent
 /// type identity for emit lookups.
 pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
-    let anyref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("anyref"));
+    let i32_ty = core::I32::type_ref(ctx);
+    let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
 
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(tribute_ir::runtime_layout::CLOSURE);
@@ -80,7 +73,7 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
 /// Get the `Described` type: the supertype of every user struct and variant,
 /// holding only the runtime type descriptor field.
 pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
+    let i32_ty = core::I32::type_ref(ctx);
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(tribute_ir::runtime_layout::DESCRIBED);
     attrs
@@ -104,12 +97,12 @@ pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Check if a type is an `adt.struct` type.
 fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, "adt", "struct")
+    tribute_ir::dialect::adt::Struct::matches(ctx, ty)
 }
 
 /// Check if a type is an `adt.typeref` type.
 fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, "adt", "typeref")
+    tribute_ir::dialect::adt::Typeref::matches(ctx, ty)
 }
 
 /// Check if a type is a struct-like reference type.
@@ -118,7 +111,9 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
 /// and the structural `wasm_gc.struct` of user structs and variants.
 fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
     // wasm.structref or wasm.anyref
-    if is_type(ctx, ty, "wasm", "structref") || is_type(ctx, ty, "wasm", "anyref") {
+    if trunk_ir::dialect::wasm::Structref::matches(ctx, ty)
+        || trunk_ir::dialect::wasm::Anyref::matches(ctx, ty)
+    {
         return true;
     }
 
@@ -133,7 +128,7 @@ fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
     }
 
     // Structural user struct and variant types
-    if is_type(ctx, ty, "wasm_gc", "struct") {
+    if trunk_ir::dialect::wasm_gc::Struct::matches(ctx, ty) {
         return true;
     }
 
@@ -142,7 +137,7 @@ fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Check if a type is a `closure.closure` type.
 fn is_closure_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, "closure", "closure")
+    tribute_ir::dialect::closure::Closure::matches(ctx, ty)
 }
 
 // =============================================================================
@@ -163,7 +158,7 @@ fn box_via_i31(
     anyref_ty: TypeRef,
     i32_ty: TypeRef,
 ) -> Option<MaterializeResult> {
-    let is_i64 = is_type(ctx, from_ty, "core", "i64");
+    let is_i64 = trunk_ir::dialect::core::I64::matches(ctx, from_ty);
     let mut ops: Vec<OpRef> = Vec::new();
 
     let val = if is_i64 {
@@ -238,28 +233,31 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
     let shared_closure = crate::closure_lower::closure_struct_type_ref(ctx);
     let closure = closure_adt_type(ctx);
     let bytes = super::bytes::bytes_struct_type(ctx);
-    let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
-    let f64_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("f64"));
-    let anyref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("anyref"));
-    let i31ref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("i31ref"));
+    let i32_ty = core::I32::type_ref(ctx);
+    let f64_ty = core::F64::type_ref(ctx);
+    let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
+    let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
     crate::closure_lower::substitute_module_types(ctx, module, move |ctx, ty| {
         if ty == shared_closure {
             return Some(closure);
         }
-        if is_type(ctx, ty, "core", "bytes") {
+        if trunk_ir::dialect::core::Bytes::matches(ctx, ty) {
             return Some(bytes);
         }
-        let data = ctx.get_type(ty);
-        if data.dialect != "tribute_rt" {
-            return None;
+        use tribute_ir::dialect::tribute_rt::{Anyref, Bool, Float, Int, Intref, Nat};
+
+        let name = ctx.get_type(ty).name;
+        if [Int::NAME, Nat::NAME, Bool::NAME].contains(&name) {
+            Some(i32_ty)
+        } else if name == Float::NAME {
+            Some(f64_ty)
+        } else if name == Anyref::NAME {
+            Some(anyref_ty)
+        } else if name == Intref::NAME {
+            Some(i31ref_ty)
+        } else {
+            None
         }
-        data.name.with_str(|name| match name {
-            "int" | "nat" | "bool" => Some(i32_ty),
-            "float" => Some(f64_ty),
-            "anyref" => Some(anyref_ty),
-            "intref" => Some(i31ref_ty),
-            _ => None,
-        })
     });
 }
 
@@ -270,12 +268,12 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
 /// by performing conversions at the IR level.
 pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Pre-compute commonly used types (TypeRef is Copy)
-    let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
-    let f64_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("f64"));
-    let anyref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("anyref"));
-    let i31ref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("i31ref"));
-    let structref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("structref"));
-    let arrayref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("arrayref"));
+    let i32_ty = core::I32::type_ref(ctx);
+    let f64_ty = core::F64::type_ref(ctx);
+    let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
+    let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
+    let structref_ty = wasm_dialect::structref(ctx).as_type_ref();
+    let arrayref_ty = wasm_dialect::arrayref(ctx).as_type_ref();
     let closure_ty = closure_adt_type(ctx);
     let shared_closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let evidence_ty = evidence_wasm_type(ctx);
@@ -290,7 +288,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
     // Convert tribute_rt.int -> core.i32 (Phase 1: arbitrary precision as i32)
     tc.add_conversion(move |ctx, ty| {
-        if is_type(ctx, ty, "tribute_rt", "int") {
+        if tribute_ir::dialect::tribute_rt::Int::matches(ctx, ty) {
             Some(i32_ty)
         } else {
             None
@@ -299,7 +297,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
     // Convert tribute_rt.nat -> core.i32 (Phase 1: arbitrary precision as i32)
     tc.add_conversion(move |ctx, ty| {
-        if is_type(ctx, ty, "tribute_rt", "nat") {
+        if tribute_ir::dialect::tribute_rt::Nat::matches(ctx, ty) {
             Some(i32_ty)
         } else {
             None
@@ -308,7 +306,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
     // Convert tribute_rt.bool -> core.i32 (boolean as i32)
     tc.add_conversion(move |ctx, ty| {
-        if is_type(ctx, ty, "tribute_rt", "bool") {
+        if tribute_ir::dialect::tribute_rt::Bool::matches(ctx, ty) {
             Some(i32_ty)
         } else {
             None
@@ -317,7 +315,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
     // Convert core.i1 -> core.i32 (WASM doesn't have i1, use i32)
     tc.add_conversion(move |ctx, ty| {
-        if is_type(ctx, ty, "core", "i1") {
+        if trunk_ir::dialect::core::I1::matches(ctx, ty) {
             Some(i32_ty)
         } else {
             None
@@ -326,7 +324,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
     // Convert tribute_rt.float -> core.f64 (float as f64)
     tc.add_conversion(move |ctx, ty| {
-        if is_type(ctx, ty, "tribute_rt", "float") {
+        if tribute_ir::dialect::tribute_rt::Float::matches(ctx, ty) {
             Some(f64_ty)
         } else {
             None
@@ -335,7 +333,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
     // Convert tribute_rt.intref -> wasm.i31ref (boxed integer reference)
     tc.add_conversion(move |ctx, ty| {
-        if is_type(ctx, ty, "tribute_rt", "intref") {
+        if tribute_ir::dialect::tribute_rt::Intref::matches(ctx, ty) {
             Some(i31ref_ty)
         } else {
             None
@@ -344,7 +342,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
     // Convert tribute_rt.anyref -> wasm.anyref (any reference type)
     tc.add_conversion(move |ctx, ty| {
-        if is_type(ctx, ty, "tribute_rt", "anyref") {
+        if tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty) {
             Some(anyref_ty)
         } else {
             None
@@ -390,7 +388,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Convert generic core.array -> wasm.arrayref
     // This handles array types that are not evidence types (e.g., user arrays)
     tc.add_conversion(move |ctx, ty| {
-        if is_type(ctx, ty, "core", "array") {
+        if trunk_ir::dialect::core::Array::matches(ctx, ty) {
             Some(arrayref_ty)
         } else {
             None
@@ -426,7 +424,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         // not materialized,
         // and values of equal representation get equal types from the target
         // conversion. Only real conversions are materialized below.
-        let to_is_structref = is_type(ctx, to_ty, "wasm", "structref");
+        let to_is_structref = trunk_ir::dialect::wasm::Structref::matches(ctx, to_ty);
 
         // Both are struct-like types but need actual bridging - generate ref_cast
         let from_is_struct_like = is_struct_like(ctx, from_ty);
@@ -434,13 +432,13 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
         if from_is_struct_like && to_is_struct_like {
             // Upcasts are elided by the target; only downcasts need a ref_cast.
-            let to_is_anyref = is_type(ctx, to_ty, "wasm", "anyref");
-            let from_is_anyref = is_type(ctx, from_ty, "wasm", "anyref");
+            let to_is_anyref = trunk_ir::dialect::wasm::Anyref::matches(ctx, to_ty);
+            let from_is_anyref = trunk_ir::dialect::wasm::Anyref::matches(ctx, from_ty);
             if to_is_anyref || (to_is_structref && !from_is_anyref) {
                 return None;
             }
 
-            if is_type(ctx, to_ty, "wasm", "structref") {
+            if trunk_ir::dialect::wasm::Structref::matches(ctx, to_ty) {
                 let cast_op = wasm_dialect::RefCast::operands(value)
                     .target_type(to_ty)
                     .type_idx(None)
@@ -465,9 +463,9 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         // This handles erased struct slots such as closure environments that are
         // passed as anyref for a uniform calling convention.
         // We EXCLUDE wasm.anyref as target since that's handled by primitive equivalence.
-        let from_is_anyref = is_type(ctx, from_ty, "wasm", "anyref")
-            || is_type(ctx, from_ty, "tribute_rt", "anyref");
-        let to_is_abstract_anyref = is_type(ctx, to_ty, "wasm", "anyref");
+        let from_is_anyref = trunk_ir::dialect::wasm::Anyref::matches(ctx, from_ty)
+            || tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, from_ty);
+        let to_is_abstract_anyref = trunk_ir::dialect::wasm::Anyref::matches(ctx, to_ty);
         if from_is_anyref && to_is_struct_like && !to_is_abstract_anyref {
             let cast_op = wasm_gc_dialect::RefCast::operands(value)
                 .target_type(to_ty)
@@ -484,15 +482,21 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         // -----------------------------------------------------------------
 
         // core.i32 -> wasm.anyref (box via i31)
-        if is_type(ctx, from_ty, "core", "i32") && is_type(ctx, to_ty, "wasm", "anyref") {
+        if trunk_ir::dialect::core::I32::matches(ctx, from_ty)
+            && trunk_ir::dialect::wasm::Anyref::matches(ctx, to_ty)
+        {
             return box_via_i31(ctx, location, value, from_ty, i31ref_ty, anyref_ty, i32_ty);
         }
         // core.i64 -> wasm.anyref (box via i31, with i32 truncation)
-        if is_type(ctx, from_ty, "core", "i64") && is_type(ctx, to_ty, "wasm", "anyref") {
+        if trunk_ir::dialect::core::I64::matches(ctx, from_ty)
+            && trunk_ir::dialect::wasm::Anyref::matches(ctx, to_ty)
+        {
             return box_via_i31(ctx, location, value, from_ty, i31ref_ty, anyref_ty, i32_ty);
         }
         // core.nil -> wasm.anyref (nil is represented as null reference)
-        if is_type(ctx, from_ty, "core", "nil") && is_type(ctx, to_ty, "wasm", "anyref") {
+        if trunk_ir::dialect::core::Nil::matches(ctx, from_ty)
+            && trunk_ir::dialect::wasm::Anyref::matches(ctx, to_ty)
+        {
             let null_op = wasm_dialect::RefNull::operands()
                 .heap_type("anyref")
                 .type_idx(None)
@@ -509,28 +513,35 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         // -----------------------------------------------------------------
 
         // wasm.anyref -> core.i32 (unbox via i31)
-        if is_type(ctx, from_ty, "wasm", "anyref") && is_type(ctx, to_ty, "core", "i32") {
+        if trunk_ir::dialect::wasm::Anyref::matches(ctx, from_ty)
+            && trunk_ir::dialect::core::I32::matches(ctx, to_ty)
+        {
             return unbox_via_i31(ctx, location, value, i31ref_ty, i32_ty);
         }
         // tribute_rt.anyref -> core.i32 (unbox via i31, same as wasm.anyref)
-        if is_type(ctx, from_ty, "tribute_rt", "anyref") && is_type(ctx, to_ty, "core", "i32") {
+        if tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, from_ty)
+            && trunk_ir::dialect::core::I32::matches(ctx, to_ty)
+        {
             return unbox_via_i31(ctx, location, value, i31ref_ty, i32_ty);
         }
         // wasm.anyref -> tribute_rt.int (unbox via i31)
-        if is_type(ctx, from_ty, "wasm", "anyref") && is_type(ctx, to_ty, "tribute_rt", "int") {
+        if trunk_ir::dialect::wasm::Anyref::matches(ctx, from_ty)
+            && tribute_ir::dialect::tribute_rt::Int::matches(ctx, to_ty)
+        {
             return unbox_via_i31(ctx, location, value, i31ref_ty, i32_ty);
         }
         // tribute_rt.anyref -> tribute_rt.int (unbox via i31)
-        if is_type(ctx, from_ty, "tribute_rt", "anyref") && is_type(ctx, to_ty, "tribute_rt", "int")
+        if tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, from_ty)
+            && tribute_ir::dialect::tribute_rt::Int::matches(ctx, to_ty)
         {
             return unbox_via_i31(ctx, location, value, i31ref_ty, i32_ty);
         }
         // anyref -> core.nil: nil carries no data, so produce a fresh nil value
         // the way nil constants lower (`wasm.nop : core.nil`) and discard the
         // reference.
-        if (is_type(ctx, from_ty, "wasm", "anyref")
-            || is_type(ctx, from_ty, "tribute_rt", "anyref"))
-            && is_type(ctx, to_ty, "core", "nil")
+        if (trunk_ir::dialect::wasm::Anyref::matches(ctx, from_ty)
+            || tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, from_ty))
+            && trunk_ir::dialect::core::Nil::matches(ctx, to_ty)
         {
             let nil_op = wasm_dialect::Nop::operands()
                 .results(to_ty)
@@ -545,8 +556,8 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         // anyref -> arrayref materialization (requires ref_cast)
         // -----------------------------------------------------------------
 
-        let from_is_any = is_type(ctx, from_ty, "wasm", "anyref")
-            || is_type(ctx, from_ty, "tribute_rt", "anyref");
+        let from_is_any = trunk_ir::dialect::wasm::Anyref::matches(ctx, from_ty)
+            || tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, from_ty);
         if from_is_any && is_evidence_type_ref(ctx, to_ty) {
             let cast_op = wasm_gc_dialect::RefCast::operands(value)
                 .target_type(to_ty)
@@ -557,7 +568,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
                 ops: vec![cast_op.op_ref()],
             });
         }
-        if from_is_any && is_type(ctx, to_ty, "wasm", "arrayref") {
+        if from_is_any && trunk_ir::dialect::wasm::Arrayref::matches(ctx, to_ty) {
             let cast_op = wasm_dialect::RefCast::operands(value)
                 .target_type(arrayref_ty)
                 .type_idx(None)
@@ -664,17 +675,13 @@ mod tests {
         let path = ctx.intern_path("test.trb");
         let location = Location::new(path, trunk_ir::location::Span::new(0, 0));
         let tc = wasm_type_converter(&mut ctx);
-        let anyref = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("anyref"));
-        let ptr = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("ptr"));
+        let anyref = wasm_dialect::anyref(&mut ctx).as_type_ref();
+        let ptr = core::ptr(&mut ctx).as_type_ref();
         let concrete = closure_adt_type(&mut ctx);
 
-        let source_data = trunk_ir::OperationDataBuilder::new(
-            location,
-            Symbol::new("test"),
-            Symbol::new("source"),
-        )
-        .result(anyref)
-        .build(&mut ctx);
+        let source_data = trunk_ir::OperationDataBuilder::new(location, "test.source")
+            .result(anyref)
+            .build(&mut ctx);
         let source = ctx.create_op(source_data);
         let value = ctx.op_result(source, 0);
         // An upcast is elided by the target, and a representation match is not
@@ -774,7 +781,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let shared = crate::closure_lower::closure_struct_type_ref(&mut ctx);
         let target = closure_adt_type(&mut ctx);
-        let generic = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("structref"));
+        let generic = wasm_dialect::structref(&mut ctx).as_type_ref();
         let mut near = ctx.get_type(shared).clone();
         near.attrs
             .view_mut(&mut ctx)
@@ -784,8 +791,8 @@ mod tests {
         assert_eq!(converter.convert_type_or_identity(&ctx, shared), target);
         assert_eq!(converter.convert_type_or_identity(&ctx, near), near);
         assert_eq!(converter.convert_type_or_identity(&ctx, generic), generic);
-        let anyref = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("anyref"));
-        let i32_ty = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("i32"));
+        let anyref = wasm_dialect::anyref(&mut ctx).as_type_ref();
+        let i32_ty = core::I32::type_ref(&mut ctx);
         itertools::assert_equal(
             adt::Struct::from_type_ref(&ctx, target)
                 .unwrap()

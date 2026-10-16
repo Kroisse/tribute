@@ -170,7 +170,7 @@ mod tests {
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
     use crate::rewrite::Module;
-    use crate::symbol::Symbol;
+
     use crate::*;
     use smallvec::smallvec;
     fn test_ctx() -> (IrContext, Location) {
@@ -181,7 +181,7 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
@@ -205,11 +205,10 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(region)
+            .build(ctx);
         let module_op = ctx.create_op(module_data);
         Module::new(ctx, module_op).unwrap()
     }
@@ -280,11 +279,10 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // func.call is not pure — must keep even if result unused
-            let call_data =
-                OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("call"))
-                    .result(i32_ty)
-                    .attr("callee", Attribute::SymbolRef(SymbolPath::new(["foo"])))
-                    .build(ctx);
+            let call_data = OperationDataBuilder::new(loc, "func.call")
+                .result(i32_ty)
+                .attr("callee", Attribute::SymbolRef(SymbolPath::new(["foo"])))
+                .build(ctx);
             let call_op = ctx.create_op(call_data);
             ctx.push_op(entry, call_op);
 

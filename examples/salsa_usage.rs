@@ -6,7 +6,8 @@
 use salsa::Setter;
 use tree_sitter::Parser;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
-use trunk_ir::Symbol;
+use trunk_ir::dialect::func;
+use trunk_ir::ops::DialectOp;
 
 fn main() {
     // Example 1: Basic database usage
@@ -55,17 +56,12 @@ fn basic_database_usage() {
     // Display the lowered functions
     for (i, op_ref) in ops.iter().enumerate() {
         let op_data = ctx.op(*op_ref);
-        if op_data.dialect == Symbol::new("func") && op_data.name == Symbol::new("func") {
+        if func::Func::matches(&ctx, *op_ref) {
             if let Some(name) = op_data.attributes.view(&ctx).get_str("sym_name") {
                 println!("  Operation {}: func.func \"{}\"", i + 1, name);
             }
         } else {
-            println!(
-                "  Operation {}: {}.{}",
-                i + 1,
-                op_data.dialect,
-                op_data.name
-            );
+            println!("  Operation {}: {}", i + 1, op_data.name.display(&ctx));
         }
     }
 

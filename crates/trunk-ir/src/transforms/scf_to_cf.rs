@@ -148,12 +148,7 @@ fn transform_block(ctx: &mut IrContext, block: BlockRef, plan: &ScfToCfPlan) {
 
 /// Check if an op is an scf control-flow op (if/loop/switch).
 fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
-    let d = ctx.op(op).dialect.clone();
-    if d != "scf" {
-        return false;
-    }
-    let n = ctx.op(op).name.clone();
-    matches!(n.as_str(), "if" | "loop" | "switch")
+    scf::If::matches(ctx, op) || scf::Loop::matches(ctx, op) || scf::Switch::matches(ctx, op)
 }
 
 /// Lower a terminal `scf.if : core.never` without creating a merge block.
@@ -756,7 +751,7 @@ mod tests {
     use crate::dialect::{arith, core, func, scf};
     use crate::location::Span;
     use crate::refs::ValueRef;
-    use crate::symbol::Symbol;
+
     use crate::*;
     use smallvec::smallvec;
     use std::ops::ControlFlow;
@@ -769,11 +764,11 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn i1_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i1").intern(ctx)
+        TypeDataBuilder::new("core.i1").intern(ctx)
     }
 
     fn nil_type(ctx: &mut IrContext) -> TypeRef {
@@ -800,11 +795,10 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(region)
+            .build(ctx);
         let module_op = ctx.create_op(module_data);
         Module::new(ctx, module_op).unwrap()
     }
@@ -829,9 +823,7 @@ mod tests {
     fn collect_op_names(ctx: &IrContext, region: RegionRef) -> Vec<String> {
         let mut names = Vec::new();
         let _ = crate::walk::walk_region::<()>(ctx, region, &mut |op| {
-            let d = ctx.op(op).dialect.clone();
-            let n = ctx.op(op).name.clone();
-            d.with_str(|ds| n.with_str(|ns| names.push(format!("{ds}.{ns}"))));
+            names.push(ctx.op(op).name.display(ctx).to_string());
             ControlFlow::Continue(WalkAction::Advance)
         });
         names
@@ -849,7 +841,7 @@ mod tests {
         then_region: RegionRef,
         else_region: RegionRef,
     ) -> scf::If {
-        let data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
+        let data = OperationDataBuilder::new(loc, "scf.if")
             .operand(cond)
             .region(then_region)
             .region(else_region)
@@ -864,7 +856,7 @@ mod tests {
         init: impl IntoIterator<Item = ValueRef>,
         body: RegionRef,
     ) -> scf::Loop {
-        let data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("loop"))
+        let data = OperationDataBuilder::new(loc, "scf.loop")
             .operands(init)
             .region(body)
             .build(ctx);
@@ -1083,7 +1075,7 @@ mod tests {
     fn scf_to_cf_pass_leaves_bodyless_func_unchanged() {
         let (mut ctx, loc) = test_ctx();
         let fn_ty = fn_type(&mut ctx);
-        let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+        let func_data = OperationDataBuilder::new(loc, "func.func")
             .attr("sym_name", Attribute::String(ctx.intern_str("external")))
             .attr("type", Attribute::Type(fn_ty))
             .build(&mut ctx);
@@ -1279,7 +1271,7 @@ mod tests {
             .flat_map(|&block| ctx.block_args(block))
             .any(|&arg| {
                 let ty = ctx.get_type(ctx.value_ty(arg));
-                ty.dialect == "core" && ty.name == "never"
+                ty.name.is(&ctx, "core.never")
             });
         assert!(
             !has_non_entry_never_arg,
@@ -1581,13 +1573,10 @@ mod tests {
         let malformed_wrapper = ctx.block(ctx.region(switch_body).blocks[0]).ops[1];
         let malformed_region = ctx.op_region(malformed_wrapper, 0).unwrap();
         let malformed = ctx.block(ctx.region(malformed_region).blocks[0]).ops[0];
-        let malformed_func_exit_data = OperationDataBuilder::new(
-            ctx.op(unregistered).location,
-            Symbol::new("func"),
-            Symbol::new("unreachable"),
-        )
-        .result(ctx.value_ty(ctx.op_results(unregistered)[0]))
-        .build(&mut ctx);
+        let malformed_func_exit_data =
+            OperationDataBuilder::new(ctx.op(unregistered).location, "func.unreachable")
+                .result(ctx.value_ty(ctx.op_results(unregistered)[0]))
+                .build(&mut ctx);
         let malformed_func_exit = ctx.create_op(malformed_func_exit_data);
 
         assert!(crate::op_interface::CallableExitOps::exits_callable(&ctx, unregistered).is_err());
@@ -1726,7 +1715,7 @@ mod tests {
             ctx.block(continuation)
                 .ops
                 .iter()
-                .any(|&op| { ctx.op(op).dialect == "func" && ctx.op(op).name == "return" }),
+                .any(|&op| { ctx.op(op).name.is(&ctx, "func.return") }),
             "ordinary switch continuation must remain in its merge block"
         );
         assert_eq!(
@@ -1779,7 +1768,7 @@ mod tests {
             ctx.block(continuation)
                 .ops
                 .iter()
-                .any(|&op| { ctx.op(op).dialect == "func" && ctx.op(op).name == "return" }),
+                .any(|&op| { ctx.op(op).name.is(&ctx, "func.return") }),
             "ordinary switch continuation must remain in its merge block"
         );
         assert_eq!(
@@ -1966,7 +1955,7 @@ mod tests {
                 ctx.block(block)
                     .ops
                     .iter()
-                    .any(|&op| ctx.op(op).dialect == "func" && ctx.op(op).name == "return")
+                    .any(|&op| ctx.op(op).name.is(&ctx, "func.return"))
             })
             .unwrap();
         assert!(ctx.block_args(exit).is_empty());
@@ -1976,7 +1965,7 @@ mod tests {
                     assert!(
                         ctx.op_operands(op).is_empty(),
                         "{} has operands {:?}",
-                        ctx.op(op).name,
+                        ctx.op(op).name.display(&ctx),
                         ctx.op_operands(op)
                     );
                 }
@@ -2315,7 +2304,7 @@ mod tests {
             blocks: smallvec![],
             parent_op: None,
         });
-        let switch_data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("switch"))
+        let switch_data = OperationDataBuilder::new(loc, "scf.switch")
             .operand(disc.result(&ctx))
             .result(i32_ty)
             .region(body)
@@ -2488,7 +2477,7 @@ mod tests {
         let merge_ops = &ctx.block(*merge).ops;
         let add_op = merge_ops
             .iter()
-            .find(|&&op| ctx.op(op).dialect == "arith" && ctx.op(op).name == "addi")
+            .find(|&&op| ctx.op(op).name.is(&ctx, "arith.addi"))
             .unwrap();
         let operands = ctx.op_operands(*add_op);
         assert_eq!(operands[0], merge_args[0]);

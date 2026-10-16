@@ -18,6 +18,7 @@ use tribute_ir::dialect::adt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, RegionRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -80,13 +81,13 @@ impl ConstCollector {
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
 
-        if data.dialect == adt::DIALECT_NAME() {
-            if data.name == "string_const" {
+        if data.name.dialect(ctx) == adt::DIALECT_NAME {
+            if adt::StringConst::matches(ctx, op) {
                 if let Some(s) = ctx.op_attrs(op).get_str("value") {
                     self.has_string_consts = true;
                     self.collect_content(s.as_bytes());
                 }
-            } else if data.name == "bytes_const"
+            } else if adt::BytesConst::matches(ctx, op)
                 && let Some(Attribute::Bytes(b)) = ctx.op_attrs(op).get("value")
             {
                 self.collect_content(b);
@@ -160,10 +161,9 @@ pub fn validate_for_wasm(
             });
             return;
         };
-        let ty = ctx.get_type(result_ty);
-        if ty.dialect != wasm_dialect::DIALECT_NAME() || ty.name != "anyref" {
+        if !wasm_dialect::Anyref::matches(ctx, result_ty) {
             result = Err(ConstValidationError::InvalidStringResultType {
-                actual: format!("{}.{}", ty.dialect, ty.name),
+                actual: ctx.get_type(result_ty).name.display(ctx).to_string(),
             });
         }
     });
@@ -539,7 +539,7 @@ mod tests {
     fn string_lowering_preserves_constants_when_analysis_is_incomplete() {
         let mut missing_data_ctx = IrContext::new();
         let missing_data_module = string_module(&mut missing_data_ctx, &["hello"]);
-        let placeholder_ty = TypeDataBuilder::new("adt", "enum").intern(&mut missing_data_ctx);
+        let placeholder_ty = TypeDataBuilder::new("adt.enum").intern(&mut missing_data_ctx);
         lower(
             &mut missing_data_ctx,
             missing_data_module,

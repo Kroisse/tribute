@@ -18,26 +18,18 @@
 //! type converters.
 
 use tribute_ir::dialect::tribute_rt;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
-use trunk_ir::types::TypeDataBuilder;
-
-fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
-    TypeDataBuilder::new(dialect, name).intern(ctx)
-}
-
-fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
-    ctx.types().is_dialect(ty, dialect, name)
-}
 
 fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, "adt", "struct")
+    tribute_ir::dialect::adt::Struct::matches(ctx, ty)
 }
 
 fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, "adt", "typeref")
+    tribute_ir::dialect::adt::Typeref::matches(ctx, ty)
 }
 
 /// Create an TypeConverter configured for target-agnostic type conversions.
@@ -47,14 +39,14 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
 /// additional conversions.
 pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Pre-intern commonly used types (TypeRef is Copy)
-    let tribute_rt_int = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("int"));
-    let tribute_rt_nat = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("nat"));
-    let tribute_rt_bool = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("bool"));
-    let tribute_rt_float = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("float"));
-    let tribute_rt_anyref = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("anyref"));
-    let core_i32 = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
-    let core_i1 = intern_type(ctx, Symbol::new("core"), Symbol::new("i1"));
-    let core_f64 = intern_type(ctx, Symbol::new("core"), Symbol::new("f64"));
+    let tribute_rt_int = tribute_rt::int(ctx).as_type_ref();
+    let tribute_rt_nat = tribute_rt::nat(ctx).as_type_ref();
+    let tribute_rt_bool = tribute_rt::bool(ctx).as_type_ref();
+    let tribute_rt_float = tribute_rt::float(ctx).as_type_ref();
+    let tribute_rt_anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let core_i32 = core::I32::type_ref(ctx);
+    let core_i1 = core::I1::type_ref(ctx);
+    let core_f64 = core::F64::type_ref(ctx);
 
     let canonical_closure = crate::closure_lower::closure_struct_type_ref(ctx);
 
@@ -257,6 +249,7 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::pass::Pass;
     use trunk_ir::refs::ValueRef;
+    use trunk_ir::types::TypeDataBuilder;
     use trunk_ir::types::{Attribute, Location};
     use trunk_ir::walk::{WalkAction, walk_op};
 
@@ -398,29 +391,28 @@ mod tests {
     }
 
     fn anyref_type(ctx: &mut IrContext) -> TypeRef {
-        intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("anyref"))
+        tribute_rt::anyref(ctx).as_type_ref()
     }
 
     fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {
         let name_attr = ctx.string_attr("String");
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+        TypeDataBuilder::new(tribute_ir::dialect::adt::Typeref::NAME)
             .attr("name", name_attr)
             .intern(ctx)
     }
 
     fn struct_type(ctx: &mut IrContext) -> TypeRef {
         let name_attr = ctx.string_attr("Payload");
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+        TypeDataBuilder::new("adt.struct")
             .attr("name", name_attr)
             .intern(ctx)
     }
 
     fn dynamic_value(ctx: &mut IrContext, location: Location) -> ValueRef {
         let anyref_ty = anyref_type(ctx);
-        let source_data =
-            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))
-                .result(anyref_ty)
-                .build(ctx);
+        let source_data = OperationDataBuilder::new(location, "test.source")
+            .result(anyref_ty)
+            .build(ctx);
         let source = ctx.create_op(source_data);
         ctx.op_result(source, 0)
     }
@@ -464,12 +456,6 @@ mod tests {
         let wasm_result = wasm_converter
             .materialize(&mut ctx, location, value, anyref_ty, wasm_target)
             .expect("Wasm target consumes nominal recovery");
-        assert_eq!(
-            (
-                ctx.op(wasm_result.ops[0]).dialect.clone(),
-                ctx.op(wasm_result.ops[0]).name.clone()
-            ),
-            (Symbol::new("wasm_gc"), Symbol::new("ref_cast"))
-        );
+        assert!(ctx.op(wasm_result.ops[0]).name.is(&ctx, "wasm_gc.ref_cast"));
     }
 }

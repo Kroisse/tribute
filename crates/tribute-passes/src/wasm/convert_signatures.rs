@@ -86,16 +86,12 @@ impl RewritePattern for IndirectCallSignaturePattern {
 
         let data = ctx.op(op);
         debug!(
-            "convert_signatures: {}.{} signature converted",
-            data.dialect, data.name
+            "convert_signatures: {} signature converted",
+            data.name.display(ctx)
         );
-        let mut builder = trunk_ir::context::OperationDataBuilder::new(
-            data.location,
-            data.dialect.clone(),
-            data.name.clone(),
-        )
-        .operands(ctx.op_operands(op).to_vec())
-        .results(result_types);
+        let mut builder = trunk_ir::context::OperationDataBuilder::new(data.location, data.name)
+            .operands(ctx.op_operands(op).to_vec())
+            .results(result_types);
         for (key, value) in data.attributes.clone() {
             builder = builder.attr(key, value);
         }

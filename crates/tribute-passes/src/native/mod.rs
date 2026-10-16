@@ -41,7 +41,6 @@ pub mod tribute_rt_to_clif;
 pub mod type_converter;
 
 use trunk_ir::OperationDataBuilder;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::refs::{OpRef, TypeRef};
@@ -60,7 +59,7 @@ pub(crate) fn build_extern_func(
 ) -> OpRef {
     let func_ty = func::func_sig(ctx, params.iter().copied(), [result]).as_type_ref();
 
-    let data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+    let data = OperationDataBuilder::new(loc, "func.func")
         .attr("sym_name", Attribute::String(ctx.intern_str(name)))
         .attr("type", Attribute::Type(func_ty))
         .attr("abi", ctx.string_attr("C"))
@@ -82,8 +81,7 @@ mod tests {
         let path = ctx.intern_path("test.ir");
         let loc = Location::new(path, Span::new(0, 0));
         let ptr = core::ptr(&mut ctx).as_type_ref();
-        let i32 = trunk_ir::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
-            .intern(&mut ctx);
+        let i32 = trunk_ir::TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let op = build_extern_func(&mut ctx, loc, "runtime", &[ptr, i32], ptr);
         assert_eq!(
             classify_callable_body(&ctx, op),

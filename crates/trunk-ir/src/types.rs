@@ -11,7 +11,8 @@ use smallvec::SmallVec;
 use super::refs::{PathRef, TypeRef};
 use crate::IrContext;
 use crate::location::Span;
-use crate::symbol::{Symbol, SymbolPath};
+use crate::symbol::SymbolPath;
+use crate::type_def::{TypeName, TypeNameArg};
 
 // ============================================================================
 // Location
@@ -834,8 +835,7 @@ pub fn param_attrs_attribute(entries: impl IntoIterator<Item = AttributeMap>) ->
 /// Data for a single interned type.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TypeData {
-    pub dialect: Symbol,
-    pub name: Symbol,
+    pub name: TypeName,
     pub params: SmallVec<[TypeRef; 4]>,
     pub attrs: AttributeMap,
 }
@@ -939,8 +939,7 @@ pub fn normalize_param_attrs(
 ///
 /// Defaults to empty params and empty attrs, matching the most common usage.
 pub struct TypeDataBuilder {
-    dialect: Symbol,
-    name: Symbol,
+    name: TypeNameArg,
     /// Same inline capacity as [`TypeData::params`], so a type whose
     /// parameters fit inline there does not allocate here either; at 32 bytes
     /// per entry the inline buffer is 128 bytes.
@@ -950,9 +949,10 @@ pub struct TypeDataBuilder {
 }
 
 impl TypeDataBuilder {
-    pub fn new(dialect: impl Into<Symbol>, name: impl Into<Symbol>) -> Self {
+    /// Start a type named by its definition, handle, or `dialect.name`
+    /// text; text is interned when the type data is built.
+    pub fn new(name: impl Into<TypeNameArg>) -> Self {
         Self {
-            dialect: dialect.into(),
             name: name.into(),
             params: SmallVec::new(),
             attrs: Vec::new(),
@@ -1003,8 +1003,7 @@ impl TypeDataBuilder {
             let _ = normalize_param_attrs(ctx, &mut attrs, params.len());
         }
         TypeData {
-            dialect: self.dialect,
-            name: self.name,
+            name: self.name.resolve(ctx.strings_mut()),
             params,
             attrs,
         }
@@ -1119,18 +1118,6 @@ impl TypeInterner {
         &self.0.values[r]
     }
 
-    /// Check if this type matches the given dialect and name.
-    ///
-    /// `dialect` and `name` are anything a `Symbol` compares with, such as a
-    /// `&str` or a `&Symbol`.
-    pub fn is_dialect<D, N>(&self, r: TypeRef, dialect: D, name: N) -> bool
-    where
-        Symbol: PartialEq<D> + PartialEq<N>,
-    {
-        let data = self.get(r);
-        data.dialect == dialect && data.name == name
-    }
-
     /// Iterate over all interned types, yielding `(TypeRef, &TypeData)` pairs.
     pub fn iter(&self) -> impl Iterator<Item = (TypeRef, &TypeData)> {
         self.0.values.iter()
@@ -1145,7 +1132,8 @@ impl TypeInterner {
     /// Estimate the complexity of a type for alias generation heuristics.
     pub fn complexity(&self, ty: TypeRef, strings: &StringPool) -> usize {
         let data = self.get(ty);
-        let mut size = data.dialect.with_str(|s| s.len()) + 1 + data.name.with_str(|s| s.len());
+        let mut size =
+            data.name.dialect(strings).len() + 1 + data.name.strip_dialect(strings).len();
         for &param in &data.params {
             size += self.complexity(param, strings) + 2; // ", " separator
         }
@@ -1305,20 +1293,20 @@ mod tests {
     #[test]
     fn parameter_attributes_are_canonical_and_part_of_identity() {
         let mut ctx = IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let marked = AttributeMap::from_entries(
             &mut ctx,
             [("k", Attribute::SymbolRef(SymbolPath::new(["v"])))],
         );
 
-        let plain = TypeDataBuilder::new("core", "tuple")
+        let plain = TypeDataBuilder::new("core.tuple")
             .params([i32_ty, i32_ty])
             .intern(&mut ctx);
-        let empty = TypeDataBuilder::new("core", "tuple")
+        let empty = TypeDataBuilder::new("core.tuple")
             .param_with_attrs(i32_ty, AttributeMap::new())
             .param(i32_ty)
             .intern(&mut ctx);
-        let explicit_empty = TypeDataBuilder::new("core", "tuple")
+        let explicit_empty = TypeDataBuilder::new("core.tuple")
             .params([i32_ty, i32_ty])
             .attr(
                 PARAM_ATTRS_ATTR,
@@ -1332,7 +1320,7 @@ mod tests {
         assert_eq!(plain, explicit_empty);
         assert!(!ctx.type_attrs(plain).contains_key(PARAM_ATTRS_ATTR));
 
-        let with_attrs = TypeDataBuilder::new("core", "tuple")
+        let with_attrs = TypeDataBuilder::new("core.tuple")
             .param(i32_ty)
             .param_with_attrs(i32_ty, marked.clone())
             .intern(&mut ctx);
@@ -1430,8 +1418,8 @@ mod tests {
     #[test]
     fn nested_types_are_visited_and_mapped_through_lists_and_dicts() {
         let mut ctx = IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
-        let i64_ty = TypeDataBuilder::new("core", "i64").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
         let ty_key = ctx.intern_str("ty");
         let tag_key = ctx.intern_str("tag");
         let dict = |ty| {

@@ -201,7 +201,7 @@ impl NativeOwnershipPlan {
             return Ok(ty);
         }
         let data = ctx.get_type(ty);
-        if data.dialect != "adt" || data.name != "typeref" {
+        if data.name != tribute_ir::dialect::adt::Typeref::NAME {
             return Err(OwnershipPlanError::new(format!(
                 "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
             )));
@@ -317,9 +317,10 @@ fn is_typed_managed_reference(
         return true;
     }
     let data = ctx.get_type(ty);
-    (data.dialect == "adt" && data.name == "typeref")
-        || (data.dialect == "tribute_rt" && (matches!(data.name.as_str(), "anyref" | "intref")))
-        || (data.dialect == "core" && data.name == "bytes")
+    (data.name == tribute_ir::dialect::adt::Typeref::NAME)
+        || tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty)
+        || tribute_ir::dialect::tribute_rt::Intref::matches(ctx, ty)
+        || trunk_ir::dialect::core::Bytes::matches(ctx, ty)
         || tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
 }
 
@@ -329,7 +330,7 @@ fn is_managed_value(ctx: &IrContext, value: ValueRef, managed_layouts: &HashSet<
 
 fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "tribute_rt" && data.name == "anyref"
+    data.name.is(ctx, "tribute_rt.anyref")
 }
 
 /// Build the plan while reusing cached policy-neutral ownership analyses.
@@ -527,9 +528,8 @@ impl ManagedLayoutCollector {
     }
 
     fn index_nominal_layout(&mut self, ctx: &IrContext, ty: TypeRef) {
-        let data = ctx.get_type(ty);
-        if data.dialect == "adt"
-            && (matches!(data.name.as_str(), "struct" | "enum"))
+        if (tribute_ir::dialect::adt::Struct::matches(ctx, ty)
+            || tribute_ir::dialect::adt::Enum::matches(ctx, ty))
             && let Some(name) = ctx.type_attrs(ty).get_string_ref("name")
         {
             let layouts = self.nominal_layouts.entry(name).or_default();
@@ -545,10 +545,12 @@ impl ManagedLayoutCollector {
         }
         let data = ctx.get_type(ty);
         self.index_nominal_layout(ctx, ty);
-        if (data.dialect == "adt") && (matches!(data.name.as_str(), "struct" | "enum")) {
+        if tribute_ir::dialect::adt::Struct::matches(ctx, ty)
+            || tribute_ir::dialect::adt::Enum::matches(ctx, ty)
+        {
             self.layouts.insert(ty);
         }
-        if data.dialect == "adt" && data.name == "typeref" && self.typerefs.insert(ty) {
+        if data.name == tribute_ir::dialect::adt::Typeref::NAME && self.typerefs.insert(ty) {
             self.pending_typerefs.push(ty);
         }
         for &parameter in &data.params {
@@ -567,7 +569,7 @@ impl ManagedLayoutCollector {
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
     let identity = |ty| {
         let data = ctx.get_type(ty);
-        (data.dialect == "adt").then(|| ctx.type_attrs(ty).get_string_ref("name"))?
+        (data.name.dialect(ctx) == "adt").then(|| ctx.type_attrs(ty).get_string_ref("name"))?
     };
     identity(left).is_some() && identity(left) == identity(right)
 }
@@ -621,9 +623,8 @@ fn build_field_kinds(
 /// [`is_typed_managed_reference`], so release and ownership agree.
 fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) -> FieldKind {
     if is_typed_managed_reference(ctx, ty, managed_layouts) {
-        let data = ctx.get_type(ty);
-        let dynamic =
-            data.dialect == "tribute_rt" && (matches!(data.name.as_str(), "anyref" | "intref"));
+        let dynamic = tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty)
+            || tribute_ir::dialect::tribute_rt::Intref::matches(ctx, ty);
         return if dynamic {
             FieldKind::Dynamic
         } else {
@@ -804,8 +805,7 @@ fn validate_into_raw_transfer_action(
     *source == action.value
         && ctx.value_ty(*source) == closure_layout
         && is_managed_value(ctx, *source, managed_layouts)
-        && result_ty.dialect == "core"
-        && result_ty.name == "ptr"
+        && result_ty.name.is(ctx, "core.ptr")
 }
 
 fn validate_into_raw_transfer_groups(

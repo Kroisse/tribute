@@ -125,7 +125,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         {
             return "Frame".to_owned();
         }
-        let mut shape = format!("{}.{}", data.dialect, data.name);
+        let mut shape = format!("{}", data.name.display(ctx));
         if let Some(name) = ctx.type_attrs(ty).get_str("name") {
             shape.push_str(&format!("<{name}>"));
         }
@@ -167,12 +167,8 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         // the named functions, so every function counts.
         if native {
             let _ = walk_op::<()>(&ctx, op, &mut |nested| {
-                let data = ctx.op(nested);
-                if data.dialect == "func"
-                    && matches!(
-                        data.name.to_string().as_str(),
-                        "tail_call" | "tail_call_indirect"
-                    )
+                if func::TailCall::matches(&ctx, nested)
+                    || func::TailCallIndirect::matches(&ctx, nested)
                 {
                     cps_functions += 1;
                 }
@@ -211,31 +207,24 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         let mut transfers = BTreeMap::<String, usize>::new();
         let _ = walk_op::<()>(&ctx, op, &mut |nested| {
             let data = ctx.op(nested);
-            if data.dialect == "func"
-                && matches!(
-                    data.name.to_string().as_str(),
-                    "tail_call"
-                        | "tail_call_indirect"
-                        | "call"
-                        | "call_indirect"
-                        | "return"
-                        | "unreachable"
-                )
-                || data.dialect == "effect"
+            let tail = func::TailCall::matches(&ctx, nested)
+                || func::TailCallIndirect::matches(&ctx, nested);
+            if tail
+                || func::Call::matches(&ctx, nested)
+                || func::CallIndirect::matches(&ctx, nested)
+                || func::Return::matches(&ctx, nested)
+                || func::Unreachable::matches(&ctx, nested)
+                || data.name.dialect(&ctx) == "effect"
             {
-                if matches!(
-                    data.name.to_string().as_str(),
-                    "tail_call" | "tail_call_indirect"
-                ) {
+                if tail {
                     assert!(
                         ctx.op_result_types(nested).is_empty(),
                         "tail transfer has SSA results"
                     );
                 }
                 let key = format!(
-                    "{}.{} operands={} results={}",
-                    data.dialect,
-                    data.name,
+                    "{} operands={} results={}",
+                    data.name.display(&ctx),
                     ctx.op_operands(nested).len(),
                     ctx.op_result_types(nested).len()
                 );

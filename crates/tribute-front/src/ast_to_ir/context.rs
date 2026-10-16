@@ -618,7 +618,7 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Continuation { arg, result, .. } => {
                 let arg = self.convert_logical_type(ir, *arg);
                 let result = self.convert_logical_type(ir, *result);
-                TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("resume_token"))
+                TypeDataBuilder::new("tribute_control.resume_token")
                     .param(arg)
                     .param(result)
                     .intern(ir)
@@ -856,7 +856,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.i32` type.
     pub fn i32_type(&self, ir: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ir)
+        TypeDataBuilder::new("core.i32").intern(ir)
     }
 
     /// Get the `core.nil` type.
@@ -866,12 +866,12 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.i1` (bool) type.
     pub fn bool_type(&self, ir: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i1").intern(ir)
+        TypeDataBuilder::new("core.i1").intern(ir)
     }
 
     /// Get the `core.f64` type.
     pub fn f64_type(&self, ir: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "f64").intern(ir)
+        TypeDataBuilder::new("core.f64").intern(ir)
     }
 
     /// Get the `core.bytes` type.
@@ -955,7 +955,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// Create an `adt.typeref` type — a reference to a named type.
     pub fn adt_typeref(&self, ir: &mut IrContext, name: &Symbol) -> TypeRef {
         let name = ir.intern_symbol_text(name);
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+        TypeDataBuilder::new(tribute_ir::dialect::adt::Typeref::NAME)
             .attr("name", name)
             .intern(ir)
     }
@@ -1190,8 +1190,7 @@ mod tests {
         );
         let resume = ctx.convert_logical_type(&mut ir, resume);
         let resume_data = ir.get_type(resume);
-        assert_eq!(resume_data.dialect, Symbol::new("tribute_control"));
-        assert_eq!(resume_data.name, Symbol::new("resume_token"));
+        assert!(resume_data.name.is(&ir, "tribute_control.resume_token"));
 
         let tuple = AstType::new(&db, TypeKind::Tuple(vec![callable, never]));
         let tuple_name = ctx.logical_tuple_name(tuple);

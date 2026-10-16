@@ -313,11 +313,11 @@ inventory::submit! { CallableExitOps::register::<Handle>() }
 // === ADT Type Functions ===
 
 use crate::runtime_layout;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, Location, StringRef, TypeDataBuilder};
-use trunk_ir::{Symbol, SymbolPath};
 
 /// Canonical field identifiers for the `_Marker` ADT used by ability evidence.
 #[repr(u32)]
@@ -344,12 +344,10 @@ pub enum MarkerFieldType {
 
 impl MarkerFieldType {
     fn type_ref(self, ctx: &mut IrContext) -> TypeRef {
-        let dialect = Symbol::new("core");
-        let name = match self {
-            Self::I32 => Symbol::new("i32"),
-            Self::Ptr => Symbol::new("ptr"),
-        };
-        TypeDataBuilder::new(dialect, name).intern(ctx)
+        match self {
+            Self::I32 => trunk_ir::dialect::core::I32::type_ref(ctx),
+            Self::Ptr => trunk_ir::dialect::core::ptr(ctx).as_type_ref(),
+        }
     }
 }
 
@@ -474,7 +472,7 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
 pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let marker_ty = marker_adt_type_ref(ctx);
     let layout = ctx.string_attr(runtime_layout::EVIDENCE);
-    TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
+    TypeDataBuilder::new("core.array")
         .param(marker_ty)
         .attr(runtime_layout::LAYOUT_ATTR, layout)
         .intern(ctx)
@@ -516,7 +514,7 @@ mod tests {
     fn evidence_layouts_are_identified_by_layout_not_name() {
         let mut ctx = IrContext::new();
         let name_attr = ctx.string_attr("_Marker");
-        let named_marker = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+        let named_marker = TypeDataBuilder::new("adt.struct")
             .attr("name", name_attr)
             .intern(&mut ctx);
         let plain_array = core::array(&mut ctx, named_marker).as_type_ref();
@@ -541,8 +539,7 @@ mod tests {
 
         // Should be an adt.struct
         let data = ctx.get_type(marker_ty);
-        assert_eq!(data.dialect, Symbol::new("adt"));
-        assert_eq!(data.name, Symbol::new("struct"));
+        assert!(data.name.is(&ctx, "adt.struct"));
 
         // Should have name "_Marker"
         assert_eq!(ctx.type_attrs(marker_ty).get_str("name"), Some("_Marker"));
@@ -609,8 +606,7 @@ mod tests {
 
         // Should be a core.array type
         let data = ctx.get_type(evidence_ty);
-        assert_eq!(data.dialect, Symbol::new("core"));
-        assert_eq!(data.name, Symbol::new("array"));
+        assert!(data.name.is(&ctx, "core.array"));
         assert_eq!(data.params.len(), 1);
 
         // Element type should be the Marker ADT
@@ -623,13 +619,13 @@ mod tests {
 
         // Non-marker struct should return false
         let name_attr = ctx.string_attr("OtherStruct");
-        let other_struct = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+        let other_struct = TypeDataBuilder::new("adt.struct")
             .attr("name", name_attr)
             .intern(&mut ctx);
         assert!(!is_marker_type_ref(&ctx, other_struct));
 
         // Non-struct type should return false
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         assert!(!is_marker_type_ref(&ctx, i32_ty));
     }
 
@@ -638,7 +634,7 @@ mod tests {
         let mut ctx = IrContext::new();
 
         // Array of non-marker should return false
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let other_array = core::array(&mut ctx, i32_ty).as_type_ref();
         assert!(!is_evidence_type_ref(&ctx, other_array));
 

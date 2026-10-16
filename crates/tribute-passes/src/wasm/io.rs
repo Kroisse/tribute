@@ -16,7 +16,7 @@ use trunk_ir::rewrite::{
     PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, Location};
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
 const IO_TO_WASM: &str = "io-to-wasm";
@@ -88,7 +88,7 @@ fn declare_host_resources(
     block: trunk_ir::BlockRef,
     loc: Location,
 ) -> Result<(), ConversionError> {
-    let i32_ty = simple_type(ctx, "core", "i32");
+    let i32_ty = core::I32::type_ref(ctx);
     let import_ty = wasm_dialect::func_sig(ctx, [i32_ty; 4], [i32_ty]).as_type_ref();
 
     let mut import = None;
@@ -175,8 +175,7 @@ fn incompatible(ctx: &IrContext, op: OpRef, reason: String) -> ConversionError {
     let data = ctx.op(op);
     let conflict = IllegalOp {
         op,
-        dialect: data.dialect.clone(),
-        name: data.name.clone(),
+        name: data.name.to_text(ctx),
         legality: LegalityCheck::Illegal,
         reason: None,
     }
@@ -206,7 +205,7 @@ impl RewritePattern for WritePattern {
 }
 
 fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
-    let i32_ty = simple_type(ctx, "core", "i32");
+    let i32_ty = core::I32::type_ref(ctx);
     let bytes_ty = super::bytes::bytes_struct_type(ctx);
     let nil_ty = core::nil(ctx).as_type_ref();
     let body = ctx.create_block(BlockData {
@@ -630,10 +629,6 @@ fn i32_const(
     result
 }
 
-fn simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(dialect, name).intern(ctx)
-}
-
 fn block_arg(ty: TypeRef) -> BlockArgData {
     BlockArgData {
         ty,
@@ -652,7 +647,7 @@ mod tests {
             .ops(ctx)
             .iter()
             .copied()
-            .map(|op| format!("{}.{}", ctx.op(op).dialect, ctx.op(op).name))
+            .map(|op| format!("{}", ctx.op(op).name.display(ctx)))
             .collect()
     }
 

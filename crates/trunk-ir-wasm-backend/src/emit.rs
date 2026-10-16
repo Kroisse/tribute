@@ -42,10 +42,12 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Module as IrModule;
 use trunk_ir::callable::CallableBody;
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::{Symbol, SymbolPath};
+use trunk_ir::{OpName, SymbolPath};
 use wasm_encoder::{
     AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
@@ -85,131 +87,175 @@ trunk_ir::symbols! {
 
 /// Simple wasm operations that follow the pattern:
 /// emit operands → single instruction → set result local
-static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::new(|| {
+static SIMPLE_OPS: LazyLock<HashMap<OpName, Instruction<'static>>> = LazyLock::new(|| {
     [
         // i32 arithmetic
-        ("i32_add", Instruction::I32Add),
-        ("i32_sub", Instruction::I32Sub),
-        ("i32_mul", Instruction::I32Mul),
-        ("i32_div_s", Instruction::I32DivS),
-        ("i32_div_u", Instruction::I32DivU),
-        ("i32_rem_s", Instruction::I32RemS),
-        ("i32_rem_u", Instruction::I32RemU),
+        (wasm_dialect::I32Add::NAME, Instruction::I32Add),
+        (wasm_dialect::I32Sub::NAME, Instruction::I32Sub),
+        (wasm_dialect::I32Mul::NAME, Instruction::I32Mul),
+        (wasm_dialect::I32DivS::NAME, Instruction::I32DivS),
+        (wasm_dialect::I32DivU::NAME, Instruction::I32DivU),
+        (wasm_dialect::I32RemS::NAME, Instruction::I32RemS),
+        (wasm_dialect::I32RemU::NAME, Instruction::I32RemU),
         // i32 comparison
-        ("i32_eq", Instruction::I32Eq),
-        ("i32_ne", Instruction::I32Ne),
-        ("i32_lt_s", Instruction::I32LtS),
-        ("i32_lt_u", Instruction::I32LtU),
-        ("i32_le_s", Instruction::I32LeS),
-        ("i32_le_u", Instruction::I32LeU),
-        ("i32_gt_s", Instruction::I32GtS),
-        ("i32_gt_u", Instruction::I32GtU),
-        ("i32_ge_s", Instruction::I32GeS),
-        ("i32_ge_u", Instruction::I32GeU),
+        (wasm_dialect::I32Eq::NAME, Instruction::I32Eq),
+        (wasm_dialect::I32Ne::NAME, Instruction::I32Ne),
+        (wasm_dialect::I32LtS::NAME, Instruction::I32LtS),
+        (wasm_dialect::I32LtU::NAME, Instruction::I32LtU),
+        (wasm_dialect::I32LeS::NAME, Instruction::I32LeS),
+        (wasm_dialect::I32LeU::NAME, Instruction::I32LeU),
+        (wasm_dialect::I32GtS::NAME, Instruction::I32GtS),
+        (wasm_dialect::I32GtU::NAME, Instruction::I32GtU),
+        (wasm_dialect::I32GeS::NAME, Instruction::I32GeS),
+        (wasm_dialect::I32GeU::NAME, Instruction::I32GeU),
         // i32 bitwise
-        ("i32_and", Instruction::I32And),
-        ("i32_or", Instruction::I32Or),
-        ("i32_xor", Instruction::I32Xor),
-        ("i32_shl", Instruction::I32Shl),
-        ("i32_shr_s", Instruction::I32ShrS),
-        ("i32_shr_u", Instruction::I32ShrU),
+        (wasm_dialect::I32And::NAME, Instruction::I32And),
+        (wasm_dialect::I32Or::NAME, Instruction::I32Or),
+        (wasm_dialect::I32Xor::NAME, Instruction::I32Xor),
+        (wasm_dialect::I32Shl::NAME, Instruction::I32Shl),
+        (wasm_dialect::I32ShrS::NAME, Instruction::I32ShrS),
+        (wasm_dialect::I32ShrU::NAME, Instruction::I32ShrU),
         // i64 arithmetic
-        ("i64_add", Instruction::I64Add),
-        ("i64_sub", Instruction::I64Sub),
-        ("i64_mul", Instruction::I64Mul),
-        ("i64_div_s", Instruction::I64DivS),
-        ("i64_div_u", Instruction::I64DivU),
-        ("i64_rem_s", Instruction::I64RemS),
-        ("i64_rem_u", Instruction::I64RemU),
+        (wasm_dialect::I64Add::NAME, Instruction::I64Add),
+        (wasm_dialect::I64Sub::NAME, Instruction::I64Sub),
+        (wasm_dialect::I64Mul::NAME, Instruction::I64Mul),
+        (wasm_dialect::I64DivS::NAME, Instruction::I64DivS),
+        (wasm_dialect::I64DivU::NAME, Instruction::I64DivU),
+        (wasm_dialect::I64RemS::NAME, Instruction::I64RemS),
+        (wasm_dialect::I64RemU::NAME, Instruction::I64RemU),
         // i64 comparison
-        ("i64_eq", Instruction::I64Eq),
-        ("i64_ne", Instruction::I64Ne),
-        ("i64_lt_s", Instruction::I64LtS),
-        ("i64_lt_u", Instruction::I64LtU),
-        ("i64_le_s", Instruction::I64LeS),
-        ("i64_le_u", Instruction::I64LeU),
-        ("i64_gt_s", Instruction::I64GtS),
-        ("i64_gt_u", Instruction::I64GtU),
-        ("i64_ge_s", Instruction::I64GeS),
-        ("i64_ge_u", Instruction::I64GeU),
+        (wasm_dialect::I64Eq::NAME, Instruction::I64Eq),
+        (wasm_dialect::I64Ne::NAME, Instruction::I64Ne),
+        (wasm_dialect::I64LtS::NAME, Instruction::I64LtS),
+        (wasm_dialect::I64LtU::NAME, Instruction::I64LtU),
+        (wasm_dialect::I64LeS::NAME, Instruction::I64LeS),
+        (wasm_dialect::I64LeU::NAME, Instruction::I64LeU),
+        (wasm_dialect::I64GtS::NAME, Instruction::I64GtS),
+        (wasm_dialect::I64GtU::NAME, Instruction::I64GtU),
+        (wasm_dialect::I64GeS::NAME, Instruction::I64GeS),
+        (wasm_dialect::I64GeU::NAME, Instruction::I64GeU),
         // i64 bitwise
-        ("i64_and", Instruction::I64And),
-        ("i64_or", Instruction::I64Or),
-        ("i64_xor", Instruction::I64Xor),
-        ("i64_shl", Instruction::I64Shl),
-        ("i64_shr_s", Instruction::I64ShrS),
-        ("i64_shr_u", Instruction::I64ShrU),
+        (wasm_dialect::I64And::NAME, Instruction::I64And),
+        (wasm_dialect::I64Or::NAME, Instruction::I64Or),
+        (wasm_dialect::I64Xor::NAME, Instruction::I64Xor),
+        (wasm_dialect::I64Shl::NAME, Instruction::I64Shl),
+        (wasm_dialect::I64ShrS::NAME, Instruction::I64ShrS),
+        (wasm_dialect::I64ShrU::NAME, Instruction::I64ShrU),
         // f32 arithmetic
-        ("f32_add", Instruction::F32Add),
-        ("f32_sub", Instruction::F32Sub),
-        ("f32_mul", Instruction::F32Mul),
-        ("f32_div", Instruction::F32Div),
-        ("f32_neg", Instruction::F32Neg),
+        (wasm_dialect::F32Add::NAME, Instruction::F32Add),
+        (wasm_dialect::F32Sub::NAME, Instruction::F32Sub),
+        (wasm_dialect::F32Mul::NAME, Instruction::F32Mul),
+        (wasm_dialect::F32Div::NAME, Instruction::F32Div),
+        (wasm_dialect::F32Neg::NAME, Instruction::F32Neg),
         // f32 comparison
-        ("f32_eq", Instruction::F32Eq),
-        ("f32_ne", Instruction::F32Ne),
-        ("f32_lt", Instruction::F32Lt),
-        ("f32_le", Instruction::F32Le),
-        ("f32_gt", Instruction::F32Gt),
-        ("f32_ge", Instruction::F32Ge),
+        (wasm_dialect::F32Eq::NAME, Instruction::F32Eq),
+        (wasm_dialect::F32Ne::NAME, Instruction::F32Ne),
+        (wasm_dialect::F32Lt::NAME, Instruction::F32Lt),
+        (wasm_dialect::F32Le::NAME, Instruction::F32Le),
+        (wasm_dialect::F32Gt::NAME, Instruction::F32Gt),
+        (wasm_dialect::F32Ge::NAME, Instruction::F32Ge),
         // f64 arithmetic
-        ("f64_add", Instruction::F64Add),
-        ("f64_sub", Instruction::F64Sub),
-        ("f64_mul", Instruction::F64Mul),
-        ("f64_div", Instruction::F64Div),
-        ("f64_neg", Instruction::F64Neg),
+        (wasm_dialect::F64Add::NAME, Instruction::F64Add),
+        (wasm_dialect::F64Sub::NAME, Instruction::F64Sub),
+        (wasm_dialect::F64Mul::NAME, Instruction::F64Mul),
+        (wasm_dialect::F64Div::NAME, Instruction::F64Div),
+        (wasm_dialect::F64Neg::NAME, Instruction::F64Neg),
         // f64 comparison
-        ("f64_eq", Instruction::F64Eq),
-        ("f64_ne", Instruction::F64Ne),
-        ("f64_lt", Instruction::F64Lt),
-        ("f64_le", Instruction::F64Le),
-        ("f64_gt", Instruction::F64Gt),
-        ("f64_ge", Instruction::F64Ge),
+        (wasm_dialect::F64Eq::NAME, Instruction::F64Eq),
+        (wasm_dialect::F64Ne::NAME, Instruction::F64Ne),
+        (wasm_dialect::F64Lt::NAME, Instruction::F64Lt),
+        (wasm_dialect::F64Le::NAME, Instruction::F64Le),
+        (wasm_dialect::F64Gt::NAME, Instruction::F64Gt),
+        (wasm_dialect::F64Ge::NAME, Instruction::F64Ge),
         // Integer conversions
-        ("i32_wrap_i64", Instruction::I32WrapI64),
-        ("i64_extend_i32_s", Instruction::I64ExtendI32S),
-        ("i64_extend_i32_u", Instruction::I64ExtendI32U),
-        ("i32_extend8_s", Instruction::I32Extend8S),
-        ("i32_extend16_s", Instruction::I32Extend16S),
+        (wasm_dialect::I32WrapI64::NAME, Instruction::I32WrapI64),
+        (
+            wasm_dialect::I64ExtendI32S::NAME,
+            Instruction::I64ExtendI32S,
+        ),
+        (
+            wasm_dialect::I64ExtendI32U::NAME,
+            Instruction::I64ExtendI32U,
+        ),
+        (wasm_dialect::I32Extend8S::NAME, Instruction::I32Extend8S),
+        (wasm_dialect::I32Extend16S::NAME, Instruction::I32Extend16S),
         // Float to int conversions
-        ("i32_trunc_f32_s", Instruction::I32TruncF32S),
-        ("i32_trunc_f32_u", Instruction::I32TruncF32U),
-        ("i32_trunc_f64_s", Instruction::I32TruncF64S),
-        ("i32_trunc_f64_u", Instruction::I32TruncF64U),
-        ("i64_trunc_f32_s", Instruction::I64TruncF32S),
-        ("i64_trunc_f32_u", Instruction::I64TruncF32U),
-        ("i64_trunc_f64_s", Instruction::I64TruncF64S),
-        ("i64_trunc_f64_u", Instruction::I64TruncF64U),
+        (wasm_dialect::I32TruncF32S::NAME, Instruction::I32TruncF32S),
+        (wasm_dialect::I32TruncF32U::NAME, Instruction::I32TruncF32U),
+        (wasm_dialect::I32TruncF64S::NAME, Instruction::I32TruncF64S),
+        (wasm_dialect::I32TruncF64U::NAME, Instruction::I32TruncF64U),
+        (wasm_dialect::I64TruncF32S::NAME, Instruction::I64TruncF32S),
+        (wasm_dialect::I64TruncF32U::NAME, Instruction::I64TruncF32U),
+        (wasm_dialect::I64TruncF64S::NAME, Instruction::I64TruncF64S),
+        (wasm_dialect::I64TruncF64U::NAME, Instruction::I64TruncF64U),
         // Int to float conversions
-        ("f32_convert_i32_s", Instruction::F32ConvertI32S),
-        ("f32_convert_i32_u", Instruction::F32ConvertI32U),
-        ("f32_convert_i64_s", Instruction::F32ConvertI64S),
-        ("f32_convert_i64_u", Instruction::F32ConvertI64U),
-        ("f64_convert_i32_s", Instruction::F64ConvertI32S),
-        ("f64_convert_i32_u", Instruction::F64ConvertI32U),
-        ("f64_convert_i64_s", Instruction::F64ConvertI64S),
-        ("f64_convert_i64_u", Instruction::F64ConvertI64U),
+        (
+            wasm_dialect::F32ConvertI32S::NAME,
+            Instruction::F32ConvertI32S,
+        ),
+        (
+            wasm_dialect::F32ConvertI32U::NAME,
+            Instruction::F32ConvertI32U,
+        ),
+        (
+            wasm_dialect::F32ConvertI64S::NAME,
+            Instruction::F32ConvertI64S,
+        ),
+        (
+            wasm_dialect::F32ConvertI64U::NAME,
+            Instruction::F32ConvertI64U,
+        ),
+        (
+            wasm_dialect::F64ConvertI32S::NAME,
+            Instruction::F64ConvertI32S,
+        ),
+        (
+            wasm_dialect::F64ConvertI32U::NAME,
+            Instruction::F64ConvertI32U,
+        ),
+        (
+            wasm_dialect::F64ConvertI64S::NAME,
+            Instruction::F64ConvertI64S,
+        ),
+        (
+            wasm_dialect::F64ConvertI64U::NAME,
+            Instruction::F64ConvertI64U,
+        ),
         // Float to float conversions
-        ("f32_demote_f64", Instruction::F32DemoteF64),
-        ("f64_promote_f32", Instruction::F64PromoteF32),
+        (wasm_dialect::F32DemoteF64::NAME, Instruction::F32DemoteF64),
+        (
+            wasm_dialect::F64PromoteF32::NAME,
+            Instruction::F64PromoteF32,
+        ),
         // Reinterpretations
-        ("i32_reinterpret_f32", Instruction::I32ReinterpretF32),
-        ("i64_reinterpret_f64", Instruction::I64ReinterpretF64),
-        ("f32_reinterpret_i32", Instruction::F32ReinterpretI32),
-        ("f64_reinterpret_i64", Instruction::F64ReinterpretI64),
+        (
+            wasm_dialect::I32ReinterpretF32::NAME,
+            Instruction::I32ReinterpretF32,
+        ),
+        (
+            wasm_dialect::I64ReinterpretF64::NAME,
+            Instruction::I64ReinterpretF64,
+        ),
+        (
+            wasm_dialect::F32ReinterpretI32::NAME,
+            Instruction::F32ReinterpretI32,
+        ),
+        (
+            wasm_dialect::F64ReinterpretI64::NAME,
+            Instruction::F64ReinterpretI64,
+        ),
         // Misc
-        ("drop", Instruction::Drop),
-        ("return", Instruction::Return),
-        ("unreachable", Instruction::Unreachable),
-        ("ref_is_null", Instruction::RefIsNull),
-        ("array_len", Instruction::ArrayLen),
+        (wasm_dialect::Drop::NAME, Instruction::Drop),
+        (wasm_dialect::Return::NAME, Instruction::Return),
+        (wasm_dialect::Unreachable::NAME, Instruction::Unreachable),
+        (wasm_dialect::RefIsNull::NAME, Instruction::RefIsNull),
+        (wasm_dialect::ArrayLen::NAME, Instruction::ArrayLen),
         // i31ref (WasmGC fixnum)
-        ("ref_i31", Instruction::RefI31),
-        ("i31_get_s", Instruction::I31GetS),
-        ("i31_get_u", Instruction::I31GetU),
+        (wasm_dialect::RefI31::NAME, Instruction::RefI31),
+        (wasm_dialect::I31GetS::NAME, Instruction::I31GetS),
+        (wasm_dialect::I31GetU::NAME, Instruction::I31GetU),
     ]
     .into_iter()
-    .map(|(k, v)| (Symbol::new(k), v))
     .collect()
 });
 
@@ -368,12 +414,12 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
                 .iter()
                 .map(|t| {
                     let d = ctx.get_type(*t);
-                    format!("{}.{}", d.dialect, d.name)
+                    format!("{}", d.name.display(ctx))
                 })
                 .collect::<Vec<_>>(),
             signature_results
                 .iter()
-                .map(|ty| format!("{}.{}", ctx.get_type(*ty).dialect, ctx.get_type(*ty).name))
+                .map(|ty| format!("{}", ctx.get_type(*ty).name.display(ctx)))
                 .collect::<Vec<_>>()
         );
         let params = params_refs
@@ -559,16 +605,9 @@ fn collect_wasm_ops_from_region(
     region: RegionRef,
     info: &mut ModuleInfo,
 ) -> CompilationResult<()> {
-    let core_dialect = Symbol::new("core");
-    let module_name = Symbol::new("module");
-
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
-            let op_data = ctx.op(op);
-            let dialect = op_data.dialect.clone();
-            let name = op_data.name.clone();
-
-            if dialect == core_dialect && name == module_name {
+            if core::Module::matches(ctx, op) {
                 for nested_region in ctx.op_regions(op) {
                     collect_wasm_ops_from_region(ctx, nested_region, info)?;
                 }
@@ -766,10 +805,9 @@ fn assign_locals_in_region(
             locals.push(val_type);
             let ty_data = ctx.get_type(arg_ty);
             tracing::debug!(
-                "Allocated local {} for block arg type {}.{}",
+                "Allocated local {} for block arg type {}",
                 local_index,
-                ty_data.dialect,
-                ty_data.name
+                ty_data.name.display(ctx)
             );
         }
 
@@ -789,8 +827,9 @@ fn assign_locals_in_region(
                         Err(e) => {
                             let op_data = ctx.op(op);
                             debug!(
-                                "type_to_valtype failed for op {}.{}: {:?}",
-                                op_data.dialect, op_data.name, e
+                                "type_to_valtype failed for op {}: {:?}",
+                                op_data.name.display(ctx),
+                                e
                             );
                             return Err(e);
                         }
@@ -898,25 +937,24 @@ fn emit_op_nested(
     nesting: &[NestingKind],
 ) -> CompilationResult<()> {
     let op_data = ctx.op(op);
-    let wasm_dialect = Symbol::new("wasm");
-    if op_data.dialect != wasm_dialect {
+    if op_data.name.dialect(ctx) != "wasm" {
         return Err(CompilationError::unsupported_feature(
             "non-wasm op in wasm backend",
         ));
     }
 
-    let name = op_data.name.clone();
+    let name = op_data.name;
     let operands = ctx.op_operands(op);
 
-    debug!("emit_op: wasm.{}", name);
+    debug!("emit_op: {}", name.display(ctx));
 
     // Handle wasm.nop
     if wasm_dialect::Nop::matches(ctx, op) {
         if let Some(&result_ty) = ctx.op_result_types(op).first() {
             let ty_data = ctx.get_type(result_ty);
-            debug!("wasm.nop: result_ty={}.{}", ty_data.dialect, ty_data.name);
-            if is_type(ctx, result_ty, "wasm", "func_sig")
-                || is_type(ctx, result_ty, "wasm", "funcref")
+            debug!("wasm.nop: result_ty={}", ty_data.name.display(ctx));
+            if trunk_ir::dialect::wasm::FuncSig::matches(ctx, result_ty)
+                || trunk_ir::dialect::wasm::Funcref::matches(ctx, result_ty)
             {
                 debug!("wasm.nop: emitting ref.null func");
                 function.instruction(&Instruction::RefNull(HeapType::Abstract {
@@ -924,8 +962,8 @@ fn emit_op_nested(
                     ty: AbstractHeapType::Func,
                 }));
                 set_result_local(ctx, op, emit_ctx, function)?;
-            } else if is_type(ctx, result_ty, "wasm", "anyref")
-                || is_type(ctx, result_ty, "wasm", "structref")
+            } else if trunk_ir::dialect::wasm::Anyref::matches(ctx, result_ty)
+                || trunk_ir::dialect::wasm::Structref::matches(ctx, result_ty)
             {
                 debug!("wasm.nop: emitting ref.null any");
                 function.instruction(&Instruction::RefNull(HeapType::Abstract {
@@ -1075,9 +1113,8 @@ fn emit_op_nested(
     } else {
         let op_data = ctx.op(op);
         tracing::error!(
-            "unsupported wasm op: {} (dialect={}, operands={}, results={}, attrs={:?})",
-            name,
-            op_data.dialect,
+            "unsupported wasm op: {} (operands={}, results={}, attrs={:?})",
+            name.display(ctx),
             ctx.op_operands(op).len(),
             ctx.op_result_types(op).len(),
             op_data
@@ -1088,7 +1125,7 @@ fn emit_op_nested(
         );
         Err(CompilationError::unsupported_feature_msg(format!(
             "wasm op not supported: {}",
-            name
+            name.display(ctx)
         )))
     }
 }
@@ -1472,9 +1509,9 @@ mod tests {
         let Some((params, result)) = helpers::func_type_parts(&ctx, *signature) else {
             panic!("expected wasm.func_sig signature")
         };
-        assert_eq!(ctx.get_type(params[0]).name, Symbol::new("anyref"));
+        assert!(ctx.get_type(params[0]).name.is(&ctx, "wasm.anyref"));
         assert_eq!(result.len(), 1);
-        assert_eq!(ctx.get_type(result[0]).name, Symbol::new("i32"));
+        assert!(ctx.get_type(result[0]).name.is(&ctx, "core.i32"));
 
         let bytes = crate::emit_module_to_wasm(&mut ctx, module)
             .expect("exact ordinary indirect call must emit")
@@ -1553,7 +1590,7 @@ mod tests {
             panic!("expected wasm.func_sig signature")
         };
         assert_eq!(result.len(), 1);
-        assert!(helpers::is_type(&ctx, result[0], "wasm", "funcref"));
+        assert!(trunk_ir::dialect::wasm::Funcref::matches(&ctx, result[0]));
     }
 
     #[test]

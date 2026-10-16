@@ -217,9 +217,8 @@ impl<'a> Converter<'a> {
                 start: index + 1,
             };
             let location = self.ctx.op(source).location;
-            let dialect = self.ctx.op(source).dialect.clone();
-            let name = self.ctx.op(source).name.clone();
-            if dialect == "scf" && name == "yield" {
+            let name = self.ctx.op(source).name;
+            if name == scf::Yield::NAME {
                 if let Some(join) = &flow.tail_join
                     && self.ctx.op(source).parent_block.and_then(|block| {
                         self.ctx
@@ -268,15 +267,15 @@ impl<'a> Converter<'a> {
                 self.emit_exit(block, location, value, flow)?;
                 return Ok(());
             }
-            if dialect == "scf" && name == "switch" && self.contains_tribute_control(source) {
+            if name == scf::Switch::NAME && self.contains_tribute_control(source) {
                 self.lower_structured_switch(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
-            if dialect == "scf" && name == "if" && self.contains_tribute_control(source) {
+            if name == scf::If::NAME && self.contains_tribute_control(source) {
                 self.lower_structured_if(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
-            if dialect != "tribute_control" {
+            if name.dialect(self.ctx) != "tribute_control" {
                 let cloned = self.clone_plain_op(source, mapping)?;
                 self.ctx.push_op(block, cloned);
                 index += 1;
@@ -290,82 +289,75 @@ impl<'a> Converter<'a> {
                 continue;
             }
 
-            match name.with_str(|value| value.to_owned()).as_str() {
-                "return" | "yield" => {
-                    let value = self.ctx.op_operands(source)[0];
-                    let value = mapping.get(&value).copied().unwrap_or(value);
-                    self.emit_exit(block, location, value, flow)?;
+            if tribute_control::Return::matches(self.ctx, source)
+                || tribute_control::Yield::matches(self.ctx, source)
+            {
+                let value = self.ctx.op_operands(source)[0];
+                let value = mapping.get(&value).copied().unwrap_or(value);
+                self.emit_exit(block, location, value, flow)?;
+                return Ok(());
+            } else if tribute_control::Lambda::matches(self.ctx, source) {
+                let lambda = self.lower_lambda(source, mapping)?;
+                self.ctx.push_op(block, lambda);
+                mapping.insert(self.ctx.op_result(source, 0), self.ctx.op_result(lambda, 0));
+                index += 1;
+            } else if tribute_control::FuncRef::matches(self.ctx, source) {
+                let (ops, value) = self.lower_func_ref(source)?;
+                for op in ops {
+                    self.ctx.push_op(block, op);
+                }
+                mapping.insert(self.ctx.op_result(source, 0), value);
+                index += 1;
+            } else if tribute_control::Call::matches(self.ctx, source) {
+                if self
+                    .lower_call(source, rest, block, mapping, flow)?
+                    .is_break()
+                {
                     return Ok(());
                 }
-                "lambda" => {
-                    let lambda = self.lower_lambda(source, mapping)?;
-                    self.ctx.push_op(block, lambda);
-                    mapping.insert(self.ctx.op_result(source, 0), self.ctx.op_result(lambda, 0));
+                index += 1;
+            } else if tribute_control::CallIndirect::matches(self.ctx, source) {
+                if self
+                    .lower_call_indirect(source, rest, block, mapping, flow)?
+                    .is_break()
+                {
+                    return Ok(());
+                }
+                index += 1;
+            } else if tribute_control::TailCall::matches(self.ctx, source) {
+                self.lower_tail_call(source, block, mapping, flow)?;
+                return Ok(());
+            } else if tribute_control::TailCallIndirect::matches(self.ctx, source) {
+                self.lower_tail_call_indirect(source, block, mapping, flow)?;
+                return Ok(());
+            } else if tribute_control::Perform::matches(self.ctx, source) {
+                let kind = self
+                    .ctx
+                    .op_attrs(source)
+                    .get_str("operation_kind")
+                    .expect("pre-CPS validation checked operation kind");
+                if kind == "fn" {
+                    self.lower_tail_perform(source, block, mapping, flow)?;
                     index += 1;
-                }
-                "func_ref" => {
-                    let (ops, value) = self.lower_func_ref(source)?;
-                    for op in ops {
-                        self.ctx.push_op(block, op);
-                    }
-                    mapping.insert(self.ctx.op_result(source, 0), value);
-                    index += 1;
-                }
-                "call" => {
-                    if self
-                        .lower_call(source, rest, block, mapping, flow)?
-                        .is_break()
-                    {
-                        return Ok(());
-                    }
-                    index += 1;
-                }
-                "call_indirect" => {
-                    if self
-                        .lower_call_indirect(source, rest, block, mapping, flow)?
-                        .is_break()
-                    {
-                        return Ok(());
-                    }
-                    index += 1;
-                }
-                "tail_call" => {
-                    self.lower_tail_call(source, block, mapping, flow)?;
+                } else {
+                    self.lower_general_perform(source, rest, block, mapping, flow)?;
                     return Ok(());
                 }
-                "tail_call_indirect" => {
-                    self.lower_tail_call_indirect(source, block, mapping, flow)?;
-                    return Ok(());
-                }
-                "perform" => {
-                    let kind = self
-                        .ctx
-                        .op_attrs(source)
-                        .get_str("operation_kind")
-                        .expect("pre-CPS validation checked operation kind");
-                    if kind == "fn" {
-                        self.lower_tail_perform(source, block, mapping, flow)?;
-                        index += 1;
-                    } else {
-                        self.lower_general_perform(source, rest, block, mapping, flow)?;
-                        return Ok(());
-                    }
-                }
-                "resume" => {
-                    self.lower_resume(source, rest, block, mapping, flow)?;
-                    return Ok(());
-                }
-                "handle" => {
-                    self.lower_handle(source, rest, block, mapping, flow)?;
-                    return Ok(());
-                }
-                other => {
-                    return Err(TributeControlToCpsError::post_op(
-                        source,
-                        location,
-                        format!("unsupported tribute_control operation '{other}'"),
-                    ));
-                }
+            } else if tribute_control::Resume::matches(self.ctx, source) {
+                self.lower_resume(source, rest, block, mapping, flow)?;
+                return Ok(());
+            } else if tribute_control::Handle::matches(self.ctx, source) {
+                self.lower_handle(source, rest, block, mapping, flow)?;
+                return Ok(());
+            } else {
+                return Err(TributeControlToCpsError::post_op(
+                    source,
+                    location,
+                    format!(
+                        "unsupported tribute_control operation '{}'",
+                        name.display(self.ctx)
+                    ),
+                ));
             }
         }
         Ok(())
@@ -493,7 +485,7 @@ pub fn tribute_control_to_cps(
             if tribute_control::Func::matches(converter.ctx, source) {
                 let function = converter.convert_func(source)?;
                 converter.ctx.push_op(new_block, function);
-            } else if converter.ctx.op(source).dialect == "tribute_control" {
+            } else if converter.ctx.op(source).name.dialect(converter.ctx) == "tribute_control" {
                 return Err(TributeControlToCpsError::one(
                     PRE_CPS_BOUNDARY,
                     Some(source),

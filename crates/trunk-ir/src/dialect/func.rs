@@ -7,7 +7,7 @@ use crate::op_interface::{
     IndirectCallLikeModel, IndirectCallLikeOps,
 };
 use crate::ops::{DialectOp, DialectType};
-use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
+use crate::{Attribute, AttributeMap, IrContext, TypeDataBuilder, TypeRef};
 
 /// The exact callable signature retained after a typed indirect callee becomes
 /// a runtime function or table index.
@@ -133,12 +133,6 @@ pub const NUM_INPUTS_ATTR: &str = "num_inputs";
 pub const NUM_RESULTS_ATTR: &str = "num_results";
 
 /// Return the interned name of the `func.func_sig` type.
-#[allow(non_snake_case)]
-#[inline]
-pub fn FUNC_SIG() -> Symbol {
-    Symbol::new("func_sig")
-}
-
 /// Why a name-matching `func.func_sig` does not satisfy its storage invariant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FuncSigTypeError {
@@ -186,7 +180,7 @@ impl FuncSig {
     /// Validate a name-matching `func.func_sig`, including both delimiter counts.
     pub(crate) fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
         let data = ctx.get_type(ty);
-        debug_assert!(data.dialect == DIALECT_NAME() && data.name == FUNC_SIG());
+        debug_assert!(data.name == <Self as DialectType>::NAME);
 
         let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)?;
         let num_results = read_count(ctx, &data.attrs, NUM_RESULTS_ATTR)?;
@@ -326,9 +320,16 @@ impl FuncSig {
     }
 }
 
+static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef {
+    name: crate::name::QualifiedName::new("func.func_sig"),
+};
+
+inventory::submit! {
+    crate::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
+}
+
 impl DialectType for FuncSig {
-    const DIALECT_NAME: &'static str = "func";
-    const TYPE_NAME: &'static str = "func_sig";
+    const DEF: &'static crate::type_def::TypeDef = &FUNC_SIG_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
         if !Self::matches(ctx, ty) {
@@ -427,7 +428,7 @@ pub fn func_sig_with_attrs(
         panic!("func.func_sig: {error}");
     }
 
-    let mut builder = TypeDataBuilder::new(DIALECT_NAME(), FUNC_SIG())
+    let mut builder = TypeDataBuilder::new(<FuncSig as DialectType>::NAME)
         .params(inputs)
         .params(results);
     for (key, value) in attrs {
@@ -508,7 +509,7 @@ fn verify_typed_callee(
 ) -> Result<(), String> {
     let callee_ty = ctx.value_ty(callee);
     let data = ctx.get_type(callee_ty);
-    let func_ty = if data.dialect == "closure" && data.name == "closure" {
+    let func_ty = if data.name.is(ctx, "closure.closure") {
         let [func_ty] = data.params.as_slice() else {
             return Err("callee closure type must contain exactly one function type".into());
         };
@@ -847,8 +848,7 @@ fn parse_func<'a>(
 
     Ok(RawOperation {
         results,
-        dialect: "func",
-        op_name: "func",
+        name: "func.func",
         sym_name,
         has_func_signature: true,
         func_params: params,
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn with_call_conv_changes_type_identity_and_preserves_the_rest() {
         let mut ctx = crate::IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let mut attrs = AttributeMap::new();
         attrs
             .view_mut(&mut ctx)
@@ -929,8 +929,8 @@ mod tests {
     #[test]
     fn inserting_a_parameter_moves_parameter_attributes_with_their_parameters() {
         let mut ctx = crate::IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
-        let ptr_ty = TypeDataBuilder::new("core", "ptr").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let ptr_ty = TypeDataBuilder::new("core.ptr").intern(&mut ctx);
         let marked = AttributeMap::from_entries(
             &mut ctx,
             [("k", Attribute::SymbolRef(SymbolPath::new(["v"])))],

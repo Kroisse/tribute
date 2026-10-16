@@ -32,12 +32,14 @@ mod parse;
 ///
 /// ## Generated code
 ///
-/// For each operation `fn op_name(...)`:
-/// - `DIALECT_NAME()` / `OP_NAME()` — Symbol helper functions
-/// - `struct OpName(OpRef)` — wrapper struct
-/// - `impl DialectOp for OpName` — type-safe matching
+/// For the dialect, a `DIALECT_NAME` constant. For each operation
+/// `fn op_name(...)`:
+/// - `struct Wrapper(OpRef)` — wrapper struct, named in `UpperCamelCase`
+/// - A `static` `OpDef` whose address identifies the operation, and
+///   `impl DialectOp for Wrapper` whose `NAME` points to it — matching
+///   compares name handles
 /// - Operand, result, attribute, region/successor accessors
-/// - A builder started by `OpName::operands(..)` (empty for operations
+/// - A builder started by `Wrapper::operands(..)` (empty for operations
 ///   without operands) and finished by `.build(ctx, location)`
 /// - `OpDef` registration: the declarative `OpSchema`, plus a call to the
 ///   wrapper's `trunk_ir::ops::Verify` impl for `#[verify]` operations

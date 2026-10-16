@@ -11,17 +11,17 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataId, FuncId, Module as _};
 use cranelift_object::ObjectModule;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
-use trunk_ir::{Symbol, SymbolPath};
 
 use crate::{CompilationError, CompilationResult};
 
 pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let ty = ctx.get_type(ty);
-    ty.dialect == "core" && ty.name == "nil" && ty.params.is_empty()
+    ty.name.is(ctx, "core.nil") && ty.params.is_empty()
 }
 
 /// Parse a condition symbol into a Cranelift integer condition code.
@@ -90,25 +90,27 @@ pub(crate) fn translate_type(
     ptr_ty: cl_types::Type,
 ) -> CompilationResult<cl_types::Type> {
     let td = ctx.get_type(ty);
-    let core_dialect = Symbol::new("core");
-    if td.dialect == core_dialect {
-        return td.name.with_str(|n| match n {
-            "i1" => Ok(cl_types::I8),
-            "i8" => Ok(cl_types::I8),
-            "i16" => Ok(cl_types::I16),
-            "i32" => Ok(cl_types::I32),
-            "i64" => Ok(cl_types::I64),
-            "f32" => Ok(cl_types::F32),
-            "f64" => Ok(cl_types::F64),
-            "ptr" => Ok(ptr_ty),
-            other => Err(CompilationError::type_error(format!(
-                "unsupported type for Cranelift: core.{other}"
-            ))),
-        });
+    {
+        use trunk_ir::dialect::core::{F32, F64, I1, I8, I16, I32, I64, Ptr};
+        use trunk_ir::ops::DialectType;
+
+        let types = [
+            (I1::NAME, cl_types::I8),
+            (I8::NAME, cl_types::I8),
+            (I16::NAME, cl_types::I16),
+            (I32::NAME, cl_types::I32),
+            (I64::NAME, cl_types::I64),
+            (F32::NAME, cl_types::F32),
+            (F64::NAME, cl_types::F64),
+            (Ptr::NAME, ptr_ty),
+        ];
+        if let Some(&(_, translated)) = types.iter().find(|(name, _)| *name == td.name) {
+            return Ok(translated);
+        }
     }
     Err(CompilationError::type_error(format!(
-        "unsupported type for Cranelift: {}.{}",
-        td.dialect, td.name,
+        "unsupported type for Cranelift: {}",
+        td.name.display(ctx),
     )))
 }
 
@@ -245,8 +247,8 @@ impl<'a> FunctionTranslator<'a> {
                     let op_data = self.ctx.op(op);
                     let parent_block = op_data.parent_block;
                     let in_block_map = parent_block.map(|b| self.block_map.contains_key(&b)).unwrap_or(false);
-                    format!("op={:?} idx={} dialect={} name={} parent_block={:?} in_block_map={}",
-                        op, idx, op_data.dialect, op_data.name, parent_block, in_block_map)
+                    format!("op={:?} idx={} name={} parent_block={:?} in_block_map={}",
+                        op, idx, op_data.name.display(self.ctx), parent_block, in_block_map)
                 }
                 trunk_ir::refs::ValueDef::BlockArg(block, idx) => {
                     let in_block_map = self.block_map.contains_key(&block);
@@ -254,10 +256,9 @@ impl<'a> FunctionTranslator<'a> {
                 }
             };
             CompilationError::codegen(format!(
-                "TrunkIR value not found in Cranelift mapping (mapped {} values total, type: {}.{}, def: {})",
+                "TrunkIR value not found in Cranelift mapping (mapped {} values total, type: {}, def: {})",
                 self.values.len(),
-                ty_data.dialect,
-                ty_data.name,
+                ty_data.name.display(self.ctx),
                 def_info,
             ))
         })
@@ -333,7 +334,7 @@ impl<'a> FunctionTranslator<'a> {
             let result_ty = ctx.op_result_types(op)[0];
             // Nil constants have no runtime representation — skip emission.
             let td = ctx.get_type(result_ty);
-            if td.dialect == "core" && td.name == "nil" {
+            if td.name.is(ctx, "core.nil") {
                 return Ok(());
             }
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -533,7 +534,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(load) = clif::Load::from_op(ctx, op) {
             let result_ty = ctx.op_result_types(op)[0];
             let td = ctx.get_type(result_ty);
-            if td.dialect == "core" && td.name == "nil" {
+            if td.name.is(ctx, "core.nil") {
                 return Ok(());
             }
             let operands = ctx.op_operands(op);
@@ -763,8 +764,8 @@ impl<'a> FunctionTranslator<'a> {
 
         let op_data = ctx.op(op);
         Err(CompilationError::codegen(format!(
-            "unsupported operation: {}.{}",
-            op_data.dialect, op_data.name,
+            "unsupported operation: {}",
+            op_data.name.display(ctx),
         )))
     }
 
@@ -801,34 +802,26 @@ impl<'a> FunctionTranslator<'a> {
 mod tests {
     use super::*;
     use trunk_ir::context::IrContext;
-    use trunk_ir::types::TypeData;
-
-    fn make_core_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        ctx.intern_type(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new(name),
-            params: Default::default(),
-            attrs: Default::default(),
-        })
-    }
+    use trunk_ir::dialect::core;
+    use trunk_ir::types::TypeDataBuilder;
 
     #[test]
     fn test_translate_type() {
         let mut ctx = IrContext::new();
         for (name, expected) in [
-            ("i8", Some(cl_types::I8)),
-            ("i16", Some(cl_types::I16)),
-            ("i32", Some(cl_types::I32)),
-            ("i64", Some(cl_types::I64)),
-            ("f32", Some(cl_types::F32)),
-            ("f64", Some(cl_types::F64)),
-            ("nil", None),
+            ("core.i8", Some(cl_types::I8)),
+            ("core.i16", Some(cl_types::I16)),
+            ("core.i32", Some(cl_types::I32)),
+            ("core.i64", Some(cl_types::I64)),
+            ("core.f32", Some(cl_types::F32)),
+            ("core.f64", Some(cl_types::F64)),
+            ("core.nil", None),
         ] {
-            let ty = make_core_type(&mut ctx, name);
+            let ty = TypeDataBuilder::new(name).intern(&mut ctx);
             let translated = translate_type(&ctx, ty, cl_types::I64);
             match expected {
-                Some(expected) => assert_eq!(translated.ok(), Some(expected), "core.{name}"),
-                None => assert!(translated.is_err(), "core.{name} must be unsupported"),
+                Some(expected) => assert_eq!(translated.ok(), Some(expected), "{name}"),
+                None => assert!(translated.is_err(), "{name} must be unsupported"),
             }
         }
     }
@@ -836,9 +829,9 @@ mod tests {
     #[test]
     fn test_translate_signature_params_and_results() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_core_type(&mut ctx, "i32");
-        let i64_ty = make_core_type(&mut ctx, "i64");
-        let nil_ty = make_core_type(&mut ctx, "nil");
+        let i32_ty = core::I32::type_ref(&mut ctx);
+        let i64_ty = core::I64::type_ref(&mut ctx);
+        let nil_ty = core::nil(&mut ctx).as_type_ref();
         // (case, inputs, results, expected params, expected returns);
         // nil parameters and results are omitted in order.
         let cases: [(&str, &[_], &[_], &[_], &[_]); 6] = [
@@ -882,7 +875,7 @@ mod tests {
     #[test]
     fn signature_call_conv_selects_the_cranelift_convention() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_core_type(&mut ctx, "i32");
+        let i32_ty = core::I32::type_ref(&mut ctx);
         let platform = clif::func_sig(&mut ctx, [i32_ty], []).as_type_ref();
         let mut attrs = trunk_ir::AttributeMap::new();
         func::CallConv::Tail.set_in(&mut ctx, &mut attrs);

@@ -191,17 +191,17 @@ impl Pass for LowerEvidenceToWasm {
 
 fn wasm_effect_abi_target() -> ConversionTarget {
     ConversionTarget::new()
-        .legal_op("func", "func")
-        .recursive_legal_op("func", "func")
-        .illegal_op("effect", "extend")
-        .illegal_op("effect", "mask")
-        .illegal_op("effect", "dup")
-        .illegal_op("effect", "outer")
-        .illegal_op("effect", "tail")
-        .illegal_op("effect", "with_tail")
-        .illegal_op("effect", "push")
-        .illegal_op("effect", "dispatch_tail")
-        .illegal_op("effect", "dispatch_cps")
+        .legal_op("func.func")
+        .recursive_legal_op("func.func")
+        .illegal_op("effect.extend")
+        .illegal_op("effect.mask")
+        .illegal_op("effect.dup")
+        .illegal_op("effect.outer")
+        .illegal_op("effect.tail")
+        .illegal_op("effect.with_tail")
+        .illegal_op("effect.push")
+        .illegal_op("effect.dispatch_tail")
+        .illegal_op("effect.dispatch_cps")
 }
 
 /// The helpers the module's `effect.*` operations call.
@@ -1352,12 +1352,12 @@ fn evidence_ref_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a `core.i32` type.
 fn intern_i32(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core", "i32").intern(ctx)
+    TypeDataBuilder::new("core.i32").intern(ctx)
 }
 
 /// Intern a `wasm.anyref` type.
 fn intern_anyref(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("wasm", "anyref").intern(ctx)
+    TypeDataBuilder::new("wasm.anyref").intern(ctx)
 }
 
 fn empty_block(ctx: &mut IrContext, location: Location) -> BlockRef {

@@ -19,22 +19,6 @@ pub fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
     crate::emit::helpers::builtin_layout_type_idx(ctx, ty)
 }
 
-fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.dialect == "wasm"
-        && [
-            "anyref",
-            "eqref",
-            "i31ref",
-            "structref",
-            "arrayref",
-            "funcref",
-            "externref",
-        ]
-        .into_iter()
-        .any(|name| data.name == name)
-}
-
 /// Module attribute listing the GC types that received user indices, in
 /// index order from [`FIRST_USER_TYPE_IDX`]. Emission reads each structural
 /// struct's fields from its type.
@@ -53,7 +37,7 @@ struct TypeCollector {
 impl TypeCollector {
     /// Add `ty`, then every structural struct among its fields.
     fn push_type(&mut self, ctx: &IrContext, ty: TypeRef) {
-        if !self.considered.insert(ty) || is_abstract_heap_type(ctx, ty) {
+        if !self.considered.insert(ty) || wasm::is_abstract_heap_type(ctx, ty) {
             return;
         }
         self.types.push(ty);
@@ -270,8 +254,8 @@ impl RewritePattern for LowerTypedGcPattern {
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::RefNull::from_op(ctx, op) {
             let target = old.target_type(ctx);
-            let heap_type = ctx.get_type(target).name.clone();
-            let heap_type = heap_type.with_str(|name| ctx.intern_str(name));
+            let heap_type = ctx.get_type(target).name.strip_dialect(ctx).to_owned();
+            let heap_type = ctx.intern_str(&heap_type);
             let new = wasm::RefNull::operands()
                 .heap_type(heap_type)
                 .type_idx(self.index(target))
@@ -364,7 +348,7 @@ mod tests {
             ctx.block(block)
                 .ops
                 .iter()
-                .all(|&op| ctx.op(op).dialect != wasm_gc::DIALECT_NAME())
+                .all(|&op| ctx.op(op).name.dialect(&ctx) != wasm_gc::DIALECT_NAME)
         );
     }
 
@@ -558,7 +542,7 @@ mod tests {
         let ops = &ctx.block(block).ops;
         assert!(
             ops.iter()
-                .all(|&op| ctx.op(op).dialect != wasm_gc::DIALECT_NAME())
+                .all(|&op| ctx.op(op).name.dialect(&ctx) != wasm_gc::DIALECT_NAME)
         );
 
         let struct_new = ops

@@ -173,7 +173,7 @@ fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameType
         .collect();
     let evidence = ability::evidence_adt_type_ref(ctx);
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
-    let i32_type = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i32_type = TypeDataBuilder::new("core.i32").intern(ctx);
     let mut resolved = HashMap::default();
     let mut layouts = Vec::with_capacity(answers.len());
     for source_answer in answers {
@@ -370,8 +370,8 @@ mod tests {
         (ctx, module)
     }
 
-    fn frame_of_answer(ctx: &mut IrContext, answer: &str) -> TypeRef {
-        let answer = TypeDataBuilder::new("core", answer).intern(ctx);
+    fn frame_of_answer(ctx: &mut IrContext, answer: &'static str) -> TypeRef {
+        let answer = TypeDataBuilder::new(answer).intern(ctx);
         ability::frame(ctx, answer).as_type_ref()
     }
 
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn a_frame_in_a_type_alias_gets_a_layout() {
         let (mut ctx, module) = parse(MODULE);
-        let frame = frame_of_answer(&mut ctx, "i32");
+        let frame = frame_of_answer(&mut ctx, "core.i32");
         ctx.register_type_alias("orphan".into(), frame);
         lower_continuation_frames(&mut ctx, module).unwrap();
         let orphan = ctx.type_alias_by_text("orphan").unwrap();
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn a_frame_in_a_block_argument_attribute_gets_a_layout() {
         let (mut ctx, module) = parse(MODULE);
-        let frame = frame_of_answer(&mut ctx, "i32");
+        let frame = frame_of_answer(&mut ctx, "core.i32");
         let function = module.ops(&ctx)[0];
         let body = ctx.op_region(function, 0).expect("function body");
         let block = ctx.region(body).blocks[0];
@@ -423,11 +423,11 @@ mod tests {
     fn layouts_are_numbered_in_module_walk_order() {
         // A `TypeRef` is an interner index, which changes with the types
         // interned before the pass and must not decide the numbering.
-        let answers = |unrelated_types: usize, first: &str, second: &str| {
+        let answers = |unrelated_types: usize, first: &'static str, second: &'static str| {
             let mut ctx = IrContext::new();
             for index in 0..unrelated_types {
                 let name = ctx.string_attr(&format!("unrelated{index}"));
-                TypeDataBuilder::new("test", "unrelated")
+                TypeDataBuilder::new("test.unrelated")
                     .attr("name", name)
                     .intern(&mut ctx);
             }
@@ -436,7 +436,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     "core.module @m {{
-  func.func @f(%a: ability.frame<core.{first}>, %b: ability.frame<core.{second}>) -> core.never {{
+  func.func @f(%a: ability.frame<{first}>, %b: ability.frame<{second}>) -> core.never {{
     func.unreachable
   }}
 }}"
@@ -449,12 +449,14 @@ mod tests {
                     .type_alias_by_text(&name)
                     .expect("the layout is registered");
                 let answer = continuation_frame::result_type(&ctx, layout).unwrap();
-                ctx.get_type(answer).name.to_string()
+                ctx.get_type(answer).name
             })
         };
-        assert_eq!(answers(0, "i32", "i64"), ["i32", "i64"]);
-        assert_eq!(answers(17, "i32", "i64"), ["i32", "i64"]);
-        assert_eq!(answers(0, "i64", "i32"), ["i64", "i32"]);
+        use trunk_ir::dialect::core::{I32, I64};
+        let (i32, i64) = (I32::NAME, I64::NAME);
+        assert_eq!(answers(0, "core.i32", "core.i64"), [i32, i64]);
+        assert_eq!(answers(17, "core.i32", "core.i64"), [i32, i64]);
+        assert_eq!(answers(0, "core.i64", "core.i32"), [i64, i32]);
     }
 
     const TYPES: &str = r#"  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>

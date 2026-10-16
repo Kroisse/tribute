@@ -136,7 +136,7 @@ fn check_value_types(
     if values.len() != expected.len() {
         errors.push(format!(
             "clif.{} {role} count mismatch: expected {}, found {}",
-            ctx.op(op).name,
+            ctx.op(op).name.display(ctx),
             expected.len(),
             values.len()
         ));
@@ -146,7 +146,7 @@ fn check_value_types(
         if ty != ctx.value_ty(value) {
             errors.push(format!(
                 "clif.{} {role} #{index} type mismatch: expected {}, found {}",
-                ctx.op(op).name,
+                ctx.op(op).name.display(ctx),
                 print_type(ctx, ty),
                 print_type(ctx, ctx.value_ty(value))
             ));
@@ -165,7 +165,7 @@ fn check_result_types(
     if !type_lists_match(expected, actual) {
         errors.push(format!(
             "clif.{} {role} mismatch: expected {:?}, found {:?}",
-            ctx.op(op).name,
+            ctx.op(op).name.display(ctx),
             expected,
             actual
         ));
@@ -281,9 +281,9 @@ fn validate_clif_region(
                 if !violations.is_empty() {
                     let data = ctx.op(op);
                     errors.extend(
-                        violations.iter().map(|violation| {
-                            format!("{}.{}: {violation}", data.dialect, data.name)
-                        }),
+                        violations
+                            .iter()
+                            .map(|violation| format!("{}: {violation}", data.name.display(ctx))),
                     );
                     let nested_owner = if clif::Func::matches(ctx, op) {
                         None
@@ -427,7 +427,7 @@ fn check_tail_call_conv(
     if caller.call_conv(ctx) != tail || callee.call_conv(ctx) != tail {
         errors.push(format!(
             "clif.{} requires caller and callee signatures with call_conv = \"tail\"",
-            ctx.op(op).name
+            ctx.op(op).name.display(ctx)
         ));
     }
 }
@@ -436,7 +436,7 @@ fn check_tail_call_conv(
 pub fn native_backend_ready_target() -> ConversionTarget {
     let mut target = ConversionTarget::new();
     target.add_legal_dialect("clif");
-    target.add_legal_op("core", "module");
+    target.add_legal_op("core.module");
     target
 }
 
@@ -448,7 +448,7 @@ mod tests {
     use trunk_ir::location::Span;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::smallvec::smallvec;
-    use trunk_ir::symbol::Symbol;
+
     use trunk_ir::types::{Attribute, Location};
 
     fn test_ctx() -> (IrContext, Location) {
@@ -458,9 +458,8 @@ mod tests {
         (ctx, loc)
     }
 
-    fn make_module(ctx: &mut IrContext, loc: Location, dialect: &str, name: &str) -> Module {
-        let op_data =
-            OperationDataBuilder::new(loc, Symbol::new(dialect), Symbol::new(name)).build(ctx);
+    fn make_module(ctx: &mut IrContext, loc: Location, name: &'static str) -> Module {
+        let op_data = OperationDataBuilder::new(loc, name).build(ctx);
         let op = ctx.create_op(op_data);
 
         let block = ctx.create_block(BlockData {
@@ -475,11 +474,10 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(region)
+            .build(ctx);
         let module_op = ctx.create_op(module_data);
         Module::new(ctx, module_op).expect("test module should be valid")
     }
@@ -612,7 +610,7 @@ mod tests {
     #[test]
     fn native_backend_ready_rejects_unknown_ops() {
         let (mut ctx, loc) = test_ctx();
-        let module = make_module(&mut ctx, loc, "arith", "add");
+        let module = make_module(&mut ctx, loc, "arith.add");
 
         let err = validate_clif_ir(&ctx, module).unwrap_err().to_string();
         assert!(err.contains("native-backend-ready"));

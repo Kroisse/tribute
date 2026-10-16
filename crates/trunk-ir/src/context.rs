@@ -16,7 +16,9 @@ use super::types::*;
 use crate::diagnostic::{Diagnostic, DiagnosticSeverity};
 use crate::ir_mapping::IrMapping;
 use crate::location::Span;
+use crate::op_def::{OpName, OpNameArg};
 use crate::symbol::Symbol;
+use crate::type_def::TypeName;
 
 // ============================================================================
 // Use-chain
@@ -106,8 +108,7 @@ impl SuccessorList {
 #[derive(Clone)]
 pub struct OperationData {
     pub location: Location,
-    pub dialect: Symbol,
-    pub name: Symbol,
+    pub name: OpName,
     pub operands: EntityList<ValueRef>,
     pub results: EntityList<TypeRef>,
     pub attributes: AttributeMap,
@@ -360,9 +361,8 @@ impl IrContext {
     pub fn intern_type(&mut self, data: TypeData) -> TypeRef {
         debug_assert!(
             data.validate_param_attrs(self).is_ok(),
-            "{}.{}: {}",
-            data.dialect,
-            data.name,
+            "{}: {}",
+            data.name.display(self),
             data.validate_param_attrs(self).unwrap_err()
         );
         match self.types.entry(&data) {
@@ -406,6 +406,34 @@ impl IrContext {
     /// names, but are stored as string attributes.
     pub fn intern_symbol_text(&mut self, symbol: &Symbol) -> StringRef {
         symbol.with_str(|text| self.intern_str(text))
+    }
+
+    /// The handle of the operation name written `dialect.name`: its
+    /// registered definition, or strings in this context.
+    ///
+    /// # Panics
+    ///
+    /// If `text` has no `.` separating a non-empty dialect and name.
+    pub fn intern_op_name(&mut self, text: &str) -> OpName {
+        OpName::intern(&mut self.strings, text)
+    }
+
+    /// The handle of the type name written `dialect.name`; see
+    /// [`intern_op_name`](Self::intern_op_name).
+    pub fn intern_type_name(&mut self, text: &str) -> TypeName {
+        TypeName::intern(&mut self.strings, text)
+    }
+
+    /// The handle of the operation name written `dialect.name`, or `None`
+    /// if it is neither registered nor used in this context.
+    pub fn lookup_op_name(&self, text: &str) -> Option<OpName> {
+        OpName::lookup(&self.strings, text)
+    }
+
+    /// The handle of the type name written `dialect.name`, or `None` if it
+    /// is neither registered nor used in this context.
+    pub fn lookup_type_name(&self, text: &str) -> Option<TypeName> {
+        TypeName::lookup(&self.strings, text)
     }
 
     /// The attributes of `op`, read through this context.
@@ -1171,8 +1199,7 @@ impl IrContext {
         // Copy all data from src_op into locals to avoid borrow conflicts.
         let data = &self.ops[src_op];
         let loc = data.location;
-        let dialect = data.dialect.clone();
-        let name = data.name.clone();
+        let name = data.name;
         let attrs = data.attributes.clone();
         let operands: SmallVec<[ValueRef; 8]> = data.operands.as_slice(&self.value_pool).into();
         let result_types: SmallVec<[TypeRef; 4]> = data.results.as_slice(&self.type_pool).into();
@@ -1180,7 +1207,7 @@ impl IrContext {
         let successors: BlockList = self.op_successors(src_op).collect();
 
         // Build new operation with remapped operands and successors.
-        let mut builder = OperationDataBuilder::new(loc, dialect, name);
+        let mut builder = OperationDataBuilder::new(loc, name);
         for &v in &operands {
             builder = builder.operand(mapping.lookup_value_or_default(v));
         }
@@ -1359,10 +1386,9 @@ pub type Successors<'a> = std::iter::Copied<std::slice::Iter<'a, BlockRef>>;
 impl OperationData {
     /// Create a new OperationData with the given basic fields.
     /// Operands and results must be added via the pool-backed EntityList.
-    pub fn new(location: Location, dialect: Symbol, name: Symbol) -> Self {
+    pub fn new(location: Location, name: OpName) -> Self {
         Self {
             location,
-            dialect,
             name,
             operands: EntityList::new(),
             results: EntityList::new(),
@@ -1380,8 +1406,7 @@ impl OperationData {
 /// into `EntityList`s on `build()`.
 pub struct OperationDataBuilder {
     location: Location,
-    dialect: Symbol,
-    name: Symbol,
+    name: OpNameArg,
     operands: Vec<ValueRef>,
     results: Vec<TypeRef>,
     /// Keys are interned when the operation data is built.
@@ -1391,11 +1416,12 @@ pub struct OperationDataBuilder {
 }
 
 impl OperationDataBuilder {
-    pub fn new(location: Location, dialect: Symbol, name: Symbol) -> Self {
+    /// Start an operation named by its definition, handle, or
+    /// `dialect.name` text; text is interned when the data is built.
+    pub fn new(location: Location, name: impl Into<OpNameArg>) -> Self {
         Self {
             location,
-            dialect,
-            name,
+            name: name.into(),
             operands: Vec::new(),
             results: Vec::new(),
             attributes: Vec::new(),
@@ -1474,8 +1500,7 @@ impl OperationDataBuilder {
         let attributes = AttributeMap::from_entries(ctx, self.attributes);
         OperationData {
             location: self.location,
-            dialect: self.dialect,
-            name: self.name,
+            name: self.name.resolve(&mut ctx.strings),
             operands,
             results,
             attributes,
@@ -1493,7 +1518,7 @@ mod prop_tests;
 mod tests {
     use super::*;
     use crate::location::Span;
-    use crate::symbol::Symbol;
+
     use smallvec::{smallvec, smallvec_inline};
 
     fn test_location(ctx: &mut IrContext) -> Location {
@@ -1502,7 +1527,7 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn empty_region(ctx: &mut IrContext, loc: Location) -> RegionRef {
@@ -1535,7 +1560,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let [a, b, c] = [(); 3].map(|()| empty_region(&mut ctx, loc));
-        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+        let data = OperationDataBuilder::new(loc, "test.op")
             .region(a)
             .region(b)
             .build(&mut ctx);
@@ -1561,11 +1586,8 @@ mod tests {
         assert_eq!(ctx.region(b).parent_op, None);
 
         // A detached region can be attached elsewhere.
-        let other = ctx.create_op(OperationData::new(
-            loc,
-            Symbol::new("test"),
-            Symbol::new("op"),
-        ));
+        let name = ctx.intern_op_name("test.op");
+        let other = ctx.create_op(OperationData::new(loc, name));
         ctx.push_op_region(other, a);
         ctx.push_op_region(other, b);
         assert_eq!(region_ids(&ctx, other), smallvec_inline![a, b]);
@@ -1581,7 +1603,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let regions = [(); 3].map(|()| empty_region(&mut ctx, loc));
-        let mut builder = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"));
+        let mut builder = OperationDataBuilder::new(loc, "test.op");
         for region in regions {
             builder = builder.region(region);
         }
@@ -1605,7 +1627,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let region = empty_region(&mut ctx, loc);
-        OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+        OperationDataBuilder::new(loc, "test.op")
             .region(region)
             .region(region)
             .build(&mut ctx);
@@ -1617,11 +1639,11 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let region = empty_region(&mut ctx, loc);
-        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+        let data = OperationDataBuilder::new(loc, "test.op")
             .region(region)
             .build(&mut ctx);
         ctx.create_op(data);
-        OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+        OperationDataBuilder::new(loc, "test.op")
             .region(region)
             .build(&mut ctx);
     }
@@ -1632,8 +1654,7 @@ mod tests {
         let loc = test_location(&mut ctx);
         let blocks = [(); 4].map(|()| empty_block(&mut ctx, loc));
         for len in 0..=blocks.len() {
-            let mut builder =
-                OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("br"));
+            let mut builder = OperationDataBuilder::new(loc, "test.br");
             for &block in &blocks[..len] {
                 builder = builder.successor(block);
             }
@@ -1649,7 +1670,7 @@ mod tests {
             );
         }
 
-        let mut builder = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("br"));
+        let mut builder = OperationDataBuilder::new(loc, "test.br");
         for block in blocks {
             builder = builder.successor(block);
         }
@@ -1677,15 +1698,17 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
 
-        let data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+        let data = OperationDataBuilder::new(loc, "arith.const")
             .result(i32_ty)
             .attr("value", Attribute::Int(42))
             .build(&mut ctx);
 
         let op = ctx.create_op(data);
 
-        assert_eq!(ctx.op(op).dialect, Symbol::new("arith"));
-        assert_eq!(ctx.op(op).name, Symbol::new("const"));
+        assert_eq!(
+            ctx.op(op).name,
+            <crate::dialect::arith::Const as crate::ops::DialectOp>::NAME
+        );
         assert_eq!(ctx.op_result_types(op), &[i32_ty]);
         assert_eq!(ctx.op_attrs(op).get("value"), Some(&Attribute::Int(42)));
     }
@@ -1696,7 +1719,7 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
 
-        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("multi"))
+        let data = OperationDataBuilder::new(loc, "test.multi")
             .result(i32_ty)
             .result(i32_ty)
             .build(&mut ctx);
@@ -1765,7 +1788,7 @@ mod tests {
         });
 
         // Create an op
-        let data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+        let data = OperationDataBuilder::new(loc, "arith.const")
             .result(i32_ty)
             .build(&mut ctx);
         let op = ctx.create_op(data);
@@ -1801,19 +1824,19 @@ mod tests {
         });
 
         let mk_op = |ctx: &mut IrContext, name: &'static str| {
-            let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new(name))
+            let data = OperationDataBuilder::new(loc, name)
                 .result(i32_ty)
                 .build(ctx);
             ctx.create_op(data)
         };
 
-        let op_a = mk_op(&mut ctx, "a");
-        let op_c = mk_op(&mut ctx, "c");
+        let op_a = mk_op(&mut ctx, "test.a");
+        let op_c = mk_op(&mut ctx, "test.c");
         ctx.push_op(block, op_a);
         ctx.push_op(block, op_c);
 
         // Insert op_b before op_c
-        let op_b = mk_op(&mut ctx, "b");
+        let op_b = mk_op(&mut ctx, "test.b");
         ctx.insert_op_before(block, op_c, op_b);
 
         assert_eq!(ctx.block(block).ops.as_slice(), &[op_a, op_b, op_c]);
@@ -1833,7 +1856,7 @@ mod tests {
             parent_region: None,
         });
 
-        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("x"))
+        let data = OperationDataBuilder::new(loc, "test.x")
             .result(i32_ty)
             .build(&mut ctx);
         let op = ctx.create_op(data);
@@ -1850,7 +1873,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
-        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
+        let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
 
         // Create a block with 2 args of type i32
         let block = ctx.create_block(BlockData {
@@ -1934,9 +1957,9 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
-        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
+        let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
 
-        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+        let data = OperationDataBuilder::new(loc, "test.op")
             .result(i32_ty)
             .result(i32_ty)
             .build(&mut ctx);
@@ -1961,7 +1984,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
-        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
+        let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
 
         let block = ctx.create_block(BlockData {
             location: loc,
@@ -2025,14 +2048,14 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
 
         // Create op1 with a result
-        let data1 = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("a"))
+        let data1 = OperationDataBuilder::new(loc, "test.a")
             .result(i32_ty)
             .build(&mut ctx);
         let op1 = ctx.create_op(data1);
         let v1 = ctx.op_result(op1, 0);
 
         // Create op2 that uses op1's result
-        let data2 = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("b"))
+        let data2 = OperationDataBuilder::new(loc, "test.b")
             .operand(v1)
             .result(i32_ty)
             .build(&mut ctx);
@@ -2065,7 +2088,7 @@ mod tests {
         assert_eq!(ctx.region(region).parent_op, None);
 
         // Create an op that owns the region
-        let data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+        let data = OperationDataBuilder::new(loc, "func.func")
             .result(i32_ty)
             .region(region)
             .build(&mut ctx);
@@ -2090,7 +2113,8 @@ mod tests {
         });
 
         // Manually construct OperationData with parent_block set
-        let mut data = OperationData::new(loc, Symbol::new("test"), Symbol::new("x"));
+        let name = ctx.intern_op_name("test.x");
+        let mut data = OperationData::new(loc, name);
         data.results.push(i32_ty, &mut ctx.type_pool);
         data.parent_block = Some(block);
 
@@ -2118,14 +2142,14 @@ mod tests {
         });
 
         // First op takes ownership of the region
-        let data1 = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+        let data1 = OperationDataBuilder::new(loc, "func.func")
             .result(i32_ty)
             .region(region)
             .build(&mut ctx);
         let _op1 = ctx.create_op(data1);
 
         // Second op tries to take the same region — should panic
-        let data2 = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+        let data2 = OperationDataBuilder::new(loc, "func.func")
             .result(i32_ty)
             .region(region)
             .build(&mut ctx);
@@ -2207,7 +2231,7 @@ mod tests {
         let one = clone.op_results(first)[0];
         let two = clone.op_results(second)[0];
         clone.replace_all_uses(one, two);
-        TypeDataBuilder::new("core", "i64").intern(&mut clone);
+        TypeDataBuilder::new("core.i64").intern(&mut clone);
 
         assert_eq!(print_module(&ctx, module.op()), original_text);
         assert_eq!(ctx.uses(one).len(), 1);
@@ -2234,7 +2258,7 @@ mod tests {
             .ops
             .iter()
             .copied()
-            .find(|&op| ctx.op(op).dialect == "func" && ctx.op(op).name == "func")
+            .find(|&op| ctx.op(op).name.is(&ctx, "func.func"))
             .expect("no func.func found");
 
         // Clone the body region
@@ -2244,15 +2268,11 @@ mod tests {
 
         // Build a new func.func with the cloned region
         let func_ty = ctx.op_attrs(func_op).get("type").cloned().unwrap();
-        let new_func = OperationDataBuilder::new(
-            ctx.op(func_op).location,
-            Symbol::new("func"),
-            Symbol::new("func"),
-        )
-        .attr("sym_name", Attribute::String(ctx.intern_str(new_name)))
-        .attr("type", func_ty)
-        .region(cloned_region)
-        .build(&mut ctx);
+        let new_func = OperationDataBuilder::new(ctx.op(func_op).location, "func.func")
+            .attr("sym_name", Attribute::String(ctx.intern_str(new_name)))
+            .attr("type", func_ty)
+            .region(cloned_region)
+            .build(&mut ctx);
         let new_func_op = ctx.create_op(new_func);
 
         // Add to module
@@ -2325,13 +2345,13 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
 
-        let ext_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+        let ext_data = OperationDataBuilder::new(loc, "arith.const")
             .result(i32_ty)
             .build(&mut ctx);
         let ext_op = ctx.create_op(ext_data);
         let ext_val = ctx.op_result(ext_op, 0);
 
-        let op_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("neg"))
+        let op_data = OperationDataBuilder::new(loc, "arith.neg")
             .operand(ext_val)
             .result(i32_ty)
             .build(&mut ctx);
@@ -2353,7 +2373,7 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
 
-        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("multi"))
+        let data = OperationDataBuilder::new(loc, "test.multi")
             .result(i32_ty)
             .result(i32_ty)
             .build(&mut ctx);

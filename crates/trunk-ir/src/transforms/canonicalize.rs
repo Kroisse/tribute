@@ -37,6 +37,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
+use crate::OpName;
 use crate::context::IrContext;
 use crate::dialect::{arith, func};
 use crate::pass::{Pass, pass_fn};
@@ -44,7 +45,6 @@ use crate::refs::{OpRef, ValueRef};
 use crate::rewrite::{
     PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
 };
-use crate::symbol::Symbol;
 use crate::types::Attribute;
 
 // =========================================================================
@@ -99,29 +99,27 @@ pub type FoldFn = fn(&IrContext, OpRef) -> Option<FoldResult>;
 ///
 /// Replaces N individual self-filtering patterns (one per op kind) with
 /// a single O(1) dispatcher: instead of every pattern testing
-/// `op.dialect == "arith" && op.name == "addi"`, the dispatcher does one
-/// `HashMap::get((dialect, name))` and calls the fold directly.
+/// whether it is `arith.addi`, the dispatcher does one `HashMap::get(name)`
+/// and calls the fold directly.
 ///
 /// The hashmap is built once at pass-construction time. Duplicate
-/// registrations for the same (dialect, op_name) panic via `assert!`
+/// registrations for the same operation panic via `assert!`
 /// in all build profiles — silently overwriting one fold with another
 /// is always a bug.
 pub struct FoldDispatchPattern {
-    table: HashMap<(Symbol, Symbol), FoldFn>,
+    table: HashMap<OpName, FoldFn>,
 }
 
 impl FoldDispatchPattern {
-    /// Build a dispatcher from an iterator of `(dialect, op_name, fold)`
-    /// triples. Panics on duplicate keys (in release builds too — see
-    /// type-level docs).
-    pub fn from_folds(folds: impl IntoIterator<Item = (Symbol, Symbol, FoldFn)>) -> Self {
+    /// Build a dispatcher from an iterator of `(operation, fold)` pairs.
+    /// Panics on duplicate keys (in release builds too — see type-level
+    /// docs).
+    pub fn from_folds(folds: impl IntoIterator<Item = (OpName, FoldFn)>) -> Self {
         let mut table = HashMap::default();
-        for (dialect, op_name, fold) in folds {
+        for (name, fold) in folds {
             assert!(
-                table
-                    .insert((dialect.clone(), op_name.clone()), fold)
-                    .is_none(),
-                "duplicate canonicalize fold for {dialect}.{op_name}",
+                table.insert(name, fold).is_none(),
+                "duplicate canonicalize fold for {name:?}",
             );
         }
         Self { table }
@@ -137,8 +135,8 @@ impl FoldDispatchPattern {
     /// test compose one specific fold with other patterns in the same
     /// applicator without pulling in every registered fold.
     #[cfg(test)]
-    pub(crate) fn single(dialect: &'static str, op_name: &'static str, fold: FoldFn) -> Self {
-        Self::from_folds([(Symbol::new(dialect), Symbol::new(op_name), fold)])
+    pub(crate) fn single(name: OpName, fold: FoldFn) -> Self {
+        Self::from_folds([(name, fold)])
     }
 }
 
@@ -149,11 +147,7 @@ impl RewritePattern for FoldDispatchPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let key = {
-            let data = ctx.op(op);
-            (data.dialect.clone(), data.name.clone())
-        };
-        let Some(fold) = self.table.get(&key).copied() else {
+        let Some(fold) = self.table.get(&ctx.op(op).name).copied() else {
             return false;
         };
         let Some(result) = fold(ctx, op) else {
@@ -242,8 +236,7 @@ fn apply_splice(
 /// via the [`canonicalize_fold`](crate::canonicalize_fold) attribute —
 /// never constructed directly from user code.
 pub struct CanonicalizeFold {
-    dialect: &'static str,
-    op_name: &'static str,
+    name: OpName,
     fold: FoldFn,
 }
 inventory::collect!(CanonicalizeFold);
@@ -252,19 +245,18 @@ impl CanonicalizeFold {
     /// Fold registration for the operation wrapped by `T`.
     pub const fn new<T: crate::ops::DialectOp>(fold: FoldFn) -> Self {
         Self {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
+            name: T::NAME,
             fold,
         }
     }
 }
 
-/// Iterate every fold registered via inventory, keyed by interned
-/// `(dialect, op_name)` symbols ready for [`FoldDispatchPattern::from_folds`].
-fn folds_from_inventory() -> impl Iterator<Item = (Symbol, Symbol, FoldFn)> {
+/// Iterate every fold registered via inventory, keyed by operation name
+/// for [`FoldDispatchPattern::from_folds`].
+fn folds_from_inventory() -> impl Iterator<Item = (OpName, FoldFn)> {
     inventory::iter::<CanonicalizeFold>
         .into_iter()
-        .map(|reg| (Symbol::new(reg.dialect), Symbol::new(reg.op_name), reg.fold))
+        .map(|reg| (reg.name, reg.fold))
 }
 
 /// Iterate inventory folds whose dialect matches `dialect`. Used by
@@ -273,13 +265,15 @@ fn folds_from_inventory() -> impl Iterator<Item = (Symbol, Symbol, FoldFn)> {
 /// interference is unlikely, but filtering keeps tests honest as more
 /// dialects add folds).
 #[cfg(test)]
-pub(crate) fn folds_for_dialect(
-    dialect: &'static str,
-) -> impl Iterator<Item = (Symbol, Symbol, FoldFn)> {
+pub(crate) fn folds_for_dialect(dialect: &'static str) -> impl Iterator<Item = (OpName, FoldFn)> {
     inventory::iter::<CanonicalizeFold>
         .into_iter()
-        .filter(move |reg| reg.dialect == dialect)
-        .map(|reg| (Symbol::new(reg.dialect), Symbol::new(reg.op_name), reg.fold))
+        .filter(move |reg| {
+            reg.name
+                .def()
+                .is_some_and(|def| def.name.dialect() == dialect)
+        })
+        .map(|reg| (reg.name, reg.fold))
 }
 
 // Registration is done via the `#[trunk_ir::canonicalize_fold(...)]`
@@ -356,13 +350,11 @@ mod tests {
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
-    fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::new(dialect);
-        let name_sym = Symbol::new(name);
+    fn count_ops(ctx: &IrContext, module: Module, name: crate::OpName) -> usize {
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == dialect_sym && data.name == name_sym {
+            if data.name == name {
                 count += 1;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -370,13 +362,11 @@ mod tests {
         count
     }
 
-    fn count_ops_under(ctx: &IrContext, root: OpRef, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::new(dialect);
-        let name_sym = Symbol::new(name);
+    fn count_ops_under(ctx: &IrContext, root: OpRef, name: crate::OpName) -> usize {
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, root, &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == dialect_sym && data.name == name_sym {
+            if data.name == name {
                 count += 1;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -406,7 +396,10 @@ mod tests {
 
         let result = canonicalize(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
     }
 
     #[test]
@@ -427,7 +420,10 @@ mod tests {
         let result = canonicalize(&mut ctx, module);
         assert!(result.reached_fixpoint);
         assert!(result.total_changes >= 2);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
     }
 
     #[test]
@@ -456,9 +452,18 @@ mod tests {
         let result = canonicalize(&mut ctx, funcs[0]);
 
         assert!(result.reached_fixpoint);
-        assert_eq!(count_ops_under(&ctx, funcs[0].op_ref(), "arith", "addi"), 0);
-        assert_eq!(count_ops_under(&ctx, funcs[1].op_ref(), "arith", "addi"), 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+        assert_eq!(
+            count_ops_under(&ctx, funcs[0].op_ref(), crate::dialect::arith::Addi::NAME),
+            0
+        );
+        assert_eq!(
+            count_ops_under(&ctx, funcs[1].op_ref(), crate::dialect::arith::Addi::NAME),
+            1
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            1
+        );
     }
 
     #[test]
@@ -482,9 +487,15 @@ mod tests {
 
         let result = canonicalize(&mut ctx, module);
         assert!(result.reached_fixpoint);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
         // muli %s, %x stays — only one operand is const.
-        assert_eq!(count_ops(&ctx, module, "arith", "muli"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
+            1
+        );
     }
 
     #[test]
@@ -516,12 +527,18 @@ mod tests {
         let result = canonicalize(&mut ctx, module);
         assert!(result.reached_fixpoint);
         // scf.if is gone; the then-region's body was spliced out.
-        assert_eq!(count_ops(&ctx, module, "scf", "if"), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::scf::If::NAME), 0);
         // arith.addi was folded away (`x + 0` → `x`).
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
         // The else region's `arith.muli` was orphaned with the erased
         // `scf.if`; it should not appear in the walked module.
-        assert_eq!(count_ops(&ctx, module, "arith", "muli"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
+            0
+        );
     }
 
     #[test]

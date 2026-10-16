@@ -78,11 +78,11 @@ impl TargetKind {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::Display)]
 pub enum ViolationKind {
     /// An operation of a dialect that the boundary must consume.
-    #[display("forbidden op {dialect}.{name}")]
-    ForbiddenOp { dialect: String, name: String },
+    #[display("forbidden op {name}")]
+    ForbiddenOp { name: String },
     /// A `closure.closure` type.
-    #[display("forbidden type {dialect}.{name}")]
-    ForbiddenType { dialect: String, name: String },
+    #[display("forbidden type {name}")]
+    ForbiddenType { name: String },
     /// Semantic control metadata listed by the exit contract.
     #[display("forbidden attribute {_0}")]
     ForbiddenAttribute(String),
@@ -255,13 +255,11 @@ impl<'a> Verifier<'a> {
     fn check_op(&mut self, op: OpRef, functions: &SymbolTable) {
         let ctx = self.ctx;
         let data = ctx.op(op);
-        let op_name = format!("{}.{}", data.dialect, data.name);
-        let dialect = data.dialect.to_string();
-        if FORBIDDEN_DIALECTS.contains(&dialect.as_str()) {
+        let op_name = data.name.display(ctx).to_string();
+        if FORBIDDEN_DIALECTS.contains(&data.name.dialect(ctx)) {
             self.report(
                 ViolationKind::ForbiddenOp {
-                    dialect,
-                    name: data.name.to_string(),
+                    name: op_name.clone(),
                 },
                 Some(op),
                 op_name.clone(),
@@ -386,11 +384,10 @@ impl<'a> Verifier<'a> {
         let ctx = self.ctx;
         let data = ctx.get_type(ty);
         let mut found = Vec::new();
-        if data.dialect == "closure" && data.name == "closure" {
+        if tribute_ir::dialect::closure::Closure::matches(ctx, ty) {
             found.push((
                 ViolationKind::ForbiddenType {
-                    dialect: data.dialect.to_string(),
-                    name: data.name.to_string(),
+                    name: data.name.display(ctx).to_string(),
                 },
                 String::new(),
             ));
@@ -543,8 +540,7 @@ mod tests {
 }"#,
         );
         assert!(violations.contains(&ViolationKind::ForbiddenType {
-            dialect: "closure".to_owned(),
-            name: "closure".to_owned(),
+            name: "closure.closure".to_owned(),
         }));
 
         let violations = kinds(
@@ -557,8 +553,7 @@ mod tests {
 }"#,
         );
         assert!(violations.contains(&ViolationKind::ForbiddenOp {
-            dialect: "closure".to_owned(),
-            name: "new".to_owned(),
+            name: "closure.new".to_owned(),
         }));
     }
 

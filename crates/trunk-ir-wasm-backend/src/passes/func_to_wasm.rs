@@ -19,6 +19,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
+use trunk_ir::SymbolPath;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -31,7 +32,6 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{BlockData, RegionData};
-use trunk_ir::{Symbol, SymbolPath};
 
 use trunk_ir::smallvec::smallvec;
 
@@ -429,7 +429,7 @@ impl RewritePattern for FuncFuncPattern {
                 .build(ctx, loc)
                 .op_ref(),
             None => {
-                let data = OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
+                let data = OperationDataBuilder::new(loc, "wasm.func")
                     .attr("sym_name", Attribute::String(sym_name))
                     .attr("type", Attribute::Type(func_type))
                     .build(ctx);
@@ -720,7 +720,7 @@ impl RewritePattern for FuncConstantPattern {
 
 /// Intern a core.i32 type.
 fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core", "i32").intern(ctx)
+    TypeDataBuilder::new("core.i32").intern(ctx)
 }
 
 /// Intern a wasm.funcref type.
@@ -1043,14 +1043,14 @@ mod tests {
 }"#,
         );
 
-        let anyref_ty = TypeDataBuilder::new("wasm", "anyref").intern(&mut ctx);
-        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
+        let anyref_ty = TypeDataBuilder::new("wasm.anyref").intern(&mut ctx);
+        let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types().is_dialect(ty, "tribute_rt", "anyref")).then_some(anyref_ty)
+            (ctx.get_type(ty).name.is(ctx, "tribute_rt.anyref")).then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types().is_dialect(ty, "tribute_rt", "float")).then_some(f64_ty)
+            (ctx.get_type(ty).name.is(ctx, "tribute_rt.float")).then_some(f64_ty)
         });
         lower(&mut ctx, module, type_converter);
 
@@ -1096,14 +1096,14 @@ mod tests {
 }"#,
         );
 
-        let anyref_ty = TypeDataBuilder::new("wasm", "anyref").intern(&mut ctx);
-        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
+        let anyref_ty = TypeDataBuilder::new("wasm.anyref").intern(&mut ctx);
+        let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types().is_dialect(ty, "tribute_rt", "anyref")).then_some(anyref_ty)
+            (ctx.get_type(ty).name.is(ctx, "tribute_rt.anyref")).then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types().is_dialect(ty, "tribute_rt", "float")).then_some(f64_ty)
+            (ctx.get_type(ty).name.is(ctx, "tribute_rt.float")).then_some(f64_ty)
         });
         lower(&mut ctx, module, type_converter);
 
@@ -1198,11 +1198,12 @@ mod tests {
 }"#,
         );
 
-        let structref_ty = TypeDataBuilder::new("wasm", "structref").intern(&mut ctx);
+        let structref_ty = TypeDataBuilder::new("wasm.structref").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            ctx.types()
-                .is_dialect(ty, "test", "ref")
+            ctx.get_type(ty)
+                .name
+                .is(ctx, "test.ref")
                 .then_some(structref_ty)
         });
         lower(&mut ctx, module, type_converter);

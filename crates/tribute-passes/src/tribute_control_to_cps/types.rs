@@ -57,7 +57,7 @@ impl Converter<'_> {
             return converted;
         }
         let data = self.ctx.get_type(ty).clone();
-        if data.dialect == func::DIALECT_NAME() && data.name == func::FUNC_SIG() {
+        if func::FuncSig::matches(self.ctx, ty) {
             let function = func::FuncSig::from_type_ref(self.ctx, ty)
                 .expect("pre-CPS validation must reject malformed func.func_sig types");
             let source_inputs = function.inputs(self.ctx).to_vec();
@@ -80,10 +80,7 @@ impl Converter<'_> {
             self.converted_types.insert(ty, converted);
             return converted;
         }
-        if data.dialect == "tribute_control"
-            && data.name == "resume_token"
-            && data.params.len() == 2
-        {
+        if tribute_control::ResumeToken::matches(self.ctx, ty) && data.params.len() == 2 {
             let input = self.convert_type(data.params[0]);
             let answer = self.convert_type(data.params[1]);
             let converted = self.resumption_type(input, answer);
@@ -110,7 +107,7 @@ impl Converter<'_> {
             self.converted_types.insert(ty, ty);
             return ty;
         }
-        let mut builder = TypeDataBuilder::new(data.dialect, data.name).params(params);
+        let mut builder = TypeDataBuilder::new(data.name).params(params);
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }

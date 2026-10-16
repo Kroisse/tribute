@@ -61,7 +61,7 @@ pub(super) fn emit_operands(
                 let def_info = match ctx.value_def(v) {
                     ValueDef::OpResult(op, _) => {
                         let op_data = ctx.op(op);
-                        format!("{}.{}", op_data.dialect, op_data.name)
+                        format!("{}", op_data.name.display(ctx))
                     }
                     ValueDef::BlockArg(bid, _) => format!("block_arg({:?})", bid),
                 };
@@ -69,8 +69,8 @@ pub(super) fn emit_operands(
             }
             let op_data = ctx.op(stale_op);
             panic!(
-                "emit_operands: stale SSA value: {}.{} (value references should have been resolved before emit)",
-                op_data.dialect, op_data.name,
+                "emit_operands: stale SSA value: {} (value references should have been resolved before emit)",
+                op_data.name.display(ctx),
             );
         }
     }
@@ -101,8 +101,5 @@ pub(super) fn emit_value(
         unreachable!("ValueDef only has BlockArg and OpResult variants");
     };
     let op_data = ctx.op(stale_op);
-    panic!(
-        "emit_value: stale SSA value: {}.{}",
-        op_data.dialect, op_data.name,
-    )
+    panic!("emit_value: stale SSA value: {}", op_data.name.display(ctx),)
 }

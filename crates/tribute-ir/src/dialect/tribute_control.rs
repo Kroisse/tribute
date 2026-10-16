@@ -492,9 +492,16 @@ pub enum FuncSigTypeError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(TypeRef);
 
+static FUNC_SIG_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
+    name: trunk_ir::name::QualifiedName::new("tribute_control.func_sig"),
+};
+
+inventory::submit! {
+    trunk_ir::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
+}
+
 impl DialectType for FuncSig {
-    const DIALECT_NAME: &'static str = "tribute_control";
-    const TYPE_NAME: &'static str = "func_sig";
+    const DEF: &'static trunk_ir::TypeDef = &FUNC_SIG_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
         Self::matches(ctx, ty)
@@ -730,7 +737,7 @@ fn build_func_sig(
 ) -> FuncSig {
     let inputs: Vec<_> = inputs.into_iter().collect();
     let count = u32::try_from(inputs.len()).expect("source func_sig input count exceeds u32");
-    let mut builder = TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+    let mut builder = TypeDataBuilder::new("tribute_control.func_sig")
         .params(inputs)
         .param(result);
     for (key, value) in attrs {
@@ -773,17 +780,13 @@ pub fn func_declaration(
     sym_name: &Symbol,
     func_sig_type: TypeRef,
 ) -> Func {
-    let data = trunk_ir::OperationDataBuilder::new(
-        location,
-        Symbol::new("tribute_control"),
-        Symbol::new("func"),
-    )
-    .attr(
-        "sym_name",
-        Attribute::String(ctx.intern_symbol_text(sym_name)),
-    )
-    .attr("type", Attribute::Type(func_sig_type))
-    .build(ctx);
+    let data = trunk_ir::OperationDataBuilder::new(location, "tribute_control.func")
+        .attr(
+            "sym_name",
+            Attribute::String(ctx.intern_symbol_text(sym_name)),
+        )
+        .attr("type", Attribute::Type(func_sig_type))
+        .build(ctx);
     let op = ctx.create_op(data);
     Func::from_op(ctx, op).expect("newly built tribute_control.func")
 }
@@ -1058,8 +1061,7 @@ fn func_sig_raw_type<'a>(
         attrs.push((ABILITY_ROW_ATTR.into(), row));
     }
     RawType::Function {
-        dialect: "tribute_control",
-        name: "func_sig",
+        name: "tribute_control.func_sig",
         inputs: params.iter().map(|(_, ty)| ty.clone().into()).collect(),
         results: vec![result.into()],
         attrs,
@@ -1130,8 +1132,7 @@ fn parse_func<'a>(
 
     Ok(RawOperation {
         results,
-        dialect: "tribute_control",
-        op_name: "func",
+        name: "tribute_control.func",
         sym_name,
         has_func_signature: false,
         func_params: vec![],
@@ -1269,8 +1270,7 @@ fn parse_lambda<'a>(
 
     Ok(RawOperation {
         results,
-        dialect: "tribute_control",
-        op_name: "lambda",
+        name: "tribute_control.lambda",
         sym_name,
         has_func_signature: false,
         func_params: vec![],
@@ -1504,11 +1504,6 @@ fn push_type_error(errors: &mut Vec<ValidationError>, message: impl Into<String>
     });
 }
 
-fn is_control_op(ctx: &IrContext, op: OpRef, name: &str) -> bool {
-    let data = ctx.op(op);
-    data.dialect == "tribute_control" && data.name == name
-}
-
 fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
     let block = ctx.op(op).parent_block?;
     let region = ctx.block(block).parent_region?;
@@ -1522,13 +1517,13 @@ fn parent_region(ctx: &IrContext, op: OpRef) -> Option<RegionRef> {
 
 fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "never"
+    data.name.is(ctx, "core.never")
 }
 
 fn is_unresolved_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    let unresolved_name = matches!(data.name.as_str(), "var" | "infer" | "unresolved");
-    (matches!(data.dialect.as_str(), "type" | "tribute")) && unresolved_name
+    let unresolved_name = matches!(data.name.strip_dialect(ctx), "var" | "infer" | "unresolved");
+    (matches!(data.name.dialect(ctx), "type" | "tribute")) && unresolved_name
 }
 
 fn contains_unresolved_type(ctx: &IrContext, ty: TypeRef, visiting: &mut HashSet<TypeRef>) -> bool {
@@ -1555,8 +1550,8 @@ fn contains_forbidden_logical_component(
         return true;
     }
     let data = ctx.get_type(ty);
-    let forbidden = (data.dialect == "func" && data.name == "func_sig")
-        || (data.dialect == "closure" && data.name == "closure")
+    let forbidden = (data.name.is(ctx, "func.func_sig"))
+        || (data.name.is(ctx, "closure.closure"))
         || ResumeToken::matches(ctx, ty)
         || is_unresolved_type(ctx, ty)
         || data
@@ -1570,10 +1565,10 @@ fn contains_forbidden_logical_component(
 
 fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     for (ty, data) in ctx.types().iter() {
-        if data.dialect != "tribute_control" {
+        if data.name.dialect(ctx) != "tribute_control" {
             continue;
         }
-        if data.name == "func_sig" {
+        if FuncSig::matches(ctx, ty) {
             if let Err(error) = FuncSig::validate(ctx, ty) {
                 push_type_error(
                     errors,
@@ -1591,7 +1586,7 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                     );
                 }
             }
-        } else if data.name == "resume_token" {
+        } else if ResumeToken::matches(ctx, ty) {
             if data.params.len() != 2 {
                 push_type_error(
                     errors,
@@ -1615,7 +1610,10 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
         } else {
             push_type_error(
                 errors,
-                format!("{ty}: unsupported tribute_control type '{}'", data.name),
+                format!(
+                    "{ty}: unsupported tribute_control type '{}'",
+                    data.name.strip_dialect(ctx)
+                ),
             );
         }
     }
@@ -1694,8 +1692,7 @@ fn terminator(
     ctx: &IrContext,
     owner: OpRef,
     block: BlockRef,
-    dialect: &str,
-    name: &str,
+    expected: &'static OpDef,
     errors: &mut Vec<ValidationError>,
 ) -> Option<OpRef> {
     let Some(&op) = ctx.block(block).ops.last() else {
@@ -1703,17 +1700,17 @@ fn terminator(
             ctx,
             owner,
             errors,
-            format!("region must terminate with {dialect}.{name}"),
+            format!("region must terminate with {}", expected.name.as_str()),
         );
         return None;
     };
     let data = ctx.op(op);
-    if data.dialect != dialect || data.name != name {
+    if data.name != expected {
         push_op_error(
             ctx,
             owner,
             errors,
-            format!("region must terminate with {dialect}.{name}"),
+            format!("region must terminate with {}", expected.name.as_str()),
         );
         None
     } else {
@@ -1779,7 +1776,7 @@ fn validate_callable_body(
         // The tail call checks its own result against this callable.
         return;
     }
-    if let Some(ret) = terminator(ctx, owner, block, "tribute_control", "return", errors)
+    if let Some(ret) = terminator(ctx, owner, block, Return::DEF, errors)
         && ctx.op_operands(ret).len() == 1
         && ctx.value_ty(ctx.op_operands(ret)[0]) != result_ty
     {
@@ -1923,9 +1920,9 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
         );
         return;
     };
-    let callable_ty = if is_control_op(ctx, owner, "func") {
+    let callable_ty = if Func::matches(ctx, owner) {
         ctx.op_attrs(owner).get_type("type")
-    } else if is_control_op(ctx, owner, "lambda") {
+    } else if Lambda::matches(ctx, owner) {
         ctx.op_result_types(owner).first().copied()
     } else {
         None
@@ -1952,7 +1949,7 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
 }
 
 fn is_tail_call(ctx: &IrContext, op: OpRef) -> bool {
-    is_control_op(ctx, op, "tail_call") || is_control_op(ctx, op, "tail_call_indirect")
+    TailCall::matches(ctx, op) || TailCallIndirect::matches(ctx, op)
 }
 
 /// The source signature of the callable whose body contains `op`, or `None`
@@ -1963,20 +1960,20 @@ fn tail_call_owner_signature(ctx: &IrContext, op: OpRef) -> Result<TypeRef, &'st
         let Some(owner) = parent_op(ctx, exit) else {
             return Err("must be inside a tribute_control.func or lambda body");
         };
-        if is_control_op(ctx, owner, "func") {
+        if Func::matches(ctx, owner) {
             return ctx
                 .op_attrs(owner)
                 .get_type("type")
                 .ok_or("must be inside a tribute_control.func or lambda body");
         }
-        if is_control_op(ctx, owner, "lambda") {
+        if Lambda::matches(ctx, owner) {
             return ctx
                 .op_result_types(owner)
                 .first()
                 .copied()
                 .ok_or("must be inside a tribute_control.func or lambda body");
         }
-        if is_control_op(ctx, owner, "handle") || is_control_op(ctx, owner, "handler") {
+        if Handle::matches(ctx, owner) || Handler::matches(ctx, owner) {
             return Err("must not be inside a tribute_control.handle body or handler");
         }
         // A structured arm may end with a tail call only when the structured
@@ -2002,7 +1999,7 @@ fn tail_call_owner_signature(ctx: &IrContext, op: OpRef) -> Result<TypeRef, &'st
         if ops.last().copied() != Some(terminator) {
             return Err("must be in tail position of its callable");
         }
-        if is_control_op(ctx, terminator, "return") {
+        if Return::matches(ctx, terminator) {
             exit = terminator;
             continue;
         }
@@ -2115,15 +2112,8 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
             "handlers table block must not have arguments",
         );
     }
-    let body_yield = terminator(ctx, op, body_block, "tribute_control", "yield", errors);
-    let completion_yield = terminator(
-        ctx,
-        op,
-        completion_block,
-        "tribute_control",
-        "yield",
-        errors,
-    );
+    let body_yield = terminator(ctx, op, body_block, Yield::DEF, errors);
+    let completion_yield = terminator(ctx, op, completion_block, Yield::DEF, errors);
     if let (Some(body_yield), Some(&completion_arg)) =
         (body_yield, ctx.block_args(completion_block).first())
         && let Some(&body_value) = ctx.op_operands(body_yield).first()
@@ -2150,7 +2140,7 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
     }
     let mut clauses = HashSet::default();
     for child in ctx.block(handlers_block).ops.iter().copied() {
-        if !is_control_op(ctx, child, "handler") {
+        if !Handler::matches(ctx, child) {
             push_op_error(
                 ctx,
                 op,
@@ -2176,7 +2166,7 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
             && let Some(region) = ctx.op_region(child, 0)
             && let Some(&block) = ctx.region(region).blocks.first()
             && let Some(&yield_op) = ctx.block(block).ops.last()
-            && is_control_op(ctx, yield_op, "yield")
+            && Yield::matches(ctx, yield_op)
             && ctx.op_attrs(child).get_str("kind") == Some("op")
             && let Some(&value) = ctx.op_operands(yield_op).first()
             && ctx.value_ty(value) != result
@@ -2194,7 +2184,7 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
 fn region_contains_resume(ctx: &IrContext, region: RegionRef) -> bool {
     let mut found = false;
     walk_region_ops(ctx, region, &mut |op| {
-        found |= is_control_op(ctx, op, "resume");
+        found |= Resume::matches(ctx, op);
     });
     found
 }
@@ -2217,10 +2207,10 @@ fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
     let Some(block) = single_block(ctx, op, body, "body", errors) else {
         return;
     };
-    let yield_op = terminator(ctx, op, block, "tribute_control", "yield", errors);
+    let yield_op = terminator(ctx, op, block, Yield::DEF, errors);
     let result_type = ctx.op_attrs(op).get_type("operation_result_type");
     let handle_result = parent_op(ctx, op)
-        .filter(|parent| is_control_op(ctx, *parent, "handle"))
+        .filter(|parent| Handle::matches(ctx, *parent))
         .and_then(|parent| ctx.op_result_types(parent).first().copied());
     let args = ctx.block_args(block);
     let last_token = args
@@ -2301,7 +2291,7 @@ fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
     }
 
     let placed = parent_op(ctx, op).is_some_and(|parent| {
-        is_control_op(ctx, parent, "handle")
+        Handle::matches(ctx, parent)
             && ctx
                 .op_region(parent, 2)
                 .is_some_and(|handlers| parent_region(ctx, op) == Some(handlers))
@@ -2324,9 +2314,9 @@ fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>)
         push_op_error(ctx, op, errors, "must not yield a resume token");
     }
     let valid_owner = parent_op(ctx, op).is_some_and(|owner| {
-        if is_control_op(ctx, owner, "handler") {
+        if Handler::matches(ctx, owner) {
             true
-        } else if is_control_op(ctx, owner, "handle") {
+        } else if Handle::matches(ctx, owner) {
             let region = parent_region(ctx, op);
             ctx.op_region(owner, 0) == region || ctx.op_region(owner, 1) == region
         } else {
@@ -2345,16 +2335,18 @@ fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>)
 
 fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
-    if data.dialect != "tribute_control" {
+    if data.name.dialect(ctx) != "tribute_control" {
         return;
     }
-    let name = data.name.with_str(|name| name.to_owned());
     let Some(def) = OpDef::of(ctx, op) else {
         push_op_error(
             ctx,
             op,
             errors,
-            format!("unsupported tribute_control operation '{name}'"),
+            format!(
+                "unsupported tribute_control operation '{}'",
+                data.name.strip_dialect(ctx)
+            ),
         );
         return;
     };
@@ -2371,20 +2363,33 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
         ctx,
         op,
         &def.schema,
-        matches!(name.as_str(), "func" | "lambda"),
+        Func::matches(ctx, op) || Lambda::matches(ctx, op),
         errors,
     );
-    match name.as_str() {
-        "func" => validate_func(ctx, op, errors),
-        "lambda" => validate_lambda(ctx, op, errors),
-        "call" => validate_call(ctx, op, errors),
-        "return" => validate_return(ctx, op, errors),
-        "tail_call" | "tail_call_indirect" => validate_tail_call(ctx, op, errors),
-        "perform" => validate_perform(ctx, op, errors),
-        "handle" => validate_handle(ctx, op, errors),
-        "handler" => validate_handler(ctx, op, errors),
-        "yield" => validate_yield(ctx, op, errors),
-        _ => {}
+    let validate: Option<fn(&IrContext, OpRef, &mut Vec<ValidationError>)> =
+        if Func::matches(ctx, op) {
+            Some(validate_func)
+        } else if Lambda::matches(ctx, op) {
+            Some(validate_lambda)
+        } else if Call::matches(ctx, op) {
+            Some(validate_call)
+        } else if Return::matches(ctx, op) {
+            Some(validate_return)
+        } else if TailCall::matches(ctx, op) || TailCallIndirect::matches(ctx, op) {
+            Some(validate_tail_call)
+        } else if Perform::matches(ctx, op) {
+            Some(validate_perform)
+        } else if Handle::matches(ctx, op) {
+            Some(validate_handle)
+        } else if Handler::matches(ctx, op) {
+            Some(validate_handler)
+        } else if Yield::matches(ctx, op) {
+            Some(validate_yield)
+        } else {
+            None
+        };
+    if let Some(validate) = validate {
+        validate(ctx, op, errors);
     }
 }
 
@@ -2477,7 +2482,7 @@ fn validate_symbol_use(
     errors: &mut Vec<ValidationError>,
 ) {
     {
-        if is_control_op(ctx, op, "func_ref") {
+        if FuncRef::matches(ctx, op) {
             let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("func_ref") else {
                 return;
             };
@@ -2485,7 +2490,7 @@ fn validate_symbol_use(
                 .definitions(ctx, op, symbol)
                 .first()
                 .copied()
-                .filter(|&target| is_control_op(ctx, target, "func"))
+                .filter(|&target| Func::matches(ctx, target))
             else {
                 push_op_error(
                     ctx,
@@ -2530,7 +2535,7 @@ fn validate_symbol_use(
                     "func_ref result convention must be at least as strong as its target",
                 );
             }
-        } else if is_control_op(ctx, op, "call") {
+        } else if Call::matches(ctx, op) {
             let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                 return;
             };
@@ -2538,7 +2543,7 @@ fn validate_symbol_use(
                 .definitions(ctx, op, symbol)
                 .first()
                 .copied()
-                .filter(|&target| is_control_op(ctx, target, "func"))
+                .filter(|&target| Func::matches(ctx, target))
             else {
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
@@ -2573,7 +2578,7 @@ fn validate_symbol_use(
                     "call result types do not match the logical signature",
                 );
             }
-        } else if is_control_op(ctx, op, "tail_call") {
+        } else if TailCall::matches(ctx, op) {
             let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                 return;
             };
@@ -2581,7 +2586,7 @@ fn validate_symbol_use(
                 .definitions(ctx, op, symbol)
                 .first()
                 .copied()
-                .filter(|&target| is_control_op(ctx, target, "func"))
+                .filter(|&target| Func::matches(ctx, target))
             else {
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
@@ -2679,7 +2684,7 @@ fn collect_external_references(
                     external.insert(operand);
                 }
             }
-            if is_control_op(ctx, op, "func") {
+            if Func::matches(ctx, op) {
                 continue;
             }
             for nested in ctx.op_regions(op) {
@@ -2691,7 +2696,7 @@ fn collect_external_references(
 
 fn validate_lambda_captures(ctx: &IrContext, body: RegionRef, errors: &mut Vec<ValidationError>) {
     walk_region_ops(ctx, body, &mut |op| {
-        if !is_control_op(ctx, op, "lambda") {
+        if !Lambda::matches(ctx, op) {
             return;
         }
         let Some(region) = ctx.op_region(op, 0) else {
@@ -2749,7 +2754,7 @@ fn declaration_map<'a>(
 
 fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "adt" && data.name == "typeref"
+    data.name == crate::dialect::adt::Typeref::NAME
 }
 
 fn contains_adt_typeref(ctx: &IrContext, ty: TypeRef, visiting: &mut HashSet<TypeRef>) -> bool {
@@ -2797,14 +2802,13 @@ fn canonical_nominal_layouts(
     let mut sorted_reachable_types = reachable_types.iter().copied().collect::<Vec<_>>();
     sorted_reachable_types.sort_unstable();
     for ty in sorted_reachable_types {
-        let data = ctx.get_type(ty);
         if is_adt_typeref(ctx, ty) {
             if let Some(name) = ctx.type_attrs(ty).get_string_ref("name") {
                 referenced_names.insert(name);
             }
             continue;
         }
-        if data.dialect != "adt" || !(matches!(data.name.as_str(), "struct" | "enum")) {
+        if !adt::Struct::matches(ctx, ty) && !adt::Enum::matches(ctx, ty) {
             continue;
         }
         let Some(name) = ctx.type_attrs(ty).get_string_ref("name") else {
@@ -2832,8 +2836,7 @@ fn canonical_nominal_layouts(
             .types()
             .iter()
             .filter_map(|(ty, data)| {
-                (data.dialect == "adt"
-                    && (matches!(data.name.as_str(), "struct" | "enum"))
+                ((adt::Struct::matches(ctx, ty) || adt::Enum::matches(ctx, ty))
                     && data.attrs.view(ctx).get_string_ref("name") == Some(name))
                 .then_some(ty)
             })
@@ -2855,7 +2858,7 @@ fn canonical_nominal_layouts(
 
 fn is_core_ptr(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "ptr"
+    data.name.is(ctx, "core.ptr")
 }
 
 fn collect_attribute_types(ctx: &IrContext, attribute: &Attribute, types: &mut HashSet<TypeRef>) {
@@ -2969,7 +2972,7 @@ fn validate_managed_reference_boundaries(
 
     walk_region_ops(ctx, body, &mut |op| {
         let data = ctx.op(op);
-        if data.dialect == "adt" && data.name == "ref_null" {
+        if data.name.is(ctx, "adt.ref_null") {
             let ([], [result], Some(declared)) = (
                 ctx.op_operands(op),
                 ctx.op_result_types(op),
@@ -2987,7 +2990,7 @@ fn validate_managed_reference_boundaries(
                 );
             }
         }
-        if data.dialect == "adt" && data.name == "ref_cast" {
+        if data.name.is(ctx, "adt.ref_cast") {
             let ([operand], [result], Some(declared)) = (
                 ctx.op_operands(op),
                 ctx.op_result_types(op),
@@ -3148,12 +3151,12 @@ fn callable_block_arg_has_source_contract(
     };
     let value_type = ctx.value_ty(value);
 
-    let func_sig_type = if is_control_op(ctx, owner, "func") {
+    let func_sig_type = if Func::matches(ctx, owner) {
         ctx.op_regions(owner)
             .eq([region])
             .then(|| ctx.op_attrs(owner).get_type("type"))
             .flatten()
-    } else if is_control_op(ctx, owner, "lambda") {
+    } else if Lambda::matches(ctx, owner) {
         ctx.op_regions(owner)
             .eq([region])
             .then(|| ctx.op_result_types(owner).first().copied())
@@ -3165,7 +3168,7 @@ fn callable_block_arg_has_source_contract(
         return parameters.get(index as usize) == Some(&value_type);
     }
 
-    if is_control_op(ctx, owner, "handler") && ctx.op_regions(owner).eq([region]) {
+    if Handler::matches(ctx, owner) && ctx.op_regions(owner).eq([region]) {
         let attrs = ctx.op_attrs(owner);
         if let (Some(ability), Some(name), Some(kind)) = (
             attrs.get_symbol_ref("ability"),
@@ -3185,7 +3188,7 @@ fn callable_block_arg_has_source_contract(
     let Some((body_region, completion_region, _)) = ctx.op_regions(owner).collect_tuple() else {
         return false;
     };
-    if !is_control_op(ctx, owner, "handle") || completion_region != region || index != 0 {
+    if !Handle::matches(ctx, owner) || completion_region != region || index != 0 {
         return false;
     }
     let [body_block] = ctx.region(body_region).blocks.as_slice() else {
@@ -3197,7 +3200,7 @@ fn callable_block_arg_has_source_contract(
     let [body_value] = ctx.op_operands(body_yield) else {
         return false;
     };
-    is_control_op(ctx, body_yield, "yield")
+    Yield::matches(ctx, body_yield)
         && ctx.value_ty(*body_value) == value_type
         && callable_has_semantic_provenance(ctx, *body_value, provenance, visiting)
 }
@@ -3216,22 +3219,21 @@ fn callable_has_semantic_provenance(
             callable_block_arg_has_source_contract(ctx, block, index, value, provenance, visiting)
         }
         ValueDef::OpResult(producer, _) => {
-            is_control_op(ctx, producer, "lambda")
-                || ((is_control_op(ctx, producer, "func_ref")
-                    || is_control_op(ctx, producer, "call"))
+            Lambda::matches(ctx, producer)
+                || ((FuncRef::matches(ctx, producer) || Call::matches(ctx, producer))
                     && ctx
                         .op_attrs(producer)
-                        .get_symbol_ref(if is_control_op(ctx, producer, "func_ref") {
+                        .get_symbol_ref(if FuncRef::matches(ctx, producer) {
                             "func_ref"
                         } else {
                             "callee"
                         })
                         .and_then(|symbol| provenance.functions.resolve(ctx, producer, symbol))
-                        .filter(|&function| is_control_op(ctx, function, "func"))
+                        .filter(|&function| Func::matches(ctx, function))
                         .is_some_and(|function| {
                             verified_callable_declaration(ctx, function, provenance.registered)
                         }))
-                || (is_control_op(ctx, producer, "call_indirect")
+                || (CallIndirect::matches(ctx, producer)
                     && ctx.op_operands(producer).first().is_some_and(|callee| {
                         callable_has_semantic_provenance(ctx, *callee, provenance, visiting)
                     }))
@@ -3289,7 +3291,7 @@ fn validate_callable_origins(
     };
     let mut seen = HashSet::default();
     walk_region_ops(ctx, body, &mut |op| {
-        if is_control_op(ctx, op, "func") {
+        if Func::matches(ctx, op) {
             let (Some(symbol), Some(func_sig_type)) =
                 (qualified_name(ctx, op), ctx.op_attrs(op).get_type("type"))
             else {
@@ -3349,8 +3351,7 @@ fn validate_callable_origins(
                     );
                 }
             }
-        } else if (is_control_op(ctx, op, "call_indirect")
-            || is_control_op(ctx, op, "tail_call_indirect"))
+        } else if (CallIndirect::matches(ctx, op) || TailCallIndirect::matches(ctx, op))
             && let Some(callee) = ctx.op_operands(op).first().copied()
             && !callable_has_semantic_provenance(ctx, callee, &provenance, &mut HashSet::default())
         {
@@ -3412,7 +3413,7 @@ fn validate_callable_conversion_casts(
 
 fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<ValidationError>) {
     walk_region_ops(ctx, body, &mut |op| {
-        if !is_control_op(ctx, op, "return") {
+        if !Return::matches(ctx, op) {
             return;
         }
         let mut owner = parent_op(ctx, op);
@@ -3426,10 +3427,10 @@ fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
                 );
                 return;
             };
-            if is_control_op(ctx, current, "func") {
+            if Func::matches(ctx, current) {
                 break ctx.op_attrs(current).get_type("type");
             }
-            if is_control_op(ctx, current, "lambda") {
+            if Lambda::matches(ctx, current) {
                 break ctx.op_result_types(current).first().copied();
             }
             owner = parent_op(ctx, current);
@@ -3458,13 +3459,13 @@ fn validate_declaration_uses(
 ) {
     walk_region_ops(ctx, body, &mut |op| {
         let attrs = ctx.op_attrs(op);
-        let (kind_attr, args, result_ty) = if is_control_op(ctx, op, "perform") {
+        let (kind_attr, args, result_ty) = if Perform::matches(ctx, op) {
             (
                 "operation_kind",
                 ctx.op_operands(op),
                 ctx.op_result_types(op).first().copied(),
             )
-        } else if is_control_op(ctx, op, "handler") {
+        } else if Handler::matches(ctx, op) {
             let Some(region) = ctx.op_region(op, 0) else {
                 return;
             };
@@ -3544,7 +3545,7 @@ fn op_is_within_region(ctx: &IrContext, op: OpRef, target: RegionRef) -> bool {
 fn nearest_enclosing_handler(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
-        if is_control_op(ctx, current, "handler") {
+        if Handler::matches(ctx, current) {
             return Some(current);
         }
         owner = parent_op(ctx, current);
@@ -3553,7 +3554,7 @@ fn nearest_enclosing_handler(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
 }
 
 fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
-    if !is_control_op(ctx, op, "call") {
+    if !Call::matches(ctx, op) {
         return false;
     }
     let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
@@ -3561,7 +3562,7 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     };
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
-        if is_control_op(ctx, current, "func") {
+        if Func::matches(ctx, current) {
             // The call is looked up in the module enclosing the function,
             // where the function is a symbol under its own name.
             return parent_op(ctx, current)
@@ -3608,9 +3609,9 @@ fn validate_affine_lambda_carrier(
             );
             continue;
         }
-        if is_control_op(ctx, use_.user, "lambda") {
+        if Lambda::matches(ctx, use_.user) {
             captures.push(use_.user);
-        } else if (is_control_op(ctx, use_.user, "call_indirect") && use_.operand_index == 0)
+        } else if (CallIndirect::matches(ctx, use_.user) && use_.operand_index == 0)
             // A captured resumption may be passed to the enclosing source
             // function's recursive logical call (for example
             // `run_state(fn() { resume value }, value)`). Other direct calls
@@ -3650,7 +3651,7 @@ fn validate_affine_lambda_carrier(
 
     if !captures.is_empty() {
         for terminal in &terminals {
-            if is_control_op(ctx, *terminal, "call_indirect")
+            if CallIndirect::matches(ctx, *terminal)
                 && !captures.iter().any(|capture| {
                     ctx.op_region(*capture, 0)
                         .is_some_and(|region| op_is_within_region(ctx, *terminal, region))
@@ -3700,9 +3701,9 @@ fn validate_token_path(
             );
             continue;
         }
-        if is_control_op(ctx, use_.user, "resume") && use_.operand_index == 0 {
+        if Resume::matches(ctx, use_.user) && use_.operand_index == 0 {
             resumes.push(use_.user);
-        } else if is_control_op(ctx, use_.user, "lambda") {
+        } else if Lambda::matches(ctx, use_.user) {
             captures.push(use_.user);
         } else {
             push_op_error(
@@ -3803,7 +3804,7 @@ fn ops_are_mutually_exclusive(ctx: &IrContext, left: OpRef, right: OpRef) -> boo
 
 fn validate_resume_ownership(ctx: &IrContext, body: RegionRef, errors: &mut Vec<ValidationError>) {
     walk_region_ops(ctx, body, &mut |op| {
-        if !is_control_op(ctx, op, "handler") {
+        if !Handler::matches(ctx, op) {
             return;
         }
         let Some(region) = ctx.op_region(op, 0) else {
@@ -3839,8 +3840,8 @@ fn validate_token_placements(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
                     if !ResumeToken::matches(ctx, ctx.value_ty(arg)) {
                         continue;
                     }
-                    let allowed = is_control_op(ctx, op, "handler")
-                        && index + 1 == ctx.block_args(block).len();
+                    let allowed =
+                        Handler::matches(ctx, op) && index + 1 == ctx.block_args(block).len();
                     if !allowed {
                         push_op_error(
                             ctx,
@@ -3933,7 +3934,7 @@ fn validate_row_scopes(
             }
             return ControlFlow::Continue(WalkAction::Advance);
         }
-        if !is_control_op(ctx, op, "func") {
+        if !Func::matches(ctx, op) {
             return ControlFlow::Continue(WalkAction::Advance);
         }
         let Ok(binders) = row_binders(ctx, op) else {
@@ -3983,11 +3984,11 @@ fn enclosing_row_tail(ctx: &IrContext, op: OpRef) -> Option<(Option<u32>, OpRef)
     let mut tail = None;
     loop {
         let owner = parent_op(ctx, current)?;
-        if is_control_op(ctx, owner, "lambda") && tail.is_none() {
+        if Lambda::matches(ctx, owner) && tail.is_none() {
             let ty = ctx.op_result_types(owner).first().copied()?;
             tail = Some(FuncSig::from_type_ref(ctx, ty)?.row(ctx).tail);
         }
-        if is_control_op(ctx, owner, "func") {
+        if Func::matches(ctx, owner) {
             let tail = match tail {
                 Some(tail) => tail,
                 None => {
@@ -4072,7 +4073,7 @@ fn validate_evidence_tails(
             .op_attrs(op)
             .get_symbol_ref("callee")
             .and_then(|symbol| symbols.definitions(ctx, op, symbol).first().copied())
-            .filter(|&callee| is_control_op(ctx, callee, "func"));
+            .filter(|&callee| Func::matches(ctx, callee));
         let Some(callee) = callee else {
             return;
         };
@@ -4186,10 +4187,6 @@ mod tests {
         Location::new(path, Span::new(7, 19))
     }
 
-    fn simple_type(ctx: &mut IrContext, dialect: &str, name: &str) -> TypeRef {
-        TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).intern(ctx)
-    }
-
     fn ability_type(_: &mut IrContext, name: &str) -> SymbolPath {
         SymbolPath::new([name])
     }
@@ -4260,7 +4257,7 @@ mod tests {
     fn builder_fixture() -> ValidFixture {
         let mut ctx = IrContext::new();
         let loc = location(&mut ctx);
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let i32_ty = core::I32::type_ref(&mut ctx);
         let ability = ability_type(&mut ctx, "State");
         let direct = func_sig(&mut ctx, i32_ty, [i32_ty], CallingConvention::Direct).as_type_ref();
 
@@ -4406,31 +4403,32 @@ mod tests {
         (ctx, module)
     }
 
-    fn control_ops(ctx: &IrContext, module: Module, name: &str) -> Vec<OpRef> {
+    fn control_ops(ctx: &IrContext, module: Module, name: trunk_ir::OpName) -> Vec<OpRef> {
         let mut matches = Vec::new();
         let body = module.body(ctx).expect("module body");
         walk_region_ops(ctx, body, &mut |op| {
-            if is_control_op(ctx, op, name) {
+            if ctx.op(op).name == name {
                 matches.push(op);
             }
         });
         matches
     }
 
-    fn control_op(ctx: &IrContext, module: Module, name: &str) -> OpRef {
+    fn control_op(ctx: &IrContext, module: Module, name: trunk_ir::OpName) -> OpRef {
         let matches = control_ops(ctx, module, name);
         assert_eq!(
             matches.len(),
             1,
-            "expected exactly one tribute_control.{name}"
+            "expected exactly one {}",
+            name.display(ctx)
         );
         matches[0]
     }
 
     fn valid_fixture() -> ValidFixture {
         let (mut ctx, module) = parse_fixture(VALID_CONTROL_MODULE);
-        let handle = control_op(&ctx, module, "handle");
-        let handler = control_op(&ctx, module, "handler");
+        let handle = control_op(&ctx, module, Handle::NAME);
+        let handler = control_op(&ctx, module, Handler::NAME);
         let handler_body = ctx.op_region(handler, 0).unwrap();
         let handler_block = ctx.region(handler_body).blocks[0];
         let ability = ctx
@@ -4485,7 +4483,7 @@ mod tests {
             "[{mask = @State}, {dup = @Log}]",
             "[{mask = @State}]",
         ));
-        let referenced = |name: &str| {
+        let referenced = |name: trunk_ir::OpName| {
             let mut referenced = Vec::new();
             ctx.op(control_op(&ctx, module, name))
                 .attributes
@@ -4493,9 +4491,9 @@ mod tests {
             referenced
         };
         // A call's callee, then the instances its evidence plan names.
-        assert_eq!(referenced("call"), ["id", "State", "Log"]);
-        assert_eq!(referenced("perform"), ["State"]);
-        assert_eq!(referenced("handler"), ["State"]);
+        assert_eq!(referenced(Call::NAME), ["id", "State", "Log"]);
+        assert_eq!(referenced(Perform::NAME), ["State"]);
+        assert_eq!(referenced(Handler::NAME), ["State"]);
     }
 
     #[test]
@@ -4599,7 +4597,7 @@ mod tests {
     #[test]
     fn callable_codes_and_resume_token_accessors_are_exact() {
         let mut ctx = IrContext::new();
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let i32_ty = core::I32::type_ref(&mut ctx);
 
         for (convention, code) in [
             (CallingConvention::Direct, 0),
@@ -4646,13 +4644,13 @@ mod tests {
     #[test]
     fn func_sig_rejects_raw_delimiter_failures_before_conversion() {
         let (mut ctx, module) = parse_fixture("core.module @test {}");
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let i32_ty = core::I32::type_ref(&mut ctx);
         let malformed = [
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+            TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
                 .build(&mut ctx),
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+            TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
                 .attr(
                     trunk_ir::dialect::func::NUM_INPUTS_ATTR,
@@ -4661,13 +4659,13 @@ mod tests {
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
                 .build(&mut ctx),
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+            TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
                 .attr(trunk_ir::dialect::func::NUM_INPUTS_ATTR, Attribute::Int(2))
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
                 .build(&mut ctx),
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+            TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
                 .attr(
                     trunk_ir::dialect::func::NUM_INPUTS_ATTR,
@@ -4676,7 +4674,7 @@ mod tests {
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
                 .build(&mut ctx),
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+            TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
                 .attr(trunk_ir::dialect::func::NUM_INPUTS_ATTR, Attribute::Int(0))
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(2))
@@ -4702,25 +4700,25 @@ mod tests {
         let body = fixture.module.body(ctx).expect("module body");
         walk_region_ops(ctx, body, &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == "tribute_control" {
-                names.insert(data.name.clone());
+            if data.name.dialect(ctx) == "tribute_control" {
+                names.insert(data.name);
                 assert_eq!(data.location.span, Span::new(7, 19));
             }
         });
         for expected in [
-            "func",
-            "lambda",
-            "func_ref",
-            "call",
-            "call_indirect",
-            "return",
-            "perform",
-            "handle",
-            "handler",
-            "resume",
-            "yield",
+            Func::NAME,
+            Lambda::NAME,
+            FuncRef::NAME,
+            Call::NAME,
+            CallIndirect::NAME,
+            Return::NAME,
+            Perform::NAME,
+            Handle::NAME,
+            Handler::NAME,
+            Resume::NAME,
+            Yield::NAME,
         ] {
-            assert!(names.contains(&Symbol::new(expected)), "{expected}");
+            assert!(names.contains(&expected), "{expected:?}");
         }
 
         let handler = Handler::from_op(ctx, fixture.handler).expect("typed handler accessor");
@@ -4971,7 +4969,7 @@ mod tests {
 
         // The custom func parser derives and hides sym_name/type, so malformed
         // values for those two required attributes are not text-representable.
-        let malformed_func = control_op(&ctx, module, "func");
+        let malformed_func = control_op(&ctx, module, Func::NAME);
         ctx.op_attrs_mut(malformed_func)
             .insert("sym_name", Attribute::Int(1));
         ctx.op_attrs_mut(malformed_func)
@@ -4988,17 +4986,17 @@ mod tests {
         );
         assert_op_diagnostics(
             &result,
-            control_op(&ctx, module, "func_ref"),
+            control_op(&ctx, module, FuncRef::NAME),
             &["attribute `func_ref` must be a SymbolRef attribute"],
         );
         assert_op_diagnostics(
             &result,
-            control_op(&ctx, module, "call"),
+            control_op(&ctx, module, Call::NAME),
             &["attribute `callee` must be a SymbolRef attribute"],
         );
         assert_op_diagnostics(
             &result,
-            control_op(&ctx, module, "perform"),
+            control_op(&ctx, module, Perform::NAME),
             &[
                 "attribute `ability` must be a SymbolRef attribute",
                 "attribute `op_name` must be a String attribute",
@@ -5007,7 +5005,7 @@ mod tests {
         );
         assert_op_diagnostics(
             &result,
-            control_op(&ctx, module, "handler"),
+            control_op(&ctx, module, Handler::NAME),
             &[
                 "attribute `ability` must be a SymbolRef attribute",
                 "attribute `op_name` must be a String attribute",
@@ -5031,7 +5029,7 @@ mod tests {
         let never = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "never").then_some(ty))
+            .find_map(|(ty, data)| (data.name.is(&ctx, "core.never")).then_some(ty))
             .expect("core.never");
         assert!(!contains_unresolved_type(
             &ctx,
@@ -5041,8 +5039,8 @@ mod tests {
 
         let result = validate_local(&ctx, module);
         for op in [
-            control_op(&ctx, module, "call"),
-            control_op(&ctx, module, "perform"),
+            control_op(&ctx, module, Call::NAME),
+            control_op(&ctx, module, Perform::NAME),
         ] {
             assert_eq!(
                 result
@@ -5138,33 +5136,27 @@ mod tests {
         let i32_ty = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+            .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
             .unwrap();
         let i32_value = module
             .ops(&ctx)
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op).dialect == "arith"
-                    && ctx.op(*op).name == "const"
-                    && ctx.op_result_types(*op) == [i32_ty]
+                ctx.op(*op).name.is(&ctx, "arith.const") && ctx.op_result_types(*op) == [i32_ty]
             })
             .map(|op| ctx.op_result(op, 0))
             .unwrap();
 
         // Custom func assembly requires its symbol and callable type, so the
         // parser cannot represent their simultaneous absence.
-        let missing_func = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("tribute_control"),
-            Symbol::new("func"),
-        )
-        .operand(i32_value)
-        .build(&mut ctx);
+        let missing_func = trunk_ir::OperationDataBuilder::new(loc, "tribute_control.func")
+            .operand(i32_value)
+            .build(&mut ctx);
         let missing_func = ctx.create_op(missing_func);
         append_module_op(&mut ctx, module, missing_func);
 
-        let bad_func = control_ops(&ctx, module, "func")
+        let bad_func = control_ops(&ctx, module, Func::NAME)
             .into_iter()
             .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("bad_func"))
             .unwrap();
@@ -5176,23 +5168,26 @@ mod tests {
         let extra_region = region(&mut ctx, loc, extra_block);
         ctx.push_op_region(bad_func, extra_region);
 
-        let bad_lambda = control_op(&ctx, module, "lambda");
+        let bad_lambda = control_op(&ctx, module, Lambda::NAME);
         ctx.set_op_result_type(bad_lambda, 0, i32_ty);
 
-        let bad_func_ref = control_ops(&ctx, module, "func_ref")
+        let bad_func_ref = control_ops(&ctx, module, FuncRef::NAME)
             .into_iter()
             .find(|op| ctx.op_attrs(*op).contains_key("unexpected"))
             .unwrap();
-        let bad_call = control_op(&ctx, module, "call");
-        let indirects = control_ops(&ctx, module, "call_indirect");
+        let bad_call = control_op(&ctx, module, Call::NAME);
+        let indirects = control_ops(&ctx, module, CallIndirect::NAME);
         let non_callable_indirect = indirects[0];
         let mismatched_indirect = indirects[1];
-        let bad_perform = control_op(&ctx, module, "perform");
-        let bad_handler = control_op(&ctx, module, "handler");
-        let resumes = control_ops(&ctx, module, "resume");
+        let bad_perform = control_op(&ctx, module, Perform::NAME);
+        let bad_handler = control_op(&ctx, module, Handler::NAME);
+        let resumes = control_ops(&ctx, module, Resume::NAME);
         let bad_resume = resumes[0];
         let mismatched_resume = resumes[1];
-        let unknown = control_op(&ctx, module, "unknown");
+        let unknown_name = ctx
+            .lookup_op_name("tribute_control.unknown")
+            .expect("the fixture uses tribute_control.unknown");
+        let unknown = control_op(&ctx, module, unknown_name);
 
         let result = validate_local(&ctx, module);
         assert_op_diagnostics(
@@ -5362,7 +5357,7 @@ mod tests {
 
         let mut ctx = IrContext::new();
         let loc = location(&mut ctx);
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let i32_ty = core::I32::type_ref(&mut ctx);
         let module = module(&mut ctx, loc, &[]);
         // Textual regions always receive an implicit entry block, so zero-block
         // regions require direct in-memory construction.
@@ -5380,16 +5375,13 @@ mod tests {
                     regions.push(region(&mut ctx, loc, region_block));
                 }
             }
-            let malformed_handle = trunk_ir::OperationDataBuilder::new(
-                loc,
-                Symbol::new("tribute_control"),
-                Symbol::new("handle"),
-            )
-            .result(i32_ty)
-            .region(regions[0])
-            .region(regions[1])
-            .region(regions[2])
-            .build(&mut ctx);
+            let malformed_handle =
+                trunk_ir::OperationDataBuilder::new(loc, "tribute_control.handle")
+                    .result(i32_ty)
+                    .region(regions[0])
+                    .region(regions[1])
+                    .region(regions[2])
+                    .build(&mut ctx);
             let malformed_handle = ctx.create_op(malformed_handle);
             append_module_op(&mut ctx, module, malformed_handle);
         }
@@ -5526,7 +5518,7 @@ mod tests {
         let i32_ty = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+            .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
             .expect("core.i32");
         let declaration = OperationDeclaration {
             ability: SymbolPath::new(["State"]),
@@ -5587,7 +5579,7 @@ mod tests {
   }
 }"#,
         );
-        let handler = control_ops(&ctx, module, "handler")[0];
+        let handler = control_ops(&ctx, module, Handler::NAME)[0];
         let fn_kind = ctx.intern_str("fn");
         let attrs = ctx.op_attrs(handler);
         let result_type = attrs.get_type("operation_result_type").unwrap();
@@ -5811,9 +5803,9 @@ mod tests {
         let mut switch = None;
         walk_region_ops(&ctx, module.body(&ctx).unwrap(), &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == "tribute_control" && data.name == "lambda" {
+            if data.name.is(&ctx, "tribute_control.lambda") {
                 branch_lambda.get_or_insert(op);
-            } else if data.dialect == "scf" && data.name == "switch" {
+            } else if data.name.is(&ctx, "scf.switch") {
                 switch = Some(op);
             }
         });
@@ -5926,8 +5918,8 @@ mod tests {
   }
 }"#,
         );
-        let handler = control_op(&ctx, module, "handler");
-        let resume = control_op(&ctx, module, "resume");
+        let handler = control_op(&ctx, module, Handler::NAME);
+        let resume = control_op(&ctx, module, Resume::NAME);
         let result = validate_local(&ctx, module);
         assert!(
             result.errors.iter().any(|error| {
@@ -6099,7 +6091,7 @@ mod tests {
     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Nat::+"}
 }"#,
         );
-        let function = control_op(&ctx, module, "func");
+        let function = control_op(&ctx, module, Func::NAME);
         let func_sig_type = ctx.op_attrs(function).get_type("type").unwrap();
         let exact = CompilerIntrinsicDeclaration::new(
             SymbolPath::new(["Nat::+"]),
@@ -6139,7 +6131,7 @@ mod tests {
     attributes {tribute.compiler_intrinsic = "read"}
 }"#,
         );
-        let function = control_op(&ctx, module, "func");
+        let function = control_op(&ctx, module, Func::NAME);
         let func_sig_type = ctx.op_attrs(function).get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
             SymbolPath::new(["read"]),
@@ -6168,7 +6160,7 @@ mod tests {
   }
 }"#,
         );
-        let intrinsic = control_ops(&ctx, module, "func")
+        let intrinsic = control_ops(&ctx, module, Func::NAME)
             .into_iter()
             .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("Nat::+"))
             .unwrap();
@@ -6195,7 +6187,7 @@ mod tests {
   }
 }"#,
         );
-        let functions = control_ops(&ctx, module, "func");
+        let functions = control_ops(&ctx, module, Func::NAME);
         let declaration = |symbol: Symbol| {
             let function = functions
                 .iter()
@@ -6461,7 +6453,7 @@ mod tests {
   }
 }"#,
         );
-        let handler = control_op(&ctx, module, "handler");
+        let handler = control_op(&ctx, module, Handler::NAME);
         let handler_region = ctx.op_region(handler, 0).unwrap();
         let handler_block = ctx.region(handler_region).blocks[0];
         let callback_type = ctx.value_ty(ctx.block_args(handler_block)[0]);
@@ -6611,10 +6603,10 @@ mod tests {
         let mut func_ref = None;
         let mut call = None;
         walk_region_ops(ctx, body, &mut |op| {
-            func = func.or_else(|| is_control_op(ctx, op, "func").then_some(op));
-            lambda = lambda.or_else(|| is_control_op(ctx, op, "lambda").then_some(op));
-            func_ref = func_ref.or_else(|| is_control_op(ctx, op, "func_ref").then_some(op));
-            call = call.or_else(|| is_control_op(ctx, op, "call").then_some(op));
+            func = func.or_else(|| Func::matches(ctx, op).then_some(op));
+            lambda = lambda.or_else(|| Lambda::matches(ctx, op).then_some(op));
+            func_ref = func_ref.or_else(|| FuncRef::matches(ctx, op).then_some(op));
+            call = call.or_else(|| Call::matches(ctx, op).then_some(op));
         });
         let func = func.expect("func");
         assert!(trunk_ir::op_interface::IsolatedFromAboveOps::is_isolated(
@@ -6649,7 +6641,7 @@ mod tests {
         );
         let mut calls = Vec::new();
         let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
-            if is_control_op(&ctx, op, "call") {
+            if Call::matches(&ctx, op) {
                 calls.push(op);
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -6689,7 +6681,7 @@ mod tests {
         let result = validate_local(&ctx, module);
         assert!(result.is_ok(), "{result}");
 
-        let call = Call::from_op(&ctx, control_op(&ctx, module, "call")).unwrap();
+        let call = Call::from_op(&ctx, control_op(&ctx, module, Call::NAME)).unwrap();
         match call.evidence_plan(&ctx).unwrap().next() {
             Some(EvidenceStep::Mask(state)) => assert_eq!(state, SymbolPath::new(["State"])),
             other => panic!("expected a leading mask, found {other:?}"),
@@ -6714,7 +6706,7 @@ mod tests {
         let (ctx, module) = parse_fixture(&evidence_plan_module(plan, "[{mask = @State}]"));
         let result = validate_local(&ctx, module);
         assert!(result.errors.is_empty(), "{result}");
-        let call = Call::from_op(&ctx, control_op(&ctx, module, "call")).unwrap();
+        let call = Call::from_op(&ctx, control_op(&ctx, module, Call::NAME)).unwrap();
         let steps: Vec<_> = call.evidence_plan(&ctx).unwrap().collect();
         let [
             EvidenceStep::Select(1),
@@ -6805,9 +6797,9 @@ mod tests {
             let (ctx, module) = parse_fixture(&evidence_plan_module(call, handle));
             let result = validate_local(&ctx, module);
             let op = if handle.contains("dup") {
-                control_op(&ctx, module, "handle")
+                control_op(&ctx, module, Handle::NAME)
             } else {
-                control_op(&ctx, module, "call")
+                control_op(&ctx, module, Call::NAME)
             };
             assert_op_diagnostics(&result, op, &[expected]);
             assert_eq!(result.errors.len(), 1, "{call} {handle}: {result}");
@@ -6819,6 +6811,9 @@ mod tests {
         let (ctx, module) = parse_fixture(&evidence_plan_module("[1]", "[{mask = @State}]"));
         let result = validate_local(&ctx, module);
         assert_eq!(result.errors.len(), 1, "{result}");
-        assert_eq!(result.errors[0].op, Some(control_op(&ctx, module, "call")));
+        assert_eq!(
+            result.errors[0].op,
+            Some(control_op(&ctx, module, Call::NAME))
+        );
     }
 }

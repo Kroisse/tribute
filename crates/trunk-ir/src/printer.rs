@@ -18,7 +18,7 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 
 use super::context::IrContext;
-use super::ops::DialectType;
+use super::ops::{DialectOp, DialectType};
 use super::refs::*;
 use super::types::*;
 use super::walk::{WalkAction, walk_region};
@@ -112,13 +112,12 @@ impl<'a> PrintState<'a> {
             return self.write_func_sig_type(f, ty, inputs, results);
         }
         let data = self.ctx.get_type(ty);
-        if let Some(format) =
-            crate::asm_format::lookup_type_asm_format(data.dialect.clone(), data.name.clone())
+        if let Some(format) = crate::asm_format::lookup_type_asm_format(data.name)
             && let Some(result) = (format.print_fn)(&mut TypePrintHelper { state: self, f }, ty)
         {
             return result;
         }
-        write!(f, "{}.{}", data.dialect, data.name)?;
+        write!(f, "{}", data.name.display(self.ctx))?;
         let inline_param_attrs = data.validate_param_attrs(self.ctx).is_ok();
         let mut attrs = visible_type_attrs(self.ctx, data, inline_param_attrs, &[]).peekable();
         if data.params.is_empty() && attrs.peek().is_none() {
@@ -149,7 +148,7 @@ impl<'a> PrintState<'a> {
     ) -> fmt::Result {
         let data = self.ctx.get_type(ty);
         let inline_param_attrs = data.validate_param_attrs(self.ctx).is_ok();
-        write!(f, "{}.{}<(", data.dialect, data.name)?;
+        write!(f, "{}<(", data.name.display(self.ctx))?;
         for (index, &input) in inputs.iter().enumerate() {
             if index > 0 {
                 f.write_str(", ")?;
@@ -291,22 +290,19 @@ fn visible_type_attrs<'b>(
 /// Other types, including malformed count-shaped data, retain concrete printing.
 fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef])> {
     let data = ctx.get_type(ty);
-    if data.name != crate::Symbol::new("func_sig") {
+    if data.name.strip_dialect(ctx) != "func_sig" {
         return None;
     }
-    if data.dialect == crate::Symbol::new("func")
-        && crate::dialect::func::FuncSig::from_type_ref(ctx, ty).is_none()
-    {
-        return None;
-    }
-    if data.dialect == crate::Symbol::new("wasm")
-        && crate::dialect::wasm::FuncSig::from_type_ref(ctx, ty).is_none()
-    {
-        return None;
-    }
-    if data.dialect == crate::Symbol::new("clif")
-        && crate::dialect::clif::FuncSig::from_type_ref(ctx, ty).is_none()
-    {
+    let malformed = if crate::dialect::func::FuncSig::matches(ctx, ty) {
+        crate::dialect::func::FuncSig::from_type_ref(ctx, ty).is_none()
+    } else if crate::dialect::wasm::FuncSig::matches(ctx, ty) {
+        crate::dialect::wasm::FuncSig::from_type_ref(ctx, ty).is_none()
+    } else if crate::dialect::clif::FuncSig::matches(ctx, ty) {
+        crate::dialect::clif::FuncSig::from_type_ref(ctx, ty).is_none()
+    } else {
+        false
+    };
+    if malformed {
         return None;
     }
     let num_inputs = match ctx
@@ -665,7 +661,7 @@ fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, 
         let data = ctx.op(op);
 
         // Skip nested modules — they collect their own aliases.
-        if data.dialect == crate::Symbol::new("core") && data.name == crate::Symbol::new("module") {
+        if crate::dialect::core::Module::matches(ctx, op) {
             return ControlFlow::Continue(WalkAction::Skip);
         }
 
@@ -677,8 +673,7 @@ fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, 
         // Attributes containing types.
         // Skip func.func — its `type` attribute holds the function signature
         // (func.func_sig), which would otherwise dominate alias candidates.
-        let is_func_decl =
-            data.dialect == crate::Symbol::new("func") && data.name == crate::Symbol::new("func");
+        let is_func_decl = crate::dialect::func::Func::matches(ctx, op);
         if !is_func_decl {
             for attr in data.attributes.values() {
                 count_attr_types(&mut counts, attr);
@@ -876,18 +871,13 @@ fn print_operation(
     op: OpRef,
     indent: usize,
 ) -> fmt::Result {
-    let data = state.ctx.op(op);
-    let dialect = data.dialect.clone();
-    let name = data.name.clone();
-
     // Check for special ops
-    let is_module = dialect == crate::Symbol::new("core") && name == crate::Symbol::new("module");
-    if is_module {
+    if crate::dialect::core::Module::matches(state.ctx, op) {
         return print_module_op(state, f, op, indent);
     }
 
     // Check custom assembly format registry
-    if let Some(fmt) = crate::asm_format::lookup_asm_format(dialect, name) {
+    if let Some(fmt) = crate::asm_format::lookup_asm_format(state.ctx.op(op).name) {
         let mut helper = OpPrintHelper { state, f };
         return (fmt.print_fn)(&mut helper, op, indent);
     }
@@ -922,7 +912,7 @@ fn print_generic_op(
 
     // Dialect.op
     let data = state.ctx.op(op);
-    write!(f, "{}.{}", data.dialect, data.name)?;
+    write!(f, "{}", data.name.display(state.ctx))?;
 
     // Operands
     let operands = state.ctx.op_operands(op);
@@ -1175,7 +1165,7 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     /// Create a one-result `func.func_sig` type.
@@ -1254,7 +1244,7 @@ mod tests {
     fn malformed_func_sig_storage_prints_as_concrete_type() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let foreign = TypeDataBuilder::new(Symbol::new("foreign"), Symbol::new("func_sig"))
+        let foreign = TypeDataBuilder::new("foreign.func_sig")
             .param(i32_ty)
             .attr(func::NUM_INPUTS_ATTR, Attribute::Int(2))
             .attr(func::NUM_RESULTS_ATTR, Attribute::Int(1))
@@ -1266,7 +1256,7 @@ mod tests {
 
         // Shared signatures have a stricter one-result contract, so raw
         // multi-result storage must not be printed in arrow syntax either.
-        let shared = TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+        let shared = TypeDataBuilder::new("func.func_sig")
             .params([i32_ty, i32_ty, i32_ty])
             .attr(func::NUM_INPUTS_ATTR, Attribute::Int(1))
             .attr(func::NUM_RESULTS_ATTR, Attribute::Int(2))
@@ -1642,7 +1632,7 @@ mod tests {
     /// Helper: build a named `alias_test.record` type, which suggests its
     /// `name` as an alias, with the given named fields.
     fn make_named_type(ctx: &mut IrContext, name: &str, fields: &[(&str, TypeRef)]) -> TypeRef {
-        let mut builder = TypeDataBuilder::new("alias_test", "record");
+        let mut builder = TypeDataBuilder::new("alias_test.record");
         for (field, ty) in fields {
             let mut attrs = AttributeMap::new();
             let field = ctx.string_attr(field);

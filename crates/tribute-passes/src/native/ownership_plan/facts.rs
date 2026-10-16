@@ -349,14 +349,14 @@ fn build_aliases(
             let output_data = ctx.get_type(ctx.value_ty(*output));
             // A cast cannot say whether a unit moves, so only the explicit
             // transfers cross between a raw pointer and a managed reference.
-            if input_data.dialect == "core" && input_data.name == "ptr" && output_managed {
+            if input_data.name.is(ctx, "core.ptr") && output_managed {
                 return Err(OwnershipPlanError::new(format!(
                     "raw pointer alias {op:?} masquerades as a managed reference; use tribute_rt.from_raw: {} -> {}",
                     ctx.value_ty(*input),
                     ctx.value_ty(*output)
                 )));
             }
-            if input_managed && output_data.dialect == "core" && output_data.name == "ptr" {
+            if input_managed && output_data.name.is(ctx, "core.ptr") {
                 return Err(OwnershipPlanError::new(format!(
                     "managed reference {op:?} is viewed as a raw pointer; use tribute_rt.into_raw: {} -> {}",
                     ctx.value_ty(*input),
@@ -419,12 +419,12 @@ pub(super) fn is_internal_closure_layout(
 
 pub(super) fn is_core_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "ptr"
+    data.name.is(ctx, "core.ptr")
 }
 
 fn is_core_i32_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "i32"
+    data.name.is(ctx, "core.i32")
 }
 
 pub(super) fn root_value(aliases: &HashMap<ValueRef, ValueRef>, value: ValueRef) -> ValueRef {
@@ -524,7 +524,7 @@ fn validate_projection_contract(
     };
     let source_ty = ctx.value_ty(source);
     let source_data = ctx.get_type(source_ty);
-    let raw_source = source_data.dialect == "core" && source_data.name == "ptr";
+    let raw_source = source_data.name.is(ctx, "core.ptr");
     let result_managed = is_managed_value(ctx, result, managed_layouts);
     if (!raw_source && !types_compatible(ctx, source_ty, layout, managed_layouts))
         || (result_managed

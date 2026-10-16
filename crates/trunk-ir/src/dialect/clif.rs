@@ -171,12 +171,6 @@ const INDIRECT_CALL_SIGNATURE_ATTR: &str = "sig";
 pub const NUM_INPUTS_ATTR: &str = "num_inputs";
 pub const NUM_RESULTS_ATTR: &str = "num_results";
 
-#[allow(non_snake_case)]
-#[inline]
-pub fn FUNC_SIG() -> crate::Symbol {
-    crate::Symbol::new("func_sig")
-}
-
 /// Why a name-matching `clif.func_sig` does not satisfy its storage invariant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FuncSigTypeError {
@@ -222,7 +216,7 @@ impl FuncSig {
         ty: crate::TypeRef,
     ) -> Result<Self, FuncSigTypeError> {
         let data = ctx.get_type(ty);
-        debug_assert!(data.dialect == DIALECT_NAME() && data.name == FUNC_SIG());
+        debug_assert!(data.name == <Self as DialectType>::NAME);
         let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)?;
         let num_results = read_count(ctx, &data.attrs, NUM_RESULTS_ATTR)?;
         let total = num_inputs
@@ -294,9 +288,16 @@ impl FuncSig {
     }
 }
 
+static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef {
+    name: crate::name::QualifiedName::new("clif.func_sig"),
+};
+
+inventory::submit! {
+    crate::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
+}
+
 impl DialectType for FuncSig {
-    const DIALECT_NAME: &'static str = "clif";
-    const TYPE_NAME: &'static str = "func_sig";
+    const DEF: &'static crate::type_def::TypeDef = &FUNC_SIG_DEF;
 
     fn from_type_ref(ctx: &crate::IrContext, ty: crate::TypeRef) -> Option<Self> {
         Self::matches(ctx, ty)
@@ -354,7 +355,7 @@ pub fn func_sig_with_attrs(
     let results: Vec<_> = results.into_iter().collect();
     let num_inputs = u32::try_from(inputs.len()).expect("clif.func_sig input count exceeds u32");
     let num_results = u32::try_from(results.len()).expect("clif.func_sig result count exceeds u32");
-    let mut builder = TypeDataBuilder::new(DIALECT_NAME(), FUNC_SIG())
+    let mut builder = TypeDataBuilder::new(<FuncSig as DialectType>::NAME)
         .params(inputs)
         .params(results);
     for (key, value) in attrs {
@@ -440,10 +441,9 @@ impl crate::ops::Verify for Data {
         let mut offsets = HashSet::default();
         for op in reloc_ops(ctx, self.op_ref()) {
             let Ok(reloc) = FuncReloc::from_op(ctx, op) else {
-                let data = ctx.op(op);
                 return Err(format!(
-                    "relocation region holds {}.{}, not clif.func_reloc",
-                    data.dialect, data.name
+                    "relocation region holds {}, not clif.func_reloc",
+                    ctx.op(op).name.display(ctx)
                 ));
             };
             let offset = reloc.offset(ctx);

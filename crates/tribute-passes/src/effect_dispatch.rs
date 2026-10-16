@@ -22,7 +22,7 @@ use trunk_ir::rewrite::{PatternRewriter, TypeConverter};
 use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 
 pub(crate) fn i32_type(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core", "i32").intern(ctx)
+    TypeDataBuilder::new("core.i32").intern(ctx)
 }
 
 /// Insert the stable ability id of `ability` as an `i32` constant.

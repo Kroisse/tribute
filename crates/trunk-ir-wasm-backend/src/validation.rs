@@ -7,11 +7,11 @@
 
 use trunk_ir::IrContext;
 use trunk_ir::Module;
+use trunk_ir::SymbolPath;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
-use trunk_ir::{Symbol, SymbolPath};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -84,12 +84,13 @@ fn validate_operation(
     errors: &mut Vec<String>,
 ) {
     let op_data = ctx.op(op);
-    let dialect = op_data.dialect.clone();
-    let name = op_data.name.clone();
 
     // Check dialect - must be wasm (with specific exceptions)
     if !is_allowed_dialect(ctx, op, depth) {
-        errors.push(format!("Non-wasm operation found: {}.{}", dialect, name));
+        errors.push(format!(
+            "Non-wasm operation found: {}",
+            op_data.name.display(ctx)
+        ));
     }
     if wasm_dialect::CallIndirect::matches(ctx, op)
         && let Err(error) = crate::emit::helpers::exact_call_indirect_signature(ctx, op)
@@ -145,7 +146,7 @@ fn resolve_wasm_callee(
 
 fn is_nil(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "nil"
+    data.name.is(ctx, "core.nil")
 }
 
 /// `core.nil` occupies a logical result slot but has no physical Wasm value.
@@ -180,15 +181,10 @@ fn is_wasm_physical_result_assignable(
 ) -> bool {
     let produced_data = ctx.get_type(produced);
     let received_data = ctx.get_type(received);
-    (produced_data.dialect == "wasm"
-        && produced_data.name == "arrayref"
-        && received_data.dialect == "core"
-        && received_data.name == "array"
+    (produced_data.name.is(ctx, "wasm.arrayref")
+        && received_data.name.is(ctx, "core.array")
         && crate::emit::helpers::builtin_layout_type_idx(ctx, received).is_none())
-        || (produced_data.dialect == "core"
-            && produced_data.name == "i32"
-            && received_data.dialect == "core"
-            && received_data.name == "i1")
+        || (produced_data.name.is(ctx, "core.i32") && received_data.name.is(ctx, "core.i1"))
         || crate::assignability::is_wasm_physical_argument_assignable(ctx, produced, received)
 }
 
@@ -203,7 +199,7 @@ fn check_value_types(
     if values.len() != expected.len() {
         errors.push(format!(
             "wasm.{} {role} count mismatch: expected {}, found {}",
-            ctx.op(op).name,
+            ctx.op(op).name.display(ctx),
             expected.len(),
             values.len()
         ));
@@ -213,7 +209,7 @@ fn check_value_types(
         if ctx.value_ty(value) != ty {
             errors.push(format!(
                 "wasm.{} {role} #{index} type mismatch",
-                ctx.op(op).name
+                ctx.op(op).name.display(ctx)
             ));
         }
     }
@@ -257,7 +253,7 @@ fn validate_direct_callable_contracts(
     let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
         errors.push(format!(
             "wasm.{} requires a symbol callee attribute",
-            ctx.op(op).name
+            ctx.op(op).name.display(ctx)
         ));
         return;
     };
@@ -267,7 +263,7 @@ fn validate_direct_callable_contracts(
     let Some(signature) = resolved else {
         errors.push(format!(
             "wasm.{} requires a uniquely resolved valid wasm.func_sig",
-            ctx.op(op).name
+            ctx.op(op).name.display(ctx)
         ));
         return;
     };
@@ -276,7 +272,7 @@ fn validate_direct_callable_contracts(
     if operands.len() != inputs.len() {
         errors.push(format!(
             "wasm.{} call argument count mismatch: expected {}, found {}",
-            ctx.op(op).name,
+            ctx.op(op).name.display(ctx),
             inputs.len(),
             operands.len()
         ));
@@ -290,12 +286,10 @@ fn validate_direct_callable_contracts(
                 let actual = ctx.get_type(ctx.value_ty(operand));
                 let expected = ctx.get_type(input);
                 errors.push(format!(
-                    "wasm.{} call argument #{index} type mismatch: found {}.{}, expected {}.{}",
-                    ctx.op(op).name,
-                    actual.dialect,
-                    actual.name,
-                    expected.dialect,
-                    expected.name
+                    "wasm.{} call argument #{index} type mismatch: found {}, expected {}",
+                    ctx.op(op).name.display(ctx),
+                    actual.name.display(ctx),
+                    expected.name.display(ctx)
                 ));
             }
         }
@@ -314,7 +308,7 @@ fn validate_direct_callable_contracts(
                 .iter()
                 .map(|&ty| {
                     let data = ctx.get_type(ty);
-                    format!("{}.{}", data.dialect, data.name)
+                    format!("{}", data.name.display(ctx))
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -371,15 +365,14 @@ fn tail_results_agree(ctx: &IrContext, caller: &[TypeRef], callee: &[TypeRef]) -
 
 /// Check if an operation's dialect is allowed in the emit phase.
 fn is_allowed_dialect(ctx: &IrContext, op: OpRef, depth: usize) -> bool {
-    let wasm_dialect = Symbol::new("wasm");
     let op_data = ctx.op(op);
 
-    if op_data.dialect == wasm_dialect {
+    if op_data.name.dialect(ctx) == "wasm" {
         return true;
     }
 
     // Allow core.module only at the top level (depth 0)
-    if depth == 0 && op_data.dialect == "core" && op_data.name == "module" {
+    if depth == 0 && op_data.name.is(ctx, "core.module") {
         return true;
     }
 
@@ -556,7 +549,7 @@ mod tests {
         let alias = |ctx: &IrContext, name: &str| ctx.type_alias_by_text(name).unwrap();
         let evidence = alias(&ctx, "Evidence");
         let plain = alias(&ctx, "Plain");
-        let arrayref = trunk_ir::types::TypeDataBuilder::new("wasm", "arrayref").intern(&mut ctx);
+        let arrayref = trunk_ir::types::TypeDataBuilder::new("wasm.arrayref").intern(&mut ctx);
 
         assert!(is_wasm_physical_result_assignable(&ctx, arrayref, plain));
         assert!(!is_wasm_physical_result_assignable(

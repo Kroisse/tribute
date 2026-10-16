@@ -135,7 +135,7 @@ fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
 /// The convention and function signature of a convention-proven closure type.
 fn closure_signature(ctx: &IrContext, ty: TypeRef) -> Option<(CallingConvention, func::FuncSig)> {
     let data = ctx.get_type(ty);
-    if data.dialect != "closure" || data.name != "closure" {
+    if !data.name.is(ctx, "closure.closure") {
         return None;
     }
     let convention = match ctx.type_attrs(ty).get(CALLING_CONVENTION_ATTR) {
@@ -672,8 +672,8 @@ mod tests {
     fn handler_binding_round_trips_through_its_attribute() {
         let mut ctx = IrContext::new();
         let state = trunk_ir::SymbolPath::new(["State"]);
-        let never = trunk_ir::types::TypeDataBuilder::new("core", "never").intern(&mut ctx);
-        let i32_ty = trunk_ir::types::TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let never = trunk_ir::types::TypeDataBuilder::new("core.never").intern(&mut ctx);
+        let i32_ty = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let op_name = ctx.intern_str("get");
         for (kind, result, resumptive) in [
             (super::OperationKind::Op, i32_ty, true),

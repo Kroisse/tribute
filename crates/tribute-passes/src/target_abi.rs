@@ -911,7 +911,7 @@ fn build_initial_evidence(
     location: Location,
     evidence_ty: TypeRef,
 ) -> ValueRef {
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
     let zero = arith::Const::operands()
         .value(Attribute::Int(0))
         .results(i32_ty)
@@ -970,7 +970,8 @@ pub(crate) fn dispatch_answer_type(
         .ok_or_else(|| TargetAbiError::new("CPS resume frame lacks answer type"))?;
     let results = resume_signature.results(ctx);
     if !(results.is_empty()
-        || (results.len() == 1 && is_parameterless_dialect_type(ctx, results[0], "core", "never")))
+        || (results.len() == 1
+            && is_parameterless_type(ctx, results[0], trunk_ir::dialect::core::Never::NAME)))
     {
         return Err(TargetAbiError::new(
             "CPS resume must have logical never or physical empty results",
@@ -1042,7 +1043,7 @@ fn validate_root_continuation_frame(
     phase: ContractPhase,
 ) -> Result<RootFrameContract, TargetAbiError> {
     let reference_data = ctx.get_type(frame);
-    if reference_data.dialect != "adt" || reference_data.name != "typeref" {
+    if reference_data.name != tribute_ir::dialect::adt::Typeref::NAME {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame must be an exact nominal adt.typeref",
         ));
@@ -1140,10 +1141,10 @@ fn validate_root_dispatch_type(
     };
     if callable.results(ctx) != physical_results
         || *actual_evidence != evidence
-        || !is_parameterless_dialect_type(ctx, *prompt, "core", "i32")
-        || !is_parameterless_dialect_type(ctx, *ability, "core", "i32")
-        || !is_parameterless_dialect_type(ctx, *operation, "core", "i32")
-        || !is_parameterless_dialect_type(ctx, *payload, "tribute_rt", "anyref")
+        || !is_parameterless_type(ctx, *prompt, trunk_ir::dialect::core::I32::NAME)
+        || !is_parameterless_type(ctx, *ability, trunk_ir::dialect::core::I32::NAME)
+        || !is_parameterless_type(ctx, *operation, trunk_ir::dialect::core::I32::NAME)
+        || !is_parameterless_type(ctx, *payload, tribute_ir::dialect::tribute_rt::Anyref::NAME)
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch operands differ from the exact terminal ABI",
@@ -1168,7 +1169,11 @@ fn validate_root_dispatch_type(
         || resume.inputs(ctx).len() != 3
         || resume.inputs(ctx)[0] != evidence
         || resume.inputs(ctx)[1] != frame
-        || !is_parameterless_dialect_type(ctx, resume.inputs(ctx)[2], "tribute_rt", "anyref")
+        || !is_parameterless_type(
+            ctx,
+            resume.inputs(ctx)[2],
+            tribute_ir::dialect::tribute_rt::Anyref::NAME,
+        )
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch resume differs from the exact frame ABI",
@@ -1203,10 +1208,9 @@ fn dispatch_entry_function_type(
         .as_type_ref())
 }
 
-fn is_parameterless_dialect_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
-    ctx.types().is_dialect(ty, dialect, name)
-        && ctx.get_type(ty).params.is_empty()
-        && ctx.get_type(ty).attrs.is_empty()
+fn is_parameterless_type(ctx: &IrContext, ty: TypeRef, name: trunk_ir::TypeName) -> bool {
+    let data = ctx.get_type(ty);
+    data.name == name && data.params.is_empty() && data.attrs.is_empty()
 }
 
 fn set_root_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
@@ -1747,7 +1751,7 @@ impl<'a> PhysicalTypeConverter<'a> {
             return Ok(converted);
         }
         let data = self.ctx.get_type(ty).clone();
-        if data.dialect == "closure" && data.name == "closure" {
+        if tribute_ir::dialect::closure::Closure::matches(self.ctx, ty) {
             let [function] = data.params.as_slice() else {
                 return Err(TargetAbiError::new(
                     "target ABI: closure type must contain one callable",
@@ -1763,7 +1767,7 @@ impl<'a> PhysicalTypeConverter<'a> {
             self.embedded.insert(ty, converted);
             return Ok(converted);
         }
-        if data.dialect == func::DIALECT_NAME() && data.name == func::FUNC_SIG() {
+        if func::FuncSig::matches(self.ctx, ty) {
             let callable = func::FuncSig::from_type_ref(self.ctx, ty).ok_or_else(|| {
                 TargetAbiError::new("target ABI: malformed nested func.func_sig type")
             })?;
@@ -2014,8 +2018,7 @@ mod tests {
                 }
                 7 | 8 => {
                     let ty = if mutation == 7 {
-                        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
-                            .intern(&mut ctx)
+                        TypeDataBuilder::new("core.i32").intern(&mut ctx)
                     } else {
                         core::ptr(&mut ctx).as_type_ref()
                     };
@@ -2227,7 +2230,7 @@ mod tests {
         let frame_name = "__tribute_continuation_frame_root_nil";
         let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
             &mut ctx, evidence, frame, anyref, i32_ty,
         );
@@ -2294,8 +2297,7 @@ mod tests {
         };
         assert_eq!(ctx.value_ty(ctx.op_operands(call)[0]), *worker_evidence);
         assert_eq!(ctx.value_ty(ctx.op_operands(call)[1]), *worker_frame);
-        assert_eq!(ctx.get_type(*worker_frame).dialect, Symbol::new("adt"));
-        assert_eq!(ctx.get_type(*worker_frame).name, Symbol::new("typeref"));
+        assert!(ctx.get_type(*worker_frame).name == tribute_ir::dialect::adt::Typeref::NAME);
         let frame_name = ctx.type_attrs(*worker_frame).get_str("name").unwrap();
         let frame_layout = ctx
             .type_alias_by_text(frame_name)
@@ -2553,7 +2555,7 @@ mod tests {
             let never = core::never(&mut ctx).as_type_ref();
             let evidence = ability::evidence_adt_type_ref(&mut ctx);
             let frame_name = "__tribute_malformed_root_frame";
-            let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+            let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
             let frame = tribute_ir::continuation_frame::ref_type(
                 &mut ctx,
                 frame_name,
@@ -2601,9 +2603,7 @@ mod tests {
         let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
         let done = tribute_core::calling_convention::cps_done_type(&mut ctx, nil);
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
-        let parameterized_i32 = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
-            .param(nil)
-            .intern(&mut ctx);
+        let parameterized_i32 = TypeDataBuilder::new("core.i32").param(nil).intern(&mut ctx);
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
             &mut ctx,
             evidence,
@@ -2900,9 +2900,7 @@ mod tests {
     fn malformed_zero_parameter_func_sig_fails_without_panicking() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, "core.module @test {}");
-        let malformed =
-            trunk_ir::types::TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
-                .intern(&mut ctx);
+        let malformed = trunk_ir::types::TypeDataBuilder::new("func.func_sig").intern(&mut ctx);
         ctx.op_attrs_mut(module.op())
             .insert("malformed_callable", Attribute::Type(malformed));
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);

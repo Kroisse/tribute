@@ -83,8 +83,8 @@ pub fn tribute_control_pre_cps_target() -> ConversionTarget {
         .legal_dialect("list")
         .legal_dialect("tribute_rt")
         .legal_dialect("tribute_io")
-        .legal_op("ability", "decl")
-        .recursive_legal_op("ability", "decl")
+        .legal_op("ability.decl")
+        .recursive_legal_op("ability.decl")
 }
 
 /// Partial post-legalization target. Unknown operations belong to later passes.
@@ -96,11 +96,6 @@ pub fn tribute_control_post_cps_target() -> ConversionTarget {
 enum TypeBoundary {
     Pre,
     Post,
-}
-
-pub(super) fn type_is(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
-    let data = ctx.get_type(ty);
-    data.dialect == dialect && data.name == name
 }
 
 fn walk_attribute_types(
@@ -126,11 +121,11 @@ fn walk_type(
     let data = ctx.get_type(ty);
     let forbidden = match boundary {
         TypeBoundary::Pre => {
-            type_is(ctx, ty, "func", "func_sig")
-                || type_is(ctx, ty, "closure", "closure")
-                || matches!(data.dialect.as_str(), "ability" | "effect")
+            trunk_ir::dialect::func::FuncSig::matches(ctx, ty)
+                || tribute_ir::dialect::closure::Closure::matches(ctx, ty)
+                || matches!(data.name.dialect(ctx), "ability" | "effect")
         }
-        TypeBoundary::Post => data.dialect == "tribute_control",
+        TypeBoundary::Post => data.name.dialect(ctx) == "tribute_control",
     };
     if forbidden {
         errors.push(format!(
@@ -214,18 +209,16 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let closure_ty = ctx.get_type(ctx.value_ty(value));
-        let valid = if closure_ty.dialect == "closure"
-            && closure_ty.name == "closure"
-            && closure_ty.params.len() == 1
-        {
+        let valid = if closure_ty.name.is(ctx, "closure.closure") && closure_ty.params.len() == 1 {
             func::FuncSig::from_type_ref(ctx, closure_ty.params[0]).is_some_and(|function| {
                 let params = function.inputs(ctx);
                 let result = function.single_result(ctx);
-                result.is_some_and(|result| type_is(ctx, result, "tribute_rt", "anyref"))
-                    && params.len() == 3
+                result.is_some_and(|result| {
+                    tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, result)
+                }) && params.len() == 3
                     && params[0] == evidence
-                    && type_is(ctx, params[1], "core", "i32")
-                    && type_is(ctx, params[2], "tribute_rt", "anyref")
+                    && trunk_ir::dialect::core::I32::matches(ctx, params[1])
+                    && tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, params[2])
             })
         } else {
             false
@@ -294,7 +287,7 @@ fn enclosing_func_result(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
             let ty = function.r#type(ctx);
             return func::FuncSig::from_type_ref(ctx, ty)?.single_result(ctx);
         }
-        if ctx.op(owner).dialect != "scf" {
+        if ctx.op(owner).name.dialect(ctx) != "scf" {
             return None;
         }
         current = owner;
@@ -319,27 +312,24 @@ fn verify_physical_callable_graph(
             .get_i64(CALLING_CONVENTION_ATTR)
             .ok()
             .flatten();
-        let requires_convention = (data.dialect == "func"
-            && matches!(
-                data.name.with_str(|name| name.to_owned()).as_str(),
-                "func" | "call" | "call_indirect" | "tail_call" | "tail_call_indirect"
-            ))
-            || (data.dialect == "closure"
-                && matches!(
-                    data.name.with_str(|name| name.to_owned()).as_str(),
-                    "lambda" | "new"
-                ));
+        let requires_convention = func::Func::matches(ctx, op)
+            || func::Call::matches(ctx, op)
+            || func::CallIndirect::matches(ctx, op)
+            || func::TailCall::matches(ctx, op)
+            || func::TailCallIndirect::matches(ctx, op)
+            || closure::Lambda::matches(ctx, op)
+            || closure::New::matches(ctx, op);
         if requires_convention && !matches!(op_convention, Some(0..=2)) {
             failures.push(BoundaryFailure {
                 op: Some(op),
                 location: Some(data.location),
                 message: format!(
-                    "{}.{} must carry exact Direct, EvidenceDirect, or Cps metadata",
-                    data.dialect, data.name
+                    "{} must carry exact Direct, EvidenceDirect, or Cps metadata",
+                    data.name.display(ctx)
                 ),
             });
         }
-        if data.dialect == "func" && data.name == "tail_call" {
+        if data.name.is(ctx, "func.tail_call") {
             let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                 failures.push(BoundaryFailure {
                     op: Some(op),
@@ -363,7 +353,7 @@ fn verify_physical_callable_graph(
             let is_cps = op_convention == Some(CallingConvention::Cps as i64);
             let valid_never = function
                 .and_then(|function| function.single_result(ctx))
-                .is_some_and(|result| type_is(ctx, result, "core", "never"));
+                .is_some_and(|result| trunk_ir::dialect::core::Never::matches(ctx, result));
             if is_cps && !valid_never {
                 failures.push(BoundaryFailure {
                     op: Some(op),
@@ -414,7 +404,7 @@ fn verify_physical_callable_graph(
                     });
                 }
             }
-        } else if data.dialect == "func" && data.name == "call" {
+        } else if data.name.is(ctx, "func.call") {
             let callee = ctx.op_attrs(op).get_symbol_ref("callee");
             if let Some(callee) = callee {
                 match symbols
@@ -434,8 +424,7 @@ fn verify_physical_callable_graph(
                     }),
                 }
             }
-        } else if data.dialect == "func"
-            && data.name == "call_indirect"
+        } else if data.name.is(ctx, "func.call_indirect")
             && op_convention == Some(CallingConvention::Cps as i64)
         {
             failures.push(BoundaryFailure {
@@ -498,7 +487,7 @@ pub(super) fn verify_source_conversion_shapes(
                 "tribute-control-pre-cps is structured and forbids block successors",
             ));
         }
-        if data.dialect == "scf" && data.name == "switch" {
+        if data.name.is(ctx, "scf.switch") {
             let body_region =
                 ctx.op_regions(op).exactly_one().ok().filter(|_| {
                     ctx.op_operands(op).len() == 1 && ctx.op_result_types(op).is_empty()
@@ -508,8 +497,8 @@ pub(super) fn verify_source_conversion_shapes(
                 if let [body] = blocks.as_slice() {
                     for arm in ctx.block(*body).ops.iter().copied() {
                         let arm_data = ctx.op(arm);
-                        let is_case = arm_data.dialect == "scf" && arm_data.name == "case";
-                        let is_default = arm_data.dialect == "scf" && arm_data.name == "default";
+                        let is_case = arm_data.name.is(ctx, "scf.case");
+                        let is_default = arm_data.name.is(ctx, "scf.default");
                         if !is_case && !is_default {
                             failures.push(failure(
                                 ctx,
@@ -590,14 +579,13 @@ pub fn verify_tribute_control_pre_cps(
                     op: Some(illegal.op),
                     location: Some(ctx.op(illegal.op).location),
                     message: format!(
-                        "{} operation {}.{} is not legal",
+                        "{} operation {} is not legal",
                         match illegal.legality {
                             trunk_ir::rewrite::LegalityCheck::Illegal => "illegal",
                             trunk_ir::rewrite::LegalityCheck::Unknown => "unknown",
                             trunk_ir::rewrite::LegalityCheck::Legal => "unexpected legal",
                         },
-                        ctx.op(illegal.op).dialect,
-                        ctx.op(illegal.op).name
+                        ctx.op(illegal.op).name.display(ctx)
                     ),
                 }),
         );
@@ -641,9 +629,8 @@ pub fn verify_tribute_control_post_cps(
                     op: Some(illegal.op),
                     location: Some(ctx.op(illegal.op).location),
                     message: format!(
-                        "residual {}.{} operation",
-                        ctx.op(illegal.op).dialect,
-                        ctx.op(illegal.op).name
+                        "residual {} operation",
+                        ctx.op(illegal.op).name.display(ctx)
                     ),
                 }),
         );

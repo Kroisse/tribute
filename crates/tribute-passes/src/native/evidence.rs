@@ -90,8 +90,8 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         return;
     };
     let loc = ctx.op(module.op()).location;
-    let ptr_ty = TypeDataBuilder::new("core", "ptr").intern(ctx);
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let ptr_ty = TypeDataBuilder::new("core.ptr").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
     // Evidence is a managed reference: the runtime borrows evidence arguments
     // and returns a result the caller owns, which includes the dispatch
     // closure it looks up. A closure handed to the runtime crosses as a raw
@@ -152,17 +152,17 @@ fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: Module) {
 
 fn native_effect_abi_target() -> ConversionTarget {
     ConversionTarget::new()
-        .legal_op("func", "func")
-        .recursive_legal_op("func", "func")
-        .illegal_op("effect", "extend")
-        .illegal_op("effect", "mask")
-        .illegal_op("effect", "dup")
-        .illegal_op("effect", "outer")
-        .illegal_op("effect", "tail")
-        .illegal_op("effect", "with_tail")
-        .illegal_op("effect", "push")
-        .illegal_op("effect", "dispatch_tail")
-        .illegal_op("effect", "dispatch_cps")
+        .legal_op("func.func")
+        .recursive_legal_op("func.func")
+        .illegal_op("effect.extend")
+        .illegal_op("effect.mask")
+        .illegal_op("effect.dup")
+        .illegal_op("effect.outer")
+        .illegal_op("effect.tail")
+        .illegal_op("effect.with_tail")
+        .illegal_op("effect.push")
+        .illegal_op("effect.dispatch_tail")
+        .illegal_op("effect.dispatch_cps")
 }
 
 fn lower_effect_abi_to_native(
@@ -225,11 +225,11 @@ fn is_evidence_type(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 fn core_ptr_type(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core", "ptr").intern(ctx)
+    TypeDataBuilder::new("core.ptr").intern(ctx)
 }
 
 fn core_i32_type(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core", "i32").intern(ctx)
+    TypeDataBuilder::new("core.i32").intern(ctx)
 }
 
 fn lower_evidence_dispatch_operand(
@@ -468,15 +468,12 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
     let ops = ctx.block(block).ops.clone();
 
     for op in ops {
-        let op_data = ctx.op(op);
-        let dialect = op_data.dialect.clone();
-        let name = op_data.name.clone();
-        let loc = op_data.location;
+        let loc = ctx.op(op).location;
 
         // --- adt.ref_null with evidence type → func.call @__tribute_evidence_empty ---
         // The root CPS bridge creates `adt.ref_null {type = evidence}` for empty evidence.
         // Without this, the null ptr gets unboxed via `clif.load` which dereferences null.
-        if dialect == "adt" && name == "ref_null" {
+        if tribute_ir::dialect::adt::RefNull::matches(ctx, op) {
             let result_types = ctx.op_result_types(op).to_vec();
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
                 let old_result = ctx.op_result(op, 0);
@@ -492,7 +489,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
         }
 
         // --- adt.array_new with evidence type → func.call @__tribute_evidence_empty ---
-        if dialect == "adt" && name == "array_new" {
+        if tribute_ir::dialect::adt::ArrayNew::matches(ctx, op) {
             let result_types = ctx.op_result_types(op).to_vec();
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
                 // Evidence array_new must represent an empty evidence vector.

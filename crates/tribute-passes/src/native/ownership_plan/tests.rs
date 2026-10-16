@@ -2534,7 +2534,7 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
   func.func @f(%value: !R) -> !R { func.return %value }
 }"#,
     );
-    let i64_ty = TypeDataBuilder::new("core", "i64").intern(&mut ctx);
+    let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
     let stale = tribute_ir::dialect::adt::struct_type(
         &mut ctx,
         "R",
@@ -2755,8 +2755,7 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
         .types()
         .iter()
         .filter_map(|(ty, data)| {
-            (data.dialect == "adt" && data.name == "struct" && ty != plan.rtti_types()[0].ty)
-                .then_some(ty)
+            (data.name.is(&ctx, "adt.struct") && ty != plan.rtti_types()[0].ty).then_some(ty)
         })
         .collect::<Vec<_>>();
     assert_eq!(candidates.len(), 2);

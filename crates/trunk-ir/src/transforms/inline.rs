@@ -476,7 +476,7 @@ mod mechanics {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     /// Build `func.func @name(params) -> ret_ty { body_builder }`.
@@ -536,11 +536,10 @@ mod mechanics {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(region)
+            .build(ctx);
         ctx.create_op(module_data)
     }
 
@@ -624,12 +623,11 @@ mod mechanics {
                     .results(i32_ty)
                     .build(ctx, loc);
                 ctx.push_op(entry, one.op_ref());
-                let add_data =
-                    OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("add"))
-                        .operand(args[0])
-                        .operand(one.result(ctx))
-                        .result(i32_ty)
-                        .build(ctx);
+                let add_data = OperationDataBuilder::new(loc, "arith.add")
+                    .operand(args[0])
+                    .operand(one.result(ctx))
+                    .result(i32_ty)
+                    .build(ctx);
                 let add = ctx.create_op(add_data);
                 ctx.push_op(entry, add);
                 let add_result = ctx.op_results(add)[0];
@@ -834,7 +832,7 @@ mod mechanics {
             if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
                 has_call = true;
             }
-            if ctx.op(op).dialect == "arith" && ctx.op(op).name == "const" {
+            if ctx.op(op).name.is(ctx, "arith.const") {
                 has_const = true;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -877,7 +875,7 @@ mod pass {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn build_func<F>(
@@ -936,11 +934,10 @@ mod pass {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(region)
+            .build(ctx);
         let module_op = ctx.create_op(module_data);
         Module::new(ctx, module_op).unwrap()
     }
@@ -1203,7 +1200,7 @@ mod pass {
         });
 
         let fn_ty = crate::dialect::func::func_sig(&mut ctx, [], [i32_ty]).as_type_ref();
-        let helper_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+        let helper_data = OperationDataBuilder::new(loc, "func.func")
             .attr("sym_name", Attribute::String(ctx.intern_str("helper")))
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
@@ -1451,7 +1448,8 @@ mod pass {
         );
 
         let total_changes = {
-            let dispatcher = FoldDispatchPattern::single("arith", "addi", fold_addi);
+            let dispatcher =
+                FoldDispatchPattern::single(crate::dialect::arith::Addi::NAME, fold_addi);
             let applicator = PatternApplicator::new(TypeConverter::new())
                 .add_pattern(inline_pattern)
                 .add_pattern_box(Box::new(dispatcher));
@@ -1488,7 +1486,7 @@ mod pass {
             if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
                 has_call = true;
             }
-            if ctx.op(op).dialect == "arith" && ctx.op(op).name == "addi" {
+            if ctx.op(op).name.is(ctx, "arith.addi") {
                 has_add = true;
             }
             ControlFlow::Continue(WalkAction::Advance)

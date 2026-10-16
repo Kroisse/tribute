@@ -142,9 +142,9 @@ fn lower(
 ) -> Result<(), ConversionError> {
     // Pre-intern types for patterns
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let i64_ty = TypeDataBuilder::new("core", "i64").intern(ctx);
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
-    let f64_ty = TypeDataBuilder::new("core", "f64").intern(ctx);
+    let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
+    let f64_ty = TypeDataBuilder::new("core.f64").intern(ctx);
 
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(BoxIntPattern {
@@ -182,8 +182,8 @@ fn lower(
 fn tribute_rt_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
         .illegal_dialect("tribute_rt")
-        .legal_op("tribute_rt", "retain")
-        .legal_op("tribute_rt", "release")
+        .legal_op("tribute_rt.retain")
+        .legal_op("tribute_rt.release")
 }
 
 // =============================================================================

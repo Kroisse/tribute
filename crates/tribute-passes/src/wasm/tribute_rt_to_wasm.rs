@@ -32,11 +32,11 @@ use trunk_ir::types::{AttributeMap, Location, TypeDataBuilder};
 
 /// Helper to create arena type refs for common types.
 fn i32_type(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core", "i32").intern(ctx)
+    TypeDataBuilder::new("core.i32").intern(ctx)
 }
 
 fn f64_type(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core", "f64").intern(ctx)
+    TypeDataBuilder::new("core.f64").intern(ctx)
 }
 
 /// Get the BoxedF64 struct type:

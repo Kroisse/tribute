@@ -15,7 +15,6 @@ use tribute_core::get_calling_convention;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_control::{EVIDENCE_PLAN_ATTR, EvidenceStep};
-use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
@@ -32,7 +31,7 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 // ============================================================================
 
 fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core", "i32").intern(ctx)
+    TypeDataBuilder::new("core.i32").intern(ctx)
 }
 
 #[derive(Debug)]
@@ -99,7 +98,7 @@ fn final_handle_dispatch_shape(
         ));
     };
     let prompt_ty = ctx.get_type(ctx.value_ty(prompt_tag));
-    if prompt_ty.dialect != "core" || prompt_ty.name != "i32" {
+    if !prompt_ty.name.is(ctx, "core.i32") {
         return Err(error(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
         ));
@@ -207,15 +206,14 @@ fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
         // fn __tribute_next_tag() -> i32
         let func_ty = func::func_sig(ctx, std::iter::empty(), [i32_ty]).as_type_ref();
 
-        let data =
-            trunk_ir::OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_str("__tribute_next_tag")),
-                )
-                .attr("type", Attribute::Type(func_ty))
-                .attr("abi", ctx.string_attr("C"))
-                .build(ctx);
+        let data = trunk_ir::OperationDataBuilder::new(loc, "func.func")
+            .attr(
+                "sym_name",
+                Attribute::String(ctx.intern_str("__tribute_next_tag")),
+            )
+            .attr("type", Attribute::Type(func_ty))
+            .attr("abi", ctx.string_attr("C"))
+            .build(ctx);
         let func_op = ctx.create_op(data);
         let first_op = ctx.block(module_block).ops.first().copied();
         if let Some(first) = first_op {

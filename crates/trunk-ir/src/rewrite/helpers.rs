@@ -141,7 +141,7 @@ pub fn erase_op(ctx: &mut IrContext, op: OpRef) {
 mod tests {
     use super::*;
     use crate::location::Span;
-    use crate::symbol::Symbol;
+
     use crate::*;
     use smallvec::smallvec;
     fn test_ctx() -> (IrContext, Location) {
@@ -152,11 +152,11 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn make_const(ctx: &mut IrContext, loc: Location, ty: TypeRef, val: i128) -> OpRef {
-        let data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+        let data = OperationDataBuilder::new(loc, "arith.const")
             .result(ty)
             .attr("value", Attribute::Int(val))
             .build(ctx);

@@ -2316,7 +2316,7 @@ fn main() -> Nil {
         let i32_type = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+            .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
             .expect("fixture must contain core.i32");
         let calls = clif_indirect_calls(&ctx, module);
         assert_eq!(
@@ -2359,7 +2359,7 @@ fn main() ->{Io} Nil {
         let i32_type = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+            .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
             .expect("fixture must contain core.i32");
         let calls: Vec<_> = clif_indirect_calls(&ctx, module)
             .into_iter()
@@ -2611,7 +2611,7 @@ fn main() ->{Io} Nil {
                     .copied()
                     .find(|&op| {
                         let data = ctx.op(op);
-                        data.dialect == "arith" && data.name == "addi"
+                        data.name.is(ctx, "arith.addi")
                     })
                     .expect("test input must contain arith.addi");
 
@@ -2664,7 +2664,7 @@ fn main() ->{Io} Nil {
                 let add_op = ctx.block(func_block).ops[0];
                 // Retype the result without touching use-chains, so only the
                 // `T` binding of `arith.addi` is violated.
-                let i64_ty = trunk_ir::types::TypeDataBuilder::new("core", "i64").intern(ctx);
+                let i64_ty = trunk_ir::types::TypeDataBuilder::new("core.i64").intern(ctx);
                 ctx.set_op_result_type(add_op, 0, i64_ty);
                 Ok(())
             },
@@ -3276,8 +3276,7 @@ fn main() -> Nil {
             ty
         }
         fn target(ir: &IrContext, ty: TypeRef) -> TypeRef {
-            let data = ir.get_type(ty);
-            assert_eq!(data.name, Symbol::new("typeref"));
+            assert!(tribute_ir::dialect::adt::Typeref::matches(ir, ty));
             ir.type_alias_by_text(ir.type_attrs(ty).get_str("name").unwrap())
                 .expect("referenced layout")
         }
@@ -3367,29 +3366,30 @@ fn main() -> Nil {}
                 )
                 .unwrap();
             }
-            for (suffix, primitive) in [("Int", "i32"), ("Bool", "i1")] {
+            use trunk_ir::dialect::core::{I1, I32};
+            for (suffix, primitive) in [("Int", I32::NAME), ("Bool", I1::NAME)] {
                 let inner = alias(&ir, &format!("Inner${suffix}"));
                 let value = get_struct_fields(&ir, inner).unwrap()[0].1;
-                assert_eq!(ir.get_type(value).name, Symbol::new(primitive));
+                assert_eq!(ir.get_type(value).name, primitive);
                 let outer = get_enum_variants(&ir, alias(&ir, &format!("Outer${suffix}"))).unwrap();
                 assert_eq!(ir.str(outer[0].0), "Wrap");
                 assert_eq!(target(&ir, outer[0].1[0]), inner);
                 assert!(outer[2].1.is_empty());
                 assert_eq!(outer[3].1.len(), 2);
                 assert_eq!(outer[3].1[0], value);
-                assert_eq!(ir.get_type(outer[3].1[1]).name, Symbol::new("i1"));
+                assert_eq!(ir.get_type(outer[3].1[1]).name, I1::NAME);
                 assert_eq!(target(&ir, outer[4].1[0]), alias(&ir, "std::String"));
                 let tuple = target(&ir, outer[1].1[0]);
                 let fields = get_struct_fields(&ir, tuple).unwrap();
                 assert_eq!(fields[0].1, value);
                 let callback = ir.get_type(fields[1].1);
                 assert_eq!(
-                    callback.dialect,
-                    Symbol::new(if after_cps {
+                    callback.name.dialect(&ir),
+                    if after_cps {
                         "closure"
                     } else {
                         "tribute_control"
-                    })
+                    }
                 );
                 let boxed = get_enum_variants(&ir, alias(&ir, &format!("Boxed${suffix}"))).unwrap();
                 assert_eq!(boxed[0].1, vec![value]);
@@ -3400,10 +3400,10 @@ fn main() -> Nil {}
             assert_eq!(target(&ir, link[0].1), alias(&ir, "Loop$Int"));
             let recursive = get_enum_variants(&ir, alias(&ir, "Loop$Int")).unwrap();
             assert_eq!(target(&ir, recursive[0].1[0]), alias(&ir, "Link$Int"));
-            for (name, primitive) in [("A::Token$Int", "i32"), ("B::Token$Bool", "i1")] {
+            for (name, primitive) in [("A::Token$Int", I32::NAME), ("B::Token$Bool", I1::NAME)] {
                 let variants = get_enum_variants(&ir, alias(&ir, name)).unwrap();
                 assert_eq!(ir.str(variants[0].0), "Item");
-                assert_eq!(ir.get_type(variants[0].1[0]).name, Symbol::new(primitive));
+                assert_eq!(ir.get_type(variants[0].1[0]).name, primitive);
             }
             let output = trunk_ir::printer::print_module(&ir, logical.module.op());
             for (name, primitive) in [("Boxed$Int", "core.i32"), ("Boxed$Bool", "core.i1")] {
@@ -3423,13 +3423,16 @@ fn main() -> Nil {}
         use tribute_ir::dialect::tribute_control;
         use trunk_ir::{Symbol, TypeRef};
 
-        fn layout(ir: &IrContext, name: &Symbol, kind: &str) -> TypeRef {
+        const STRUCT: trunk_ir::TypeName =
+            <tribute_ir::dialect::adt::Struct as trunk_ir::ops::DialectType>::NAME;
+        const ENUM: trunk_ir::TypeName =
+            <tribute_ir::dialect::adt::Enum as trunk_ir::ops::DialectType>::NAME;
+
+        fn layout(ir: &IrContext, name: &Symbol, kind: trunk_ir::TypeName) -> TypeRef {
             let ty = ir
                 .type_alias_by_name(name)
                 .expect("published nominal layout");
-            let data = ir.get_type(ty);
-            assert_eq!(data.dialect, Symbol::new("adt"));
-            assert_eq!(data.name, Symbol::new(kind));
+            assert_eq!(ir.get_type(ty).name, kind);
             assert!(
                 ir.type_attrs(ty)
                     .get_str("name")
@@ -3452,8 +3455,7 @@ fn main() -> Nil {}
 
         fn reference_name(ir: &IrContext, ty: TypeRef) -> Symbol {
             let data = ir.get_type(ty);
-            assert_eq!(data.dialect, Symbol::new("adt"));
-            assert_eq!(data.name, Symbol::new("typeref"));
+            assert!(data.name == tribute_ir::dialect::adt::Typeref::NAME);
             Symbol::new(ir.type_attrs(ty).get_str("name").expect("nominal identity"))
         }
 
@@ -3497,9 +3499,9 @@ fn main() -> Nil {}
                 .expect("CPS converts published layout fields");
             }
             for (function, nominal, kind) in [
-                ("keep_a", "A::Token$Nat", "struct"),
-                ("keep_b", "B::Token$Nat", "struct"),
-                ("keep_choice", "Choice$Nat", "enum"),
+                ("keep_a", "A::Token$Nat", STRUCT),
+                ("keep_b", "B::Token$Nat", STRUCT),
+                ("keep_choice", "Choice$Nat", ENUM),
             ] {
                 let parameter = logical
                     .module
@@ -3529,29 +3531,27 @@ fn main() -> Nil {}
                 layout(&ir, &name, kind);
             }
             assert_ne!(
-                layout(&ir, &Symbol::new("A::Token$Nat"), "struct"),
-                layout(&ir, &Symbol::new("B::Token$Nat"), "struct")
+                layout(&ir, &Symbol::new("A::Token$Nat"), STRUCT),
+                layout(&ir, &Symbol::new("B::Token$Nat"), STRUCT)
             );
             for (owner, target) in [("Node", "Node"), ("First", "Second"), ("Second", "First")] {
-                let owner = layout(&ir, &Symbol::new(owner), "struct");
+                let owner = layout(&ir, &Symbol::new(owner), STRUCT);
                 let field = get_struct_fields(&ir, owner).unwrap()[0].1;
                 let name = reference_name(&ir, field);
                 assert_eq!(name, Symbol::new(target));
-                layout(&ir, &name, "struct");
+                layout(&ir, &name, STRUCT);
             }
-            let holder = layout(&ir, &Symbol::new("Holder"), "struct");
+            let holder = layout(&ir, &Symbol::new("Holder"), STRUCT);
             let pair = get_struct_fields(&ir, holder).unwrap()[0].1;
-            let tuple = layout(&ir, &reference_name(&ir, pair), "struct");
+            let tuple = layout(&ir, &reference_name(&ir, pair), STRUCT);
             let fields = get_struct_fields(&ir, tuple).unwrap();
             let callback = ir.get_type(fields[1].1);
             if after_cps {
                 assert_ne!(Some(tuple), source_tuple);
-                assert_eq!(callback.dialect, Symbol::new("closure"));
-                assert_eq!(callback.name, Symbol::new("closure"));
+                assert!(callback.name.is(&ir, "closure.closure"));
             } else {
                 source_tuple = Some(tuple);
-                assert_eq!(callback.dialect, Symbol::new("tribute_control"));
-                assert_eq!(callback.name, Symbol::new("func_sig"));
+                assert!(callback.name.is(&ir, "tribute_control.func_sig"));
             }
         }
     }
@@ -3559,7 +3559,7 @@ fn main() -> Nil {}
     #[salsa_test]
     fn source_list_does_not_change_logical_prelude_signatures(db: &salsa::DatabaseImpl) {
         use tribute_ir::dialect::tribute_control;
-        use trunk_ir::{Symbol, ops::DialectOp};
+        use trunk_ir::ops::DialectOp;
 
         let source = source_from_str(
             "unused_source_list.trb",
@@ -3578,8 +3578,7 @@ fn main() -> Nil {}
                 let signature = tribute_control::FuncSig::from_type_ref(&ir, function.r#type(&ir))
                     .expect("logical signature");
                 let result = ir.get_type(signature.result(&ir));
-                assert_eq!(result.dialect, Symbol::new("tribute_rt"));
-                assert_eq!(result.name, Symbol::new("anyref"));
+                assert!(result.name.is(&ir, "tribute_rt.anyref"));
                 assert_eq!(signature.inputs(&ir)[1], signature.result(&ir));
                 checked += 1;
             }
@@ -3901,7 +3900,7 @@ fn main() -> Nil { }
         }
         let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
-            let site = format!("{}.{}", data.dialect, data.name);
+            let site = format!("{}", data.name.display(&ctx));
             let mut types: Vec<_> = ctx.op_result_types(op).to_vec();
             for value in data.attributes.values() {
                 value.visit_types(&mut |ty| types.push(ty));
@@ -3928,7 +3927,7 @@ fn main() -> Nil { }
     fn wasm_lowering_leaves_no_core_bytes(db: &salsa::DatabaseImpl) {
         let not_core_bytes = |ctx: &IrContext, ty| {
             let data = ctx.get_type(ty);
-            !(data.dialect == "core" && data.name == "bytes")
+            !(data.name.is(ctx, "core.bytes"))
         };
         for (path, text) in [
             (
@@ -3960,7 +3959,8 @@ fn main() ->{std::io::Io} Nil {
 
     #[salsa_test]
     fn wasm_lowering_leaves_no_tribute_rt_types(db: &salsa::DatabaseImpl) {
-        let not_tribute_rt = |ctx: &IrContext, ty| ctx.get_type(ty).dialect != "tribute_rt";
+        let not_tribute_rt =
+            |ctx: &IrContext, ty| ctx.get_type(ty).name.dialect(ctx) != "tribute_rt";
         for (path, text) in [
             (
                 "native_effects.trb",
@@ -3987,7 +3987,7 @@ fn main() ->{std::io::Io} Nil {
         // and knows no other `adt` type.
         let builtin_layout_or_not_adt = |ctx: &IrContext, ty| {
             let data = ctx.get_type(ty);
-            data.dialect != "adt"
+            data.name.dialect(ctx) != "adt"
                 || ctx
                     .type_attrs(ty)
                     .get(trunk_ir::types::LAYOUT_ATTR)
@@ -4040,7 +4040,7 @@ fn main() ->{std::io::Io} Nil {
             for name in ctx.op(op).attributes.keys() {
                 let name = ctx.str(name);
                 if name.starts_with("tribute.") && !is_preserved_attribute(name) {
-                    unexpected.insert(format!("{}.{} {name}", ctx.op(op).dialect, ctx.op(op).name));
+                    unexpected.insert(format!("{} {name}", ctx.op(op).name.display(&ctx)));
                 }
             }
             std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
@@ -4088,8 +4088,7 @@ fn main() -> String { "hello" }
 
         let user_lookalike = ctx.types().iter().find_map(|(ty, data)| {
             (ty != string_ty
-                && data.dialect == "adt"
-                && data.name == "enum"
+                && data.name.is(&ctx, "adt.enum")
                 && data.attrs.view(&ctx).get_str("name") == Some("String"))
             .then_some(ty)
         });

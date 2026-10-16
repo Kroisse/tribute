@@ -145,15 +145,11 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::printer::print_op;
     use trunk_ir::refs::PathRef;
-    use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
-    use trunk_ir::{IrContext, Span, Symbol};
+    use trunk_ir::types::{Attribute, Location};
+    use trunk_ir::{IrContext, Span};
 
     fn dummy_location() -> Location {
         Location::new(PathRef::from_u32(0), Span::default())
-    }
-
-    fn type_ref(ctx: &mut IrContext, dialect: &str, name: &str) -> trunk_ir::TypeRef {
-        TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).intern(ctx)
     }
 
     fn ability(_: &mut IrContext, name: &str) -> trunk_ir::SymbolPath {
@@ -186,8 +182,8 @@ mod tests {
     fn extend_round_trips_through_typed_wrapper() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = type_ref(&mut ctx, "core", "i32");
-        let ptr_ty = type_ref(&mut ctx, "core", "ptr");
+        let i32_ty = trunk_ir::dialect::core::I32::type_ref(&mut ctx);
+        let ptr_ty = trunk_ir::dialect::core::ptr(&mut ctx).as_type_ref();
         let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
         let ability = ability(&mut ctx, "State");
 
@@ -250,7 +246,7 @@ mod tests {
     fn evidence_operands_must_have_the_evidence_type() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let ptr_ty = type_ref(&mut ctx, "core", "ptr");
+        let ptr_ty = trunk_ir::dialect::core::ptr(&mut ctx).as_type_ref();
         let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
         let ability = ability(&mut ctx, "State");
         let evidence = const_i32(&mut ctx, loc, evidence_ty, 0);
@@ -277,7 +273,7 @@ mod tests {
     fn dispatch_ops_round_trip_and_print_generically() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let anyref_ty = type_ref(&mut ctx, "tribute_rt", "anyref");
+        let anyref_ty = crate::dialect::tribute_rt::anyref(&mut ctx).as_type_ref();
         let ability = ability(&mut ctx, "Console");
         let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
         let evidence = const_i32(&mut ctx, loc, evidence_ty, 0);

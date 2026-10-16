@@ -13,6 +13,9 @@ TrunkIR is Tribute's multi-level dialect IR, inspired by MLIR's dialect concept.
   store it. Names of at most 7 bytes are inline, trunk-ir's own declared names
   are static, and other names are reference-counted and released with their
   last symbol. A qualified name is a `SymbolPath`, one `Symbol` per component.
+- **`OpName`**, **`TypeName`** — An operation's or type's `dialect.name`,
+  `Copy` and compared by handle, not text. See
+  [operation and type names](#operation-and-type-names).
 
 ## Dialect Organization
 
@@ -163,13 +166,13 @@ iterator. Missing required inputs panic in `build`; the builder does not check
 input types.
 
 **Operation definition**: every generated operation wrapper exposes
-`DialectOp::DEF`, a static `op_def::OpDef` registered by operation name.
-`OpDef::of(ctx, op)` looks it up for any operation. An `OpDef` holds the
-declarative `op_schema::OpSchema` and the hooks its declaration opts into,
-such as `#[verify]`. `OpSchema::verify` runs the declarative stages: counts
-and attributes, individual type constraints, variable bindings, then
-projections and type lists. `OpDef::verify` adds the `#[verify]` hook after
-them; each stage runs only if the earlier ones passed.
+`DialectOp::DEF`, the `static` `op_def::OpDef` the declaration emits.
+`OpDef::of(ctx, op)` reads it from the operation's name handle. An `OpDef`
+holds the declarative `op_schema::OpSchema` and the hooks its declaration
+opts into, such as `#[verify]`. `OpSchema::verify` runs the declarative
+stages: counts and attributes, individual type constraints, variable
+bindings, then projections and type lists. `OpDef::verify` adds the
+`#[verify]` hook after them; each stage runs only if the earlier ones passed.
 `validate_operation_verifiers` runs `OpDef::verify` on each operation.
 Remaining operation-specific checks run afterwards and may assume the
 declared shape. The `tribute_control` local validator and the native backend
@@ -271,7 +274,7 @@ ctx.block_arg_attrs_mut(block, 0).insert("bind_name", name);
 `AttributeMap::from_refs(ctx, entries)` builds one from keys already pooled
 in the context, such as the entries of another map. A type is built with
 `TypeDataBuilder`, whose `attr` keys are interned when it is built:
-`TypeDataBuilder::new("core", "i32").intern(ctx)` builds and interns it.
+`TypeDataBuilder::new("core.i32").intern(ctx)` builds and interns it.
 
 Attributes that embed types (directly or inside `List`/`Dict` values) are
 converted and inspected through the shared traversal instead of matching
@@ -382,6 +385,34 @@ Matching uses typed wrappers (see [code conventions](conventions.md) for
 if let Ok(func) = func::Func::from_op(&ctx, op) { ... }
 if func::Call::matches(&ctx, op) { ... }
 ```
+
+### Operation and Type Names
+
+`OperationData::name` is an `OpName` and `TypeData::name` a `TypeName`, one
+handle for the dialect and the name together, as MLIR's `OperationName`
+is (see [the IR contract](../../new-plans/ir.md)). A name declared by
+`#[dialect]` is registered: its handle points to the `static` definition the
+declaration emits (`OpDef`, `TypeDef`), so it is valid in every context and
+compares by address. A typed wrapper's `NAME` is that handle, and `matches`
+compares it. Any other name, such as an operation the parser reads in
+generic syntax or a test dialect's, keeps its text in the context's string
+pool and is valid only in that context.
+
+Builders take a definition, a handle, or the `dialect.name` text, split at
+its first `.`; text is resolved when the builder builds, to the registered
+definition when there is one:
+
+```rust
+let op = OperationDataBuilder::new(loc, "test.op").build(ctx);
+let copy = OperationDataBuilder::new(loc, ctx.op(op).name).build(ctx);
+let ty = TypeDataBuilder::new(core::I32::NAME).intern(ctx);
+let name: OpName = ctx.intern_op_name("test.op");
+```
+
+Read a name's text through the context, the way a string attribute is read:
+`name.dialect(ctx)`, `name.strip_dialect(ctx)`, and `name.display(ctx)` for
+`dialect.name`. Prefer a wrapper's `matches` to comparing text; compare text
+with `name.is(ctx, "dialect.name")` only for a name no wrapper declares.
 
 An operation's regions and successors are read through the context, not
 through `OperationData`: `ctx.op_regions(op)` and `ctx.op_successors(op)`

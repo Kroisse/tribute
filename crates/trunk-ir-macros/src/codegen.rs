@@ -12,7 +12,7 @@ use crate::parse::{
 
 /// Generate all code for a dialect module.
 pub fn generate(crate_path: &TokenStream, module: &DialectModule) -> TokenStream {
-    let dialect_name_fn = gen_dialect_name(crate_path, &module.name);
+    let dialect_name_fn = gen_dialect_name(&module.name);
 
     let mut items = Vec::new();
     for item in &module.items {
@@ -32,38 +32,22 @@ pub fn generate(crate_path: &TokenStream, module: &DialectModule) -> TokenStream
     }
 }
 
-fn gen_dialect_name(crate_path: &TokenStream, dialect: &str) -> TokenStream {
+fn gen_dialect_name(dialect: &str) -> TokenStream {
     quote! {
-        #[allow(non_snake_case)]
-        #[inline]
-        pub fn DIALECT_NAME() -> #crate_path::Symbol {
-            #crate_path::Symbol::new(#dialect)
-        }
+        /// The dialect's name.
+        pub const DIALECT_NAME: &str = #dialect;
     }
 }
 
 fn gen_operation(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> TokenStream {
-    let op_name_fn = gen_op_name_fn(crate_path, &op.name);
     let struct_and_trait = gen_struct_and_trait(crate_path, dialect, op);
     let impl_block = gen_impl_block(crate_path, op);
     let builder = gen_fluent_builder(crate_path, dialect, op);
 
     quote! {
-        #op_name_fn
         #struct_and_trait
         #impl_block
         #builder
-    }
-}
-
-fn gen_op_name_fn(crate_path: &TokenStream, op_name: &str) -> TokenStream {
-    let upper_name = format_ident!("{}", op_name.to_shouty_snake_case());
-    quote! {
-        #[allow(non_snake_case)]
-        #[inline]
-        pub fn #upper_name() -> #crate_path::Symbol {
-            #crate_path::Symbol::new(#op_name)
-        }
     }
 }
 
@@ -74,17 +58,19 @@ fn struct_name(op_name: &str) -> proc_macro2::Ident {
 fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> TokenStream {
     let sname = struct_name(&op.name);
     let op_name = &op.name;
-    let full_name = format!("{dialect}.{op_name}");
     let def = gen_op_def(crate_path, dialect, op);
+    let def_static = format_ident!("__{}_DEF", op_name.to_shouty_snake_case());
 
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub struct #sname(#crate_path::OpRef);
 
+        // A `static`, not a constant, so that the definition has one address.
+        #[doc(hidden)]
+        static #def_static: #crate_path::op_def::OpDef = #def;
+
         impl #crate_path::ops::DialectOp for #sname {
-            const DIALECT_NAME: &'static str = #dialect;
-            const OP_NAME: &'static str = #op_name;
-            const DEF: &'static #crate_path::op_def::OpDef = &#def;
+            const DEF: &'static #crate_path::op_def::OpDef = &#def_static;
 
             fn from_op(
                 ctx: &#crate_path::IrContext,
@@ -92,9 +78,8 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
             ) -> Result<Self, #crate_path::ops::ConversionError> {
                 if !Self::matches(ctx, op) {
                     return Err(#crate_path::ops::ConversionError::WrongOperation {
-                        expected: #full_name,
-                        actual_dialect: ctx.op(op).dialect.clone(),
-                        actual_name: ctx.op(op).name.clone(),
+                        expected: Self::NAME,
+                        actual: ctx.op(op).name,
                     });
                 }
                 Ok(Self(op))
@@ -184,8 +169,10 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
         None => quote!(None),
     };
 
+    let full_name = format!("{dialect}.{op_name}");
     quote! {
         #crate_path::op_def::OpDef {
+            name: #crate_path::name::QualifiedName::new(#full_name),
             schema: #schema_mod::OpSchema {
                 dialect: #dialect,
                 name: #op_name,
@@ -864,8 +851,7 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
                 #(#pre_stmts)*
                 let mut __builder = #crate_path::OperationDataBuilder::new(
                     location,
-                    #crate_path::Symbol::new(#dialect),
-                    #crate_path::Symbol::new(#op_name),
+                    <#sname as #crate_path::ops::DialectOp>::NAME,
                 );
                 #(#build_stmts)*
                 let __data = __builder.build(ctx);
@@ -954,14 +940,12 @@ fn fixed_result_checks(crate_path: &TokenStream, op: &OperationDef) -> Vec<Token
 
 fn gen_type_def(crate_path: &TokenStream, dialect: &str, td: &TypeDefData) -> TokenStream {
     let ir_type_name = td.name.to_snake_case();
-    let type_name_fn = gen_type_name_fn(crate_path, &ir_type_name);
     let struct_and_trait = gen_type_struct_and_trait(crate_path, dialect, &ir_type_name, td);
     let impl_block = gen_type_impl_block(crate_path, td);
-    let constructor = gen_type_constructor(crate_path, dialect, &ir_type_name, td);
+    let constructor = gen_type_constructor(crate_path, td);
     let constraint = gen_type_constraint(crate_path, dialect, &ir_type_name, td);
 
     quote! {
-        #type_name_fn
         #struct_and_trait
         #impl_block
         #constructor
@@ -1016,7 +1000,8 @@ fn gen_type_constraint(
     // A type without parameters or attributes has exactly one instance.
     let fixed_type = if td.params.is_empty() && td.attrs.is_empty() {
         quote!(Some(|ctx| {
-            #crate_path::TypeDataBuilder::new(#dialect, #type_name).intern(ctx)
+            #crate_path::TypeDataBuilder::new(<#sname as #crate_path::ops::DialectType>::NAME)
+                .intern(ctx)
         }))
     } else {
         quote!(None)
@@ -1051,17 +1036,6 @@ fn gen_type_constraint(
     }
 }
 
-fn gen_type_name_fn(crate_path: &TokenStream, type_name: &str) -> TokenStream {
-    let upper_name = format_ident!("{}", type_name.to_shouty_snake_case());
-    quote! {
-        #[allow(non_snake_case)]
-        #[inline]
-        pub fn #upper_name() -> #crate_path::Symbol {
-            #crate_path::Symbol::new(#type_name)
-        }
-    }
-}
-
 fn gen_type_struct_and_trait(
     crate_path: &TokenStream,
     dialect: &str,
@@ -1069,14 +1043,25 @@ fn gen_type_struct_and_trait(
     td: &TypeDefData,
 ) -> TokenStream {
     let sname = struct_name(&td.name);
+    let full_name = format!("{dialect}.{type_name}");
+    let def_static = format_ident!("__{}_TYPE_DEF", type_name.to_shouty_snake_case());
 
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub struct #sname(#crate_path::TypeRef);
 
+        // A `static`, not a constant, so that the definition has one address.
+        #[doc(hidden)]
+        static #def_static: #crate_path::type_def::TypeDef = #crate_path::type_def::TypeDef {
+            name: #crate_path::name::QualifiedName::new(#full_name),
+        };
+
+        #crate_path::inventory::submit! {
+            #crate_path::type_def::TypeDefRegistration(&#def_static)
+        }
+
         impl #crate_path::ops::DialectType for #sname {
-            const DIALECT_NAME: &'static str = #dialect;
-            const TYPE_NAME: &'static str = #type_name;
+            const DEF: &'static #crate_path::type_def::TypeDef = &#def_static;
 
             fn from_type_ref(
                 ctx: &#crate_path::IrContext,
@@ -1185,12 +1170,7 @@ fn gen_type_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStre
     gen_map_attr_accessor(crate_path, attr, quote!(ctx.type_attrs(self.0)))
 }
 
-fn gen_type_constructor(
-    crate_path: &TokenStream,
-    dialect: &str,
-    type_name: &str,
-    td: &TypeDefData,
-) -> TokenStream {
+fn gen_type_constructor(crate_path: &TokenStream, td: &TypeDefData) -> TokenStream {
     let sname = struct_name(&td.name);
 
     // Build parameter list
@@ -1252,8 +1232,7 @@ fn gen_type_constructor(
         ) -> #sname {
             #[allow(unused_mut)]
             let mut __builder = #crate_path::TypeDataBuilder::new(
-                #dialect,
-                #type_name,
+                <#sname as #crate_path::ops::DialectType>::NAME,
             );
             #(#body_stmts)*
             #sname(__builder.intern(ctx))

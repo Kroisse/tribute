@@ -67,15 +67,15 @@ fn adt_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
         .legal_dialect("clif")
         .illegal_dialect("adt")
-        .illegal_op("tribute_rtti", "descriptor")
-        .legal_op("adt", "struct_new")
-        .legal_op("adt", "variant_new")
-        .legal_op("adt", "array_new")
-        .legal_op("adt", "array_get")
-        .legal_op("adt", "array_set")
-        .legal_op("adt", "array_len")
-        .legal_op("adt", "string_const")
-        .legal_op("adt", "bytes_const")
+        .illegal_op("tribute_rtti.descriptor")
+        .legal_op("adt.struct_new")
+        .legal_op("adt.variant_new")
+        .legal_op("adt.array_new")
+        .legal_op("adt.array_get")
+        .legal_op("adt.array_set")
+        .legal_op("adt.array_len")
+        .legal_op("adt.string_const")
+        .legal_op("adt.bytes_const")
 }
 
 /// The converted result type of a comparison-like op, if it can hold the `i8`
@@ -90,7 +90,7 @@ fn flag_result_type(ctx: &IrContext, op: OpRef, rewriter: &PatternRewriter<'_>) 
 }
 
 fn intern_i8_type(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core", "i8").intern(ctx)
+    TypeDataBuilder::new("core.i8").intern(ctx)
 }
 
 struct StructGetPattern;
@@ -356,7 +356,7 @@ mod tests {
             error
                 .operations()
                 .iter()
-                .any(|illegal| illegal.dialect == "adt" && illegal.name == "struct_get")
+                .any(|illegal| illegal.name == "adt.struct_get")
         );
     }
 
@@ -448,7 +448,7 @@ mod tests {
             error
                 .operations()
                 .iter()
-                .any(|illegal| illegal.dialect == "adt" && illegal.name == "variant_get")
+                .any(|illegal| illegal.name == "adt.variant_get")
         );
     }
 
@@ -469,7 +469,7 @@ mod tests {
             error
                 .operations()
                 .iter()
-                .any(|illegal| illegal.dialect == "adt" && illegal.name == "variant_is")
+                .any(|illegal| illegal.name == "adt.variant_is")
         );
     }
 

@@ -52,23 +52,17 @@ pub struct StructLayout {
 /// After type conversion, all types should be one of the core types.
 /// Unknown types default to pointer size (8 bytes) for safety.
 pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
-    let data = ctx.get_type(ty);
-    if data.dialect != "core" {
-        return (8, 8);
-    }
-    let name = data.name.clone();
-    if name == "i8" {
+    use trunk_ir::dialect::core::{F32, I1, I8, I16, I32};
+
+    let name = ctx.get_type(ty).name;
+    if name == I8::NAME {
         (1, 1)
-    } else if name == "i16" {
+    } else if name == I16::NAME {
         (2, 2)
-    } else if matches!(name.as_str(), "i32" | "i1") {
-        (4, 4)
-    } else if name == "i64" {
-        (8, 8)
-    } else if name == "f32" {
+    } else if name == I32::NAME || name == I1::NAME || name == F32::NAME {
         (4, 4)
     } else {
-        // f64, ptr, and any unknown types default to 8-byte size/align
+        // i64, f64, ptr, and any unknown types default to 8-byte size/align
         (8, 8)
     }
 }

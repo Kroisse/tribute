@@ -468,16 +468,28 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   legalization에서 실제 adapter를 생성해야 한다.
 - `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.const`는
   nil을 만들지 않는다.
-- Operation과 type의 이름은 `Symbol`이다. Symbol table 정의의 qualified path는
-  component마다 `Symbol` 하나인 `SymbolPath`로 저장한다. Component가 없는
-  `SymbolPath`는 root module을 가리키며, 어떤 path에서 마지막 component를 뺀 path는
-  그 정의를 둘러싼 module의 path다. 정의의 qualified path와 symbol 참조에는
+- Operation과 type의 이름은 `<dialect>.<name>` 텍스트 하나로 표기한다. Dialect
+  identifier에는 점이 없으므로 첫 점이 dialect와 이름의 경계이고, 이름 쪽에는 점이
+  더 있을 수 있다. IR은 이름을 `Symbol`이 아니라 이름 handle로 저장한다.
+  `#[dialect]`가 선언한 operation과 type의 이름은 등록된 이름이며, 그 handle은
+  선언이 정적으로 내보낸 정의(operation definition, type definition)를 가리킨다.
+  등록된 handle은 모든 context에서 유효하고, 이름 조회 없이 정의와 그에 딸린
+  hook을 준다. 등록되지 않은 이름(generic syntax로 parse한 operation, 테스트
+  dialect)의 handle은 dialect와 이름을 context의 문자열 pool에 담으며 그
+  context 안에서만 유효하다. 텍스트에서 handle을 만들 때는 등록된 정의를 먼저
+  찾으므로, 한 context 안에서 같은 이름은 늘 같은 handle이다. Handle의 동등성은
+  정의의 정체성 또는 문자열 id 비교다. 출력은 handle의 텍스트를 쓰므로 textual
+  form은 등록 여부와 관계없다.
+- Symbol table 정의의 qualified path는 component마다 `Symbol` 하나인
+  `SymbolPath`로 저장한다. Component가 없는 `SymbolPath`는 root module을
+  가리키며, 어떤 path에서 마지막 component를 뺀 path는 그 정의를 둘러싼
+  module의 path다. 정의의 qualified path와 symbol 참조에는
   component가 하나 이상 있고, component 없는 symbol 참조는 IR 오류다.
 - `Symbol`은 8바이트 atom이며 세 형태 중 하나다. 7바이트 이하의 이름은 값 안에
-  직접 담는다. IR 기반 계층이 선언한 dialect, operation, type, 속성 이름은 빌드
-  때 만든 static 집합의 색인이다. 그 밖의 이름은 프로세스 전역 동적 집합의
-  참조 카운트 항목이며, 마지막 `Symbol`이 사라지면 집합에서 제거된다. Static
-  집합에 없는 이름도 유효한 `Symbol`이다.
+  직접 담는다. IR 기반 계층이 소스에 쓴 이름은 빌드 때 만든 static 집합의
+  색인이다. 그 밖의 이름은 프로세스 전역 동적 집합의 참조 카운트 항목이며,
+  마지막 `Symbol`이 사라지면 집합에서 제거된다. Static 집합에 없는 이름도
+  유효한 `Symbol`이다.
 - `Symbol`의 동등성은 값 비교이고 hash는 atom에 미리 계산된 값을 쓴다. 순서는
   텍스트 순서이므로 `Symbol`을 key로 정렬한 자료구조는 이름 순서로 순회한다.
   Hash 순회 순서는 출력에 영향을 주어서는 안 된다. `Symbol`은 `Copy`가 아니다.

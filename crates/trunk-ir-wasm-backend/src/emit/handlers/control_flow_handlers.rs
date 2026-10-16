@@ -38,8 +38,9 @@ fn emit_value_get(
             trunk_ir::refs::ValueDef::OpResult(op, _) => {
                 let op_data = ctx.op(op);
                 format!(
-                    "OpResult from {}.{} at {:?}",
-                    op_data.dialect, op_data.name, op_data.location
+                    "OpResult from {} at {:?}",
+                    op_data.name.display(ctx),
+                    op_data.location
                 )
             }
             trunk_ir::refs::ValueDef::BlockArg(block_id, idx) => {
@@ -84,7 +85,7 @@ pub(crate) fn handle_if(
         then_has_result_value,
         result_ty.map(|ty| {
             let data = ctx.get_type(ty);
-            format!("{}.{}", data.dialect, data.name)
+            format!("{}", data.name.display(ctx))
         })
     );
 
@@ -165,9 +166,8 @@ fn compute_block_type(
     let ty = result_ty.expect("result_ty should be Some when has_result is true");
 
     debug!(
-        "block_type: converting {}.{} with canonical value-type rules",
-        ctx.get_type(ty).dialect,
-        ctx.get_type(ty).name
+        "block_type: converting {} with canonical value-type rules",
+        ctx.get_type(ty).name.display(ctx)
     );
     Ok(BlockType::Result(helpers::type_to_valtype(
         ctx,

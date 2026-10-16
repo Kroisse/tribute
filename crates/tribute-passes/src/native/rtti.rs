@@ -39,7 +39,6 @@ use std::ops::ControlFlow;
 use tribute_ir::dialect::adt::layout::{compute_struct_layout, compute_variant_layout};
 use tribute_ir::dialect::tribute_rtti::FieldKind;
 use trunk_ir::SymbolPath;
-use trunk_ir::TypeDataBuilder;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::clif;
 use trunk_ir::location::Span;
@@ -66,15 +65,12 @@ struct ClifTypes {
 
 impl ClifTypes {
     fn intern(ctx: &mut IrContext) -> Self {
-        let mk = |ctx: &mut IrContext, name: &'static str| {
-            TypeDataBuilder::new("core", name).intern(ctx)
-        };
         Self {
-            ptr: mk(ctx, "ptr"),
-            nil: mk(ctx, "nil"),
-            i64: mk(ctx, "i64"),
-            i32: mk(ctx, "i32"),
-            i8: mk(ctx, "i8"),
+            ptr: trunk_ir::dialect::core::ptr(ctx).as_type_ref(),
+            nil: trunk_ir::dialect::core::nil(ctx).as_type_ref(),
+            i64: trunk_ir::dialect::core::I64::type_ref(ctx),
+            i32: trunk_ir::dialect::core::I32::type_ref(ctx),
+            i8: trunk_ir::dialect::core::I8::type_ref(ctx),
         }
     }
 }
@@ -961,8 +957,10 @@ impl trunk_ir::pass::Pass for GenerateRtti {
 mod tests {
     use super::*;
     use trunk_ir::Span;
-    use trunk_ir::Symbol;
+
+    use tribute_ir::dialect::tribute_rt;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
+    use trunk_ir::dialect::core;
     use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
@@ -984,10 +982,6 @@ mod tests {
         let path = ctx.intern_path("file:///test.trb");
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
-    }
-
-    fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(dialect, name).intern(ctx)
     }
 
     /// Build a module containing a function that creates a struct via adt.struct_new.
@@ -1021,12 +1015,11 @@ mod tests {
             .map(|i| ctx.block_arg(entry, i as u32))
             .collect();
 
-        let struct_new_data =
-            OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
-                .operands(field_vals)
-                .result(struct_ty)
-                .attr("type", Attribute::Type(struct_ty))
-                .build(ctx);
+        let struct_new_data = OperationDataBuilder::new(loc, "adt.struct_new")
+            .operands(field_vals)
+            .result(struct_ty)
+            .attr("type", Attribute::Type(struct_ty))
+            .build(ctx);
         let struct_new_ref = ctx.create_op(struct_new_data);
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
@@ -1060,11 +1053,10 @@ mod tests {
             parent_op: None,
         });
 
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(module_region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(module_region)
+            .build(ctx);
         let module_op = ctx.create_op(module_data);
 
         Module::new(ctx, module_op).expect("valid arena module")
@@ -1073,7 +1065,7 @@ mod tests {
     #[test]
     fn declarations_receive_user_indices_in_plan_order() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let i32_ty = core::I32::type_ref(&mut ctx);
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty)]);
         let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty]);
 
@@ -1090,7 +1082,7 @@ mod tests {
     #[test]
     fn generation_rejects_an_undeclared_allocation_layout() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let i32_ty = core::I32::type_ref(&mut ctx);
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty)]);
         let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty]);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
@@ -1236,7 +1228,7 @@ mod tests {
     #[test]
     fn test_struct_no_ptr_fields() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let i32_ty = core::I32::type_ref(&mut ctx);
 
         // Point(x: i32, y: i32) - no managed fields
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
@@ -1253,8 +1245,8 @@ mod tests {
     #[test]
     fn test_struct_with_ptr_fields() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
-        let managed_ty = intern_ty(&mut ctx, "tribute_rt", "anyref");
+        let i32_ty = core::I32::type_ref(&mut ctx);
+        let managed_ty = tribute_rt::anyref(&mut ctx).as_type_ref();
 
         // Node(value: i32, next: anyref) has one typed managed field.
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", managed_ty)]);
@@ -1271,8 +1263,8 @@ mod tests {
     #[test]
     fn test_multiple_struct_types() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
-        let ptr_ty = intern_ty(&mut ctx, "core", "ptr");
+        let i32_ty = core::I32::type_ref(&mut ctx);
+        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
 
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
@@ -1305,7 +1297,7 @@ mod tests {
         let next = ctx.block_arg(entry, 2);
 
         // First struct_new: Point(x, y)
-        let sn1 = OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
+        let sn1 = OperationDataBuilder::new(loc, "adt.struct_new")
             .operands([x, y])
             .result(point_ty)
             .attr("type", Attribute::Type(point_ty))
@@ -1314,7 +1306,7 @@ mod tests {
         ctx.push_op(entry, sn1_ref);
 
         // Second struct_new: Node(x, next)
-        let sn2 = OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
+        let sn2 = OperationDataBuilder::new(loc, "adt.struct_new")
             .operands([x, next])
             .result(node_ty)
             .attr("type", Attribute::Type(node_ty))
@@ -1350,11 +1342,10 @@ mod tests {
             blocks: smallvec![module_block],
             parent_op: None,
         });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(module_region)
-                .build(&mut ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(module_region)
+            .build(&mut ctx);
         let module_op = ctx.create_op(module_data);
         let module = Module::new(&ctx, module_op).expect("valid");
 
@@ -1378,8 +1369,8 @@ mod tests {
     #[test]
     fn test_closure_struct_skips_func_ptr() {
         let (mut ctx, loc) = test_ctx();
-        let ptr_ty = intern_ty(&mut ctx, "core", "ptr");
-        let managed_ty = intern_ty(&mut ctx, "tribute_rt", "anyref");
+        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
+        let managed_ty = tribute_rt::anyref(&mut ctx).as_type_ref();
 
         // The raw code pointer is unmanaged; the typed environment is managed.
         let closure_ty = make_struct_type(&mut ctx, &[("func_ptr", ptr_ty), ("env", managed_ty)]);

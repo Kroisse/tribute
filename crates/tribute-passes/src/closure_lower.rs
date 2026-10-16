@@ -49,7 +49,7 @@ use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(runtime_layout::CLOSURE);
@@ -69,8 +69,7 @@ pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
 /// runtime layout attribute.
 pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "adt"
-        && data.name == "struct"
+    data.name.is(ctx, "adt.struct")
         && runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::CLOSURE)
 }
 
@@ -172,7 +171,7 @@ impl RewritePattern for LowerClosureCallArena {
         // delimiter enters its Cps body.
         let caller_results = ctx.op_result_types(op).to_vec();
 
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let Some(convention) = get_calling_convention(ctx, op) else {
             return false;
@@ -256,7 +255,7 @@ impl RewritePattern for LowerClosureTailCallArena {
         }
 
         let location = ctx.op(op).location;
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let Some(results) = exact_tail_results(ctx, op, callee, convention) else {
             return false;
@@ -417,7 +416,7 @@ impl RewritePattern for LowerClosureFuncArena {
 
         let loc = ctx.op(op).location;
         let closure_value = ctx.op_operands(op)[0];
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
         let struct_ty = closure_struct_type_ref(ctx);
 
         let get_op = adt::StructGet::operands(closure_value)
@@ -575,8 +574,8 @@ fn rewrite_validated_closures_in_func(
     let applicator = PatternApplicator::new(TypeConverter::new())
         .with_target(
             ConversionTarget::new()
-                .legal_op("func", "func")
-                .recursive_legal_op("func", "func"),
+                .legal_op("func.func")
+                .recursive_legal_op("func.func"),
         )
         .add_pattern(LowerClosureCallArena)
         .add_pattern(LowerClosureTailCallArena)

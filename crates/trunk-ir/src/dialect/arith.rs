@@ -512,7 +512,7 @@ fn is_signed_overflow_at_width(a: i128, b: i128, width: u32) -> bool {
 #[cfg(test)]
 mod canonicalize_tests {
     use super::*;
-    use crate::Symbol;
+
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
@@ -531,13 +531,11 @@ mod canonicalize_tests {
             .apply_partial(ctx, module)
     }
 
-    fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::new(dialect);
-        let name_sym = Symbol::new(name);
+    fn count_ops(ctx: &IrContext, module: Module, name: crate::OpName) -> usize {
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == dialect_sym && data.name == name_sym {
+            if data.name == name {
                 count += 1;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -551,16 +549,12 @@ mod canonicalize_tests {
     /// by a const-int op. Lets value-shaped tests assert the folded
     /// constant directly without going through textual snapshots.
     fn return_value_int_const(ctx: &IrContext, module: Module) -> Option<i128> {
-        let func_return_dialect = Symbol::new("func");
-        let return_name = Symbol::new("return");
         let mut found = None;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             if found.is_some() {
                 return ControlFlow::Continue(WalkAction::Advance);
             }
-            let data = ctx.op(op);
-            if data.dialect == func_return_dialect
-                && data.name == return_name
+            if crate::dialect::func::Return::matches(ctx, op)
                 && let Some(&v) = ctx.op_operands(op).first()
             {
                 found = const_int_value(ctx, v);
@@ -584,7 +578,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
         insta::assert_snapshot!(print_module(&ctx, module.op()));
     }
 
@@ -602,7 +599,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
     }
 
     #[test]
@@ -618,7 +618,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            1
+        );
     }
 
     #[test]
@@ -635,7 +638,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "muli"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
+            0
+        );
     }
 
     #[test]
@@ -652,8 +658,14 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "muli"), 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "const"), 2);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
+            0
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Const::NAME),
+            2
+        );
         insta::assert_snapshot!(print_module(&ctx, module.op()));
     }
 
@@ -671,7 +683,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "subi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Subi::NAME),
+            0
+        );
     }
 
     #[test]
@@ -688,7 +703,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "subi"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Subi::NAME),
+            1
+        );
     }
 
     #[test]
@@ -706,7 +724,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
         insta::assert_snapshot!(print_module(&ctx, module.op()));
     }
 
@@ -727,8 +748,14 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.reached_fixpoint);
-        assert_eq!(count_ops(&ctx, module, "arith", "subi"), 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "muli"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Subi::NAME),
+            0
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
+            0
+        );
     }
 
     #[test]
@@ -746,7 +773,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            1
+        );
     }
 
     #[test]
@@ -764,7 +794,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            1
+        );
     }
 
     #[test]
@@ -781,7 +814,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            1
+        );
     }
 
     // ---------------------------------------------------------------------
@@ -804,7 +840,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "divsi"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Divsi::NAME),
+            1
+        );
     }
 
     #[test]
@@ -824,7 +863,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "divsi"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Divsi::NAME),
+            1
+        );
     }
 
     // ---------- arith.and ----------
@@ -843,7 +885,7 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "and"), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::And::NAME), 0);
         assert_eq!(return_value_int_const(&ctx, module), Some(0));
     }
 
@@ -861,7 +903,7 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "and"), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::And::NAME), 0);
     }
 
     // ---------- arith.or ----------
@@ -880,7 +922,7 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "or"), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Or::NAME), 0);
     }
 
     #[test]
@@ -897,7 +939,7 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "or"), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Or::NAME), 0);
         assert_eq!(return_value_int_const(&ctx, module), Some(-1));
     }
 
@@ -917,7 +959,7 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "xor"), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Xor::NAME), 0);
     }
 
     #[test]
@@ -935,9 +977,9 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "and"), 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "or"), 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "xor"), 1);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::And::NAME), 1);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Or::NAME), 1);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Xor::NAME), 1);
     }
 
     // ---------------------------------------------------------------------
@@ -950,7 +992,16 @@ mod canonicalize_tests {
 
         /// Binary integer operations with a constant fold.
         const BINARY_OPS: [&str; 10] = [
-            "addi", "subi", "muli", "divsi", "divui", "remsi", "remui", "and", "or", "xor",
+            "arith.addi",
+            "arith.subi",
+            "arith.muli",
+            "arith.divsi",
+            "arith.divui",
+            "arith.remsi",
+            "arith.remui",
+            "arith.and",
+            "arith.or",
+            "arith.xor",
         ];
 
         /// Native Rust integer widths, so the expected value comes straight
@@ -970,7 +1021,7 @@ mod canonicalize_tests {
   func.func @f() -> core.i{width} {{
     %a = arith.const {{value = {a}}} : core.i{width}
     %b = arith.const {{value = {b}}} : core.i{width}
-    %r = arith.{op} %a, %b : core.i{width}
+    %r = {op} %a, %b : core.i{width}
     func.return %r
   }}
 }}"
@@ -978,7 +1029,8 @@ mod canonicalize_tests {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &input);
             let result = run_arith_patterns(&mut ctx, module);
-            let remaining = count_ops(&ctx, module, "arith", op);
+            let def = crate::OpDef::lookup(op).expect("registered arith op");
+            let remaining = count_ops(&ctx, module, crate::OpName::registered(def));
             if result.total_changes == 0 {
                 prop_assert_eq!(remaining, 1);
                 return Ok(None);
@@ -998,16 +1050,16 @@ mod canonicalize_tests {
                     let (a, b) = (a as $s, b as $s);
                     let (ua, ub) = (a as $u, b as $u);
                     match op {
-                        "addi" => Some(a.wrapping_add(b) as i128),
-                        "subi" => Some(a.wrapping_sub(b) as i128),
-                        "muli" => Some(a.wrapping_mul(b) as i128),
-                        "divsi" => a.checked_div(b).map(|r| r as i128),
-                        "remsi" => a.checked_rem(b).map(|r| r as i128),
-                        "divui" => ua.checked_div(ub).map(|r| r as $s as i128),
-                        "remui" => ua.checked_rem(ub).map(|r| r as $s as i128),
-                        "and" => Some((a & b) as i128),
-                        "or" => Some((a | b) as i128),
-                        "xor" => Some((a ^ b) as i128),
+                        "arith.addi" => Some(a.wrapping_add(b) as i128),
+                        "arith.subi" => Some(a.wrapping_sub(b) as i128),
+                        "arith.muli" => Some(a.wrapping_mul(b) as i128),
+                        "arith.divsi" => a.checked_div(b).map(|r| r as i128),
+                        "arith.remsi" => a.checked_rem(b).map(|r| r as i128),
+                        "arith.divui" => ua.checked_div(ub).map(|r| r as $s as i128),
+                        "arith.remui" => ua.checked_rem(ub).map(|r| r as $s as i128),
+                        "arith.and" => Some((a & b) as i128),
+                        "arith.or" => Some((a | b) as i128),
+                        "arith.xor" => Some((a ^ b) as i128),
                         _ => unreachable!("unknown op {op}"),
                     }
                 }};
@@ -1091,16 +1143,16 @@ mod canonicalize_tests {
                 let min = reference_wrap(1i128 << (width - 1), width);
                 let signed_trap = b == 0 || (a == min && b == -1);
                 let expected = match op {
-                    "addi" => Some(a.wrapping_add(b)),
-                    "subi" => Some(a.wrapping_sub(b)),
-                    "muli" => Some(a.wrapping_mul(b)),
-                    "divsi" => (!signed_trap).then(|| a.wrapping_div(b)),
-                    "remsi" => (!signed_trap).then(|| a.wrapping_rem(b)),
-                    "divui" => (unsigned(b) != 0).then(|| (unsigned(a) / unsigned(b)) as i128),
-                    "remui" => (unsigned(b) != 0).then(|| (unsigned(a) % unsigned(b)) as i128),
-                    "and" => Some(a & b),
-                    "or" => Some(a | b),
-                    "xor" => Some(a ^ b),
+                    "arith.addi" => Some(a.wrapping_add(b)),
+                    "arith.subi" => Some(a.wrapping_sub(b)),
+                    "arith.muli" => Some(a.wrapping_mul(b)),
+                    "arith.divsi" => (!signed_trap).then(|| a.wrapping_div(b)),
+                    "arith.remsi" => (!signed_trap).then(|| a.wrapping_rem(b)),
+                    "arith.divui" => (unsigned(b) != 0).then(|| (unsigned(a) / unsigned(b)) as i128),
+                    "arith.remui" => (unsigned(b) != 0).then(|| (unsigned(a) % unsigned(b)) as i128),
+                    "arith.and" => Some(a & b),
+                    "arith.or" => Some(a | b),
+                    "arith.xor" => Some(a ^ b),
                     _ => unreachable!("unknown op {op}"),
                 }
                 .map(|r| reference_wrap(r, width));
@@ -1111,7 +1163,7 @@ mod canonicalize_tests {
             /// the neighbouring `(MIN + 1) / -1` is.
             #[test]
             fn signed_div_rem_overflow_corner_is_left_alone(
-                op in prop::sample::select(&["divsi", "remsi"][..]),
+                op in prop::sample::select(&["arith.divsi", "arith.remsi"][..]),
                 width in 1u32..=128,
             ) {
                 let min = reference_wrap(1i128 << (width - 1), width);

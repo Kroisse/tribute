@@ -423,12 +423,11 @@ fn exact_signature(
     }
     let operand = ctx.get_type(*left);
     let result = ctx.get_type(result);
-    let operand_is_i32 = operand.dialect == "core" && operand.name == "i32";
-    let operand_is_f64 = operand.dialect == "core" && operand.name == "f64";
+    let operand_is_i32 = operand.name.is(ctx, "core.i32");
+    let operand_is_f64 = operand.name.is(ctx, "core.f64");
     match mapping {
         ArithMapping::BinaryOp(_) => {
-            result.dialect == operand.dialect
-                && result.name == operand.name
+            result.name == operand.name
                 && if symbol
                     .as_simple()
                     .is_some_and(|name| name.as_str().starts_with("std::Float::"))
@@ -438,8 +437,8 @@ fn exact_signature(
                     operand_is_i32
                 }
         }
-        ArithMapping::CmpI(_) => operand_is_i32 && result.dialect == "core" && result.name == "i1",
-        ArithMapping::CmpF(_) => operand_is_f64 && result.dialect == "core" && result.name == "i1",
+        ArithMapping::CmpI(_) => operand_is_i32 && result.name.is(ctx, "core.i1"),
+        ArithMapping::CmpF(_) => operand_is_f64 && result.name.is(ctx, "core.i1"),
     }
 }
 

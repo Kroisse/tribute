@@ -51,7 +51,7 @@ fn push_one_shot_resume(
                 "ability.perform resumption lacks an exact callable input",
             )
         })?;
-    let i1_type = TypeDataBuilder::new("core", "i1").intern(ctx);
+    let i1_type = TypeDataBuilder::new("core.i1").intern(ctx);
     let state_name = ctx.intern_str("__tribute_one_shot_state");
     let state_type = adt::struct_type(
         ctx,
@@ -78,13 +78,13 @@ fn push_one_shot_resume(
     let (wrapper_block, resume_type) = resume_block(ctx, location, frame);
     let args = ctx.block_args(wrapper_block).to_vec();
     let input_data = ctx.get_type(input_type);
-    let input = if input_data.dialect == "core" && input_data.name == "nil" {
+    let input = if input_data.name.is(ctx, "core.nil") {
         // Nil has no physical payload: its exact resumption receives the
         // canonical unit instead of an erased runtime value.
         let unit = core::NilValue::operands().build(ctx, location);
         ctx.push_op(wrapper_block, unit.op_ref());
         unit.result(ctx)
-    } else if input_data.dialect == "adt" && input_data.name == "typeref" {
+    } else if input_data.name == tribute_ir::dialect::adt::Typeref::NAME {
         // Dynamic effect values recover nominal references only through
         // their declared type, preserving the typed ownership boundary.
         let recovered = adt::RefCast::operands(args[2])
