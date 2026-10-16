@@ -52,7 +52,7 @@ pub enum ValidationError {
         /// Name of the function containing the stale reference.
         function_name: String,
         /// Full name of the consuming operation (e.g., "func.call").
-        consumer_op: String,
+        consumer_op: std::borrow::Cow<'static, str>,
         /// Index of the stale operand within the consuming operation.
         operand_index: usize,
         /// Human-readable description of the stale value.
@@ -164,7 +164,7 @@ fn check_operands_in_region(
                 if !visible.contains(&operand) {
                     errors.push(ValidationError::StaleValue {
                         function_name: function_name.to_string(),
-                        consumer_op: ctx.op(op).name.display(ctx).to_string(),
+                        consumer_op: ctx.op(op).name.to_text(ctx),
                         operand_index: i,
                         stale_value_description: describe_value(ctx, operand),
                     });
@@ -1341,7 +1341,7 @@ mod tests {
 
                 Some((
                     function_name.as_str(),
-                    consumer_op.as_str(),
+                    consumer_op.as_ref(),
                     stale_value_description.as_str(),
                 ))
             })
