@@ -27,7 +27,7 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> crate::TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     fn make_func_type(ctx: &mut IrContext) -> crate::TypeRef {
@@ -550,15 +550,13 @@ mod tests {
                 let dialect = stringify!($dialect);
                 let mut ctx = IrContext::new();
                 let i32 = make_i32_type(&mut ctx);
-                let i64 = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
-                let kept = || {
-                    let mut attrs = crate::AttributeMap::new();
-                    attrs.insert(Symbol::new("kept"), Attribute::Type(i64));
-                    attrs
-                };
+                let i64 = TypeDataBuilder::new("core", "i64").intern(&mut ctx);
+                let kept =
+                    crate::AttributeMap::from_entries(&mut ctx, [("kept", Attribute::Type(i64))]);
                 let zero = func_sig(&mut ctx, [i32], []).as_type_ref();
                 let one = func_sig(&mut ctx, [i32], [i64]).as_type_ref();
-                let many = func_sig_with_attrs(&mut ctx, [i32], [i32, i64], kept()).as_type_ref();
+                let many =
+                    func_sig_with_attrs(&mut ctx, [i32], [i32, i64], kept.clone()).as_type_ref();
 
                 let zero_sig = FuncSig::from_type_ref(&ctx, zero).expect(dialect);
                 assert!(zero_sig.is_resultless(&ctx), "{dialect}");
@@ -576,7 +574,7 @@ mod tests {
                 assert_eq!(many_sig.non_reserved_attrs(&ctx).count(), 1, "{dialect}");
                 assert_eq!(
                     many,
-                    func_sig_with_attrs(&mut ctx, [i32], [i32, i64], kept()).as_type_ref(),
+                    func_sig_with_attrs(&mut ctx, [i32], [i32, i64], kept.clone()).as_type_ref(),
                     "{dialect}"
                 );
             }};
@@ -603,7 +601,7 @@ mod tests {
                         for (name, value) in counts {
                             builder = builder.attr(*name, value.clone());
                         }
-                        ctx.intern_type(builder.build())
+                        builder.intern(ctx)
                     };
 
                 let malformed = sig(

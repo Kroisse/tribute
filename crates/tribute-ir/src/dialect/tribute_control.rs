@@ -208,7 +208,7 @@ impl EvidenceStep {
     }
 
     /// Decode one plan element, or say why it is malformed.
-    pub fn from_attribute(attr: &Attribute) -> Result<Self, String> {
+    pub fn from_attribute(ctx: &IrContext, attr: &Attribute) -> Result<Self, String> {
         let Attribute::Dict(entries) = attr else {
             return Err("evidence_plan element must be a dictionary".into());
         };
@@ -220,9 +220,12 @@ impl EvidenceStep {
         };
         let instance = || match value {
             Attribute::SymbolRef(instance) => Ok(instance.clone()),
-            _ => Err(format!("evidence_plan {key} must name an ability instance")),
+            _ => Err(format!(
+                "evidence_plan {} must name an ability instance",
+                ctx.str(key)
+            )),
         };
-        key.with_str(|name| match name {
+        match ctx.str(key) {
             "mask" => instance().map(Self::Mask),
             "dup" => instance().map(Self::Dup),
             "outer" => instance().map(Self::Outer),
@@ -243,7 +246,10 @@ impl EvidenceStep {
                         let Attribute::List(steps) = plan else {
                             return Err("evidence_plan tails must be a list of plans".into());
                         };
-                        steps.iter().map(Self::from_attribute).collect()
+                        steps
+                            .iter()
+                            .map(|step| Self::from_attribute(ctx, step))
+                            .collect()
                     })
                     .collect::<Result<_, _>>()
                     .map(Self::Tails)
@@ -252,10 +258,10 @@ impl EvidenceStep {
                 "evidence_plan element must be mask, dup, outer, select, push, or tails, \
                  found {other}"
             )),
-        })
+        }
     }
 
-    pub fn to_attribute(&self) -> Attribute {
+    pub fn to_attribute(&self, ctx: &mut IrContext) -> Attribute {
         let (keyword, value) = match self {
             Self::Mask(instance) => ("mask", Attribute::SymbolRef(instance.clone())),
             Self::Dup(instance) => ("dup", Attribute::SymbolRef(instance.clone())),
@@ -267,20 +273,30 @@ impl EvidenceStep {
                 Attribute::List(
                     plans
                         .iter()
-                        .map(|plan| Attribute::List(plan.iter().map(Self::to_attribute).collect()))
+                        .map(|plan| {
+                            Attribute::List(
+                                plan.iter().map(|step| step.to_attribute(ctx)).collect(),
+                            )
+                        })
                         .collect(),
                 ),
             ),
         };
         let mut entries = AttributeMap::new();
-        entries.insert(Symbol::new(keyword), value);
+        entries.view_mut(ctx).insert(keyword, value);
         Attribute::Dict(entries)
     }
 
     /// The `evidence_plan` value for these steps, or `None` for an empty
     /// plan, which is written by omitting the attribute.
-    pub fn plan_attribute(steps: impl IntoIterator<Item = Self>) -> Option<Attribute> {
-        let steps: Vec<_> = steps.into_iter().map(|step| step.to_attribute()).collect();
+    pub fn plan_attribute(
+        ctx: &mut IrContext,
+        steps: impl IntoIterator<Item = Self>,
+    ) -> Option<Attribute> {
+        let steps: Vec<_> = steps
+            .into_iter()
+            .map(|step| step.to_attribute(ctx))
+            .collect();
         (!steps.is_empty()).then_some(Attribute::List(steps))
     }
 }
@@ -291,13 +307,13 @@ impl trunk_ir::attr_kind::AttrKind for EvidenceStep {
     type Out<'ctx> = EvidenceStep;
     type In = EvidenceStep;
 
-    fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> EvidenceStep {
-        Self::from_attribute(attr)
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> EvidenceStep {
+        Self::from_attribute(ctx, attr)
             .unwrap_or_else(|error| panic!("unverified evidence_plan element: {error}"))
     }
 
-    fn write(_: &mut IrContext, value: EvidenceStep) -> Attribute {
-        value.to_attribute()
+    fn write(ctx: &mut IrContext, value: EvidenceStep) -> Attribute {
+        value.to_attribute(ctx)
     }
 }
 
@@ -321,7 +337,7 @@ pub(crate) fn verify_evidence_plan(
     op: OpRef,
     site: EvidencePlanSite,
 ) -> Result<(), String> {
-    let Some(plan) = ctx.op(op).attributes.get(EVIDENCE_PLAN_ATTR) else {
+    let Some(plan) = ctx.op_attrs(op).get(EVIDENCE_PLAN_ATTR) else {
         return Ok(());
     };
     let Attribute::List(items) = plan else {
@@ -332,7 +348,7 @@ pub(crate) fn verify_evidence_plan(
     }
     let steps: Vec<_> = items
         .iter()
-        .map(EvidenceStep::from_attribute)
+        .map(|item| EvidenceStep::from_attribute(ctx, item))
         .collect::<Result<_, _>>()?;
     if site == EvidencePlanSite::Handle
         && steps
@@ -504,8 +520,8 @@ impl From<FuncSig> for TypeRef {
 impl FuncSig {
     fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
         let data = ctx.get_type(ty);
-        let inputs = read_count(&data.attrs, trunk_ir::dialect::func::NUM_INPUTS_ATTR)?;
-        let results = read_count(&data.attrs, trunk_ir::dialect::func::NUM_RESULTS_ATTR)?;
+        let inputs = read_count(ctx, &data.attrs, trunk_ir::dialect::func::NUM_INPUTS_ATTR)?;
+        let results = read_count(ctx, &data.attrs, trunk_ir::dialect::func::NUM_RESULTS_ATTR)?;
         if results != 1 {
             return Err(FuncSigTypeError::ResultCount(results));
         }
@@ -517,6 +533,7 @@ impl FuncSig {
         }
         CallingConvention::try_from(
             data.attrs
+                .view(ctx)
                 .get_i128(CALLING_CONVENTION_ATTR)
                 .ok_or(FuncSigTypeError::Convention)?,
         )
@@ -534,6 +551,7 @@ impl FuncSig {
 
     pub fn inputs(self, ctx: &IrContext) -> &[TypeRef] {
         let count = read_count(
+            ctx,
             &ctx.get_type(self.0).attrs,
             trunk_ir::dialect::func::NUM_INPUTS_ATTR,
         )
@@ -552,20 +570,19 @@ impl FuncSig {
         ctx: &IrContext,
     ) -> impl Iterator<Item = (TypeRef, &AttributeMap)> {
         let count = self.inputs(ctx).len();
-        ctx.get_type(self.0).params_with_attrs().take(count)
+        ctx.get_type(self.0).params_with_attrs(ctx).take(count)
     }
 
     /// The result paired with its own attributes.
     pub fn result_with_attrs(self, ctx: &IrContext) -> (TypeRef, &AttributeMap) {
         let index = self.inputs(ctx).len();
         let data = ctx.get_type(self.0);
-        (data.params[index], data.param_attrs(index))
+        (data.params[index], data.param_attrs(ctx, index))
     }
 
     pub fn convention(self, ctx: &IrContext) -> CallingConvention {
         CallingConvention::try_from(
-            ctx.get_type(self.0)
-                .attrs
+            ctx.type_attrs(self.0)
                 .get_i128(CALLING_CONVENTION_ATTR)
                 .expect("validated source func_sig retains convention"),
         )
@@ -576,23 +593,35 @@ impl FuncSig {
     ///
     /// Consumers rebuilding an equivalent signature in another dialect retain
     /// every other attribute through their owning typed constructor.
-    pub fn remove_reserved_attrs(attrs: &mut AttributeMap) {
-        attrs.remove(trunk_ir::dialect::func::NUM_INPUTS_ATTR);
-        attrs.remove(trunk_ir::dialect::func::NUM_RESULTS_ATTR);
-        attrs.remove(CALLING_CONVENTION_ATTR);
+    pub fn remove_reserved_attrs(ctx: &mut IrContext, attrs: &mut AttributeMap) {
+        let mut attrs = attrs.view_mut(ctx);
+        for key in RESERVED_ATTRS {
+            attrs.remove(key);
+        }
     }
 
     /// Whether this signature carries type-owned metadata beyond storage and
     /// source convention fields.
     pub(crate) fn has_nonreserved_attrs(self, ctx: &IrContext) -> bool {
-        let mut attrs = ctx.get_type(self.0).attrs.clone();
-        Self::remove_reserved_attrs(&mut attrs);
-        !attrs.is_empty()
+        ctx.type_attrs(self.0)
+            .iter()
+            .any(|(key, _)| !RESERVED_ATTRS.contains(&key))
     }
 }
 
-fn read_count(attrs: &AttributeMap, key: &'static str) -> Result<u32, FuncSigTypeError> {
-    match attrs.get(key) {
+/// The storage delimiters and source-only convention metadata.
+const RESERVED_ATTRS: [&str; 3] = [
+    trunk_ir::dialect::func::NUM_INPUTS_ATTR,
+    trunk_ir::dialect::func::NUM_RESULTS_ATTR,
+    CALLING_CONVENTION_ATTR,
+];
+
+fn read_count(
+    ctx: &IrContext,
+    attrs: &AttributeMap,
+    key: &'static str,
+) -> Result<u32, FuncSigTypeError> {
+    match attrs.view(ctx).get(key) {
         Some(Attribute::Int(value)) => {
             u32::try_from(*value).map_err(|_| FuncSigTypeError::InvalidCount(key))
         }
@@ -620,9 +649,13 @@ pub fn func_sig_with_attrs(
     attrs: AttributeMap,
 ) -> FuncSig {
     assert!(
-        !attrs.contains_key(trunk_ir::dialect::func::NUM_INPUTS_ATTR)
-            && !attrs.contains_key(trunk_ir::dialect::func::NUM_RESULTS_ATTR)
-            && !attrs.contains_key(CALLING_CONVENTION_ATTR),
+        !attrs
+            .view(ctx)
+            .contains_key(trunk_ir::dialect::func::NUM_INPUTS_ATTR)
+            && !attrs
+                .view(ctx)
+                .contains_key(trunk_ir::dialect::func::NUM_RESULTS_ATTR)
+            && !attrs.view(ctx).contains_key(CALLING_CONVENTION_ATTR),
         "source func_sig reserves delimiters and convention metadata"
     );
     let inputs: Vec<_> = inputs.into_iter().collect();
@@ -633,19 +666,17 @@ pub fn func_sig_with_attrs(
     for (key, value) in attrs {
         builder = builder.attr(key, value);
     }
-    let ty = ctx.intern_type(
-        builder
-            .attr(
-                trunk_ir::dialect::func::NUM_INPUTS_ATTR,
-                Attribute::from(count),
-            )
-            .attr(
-                trunk_ir::dialect::func::NUM_RESULTS_ATTR,
-                Attribute::from(1_u32),
-            )
-            .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
-            .build(),
-    );
+    let ty = builder
+        .attr(
+            trunk_ir::dialect::func::NUM_INPUTS_ATTR,
+            Attribute::from(count),
+        )
+        .attr(
+            trunk_ir::dialect::func::NUM_RESULTS_ATTR,
+            Attribute::from(1_u32),
+        )
+        .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
+        .intern(ctx);
     FuncSig::from_type_ref(ctx, ty).expect("source func_sig constructor must produce a valid type")
 }
 
@@ -690,9 +721,7 @@ pub fn func_declaration(
 impl Func {
     /// Return the optional semantic identity attached by the trusted frontend registry.
     pub fn compiler_intrinsic_identity<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
-        ctx.op(self.op_ref())
-            .attributes
-            .get_str(ctx, COMPILER_INTRINSIC_ATTR)
+        ctx.op_attrs(self.op_ref()).get_str(COMPILER_INTRINSIC_ATTR)
     }
 }
 
@@ -758,14 +787,11 @@ fn print_extra_attributes(
     excluded: &[&str],
 ) -> fmt::Result {
     use fmt::Write;
-    let excluded: HashSet<Symbol> = excluded.iter().map(|key| Symbol::new(key)).collect();
-    let attrs: Vec<_> = h
-        .ctx()
-        .op(op)
-        .attributes
+    let ctx = h.ctx();
+    let attrs: Vec<_> = ctx
+        .op_attrs(op)
         .iter()
         .filter(|(key, _)| !excluded.contains(key))
-        .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     if attrs.is_empty() {
         return Ok(());
@@ -824,11 +850,8 @@ fn print_func(
     use fmt::Write;
 
     let data = h.ctx().op(op);
-    let symbol = data
-        .attributes
-        .get_str(h.ctx(), "sym_name")
-        .map(str::to_owned);
-    let callable_ty = data.attributes.get_type("type");
+    let symbol = data.attributes.view(h.ctx()).get_str("sym_name");
+    let callable_ty = data.attributes.view(h.ctx()).get_type("type");
     let region = h.ctx().op_region(op, 0);
     if !has_concise_func_sig(h.ctx(), callable_ty) {
         return h.print_generic(op, indent);
@@ -837,7 +860,7 @@ fn print_func(
 
     write!(h, "{}tribute_control.func ", " ".repeat(indent))?;
     if let Some(symbol) = symbol {
-        h.write_symbol_text(&symbol)?;
+        h.write_symbol_text(symbol)?;
     } else {
         write!(h, "@<missing>")?;
     }
@@ -1458,7 +1481,12 @@ fn validate_attr_keys(
     errors: &mut Vec<ValidationError>,
 ) {
     let data = ctx.op(op);
-    if data.attributes.get(CALLING_CONVENTION_ATTR).is_some() {
+    if data
+        .attributes
+        .view(ctx)
+        .get(CALLING_CONVENTION_ATTR)
+        .is_some()
+    {
         push_op_error(
             ctx,
             op,
@@ -1472,7 +1500,8 @@ fn validate_attr_keys(
         return;
     }
     for key in data.attributes.keys() {
-        let declared = key.with_str(|key| schema.attributes.iter().any(|attr| attr.name == key));
+        let key = ctx.str(key);
+        let declared = schema.attributes.iter().any(|attr| attr.name == key);
         if !declared {
             push_op_error(
                 ctx,
@@ -1704,7 +1733,7 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
         return;
     };
     let callable_ty = if is_control_op(ctx, owner, "func") {
-        ctx.op(owner).attributes.get_type("type")
+        ctx.op_attrs(owner).get_type("type")
     } else if is_control_op(ctx, owner, "lambda") {
         ctx.op_result_types(owner).first().copied()
     } else {
@@ -1745,8 +1774,7 @@ fn tail_call_owner_signature(ctx: &IrContext, op: OpRef) -> Result<TypeRef, &'st
         };
         if is_control_op(ctx, owner, "func") {
             return ctx
-                .op(owner)
-                .attributes
+                .op_attrs(owner)
                 .get_type("type")
                 .ok_or("must be inside a tribute_control.func or lambda body");
         }
@@ -1842,7 +1870,7 @@ fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationErr
 }
 
 fn validate_perform(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    match ctx.op(op).attributes.get_str(ctx, "operation_kind") {
+    match ctx.op_attrs(op).get_str("operation_kind") {
         Some("fn" | "op") => {}
         Some(kind) => push_op_error(
             ctx,
@@ -1942,8 +1970,8 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
         }
         let data = ctx.op(child);
         if let (Some(ability), Some(name)) = (
-            data.attributes.get_symbol_ref("ability"),
-            data.attributes.get_string_ref("op_name"),
+            data.attributes.view(ctx).get_symbol_ref("ability"),
+            data.attributes.view(ctx).get_string_ref("op_name"),
         ) && !clauses.insert((ability, name))
         {
             push_op_error(
@@ -1958,7 +1986,7 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
             && let Some(&block) = ctx.region(region).blocks.first()
             && let Some(&yield_op) = ctx.block(block).ops.last()
             && is_control_op(ctx, yield_op, "yield")
-            && data.attributes.get_str(ctx, "kind") == Some("op")
+            && data.attributes.view(ctx).get_str("kind") == Some("op")
             && let Some(&value) = ctx.op_operands(yield_op).first()
             && ctx.value_ty(value) != result
         {
@@ -1981,7 +2009,7 @@ fn region_contains_resume(ctx: &IrContext, region: RegionRef) -> bool {
 }
 
 fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let kind = ctx.op(op).attributes.get_str(ctx, "kind");
+    let kind = ctx.op_attrs(op).get_str("kind");
     if let Some(kind) = kind
         && !matches!(kind, "fn" | "op")
     {
@@ -1999,7 +2027,7 @@ fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
         return;
     };
     let yield_op = terminator(ctx, op, block, "tribute_control", "yield", errors);
-    let result_type = ctx.op(op).attributes.get_type("operation_result_type");
+    let result_type = ctx.op_attrs(op).get_type("operation_result_type");
     let handle_result = parent_op(ctx, op)
         .filter(|parent| is_control_op(ctx, *parent, "handle"))
         .and_then(|parent| ctx.op_result_types(parent).first().copied());
@@ -2211,7 +2239,7 @@ fn validate_symbol_use(
 ) {
     {
         if is_control_op(ctx, op, "func_ref") {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref("func_ref") else {
+            let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("func_ref") else {
                 return;
             };
             let Some(target) = funcs
@@ -2228,7 +2256,7 @@ fn validate_symbol_use(
                 );
                 return;
             };
-            let Some(target_ty) = ctx.op(target).attributes.get_type("type") else {
+            let Some(target_ty) = ctx.op_attrs(target).get_type("type") else {
                 return;
             };
             let Some(result_ty) = ctx.op_result_types(op).first().copied() else {
@@ -2254,7 +2282,7 @@ fn validate_symbol_use(
                 );
             }
         } else if is_control_op(ctx, op, "call") {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref("callee") else {
+            let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                 return;
             };
             let Some(target) = funcs
@@ -2266,7 +2294,7 @@ fn validate_symbol_use(
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
             };
-            let Some(target_ty) = ctx.op(target).attributes.get_type("type") else {
+            let Some(target_ty) = ctx.op_attrs(target).get_type("type") else {
                 return;
             };
             let Some((result, params, _)) = func_sig_parts(ctx, target_ty) else {
@@ -2289,7 +2317,7 @@ fn validate_symbol_use(
                 errors,
             );
         } else if is_control_op(ctx, op, "tail_call") {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref("callee") else {
+            let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                 return;
             };
             let Some(target) = funcs
@@ -2301,7 +2329,7 @@ fn validate_symbol_use(
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
             };
-            if ctx.op(target).attributes.get("abi").is_some() {
+            if ctx.op_attrs(target).get("abi").is_some() {
                 push_op_error(
                     ctx,
                     op,
@@ -2309,7 +2337,7 @@ fn validate_symbol_use(
                     format!("cannot tail call foreign function @{symbol}"),
                 );
             }
-            let Some(target_ty) = ctx.op(target).attributes.get_type("type") else {
+            let Some(target_ty) = ctx.op_attrs(target).get_type("type") else {
                 return;
             };
             let Some((result, params, _)) = func_sig_parts(ctx, target_ty) else {
@@ -2506,7 +2534,7 @@ fn canonical_nominal_layouts(
     for ty in sorted_reachable_types {
         let data = ctx.get_type(ty);
         if is_adt_typeref(ctx, ty) {
-            if let Some(name) = data.attrs.get_string_ref("name") {
+            if let Some(name) = data.attrs.view(ctx).get_string_ref("name") {
                 referenced_names.insert(name);
             }
             continue;
@@ -2514,7 +2542,7 @@ fn canonical_nominal_layouts(
         if data.dialect != "adt" || !(matches!(data.name.as_str(), "struct" | "enum")) {
             continue;
         }
-        let Some(name) = data.attrs.get_string_ref("name") else {
+        let Some(name) = data.attrs.view(ctx).get_string_ref("name") else {
             continue;
         };
         if let Some(previous) = layouts.get(&name).copied() {
@@ -2541,7 +2569,7 @@ fn canonical_nominal_layouts(
             .filter_map(|(ty, data)| {
                 (data.dialect == "adt"
                     && (matches!(data.name.as_str(), "struct" | "enum"))
-                    && data.attrs.get_string_ref("name") == Some(name))
+                    && data.attrs.view(ctx).get_string_ref("name") == Some(name))
                 .then_some(ty)
             })
             .collect::<Vec<_>>();
@@ -2650,7 +2678,7 @@ fn validate_managed_reference_boundaries(
             continue;
         }
         let data = ctx.get_type(ty);
-        let Some(name) = data.attrs.get_string_ref("name") else {
+        let Some(name) = data.attrs.view(ctx).get_string_ref("name") else {
             push_type_error(
                 errors,
                 format!("{ty}: adt.typeref requires nominal name metadata"),
@@ -2680,7 +2708,7 @@ fn validate_managed_reference_boundaries(
             let ([], [result], Some(declared)) = (
                 ctx.op_operands(op),
                 ctx.op_result_types(op),
-                data.attributes.get_type("type"),
+                data.attributes.view(ctx).get_type("type"),
             ) else {
                 push_op_error(ctx, op, errors, "adt.ref_null requires one typed result");
                 return;
@@ -2698,7 +2726,7 @@ fn validate_managed_reference_boundaries(
             let ([operand], [result], Some(declared)) = (
                 ctx.op_operands(op),
                 ctx.op_result_types(op),
-                data.attributes.get_type("type"),
+                data.attributes.view(ctx).get_type("type"),
             ) else {
                 push_op_error(
                     ctx,
@@ -2858,7 +2886,7 @@ fn callable_block_arg_has_source_contract(
     let func_sig_type = if is_control_op(ctx, owner, "func") {
         ctx.op_regions(owner)
             .eq([region])
-            .then(|| ctx.op(owner).attributes.get_type("type"))
+            .then(|| ctx.op_attrs(owner).get_type("type"))
             .flatten()
     } else if is_control_op(ctx, owner, "lambda") {
         ctx.op_regions(owner)
@@ -2875,9 +2903,9 @@ fn callable_block_arg_has_source_contract(
     if is_control_op(ctx, owner, "handler") && ctx.op_regions(owner).eq([region]) {
         let data = ctx.op(owner);
         if let (Some(ability), Some(name), Some(kind)) = (
-            data.attributes.get_symbol_ref("ability"),
-            data.attributes.get_string_ref("op_name"),
-            data.attributes.get_string_ref("kind"),
+            data.attributes.view(ctx).get_symbol_ref("ability"),
+            data.attributes.view(ctx).get_string_ref("op_name"),
+            data.attributes.view(ctx).get_string_ref("kind"),
         ) {
             return provenance
                 .declarations
@@ -2927,8 +2955,7 @@ fn callable_has_semantic_provenance(
                 || ((is_control_op(ctx, producer, "func_ref")
                     || is_control_op(ctx, producer, "call"))
                     && ctx
-                        .op(producer)
-                        .attributes
+                        .op_attrs(producer)
                         .get_symbol_ref(if is_control_op(ctx, producer, "func_ref") {
                             "func_ref"
                         } else {
@@ -2970,7 +2997,7 @@ fn verified_callable_declaration(
         Func::from_op(ctx, function)
             .ok()
             .and_then(|function| function.compiler_intrinsic_identity(ctx)),
-        ctx.op(function).attributes.get_type("type"),
+        ctx.op_attrs(function).get_type("type"),
     ) else {
         return false;
     };
@@ -2999,9 +3026,10 @@ fn validate_callable_origins(
     walk_region_ops(ctx, body, &mut |op| {
         if is_control_op(ctx, op, "func") {
             let data = ctx.op(op);
-            let (Some(symbol), Some(func_sig_type)) =
-                (qualified_name(ctx, op), data.attributes.get_type("type"))
-            else {
+            let (Some(symbol), Some(func_sig_type)) = (
+                qualified_name(ctx, op),
+                data.attributes.view(ctx).get_type("type"),
+            ) else {
                 return;
             };
             let intrinsic_identity = Func::from_op(ctx, op)
@@ -3045,7 +3073,7 @@ fn validate_callable_origins(
                     }
                     (None, None) => false,
                 };
-                let trusted_c_ffi = data.attributes.get_str(ctx, "abi") == Some("C");
+                let trusted_c_ffi = data.attributes.view(ctx).get_str("abi") == Some("C");
                 if !exact_intrinsic
                     && !trusted_c_ffi
                     && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::default())
@@ -3136,7 +3164,7 @@ fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
                 return;
             };
             if is_control_op(ctx, current, "func") {
-                break ctx.op(current).attributes.get_type("type");
+                break ctx.op_attrs(current).get_type("type");
             }
             if is_control_op(ctx, current, "lambda") {
                 break ctx.op_result_types(current).first().copied();
@@ -3189,15 +3217,15 @@ fn validate_declaration_uses(
             (
                 "kind",
                 args,
-                ctx.op(op).attributes.get_type("operation_result_type"),
+                ctx.op_attrs(op).get_type("operation_result_type"),
             )
         } else {
             return;
         };
         let data = ctx.op(op);
         let (Some(ability), Some(name)) = (
-            data.attributes.get_symbol_ref("ability"),
-            data.attributes.get_string_ref("op_name"),
+            data.attributes.view(ctx).get_symbol_ref("ability"),
+            data.attributes.view(ctx).get_string_ref("op_name"),
         ) else {
             return;
         };
@@ -3213,7 +3241,7 @@ fn validate_declaration_uses(
             );
             return;
         };
-        if data.attributes.get_string_ref(kind_attr) != Some(declaration.kind) {
+        if data.attributes.view(ctx).get_string_ref(kind_attr) != Some(declaration.kind) {
             push_op_error(
                 ctx,
                 op,
@@ -3269,7 +3297,7 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     if !is_control_op(ctx, op, "call") {
         return false;
     }
-    let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
+    let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
         return false;
     };
     let mut owner = parent_op(ctx, op);
@@ -3280,9 +3308,8 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
             return parent_op(ctx, current)
                 .is_some_and(|module| trunk_ir::dialect::core::Module::matches(ctx, module))
                 && ctx
-                    .op(current)
-                    .attributes
-                    .get_str(ctx, "sym_name")
+                    .op_attrs(current)
+                    .get_str("sym_name")
                     .is_some_and(|name| *callee == [name]);
         }
         owner = parent_op(ctx, current);
@@ -3657,7 +3684,7 @@ mod tests {
     }
 
     fn simple_type(ctx: &mut IrContext, dialect: &str, name: &str) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+        TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).intern(ctx)
     }
 
     fn ability_type(_: &mut IrContext, name: &str) -> SymbolPath {
@@ -3906,19 +3933,23 @@ mod tests {
         let handler_data = ctx.op(handler);
         let ability = handler_data
             .attributes
+            .view(&ctx)
             .get_symbol_ref("ability")
             .cloned()
             .expect("handler ability");
         let op_name = handler_data
             .attributes
+            .view(&ctx)
             .get_string_ref("op_name")
             .expect("handler operation name");
         let kind = handler_data
             .attributes
+            .view(&ctx)
             .get_string_ref("kind")
             .expect("handler kind");
         let result_type = handler_data
             .attributes
+            .view(&ctx)
             .get_type("operation_result_type")
             .expect("handler operation result");
         let parameter_types = block_arg_types(&ctx, handler_block);
@@ -4081,8 +4112,7 @@ mod tests {
             assert_eq!(ty.result(&ctx), i32_ty);
             assert_eq!(ty.inputs(&ctx), &[i32_ty]);
             assert_eq!(
-                ctx.get_type(ty.as_type_ref())
-                    .attrs
+                ctx.type_attrs(ty.as_type_ref())
                     .get_i128(CALLING_CONVENTION_ATTR),
                 Some(code)
             );
@@ -4123,7 +4153,7 @@ mod tests {
             TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
                 .param(i32_ty)
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
-                .build(),
+                .build(&mut ctx),
             TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
                 .param(i32_ty)
                 .attr(
@@ -4132,13 +4162,13 @@ mod tests {
                 )
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
-                .build(),
+                .build(&mut ctx),
             TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
                 .param(i32_ty)
                 .attr(trunk_ir::dialect::func::NUM_INPUTS_ATTR, Attribute::Int(2))
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
-                .build(),
+                .build(&mut ctx),
             TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
                 .param(i32_ty)
                 .attr(
@@ -4147,13 +4177,13 @@ mod tests {
                 )
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
-                .build(),
+                .build(&mut ctx),
             TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
                 .param(i32_ty)
                 .attr(trunk_ir::dialect::func::NUM_INPUTS_ATTR, Attribute::Int(0))
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(2))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
-                .build(),
+                .build(&mut ctx),
         ];
         for data in malformed {
             let ty = ctx.intern_type(data);
@@ -4268,49 +4298,28 @@ mod tests {
         let declaration = funcs
             .iter()
             .copied()
-            .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
-                    == Some(Symbol::new("decl"))
-            })
+            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("decl"))
             .unwrap();
         let definition = funcs
             .iter()
             .copied()
-            .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
-                    == Some(Symbol::new("definition"))
-            })
+            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("definition"))
             .unwrap();
-        let shared = ctx.op(declaration).attributes.get_type("type").unwrap();
-        assert_eq!(
-            shared,
-            ctx.op(definition).attributes.get_type("type").unwrap()
-        );
+        let shared = ctx.op_attrs(declaration).get_type("type").unwrap();
+        assert_eq!(shared, ctx.op_attrs(definition).get_type("type").unwrap());
         let distinct = funcs
             .iter()
             .copied()
-            .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
-                    == Some(Symbol::new("different"))
-            })
-            .and_then(|op| ctx.op(op).attributes.get_type("type"))
+            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("different"))
+            .and_then(|op| ctx.op_attrs(op).get_type("type"))
             .unwrap();
         assert_ne!(shared, distinct);
         assert!(matches!(
-            ctx.get_type(shared).attrs.get("metadata"),
+            ctx.type_attrs(shared).get("metadata"),
             Some(Attribute::List(_))
         ));
         assert_eq!(
-            ctx.op(declaration).attributes.get_symbol_ref("metadata"),
+            ctx.op_attrs(declaration).get_symbol_ref("metadata"),
             Some(&SymbolPath::new(["declaration"]))
         );
 
@@ -4465,11 +4474,9 @@ mod tests {
         // The custom func parser derives and hides sym_name/type, so malformed
         // values for those two required attributes are not text-representable.
         let malformed_func = control_op(&ctx, module, "func");
-        ctx.op_mut(malformed_func)
-            .attributes
+        ctx.op_attrs_mut(malformed_func)
             .insert("sym_name", Attribute::Int(1));
-        ctx.op_mut(malformed_func)
-            .attributes
+        ctx.op_attrs_mut(malformed_func)
             .insert("type", Attribute::Int(2));
 
         let result = validate_local(&ctx, module);
@@ -4661,18 +4668,11 @@ mod tests {
 
         let bad_func = control_ops(&ctx, module, "func")
             .into_iter()
-            .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
-                    == Some(Symbol::new("bad_func"))
-            })
+            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("bad_func"))
             .unwrap();
         // Custom assembly always derives a callable type and permits at most one
         // body. Mutate only those parser-enforced fields.
-        ctx.op_mut(bad_func)
-            .attributes
+        ctx.op_attrs_mut(bad_func)
             .insert("type", Attribute::Type(i32_ty));
         let extra_block = block(&mut ctx, loc, &[]);
         let extra_region = region(&mut ctx, loc, extra_block);
@@ -4683,11 +4683,7 @@ mod tests {
 
         let bad_func_ref = control_ops(&ctx, module, "func_ref")
             .into_iter()
-            .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .contains_key(Symbol::new("unexpected"))
-            })
+            .find(|op| ctx.op_attrs(*op).contains_key("unexpected"))
             .unwrap();
         let bad_call = control_op(&ctx, module, "call");
         let indirects = control_ops(&ctx, module, "call_indirect");
@@ -5099,17 +5095,24 @@ mod tests {
         let declarations = [OperationDeclaration::new(
             handler_data
                 .attributes
+                .view(&ctx)
                 .get_symbol_ref("ability")
                 .cloned()
                 .unwrap(),
-            handler_data.attributes.get_string_ref("op_name").unwrap(),
+            handler_data
+                .attributes
+                .view(&ctx)
+                .get_string_ref("op_name")
+                .unwrap(),
             fn_kind,
             [handler_data
                 .attributes
+                .view(&ctx)
                 .get_type("operation_result_type")
                 .unwrap()],
             handler_data
                 .attributes
+                .view(&ctx)
                 .get_type("operation_result_type")
                 .unwrap(),
         )];
@@ -5615,7 +5618,7 @@ mod tests {
 }"#,
         );
         let function = control_op(&ctx, module, "func");
-        let func_sig_type = ctx.op(function).attributes.get_type("type").unwrap();
+        let func_sig_type = ctx.op_attrs(function).get_type("type").unwrap();
         let exact = CompilerIntrinsicDeclaration::new(
             SymbolPath::new(["Nat::+"]),
             Symbol::new("Nat::+"),
@@ -5655,7 +5658,7 @@ mod tests {
 }"#,
         );
         let function = control_op(&ctx, module, "func");
-        let func_sig_type = ctx.op(function).attributes.get_type("type").unwrap();
+        let func_sig_type = ctx.op_attrs(function).get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
             SymbolPath::new(["read"]),
             Symbol::new("read"),
@@ -5685,15 +5688,9 @@ mod tests {
         );
         let intrinsic = control_ops(&ctx, module, "func")
             .into_iter()
-            .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
-                    == Some(Symbol::new("Nat::+"))
-            })
+            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("Nat::+"))
             .unwrap();
-        let func_sig_type = ctx.op(intrinsic).attributes.get_type("type").unwrap();
+        let func_sig_type = ctx.op_attrs(intrinsic).get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
             SymbolPath::new(["Nat::+"]),
             Symbol::new("Nat::+"),
@@ -5721,18 +5718,12 @@ mod tests {
             let function = functions
                 .iter()
                 .copied()
-                .find(|op| {
-                    ctx.op(*op)
-                        .attributes
-                        .get_str(&ctx, "sym_name")
-                        .map(Symbol::new)
-                        == Some(symbol.clone())
-                })
+                .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some(symbol.as_str()))
                 .unwrap();
             CompilerIntrinsicDeclaration::new(
                 SymbolPath::new([symbol.clone()]),
                 symbol,
-                ctx.op(function).attributes.get_type("type").unwrap(),
+                ctx.op_attrs(function).get_type("type").unwrap(),
             )
         };
         let nat = declaration(Symbol::new("Nat::+"));
@@ -5993,14 +5984,12 @@ mod tests {
         let handler_block = ctx.region(handler_region).blocks[0];
         let callback_type = ctx.value_ty(ctx.block_args(handler_block)[0]);
         let ability = ctx
-            .op(handler)
-            .attributes
+            .op_attrs(handler)
             .get_symbol_ref("ability")
             .cloned()
             .unwrap();
         let operation_result = ctx
-            .op(handler)
-            .attributes
+            .op_attrs(handler)
             .get_type("operation_result_type")
             .unwrap();
         let declaration = OperationDeclaration::new(

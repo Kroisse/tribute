@@ -51,7 +51,7 @@ fn find_read_line_result_type(ctx: &IrContext) -> Option<TypeRef> {
     ctx.types().iter().find_map(|(ty, data)| {
         (data.dialect == adt
             && data.name == enum_name
-            && data.attrs.get_str(ctx, "name") == Some(READ_LINE_RESULT_TYPE))
+            && data.attrs.view(ctx).get_str("name") == Some(READ_LINE_RESULT_TYPE))
         .then_some(ty)
     })
 }
@@ -93,7 +93,7 @@ fn has_function(ctx: &IrContext, block: trunk_ir::BlockRef, name: &str) -> bool 
 }
 
 fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+    TypeDataBuilder::new(dialect, name).intern(ctx)
 }
 
 struct NativeWritePattern;

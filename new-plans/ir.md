@@ -1801,10 +1801,15 @@ hash는 내용으로 정해진다. 문자열 값을 만들고 읽는 일은 cont
 Context를 복제하면 pool도 복사되므로, 복제 전에 만든 handle은 양쪽에서 유효하고 복제
 뒤에 만든 handle은 만든 쪽에서만 유효하다. Pool은 context와 함께 해제된다.
 
-Dictionary(`Attribute::Dict`)는 symbol key에서 속성 값으로의 map이다. Key는 정렬된
-순서로 보관·출력되며, identity와 hash는 삽입 순서가 아니라 key-value 내용으로
-정해진다. Textual form은 값 위치의 `{key = value, ...}`이고, 빈 dictionary는 `{}`다.
-값 위치에서는 `{`가 region body를 시작하지 않으므로 type 속성 dictionary나 operation
+속성의 이름(operation, block 인자, type 속성의 key와 dictionary key)도 symbol
+table을 이루는 이름이 아니므로 symbol이 아니라 문자열이다. 이름은 문자열 값과 같은
+pool에 uniquing되며, 이름을 읽고 속성을 찾고 넣는 일은 context를 거친다. 속성
+map은 key를 텍스트 순서로 보관·순회·출력하고, identity와 hash는 삽입 순서가 아니라
+key-value 내용으로 정해진다.
+
+Dictionary(`Attribute::Dict`)는 문자열 key에서 속성 값으로의 map이며, key 순서와
+identity는 속성 map과 같다. Textual form은 값 위치의 `{key = value, ...}`이고,
+빈 dictionary는 `{}`다. 값 위치에서는 `{`가 region body를 시작하지 않으므로 type 속성 dictionary나 operation
 body와 모호하지 않다. Reader는 한 dictionary 안의 중복 key를 거부한다.
 
 List와 dictionary는 임의로 중첩된다. 속성 값 안의 type은 type walk의 일부다. 속성에

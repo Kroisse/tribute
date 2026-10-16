@@ -90,7 +90,7 @@ fn flag_result_type(ctx: &IrContext, op: OpRef, rewriter: &PatternRewriter<'_>) 
 }
 
 fn intern_i8_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "i8").build())
+    TypeDataBuilder::new("core", "i8").intern(ctx)
 }
 
 struct StructGetPattern;

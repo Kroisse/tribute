@@ -97,7 +97,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 for (k, v) in attrs {
                     builder = builder.attr(k, v);
                 }
-                Ok(self.ctx.intern_type(builder.build()))
+                Ok(builder.intern(self.ctx))
             }
             RawType::Function {
                 dialect,
@@ -125,10 +125,13 @@ impl<'a> ArenaIrBuilder<'a> {
     }
 
     fn build_attr_dict(&mut self, attrs: &RawAttrDict<'_>) -> Result<AttributeMap, ParseError> {
-        attrs
-            .iter()
-            .map(|(key, value)| Ok((Symbol::new(key), self.build_attribute(value)?)))
-            .collect()
+        let mut map = AttributeMap::new();
+        for (key, value) in attrs.iter() {
+            let value = self.build_attribute(value)?;
+            let key = self.ctx.intern_str(key);
+            map.view_mut(self.ctx).insert(key, value);
+        }
+        Ok(map)
     }
 
     /// Build a type's own attributes.
@@ -165,7 +168,7 @@ impl<'a> ArenaIrBuilder<'a> {
         let mut attrs = self.build_type_attrs(dialect, name, attrs)?;
         let param_attrs = inputs.iter().chain(results).map(|(_, attrs)| attrs.clone());
         if let Some(value) = param_attrs_attribute(param_attrs) {
-            attrs.insert(PARAM_ATTRS_ATTR, value);
+            attrs.view_mut(self.ctx).insert(PARAM_ATTRS_ATTR, value);
         }
         Ok(attrs)
     }
@@ -346,18 +349,16 @@ impl<'a> ArenaIrBuilder<'a> {
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
-        Ok(self.ctx.intern_type(
-            builder
-                .attr(
-                    crate::dialect::func::NUM_INPUTS_ATTR,
-                    Attribute::from(num_inputs),
-                )
-                .attr(
-                    crate::dialect::func::NUM_RESULTS_ATTR,
-                    Attribute::from(num_results),
-                )
-                .build(),
-        ))
+        Ok(builder
+            .attr(
+                crate::dialect::func::NUM_INPUTS_ATTR,
+                Attribute::from(num_inputs),
+            )
+            .attr(
+                crate::dialect::func::NUM_RESULTS_ATTR,
+                Attribute::from(num_results),
+            )
+            .intern(self.ctx))
     }
 
     fn build_attribute(&mut self, raw: &RawAttribute<'_>) -> Result<Attribute, ParseError> {
@@ -381,7 +382,8 @@ impl<'a> ArenaIrBuilder<'a> {
                 let mut dict = crate::types::AttributeMap::new();
                 for (key, value) in entries {
                     let value = self.build_attribute(value)?;
-                    if dict.insert(Symbol::new(key), value).is_some() {
+                    let interned = self.ctx.intern_str(key);
+                    if dict.view_mut(self.ctx).insert(interned, value).is_some() {
                         return Err(ParseError {
                             message: format!("duplicate dictionary attribute key '{key}'"),
                             offset: 0,
@@ -496,7 +498,8 @@ impl<'a> ArenaIrBuilder<'a> {
 
                 let mut attrs = AttributeMap::new();
                 if !is_default_name {
-                    attrs.insert("bind_name", self.ctx.string_attr(name));
+                    let name = self.ctx.string_attr(name);
+                    attrs.view_mut(self.ctx).insert("bind_name", name);
                 }
                 block_arg_data.push(BlockArgData { ty, attrs });
                 arg_names.push(name.to_string());
@@ -634,15 +637,12 @@ impl<'a> ArenaIrBuilder<'a> {
             .collect::<Result<_, _>>()?;
 
         // Build attributes from explicit attr dict
-        let mut attributes: AttributeMap = raw
-            .attributes
-            .iter()
-            .map(|(k, v)| Ok((Symbol::new(k), self.build_attribute(v)?)))
-            .collect::<Result<_, ParseError>>()?;
+        let mut attributes = self.build_attr_dict(&raw.attributes)?;
 
         // Add sym_name if present
         if let Some(ref name) = raw.sym_name {
-            attributes.insert("sym_name", Attribute::String(self.ctx.intern_str(name)));
+            let name = self.ctx.string_attr(name);
+            attributes.view_mut(self.ctx).insert("sym_name", name);
         }
 
         // Handle func-style signature → func.func_sig type
@@ -669,13 +669,15 @@ impl<'a> ArenaIrBuilder<'a> {
                 }
                 _ => crate::dialect::func::func_sig(self.ctx, param_types, results).as_type_ref(),
             };
-            if attributes.contains_key("type") && attributes.get_type("type").is_none() {
+            if attributes.view(self.ctx).contains_key("type")
+                && attributes.view(self.ctx).get_type("type").is_none()
+            {
                 return Err(ParseError {
                     message: "explicit function type attribute must be a type".into(),
                     offset: 0,
                 });
             }
-            if let Some(explicit) = attributes.get_type("type") {
+            if let Some(explicit) = attributes.view(self.ctx).get_type("type") {
                 let matches =
                     if raw.dialect == "wasm" && raw.op_name == "func" {
                         crate::dialect::wasm::FuncSig::from_type_ref(self.ctx, explicit)
@@ -712,7 +714,9 @@ impl<'a> ArenaIrBuilder<'a> {
                     });
                 }
             } else {
-                attributes.insert("type", Attribute::Type(func_ty));
+                attributes
+                    .view_mut(self.ctx)
+                    .insert("type", Attribute::Type(func_ty));
             }
         }
 
@@ -886,7 +890,7 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
@@ -1071,8 +1075,7 @@ core.module @test {
         );
         assert!(sig.result_attrs(&ctx).all(|attrs| attrs.is_empty()));
         assert!(
-            !ctx.get_type(aliases["plain"])
-                .attrs
+            !ctx.type_attrs(aliases["plain"])
                 .contains_key(crate::types::PARAM_ATTRS_ATTR),
             "all-empty parameter attributes are canonicalized away"
         );
@@ -1158,7 +1161,7 @@ core.module @test {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
+        let i1_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
 
         // Entry block with param
@@ -1696,12 +1699,9 @@ core.module @test {
         let function = ctx
             .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
+        assert_eq!(ctx.op_attrs(function).get_str("sym_name"), Some("generic"));
         assert_eq!(
-            ctx.op(function).attributes.get_str(&ctx, "sym_name"),
-            Some("generic")
-        );
-        assert_eq!(
-            ctx.op(function).attributes.get_type("type"),
+            ctx.op_attrs(function).get_type("type"),
             ctx.type_alias_by_text("signature")
         );
     }
@@ -1716,7 +1716,7 @@ core.module @test {
         let function = ctx
             .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
-        let signature = ctx.op(function).attributes.get_type("type").unwrap();
+        let signature = ctx.op_attrs(function).get_type("type").unwrap();
         assert!(func::FuncSig::from_type_ref(&ctx, signature).is_some());
         assert!(crate::dialect::wasm::FuncSig::from_type_ref(&ctx, signature).is_none());
         assert!(
@@ -1741,7 +1741,7 @@ core.module @test {
         let function = ctx
             .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
-        let signature = ctx.op(function).attributes.get_type("type").unwrap();
+        let signature = ctx.op_attrs(function).get_type("type").unwrap();
         assert!(clif::FuncSig::from_type_ref(&ctx, signature).is_some());
         assert!(func::FuncSig::from_type_ref(&ctx, signature).is_none());
         assert_roundtrip(&ctx, module);
@@ -2060,11 +2060,11 @@ core.module @test {
                 let parsed_op = parsed_ctx.block(block).ops[0];
                 let attrs = &parsed_ctx.op(parsed_op).attributes;
                 prop_assert_eq!(
-                    attrs.get("bytes"),
+                    attrs.view(&parsed_ctx).get("bytes"),
                     Some(&Attribute::Bytes(bytes.as_slice().into()))
                 );
-                prop_assert_eq!(attrs.get_str(&parsed_ctx, "text"), Some(string.as_str()));
-                prop_assert_eq!(attrs.get_symbol_ref("callee"), Some(&callee));
+                prop_assert_eq!(attrs.view(&parsed_ctx).get_str("text"), Some(string.as_str()));
+                prop_assert_eq!(attrs.view(&parsed_ctx).get_symbol_ref("callee"), Some(&callee));
                 prop_assert_eq!(print_module(&parsed_ctx, parsed), printed);
             }
         }

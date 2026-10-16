@@ -49,13 +49,13 @@ use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let mut attrs = AttributeMap::new();
-    attrs.insert(
-        runtime_layout::LAYOUT_ATTR,
-        ctx.string_attr(runtime_layout::CLOSURE),
-    );
+    let layout = ctx.string_attr(runtime_layout::CLOSURE);
+    attrs
+        .view_mut(ctx)
+        .insert(runtime_layout::LAYOUT_ATTR, layout);
     adt::struct_type(
         ctx,
         "_closure",
@@ -172,7 +172,7 @@ impl RewritePattern for LowerClosureCallArena {
         // delimiter enters its Cps body.
         let caller_results = ctx.op_result_types(op).to_vec();
 
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let Some(convention) = get_calling_convention(ctx, op) else {
             return false;
@@ -256,7 +256,7 @@ impl RewritePattern for LowerClosureTailCallArena {
         }
 
         let location = ctx.op(op).location;
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let Some(results) = exact_tail_results(ctx, op, callee, convention) else {
             return false;
@@ -303,9 +303,9 @@ impl RewritePattern for LowerClosureTailCallArena {
 /// physical signature carries the contract it was validated against.
 fn copy_indirect_call_attributes(ctx: &mut IrContext, source: OpRef, destination: OpRef) {
     let mut attributes = ctx.op(source).attributes.clone();
-    func::remove_indirect_call_signature(&mut attributes);
-    attributes.remove(CALLING_CONVENTION_ATTR);
-    ctx.op_mut(destination).attributes.extend(attributes);
+    func::remove_indirect_call_signature(ctx, &mut attributes);
+    attributes.view_mut(ctx).remove(CALLING_CONVENTION_ATTR);
+    ctx.op_attrs_mut(destination).extend(attributes);
 }
 
 pub(crate) fn physical_closure_type_for_callee(
@@ -417,7 +417,7 @@ impl RewritePattern for LowerClosureFuncArena {
 
         let loc = ctx.op(op).location;
         let closure_value = ctx.op_operands(op)[0];
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
         let struct_ty = closure_struct_type_ref(ctx);
 
         let get_op = adt::StructGet::operands(closure_value)
@@ -549,8 +549,7 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
         for func_op in discovered.into_iter().rev() {
             rewrite_validated_closures_in_func(ctx, func_op, functions.clone());
             // Closure lowering is the last reader of a function's convention.
-            ctx.op_mut(func_op.op_ref())
-                .attributes
+            ctx.op_attrs_mut(func_op.op_ref())
                 .remove(CALLING_CONVENTION_ATTR);
         }
     }
@@ -666,7 +665,8 @@ pub(crate) fn substitute_module_types_keeping_casts(
                 for (index, argument) in args.into_iter().enumerate() {
                     let mut attrs = argument.attrs.clone();
                     for (name, value) in argument.attrs.iter() {
-                        attrs.insert(name.clone(), physicalizer.convert_attribute(value.clone()));
+                        let value = physicalizer.convert_attribute(value.clone());
+                        attrs.view_mut(physicalizer.ctx).insert(name, value);
                     }
                     if attrs != argument.attrs {
                         block_attribute_updates.push((block, index, attrs));
@@ -686,7 +686,7 @@ pub(crate) fn substitute_module_types_keeping_casts(
         ctx.register_type_alias(name, ty);
     }
     for (op, name, value) in attribute_updates {
-        ctx.op_mut(op).attributes.insert(name, value);
+        ctx.op_attrs_mut(op).insert(name, value);
     }
     for (op, index, ty) in result_updates {
         ctx.set_op_result_type(op, index, ty);
@@ -750,10 +750,10 @@ impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<
         let attributes: Vec<_> = data
             .attrs
             .iter()
-            .map(|(name, value)| (name.clone(), self.convert_attribute(value.clone())))
+            .map(|(name, value)| (name, self.convert_attribute(value.clone())))
             .collect();
         converted.attrs.clear();
-        converted.attrs.extend(attributes);
+        converted.attrs.view_mut(self.ctx).extend(attributes);
         let converted = if converted == data {
             ty
         } else {

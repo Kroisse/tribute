@@ -108,7 +108,7 @@ where
 - `Attr<Dict<V>>` (`attr_kind::Dict`) is a dictionary whose every value has
   kind `V`. Its accessor returns a view with `get(key)`, `len()`, and
   `iter()` in key order, and its builder setter takes the
-  `(Symbol, value)` entries.
+  `(StringArg, value)` entries.
 - Regions and successors are declared in the body: `#[region(name)] {}`,
   `#[region(name?)] {}` for an optional last region such as the body of an
   external function, and `#[successor(name)] {}`. `#[successors(name)] {}`
@@ -216,8 +216,8 @@ not carry a `StringRef` to another context:
 
 ```rust
 let abi = ctx.string_attr("C");
-attrs.insert("abi", abi);
-let is_c = ctx.op(op).attributes.get_str(ctx, "abi") == Some("C");
+attrs.view_mut(ctx).insert("abi", abi);
+let is_c = ctx.op_attrs(op).get_str("abi") == Some("C");
 let value: &str = string_const.value(ctx); // generated accessor
 ```
 
@@ -243,6 +243,35 @@ let copy = adt::StringConst::operands()
     .results(ty)
     .build(ctx, loc);
 ```
+
+Attribute keys are names, not symbols: an `AttributeMap` keys its entries by
+`StringRef` in the same pool, ordered by their text. The map itself offers
+only what needs no key text (`len`, `iter` over `StringRef` keys, `values`);
+every lookup and change goes through a view bound to the context:
+
+- `ctx.op_attrs(op)`, `ctx.type_attrs(ty)`, and `attrs.view(ctx)` for any
+  other map read by key text or handle, `get_type("type")`, and print keys
+  and string values as text with `{:?}`.
+- `ctx.op_attrs_mut(op)`, `ctx.block_arg_attrs_mut(block, i)`, and
+  `attrs.view_mut(ctx)` for a map outside the context change it, interning
+  new keys. The view borrows the context, so build any value that needs the
+  context before taking it.
+
+```rust
+let callee = ctx.op_attrs(op).get_symbol_ref("callee");
+let is_bodyless = !ctx.op_attrs(op).contains_key("body");
+let name = ctx.string_attr("x");
+let mut attrs = ctx.op_attrs_mut(op);
+attrs.insert("type", Attribute::Type(ty));
+attrs.remove("signature");
+ctx.block_arg_attrs_mut(block, 0).insert("bind_name", name);
+```
+
+`AttributeMap::from_entries(ctx, [("bind_name", name)])` builds a map, and
+`AttributeMap::from_refs(ctx, entries)` builds one from keys already pooled
+in the context, such as the entries of another map. A type is built with
+`TypeDataBuilder`, whose `attr` keys are interned when it is built:
+`TypeDataBuilder::new("core", "i32").intern(ctx)` builds and interns it.
 
 Attributes that embed types (directly or inside `List`/`Dict` values) are
 converted and inspected through the shared traversal instead of matching

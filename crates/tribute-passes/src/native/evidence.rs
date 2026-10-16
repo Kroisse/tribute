@@ -90,8 +90,8 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         return;
     };
     let loc = ctx.op(module.op()).location;
-    let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let ptr_ty = TypeDataBuilder::new("core", "ptr").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
     // Evidence is a managed reference: the runtime borrows evidence arguments
     // and returns a result the caller owns, which includes the dispatch
     // closure it looks up. A closure handed to the runtime crosses as a raw
@@ -225,11 +225,11 @@ fn is_evidence_type(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 fn core_ptr_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "ptr").build())
+    TypeDataBuilder::new("core", "ptr").intern(ctx)
 }
 
 fn core_i32_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+    TypeDataBuilder::new("core", "i32").intern(ctx)
 }
 
 fn lower_evidence_dispatch_operand(
@@ -624,10 +624,7 @@ mod tests {
         ] {
             let function = func_by_name_recursive(&ctx, module, name);
             assert!(!ctx.op_has_regions(function.op_ref()));
-            assert_eq!(
-                ctx.op(function.op_ref()).attributes.get_str(&ctx, "abi"),
-                Some("C")
-            );
+            assert_eq!(ctx.op_attrs(function.op_ref()).get_str("abi"), Some("C"));
             let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
             let parameter_types: Vec<_> = signature
                 .inputs(&ctx)
@@ -964,7 +961,7 @@ mod tests {
             lower_evidence_to_native_func(&mut ctx, function);
             let block = ctx.region(function.body(&ctx)).blocks[0];
             let tail = *ctx.block(block).ops.last().unwrap();
-            assert!(!ctx.op(tail).attributes.contains_key("answer_type"));
+            assert!(!ctx.op_attrs(tail).contains_key("answer_type"));
             signatures.push(
                 func::TailCallIndirect::from_op(&ctx, tail)
                     .unwrap()

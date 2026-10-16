@@ -50,7 +50,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
-use trunk_ir::{StringRef, Symbol, SymbolPath};
+use trunk_ir::{StringRef, SymbolPath};
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 
 use crate::effect_dispatch;
@@ -247,11 +247,7 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> HelperRequir
 
 fn has_function(ctx: &IrContext, module: Module, name: &'static str) -> bool {
     module.ops(ctx).iter().copied().any(|op| {
-        ctx.op(op)
-            .attributes
-            .get_str(ctx, "sym_name")
-            .map(Symbol::new)
-            == Some(Symbol::new(name))
+        ctx.op_attrs(op).get_str("sym_name") == Some(name)
             && (func::Func::matches(ctx, op) || wasm_dialect::Func::matches(ctx, op))
     })
 }
@@ -510,10 +506,10 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         if !is_function || ctx.op_has_regions(op) {
             continue;
         }
-        let Some(name_ref) = data.attributes.get_string_ref("sym_name") else {
+        let Some(name_ref) = data.attributes.view(ctx).get_string_ref("sym_name") else {
             continue;
         };
-        let Some(signature) = data.attributes.get_type("type") else {
+        let Some(signature) = data.attributes.view(ctx).get_type("type") else {
             continue;
         };
         let location = data.location;
@@ -1355,12 +1351,12 @@ fn evidence_ref_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a `core.i32` type.
 fn intern_i32(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+    TypeDataBuilder::new("core", "i32").intern(ctx)
 }
 
 /// Intern a `wasm.anyref` type.
 fn intern_anyref(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build())
+    TypeDataBuilder::new("wasm", "anyref").intern(ctx)
 }
 
 fn empty_block(ctx: &mut IrContext, location: Location) -> BlockRef {

@@ -30,5 +30,5 @@ pub const DESCRIBED: &str = "described";
 
 /// Whether `ty` carries the runtime layout identifier `layout`.
 pub fn has_runtime_layout(ctx: &IrContext, ty: TypeRef, layout: &str) -> bool {
-    ctx.get_type(ty).attrs.get_str(ctx, LAYOUT_ATTR) == Some(layout)
+    ctx.type_attrs(ty).get_str(LAYOUT_ATTR) == Some(layout)
 }

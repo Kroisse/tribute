@@ -43,9 +43,8 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
             .filter_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
                 let symbol = SymbolPath::new([function.sym_name(ctx)]);
-                (ctx.op(op)
-                    .attributes
-                    .get_str(ctx, COMPILER_INTRINSIC_ATTR)
+                (ctx.op_attrs(op)
+                    .get_str(COMPILER_INTRINSIC_ATTR)
                     .is_some_and(|identity| symbol == [identity])
                     && intrinsic_map.get(&symbol).is_some_and(|mapping| {
                         exact_signature(ctx, function.r#type(ctx), &symbol, mapping)
@@ -99,8 +98,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     });
     for declaration in declarations {
         if ctx.op_has_regions(declaration) || referenced.contains(&declaration) {
-            ctx.op_mut(declaration)
-                .attributes
+            ctx.op_attrs_mut(declaration)
                 .remove(COMPILER_INTRINSIC_ATTR);
         } else {
             ctx.detach_op(declaration);

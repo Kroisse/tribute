@@ -358,13 +358,15 @@ fn assert_source_allocation_field_releases(ir: &str) {
         let ty = ctx.get_type(ctx.value_ty(retain.result(&ctx)));
         let kind = if ty
             .attrs
-            .get_str(&ctx, "name")
+            .view(&ctx)
+            .get_str("name")
             .is_some_and(|name| name == "_closure")
         {
             "closure"
         } else if ty
             .attrs
-            .get_str(&ctx, "name")
+            .view(&ctx)
+            .get_str("name")
             .is_some_and(|name| name.starts_with(tribute_ir::continuation_frame::NAME_PREFIX))
         {
             "frame"

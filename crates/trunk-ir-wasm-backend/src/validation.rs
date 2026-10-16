@@ -112,8 +112,7 @@ fn enclosing_wasm_func_signature(ctx: &IrContext, mut op: OpRef) -> Option<wasm_
         let parent = ctx.region(region).parent_op?;
         if wasm_dialect::Func::matches(ctx, parent) {
             return ctx
-                .op(parent)
-                .attributes
+                .op_attrs(parent)
                 .get_type("type")
                 .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty));
         }
@@ -138,8 +137,7 @@ fn resolve_wasm_callee(
         return Some(None);
     }
     Some(
-        ctx.op(found)
-            .attributes
+        ctx.op_attrs(found)
             .get_type("type")
             .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty)),
     )
@@ -256,7 +254,7 @@ fn validate_direct_callable_contracts(
     if !is_direct {
         return;
     }
-    let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
+    let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
         errors.push(format!(
             "wasm.{} requires a symbol callee attribute",
             ctx.op(op).name
@@ -346,8 +344,7 @@ fn validate_return_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<St
         return;
     };
     let Some(signature) = ctx
-        .op(op)
-        .attributes
+        .op_attrs(op)
         .get_type("signature")
         .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty))
     else {
@@ -559,8 +556,7 @@ mod tests {
         let alias = |ctx: &IrContext, name: &str| ctx.type_alias_by_text(name).unwrap();
         let evidence = alias(&ctx, "Evidence");
         let plain = alias(&ctx, "Plain");
-        let arrayref =
-            ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("wasm", "arrayref").build());
+        let arrayref = trunk_ir::types::TypeDataBuilder::new("wasm", "arrayref").intern(&mut ctx);
 
         assert!(is_wasm_physical_result_assignable(&ctx, arrayref, plain));
         assert!(!is_wasm_physical_result_assignable(

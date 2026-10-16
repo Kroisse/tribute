@@ -247,7 +247,7 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             });
             return;
         };
-        if ctx.op(def).attributes.get_i64(CALLING_CONVENTION_ATTR) != Ok(Some(expected)) {
+        if ctx.op_attrs(def).get_i64(CALLING_CONVENTION_ATTR) != Ok(Some(expected)) {
             failures.push(BoundaryFailure {
                 op: Some(def),
                 location: Some(ctx.op(def).location),
@@ -316,6 +316,7 @@ fn verify_physical_callable_graph(
         let data = ctx.op(op);
         let op_convention = data
             .attributes
+            .view(ctx)
             .get_i64(CALLING_CONVENTION_ATTR)
             .ok()
             .flatten();
@@ -340,7 +341,7 @@ fn verify_physical_callable_graph(
             });
         }
         if data.dialect == "func" && data.name == "tail_call" {
-            let Some(callee) = data.attributes.get_symbol_ref("callee") else {
+            let Some(callee) = data.attributes.view(ctx).get_symbol_ref("callee") else {
                 failures.push(BoundaryFailure {
                     op: Some(op),
                     location: Some(data.location),
@@ -415,7 +416,7 @@ fn verify_physical_callable_graph(
                 }
             }
         } else if data.dialect == "func" && data.name == "call" {
-            let callee = data.attributes.get_symbol_ref("callee");
+            let callee = data.attributes.view(ctx).get_symbol_ref("callee");
             if let Some(callee) = callee {
                 match symbols
                     .resolve(ctx, op, callee)
@@ -462,8 +463,12 @@ fn verify_physical_callable_graph(
                 return None;
             }
             let attributes = &ctx.op(op).attributes;
-            let convention = attributes.get_i64(CALLING_CONVENTION_ATTR).ok().flatten();
-            Some((op, (attributes.get_type("type")?, convention)))
+            let convention = attributes
+                .view(ctx)
+                .get_i64(CALLING_CONVENTION_ATTR)
+                .ok()
+                .flatten();
+            Some((op, (attributes.view(ctx).get_type("type")?, convention)))
         })
         .collect();
     let mut failures = Vec::new();
@@ -514,7 +519,7 @@ pub(super) fn verify_source_conversion_shapes(
                             ));
                             continue;
                         }
-                        if is_case && !arm_data.attributes.contains_key("value") {
+                        if is_case && !arm_data.attributes.view(ctx).contains_key("value") {
                             failures.push(failure(ctx, arm, "scf.case requires a value attribute"));
                         }
                         if let Ok(region) = ctx.op_regions(arm).exactly_one() {

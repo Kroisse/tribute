@@ -22,7 +22,7 @@ use trunk_ir::rewrite::{PatternRewriter, TypeConverter};
 use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 
 pub(crate) fn i32_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+    TypeDataBuilder::new("core", "i32").intern(ctx)
 }
 
 /// Insert the stable ability id of `ability` as an `i32` constant.
@@ -93,8 +93,8 @@ pub(crate) fn is_valid_tail_dispatch(
     let results = ctx.op_result_types(op).to_vec();
     if operands.len() != 2
         || results.len() != 1
-        || ctx.op(op).attributes.get_symbol_ref("ability").is_none()
-        || ctx.op(op).attributes.get_string_ref("op_name").is_none()
+        || ctx.op_attrs(op).get_symbol_ref("ability").is_none()
+        || ctx.op_attrs(op).get_string_ref("op_name").is_none()
     {
         return false;
     }
@@ -178,9 +178,9 @@ pub(crate) fn is_valid_cps_dispatch(
     converter: &TypeConverter,
 ) -> bool {
     if !ctx.op_result_types(op).is_empty()
-        || ctx.op(op).attributes.get_type("answer_type").is_none()
-        || ctx.op(op).attributes.get_symbol_ref("ability").is_none()
-        || ctx.op(op).attributes.get_string_ref("op_name").is_none()
+        || ctx.op_attrs(op).get_type("answer_type").is_none()
+        || ctx.op_attrs(op).get_symbol_ref("ability").is_none()
+        || ctx.op_attrs(op).get_string_ref("op_name").is_none()
         || ctx.op_operands(op).len() != 4
     {
         return false;

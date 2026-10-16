@@ -67,18 +67,13 @@ impl TryFrom<u8> for CallingConvention {
 
 /// Attach the logical calling convention to a high-level IR operation.
 pub fn set_calling_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
-    ctx.op_mut(op)
-        .attributes
+    ctx.op_attrs_mut(op)
         .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
 }
 
 /// Read explicitly attached calling-convention metadata.
 pub fn get_calling_convention(ctx: &IrContext, op: OpRef) -> Option<CallingConvention> {
-    let code = ctx
-        .op(op)
-        .attributes
-        .get_u8(CALLING_CONVENTION_ATTR)
-        .ok()??;
+    let code = ctx.op_attrs(op).get_u8(CALLING_CONVENTION_ATTR).ok()??;
     code.try_into().ok()
 }
 
@@ -200,16 +195,14 @@ pub fn physical_closure_type_with_environment_index(
     convention: CallingConvention,
     environment_index: usize,
 ) -> TypeRef {
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
-            .param(function)
-            .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
-            .attr(
-                CLOSURE_ENVIRONMENT_INDEX_ATTR,
-                Attribute::Int(environment_index as i128),
-            )
-            .build(),
-    )
+    TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
+        .param(function)
+        .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
+        .attr(
+            CLOSURE_ENVIRONMENT_INDEX_ATTR,
+            Attribute::Int(environment_index as i128),
+        )
+        .intern(ctx)
 }
 
 /// Read exact convention provenance from an outer physical closure type.
@@ -222,6 +215,7 @@ pub fn get_physical_closure_convention(
         return None;
     }
     data.attrs
+        .view(ctx)
         .get_u8(CALLING_CONVENTION_ATTR)
         .ok()??
         .try_into()
@@ -235,6 +229,7 @@ pub fn get_physical_closure_environment_index(ctx: &IrContext, closure: TypeRef)
         return None;
     }
     data.attrs
+        .view(ctx)
         .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
         .ok()??
         .try_into()
@@ -289,10 +284,10 @@ mod tests {
     #[test]
     fn result_indexed_cps_closure_builders_preserve_exact_types() {
         let mut ctx = IrContext::new();
-        let evidence = ctx.intern_type(TypeDataBuilder::new("ability", "evidence").build());
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let anyref = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
-        let frame = ctx.intern_type(TypeDataBuilder::new("test", "frame").build());
+        let evidence = TypeDataBuilder::new("ability", "evidence").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let anyref = TypeDataBuilder::new("tribute_rt", "anyref").intern(&mut ctx);
+        let frame = TypeDataBuilder::new("test", "frame").intern(&mut ctx);
         let done = cps_done_type(&mut ctx, i32_ty);
         let dispatch = cps_dispatch_type(&mut ctx, evidence, frame, anyref, i32_ty);
         let completion = cps_completion_type(&mut ctx, evidence, i32_ty, frame);
@@ -328,16 +323,15 @@ mod tests {
         let mut ctx = IrContext::new();
         let never = core::never(&mut ctx).as_type_ref();
         let function = func::func_sig(&mut ctx, [], [never]).as_type_ref();
-        let missing_environment = ctx.intern_type(
+        let missing_environment =
             TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
                 .param(function)
                 .attr(
                     CALLING_CONVENTION_ATTR,
                     Attribute::Int(CallingConvention::Cps as i128),
                 )
-                .build(),
-        );
-        let extra_outer_parameter = ctx.intern_type(
+                .intern(&mut ctx);
+        let extra_outer_parameter =
             TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
                 .param(function)
                 .param(never)
@@ -346,9 +340,8 @@ mod tests {
                     Attribute::Int(CallingConvention::Cps as i128),
                 )
                 .attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(0))
-                .build(),
-        );
-        let out_of_range_environment = ctx.intern_type(
+                .intern(&mut ctx);
+        let out_of_range_environment =
             TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
                 .param(function)
                 .attr(
@@ -356,8 +349,7 @@ mod tests {
                     Attribute::Int(CallingConvention::Cps as i128),
                 )
                 .attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(1))
-                .build(),
-        );
+                .intern(&mut ctx);
 
         assert_eq!(cps_closure_function_type(&ctx, missing_environment), None);
         assert_eq!(cps_closure_function_type(&ctx, extra_outer_parameter), None);

@@ -5,22 +5,21 @@
 
 use smallvec::SmallVec;
 
-use crate::Symbol;
 use crate::context::{BlockData, BlockList, IrContext, OpList};
 use crate::refs::{BlockRef, OpRef, RegionRef};
-use crate::types::Attribute;
+use crate::types::{Attribute, StringRef};
 
 /// Clone an operation's attributes except for the named exclusions.
 pub fn clone_attrs_except(
     ctx: &IrContext,
     op: OpRef,
     excluded_names: &[&str],
-) -> Vec<(Symbol, Attribute)> {
+) -> Vec<(StringRef, Attribute)> {
     ctx.op(op)
         .attributes
         .iter()
-        .filter(|(name, _)| !excluded_names.iter().any(|excluded| **name == *excluded))
-        .map(|(name, value)| (name.clone(), value.clone()))
+        .filter(|&(name, _)| !excluded_names.contains(&ctx.str(name)))
+        .map(|(name, value)| (name, value.clone()))
         .collect()
 }
 
@@ -153,7 +152,7 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     fn make_const(ctx: &mut IrContext, loc: Location, ty: TypeRef, val: i128) -> OpRef {

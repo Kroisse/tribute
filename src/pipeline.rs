@@ -2171,7 +2171,7 @@ fn main() -> Nil {
         let consumed = |ctx: &IrContext, signature: func_dialect::FuncSig| {
             signature
                 .input_attrs(ctx)
-                .all(|attrs| attrs.get_str(ctx, "tribute.ownership") == Some("consumed"))
+                .all(|attrs| attrs.view(ctx).get_str("tribute.ownership") == Some("consumed"))
         };
         let mut tail_signatures = 0;
         for (path, text) in BOUNDARY_EXIT_PROGRAMS {
@@ -2277,8 +2277,7 @@ fn main() -> Nil {
 
     fn clif_indirect_signature(ctx: &IrContext, call: trunk_ir::OpRef) -> clif::FuncSig {
         let signature = ctx
-            .op(call)
-            .attributes
+            .op_attrs(call)
             .get_type("sig")
             .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty))
             .expect("indirect call must have an exact signature");
@@ -2386,10 +2385,7 @@ fn main() ->{Io} Nil {
             panic!("CPS Done tail must have one callee, its environment, and the value");
         };
         assert!(clif::ReturnCallIndirect::matches(&ctx, call));
-        assert_eq!(
-            ctx.op(call).attributes.get("tribute.calling_convention"),
-            None
-        );
+        assert_eq!(ctx.op_attrs(call).get("tribute.calling_convention"), None);
         let trunk_ir::refs::ValueDef::OpResult(environment_load, 0) =
             ctx.value_def(*continuation_environment)
         else {
@@ -2668,8 +2664,7 @@ fn main() ->{Io} Nil {
                 let add_op = ctx.block(func_block).ops[0];
                 // Retype the result without touching use-chains, so only the
                 // `T` binding of `arith.addi` is violated.
-                let i64_ty =
-                    ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i64").build());
+                let i64_ty = trunk_ir::types::TypeDataBuilder::new("core", "i64").intern(ctx);
                 ctx.set_op_result_type(add_op, 0, i64_ty);
                 Ok(())
             },
@@ -2696,7 +2691,7 @@ fn main() ->{Io} Nil {
         let result = compile_ast(db, source).expect("pipeline should not fail");
         assert!(result.is_some(), "Should compile successfully");
         let (ctx, m) = result.unwrap();
-        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+        assert_eq!(m.name(&ctx), Some("test"));
     }
 
     #[salsa_test]
@@ -3077,7 +3072,7 @@ fn main() ->{std::io::Io} Nil {
         let result = compile_frontend(db, source);
         assert!(result.is_some());
         let (ctx, m) = result.unwrap();
-        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+        assert_eq!(m.name(&ctx), Some("test"));
     }
 
     #[salsa_test]
@@ -3087,7 +3082,7 @@ fn main() ->{std::io::Io} Nil {
         let result = compile_frontend(db, source);
         assert!(result.is_some());
         let (ctx, m) = result.unwrap();
-        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+        assert_eq!(m.name(&ctx), Some("test"));
     }
 
     #[test]
@@ -3274,9 +3269,8 @@ fn main() -> Nil {
                 .type_alias_by_name(&name)
                 .expect("dependency layout is published");
             assert!(
-                ir.get_type(ty)
-                    .attrs
-                    .get_str(ir, "name")
+                ir.type_attrs(ty)
+                    .get_str("name")
                     .is_some_and(|text| name == text)
             );
             ty
@@ -3284,7 +3278,7 @@ fn main() -> Nil {
         fn target(ir: &IrContext, ty: TypeRef) -> TypeRef {
             let data = ir.get_type(ty);
             assert_eq!(data.name, Symbol::new("typeref"));
-            ir.type_alias_by_text(data.attrs.get_str(ir, "name").unwrap())
+            ir.type_alias_by_text(data.attrs.view(ir).get_str("name").unwrap())
                 .expect("referenced layout")
         }
         let source = source_from_str(
@@ -3438,16 +3432,16 @@ fn main() -> Nil {}
             assert_eq!(data.name, Symbol::new(kind));
             assert!(
                 data.attrs
-                    .get_str(ir, "name")
+                    .view(ir)
+                    .get_str("name")
                     .is_some_and(|text| name == text)
             );
             assert_eq!(
                 ir.type_aliases()
                     .iter()
                     .filter(|(_, ty)| {
-                        ir.get_type(*ty)
-                            .attrs
-                            .get_str(ir, "name")
+                        ir.type_attrs(*ty)
+                            .get_str("name")
                             .is_some_and(|text| name == text)
                     })
                     .count(),
@@ -3461,7 +3455,12 @@ fn main() -> Nil {}
             let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
             assert_eq!(data.name, Symbol::new("typeref"));
-            Symbol::new(data.attrs.get_str(ir, "name").expect("nominal identity"))
+            Symbol::new(
+                data.attrs
+                    .view(ir)
+                    .get_str("name")
+                    .expect("nominal identity"),
+            )
         }
 
         // These specializations occur only in signatures, never in allocations.
@@ -3771,14 +3770,8 @@ mod Nested {
             module.ops(&ctx).iter().copied().find_map(|op| {
                 let function = func::Func::from_op(&ctx, op).ok()?;
                 (function.sym_name(&ctx) == name).then(|| {
-                    assert_eq!(
-                        ctx.op(op).attributes.get_str(&ctx, "abi"),
-                        Some("intrinsic")
-                    );
-                    ctx.op(op)
-                        .attributes
-                        .get_str(&ctx, COMPILER_INTRINSIC_ATTR)
-                        .map(str::to_owned)
+                    assert_eq!(ctx.op_attrs(op).get_str("abi"), Some("intrinsic"));
+                    ctx.op_attrs(op).get_str(COMPILER_INTRINSIC_ATTR)
                 })
             })
         };
@@ -3790,7 +3783,7 @@ mod Nested {
         );
         assert_eq!(
             identity("std::__bytes_get_or_panic"),
-            Some(Some("std::__bytes_get_or_panic".to_owned())),
+            Some(Some("std::__bytes_get_or_panic")),
             "bytes lowering consumes its identity inside the target boundary"
         );
     }
@@ -3817,7 +3810,7 @@ mod Nested {
 
             for &op in module.ops(&ctx) {
                 assert!(
-                    ctx.op(op).attributes.get(COMPILER_INTRINSIC_ATTR).is_none(),
+                    ctx.op_attrs(op).get(COMPILER_INTRINSIC_ATTR).is_none(),
                     "{target:?}: the identity is consumed at the boundary exit"
                 );
                 let declares_intrinsic = func::Func::from_op(&ctx, op)
@@ -4000,7 +3993,12 @@ fn main() ->{std::io::Io} Nil {
         // and knows no other `adt` type.
         let builtin_layout_or_not_adt = |ctx: &IrContext, ty| {
             let data = ctx.get_type(ty);
-            data.dialect != "adt" || data.attrs.get(trunk_ir::types::LAYOUT_ATTR).is_some()
+            data.dialect != "adt"
+                || data
+                    .attrs
+                    .view(ctx)
+                    .get(trunk_ir::types::LAYOUT_ATTR)
+                    .is_some()
         };
         for (path, text) in [
             (
@@ -4047,8 +4045,8 @@ fn main() ->{std::io::Io} Nil {
         let mut unexpected = std::collections::BTreeSet::new();
         let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
             for name in ctx.op(op).attributes.keys() {
-                let name = name.to_string();
-                if name.starts_with("tribute.") && !is_preserved_attribute(&name) {
+                let name = ctx.str(name);
+                if name.starts_with("tribute.") && !is_preserved_attribute(name) {
                     unexpected.insert(format!("{}.{} {name}", ctx.op(op).dialect, ctx.op(op).name));
                 }
             }
@@ -4086,7 +4084,7 @@ fn main() -> String { "hello" }
         let string_data = ctx.get_type(string_ty);
 
         let Some(trunk_ir::Attribute::Location(definition)) =
-            string_data.attrs.get("tribute.definition")
+            string_data.attrs.view(&ctx).get("tribute.definition")
         else {
             panic!("String IR type records its definition location");
         };
@@ -4100,7 +4098,7 @@ fn main() -> String { "hello" }
             (ty != string_ty
                 && data.dialect == "adt"
                 && data.name == "enum"
-                && data.attrs.get_str(&ctx, "name") == Some("String"))
+                && data.attrs.view(&ctx).get_str("name") == Some("String"))
             .then_some(ty)
         });
         assert!(
@@ -4129,7 +4127,7 @@ fn main() -> String { "hello" }
             parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
         );
         let (ctx, m) = result.unwrap();
-        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+        assert_eq!(m.name(&ctx), Some("test"));
     }
 
     #[salsa_test]
@@ -4149,7 +4147,7 @@ fn main() -> String { "hello" }
         let result = compile_frontend(db, source);
         assert!(result.is_some());
         let (ctx, m) = result.unwrap();
-        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+        assert_eq!(m.name(&ctx), Some("test"));
     }
 
     // =========================================================================

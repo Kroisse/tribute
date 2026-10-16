@@ -6,7 +6,6 @@
 use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::IrContext;
-use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm;
 use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::DialectType;
@@ -55,18 +54,12 @@ pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Whether a type carries the runtime layout identifier `layout`.
 pub(crate) fn has_layout(ctx: &IrContext, ty: TypeRef, layout: &'static str) -> bool {
-    ctx.get_type(ty)
-        .attrs
-        .get_str(ctx, trunk_ir::types::LAYOUT_ATTR)
-        == Some(layout)
+    ctx.type_attrs(ty).get_str(trunk_ir::types::LAYOUT_ATTR) == Some(layout)
 }
 
 /// The builtin GC type index a type's runtime layout identifier selects.
 pub(crate) fn builtin_layout_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
-    let layout = ctx
-        .get_type(ty)
-        .attrs
-        .get_str(ctx, trunk_ir::types::LAYOUT_ATTR)?;
+    let layout = ctx.type_attrs(ty).get_str(trunk_ir::types::LAYOUT_ATTR)?;
     crate::gc_types::builtin_layout_idx(layout)
 }
 
@@ -344,9 +337,9 @@ pub(crate) fn signature_result_types(
 pub(crate) fn attr_heap_type(
     ctx: &IrContext,
     attrs: &AttributeMap,
-    key: Symbol,
+    key: &str,
 ) -> CompilationResult<HeapType> {
-    match attrs.get(key) {
+    match attrs.view(ctx).get(key) {
         Some(Attribute::Int(bits)) => {
             let idx = u32::try_from(*bits).map_err(|_| {
                 CompilationError::invalid_attribute(format!(
@@ -425,8 +418,8 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 /// - Key absent → `missing_attribute` error
 /// - Key present but wrong variant → `invalid_attribute` error
 /// - Key present and Int → checked u32 conversion
-pub(crate) fn attr_u32(attrs: &AttributeMap, key: &str) -> CompilationResult<u32> {
-    match attrs.get(key) {
+pub(crate) fn attr_u32(ctx: &IrContext, attrs: &AttributeMap, key: &str) -> CompilationResult<u32> {
+    match attrs.view(ctx).get(key) {
         Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "attribute '{}' value {} out of u32 range",
@@ -450,19 +443,15 @@ mod tests {
     fn builtin_closure_is_identified_by_layout_not_name() {
         let mut ctx = IrContext::new();
         let name_attr = ctx.string_attr("_closure");
-        let named = ctx.intern_type(
-            TypeDataBuilder::new("test", "layout")
-                .attr("name", name_attr)
-                .build(),
-        );
+        let named = TypeDataBuilder::new("test", "layout")
+            .attr("name", name_attr)
+            .intern(&mut ctx);
         let closure_layout = ctx.string_attr(crate::gc_types::CLOSURE_LAYOUT);
         let name_attr = ctx.string_attr("Other");
-        let layout = ctx.intern_type(
-            TypeDataBuilder::new("test", "layout")
-                .attr("name", name_attr)
-                .attr(trunk_ir::types::LAYOUT_ATTR, closure_layout)
-                .build(),
-        );
+        let layout = TypeDataBuilder::new("test", "layout")
+            .attr("name", name_attr)
+            .attr(trunk_ir::types::LAYOUT_ATTR, closure_layout)
+            .intern(&mut ctx);
 
         assert!(!is_closure_struct_type(&ctx, named));
         assert!(is_closure_struct_type(&ctx, layout));
@@ -471,8 +460,10 @@ mod tests {
     #[test]
     fn core_array_uses_nullable_abstract_array_value_type() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let array_ty = ctx.intern_type(TypeDataBuilder::new("core", "array").param(i32_ty).build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let array_ty = TypeDataBuilder::new("core", "array")
+            .param(i32_ty)
+            .intern(&mut ctx);
 
         assert_eq!(
             type_to_valtype(&ctx, array_ty, &HashMap::default()).expect("core.array is supported"),
@@ -489,7 +480,7 @@ mod tests {
     #[test]
     fn func_sig_uses_nullable_funcref_value_type() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
         let signature = wasm::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
 
         assert_eq!(

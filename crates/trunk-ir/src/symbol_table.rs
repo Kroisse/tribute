@@ -58,7 +58,7 @@ impl SymbolTable {
         for region in ctx.op_regions(table) {
             for &block in &ctx.region(region).blocks {
                 for &op in &ctx.block(block).ops {
-                    if let Some(name) = ctx.op(op).attributes.get_str(ctx, SYM_NAME) {
+                    if let Some(name) = ctx.op_attrs(op).get_str(SYM_NAME) {
                         names.entry(Symbol::new(name)).or_default().push(op);
                         self.symbols.push(op);
                     }
@@ -184,7 +184,7 @@ pub fn nearest_table(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
 /// own `sym_name`. For diagnostics and stable output; a symbol's identity is
 /// its operation.
 pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
-    let name = ctx.op(op).attributes.get_str(ctx, SYM_NAME)?;
+    let name = ctx.op_attrs(op).get_str(SYM_NAME)?;
     let module =
         parent_op(ctx, op).map_or_else(SymbolPath::root, |parent| module_path(ctx, parent));
     Some(module.child(name))
@@ -196,8 +196,9 @@ pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
 pub fn link_name(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
     let attributes = &ctx.op(op).attributes;
     attributes
-        .get_str(ctx, LINK_NAME)
-        .or_else(|| attributes.get_str(ctx, SYM_NAME))
+        .view(ctx)
+        .get_str(LINK_NAME)
+        .or_else(|| attributes.view(ctx).get_str(SYM_NAME))
         .map(Symbol::new)
 }
 
@@ -210,12 +211,7 @@ fn module_path(ctx: &IrContext, op: OpRef) -> SymbolPath {
         let parent = parent_op(ctx, op);
         // The root module has no parent and contributes nothing.
         if core::Module::matches(ctx, op) && parent.is_some() {
-            path.extend(
-                ctx.op(op)
-                    .attributes
-                    .get_str(ctx, SYM_NAME)
-                    .map(Symbol::new),
-            );
+            path.extend(ctx.op_attrs(op).get_str(SYM_NAME).map(Symbol::new));
         }
         current = parent;
     }

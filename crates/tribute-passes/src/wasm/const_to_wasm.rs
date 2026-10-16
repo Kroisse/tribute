@@ -82,12 +82,12 @@ impl ConstCollector {
 
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == "string_const" {
-                if let Some(s) = data.attributes.get_str(ctx, "value") {
+                if let Some(s) = data.attributes.view(ctx).get_str("value") {
                     self.has_string_consts = true;
                     self.collect_content(s.as_bytes());
                 }
             } else if data.name == "bytes_const"
-                && let Some(Attribute::Bytes(b)) = data.attributes.get("value")
+                && let Some(Attribute::Bytes(b)) = data.attributes.view(ctx).get("value")
             {
                 self.collect_content(b);
             }
@@ -539,8 +539,7 @@ mod tests {
     fn string_lowering_preserves_constants_when_analysis_is_incomplete() {
         let mut missing_data_ctx = IrContext::new();
         let missing_data_module = string_module(&mut missing_data_ctx, &["hello"]);
-        let placeholder_ty =
-            missing_data_ctx.intern_type(TypeDataBuilder::new("adt", "enum").build());
+        let placeholder_ty = TypeDataBuilder::new("adt", "enum").intern(&mut missing_data_ctx);
         lower(
             &mut missing_data_ctx,
             missing_data_module,

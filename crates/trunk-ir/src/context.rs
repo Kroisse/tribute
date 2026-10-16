@@ -272,6 +272,12 @@ impl Clone for IrContext {
     }
 }
 
+impl AsRef<StringPool> for IrContext {
+    fn as_ref(&self) -> &StringPool {
+        &self.strings
+    }
+}
+
 impl IrContext {
     /// Create a new empty IR context.
     pub fn new() -> Self {
@@ -353,11 +359,11 @@ impl IrContext {
     /// Intern a type, advancing the revision only for a new entry.
     pub fn intern_type(&mut self, data: TypeData) -> TypeRef {
         debug_assert!(
-            data.validate_param_attrs().is_ok(),
+            data.validate_param_attrs(self).is_ok(),
             "{}.{}: {}",
             data.dialect,
             data.name,
-            data.validate_param_attrs().unwrap_err()
+            data.validate_param_attrs(self).unwrap_err()
         );
         match self.types.entry(&data) {
             InternEntry::Occupied(ty) => ty,
@@ -400,6 +406,34 @@ impl IrContext {
     /// names, but are stored as string attributes.
     pub fn intern_symbol_text(&mut self, symbol: &Symbol) -> StringRef {
         symbol.with_str(|text| self.intern_str(text))
+    }
+
+    /// The attributes of `op`, read through this context.
+    pub fn op_attrs(&self, op: OpRef) -> AttributeView<'_> {
+        self.ops[op].attributes.view(self)
+    }
+
+    /// The attributes of type `ty`, read through this context.
+    pub fn type_attrs(&self, ty: TypeRef) -> AttributeView<'_> {
+        self.types.get(ty).attrs.view(self)
+    }
+
+    /// The string pool, for borrowing it beside another part of the context.
+    pub(crate) fn strings_mut(&mut self) -> &mut StringPool {
+        &mut self.strings
+    }
+
+    /// The attributes of `op`, changed through this context.
+    pub fn op_attrs_mut(&mut self, op: OpRef) -> AttributeViewMut<'_> {
+        self.bump_revision();
+        AttributeViewMut::new(&mut self.ops[op].attributes, &mut self.strings)
+    }
+
+    /// The attributes of argument `index` of `block`, changed through this
+    /// context.
+    pub fn block_arg_attrs_mut(&mut self, block: BlockRef, index: usize) -> AttributeViewMut<'_> {
+        self.bump_revision();
+        AttributeViewMut::new(&mut self.blocks[block].args[index].attrs, &mut self.strings)
     }
 
     /// Find a pooled string without interning it.
@@ -1350,7 +1384,8 @@ pub struct OperationDataBuilder {
     name: Symbol,
     operands: Vec<ValueRef>,
     results: Vec<TypeRef>,
-    attributes: AttributeMap,
+    /// Keys are interned when the operation data is built.
+    attributes: Vec<(StringArg, Attribute)>,
     regions: RegionList,
     successors: BlockList,
 }
@@ -1363,7 +1398,7 @@ impl OperationDataBuilder {
             name,
             operands: Vec::new(),
             results: Vec::new(),
-            attributes: AttributeMap::new(),
+            attributes: Vec::new(),
             regions: SmallVec::new(),
             successors: SmallVec::new(),
         }
@@ -1389,8 +1424,8 @@ impl OperationDataBuilder {
         self
     }
 
-    pub fn attr(mut self, key: impl Into<Symbol>, val: impl Into<Attribute>) -> Self {
-        self.attributes.insert(key, val);
+    pub fn attr(mut self, key: impl Into<StringArg>, val: impl Into<Attribute>) -> Self {
+        self.attributes.push((key.into(), val.into()));
         self
     }
 
@@ -1436,13 +1471,14 @@ impl OperationDataBuilder {
         if let Some(&last) = self.regions.last() {
             ctx.next_region[last] = None;
         }
+        let attributes = AttributeMap::from_entries(ctx, self.attributes);
         OperationData {
             location: self.location,
             dialect: self.dialect,
             name: self.name,
             operands,
             results,
-            attributes: self.attributes,
+            attributes,
             first_region: self.regions.first().copied(),
             successors: SuccessorList::from_slice(&self.successors, &mut ctx.block_pool),
             parent_block: None,
@@ -1466,7 +1502,7 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     fn empty_region(ctx: &mut IrContext, loc: Location) -> RegionRef {
@@ -1651,10 +1687,7 @@ mod tests {
         assert_eq!(ctx.op(op).dialect, Symbol::new("arith"));
         assert_eq!(ctx.op(op).name, Symbol::new("const"));
         assert_eq!(ctx.op_result_types(op), &[i32_ty]);
-        assert_eq!(
-            ctx.op(op).attributes.get("value"),
-            Some(&Attribute::Int(42))
-        );
+        assert_eq!(ctx.op_attrs(op).get("value"), Some(&Attribute::Int(42)));
     }
 
     #[test]
@@ -1817,7 +1850,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
-        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
+        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
 
         // Create a block with 2 args of type i32
         let block = ctx.create_block(BlockData {
@@ -1901,7 +1934,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
-        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
+        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
 
         let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
             .result(i32_ty)
@@ -1928,7 +1961,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
-        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
+        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
 
         let block = ctx.create_block(BlockData {
             location: loc,
@@ -2174,7 +2207,7 @@ mod tests {
         let one = clone.op_results(first)[0];
         let two = clone.op_results(second)[0];
         clone.replace_all_uses(one, two);
-        clone.intern_type(TypeDataBuilder::new("core", "i64").build());
+        TypeDataBuilder::new("core", "i64").intern(&mut clone);
 
         assert_eq!(print_module(&ctx, module.op()), original_text);
         assert_eq!(ctx.uses(one).len(), 1);
@@ -2210,7 +2243,7 @@ mod tests {
         let cloned_region = ctx.clone_region(body_region, &mut mapping);
 
         // Build a new func.func with the cloned region
-        let func_ty = ctx.op(func_op).attributes.get("type").cloned().unwrap();
+        let func_ty = ctx.op_attrs(func_op).get("type").cloned().unwrap();
         let new_func = OperationDataBuilder::new(
             ctx.op(func_op).location,
             Symbol::new("func"),

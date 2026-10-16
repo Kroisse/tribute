@@ -206,14 +206,14 @@ impl NativeOwnershipPlan {
                 "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
             )));
         }
-        let name = data.attrs.get_string_ref("name").ok_or_else(|| {
+        let name = data.attrs.view(ctx).get_string_ref("name").ok_or_else(|| {
             OwnershipPlanError::new("managed release typeref lacks nominal allocation identity")
         })?;
         let mut layouts = self
             .managed_layouts
             .iter()
             .copied()
-            .filter(|layout| ctx.get_type(*layout).attrs.get_string_ref("name") == Some(name));
+            .filter(|layout| ctx.type_attrs(*layout).get_string_ref("name") == Some(name));
         let layout = layouts.next().ok_or_else(|| {
             OwnershipPlanError::new("managed release typeref has no planned allocation layout")
         })?;
@@ -403,10 +403,8 @@ pub fn build_native_ownership_plan(
 fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, OwnershipPlanError> {
     classify_callable_body(ctx, op).map_err(|error| {
         let symbol = ctx
-            .op(op)
-            .attributes
-            .get_str(ctx, "sym_name")
-            .map(Symbol::new)
+            .op_attrs(op)
+            .get_str("sym_name")
             .map(|name| format!("@{name}"))
             .unwrap_or_else(|| "<unnamed>".into());
         OwnershipPlanError::new(format!("func.func {symbol}: {error}"))
@@ -505,7 +503,7 @@ impl ManagedLayoutCollector {
 
     fn finish(mut self, ctx: &IrContext) -> Result<HashSet<TypeRef>, OwnershipPlanError> {
         while let Some(typeref) = self.pending_typerefs.pop() {
-            let Some(name) = ctx.get_type(typeref).attrs.get_string_ref("name") else {
+            let Some(name) = ctx.type_attrs(typeref).get_string_ref("name") else {
                 return Err(OwnershipPlanError::new(
                     "adt.typeref lacks nominal identity",
                 ));
@@ -532,7 +530,7 @@ impl ManagedLayoutCollector {
         let data = ctx.get_type(ty);
         if data.dialect == "adt"
             && (matches!(data.name.as_str(), "struct" | "enum"))
-            && let Some(name) = data.attrs.get_string_ref("name")
+            && let Some(name) = data.attrs.view(ctx).get_string_ref("name")
         {
             let layouts = self.nominal_layouts.entry(name).or_default();
             if !layouts.contains(&ty) {
@@ -569,7 +567,7 @@ impl ManagedLayoutCollector {
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
     let identity = |ty| {
         let data = ctx.get_type(ty);
-        (data.dialect == "adt").then(|| data.attrs.get_string_ref("name"))?
+        (data.dialect == "adt").then(|| data.attrs.view(ctx).get_string_ref("name"))?
     };
     identity(left).is_some() && identity(left) == identity(right)
 }
@@ -644,8 +642,7 @@ fn validate_function_contract(
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<(), OwnershipPlanError> {
     let signature = ctx
-        .op(function_op)
-        .attributes
+        .op_attrs(function_op)
         .get_type("type")
         .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
         .ok_or_else(|| OwnershipPlanError::new("defined function lacks exact signature"))?;

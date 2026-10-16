@@ -1,4 +1,3 @@
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::Attribute;
@@ -14,15 +13,14 @@ pub struct WellKnownTypes {
 impl WellKnownTypes {
     pub fn from_module(ctx: &IrContext, module: OpRef) -> Self {
         Self {
-            string: ctx.op(module).attributes.get_type(STRING_TYPE_ATTR),
+            string: ctx.op_attrs(module).get_type(STRING_TYPE_ATTR),
         }
     }
 
     pub fn attach(self, ctx: &mut IrContext, module: OpRef) {
         if let Some(string) = self.string {
-            ctx.op_mut(module)
-                .attributes
-                .insert(Symbol::new(STRING_TYPE_ATTR), Attribute::Type(string));
+            ctx.op_attrs_mut(module)
+                .insert(STRING_TYPE_ATTR, Attribute::Type(string));
         }
     }
 }

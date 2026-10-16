@@ -583,8 +583,7 @@ pub trait CallLikeModel: DialectOp {
     /// `None` for a malformed call; read fallibly since unverified IR may be
     /// queried.
     fn direct_callee(self, ctx: &IrContext) -> Option<SymbolPath> {
-        ctx.op(self.op_ref())
-            .attributes
+        ctx.op_attrs(self.op_ref())
             .get_symbol_ref("callee")
             .cloned()
     }

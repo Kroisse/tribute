@@ -197,7 +197,7 @@ macro_rules! scalar_types {
 
             /// Intern this scalar type.
             pub fn type_ref(ctx: &mut IrContext) -> TypeRef {
-                ctx.intern_type(crate::TypeDataBuilder::new("core", $name).build())
+                crate::TypeDataBuilder::new("core", $name).intern(ctx)
             }
         }
 
@@ -326,28 +326,26 @@ mod canonicalize_tests {
 
     #[test]
     fn remove_reserved_attrs_preserves_metadata_and_is_idempotent() {
+        let mut ctx = IrContext::new();
         let mut attrs = AttributeMap::new();
-        FuncSig::remove_reserved_attrs(&mut attrs);
+        FuncSig::remove_reserved_attrs(&mut ctx, &mut attrs);
         assert!(attrs.is_empty());
 
-        let mut ctx = IrContext::new();
         let nil = nil(&mut ctx).as_type_ref();
-        let metadata = AttributeMap::from_iter([
-            (
-                Symbol::new("tag"),
-                Attribute::SymbolRef(SymbolPath::new(["kept"])),
-            ),
-            (
-                Symbol::new("nested"),
-                Attribute::List(vec![Attribute::Type(nil)]),
-            ),
-        ]);
+        let metadata = AttributeMap::from_entries(
+            &mut ctx,
+            [
+                ("tag", Attribute::SymbolRef(SymbolPath::new(["kept"]))),
+                ("nested", Attribute::List(vec![Attribute::Type(nil)])),
+            ],
+        );
         attrs = metadata.clone();
-        attrs.insert(Symbol::new(NUM_INPUTS_ATTR), Attribute::from(2u32));
-        attrs.insert(Symbol::new(NUM_RESULTS_ATTR), Attribute::from(1u32));
-        FuncSig::remove_reserved_attrs(&mut attrs);
+        let mut attrs_view = attrs.view_mut(&mut ctx);
+        attrs_view.insert(NUM_INPUTS_ATTR, Attribute::from(2u32));
+        attrs_view.insert(NUM_RESULTS_ATTR, Attribute::from(1u32));
+        FuncSig::remove_reserved_attrs(&mut ctx, &mut attrs);
         assert_eq!(attrs, metadata);
-        FuncSig::remove_reserved_attrs(&mut attrs);
+        FuncSig::remove_reserved_attrs(&mut ctx, &mut attrs);
         assert_eq!(attrs, metadata);
     }
 
@@ -439,7 +437,7 @@ mod scalar_category_tests {
     use crate::types::{Attribute, TypeDataBuilder};
 
     fn ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+        TypeDataBuilder::new(dialect, name).intern(ctx)
     }
 
     #[test]
@@ -463,11 +461,9 @@ mod scalar_category_tests {
             let t = ty(&mut ctx, dialect, name);
             assert!(!IntegerLike::matches(&ctx, t), "{dialect}.{name}");
         }
-        let with_attr = ctx.intern_type(
-            TypeDataBuilder::new("core", "i32")
-                .attr("x", Attribute::Int(0))
-                .build(),
-        );
+        let with_attr = TypeDataBuilder::new("core", "i32")
+            .attr("x", Attribute::Int(0))
+            .intern(&mut ctx);
         assert!(!IntegerLike::matches(&ctx, with_attr));
     }
 

@@ -462,8 +462,7 @@ fn assert_direct_lifted_return(ctx: &IrContext, function: func::Func, expected: 
 /// Check the complete physical transfer contract, including resultless CPS tails.
 fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
     let signature = ctx
-        .op(call)
-        .attributes
+        .op_attrs(call)
         .get_type("signature")
         .expect("exact indirect signature");
     let signature = func::FuncSig::from_type_ref(ctx, signature).expect("complete signature");
@@ -499,7 +498,7 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
     let signature = func::FuncSig::from_type_ref(ctx, callable.func_type(ctx)).unwrap();
     assert_eq!(
         signature.as_type_ref(),
-        ctx.op(call).attributes.get_type("signature").unwrap()
+        ctx.op_attrs(call).get_type("signature").unwrap()
     );
     let environment_index =
         tribute_core::calling_convention::get_physical_closure_environment_index(ctx, closure_ty)

@@ -77,7 +77,7 @@ fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: boo
         .expect("entrypoint: root `main` must have an entry block");
 
     let nil_ty = core::nil(ctx).as_type_ref();
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
 
     if !has_tribute_init {
         let init_op = super::build_extern_func(ctx, loc, "__tribute_init", &[], nil_ty);
@@ -131,9 +131,8 @@ fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: boo
     }
 
     let func_ty = func::func_sig(ctx, [], [i32_ty]).as_type_ref();
-    ctx.op_mut(main.op_ref())
-        .attributes
-        .insert(Symbol::new("type"), Attribute::Type(func_ty));
+    ctx.op_attrs_mut(main.op_ref())
+        .insert("type", Attribute::Type(func_ty));
 }
 
 fn prepend_op(ctx: &mut IrContext, block: BlockRef, op: OpRef) {
