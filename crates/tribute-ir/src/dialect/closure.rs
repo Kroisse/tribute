@@ -97,13 +97,7 @@ fn print_closure_lambda(
     }
 
     // " {key = val, ...}" — attributes (if any)
-    let ctx = h.ctx();
-    let attrs: Vec<(String, trunk_ir::Attribute)> = ctx
-        .op(op)
-        .attributes
-        .iter()
-        .map(|(k, v)| (ctx.str(k).to_owned(), v.clone()))
-        .collect();
+    let attrs = h.ctx().op_attrs(op);
     if !attrs.is_empty() {
         write!(h, " {{")?;
         for (i, (key, val)) in attrs.iter().enumerate() {

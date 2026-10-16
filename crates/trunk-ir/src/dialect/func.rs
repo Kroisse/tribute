@@ -697,18 +697,14 @@ fn print_func(
 
     let indent_str = " ".repeat(indent);
 
-    // Extract sym_name before mutable operations
-    let sym_name = {
-        let ctx = h.ctx();
-        ctx.op_attrs(op).get_str("sym_name").map(str::to_owned)
-    };
+    let sym_name = h.ctx().op_attrs(op).get_str("sym_name");
 
     write!(h, "{indent_str}func.func")?;
 
     // Function name
     if let Some(name) = sym_name {
         write!(h, " ")?;
-        h.write_symbol_text(&name)?;
+        h.write_symbol_text(name)?;
     }
 
     // Reset numbering for function body
@@ -791,18 +787,12 @@ fn print_func(
                 .keys()
                 .any(|key| ![NUM_INPUTS_ATTR, NUM_RESULTS_ATTR].contains(&h.ctx().str(key)))
         });
-    let extra_attrs: Vec<_> = {
-        let ctx = h.ctx();
-        ctx.op(op)
-            .attributes
-            .iter()
-            .filter(|&(k, _)| {
-                let k = ctx.str(k);
-                k != "sym_name" && (preserve_type || k != "type")
-            })
-            .map(|(k, v)| (ctx.str(k).to_owned(), v.clone()))
-            .collect()
-    };
+    let extra_attrs: Vec<_> = h
+        .ctx()
+        .op_attrs(op)
+        .iter()
+        .filter(|&(k, _)| k != "sym_name" && (preserve_type || k != "type"))
+        .collect();
     if !extra_attrs.is_empty() {
         write!(h, " attributes {{")?;
         for (i, (key, val)) in extra_attrs.iter().enumerate() {

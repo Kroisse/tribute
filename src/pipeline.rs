@@ -3771,9 +3771,7 @@ mod Nested {
                 let function = func::Func::from_op(&ctx, op).ok()?;
                 (function.sym_name(&ctx) == name).then(|| {
                     assert_eq!(ctx.op_attrs(op).get_str("abi"), Some("intrinsic"));
-                    ctx.op_attrs(op)
-                        .get_str(COMPILER_INTRINSIC_ATTR)
-                        .map(str::to_owned)
+                    ctx.op_attrs(op).get_str(COMPILER_INTRINSIC_ATTR)
                 })
             })
         };
@@ -3785,7 +3783,7 @@ mod Nested {
         );
         assert_eq!(
             identity("std::__bytes_get_or_panic"),
-            Some(Some("std::__bytes_get_or_panic".to_owned())),
+            Some(Some("std::__bytes_get_or_panic")),
             "bytes lowering consumes its identity inside the target boundary"
         );
     }

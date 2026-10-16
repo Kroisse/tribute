@@ -404,7 +404,7 @@ pub struct OpPrintHelper<'a, 'ctx> {
 
 impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
     /// Access the IR context.
-    pub fn ctx(&self) -> &IrContext {
+    pub fn ctx(&self) -> &'ctx IrContext {
         self.state.ctx
     }
 

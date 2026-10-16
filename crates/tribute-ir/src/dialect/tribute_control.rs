@@ -789,11 +789,9 @@ fn print_extra_attributes(
     use fmt::Write;
     let ctx = h.ctx();
     let attrs: Vec<_> = ctx
-        .op(op)
-        .attributes
+        .op_attrs(op)
         .iter()
-        .filter(|&(key, _)| !excluded.contains(&ctx.str(key)))
-        .map(|(key, value)| (ctx.str(key).to_owned(), value.clone()))
+        .filter(|(key, _)| !excluded.contains(key))
         .collect();
     if attrs.is_empty() {
         return Ok(());
@@ -852,11 +850,7 @@ fn print_func(
     use fmt::Write;
 
     let data = h.ctx().op(op);
-    let symbol = data
-        .attributes
-        .view(h.ctx())
-        .get_str("sym_name")
-        .map(str::to_owned);
+    let symbol = data.attributes.view(h.ctx()).get_str("sym_name");
     let callable_ty = data.attributes.view(h.ctx()).get_type("type");
     let region = h.ctx().op_region(op, 0);
     if !has_concise_func_sig(h.ctx(), callable_ty) {
@@ -866,7 +860,7 @@ fn print_func(
 
     write!(h, "{}tribute_control.func ", " ".repeat(indent))?;
     if let Some(symbol) = symbol {
-        h.write_symbol_text(&symbol)?;
+        h.write_symbol_text(symbol)?;
     } else {
         write!(h, "@<missing>")?;
     }
