@@ -1,6 +1,6 @@
 //! Structural type equality and occurs checks.
 
-use super::{EffectRow, SolveError, Type, TypeKind, TypeSolver, UniVarId};
+use super::{AbilityRow, SolveError, Type, TypeKind, TypeSolver, UniVarId};
 
 impl<'db> TypeSolver<'db> {
     /// Unify two types.
@@ -189,7 +189,7 @@ impl<'db> TypeSolver<'db> {
             } => {
                 params.iter().any(|p| self.occurs_in(var, *p))
                     || self.occurs_in(var, *result)
-                    || self.occurs_in_effect_row(var, *effect)
+                    || self.occurs_in_ability_row(var, *effect)
             }
             TypeKind::Tuple(elements) => elements.iter().any(|e| self.occurs_in(var, *e)),
             TypeKind::App { ctor, args } => {
@@ -202,17 +202,21 @@ impl<'db> TypeSolver<'db> {
             } => {
                 self.occurs_in(var, *arg)
                     || self.occurs_in(var, *result)
-                    || self.occurs_in_effect_row(var, *effect)
+                    || self.occurs_in_ability_row(var, *effect)
             }
             _ => false,
         }
     }
 
-    /// Check a substituted effect row's type arguments for a type variable.
-    pub(super) fn occurs_in_effect_row(&self, var: UniVarId<'db>, effect: EffectRow<'db>) -> bool {
+    /// Check a substituted ability row's type arguments for a type variable.
+    pub(super) fn occurs_in_ability_row(
+        &self,
+        var: UniVarId<'db>,
+        effect: AbilityRow<'db>,
+    ) -> bool {
         self.row_subst
             .apply(self.db, effect)
-            .effects(self.db)
+            .instances(self.db)
             .iter()
             .any(|effect| effect.args.iter().any(|arg| self.occurs_in(var, *arg)))
     }
@@ -223,8 +227,8 @@ impl<'db> TypeSolver<'db> {
     /// coincide.
     pub(crate) fn effects_may_coincide(
         db: &'db dyn salsa::Database,
-        a: &crate::ast::Effect<'db>,
-        b: &crate::ast::Effect<'db>,
+        a: &crate::ast::AbilityInstance<'db>,
+        b: &crate::ast::AbilityInstance<'db>,
     ) -> bool {
         if a.ability_id != b.ability_id || a.args.len() != b.args.len() {
             return false;

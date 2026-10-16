@@ -108,7 +108,7 @@ fn main() -> Nil {
 }
 
 #[salsa_test]
-fn effect_rows_name_abilities_through_keywords(db: &salsa::DatabaseImpl) {
+fn ability_rows_name_abilities_through_keywords(db: &salsa::DatabaseImpl) {
     let errors = errors(
         db,
         r#"

@@ -1,15 +1,15 @@
-//! Effect-row equality, set matching, and retained relations.
+//! Ability-row equality, set matching, and retained relations.
 
 use super::{
-    Constraint, ConstraintOrigin, EffectRow, EffectVar, HashMap, LocatedSolveError, SolveError,
-    Type, TypeKind, TypeSolver, UniVarId, collect_effect_vars, map_effect_row_type_args,
+    AbilityRow, Constraint, ConstraintOrigin, HashMap, LocatedSolveError, RowVar, SolveError, Type,
+    TypeKind, TypeSolver, UniVarId, collect_row_vars, map_ability_row_type_args,
 };
 
 impl<'db> TypeSolver<'db> {
     pub(super) fn union_variables(
         &self,
         union: &crate::ast::RowUnion<'db>,
-    ) -> (Vec<UniVarId<'db>>, Vec<EffectVar>) {
+    ) -> (Vec<UniVarId<'db>>, Vec<RowVar>) {
         let mut types = Vec::new();
         let mut rows = Vec::new();
         for row in union.sources.iter().chain(std::iter::once(&union.result)) {
@@ -19,7 +19,7 @@ impl<'db> TypeSolver<'db> {
             {
                 rows.push(var);
             }
-            for effect in row.effects(self.db) {
+            for effect in row.instances(self.db) {
                 for arg in &effect.args {
                     self.type_subst.collect_univars_from_type(
                         self.db,
@@ -27,7 +27,7 @@ impl<'db> TypeSolver<'db> {
                         &self.row_subst,
                         &mut types,
                     );
-                    for var in collect_effect_vars(self.db, *arg) {
+                    for var in collect_row_vars(self.db, *arg) {
                         if !rows.contains(&var) {
                             rows.push(var);
                         }
@@ -41,7 +41,7 @@ impl<'db> TypeSolver<'db> {
     pub fn expand_union_dependencies(
         &self,
         types: &mut Vec<UniVarId<'db>>,
-        rows: &mut Vec<EffectVar>,
+        rows: &mut Vec<RowVar>,
     ) {
         loop {
             let before = (types.len(), rows.len());
@@ -81,7 +81,7 @@ impl<'db> TypeSolver<'db> {
         let ty = self
             .type_subst
             .apply_with_rows(self.db, ty, &self.row_subst);
-        let visible = collect_effect_vars(self.db, ty);
+        let visible = collect_row_vars(self.db, ty);
         let mut visible_types = Vec::new();
         self.type_subst
             .collect_univars_from_type(self.db, ty, &self.row_subst, &mut visible_types);
@@ -144,7 +144,7 @@ impl<'db> TypeSolver<'db> {
                         .sources
                         .iter()
                         .chain(std::iter::once(&union.result))
-                        .all(|row| row.effects(self.db).is_empty())
+                        .all(|row| row.instances(self.db).is_empty())
             });
             if unrestricted && vars.iter().filter(|var| visible.contains(var)).count() <= 1 {
                 continue;
@@ -191,7 +191,7 @@ impl<'db> TypeSolver<'db> {
     pub fn row_removal_variables(
         &self,
         removals: &[crate::ast::RowRemoval<'db>],
-    ) -> (Vec<UniVarId<'db>>, Vec<EffectVar>) {
+    ) -> (Vec<UniVarId<'db>>, Vec<RowVar>) {
         self.row_union_variables(
             &removals
                 .iter()
@@ -206,7 +206,7 @@ impl<'db> TypeSolver<'db> {
     pub fn row_union_variables(
         &self,
         unions: &[crate::ast::RowUnion<'db>],
-    ) -> (Vec<UniVarId<'db>>, Vec<EffectVar>) {
+    ) -> (Vec<UniVarId<'db>>, Vec<RowVar>) {
         let mut types = Vec::new();
         let mut rows = Vec::new();
         for union in unions {
@@ -228,7 +228,7 @@ impl<'db> TypeSolver<'db> {
     pub fn add_row_unions(&mut self, unions: Vec<crate::ast::RowUnion<'db>>) {
         for union in unions {
             for row in union.sources.iter().chain(std::iter::once(&union.result)) {
-                self.reserve_effect_vars_in_row(*row);
+                self.reserve_row_vars_in_row(*row);
             }
             if !self.pending_row_unions.iter().any(|(old, _)| *old == union) {
                 self.pending_row_unions.push((union, None));
@@ -243,7 +243,7 @@ impl<'db> TypeSolver<'db> {
     ) -> crate::ast::RowUnion<'db> {
         let mut union = union.clone();
         union.for_each_row_mut(|row| {
-            *row = map_effect_row_type_args(self.db, self.normalize_row(*row), |ty| {
+            *row = map_ability_row_type_args(self.db, self.normalize_row(*row), |ty| {
                 self.type_subst
                     .apply_generalization(self.db, ty, &self.row_subst, mapping)
             });
@@ -263,9 +263,9 @@ impl<'db> TypeSolver<'db> {
             .collect()
     }
 
-    pub(crate) fn normalize_row(&self, row: EffectRow<'db>) -> EffectRow<'db> {
+    pub(crate) fn normalize_row(&self, row: AbilityRow<'db>) -> AbilityRow<'db> {
         let row = self.row_subst.apply(self.db, row);
-        map_effect_row_type_args(self.db, row, |ty| {
+        map_ability_row_type_args(self.db, row, |ty| {
             self.type_subst
                 .apply_with_rows(self.db, ty, &self.row_subst)
         })
@@ -278,9 +278,9 @@ impl<'db> TypeSolver<'db> {
     /// against a row-polymorphic parameter, may hold more.
     pub(crate) fn call_effect_constraint(
         &self,
-        callee: EffectRow<'db>,
-        call: EffectRow<'db>,
-        slack: impl FnOnce() -> EffectVar,
+        callee: AbilityRow<'db>,
+        call: AbilityRow<'db>,
+        slack: impl FnOnce() -> RowVar,
         origin: ConstraintOrigin,
     ) -> Constraint<'db> {
         if self.normalize_row(call) == call {
@@ -288,7 +288,7 @@ impl<'db> TypeSolver<'db> {
         } else {
             Constraint::RowUnion(
                 crate::ast::RowUnion {
-                    sources: vec![callee, EffectRow::open(self.db, slack())],
+                    sources: vec![callee, AbilityRow::open(self.db, slack())],
                     result: call,
                 },
                 Some(origin),
@@ -388,21 +388,23 @@ impl<'db> TypeSolver<'db> {
             for (removal, origin) in std::mem::take(&mut self.pending_row_removals) {
                 let mut normalized = removal.clone();
                 normalized.for_each_row_mut(|row| *row = self.normalize_row(*row));
-                let source_effects = normalized.source.effects(self.db);
+                let source_effects = normalized.source.instances(self.db);
                 match normalized.source.rest(self.db) {
                     Some(tail)
                         if normalized
                             .removed
-                            .effects(self.db)
+                            .instances(self.db)
                             .iter()
                             .all(|effect| source_effects.contains(effect)) =>
                     {
                         let remaining: Vec<_> = source_effects
                             .iter()
-                            .filter(|effect| !normalized.removed.effects(self.db).contains(effect))
+                            .filter(|effect| {
+                                !normalized.removed.instances(self.db).contains(effect)
+                            })
                             .cloned()
                             .collect();
-                        let row = EffectRow::new(self.db, remaining, Some(tail));
+                        let row = AbilityRow::new(self.db, remaining, Some(tail));
                         self.unify_rows(normalized.result, row)
                             .map_err(|error| LocatedSolveError { error, origin })?;
                     }
@@ -420,7 +422,7 @@ impl<'db> TypeSolver<'db> {
                 let mut sources = normalized.sources.clone();
                 let mut expanded = Vec::new();
                 while let Some(source) = sources.pop() {
-                    for effect in source.effects(self.db) {
+                    for effect in source.instances(self.db) {
                         if !known.contains(effect) {
                             known.push(effect.clone());
                         }
@@ -466,7 +468,7 @@ impl<'db> TypeSolver<'db> {
                 });
                 match cover {
                     Some((result, _)) => {
-                        let row = EffectRow::new(self.db, known, Some(*result));
+                        let row = AbilityRow::new(self.db, known, Some(*result));
                         self.unify_rows(normalized.result, row)
                             .map_err(|error| LocatedSolveError { error, origin })?;
                     }
@@ -481,9 +483,9 @@ impl<'db> TypeSolver<'db> {
                             // A closed result bounds every source, and a
                             // body-local tail that nothing else constrains
                             // adds no labels of its own: it is empty.
-                            let within = known
-                                .iter()
-                                .all(|effect| normalized.result.effects(self.db).contains(effect));
+                            let within = known.iter().all(|effect| {
+                                normalized.result.instances(self.db).contains(effect)
+                            });
                             // A pending removal still decides the tail it
                             // removes from.
                             let (free, removed_from): (Vec<_>, Vec<_>) =
@@ -498,7 +500,7 @@ impl<'db> TypeSolver<'db> {
                                 && removed_from.is_empty()
                                 && within;
                             for free in free {
-                                self.row_subst.insert(free.id, EffectRow::pure(self.db));
+                                self.row_subst.insert(free.id, AbilityRow::pure(self.db));
                                 bound += 1;
                             }
                             // With every tail empty the sources are within
@@ -511,7 +513,7 @@ impl<'db> TypeSolver<'db> {
                         {
                             for free in free {
                                 self.row_subst
-                                    .insert(free.id, EffectRow::open(self.db, tail));
+                                    .insert(free.id, AbilityRow::open(self.db, tail));
                                 bound += 1;
                             }
                         }
@@ -530,8 +532,8 @@ impl<'db> TypeSolver<'db> {
 
     /// Whether `tail`, a source tail of `union`, is a body-local row that no
     /// signature row or other relation determines.
-    fn is_unconstrained_tail(&self, tail: EffectVar, union: &crate::ast::RowUnion<'db>) -> bool {
-        let is_tail = |row: EffectRow<'db>| self.normalize_row(row).rest(self.db) == Some(tail);
+    fn is_unconstrained_tail(&self, tail: RowVar, union: &crate::ast::RowUnion<'db>) -> bool {
+        let is_tail = |row: AbilityRow<'db>| self.normalize_row(row).rest(self.db) == Some(tail);
         !self.rigid_rows.contains(&tail)
             && union.result.rest(self.db) != Some(tail)
             && !self
@@ -547,7 +549,7 @@ impl<'db> TypeSolver<'db> {
     pub fn add_row_removals(&mut self, removals: Vec<crate::ast::RowRemoval<'db>>) {
         for removal in removals {
             for row in removal.rows() {
-                self.reserve_effect_vars_in_row(row);
+                self.reserve_row_vars_in_row(row);
             }
             if !self
                 .pending_row_removals
@@ -577,7 +579,7 @@ impl<'db> TypeSolver<'db> {
     ) -> crate::ast::RowRemoval<'db> {
         let mut removal = removal.clone();
         removal.for_each_row_mut(|row| {
-            *row = map_effect_row_type_args(self.db, self.normalize_row(*row), |ty| {
+            *row = map_ability_row_type_args(self.db, self.normalize_row(*row), |ty| {
                 self.type_subst
                     .apply_generalization(self.db, ty, &self.row_subst, mapping)
             });
@@ -597,29 +599,29 @@ impl<'db> TypeSolver<'db> {
         );
         if removal
             .result
-            .effects(self.db)
+            .instances(self.db)
             .iter()
-            .any(|effect| removal.removed.effects(self.db).contains(effect))
+            .any(|effect| removal.removed.instances(self.db).contains(effect))
         {
             let allowed: Vec<_> = removal
                 .result
-                .effects(self.db)
+                .instances(self.db)
                 .iter()
-                .filter(|effect| !removal.removed.effects(self.db).contains(effect))
+                .filter(|effect| !removal.removed.instances(self.db).contains(effect))
                 .cloned()
                 .collect();
             return Err(SolveError::RowMismatch {
-                expected: EffectRow::new(self.db, allowed, removal.result.rest(self.db)),
+                expected: AbilityRow::new(self.db, allowed, removal.result.rest(self.db)),
                 actual: removal.result,
             });
         }
         let mut remaining = Vec::new();
         let mut ambiguous = false;
-        for effect in removal.source.effects(self.db) {
-            if removal.removed.effects(self.db).contains(effect) {
+        for effect in removal.source.instances(self.db) {
+            if removal.removed.instances(self.db).contains(effect) {
                 continue;
             }
-            if removal.removed.effects(self.db).iter().any(|candidate| {
+            if removal.removed.instances(self.db).iter().any(|candidate| {
                 candidate.ability_id == effect.ability_id
                     && candidate.args.len() == effect.args.len()
                     && candidate
@@ -633,7 +635,7 @@ impl<'db> TypeSolver<'db> {
                 remaining.push(effect.clone());
             }
         }
-        let known = EffectRow::new(self.db, remaining, None);
+        let known = AbilityRow::new(self.db, remaining, None);
         if removal.source.rest(self.db).is_none() && !ambiguous {
             self.unify_rows(removal.result, known)?;
             return Ok(true);
@@ -642,21 +644,21 @@ impl<'db> TypeSolver<'db> {
         // membership of an unresolved type argument by unification.
         if let Some(tail) = removal.result.rest(self.db) {
             let missing: Vec<_> = known
-                .effects(self.db)
+                .instances(self.db)
                 .iter()
-                .filter(|effect| !removal.result.effects(self.db).contains(effect))
+                .filter(|effect| !removal.result.instances(self.db).contains(effect))
                 .cloned()
                 .collect();
             if !missing.is_empty() {
                 let fresh = self.fresh_row_var();
                 self.row_subst
-                    .insert(tail.id, EffectRow::new(self.db, missing, Some(fresh)));
+                    .insert(tail.id, AbilityRow::new(self.db, missing, Some(fresh)));
             }
         } else {
-            for effect in known.effects(self.db) {
+            for effect in known.instances(self.db) {
                 let candidates: Vec<_> = removal
                     .result
-                    .effects(self.db)
+                    .instances(self.db)
                     .iter()
                     .filter(|other| {
                         other.ability_id == effect.ability_id
@@ -694,8 +696,8 @@ impl<'db> TypeSolver<'db> {
     /// side of a mismatch.
     fn unify_union_source(
         &mut self,
-        sources: EffectRow<'db>,
-        result: EffectRow<'db>,
+        sources: AbilityRow<'db>,
+        result: AbilityRow<'db>,
     ) -> Result<(), SolveError<'db>> {
         self.unify_rows(sources, result)
             .map_err(|error| match error {
@@ -716,7 +718,7 @@ impl<'db> TypeSolver<'db> {
         let mut known = Vec::new();
         let mut tails = Vec::new();
         for source in &union.sources {
-            for effect in source.effects(self.db) {
+            for effect in source.instances(self.db) {
                 if !known.contains(effect) {
                     known.push(effect.clone());
                 }
@@ -728,7 +730,7 @@ impl<'db> TypeSolver<'db> {
             }
         }
         if tails.len() <= 1 {
-            let actual = EffectRow::new(self.db, known, tails.first().copied());
+            let actual = AbilityRow::new(self.db, known, tails.first().copied());
             if actual == union.result {
                 return Ok(true);
             }
@@ -747,7 +749,7 @@ impl<'db> TypeSolver<'db> {
             for effect in &known {
                 let candidates: Vec<_> = union
                     .result
-                    .effects(self.db)
+                    .instances(self.db)
                     .iter()
                     .filter(|candidate| {
                         candidate.ability_id == effect.ability_id
@@ -764,7 +766,7 @@ impl<'db> TypeSolver<'db> {
                     [] => {
                         return Err(SolveError::RowMismatch {
                             expected: union.result,
-                            actual: EffectRow::new(self.db, known.clone(), None),
+                            actual: AbilityRow::new(self.db, known.clone(), None),
                         });
                     }
                     [candidate] => {
@@ -778,13 +780,13 @@ impl<'db> TypeSolver<'db> {
         } else {
             let missing: Vec<_> = known
                 .into_iter()
-                .filter(|effect| !union.result.effects(self.db).contains(effect))
+                .filter(|effect| !union.result.instances(self.db).contains(effect))
                 .collect();
             if !missing.is_empty() {
                 let rest = union.result.rest(self.db).expect("open result");
                 let fresh = self.fresh_row_var();
                 self.row_subst
-                    .insert(rest.id, EffectRow::new(self.db, missing, Some(fresh)));
+                    .insert(rest.id, AbilityRow::new(self.db, missing, Some(fresh)));
             }
         }
         // There may be several valid ways to distribute the remaining labels.
@@ -797,11 +799,11 @@ impl<'db> TypeSolver<'db> {
     /// This ensures that UniVars in effect args (like `State(s)` where `s` is a UniVar)
     /// are resolved before row comparison. Without this, two rows with the same ability
     /// but different (unresolved vs resolved) args would fail to unify.
-    pub(super) fn apply_type_subst_to_row(&self, row: EffectRow<'db>) -> EffectRow<'db> {
-        let row = map_effect_row_type_args(self.db, row, |a| self.type_subst.apply(self.db, a));
+    pub(super) fn apply_type_subst_to_row(&self, row: AbilityRow<'db>) -> AbilityRow<'db> {
+        let row = map_ability_row_type_args(self.db, row, |a| self.type_subst.apply(self.db, a));
         // Instances that the substitution made equal are one instance.
-        let effects = row.effects(self.db);
-        let mut unique: Vec<crate::ast::Effect<'db>> = Vec::with_capacity(effects.len());
+        let effects = row.instances(self.db);
+        let mut unique: Vec<crate::ast::AbilityInstance<'db>> = Vec::with_capacity(effects.len());
         for effect in effects {
             if !unique.contains(effect) {
                 unique.push(effect.clone());
@@ -810,12 +812,12 @@ impl<'db> TypeSolver<'db> {
         if unique.len() == effects.len() {
             row
         } else {
-            EffectRow::new(self.db, unique, row.rest(self.db))
+            AbilityRow::new(self.db, unique, row.rest(self.db))
         }
     }
 
-    /// Check if a row variable occurs in an effect row (for row occurs check).
-    pub(super) fn row_occurs_in(&self, var: EffectVar, row: EffectRow<'db>) -> bool {
+    /// Check if a row variable occurs in an ability row (for row occurs check).
+    pub(super) fn row_occurs_in(&self, var: RowVar, row: AbilityRow<'db>) -> bool {
         // Apply current substitution first
         let row = self.row_subst.apply(self.db, row);
 
@@ -825,7 +827,7 @@ impl<'db> TypeSolver<'db> {
         }
 
         // Check type variables inside effect args
-        for effect in row.effects(self.db) {
+        for effect in row.instances(self.db) {
             for arg in &effect.args {
                 if self.row_occurs_in_type(var, *arg) {
                     return true;
@@ -837,7 +839,7 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Check if a row variable occurs in a type.
-    pub(super) fn row_occurs_in_type(&self, var: EffectVar, ty: Type<'db>) -> bool {
+    pub(super) fn row_occurs_in_type(&self, var: RowVar, ty: Type<'db>) -> bool {
         match ty.kind(self.db) {
             TypeKind::Func {
                 params,
@@ -884,8 +886,8 @@ impl<'db> TypeSolver<'db> {
     /// 4. Different row variables: create a fresh variable for the common tail
     pub(super) fn unify_rows(
         &mut self,
-        left: EffectRow<'db>,
-        right: EffectRow<'db>,
+        left: AbilityRow<'db>,
+        right: AbilityRow<'db>,
     ) -> Result<(), SolveError<'db>> {
         if !self.solving_row_relation && self.waits_for_relation(left, right, true) {
             self.pending_row_eqs
@@ -893,7 +895,7 @@ impl<'db> TypeSolver<'db> {
             return Ok(());
         }
         match self.unify_rows_inner(left, right) {
-            Err(SolveError::AmbiguousEffect { .. }) => {
+            Err(SolveError::AmbiguousAbility { .. }) => {
                 let union = crate::ast::RowUnion {
                     sources: vec![left],
                     result: right,
@@ -924,7 +926,7 @@ impl<'db> TypeSolver<'db> {
                 LocatedSolveError {
                     // The equality's left row is the expected side, as in
                     // `unify_rows`.
-                    error: SolveError::AmbiguousEffect {
+                    error: SolveError::AmbiguousAbility {
                         expected: source,
                         actual: result,
                     },
@@ -951,8 +953,8 @@ impl<'db> TypeSolver<'db> {
     /// waiting for an expression relation, whose types are not known yet.
     fn waits_for_relation(
         &self,
-        left: EffectRow<'db>,
-        right: EffectRow<'db>,
+        left: AbilityRow<'db>,
+        right: AbilityRow<'db>,
         unions: bool,
     ) -> bool {
         let unions = unions && !self.pending_row_unions.is_empty();
@@ -967,7 +969,7 @@ impl<'db> TypeSolver<'db> {
                 let Some(tail) = row.rest(self.db) else {
                     return false;
                 };
-                let names_labels = |row: EffectRow<'db>| !row.effects(self.db).is_empty();
+                let names_labels = |row: AbilityRow<'db>| !row.instances(self.db).is_empty();
                 names_labels(row)
                     && (names_labels(other) || other.rest(self.db).is_none())
                     && ((unions
@@ -980,7 +982,7 @@ impl<'db> TypeSolver<'db> {
 
     /// Whether an expression relation or a call still to be resolved may add
     /// labels to `tail`, directly or through the unions that define it.
-    fn awaits_expression(&self, tail: EffectVar, visited: &mut Vec<EffectVar>) -> bool {
+    fn awaits_expression(&self, tail: RowVar, visited: &mut Vec<RowVar>) -> bool {
         if visited.contains(&tail) {
             return false;
         }
@@ -1002,7 +1004,7 @@ impl<'db> TypeSolver<'db> {
 
     /// Whether the types of a pending expression relation, or the row of a
     /// call still to be resolved, mention `tail`.
-    fn pending_relation_mentions(&self, tail: EffectVar) -> bool {
+    fn pending_relation_mentions(&self, tail: RowVar) -> bool {
         if self
             .pending_producers
             .iter()
@@ -1014,7 +1016,7 @@ impl<'db> TypeSolver<'db> {
             let ty = self
                 .type_subst
                 .apply_with_rows(self.db, ty, &self.row_subst);
-            collect_effect_vars(self.db, ty).contains(&tail)
+            collect_row_vars(self.db, ty).contains(&tail)
         };
         self.pending_relations
             .iter()
@@ -1050,8 +1052,8 @@ impl<'db> TypeSolver<'db> {
 
     pub(super) fn unify_rows_inner(
         &mut self,
-        r1: EffectRow<'db>,
-        r2: EffectRow<'db>,
+        r1: AbilityRow<'db>,
+        r2: AbilityRow<'db>,
     ) -> Result<(), SolveError<'db>> {
         // Apply current row substitution first
         let r1 = self.row_subst.apply(self.db, r1);
@@ -1074,8 +1076,8 @@ impl<'db> TypeSolver<'db> {
             return Ok(());
         }
 
-        let effects1 = r1.effects(self.db);
-        let effects2 = r2.effects(self.db);
+        let effects1 = r1.instances(self.db);
+        let effects2 = r2.instances(self.db);
         let rest1 = r1.rest(self.db);
         let rest2 = r2.rest(self.db);
 
@@ -1106,7 +1108,7 @@ impl<'db> TypeSolver<'db> {
                     return self.unify_rows_inner(r1, r2);
                 }
                 // Bind var1 to remaining effects (closed)
-                let remainder = EffectRow::new(self.db, only_r2, None);
+                let remainder = AbilityRow::new(self.db, only_r2, None);
                 if self.row_occurs_in(var1, remainder) {
                     return Err(SolveError::RowMismatch {
                         expected: r1,
@@ -1121,10 +1123,10 @@ impl<'db> TypeSolver<'db> {
             (None, Some(var2)) => {
                 // Pure subsumption: if r1 is pure (closed empty) and r2 has existing effects,
                 // it means a pure function is being called from an effectful context.
-                // This is always valid, and the caller's effect row should remain unchanged.
+                // This is always valid, and the caller's ability row should remain unchanged.
                 //
                 // Example: calling `identity: fn(Int) -> Int` (effect: {}) from a context
-                // with effect `{State(Int) | var}` should not modify the caller's effect row.
+                // with effect `{State(Int) | var}` should not modify the caller's ability row.
                 //
                 // However, if r2 has no effects (just a bare variable `{|var}`), we should
                 // bind the variable to the closed row as normal instantiation behavior.
@@ -1150,7 +1152,7 @@ impl<'db> TypeSolver<'db> {
                     return self.unify_rows_inner(r1, r2);
                 }
                 // Bind var2 to remaining effects (closed)
-                let remainder = EffectRow::new(self.db, only_r1, None);
+                let remainder = AbilityRow::new(self.db, only_r1, None);
                 if self.row_occurs_in(var2, remainder) {
                     return Err(SolveError::RowMismatch {
                         expected: r1,
@@ -1181,8 +1183,8 @@ impl<'db> TypeSolver<'db> {
                 // `only_r1`, so a tail may not occur in its own remainder,
                 // nor may each occur in the other's while the other's tail
                 // occurs in its own, which would cycle through both bindings.
-                let only_r1_row = EffectRow::new(self.db, only_r1.clone(), None);
-                let only_r2_row = EffectRow::new(self.db, only_r2.clone(), None);
+                let only_r1_row = AbilityRow::new(self.db, only_r1.clone(), None);
+                let only_r2_row = AbilityRow::new(self.db, only_r2.clone(), None);
                 if self.row_occurs_in(v1, only_r2_row)
                     || self.row_occurs_in(v2, only_r1_row)
                     || (self.row_occurs_in(v1, only_r1_row) && self.row_occurs_in(v2, only_r2_row))
@@ -1198,12 +1200,12 @@ impl<'db> TypeSolver<'db> {
                 let rigid1 = self.rigid_rows.contains(&v1);
                 let rigid2 = self.rigid_rows.contains(&v2);
                 if rigid1 && !rigid2 && only_r2.is_empty() {
-                    let row = EffectRow::new(self.db, only_r1, Some(v1));
+                    let row = AbilityRow::new(self.db, only_r1, Some(v1));
                     self.row_subst.insert(v2.id, row);
                     return Ok(());
                 }
                 if rigid2 && !rigid1 && only_r1.is_empty() {
-                    let row = EffectRow::new(self.db, only_r2, Some(v2));
+                    let row = AbilityRow::new(self.db, only_r2, Some(v2));
                     self.row_subst.insert(v1.id, row);
                     return Ok(());
                 }
@@ -1212,11 +1214,11 @@ impl<'db> TypeSolver<'db> {
                 let v3 = self.fresh_row_var();
 
                 // v1 = {only_r2 | v3}
-                let row_for_v1 = EffectRow::new(self.db, only_r2, Some(v3));
+                let row_for_v1 = AbilityRow::new(self.db, only_r2, Some(v3));
                 self.row_subst.insert(v1.id, row_for_v1);
 
                 // v2 = {only_r1 | v3}
-                let row_for_v2 = EffectRow::new(self.db, only_r1, Some(v3));
+                let row_for_v2 = AbilityRow::new(self.db, only_r1, Some(v3));
                 self.row_subst.insert(v2.id, row_for_v2);
 
                 Ok(())
@@ -1227,15 +1229,15 @@ impl<'db> TypeSolver<'db> {
     /// Check if two effect lists are equal as sets, unifying type arguments.
     ///
     /// Effects are matched by name first, then by arity, then args are unified.
-    /// - Same name, different arity → EffectArgArityMismatch
+    /// - Same name, different arity → AbilityArgArityMismatch
     /// - Same name, same arity, args unify → matched
     /// - Same name, same arity, args don't unify → different abilities (RowMismatch)
     pub(super) fn unify_effects_as_sets(
         &mut self,
-        effects1: &[crate::ast::Effect<'db>],
-        effects2: &[crate::ast::Effect<'db>],
-        r1: EffectRow<'db>,
-        r2: EffectRow<'db>,
+        effects1: &[crate::ast::AbilityInstance<'db>],
+        effects2: &[crate::ast::AbilityInstance<'db>],
+        r1: AbilityRow<'db>,
+        r2: AbilityRow<'db>,
     ) -> Result<(), SolveError<'db>> {
         // Equality is bidirectional set membership, including idempotence
         // after type substitution. Never choose the first of several possible
@@ -1246,17 +1248,18 @@ impl<'db> TypeSolver<'db> {
         let mut ambiguous = false;
         for (source, target) in [(effects1, effects2), (effects2, effects1)] {
             for effect in source {
-                let normalized = |candidate: &crate::ast::Effect<'db>| crate::ast::Effect {
-                    ability_id: candidate.ability_id,
-                    args: candidate
-                        .args
-                        .iter()
-                        .map(|ty| {
-                            self.type_subst
-                                .apply_with_rows(self.db, *ty, &self.row_subst)
-                        })
-                        .collect(),
-                };
+                let normalized =
+                    |candidate: &crate::ast::AbilityInstance<'db>| crate::ast::AbilityInstance {
+                        ability_id: candidate.ability_id,
+                        args: candidate
+                            .args
+                            .iter()
+                            .map(|ty| {
+                                self.type_subst
+                                    .apply_with_rows(self.db, *ty, &self.row_subst)
+                            })
+                            .collect(),
+                    };
                 let effect = normalized(effect);
                 let mut candidates = Vec::new();
                 for other in target {
@@ -1265,7 +1268,7 @@ impl<'db> TypeSolver<'db> {
                         continue;
                     }
                     if other.args.len() != effect.args.len() {
-                        return Err(SolveError::EffectArgArityMismatch {
+                        return Err(SolveError::AbilityArgArityMismatch {
                             effect_name: effect.ability_id.name(self.db),
                             expected: effect.args.len(),
                             found: other.args.len(),
@@ -1302,7 +1305,7 @@ impl<'db> TypeSolver<'db> {
             }
         }
         if ambiguous {
-            return Err(SolveError::AmbiguousEffect {
+            return Err(SolveError::AmbiguousAbility {
                 expected: r1,
                 actual: r2,
             });
@@ -1323,27 +1326,27 @@ impl<'db> TypeSolver<'db> {
     /// unifies them once every effect has been matched.
     pub(super) fn compute_effect_difference(
         &self,
-        list1: &[crate::ast::Effect<'db>],
-        list2: &[crate::ast::Effect<'db>],
+        list1: &[crate::ast::AbilityInstance<'db>],
+        list2: &[crate::ast::AbilityInstance<'db>],
         pairs: &mut Vec<(Type<'db>, Type<'db>)>,
-    ) -> Result<Vec<crate::ast::Effect<'db>>, SolveError<'db>> {
+    ) -> Result<Vec<crate::ast::AbilityInstance<'db>>, SolveError<'db>> {
         let mut only_list2 = Vec::new();
         for e2 in list2 {
             let e2 = self
-                .normalize_row(EffectRow::single(self.db, e2.clone()))
-                .effects(self.db)[0]
+                .normalize_row(AbilityRow::single(self.db, e2.clone()))
+                .instances(self.db)[0]
                 .clone();
             let mut candidates = Vec::new();
             for e1 in list1 {
                 let e1 = self
-                    .normalize_row(EffectRow::single(self.db, e1.clone()))
-                    .effects(self.db)[0]
+                    .normalize_row(AbilityRow::single(self.db, e1.clone()))
+                    .instances(self.db)[0]
                     .clone();
                 if e1.ability_id != e2.ability_id {
                     continue;
                 }
                 if e1.args.len() != e2.args.len() {
-                    return Err(SolveError::EffectArgArityMismatch {
+                    return Err(SolveError::AbilityArgArityMismatch {
                         effect_name: e1.ability_id.name(self.db),
                         expected: e1.args.len(),
                         found: e2.args.len(),
@@ -1371,9 +1374,9 @@ impl<'db> TypeSolver<'db> {
                     }
                 }
                 _ => {
-                    return Err(SolveError::AmbiguousEffect {
-                        expected: EffectRow::new(self.db, list1.to_vec(), None),
-                        actual: EffectRow::new(self.db, list2.to_vec(), None),
+                    return Err(SolveError::AmbiguousAbility {
+                        expected: AbilityRow::new(self.db, list1.to_vec(), None),
+                        actual: AbilityRow::new(self.db, list2.to_vec(), None),
                     });
                 }
             }
@@ -1386,9 +1389,15 @@ impl<'db> TypeSolver<'db> {
     /// Returns (only_list1, only_list2) after matching and unifying.
     pub(super) fn compute_effect_split_with_unify(
         &mut self,
-        list1: &[crate::ast::Effect<'db>],
-        list2: &[crate::ast::Effect<'db>],
-    ) -> Result<(Vec<crate::ast::Effect<'db>>, Vec<crate::ast::Effect<'db>>), SolveError<'db>> {
+        list1: &[crate::ast::AbilityInstance<'db>],
+        list2: &[crate::ast::AbilityInstance<'db>],
+    ) -> Result<
+        (
+            Vec<crate::ast::AbilityInstance<'db>>,
+            Vec<crate::ast::AbilityInstance<'db>>,
+        ),
+        SolveError<'db>,
+    > {
         let mut pairs = Vec::new();
         let only_list1 = self.compute_effect_difference(list2, list1, &mut pairs)?;
         let only_list2 = self.compute_effect_difference(list1, list2, &mut pairs)?;

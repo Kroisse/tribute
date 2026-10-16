@@ -81,7 +81,7 @@ for joining; keep collections needed for sorting or reuse.
 ### Row-Polymorphic Effects
 
 Typechecked source callable metadata includes its parameter/result types and
-effect row. Source-logical IR preserves that signature, including the effect
+ability row. Source-logical IR preserves that signature, including the effect
 row, and the calling convention computed from the row. Shared CPS legalization
 alone adds hidden callable parameters.
 Do not infer operation kind, ownership, or callable ABI from symbol spelling,

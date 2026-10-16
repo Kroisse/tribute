@@ -123,7 +123,7 @@ monomorphic하게 바꾸지 않는다. 추론 변수를 지역 quantifier로 변
 
 ---
 
-## Effect Row Syntax
+## Ability Row Syntax
 
 ### 기본 문법
 
@@ -147,7 +147,7 @@ fn pure(x: a) ->{} a
 fn length(xs: List(a)) -> Nat
 ```
 
-`std::io::Io`도 effect row의 concrete label로 전파된다. 다만 compiler-owned
+`std::io::Io`도 ability row의 concrete label로 전파된다. 다만 compiler-owned
 ambient ability이므로 handler로 제거할 수 없고 `main`에 terminal effect로 남을
 수 있다. 표준 API는 [io.md](io.md)를, calling convention은
 [cps-effects.md](cps-effects.md#호출-규약)를 따른다.
@@ -159,7 +159,7 @@ Named type unification은 declaration identity와 type argument를 모두 비교
 
 ### 암묵적 Effect Polymorphism
 
-Effect annotation이 생략되면 그 위치마다 fresh row 변수를 쓴 것과 같다:
+Ability annotation이 생략되면 그 위치마다 fresh row 변수를 쓴 것과 같다:
 
 ```rust
 // 이 두 선언은 동일
@@ -168,11 +168,11 @@ fn length(xs: List(a)) ->{e} Nat
 ```
 
 생략된 row는 서로 다른 변수이다. 고차 함수가 전달받은 함수의 effect를
-전파하려면 같은 row 변수를 명시한다([Effect Annotation 규칙](#effect-annotation-규칙)).
+전파하려면 같은 row 변수를 명시한다([Ability Annotation 규칙](#ability-annotation-규칙)).
 
 ### Row 구성 요소
 
-Effect row는 다음으로 구성된다:
+Ability row는 다음으로 구성된다:
 
 ```text
 Row ::= {}                    -- 빈 row (순수)
@@ -213,7 +213,7 @@ callable row의 명시 label에 묶인 handler로 가고, 같은 위치에서 �
 가리킬 방법은 없다. 중복을 허용하려면
 occurrence의 순서나 이름으로 handler를 고르는 규칙이 함께 필요하다.
 
-**향후 확장**: 동일 ability의 여러 인스턴스가 필요한 경우, effect row에서 이름을 붙일 수 있다:
+**향후 확장**: 동일 ability의 여러 인스턴스가 필요한 경우, ability row에서 이름을 붙일 수 있다:
 
 ```rust
 // 향후 가능한 확장 (현재 미지원)
@@ -695,7 +695,7 @@ op : fn(A₁, ..., Aₙ) ->{Eff} B ∈ Ability
 
 ### Subsumption
 
-Effect row 간의 subsumption:
+Ability row 간의 subsumption:
 
 ```text
 E₁ ⊆ E₂
@@ -760,7 +760,7 @@ constraints generated up to the binding, `let p = e` generalizes variables in
 the type of `e` exactly when evaluating `e` has the closed-empty effect `{}`.
 Variables free in the surrounding environment are never generalized.
 
-앞의 lambda inference 규칙으로 얻은 callable effect row는 lambda literal을
+앞의 lambda inference 규칙으로 얻은 callable ability row는 lambda literal을
 평가하는 효과와 구별한다. 따라서 local callable의 generalization은 실제로 추론된
 type과 row의 변수만 대상으로 하며, generalization을 위해 새 open tail을 만들지
 않는다.
@@ -790,7 +790,7 @@ For a destructuring pattern, each introduced name receives the corresponding
 component scheme under the same decision. Function parameters, handler
 continuations, and pattern bindings not introduced by `let` are monomorphic.
 
-A type scheme quantifies both type variables and effect-row variables:
+A type scheme quantifies both type variables and ability-row variables:
 
 ```text
 sigma ::= forall a1 ... an, e1 ... em. tau
@@ -975,9 +975,9 @@ fn example() -> Int {
 주지 않는다. 함수 검사는 선언 수집이 만든 모듈 환경을 읽기만 하고, 그 함수의
 본문 metadata만 결과로 낸다.
 
-### Effect Annotation 규칙
+### Ability Annotation 규칙
 
-Effect annotation을 생략하면 fresh한 ability 변수가 생성된다. 본문의 effect로
+Ability annotation을 생략하면 fresh한 ability 변수가 생성된다. 본문의 effect로
 시그니처를 추론하지 않으므로, 생략한 함수의 본문은 concrete ability를 수행할 수
 없다. Ability를 수행하는 함수는 그 ability를 row에 명시한다:
 

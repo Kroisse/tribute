@@ -1,6 +1,6 @@
 //! Structured solver failures and their diagnostic messages.
 
-use crate::ast::{EffectRow, Type, UniVarId};
+use crate::ast::{AbilityRow, Type, UniVarId};
 use crate::typeck::constraint::ConstraintOrigin;
 
 /// Error during constraint solving.
@@ -13,18 +13,18 @@ pub enum SolveError<'db> {
     },
     /// Occurs check failed (infinite type).
     OccursCheck { var: UniVarId<'db>, ty: Type<'db> },
-    /// Effect row mismatch.
+    /// Ability row mismatch.
     RowMismatch {
-        expected: EffectRow<'db>,
-        actual: EffectRow<'db>,
+        expected: AbilityRow<'db>,
+        actual: AbilityRow<'db>,
     },
     /// Several exact-identity candidates remain possible until more types solve.
-    AmbiguousEffect {
-        expected: EffectRow<'db>,
-        actual: EffectRow<'db>,
+    AmbiguousAbility {
+        expected: AbilityRow<'db>,
+        actual: AbilityRow<'db>,
     },
     /// Effect type argument arity mismatch.
-    EffectArgArityMismatch {
+    AbilityArgArityMismatch {
         effect_name: trunk_ir::Symbol,
         expected: usize,
         found: usize,
@@ -55,16 +55,16 @@ impl std::fmt::Display for SolveError<'_> {
             Self::RowMismatch { expected, actual } => {
                 write!(
                     f,
-                    "effect mismatch: expected `{expected}`, found `{actual}`"
+                    "ability row mismatch: expected `{expected}`, found `{actual}`"
                 )
             }
-            Self::AmbiguousEffect { expected, actual } => {
+            Self::AmbiguousAbility { expected, actual } => {
                 write!(
                     f,
-                    "ambiguous effect: cannot match `{actual}` with `{expected}`, more than one instance could correspond; annotate the effect's type arguments"
+                    "ambiguous ability: cannot match `{actual}` with `{expected}`, more than one instance could correspond; annotate the ability's type arguments"
                 )
             }
-            Self::EffectArgArityMismatch {
+            Self::AbilityArgArityMismatch {
                 effect_name,
                 expected,
                 found,

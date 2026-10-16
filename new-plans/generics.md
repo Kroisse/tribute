@@ -95,7 +95,7 @@ Monomorph  Uniform Rep
 | 제네릭 함수            | **다형적 재귀** | Uniform representation |
 | Effect만 다형적인 함수 | -               | Evidence passing       |
 
-Effect row는 값으로 특수화하지 않는다. Row 변수가 요구하는 calling convention만
+Ability row는 값으로 특수화하지 않는다. Row 변수가 요구하는 calling convention만
 [convention class](#row-변수의-convention-class)로 특수화한다.
 
 이 도식의 uniform representation 선택은 함수의 다형적 재귀에 적용한다.
@@ -317,7 +317,7 @@ template은 허용하되, 도달하는 함수 인스턴스나 ability 인자가 
 
 ### Row 변수의 convention class
 
-Effect row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실행 중 evidence로
+Ability row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실행 중 evidence로
 전달한다. 실행 전략은 row 변수가 요구하는 calling convention마다 정의를 따로 만들 수
 있으며, CPS 전략에서 이를 그 변수의
 [convention class](cps-effects.md#row-변수의-convention-class)라 한다. 인스턴스

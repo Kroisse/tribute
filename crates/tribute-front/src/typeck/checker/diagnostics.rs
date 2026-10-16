@@ -74,7 +74,7 @@ impl<'db> TypeChecker<'db> {
         let is_effect_error = matches!(
             &failure.error,
             super::super::solver::SolveError::RowMismatch { .. }
-                | super::super::solver::SolveError::EffectArgArityMismatch { .. }
+                | super::super::solver::SolveError::AbilityArgArityMismatch { .. }
         );
         if is_effect_error && primary_node != func_id {
             let related_node = effects

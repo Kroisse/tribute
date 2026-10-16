@@ -14,7 +14,7 @@
 use proptest::prelude::*;
 
 use super::{ConstraintSet, SolveError, TypeSolver};
-use crate::ast::{EffectRow, Type};
+use crate::ast::{AbilityRow, Type};
 use crate::typeck::prop::{
     RowRelation, RowShape, Sharing, TypeGen, TypeShape, context_with_hole, generalization,
     row_and_shuffle, row_shape, rows_equiv, type_shape, types_equiv, univar,
@@ -48,8 +48,8 @@ fn solve_types<'db>(
 
 fn solve_rows<'db>(
     db: &'db dyn salsa::Database,
-    left: EffectRow<'db>,
-    right: EffectRow<'db>,
+    left: AbilityRow<'db>,
+    right: AbilityRow<'db>,
 ) -> (TypeSolver<'db>, Result<(), SolveError<'db>>) {
     let mut solver = TypeSolver::new(db);
     let mut constraints = ConstraintSet::new();
@@ -350,10 +350,10 @@ proptest! {
 
 /// A row whose only effect argument is `ty`, to check reflexivity of row
 /// unification on rows with arbitrary arguments.
-fn row_of<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> EffectRow<'db> {
-    EffectRow::new(
+fn row_of<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> AbilityRow<'db> {
+    AbilityRow::new(
         db,
-        vec![crate::ast::Effect {
+        vec![crate::ast::AbilityInstance {
             ability_id: crate::typeck::prop::ability_id(db, 1),
             args: vec![ty],
         }],
@@ -367,13 +367,13 @@ fn row_of<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> EffectRow<'db> {
 /// `State(Int)` is ambiguous between the two.
 #[test]
 fn row_equality_with_ambiguous_candidates_ignores_effect_order() {
-    use crate::typeck::prop::{EffectShape, Prim};
+    use crate::typeck::prop::{AbilityInstanceShape, Prim};
     let db = salsa::DatabaseImpl::new();
-    let console = EffectShape {
+    let console = AbilityInstanceShape {
         ability: 0,
         args: vec![],
     };
-    let state = |arg| EffectShape {
+    let state = |arg| AbilityInstanceShape {
         ability: 1,
         args: vec![arg],
     };
@@ -401,9 +401,9 @@ fn row_equality_with_ambiguous_candidates_ignores_effect_order() {
 /// makes `{State(?1)}` equal to `{State(Int), State(Bool)}`.
 #[test]
 fn unsettled_ambiguous_row_equality_is_reported() {
-    use crate::typeck::prop::{EffectShape, Prim};
+    use crate::typeck::prop::{AbilityInstanceShape, Prim};
     let db = salsa::DatabaseImpl::new();
-    let state = |arg| EffectShape {
+    let state = |arg| AbilityInstanceShape {
         ability: 1,
         args: vec![arg],
     };
@@ -417,7 +417,7 @@ fn unsettled_ambiguous_row_equality_is_reported() {
     assert!(result.is_ok() && solver.finalize_relations().is_ok());
     assert!(matches!(
         solver.unsettled_ambiguity().map(|failure| failure.error),
-        Some(SolveError::AmbiguousEffect { .. })
+        Some(SolveError::AmbiguousAbility { .. })
     ));
 }
 
@@ -428,7 +428,7 @@ fn unsettled_ambiguous_row_equality_is_reported() {
 /// rows are then equated again under that binding, closing the common tail.
 #[test]
 fn open_row_tail_binding_keeps_argument_bindings() {
-    use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
+    use crate::typeck::prop::{AbilityInstanceShape, Prim, ROW_VAR_BASE};
     let db = salsa::DatabaseImpl::new();
     let thunk = |tail| TypeShape::Func {
         params: vec![],
@@ -438,7 +438,7 @@ fn open_row_tail_binding_keeps_argument_bindings() {
             rest: Some(tail),
         },
     };
-    let state = |tail| EffectShape {
+    let state = |tail| AbilityInstanceShape {
         ability: 1,
         args: vec![thunk(tail)],
     };
@@ -460,10 +460,10 @@ fn open_row_tail_binding_keeps_argument_bindings() {
 /// and `e2` to `State(fn() ->{e1} Nil)` over it, which is no cycle.
 #[test]
 fn open_rows_allow_a_tail_in_the_other_remainder() {
-    use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
+    use crate::typeck::prop::{AbilityInstanceShape, Prim, ROW_VAR_BASE};
     let db = salsa::DatabaseImpl::new();
     let (e1, e2) = (ROW_VAR_BASE, ROW_VAR_BASE + 1);
-    let state = EffectShape {
+    let state = AbilityInstanceShape {
         ability: 1,
         args: vec![TypeShape::Func {
             params: vec![],
@@ -495,7 +495,7 @@ fn open_rows_allow_a_tail_in_the_other_remainder() {
 /// `e1` would name `Choice` over `e2` and `e2` would name `State` over `e1`.
 #[test]
 fn open_rows_reject_a_cycle_through_both_tails() {
-    use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
+    use crate::typeck::prop::{AbilityInstanceShape, Prim, ROW_VAR_BASE};
     let db = salsa::DatabaseImpl::new();
     let thunk = |tail| TypeShape::Func {
         params: vec![],
@@ -507,7 +507,7 @@ fn open_rows_reject_a_cycle_through_both_tails() {
     };
     let (e1, e2) = (ROW_VAR_BASE, ROW_VAR_BASE + 1);
     let left = RowShape {
-        effects: vec![EffectShape {
+        effects: vec![AbilityInstanceShape {
             ability: 1,
             args: vec![thunk(e1)],
         }],
@@ -515,7 +515,7 @@ fn open_rows_reject_a_cycle_through_both_tails() {
     }
     .build(&db);
     let right = RowShape {
-        effects: vec![EffectShape {
+        effects: vec![AbilityInstanceShape {
             ability: 3,
             args: vec![thunk(e2), TypeShape::Prim(Prim::Nil)],
         }],
@@ -533,9 +533,9 @@ fn open_rows_reject_a_cycle_through_both_tails() {
 /// leave `Choice(Bool)` without a candidate, nor the reverse.
 #[test]
 fn open_row_matching_ignores_effect_order() {
-    use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
+    use crate::typeck::prop::{AbilityInstanceShape, Prim, ROW_VAR_BASE};
     let db = salsa::DatabaseImpl::new();
-    let effect = |ability, arg| EffectShape {
+    let effect = |ability, arg| AbilityInstanceShape {
         ability,
         args: vec![arg],
     };

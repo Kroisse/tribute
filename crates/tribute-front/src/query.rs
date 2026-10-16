@@ -465,10 +465,10 @@ fn explicit() ->{} Nil { Nil }
     fn contains_univar(db: &dyn salsa::Database, ty: crate::ast::Type) -> bool {
         fn effect_contains_univar(
             db: &dyn salsa::Database,
-            effect: crate::ast::EffectRow<'_>,
+            effect: crate::ast::AbilityRow<'_>,
         ) -> bool {
             effect
-                .effects(db)
+                .instances(db)
                 .iter()
                 .any(|effect| effect.args.iter().any(|arg| contains_univar(db, *arg)))
         }
@@ -510,9 +510,9 @@ fn explicit() ->{} Nil { Nil }
         let db = salsa::DatabaseImpl::default();
         let id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
         let var = crate::ast::Type::new(&db, crate::ast::TypeKind::UniVar { id });
-        let effect = crate::ast::EffectRow::new(
+        let effect = crate::ast::AbilityRow::new(
             &db,
-            vec![crate::ast::Effect {
+            vec![crate::ast::AbilityInstance {
                 ability_id: crate::ast::AbilityId::source(
                     &db,
                     trunk_ir::SymbolPath::new(["State"]),

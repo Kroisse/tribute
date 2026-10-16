@@ -18,9 +18,9 @@ use trunk_ir::{Symbol, SymbolPath};
 pub use self::instance::InstanceRowClasses;
 use self::instance::{InstanceKey, InstanceKeys};
 use crate::ast::{
-    CtorId, Decl, DeclTable, EffectRow, FuncDefId, NodeId, Type, TypeScheme, TypedRef,
+    AbilityRow, CtorId, Decl, DeclTable, FuncDefId, NodeId, Type, TypeScheme, TypedRef,
 };
-use crate::typeck::subst::{BoundVarOutOfBounds, substitute_bound_vars, substitute_effect_row};
+use crate::typeck::subst::{BoundVarOutOfBounds, substitute_ability_row, substitute_bound_vars};
 use crate::typeck::{
     EvidenceStep, InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature,
 };
@@ -188,7 +188,7 @@ pub fn monomorphize_functions<'db>(
         extra_types.push(instance.callable);
         extra_types.extend(instance.type_arguments.iter().copied());
         for row in &instance.row_arguments {
-            for effect in row.effects(db) {
+            for effect in row.instances(db) {
                 extra_types.extend(effect.args.iter().copied());
             }
         }
@@ -198,7 +198,7 @@ pub fn monomorphize_functions<'db>(
         extra_types.push(instance.callable);
         for row in &instance.row_arguments {
             extra_types.extend(
-                row.effects(db)
+                row.instances(db)
                     .iter()
                     .flat_map(|effect| effect.args.iter().copied()),
             );
@@ -556,10 +556,10 @@ fn substitute_type<'db>(
 
 fn substitute_row<'db>(
     db: &'db dyn salsa::Database,
-    row: EffectRow<'db>,
+    row: AbilityRow<'db>,
     type_args: &[Type<'db>],
-) -> EffectRow<'db> {
-    substitute_effect_row(db, row, type_args).unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
+) -> AbilityRow<'db> {
+    substitute_ability_row(db, row, type_args).unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
         panic!("BoundVar index out of range in specialization metadata: index={index}, subst.len()={max}")
     })
 }
@@ -681,7 +681,7 @@ mod tests {
             TypeKind::Func {
                 params: vec![bound],
                 result: bound,
-                effect: EffectRow::pure(&db),
+                effect: AbilityRow::pure(&db),
             },
         );
         let specialized_function = Type::new(
@@ -689,7 +689,7 @@ mod tests {
             TypeKind::Func {
                 params: vec![int],
                 result: int,
-                effect: EffectRow::pure(&db),
+                effect: AbilityRow::pure(&db),
             },
         );
         let ability = AbilityId::source(&db, trunk_ir::SymbolPath::new(["Audit"]));
@@ -707,7 +707,7 @@ mod tests {
             function_instances: HashMap::default(),
             evidence_plans: [(
                 origin,
-                vec![EvidenceStep::Mask(crate::ast::Effect {
+                vec![EvidenceStep::Mask(crate::ast::AbilityInstance {
                     ability_id: ability,
                     args: vec![bound],
                 })],
@@ -797,7 +797,7 @@ mod tests {
         assert_eq!(metadata.perform_operations.get(&clone).unwrap().result, int);
         assert_eq!(
             metadata.evidence_plans[&clone],
-            [EvidenceStep::Mask(crate::ast::Effect {
+            [EvidenceStep::Mask(crate::ast::AbilityInstance {
                 ability_id: ability,
                 args: vec![int],
             })]

@@ -113,7 +113,7 @@ fn shared(comp: fn() ->{e} Nil) ->{e} Nil {
         .collect();
     assert_eq!(
         errors,
-        ["effect variable `e` in the signature of `shared` is closed in its body"],
+        ["row variable `e` in the signature of `shared` is closed in its body"],
     );
 }
 
@@ -210,8 +210,8 @@ fn handled(comp: fn() ->{{e}} Nil) ->{{}} Nil {{
     assert_eq!(
         errors,
         [
-            "function 'handled' handles Ping from effect variable `e` without declaring it there; \
-             add it to that effect row"
+            "function 'handled' handles Ping from row variable `e` without declaring it there; \
+             add it to that ability row"
         ],
     );
 }
@@ -481,7 +481,9 @@ fn run() ->{Tell} Int { apply(+1, bump) }
         .collect();
     assert_eq!(
         errors,
-        ["type error in function 'run': effect mismatch: expected `{Tell}`, found `{Ask, Tell}`"]
+        [
+            "type error in function 'run': ability row mismatch: expected `{Tell}`, found `{Ask, Tell}`"
+        ]
     );
 }
 

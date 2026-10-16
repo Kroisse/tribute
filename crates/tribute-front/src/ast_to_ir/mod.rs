@@ -165,7 +165,7 @@ pub struct TypedModule<'db> {
     /// Exact intrinsic-directive declaration IDs and canonical identities.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
     /// Convention classes of the class variables of each function instance.
-    pub row_classes: HashMap<SymbolPath, Vec<(crate::ast::EffectVar, CallingConvention)>>,
+    pub row_classes: HashMap<SymbolPath, Vec<(crate::ast::RowVar, CallingConvention)>>,
     /// URIs of the other sources whose declarations were merged into `ast`.
     pub merged_sources: Vec<String>,
 }

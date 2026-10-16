@@ -3,8 +3,8 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::{
     SourceCst,
     ast::{
-        AbilityId, Decl, DeclTable, Effect, EffectRow, Expr, ExprKind, NodeId, Type, TypeKind,
-        TypedRef, UniVarId, UniVarSource,
+        AbilityId, AbilityInstance, AbilityRow, Decl, DeclTable, Expr, ExprKind, NodeId, Type,
+        TypeKind, TypedRef, UniVarId, UniVarSource,
     },
 };
 use trunk_ir::Symbol;
@@ -30,7 +30,7 @@ fn type_contains<'db>(
                 .any(|param| type_contains(db, *param, predicate))
                 || type_contains(db, *result, predicate)
                 || effect
-                    .effects(db)
+                    .instances(db)
                     .iter()
                     .flat_map(|effect| effect.args.iter())
                     .any(|arg| type_contains(db, *arg, predicate))
@@ -50,7 +50,7 @@ fn type_contains<'db>(
             type_contains(db, *arg, predicate)
                 || type_contains(db, *result, predicate)
                 || effect
-                    .effects(db)
+                    .instances(db)
                     .iter()
                     .flat_map(|effect| effect.args.iter())
                     .any(|arg| type_contains(db, *arg, predicate))
@@ -368,7 +368,7 @@ fn pair() -> Nil {
         .lambda_signatures(db)
         .iter()
         .find(|(_, signature)| {
-            matches!(signature.function_type.kind(db), TypeKind::Func { effect, .. } if !effect.effects(db).is_empty())
+            matches!(signature.function_type.kind(db), TypeKind::Func { effect, .. } if !effect.instances(db).is_empty())
         })
         .expect("effectful local lambda signature should be present");
     let TypeKind::Func { effect, .. } = signature.function_type.kind(db) else {
@@ -376,11 +376,11 @@ fn pair() -> Nil {
     };
     assert!(
         effect
-            .effects(db)
+            .instances(db)
             .iter()
             .flat_map(|effect| effect.args.iter())
             .any(|arg| matches!(arg.kind(db), TypeKind::LocalBoundVar { .. })),
-        "the lambda effect row must retain its local quantifier provenance"
+        "the lambda ability row must retain its local quantifier provenance"
     );
     let local = Type::new(
         db,
@@ -395,9 +395,9 @@ fn pair() -> Nil {
             id: UniVarId::new(db, UniVarSource::Anonymous(1), 0),
         },
     );
-    let effect = EffectRow::single(
+    let effect = AbilityRow::single(
         db,
-        Effect {
+        AbilityInstance {
             ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Source"])),
             args: vec![local, univar],
         },
@@ -487,14 +487,14 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
         panic!("resume lambda metadata must be callable");
     };
     let continuation_writer = computation_effect
-        .effects(db)
+        .instances(db)
         .iter()
         .find(|effect| {
             effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"]))
         })
         .expect("the enclosing computation must retain Writer(w)");
     let lambda_writer = lambda_effect
-        .effects(db)
+        .instances(db)
         .iter()
         .find(|effect| {
             effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"]))
@@ -506,7 +506,7 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
     );
     assert!(
         lambda_effect
-            .effects(db)
+            .instances(db)
             .iter()
             .any(|effect| effect.ability_id
                 == AbilityId::source(db, trunk_ir::SymbolPath::new(["Audit"]))),

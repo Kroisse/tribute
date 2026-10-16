@@ -11,9 +11,8 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    AbilityDecl, AbilityId, CtorId, Decl, DeclTable, EffectRow, EffectVar, EnumDecl, FuncDecl,
-    ResolvedRef, StructDecl, Type, TypeKind, TypeParam, TypeScheme, collect_effect_vars,
-    is_type_variable,
+    AbilityDecl, AbilityId, AbilityRow, CtorId, Decl, DeclTable, EnumDecl, FuncDecl, ResolvedRef,
+    RowVar, StructDecl, Type, TypeKind, TypeParam, TypeScheme, collect_row_vars, is_type_variable,
 };
 use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
 
@@ -29,16 +28,16 @@ fn field_names(fields: &[crate::ast::FieldDecl]) -> Option<Vec<Symbol>> {
 struct SignatureVariables<'db> {
     types: HashMap<Symbol, u32>,
     next_type: u32,
-    rows: HashMap<Symbol, EffectVar>,
+    rows: HashMap<Symbol, RowVar>,
     next_row: u64,
     unions: Vec<crate::ast::RowUnion<'db>>,
 }
 
 impl SignatureVariables<'_> {
-    fn fresh_row(&mut self) -> EffectVar {
-        // Zero is reserved for the implicit, omitted effect annotation.
+    fn fresh_row(&mut self) -> RowVar {
+        // Zero is reserved for the implicit, omitted ability annotation.
         self.next_row += 1;
-        EffectVar { id: self.next_row }
+        RowVar { id: self.next_row }
     }
 }
 
@@ -219,7 +218,7 @@ impl<'db> TypeChecker<'db> {
                 format!("function `{}` needs a return type", func.name),
             ),
         };
-        // Build effect row from annotations (effects don't have BoundVars for now)
+        // Build ability row from annotations (effects don't have BoundVars for now)
         let (effect, effect_origins) = match &func.effects {
             Some(anns) => {
                 let conversion = self.effects_for_signature(anns, &mut vars);
@@ -227,7 +226,7 @@ impl<'db> TypeChecker<'db> {
             }
             // Omitting the annotation is effect-polymorphic (`->{e}`), not
             // an assertion that the row is closed and empty.
-            None => (EffectRow::open(self.db(), EffectVar { id: 0 }), None),
+            None => (AbilityRow::open(self.db(), RowVar { id: 0 }), None),
         };
 
         let func_ty = self.env.func_type(param_types, return_ty, effect);
@@ -237,7 +236,7 @@ impl<'db> TypeChecker<'db> {
             .map(|_| TypeParam::anonymous())
             .collect();
 
-        let mut effect_params = collect_effect_vars(self.db(), func_ty);
+        let mut effect_params = collect_row_vars(self.db(), func_ty);
         for union in &vars.unions {
             for row in union.sources.iter().chain(std::iter::once(&union.result)) {
                 if let Some(var) = row.rest(self.db())
@@ -297,14 +296,14 @@ impl<'db> TypeChecker<'db> {
 
         let return_ty = self.annotation_to_type_for_sig(&func.return_ty, &mut vars);
 
-        let effect = EffectRow::pure(self.db());
+        let effect = AbilityRow::pure(self.db());
         let func_ty = self.env.func_type(param_types, return_ty, effect);
 
         let type_params: Vec<TypeParam> = (0..vars.next_type)
             .map(|_| TypeParam::anonymous())
             .collect();
 
-        let mut effect_params = collect_effect_vars(self.db(), func_ty);
+        let mut effect_params = collect_row_vars(self.db(), func_ty);
         for union in &vars.unions {
             for row in union.sources.iter().chain(std::iter::once(&union.result)) {
                 if let Some(var) = row.rest(self.db())
@@ -370,11 +369,11 @@ impl<'db> TypeChecker<'db> {
             struct_ty
         } else {
             // Field struct: constructor type is fn(fields...) -> struct_ty
-            let effect = EffectRow::pure(self.db());
+            let effect = AbilityRow::pure(self.db());
             self.env.func_type(field_types, struct_ty, effect)
         };
 
-        let effect_params = collect_effect_vars(self.db(), ctor_ty);
+        let effect_params = collect_row_vars(self.db(), ctor_ty);
         let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
         let ctor_id = CtorId::new(self.db(), qualified_name.clone());
         self.env.register_constructor(ctor_id, ctor_scheme);
@@ -447,11 +446,11 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .map(|f| self.annotation_to_type_for_ctor(&f.ty, &type_param_indices))
                     .collect();
-                let effect = EffectRow::pure(self.db());
+                let effect = AbilityRow::pure(self.db());
                 self.env.func_type(field_types, enum_ty, effect)
             };
 
-            let effect_params = collect_effect_vars(self.db(), ctor_ty);
+            let effect_params = collect_row_vars(self.db(), ctor_ty);
             let ctor_scheme =
                 TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
             let ctor_id = CtorId::new(self.db(), self.current_prefix().child(variant.name.clone()));
@@ -595,14 +594,14 @@ impl<'db> TypeChecker<'db> {
         &self,
         annotations: &[crate::ast::TypeAnnotation],
         vars: &mut SignatureVariables<'db>,
-    ) -> crate::ast::EffectRowConversion<'db> {
+    ) -> crate::ast::AbilityRowConversion<'db> {
         use crate::ast::TypeAnnotationKind;
-        let conversion = crate::ast::abilities_to_effect_row_with_origins(
+        let conversion = crate::ast::abilities_to_ability_row_with_origins(
             self.db(),
             annotations,
             self.current_prefix(),
             &mut |ann| self.annotation_to_type_for_sig(ann, vars),
-            || EffectVar { id: 0 },
+            || RowVar { id: 0 },
         );
         let mut tails = Vec::new();
         for ann in annotations {
@@ -631,15 +630,15 @@ impl<'db> TypeChecker<'db> {
                 vars.unions.push(crate::ast::RowUnion {
                     sources: tails
                         .into_iter()
-                        .map(|var| EffectRow::open(self.db(), var))
+                        .map(|var| AbilityRow::open(self.db(), var))
                         .collect(),
-                    result: EffectRow::open(self.db(), result),
+                    result: AbilityRow::open(self.db(), result),
                 });
                 Some(result)
             }
         };
-        crate::ast::EffectRowConversion {
-            row: EffectRow::new(self.db(), conversion.row.effects(self.db()), rest),
+        crate::ast::AbilityRowConversion {
+            row: AbilityRow::new(self.db(), conversion.row.instances(self.db()), rest),
             origins: conversion.origins,
         }
     }
@@ -682,12 +681,12 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.annotation_to_type_for_ctor(p, type_param_indices))
                     .collect();
                 let result_ty = self.annotation_to_type_for_ctor(result, type_param_indices);
-                let effect = crate::ast::abilities_to_effect_row(
+                let effect = crate::ast::abilities_to_ability_row(
                     self.db(),
                     abilities,
                     self.current_prefix(),
                     &mut |a| self.annotation_to_type_for_ctor(a, type_param_indices),
-                    || EffectVar { id: 0 },
+                    || RowVar { id: 0 },
                 );
                 self.env.func_type(param_types, result_ty, effect)
             }

@@ -11,5 +11,5 @@ expression: result.diagnostics
     - span:
         start: 100
         end: 119
-      message: first matching effect annotation is here
+      message: first matching ability annotation is here
   phase: TypeChecking

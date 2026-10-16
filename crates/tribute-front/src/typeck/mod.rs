@@ -18,10 +18,10 @@
 //! - Algebraic data types (structs, enums)
 //! - Pattern matching exhaustiveness (future)
 
+pub mod ability_row;
 mod checker;
 mod constraint;
 mod context;
-pub mod effect_row;
 mod evidence_plan;
 mod func_context;
 #[cfg(test)]
@@ -248,7 +248,7 @@ pub struct FunctionInstance<'db> {
     pub function: FuncDefId<'db>,
     pub scheme: TypeScheme<'db>,
     pub type_arguments: Vec<Type<'db>>,
-    pub row_arguments: Vec<crate::ast::EffectRow<'db>>,
+    pub row_arguments: Vec<crate::ast::AbilityRow<'db>>,
     pub callable: Type<'db>,
 }
 
@@ -258,7 +258,7 @@ pub struct LocalCallableInstance<'db> {
     pub local: crate::ast::LocalId,
     /// Only schemes without local data-type quantifiers are exported here.
     pub scheme: TypeScheme<'db>,
-    pub row_arguments: Vec<crate::ast::EffectRow<'db>>,
+    pub row_arguments: Vec<crate::ast::AbilityRow<'db>>,
     pub callable: Type<'db>,
 }
 
@@ -270,15 +270,15 @@ pub struct LocalCallableInstance<'db> {
 pub enum EvidenceStep<'db> {
     /// The callee reaches this caller-explicit instance only through its row
     /// tail, so the caller's handler is hidden from it.
-    Mask(crate::ast::Effect<'db>),
+    Mask(crate::ast::AbilityInstance<'db>),
     /// One more callee position takes the caller's handler for this instance.
-    Dup(crate::ast::Effect<'db>),
+    Dup(crate::ast::AbilityInstance<'db>),
     /// The callee's row tail is the caller's row tail of this index, so the
     /// callee takes that tail's evidence.
     Select(u32),
     /// The callee names this caller-explicit instance, which the selected
     /// row tail's evidence does not hold.
-    Push(crate::ast::Effect<'db>),
+    Push(crate::ast::AbilityInstance<'db>),
     /// The callee's row is a union of row tails: each takes the caller's
     /// evidence after its own plan.
     Tails(Vec<Vec<EvidenceStep<'db>>>),
@@ -286,13 +286,13 @@ pub enum EvidenceStep<'db> {
 
 impl<'db> EvidenceStep<'db> {
     /// Call `visit` with each ability instance the plan step names.
-    pub fn for_each_instance(&self, mut visit: impl FnMut(&crate::ast::Effect<'db>)) {
+    pub fn for_each_instance(&self, mut visit: impl FnMut(&crate::ast::AbilityInstance<'db>)) {
         self.visit_instances(&mut visit);
     }
 
     // The recursion passes one `&mut dyn` down: a generic parameter would
     // grow by a reference at each level of `Tails`.
-    fn visit_instances(&self, visit: &mut dyn FnMut(&crate::ast::Effect<'db>)) {
+    fn visit_instances(&self, visit: &mut dyn FnMut(&crate::ast::AbilityInstance<'db>)) {
         match self {
             Self::Mask(instance) | Self::Dup(instance) | Self::Push(instance) => visit(instance),
             Self::Select(_) => {}
@@ -310,10 +310,11 @@ impl<'db> EvidenceStep<'db> {
     }
 
     fn map_instance_types(&self, map: &mut dyn FnMut(Type<'db>) -> Type<'db>) -> Self {
-        let mut instance = |instance: &crate::ast::Effect<'db>| crate::ast::Effect {
-            ability_id: instance.ability_id,
-            args: instance.args.iter().map(|ty| map(*ty)).collect(),
-        };
+        let mut instance =
+            |instance: &crate::ast::AbilityInstance<'db>| crate::ast::AbilityInstance {
+                ability_id: instance.ability_id,
+                args: instance.args.iter().map(|ty| map(*ty)).collect(),
+            };
         match self {
             Self::Mask(effect) => Self::Mask(instance(effect)),
             Self::Dup(effect) => Self::Dup(instance(effect)),

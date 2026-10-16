@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap as HashMap;
 use salsa_test_macros::salsa_test;
 use trunk_ir::Symbol;
 
-use crate::ast::{EffectRow, NodeId, SpanMap, Type, TypeDefId, TypeKind};
+use crate::ast::{AbilityRow, NodeId, SpanMap, Type, TypeDefId, TypeKind};
 use crate::typeck::{TypeChecker, TypeSolver};
 
 use super::super::super::solver::SolveError;
@@ -71,7 +71,7 @@ fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::Database
         TypeKind::Func {
             params: vec![Type::new(db, TypeKind::Nat)],
             result: first_solver_var,
-            effect: EffectRow::pure(db),
+            effect: AbilityRow::pure(db),
         },
     );
     let second_callee_ty = Type::new(
@@ -79,7 +79,7 @@ fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::Database
         TypeKind::Func {
             params: vec![Type::new(db, TypeKind::Nat)],
             result: second_solver_var,
-            effect: EffectRow::pure(db),
+            effect: AbilityRow::pure(db),
         },
     );
 

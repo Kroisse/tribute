@@ -206,7 +206,7 @@ fn result() {
 /// This is the core pattern from ability_core.trb:
 /// `op State::get() { run_state(fn() { resume init }, init) }`
 ///
-/// The lambda `fn() { resume init }` should preserve the effect row variable `e`
+/// The lambda `fn() { resume init }` should preserve the ability row variable `e`
 /// from the outer handler context.
 #[salsa_test]
 fn test_handler_arm_continuation_lambda(db: &salsa::DatabaseImpl) {
@@ -314,15 +314,15 @@ fn main() -> Int {
 }
 
 // ========================================================================
-// Effect Row Variable Tests
+// Ability Row Variable Tests
 // ========================================================================
 
-/// Test that effect row variables are properly unified.
+/// Test that ability row variables are properly unified.
 ///
 /// When a lambda is passed to a function expecting `fn() ->{e, State(s)} a`,
 /// the lambda's effect should include State(s) with the row variable e.
 #[salsa_test]
-fn test_lambda_effect_row_unification(db: &salsa::DatabaseImpl) {
+fn test_lambda_ability_row_unification(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",

@@ -1,27 +1,28 @@
 use tribute_front::{
-    ast::{EffectRow, EffectVar},
+    ast::{AbilityRow, RowVar},
     typeck::SolveError,
 };
 
 #[test]
 fn effect_errors_display_without_an_attached_database() {
     let db = salsa::DatabaseImpl::default();
-    let expected = EffectRow::pure(&db);
-    let actual = EffectRow::open(&db, EffectVar { id: 42 });
+    let expected = AbilityRow::pure(&db);
+    let actual = AbilityRow::open(&db, RowVar { id: 42 });
 
-    let ambiguous = "more than one instance could correspond; annotate the effect's type arguments";
+    let ambiguous =
+        "more than one instance could correspond; annotate the ability's type arguments";
     for (error, detached, attached) in [
         (
             SolveError::RowMismatch { expected, actual },
-            "effect mismatch: expected `<effect row>`, found `<effect row>`".to_owned(),
-            "effect mismatch: expected `{}`, found `{e}`".to_owned(),
+            "ability row mismatch: expected `<ability row>`, found `<ability row>`".to_owned(),
+            "ability row mismatch: expected `{}`, found `{e}`".to_owned(),
         ),
         (
-            SolveError::AmbiguousEffect { expected, actual },
+            SolveError::AmbiguousAbility { expected, actual },
             format!(
-                "ambiguous effect: cannot match `<effect row>` with `<effect row>`, {ambiguous}"
+                "ambiguous ability: cannot match `<ability row>` with `<ability row>`, {ambiguous}"
             ),
-            format!("ambiguous effect: cannot match `{{e}}` with `{{}}`, {ambiguous}"),
+            format!("ambiguous ability: cannot match `{{e}}` with `{{}}`, {ambiguous}"),
         ),
     ] {
         assert_eq!(error.to_string(), detached);

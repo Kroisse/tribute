@@ -1,8 +1,8 @@
 //! Solver substitutions and binder-aware generalization.
 
 use super::{
-    EffectRow, EffectVar, HashMap, RowSubst, SmallVec, Type, TypeKind, TypeParam, TypeSubst,
-    UniVarId, map_effect_row_type_args,
+    AbilityRow, HashMap, RowSubst, RowVar, SmallVec, Type, TypeKind, TypeParam, TypeSubst,
+    UniVarId, map_ability_row_type_args,
 };
 
 impl<'db> TypeSubst<'db> {
@@ -26,13 +26,13 @@ impl<'db> TypeSubst<'db> {
     /// Apply the substitution to a type.
     ///
     /// Note: This delegates to `apply_with_rows` with an empty row substitution.
-    /// If you need to substitute effect row variables, use `apply_with_rows` directly
+    /// If you need to substitute ability row variables, use `apply_with_rows` directly
     /// with the appropriate `RowSubst`.
     pub fn apply(&self, db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
         self.apply_with_rows(db, ty, &RowSubst::new())
     }
 
-    /// Apply substitution to a type, including effect row substitution.
+    /// Apply substitution to a type, including ability row substitution.
     pub fn apply_with_rows(
         &self,
         db: &'db dyn salsa::Database,
@@ -72,7 +72,7 @@ impl<'db> TypeSubst<'db> {
                     .collect();
                 let result = self.apply_with_rows(db, *result, row_subst);
                 let row_applied = row_subst.apply(db, *effect);
-                let effect = map_effect_row_type_args(db, row_applied, |a| {
+                let effect = map_ability_row_type_args(db, row_applied, |a| {
                     self.apply_with_rows(db, a, row_subst)
                 });
                 Type::new(
@@ -107,7 +107,7 @@ impl<'db> TypeSubst<'db> {
                 let arg = self.apply_with_rows(db, *arg, row_subst);
                 let result = self.apply_with_rows(db, *result, row_subst);
                 let row_applied = row_subst.apply(db, *effect);
-                let effect = map_effect_row_type_args(db, row_applied, |a| {
+                let effect = map_ability_row_type_args(db, row_applied, |a| {
                     self.apply_with_rows(db, a, row_subst)
                 });
                 Type::new(
@@ -311,7 +311,7 @@ impl<'db> TypeSubst<'db> {
                         var_to_index,
                         local_vars,
                     ),
-                    effect: map_effect_row_type_args(db, row_subst.apply(db, *effect), |arg| {
+                    effect: map_ability_row_type_args(db, row_subst.apply(db, *effect), |arg| {
                         self.replace_univars_with_bound_and_local(
                             db,
                             arg,
@@ -384,7 +384,7 @@ impl<'db> TypeSubst<'db> {
                         var_to_index,
                         local_vars,
                     ),
-                    effect: map_effect_row_type_args(db, row_subst.apply(db, *effect), |entry| {
+                    effect: map_ability_row_type_args(db, row_subst.apply(db, *effect), |entry| {
                         self.replace_univars_with_bound_and_local(
                             db,
                             entry,
@@ -436,7 +436,7 @@ impl<'db> TypeSubst<'db> {
                     self.collect_univars_from_type(db, *p, row_subst, out);
                 }
                 self.collect_univars_from_type(db, *result, row_subst, out);
-                self.collect_univars_from_effect_row(db, *effect, row_subst, out);
+                self.collect_univars_from_ability_row(db, *effect, row_subst, out);
             }
             TypeKind::Named { args, .. } => {
                 for a in args {
@@ -461,22 +461,22 @@ impl<'db> TypeSubst<'db> {
             } => {
                 self.collect_univars_from_type(db, *arg, row_subst, out);
                 self.collect_univars_from_type(db, *result, row_subst, out);
-                self.collect_univars_from_effect_row(db, *effect, row_subst, out);
+                self.collect_univars_from_ability_row(db, *effect, row_subst, out);
             }
             _ => {}
         }
     }
 
-    /// Collect unresolved UniVarIds from an effect row's type arguments.
-    fn collect_univars_from_effect_row(
+    /// Collect unresolved UniVarIds from an ability row's type arguments.
+    fn collect_univars_from_ability_row(
         &self,
         db: &'db dyn salsa::Database,
-        effect: EffectRow<'db>,
+        effect: AbilityRow<'db>,
         row_subst: &RowSubst<'db>,
         out: &mut Vec<UniVarId<'db>>,
     ) {
         let applied = row_subst.apply(db, effect);
-        for e in applied.effects(db) {
+        for e in applied.instances(db) {
             for a in &e.args {
                 self.collect_univars_from_type(db, *a, row_subst, out);
             }
@@ -510,31 +510,31 @@ impl<'db> RowSubst<'db> {
     }
 
     /// Insert a mapping.
-    pub fn insert(&mut self, var: u64, row: EffectRow<'db>) {
+    pub fn insert(&mut self, var: u64, row: AbilityRow<'db>) {
         self.map.insert(var, row);
     }
 
     /// Look up a row variable.
-    pub fn get(&self, var: u64) -> Option<EffectRow<'db>> {
+    pub fn get(&self, var: u64) -> Option<AbilityRow<'db>> {
         self.map.get(&var).copied()
     }
 
     /// Make `var` the representative of the bare open row it resolves to,
     /// so finalized types name `var` instead of the solver's alias. A row
     /// that resolved to concrete effects or no tail is left unchanged.
-    pub(crate) fn make_representative(&mut self, db: &'db dyn salsa::Database, var: EffectVar) {
-        let resolved = self.apply(db, EffectRow::open(db, var));
+    pub(crate) fn make_representative(&mut self, db: &'db dyn salsa::Database, var: RowVar) {
+        let resolved = self.apply(db, AbilityRow::open(db, var));
         if let Some(alias) = resolved.rest(db)
             && alias != var
-            && resolved.effects(db).is_empty()
+            && resolved.instances(db).is_empty()
         {
             self.map.remove(&var.id);
-            self.map.insert(alias.id, EffectRow::open(db, var));
+            self.map.insert(alias.id, AbilityRow::open(db, var));
         }
     }
 
-    /// Apply substitution to an effect row.
-    pub fn apply(&self, db: &'db dyn salsa::Database, row: EffectRow<'db>) -> EffectRow<'db> {
+    /// Apply substitution to an ability row.
+    pub fn apply(&self, db: &'db dyn salsa::Database, row: AbilityRow<'db>) -> AbilityRow<'db> {
         let mut row = row;
         let mut visited = SmallVec::<[u64; 8]>::new();
         while let Some(var) = row.rest(db) {
@@ -546,14 +546,14 @@ impl<'db> RowSubst<'db> {
             }
             visited.push(var.id);
 
-            let mut effects = row.effects(db).to_vec();
-            for effect in subst_row.effects(db) {
+            let mut effects = row.instances(db).to_vec();
+            for effect in subst_row.instances(db) {
                 if !effects.contains(effect) {
                     effects.push(effect.clone());
                 }
             }
             let rest = subst_row.rest(db);
-            row = EffectRow::new(db, effects, rest);
+            row = AbilityRow::new(db, effects, rest);
         }
         row
     }

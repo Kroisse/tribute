@@ -12,9 +12,9 @@ use crate::ast::visit::{
     walk_pattern_mut, walk_stmt, walk_stmt_mut,
 };
 use crate::ast::{
-    CallingConvention, Decl, DeclEntry, EffectRow, EffectVar, Expr, ExprKind, HandlerArm,
-    HandlerKind, LocalId, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypedRef,
-    collect_effect_vars,
+    AbilityRow, CallingConvention, Decl, DeclEntry, Expr, ExprKind, HandlerArm, HandlerKind,
+    LocalId, NodeId, Pattern, PatternKind, ResolvedRef, RowVar, Stmt, Type, TypedRef,
+    collect_row_vars,
 };
 use crate::typeck::{RowSubst, TypeSubst};
 
@@ -87,7 +87,7 @@ fn split_local_lambdas<'db>(
         let mut shared = HashSet::default();
         // The row variables each binding quantifies, as its lambda spells
         // them.
-        let mut rows: HashMap<NodeId, Vec<EffectVar>> = HashMap::default();
+        let mut rows: HashMap<NodeId, Vec<RowVar>> = HashMap::default();
         function.body.for_each(|expr| {
             let ExprKind::Var(TypedRef {
                 resolved: ResolvedRef::Local { id, .. },
@@ -105,8 +105,8 @@ fn split_local_lambdas<'db>(
                 .filter(|instance| instance.binding == *binding);
             let spelled = instance.and_then(|instance| {
                 let signature = metadata.lambda_signatures.get(lambda)?;
-                let quantified = collect_effect_vars(db, instance.scheme.body(db));
-                let spelled = collect_effect_vars(db, signature.function_type);
+                let quantified = collect_row_vars(db, instance.scheme.body(db));
+                let spelled = collect_row_vars(db, signature.function_type);
                 (quantified.len() == spelled.len()).then(|| {
                     instance
                         .scheme
@@ -186,7 +186,7 @@ struct Split<'a, 'db> {
     db: &'db dyn salsa::Database,
     metadata: &'a mut MonomorphizeMetadata<'db>,
     copies: &'a [LambdaCopy],
-    rows: &'a HashMap<NodeId, Vec<EffectVar>>,
+    rows: &'a HashMap<NodeId, Vec<RowVar>>,
     next_local: u32,
 }
 
@@ -212,7 +212,7 @@ impl<'db> Split<'_, 'db> {
             for row in self.rows.get(pattern).into_iter().flatten() {
                 // Checked row variables are numbered from zero per function.
                 let id = (copy.variant.get() | 1 << 63).wrapping_add(renamed);
-                renaming.insert(row.id, EffectRow::open(self.db, EffectVar { id }));
+                renaming.insert(row.id, AbilityRow::open(self.db, RowVar { id }));
                 renamed += 1;
             }
         }

@@ -4,7 +4,7 @@ use std::fmt;
 
 use itertools::Itertools;
 
-use super::{Effect, EffectRow, Type, TypeKind};
+use super::{AbilityInstance, AbilityRow, Type, TypeKind};
 
 impl fmt::Display for Type<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -65,7 +65,7 @@ impl fmt::Display for TypeKind<'_> {
     }
 }
 
-impl fmt::Display for Effect<'_> {
+impl fmt::Display for AbilityInstance<'_> {
     /// Formats this effect for diagnostic messages.
     ///
     /// Produces strings like `"State(Int)"` or `"Console"`.
@@ -89,14 +89,14 @@ impl fmt::Display for Effect<'_> {
     }
 }
 
-impl fmt::Display for EffectRow<'_> {
+impl fmt::Display for AbilityRow<'_> {
     /// Format a canonical diagnostic row, hiding internal row-variable IDs.
     ///
     /// Open tails use the name `e`. Without an attached Salsa database,
-    /// displays `<effect row>`.
+    /// displays `<ability row>`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         salsa::with_attached_database(|db| {
-            let effects = self.effects(db);
+            let effects = self.instances(db);
             // The displayed strings are both the sort keys and the output.
             let sorted = effects.iter().map(ToString::to_string).sorted();
             write!(f, "{{{}", sorted.format(", "))?;
@@ -108,7 +108,7 @@ impl fmt::Display for EffectRow<'_> {
             }
             f.write_str("}")
         })
-        .unwrap_or_else(|| f.write_str("<effect row>"))
+        .unwrap_or_else(|| f.write_str("<ability row>"))
     }
 }
 

@@ -603,8 +603,8 @@ non-resumptive case를 식별해야 하므로 `Never`용 `anyref` placeholder는
 
 ### Ability row
 
-`tribute_control.func_sig`는 callable의 effect row를 `ability_row` type 속성으로
-가진다. IR은 이 row를 원소인 ability instance를 따라 ability row라고 부른다.
+`tribute_control.func_sig`는 callable의 ability row를 `ability_row` type 속성으로
+가진다.
 
 ```text
 tribute_control.func_sig<(T) -> R, {tribute.calling_convention = 2,
@@ -925,7 +925,7 @@ tribute_control.tail_call_indirect %callee, %arg0, ...
 - **검증:** local verifier는 callee signature와 argument type, 위치 규칙, callee
   result type과 감싼 callable result type의 일치, `evidence_plan` 형상을 검사한다.
   Callee type의 convention은 감싼 callable의 convention보다 강할 수 없다. 선택이
-  effect row와 맞는지는 typechecking이 책임진다.
+  ability row와 맞는지는 typechecking이 책임진다.
 - **소유권과 값 흐름:** `tribute_control.call_indirect`와 같이 environment,
   evidence, `ContinuationFrame<R>`는 operand가 아니다.
 - **위치:** `become` keyword와 indirect call을 포함한 source span이다.
@@ -1605,7 +1605,7 @@ Important stage invariants:
 | Stage | Required invariant |
 | ---- | ---- |
 | Resolution | Names, constructors, and variable references are resolved |
-| Type check | Type variables and effect rows are solved; method-style calls are converted to resolved calls |
+| Type check | Type variables and ability rows are solved; method-style calls are converted to resolved calls |
 | AST-to-IR | `tribute_control.func_sig`과 callable/control operation, valid SSA use chain |
 | Shared CPS legalization | 전체 callable graph가 physical `CallableAbi`와 direct/indirect tail transfer를 사용하며 `tribute_control` operation/type이 남지 않음 |
 | Shared lowering | 명시된 경계에서 high-level ability dispatch operation이 제거됨 |
@@ -1699,7 +1699,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 - Callable 결과로서의 `core.never`. 논리 CPS 결과는 물리 결과 목록 `[]`로 바뀐다.
 - 의미적 호출 규약과 제어 metadata: `tribute.calling_convention`,
   `tribute.cps_continuation_frame_result`, `tribute.closure_environment_index`
-- 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 effect row
+- 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 ability row
 
 출구 이후에도 보존하는 것:
 

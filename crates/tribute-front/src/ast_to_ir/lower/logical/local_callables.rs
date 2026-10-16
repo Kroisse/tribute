@@ -193,10 +193,10 @@ impl<'db> Plan<'db> {
 /// generic template. Local quantifiers and unsolved variables are not fixed.
 fn fixed_in_parent<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, parameters: usize) -> bool {
     let fixed = |ty| fixed_in_parent(db, ty, parameters);
-    let fixed_row = |row: crate::ast::EffectRow<'db>| {
+    let fixed_row = |row: crate::ast::AbilityRow<'db>| {
         row.rest(db).is_none()
             && row
-                .effects(db)
+                .instances(db)
                 .iter()
                 .all(|effect| effect.args.iter().copied().all(fixed))
     };
@@ -259,7 +259,7 @@ fn fixed_instance<'db>(
     {
         return false;
     }
-    let mut next_row = crate::ast::collect_effect_vars(db, instance.scheme.body(db))
+    let mut next_row = crate::ast::collect_row_vars(db, instance.scheme.body(db))
         .into_iter()
         .chain(instance.scheme.effect_params(db).iter().copied())
         .chain(instance.row_arguments.iter().flat_map(|row| {
@@ -271,7 +271,7 @@ fn fixed_instance<'db>(
                     effect: *row,
                 },
             );
-            crate::ast::collect_effect_vars(db, wrapper)
+            crate::ast::collect_row_vars(db, wrapper)
         }))
         .map(|var| var.id)
         .max()
@@ -281,7 +281,7 @@ fn fixed_instance<'db>(
         .row_arguments
         .iter()
         .map(|_| {
-            let var = crate::ast::EffectVar { id: next_row };
+            let var = crate::ast::RowVar { id: next_row };
             next_row += 1;
             var
         })
@@ -290,7 +290,7 @@ fn fixed_instance<'db>(
     // belong to the enclosing function and must survive row instantiation.
     let mut freshening = crate::typeck::RowSubst::new();
     for (owned, fresh) in instance.scheme.effect_params(db).iter().zip(&fresh) {
-        freshening.insert(owned.id, crate::ast::EffectRow::open(db, *fresh));
+        freshening.insert(owned.id, crate::ast::AbilityRow::open(db, *fresh));
     }
     let selected =
         crate::typeck::TypeSubst::new().apply_with_rows(db, instance.scheme.body(db), &freshening);
@@ -310,7 +310,7 @@ fn fixed_instance<'db>(
     };
     // Aliases can rename an owned latent row, but cannot introduce effects or
     // turn a free environment row into a newly quantified row.
-    if scheme_effect.effects(db) != effect.effects(db)
+    if scheme_effect.instances(db) != effect.instances(db)
         || match scheme_effect.rest(db) {
             Some(row) => instance.scheme.effect_params(db) != [row],
             None => !instance.scheme.effect_params(db).is_empty(),
@@ -321,7 +321,7 @@ fn fixed_instance<'db>(
     let changes_row = |ty| {
         effect
             .rest(db)
-            .is_some_and(|row| crate::ast::collect_effect_vars(db, ty).contains(&row))
+            .is_some_and(|row| crate::ast::collect_row_vars(db, ty).contains(&row))
     };
     let mut independent = true;
     body.for_each(|expr| {

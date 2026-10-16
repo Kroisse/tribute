@@ -18,8 +18,8 @@ use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
 use crate::SortedMap;
 use crate::ast::{
-    AbilityId, CallingConvention, CtorId, EffectVar, LocalId, NodeId, RowClasses, SpanMap,
-    TypeKind, TypeScheme,
+    AbilityId, CallingConvention, CtorId, LocalId, NodeId, RowClasses, RowVar, SpanMap, TypeKind,
+    TypeScheme,
 };
 
 /// Encode a tagged type-shape node without relying on separator characters in
@@ -115,9 +115,9 @@ pub struct IrLoweringCtx<'db> {
     /// Exact intrinsic-directive declaration ID to canonical identity.
     compiler_intrinsics: HashMap<NodeId, Symbol>,
     /// Convention classes of the class variables of each function instance.
-    row_classes: HashMap<SymbolPath, Vec<(EffectVar, CallingConvention)>>,
+    row_classes: HashMap<SymbolPath, Vec<(RowVar, CallingConvention)>>,
     /// The classes of the definition whose types are being read.
-    current_row_classes: Vec<(EffectVar, CallingConvention)>,
+    current_row_classes: Vec<(RowVar, CallingConvention)>,
     /// The `==` functions that `String` and `Bytes` literal patterns call.
     literal_equalities: LiteralEqualities,
     /// Node types from type checking, keyed by NodeId.
@@ -187,7 +187,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     pub(crate) fn with_row_classes(
         mut self,
-        row_classes: HashMap<SymbolPath, Vec<(EffectVar, CallingConvention)>>,
+        row_classes: HashMap<SymbolPath, Vec<(RowVar, CallingConvention)>>,
     ) -> Self {
         self.row_classes = row_classes;
         self
@@ -200,15 +200,12 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Read types as the definition `name` sees them, and return the classes
     /// to restore with [`Self::leave_definition`].
-    pub(crate) fn enter_definition(
-        &mut self,
-        name: &[Symbol],
-    ) -> Vec<(EffectVar, CallingConvention)> {
+    pub(crate) fn enter_definition(&mut self, name: &[Symbol]) -> Vec<(RowVar, CallingConvention)> {
         let classes = self.row_classes.get(name).cloned().unwrap_or_default();
         std::mem::replace(&mut self.current_row_classes, classes)
     }
 
-    pub(crate) fn leave_definition(&mut self, outer: Vec<(EffectVar, CallingConvention)>) {
+    pub(crate) fn leave_definition(&mut self, outer: Vec<(RowVar, CallingConvention)>) {
         self.current_row_classes = outer;
     }
 
@@ -398,7 +395,7 @@ impl<'db> IrLoweringCtx<'db> {
         self.logical_emitted_externs.insert(name)
     }
 
-    /// Derive a function convention from both its effect row and ABI lower bound.
+    /// Derive a function convention from both its ability row and ABI lower bound.
     pub(crate) fn calling_convention_for_type(
         &self,
         ty: crate::ast::Type<'db>,
@@ -420,12 +417,12 @@ impl<'db> IrLoweringCtx<'db> {
         )
     }
 
-    /// Derive a convention from an effect row without a function-level ABI bound.
-    pub(crate) fn calling_convention_for_effect_row(
+    /// Derive a convention from an ability row without a function-level ABI bound.
+    pub(crate) fn calling_convention_for_ability_row(
         &self,
-        effect: crate::ast::EffectRow<'db>,
+        effect: crate::ast::AbilityRow<'db>,
     ) -> CallingConvention {
-        crate::ast::calling_convention_for_effect_row_in(
+        crate::ast::calling_convention_for_ability_row_in(
             self.db,
             effect,
             &self.ability_conventions,
@@ -708,7 +705,7 @@ impl<'db> IrLoweringCtx<'db> {
     fn source_type_key(
         &self,
         ty: crate::ast::Type<'db>,
-        row_vars: &mut Vec<crate::ast::EffectVar>,
+        row_vars: &mut Vec<crate::ast::RowVar>,
     ) -> String {
         match ty.kind(self.db) {
             TypeKind::Named { id, args, .. } => {
@@ -784,16 +781,16 @@ impl<'db> IrLoweringCtx<'db> {
         )
     }
 
-    /// Key an effect row with its abilities in canonical order. Row variables
+    /// Key an ability row with its abilities in canonical order. Row variables
     /// are numbered by first appearance within the instance key, so the key
     /// does not depend on inference numbering.
     fn source_row_key(
         &self,
-        row: crate::ast::EffectRow<'db>,
-        row_vars: &mut Vec<crate::ast::EffectVar>,
+        row: crate::ast::AbilityRow<'db>,
+        row_vars: &mut Vec<crate::ast::RowVar>,
     ) -> String {
         let mut effects: Vec<String> = row
-            .effects(self.db)
+            .instances(self.db)
             .iter()
             .map(|effect| {
                 let mut parts = vec![effect.ability_id.qualified(self.db).with_str(str::to_owned)];
@@ -1013,7 +1010,7 @@ mod tests {
     fn func_type<'db>(
         db: &'db salsa::DatabaseImpl,
         params: Vec<AstType<'db>>,
-        effect: crate::ast::EffectRow<'db>,
+        effect: crate::ast::AbilityRow<'db>,
     ) -> AstType<'db> {
         AstType::new(
             db,
@@ -1028,18 +1025,18 @@ mod tests {
     /// Row variables are keyed by first appearance, not by inference ids, and
     /// effects are keyed in canonical order.
     #[test]
-    fn ability_instance_key_normalizes_effect_rows() {
-        use crate::ast::{Effect, EffectRow, EffectVar};
+    fn ability_instance_key_normalizes_ability_rows() {
+        use crate::ast::{AbilityInstance, AbilityRow, RowVar};
 
         let db = test_db();
         let mut ir = IrContext::new();
         let ctx = lowering_ctx(&db, &mut ir);
         let ability = Symbol::new("State");
-        let effect = |name: &str| Effect {
+        let effect = |name: &str| AbilityInstance {
             ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::new([name])),
             args: vec![],
         };
-        let open = |id, effects| EffectRow::new(&db, effects, Some(EffectVar { id }));
+        let open = |id, effects| AbilityRow::new(&db, effects, Some(RowVar { id }));
         let key = |row| ctx.ability_instance_key(&ability, &[func_type(&db, vec![], row)]);
 
         assert_eq!(key(open(3, vec![])), key(open(9, vec![])));
@@ -1049,7 +1046,7 @@ mod tests {
         );
         assert_ne!(
             key(open(3, vec![effect("Ask")])),
-            key(EffectRow::new(&db, vec![effect("Ask")], None))
+            key(AbilityRow::new(&db, vec![effect("Ask")], None))
         );
 
         let shared = |a, b| {
@@ -1098,7 +1095,7 @@ mod tests {
                 TypeKind::Continuation {
                     arg: nat,
                     result: int,
-                    effect: crate::ast::EffectRow::pure(&db),
+                    effect: crate::ast::AbilityRow::pure(&db),
                 },
             ),
             named(crate::ast::TypeDefId::builtin_list(&db)),
@@ -1153,7 +1150,7 @@ mod tests {
             SortedMap::default(),
         );
         let int = AstType::new(&db, TypeKind::Int);
-        let effect = crate::ast::EffectRow::pure(&db);
+        let effect = crate::ast::AbilityRow::pure(&db);
         let callable = AstType::new(
             &db,
             TypeKind::Func {

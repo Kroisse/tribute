@@ -25,35 +25,35 @@ use rustc_hash::FxHashMap as HashMap;
 use trunk_ir::smallvec::SmallVec;
 
 use crate::ast::{
-    Effect, EffectRow, EffectVar, NodeId, Type, TypeKind, TypeParam, UniVarId, UniVarSource,
-    collect_effect_vars,
+    AbilityInstance, AbilityRow, NodeId, RowVar, Type, TypeKind, TypeParam, UniVarId, UniVarSource,
+    collect_row_vars,
 };
 
 use super::constraint::{Constraint, ConstraintOrigin, ConstraintSet};
 
-/// Apply a type-transforming function to all effect type arguments in an effect row.
+/// Apply a type-transforming function to all effect type arguments in an ability row.
 ///
 /// This is the shared logic used by `apply_with_rows`, `replace_univars_with_bound`,
 /// and `apply_type_subst_to_row`: map each effect's type args through `f`, then
 /// rebuild the row only if something changed.
-pub(super) fn map_effect_row_type_args<'db>(
+pub(super) fn map_ability_row_type_args<'db>(
     db: &'db dyn salsa::Database,
-    row: EffectRow<'db>,
+    row: AbilityRow<'db>,
     mut f: impl FnMut(Type<'db>) -> Type<'db>,
-) -> EffectRow<'db> {
-    let effects = row.effects(db);
+) -> AbilityRow<'db> {
+    let effects = row.instances(db);
     let new_effects: Vec<_> = effects
         .iter()
         .map(|e| {
             let new_args: Vec<_> = e.args.iter().map(|a| f(*a)).collect();
-            Effect {
+            AbilityInstance {
                 ability_id: e.ability_id,
                 args: new_args,
             }
         })
         .collect();
     if new_effects != *effects {
-        EffectRow::new(db, new_effects, row.rest(db))
+        AbilityRow::new(db, new_effects, row.rest(db))
     } else {
         row
     }
@@ -68,7 +68,7 @@ pub struct TypeSubst<'db> {
 /// Row substitution: maps row variable IDs to effect rows.
 #[derive(Clone, Debug, Default)]
 pub struct RowSubst<'db> {
-    map: HashMap<u64, EffectRow<'db>>,
+    map: HashMap<u64, AbilityRow<'db>>,
 }
 
 /// Type constraint solver.
@@ -90,7 +90,7 @@ pub struct TypeSolver<'db> {
     )>,
     /// Row equalities that wait for a pending relation to name the labels of a
     /// row tail (see [`Self::waits_for_relation`]).
-    pending_row_eqs: Vec<(EffectRow<'db>, EffectRow<'db>, Option<ConstraintOrigin>)>,
+    pending_row_eqs: Vec<(AbilityRow<'db>, AbilityRow<'db>, Option<ConstraintOrigin>)>,
     /// The origin of the equality constraint being solved.
     current_origin: Option<ConstraintOrigin>,
     /// Set while a relation unifies its own rows, which never wait.
@@ -99,14 +99,14 @@ pub struct TypeSolver<'db> {
     pending_producers: Vec<PendingProducer<'db>>,
     /// Row variables of the checked function's signature. Unification keeps
     /// them as the representative of an alias instead of renaming them.
-    rigid_rows: Vec<EffectVar>,
+    rigid_rows: Vec<RowVar>,
 }
 
 struct PendingProducer<'db> {
     node_id: NodeId,
     result: Type<'db>,
     inputs: Vec<Type<'db>>,
-    effect: EffectRow<'db>,
+    effect: AbilityRow<'db>,
 }
 
 impl<'db> TypeSolver<'db> {
@@ -129,7 +129,7 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Declare the checked function's signature rows.
-    pub(crate) fn set_rigid_rows(&mut self, rows: impl IntoIterator<Item = EffectVar>) {
+    pub(crate) fn set_rigid_rows(&mut self, rows: impl IntoIterator<Item = RowVar>) {
         self.rigid_rows = rows.into_iter().collect();
     }
 
@@ -144,7 +144,7 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Make each `var` the representative of the bare open row it resolved to.
-    pub(crate) fn make_row_representatives(&mut self, vars: impl IntoIterator<Item = EffectVar>) {
+    pub(crate) fn make_row_representatives(&mut self, vars: impl IntoIterator<Item = RowVar>) {
         for var in vars {
             self.row_subst.make_representative(self.db, var);
         }
@@ -163,7 +163,7 @@ impl<'db> TypeSolver<'db> {
         node_id: NodeId,
         result: Type<'db>,
         inputs: Vec<Type<'db>>,
-        effect: EffectRow<'db>,
+        effect: AbilityRow<'db>,
     ) {
         if !self
             .pending_producers
@@ -185,7 +185,7 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Variables in an unresolved relation cannot be quantified independently.
-    pub fn pending_variables(&self) -> (Vec<UniVarId<'db>>, Vec<EffectVar>) {
+    pub fn pending_variables(&self) -> (Vec<UniVarId<'db>>, Vec<RowVar>) {
         let mut types = Vec::new();
         for producer in &self.pending_producers {
             types.push(producer.result);
@@ -208,7 +208,7 @@ impl<'db> TypeSolver<'db> {
         for producer in &self.pending_producers {
             let row = self.normalize_row(producer.effect);
             types.extend(
-                row.effects(self.db)
+                row.instances(self.db)
                     .iter()
                     .flat_map(|effect| effect.args.clone()),
             );
@@ -220,7 +220,7 @@ impl<'db> TypeSolver<'db> {
                 .apply_with_rows(self.db, ty, &self.row_subst);
             self.type_subst
                 .collect_univars_from_type(self.db, ty, &self.row_subst, &mut vars);
-            for effect in collect_effect_vars(self.db, ty) {
+            for effect in collect_row_vars(self.db, ty) {
                 if !effects.contains(&effect) {
                     effects.push(effect);
                 }
@@ -376,70 +376,70 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Generate a fresh row variable for post-solve instantiation.
-    pub(super) fn fresh_row_var(&mut self) -> EffectVar {
+    pub(super) fn fresh_row_var(&mut self) -> RowVar {
         let id = self.next_row_var;
         self.next_row_var += 1;
-        EffectVar { id }
+        RowVar { id }
     }
 
-    pub(crate) fn reserve_effect_vars_in_type(&mut self, ty: Type<'db>) {
-        for var in collect_effect_vars(self.db, ty) {
-            self.reserve_effect_var(var);
+    pub(crate) fn reserve_row_vars_in_type(&mut self, ty: Type<'db>) {
+        for var in collect_row_vars(self.db, ty) {
+            self.reserve_row_var(var);
         }
     }
 
-    fn reserve_effect_var(&mut self, var: EffectVar) {
+    fn reserve_row_var(&mut self, var: RowVar) {
         let next = var
             .id
             .checked_add(1)
-            .expect("cannot allocate an effect variable after u64::MAX");
+            .expect("cannot allocate an row variable after u64::MAX");
         self.next_row_var = self.next_row_var.max(next);
     }
 
-    pub(crate) fn reserve_effect_vars_in_row(&mut self, row: EffectRow<'db>) {
+    pub(crate) fn reserve_row_vars_in_row(&mut self, row: AbilityRow<'db>) {
         if let Some(var) = row.rest(self.db) {
-            self.reserve_effect_var(var);
+            self.reserve_row_var(var);
         }
-        for effect in row.effects(self.db) {
+        for effect in row.instances(self.db) {
             for arg in &effect.args {
-                self.reserve_effect_vars_in_type(*arg);
+                self.reserve_row_vars_in_type(*arg);
             }
         }
     }
 
-    fn reserve_effect_vars_in_constraint(&mut self, constraint: &Constraint<'db>) {
+    fn reserve_row_vars_in_constraint(&mut self, constraint: &Constraint<'db>) {
         match constraint {
             Constraint::TypeEq(left, right)
             | Constraint::TypeEqAt(left, right, _)
             | Constraint::TypeCoerce(left, right, _) => {
-                self.reserve_effect_vars_in_type(*left);
-                self.reserve_effect_vars_in_type(*right);
+                self.reserve_row_vars_in_type(*left);
+                self.reserve_row_vars_in_type(*right);
             }
             Constraint::TypeJoin {
                 sources, result, ..
             } => {
-                self.reserve_effect_vars_in_type(*result);
+                self.reserve_row_vars_in_type(*result);
                 for (source, _) in sources {
-                    self.reserve_effect_vars_in_type(*source);
+                    self.reserve_row_vars_in_type(*source);
                 }
             }
             Constraint::RowEq(left, right) | Constraint::RowEqAt(left, right, _) => {
-                self.reserve_effect_vars_in_row(*left);
-                self.reserve_effect_vars_in_row(*right);
+                self.reserve_row_vars_in_row(*left);
+                self.reserve_row_vars_in_row(*right);
             }
             Constraint::RowRemoval(removal, _) => {
                 for row in removal.rows() {
-                    self.reserve_effect_vars_in_row(row);
+                    self.reserve_row_vars_in_row(row);
                 }
             }
             Constraint::RowUnion(union, _) => {
                 for row in union.sources.iter().chain(std::iter::once(&union.result)) {
-                    self.reserve_effect_vars_in_row(*row);
+                    self.reserve_row_vars_in_row(*row);
                 }
             }
             Constraint::And(constraints) => {
                 for constraint in constraints {
-                    self.reserve_effect_vars_in_constraint(constraint);
+                    self.reserve_row_vars_in_constraint(constraint);
                 }
             }
         }
@@ -461,7 +461,7 @@ impl<'db> TypeSolver<'db> {
         constraints: ConstraintSet<'db>,
     ) -> Result<(), LocatedSolveError<'db>> {
         for constraint in constraints.constraints() {
-            self.reserve_effect_vars_in_constraint(constraint);
+            self.reserve_row_vars_in_constraint(constraint);
         }
         let constraints_vec = constraints.into_constraints();
         let mut first_error: Option<LocatedSolveError<'db>> = None;

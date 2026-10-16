@@ -393,7 +393,7 @@ user.age::modify(fn(n) n + 1)    // User::age::modify(user, fn(n) n + 1)
 - Generic struct에서는 세 함수 모두 struct의 타입 매개변수를 그대로 받는다.
   Setter와 modifier는 타입 인자를 바꾸지 않는다(spread와 같은 규칙).
   `struct Box(a) { value: a }`이면 `Box::value::set : fn(Box(a), a) -> Box(a)`이다.
-- Modifier는 콜백의 effect row에 대해 다형적이다:
+- Modifier는 콜백의 ability row에 대해 다형적이다:
   `T::f::modify : fn(T, fn(F) ->{e} F) ->{e} T`. Getter와 setter는 순수하다.
 - `T::f`는 값 namespace의 getter이면서 `set`·`modify`를 담는 모듈 `T::f`이기도
   하다. Companion `mod T`가 `f::set`이나 `f::modify`를 직접 선언하면 생성된

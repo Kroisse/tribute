@@ -2,7 +2,7 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "type error in function 'test': effect mismatch: expected `{Foo}`, found `{Bar, Foo}`"
+- message: "type error in function 'test': ability row mismatch: expected `{Foo}`, found `{Bar, Foo}`"
   span:
     start: 75
     end: 115

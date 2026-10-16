@@ -94,7 +94,7 @@ impl<'db> TypeChecker<'db> {
             ctx.bind_local_by_name(param.name.clone(), ty);
         }
 
-        // Set effect row from the function's declared type before checking
+        // Set ability row from the function's declared type before checking
         // body. An omitted annotation is exactly a fresh `->{e}`; the body's
         // effects never widen the declared row.
         let declared_effect =
@@ -152,8 +152,8 @@ impl<'db> TypeChecker<'db> {
         let func_perform_operations = ctx.take_perform_operations();
         let func_lambda_signatures = ctx.take_lambda_signatures();
         let local_generalizations = ctx.take_local_generalizations();
-        // Save the accumulated effect row from the body before dropping ctx
-        let body_effect_row = ctx.current_effect();
+        // Save the accumulated ability row from the body before dropping ctx
+        let body_ability_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
         let deferred_methods = ctx.take_deferred_methods();
         let become_method_operands = ctx.take_become_method_operands();
@@ -372,7 +372,7 @@ impl<'db> TypeChecker<'db> {
             if !solve_failed
                 && !reported_undeclared
                 && let Some(undeclared) =
-                    self.undeclared_effects(declared, row_subst.apply(self.db(), body_effect_row))
+                    self.undeclared_effects(declared, row_subst.apply(self.db(), body_ability_row))
             {
                 // The body may perform only the concrete effects the signature
                 // declares; the declared tail stands for the caller's effects.
@@ -383,7 +383,7 @@ impl<'db> TypeChecker<'db> {
             // Root `main` may leave only the ambient `Io` unhandled.
             if is_root_main {
                 let unhandled = declared
-                    .effects(self.db())
+                    .instances(self.db())
                     .iter()
                     .filter(|effect| !effect.ability_id.is_builtin_io(self.db()))
                     .collect_vec();
@@ -487,7 +487,7 @@ impl<'db> TypeChecker<'db> {
                 .row_arguments
                 .into_iter()
                 .map(|row| {
-                    crate::typeck::solver::map_effect_row_type_args(
+                    crate::typeck::solver::map_ability_row_type_args(
                         self.db(),
                         row_subst.apply(self.db(), row),
                         map_type,
@@ -508,7 +508,7 @@ impl<'db> TypeChecker<'db> {
                 .into_iter()
                 .map(|row| {
                     let row = row_subst.apply(self.db(), row);
-                    crate::typeck::solver::map_effect_row_type_args(self.db(), row, |ty| {
+                    crate::typeck::solver::map_ability_row_type_args(self.db(), row, |ty| {
                         substitution.apply(ty)
                     })
                 })
@@ -517,7 +517,7 @@ impl<'db> TypeChecker<'db> {
         }
         checked.evidence_plans = evidence.plans(self.db(), |row| {
             let row = row_subst.apply(self.db(), row);
-            crate::typeck::solver::map_effect_row_type_args(self.db(), row, |ty| {
+            crate::typeck::solver::map_ability_row_type_args(self.db(), row, |ty| {
                 substitution.apply(ty)
             })
         });
@@ -687,7 +687,7 @@ impl<'db> TypeChecker<'db> {
         solver: &TypeSolver<'db>,
         call: &crate::typeck::func_context::DeferredMethodCall<'db>,
         callee: Type<'db>,
-        slack: crate::ast::EffectVar,
+        slack: crate::ast::RowVar,
     ) -> Vec<super::super::constraint::Constraint<'db>> {
         use super::super::constraint::Constraint;
         let TypeKind::Func {
@@ -838,16 +838,16 @@ impl<'db> TypeChecker<'db> {
     /// Concrete effects of `body` that `declared` does not name.
     fn undeclared_effects(
         &self,
-        declared: crate::ast::EffectRow<'db>,
-        body: crate::ast::EffectRow<'db>,
-    ) -> Option<Vec<crate::ast::Effect<'db>>> {
+        declared: crate::ast::AbilityRow<'db>,
+        body: crate::ast::AbilityRow<'db>,
+    ) -> Option<Vec<crate::ast::AbilityInstance<'db>>> {
         let declared_ids: HashSet<_> = declared
-            .effects(self.db())
+            .instances(self.db())
             .iter()
             .map(|effect| effect.ability_id)
             .collect();
         let undeclared: Vec<_> = body
-            .effects(self.db())
+            .instances(self.db())
             .iter()
             .filter(|effect| !declared_ids.contains(&effect.ability_id))
             .cloned()
@@ -862,7 +862,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         func: &FuncDecl<ResolvedRef<'db>>,
         is_root_main: bool,
-        undeclared: &[crate::ast::Effect<'db>],
+        undeclared: &[crate::ast::AbilityInstance<'db>],
     ) {
         let (unhandled, undeclared): (Vec<_>, Vec<_>) = undeclared
             .iter()
@@ -889,7 +889,7 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Report signature rows whose effects the body propagates into the
-    /// function's own effect row without the signature saying so.
+    /// function's own ability row without the signature saying so.
     ///
     /// Calling a callback whose row is not the function's own joins that row
     /// into the function's effects through a retained union. The signature
@@ -905,7 +905,7 @@ impl<'db> TypeChecker<'db> {
         row_subst: &crate::typeck::solver::RowSubst<'db>,
     ) -> bool {
         let db = self.db();
-        let tail = |row: &crate::ast::EffectRow<'db>| row_subst.apply(db, *row).rest(db);
+        let tail = |row: &crate::ast::AbilityRow<'db>| row_subst.apply(db, *row).rest(db);
         let Some(own) = (match instance.ty.kind(db) {
             TypeKind::Func { effect, .. } => tail(effect),
             _ => None,
@@ -928,8 +928,7 @@ impl<'db> TypeChecker<'db> {
         }
 
         // Rows each row flows into through the body's retained unions.
-        let mut flows: HashMap<crate::ast::EffectVar, Vec<crate::ast::EffectVar>> =
-            HashMap::default();
+        let mut flows: HashMap<crate::ast::RowVar, Vec<crate::ast::RowVar>> = HashMap::default();
         for union in retained {
             if let Some(result) = tail(&union.result) {
                 for source in union.sources.iter().filter_map(tail) {
@@ -937,7 +936,7 @@ impl<'db> TypeChecker<'db> {
                 }
             }
         }
-        let reaches_own = |start: crate::ast::EffectVar| {
+        let reaches_own = |start: crate::ast::RowVar| {
             let mut seen = [start].into_iter().collect::<HashSet<_>>();
             let mut pending = vec![start];
             while let Some(row) = pending.pop() {
@@ -962,7 +961,7 @@ impl<'db> TypeChecker<'db> {
             Diagnostic::new(
                 format!(
                     "function '{}' performs the effects of {} without declaring them; \
-                     use the same effect variable in its own effect row",
+                     use the same row variable in its own ability row",
                     func.name,
                     self.signature_row_name(func_id, scheme, index),
                 ),
@@ -989,11 +988,11 @@ impl<'db> TypeChecker<'db> {
     ) -> bool {
         let db = self.db();
         let scheme = *scheme;
-        let row_name = |var: Option<crate::ast::EffectVar>| match var
+        let row_name = |var: Option<crate::ast::RowVar>| match var
             .and_then(|var| scheme.effect_params(db).iter().position(|p| *p == var))
         {
             Some(index) => self.signature_row_name(func_id, scheme, index),
-            None => "an inferred effect row".to_owned(),
+            None => "an inferred ability row".to_owned(),
         };
         let mut messages = Vec::new();
         let declared: Vec<_> = instance
@@ -1008,9 +1007,9 @@ impl<'db> TypeChecker<'db> {
         for removal in removals {
             let removed = removal
                 .removed
-                .effects(db)
+                .instances(db)
                 .iter()
-                .filter(|effect| !removal.source.effects(db).contains(effect))
+                .filter(|effect| !removal.source.instances(db).contains(effect))
                 .collect_vec();
             // Every handled label is named in the source, but an unresolved
             // ability argument leaves which instance it removes open.
@@ -1019,14 +1018,14 @@ impl<'db> TypeChecker<'db> {
                     "function '{}' handles {} from {} without its signature determining \
                      which effect instance that is",
                     func.name,
-                    removal.removed.effects(db).iter().format(", "),
+                    removal.removed.instances(db).iter().format(", "),
                     row_name(removal.source.rest(db)),
                 ));
                 continue;
             }
             messages.push(format!(
                 "function '{}' handles {} from {} without declaring {} there; \
-                 add {} to that effect row",
+                 add {} to that ability row",
                 func.name,
                 removed.iter().format(", "),
                 row_name(removal.source.rest(db)),
@@ -1036,7 +1035,7 @@ impl<'db> TypeChecker<'db> {
         }
         for union in unions.iter().filter(|union| !declared.contains(union)) {
             messages.push(format!(
-                "function '{}' joins {} into an effect row its signature does not declare",
+                "function '{}' joins {} into an ability row its signature does not declare",
                 func.name,
                 union
                     .sources
@@ -1072,8 +1071,8 @@ impl<'db> TypeChecker<'db> {
             .flatten()
             .find(|(_, candidate)| Some(**candidate) == var)
             .map_or_else(
-                || "an omitted effect row".to_owned(),
-                |(name, _)| format!("effect variable `{name}`"),
+                || "an omitted ability row".to_owned(),
+                |(name, _)| format!("row variable `{name}`"),
             )
     }
 
@@ -1082,7 +1081,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         func: &FuncDecl<ResolvedRef<'db>>,
         func_id: FuncDefId<'db>,
-        resolved_declared: crate::ast::EffectRow<'db>,
+        resolved_declared: crate::ast::AbilityRow<'db>,
     ) -> bool {
         let Some(origins) = self.effect_annotation_origins.get(&func_id) else {
             return false;
@@ -1091,7 +1090,7 @@ impl<'db> TypeChecker<'db> {
             origins.find_duplicate(self.db(), resolved_declared)
         {
             let message = format!(
-                "function '{}' declares duplicate effect: {}",
+                "function '{}' declares duplicate ability: {}",
                 func.name,
                 duplicate.effects.iter().format(", "),
             );
@@ -1120,7 +1119,7 @@ impl<'db> TypeChecker<'db> {
         )
         .label(
             self.get_span(duplicate.first_annotation_id),
-            "first matching effect annotation is here",
+            "first matching ability annotation is here",
         )
         .build()
         .accumulate(self.db());
@@ -1191,7 +1190,7 @@ impl<'db> TypeChecker<'db> {
             }
         }
 
-        let row_names: HashMap<crate::ast::EffectVar, Symbol> = self
+        let row_names: HashMap<crate::ast::RowVar, Symbol> = self
             .signature_row_names
             .get(&func_id)
             .into_iter()
@@ -1204,15 +1203,15 @@ impl<'db> TypeChecker<'db> {
                 .get(index)
                 .and_then(|var| row_names.get(var))
                 .map_or_else(
-                    || "an omitted effect row".to_owned(),
-                    |name| format!("effect variable `{name}`"),
+                    || "an omitted ability row".to_owned(),
+                    |name| format!("row variable `{name}`"),
                 )
         };
         let own_tail = match instance.ty.kind(db) {
             TypeKind::Func { effect, .. } => effect.rest(db),
             _ => None,
         };
-        let mut seen_rows: HashMap<crate::ast::EffectVar, usize> = HashMap::default();
+        let mut seen_rows: HashMap<crate::ast::RowVar, usize> = HashMap::default();
         for (index, row) in instance.row_args.iter().enumerate() {
             let resolved = row_subst.apply(db, *row);
             let Some(tail) = resolved.rest(db) else {
@@ -1231,12 +1230,12 @@ impl<'db> TypeChecker<'db> {
                     func.name,
                 ));
             }
-            if row.rest(db) != own_tail && !resolved.effects(db).is_empty() {
+            if row.rest(db) != own_tail && !resolved.instances(db).is_empty() {
                 report(format!(
                     "{} in the signature of `{}` has {} in its body",
                     row_name(index),
                     func.name,
-                    resolved.effects(db).iter().format(", "),
+                    resolved.instances(db).iter().format(", "),
                 ));
             }
         }
@@ -1270,7 +1269,7 @@ impl<'db> TypeChecker<'db> {
         let param_types: Vec<Type<'db>> =
             func.params.iter().map(|_| ctx.fresh_type_var()).collect();
         let return_ty = ctx.fresh_type_var();
-        let effect = ctx.fresh_effect_row();
+        let effect = ctx.fresh_ability_row();
         let func_ty = ctx.func_type(param_types.clone(), return_ty, effect);
         (param_types, return_ty, func_ty, None)
     }

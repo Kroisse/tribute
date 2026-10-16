@@ -511,7 +511,7 @@ fn main() -> Nil {
 }
 
 #[salsa_test]
-fn diag_effect_row_mismatch(db: &salsa::DatabaseImpl) {
+fn diag_ability_row_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",

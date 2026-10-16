@@ -5,8 +5,8 @@ use tribute_core::Diagnostic;
 use tribute_front::{
     SourceCst,
     ast::{
-        AbilityId, Decl, Effect, EffectRow, EffectVar, RowRemoval, RowUnion, Type, TypeDefId,
-        TypeKind, TypeParam,
+        AbilityId, AbilityInstance, AbilityRow, Decl, RowRemoval, RowUnion, RowVar, Type,
+        TypeDefId, TypeKind, TypeParam,
     },
     typeck::TypeCheckOutput,
 };
@@ -47,9 +47,9 @@ fn prepare_root<'db>(
             args: vec![Type::new(db, TypeKind::Nat)],
         },
     );
-    let row = EffectRow::single(
+    let row = AbilityRow::single(
         db,
-        Effect {
+        AbilityInstance {
             ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Marker"])),
             args: vec![packet],
         },
@@ -84,7 +84,7 @@ fn prepare_root<'db>(
         Root::RowArgument => {
             *scheme = tribute_front::ast::TypeScheme::builder(
                 scheme.type_params(db).to_vec(),
-                vec![EffectVar { id: 999 }],
+                vec![RowVar { id: 999 }],
                 scheme.body(db),
             )
             .build(db);
@@ -96,7 +96,7 @@ fn prepare_root<'db>(
                 .row_removals(vec![RowRemoval {
                     source: row,
                     removed: row,
-                    result: EffectRow::pure(db),
+                    result: AbilityRow::pure(db),
                 }])
                 .build(db)
         }
@@ -169,9 +169,9 @@ fn main() -> Nil { marker() }
         .1;
     let ty = match root {
         Root::TypeArgument => instance.type_arguments[0],
-        Root::RowArgument => instance.row_arguments[0].effects(db)[0].args[0],
-        Root::Union => marker.row_unions(db)[0].result.effects(db)[0].args[0],
-        Root::Removal => marker.row_removals(db)[0].removed.effects(db)[0].args[0],
+        Root::RowArgument => instance.row_arguments[0].instances(db)[0].args[0],
+        Root::Union => marker.row_unions(db)[0].result.instances(db)[0].args[0],
+        Root::Removal => marker.row_removals(db)[0].removed.instances(db)[0].args[0],
         Root::ConstructorUnion => {
             prepared
                 .constructor_types(db)
@@ -182,7 +182,7 @@ fn main() -> Nil { marker() }
                 .1
                 .row_unions(db)[0]
                 .result
-                .effects(db)[0]
+                .instances(db)[0]
                 .args[0]
         }
     };

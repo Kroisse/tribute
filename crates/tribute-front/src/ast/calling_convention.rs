@@ -2,11 +2,11 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use super::{AbilityId, EffectRow, EffectVar, OpDeclKind, Type, TypeKind};
+use super::{AbilityId, AbilityRow, OpDeclKind, RowVar, Type, TypeKind};
 pub use tribute_core::CallingConvention;
 
 /// The convention class of each class variable of one function instance.
-pub type RowClasses = [(EffectVar, CallingConvention)];
+pub type RowClasses = [(RowVar, CallingConvention)];
 
 /// The convention each ability requires of a callable whose row names it:
 /// `Cps` when it declares an `op`, `EvidenceDirect` otherwise.
@@ -26,28 +26,28 @@ pub fn ability_conventions<'db>(
         .collect()
 }
 
-/// Derive a convention from an effect row and ability-level requirements.
+/// Derive a convention from an ability row and ability-level requirements.
 ///
 /// Unknown abilities and open row tails conservatively require CPS.
-pub fn calling_convention_for_effect_row<'db>(
+pub fn calling_convention_for_ability_row<'db>(
     db: &'db dyn salsa::Database,
-    row: EffectRow<'db>,
+    row: AbilityRow<'db>,
     abilities: &HashMap<AbilityId<'db>, CallingConvention>,
 ) -> CallingConvention {
-    calling_convention_for_effect_row_in(db, row, abilities, &[])
+    calling_convention_for_ability_row_in(db, row, abilities, &[])
 }
 
-/// Derive a convention from an effect row inside a function instance. A tail
+/// Derive a convention from an ability row inside a function instance. A tail
 /// that is a class variable of the instance requires its class; any other
 /// tail requires CPS.
-pub fn calling_convention_for_effect_row_in<'db>(
+pub fn calling_convention_for_ability_row_in<'db>(
     db: &'db dyn salsa::Database,
-    row: EffectRow<'db>,
+    row: AbilityRow<'db>,
     abilities: &HashMap<AbilityId<'db>, CallingConvention>,
     classes: &RowClasses,
 ) -> CallingConvention {
     let mut convention = CallingConvention::Direct;
-    for effect in row.effects(db) {
+    for effect in row.instances(db) {
         let requirement = abilities
             .get(&effect.ability_id)
             .copied()
@@ -64,7 +64,7 @@ pub fn calling_convention_for_effect_row_in<'db>(
     convention
 }
 
-/// Derive a convention for a function type from its effect row.
+/// Derive a convention for a function type from its ability row.
 pub fn calling_convention_for_function_type<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
@@ -83,7 +83,7 @@ pub fn calling_convention_for_function_type_in<'db>(
     let TypeKind::Func { effect, .. } = ty.kind(db) else {
         return None;
     };
-    Some(calling_convention_for_effect_row_in(
+    Some(calling_convention_for_ability_row_in(
         db, *effect, abilities, classes,
     ))
 }
@@ -91,7 +91,7 @@ pub fn calling_convention_for_function_type_in<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Effect, EffectVar};
+    use crate::ast::{AbilityInstance, RowVar};
 
     #[test]
     fn joins_to_the_strongest_requirement() {
@@ -106,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn effect_rows_use_ability_level_upper_bounds() {
+    fn ability_rows_use_ability_level_upper_bounds() {
         let db = salsa::DatabaseImpl::new();
         let logger = AbilityId::source(&db, trunk_ir::SymbolPath::new(["Logger"]));
         let state = AbilityId::source(&db, trunk_ir::SymbolPath::new(["State"]));
@@ -114,28 +114,28 @@ mod tests {
         abilities.insert(logger, CallingConvention::EvidenceDirect);
         abilities.insert(state, CallingConvention::Cps);
 
-        let logger_effect = Effect {
+        let logger_effect = AbilityInstance {
             ability_id: logger,
             args: vec![],
         };
-        let state_effect = Effect {
+        let state_effect = AbilityInstance {
             ability_id: state,
             args: vec![],
         };
-        let logger_only = EffectRow::new(&db, vec![logger_effect.clone()], None);
-        let mixed = EffectRow::new(&db, vec![logger_effect, state_effect], None);
+        let logger_only = AbilityRow::new(&db, vec![logger_effect.clone()], None);
+        let mixed = AbilityRow::new(&db, vec![logger_effect, state_effect], None);
 
         assert_eq!(
-            calling_convention_for_effect_row(&db, EffectRow::pure(&db), &abilities),
+            calling_convention_for_ability_row(&db, AbilityRow::pure(&db), &abilities),
             CallingConvention::Direct
         );
 
         assert_eq!(
-            calling_convention_for_effect_row(&db, logger_only, &abilities),
+            calling_convention_for_ability_row(&db, logger_only, &abilities),
             CallingConvention::EvidenceDirect
         );
         assert_eq!(
-            calling_convention_for_effect_row(&db, mixed, &abilities),
+            calling_convention_for_ability_row(&db, mixed, &abilities),
             CallingConvention::Cps
         );
     }
@@ -144,23 +144,23 @@ mod tests {
     fn open_and_unknown_rows_are_cps() {
         let db = salsa::DatabaseImpl::new();
         let unknown = AbilityId::source(&db, trunk_ir::SymbolPath::new(["Unknown"]));
-        let unknown_row = EffectRow::new(
+        let unknown_row = AbilityRow::new(
             &db,
-            vec![Effect {
+            vec![AbilityInstance {
                 ability_id: unknown,
                 args: vec![],
             }],
             None,
         );
-        let open_row = EffectRow::open(&db, EffectVar { id: 0 });
+        let open_row = AbilityRow::open(&db, RowVar { id: 0 });
         let abilities = HashMap::default();
 
         assert_eq!(
-            calling_convention_for_effect_row(&db, unknown_row, &abilities),
+            calling_convention_for_ability_row(&db, unknown_row, &abilities),
             CallingConvention::Cps
         );
         assert_eq!(
-            calling_convention_for_effect_row(&db, open_row, &abilities),
+            calling_convention_for_ability_row(&db, open_row, &abilities),
             CallingConvention::Cps
         );
     }

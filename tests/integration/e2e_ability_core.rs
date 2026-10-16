@@ -97,7 +97,7 @@ fn main() -> Nil { }
     );
 }
 
-/// Test ability operations with effect annotations.
+/// Test ability operations with ability annotations.
 #[test]
 fn test_ability_operation_with_effect() {
     let code = r#"ability State(s) {
@@ -164,13 +164,13 @@ fn main() -> Nil { }
 }
 
 // =============================================================================
-// Effect Row Tests
+// Ability Row Tests
 // =============================================================================
 
-/// Test that effect row polymorphism works correctly.
+/// Test that ability row polymorphism works correctly.
 /// The function `run_state` should handle `State(s)` and propagate remaining effects `e`.
 #[test]
-fn test_effect_row_polymorphism() {
+fn test_ability_row_polymorphism() {
     let code = r#"ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -190,7 +190,7 @@ fn stateful_print() ->{State(Nat), Console} Nat {
 fn main() -> Nil { }
 "#;
 
-    let diagnostics = compile_and_check(code, "effect_row.trb");
+    let diagnostics = compile_and_check(code, "ability_row.trb");
 
     print_diagnostics(&diagnostics);
 
@@ -362,7 +362,7 @@ fn main() -> Nil { }
 /// Test that let binding with pure expression doesn't introduce spurious effects.
 #[test]
 fn test_pure_let_binding_no_spurious_effects() {
-    // This function has no effect annotation and uses only pure let bindings
+    // This function has no ability annotation and uses only pure let bindings
     let code = r#"fn pure_computation() -> Int {
     let x = +1
     let y = +2
@@ -603,7 +603,7 @@ fn main() -> Nil { }
             .inner
             .message
             .contains("function 'counter' uses undeclared effects: State")),
-        "an omitted effect row must not absorb the body's effects: {diagnostics:?}"
+        "an omitted ability row must not absorb the body's effects: {diagnostics:?}"
     );
 
     let declared = undeclared.replace("fn counter() -> Nat", "fn counter() ->{State(Nat)} Nat");
@@ -815,7 +815,7 @@ fn main() -> Nil { }
 /// Test that handle expressions preserve parameterized ability type arguments.
 ///
 /// When handling State(Int), the type argument Int should be preserved in the
-/// effect row constraint, not lost by creating Effect entries with empty args.
+/// ability row constraint, not lost by creating Effect entries with empty args.
 #[test]
 fn test_handle_preserves_parameterized_ability_type_args() {
     let code = r#"ability State(s) {
@@ -948,7 +948,7 @@ fn main() -> Nil { }
     );
 }
 
-/// Test that an empty ability can be used in an effect annotation.
+/// Test that an empty ability can be used in an ability annotation.
 #[test]
 fn test_empty_ability_in_effect_annotation() {
     let code = r#"ability Empty {
@@ -967,7 +967,7 @@ fn main() -> Nil { }
 
     assert!(
         diagnostics.is_empty(),
-        "Empty ability in effect annotation should pass frontend, got {} diagnostics",
+        "Empty ability in ability annotation should pass frontend, got {} diagnostics",
         diagnostics.len()
     );
 }

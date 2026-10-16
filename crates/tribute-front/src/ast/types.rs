@@ -114,11 +114,11 @@ pub enum TypeKind<'db> {
         args: Vec<Type<'db>>,
     },
 
-    /// Function type with parameters, result, and effect row.
+    /// Function type with parameters, result, and ability row.
     Func {
         params: Vec<Type<'db>>,
         result: Type<'db>,
-        effect: EffectRow<'db>,
+        effect: AbilityRow<'db>,
     },
 
     /// Tuple type.
@@ -137,11 +137,11 @@ pub enum TypeKind<'db> {
     /// Represents a captured continuation that can be resumed with a value.
     /// - `arg`: The type of value passed when resuming
     /// - `result`: The type returned after resuming
-    /// - `effect`: The effect row of the continuation body
+    /// - `effect`: The ability row of the continuation body
     Continuation {
         arg: Type<'db>,
         result: Type<'db>,
-        effect: EffectRow<'db>,
+        effect: AbilityRow<'db>,
     },
 
     /// Error type (used when type checking fails).
@@ -204,9 +204,9 @@ pub struct TypeScheme<'db> {
     /// The order matters: `type_params[0]` corresponds to `BoundVar { index: 0 }`.
     #[returns(deref)]
     pub type_params: Vec<TypeParam>,
-    /// Effect-row variables quantified by this scheme.
+    /// Ability-row variables quantified by this scheme.
     #[returns(deref)]
-    pub effect_params: Vec<EffectVar>,
+    pub effect_params: Vec<RowVar>,
     /// Retained exact effect unions, quantified together with the body.
     #[returns(deref)]
     pub row_unions: Vec<RowUnion<'db>>,
@@ -220,25 +220,25 @@ pub struct TypeScheme<'db> {
 /// An exact set union retained through inference and generalization.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct RowUnion<'db> {
-    pub sources: Vec<EffectRow<'db>>,
-    pub result: EffectRow<'db>,
+    pub sources: Vec<AbilityRow<'db>>,
+    pub result: AbilityRow<'db>,
 }
 
 /// Exact handler subtraction, retained while source tails or type arguments are open.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct RowRemoval<'db> {
-    pub source: EffectRow<'db>,
-    pub removed: EffectRow<'db>,
-    pub result: EffectRow<'db>,
+    pub source: AbilityRow<'db>,
+    pub removed: AbilityRow<'db>,
+    pub result: AbilityRow<'db>,
 }
 
 impl<'db> RowRemoval<'db> {
-    pub fn rows(&self) -> [EffectRow<'db>; 3] {
+    pub fn rows(&self) -> [AbilityRow<'db>; 3] {
         [self.source, self.removed, self.result]
     }
 
     /// Visit source, removed, then result, updating their row handles in place.
-    pub fn for_each_row_mut(&mut self, mut f: impl FnMut(&mut EffectRow<'db>)) {
+    pub fn for_each_row_mut(&mut self, mut f: impl FnMut(&mut AbilityRow<'db>)) {
         f(&mut self.source);
         f(&mut self.removed);
         f(&mut self.result);
@@ -247,7 +247,7 @@ impl<'db> RowRemoval<'db> {
 
 impl<'db> RowUnion<'db> {
     /// Visit sources in order, then result, reusing the source vector.
-    pub fn for_each_row_mut(&mut self, mut f: impl FnMut(&mut EffectRow<'db>)) {
+    pub fn for_each_row_mut(&mut self, mut f: impl FnMut(&mut AbilityRow<'db>)) {
         for source in &mut self.sources {
             f(source);
         }
@@ -259,7 +259,7 @@ impl<'db> TypeScheme<'db> {
     pub fn new(
         db: &'db dyn salsa::Database,
         type_params: Vec<TypeParam>,
-        effect_params: Vec<EffectVar>,
+        effect_params: Vec<RowVar>,
         body: Type<'db>,
     ) -> Self {
         Self::builder(type_params, effect_params, body).build(db)
@@ -267,7 +267,7 @@ impl<'db> TypeScheme<'db> {
 
     pub fn builder(
         type_params: Vec<TypeParam>,
-        effect_params: Vec<EffectVar>,
+        effect_params: Vec<RowVar>,
         body: Type<'db>,
     ) -> TypeSchemeBuilder<'db> {
         TypeSchemeBuilder {
@@ -295,8 +295,8 @@ impl<'db> TypeScheme<'db> {
     /// The caller owns recursive traversal within each type.
     pub fn for_each_type(self, db: &'db dyn salsa::Database, mut f: impl FnMut(Type<'db>)) {
         f(self.body(db));
-        let mut visit_row = |row: EffectRow<'db>| {
-            for effect in row.effects(db) {
+        let mut visit_row = |row: AbilityRow<'db>| {
+            for effect in row.instances(db) {
                 for argument in &effect.args {
                     f(*argument);
                 }
@@ -334,7 +334,7 @@ impl<'db> TypeScheme<'db> {
 #[must_use]
 pub struct TypeSchemeBuilder<'db> {
     type_params: Cow<'db, [TypeParam]>,
-    effect_params: Cow<'db, [EffectVar]>,
+    effect_params: Cow<'db, [RowVar]>,
     row_unions: Cow<'db, [RowUnion<'db>]>,
     row_removals: Cow<'db, [RowRemoval<'db>]>,
     body: Type<'db>,
@@ -366,12 +366,12 @@ impl<'db> TypeSchemeBuilder<'db> {
         mut map: impl FnMut(Type<'db>) -> Type<'db>,
     ) -> Self {
         self.body = map(self.body);
-        let mut map_row = |row: &mut EffectRow<'db>| {
-            *row = EffectRow::new(
+        let mut map_row = |row: &mut AbilityRow<'db>| {
+            *row = AbilityRow::new(
                 db,
-                row.effects(db)
+                row.instances(db)
                     .iter()
-                    .map(|effect| Effect {
+                    .map(|effect| AbilityInstance {
                         ability_id: effect.ability_id,
                         args: effect.args.iter().copied().map(&mut map).collect(),
                     })
@@ -442,68 +442,66 @@ pub enum Kind {
     Arrow(Box<Kind>, Box<Kind>),
 }
 
-/// Effect row for tracking computational effects.
-///
-/// Effect rows are used in function types to track what effects
-/// a function may perform.
+/// The ability row of a function type: the ability instances a function may
+/// use.
 #[salsa::interned(debug)]
-pub struct EffectRow<'db> {
-    /// Known effects in this row.
+pub struct AbilityRow<'db> {
+    /// The ability instances the row names.
     #[returns(deref)]
-    pub effects: Vec<Effect<'db>>,
-    /// Optional row variable for open effect rows.
+    pub instances: Vec<AbilityInstance<'db>>,
+    /// The row variable of an open row.
     ///
-    /// If Some, this row can have additional unknown effects.
-    /// If None, this is a closed row with exactly the listed effects.
+    /// If Some, the row may hold further unknown instances.
+    /// If None, the row is closed: exactly the listed instances.
     #[returns(copy)]
-    pub rest: Option<EffectVar>,
+    pub rest: Option<RowVar>,
 }
 
-impl<'db> EffectRow<'db> {
-    /// Create an empty effect row (pure function).
+impl<'db> AbilityRow<'db> {
+    /// Create an empty ability row (pure function).
     pub fn pure(db: &'db dyn salsa::Database) -> Self {
         Self::new(db, Vec::new(), None)
     }
 
     /// Create a row with a single effect.
-    pub fn single(db: &'db dyn salsa::Database, effect: Effect<'db>) -> Self {
+    pub fn single(db: &'db dyn salsa::Database, effect: AbilityInstance<'db>) -> Self {
         Self::new(db, vec![effect], None)
     }
 
     /// Create an open row variable (unknown effects).
-    pub fn open(db: &'db dyn salsa::Database, var: EffectVar) -> Self {
+    pub fn open(db: &'db dyn salsa::Database, var: RowVar) -> Self {
         Self::new(db, Vec::new(), Some(var))
     }
 
     /// Check if this row is pure (no effects and closed).
     pub fn is_pure(&self, db: &'db dyn salsa::Database) -> bool {
-        self.effects(db).is_empty() && self.rest(db).is_none()
+        self.instances(db).is_empty() && self.rest(db).is_none()
     }
 }
 
 /// An individual effect (ability).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct Effect<'db> {
+pub struct AbilityInstance<'db> {
     /// The ability identifier (module path + name).
     pub ability_id: super::AbilityId<'db>,
     /// Type arguments for parameterized abilities.
     pub args: Vec<Type<'db>>,
 }
 
-/// Effect row variable for row-polymorphic effects.
+/// Ability row variable for row-polymorphic effects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct EffectVar {
+pub struct RowVar {
     pub id: u64,
 }
 
-/// Collect effect-row variables occurring in a type, preserving first appearance.
-pub fn collect_effect_vars<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Vec<EffectVar> {
+/// Collect ability-row variables occurring in a type, preserving first appearance.
+pub fn collect_row_vars<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Vec<RowVar> {
     fn collect_row<'db>(
         db: &'db dyn salsa::Database,
-        row: EffectRow<'db>,
-        vars: &mut Vec<EffectVar>,
+        row: AbilityRow<'db>,
+        vars: &mut Vec<RowVar>,
     ) {
-        for effect in row.effects(db) {
+        for effect in row.instances(db) {
             for arg in &effect.args {
                 collect_type(db, *arg, vars);
             }
@@ -515,7 +513,7 @@ pub fn collect_effect_vars<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> 
         }
     }
 
-    fn collect_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, vars: &mut Vec<EffectVar>) {
+    fn collect_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, vars: &mut Vec<RowVar>) {
         match ty.kind(db) {
             TypeKind::Named { args, .. } | TypeKind::Tuple(args) => {
                 for arg in args {
@@ -559,27 +557,27 @@ pub fn collect_effect_vars<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> 
 }
 
 // =========================================================================
-// Shared annotation → EffectRow conversion
+// Shared annotation → AbilityRow conversion
 // =========================================================================
 
 /// Source origins for the concrete effects produced from an annotation list.
 ///
 /// The IDs have the same order as the concrete effects in the converted row.
 /// Row-variable annotations are intentionally omitted. Keeping this metadata
-/// outside [`EffectRow`] preserves the row's semantic identity.
+/// outside [`AbilityRow`] preserves the row's semantic identity.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct EffectAnnotationOrigins {
+pub struct AbilityAnnotationOrigins {
     concrete: Vec<NodeId>,
 }
 
-impl EffectAnnotationOrigins {
-    /// Find the first duplicate in a resolved effect row and recover both
+impl AbilityAnnotationOrigins {
+    /// Find the first duplicate in a resolved ability row and recover both
     /// annotation origins associated with it.
     pub fn find_duplicate<'db>(
         &self,
         db: &'db dyn salsa::Database,
-        row: EffectRow<'db>,
-    ) -> Option<DuplicateEffectAnnotations<'db>> {
+        row: AbilityRow<'db>,
+    ) -> Option<DuplicateAbilityAnnotations<'db>> {
         self.find_overlap(db, row, |a, b| a == b)
     }
 
@@ -589,10 +587,10 @@ impl EffectAnnotationOrigins {
     pub fn find_overlap<'db>(
         &self,
         db: &'db dyn salsa::Database,
-        row: EffectRow<'db>,
-        mut overlaps: impl FnMut(&Effect<'db>, &Effect<'db>) -> bool,
-    ) -> Option<DuplicateEffectAnnotations<'db>> {
-        let effects = row.effects(db);
+        row: AbilityRow<'db>,
+        mut overlaps: impl FnMut(&AbilityInstance<'db>, &AbilityInstance<'db>) -> bool,
+    ) -> Option<DuplicateAbilityAnnotations<'db>> {
+        let effects = row.instances(db);
         // Solving an open row may append inferred effects after the concrete
         // annotations. Only the prefix produced by the source conversion has
         // annotation origins and can represent duplicate annotations.
@@ -615,7 +613,7 @@ impl EffectAnnotationOrigins {
                         .map(|(candidate, _)| candidate.clone()),
                 )
                 .collect();
-            return Some(DuplicateEffectAnnotations {
+            return Some(DuplicateAbilityAnnotations {
                 effects,
                 first_annotation_id,
                 duplicate_annotation_id: annotation_id,
@@ -628,17 +626,17 @@ impl EffectAnnotationOrigins {
 
 /// A duplicate effect together with its first and repeated source annotations.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DuplicateEffectAnnotations<'db> {
-    pub effects: Vec<Effect<'db>>,
+pub struct DuplicateAbilityAnnotations<'db> {
+    pub effects: Vec<AbilityInstance<'db>>,
     pub first_annotation_id: NodeId,
     pub duplicate_annotation_id: NodeId,
 }
 
 /// Result of source-aware effect-annotation conversion.
 #[derive(Clone, Debug)]
-pub struct EffectRowConversion<'db> {
-    pub row: EffectRow<'db>,
-    pub origins: EffectAnnotationOrigins,
+pub struct AbilityRowConversion<'db> {
+    pub row: AbilityRow<'db>,
+    pub origins: AbilityAnnotationOrigins,
 }
 
 /// Check whether a symbol name looks like a type variable (starts with lowercase).
@@ -654,7 +652,7 @@ fn ability_path(path: &[Symbol]) -> Option<SymbolPath> {
         .then(|| SymbolPath::new(path.iter().cloned()))
 }
 
-/// Convert a single type annotation to an `Effect`.
+/// Convert a single type annotation to an `AbilityInstance`.
 ///
 /// Returns `None` for annotations that represent row variables (lowercase names, `Infer`)
 /// rather than concrete abilities.
@@ -666,18 +664,18 @@ pub fn annotation_to_effect<'db>(
     annotation: &TypeAnnotation,
     prefix: &SymbolPath,
     convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
-) -> Option<Effect<'db>> {
+) -> Option<AbilityInstance<'db>> {
     match &annotation.kind {
         TypeAnnotationKind::Named(name) if !is_type_variable(name) => {
             let ability_id = super::AbilityId::source(db, prefix.child(name.clone()));
-            Some(Effect {
+            Some(AbilityInstance {
                 ability_id,
                 args: vec![],
             })
         }
         TypeAnnotationKind::Path(path) => {
             let ability_id = super::AbilityId::from_resolved_path(db, ability_path(path)?);
-            Some(Effect {
+            Some(AbilityInstance {
                 ability_id,
                 args: vec![],
             })
@@ -693,7 +691,7 @@ pub fn annotation_to_effect<'db>(
                 TypeAnnotationKind::Path(_) => super::AbilityId::from_resolved_path(db, qualified),
                 _ => super::AbilityId::source(db, qualified),
             };
-            Some(Effect {
+            Some(AbilityInstance {
                 ability_id,
                 args: type_args,
             })
@@ -703,33 +701,33 @@ pub fn annotation_to_effect<'db>(
     }
 }
 
-/// Convert a slice of ability annotations to an `EffectRow`.
+/// Convert a slice of ability annotations to an `AbilityRow`.
 ///
 /// - Uppercase names / `App` → concrete effects
 /// - Lowercase names / `Infer` → open row variable (via `fresh_row_var`)
 ///
 /// The `prefix` parameter is used to construct AbilityIds for unqualified ability names.
-pub fn abilities_to_effect_row<'db>(
+pub fn abilities_to_ability_row<'db>(
     db: &'db dyn salsa::Database,
     abilities: &[TypeAnnotation],
     prefix: &SymbolPath,
     convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
-    fresh_row_var: impl FnOnce() -> EffectVar,
-) -> EffectRow<'db> {
-    abilities_to_effect_row_with_origins(db, abilities, prefix, convert_type, fresh_row_var).row
+    fresh_row_var: impl FnOnce() -> RowVar,
+) -> AbilityRow<'db> {
+    abilities_to_ability_row_with_origins(db, abilities, prefix, convert_type, fresh_row_var).row
 }
 
 /// Convert ability annotations while preserving each concrete effect's origin.
 ///
 /// Consumers that only need semantic effect identity should continue to use
-/// [`abilities_to_effect_row`].
-pub fn abilities_to_effect_row_with_origins<'db>(
+/// [`abilities_to_ability_row`].
+pub fn abilities_to_ability_row_with_origins<'db>(
     db: &'db dyn salsa::Database,
     abilities: &[TypeAnnotation],
     prefix: &SymbolPath,
     convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
-    fresh_row_var: impl FnOnce() -> EffectVar,
-) -> EffectRowConversion<'db> {
+    fresh_row_var: impl FnOnce() -> RowVar,
+) -> AbilityRowConversion<'db> {
     let mut effects = Vec::new();
     let mut concrete_origins = Vec::new();
     let mut has_row_var = false;
@@ -757,9 +755,9 @@ pub fn abilities_to_effect_row_with_origins<'db>(
         None
     };
 
-    EffectRowConversion {
-        row: EffectRow::new(db, effects, rest),
-        origins: EffectAnnotationOrigins {
+    AbilityRowConversion {
+        row: AbilityRow::new(db, effects, rest),
+        origins: AbilityAnnotationOrigins {
             concrete: concrete_origins,
         },
     }

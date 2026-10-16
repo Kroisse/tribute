@@ -16,12 +16,12 @@ use trunk_ir::SymbolPath;
 use trunk_ir::Symbol;
 
 #[cfg(test)]
-use crate::ast::Effect;
+use crate::ast::AbilityInstance;
 
 use super::{InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature};
 
 use crate::ast::{
-    CtorId, EffectRow, EffectVar, Expr, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme,
+    AbilityRow, CtorId, Expr, FuncDefId, LocalId, NodeId, RowVar, Type, TypeKind, TypeScheme,
     TypedRef, UniVarId, UniVarSource,
 };
 
@@ -31,15 +31,15 @@ use super::subst;
 
 /// Context for the handle expression currently being type-checked.
 ///
-/// Captures the body type and body effect row so that handler arms
+/// Captures the body type and body ability row so that handler arms
 /// can assign proper effect information to continuation variables.
 pub(crate) struct HandleContext<'db> {
     pub node_id: NodeId,
     /// The source result of the complete handle expression after its `do` arm.
     pub answer_ty: Type<'db>,
     pub body_ty: Type<'db>,
-    pub body_effect: EffectRow<'db>,
-    pub handled_effects: EffectRow<'db>,
+    pub body_effect: AbilityRow<'db>,
+    pub handled_effects: AbilityRow<'db>,
     /// The evidence scope of the handle body, once conversion has entered it.
     pub evidence_body: Option<usize>,
 }
@@ -154,22 +154,22 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Counter for fresh type variables (local to this function).
     next_type_var: u64,
 
-    /// Counter for fresh effect row variables (local to this function).
+    /// Counter for fresh ability row variables (local to this function).
     next_row_var: u64,
 
     /// Named rows share the function declaration's annotation scope.
-    annotation_rows: HashMap<Symbol, EffectVar>,
+    annotation_rows: HashMap<Symbol, RowVar>,
     /// Parent signature parameters are shared by all body annotations.
     annotation_type_parameters: HashMap<Symbol, Type<'db>>,
     /// Annotation revisits must not allocate unrelated inference variables.
     annotation_types: HashMap<NodeId, Type<'db>>,
 
     /// Current accumulated effects.
-    current_effect: EffectRow<'db>,
-    pub(crate) effect_contract: Option<EffectRow<'db>>,
+    current_effect: AbilityRow<'db>,
+    pub(crate) effect_contract: Option<AbilityRow<'db>>,
 
     /// Continuation effect rows captured while checking active lambdas.
-    lambda_resume_effects: Vec<Option<EffectRow<'db>>>,
+    lambda_resume_effects: Vec<Option<AbilityRow<'db>>>,
 
     /// Result types of the enclosing callables, innermost last. A `become`
     /// call must produce exactly this type. An inferred lambda has no result
@@ -184,7 +184,7 @@ pub struct FunctionInferenceContext<'a, 'db> {
     ///
     /// Pushed during the infer phase of a handle expression and
     /// popped during the convert phase, so that handler arms can
-    /// assign the body's effect row to continuation variables.
+    /// assign the body's ability row to continuation variables.
     handle_ctx_stack: Vec<HandleContext<'db>>,
 
     /// Resolved UFCS methods: NodeId → (FuncDefId, instantiated callee type).
@@ -231,7 +231,7 @@ pub struct DeferredMethodCall<'db> {
     /// Argument types including receiver as first element.
     pub arg_types: Vec<Type<'db>>,
     /// Fresh row for the method's effects, joined into the caller's row.
-    pub effect: EffectRow<'db>,
+    pub effect: AbilityRow<'db>,
 }
 
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
@@ -271,13 +271,13 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             constraints: ConstraintSet::new(),
             result_joins: HashMap::default(),
             next_type_var: 0,
-            // Start from 1 to avoid collision with EffectVar { id: 0 } placeholder
+            // Start from 1 to avoid collision with RowVar { id: 0 } placeholder
             // used in collect.rs for function signature effect rows
             next_row_var: 1,
             annotation_rows: HashMap::default(),
             annotation_type_parameters: HashMap::default(),
             annotation_types: HashMap::default(),
-            current_effect: EffectRow::pure(db),
+            current_effect: AbilityRow::pure(db),
             effect_contract: None,
             lambda_resume_effects: Vec::new(),
             callable_results: Vec::new(),
@@ -377,17 +377,17 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         Type::new(self.db, TypeKind::UniVar { id })
     }
 
-    /// Generate a fresh effect row variable.
-    pub fn fresh_row_var(&mut self) -> EffectVar {
+    /// Generate a fresh ability row variable.
+    pub fn fresh_row_var(&mut self) -> RowVar {
         let id = self.next_row_var;
         self.next_row_var += 1;
-        EffectVar { id }
+        RowVar { id }
     }
 
-    /// Generate a fresh effect row with only a variable.
-    pub fn fresh_effect_row(&mut self) -> EffectRow<'db> {
+    /// Generate a fresh ability row with only a variable.
+    pub fn fresh_ability_row(&mut self) -> AbilityRow<'db> {
         let var = self.fresh_row_var();
-        EffectRow::open(self.db, var)
+        AbilityRow::open(self.db, var)
     }
 
     // =========================================================================
@@ -572,7 +572,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     /// The row a deferred method call was given on an earlier visit.
-    pub fn deferred_method_effect(&self, node: NodeId) -> Option<EffectRow<'db>> {
+    pub fn deferred_method_effect(&self, node: NodeId) -> Option<AbilityRow<'db>> {
         self.deferred_methods
             .iter()
             .chain(
@@ -860,7 +860,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Instantiate a type scheme with fresh type variables.
     ///
     /// Replaces each `BoundVar { index: i }` with a fresh `UniVar`, and each
-    /// quantified effect-row variable with a fresh row variable. Repeated
+    /// quantified ability-row variable with a fresh row variable. Repeated
     /// occurrences of the same row variable remain shared within one instantiation.
     pub fn instantiate_scheme(&mut self, scheme: TypeScheme<'db>) -> Type<'db> {
         self.instantiate_scheme_details(scheme).ty
@@ -908,7 +908,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &mut self,
         scheme: TypeScheme<'db>,
         types: Vec<Type<'db>>,
-        rows: Vec<EffectVar>,
+        rows: Vec<RowVar>,
     ) -> subst::SchemeInstance<'db> {
         let instance = subst::instantiate_with_arguments(self.db, scheme, types, rows);
         self.evidence.record_unions(&instance.row_unions);
@@ -1010,7 +1010,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.next_row_var = self.next_row_var.max(next);
     }
 
-    pub(crate) fn bind_annotation_row(&mut self, name: Symbol, row: EffectVar) {
+    pub(crate) fn bind_annotation_row(&mut self, name: Symbol, row: RowVar) {
         self.annotation_rows.insert(name, row);
     }
 
@@ -1026,7 +1026,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.annotation_type_parameters.values().copied()
     }
 
-    pub(crate) fn annotation_row(&mut self, name: Symbol) -> EffectVar {
+    pub(crate) fn annotation_row(&mut self, name: Symbol) -> RowVar {
         if let Some(row) = self.annotation_rows.get(&name) {
             return *row;
         }
@@ -1063,16 +1063,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             .add_type_eq_at(t1, t2, ConstraintOrigin { node_id, kind });
     }
 
-    /// Add an effect row equality constraint.
-    pub fn constrain_row_eq(&mut self, r1: EffectRow<'db>, r2: EffectRow<'db>) {
+    /// Add an ability row equality constraint.
+    pub fn constrain_row_eq(&mut self, r1: AbilityRow<'db>, r2: AbilityRow<'db>) {
         self.constraints.add_row_eq(r1, r2);
     }
 
-    /// Add an effect row equality constraint tied to a source AST node.
+    /// Add an ability row equality constraint tied to a source AST node.
     pub fn constrain_row_eq_at(
         &mut self,
-        r1: EffectRow<'db>,
-        r2: EffectRow<'db>,
+        r1: AbilityRow<'db>,
+        r2: AbilityRow<'db>,
         node_id: NodeId,
         kind: ConstraintOriginKind,
     ) {
@@ -1090,7 +1090,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// if the expected type has effects, the lambda's effect should match.
     ///
     /// TODO: Implement proper row subsumption for higher-order effects.
-    pub fn constrain_effect_subtype(&mut self, inferred: EffectRow<'db>, expected: EffectRow<'db>) {
+    pub fn constrain_effect_subtype(
+        &mut self,
+        inferred: AbilityRow<'db>,
+        expected: AbilityRow<'db>,
+    ) {
         // For simplicity, use row equality.
         // A more sophisticated system would handle row extension/subsumption.
         self.constraints.add_row_eq(inferred, expected);
@@ -1126,13 +1130,13 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     // Effect tracking
     // =========================================================================
 
-    /// Get the current effect row.
-    pub fn current_effect(&self) -> EffectRow<'db> {
+    /// Get the current ability row.
+    pub fn current_effect(&self) -> AbilityRow<'db> {
         self.current_effect
     }
 
-    /// Set the current effect row.
-    pub fn set_current_effect(&mut self, effect: EffectRow<'db>) {
+    /// Set the current ability row.
+    pub fn set_current_effect(&mut self, effect: AbilityRow<'db>) {
         self.current_effect = effect;
     }
 
@@ -1140,7 +1144,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.lambda_resume_effects.push(None);
     }
 
-    pub(crate) fn exit_lambda(&mut self) -> Option<EffectRow<'db>> {
+    pub(crate) fn exit_lambda(&mut self) -> Option<AbilityRow<'db>> {
         self.lambda_resume_effects
             .pop()
             .expect("lambda resume effect stack must be balanced")
@@ -1180,7 +1184,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     /// Record the continuation row selected by a resume in the active lambda.
-    pub(crate) fn record_lambda_resume_effect(&mut self, effect: EffectRow<'db>) {
+    pub(crate) fn record_lambda_resume_effect(&mut self, effect: AbilityRow<'db>) {
         if let Some(slot) = self.lambda_resume_effects.last_mut() {
             *slot = Some(effect);
         }
@@ -1196,19 +1200,19 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.handle_ctx_stack.pop()
     }
 
-    /// Merge an effect into the current effect row.
+    /// Merge an effect into the current ability row.
     ///
     /// Implements row-polymorphic effect union:
     /// - `{} ∪ ρ = ρ` (pure is identity)
     /// - `{A} ∪ {B} = {A, B}` (closed rows merge directly)
     /// - `{A | e1} ∪ {B | e2} = {A, B | e3}` retains a `RowUnion`
     ///   relation without equating the independent source tails.
-    pub fn merge_effect(&mut self, effect: EffectRow<'db>) {
+    pub fn merge_effect(&mut self, effect: AbilityRow<'db>) {
         self.merge_effect_with_origin(effect, None);
     }
 
     /// Merge an effect and tie any resulting type/arity constraint to a call.
-    pub fn merge_effect_at(&mut self, effect: EffectRow<'db>, node_id: NodeId) {
+    pub fn merge_effect_at(&mut self, effect: AbilityRow<'db>, node_id: NodeId) {
         self.merge_effect_with_origin(
             effect,
             Some(ConstraintOrigin {
@@ -1218,7 +1222,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         );
     }
 
-    pub(crate) fn merge_handler_effect_at(&mut self, effect: EffectRow<'db>, node_id: NodeId) {
+    pub(crate) fn merge_handler_effect_at(&mut self, effect: AbilityRow<'db>, node_id: NodeId) {
         self.merge_effect_with_origin(
             effect,
             Some(ConstraintOrigin {
@@ -1230,7 +1234,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     fn merge_effect_with_origin(
         &mut self,
-        effect: EffectRow<'db>,
+        effect: AbilityRow<'db>,
         origin: Option<ConstraintOrigin>,
     ) {
         let db = self.db;
@@ -1249,8 +1253,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
         // Arity belongs to the declaration, so even distinct instances of one
         // ability must agree on it. Type arguments themselves are set keys.
-        for incoming in effect.effects(db) {
-            if let Some(existing) = current.effects(db).iter().find(|existing| {
+        for incoming in effect.instances(db) {
+            if let Some(existing) = current.instances(db).iter().find(|existing| {
                 existing.ability_id == incoming.ability_id
                     && existing.args.len() != incoming.args.len()
             }) {
@@ -1265,14 +1269,14 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                 } else {
                     incoming
                 };
-                let left = EffectRow::single(
+                let left = AbilityRow::single(
                     db,
-                    crate::ast::Effect {
+                    crate::ast::AbilityInstance {
                         ability_id: incoming.ability_id,
                         args: (0..expected).map(|_| self.fresh_type_var()).collect(),
                     },
                 );
-                let right = EffectRow::single(db, invalid.clone());
+                let right = AbilityRow::single(db, invalid.clone());
                 if let Some(origin) = origin {
                     self.constrain_row_eq_at(left, right, origin.node_id, origin.kind);
                 } else {
@@ -1281,7 +1285,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             }
         }
         let (result, relation) =
-            super::effect_row::union(db, current, effect, || self.fresh_row_var());
+            super::ability_row::union(db, current, effect, || self.fresh_row_var());
         self.current_effect = result;
         if let Some(relation) = relation {
             self.constraints.add(Constraint::RowUnion(relation, origin));
@@ -1352,7 +1356,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &self,
         params: Vec<Type<'db>>,
         result: Type<'db>,
-        effect: EffectRow<'db>,
+        effect: AbilityRow<'db>,
     ) -> Type<'db> {
         self.env.func_type(params, result, effect)
     }
@@ -1453,7 +1457,7 @@ mod tests {
         let func_id = FuncDefId::new(db, trunk_ir::SymbolPath::new([name]));
 
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let effect = EffectRow::pure(db);
+        let effect = AbilityRow::pure(db);
         let func_ty = Type::new(
             db,
             TypeKind::Func {
@@ -1510,11 +1514,11 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_instantiate_scheme_freshens_shared_effect_row_vars(db: &dyn salsa::Database) {
+    fn test_instantiate_scheme_freshens_shared_ability_row_vars(db: &dyn salsa::Database) {
         fn extract_rows<'db>(
             db: &'db dyn salsa::Database,
             ty: Type<'db>,
-        ) -> (EffectRow<'db>, EffectRow<'db>) {
+        ) -> (AbilityRow<'db>, AbilityRow<'db>) {
             let TypeKind::Func { params, effect, .. } = ty.kind(db) else {
                 panic!("expected outer function type");
             };
@@ -1532,7 +1536,7 @@ mod tests {
         let func_id = FuncDefId::new(db, trunk_ir::SymbolPath::new(["test_func"]));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
-        let shared = EffectRow::open(db, EffectVar { id: 0 });
+        let shared = AbilityRow::open(db, RowVar { id: 0 });
         let nil = Type::new(db, TypeKind::Nil);
         let callback = Type::new(
             db,
@@ -1550,7 +1554,7 @@ mod tests {
                 effect: shared,
             },
         );
-        let scheme = TypeScheme::new(db, vec![], vec![EffectVar { id: 0 }], outer);
+        let scheme = TypeScheme::new(db, vec![], vec![RowVar { id: 0 }], outer);
 
         let first = ctx.instantiate_scheme(scheme);
         let second = ctx.instantiate_scheme(scheme);
@@ -1563,18 +1567,18 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_local_scheme_lookup_freshens_type_and_effect_vars(db: &dyn salsa::Database) {
+    fn test_local_scheme_lookup_freshens_type_and_row_vars(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
         let func_id = FuncDefId::new(db, trunk_ir::SymbolPath::new(["test_func"]));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
         let bound = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let row_var = EffectVar { id: 42 };
+        let row_var = RowVar { id: 42 };
         let body = Type::new(
             db,
             TypeKind::Func {
                 params: vec![bound],
                 result: bound,
-                effect: EffectRow::open(db, row_var),
+                effect: AbilityRow::open(db, row_var),
             },
         );
         let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], vec![row_var], body);
@@ -1606,7 +1610,10 @@ mod tests {
 
     #[salsa_test]
     fn test_instantiate_scheme_freshens_rows_in_app_and_continuation(db: &dyn salsa::Database) {
-        fn continuation_effect<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> EffectRow<'db> {
+        fn continuation_effect<'db>(
+            db: &'db dyn salsa::Database,
+            ty: Type<'db>,
+        ) -> AbilityRow<'db> {
             let TypeKind::Continuation { effect, .. } = ty.kind(db) else {
                 panic!("expected continuation type");
             };
@@ -1617,7 +1624,7 @@ mod tests {
         let func_id = FuncDefId::new(db, trunk_ir::SymbolPath::new(["test_func"]));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
-        let shared = EffectRow::open(db, EffectVar { id: 0 });
+        let shared = AbilityRow::open(db, RowVar { id: 0 });
         let nil = Type::new(db, TypeKind::Nil);
         let continuation = Type::new(
             db,
@@ -1634,7 +1641,7 @@ mod tests {
                 args: vec![continuation],
             },
         );
-        let scheme = TypeScheme::new(db, vec![], vec![EffectVar { id: 0 }], app);
+        let scheme = TypeScheme::new(db, vec![], vec![RowVar { id: 0 }], app);
 
         let instantiated = ctx.instantiate_scheme(scheme);
         let TypeKind::App { ctor, args } = instantiated.kind(db) else {
@@ -1704,7 +1711,7 @@ mod tests {
                 args: vec![bound_var],
             },
         );
-        let effect = EffectRow::pure(db);
+        let effect = AbilityRow::pure(db);
         let func_ty = Type::new(
             db,
             TypeKind::Func {
@@ -1797,34 +1804,34 @@ mod merge_effect_tests {
         let ability_id = test_ability_id(db, "State");
 
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
-        ctx.set_current_effect(EffectRow::single(
+        ctx.set_current_effect(AbilityRow::single(
             db,
-            Effect {
+            AbilityInstance {
                 ability_id,
                 args: vec![ctx.int_type()],
             },
         ));
-        ctx.merge_effect(EffectRow::single(
+        ctx.merge_effect(AbilityRow::single(
             db,
-            Effect {
+            AbilityInstance {
                 ability_id,
                 args: vec![ctx.bool_type()],
             },
         ));
-        assert_eq!(ctx.current_effect().effects(db).len(), 2);
+        assert_eq!(ctx.current_effect().instances(db).len(), 2);
         assert!(ctx.take_constraints().into_constraints().is_empty());
 
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
-        ctx.set_current_effect(EffectRow::single(
+        ctx.set_current_effect(AbilityRow::single(
             db,
-            Effect {
+            AbilityInstance {
                 ability_id,
                 args: vec![ctx.int_type()],
             },
         ));
-        ctx.merge_effect(EffectRow::single(
+        ctx.merge_effect(AbilityRow::single(
             db,
-            Effect {
+            AbilityInstance {
                 ability_id,
                 args: vec![],
             },
@@ -1851,9 +1858,9 @@ mod merge_effect_tests {
         for (left, right, found) in [(1, 2, 2), (2, 1, 2), (1, 0, 0), (0, 1, 0), (2, 0, 2)] {
             let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
             let row = |count| {
-                EffectRow::single(
+                AbilityRow::single(
                     db,
-                    Effect {
+                    AbilityInstance {
                         ability_id,
                         args: vec![env.int_type(); count],
                     },
@@ -1864,7 +1871,7 @@ mod merge_effect_tests {
             let mut solver = super::super::solver::TypeSolver::new(db);
             assert!(matches!(
                 solver.solve(ctx.take_constraints()),
-                Err(super::super::solver::SolveError::EffectArgArityMismatch {
+                Err(super::super::solver::SolveError::AbilityArgArityMismatch {
                     expected: 1,
                     found: actual,
                     ..
@@ -1906,7 +1913,7 @@ mod merge_effect_tests {
             let mut effects = current.effects.clone();
             effects.extend(incoming.effects.iter().filter(|e| !current.effects.contains(e)).cloned());
             let effects: Vec<_> = effects.iter().map(|effect| effect.build(&db)).collect();
-            proptest::prop_assert_eq!(result.effects(&db), effects.as_slice());
+            proptest::prop_assert_eq!(result.instances(&db), effects.as_slice());
             match (current.rest, incoming.rest) {
                 (Some(a), Some(b)) if a != b => {
                     let tail = result.rest(&db).expect("open result");
@@ -1918,7 +1925,7 @@ mod merge_effect_tests {
                     ));
                 }
                 (a, b) => {
-                    proptest::prop_assert_eq!(result.rest(&db), a.or(b).map(|id| EffectVar { id }));
+                    proptest::prop_assert_eq!(result.rest(&db), a.or(b).map(|id| RowVar { id }));
                     proptest::prop_assert!(constraints.is_empty());
                 }
             }

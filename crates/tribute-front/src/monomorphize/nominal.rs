@@ -344,7 +344,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
 
     #[salsa_test]
     fn nominal_dependencies_include_substituted_row_constraints(db: &salsa::DatabaseImpl) {
-        use crate::ast::{AbilityId, Effect, EffectRow, RowRemoval, RowUnion};
+        use crate::ast::{AbilityId, AbilityInstance, AbilityRow, RowRemoval, RowUnion};
         let input = checked(
             db,
             crate::SourceCst::from_source_str(
@@ -374,9 +374,9 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 args: vec![Type::new(db, TypeKind::BoundVar { index: 0 })],
             },
         );
-        let row = EffectRow::single(
+        let row = AbilityRow::single(
             db,
-            Effect {
+            AbilityInstance {
                 ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Marker"])),
                 args: vec![hidden],
             },
@@ -437,7 +437,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 variant.row_unions(db)[0].result
             };
             assert!(
-                matches!(row.effects(db)[0].args[0].kind(db), TypeKind::Named { id, args, .. } if *id == hidden_id && args == &[Type::new(db, TypeKind::Int)])
+                matches!(row.instances(db)[0].args[0].kind(db), TypeKind::Named { id, args, .. } if *id == hidden_id && args == &[Type::new(db, TypeKind::Int)])
             );
             assert_eq!(schemas[&ctor], constrained);
         }

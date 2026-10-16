@@ -1316,7 +1316,7 @@ fn main() -> Nil {
 // Effect-Directed Name Resolution Tests (#629)
 // =============================================================================
 
-/// Test effect-directed resolution: `abort()` resolves from effect row.
+/// Test effect-directed resolution: `abort()` resolves from ability row.
 #[test]
 fn test_effect_directed_abort() {
     let code = r#"fn do_abort() ->{abilities::Abort} Nat {
@@ -1334,7 +1334,7 @@ fn main() -> Nil {
     assert_native_output("effect_directed_abort.trb", code, "99");
 }
 
-/// Test effect-directed resolution: `throw(x)` resolves from effect row.
+/// Test effect-directed resolution: `throw(x)` resolves from ability row.
 #[test]
 fn test_effect_directed_throw() {
     let code = r#"fn do_throw() ->{abilities::Throw(Nat)} Nat {

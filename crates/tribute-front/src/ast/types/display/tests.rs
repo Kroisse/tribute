@@ -1,15 +1,15 @@
 use salsa_test_macros::salsa_test;
 
 use super::*;
-use crate::ast::{AbilityId, EffectVar, NodeId, TypeDefId, UniVarId, UniVarSource};
+use crate::ast::{AbilityId, NodeId, RowVar, TypeDefId, UniVarId, UniVarSource};
 use trunk_ir::Symbol;
 
 fn effect<'db>(
     db: &'db dyn salsa::Database,
     name: &'static str,
     args: Vec<Type<'db>>,
-) -> Effect<'db> {
-    Effect {
+) -> AbilityInstance<'db> {
+    AbilityInstance {
         ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new([name])),
         args,
     }
@@ -19,7 +19,7 @@ fn effect<'db>(
 fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
     let int = Type::new(db, TypeKind::Int);
     let bool_ty = Type::new(db, TypeKind::Bool);
-    let pure = EffectRow::pure(db);
+    let pure = AbilityRow::pure(db);
     let named = |name, args| TypeKind::Named {
         id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::new([name])),
         name: Symbol::new(name),
@@ -116,10 +116,10 @@ fn type_and_effect_display_preserve_spelling(db: &salsa::DatabaseImpl) {
 }
 
 #[salsa_test]
-fn effect_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
+fn ability_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
     let int = Type::new(db, TypeKind::Int);
-    let pure = EffectRow::pure(db);
-    let open = EffectRow::open(db, EffectVar { id: 987 });
+    let pure = AbilityRow::pure(db);
+    let open = AbilityRow::open(db, RowVar { id: 987 });
     let named = |declaration| TypeKind::Named {
         id: TypeDefId::source(
             db,
@@ -180,29 +180,29 @@ fn effect_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
         assert_ne!(a, b);
         assert_eq!(a.to_string(), b.to_string());
         let expected = format!("{{{a}, {b}}}");
-        let row = EffectRow::new(db, vec![a, b], None);
+        let row = AbilityRow::new(db, vec![a, b], None);
         assert_eq!(row.to_string(), expected);
     }
-    let source = Effect {
+    let source = AbilityInstance {
         ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["std", "io", "Io"])),
         args: vec![],
     };
-    let builtin = Effect {
+    let builtin = AbilityInstance {
         ability_id: AbilityId::builtin_io(db),
         args: vec![],
     };
     assert_ne!(source, builtin);
-    let row = EffectRow::new(db, vec![source, builtin], None);
+    let row = AbilityRow::new(db, vec![source, builtin], None);
     assert_eq!(row.to_string(), "{Io, Io}");
 }
 
 #[salsa_test]
-fn effect_row_display_is_canonical(db: &salsa::DatabaseImpl) {
+fn ability_row_display_is_canonical(db: &salsa::DatabaseImpl) {
     use crate::typeck::SolveError;
 
-    let pure = EffectRow::pure(db);
+    let pure = AbilityRow::pure(db);
     assert_eq!(pure.to_string(), "{}");
-    assert_eq!(EffectRow::open(db, EffectVar { id: 99 }).to_string(), "{e}");
+    assert_eq!(AbilityRow::open(db, RowVar { id: 99 }).to_string(), "{e}");
     let mut effects = vec![
         effect(
             db,
@@ -216,14 +216,14 @@ fn effect_row_display_is_canonical(db: &salsa::DatabaseImpl) {
             vec![Type::new(db, TypeKind::BoundVar { index: 10 })],
         ),
     ];
-    let closed = EffectRow::new(db, effects.clone(), None);
+    let closed = AbilityRow::new(db, effects.clone(), None);
     assert_eq!(closed.to_string(), "{Console, State(_10), State(_2)}");
     effects.reverse();
     assert_eq!(
-        EffectRow::new(db, effects.clone(), None).to_string(),
+        AbilityRow::new(db, effects.clone(), None).to_string(),
         closed.to_string()
     );
-    let open = EffectRow::new(db, effects, Some(EffectVar { id: 777 }));
+    let open = AbilityRow::new(db, effects, Some(RowVar { id: 777 }));
     assert_eq!(open.to_string(), "{Console, State(_10), State(_2), e}");
     let mismatch = SolveError::RowMismatch {
         expected: pure,
@@ -231,21 +231,21 @@ fn effect_row_display_is_canonical(db: &salsa::DatabaseImpl) {
     };
     assert_eq!(
         mismatch.to_string(),
-        "effect mismatch: expected `{}`, found `{Console, State(_10), State(_2), e}`"
+        "ability row mismatch: expected `{}`, found `{Console, State(_10), State(_2), e}`"
     );
-    let ambiguous = SolveError::AmbiguousEffect {
+    let ambiguous = SolveError::AmbiguousAbility {
         expected: pure,
         actual: open,
     };
     assert_eq!(
         ambiguous.to_string(),
-        "ambiguous effect: cannot match `{Console, State(_10), State(_2), e}` with `{}`, \
-         more than one instance could correspond; annotate the effect's type arguments"
+        "ambiguous ability: cannot match `{Console, State(_10), State(_2), e}` with `{}`, \
+         more than one instance could correspond; annotate the ability's type arguments"
     );
 }
 
 #[salsa_test]
-fn effect_row_displays_deep_types(db: &salsa::DatabaseImpl) {
+fn ability_row_displays_deep_types(db: &salsa::DatabaseImpl) {
     let mut ty = Type::new(db, TypeKind::Int);
     for _ in 0..32 {
         ty = Type::new(db, TypeKind::Tuple(vec![ty]));
@@ -257,6 +257,6 @@ fn effect_row_displays_deep_types(db: &salsa::DatabaseImpl) {
         format!("State({}Int{})", "#(".repeat(32), ")".repeat(32))
     );
     let expected = format!("{{{a}, {b}}}");
-    let row = EffectRow::new(db, vec![a, b], None);
+    let row = AbilityRow::new(db, vec![a, b], None);
     assert_eq!(row.to_string(), expected);
 }
