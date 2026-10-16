@@ -215,7 +215,8 @@ pub fn get_physical_closure_convention(
         return None;
     }
     data.attrs
-        .get_u8(ctx, CALLING_CONVENTION_ATTR)
+        .view(ctx)
+        .get_u8(CALLING_CONVENTION_ATTR)
         .ok()??
         .try_into()
         .ok()
@@ -228,7 +229,8 @@ pub fn get_physical_closure_environment_index(ctx: &IrContext, closure: TypeRef)
         return None;
     }
     data.attrs
-        .get_u32(ctx, CLOSURE_ENVIRONMENT_INDEX_ATTR)
+        .view(ctx)
+        .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
         .ok()??
         .try_into()
         .ok()

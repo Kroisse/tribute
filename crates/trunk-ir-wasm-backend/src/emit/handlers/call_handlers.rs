@@ -84,7 +84,8 @@ pub(crate) fn handle_call_indirect(
         })?;
     let attrs = &ctx.op(op).attributes;
     let table_index = attrs
-        .get(ctx, "table")
+        .view(ctx)
+        .get("table")
         .map(|_| attr_u32(ctx, attrs, "table"))
         .transpose()?
         .unwrap_or(0);

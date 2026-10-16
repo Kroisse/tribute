@@ -467,7 +467,7 @@ fn gen_attr_accessors(crate_path: &TokenStream, attrs: &[AttrDef]) -> TokenStrea
 }
 
 fn gen_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
-    gen_map_attr_accessor(crate_path, attr, quote!(ctx.op(self.0).attributes))
+    gen_map_attr_accessor(crate_path, attr, quote!(ctx.op_attrs(self.0)))
 }
 
 fn gen_map_attr_accessor(
@@ -482,14 +482,14 @@ fn gen_map_attr_accessor(
         if attr.optional {
             quote! {
                 pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> Option<#out> {
-                    #attrs.get(ctx, #name_str).map(|attr| #read)
+                    #attrs.get(#name_str).map(|attr| #read)
                 }
             }
         } else {
             quote! {
                 pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> #out {
                     let attr = #attrs
-                        .get(ctx, #name_str)
+                        .get(#name_str)
                         .expect(concat!("missing attribute: ", #name_str));
                     #read
                 }
@@ -985,9 +985,9 @@ fn gen_type_constraint(
         let kind = attr_kind_trait(crate_path, attr);
         let kind = quote!(#kind::KIND);
         if attr.optional {
-            quote!(attrs.get(ctx, #name).is_none_or(|attr| #kind.accepts(attr)))
+            quote!(attrs.view(ctx).get(#name).is_none_or(|attr| #kind.accepts(attr)))
         } else {
-            quote!(attrs.get(ctx, #name).is_some_and(|attr| #kind.accepts(attr)))
+            quote!(attrs.view(ctx).get(#name).is_some_and(|attr| #kind.accepts(attr)))
         }
     });
     let count_ok = if td.params.iter().any(|p| p.variadic) {
@@ -1182,7 +1182,7 @@ fn gen_type_param_accessors(
 }
 
 fn gen_type_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
-    gen_map_attr_accessor(crate_path, attr, quote!(ctx.get_type(self.0).attrs))
+    gen_map_attr_accessor(crate_path, attr, quote!(ctx.type_attrs(self.0)))
 }
 
 fn gen_type_constructor(

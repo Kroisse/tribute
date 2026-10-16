@@ -3,7 +3,7 @@
 // === Type alias hint registration ===
 inventory::submit!(trunk_ir::asm_format::TypeAliasHint {
     dialect: "adt",
-    suggest: |ctx, ty| { ctx.get_type(ty).attrs.get_str(ctx, "name") },
+    suggest: |ctx, ty| { ctx.type_attrs(ty).get_str("name") },
 });
 
 // === Managed reference registrations ===
@@ -215,7 +215,7 @@ pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
     let nominal =
         data.dialect == "adt" && (matches!(data.name.as_str(), "struct" | "enum" | "typeref"));
     nominal
-        .then(|| data.attrs.get_string_ref(ctx, STRUCT_NAME_ATTR))
+        .then(|| data.attrs.view(ctx).get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
 }
 
@@ -249,17 +249,23 @@ impl Struct {
     pub fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, StructTypeError> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
-        if data.attrs.contains_key(ctx, "fields") {
+        if data.attrs.view(ctx).contains_key("fields") {
             return Err(StructTypeError::FieldsAttribute);
         }
-        if data.attrs.get_string_ref(ctx, STRUCT_NAME_ATTR).is_none() {
+        if data
+            .attrs
+            .view(ctx)
+            .get_string_ref(STRUCT_NAME_ATTR)
+            .is_none()
+        {
             return Err(StructTypeError::MissingName);
         }
         let mut names: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
         for index in 0..data.params.len() {
             let name = data
                 .param_attrs(ctx, index)
-                .get_string_ref(ctx, STRUCT_NAME_ATTR)
+                .view(ctx)
+                .get_string_ref(STRUCT_NAME_ATTR)
                 .ok_or(StructTypeError::MissingFieldName(index))?;
             if names.contains(&name) {
                 return Err(StructTypeError::DuplicateFieldName(
@@ -282,9 +288,8 @@ impl Struct {
 
     /// The struct's name as a pooled handle.
     pub fn name_ref(self, ctx: &IrContext) -> StringRef {
-        ctx.get_type(self.0)
-            .attrs
-            .get_string_ref(ctx, STRUCT_NAME_ATTR)
+        ctx.type_attrs(self.0)
+            .get_string_ref(STRUCT_NAME_ATTR)
             .expect("validated adt.struct must retain its name")
     }
 
@@ -374,7 +379,8 @@ impl Struct {
 
 fn field_name(ctx: &IrContext, attrs: &AttributeMap) -> StringRef {
     attrs
-        .get_string_ref(ctx, STRUCT_NAME_ATTR)
+        .view(ctx)
+        .get_string_ref(STRUCT_NAME_ATTR)
         .expect("validated adt.struct fields must retain their names")
 }
 
@@ -453,7 +459,7 @@ pub fn try_struct_type<N: Into<StringArg>>(
     let mut builder = TypeDataBuilder::new("adt", "struct");
     for (field, ty, mut field_attrs) in fields {
         let field = ctx.intern_string_arg(field.into());
-        field_attrs.insert(ctx, STRUCT_NAME_ATTR, field);
+        field_attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, field);
         builder = builder.param_with_attrs(ty, field_attrs);
     }
     let name = ctx.intern_string_arg(name.into());
@@ -467,13 +473,14 @@ fn finish_struct_type(
     mut builder: TypeDataBuilder,
     mut attrs: AttributeMap,
 ) -> Result<Struct, StructTypeError> {
-    attrs.remove(ctx, PARAM_ATTRS_ATTR);
-    attrs.insert(ctx, STRUCT_NAME_ATTR, name);
+    let mut attrs_view = attrs.view_mut(ctx);
+    attrs_view.remove(PARAM_ATTRS_ATTR);
+    attrs_view.insert(STRUCT_NAME_ATTR, name);
     for (key, value) in attrs {
         builder = builder.attr(key, value);
     }
     let data = builder.build(ctx);
-    if data.attrs.contains_key(ctx, "fields") {
+    if data.attrs.view(ctx).contains_key("fields") {
         return Err(StructTypeError::FieldsAttribute);
     }
     let mut seen: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
@@ -629,14 +636,19 @@ impl Enum {
     pub fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, EnumTypeError> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
-        if data.attrs.contains_key(ctx, "variants") {
+        if data.attrs.view(ctx).contains_key("variants") {
             return Err(EnumTypeError::VariantsAttribute);
         }
         // The syntax has no place for them, so printing would drop them.
-        if data.attrs.contains_key(ctx, PARAM_ATTRS_ATTR) {
+        if data.attrs.view(ctx).contains_key(PARAM_ATTRS_ATTR) {
             return Err(EnumTypeError::VariantAttributes);
         }
-        if data.attrs.get_string_ref(ctx, STRUCT_NAME_ATTR).is_none() {
+        if data
+            .attrs
+            .view(ctx)
+            .get_string_ref(STRUCT_NAME_ATTR)
+            .is_none()
+        {
             return Err(EnumTypeError::MissingName);
         }
         let mut names: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
@@ -663,9 +675,8 @@ impl Enum {
 
     /// The enum's name as a pooled handle.
     pub fn name_ref(self, ctx: &IrContext) -> StringRef {
-        ctx.get_type(self.0)
-            .attrs
-            .get_string_ref(ctx, STRUCT_NAME_ATTR)
+        ctx.type_attrs(self.0)
+            .get_string_ref(STRUCT_NAME_ATTR)
             .expect("validated adt.enum must retain its name")
     }
 
@@ -706,7 +717,7 @@ impl Enum {
 fn variant_name(ctx: &IrContext, variant: TypeRef) -> Option<StringRef> {
     let data = ctx.get_type(variant);
     (data.dialect == "adt" && data.name == "variant")
-        .then(|| data.attrs.get_string_ref(ctx, STRUCT_NAME_ATTR))
+        .then(|| data.attrs.view(ctx).get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
 }
 
@@ -763,7 +774,7 @@ pub fn enum_type<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
         builder = builder.param(variant);
     }
     let name = ctx.intern_string_arg(name.into());
-    attrs.insert(ctx, STRUCT_NAME_ATTR, name);
+    attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, name);
     for (key, value) in attrs {
         builder = builder.attr(key, value);
     }
@@ -810,7 +821,7 @@ fn write_enum_type(
                 h.write_str(", ")?;
             }
             let field_attrs = variant_data.param_attrs(ctx, field);
-            if let Some(field_name) = field_attrs.get_string_ref(ctx, STRUCT_NAME_ATTR) {
+            if let Some(field_name) = field_attrs.view(ctx).get_string_ref(STRUCT_NAME_ATTR) {
                 h.write_name(ctx.str(field_name))?;
                 h.write_str(": ")?;
             }
@@ -1192,9 +1203,8 @@ mod tests {
         }
         let valid = struct_type(&mut ctx, "Q", [("x", i32_ty)], AttributeMap::new());
         assert!(
-            ctx.get_type(valid.as_type_ref())
-                .attrs
-                .contains_key(&ctx, PARAM_ATTRS_ATTR)
+            ctx.type_attrs(valid.as_type_ref())
+                .contains_key(PARAM_ATTRS_ATTR)
         );
     }
 }

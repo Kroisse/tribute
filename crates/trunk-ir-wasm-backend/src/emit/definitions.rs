@@ -278,7 +278,7 @@ pub(crate) fn extract_global_def(
     }?;
     let mutable = global_op.mutable(ctx);
     let op_data = ctx.op(global_op.op_ref());
-    let init = match op_data.attributes.get(ctx, "init") {
+    let init = match op_data.attributes.view(ctx).get("init") {
         Some(Attribute::Int(v)) => i64::try_from(*v).map_err(|_| {
             CompilationError::invalid_attribute(format!("global init value {} out of i64 range", v))
         })?,

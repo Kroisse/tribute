@@ -932,7 +932,9 @@ impl<'db> IrLoweringCtx<'db> {
         definition: Location,
     ) -> TypeRef {
         let mut attrs = AttributeMap::new();
-        attrs.insert(ir, "tribute.definition", Attribute::Location(definition));
+        attrs
+            .view_mut(ir)
+            .insert("tribute.definition", Attribute::Location(definition));
         Self::enum_type(ir, name, variants, attrs)
     }
 

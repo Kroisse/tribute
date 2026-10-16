@@ -238,7 +238,7 @@ fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     }
     // struct, enum, typeref, variant instance
     matches!(data.name.as_str(), "typeref" | "struct" | "enum")
-        || data.attrs.get_bool(ctx, "is_variant") == Some(true)
+        || data.attrs.view(ctx).get_bool("is_variant") == Some(true)
 }
 
 /// Helper: Check if a type is closure.closure.

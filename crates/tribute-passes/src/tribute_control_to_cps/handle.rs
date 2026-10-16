@@ -121,14 +121,16 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref(self.ctx, "ability")
+            .view(self.ctx)
+            .get_symbol_ref("ability")
             .cloned()
             .expect("pre-CPS validation checked perform ability");
         let op_name = self
             .ctx
             .op(source)
             .attributes
-            .get_string_ref(self.ctx, "op_name")
+            .view(self.ctx)
+            .get_string_ref("op_name")
             .expect("pre-CPS validation checked perform operation");
         let evidence = self.current_evidence(source, flow)?;
         let frame = flow.exit_k.ok_or_else(|| {
@@ -230,21 +232,24 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref(self.ctx, "ability")
+            .view(self.ctx)
+            .get_symbol_ref("ability")
             .cloned()
             .unwrap();
         let op_name = self
             .ctx
             .op(source)
             .attributes
-            .get_string_ref(self.ctx, "op_name")
+            .view(self.ctx)
+            .get_string_ref("op_name")
             .unwrap();
         let general = self.ctx.op_attrs(source).get_str("kind") == Some("op");
         let operation_result = self
             .ctx
             .op(source)
             .attributes
-            .get_type(self.ctx, "operation_result_type")
+            .view(self.ctx)
+            .get_type("operation_result_type")
             .unwrap();
         let source_region = self.ctx.op_region(source, 0).ok_or_else(|| {
             self.malformed_source(source, "tribute_control.handler requires a body region")
@@ -487,14 +492,16 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref(self.ctx, "ability")
+            .view(self.ctx)
+            .get_symbol_ref("ability")
             .cloned()
             .expect("pre-CPS validation checked perform ability");
         let op_name = self
             .ctx
             .op(source)
             .attributes
-            .get_string_ref(self.ctx, "op_name")
+            .view(self.ctx)
+            .get_string_ref("op_name")
             .expect("pre-CPS validation checked perform operation");
         let call = ability::Call::operands(args)
             .ability(ability)

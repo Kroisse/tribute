@@ -216,7 +216,7 @@ not carry a `StringRef` to another context:
 
 ```rust
 let abi = ctx.string_attr("C");
-attrs.insert(ctx, "abi", abi);
+attrs.view_mut(ctx).insert("abi", abi);
 let is_c = ctx.op_attrs(op).get_str("abi") == Some("C");
 let value: &str = string_const.value(ctx); // generated accessor
 ```
@@ -245,25 +245,20 @@ let copy = adt::StringConst::operands()
 ```
 
 Attribute keys are names, not symbols: an `AttributeMap` keys its entries by
-`StringRef` in the same pool, ordered by their text. Look a key up through the
-context by its text or by its handle, and insert through the context, which
-interns the key. An entry being moved from another map of the same context
-keeps its handle through `insert_ref` or `AttributeMap::from_refs`:
+`StringRef` in the same pool, ordered by their text. The map itself offers
+only what needs no key text (`len`, `iter` over `StringRef` keys, `values`);
+every lookup and change goes through a view bound to the context:
+
+- `ctx.op_attrs(op)`, `ctx.type_attrs(ty)`, and `attrs.view(ctx)` for any
+  other map read by key text or handle, `get_type("type")`, and print keys
+  and string values as text with `{:?}`.
+- `ctx.op_attrs_mut(op)`, `ctx.block_arg_attrs_mut(block, i)`, and
+  `attrs.view_mut(ctx)` for a map outside the context change it, interning
+  new keys. The view borrows the context, so build any value that needs the
+  context before taking it.
 
 ```rust
-let attrs = AttributeMap::from_entries(ctx, [("bind_name", name)]);
 let callee = ctx.op_attrs(op).get_symbol_ref("callee");
-let copied = AttributeMap::from_refs(ctx, source.iter().map(|(key, value)| (key, value.clone())));
-```
-
-An operation's attributes are read through `ctx.op_attrs(op)`, a view bound
-to the context whose lookups take only the key; `attrs.view(ctx)` binds any
-other map the same way. They are changed through `ctx.op_attrs_mut(op)`, which
-borrows the map together with the string pool so that inserting a key can
-intern it, and a block argument's through `ctx.block_arg_attrs_mut(block, i)`.
-Build any value that needs the context before taking the view:
-
-```rust
 let is_bodyless = !ctx.op_attrs(op).contains_key("body");
 let name = ctx.string_attr("x");
 let mut attrs = ctx.op_attrs_mut(op);
@@ -272,11 +267,11 @@ attrs.remove("signature");
 ctx.block_arg_attrs_mut(block, 0).insert("bind_name", name);
 ```
 
-Iteration yields each key's `StringRef`; read its text with `ctx.str(key)`.
-`Debug` cannot resolve keys or string values, so diagnostics format a map
-with `attrs.display(ctx)`. A type is built with `TypeDataBuilder`, whose
-`attr` keys are interned when it is built: `TypeDataBuilder::new("core",
-"i32").intern(ctx)` builds and interns it.
+`AttributeMap::from_entries(ctx, [("bind_name", name)])` builds a map, and
+`AttributeMap::from_refs(ctx, entries)` builds one from keys already pooled
+in the context, such as the entries of another map. A type is built with
+`TypeDataBuilder`, whose `attr` keys are interned when it is built:
+`TypeDataBuilder::new("core", "i32").intern(ctx)` builds and interns it.
 
 Attributes that embed types (directly or inside `List`/`Dict` values) are
 converted and inspected through the shared traversal instead of matching

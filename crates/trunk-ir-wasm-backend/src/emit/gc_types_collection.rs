@@ -141,7 +141,7 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
         "outer",
     ]) {
         let field_type = ctx.get_type(ty);
-        if attrs.get_str(ctx, "name") != Some(role)
+        if attrs.view(ctx).get_str("name") != Some(role)
             || !field_type.params.is_empty()
             || !field_type.attrs.is_empty()
             || !(helpers::is_type(ctx, ty, "core", "i32")

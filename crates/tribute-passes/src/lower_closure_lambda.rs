@@ -465,7 +465,7 @@ impl LambdaNamer {
 fn make_bind_name_attrs(ctx: &mut IrContext, name: &str) -> AttributeMap {
     let mut attrs = AttributeMap::new();
     let bind_name = ctx.string_attr(name);
-    attrs.insert(ctx, "bind_name", bind_name);
+    attrs.view_mut(ctx).insert("bind_name", bind_name);
     attrs
 }
 

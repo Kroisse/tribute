@@ -41,7 +41,7 @@ pub fn bytes_struct_type(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(BYTES);
-    attrs.insert(ctx, LAYOUT_ATTR, layout);
+    attrs.view_mut(ctx).insert(LAYOUT_ATTR, layout);
     adt::struct_type(
         ctx,
         "_Bytes",

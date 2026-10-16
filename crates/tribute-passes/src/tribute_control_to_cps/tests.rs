@@ -60,7 +60,8 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
                 .ctx
                 .get_type(converted)
                 .attrs
-                .get_type(converter.ctx, "nested"),
+                .view(converter.ctx)
+                .get_type("nested"),
             Some(converted_callable)
         );
     }
@@ -520,9 +521,8 @@ fn source_signature_metadata_roundtrips_before_conversion() {
     let physical = ctx.op_attrs(lowered).get_type("type").unwrap();
     let physical = func::FuncSig::from_type_ref(&ctx, physical).unwrap();
     let Attribute::List(function_metadata) = ctx
-        .get_type(physical.as_type_ref())
-        .attrs
-        .get(&ctx, "metadata")
+        .type_attrs(physical.as_type_ref())
+        .get("metadata")
         .unwrap()
     else {
         panic!("function metadata must remain a list");
@@ -540,9 +540,8 @@ fn source_signature_metadata_roundtrips_before_conversion() {
     assert_eq!(*function_tag, SymbolPath::new(["function"]));
     assert!(closure::Closure::matches(&ctx, *function_nested));
     assert!(
-        ctx.get_type(physical.as_type_ref())
-            .attrs
-            .get(&ctx, CALLING_CONVENTION_ATTR)
+        ctx.type_attrs(physical.as_type_ref())
+            .get(CALLING_CONVENTION_ATTR)
             .is_none()
     );
     assert_eq!(
@@ -556,10 +555,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
         let closure_ty = ctx.op_result_types(lambda)[0];
         let closure = closure::Closure::from_type_ref(&ctx, closure_ty)?;
         let signature = func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx))?;
-        let Attribute::List(metadata) = ctx
-            .get_type(signature.as_type_ref())
-            .attrs
-            .get(&ctx, "metadata")?
+        let Attribute::List(metadata) = ctx.type_attrs(signature.as_type_ref()).get("metadata")?
         else {
             return None;
         };
@@ -1238,9 +1234,8 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
         consumed_set: &mut Option<ValueRef>,
     ) {
         let is_one_shot_type = |ty: TypeRef| {
-            ctx.get_type(ty)
-                .attrs
-                .get_str(ctx, "name")
+            ctx.type_attrs(ty)
+                .get_str("name")
                 .is_some_and(|name| name.starts_with("__tribute_one_shot_state"))
         };
         if let Ok(get) = adt::StructGet::from_op(ctx, op)
@@ -1728,7 +1723,7 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
     let contract = crate::target_abi::physical_parameter_attrs(&mut ctx, CallingConvention::Cps);
     let consumed = || contract.clone();
     let mut marked_consumed = marked;
-    marked_consumed.extend(&mut ctx, consumed());
+    marked_consumed.view_mut(&mut ctx).extend(consumed());
     itertools::assert_equal(
         physical
             .inputs_with_attrs(&ctx)

@@ -105,9 +105,8 @@ fn is_i32(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
 }
 
 fn is_continuation_frame(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
-    ctx.get_type(ty)
-        .attrs
-        .contains_key(ctx, "tribute.cps_continuation_frame_result")
+    ctx.type_attrs(ty)
+        .contains_key("tribute.cps_continuation_frame_result")
 }
 
 #[test]

@@ -105,7 +105,7 @@ impl CallConv {
     ///
     /// Returns `None` for a malformed `call_conv` value.
     pub fn from_attrs(ctx: &IrContext, attrs: &AttributeMap) -> Option<Self> {
-        match attrs.get(ctx, CALL_CONV_ATTR) {
+        match attrs.view(ctx).get(CALL_CONV_ATTR) {
             None => Some(Self::Platform),
             Some(Attribute::String(name)) if ctx.str(*name) == "tail" => Some(Self::Tail),
             Some(_) => None,
@@ -117,10 +117,10 @@ impl CallConv {
         match self.name() {
             Some(name) => {
                 let name = ctx.string_attr(name);
-                attrs.insert(ctx, CALL_CONV_ATTR, name);
+                attrs.view_mut(ctx).insert(CALL_CONV_ATTR, name);
             }
             None => {
-                attrs.remove(ctx, CALL_CONV_ATTR);
+                attrs.view_mut(ctx).remove(CALL_CONV_ATTR);
             }
         }
     }
@@ -300,9 +300,10 @@ impl FuncSig {
     }
 
     /// Remove input/result count delimiters from owned function metadata before rebuilding it.
-    pub fn remove_reserved_attrs(ctx: &crate::IrContext, attrs: &mut AttributeMap) {
-        attrs.remove(ctx, NUM_INPUTS_ATTR);
-        attrs.remove(ctx, NUM_RESULTS_ATTR);
+    pub fn remove_reserved_attrs(ctx: &mut crate::IrContext, attrs: &mut AttributeMap) {
+        let mut attrs_view = attrs.view_mut(ctx);
+        attrs_view.remove(NUM_INPUTS_ATTR);
+        attrs_view.remove(NUM_RESULTS_ATTR);
     }
 
     pub fn is_resultless(&self, ctx: &IrContext) -> bool {
@@ -352,7 +353,7 @@ fn read_count(
     attrs: &AttributeMap,
     name: &'static str,
 ) -> Result<u32, FuncSigTypeError> {
-    match attrs.get(ctx, name) {
+    match attrs.view(ctx).get(name) {
         None => Err(FuncSigTypeError::MissingCount(name)),
         Some(Attribute::Int(value)) => {
             u32::try_from(*value).map_err(|_| FuncSigTypeError::InvalidCount(name))
@@ -386,10 +387,12 @@ pub fn func_sig_with_param_attrs(
     let (results, result_attrs): (Vec<_>, Vec<_>) = results.into_iter().unzip();
     match crate::types::param_attrs_attribute(input_attrs.into_iter().chain(result_attrs)) {
         Some(value) => {
-            attrs.insert(ctx, crate::types::PARAM_ATTRS_ATTR, value);
+            attrs
+                .view_mut(ctx)
+                .insert(crate::types::PARAM_ATTRS_ATTR, value);
         }
         None => {
-            attrs.remove(ctx, crate::types::PARAM_ATTRS_ATTR);
+            attrs.view_mut(ctx).remove(crate::types::PARAM_ATTRS_ATTR);
         }
     }
     func_sig_with_attrs(ctx, inputs, results, attrs)
@@ -405,7 +408,8 @@ pub fn func_sig_with_attrs(
     mut attrs: AttributeMap,
 ) -> FuncSig {
     assert!(
-        !attrs.contains_key(ctx, NUM_INPUTS_ATTR) && !attrs.contains_key(ctx, NUM_RESULTS_ATTR),
+        !attrs.view(ctx).contains_key(NUM_INPUTS_ATTR)
+            && !attrs.view(ctx).contains_key(NUM_RESULTS_ATTR),
         "func.func_sig count attributes are reserved"
     );
 
@@ -665,10 +669,12 @@ fn indirect_call_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<c
 
 /// Remove the `func`-owned exact-signature attribute from copied metadata.
 pub fn remove_indirect_call_signature(
-    ctx: &crate::IrContext,
+    ctx: &mut crate::IrContext,
     attributes: &mut crate::AttributeMap,
 ) {
-    attributes.remove(ctx, INDIRECT_CALL_SIGNATURE_ATTR);
+    attributes
+        .view_mut(ctx)
+        .remove(INDIRECT_CALL_SIGNATURE_ATTR);
 }
 
 impl Func {
@@ -722,7 +728,8 @@ fn print_func(
     let type_info = {
         let data = h.ctx().op(op);
         data.attributes
-            .get_type(h.ctx(), "type")
+            .view(h.ctx())
+            .get_type("type")
             .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(h.ctx(), ty))
             .map(|func| (func.single_result(h.ctx()), func.inputs(h.ctx()).to_vec()))
     };
@@ -775,7 +782,8 @@ fn print_func(
         .ctx()
         .op(op)
         .attributes
-        .get_type(h.ctx(), "type")
+        .view(h.ctx())
+        .get_type("type")
         .is_some_and(|ty| {
             h.ctx()
                 .get_type(ty)
@@ -917,11 +925,9 @@ mod tests {
         let mut ctx = crate::IrContext::new();
         let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
         let mut attrs = AttributeMap::new();
-        attrs.insert(
-            &mut ctx,
-            "note",
-            Attribute::SymbolRef(SymbolPath::new(["kept"])),
-        );
+        attrs
+            .view_mut(&mut ctx)
+            .insert("note", Attribute::SymbolRef(SymbolPath::new(["kept"])));
         let platform = func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs);
         assert_eq!(platform.call_conv(&ctx), Some(CallConv::Platform));
 
@@ -975,7 +981,7 @@ mod tests {
         let mut ctx = crate::IrContext::new();
         let mut attrs = AttributeMap::new();
         let fast = ctx.string_attr("fast");
-        attrs.insert(&mut ctx, CALL_CONV_ATTR, fast);
+        attrs.view_mut(&mut ctx).insert(CALL_CONV_ATTR, fast);
         let signature = func_sig_with_attrs(&mut ctx, [], [], attrs);
         assert_eq!(signature.call_conv(&ctx), None);
     }

@@ -52,7 +52,9 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     let ptr_ty = core::ptr(ctx).as_type_ref();
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(tribute_ir::runtime_layout::CLOSURE);
-    attrs.insert(ctx, tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
+    attrs
+        .view_mut(ctx)
+        .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
     adt::struct_type(
         ctx,
         "_closure",

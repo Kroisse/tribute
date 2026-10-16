@@ -54,18 +54,12 @@ pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Whether a type carries the runtime layout identifier `layout`.
 pub(crate) fn has_layout(ctx: &IrContext, ty: TypeRef, layout: &'static str) -> bool {
-    ctx.get_type(ty)
-        .attrs
-        .get_str(ctx, trunk_ir::types::LAYOUT_ATTR)
-        == Some(layout)
+    ctx.type_attrs(ty).get_str(trunk_ir::types::LAYOUT_ATTR) == Some(layout)
 }
 
 /// The builtin GC type index a type's runtime layout identifier selects.
 pub(crate) fn builtin_layout_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
-    let layout = ctx
-        .get_type(ty)
-        .attrs
-        .get_str(ctx, trunk_ir::types::LAYOUT_ATTR)?;
+    let layout = ctx.type_attrs(ty).get_str(trunk_ir::types::LAYOUT_ATTR)?;
     crate::gc_types::builtin_layout_idx(layout)
 }
 
@@ -345,7 +339,7 @@ pub(crate) fn attr_heap_type(
     attrs: &AttributeMap,
     key: &str,
 ) -> CompilationResult<HeapType> {
-    match attrs.get(ctx, key) {
+    match attrs.view(ctx).get(key) {
         Some(Attribute::Int(bits)) => {
             let idx = u32::try_from(*bits).map_err(|_| {
                 CompilationError::invalid_attribute(format!(
@@ -425,7 +419,7 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 /// - Key present but wrong variant → `invalid_attribute` error
 /// - Key present and Int → checked u32 conversion
 pub(crate) fn attr_u32(ctx: &IrContext, attrs: &AttributeMap, key: &str) -> CompilationResult<u32> {
-    match attrs.get(ctx, key) {
+    match attrs.view(ctx).get(key) {
         Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "attribute '{}' value {} out of u32 range",

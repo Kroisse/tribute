@@ -617,9 +617,10 @@ impl FuncSig {
             .filter(|&(key, _)| ![NUM_INPUTS_ATTR, NUM_RESULTS_ATTR].contains(&ctx.str(key)))
     }
 
-    pub fn remove_reserved_attrs(ctx: &crate::IrContext, attrs: &mut AttributeMap) {
-        attrs.remove(ctx, NUM_INPUTS_ATTR);
-        attrs.remove(ctx, NUM_RESULTS_ATTR);
+    pub fn remove_reserved_attrs(ctx: &mut crate::IrContext, attrs: &mut AttributeMap) {
+        let mut attrs_view = attrs.view_mut(ctx);
+        attrs_view.remove(NUM_INPUTS_ATTR);
+        attrs_view.remove(NUM_RESULTS_ATTR);
     }
 }
 
@@ -649,7 +650,7 @@ fn read_count(
     attrs: &AttributeMap,
     name: &'static str,
 ) -> Result<u32, FuncSigTypeError> {
-    match attrs.get(ctx, name) {
+    match attrs.view(ctx).get(name) {
         None => Err(FuncSigTypeError::MissingCount(name)),
         Some(Attribute::Int(value)) => {
             u32::try_from(*value).map_err(|_| FuncSigTypeError::InvalidCount(name))
@@ -675,7 +676,8 @@ pub fn func_sig_with_attrs(
     attrs: AttributeMap,
 ) -> FuncSig {
     assert!(
-        !attrs.contains_key(ctx, NUM_INPUTS_ATTR) && !attrs.contains_key(ctx, NUM_RESULTS_ATTR),
+        !attrs.view(ctx).contains_key(NUM_INPUTS_ATTR)
+            && !attrs.view(ctx).contains_key(NUM_RESULTS_ATTR),
         "wasm.func_sig count attributes are reserved"
     );
     let inputs: Vec<_> = inputs.into_iter().collect();
@@ -825,7 +827,9 @@ mod tests {
     fn func_sig_constructor_rejects_reserved_count_attributes() {
         let mut ctx = crate::IrContext::new();
         let mut attrs = crate::AttributeMap::new();
-        attrs.insert(&mut ctx, NUM_INPUTS_ATTR, crate::Attribute::Int(0));
+        attrs
+            .view_mut(&mut ctx)
+            .insert(NUM_INPUTS_ATTR, crate::Attribute::Int(0));
         let _ = func_sig_with_attrs(&mut ctx, [], [], attrs);
     }
 }

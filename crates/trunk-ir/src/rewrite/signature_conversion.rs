@@ -358,7 +358,9 @@ mod tests {
         let i64_ty = i64_type(&mut ctx);
 
         let mut type_attrs = crate::AttributeMap::new();
-        type_attrs.insert(&mut ctx, "metadata_type", Attribute::Type(i32_ty));
+        type_attrs
+            .view_mut(&mut ctx)
+            .insert("metadata_type", Attribute::Type(i32_ty));
         let func_ty =
             func::func_sig_with_attrs(&mut ctx, [i32_ty], [i32_ty], type_attrs).as_type_ref();
         let func_op = make_func_op(&mut ctx, loc, "test_fn", func_ty, &[i32_ty]);
@@ -385,7 +387,7 @@ mod tests {
         assert_eq!(function.inputs(&ctx), &[i64_ty]);
         assert_eq!(function.single_result(&ctx), Some(i64_ty));
         assert_eq!(
-            ctx.get_type(new_type).attrs.get_type(&ctx, "metadata_type"),
+            ctx.type_attrs(new_type).get_type("metadata_type"),
             Some(i64_ty),
             "nested type attributes should be converted and preserved"
         );
@@ -469,7 +471,7 @@ mod tests {
             for (index, expected_regions) in [(0, 0), (1, 1)] {
                 let data = ctx.op(ops[index]);
                 assert_eq!(ctx.op_region_count(ops[index]), expected_regions);
-                let func_ty = data.attributes.get_type(&ctx, "type").unwrap();
+                let func_ty = data.attributes.view(&ctx).get_type("type").unwrap();
                 let function = func::FuncSig::from_type_ref(&ctx, func_ty).unwrap();
                 assert_eq!(function.inputs(&ctx), [i64_ty]);
                 assert_eq!(function.results(&ctx), vec![i64_ty; result_count]);
@@ -562,8 +564,7 @@ mod result_list_tests {
                 let nil = core::nil(&mut ctx).as_type_ref();
                 let ptr = core::ptr(&mut ctx).as_type_ref();
                 let mut attrs = crate::AttributeMap::new();
-                attrs.insert(
-                    &mut ctx,
+                attrs.view_mut(&mut ctx).insert(
                     "nested",
                     Attribute::List(vec![Attribute::List(vec![Attribute::Type(nil)])]),
                 );
@@ -571,12 +572,9 @@ mod result_list_tests {
                     &mut ctx,
                     [("ty", Attribute::List(vec![Attribute::Type(nil)]))],
                 );
-                attrs.insert(&mut ctx, "dict", Attribute::Dict(dict));
-                attrs.insert(
-                    &mut ctx,
-                    "tag",
-                    Attribute::SymbolRef(SymbolPath::new(["keep"])),
-                );
+                let mut attrs_view = attrs.view_mut(&mut ctx);
+                attrs_view.insert("dict", Attribute::Dict(dict));
+                attrs_view.insert("tag", Attribute::SymbolRef(SymbolPath::new(["keep"])));
                 let signature = func::func_sig_with_attrs(
                     &mut ctx,
                     vec![nil; inputs],
@@ -591,7 +589,7 @@ mod result_list_tests {
                 assert_eq!(function.inputs(&ctx), vec![ptr; inputs]);
                 assert_eq!(function.results(&ctx), vec![ptr; results]);
                 assert_eq!(
-                    ctx.get_type(converted).attrs.get(&ctx, "nested"),
+                    ctx.type_attrs(converted).get("nested"),
                     Some(&Attribute::List(vec![Attribute::List(vec![
                         Attribute::Type(ptr)
                     ])]))
@@ -601,11 +599,11 @@ mod result_list_tests {
                     [("ty", Attribute::List(vec![Attribute::Type(ptr)]))],
                 );
                 assert_eq!(
-                    ctx.get_type(converted).attrs.get(&ctx, "dict"),
+                    ctx.type_attrs(converted).get("dict"),
                     Some(&Attribute::Dict(expected_dict))
                 );
                 assert_eq!(
-                    ctx.get_type(converted).attrs.get_symbol_ref(&ctx, "tag"),
+                    ctx.type_attrs(converted).get_symbol_ref("tag"),
                     Some(&SymbolPath::new(["keep"]))
                 );
             }

@@ -179,19 +179,16 @@ mod tests {
             let i64 = type_ref(&mut ctx, "i64");
             let ptr = type_ref(&mut ctx, "ptr");
             let mut attrs = trunk_ir::AttributeMap::new();
-            attrs.insert(
-                &mut ctx,
+            attrs.view_mut(&mut ctx).insert(
                 "nested",
                 Attribute::List(vec![
                     Attribute::Type(i32),
                     Attribute::List(vec![Attribute::Type(i32)]),
                 ]),
             );
-            attrs.insert(
-                &mut ctx,
-                "tag",
-                Attribute::SymbolRef(SymbolPath::new(["keep"])),
-            );
+            attrs
+                .view_mut(&mut ctx)
+                .insert("tag", Attribute::SymbolRef(SymbolPath::new(["keep"])));
             let signature = wasm::func_sig_with_attrs(
                 &mut ctx,
                 [i32, ptr],
@@ -233,14 +230,14 @@ mod tests {
                     .map(|(key, value)| (key, value.clone())),
             );
             assert_eq!(
-                attrs.get(&ctx, "nested"),
+                attrs.view(&ctx).get("nested"),
                 Some(&Attribute::List(vec![
                     Attribute::Type(i64),
                     Attribute::List(vec![Attribute::Type(i64)]),
                 ])),
             );
             assert_eq!(
-                attrs.get_symbol_ref(&ctx, "tag"),
+                attrs.view(&ctx).get_symbol_ref("tag"),
                 Some(&SymbolPath::new(["keep"]))
             );
             assert_eq!(ctx.get_type(function.r#type(&ctx)).attrs.len(), 4);

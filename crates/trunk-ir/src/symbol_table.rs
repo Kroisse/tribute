@@ -196,8 +196,9 @@ pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
 pub fn link_name(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
     let attributes = &ctx.op(op).attributes;
     attributes
-        .get_str(ctx, LINK_NAME)
-        .or_else(|| attributes.get_str(ctx, SYM_NAME))
+        .view(ctx)
+        .get_str(LINK_NAME)
+        .or_else(|| attributes.view(ctx).get_str(SYM_NAME))
         .map(Symbol::new)
 }
 

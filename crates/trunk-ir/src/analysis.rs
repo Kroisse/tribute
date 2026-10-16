@@ -573,7 +573,8 @@ mod tests {
                 .ir()
                 .op(target)
                 .attributes
-                .get(ctx.ir(), "marker")
+                .view(ctx.ir())
+                .get("marker")
                 .and_then(|a| a.as_i128());
             Ok(Self(marker))
         }
@@ -694,7 +695,8 @@ mod tests {
                 .ir()
                 .op(first_child)
                 .attributes
-                .get_str(ctx.ir(), "sym_name")
+                .view(ctx.ir())
+                .get_str("sym_name")
                 == Some("first")
             {
                 let _ = ctx.get::<ChoicePrerequisiteFirst>(first_child)?;

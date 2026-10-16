@@ -65,7 +65,9 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
 
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(tribute_ir::runtime_layout::CLOSURE);
-    attrs.insert(ctx, tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
+    attrs
+        .view_mut(ctx)
+        .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
     adt::struct_type(
         ctx,
         "_closure",
@@ -81,7 +83,9 @@ pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(tribute_ir::runtime_layout::DESCRIBED);
-    attrs.insert(ctx, tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
+    attrs
+        .view_mut(ctx)
+        .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
     adt::struct_type(ctx, "_described", [("descriptor", i32_ty)], attrs).as_type_ref()
 }
 
@@ -726,7 +730,7 @@ mod tests {
             .insert("storage", nested(source));
         convert_builtin_layouts(&mut ctx, module);
         assert_eq!(
-            ctx.block(block).args[0].attrs.get(&ctx, "storage"),
+            ctx.block(block).args[0].attrs.view(&ctx).get("storage"),
             Some(&nested(target))
         );
     }
@@ -773,7 +777,8 @@ mod tests {
         let generic = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("structref"));
         let mut near = ctx.get_type(shared).clone();
         near.attrs
-            .insert(&mut ctx, "unrelated", Attribute::Bool(true));
+            .view_mut(&mut ctx)
+            .insert("unrelated", Attribute::Bool(true));
         let near = ctx.intern_type(near);
         let converter = wasm_type_converter(&mut ctx);
         assert_eq!(converter.convert_type_or_identity(&ctx, shared), target);

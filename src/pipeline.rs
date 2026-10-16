@@ -2171,7 +2171,7 @@ fn main() -> Nil {
         let consumed = |ctx: &IrContext, signature: func_dialect::FuncSig| {
             signature
                 .input_attrs(ctx)
-                .all(|attrs| attrs.get_str(ctx, "tribute.ownership") == Some("consumed"))
+                .all(|attrs| attrs.view(ctx).get_str("tribute.ownership") == Some("consumed"))
         };
         let mut tail_signatures = 0;
         for (path, text) in BOUNDARY_EXIT_PROGRAMS {
@@ -3269,9 +3269,8 @@ fn main() -> Nil {
                 .type_alias_by_name(&name)
                 .expect("dependency layout is published");
             assert!(
-                ir.get_type(ty)
-                    .attrs
-                    .get_str(ir, "name")
+                ir.type_attrs(ty)
+                    .get_str("name")
                     .is_some_and(|text| name == text)
             );
             ty
@@ -3279,7 +3278,7 @@ fn main() -> Nil {
         fn target(ir: &IrContext, ty: TypeRef) -> TypeRef {
             let data = ir.get_type(ty);
             assert_eq!(data.name, Symbol::new("typeref"));
-            ir.type_alias_by_text(data.attrs.get_str(ir, "name").unwrap())
+            ir.type_alias_by_text(data.attrs.view(ir).get_str("name").unwrap())
                 .expect("referenced layout")
         }
         let source = source_from_str(
@@ -3433,16 +3432,16 @@ fn main() -> Nil {}
             assert_eq!(data.name, Symbol::new(kind));
             assert!(
                 data.attrs
-                    .get_str(ir, "name")
+                    .view(ir)
+                    .get_str("name")
                     .is_some_and(|text| name == text)
             );
             assert_eq!(
                 ir.type_aliases()
                     .iter()
                     .filter(|(_, ty)| {
-                        ir.get_type(*ty)
-                            .attrs
-                            .get_str(ir, "name")
+                        ir.type_attrs(*ty)
+                            .get_str("name")
                             .is_some_and(|text| name == text)
                     })
                     .count(),
@@ -3456,7 +3455,12 @@ fn main() -> Nil {}
             let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
             assert_eq!(data.name, Symbol::new("typeref"));
-            Symbol::new(data.attrs.get_str(ir, "name").expect("nominal identity"))
+            Symbol::new(
+                data.attrs
+                    .view(ir)
+                    .get_str("name")
+                    .expect("nominal identity"),
+            )
         }
 
         // These specializations occur only in signatures, never in allocations.
@@ -3991,7 +3995,12 @@ fn main() ->{std::io::Io} Nil {
         // and knows no other `adt` type.
         let builtin_layout_or_not_adt = |ctx: &IrContext, ty| {
             let data = ctx.get_type(ty);
-            data.dialect != "adt" || data.attrs.get(ctx, trunk_ir::types::LAYOUT_ATTR).is_some()
+            data.dialect != "adt"
+                || data
+                    .attrs
+                    .view(ctx)
+                    .get(trunk_ir::types::LAYOUT_ATTR)
+                    .is_some()
         };
         for (path, text) in [
             (
@@ -4077,7 +4086,7 @@ fn main() -> String { "hello" }
         let string_data = ctx.get_type(string_ty);
 
         let Some(trunk_ir::Attribute::Location(definition)) =
-            string_data.attrs.get(&ctx, "tribute.definition")
+            string_data.attrs.view(&ctx).get("tribute.definition")
         else {
             panic!("String IR type records its definition location");
         };
@@ -4091,7 +4100,7 @@ fn main() -> String { "hello" }
             (ty != string_ty
                 && data.dialect == "adt"
                 && data.name == "enum"
-                && data.attrs.get_str(&ctx, "name") == Some("String"))
+                && data.attrs.view(&ctx).get_str("name") == Some("String"))
             .then_some(ty)
         });
         assert!(

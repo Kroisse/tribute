@@ -1051,7 +1051,7 @@ fn lower_function<'db>(
         .map(|(parameter, ty)| {
             let mut attrs = trunk_ir::types::AttributeMap::default();
             let name = parameter.name.with_str(|name| ir.string_attr(name));
-            attrs.insert(ir, "bind_name", name);
+            attrs.view_mut(ir).insert("bind_name", name);
             BlockArgData { ty: *ty, attrs }
         })
         .collect();

@@ -611,8 +611,9 @@ impl RewritePattern for FuncTailCallIndirectPattern {
 
         let mut converted_attrs = ctx.op(op).attributes.clone();
         func::remove_indirect_call_signature(ctx, &mut converted_attrs);
-        converted_attrs.remove(ctx, "table");
-        converted_attrs.remove(ctx, "type_idx");
+        let mut converted_attrs_view = converted_attrs.view_mut(ctx);
+        converted_attrs_view.remove("table");
+        converted_attrs_view.remove("type_idx");
 
         // This is intentionally checked before creating any replacement.
         // Missing or malformed metadata remains a residual `func.*` op and is
@@ -785,11 +786,9 @@ mod tests {
         let results = original.results(&ctx).to_vec();
         let nested = inputs[0];
         let mut attrs = trunk_ir::AttributeMap::new();
-        attrs.insert(
-            &mut ctx,
-            "metadata",
-            Attribute::List(vec![Attribute::Type(nested)]),
-        );
+        attrs
+            .view_mut(&mut ctx)
+            .insert("metadata", Attribute::List(vec![Attribute::Type(nested)]));
         let input_attrs =
             trunk_ir::AttributeMap::from_entries(&mut ctx, [("marker", Attribute::Unit)]);
         let outer = func::func_sig_with_param_attrs(
@@ -823,7 +822,8 @@ mod tests {
         assert_eq!(ctx.value_ty(ctx.block_args(block)[0]), nested_input);
         let block_metadata = ctx.block(block).args[0]
             .attrs
-            .get_type(&ctx, "metadata")
+            .view(&ctx)
+            .get_type("metadata")
             .unwrap();
         assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, block_metadata).is_some());
         assert_eq!(

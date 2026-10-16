@@ -362,8 +362,42 @@ impl AttributeMap {
         entries: impl IntoIterator<Item = (K, V)>,
     ) -> Self {
         let mut map = Self::new();
-        map.extend(ctx, entries);
+        map.view_mut(ctx).extend(entries);
         map
+    }
+
+    /// A map holding `entries`, whose keys are already pooled in `ctx`;
+    /// later entries replace earlier ones with the same key.
+    pub fn from_refs(
+        ctx: &impl AsRef<StringPool>,
+        entries: impl IntoIterator<Item = (StringRef, Attribute)>,
+    ) -> Self {
+        let strings = ctx.as_ref();
+        let entries = entries.into_iter();
+        let mut map = Self::new();
+        map.0.reserve_exact(entries.size_hint().0.min(4));
+        for (key, value) in entries {
+            map.insert_in(strings, key, value);
+        }
+        map
+    }
+
+    /// Read these attributes through `ctx`.
+    pub fn view<'a>(&'a self, ctx: &'a impl AsRef<StringPool>) -> AttributeView<'a> {
+        AttributeView {
+            map: self,
+            strings: ctx.as_ref(),
+        }
+    }
+
+    /// Change these attributes through `ctx`, which interns new keys. For a
+    /// map inside the context, use [`IrContext::op_attrs_mut`] or
+    /// [`IrContext::block_arg_attrs_mut`].
+    pub fn view_mut<'a>(&'a mut self, ctx: &'a mut IrContext) -> AttributeViewMut<'a> {
+        AttributeViewMut {
+            map: self,
+            strings: ctx.strings_mut(),
+        }
     }
 
     fn position(&self, strings: &StringPool, key: impl AttributeKey) -> Option<usize> {
@@ -372,143 +406,12 @@ impl AttributeMap {
             .position(|&(existing, _)| key.matches(strings, existing))
     }
 
-    /// Return the attribute associated with a key.
-    pub fn get(&self, ctx: &impl AsRef<StringPool>, key: impl AttributeKey) -> Option<&Attribute> {
-        let index = self.position(ctx.as_ref(), key)?;
-        Some(&self.0[index].1)
-    }
-
-    pub fn get_mut(
+    fn insert_in(
         &mut self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-    ) -> Option<&mut Attribute> {
-        let index = self.position(ctx.as_ref(), key)?;
-        Some(&mut self.0[index].1)
-    }
-
-    pub fn get_bool(&self, ctx: &impl AsRef<StringPool>, key: impl AttributeKey) -> Option<bool> {
-        self.get(ctx, key).and_then(Attribute::as_bool)
-    }
-
-    pub fn get_i128(&self, ctx: &impl AsRef<StringPool>, key: impl AttributeKey) -> Option<i128> {
-        self.get(ctx, key).and_then(Attribute::as_i128)
-    }
-
-    pub fn get_i64(
-        &self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-    ) -> Result<Option<i64>, IntegerOutOfRange> {
-        self.get_integer(ctx, key, "i64", i64::try_from)
-    }
-
-    pub fn get_i32(
-        &self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-    ) -> Result<Option<i32>, IntegerOutOfRange> {
-        self.get_integer(ctx, key, "i32", i32::try_from)
-    }
-
-    pub fn get_u64(
-        &self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-    ) -> Result<Option<u64>, IntegerOutOfRange> {
-        self.get_integer(ctx, key, "u64", u64::try_from)
-    }
-
-    pub fn get_u32(
-        &self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-    ) -> Result<Option<u32>, IntegerOutOfRange> {
-        self.get_integer(ctx, key, "u32", u32::try_from)
-    }
-
-    pub fn get_u8(
-        &self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-    ) -> Result<Option<u8>, IntegerOutOfRange> {
-        self.get_integer(ctx, key, "u8", u8::try_from)
-    }
-
-    pub fn get_string_ref(
-        &self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-    ) -> Option<StringRef> {
-        self.get(ctx, key).and_then(Attribute::as_string_ref)
-    }
-
-    /// The text of a string attribute, resolved through the owning context.
-    pub fn get_str<'a, C: AsRef<StringPool>>(
-        &self,
-        ctx: &'a C,
-        key: impl AttributeKey,
-    ) -> Option<&'a str> {
-        let value = self.get_string_ref(ctx, key)?;
-        Some(ctx.as_ref().get(value))
-    }
-
-    pub fn get_symbol_ref(
-        &self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-    ) -> Option<&SymbolPath> {
-        self.get(ctx, key).and_then(Attribute::as_symbol_ref)
-    }
-
-    pub fn get_type(
-        &self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-    ) -> Option<TypeRef> {
-        self.get(ctx, key).and_then(Attribute::as_type)
-    }
-
-    fn get_integer<T>(
-        &self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-        target: &'static str,
-        convert: impl FnOnce(i128) -> Result<T, std::num::TryFromIntError>,
-    ) -> Result<Option<T>, IntegerOutOfRange> {
-        let Some(value) = self.get_i128(ctx, key) else {
-            return Ok(None);
-        };
-        convert(value)
-            .map(Some)
-            .map_err(|_| IntegerOutOfRange { value, target })
-    }
-
-    pub fn contains_key(&self, ctx: &impl AsRef<StringPool>, key: impl AttributeKey) -> bool {
-        self.position(ctx.as_ref(), key).is_some()
-    }
-
-    /// Insert or replace an entry, returning the replaced value.
-    pub fn insert(
-        &mut self,
-        ctx: &mut IrContext,
-        key: impl Into<StringArg>,
-        value: impl Into<Attribute>,
-    ) -> Option<Attribute> {
-        let key = ctx.intern_string_arg(key.into());
-        self.insert_ref(ctx, key, value)
-    }
-
-    /// Insert or replace an entry under a key already pooled in `ctx`,
-    /// returning the replaced value.
-    pub fn insert_ref(
-        &mut self,
-        ctx: &impl AsRef<StringPool>,
+        strings: &StringPool,
         key: StringRef,
-        value: impl Into<Attribute>,
+        value: Attribute,
     ) -> Option<Attribute> {
-        let strings = ctx.as_ref();
-        let value = value.into();
         if let Some(index) = self.0.iter().position(|&(existing, _)| existing == key) {
             return Some(std::mem::replace(&mut self.0[index].1, value));
         }
@@ -523,49 +426,6 @@ impl AttributeMap {
             .partition_point(|&(existing, _)| strings.get(existing) < text);
         self.0.insert(index, (key, value));
         None
-    }
-
-    /// A map holding `entries`, whose keys are already pooled in `ctx`;
-    /// later entries replace earlier ones with the same key.
-    pub fn from_refs(
-        ctx: &impl AsRef<StringPool>,
-        entries: impl IntoIterator<Item = (StringRef, Attribute)>,
-    ) -> Self {
-        let entries = entries.into_iter();
-        let mut map = Self::new();
-        map.0.reserve_exact(entries.size_hint().0.min(4));
-        for (key, value) in entries {
-            map.insert_ref(ctx, key, value);
-        }
-        map
-    }
-
-    /// Insert every entry; later entries replace earlier ones with the same
-    /// key.
-    pub fn extend<K: Into<StringArg>, V: Into<Attribute>>(
-        &mut self,
-        ctx: &mut IrContext,
-        entries: impl IntoIterator<Item = (K, V)>,
-    ) {
-        let entries = entries.into_iter();
-        // Repeated keys replace earlier entries, so the iterator length only
-        // bounds the map's size from above. Reserve at most a small map
-        // exactly and let inserts grow anything larger.
-        if self.0.capacity() == 0 {
-            self.0.reserve_exact(entries.size_hint().0.min(4));
-        }
-        for (key, value) in entries {
-            self.insert(ctx, key, value);
-        }
-    }
-
-    pub fn remove(
-        &mut self,
-        ctx: &impl AsRef<StringPool>,
-        key: impl AttributeKey,
-    ) -> Option<Attribute> {
-        let index = self.position(ctx.as_ref(), key)?;
-        Some(self.0.remove(index).1)
     }
 
     pub fn iter(&self) -> AttributeIter<'_> {
@@ -615,31 +475,13 @@ impl fmt::Debug for AttributeMap {
     }
 }
 
-impl AttributeMap {
-    /// Format these attributes with keys and string values as text, which
-    /// `Debug` cannot resolve without the owning context.
-    pub fn display<'a>(&'a self, ctx: &'a impl AsRef<StringPool>) -> AttributeMapDisplay<'a> {
-        AttributeMapDisplay {
-            map: self,
-            strings: ctx.as_ref(),
-        }
-    }
-}
-
-impl AttributeMap {
-    /// Read these attributes through `ctx`, so lookups need no context
-    /// argument.
-    pub fn view<'a>(&'a self, ctx: &'a IrContext) -> AttributeView<'a> {
-        AttributeView { map: self, ctx }
-    }
-}
-
-/// An [`AttributeMap`] bound to its context; see [`AttributeMap::view`] and
+/// An [`AttributeMap`] read through its context, so lookups take only the
+/// key and keys print as text; see [`AttributeMap::view`] and
 /// [`IrContext::op_attrs`].
 #[derive(Clone, Copy)]
 pub struct AttributeView<'a> {
     map: &'a AttributeMap,
-    ctx: &'a IrContext,
+    strings: &'a StringPool,
 }
 
 impl<'a> AttributeView<'a> {
@@ -649,62 +491,79 @@ impl<'a> AttributeView<'a> {
     }
 
     pub fn get(self, key: impl AttributeKey) -> Option<&'a Attribute> {
-        self.map.get(self.ctx, key)
+        let index = self.map.position(self.strings, key)?;
+        Some(&self.map.0[index].1)
     }
 
     pub fn contains_key(self, key: impl AttributeKey) -> bool {
-        self.map.contains_key(self.ctx, key)
+        self.map.position(self.strings, key).is_some()
     }
 
     pub fn get_bool(self, key: impl AttributeKey) -> Option<bool> {
-        self.map.get_bool(self.ctx, key)
+        self.get(key).and_then(Attribute::as_bool)
     }
 
     pub fn get_i128(self, key: impl AttributeKey) -> Option<i128> {
-        self.map.get_i128(self.ctx, key)
+        self.get(key).and_then(Attribute::as_i128)
     }
 
     pub fn get_i64(self, key: impl AttributeKey) -> Result<Option<i64>, IntegerOutOfRange> {
-        self.map.get_i64(self.ctx, key)
+        self.get_integer(key, "i64", i64::try_from)
     }
 
     pub fn get_i32(self, key: impl AttributeKey) -> Result<Option<i32>, IntegerOutOfRange> {
-        self.map.get_i32(self.ctx, key)
+        self.get_integer(key, "i32", i32::try_from)
     }
 
     pub fn get_u64(self, key: impl AttributeKey) -> Result<Option<u64>, IntegerOutOfRange> {
-        self.map.get_u64(self.ctx, key)
+        self.get_integer(key, "u64", u64::try_from)
     }
 
     pub fn get_u32(self, key: impl AttributeKey) -> Result<Option<u32>, IntegerOutOfRange> {
-        self.map.get_u32(self.ctx, key)
+        self.get_integer(key, "u32", u32::try_from)
     }
 
     pub fn get_u8(self, key: impl AttributeKey) -> Result<Option<u8>, IntegerOutOfRange> {
-        self.map.get_u8(self.ctx, key)
+        self.get_integer(key, "u8", u8::try_from)
     }
 
     pub fn get_string_ref(self, key: impl AttributeKey) -> Option<StringRef> {
-        self.map.get_string_ref(self.ctx, key)
+        self.get(key).and_then(Attribute::as_string_ref)
     }
 
+    /// The text of a string attribute.
     pub fn get_str(self, key: impl AttributeKey) -> Option<&'a str> {
-        self.map.get_str(self.ctx, key)
+        self.get_string_ref(key)
+            .map(|value| self.strings.get(value))
     }
 
     pub fn get_symbol_ref(self, key: impl AttributeKey) -> Option<&'a SymbolPath> {
-        self.map.get_symbol_ref(self.ctx, key)
+        self.get(key).and_then(Attribute::as_symbol_ref)
     }
 
     pub fn get_type(self, key: impl AttributeKey) -> Option<TypeRef> {
-        self.map.get_type(self.ctx, key)
+        self.get(key).and_then(Attribute::as_type)
+    }
+
+    fn get_integer<T>(
+        self,
+        key: impl AttributeKey,
+        target: &'static str,
+        convert: impl FnOnce(i128) -> Result<T, std::num::TryFromIntError>,
+    ) -> Result<Option<T>, IntegerOutOfRange> {
+        let Some(value) = self.get_i128(key) else {
+            return Ok(None);
+        };
+        convert(value)
+            .map(Some)
+            .map_err(|_| IntegerOutOfRange { value, target })
     }
 
     /// Each key's text with its value, in key order.
     pub fn iter(self) -> impl DoubleEndedIterator<Item = (&'a str, &'a Attribute)> + 'a {
         self.map
             .iter()
-            .map(move |(key, value)| (self.ctx.str(key), value))
+            .map(move |(key, value)| (self.strings.get(key), value))
     }
 
     pub fn len(self) -> usize {
@@ -716,19 +575,13 @@ impl<'a> AttributeView<'a> {
     }
 }
 
-/// An [`AttributeMap`] formatted through its context; see
-/// [`AttributeMap::display`].
-pub struct AttributeMapDisplay<'a> {
-    map: &'a AttributeMap,
-    strings: &'a StringPool,
-}
-
-impl fmt::Debug for AttributeMapDisplay<'_> {
+/// Keys and string values print as text.
+impl fmt::Debug for AttributeView<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map()
-            .entries(self.map.iter().map(|(key, value)| {
+            .entries(self.iter().map(|(key, value)| {
                 (
-                    self.strings.get(key),
+                    key,
                     AttributeDisplay {
                         attribute: value,
                         strings: self.strings,
@@ -739,7 +592,7 @@ impl fmt::Debug for AttributeMapDisplay<'_> {
     }
 }
 
-impl fmt::Display for AttributeMapDisplay<'_> {
+impl fmt::Display for AttributeView<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
     }
@@ -761,15 +614,73 @@ impl fmt::Debug for AttributeDisplay<'_> {
                     strings: self.strings,
                 }))
                 .finish(),
-            Attribute::Dict(map) => fmt::Debug::fmt(
-                &AttributeMapDisplay {
-                    map,
-                    strings: self.strings,
-                },
-                f,
-            ),
+            Attribute::Dict(map) => fmt::Debug::fmt(&map.view(self.strings), f),
             other => fmt::Debug::fmt(other, f),
         }
+    }
+}
+
+/// An [`AttributeMap`] borrowed together with its context's string pool, so
+/// that inserting a key can intern it; see [`AttributeMap::view_mut`],
+/// [`IrContext::op_attrs_mut`] and [`IrContext::block_arg_attrs_mut`].
+pub struct AttributeViewMut<'a> {
+    map: &'a mut AttributeMap,
+    strings: &'a mut StringPool,
+}
+
+impl<'a> AttributeViewMut<'a> {
+    pub(crate) fn new(map: &'a mut AttributeMap, strings: &'a mut StringPool) -> Self {
+        Self { map, strings }
+    }
+
+    /// Read the map through the same context.
+    pub fn view(&self) -> AttributeView<'_> {
+        self.map.view(&*self.strings)
+    }
+
+    pub fn get(&self, key: impl AttributeKey) -> Option<&Attribute> {
+        let index = self.map.position(self.strings, key)?;
+        Some(&self.map.0[index].1)
+    }
+
+    pub fn contains_key(&self, key: impl AttributeKey) -> bool {
+        self.map.position(self.strings, key).is_some()
+    }
+
+    /// Insert or replace an entry, returning the replaced value.
+    pub fn insert(
+        &mut self,
+        key: impl Into<StringArg>,
+        value: impl Into<Attribute>,
+    ) -> Option<Attribute> {
+        let key = match key.into() {
+            StringArg::Ref(key) => key,
+            StringArg::Text(text) => self.strings.intern(&text),
+        };
+        self.map.insert_in(self.strings, key, value.into())
+    }
+
+    /// Insert every entry; later entries replace earlier ones with the same
+    /// key.
+    pub fn extend<K: Into<StringArg>, V: Into<Attribute>>(
+        &mut self,
+        entries: impl IntoIterator<Item = (K, V)>,
+    ) {
+        let entries = entries.into_iter();
+        // Repeated keys replace earlier entries, so the iterator length only
+        // bounds the map's size from above. Reserve at most a small map
+        // exactly and let inserts grow anything larger.
+        if self.map.0.capacity() == 0 {
+            self.map.0.reserve_exact(entries.size_hint().0.min(4));
+        }
+        for (key, value) in entries {
+            self.insert(key, value);
+        }
+    }
+
+    pub fn remove(&mut self, key: impl AttributeKey) -> Option<Attribute> {
+        let index = self.map.position(self.strings, key)?;
+        Some(self.map.0.remove(index).1)
     }
 }
 
@@ -934,9 +845,14 @@ impl TypeData {
     ///
     /// Assumes a well-formed [`PARAM_ATTRS_ATTR`]; see
     /// [`TypeData::validate_param_attrs`].
-    pub fn param_attrs(&self, ctx: &impl AsRef<StringPool>, index: usize) -> &AttributeMap {
+    pub fn param_attrs<'a>(
+        &'a self,
+        ctx: &'a impl AsRef<StringPool>,
+        index: usize,
+    ) -> &'a AttributeMap {
         self.attrs
-            .get(ctx, PARAM_ATTRS_ATTR)
+            .view(ctx)
+            .get(PARAM_ATTRS_ATTR)
             .and_then(Attribute::as_list)
             .and_then(|entries| entries.get(index))
             .and_then(Attribute::as_dict)
@@ -971,7 +887,7 @@ pub fn validate_param_attrs(
     attrs: &AttributeMap,
     params: usize,
 ) -> Result<(), ParamAttrsError> {
-    let Some(value) = attrs.get(ctx, PARAM_ATTRS_ATTR) else {
+    let Some(value) = attrs.view(ctx).get(PARAM_ATTRS_ATTR) else {
         return Ok(());
     };
     let entries = value.as_list().ok_or(ParamAttrsError::NotList)?;
@@ -999,12 +915,13 @@ pub fn validate_param_attrs(
 /// spelling of "no parameter attributes", is removed; any other malformed
 /// value is kept and reported.
 pub fn normalize_param_attrs(
-    ctx: &impl AsRef<StringPool>,
+    ctx: &mut IrContext,
     attrs: &mut AttributeMap,
     params: usize,
 ) -> Result<(), ParamAttrsError> {
     let all_empty = attrs
-        .get(ctx, PARAM_ATTRS_ATTR)
+        .view(ctx)
+        .get(PARAM_ATTRS_ATTR)
         .and_then(Attribute::as_list)
         .is_some_and(|entries| {
             entries.len() == params
@@ -1013,7 +930,7 @@ pub fn normalize_param_attrs(
                     .all(|entry| entry.as_dict().is_some_and(AttributeMap::is_empty))
         });
     if all_empty {
-        attrs.remove(ctx, PARAM_ATTRS_ATTR);
+        attrs.view_mut(ctx).remove(PARAM_ATTRS_ATTR);
     }
     validate_param_attrs(ctx, attrs, params)
 }
@@ -1081,7 +998,7 @@ impl TypeDataBuilder {
             self.params.into_iter().unzip();
         let mut attrs = AttributeMap::from_entries(ctx, self.attrs);
         if let Some(value) = param_attrs_attribute(param_attrs) {
-            attrs.insert(ctx, PARAM_ATTRS_ATTR, value);
+            attrs.view_mut(ctx).insert(PARAM_ATTRS_ATTR, value);
         } else {
             let _ = normalize_param_attrs(ctx, &mut attrs, params.len());
         }
@@ -1413,11 +1330,7 @@ mod tests {
             .intern(&mut ctx);
         assert_eq!(plain, empty);
         assert_eq!(plain, explicit_empty);
-        assert!(
-            !ctx.get_type(plain)
-                .attrs
-                .contains_key(&ctx, PARAM_ATTRS_ATTR)
-        );
+        assert!(!ctx.type_attrs(plain).contains_key(PARAM_ATTRS_ATTR));
 
         let with_attrs = TypeDataBuilder::new("core", "tuple")
             .param(i32_ty)
@@ -1441,13 +1354,17 @@ mod tests {
         let dict =
             |entries: Option<&AttributeMap>| Attribute::Dict(entries.cloned().unwrap_or_default());
         let key = ctx.intern_str(PARAM_ATTRS_ATTR);
-        let attrs = |value| AttributeMap::from_refs(ctx.strings(), [(key, value)]);
+        let attrs = |ctx: &IrContext, value| AttributeMap::from_refs(ctx, [(key, value)]);
         assert_eq!(
-            validate_param_attrs(&ctx, &attrs(Attribute::Unit), 1),
+            validate_param_attrs(&ctx, &attrs(&ctx, Attribute::Unit), 1),
             Err(ParamAttrsError::NotList)
         );
         assert_eq!(
-            validate_param_attrs(&ctx, &attrs(Attribute::List(vec![dict(Some(&k_entry))])), 2),
+            validate_param_attrs(
+                &ctx,
+                &attrs(&ctx, Attribute::List(vec![dict(Some(&k_entry))])),
+                2
+            ),
             Err(ParamAttrsError::LengthMismatch {
                 params: 2,
                 attrs: 1
@@ -1456,28 +1373,31 @@ mod tests {
         assert_eq!(
             validate_param_attrs(
                 &ctx,
-                &attrs(Attribute::List(vec![dict(Some(&k_entry)), Attribute::Unit])),
+                &attrs(
+                    &ctx,
+                    Attribute::List(vec![dict(Some(&k_entry)), Attribute::Unit])
+                ),
                 2
             ),
             Err(ParamAttrsError::NotDict(1))
         );
         assert_eq!(
-            validate_param_attrs(&ctx, &attrs(Attribute::List(vec![dict(None)])), 1),
+            validate_param_attrs(&ctx, &attrs(&ctx, Attribute::List(vec![dict(None)])), 1),
             Err(ParamAttrsError::AllEmpty)
         );
         assert_eq!(validate_param_attrs(&ctx, &AttributeMap::new(), 3), Ok(()));
 
-        let mut wrong_length = attrs(Attribute::List(vec![dict(None)]));
+        let mut wrong_length = attrs(&ctx, Attribute::List(vec![dict(None)]));
         assert_eq!(
-            normalize_param_attrs(&ctx, &mut wrong_length, 2),
+            normalize_param_attrs(&mut ctx, &mut wrong_length, 2),
             Err(ParamAttrsError::LengthMismatch {
                 params: 2,
                 attrs: 1
             })
         );
-        assert!(wrong_length.contains_key(&ctx, PARAM_ATTRS_ATTR));
-        let mut all_empty = attrs(Attribute::List(vec![dict(None), dict(None)]));
-        assert_eq!(normalize_param_attrs(&ctx, &mut all_empty, 2), Ok(()));
+        assert!(wrong_length.view(&ctx).contains_key(PARAM_ATTRS_ATTR));
+        let mut all_empty = attrs(&ctx, Attribute::List(vec![dict(None), dict(None)]));
+        assert_eq!(normalize_param_attrs(&mut ctx, &mut all_empty, 2), Ok(()));
         assert!(all_empty.is_empty());
     }
 
@@ -1486,12 +1406,13 @@ mod tests {
         let mut ctx = IrContext::new();
         let reference = |name| Attribute::SymbolRef(SymbolPath::new([name]));
         let mut attrs = AttributeMap::new();
-        attrs.insert(&mut ctx, "callee", reference("direct"));
+        attrs
+            .view_mut(&mut ctx)
+            .insert("callee", reference("direct"));
         let name = ctx.string_attr("not_a_reference");
-        attrs.insert(&mut ctx, "name", name);
+        attrs.view_mut(&mut ctx).insert("name", name);
         let nested = AttributeMap::from_entries(&mut ctx, [("target", reference("nested"))]);
-        attrs.insert(
-            &mut ctx,
+        attrs.view_mut(&mut ctx).insert(
             "table",
             Attribute::List(vec![reference("first"), Attribute::Dict(nested)]),
         );
@@ -1553,7 +1474,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            attrs.display(&ctx).to_string(),
+            attrs.view(&ctx).to_string(),
             r#"{"count": Int(3), "list": [{"inner": "hello"}], "name": "hello"}"#
         );
     }
@@ -1562,7 +1483,7 @@ mod tests {
     fn attribute_map_starts_at_exactly_the_entries_it_holds() {
         let mut ctx = IrContext::new();
         let mut attrs = AttributeMap::new();
-        attrs.insert(&mut ctx, "only", Attribute::Unit);
+        attrs.view_mut(&mut ctx).insert("only", Attribute::Unit);
         assert_eq!(attrs.0.capacity(), 1);
 
         let collected =

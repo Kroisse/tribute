@@ -89,7 +89,7 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
     if data.dialect != "adt" || data.name != "typeref" {
         return None;
     }
-    let name = data.attrs.get_str(ctx, "name")?;
+    let name = data.attrs.view(ctx).get_str("name")?;
     let enum_ty = ctx.type_alias_by_text(name)?;
     canonical_enum_type(ctx, enum_ty)
 }
@@ -820,7 +820,7 @@ mod tests {
             .copied()
             .find(|&op| {
                 let data = ctx.op(op);
-                let Some(ty) = data.attributes.get_type(&ctx, "type") else {
+                let Some(ty) = data.attributes.view(&ctx).get_type("type") else {
                     return false;
                 };
                 data.dialect == wasm_gc_dialect::DIALECT_NAME()
@@ -969,8 +969,8 @@ mod tests {
                     return None;
                 }
                 match data.name.as_str() {
-                    "struct_new" | "struct_get" => data.attributes.get_type(&ctx, "type"),
-                    "ref_test" | "ref_cast" => data.attributes.get_type(&ctx, "target_type"),
+                    "struct_new" | "struct_get" => data.attributes.view(&ctx).get_type("type"),
+                    "ref_test" | "ref_cast" => data.attributes.view(&ctx).get_type("target_type"),
                     _ => None,
                 }
             })

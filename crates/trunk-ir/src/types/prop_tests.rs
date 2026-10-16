@@ -109,45 +109,45 @@ fn check_lookup(
     key: &str,
 ) {
     let expected = model.get(key);
-    assert_eq!(attrs.get(ctx, key), expected);
+    assert_eq!(attrs.view(ctx).get(key), expected);
     if let Some(pooled) = ctx.lookup_str(key) {
-        assert_eq!(attrs.get(ctx, pooled), expected);
+        assert_eq!(attrs.view(ctx).get(pooled), expected);
     }
-    assert_eq!(attrs.contains_key(ctx, key), expected.is_some());
+    assert_eq!(attrs.view(ctx).contains_key(key), expected.is_some());
     assert_eq!(
-        attrs.get_bool(ctx, key),
+        attrs.view(ctx).get_bool(key),
         expected.and_then(Attribute::as_bool)
     );
     assert_eq!(
-        attrs.get_i128(ctx, key),
+        attrs.view(ctx).get_i128(key),
         expected.and_then(Attribute::as_i128)
     );
     assert_eq!(
-        attrs.get_i64(ctx, key),
+        attrs.view(ctx).get_i64(key),
         expected_integer(expected, "i64", i64::try_from)
     );
     assert_eq!(
-        attrs.get_i32(ctx, key),
+        attrs.view(ctx).get_i32(key),
         expected_integer(expected, "i32", i32::try_from)
     );
     assert_eq!(
-        attrs.get_u64(ctx, key),
+        attrs.view(ctx).get_u64(key),
         expected_integer(expected, "u64", u64::try_from)
     );
     assert_eq!(
-        attrs.get_u32(ctx, key),
+        attrs.view(ctx).get_u32(key),
         expected_integer(expected, "u32", u32::try_from)
     );
     assert_eq!(
-        attrs.get_u8(ctx, key),
+        attrs.view(ctx).get_u8(key),
         expected_integer(expected, "u8", u8::try_from)
     );
     assert_eq!(
-        attrs.get_str(ctx, key),
+        attrs.view(ctx).get_str(key),
         expected.and_then(|value| value.as_str(ctx))
     );
     assert_eq!(
-        attrs.get_symbol_ref(ctx, key),
+        attrs.view(ctx).get_symbol_ref(key),
         expected.and_then(Attribute::as_symbol_ref)
     );
 }
@@ -284,14 +284,17 @@ impl StateMachineTest for MapTest {
         match action {
             MapAction::Insert(key, spec) => {
                 let value = build_value(&mut sut.ctx, &spec);
-                let previous = sut.attrs.get(&sut.ctx, key.as_str()).cloned();
-                let replaced = sut.attrs.insert(&mut sut.ctx, key.clone(), value);
+                let previous = sut.attrs.view(&sut.ctx).get(key.as_str()).cloned();
+                let replaced = sut.attrs.view_mut(&mut sut.ctx).insert(key.clone(), value);
                 assert_eq!(replaced, previous);
                 touched.push(key);
             }
             MapAction::Remove(key) => {
-                let previous = sut.attrs.get(&sut.ctx, key.as_str()).cloned();
-                assert_eq!(sut.attrs.remove(&sut.ctx, key.as_str()), previous);
+                let previous = sut.attrs.view(&sut.ctx).get(key.as_str()).cloned();
+                assert_eq!(
+                    sut.attrs.view_mut(&mut sut.ctx).remove(key.as_str()),
+                    previous
+                );
                 touched.push(key);
             }
             MapAction::Extend(entries) => {
@@ -299,8 +302,7 @@ impl StateMachineTest for MapTest {
                     .into_iter()
                     .map(|(key, spec)| (key, build_value(&mut sut.ctx, &spec)))
                     .collect();
-                sut.attrs.extend(
-                    &mut sut.ctx,
+                sut.attrs.view_mut(&mut sut.ctx).extend(
                     entries
                         .iter()
                         .map(|(key, value)| (key.clone(), value.clone())),

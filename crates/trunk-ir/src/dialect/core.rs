@@ -328,7 +328,7 @@ mod canonicalize_tests {
     fn remove_reserved_attrs_preserves_metadata_and_is_idempotent() {
         let mut ctx = IrContext::new();
         let mut attrs = AttributeMap::new();
-        FuncSig::remove_reserved_attrs(&ctx, &mut attrs);
+        FuncSig::remove_reserved_attrs(&mut ctx, &mut attrs);
         assert!(attrs.is_empty());
 
         let nil = nil(&mut ctx).as_type_ref();
@@ -340,11 +340,12 @@ mod canonicalize_tests {
             ],
         );
         attrs = metadata.clone();
-        attrs.insert(&mut ctx, NUM_INPUTS_ATTR, Attribute::from(2u32));
-        attrs.insert(&mut ctx, NUM_RESULTS_ATTR, Attribute::from(1u32));
-        FuncSig::remove_reserved_attrs(&ctx, &mut attrs);
+        let mut attrs_view = attrs.view_mut(&mut ctx);
+        attrs_view.insert(NUM_INPUTS_ATTR, Attribute::from(2u32));
+        attrs_view.insert(NUM_RESULTS_ATTR, Attribute::from(1u32));
+        FuncSig::remove_reserved_attrs(&mut ctx, &mut attrs);
         assert_eq!(attrs, metadata);
-        FuncSig::remove_reserved_attrs(&ctx, &mut attrs);
+        FuncSig::remove_reserved_attrs(&mut ctx, &mut attrs);
         assert_eq!(attrs, metadata);
     }
 

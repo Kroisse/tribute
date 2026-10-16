@@ -199,7 +199,7 @@ impl RewritePattern for FuncFuncPattern {
 
         // Convert parameter and return types in the function signature
         let data = ctx.op(op);
-        let func_type_attr = data.attributes.get_type(ctx, "type");
+        let func_type_attr = data.attributes.view(ctx).get_type("type");
 
         let mut new_attrs = data.attributes.clone();
         let Some(func_ty) = func_type_attr else {
@@ -208,7 +208,9 @@ impl RewritePattern for FuncFuncPattern {
         let Some(new_func_ty) = convert_to_clif_func_type(ctx, func_ty, tc) else {
             return false;
         };
-        new_attrs.insert(ctx, "type", Attribute::Type(new_func_ty));
+        new_attrs
+            .view_mut(ctx)
+            .insert("type", Attribute::Type(new_func_ty));
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
@@ -640,24 +642,15 @@ mod tests {
         type_converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
 
         let mut inner_attrs = AttributeMap::new();
-        inner_attrs.insert(
-            &mut ctx,
-            "tag",
-            Attribute::SymbolRef(SymbolPath::new(["preserved"])),
-        );
-        inner_attrs.insert(
-            &mut ctx,
-            "nested",
-            Attribute::List(vec![Attribute::Type(i32_ty)]),
-        );
+        let mut inner_attrs_view = inner_attrs.view_mut(&mut ctx);
+        inner_attrs_view.insert("tag", Attribute::SymbolRef(SymbolPath::new(["preserved"])));
+        inner_attrs_view.insert("nested", Attribute::List(vec![Attribute::Type(i32_ty)]));
         let nested =
             func::func_sig_with_attrs(&mut ctx, [i32_ty], [i32_ty], inner_attrs).as_type_ref();
         let mut attrs = AttributeMap::new();
-        attrs.insert(
-            &mut ctx,
-            "evidence",
-            Attribute::List(vec![Attribute::Type(nested)]),
-        );
+        attrs
+            .view_mut(&mut ctx)
+            .insert("evidence", Attribute::List(vec![Attribute::Type(nested)]));
         let source = func::func_sig_with_attrs(&mut ctx, [i32_ty], [i32_ty], attrs).as_type_ref();
         let converted = super::convert_to_clif_func_type(&mut ctx, source, &type_converter)
             .expect("target callable contract");

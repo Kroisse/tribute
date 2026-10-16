@@ -272,55 +272,6 @@ impl Clone for IrContext {
     }
 }
 
-/// An attribute map inside an [`IrContext`], borrowed together with the
-/// context's string pool so that inserting a key can intern it; see
-/// [`IrContext::op_attrs_mut`].
-///
-/// Obtaining the view advances the context's revision, which covers every
-/// change made through it.
-pub struct AttributeViewMut<'a> {
-    map: &'a mut AttributeMap,
-    strings: &'a mut StringPool,
-}
-
-impl AttributeViewMut<'_> {
-    pub fn get(&self, key: impl AttributeKey) -> Option<&Attribute> {
-        self.map.get(&*self.strings, key)
-    }
-
-    pub fn contains_key(&self, key: impl AttributeKey) -> bool {
-        self.map.contains_key(&*self.strings, key)
-    }
-
-    /// Insert or replace an entry, returning the replaced value.
-    pub fn insert(
-        &mut self,
-        key: impl Into<StringArg>,
-        value: impl Into<Attribute>,
-    ) -> Option<Attribute> {
-        let key = match key.into() {
-            StringArg::Ref(key) => key,
-            StringArg::Text(text) => self.strings.intern(&text),
-        };
-        self.map.insert_ref(&*self.strings, key, value)
-    }
-
-    /// Insert every entry; later entries replace earlier ones with the same
-    /// key.
-    pub fn extend<K: Into<StringArg>, V: Into<Attribute>>(
-        &mut self,
-        entries: impl IntoIterator<Item = (K, V)>,
-    ) {
-        for (key, value) in entries {
-            self.insert(key, value);
-        }
-    }
-
-    pub fn remove(&mut self, key: impl AttributeKey) -> Option<Attribute> {
-        self.map.remove(&*self.strings, key)
-    }
-}
-
 impl AsRef<StringPool> for IrContext {
     fn as_ref(&self) -> &StringPool {
         &self.strings
@@ -462,23 +413,27 @@ impl IrContext {
         self.ops[op].attributes.view(self)
     }
 
+    /// The attributes of type `ty`, read through this context.
+    pub fn type_attrs(&self, ty: TypeRef) -> AttributeView<'_> {
+        self.types.get(ty).attrs.view(self)
+    }
+
+    /// The string pool, for borrowing it beside another part of the context.
+    pub(crate) fn strings_mut(&mut self) -> &mut StringPool {
+        &mut self.strings
+    }
+
     /// The attributes of `op`, changed through this context.
     pub fn op_attrs_mut(&mut self, op: OpRef) -> AttributeViewMut<'_> {
         self.bump_revision();
-        AttributeViewMut {
-            map: &mut self.ops[op].attributes,
-            strings: &mut self.strings,
-        }
+        AttributeViewMut::new(&mut self.ops[op].attributes, &mut self.strings)
     }
 
     /// The attributes of argument `index` of `block`, changed through this
     /// context.
     pub fn block_arg_attrs_mut(&mut self, block: BlockRef, index: usize) -> AttributeViewMut<'_> {
         self.bump_revision();
-        AttributeViewMut {
-            map: &mut self.blocks[block].args[index].attrs,
-            strings: &mut self.strings,
-        }
+        AttributeViewMut::new(&mut self.blocks[block].args[index].attrs, &mut self.strings)
     }
 
     /// Find a pooled string without interning it.

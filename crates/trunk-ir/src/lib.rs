@@ -90,15 +90,16 @@ pub use smallvec::smallvec as idvec;
 
 // Re-exports from submodules (previously from arena/mod.rs)
 pub use context::{
-    AttributeViewMut, BlockArgData, BlockData, BlockList, IrContext, OpList, OperationData,
-    OperationDataBuilder, RegionData, RegionList, Regions, Successors, Use, ValueData,
+    BlockArgData, BlockData, BlockList, IrContext, OpList, OperationData, OperationDataBuilder,
+    RegionData, RegionList, Regions, Successors, Use, ValueData,
 };
 pub use ir_mapping::IrMapping;
 pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef};
 pub use rewrite::Module;
 pub use types::{
     Attribute, AttributeIntoIter, AttributeIter, AttributeIterMut, AttributeKey, AttributeKeys,
-    AttributeMap, AttributeValues, AttributeValuesMut, AttributeView, IntegerOutOfRange, Location,
-    PathInterner, StringArg, StringPool, StringRef, TypeData, TypeDataBuilder, TypeInterner,
+    AttributeMap, AttributeValues, AttributeValuesMut, AttributeView, AttributeViewMut,
+    IntegerOutOfRange, Location, PathInterner, StringArg, StringPool, StringRef, TypeData,
+    TypeDataBuilder, TypeInterner,
 };
 pub use walk::WalkAction;

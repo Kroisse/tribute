@@ -45,7 +45,9 @@ fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     let f64_ty = f64_type(ctx);
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(tribute_ir::runtime_layout::BOXED_F64);
-    attrs.insert(ctx, tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
+    attrs
+        .view_mut(ctx)
+        .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
     adt::struct_type(ctx, "_BoxedF64", [("value", f64_ty)], attrs).as_type_ref()
 }
 

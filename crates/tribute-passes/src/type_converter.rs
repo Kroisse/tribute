@@ -367,7 +367,8 @@ mod tests {
         let canonical = crate::closure_lower::closure_struct_type_ref(&mut ctx);
         let mut near = ctx.get_type(canonical).clone();
         near.attrs
-            .insert(&mut ctx, "unrelated", Attribute::Bool(true));
+            .view_mut(&mut ctx)
+            .insert("unrelated", Attribute::Bool(true));
         let near = ctx.intern_type(near);
         let tc = generic_type_converter(&mut ctx);
         let location: Location = ctx.op(function.op_ref()).location;

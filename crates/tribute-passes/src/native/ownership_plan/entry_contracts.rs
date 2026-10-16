@@ -185,7 +185,7 @@ pub(super) fn consumed_inputs(
 ) -> Result<Vec<bool>, OwnershipPlanError> {
     signature
         .input_attrs(ctx)
-        .map(|attrs| match attrs.get(ctx, OWNERSHIP_ATTR) {
+        .map(|attrs| match attrs.view(ctx).get(OWNERSHIP_ATTR) {
             None => Ok(false),
             Some(Attribute::String(mode)) if ctx.str(*mode) == CONSUMED => Ok(true),
             Some(_) => Err(OwnershipPlanError::new(format!(

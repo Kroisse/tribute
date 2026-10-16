@@ -105,7 +105,7 @@ impl Converter<'_> {
         if params == data.params.as_slice()
             && attrs
                 .iter()
-                .all(|(key, value)| data.attrs.get(self.ctx, *key) == Some(value))
+                .all(|(key, value)| data.attrs.view(self.ctx).get(*key) == Some(value))
         {
             self.converted_types.insert(ty, ty);
             return ty;

@@ -59,9 +59,8 @@ pub fn convert(ctx: &mut IrContext, module: Module) {
 /// an unresolved name.
 fn reference_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let named = ctx
-        .get_type(ty)
-        .attrs
-        .get_str(ctx, "name")
+        .type_attrs(ty)
+        .get_str("name")
         .and_then(|name| ctx.type_alias_by_text(name));
     named
         .and_then(|layout| struct_type(ctx, layout))

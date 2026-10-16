@@ -575,7 +575,7 @@ impl OpSchema {
         }
 
         for attr in self.attributes {
-            match data.attributes.get(ctx, attr.name) {
+            match data.attributes.view(ctx).get(attr.name) {
                 None if attr.optional => {}
                 None => violations.push(SchemaViolation::MissingAttribute { name: attr.name }),
                 Some(value) if attr.kind.accepts(value) => {}
@@ -1029,7 +1029,7 @@ impl TypeSlots {
         let data = ctx.op(op);
         for attr in schema.attributes {
             if let (Some(var), Some(Attribute::Type(ty))) =
-                (attr.binds, data.attributes.get(ctx, attr.name))
+                (attr.binds, data.attributes.view(ctx).get(attr.name))
             {
                 slots.types.push(TypeSlot {
                     site: Site::Attribute { name: attr.name },

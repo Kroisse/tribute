@@ -528,7 +528,7 @@ impl ActionPlanner<'_> {
                 .ok_or_else(|| {
                     OwnershipPlanError::new(format!(
                         "indirect call {op:?} lacks exact signature; attrs = {:?}, operand types = {:?}",
-                        self.ir.op(op).attributes.display(self.ir),
+                        self.ir.op_attrs(op),
                         self.ir
                             .op_operands(op)
                             .iter()
@@ -561,7 +561,8 @@ impl ActionPlanner<'_> {
                 .ir
                 .op(op)
                 .attributes
-                .get_symbol_ref(self.ir, "callee")
+                .view(self.ir)
+                .get_symbol_ref("callee")
                 .ok_or_else(|| OwnershipPlanError::new("direct call lacks callee identity"))?;
             let Some(callee_op) = self.module.callee(self.ir, op, callee) else {
                 if args
@@ -578,7 +579,8 @@ impl ActionPlanner<'_> {
                 .ir
                 .op(callee_op)
                 .attributes
-                .get_type(self.ir, "type")
+                .view(self.ir)
+                .get_type("type")
                 .and_then(|ty| func::FuncSig::from_type_ref(self.ir, ty))
                 .ok_or_else(|| OwnershipPlanError::new("direct callee lacks exact signature"))?;
             validate_call_contract(self.ir, op, signature, args, self.managed_layouts)?;

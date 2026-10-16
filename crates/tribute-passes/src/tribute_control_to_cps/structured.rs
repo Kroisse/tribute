@@ -520,7 +520,7 @@ impl Converter<'_> {
                     "scf.switch body may contain only scf.case and scf.default",
                 ));
             }
-            let case_value = case_data.attributes.get(self.ctx, "value").cloned();
+            let case_value = case_data.attributes.view(self.ctx).get("value").cloned();
             let Ok(source_region) = self.ctx.op_regions(case).exactly_one() else {
                 return Err(TributeControlToCpsError::post_op(
                     case,

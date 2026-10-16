@@ -17,7 +17,8 @@ impl Converter<'_> {
                 .ctx
                 .op(source)
                 .attributes
-                .get_symbol_ref(self.ctx, "callee")
+                .view(self.ctx)
+                .get_symbol_ref("callee")
                 .and_then(|_| self.current_func(source))
                 .is_some_and(|target| target.convention == CallingConvention::Cps);
         }

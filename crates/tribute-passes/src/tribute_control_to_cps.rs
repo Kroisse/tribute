@@ -342,7 +342,8 @@ impl<'a> Converter<'a> {
                         .ctx
                         .op(source)
                         .attributes
-                        .get_str(self.ctx, "operation_kind")
+                        .view(self.ctx)
+                        .get_str("operation_kind")
                         .expect("pre-CPS validation checked operation kind");
                     if kind == "fn" {
                         self.lower_tail_perform(source, block, mapping, flow)?;
@@ -412,8 +413,9 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         let attributes = &ctx.op(op).attributes;
         if let Some(target) = attributes
-            .get_symbol_ref(ctx, "callee")
-            .or_else(|| attributes.get_symbol_ref(ctx, "func_ref"))
+            .view(ctx)
+            .get_symbol_ref("callee")
+            .or_else(|| attributes.view(ctx).get_symbol_ref("func_ref"))
             .and_then(|reference| symbols.resolve(ctx, op, reference))
             .filter(|target| funcs.contains_key(target))
         {

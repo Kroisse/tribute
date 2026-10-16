@@ -282,7 +282,7 @@ impl<V: AttrKind + ?Sized> AttrKind for Dict<V> {
         let mut entries = AttributeMap::new();
         for (key, entry) in value {
             let entry = V::write(ctx, entry);
-            entries.insert(ctx, key, entry);
+            entries.view_mut(ctx).insert(key, entry);
         }
         Attribute::Dict(entries)
     }
@@ -298,7 +298,8 @@ pub struct DictView<'ctx, V: ?Sized> {
 impl<'ctx, V: AttrKind + ?Sized> DictView<'ctx, V> {
     pub fn get(&self, key: impl AttributeKey) -> Option<V::Out<'ctx>> {
         self.entries
-            .get(self.ctx, key)
+            .view(self.ctx)
+            .get(key)
             .map(|attr| V::read(self.ctx, attr))
     }
 

@@ -60,7 +60,7 @@ pub(crate) fn physical_parameter_attrs(
 ) -> AttributeMap {
     let mut attrs = AttributeMap::new();
     let ownership = ctx.string_attr(CONSUMED);
-    attrs.insert(ctx, OWNERSHIP_ATTR, ownership);
+    attrs.view_mut(ctx).insert(OWNERSHIP_ATTR, ownership);
     attrs
 }
 
@@ -146,7 +146,8 @@ pub fn lower_cps_signatures_to_physical(
                 .ctx
                 .op(op)
                 .attributes
-                .contains_key(converter.ctx, "abi");
+                .view(converter.ctx)
+                .contains_key("abi");
             let converted = match convention {
                 Some(convention) if platform => {
                     converter.convert_platform_callable(signature, convention)?
@@ -164,7 +165,8 @@ pub fn lower_cps_signatures_to_physical(
                 .ctx
                 .op(op)
                 .attributes
-                .contains_key(converter.ctx, CLOSURE_ENVIRONMENT_INDEX_ATTR)
+                .view(converter.ctx)
+                .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
             {
                 consumed_attributes.push((op, CLOSURE_ENVIRONMENT_INDEX_ATTR));
             }
@@ -222,7 +224,8 @@ pub fn lower_cps_signatures_to_physical(
                 .ctx
                 .op(op)
                 .attributes
-                .contains_key(converter.ctx, CALLING_CONVENTION_ATTR)
+                .view(converter.ctx)
+                .contains_key(CALLING_CONVENTION_ATTR)
             && IndirectCallLikeOps::callee(converter.ctx, op).is_none_or(|callee| {
                 crate::closure_lower::physical_closure_type_for_callee(converter.ctx, callee)
                     .is_none()
@@ -239,10 +242,12 @@ pub fn lower_cps_signatures_to_physical(
                 continue;
             }
             let converted = converter.convert_attribute(value)?;
-            converted_attributes.insert_ref(converter.ctx, name, converted);
+            converted_attributes
+                .view_mut(converter.ctx)
+                .insert(name, converted);
         }
         for (name, value) in converted_attributes {
-            if original_attributes.get(converter.ctx, name) != Some(&value) {
+            if original_attributes.view(converter.ctx).get(name) != Some(&value) {
                 attributes.push((op, name, value));
             }
         }
@@ -266,7 +271,7 @@ pub fn lower_cps_signatures_to_physical(
                     let mut converted_attrs = argument.attrs.clone();
                     for (name, value) in argument.attrs.iter() {
                         let value = converter.convert_attribute(value.clone())?;
-                        converted_attrs.insert_ref(converter.ctx, name, value);
+                        converted_attrs.view_mut(converter.ctx).insert(name, value);
                     }
                     if converted_attrs != argument.attrs {
                         block_attributes.push((block, index, converted_attrs));
@@ -1059,9 +1064,13 @@ fn validate_root_continuation_frame(
             "target root bridge: worker frame result provenance differs from root source result",
         ));
     }
-    let name = reference_data.attrs.get_str(ctx, "name").ok_or_else(|| {
-        TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
-    })?;
+    let name = reference_data
+        .attrs
+        .view(ctx)
+        .get_str("name")
+        .ok_or_else(|| {
+            TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
+        })?;
     let layout = ctx.type_alias_by_text(name).ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
@@ -1562,10 +1571,12 @@ fn environment_index(
 ) -> Result<Option<usize>, TargetAbiError> {
     let attributes = &ctx.op(function).attributes;
     let present = attributes
-        .get(ctx, CLOSURE_ENVIRONMENT_INDEX_ATTR)
+        .view(ctx)
+        .get(CLOSURE_ENVIRONMENT_INDEX_ATTR)
         .is_some();
     let declared = attributes
-        .get_u32(ctx, CLOSURE_ENVIRONMENT_INDEX_ATTR)
+        .view(ctx)
+        .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
         .ok()
         .flatten()
         .map(|index| index as usize);
@@ -1598,7 +1609,7 @@ fn environment_index(
         .iter()
         .enumerate()
         .filter_map(|(index, argument)| {
-            (argument.attrs.get_str(ctx, "bind_name") == Some("__env")).then_some(index)
+            (argument.attrs.view(ctx).get_str("bind_name") == Some("__env")).then_some(index)
         })
         .collect();
     match indices.as_slice() {
@@ -1715,7 +1726,7 @@ impl<'a> PhysicalTypeConverter<'a> {
         if !platform {
             let contract = physical_parameter_attrs(self.ctx, convention);
             for (_, attrs) in &mut inputs {
-                attrs.extend(self.ctx, contract.clone());
+                attrs.view_mut(self.ctx).extend(contract.clone());
             }
         }
         // A physical Cps callable has no result, so the logical result's
@@ -1730,7 +1741,7 @@ impl<'a> PhysicalTypeConverter<'a> {
             self.convert_params(results)?
         };
         let mut attrs = self.convert_func_attributes(callable)?;
-        if attrs.contains_key(self.ctx, func::CALL_CONV_ATTR) {
+        if attrs.view(self.ctx).contains_key(func::CALL_CONV_ATTR) {
             return Err(TargetAbiError::new(
                 "target ABI: logical callable already carries a machine call_conv",
             ));
@@ -1801,7 +1812,8 @@ impl<'a> PhysicalTypeConverter<'a> {
         if continuation_frame::result_type(self.ctx, ty).is_some() {
             converted
                 .attrs
-                .remove(self.ctx, continuation_frame::RESULT_ATTR);
+                .view_mut(self.ctx)
+                .remove(continuation_frame::RESULT_ATTR);
         }
         let converted = self.intern_if_changed(ty, converted);
         self.embedded.insert(ty, converted);
@@ -1831,7 +1843,7 @@ impl<'a> PhysicalTypeConverter<'a> {
             .collect();
         for (name, value) in attributes {
             let value = self.convert_attribute(value)?;
-            data.attrs.insert_ref(self.ctx, name, value);
+            data.attrs.view_mut(self.ctx).insert(name, value);
         }
         Ok(())
     }
@@ -1990,14 +2002,13 @@ mod tests {
                     let value = ctx.op_operands(dispatch)[index];
                     let mut ty = ctx.get_type(ctx.value_ty(value)).clone();
                     if mutation == 3 || mutation == 4 {
-                        ty.attrs.insert(
-                            &mut ctx,
-                            CLOSURE_ENVIRONMENT_INDEX_ATTR,
-                            Attribute::Int(9),
-                        );
+                        ty.attrs
+                            .view_mut(&mut ctx)
+                            .insert(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(9));
                     } else if mutation == 5 {
                         ty.attrs
-                            .insert(&mut ctx, CALLING_CONVENTION_ATTR, Attribute::Int(0));
+                            .view_mut(&mut ctx)
+                            .insert(CALLING_CONVENTION_ATTR, Attribute::Int(0));
                     } else {
                         let signature = func::FuncSig::from_type_ref(&ctx, ty.params[0]).unwrap();
                         let mut inputs = signature.inputs(&ctx).to_vec();
@@ -2088,18 +2099,22 @@ mod tests {
                 // convention; only its results matter here.
                 let mut attributes = ctx.op(op).attributes.clone();
                 if is_transfer(&ctx, op) {
-                    attributes.remove(&ctx, CALLING_CONVENTION_ATTR);
+                    attributes
+                        .view_mut(&mut ctx)
+                        .remove(CALLING_CONVENTION_ATTR);
                 }
-                attributes.remove(&ctx, "type");
-                attributes.remove(&ctx, "signature");
+                let mut attributes_view = attributes.view_mut(&mut ctx);
+                attributes_view.remove("type");
+                attributes_view.remove("signature");
                 (op, attributes, ctx.op_result_types(op).to_vec())
             })
             .collect();
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         for (op, before, results) in unchanged {
             let mut after = ctx.op(op).attributes.clone();
-            after.remove(&ctx, "type");
-            after.remove(&ctx, "signature");
+            let mut after_view = after.view_mut(&mut ctx);
+            after_view.remove("type");
+            after_view.remove("signature");
             assert_eq!(after, before);
             assert_eq!(ctx.op_result_types(op).len(), results.len());
         }
@@ -2296,11 +2311,7 @@ mod tests {
         assert_eq!(ctx.value_ty(ctx.op_operands(call)[1]), *worker_frame);
         assert_eq!(ctx.get_type(*worker_frame).dialect, Symbol::new("adt"));
         assert_eq!(ctx.get_type(*worker_frame).name, Symbol::new("typeref"));
-        let frame_name = ctx
-            .get_type(*worker_frame)
-            .attrs
-            .get_str(&ctx, "name")
-            .unwrap();
+        let frame_name = ctx.type_attrs(*worker_frame).get_str("name").unwrap();
         let frame_layout = ctx
             .type_alias_by_text(frame_name)
             .expect("worker frame must retain its exact nominal layout");
@@ -2333,7 +2344,7 @@ mod tests {
         assert!(wrapper_ops.iter().any(|op| {
             adt::StructNew::from_op(&ctx, *op).is_ok()
                 && ctx.op_result_types(*op).first().is_some_and(|ty| {
-                    ctx.get_type(*ty).attrs.get_str(&ctx, "name") == Some(ROOT_COMPLETION_CELL_NAME)
+                    ctx.type_attrs(*ty).get_str("name") == Some(ROOT_COMPLETION_CELL_NAME)
                 })
         }));
         assert!(

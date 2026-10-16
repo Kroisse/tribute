@@ -309,11 +309,19 @@ fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef
     {
         return None;
     }
-    let num_inputs = match data.attrs.get(ctx, crate::dialect::func::NUM_INPUTS_ATTR) {
+    let num_inputs = match data
+        .attrs
+        .view(ctx)
+        .get(crate::dialect::func::NUM_INPUTS_ATTR)
+    {
         Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
         _ => return None,
     };
-    let num_results = match data.attrs.get(ctx, crate::dialect::func::NUM_RESULTS_ATTR) {
+    let num_results = match data
+        .attrs
+        .view(ctx)
+        .get(crate::dialect::func::NUM_RESULTS_ATTR)
+    {
         Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
         _ => return None,
     };
@@ -1050,7 +1058,7 @@ fn print_module_op(
     write!(f, "{indent_str}core.module")?;
 
     // Module name
-    if let Some(name) = data.attributes.get_str(state.ctx, "sym_name") {
+    if let Some(name) = data.attributes.view(state.ctx).get_str("sym_name") {
         f.write_char(' ')?;
         write_symbol_text(f, name)?;
     }
@@ -1630,7 +1638,7 @@ mod tests {
 
     inventory::submit!(crate::asm_format::TypeAliasHint {
         dialect: "alias_test",
-        suggest: |ctx, ty| ctx.get_type(ty).attrs.get_str(ctx, "name"),
+        suggest: |ctx, ty| ctx.type_attrs(ty).get_str("name"),
     });
 
     /// Helper: build a named `alias_test.record` type, which suggests its
@@ -1640,7 +1648,7 @@ mod tests {
         for (field, ty) in fields {
             let mut attrs = AttributeMap::new();
             let field = ctx.string_attr(field);
-            attrs.insert(ctx, "name", field);
+            attrs.view_mut(ctx).insert("name", field);
             builder = builder.param_with_attrs(*ty, attrs);
         }
         let name = ctx.string_attr(name);

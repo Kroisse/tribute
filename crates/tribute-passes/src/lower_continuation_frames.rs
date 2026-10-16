@@ -413,7 +413,8 @@ mod tests {
         lower_continuation_frames(&mut ctx, module).unwrap();
         let converted = ctx.block(block).args[0]
             .attrs
-            .get_type(&ctx, "frame")
+            .view(&ctx)
+            .get_type("frame")
             .unwrap();
         assert!(continuation_frame::result_type(&ctx, converted).is_some());
     }

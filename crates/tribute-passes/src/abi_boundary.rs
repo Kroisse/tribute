@@ -425,7 +425,7 @@ fn ownership_violations(ctx: &IrContext, signature: func::FuncSig) -> Vec<TypeVi
     let mut found = Vec::new();
     for (index, attrs) in signature.input_attrs(ctx).enumerate() {
         let location = format!(" input {index}");
-        match attrs.get(ctx, crate::target_abi::OWNERSHIP_ATTR) {
+        match attrs.view(ctx).get(crate::target_abi::OWNERSHIP_ATTR) {
             Some(Attribute::String(mode)) if ctx.str(*mode) == crate::target_abi::CONSUMED => {}
             Some(Attribute::String(mode)) => found.push((
                 ViolationKind::UnknownOwnership(ctx.str(*mode).to_owned()),

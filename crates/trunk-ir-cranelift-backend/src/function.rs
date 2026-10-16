@@ -889,7 +889,9 @@ mod tests {
         let tail = clif::func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs).as_type_ref();
         let mut malformed_attrs = trunk_ir::AttributeMap::new();
         let call_conv = ctx.string_attr("fast");
-        malformed_attrs.insert(&mut ctx, func::CALL_CONV_ATTR, call_conv);
+        malformed_attrs
+            .view_mut(&mut ctx)
+            .insert(func::CALL_CONV_ATTR, call_conv);
         let malformed =
             clif::func_sig_with_attrs(&mut ctx, [i32_ty], [], malformed_attrs).as_type_ref();
 

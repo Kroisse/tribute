@@ -132,7 +132,8 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref(self.ctx, "func_ref")
+            .view(self.ctx)
+            .get_symbol_ref("func_ref")
             .expect("pre-CPS validation checked func_ref target")
             .clone();
         let target = self
@@ -257,14 +258,16 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_str(self.ctx, "sym_name")
+            .view(self.ctx)
+            .get_str("sym_name")
             .map(Symbol::new)
             .expect("pre-CPS validation checked function symbol");
         let logical_type = self
             .ctx
             .op(source)
             .attributes
-            .get_type(self.ctx, "type")
+            .view(self.ctx)
+            .get_type("type")
             .expect("pre-CPS validation checked function type");
         let info = self
             .funcs
@@ -374,7 +377,8 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref(self.ctx, "callee")
+            .view(self.ctx)
+            .get_symbol_ref("callee")
             .expect("pre-CPS validation checked direct callee")
             .clone();
         let target = self
@@ -437,7 +441,8 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol_ref(self.ctx, "callee")
+            .view(self.ctx)
+            .get_symbol_ref("callee")
             .expect("pre-CPS validation checked tail callee")
             .clone();
         let target = self

@@ -129,7 +129,7 @@ impl<'a> ArenaIrBuilder<'a> {
         for (key, value) in attrs.iter() {
             let value = self.build_attribute(value)?;
             let key = self.ctx.intern_str(key);
-            map.insert_ref(self.ctx, key, value);
+            map.view_mut(self.ctx).insert(key, value);
         }
         Ok(map)
     }
@@ -168,7 +168,7 @@ impl<'a> ArenaIrBuilder<'a> {
         let mut attrs = self.build_type_attrs(dialect, name, attrs)?;
         let param_attrs = inputs.iter().chain(results).map(|(_, attrs)| attrs.clone());
         if let Some(value) = param_attrs_attribute(param_attrs) {
-            attrs.insert(self.ctx, PARAM_ATTRS_ATTR, value);
+            attrs.view_mut(self.ctx).insert(PARAM_ATTRS_ATTR, value);
         }
         Ok(attrs)
     }
@@ -383,7 +383,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 for (key, value) in entries {
                     let value = self.build_attribute(value)?;
                     let interned = self.ctx.intern_str(key);
-                    if dict.insert_ref(self.ctx, interned, value).is_some() {
+                    if dict.view_mut(self.ctx).insert(interned, value).is_some() {
                         return Err(ParseError {
                             message: format!("duplicate dictionary attribute key '{key}'"),
                             offset: 0,
@@ -499,7 +499,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 let mut attrs = AttributeMap::new();
                 if !is_default_name {
                     let name = self.ctx.string_attr(name);
-                    attrs.insert(self.ctx, "bind_name", name);
+                    attrs.view_mut(self.ctx).insert("bind_name", name);
                 }
                 block_arg_data.push(BlockArgData { ty, attrs });
                 arg_names.push(name.to_string());
@@ -642,7 +642,7 @@ impl<'a> ArenaIrBuilder<'a> {
         // Add sym_name if present
         if let Some(ref name) = raw.sym_name {
             let name = self.ctx.string_attr(name);
-            attributes.insert(self.ctx, "sym_name", name);
+            attributes.view_mut(self.ctx).insert("sym_name", name);
         }
 
         // Handle func-style signature → func.func_sig type
@@ -669,15 +669,15 @@ impl<'a> ArenaIrBuilder<'a> {
                 }
                 _ => crate::dialect::func::func_sig(self.ctx, param_types, results).as_type_ref(),
             };
-            if attributes.contains_key(self.ctx, "type")
-                && attributes.get_type(self.ctx, "type").is_none()
+            if attributes.view(self.ctx).contains_key("type")
+                && attributes.view(self.ctx).get_type("type").is_none()
             {
                 return Err(ParseError {
                     message: "explicit function type attribute must be a type".into(),
                     offset: 0,
                 });
             }
-            if let Some(explicit) = attributes.get_type(self.ctx, "type") {
+            if let Some(explicit) = attributes.view(self.ctx).get_type("type") {
                 let matches =
                     if raw.dialect == "wasm" && raw.op_name == "func" {
                         crate::dialect::wasm::FuncSig::from_type_ref(self.ctx, explicit)
@@ -714,7 +714,9 @@ impl<'a> ArenaIrBuilder<'a> {
                     });
                 }
             } else {
-                attributes.insert(self.ctx, "type", Attribute::Type(func_ty));
+                attributes
+                    .view_mut(self.ctx)
+                    .insert("type", Attribute::Type(func_ty));
             }
         }
 
@@ -1073,9 +1075,8 @@ core.module @test {
         );
         assert!(sig.result_attrs(&ctx).all(|attrs| attrs.is_empty()));
         assert!(
-            !ctx.get_type(aliases["plain"])
-                .attrs
-                .contains_key(&ctx, crate::types::PARAM_ATTRS_ATTR),
+            !ctx.type_attrs(aliases["plain"])
+                .contains_key(crate::types::PARAM_ATTRS_ATTR),
             "all-empty parameter attributes are canonicalized away"
         );
         assert_roundtrip(&ctx, module);
@@ -2059,11 +2060,11 @@ core.module @test {
                 let parsed_op = parsed_ctx.block(block).ops[0];
                 let attrs = &parsed_ctx.op(parsed_op).attributes;
                 prop_assert_eq!(
-                    attrs.get(&parsed_ctx, "bytes"),
+                    attrs.view(&parsed_ctx).get("bytes"),
                     Some(&Attribute::Bytes(bytes.as_slice().into()))
                 );
-                prop_assert_eq!(attrs.get_str(&parsed_ctx, "text"), Some(string.as_str()));
-                prop_assert_eq!(attrs.get_symbol_ref(&parsed_ctx, "callee"), Some(&callee));
+                prop_assert_eq!(attrs.view(&parsed_ctx).get_str("text"), Some(string.as_str()));
+                prop_assert_eq!(attrs.view(&parsed_ctx).get_symbol_ref("callee"), Some(&callee));
                 prop_assert_eq!(print_module(&parsed_ctx, parsed), printed);
             }
         }

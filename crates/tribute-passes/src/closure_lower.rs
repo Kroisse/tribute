@@ -53,7 +53,9 @@ pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(runtime_layout::CLOSURE);
-    attrs.insert(ctx, runtime_layout::LAYOUT_ATTR, layout);
+    attrs
+        .view_mut(ctx)
+        .insert(runtime_layout::LAYOUT_ATTR, layout);
     adt::struct_type(
         ctx,
         "_closure",
@@ -302,7 +304,7 @@ impl RewritePattern for LowerClosureTailCallArena {
 fn copy_indirect_call_attributes(ctx: &mut IrContext, source: OpRef, destination: OpRef) {
     let mut attributes = ctx.op(source).attributes.clone();
     func::remove_indirect_call_signature(ctx, &mut attributes);
-    attributes.remove(ctx, CALLING_CONVENTION_ATTR);
+    attributes.view_mut(ctx).remove(CALLING_CONVENTION_ATTR);
     ctx.op_attrs_mut(destination).extend(attributes);
 }
 
@@ -664,7 +666,7 @@ pub(crate) fn substitute_module_types_keeping_casts(
                     let mut attrs = argument.attrs.clone();
                     for (name, value) in argument.attrs.iter() {
                         let value = physicalizer.convert_attribute(value.clone());
-                        attrs.insert_ref(physicalizer.ctx, name, value);
+                        attrs.view_mut(physicalizer.ctx).insert(name, value);
                     }
                     if attrs != argument.attrs {
                         block_attribute_updates.push((block, index, attrs));
@@ -751,7 +753,7 @@ impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<
             .map(|(name, value)| (name, self.convert_attribute(value.clone())))
             .collect();
         converted.attrs.clear();
-        converted.attrs.extend(self.ctx, attributes);
+        converted.attrs.view_mut(self.ctx).extend(attributes);
         let converted = if converted == data {
             ty
         } else {
