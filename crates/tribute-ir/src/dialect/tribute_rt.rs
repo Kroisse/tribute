@@ -4,9 +4,9 @@
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Intref>());
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Anyref>());
 // A native `Bytes` value points to a reference-counted object.
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::named(
-    "core", "bytes"
-));
+inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<
+    trunk_ir::dialect::core::Bytes,
+>());
 
 use crate::dialect::tribute_rtti::ManagedRef;
 use trunk_ir::dialect::core::Ptr;

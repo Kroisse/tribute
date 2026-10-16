@@ -12,8 +12,8 @@ inventory::submit!(trunk_ir::asm_format::TypeAliasHint {
 // an allocation of that layout.
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Struct>());
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Enum>());
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::named(
-    "adt", "typeref"
+inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::of(
+    Typeref::DEF
 ));
 
 // === Pure operation registrations ===
@@ -211,9 +211,10 @@ pub const STRUCT_NAME_ATTR: &str = "name";
 /// The nominal name of an `adt.struct`, `adt.enum` or `adt.typeref`: its
 /// `name` type attribute.
 pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
-    let data = ctx.get_type(ty);
-    let nominal = data.name.dialect(ctx) == "adt"
-        && (matches!(data.name.strip_dialect(ctx), "struct" | "enum" | "typeref"));
+    let name = ctx.get_type(ty).name;
+    let nominal = name == <Struct as DialectType>::NAME
+        || name == <Enum as DialectType>::NAME
+        || name == Typeref::NAME;
     nominal
         .then(|| ctx.type_attrs(ty).get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
@@ -464,7 +465,7 @@ pub fn try_struct_type<N: Into<StringArg>>(
     fields: impl IntoIterator<Item = (N, TypeRef, AttributeMap)>,
     attrs: AttributeMap,
 ) -> Result<Struct, StructTypeError> {
-    let mut builder = TypeDataBuilder::new("adt.struct");
+    let mut builder = TypeDataBuilder::new(<Struct as DialectType>::NAME);
     for (field, ty, mut field_attrs) in fields {
         let field = ctx.intern_string_arg(field.into());
         field_attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, field);

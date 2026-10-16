@@ -55,20 +55,17 @@ pub struct ManagedRef;
 
 /// Marks one type as a managed reference, registered via
 /// `inventory::submit!` at the type's definition site.
-pub struct ManagedRefType {
-    dialect: &'static str,
-    type_name: &'static str,
-}
+pub struct ManagedRefType(&'static trunk_ir::TypeDef);
 
 impl ManagedRefType {
     /// Registration for the type wrapped by `T`.
     pub const fn new<T: trunk_ir::ops::DialectType>() -> Self {
-        Self::named(T::DIALECT_NAME, T::TYPE_NAME)
+        Self(T::DEF)
     }
 
-    /// Registration for a type that has no wrapper.
-    pub const fn named(dialect: &'static str, type_name: &'static str) -> Self {
-        Self { dialect, type_name }
+    /// Registration for the type `def` defines.
+    pub const fn of(def: &'static trunk_ir::TypeDef) -> Self {
+        Self(def)
     }
 }
 
@@ -89,10 +86,7 @@ impl trunk_ir::type_constraint::TypeConstraint for ManagedRef {
 impl ManagedRef {
     pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
         let data = ctx.get_type(ty);
-        inventory::iter::<ManagedRefType>().any(|registered| {
-            data.name.dialect(ctx) == registered.dialect
-                && data.name.strip_dialect(ctx) == registered.type_name
-        })
+        inventory::iter::<ManagedRefType>().any(|registered| data.name == registered.0)
     }
 }
 
@@ -120,28 +114,30 @@ impl FieldKind {
     /// is not a scalar.
     pub fn scalar(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
         let data = ctx.get_type(ty);
-        let is = |dialect: &'static str, name: &'static str| {
-            data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name
-        };
-        if is("core", "i1") || is("tribute_rt", "bool") {
+        use crate::dialect::tribute_rt;
+        use trunk_ir::dialect::core;
+        use trunk_ir::ops::DialectType;
+
+        let is = |name: trunk_ir::TypeName| data.name == name;
+        if is(core::I1::NAME) || is(tribute_rt::Bool::NAME) {
             return Some(Self::Bool);
         }
-        if is("tribute_rt", "int") {
+        if is(tribute_rt::Int::NAME) {
             return Some(Self::Int {
                 width: 32,
                 signed: true,
             });
         }
-        if is("tribute_rt", "nat") {
+        if is(tribute_rt::Nat::NAME) {
             return Some(Self::Int {
                 width: 32,
                 signed: false,
             });
         }
-        if is("tribute_rt", "float") || is("core", "f64") {
+        if is(tribute_rt::Float::NAME) || is(core::F64::NAME) {
             return Some(Self::Float { width: 64 });
         }
-        if is("core", "f32") {
+        if is(core::F32::NAME) {
             return Some(Self::Float { width: 32 });
         }
         // A `core` integer carries no sign, so it records as unsigned.
