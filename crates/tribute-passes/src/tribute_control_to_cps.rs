@@ -340,9 +340,7 @@ impl<'a> Converter<'a> {
                 "perform" => {
                     let kind = self
                         .ctx
-                        .op(source)
-                        .attributes
-                        .view(self.ctx)
+                        .op_attrs(source)
                         .get_str("operation_kind")
                         .expect("pre-CPS validation checked operation kind");
                     if kind == "fn" {

@@ -123,19 +123,11 @@ impl trunk_ir::op_interface::CallableExitModel for DispatchCps {
         &self,
         ctx: &trunk_ir::IrContext,
     ) -> Result<(), trunk_ir::op_interface::ControlFlowInterfaceError> {
-        let data = ctx.op(self.op_ref());
+        let attrs = ctx.op_attrs(self.op_ref());
         if ctx.op_operands(self.op_ref()).len() == 4
-            && data
-                .attributes
-                .view(ctx)
-                .get_symbol_ref("ability")
-                .is_some()
-            && data
-                .attributes
-                .view(ctx)
-                .get_string_ref("op_name")
-                .is_some()
-            && data.attributes.view(ctx).get_type("answer_type").is_some()
+            && attrs.get_symbol_ref("ability").is_some()
+            && attrs.get_string_ref("op_name").is_some()
+            && attrs.get_type("answer_type").is_some()
         {
             Ok(())
         } else {

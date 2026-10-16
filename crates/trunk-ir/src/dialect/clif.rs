@@ -288,9 +288,9 @@ impl FuncSig {
     }
 
     pub fn remove_reserved_attrs(ctx: &mut crate::IrContext, attrs: &mut AttributeMap) {
-        let mut attrs_view = attrs.view_mut(ctx);
-        attrs_view.remove(NUM_INPUTS_ATTR);
-        attrs_view.remove(NUM_RESULTS_ATTR);
+        let mut attrs = attrs.view_mut(ctx);
+        attrs.remove(NUM_INPUTS_ATTR);
+        attrs.remove(NUM_RESULTS_ATTR);
     }
 }
 

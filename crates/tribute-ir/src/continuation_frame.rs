@@ -31,7 +31,7 @@ pub fn ref_type(ctx: &mut IrContext, name: impl Into<StringArg>, result: TypeRef
 pub fn result_type(ctx: &IrContext, frame: TypeRef) -> Option<TypeRef> {
     let data = ctx.get_type(frame);
     (data.dialect == "adt" && (matches!(data.name.as_str(), "typeref" | "struct")))
-        .then(|| data.attrs.view(ctx).get_type(RESULT_ATTR))
+        .then(|| ctx.type_attrs(frame).get_type(RESULT_ATTR))
         .flatten()
 }
 

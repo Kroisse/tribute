@@ -199,7 +199,7 @@ impl RewritePattern for FuncFuncPattern {
 
         // Convert parameter and return types in the function signature
         let data = ctx.op(op);
-        let func_type_attr = data.attributes.view(ctx).get_type("type");
+        let func_type_attr = ctx.op_attrs(op).get_type("type");
 
         let mut new_attrs = data.attributes.clone();
         let Some(func_ty) = func_type_attr else {
@@ -641,10 +641,13 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
 
-        let mut inner_attrs = AttributeMap::new();
-        let mut inner_attrs_view = inner_attrs.view_mut(&mut ctx);
-        inner_attrs_view.insert("tag", Attribute::SymbolRef(SymbolPath::new(["preserved"])));
-        inner_attrs_view.insert("nested", Attribute::List(vec![Attribute::Type(i32_ty)]));
+        let inner_attrs = AttributeMap::from_entries(
+            &mut ctx,
+            [
+                ("tag", Attribute::SymbolRef(SymbolPath::new(["preserved"]))),
+                ("nested", Attribute::List(vec![Attribute::Type(i32_ty)])),
+            ],
+        );
         let nested =
             func::func_sig_with_attrs(&mut ctx, [i32_ty], [i32_ty], inner_attrs).as_type_ref();
         let mut attrs = AttributeMap::new();

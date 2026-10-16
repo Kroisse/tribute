@@ -119,17 +119,13 @@ impl Converter<'_> {
             .collect();
         let ability = self
             .ctx
-            .op(source)
-            .attributes
-            .view(self.ctx)
+            .op_attrs(source)
             .get_symbol_ref("ability")
             .cloned()
             .expect("pre-CPS validation checked perform ability");
         let op_name = self
             .ctx
-            .op(source)
-            .attributes
-            .view(self.ctx)
+            .op_attrs(source)
             .get_string_ref("op_name")
             .expect("pre-CPS validation checked perform operation");
         let evidence = self.current_evidence(source, flow)?;
@@ -230,25 +226,15 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let ability = self
             .ctx
-            .op(source)
-            .attributes
-            .view(self.ctx)
+            .op_attrs(source)
             .get_symbol_ref("ability")
             .cloned()
             .unwrap();
-        let op_name = self
-            .ctx
-            .op(source)
-            .attributes
-            .view(self.ctx)
-            .get_string_ref("op_name")
-            .unwrap();
+        let op_name = self.ctx.op_attrs(source).get_string_ref("op_name").unwrap();
         let general = self.ctx.op_attrs(source).get_str("kind") == Some("op");
         let operation_result = self
             .ctx
-            .op(source)
-            .attributes
-            .view(self.ctx)
+            .op_attrs(source)
             .get_type("operation_result_type")
             .unwrap();
         let source_region = self.ctx.op_region(source, 0).ok_or_else(|| {
@@ -490,17 +476,13 @@ impl Converter<'_> {
         let result_type = self.convert_type(self.ctx.op_result_types(source)[0]);
         let ability = self
             .ctx
-            .op(source)
-            .attributes
-            .view(self.ctx)
+            .op_attrs(source)
             .get_symbol_ref("ability")
             .cloned()
             .expect("pre-CPS validation checked perform ability");
         let op_name = self
             .ctx
-            .op(source)
-            .attributes
-            .view(self.ctx)
+            .op_attrs(source)
             .get_string_ref("op_name")
             .expect("pre-CPS validation checked perform operation");
         let call = ability::Call::operands(args)

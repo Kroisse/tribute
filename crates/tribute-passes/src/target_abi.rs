@@ -142,12 +142,7 @@ pub fn lower_cps_signatures_to_physical(
         if let Ok(function) = func::Func::from_op(converter.ctx, op) {
             let signature = function.r#type(converter.ctx);
             let convention = exact_convention(converter.ctx, op)?;
-            let platform = converter
-                .ctx
-                .op(op)
-                .attributes
-                .view(converter.ctx)
-                .contains_key("abi");
+            let platform = converter.ctx.op_attrs(op).contains_key("abi");
             let converted = match convention {
                 Some(convention) if platform => {
                     converter.convert_platform_callable(signature, convention)?
@@ -163,9 +158,7 @@ pub fn lower_cps_signatures_to_physical(
             // ordinary input, so no later pass reads the recorded position.
             if converter
                 .ctx
-                .op(op)
-                .attributes
-                .view(converter.ctx)
+                .op_attrs(op)
                 .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
             {
                 consumed_attributes.push((op, CLOSURE_ENVIRONMENT_INDEX_ATTR));
@@ -222,9 +215,7 @@ pub fn lower_cps_signatures_to_physical(
         if is_transfer(converter.ctx, op)
             && converter
                 .ctx
-                .op(op)
-                .attributes
-                .view(converter.ctx)
+                .op_attrs(op)
                 .contains_key(CALLING_CONVENTION_ATTR)
             && IndirectCallLikeOps::callee(converter.ctx, op).is_none_or(|callee| {
                 crate::closure_lower::physical_closure_type_for_callee(converter.ctx, callee)
@@ -1064,13 +1055,9 @@ fn validate_root_continuation_frame(
             "target root bridge: worker frame result provenance differs from root source result",
         ));
     }
-    let name = reference_data
-        .attrs
-        .view(ctx)
-        .get_str("name")
-        .ok_or_else(|| {
-            TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
-        })?;
+    let name = ctx.type_attrs(frame).get_str("name").ok_or_else(|| {
+        TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
+    })?;
     let layout = ctx.type_alias_by_text(name).ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
@@ -2103,18 +2090,16 @@ mod tests {
                         .view_mut(&mut ctx)
                         .remove(CALLING_CONVENTION_ATTR);
                 }
-                let mut attributes_view = attributes.view_mut(&mut ctx);
-                attributes_view.remove("type");
-                attributes_view.remove("signature");
+                attributes.view_mut(&mut ctx).remove("type");
+                attributes.view_mut(&mut ctx).remove("signature");
                 (op, attributes, ctx.op_result_types(op).to_vec())
             })
             .collect();
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         for (op, before, results) in unchanged {
             let mut after = ctx.op(op).attributes.clone();
-            let mut after_view = after.view_mut(&mut ctx);
-            after_view.remove("type");
-            after_view.remove("signature");
+            after.view_mut(&mut ctx).remove("type");
+            after.view_mut(&mut ctx).remove("signature");
             assert_eq!(after, before);
             assert_eq!(ctx.op_result_types(op).len(), results.len());
         }

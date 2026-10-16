@@ -86,12 +86,12 @@ impl ConstCollector {
 
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == "string_const" {
-                if let Some(s) = data.attributes.view(ctx).get_str("value") {
+                if let Some(s) = ctx.op_attrs(op).get_str("value") {
                     self.intern(s.as_bytes());
                     self.has_string_consts = true;
                 }
             } else if data.name == "bytes_const"
-                && let Some(Attribute::Bytes(b)) = data.attributes.view(ctx).get("value")
+                && let Some(Attribute::Bytes(b)) = ctx.op_attrs(op).get("value")
             {
                 self.intern(b);
             }

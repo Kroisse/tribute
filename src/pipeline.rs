@@ -3278,7 +3278,7 @@ fn main() -> Nil {
         fn target(ir: &IrContext, ty: TypeRef) -> TypeRef {
             let data = ir.get_type(ty);
             assert_eq!(data.name, Symbol::new("typeref"));
-            ir.type_alias_by_text(data.attrs.view(ir).get_str("name").unwrap())
+            ir.type_alias_by_text(ir.type_attrs(ty).get_str("name").unwrap())
                 .expect("referenced layout")
         }
         let source = source_from_str(
@@ -3431,8 +3431,7 @@ fn main() -> Nil {}
             assert_eq!(data.dialect, Symbol::new("adt"));
             assert_eq!(data.name, Symbol::new(kind));
             assert!(
-                data.attrs
-                    .view(ir)
+                ir.type_attrs(ty)
                     .get_str("name")
                     .is_some_and(|text| name == text)
             );
@@ -3455,12 +3454,7 @@ fn main() -> Nil {}
             let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
             assert_eq!(data.name, Symbol::new("typeref"));
-            Symbol::new(
-                data.attrs
-                    .view(ir)
-                    .get_str("name")
-                    .expect("nominal identity"),
-            )
+            Symbol::new(ir.type_attrs(ty).get_str("name").expect("nominal identity"))
         }
 
         // These specializations occur only in signatures, never in allocations.
@@ -3994,9 +3988,8 @@ fn main() ->{std::io::Io} Nil {
         let builtin_layout_or_not_adt = |ctx: &IrContext, ty| {
             let data = ctx.get_type(ty);
             data.dialect != "adt"
-                || data
-                    .attrs
-                    .view(ctx)
+                || ctx
+                    .type_attrs(ty)
                     .get(trunk_ir::types::LAYOUT_ATTR)
                     .is_some()
         };
@@ -4081,10 +4074,9 @@ fn main() -> String { "hello" }
         let string_ty = tribute_ir::metadata::WellKnownTypes::from_module(&ctx, module.op())
             .string
             .expect("String IR metadata");
-        let string_data = ctx.get_type(string_ty);
 
         let Some(trunk_ir::Attribute::Location(definition)) =
-            string_data.attrs.view(&ctx).get("tribute.definition")
+            ctx.type_attrs(string_ty).get("tribute.definition")
         else {
             panic!("String IR type records its definition location");
         };

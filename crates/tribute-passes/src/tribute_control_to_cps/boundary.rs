@@ -314,9 +314,8 @@ fn verify_physical_callable_graph(
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let data = ctx.op(op);
-        let op_convention = data
-            .attributes
-            .view(ctx)
+        let op_convention = ctx
+            .op_attrs(op)
             .get_i64(CALLING_CONVENTION_ATTR)
             .ok()
             .flatten();
@@ -341,7 +340,7 @@ fn verify_physical_callable_graph(
             });
         }
         if data.dialect == "func" && data.name == "tail_call" {
-            let Some(callee) = data.attributes.view(ctx).get_symbol_ref("callee") else {
+            let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                 failures.push(BoundaryFailure {
                     op: Some(op),
                     location: Some(data.location),
@@ -416,7 +415,7 @@ fn verify_physical_callable_graph(
                 }
             }
         } else if data.dialect == "func" && data.name == "call" {
-            let callee = data.attributes.view(ctx).get_symbol_ref("callee");
+            let callee = ctx.op_attrs(op).get_symbol_ref("callee");
             if let Some(callee) = callee {
                 match symbols
                     .resolve(ctx, op, callee)
@@ -519,7 +518,7 @@ pub(super) fn verify_source_conversion_shapes(
                             ));
                             continue;
                         }
-                        if is_case && !arm_data.attributes.view(ctx).contains_key("value") {
+                        if is_case && !ctx.op_attrs(arm).contains_key("value") {
                             failures.push(failure(ctx, arm, "scf.case requires a value attribute"));
                         }
                         if let Ok(region) = ctx.op_regions(arm).exactly_one() {
