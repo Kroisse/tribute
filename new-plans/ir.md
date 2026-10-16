@@ -652,6 +652,9 @@ Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_a
 양화된 binder마다 row 하나를 넘긴다. 각 row는 `effect_row`와 같은 형식이며 tail은
 참조하는 쪽 정의의 binder index다. Callee에 양화된 binder가 없으면 속성을 생략한다.
 
+참조의 callee symbol은 class 인스턴스 하나를 가리키고, 그 convention은 인스턴스
+정의의 것이다. Row 인자의 class가 인스턴스의 class와 맞는지는
+[convention class](cps-effects.md#row-변수의-convention-class) 규칙이 정한다.
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
 type 안의 모든 `func_sig`(자기 자신 포함)에서 tail이 양화된 binder `t`인 row
 `(I, t)`를 `(I ⊎ args[t].instances, args[t].tail)`로 바꾸고 정렬한다. Convention과
