@@ -1824,19 +1824,19 @@ mod tests {
         });
 
         let mk_op = |ctx: &mut IrContext, name: &'static str| {
-            let data = OperationDataBuilder::new(loc, format!("test.{name}"))
+            let data = OperationDataBuilder::new(loc, name)
                 .result(i32_ty)
                 .build(ctx);
             ctx.create_op(data)
         };
 
-        let op_a = mk_op(&mut ctx, "a");
-        let op_c = mk_op(&mut ctx, "c");
+        let op_a = mk_op(&mut ctx, "test.a");
+        let op_c = mk_op(&mut ctx, "test.c");
         ctx.push_op(block, op_a);
         ctx.push_op(block, op_c);
 
         // Insert op_b before op_c
-        let op_b = mk_op(&mut ctx, "b");
+        let op_b = mk_op(&mut ctx, "test.b");
         ctx.insert_op_before(block, op_c, op_b);
 
         assert_eq!(ctx.block(block).ops.as_slice(), &[op_a, op_b, op_c]);

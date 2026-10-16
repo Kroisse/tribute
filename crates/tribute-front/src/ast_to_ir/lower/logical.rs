@@ -117,14 +117,10 @@ fn op(
     ir: &mut IrContext,
     block: BlockRef,
     location: Location,
-    name: &str,
+    def: &'static trunk_ir::OpDef,
     build: impl FnOnce(OperationDataBuilder) -> OperationDataBuilder,
 ) -> OpRef {
-    let data = build(OperationDataBuilder::new(
-        location,
-        format!("tribute_control.{name}"),
-    ))
-    .build(ir);
+    let data = build(OperationDataBuilder::new(location, def)).build(ir);
     let op = ir.create_op(data);
     ir.push_op(block, op);
     op
@@ -250,11 +246,17 @@ fn lower_function_ref<'db>(
         })
         .unwrap_or(worker_ty);
     let symbol = builder.ctx.function_symbol(&name);
-    let op = op(builder.ir, builder.block, location, "func_ref", |builder| {
-        builder
-            .result(ty)
-            .attr("func_ref", Attribute::SymbolRef(SymbolPath::new([symbol])))
-    });
+    let op = op(
+        builder.ir,
+        builder.block,
+        location,
+        tribute_control::FuncRef::DEF,
+        |builder| {
+            builder
+                .result(ty)
+                .attr("func_ref", Attribute::SymbolRef(SymbolPath::new([symbol])))
+        },
+    );
     builder.ctx.record_function_ref(op, name);
     result(builder.ir, op)
 }
@@ -894,9 +896,13 @@ fn lower_struct_accessors<'db>(
             .build(ir, location);
         ir.push_op(entry, field_value.op_ref());
         let field_result = field_value.result(ir);
-        op(ir, entry, location, "return", |builder| {
-            builder.operand(field_result)
-        });
+        op(
+            ir,
+            entry,
+            location,
+            tribute_control::Return::DEF,
+            |builder| builder.operand(field_result),
+        );
         let body = ir.create_region(RegionData {
             location,
             blocks: trunk_ir::smallvec::smallvec![entry],
@@ -946,12 +952,18 @@ fn lower_struct_accessors<'db>(
                     .build(ir, location);
                 ir.push_op(entry, current.op_ref());
                 let current = current.result(ir);
-                let call = op(ir, entry, location, "call_indirect", |builder| {
-                    builder
-                        .operand(argument)
-                        .operand(current)
-                        .result(field_type)
-                });
+                let call = op(
+                    ir,
+                    entry,
+                    location,
+                    tribute_control::CallIndirect::DEF,
+                    |builder| {
+                        builder
+                            .operand(argument)
+                            .operand(current)
+                            .result(field_type)
+                    },
+                );
                 result(ir, call)
             } else {
                 argument
@@ -978,9 +990,13 @@ fn lower_struct_accessors<'db>(
                 .build(ir, location);
             ir.push_op(entry, updated.op_ref());
             let updated = updated.result(ir);
-            op(ir, entry, location, "return", |builder| {
-                builder.operand(updated)
-            });
+            op(
+                ir,
+                entry,
+                location,
+                tribute_control::Return::DEF,
+                |builder| builder.operand(updated),
+            );
             let body = ir.create_region(RegionData {
                 location,
                 blocks: trunk_ir::smallvec::smallvec![entry],
@@ -1095,9 +1111,13 @@ fn lower_function<'db>(
                 value,
                 signature.return_type,
             );
-            op(ir, entry, location, "return", |builder| {
-                builder.operand(value)
-            });
+            op(
+                ir,
+                entry,
+                location,
+                tribute_control::Return::DEF,
+                |builder| builder.operand(value),
+            );
         }
     }
     let body = ir.create_region(RegionData {
@@ -2165,17 +2185,23 @@ fn named_call(
     let symbol = builder.ctx.function_symbol(&name);
     let callee = Attribute::SymbolRef(SymbolPath::new([symbol]));
     match position {
-        CallPosition::Value => op(builder.ir, builder.block, location, "call", |builder| {
-            builder
-                .operands(values)
-                .result(signature.return_type)
-                .attr("callee", callee)
-        }),
+        CallPosition::Value => op(
+            builder.ir,
+            builder.block,
+            location,
+            tribute_control::Call::DEF,
+            |builder| {
+                builder
+                    .operands(values)
+                    .result(signature.return_type)
+                    .attr("callee", callee)
+            },
+        ),
         CallPosition::Tail => op(
             builder.ir,
             builder.block,
             location,
-            "tail_call",
+            tribute_control::TailCall::DEF,
             |builder| builder.operands(values).attr("callee", callee),
         ),
     }
@@ -2208,7 +2234,7 @@ fn indirect_call(
                 builder.ir,
                 builder.block,
                 location,
-                "call_indirect",
+                tribute_control::CallIndirect::DEF,
                 |builder| {
                     builder
                         .operand(callable)
@@ -2221,7 +2247,7 @@ fn indirect_call(
             builder.ir,
             builder.block,
             location,
-            "tail_call_indirect",
+            tribute_control::TailCallIndirect::DEF,
             |builder| builder.operand(callable).operands(values),
         ),
     }
@@ -2355,14 +2381,20 @@ fn lower_call<'db>(
                     Ok(values) => values,
                     Err(nil) => return Some(nil),
                 };
-                let perform = op(builder.ir, builder.block, location, "perform", |builder| {
-                    builder
-                        .operands(values)
-                        .result(declaration.result_type)
-                        .attr("ability", Attribute::SymbolRef(instance))
-                        .attr("op_name", Attribute::String(declaration.op_name))
-                        .attr("operation_kind", Attribute::String(declaration.kind))
-                });
+                let perform = op(
+                    builder.ir,
+                    builder.block,
+                    location,
+                    tribute_control::Perform::DEF,
+                    |builder| {
+                        builder
+                            .operands(values)
+                            .result(declaration.result_type)
+                            .attr("ability", Attribute::SymbolRef(instance))
+                            .attr("op_name", Attribute::String(declaration.op_name))
+                            .attr("operation_kind", Attribute::String(declaration.kind))
+                    },
+                );
                 declarations.record(
                     builder.ir,
                     declaration,
@@ -2519,9 +2551,13 @@ fn lower_lambda<'db>(
                 value?,
                 result_type,
             );
-            op(builder.ir, entry, location, "return", |builder| {
-                builder.operand(value)
-            });
+            op(
+                builder.ir,
+                entry,
+                location,
+                tribute_control::Return::DEF,
+                |builder| builder.operand(value),
+            );
         }
     }
     let region = builder.ir.create_region(RegionData {
@@ -2531,9 +2567,13 @@ fn lower_lambda<'db>(
     });
     let captures = local_callables::captures(builder.ctx, builder.ir, region);
     let callable = func_sig_type(builder.ir, result_type, param_types, convention);
-    let lambda = op(builder.ir, builder.block, location, "lambda", |builder| {
-        builder.operands(captures).result(callable).region(region)
-    });
+    let lambda = op(
+        builder.ir,
+        builder.block,
+        location,
+        tribute_control::Lambda::DEF,
+        |builder| builder.operands(captures).result(callable).region(region),
+    );
     Some(result(builder.ir, lambda))
 }
 
@@ -2560,9 +2600,13 @@ fn lower_handle<'db>(
     )?;
     let body_value = IrBuilder::new(builder.ctx, builder.ir, body_block)
         .cast_if_needed(location, body_value, body_ty);
-    let body_yield = op(builder.ir, body_block, location, "yield", |builder| {
-        builder.operand(body_value)
-    });
+    let body_yield = op(
+        builder.ir,
+        body_block,
+        location,
+        tribute_control::Yield::DEF,
+        |builder| builder.operand(body_value),
+    );
     let _ = body_yield;
     let body_region = builder.ir.create_region(RegionData {
         location,
@@ -2601,9 +2645,13 @@ fn lower_handle<'db>(
     } else {
         complete
     };
-    op(builder.ir, completion_block, location, "yield", |builder| {
-        builder.operand(completion_value)
-    });
+    op(
+        builder.ir,
+        completion_block,
+        location,
+        tribute_control::Yield::DEF,
+        |builder| builder.operand(completion_value),
+    );
     let completion_region = builder.ir.create_region(RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![completion_block],
@@ -2635,13 +2683,19 @@ fn lower_handle<'db>(
         blocks: trunk_ir::smallvec::smallvec![handlers_block],
         parent_op: None,
     });
-    let handle = op(builder.ir, builder.block, location, "handle", |builder| {
-        builder
-            .result(result_ty)
-            .region(body_region)
-            .region(completion_region)
-            .region(handlers_region)
-    });
+    let handle = op(
+        builder.ir,
+        builder.block,
+        location,
+        tribute_control::Handle::DEF,
+        |builder| {
+            builder
+                .result(result_ty)
+                .region(body_region)
+                .region(completion_region)
+                .region(handlers_region)
+        },
+    );
     attach_evidence_plan(builder.ctx, builder.ir, handle, handle_id, declarations);
     Some(result(builder.ir, handle))
 }
@@ -2790,23 +2844,33 @@ fn lower_handler<'db>(
             answer_ty
         };
         let value = IrBuilder::new(&mut scope, ir, block).cast_if_needed(location, value, expected);
-        op(ir, block, location, "yield", |builder| {
-            builder.operand(value)
-        });
+        op(
+            ir,
+            block,
+            location,
+            tribute_control::Yield::DEF,
+            |builder| builder.operand(value),
+        );
     }
     let region = ir.create_region(RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![block],
         parent_op: None,
     });
-    op(ir, table, location, "handler", |builder| {
-        builder
-            .attr("ability", Attribute::SymbolRef(instance))
-            .attr("op_name", Attribute::String(op_name))
-            .attr("kind", Attribute::String(kind_name))
-            .attr("operation_result_type", Attribute::Type(operation_result))
-            .region(region)
-    });
+    op(
+        ir,
+        table,
+        location,
+        tribute_control::Handler::DEF,
+        |builder| {
+            builder
+                .attr("ability", Attribute::SymbolRef(instance))
+                .attr("op_name", Attribute::String(op_name))
+                .attr("kind", Attribute::String(kind_name))
+                .attr("operation_result_type", Attribute::Type(operation_result))
+                .region(region)
+        },
+    );
     Some(())
 }
 

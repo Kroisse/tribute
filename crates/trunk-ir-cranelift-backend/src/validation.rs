@@ -458,8 +458,8 @@ mod tests {
         (ctx, loc)
     }
 
-    fn make_module(ctx: &mut IrContext, loc: Location, dialect: &str, name: &str) -> Module {
-        let op_data = OperationDataBuilder::new(loc, format!("{dialect}.{name}")).build(ctx);
+    fn make_module(ctx: &mut IrContext, loc: Location, name: &'static str) -> Module {
+        let op_data = OperationDataBuilder::new(loc, name).build(ctx);
         let op = ctx.create_op(op_data);
 
         let block = ctx.create_block(BlockData {
@@ -610,7 +610,7 @@ mod tests {
     #[test]
     fn native_backend_ready_rejects_unknown_ops() {
         let (mut ctx, loc) = test_ctx();
-        let module = make_module(&mut ctx, loc, "arith", "add");
+        let module = make_module(&mut ctx, loc, "arith.add");
 
         let err = validate_clif_ir(&ctx, module).unwrap_err().to_string();
         assert!(err.contains("native-backend-ready"));

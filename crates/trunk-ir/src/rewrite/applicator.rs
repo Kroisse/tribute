@@ -618,12 +618,12 @@ mod tests {
     fn make_bodyless_func(
         ctx: &mut IrContext,
         loc: Location,
-        dialect: &'static str,
+        func_op: &'static crate::OpDef,
         name: &'static str,
     ) -> OpRef {
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
         let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
-        let op_data = OperationDataBuilder::new(loc, format!("{dialect}.func"))
+        let op_data = OperationDataBuilder::new(loc, func_op)
             .attr("sym_name", Attribute::String(ctx.intern_str(name)))
             .attr("type", Attribute::Type(func_ty))
             .build(ctx);
@@ -872,7 +872,7 @@ mod tests {
     fn func_scope_skips_bodyless_and_visits_body() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
-        let bodyless = make_bodyless_func(&mut ctx, loc, "func", "extern");
+        let bodyless = make_bodyless_func(&mut ctx, loc, crate::dialect::func::Func::DEF, "extern");
         let nested_data = OperationDataBuilder::new(loc, "test.source")
             .result(i32_ty)
             .build(&mut ctx);
@@ -902,7 +902,7 @@ mod tests {
     fn wasm_scope_skips_bodyless_and_visits_body() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
-        let bodyless = make_bodyless_func(&mut ctx, loc, "wasm", "extern");
+        let bodyless = make_bodyless_func(&mut ctx, loc, crate::dialect::wasm::Func::DEF, "extern");
         let nested_data = OperationDataBuilder::new(loc, "test.source")
             .result(i32_ty)
             .build(&mut ctx);
