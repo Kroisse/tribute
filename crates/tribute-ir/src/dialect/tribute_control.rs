@@ -28,6 +28,15 @@ use trunk_ir::{IrContext, Symbol, SymbolPath};
 
 use super::list;
 
+mod row;
+
+pub use row::{
+    ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR, ROW_UNIONS_ATTR, Row,
+    RowBinder, RowUnion, find_substituted_rows, logical_tuple_elements, logical_tuple_name,
+    logical_tuple_type, quantified_count, row_args, row_binders, row_unions, substitute_rows,
+    visit_rows,
+};
+
 /// Exact type-attribute key used by logical callable types.
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
 
@@ -81,7 +90,13 @@ mod tribute_control {
     struct ResumeToken<Input, Answer>;
 
     // FuncSig operations
-    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
+    fn func<S: FuncSig>(
+        sym_name: Attr<String>,
+        r#type: Attr<TypeOf<S>>,
+        row_binders: Option<Attr<[RowBinder]>>,
+        row_unions: Option<Attr<[RowUnion]>>,
+        inferred_row: Option<Attr<bool>>,
+    ) {
         #[region(body?)]
         {}
     }
@@ -91,11 +106,13 @@ mod tribute_control {
         {}
     }
 
-    fn func_ref(func_ref: Attr<SymbolRef>) -> Value<impl FuncSig> {}
+    #[verify]
+    fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
     #[verify]
     fn call(
         callee: Attr<SymbolRef>,
+        row_args: Option<Attr<[Row]>>,
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         args: Variadic<_>,
     ) -> Value<_> {
@@ -112,6 +129,7 @@ mod tribute_control {
     #[verify]
     fn tail_call(
         callee: Attr<SymbolRef>,
+        row_args: Option<Attr<[Row]>>,
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         args: Variadic<_>,
     ) {
@@ -331,7 +349,7 @@ pub(crate) enum EvidencePlanSite {
 }
 
 /// Check the shape of an operation's `evidence_plan`. Whether the selection
-/// matches the effect rows is typechecking's responsibility.
+/// matches the ability rows is typechecking's responsibility.
 pub(crate) fn verify_evidence_plan(
     ctx: &IrContext,
     op: OpRef,
@@ -413,8 +431,15 @@ fn verify_evidence_steps(
     Ok(())
 }
 
+impl trunk_ir::ops::Verify for FuncRef {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        row_args(ctx, self.op_ref()).map(drop)
+    }
+}
+
 impl trunk_ir::ops::Verify for Call {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        row_args(ctx, self.op_ref())?;
         verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
     }
 }
@@ -427,6 +452,7 @@ impl trunk_ir::ops::Verify for CallIndirect {
 
 impl trunk_ir::ops::Verify for TailCall {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        row_args(ctx, self.op_ref())?;
         verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
     }
 }
@@ -458,6 +484,8 @@ pub enum FuncSigTypeError {
     LengthMismatch,
     ResultCount(u32),
     Convention,
+    /// The ability row is malformed, or written out although closed and empty.
+    Row,
 }
 
 /// Typed wrapper for an input-first, exactly-one-result source signature.
@@ -537,6 +565,14 @@ impl FuncSig {
                 .ok_or(FuncSigTypeError::Convention)?,
         )
         .map_err(|_| FuncSigTypeError::Convention)?;
+        if let Some(row) = data.attrs.view(ctx).get(ABILITY_ROW_ATTR)
+            && Row::from_attribute(ctx, row).is_ok_and(|row| row.is_empty())
+        {
+            return Err(FuncSigTypeError::Row);
+        }
+        row::stored_row(ctx, data)
+            .expect("a func_sig stores a row")
+            .map_err(|_| FuncSigTypeError::Row)?;
         Ok(Self(ty))
     }
 
@@ -588,7 +624,14 @@ impl FuncSig {
         .expect("validated source func_sig retains convention domain")
     }
 
-    /// Remove the storage delimiters and source-only convention metadata.
+    /// The callable's ability row; closed and empty when the type omits it.
+    pub fn row(self, ctx: &IrContext) -> Row {
+        row::stored_row(ctx, ctx.get_type(self.0))
+            .expect("a func_sig stores a row")
+            .expect("validated source func_sig retains a well-formed row")
+    }
+
+    /// Remove the storage delimiters and the source-only convention and row.
     ///
     /// Consumers rebuilding an equivalent signature in another dialect retain
     /// every other attribute through their owning typed constructor.
@@ -600,7 +643,7 @@ impl FuncSig {
     }
 
     /// Whether this signature carries type-owned metadata beyond storage and
-    /// source convention fields.
+    /// source convention and row fields.
     pub(crate) fn has_nonreserved_attrs(self, ctx: &IrContext) -> bool {
         ctx.type_attrs(self.0)
             .iter()
@@ -608,11 +651,12 @@ impl FuncSig {
     }
 }
 
-/// The storage delimiters and source-only convention metadata.
-const RESERVED_ATTRS: [&str; 3] = [
+/// The storage delimiters and source-only convention and row metadata.
+const RESERVED_ATTRS: [&str; 4] = [
     trunk_ir::dialect::func::NUM_INPUTS_ATTR,
     trunk_ir::dialect::func::NUM_RESULTS_ATTR,
     CALLING_CONVENTION_ATTR,
+    ABILITY_ROW_ATTR,
 ];
 
 fn read_count(
@@ -639,6 +683,22 @@ pub fn func_sig(
     func_sig_with_attrs(ctx, result, inputs, convention, AttributeMap::new())
 }
 
+/// Build a logical source signature with ability row `row`.
+pub fn func_sig_with_row(
+    ctx: &mut IrContext,
+    result: TypeRef,
+    inputs: impl IntoIterator<Item = TypeRef>,
+    row: &Row,
+    convention: CallingConvention,
+) -> FuncSig {
+    let mut attrs = AttributeMap::new();
+    if !row.is_empty() {
+        let row = row.to_attribute(ctx);
+        attrs.view_mut(ctx).insert(ABILITY_ROW_ATTR, row);
+    }
+    build_func_sig(ctx, result, inputs, convention, attrs)
+}
+
 /// Construct a source signature while preserving only non-reserved metadata.
 pub fn func_sig_with_attrs(
     ctx: &mut IrContext,
@@ -654,9 +714,20 @@ pub fn func_sig_with_attrs(
             && !attrs
                 .view(ctx)
                 .contains_key(trunk_ir::dialect::func::NUM_RESULTS_ATTR)
-            && !attrs.view(ctx).contains_key(CALLING_CONVENTION_ATTR),
-        "source func_sig reserves delimiters and convention metadata"
+            && !attrs.view(ctx).contains_key(CALLING_CONVENTION_ATTR)
+            && !attrs.view(ctx).contains_key(ABILITY_ROW_ATTR),
+        "source func_sig reserves delimiters, convention, and row metadata"
     );
+    build_func_sig(ctx, result, inputs, convention, attrs)
+}
+
+fn build_func_sig(
+    ctx: &mut IrContext,
+    result: TypeRef,
+    inputs: impl IntoIterator<Item = TypeRef>,
+    convention: CallingConvention,
+    attrs: AttributeMap,
+) -> FuncSig {
     let inputs: Vec<_> = inputs.into_iter().collect();
     let count = u32::try_from(inputs.len()).expect("source func_sig input count exceeds u32");
     let mut builder = TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
@@ -758,6 +829,27 @@ inventory::submit! {
 }
 
 // === Custom assembly: tribute_control.func ===
+
+fn print_row(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, row: &Row) -> fmt::Result {
+    use fmt::Write;
+    if row.is_empty() {
+        return Ok(());
+    }
+    write!(h, " row(")?;
+    for (index, instance) in row.instances.iter().enumerate() {
+        if index > 0 {
+            write!(h, ", ")?;
+        }
+        h.write_attribute(&Attribute::SymbolRef(instance.clone()))?;
+    }
+    if let Some(tail) = row.tail {
+        if !row.instances.is_empty() {
+            write!(h, " ")?;
+        }
+        write!(h, "| {tail}")?;
+    }
+    write!(h, ")")
+}
 
 fn func_sig_parts(
     ctx: &IrContext,
@@ -873,6 +965,9 @@ fn print_func(
     if let Some((result, _, convention)) = parts {
         write!(h, " -> ")?;
         h.write_type(result)?;
+        if let Some(ty) = callable_ty {
+            print_row(h, &FuncSig(ty).row(h.ctx()))?;
+        }
         write!(h, " convention({})", convention.keyword())?;
     }
     print_extra_attributes(h, op, &["sym_name", "type", CALLING_CONVENTION_ATTR])?;
@@ -906,31 +1001,81 @@ fn parse_convention(input: &mut &str) -> winnow::ModalResult<CallingConvention> 
     Ok(convention)
 }
 
+/// The concise row of a source signature, `row(@A, @B | 1)`, as the raw
+/// `ability_row` attribute; `None` when the signature writes no row.
+fn parse_row<'a>(
+    input: &mut &'a str,
+) -> winnow::ModalResult<Option<trunk_ir::parser::raw::RawAttribute<'a>>> {
+    use trunk_ir::parser::raw::{RawAttribute, symbol_path, ws};
+    use winnow::ascii::digit1;
+    use winnow::combinator::{opt, separated};
+    use winnow::prelude::*;
+
+    let checkpoint = *input;
+    ws.parse_next(input)?;
+    if opt("row(").parse_next(input)?.is_none() {
+        *input = checkpoint;
+        return Ok(None);
+    }
+    ws.parse_next(input)?;
+    let instances: Vec<Vec<String>> =
+        separated(0.., (ws, symbol_path, ws).map(|(_, path, _)| path), ',').parse_next(input)?;
+    ws.parse_next(input)?;
+    let tail = opt(('|', ws, digit1.try_map(str::parse::<u32>), ws))
+        .parse_next(input)?
+        .map(|(_, _, tail, _)| tail);
+    ')'.parse_next(input)?;
+    if instances.is_empty() && tail.is_none() {
+        return Err(winnow::error::ErrMode::Backtrack(
+            winnow::error::ContextError::new(),
+        ));
+    }
+    let mut entries = Vec::new();
+    if !instances.is_empty() {
+        entries.push((
+            "instances".into(),
+            RawAttribute::List(instances.into_iter().map(RawAttribute::SymbolRef).collect()),
+        ));
+    }
+    if let Some(tail) = tail {
+        entries.push(("tail".into(), RawAttribute::Int(i128::from(tail))));
+    }
+    Ok(Some(RawAttribute::Dict(entries)))
+}
+
 fn func_sig_raw_type<'a>(
     result: trunk_ir::parser::raw::RawType<'a>,
     params: &[(&'a str, trunk_ir::parser::raw::RawType<'a>)],
+    row: Option<trunk_ir::parser::raw::RawAttribute<'a>>,
     convention: CallingConvention,
 ) -> trunk_ir::parser::raw::RawType<'a> {
     use trunk_ir::parser::raw::{RawAttribute, RawType};
+    let mut attrs = vec![(
+        CALLING_CONVENTION_ATTR.into(),
+        RawAttribute::Int(convention as i128),
+    )];
+    if let Some(row) = row {
+        attrs.push((ABILITY_ROW_ATTR.into(), row));
+    }
     RawType::Function {
         dialect: "tribute_control",
         name: "func_sig",
         inputs: params.iter().map(|(_, ty)| ty.clone().into()).collect(),
         results: vec![result.into()],
-        attrs: vec![(
-            CALLING_CONVENTION_ATTR.into(),
-            RawAttribute::Int(convention as i128),
-        )],
+        attrs,
     }
 }
 
+/// Whether an operation's attributes repeat metadata its signature type owns.
 fn has_duplicate_convention_attr(
     attrs: &[(
         std::borrow::Cow<'_, str>,
         trunk_ir::parser::raw::RawAttribute<'_>,
     )],
 ) -> bool {
-    attrs.iter().any(|(key, _)| key == CALLING_CONVENTION_ATTR)
+    attrs
+        .iter()
+        .any(|(key, _)| key == CALLING_CONVENTION_ATTR || key == ABILITY_ROW_ATTR)
 }
 
 fn parse_func<'a>(
@@ -951,6 +1096,7 @@ fn parse_func<'a>(
     ws.parse_next(input)?;
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
+    let row = parse_row(input)?;
     let convention = parse_convention(input)?;
     let attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
@@ -978,7 +1124,7 @@ fn parse_func<'a>(
         regions.push(region);
     }
 
-    let signature = func_sig_raw_type(result, &params, convention);
+    let signature = func_sig_raw_type(result, &params, row, convention);
     let mut attributes = attributes;
     attributes.push(("type".into(), RawAttribute::Type(signature)));
 
@@ -1036,6 +1182,9 @@ fn print_lambda(
     if let Some((result, _, convention)) = parts {
         write!(h, " -> ")?;
         h.write_type(result)?;
+        if let Some(ty) = callable_ty {
+            print_row(h, &FuncSig(ty).row(h.ctx()))?;
+        }
         write!(h, " convention({})", convention.keyword())?;
     }
     write!(h, " captures [")?;
@@ -1097,6 +1246,7 @@ fn parse_lambda<'a>(
     ws.parse_next(input)?;
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
+    let row = parse_row(input)?;
     let convention = parse_convention(input)?;
     let captures = parse_captures(input)?;
     let attributes = opt((ws, "attributes", ws, raw_attr_dict))
@@ -1127,7 +1277,7 @@ fn parse_lambda<'a>(
         return_type: None,
         operands: captures,
         attributes,
-        result_types: vec![func_sig_raw_type(result, &params, convention)],
+        result_types: vec![func_sig_raw_type(result, &params, row, convention)],
         regions: vec![region],
         successors: vec![],
     })
@@ -1489,6 +1639,16 @@ fn validate_attr_keys(
             ),
         );
     }
+    if ctx.op_attrs(op).contains_key(ABILITY_ROW_ATTR) {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            format!(
+                "{ABILITY_ROW_ATTR} belongs only on tribute_control.func_sig, not on the operation"
+            ),
+        );
+    }
     if allowed_extra {
         return;
     }
@@ -1691,7 +1851,45 @@ fn validate_return_or_yield_shape(ctx: &IrContext, op: OpRef, errors: &mut Vec<V
     }
 }
 
+fn validate_row_declarations(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let binders = match row_binders(ctx, op) {
+        Ok(binders) => binders,
+        Err(message) => return push_op_error(ctx, op, errors, message),
+    };
+    let unions = match row_unions(ctx, op) {
+        Ok(unions) => unions,
+        Err(message) => return push_op_error(ctx, op, errors, message),
+    };
+    let mut results = HashSet::default();
+    for union in &unions {
+        let in_scope = |index: u32| usize::try_from(index).is_ok_and(|index| index < binders.len());
+        if !in_scope(union.result) || !union.sources.iter().copied().all(in_scope) {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                "row union names a tail that is not a binder",
+            );
+        } else if union.sources.contains(&union.result) {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                "row union lists its result among its sources",
+            );
+        } else if !results.insert(union.result) {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!("row tail {} is declared as a union twice", union.result),
+            );
+        }
+    }
+}
+
 fn validate_func(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    validate_row_declarations(ctx, op, errors);
     let func = Func::from_op(ctx, op).expect("schema-verified tribute_control.func");
     if let Some(body) = ctx.op_region(op, 0) {
         validate_callable_body(ctx, op, func.r#type(ctx), body, errors);
@@ -2202,14 +2400,62 @@ pub fn validate_local(ctx: &IrContext, module: Module) -> ValidationResult {
     ValidationResult { errors }
 }
 
-fn same_source_signature(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
-    let Some((left_result, left_params, _)) = func_sig_parts(ctx, left) else {
-        return false;
-    };
-    let Some((right_result, right_params, _)) = func_sig_parts(ctx, right) else {
-        return false;
-    };
-    left_result == right_result && left_params == right_params
+/// The row arguments a reference passes to `target`, once their count
+/// matches the binders `target` quantifies; `None` after reporting why not.
+fn reference_row_args(
+    ctx: &IrContext,
+    op: OpRef,
+    target: OpRef,
+    errors: &mut Vec<ValidationError>,
+) -> Option<Vec<Row>> {
+    let args = row_args(ctx, op).ok()?;
+    let quantified = quantified_count(&row_binders(ctx, target).ok()?);
+    if args.len() != quantified {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            format!(
+                "passes {} row arguments, but its target quantifies {quantified} row binders",
+                args.len()
+            ),
+        );
+        return None;
+    }
+    Some(args)
+}
+
+/// `target`'s signature as a reference with row arguments sees it. A type
+/// that cannot be found is `None` and matches no value.
+struct SubstitutedSignature {
+    result: Option<TypeRef>,
+    inputs: Vec<Option<TypeRef>>,
+    row: Option<Row>,
+}
+
+fn substituted_parts(
+    ctx: &IrContext,
+    target_ty: TypeRef,
+    args: &[Row],
+) -> Option<SubstitutedSignature> {
+    let signature = FuncSig::from_type_ref(ctx, target_ty)?;
+    Some(SubstitutedSignature {
+        result: find_substituted_rows(ctx, signature.result(ctx), args),
+        inputs: signature
+            .inputs(ctx)
+            .iter()
+            .map(|&input| find_substituted_rows(ctx, input, args))
+            .collect(),
+        row: signature.row(ctx).substitute(args),
+    })
+}
+
+fn types_match(actual: &[TypeRef], expected: &[Option<TypeRef>]) -> bool {
+    actual.len() == expected.len()
+        && actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| Some(*actual) == *expected)
 }
 
 fn validate_symbol_uses(
@@ -2255,7 +2501,17 @@ fn validate_symbol_use(
             let Some(result_ty) = ctx.op_result_types(op).first().copied() else {
                 return;
             };
-            if !same_source_signature(ctx, target_ty, result_ty) {
+            let Some(args) = reference_row_args(ctx, op, target, errors) else {
+                return;
+            };
+            let same_signature = substituted_parts(ctx, target_ty, &args)
+                .zip(FuncSig::from_type_ref(ctx, result_ty))
+                .is_some_and(|(expected, signature)| {
+                    Some(signature.result(ctx)) == expected.result
+                        && types_match(signature.inputs(ctx), &expected.inputs)
+                        && Some(signature.row(ctx)) == expected.row
+                });
+            if !same_signature {
                 push_op_error(
                     ctx,
                     op,
@@ -2290,25 +2546,33 @@ fn validate_symbol_use(
             let Some(target_ty) = ctx.op_attrs(target).get_type("type") else {
                 return;
             };
-            let Some((result, params, _)) = func_sig_parts(ctx, target_ty) else {
+            let Some(args) = reference_row_args(ctx, op, target, errors) else {
                 return;
             };
-            check_types_equal(
-                ctx,
-                op,
-                &value_types(ctx, ctx.op_operands(op)),
-                &params,
-                "call argument",
-                errors,
-            );
-            check_types_equal(
-                ctx,
-                op,
-                ctx.op_result_types(op),
-                &[result],
-                "call result",
-                errors,
-            );
+            let Some(SubstitutedSignature {
+                result,
+                inputs: params,
+                ..
+            }) = substituted_parts(ctx, target_ty, &args)
+            else {
+                return;
+            };
+            if !types_match(&value_types(ctx, ctx.op_operands(op)), &params) {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "call argument types do not match the logical signature",
+                );
+            }
+            if !types_match(ctx.op_result_types(op), &[result]) {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "call result types do not match the logical signature",
+                );
+            }
         } else if is_control_op(ctx, op, "tail_call") {
             let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                 return;
@@ -2333,22 +2597,30 @@ fn validate_symbol_use(
             let Some(target_ty) = ctx.op_attrs(target).get_type("type") else {
                 return;
             };
-            let Some((result, params, _)) = func_sig_parts(ctx, target_ty) else {
+            let Some(args) = reference_row_args(ctx, op, target, errors) else {
                 return;
             };
-            check_types_equal(
-                ctx,
-                op,
-                &value_types(ctx, ctx.op_operands(op)),
-                &params,
-                "tail call argument",
-                errors,
-            );
+            let Some(SubstitutedSignature {
+                result,
+                inputs: params,
+                ..
+            }) = substituted_parts(ctx, target_ty, &args)
+            else {
+                return;
+            };
+            if !types_match(&value_types(ctx, ctx.op_operands(op)), &params) {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "tail call argument types do not match the logical signature",
+                );
+            }
             let Ok(owner_ty) = tail_call_owner_signature(ctx, op) else {
                 return;
             };
             if func_sig_parts(ctx, owner_ty)
-                .is_some_and(|(owner_result, _, _)| owner_result != result)
+                .is_some_and(|(owner_result, _, _)| Some(owner_result) != result)
             {
                 push_op_error(
                     ctx,
@@ -3583,6 +3855,248 @@ fn validate_token_placements(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
     });
 }
 
+/// The ability instances the module tree declares.
+fn declared_instances(ctx: &IrContext, module: Module) -> HashSet<SymbolPath> {
+    let mut instances = HashSet::default();
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        if crate::dialect::ability::Decl::matches(ctx, op)
+            && let Some(path) = qualified_name(ctx, op)
+        {
+            instances.insert(path);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    instances
+}
+
+/// Check one row against the binders in scope, `None` where no binder is.
+fn check_row(
+    ctx: &IrContext,
+    owner: OpRef,
+    row: &Row,
+    binders: Option<usize>,
+    instances: &HashSet<SymbolPath>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Some(tail) = row.tail
+        && binders.is_none_or(|binders| usize::try_from(tail).is_ok_and(|tail| tail >= binders))
+    {
+        push_op_error(
+            ctx,
+            owner,
+            errors,
+            format!("row tail {tail} names no row binder in scope"),
+        );
+    }
+    for instance in &row.instances {
+        if !instances.contains(instance) {
+            push_op_error(
+                ctx,
+                owner,
+                errors,
+                format!("row instance @{instance} is not an ability.decl"),
+            );
+        }
+    }
+}
+
+fn check_type_rows(
+    ctx: &IrContext,
+    owner: OpRef,
+    ty: TypeRef,
+    binders: Option<usize>,
+    instances: &HashSet<SymbolPath>,
+    errors: &mut Vec<ValidationError>,
+) {
+    visit_rows(ctx, ty, &mut |row| match row {
+        Ok(row) => check_row(ctx, owner, &row, binders, instances, errors),
+        Err(message) => push_op_error(ctx, owner, errors, message),
+    });
+}
+
+/// Every row tail inside a definition names one of its binders, and every
+/// row instance is declared. Module-level types have no binders.
+fn validate_row_scopes(
+    ctx: &IrContext,
+    module: Module,
+    instances: &HashSet<SymbolPath>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        if crate::dialect::ability::Operation::matches(ctx, op) {
+            let mut types = Vec::new();
+            for attr in ctx.op(op).attributes.values() {
+                attr.visit_types(&mut |ty| types.push(ty));
+            }
+            for ty in types {
+                check_type_rows(ctx, op, ty, None, instances, errors);
+            }
+            return ControlFlow::Continue(WalkAction::Advance);
+        }
+        if !is_control_op(ctx, op, "func") {
+            return ControlFlow::Continue(WalkAction::Advance);
+        }
+        let Ok(binders) = row_binders(ctx, op) else {
+            return ControlFlow::Continue(WalkAction::Skip);
+        };
+        let scope = Some(binders.len());
+        let mut types = HashSet::default();
+        if let Some(ty) = ctx.op_attrs(op).get_type("type") {
+            types.insert(ty);
+        }
+        let mut rows = Vec::new();
+        if let Some(body) = ctx.op_region(op, 0) {
+            walk_region_ops(ctx, body, &mut |inner| {
+                types.extend(ctx.op_result_types(inner).iter().copied());
+                for attr in ctx.op(inner).attributes.values() {
+                    attr.visit_types(&mut |ty| {
+                        types.insert(ty);
+                    });
+                }
+                for region in ctx.op_regions(inner) {
+                    for &block in &ctx.region(region).blocks {
+                        types.extend(block_arg_types(ctx, block));
+                    }
+                }
+                if let Ok(args) = row_args(ctx, inner) {
+                    rows.extend(args.into_iter().map(|row| (inner, row)));
+                }
+            });
+            for &block in &ctx.region(body).blocks {
+                types.extend(block_arg_types(ctx, block));
+            }
+        }
+        for ty in types {
+            check_type_rows(ctx, op, ty, scope, instances, errors);
+        }
+        for (inner, row) in rows {
+            check_row(ctx, inner, &row, scope, instances, errors);
+        }
+        ControlFlow::Continue(WalkAction::Skip)
+    });
+}
+
+/// The row tail of the callable whose body holds `op`, and the function
+/// that declares the binders it names.
+fn enclosing_row_tail(ctx: &IrContext, op: OpRef) -> Option<(Option<u32>, OpRef)> {
+    let mut current = op;
+    let mut tail = None;
+    loop {
+        let owner = parent_op(ctx, current)?;
+        if is_control_op(ctx, owner, "lambda") && tail.is_none() {
+            let ty = ctx.op_result_types(owner).first().copied()?;
+            tail = Some(FuncSig::from_type_ref(ctx, ty)?.row(ctx).tail);
+        }
+        if is_control_op(ctx, owner, "func") {
+            let tail = match tail {
+                Some(tail) => tail,
+                None => {
+                    let ty = ctx.op_attrs(owner).get_type("type")?;
+                    FuncSig::from_type_ref(ctx, ty)?.row(ctx).tail
+                }
+            };
+            return Some((tail, owner));
+        }
+        current = owner;
+    }
+}
+
+/// The sources of the union `func` declares for `tail`.
+fn union_sources(ctx: &IrContext, func: OpRef, tail: Option<u32>) -> Option<Vec<u32>> {
+    let tail = tail?;
+    row_unions(ctx, func)
+        .ok()?
+        .into_iter()
+        .find(|union| union.result == tail)
+        .map(|union| union.sources)
+}
+
+fn check_selects(steps: &[EvidenceStep], sources: Option<&[u32]>) -> Result<(), String> {
+    for step in steps {
+        match step {
+            EvidenceStep::Select(index) => {
+                let in_range = sources.is_some_and(|sources| {
+                    usize::try_from(*index).is_ok_and(|index| index < sources.len())
+                });
+                if !in_range {
+                    return Err(format!(
+                        "evidence_plan select {index} names no source of the union for the \
+                         callable's row tail"
+                    ));
+                }
+            }
+            EvidenceStep::Tails(plans) => {
+                for plan in plans {
+                    check_selects(plan, sources)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// `select` and `tails` count the sources of row tail unions. Checked for
+/// definitions that declare their row binders.
+fn validate_evidence_tails(
+    ctx: &IrContext,
+    body: RegionRef,
+    symbols: &SymbolTable,
+    errors: &mut Vec<ValidationError>,
+) {
+    walk_region_ops(ctx, body, &mut |op| {
+        let Some(Attribute::List(items)) = ctx.op_attrs(op).get(EVIDENCE_PLAN_ATTR) else {
+            return;
+        };
+        let Ok(steps) = items
+            .iter()
+            .map(|step| EvidenceStep::from_attribute(ctx, step))
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            return;
+        };
+        let Some((tail, func)) = enclosing_row_tail(ctx, op) else {
+            return;
+        };
+        if ctx.op_attrs(func).get(ROW_BINDERS_ATTR).is_none() {
+            return;
+        }
+        let sources = union_sources(ctx, func, tail);
+        if let Err(message) = check_selects(&steps, sources.as_deref()) {
+            push_op_error(ctx, op, errors, message);
+        }
+        let Some(EvidenceStep::Tails(plans)) = steps.last() else {
+            return;
+        };
+        let callee = ctx
+            .op_attrs(op)
+            .get_symbol_ref("callee")
+            .and_then(|symbol| symbols.definitions(ctx, op, symbol).first().copied())
+            .filter(|&callee| is_control_op(ctx, callee, "func"));
+        let Some(callee) = callee else {
+            return;
+        };
+        if ctx.op_attrs(callee).get(ROW_BINDERS_ATTR).is_none() {
+            return;
+        }
+        let callee_tail = ctx
+            .op_attrs(callee)
+            .get_type("type")
+            .and_then(|ty| FuncSig::from_type_ref(ctx, ty))
+            .and_then(|signature| signature.row(ctx).tail);
+        let expected = union_sources(ctx, callee, callee_tail).map(|sources| sources.len());
+        if expected != Some(plans.len()) {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                "evidence_plan tails must hold one plan for each source of the callee's row \
+                 tail union",
+            );
+        }
+    });
+}
+
 /// Validate graph-wide `tribute_control` invariants.
 pub fn validate_whole_ir(
     ctx: &IrContext,
@@ -3609,6 +4123,8 @@ fn whole_ir(
     };
     let declarations = &declared_operations(ctx, module, &mut errors);
     validate_module_symbols(ctx, module, symbols, &mut errors);
+    validate_row_scopes(ctx, module, &declared_instances(ctx, module), &mut errors);
+    validate_evidence_tails(ctx, body, symbols, &mut errors);
     validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(ctx, declarations, &mut errors);
     let reachable_types = collect_reachable_ir_types(ctx, module.op());

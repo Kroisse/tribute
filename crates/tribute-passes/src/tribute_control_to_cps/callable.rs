@@ -278,7 +278,14 @@ impl Converter<'_> {
                     )
                     .attr("type", Attribute::Type(physical_type));
             for (key, value) in self.convert_attrs(&self.ctx.op(source).attributes.clone()) {
-                if !matches!(self.ctx.str(key), "sym_name" | "type") {
+                if !matches!(
+                    self.ctx.str(key),
+                    "sym_name"
+                        | "type"
+                        | tribute_control::ROW_BINDERS_ATTR
+                        | tribute_control::ROW_UNIONS_ATTR
+                        | tribute_control::INFERRED_ROW_ATTR
+                ) {
                     builder = builder.attr(key, value);
                 }
             }
@@ -350,7 +357,14 @@ impl Converter<'_> {
         self.copy_extra_attrs(
             source,
             function.op_ref(),
-            &["sym_name", "type", CALLING_CONVENTION_ATTR],
+            &[
+                "sym_name",
+                "type",
+                CALLING_CONVENTION_ATTR,
+                tribute_control::ROW_BINDERS_ATTR,
+                tribute_control::ROW_UNIONS_ATTR,
+                tribute_control::INFERRED_ROW_ATTR,
+            ],
         );
         set_calling_convention(self.ctx, function.op_ref(), info.convention);
         Ok(function.op_ref())
