@@ -506,10 +506,11 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         if !is_function || ctx.op_has_regions(op) {
             continue;
         }
-        let Some(name_ref) = data.attributes.view(ctx).get_string_ref("sym_name") else {
+        let attrs = ctx.op_attrs(op);
+        let Some(name_ref) = attrs.get_string_ref("sym_name") else {
             continue;
         };
-        let Some(signature) = data.attributes.view(ctx).get_type("type") else {
+        let Some(signature) = attrs.get_type("type") else {
             continue;
         };
         let location = data.location;

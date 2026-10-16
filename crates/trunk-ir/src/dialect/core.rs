@@ -340,9 +340,10 @@ mod canonicalize_tests {
             ],
         );
         attrs = metadata.clone();
-        let mut attrs_view = attrs.view_mut(&mut ctx);
-        attrs_view.insert(NUM_INPUTS_ATTR, Attribute::from(2u32));
-        attrs_view.insert(NUM_RESULTS_ATTR, Attribute::from(1u32));
+        attrs.view_mut(&mut ctx).extend([
+            (NUM_INPUTS_ATTR, Attribute::from(2u32)),
+            (NUM_RESULTS_ATTR, Attribute::from(1u32)),
+        ]);
         FuncSig::remove_reserved_attrs(&mut ctx, &mut attrs);
         assert_eq!(attrs, metadata);
         FuncSig::remove_reserved_attrs(&mut ctx, &mut attrs);

@@ -15,9 +15,7 @@ impl Converter<'_> {
         if tribute_control::Call::matches(self.ctx, source) {
             return self
                 .ctx
-                .op(source)
-                .attributes
-                .view(self.ctx)
+                .op_attrs(source)
                 .get_symbol_ref("callee")
                 .and_then(|_| self.current_func(source))
                 .is_some_and(|target| target.convention == CallingConvention::Cps);

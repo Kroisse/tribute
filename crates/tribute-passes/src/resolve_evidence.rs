@@ -104,7 +104,7 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
         ));
     }
-    let Some(Attribute::List(abilities)) = data.attributes.view(ctx).get("abilities") else {
+    let Some(Attribute::List(abilities)) = ctx.op_attrs(op).get("abilities") else {
         return Err(error(
             "final ability.handle_dispatch requires an abilities list".into(),
         ));

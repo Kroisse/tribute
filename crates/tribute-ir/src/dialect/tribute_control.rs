@@ -560,8 +560,7 @@ impl FuncSig {
             return Err(FuncSigTypeError::LengthMismatch);
         }
         CallingConvention::try_from(
-            data.attrs
-                .view(ctx)
+            ctx.type_attrs(ty)
                 .get_i128(CALLING_CONVENTION_ATTR)
                 .ok_or(FuncSigTypeError::Convention)?,
         )
@@ -941,9 +940,8 @@ fn print_func(
 ) -> fmt::Result {
     use fmt::Write;
 
-    let data = h.ctx().op(op);
-    let symbol = data.attributes.view(h.ctx()).get_str("sym_name");
-    let callable_ty = data.attributes.view(h.ctx()).get_type("type");
+    let symbol = h.ctx().op_attrs(op).get_str("sym_name");
+    let callable_ty = h.ctx().op_attrs(op).get_type("type");
     let region = h.ctx().op_region(op, 0);
     if !has_concise_func_sig(h.ctx(), callable_ty) {
         return h.print_generic(op, indent);
@@ -1631,12 +1629,7 @@ fn validate_attr_keys(
     errors: &mut Vec<ValidationError>,
 ) {
     let data = ctx.op(op);
-    if data
-        .attributes
-        .view(ctx)
-        .get(CALLING_CONVENTION_ATTR)
-        .is_some()
-    {
+    if ctx.op_attrs(op).get(CALLING_CONVENTION_ATTR).is_some() {
         push_op_error(
             ctx,
             op,
@@ -2166,10 +2159,10 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
             );
             continue;
         }
-        let data = ctx.op(child);
+        let attrs = ctx.op_attrs(child);
         if let (Some(ability), Some(name)) = (
-            data.attributes.view(ctx).get_symbol_ref("ability"),
-            data.attributes.view(ctx).get_string_ref("op_name"),
+            attrs.get_symbol_ref("ability"),
+            attrs.get_string_ref("op_name"),
         ) && !clauses.insert((ability, name))
         {
             push_op_error(
@@ -2184,7 +2177,7 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
             && let Some(&block) = ctx.region(region).blocks.first()
             && let Some(&yield_op) = ctx.block(block).ops.last()
             && is_control_op(ctx, yield_op, "yield")
-            && data.attributes.view(ctx).get_str("kind") == Some("op")
+            && ctx.op_attrs(child).get_str("kind") == Some("op")
             && let Some(&value) = ctx.op_operands(yield_op).first()
             && ctx.value_ty(value) != result
         {
@@ -2806,7 +2799,7 @@ fn canonical_nominal_layouts(
     for ty in sorted_reachable_types {
         let data = ctx.get_type(ty);
         if is_adt_typeref(ctx, ty) {
-            if let Some(name) = data.attrs.view(ctx).get_string_ref("name") {
+            if let Some(name) = ctx.type_attrs(ty).get_string_ref("name") {
                 referenced_names.insert(name);
             }
             continue;
@@ -2814,7 +2807,7 @@ fn canonical_nominal_layouts(
         if data.dialect != "adt" || !(matches!(data.name.as_str(), "struct" | "enum")) {
             continue;
         }
-        let Some(name) = data.attrs.view(ctx).get_string_ref("name") else {
+        let Some(name) = ctx.type_attrs(ty).get_string_ref("name") else {
             continue;
         };
         if let Some(previous) = layouts.get(&name).copied() {
@@ -2950,7 +2943,7 @@ fn validate_managed_reference_boundaries(
             continue;
         }
         let data = ctx.get_type(ty);
-        let Some(name) = data.attrs.view(ctx).get_string_ref("name") else {
+        let Some(name) = ctx.type_attrs(ty).get_string_ref("name") else {
             push_type_error(
                 errors,
                 format!("{ty}: adt.typeref requires nominal name metadata"),
@@ -2980,7 +2973,7 @@ fn validate_managed_reference_boundaries(
             let ([], [result], Some(declared)) = (
                 ctx.op_operands(op),
                 ctx.op_result_types(op),
-                data.attributes.view(ctx).get_type("type"),
+                ctx.op_attrs(op).get_type("type"),
             ) else {
                 push_op_error(ctx, op, errors, "adt.ref_null requires one typed result");
                 return;
@@ -2998,7 +2991,7 @@ fn validate_managed_reference_boundaries(
             let ([operand], [result], Some(declared)) = (
                 ctx.op_operands(op),
                 ctx.op_result_types(op),
-                data.attributes.view(ctx).get_type("type"),
+                ctx.op_attrs(op).get_type("type"),
             ) else {
                 push_op_error(
                     ctx,
@@ -3173,11 +3166,11 @@ fn callable_block_arg_has_source_contract(
     }
 
     if is_control_op(ctx, owner, "handler") && ctx.op_regions(owner).eq([region]) {
-        let data = ctx.op(owner);
+        let attrs = ctx.op_attrs(owner);
         if let (Some(ability), Some(name), Some(kind)) = (
-            data.attributes.view(ctx).get_symbol_ref("ability"),
-            data.attributes.view(ctx).get_string_ref("op_name"),
-            data.attributes.view(ctx).get_string_ref("kind"),
+            attrs.get_symbol_ref("ability"),
+            attrs.get_string_ref("op_name"),
+            attrs.get_string_ref("kind"),
         ) {
             return provenance
                 .declarations
@@ -3297,11 +3290,9 @@ fn validate_callable_origins(
     let mut seen = HashSet::default();
     walk_region_ops(ctx, body, &mut |op| {
         if is_control_op(ctx, op, "func") {
-            let data = ctx.op(op);
-            let (Some(symbol), Some(func_sig_type)) = (
-                qualified_name(ctx, op),
-                data.attributes.view(ctx).get_type("type"),
-            ) else {
+            let (Some(symbol), Some(func_sig_type)) =
+                (qualified_name(ctx, op), ctx.op_attrs(op).get_type("type"))
+            else {
                 return;
             };
             let intrinsic_identity = Func::from_op(ctx, op)
@@ -3345,7 +3336,7 @@ fn validate_callable_origins(
                     }
                     (None, None) => false,
                 };
-                let trusted_c_ffi = data.attributes.view(ctx).get_str("abi") == Some("C");
+                let trusted_c_ffi = ctx.op_attrs(op).get_str("abi") == Some("C");
                 if !exact_intrinsic
                     && !trusted_c_ffi
                     && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::default())
@@ -3466,6 +3457,7 @@ fn validate_declaration_uses(
     errors: &mut Vec<ValidationError>,
 ) {
     walk_region_ops(ctx, body, &mut |op| {
+        let attrs = ctx.op_attrs(op);
         let (kind_attr, args, result_ty) = if is_control_op(ctx, op, "perform") {
             (
                 "operation_kind",
@@ -3486,18 +3478,13 @@ fn validate_declaration_uses(
             {
                 args = &args[..args.len() - 1];
             }
-            (
-                "kind",
-                args,
-                ctx.op_attrs(op).get_type("operation_result_type"),
-            )
+            ("kind", args, attrs.get_type("operation_result_type"))
         } else {
             return;
         };
-        let data = ctx.op(op);
         let (Some(ability), Some(name)) = (
-            data.attributes.view(ctx).get_symbol_ref("ability"),
-            data.attributes.view(ctx).get_string_ref("op_name"),
+            attrs.get_symbol_ref("ability"),
+            attrs.get_string_ref("op_name"),
         ) else {
             return;
         };
@@ -3513,7 +3500,7 @@ fn validate_declaration_uses(
             );
             return;
         };
-        if data.attributes.view(ctx).get_string_ref(kind_attr) != Some(declaration.kind) {
+        if attrs.get_string_ref(kind_attr) != Some(declaration.kind) {
             push_op_error(
                 ctx,
                 op,
@@ -4446,26 +4433,21 @@ mod tests {
         let handler = control_op(&ctx, module, "handler");
         let handler_body = ctx.op_region(handler, 0).unwrap();
         let handler_block = ctx.region(handler_body).blocks[0];
-        let handler_data = ctx.op(handler);
-        let ability = handler_data
-            .attributes
-            .view(&ctx)
+        let ability = ctx
+            .op_attrs(handler)
             .get_symbol_ref("ability")
             .cloned()
             .expect("handler ability");
-        let op_name = handler_data
-            .attributes
-            .view(&ctx)
+        let op_name = ctx
+            .op_attrs(handler)
             .get_string_ref("op_name")
             .expect("handler operation name");
-        let kind = handler_data
-            .attributes
-            .view(&ctx)
+        let kind = ctx
+            .op_attrs(handler)
             .get_string_ref("kind")
             .expect("handler kind");
-        let result_type = handler_data
-            .attributes
-            .view(&ctx)
+        let result_type = ctx
+            .op_attrs(handler)
             .get_type("operation_result_type")
             .expect("handler operation result");
         let parameter_types = block_arg_types(&ctx, handler_block);
@@ -5607,30 +5589,14 @@ mod tests {
         );
         let handler = control_ops(&ctx, module, "handler")[0];
         let fn_kind = ctx.intern_str("fn");
-        let handler_data = ctx.op(handler);
+        let attrs = ctx.op_attrs(handler);
+        let result_type = attrs.get_type("operation_result_type").unwrap();
         let declarations = [OperationDeclaration::new(
-            handler_data
-                .attributes
-                .view(&ctx)
-                .get_symbol_ref("ability")
-                .cloned()
-                .unwrap(),
-            handler_data
-                .attributes
-                .view(&ctx)
-                .get_string_ref("op_name")
-                .unwrap(),
+            attrs.get_symbol_ref("ability").cloned().unwrap(),
+            attrs.get_string_ref("op_name").unwrap(),
             fn_kind,
-            [handler_data
-                .attributes
-                .view(&ctx)
-                .get_type("operation_result_type")
-                .unwrap()],
-            handler_data
-                .attributes
-                .view(&ctx)
-                .get_type("operation_result_type")
-                .unwrap(),
+            [result_type],
+            result_type,
         )];
         let result = {
             declare_operations(&mut ctx, module, &declarations);

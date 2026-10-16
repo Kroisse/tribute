@@ -267,7 +267,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
             let data = ctx.op(op);
             // Check for func.func or wasm.func operations
             if data.dialect == func::DIALECT_NAME() && data.name == "func" {
-                if let Some(fn_ty) = data.attributes.view(ctx).get_type("type") {
+                if let Some(fn_ty) = ctx.op_attrs(op).get_type("type") {
                     let Some(function) = func::FuncSig::from_type_ref(ctx, fn_ty) else {
                         continue;
                     };
@@ -279,16 +279,12 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                             format!("{}.{}", td.dialect, td.name)
                         })
                         .collect();
-                    let sym_name = data
-                        .attributes
-                        .view(ctx)
-                        .get_str("sym_name")
-                        .unwrap_or_default();
+                    let sym_name = ctx.op_attrs(op).get_str("sym_name").unwrap_or_default();
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
                 }
             } else if data.dialect == wasm_dialect::DIALECT_NAME()
                 && data.name == "func"
-                && let Some(fn_ty) = data.attributes.view(ctx).get_type("type")
+                && let Some(fn_ty) = ctx.op_attrs(op).get_type("type")
             {
                 let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty) else {
                     continue;
@@ -301,11 +297,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                         format!("{}.{}", td.dialect, td.name)
                     })
                     .collect();
-                let sym_name = data
-                    .attributes
-                    .view(ctx)
-                    .get_str("sym_name")
-                    .unwrap_or_default();
+                let sym_name = ctx.op_attrs(op).get_str("sym_name").unwrap_or_default();
                 tracing::debug!("[{phase}] wasm.func {sym_name}: params={params:?}");
             }
         }
@@ -431,8 +423,7 @@ impl WasmLowerer {
 
     /// Check if a wasm.func op is the main function and record its metadata.
     fn scan_wasm_func(&mut self, ctx: &IrContext, op: OpRef) {
-        let data = ctx.op(op);
-        let Some(sym_name) = data.attributes.view(ctx).get_str("sym_name") else {
+        let Some(sym_name) = ctx.op_attrs(op).get_str("sym_name") else {
             return;
         };
 

@@ -247,19 +247,11 @@ impl CallableExitModel for Perform {
         &self,
         ctx: &trunk_ir::IrContext,
     ) -> Result<(), ControlFlowInterfaceError> {
-        let data = ctx.op(self.op_ref());
+        let attrs = ctx.op_attrs(self.op_ref());
         if !ctx.op_has_regions(self.op_ref())
             && ctx.op_operands(self.op_ref()).len() >= 3
-            && data
-                .attributes
-                .view(ctx)
-                .get_symbol_ref("ability")
-                .is_some()
-            && data
-                .attributes
-                .view(ctx)
-                .get_string_ref("op_name")
-                .is_some()
+            && attrs.get_symbol_ref("ability").is_some()
+            && attrs.get_string_ref("op_name").is_some()
         {
             Ok(())
         } else {
@@ -279,14 +271,13 @@ impl CallableExitModel for HandleDispatch {
         &self,
         ctx: &trunk_ir::IrContext,
     ) -> Result<(), ControlFlowInterfaceError> {
-        let data = ctx.op(self.op_ref());
         if ctx.op_region_count(self.op_ref()) == 1
             && ctx
                 .op_region(self.op_ref(), 0)
                 .is_some_and(|region| ctx.region(region).blocks.len() == 1)
             && ctx.op_operands(self.op_ref()).len() >= 2
             && matches!(
-                data.attributes.view(ctx).get("abilities"),
+                ctx.op_attrs(self.op_ref()).get("abilities"),
                 Some(trunk_ir::types::Attribute::List(abilities))
                     if abilities.iter().all(|ability| matches!(
                         ability,
@@ -554,7 +545,7 @@ mod tests {
         assert_eq!(data.name, Symbol::new("struct"));
 
         // Should have name "_Marker"
-        assert_eq!(data.attrs.view(&ctx).get_str("name"), Some("_Marker"));
+        assert_eq!(ctx.type_attrs(marker_ty).get_str("name"), Some("_Marker"));
 
         // Should have the canonical field layout.
         let marker = crate::dialect::adt::Struct::from_type_ref(&ctx, marker_ty).unwrap();

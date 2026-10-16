@@ -309,17 +309,15 @@ fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef
     {
         return None;
     }
-    let num_inputs = match data
-        .attrs
-        .view(ctx)
+    let num_inputs = match ctx
+        .type_attrs(ty)
         .get(crate::dialect::func::NUM_INPUTS_ATTR)
     {
         Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
         _ => return None,
     };
-    let num_results = match data
-        .attrs
-        .view(ctx)
+    let num_results = match ctx
+        .type_attrs(ty)
         .get(crate::dialect::func::NUM_RESULTS_ATTR)
     {
         Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
@@ -1058,7 +1056,7 @@ fn print_module_op(
     write!(f, "{indent_str}core.module")?;
 
     // Module name
-    if let Some(name) = data.attributes.view(state.ctx).get_str("sym_name") {
+    if let Some(name) = state.ctx.op_attrs(op).get_str("sym_name") {
         f.write_char(' ')?;
         write_symbol_text(f, name)?;
     }
