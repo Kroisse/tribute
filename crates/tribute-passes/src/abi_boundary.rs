@@ -7,6 +7,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use std::borrow::Cow;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
@@ -79,10 +80,10 @@ impl TargetKind {
 pub enum ViolationKind {
     /// An operation of a dialect that the boundary must consume.
     #[display("forbidden op {name}")]
-    ForbiddenOp { name: String },
+    ForbiddenOp { name: Cow<'static, str> },
     /// A `closure.closure` type.
     #[display("forbidden type {name}")]
-    ForbiddenType { name: String },
+    ForbiddenType { name: Cow<'static, str> },
     /// Semantic control metadata listed by the exit contract.
     #[display("forbidden attribute {_0}")]
     ForbiddenAttribute(String),
@@ -259,7 +260,7 @@ impl<'a> Verifier<'a> {
         if FORBIDDEN_DIALECTS.contains(&data.name.dialect(ctx)) {
             self.report(
                 ViolationKind::ForbiddenOp {
-                    name: op_name.clone(),
+                    name: data.name.to_text(ctx),
                 },
                 Some(op),
                 op_name.clone(),
@@ -387,7 +388,7 @@ impl<'a> Verifier<'a> {
         if tribute_ir::dialect::closure::Closure::matches(ctx, ty) {
             found.push((
                 ViolationKind::ForbiddenType {
-                    name: data.name.display(ctx).to_string(),
+                    name: data.name.to_text(ctx),
                 },
                 String::new(),
             ));
@@ -540,7 +541,7 @@ mod tests {
 }"#,
         );
         assert!(violations.contains(&ViolationKind::ForbiddenType {
-            name: "closure.closure".to_owned(),
+            name: "closure.closure".into(),
         }));
 
         let violations = kinds(
@@ -553,7 +554,7 @@ mod tests {
 }"#,
         );
         assert!(violations.contains(&ViolationKind::ForbiddenOp {
-            name: "closure.new".to_owned(),
+            name: "closure.new".into(),
         }));
     }
 

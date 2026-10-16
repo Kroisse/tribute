@@ -9,6 +9,7 @@
 //! operations, so later steps read the segments from the IR itself.
 
 use hashbrown::hash_map::EntryRef;
+use std::borrow::Cow;
 
 use crate::collections::{HashMap, HashSet};
 use std::fmt;
@@ -28,7 +29,7 @@ use trunk_ir::types::Attribute;
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConstValidationError {
     MissingCanonicalStringType,
-    InvalidStringResultType { actual: String },
+    InvalidStringResultType { actual: Cow<'static, str> },
 }
 
 impl fmt::Display for ConstValidationError {
@@ -157,13 +158,13 @@ pub fn validate_for_wasm(
 
         let Some(&result_ty) = ctx.op_result_types(op).first() else {
             result = Err(ConstValidationError::InvalidStringResultType {
-                actual: "<missing>".to_owned(),
+                actual: "<missing>".into(),
             });
             return;
         };
         if !wasm_dialect::Anyref::matches(ctx, result_ty) {
             result = Err(ConstValidationError::InvalidStringResultType {
-                actual: ctx.get_type(result_ty).name.display(ctx).to_string(),
+                actual: ctx.get_type(result_ty).name.to_text(ctx),
             });
         }
     });
