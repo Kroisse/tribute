@@ -30,6 +30,11 @@ const FORBIDDEN_ATTRIBUTES: &[&str] = &[
     "tribute.calling_convention",
     "tribute.cps_continuation_frame_result",
     "tribute.closure_environment_index",
+    tribute_ir::dialect::tribute_control::EFFECT_ROW_ATTR,
+    tribute_ir::dialect::tribute_control::ROW_BINDERS_ATTR,
+    tribute_ir::dialect::tribute_control::ROW_UNIONS_ATTR,
+    tribute_ir::dialect::tribute_control::INFERRED_ROW_ATTR,
+    tribute_ir::dialect::tribute_control::ROW_ARGS_ATTR,
 ];
 
 /// Prefix of language-specific attributes, which must be classified.
