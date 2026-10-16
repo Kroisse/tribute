@@ -2691,7 +2691,7 @@ fn main() ->{Io} Nil {
         let result = compile_ast(db, source).expect("pipeline should not fail");
         assert!(result.is_some(), "Should compile successfully");
         let (ctx, m) = result.unwrap();
-        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+        assert_eq!(m.name(&ctx), Some("test"));
     }
 
     #[salsa_test]
@@ -3072,7 +3072,7 @@ fn main() ->{std::io::Io} Nil {
         let result = compile_frontend(db, source);
         assert!(result.is_some());
         let (ctx, m) = result.unwrap();
-        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+        assert_eq!(m.name(&ctx), Some("test"));
     }
 
     #[salsa_test]
@@ -3082,7 +3082,7 @@ fn main() ->{std::io::Io} Nil {
         let result = compile_frontend(db, source);
         assert!(result.is_some());
         let (ctx, m) = result.unwrap();
-        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+        assert_eq!(m.name(&ctx), Some("test"));
     }
 
     #[test]
@@ -4127,7 +4127,7 @@ fn main() -> String { "hello" }
             parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
         );
         let (ctx, m) = result.unwrap();
-        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+        assert_eq!(m.name(&ctx), Some("test"));
     }
 
     #[salsa_test]
@@ -4147,7 +4147,7 @@ fn main() -> String { "hello" }
         let result = compile_frontend(db, source);
         assert!(result.is_some());
         let (ctx, m) = result.unwrap();
-        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+        assert_eq!(m.name(&ctx), Some("test"));
     }
 
     // =========================================================================

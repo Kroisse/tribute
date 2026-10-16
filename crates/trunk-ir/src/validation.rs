@@ -127,12 +127,7 @@ fn describe_value(ctx: &IrContext, v: ValueRef) -> String {
         ValueDef::OpResult(op, idx) => {
             let data = ctx.op(op);
             let full_name = format!("{}.{}", data.dialect, data.name);
-            match data
-                .attributes
-                .view(ctx)
-                .get_str("sym_name")
-                .map(Symbol::new)
-            {
+            match data.attributes.view(ctx).get_str("sym_name") {
                 Some(s) => {
                     format!("result #{} of {} (@{})", idx, full_name, s)
                 }
@@ -224,9 +219,7 @@ fn validate_functions_in_region(
                     .attributes
                     .view(ctx)
                     .get_str("sym_name")
-                    .map(Symbol::new)
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "<unnamed>".to_string());
+                    .unwrap_or("<unnamed>");
 
                 // Check operands with visibility-based scoping.
                 // No values from outside the function body are visible.
@@ -235,7 +228,7 @@ fn validate_functions_in_region(
                         ctx,
                         func_region,
                         &HashSet::default(),
-                        &fn_name,
+                        fn_name,
                         errors,
                     );
                 }

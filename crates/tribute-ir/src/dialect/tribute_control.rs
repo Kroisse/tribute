@@ -4298,27 +4298,19 @@ mod tests {
         let declaration = funcs
             .iter()
             .copied()
-            .find(|op| {
-                ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new) == Some(Symbol::new("decl"))
-            })
+            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("decl"))
             .unwrap();
         let definition = funcs
             .iter()
             .copied()
-            .find(|op| {
-                ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new)
-                    == Some(Symbol::new("definition"))
-            })
+            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("definition"))
             .unwrap();
         let shared = ctx.op_attrs(declaration).get_type("type").unwrap();
         assert_eq!(shared, ctx.op_attrs(definition).get_type("type").unwrap());
         let distinct = funcs
             .iter()
             .copied()
-            .find(|op| {
-                ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new)
-                    == Some(Symbol::new("different"))
-            })
+            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("different"))
             .and_then(|op| ctx.op_attrs(op).get_type("type"))
             .unwrap();
         assert_ne!(shared, distinct);
@@ -4676,10 +4668,7 @@ mod tests {
 
         let bad_func = control_ops(&ctx, module, "func")
             .into_iter()
-            .find(|op| {
-                ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new)
-                    == Some(Symbol::new("bad_func"))
-            })
+            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("bad_func"))
             .unwrap();
         // Custom assembly always derives a callable type and permits at most one
         // body. Mutate only those parser-enforced fields.
@@ -5699,10 +5688,7 @@ mod tests {
         );
         let intrinsic = control_ops(&ctx, module, "func")
             .into_iter()
-            .find(|op| {
-                ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new)
-                    == Some(Symbol::new("Nat::+"))
-            })
+            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("Nat::+"))
             .unwrap();
         let func_sig_type = ctx.op_attrs(intrinsic).get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
@@ -5732,9 +5718,7 @@ mod tests {
             let function = functions
                 .iter()
                 .copied()
-                .find(|op| {
-                    ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new) == Some(symbol.clone())
-                })
+                .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some(symbol.as_str()))
                 .unwrap();
             CompilerIntrinsicDeclaration::new(
                 SymbolPath::new([symbol.clone()]),

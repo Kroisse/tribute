@@ -405,7 +405,6 @@ fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, O
         let symbol = ctx
             .op_attrs(op)
             .get_str("sym_name")
-            .map(Symbol::new)
             .map(|name| format!("@{name}"))
             .unwrap_or_else(|| "<unnamed>".into());
         OwnershipPlanError::new(format!("func.func {symbol}: {error}"))

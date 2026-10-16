@@ -50,7 +50,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
-use trunk_ir::{StringRef, Symbol, SymbolPath};
+use trunk_ir::{StringRef, SymbolPath};
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 
 use crate::effect_dispatch;
@@ -247,7 +247,7 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> HelperRequir
 
 fn has_function(ctx: &IrContext, module: Module, name: &'static str) -> bool {
     module.ops(ctx).iter().copied().any(|op| {
-        ctx.op_attrs(op).get_str("sym_name").map(Symbol::new) == Some(Symbol::new(name))
+        ctx.op_attrs(op).get_str("sym_name") == Some(name)
             && (func::Func::matches(ctx, op) || wasm_dialect::Func::matches(ctx, op))
     })
 }
