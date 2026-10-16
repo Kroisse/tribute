@@ -648,8 +648,7 @@ pub fn set_indirect_call_signature(
     {
         return false;
     }
-    ctx.set_op_attr(
-        op,
+    ctx.op_attrs_mut(op).insert(
         INDIRECT_CALL_SIGNATURE_ATTR,
         crate::Attribute::Type(signature),
     );
@@ -1096,7 +1095,8 @@ mod tests {
         );
         let function = Func::from_op(&ctx, module.ops(&ctx)[0]).expect("tail function");
         let tail = ctx.block(ctx.region(function.body(&ctx)).blocks[0]).ops[0];
-        ctx.set_op_attr(tail, "signature", Attribute::Int(0));
+        ctx.op_attrs_mut(tail)
+            .insert("signature", Attribute::Int(0));
 
         assert!(CallableExitOps::exits_callable(&ctx, tail).is_err());
     }

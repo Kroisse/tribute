@@ -303,7 +303,7 @@ fn copy_indirect_call_attributes(ctx: &mut IrContext, source: OpRef, destination
     let mut attributes = ctx.op(source).attributes.clone();
     func::remove_indirect_call_signature(ctx, &mut attributes);
     attributes.remove(ctx, CALLING_CONVENTION_ATTR);
-    ctx.extend_op_attrs(destination, attributes);
+    ctx.op_attrs_mut(destination).extend(attributes);
 }
 
 pub(crate) fn physical_closure_type_for_callee(
@@ -547,7 +547,8 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
         for func_op in discovered.into_iter().rev() {
             rewrite_validated_closures_in_func(ctx, func_op, functions.clone());
             // Closure lowering is the last reader of a function's convention.
-            ctx.remove_op_attr(func_op.op_ref(), CALLING_CONVENTION_ATTR);
+            ctx.op_attrs_mut(func_op.op_ref())
+                .remove(CALLING_CONVENTION_ATTR);
         }
     }
     Ok(())
@@ -683,7 +684,7 @@ pub(crate) fn substitute_module_types_keeping_casts(
         ctx.register_type_alias(name, ty);
     }
     for (op, name, value) in attribute_updates {
-        ctx.set_op_attr(op, name, value);
+        ctx.op_attrs_mut(op).insert(name, value);
     }
     for (op, index, ty) in result_updates {
         ctx.set_op_result_type(op, index, ty);

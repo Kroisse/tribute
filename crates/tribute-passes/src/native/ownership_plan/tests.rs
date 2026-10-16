@@ -1300,9 +1300,9 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
             .get(key)
             .expect("projection attribute")
             .clone();
-        ctx.set_op_attr(projection, key, invalid);
+        ctx.op_attrs_mut(projection).insert(key, invalid);
         assert_unchanged_on_error(&mut ctx, module, |ctx, module| production_plan(ctx, module));
-        ctx.set_op_attr(projection, key, original);
+        ctx.op_attrs_mut(projection).insert(key, original);
     }
 }
 
@@ -2763,7 +2763,8 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
 
     let (type_converter, _) = native_type_converter(&mut ctx);
     for &candidate in &candidates {
-        ctx.set_op_attr(allocation, "type", trunk_ir::Attribute::Type(candidate));
+        ctx.op_attrs_mut(allocation)
+            .insert("type", trunk_ir::Attribute::Type(candidate));
         assert!(plan.validate_against(&ctx, module).is_err());
         assert!(
             crate::native::rtti::generate_rtti(&mut ctx, module, &type_converter).is_err(),

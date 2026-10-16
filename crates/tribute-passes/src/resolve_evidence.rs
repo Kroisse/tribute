@@ -245,7 +245,7 @@ fn take_evidence_plan(
     ctx: &mut IrContext,
     op: OpRef,
 ) -> Result<Vec<EvidenceStep>, ResolveEvidenceError> {
-    let Some(plan) = ctx.remove_op_attr(op, EVIDENCE_PLAN_ATTR) else {
+    let Some(plan) = ctx.op_attrs_mut(op).remove(EVIDENCE_PLAN_ATTR) else {
         return Ok(Vec::new());
     };
     let Attribute::List(items) = plan else {

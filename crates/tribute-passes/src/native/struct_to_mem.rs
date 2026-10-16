@@ -107,7 +107,8 @@ pub(crate) fn lower(
                 structural
             }
         };
-        ctx.set_op_attr(op, "type", Attribute::Type(structural));
+        ctx.op_attrs_mut(op)
+            .insert("type", Attribute::Type(structural));
     }
 
     // A variant holds only its own fields, so its layout is a struct's.

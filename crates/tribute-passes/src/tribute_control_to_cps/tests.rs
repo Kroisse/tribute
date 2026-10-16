@@ -631,7 +631,8 @@ fn malformed_or_retired_source_signatures_fail_before_conversion() {
         }
         let malformed = builder.intern(&mut ctx);
         let function = module.ops(&ctx)[0];
-        ctx.set_op_attr(function, "type", Attribute::Type(malformed));
+        ctx.op_attrs_mut(function)
+            .insert("type", Attribute::Type(malformed));
 
         let before = print_module(&ctx, module.op());
         let error =

@@ -80,7 +80,8 @@ impl RewritePattern for ClosureStructAdaptPattern {
                 return false;
             }
             let new_op = rebuild_op_as(ctx, op, Symbol::new("adt"), Symbol::new("struct_new"));
-            ctx.set_op_attr(new_op, "type", Attribute::Type(native_ty));
+            ctx.op_attrs_mut(new_op)
+                .insert("type", Attribute::Type(native_ty));
             let Some(&original_ty) = ctx.op_result_types(new_op).first() else {
                 rewriter.replace_op(new_op);
                 return true;
@@ -108,7 +109,8 @@ impl RewritePattern for ClosureStructAdaptPattern {
             let original_ty = struct_get.result(ctx);
             let original_ty = ctx.value_ty(original_ty);
             let new_op = rebuild_op_as(ctx, op, Symbol::new("adt"), Symbol::new("struct_get"));
-            ctx.set_op_attr(new_op, "type", Attribute::Type(native_ty));
+            ctx.op_attrs_mut(new_op)
+                .insert("type", Attribute::Type(native_ty));
             let adapted_ty = match field_idx {
                 0 => TypeDataBuilder::new("core", "i64").intern(ctx),
                 1 => core::ptr(ctx).as_type_ref(),

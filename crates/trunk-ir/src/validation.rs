@@ -1400,7 +1400,7 @@ mod tests {
             &mut ctx,
             "core.module @m { func.func @f() { func.return } }",
         );
-        ctx.remove_op_attr(module.op(), "sym_name");
+        ctx.op_attrs_mut(module.op()).remove("sym_name");
         let text = validate_all(&ctx, module, &mut Default::default()).to_string();
         assert!(
             text.contains("core.module") && text.contains("missing required attribute `sym_name`"),
@@ -3681,7 +3681,8 @@ mod tests {
         assert!(validate_operation_verifiers(&ctx, module).is_ok());
 
         let attribute = Attribute::List(vec![Attribute::SymbolRef(SymbolPath::root())]);
-        ctx.set_op_attr(module.op(), "referenced", attribute);
+        ctx.op_attrs_mut(module.op())
+            .insert("referenced", attribute);
         let verifiers = validate_operation_verifiers(&ctx, module);
         assert_eq!(
             operation_error_messages(&verifiers)

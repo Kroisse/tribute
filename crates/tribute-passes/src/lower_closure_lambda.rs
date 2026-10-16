@@ -229,8 +229,7 @@ fn lower_single_lambda(
         .build(ctx, location);
     if let Some(convention) = convention {
         set_calling_convention(ctx, func_op.op_ref(), convention);
-        ctx.set_op_attr(
-            func_op.op_ref(),
+        ctx.op_attrs_mut(func_op.op_ref()).insert(
             CLOSURE_ENVIRONMENT_INDEX_ATTR,
             Attribute::Int(environment_index as i128),
         );

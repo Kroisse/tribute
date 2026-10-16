@@ -219,8 +219,7 @@ mod tests {
   }
 }"#,
         );
-        ctx.set_op_attr(
-            module.op(),
+        ctx.op_attrs_mut(module.op()).insert(
             "entry",
             Attribute::SymbolRef(SymbolPath::new(["named_by_module"])),
         );

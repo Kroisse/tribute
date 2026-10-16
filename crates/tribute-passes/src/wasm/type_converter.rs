@@ -722,7 +722,8 @@ mod tests {
         let source = crate::closure_lower::closure_struct_type_ref(&mut ctx);
         let target = closure_adt_type(&mut ctx);
         let nested = |ty| Attribute::List(vec![Attribute::List(vec![Attribute::Type(ty)])]);
-        ctx.set_block_arg_attr(block, 0, "storage", nested(source));
+        ctx.block_arg_attrs_mut(block, 0)
+            .insert("storage", nested(source));
         convert_builtin_layouts(&mut ctx, module);
         assert_eq!(
             ctx.block(block).args[0].attrs.get(&ctx, "storage"),

@@ -4467,8 +4467,10 @@ mod tests {
         // The custom func parser derives and hides sym_name/type, so malformed
         // values for those two required attributes are not text-representable.
         let malformed_func = control_op(&ctx, module, "func");
-        ctx.set_op_attr(malformed_func, "sym_name", Attribute::Int(1));
-        ctx.set_op_attr(malformed_func, "type", Attribute::Int(2));
+        ctx.op_attrs_mut(malformed_func)
+            .insert("sym_name", Attribute::Int(1));
+        ctx.op_attrs_mut(malformed_func)
+            .insert("type", Attribute::Int(2));
 
         let result = validate_local(&ctx, module);
         assert_op_diagnostics(
@@ -4666,7 +4668,8 @@ mod tests {
             .unwrap();
         // Custom assembly always derives a callable type and permits at most one
         // body. Mutate only those parser-enforced fields.
-        ctx.set_op_attr(bad_func, "type", Attribute::Type(i32_ty));
+        ctx.op_attrs_mut(bad_func)
+            .insert("type", Attribute::Type(i32_ty));
         let extra_block = block(&mut ctx, loc, &[]);
         let extra_region = region(&mut ctx, loc, extra_block);
         ctx.push_op_region(bad_func, extra_region);

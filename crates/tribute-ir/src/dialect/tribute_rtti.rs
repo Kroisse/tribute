@@ -334,7 +334,8 @@ impl Layout {
 
     /// Point the declaration at another layout type with the same shape.
     pub fn set_type(self, ctx: &mut IrContext, ty: TypeRef) {
-        ctx.set_op_attr(self.op_ref(), "type", Attribute::Type(ty));
+        ctx.op_attrs_mut(self.op_ref())
+            .insert("type", Attribute::Type(ty));
     }
 }
 

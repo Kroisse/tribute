@@ -676,11 +676,8 @@ fn list_attributes_build_read_and_verify_their_elements() {
 
     let mixed = op.op_ref();
     let label = ctx.string_attr("label");
-    ctx.set_op_attr(
-        mixed,
-        "labels",
-        Attribute::List(vec![label, Attribute::Int(1)]),
-    );
+    ctx.op_attrs_mut(mixed)
+        .insert("labels", Attribute::List(vec![label, Attribute::Int(1)]));
     let violations = test_typed::Labeled::DEF.verify(&ctx, mixed);
     itertools::assert_equal(
         violations.iter().map(ToString::to_string),
@@ -757,7 +754,8 @@ fn dict_attributes_build_read_and_verify_their_values() {
 
     let mixed = op.op_ref();
     let entries = crate::AttributeMap::from_entries(&mut ctx, [("a", Attribute::Int(1))]);
-    ctx.set_op_attr(mixed, "notes", Attribute::Dict(entries));
+    ctx.op_attrs_mut(mixed)
+        .insert("notes", Attribute::Dict(entries));
     let violations = test_typed::Annotated::DEF.verify(&ctx, mixed);
     itertools::assert_equal(
         violations.iter().map(ToString::to_string),

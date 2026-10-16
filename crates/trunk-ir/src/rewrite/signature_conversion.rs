@@ -174,7 +174,7 @@ pub fn rewrite_function_signature(
 
     // Create replacement op with new type
     let new_op = make_op(ctx, new_func_type, body);
-    ctx.extend_op_attrs(new_op, attrs_to_preserve);
+    ctx.op_attrs_mut(new_op).extend(attrs_to_preserve);
 
     rewriter.replace_op(new_op);
     true
@@ -624,7 +624,8 @@ mod result_list_tests {
         let nil = core::nil(&mut ctx).as_type_ref();
         let ptr = core::ptr(&mut ctx).as_type_ref();
         let bad_signature = func::func_sig(&mut ctx, [nil, nil], []).as_type_ref();
-        ctx.set_op_attr(op, "type", Attribute::Type(bad_signature));
+        ctx.op_attrs_mut(op)
+            .insert("type", Attribute::Type(bad_signature));
         let before = crate::printer::print_module(&ctx, module.op());
         let mut converter = TypeConverter::new();
         converter.add_conversion(move |_, ty| (ty == nil).then_some(ptr));

@@ -205,7 +205,7 @@ mod tests {
             )
             .as_type_ref();
             let func = make_wasm_func(&mut ctx, loc, "f", signature, &[i32, ptr]);
-            ctx.set_op_attr(func, "custom", Attribute::Int(7));
+            ctx.op_attrs_mut(func).insert("custom", Attribute::Int(7));
             let module = make_module(&mut ctx, loc, vec![func]);
 
             let result = PatternApplicator::new(i32_to_i64(i32, i64))

@@ -19,7 +19,8 @@ impl WellKnownTypes {
 
     pub fn attach(self, ctx: &mut IrContext, module: OpRef) {
         if let Some(string) = self.string {
-            ctx.set_op_attr(module, STRING_TYPE_ATTR, Attribute::Type(string));
+            ctx.op_attrs_mut(module)
+                .insert(STRING_TYPE_ATTR, Attribute::Type(string));
         }
     }
 }

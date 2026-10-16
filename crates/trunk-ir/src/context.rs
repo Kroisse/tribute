@@ -272,6 +272,55 @@ impl Clone for IrContext {
     }
 }
 
+/// An attribute map inside an [`IrContext`], borrowed together with the
+/// context's string pool so that inserting a key can intern it; see
+/// [`IrContext::op_attrs_mut`].
+///
+/// Obtaining the view advances the context's revision, which covers every
+/// change made through it.
+pub struct AttributeViewMut<'a> {
+    map: &'a mut AttributeMap,
+    strings: &'a mut StringPool,
+}
+
+impl AttributeViewMut<'_> {
+    pub fn get(&self, key: impl AttributeKey) -> Option<&Attribute> {
+        self.map.get(&*self.strings, key)
+    }
+
+    pub fn contains_key(&self, key: impl AttributeKey) -> bool {
+        self.map.contains_key(&*self.strings, key)
+    }
+
+    /// Insert or replace an entry, returning the replaced value.
+    pub fn insert(
+        &mut self,
+        key: impl Into<StringArg>,
+        value: impl Into<Attribute>,
+    ) -> Option<Attribute> {
+        let key = match key.into() {
+            StringArg::Ref(key) => key,
+            StringArg::Text(text) => self.strings.intern(&text),
+        };
+        self.map.insert_ref(&*self.strings, key, value)
+    }
+
+    /// Insert every entry; later entries replace earlier ones with the same
+    /// key.
+    pub fn extend<K: Into<StringArg>, V: Into<Attribute>>(
+        &mut self,
+        entries: impl IntoIterator<Item = (K, V)>,
+    ) {
+        for (key, value) in entries {
+            self.insert(key, value);
+        }
+    }
+
+    pub fn remove(&mut self, key: impl AttributeKey) -> Option<Attribute> {
+        self.map.remove(&*self.strings, key)
+    }
+}
+
 impl AsRef<StringPool> for IrContext {
     fn as_ref(&self) -> &StringPool {
         &self.strings
@@ -413,50 +462,23 @@ impl IrContext {
         self.ops[op].attributes.view(self)
     }
 
-    /// Set an attribute of `op`, returning the value it replaces.
-    pub fn set_op_attr(
-        &mut self,
-        op: OpRef,
-        key: impl Into<StringArg>,
-        value: impl Into<Attribute>,
-    ) -> Option<Attribute> {
-        let mut attributes = std::mem::take(&mut self.op_mut(op).attributes);
-        let replaced = attributes.insert(self, key, value);
-        self.ops[op].attributes = attributes;
-        replaced
-    }
-
-    /// Set every attribute in `entries` on `op`; later entries replace
-    /// earlier ones with the same key.
-    pub fn extend_op_attrs<K: Into<StringArg>, V: Into<Attribute>>(
-        &mut self,
-        op: OpRef,
-        entries: impl IntoIterator<Item = (K, V)>,
-    ) {
-        let mut attributes = std::mem::take(&mut self.op_mut(op).attributes);
-        attributes.extend(self, entries);
-        self.ops[op].attributes = attributes;
-    }
-
-    /// Set an attribute of argument `index` of `block`, returning the value
-    /// it replaces.
-    pub fn set_block_arg_attr(
-        &mut self,
-        block: BlockRef,
-        index: usize,
-        key: impl Into<StringArg>,
-        value: impl Into<Attribute>,
-    ) -> Option<Attribute> {
-        let mut attrs = std::mem::take(&mut self.block_mut(block).args[index].attrs);
-        let replaced = attrs.insert(self, key, value);
-        self.block_mut(block).args[index].attrs = attrs;
-        replaced
-    }
-
-    /// Remove an attribute of `op`, returning its value.
-    pub fn remove_op_attr(&mut self, op: OpRef, key: impl AttributeKey) -> Option<Attribute> {
+    /// The attributes of `op`, changed through this context.
+    pub fn op_attrs_mut(&mut self, op: OpRef) -> AttributeViewMut<'_> {
         self.bump_revision();
-        self.ops[op].attributes.remove(&self.strings, key)
+        AttributeViewMut {
+            map: &mut self.ops[op].attributes,
+            strings: &mut self.strings,
+        }
+    }
+
+    /// The attributes of argument `index` of `block`, changed through this
+    /// context.
+    pub fn block_arg_attrs_mut(&mut self, block: BlockRef, index: usize) -> AttributeViewMut<'_> {
+        self.bump_revision();
+        AttributeViewMut {
+            map: &mut self.blocks[block].args[index].attrs,
+            strings: &mut self.strings,
+        }
     }
 
     /// Find a pooled string without interning it.

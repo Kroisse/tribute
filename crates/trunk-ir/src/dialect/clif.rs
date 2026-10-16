@@ -530,8 +530,7 @@ pub fn set_indirect_call_signature(
     {
         return false;
     }
-    ctx.set_op_attr(
-        op,
+    ctx.op_attrs_mut(op).insert(
         INDIRECT_CALL_SIGNATURE_ATTR,
         crate::Attribute::Type(signature),
     );

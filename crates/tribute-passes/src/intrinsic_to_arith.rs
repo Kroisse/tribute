@@ -98,7 +98,8 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     });
     for declaration in declarations {
         if ctx.op_has_regions(declaration) || referenced.contains(&declaration) {
-            ctx.remove_op_attr(declaration, COMPILER_INTRINSIC_ATTR);
+            ctx.op_attrs_mut(declaration)
+                .remove(COMPILER_INTRINSIC_ATTR);
         } else {
             ctx.detach_op(declaration);
             ctx.remove_op(declaration);

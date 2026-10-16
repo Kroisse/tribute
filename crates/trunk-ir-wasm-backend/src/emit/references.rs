@@ -410,7 +410,7 @@ mod tests {
         let inner = ctx.region(ctx.op_region(main, 0).unwrap()).blocks[0];
         let call = ctx.block(inner).ops[0];
         assert!(wasm_dialect::Call::matches(&ctx, call));
-        ctx.remove_op_attr(call, "callee");
+        ctx.op_attrs_mut(call).remove("callee");
 
         let error = collect_function_references(&ctx, module)
             .err()
@@ -437,11 +437,8 @@ mod tests {
         let inner = ctx.region(ctx.op_region(main, 0).unwrap()).blocks[0];
         let ret = ctx.block(inner).ops[0];
         assert!(wasm_dialect::Return::matches(&ctx, ret));
-        ctx.set_op_attr(
-            ret,
-            "callee",
-            Attribute::SymbolRef(SymbolPath::new(["helper"])),
-        );
+        ctx.op_attrs_mut(ret)
+            .insert("callee", Attribute::SymbolRef(SymbolPath::new(["helper"])));
 
         let error = collect_function_references(&ctx, module)
             .err()

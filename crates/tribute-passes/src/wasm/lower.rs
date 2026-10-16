@@ -757,7 +757,7 @@ mod tests {
         assert!(lowerer.memory_plan.has_exported_memory);
         assert!(lowerer.saw_main);
 
-        ctx.remove_op_attr(main.op_ref(), "sym_name");
+        ctx.op_attrs_mut(main.op_ref()).remove("sym_name");
         lowerer.saw_main = false;
         lowerer.scan_wasm_func(&ctx, main.op_ref());
         assert!(!lowerer.saw_main);

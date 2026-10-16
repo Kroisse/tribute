@@ -408,7 +408,8 @@ mod tests {
         let function = module.ops(&ctx)[0];
         let body = ctx.op_region(function, 0).expect("function body");
         let block = ctx.region(body).blocks[0];
-        ctx.set_block_arg_attr(block, 0, "frame", Attribute::Type(frame));
+        ctx.block_arg_attrs_mut(block, 0)
+            .insert("frame", Attribute::Type(frame));
         lower_continuation_frames(&mut ctx, module).unwrap();
         let converted = ctx.block(block).args[0]
             .attrs

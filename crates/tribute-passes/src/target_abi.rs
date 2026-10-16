@@ -285,16 +285,16 @@ pub fn lower_cps_signatures_to_physical(
         ctx.register_type_alias(name, ty);
     }
     for (op, ty) in function_types {
-        ctx.set_op_attr(op, "type", Attribute::Type(ty));
+        ctx.op_attrs_mut(op).insert("type", Attribute::Type(ty));
     }
     for (op, index, ty) in result_types {
         ctx.set_op_result_type(op, index, ty);
     }
     for (op, name, value) in attributes {
-        ctx.set_op_attr(op, name, value);
+        ctx.op_attrs_mut(op).insert(name, value);
     }
     for (op, name) in consumed_attributes {
-        ctx.remove_op_attr(op, name);
+        ctx.op_attrs_mut(op).remove(name);
     }
     for (op, signature) in indirect_signatures {
         assert!(IndirectCallLikeOps::set_exact_signature(ctx, op, signature));
@@ -462,7 +462,8 @@ pub fn compose_root_entry_bridge(
 
     let location = ctx.op(worker_op).location;
     let root_main_name = ctx.intern_str(ROOT_MAIN_SYMBOL);
-    ctx.set_op_attr(worker_op, "sym_name", Attribute::String(root_main_name));
+    ctx.op_attrs_mut(worker_op)
+        .insert("sym_name", Attribute::String(root_main_name));
     for &op in &top_level_ops {
         rewrite_symbol_refs(ctx, op, &main, &root_main);
     }
@@ -1213,11 +1214,8 @@ fn is_parameterless_dialect_type(ctx: &IrContext, ty: TypeRef, dialect: &str, na
 }
 
 fn set_root_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
-    ctx.set_op_attr(
-        op,
-        CALLING_CONVENTION_ATTR,
-        Attribute::Int(convention as i128),
-    );
+    ctx.op_attrs_mut(op)
+        .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
 }
 
 fn bind_name(ctx: &mut IrContext, name: &str) -> AttributeMap {
@@ -1231,7 +1229,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: &SymbolPath, new: &S
     }
     for key in ["callee", "func_ref"] {
         if ctx.op_attrs(op).get_symbol_ref(key) == Some(old) {
-            ctx.set_op_attr(op, key, new.clone());
+            ctx.op_attrs_mut(op).insert(key, new.clone());
         }
     }
     let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
@@ -1976,14 +1974,16 @@ mod tests {
             let (mut ctx, module, dispatch) = dispatch_fixture("i32", "frame");
             match mutation {
                 0 => {
-                    ctx.remove_op_attr(dispatch, "answer_type");
+                    ctx.op_attrs_mut(dispatch).remove("answer_type");
                 }
                 1 => {
-                    ctx.set_op_attr(dispatch, "answer_type", Attribute::Int(0));
+                    ctx.op_attrs_mut(dispatch)
+                        .insert("answer_type", Attribute::Int(0));
                 }
                 2 => {
                     let wrong = core::nil(&mut ctx).as_type_ref();
-                    ctx.set_op_attr(dispatch, "answer_type", Attribute::Type(wrong));
+                    ctx.op_attrs_mut(dispatch)
+                        .insert("answer_type", Attribute::Type(wrong));
                 }
                 3..=6 => {
                     let index = if mutation == 3 { 1 } else { 2 };
@@ -2191,11 +2191,8 @@ mod tests {
         let body = run.body_if_present(&ctx).unwrap();
         let indirect = ctx.block(ctx.region(body).blocks[0]).ops[0];
         let signature = IndirectCallLikeOps::exact_signature(&ctx, indirect).unwrap();
-        ctx.set_op_attr(
-            indirect,
-            "unrelated_callable_metadata",
-            Attribute::Type(signature),
-        );
+        ctx.op_attrs_mut(indirect)
+            .insert("unrelated_callable_metadata", Attribute::Type(signature));
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
@@ -2238,7 +2235,8 @@ mod tests {
             tribute_ir::continuation_frame::layout_type(&mut ctx, frame_name, nil, done, dispatch);
         ctx.register_type_alias(Symbol::new(frame_name), layout);
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
-        ctx.set_op_attr(main.op_ref(), "type", Attribute::Type(worker));
+        ctx.op_attrs_mut(main.op_ref())
+            .insert("type", Attribute::Type(worker));
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
@@ -2572,7 +2570,8 @@ mod tests {
                 ctx.register_type_alias(Symbol::new(frame_name), wrong);
             }
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
-            ctx.set_op_attr(main.op_ref(), "type", Attribute::Type(worker));
+            ctx.op_attrs_mut(main.op_ref())
+                .insert("type", Attribute::Type(worker));
             let entry = ctx.region(main.body(&ctx)).blocks[0];
             ctx.set_block_arg_type(entry, 0, evidence);
             ctx.set_block_arg_type(entry, 1, frame);
@@ -2620,7 +2619,8 @@ mod tests {
             tribute_ir::continuation_frame::layout_type(&mut ctx, frame_name, nil, done, dispatch);
         ctx.register_type_alias(Symbol::new(frame_name), layout);
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
-        ctx.set_op_attr(main.op_ref(), "type", Attribute::Type(worker));
+        ctx.op_attrs_mut(main.op_ref())
+            .insert("type", Attribute::Type(worker));
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
@@ -2890,7 +2890,8 @@ mod tests {
         let external = function(&ctx, module, "external");
         let entry = ctx.region(external.body(&ctx)).blocks[0];
         let environment_name = ctx.string_attr("__env");
-        ctx.set_block_arg_attr(entry, 1, "bind_name", environment_name);
+        ctx.block_arg_attrs_mut(entry, 1)
+            .insert("bind_name", environment_name);
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
@@ -2906,11 +2907,8 @@ mod tests {
         let malformed =
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
                 .intern(&mut ctx);
-        ctx.set_op_attr(
-            module.op(),
-            "malformed_callable",
-            Attribute::Type(malformed),
-        );
+        ctx.op_attrs_mut(module.op())
+            .insert("malformed_callable", Attribute::Type(malformed));
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
@@ -2930,7 +2928,8 @@ mod tests {
         );
         let broken = function(&ctx, module, "broken");
         let resultless = func::func_sig(&mut ctx, [], []).as_type_ref();
-        ctx.set_op_attr(broken.op_ref(), "type", Attribute::Type(resultless));
+        ctx.op_attrs_mut(broken.op_ref())
+            .insert("type", Attribute::Type(resultless));
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(

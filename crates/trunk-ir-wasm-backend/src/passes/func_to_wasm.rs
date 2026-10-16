@@ -436,7 +436,7 @@ impl RewritePattern for FuncFuncPattern {
                 ctx.create_op(data)
             }
         };
-        ctx.extend_op_attrs(new_op, attrs_to_preserve);
+        ctx.op_attrs_mut(new_op).extend(attrs_to_preserve);
         rewriter.replace_op(new_op);
         true
     }
@@ -645,7 +645,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             .table(0)
             .signature(Some(signature))
             .build(ctx, loc);
-        ctx.extend_op_attrs(new_op.op_ref(), converted_attrs);
+        ctx.op_attrs_mut(new_op.op_ref()).extend(converted_attrs);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -747,7 +747,8 @@ mod tests {
 }"#,
         );
         let original = module.ops(&ctx)[0];
-        ctx.set_op_attr(original, "custom", Attribute::Int(7));
+        ctx.op_attrs_mut(original)
+            .insert("custom", Attribute::Int(7));
 
         lower(&mut ctx, module, TypeConverter::new());
 
@@ -800,10 +801,12 @@ mod tests {
             attrs,
         )
         .as_type_ref();
-        ctx.set_op_attr(function, "type", Attribute::Type(outer));
+        ctx.op_attrs_mut(function)
+            .insert("type", Attribute::Type(outer));
         let original_body = ctx.op_region(function, 0).unwrap();
         let original_block = ctx.region(original_body).blocks[0];
-        ctx.set_block_arg_attr(original_block, 0, "metadata", Attribute::Type(nested));
+        ctx.block_arg_attrs_mut(original_block, 0)
+            .insert("metadata", Attribute::Type(nested));
 
         lower(&mut ctx, module, TypeConverter::new());
 
@@ -848,7 +851,8 @@ mod tests {
         let original_ops = module.ops(&ctx);
         let declaration_location = ctx.op(original_ops[0]).location;
         let definition_location = ctx.op(original_ops[1]).location;
-        ctx.set_op_attr(original_ops[0], "custom", Attribute::Int(7));
+        ctx.op_attrs_mut(original_ops[0])
+            .insert("custom", Attribute::Int(7));
 
         lower(&mut ctx, module, TypeConverter::new());
 

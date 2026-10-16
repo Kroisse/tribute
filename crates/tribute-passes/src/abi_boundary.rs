@@ -633,9 +633,7 @@ mod tests {
         let function = module.ops(&ctx)[0];
         let entry = ctx.region(ctx.op_region(function, 0).unwrap()).blocks[0];
         let nil = core::nil(&mut ctx).as_type_ref();
-        ctx.set_block_arg_attr(
-            entry,
-            0,
+        ctx.block_arg_attrs_mut(entry, 0).insert(
             "tribute.cps_continuation_frame_result",
             Attribute::Type(nil),
         );

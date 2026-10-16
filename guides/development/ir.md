@@ -258,15 +258,18 @@ let copied = AttributeMap::from_refs(ctx, source.iter().map(|(key, value)| (key,
 
 An operation's attributes are read through `ctx.op_attrs(op)`, a view bound
 to the context whose lookups take only the key; `attrs.view(ctx)` binds any
-other map the same way. They are changed through the context, because
-inserting a key borrows the context while the map is part of it:
+other map the same way. They are changed through `ctx.op_attrs_mut(op)`, which
+borrows the map together with the string pool so that inserting a key can
+intern it, and a block argument's through `ctx.block_arg_attrs_mut(block, i)`.
+Build any value that needs the context before taking the view:
 
 ```rust
 let is_bodyless = !ctx.op_attrs(op).contains_key("body");
-ctx.set_op_attr(op, "type", Attribute::Type(ty));
-ctx.remove_op_attr(op, "signature");
-ctx.extend_op_attrs(op, preserved);
-ctx.set_block_arg_attr(block, 0, "bind_name", name);
+let name = ctx.string_attr("x");
+let mut attrs = ctx.op_attrs_mut(op);
+attrs.insert("type", Attribute::Type(ty));
+attrs.remove("signature");
+ctx.block_arg_attrs_mut(block, 0).insert("bind_name", name);
 ```
 
 Iteration yields each key's `StringRef`; read its text with `ctx.str(key)`.

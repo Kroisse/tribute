@@ -317,7 +317,8 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
         });
         indices.insert(ty, idx);
     }
-    ctx.set_op_attr(module.op(), GC_TYPES_ATTR, Attribute::List(user_types));
+    ctx.op_attrs_mut(module.op())
+        .insert(GC_TYPES_ATTR, Attribute::List(user_types));
 
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerTypedGcPattern { indices })

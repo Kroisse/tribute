@@ -527,7 +527,8 @@ mod tests {
         let ptr_ty = intern_ty(ctx, "core", "ptr");
         let erased_func_ty =
             func::func_sig(ctx, field_types.iter().copied(), [ptr_ty]).as_type_ref();
-        ctx.set_op_attr(func_op.op_ref(), "type", Attribute::Type(erased_func_ty));
+        ctx.op_attrs_mut(func_op.op_ref())
+            .insert("type", Attribute::Type(erased_func_ty));
         crate::native::rtti::declare_rtti_layouts(ctx, module, plan.rtti_types());
         crate::native::rtti::generate_rtti(ctx, module, &tc).expect("declared layouts");
 
