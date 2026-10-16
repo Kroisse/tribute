@@ -18,6 +18,7 @@ use tribute_ir::dialect::adt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, RegionRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -81,12 +82,12 @@ impl ConstCollector {
         let data = ctx.op(op);
 
         if data.name.dialect(ctx) == adt::DIALECT_NAME {
-            if data.name.strip_dialect(ctx) == "string_const" {
+            if adt::StringConst::matches(ctx, op) {
                 if let Some(s) = ctx.op_attrs(op).get_str("value") {
                     self.has_string_consts = true;
                     self.collect_content(s.as_bytes());
                 }
-            } else if data.name.strip_dialect(ctx) == "bytes_const"
+            } else if adt::BytesConst::matches(ctx, op)
                 && let Some(Attribute::Bytes(b)) = ctx.op_attrs(op).get("value")
             {
                 self.collect_content(b);
@@ -160,12 +161,9 @@ pub fn validate_for_wasm(
             });
             return;
         };
-        let ty = ctx.get_type(result_ty);
-        if ty.name.dialect(ctx) != wasm_dialect::DIALECT_NAME
-            || ty.name.strip_dialect(ctx) != "anyref"
-        {
+        if !wasm_dialect::Anyref::matches(ctx, result_ty) {
             result = Err(ConstValidationError::InvalidStringResultType {
-                actual: format!("{}", ty.name.display(ctx)),
+                actual: ctx.get_type(result_ty).name.display(ctx).to_string(),
             });
         }
     });

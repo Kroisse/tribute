@@ -102,19 +102,7 @@ fn register_type(
     // An operation index identifies its layout, not every value of an abstract
     // reference type elsewhere in the module. Builtin ABI mappings are seeded
     // separately and must not be inferred from individual operations.
-    let data = ctx.get_type(ty);
-    if data.name.dialect(ctx) == "wasm"
-        && [
-            "anyref",
-            "structref",
-            "arrayref",
-            "funcref",
-            "externref",
-            "i31ref",
-            "eqref",
-        ]
-        .contains(&data.name.strip_dialect(ctx))
-    {
+    if wasm_dialect::is_abstract_heap_type(ctx, ty) {
         return;
     }
     type_idx_by_type.entry(ty).or_insert(idx);
@@ -142,15 +130,15 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
         if attrs.view(ctx).get_str("name") != Some(role)
             || !field_type.params.is_empty()
             || !field_type.attrs.is_empty()
-            || !(helpers::is_type(ctx, ty, "core", "i32")
-                || helpers::is_type(ctx, ty, "core", "ptr")
-                || helpers::is_type(ctx, ty, "wasm", "anyref"))
+            || !(trunk_ir::dialect::core::I32::matches(ctx, ty)
+                || trunk_ir::dialect::core::Ptr::matches(ctx, ty)
+                || trunk_ir::dialect::wasm::Anyref::matches(ctx, ty))
         {
             return Err(invalid());
         }
         // Marker pointer fields are target-owned GC references, as specified
         // by the builtin layout, even in the retained pre-target declaration.
-        let actual = if helpers::is_type(ctx, ty, "core", "ptr") {
+        let actual = if trunk_ir::dialect::core::Ptr::matches(ctx, ty) {
             ValType::Ref(wasm_encoder::RefType::ANYREF)
         } else {
             helpers::type_to_valtype(ctx, ty, &HashMap::default())?
@@ -191,7 +179,7 @@ fn register_builtin_evidence_type(
 fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     // Wasm has no i1 storage type. Match type_to_valtype before comparing
     // constructor, getter, and setter observations of the same field.
-    if helpers::is_type(ctx, ty, "core", "i1") {
+    if trunk_ir::dialect::core::I1::matches(ctx, ty) {
         return trunk_ir::types::TypeDataBuilder::new("core.i32").intern(ctx);
     }
 
@@ -232,8 +220,8 @@ fn types_equivalent_for_gc(ctx: &mut IrContext, ty1: TypeRef, ty2: TypeRef) -> b
     // layouts, wasm.structref, wasm.arrayref, etc.). When one code path records a field
     // as anyref and another records the concrete type, they are compatible —
     // the field should remain anyref (the wider type).
-    let is_anyref_1 = helpers::is_type(ctx, ty1_norm, "wasm", "anyref");
-    let is_anyref_2 = helpers::is_type(ctx, ty2_norm, "wasm", "anyref");
+    let is_anyref_1 = trunk_ir::dialect::wasm::Anyref::matches(ctx, ty1_norm);
+    let is_anyref_2 = trunk_ir::dialect::wasm::Anyref::matches(ctx, ty2_norm);
     if is_anyref_1 || is_anyref_2 {
         let other = if is_anyref_1 { ty2_norm } else { ty1_norm };
         // Accept if the other type is a builtin layout or a wasm heap type
@@ -242,10 +230,10 @@ fn types_equivalent_for_gc(ctx: &mut IrContext, ty1: TypeRef, ty2: TypeRef) -> b
         if helpers::builtin_layout_type_idx(ctx, other).is_some() {
             return true;
         }
-        if helpers::is_type(ctx, other, "wasm", "structref")
-            || helpers::is_type(ctx, other, "wasm", "arrayref")
-            || helpers::is_type(ctx, other, "wasm", "eqref")
-            || helpers::is_type(ctx, other, "wasm", "i31ref")
+        if trunk_ir::dialect::wasm::Structref::matches(ctx, other)
+            || trunk_ir::dialect::wasm::Arrayref::matches(ctx, other)
+            || trunk_ir::dialect::wasm::Eqref::matches(ctx, other)
+            || trunk_ir::dialect::wasm::I31ref::matches(ctx, other)
         {
             return true;
         }
@@ -294,10 +282,10 @@ fn record_struct_field(
         // `anyref` is the widest compatible reference type. Otherwise, keep
         // the physical struct supertype rather than an equivalent concrete
         // struct type, independent of visitation order.
-        let existing_is_anyref = helpers::is_type(ctx, existing, "wasm", "anyref");
-        let new_is_anyref = helpers::is_type(ctx, ty, "wasm", "anyref");
-        let existing_is_structref = helpers::is_type(ctx, existing, "wasm", "structref");
-        let new_is_structref = helpers::is_type(ctx, ty, "wasm", "structref");
+        let existing_is_anyref = trunk_ir::dialect::wasm::Anyref::matches(ctx, existing);
+        let new_is_anyref = trunk_ir::dialect::wasm::Anyref::matches(ctx, ty);
+        let existing_is_structref = trunk_ir::dialect::wasm::Structref::matches(ctx, existing);
+        let new_is_structref = trunk_ir::dialect::wasm::Structref::matches(ctx, ty);
         if new_is_anyref || (!existing_is_anyref && new_is_structref && !existing_is_structref) {
             builder.fields[idx] = Some(ty);
         }

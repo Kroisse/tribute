@@ -98,11 +98,6 @@ enum TypeBoundary {
     Post,
 }
 
-pub(super) fn type_is(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
-    let data = ctx.get_type(ty);
-    data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name
-}
-
 fn walk_attribute_types(
     ctx: &IrContext,
     attribute: &Attribute,
@@ -126,8 +121,8 @@ fn walk_type(
     let data = ctx.get_type(ty);
     let forbidden = match boundary {
         TypeBoundary::Pre => {
-            type_is(ctx, ty, "func", "func_sig")
-                || type_is(ctx, ty, "closure", "closure")
+            trunk_ir::dialect::func::FuncSig::matches(ctx, ty)
+                || tribute_ir::dialect::closure::Closure::matches(ctx, ty)
                 || matches!(data.name.dialect(ctx), "ability" | "effect")
         }
         TypeBoundary::Post => data.name.dialect(ctx) == "tribute_control",
@@ -218,11 +213,12 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             func::FuncSig::from_type_ref(ctx, closure_ty.params[0]).is_some_and(|function| {
                 let params = function.inputs(ctx);
                 let result = function.single_result(ctx);
-                result.is_some_and(|result| type_is(ctx, result, "tribute_rt", "anyref"))
-                    && params.len() == 3
+                result.is_some_and(|result| {
+                    tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, result)
+                }) && params.len() == 3
                     && params[0] == evidence
-                    && type_is(ctx, params[1], "core", "i32")
-                    && type_is(ctx, params[2], "tribute_rt", "anyref")
+                    && trunk_ir::dialect::core::I32::matches(ctx, params[1])
+                    && tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, params[2])
             })
         } else {
             false
@@ -316,13 +312,13 @@ fn verify_physical_callable_graph(
             .get_i64(CALLING_CONVENTION_ATTR)
             .ok()
             .flatten();
-        let requires_convention = (data.name.dialect(ctx) == "func"
-            && matches!(
-                data.name.strip_dialect(ctx),
-                "func" | "call" | "call_indirect" | "tail_call" | "tail_call_indirect"
-            ))
-            || (data.name.dialect(ctx) == "closure"
-                && matches!(data.name.strip_dialect(ctx), "lambda" | "new"));
+        let requires_convention = func::Func::matches(ctx, op)
+            || func::Call::matches(ctx, op)
+            || func::CallIndirect::matches(ctx, op)
+            || func::TailCall::matches(ctx, op)
+            || func::TailCallIndirect::matches(ctx, op)
+            || closure::Lambda::matches(ctx, op)
+            || closure::New::matches(ctx, op);
         if requires_convention && !matches!(op_convention, Some(0..=2)) {
             failures.push(BoundaryFailure {
                 op: Some(op),
@@ -357,7 +353,7 @@ fn verify_physical_callable_graph(
             let is_cps = op_convention == Some(CallingConvention::Cps as i64);
             let valid_never = function
                 .and_then(|function| function.single_result(ctx))
-                .is_some_and(|result| type_is(ctx, result, "core", "never"));
+                .is_some_and(|result| trunk_ir::dialect::core::Never::matches(ctx, result));
             if is_cps && !valid_never {
                 failures.push(BoundaryFailure {
                     op: Some(op),

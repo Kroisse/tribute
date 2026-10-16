@@ -707,9 +707,8 @@ pub(super) fn validate_result_contract(
         };
     };
     let expected = *expected;
-    let expected_data = ctx.get_type(expected);
-    let physically_empty = expected_data.name.dialect(ctx) == "core"
-        && (matches!(expected_data.name.strip_dialect(ctx), "nil" | "never"));
+    let physically_empty = trunk_ir::dialect::core::Nil::matches(ctx, expected)
+        || trunk_ir::dialect::core::Never::matches(ctx, expected);
     if physically_empty {
         if values.is_empty() || matches!(values, [value] if ctx.value_ty(*value) == expected) {
             return Ok(());

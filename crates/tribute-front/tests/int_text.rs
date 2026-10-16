@@ -506,19 +506,15 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         assert_eq!(declaration.parameter_types.len(), 1);
         let parameter = ir.get_type(declaration.parameter_types[0]);
         let result = ir.get_type(declaration.result_type);
-        assert_eq!(parameter.name.dialect(&ir), "core");
-        assert_eq!(parameter.name.strip_dialect(&ir), "i32");
-        assert_eq!(result.name.dialect(&ir), "core");
-        assert_eq!(result.name.strip_dialect(&ir), "i32");
+        assert_eq!(parameter.name, trunk_ir::dialect::core::I32::NAME);
+        assert_eq!(result.name, trunk_ir::dialect::core::I32::NAME);
     }
     for declaration in declarations.iter().skip(2) {
         assert_eq!(declaration.parameter_types.len(), 1);
         let parameter = ir.get_type(declaration.parameter_types[0]);
         let result = ir.get_type(declaration.result_type);
-        assert_eq!(parameter.name.dialect(&ir), "core");
-        assert_eq!(parameter.name.strip_dialect(&ir), "i1");
-        assert_eq!(result.name.dialect(&ir), "core");
-        assert_eq!(result.name.strip_dialect(&ir), "i1");
+        assert_eq!(parameter.name, trunk_ir::dialect::core::I1::NAME);
+        assert_eq!(result.name, trunk_ir::dialect::core::I1::NAME);
     }
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,
@@ -634,14 +630,16 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
             functions.insert(func.sym_name(&ir), func);
             ControlFlow::Continue(WalkAction::Skip)
         });
-    for (argument, primitive) in [("Int", "i32"), ("Bool", "i1")] {
+    for (argument, primitive) in [
+        ("Int", trunk_ir::dialect::core::I32::NAME),
+        ("Bool", trunk_ir::dialect::core::I1::NAME),
+    ] {
         let parent = functions[format!("apply${argument}").as_str()];
         let consumer = functions[format!("pure${argument}").as_str()];
         let parent_signature = FuncSig::from_type_ref(&ir, parent.r#type(&ir)).unwrap();
         let data_type = parent_signature.result(&ir);
         assert_eq!(parent_signature.inputs(&ir), [data_type]);
-        assert_eq!(ir.get_type(data_type).name.dialect(&ir), "core");
-        assert_eq!(ir.get_type(data_type).name.strip_dialect(&ir), primitive);
+        assert_eq!(ir.get_type(data_type).name, primitive);
         let mut lambdas = Vec::new();
         let mut calls = Vec::new();
         let _: ControlFlow<()> = trunk_ir::walk::walk_region(&ir, parent.body(&ir), &mut |op| {

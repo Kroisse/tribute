@@ -662,6 +662,21 @@ fn read_count(
     }
 }
 
+/// Whether `ty` is one of WasmGC's abstract heap types (`anyref`, `eqref`,
+/// `i31ref`, `structref`, `arrayref`, `funcref`, `externref`).
+pub fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    [
+        Anyref::NAME,
+        Eqref::NAME,
+        I31ref::NAME,
+        Structref::NAME,
+        Arrayref::NAME,
+        Funcref::NAME,
+        Externref::NAME,
+    ]
+    .contains(&ctx.get_type(ty).name)
+}
+
 /// Construct a canonical target-owned `wasm.func_sig`.
 pub fn func_sig(
     ctx: &mut IrContext,

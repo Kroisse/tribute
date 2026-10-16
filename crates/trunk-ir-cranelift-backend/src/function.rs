@@ -90,20 +90,23 @@ pub(crate) fn translate_type(
     ptr_ty: cl_types::Type,
 ) -> CompilationResult<cl_types::Type> {
     let td = ctx.get_type(ty);
-    if td.name.dialect(ctx) == "core" {
-        return match td.name.strip_dialect(ctx) {
-            "i1" => Ok(cl_types::I8),
-            "i8" => Ok(cl_types::I8),
-            "i16" => Ok(cl_types::I16),
-            "i32" => Ok(cl_types::I32),
-            "i64" => Ok(cl_types::I64),
-            "f32" => Ok(cl_types::F32),
-            "f64" => Ok(cl_types::F64),
-            "ptr" => Ok(ptr_ty),
-            other => Err(CompilationError::type_error(format!(
-                "unsupported type for Cranelift: core.{other}"
-            ))),
-        };
+    {
+        use trunk_ir::dialect::core::{F32, F64, I1, I8, I16, I32, I64, Ptr};
+        use trunk_ir::ops::DialectType;
+
+        let types = [
+            (I1::NAME, cl_types::I8),
+            (I8::NAME, cl_types::I8),
+            (I16::NAME, cl_types::I16),
+            (I32::NAME, cl_types::I32),
+            (I64::NAME, cl_types::I64),
+            (F32::NAME, cl_types::F32),
+            (F64::NAME, cl_types::F64),
+            (Ptr::NAME, ptr_ty),
+        ];
+        if let Some(&(_, translated)) = types.iter().find(|(name, _)| *name == td.name) {
+            return Ok(translated);
+        }
     }
     Err(CompilationError::type_error(format!(
         "unsupported type for Cranelift: {}",

@@ -1,7 +1,6 @@
 //! Lower target-independent I/O operations to the native runtime ABI.
 
 use tribute_ir::dialect::adt;
-use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func, mem, scf};
 use trunk_ir::ops::DialectOp;
@@ -46,11 +45,8 @@ fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
 }
 
 fn find_read_line_result_type(ctx: &IrContext) -> Option<TypeRef> {
-    let adt = Symbol::new("adt");
-    let enum_name = Symbol::new("enum");
     ctx.types().iter().find_map(|(ty, data)| {
-        (data.name.dialect(ctx) == adt
-            && data.name.strip_dialect(ctx) == enum_name
+        (data.name == <tribute_ir::dialect::adt::Enum as trunk_ir::ops::DialectType>::NAME
             && data.attrs.view(ctx).get_str("name") == Some(READ_LINE_RESULT_TYPE))
         .then_some(ty)
     })

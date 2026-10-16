@@ -19,21 +19,6 @@ pub fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
     crate::emit::helpers::builtin_layout_type_idx(ctx, ty)
 }
 
-fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.name.dialect(ctx) == "wasm"
-        && [
-            "anyref",
-            "eqref",
-            "i31ref",
-            "structref",
-            "arrayref",
-            "funcref",
-            "externref",
-        ]
-        .contains(&data.name.strip_dialect(ctx))
-}
-
 /// Module attribute listing the GC types that received user indices, in
 /// index order from [`FIRST_USER_TYPE_IDX`]. Emission reads each structural
 /// struct's fields from its type.
@@ -52,7 +37,7 @@ struct TypeCollector {
 impl TypeCollector {
     /// Add `ty`, then every structural struct among its fields.
     fn push_type(&mut self, ctx: &IrContext, ty: TypeRef) {
-        if !self.considered.insert(ty) || is_abstract_heap_type(ctx, ty) {
+        if !self.considered.insert(ty) || wasm::is_abstract_heap_type(ctx, ty) {
             return;
         }
         self.types.push(ty);

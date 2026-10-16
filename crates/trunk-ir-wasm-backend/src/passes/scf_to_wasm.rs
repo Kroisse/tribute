@@ -1209,59 +1209,61 @@ mod tests {
 
     #[test]
     fn terminal_never_controls_have_no_target_results() {
+        use trunk_ir::dialect::wasm::{Block, If, Loop};
+        let controls_named = [If::NAME, Block::NAME, Loop::NAME];
         let cases = [
             (
                 "scf.if %cond { func.return } { func.unreachable }",
-                vec!["if"],
+                vec![If::NAME],
             ),
-            ("scf.loop { func.return }", vec!["block", "loop"]),
+            ("scf.loop { func.return }", vec![Block::NAME, Loop::NAME]),
             (
                 "%n = scf.if %cond : core.never { func.tail_call %cond, %choice, %unit {callee = @main} } { func.unreachable }",
-                vec!["if"],
+                vec![If::NAME],
             ),
             (
                 "%n = scf.if %cond : core.never { func.return } { func.unreachable }",
-                vec!["if"],
+                vec![If::NAME],
             ),
             (
                 "%n = scf.loop : core.never { func.return }",
-                vec!["block", "loop"],
+                vec![Block::NAME, Loop::NAME],
             ),
             (
                 "%n = scf.loop %choice : core.never { ^body(%carried: core.i32): func.return }",
-                vec!["block", "loop"],
+                vec![Block::NAME, Loop::NAME],
             ),
             (
                 "scf.switch %choice { scf.case {value = 0} { func.return } scf.default { func.unreachable } }",
-                vec!["if"],
+                vec![If::NAME],
             ),
             (
                 "%outer = scf.if %cond : core.never { %inner = scf.if %cond : core.never { func.return } { func.unreachable } } { func.return }",
-                vec!["if", "if"],
+                vec![If::NAME, If::NAME],
             ),
             (
                 "%outer = scf.if %cond : core.never { scf.if %cond { func.return } { func.unreachable } } { func.return }",
-                vec!["if", "if"],
+                vec![If::NAME, If::NAME],
             ),
             (
                 "%outer = scf.if %cond : core.never { scf.loop { func.return } } { func.return }",
-                vec!["if", "block", "loop"],
+                vec![If::NAME, Block::NAME, Loop::NAME],
             ),
             (
                 "%outer = scf.if %cond : core.never { %inner = scf.loop : core.never { func.return } } { func.return }",
-                vec!["if", "block", "loop"],
+                vec![If::NAME, Block::NAME, Loop::NAME],
             ),
             (
                 "scf.switch %choice { scf.case {value = 0} { %n = scf.if %cond : core.never { func.return } { func.unreachable } } scf.default { func.return } }",
-                vec!["if", "if"],
+                vec![If::NAME, If::NAME],
             ),
             (
                 "%n = scf.loop : core.never { %inner = scf.if %cond : core.never { func.return } { func.unreachable } }",
-                vec!["block", "loop", "if"],
+                vec![Block::NAME, Loop::NAME, If::NAME],
             ),
             (
                 "%n = scf.if %cond : core.never { scf.switch %choice { scf.case {value = 0} { func.return } scf.default { func.unreachable } } } { func.return }",
-                vec!["if", "if"],
+                vec![If::NAME, If::NAME],
             ),
         ];
         for (body, expected) in cases {
@@ -1278,11 +1280,9 @@ mod tests {
             let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
                 let data = ctx.op(op);
                 assert_ne!(data.name.dialect(&ctx), "scf");
-                if data.name.dialect(&ctx) == "wasm"
-                    && (matches!(data.name.strip_dialect(&ctx), "if" | "block" | "loop"))
-                {
+                if controls_named.contains(&data.name) {
                     assert!(ctx.op_results(op).is_empty(), "{body}");
-                    controls.push(data.name.strip_dialect(&ctx).to_owned());
+                    controls.push(data.name);
                 }
                 for &ty in ctx.op_result_types(op) {
                     assert!(!(ctx.get_type(ty).name.is(&ctx, "core.never")));
@@ -1460,9 +1460,9 @@ mod tests {
                 )
                 .unwrap();
                 let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
-                    let data = ctx.op(op);
-                    if data.name.dialect(&ctx) == "wasm"
-                        && (matches!(data.name.strip_dialect(&ctx), "if" | "block" | "loop"))
+                    if wasm_dialect::If::matches(&ctx, op)
+                        || wasm_dialect::Block::matches(&ctx, op)
+                        || wasm_dialect::Loop::matches(&ctx, op)
                     {
                         assert_eq!(ctx.op_result_types(op).len(), 1);
                         let result = ctx.get_type(ctx.op_result_types(op)[0]);

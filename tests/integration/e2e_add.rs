@@ -191,7 +191,7 @@ fn main() -> Nil { }
         let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
             .expect("CPS and lambda lifting").expect("frontend module");
         let mut specializations = Vec::new();
-        for (name, scalar) in [("compute_int", "i32"), ("compute_float", "f64")] {
+        for (name, scalar) in [("compute_int", core::I32::NAME), ("compute_float", core::F64::NAME)] {
             let caller = named_function(&ctx, module, name);
             let calls = function_ops::<func::Call>(&ctx, caller);
             let call = calls.into_iter().find(|call| call.args(&ctx).iter().any(|&arg| {
@@ -211,7 +211,7 @@ fn main() -> Nil { }
                 Some(tribute_core::CallingConvention::Direct)
             );
             let args = &ctx.op_operands(indirect)[1..];
-            assert_eq!(ctx.get_type(ctx.value_ty(*args.last().unwrap())).name.strip_dialect(&ctx), scalar);
+            assert_eq!(ctx.get_type(ctx.value_ty(*args.last().unwrap())).name, scalar);
             specializations.push(target.op_ref());
         }
         assert_ne!(specializations[0], specializations[1], "Int and Float must instantiate distinct callable contracts");
@@ -549,20 +549,15 @@ fn test_lambda_identity() {
         ));
         let call = only_indirect_call(&ctx, named_function(&ctx, module, "compute"));
         let boxed = *ctx.op_operands(call).last().unwrap();
-        assert_eq!(
-            ctx.get_type(ctx.value_ty(boxed)).name.strip_dialect(&ctx),
-            "anyref"
-        );
+        assert!(tribute_ir::dialect::tribute_rt::Anyref::matches(
+            &ctx,
+            ctx.value_ty(boxed)
+        ));
         let cast = defining_op(&ctx, boxed);
         assert!(core::UnrealizedConversionCast::matches(&ctx, cast));
         let input = ctx.op_operands(cast);
         assert_eq!(input.len(), 1);
-        assert_eq!(
-            ctx.get_type(ctx.value_ty(input[0]))
-                .name
-                .strip_dialect(&ctx),
-            "i32"
-        );
+        assert!(core::I32::matches(&ctx, ctx.value_ty(input[0])));
         let argument = arith::Const::from_op(&ctx, defining_op(&ctx, input[0])).unwrap();
         assert_eq!(argument.value(&ctx), Attribute::Int(42));
         let entry = ctx.region(lifted.body(&ctx)).blocks[0];

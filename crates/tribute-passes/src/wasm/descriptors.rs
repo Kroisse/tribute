@@ -14,6 +14,7 @@ use tribute_ir::dialect::tribute_rtti::{
     self, FieldKind, allocation_descriptor, descriptor_field_types,
 };
 use trunk_ir::context::IrContext;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::Module;
 use trunk_ir::walk::{WalkAction, walk_region};
@@ -67,20 +68,22 @@ pub fn declare(ctx: &mut IrContext, module: Module) {
 /// GC reference is dynamic.
 fn field_kind(ctx: &IrContext, ty: TypeRef) -> FieldKind {
     let data = ctx.get_type(ty);
-    if data.name.dialect(ctx) == "adt" || (data.name.is(ctx, "core.array")) {
+    if data.name.dialect(ctx) == "adt" || trunk_ir::dialect::core::Array::matches(ctx, ty) {
         return FieldKind::Managed;
     }
-    let dynamic = (data.name.dialect(ctx) == "tribute_rt"
-        && (matches!(data.name.strip_dialect(ctx), "anyref" | "intref")))
-        || (data.name.dialect(ctx) == "wasm" && {
-            let name = data.name.strip_dialect(ctx);
-            {
-                matches!(
-                    name,
-                    "anyref" | "eqref" | "structref" | "arrayref" | "i31ref"
-                )
-            }
-        });
+    let dynamic = {
+        use trunk_ir::dialect::wasm;
+        [
+            tribute_ir::dialect::tribute_rt::Anyref::NAME,
+            tribute_ir::dialect::tribute_rt::Intref::NAME,
+            wasm::Anyref::NAME,
+            wasm::Eqref::NAME,
+            wasm::Structref::NAME,
+            wasm::Arrayref::NAME,
+            wasm::I31ref::NAME,
+        ]
+        .contains(&data.name)
+    };
     if dynamic {
         return FieldKind::Dynamic;
     }

@@ -3276,8 +3276,7 @@ fn main() -> Nil {
             ty
         }
         fn target(ir: &IrContext, ty: TypeRef) -> TypeRef {
-            let data = ir.get_type(ty);
-            assert_eq!(data.name.strip_dialect(&ir), "typeref");
+            assert!(tribute_ir::dialect::adt::Typeref::matches(ir, ty));
             ir.type_alias_by_text(ir.type_attrs(ty).get_str("name").unwrap())
                 .expect("referenced layout")
         }
@@ -3367,17 +3366,18 @@ fn main() -> Nil {}
                 )
                 .unwrap();
             }
-            for (suffix, primitive) in [("Int", "i32"), ("Bool", "i1")] {
+            use trunk_ir::dialect::core::{I1, I32};
+            for (suffix, primitive) in [("Int", I32::NAME), ("Bool", I1::NAME)] {
                 let inner = alias(&ir, &format!("Inner${suffix}"));
                 let value = get_struct_fields(&ir, inner).unwrap()[0].1;
-                assert_eq!(ir.get_type(value).name.strip_dialect(&ir), primitive);
+                assert_eq!(ir.get_type(value).name, primitive);
                 let outer = get_enum_variants(&ir, alias(&ir, &format!("Outer${suffix}"))).unwrap();
                 assert_eq!(ir.str(outer[0].0), "Wrap");
                 assert_eq!(target(&ir, outer[0].1[0]), inner);
                 assert!(outer[2].1.is_empty());
                 assert_eq!(outer[3].1.len(), 2);
                 assert_eq!(outer[3].1[0], value);
-                assert_eq!(ir.get_type(outer[3].1[1]).name.strip_dialect(&ir), "i1");
+                assert_eq!(ir.get_type(outer[3].1[1]).name, I1::NAME);
                 assert_eq!(target(&ir, outer[4].1[0]), alias(&ir, "std::String"));
                 let tuple = target(&ir, outer[1].1[0]);
                 let fields = get_struct_fields(&ir, tuple).unwrap();
@@ -3400,13 +3400,10 @@ fn main() -> Nil {}
             assert_eq!(target(&ir, link[0].1), alias(&ir, "Loop$Int"));
             let recursive = get_enum_variants(&ir, alias(&ir, "Loop$Int")).unwrap();
             assert_eq!(target(&ir, recursive[0].1[0]), alias(&ir, "Link$Int"));
-            for (name, primitive) in [("A::Token$Int", "i32"), ("B::Token$Bool", "i1")] {
+            for (name, primitive) in [("A::Token$Int", I32::NAME), ("B::Token$Bool", I1::NAME)] {
                 let variants = get_enum_variants(&ir, alias(&ir, name)).unwrap();
                 assert_eq!(ir.str(variants[0].0), "Item");
-                assert_eq!(
-                    ir.get_type(variants[0].1[0]).name.strip_dialect(&ir),
-                    primitive
-                );
+                assert_eq!(ir.get_type(variants[0].1[0]).name, primitive);
             }
             let output = trunk_ir::printer::print_module(&ir, logical.module.op());
             for (name, primitive) in [("Boxed$Int", "core.i32"), ("Boxed$Bool", "core.i1")] {
@@ -3426,13 +3423,16 @@ fn main() -> Nil {}
         use tribute_ir::dialect::tribute_control;
         use trunk_ir::{Symbol, TypeRef};
 
-        fn layout(ir: &IrContext, name: &Symbol, kind: &str) -> TypeRef {
+        const STRUCT: trunk_ir::TypeName =
+            <tribute_ir::dialect::adt::Struct as trunk_ir::ops::DialectType>::NAME;
+        const ENUM: trunk_ir::TypeName =
+            <tribute_ir::dialect::adt::Enum as trunk_ir::ops::DialectType>::NAME;
+
+        fn layout(ir: &IrContext, name: &Symbol, kind: trunk_ir::TypeName) -> TypeRef {
             let ty = ir
                 .type_alias_by_name(name)
                 .expect("published nominal layout");
-            let data = ir.get_type(ty);
-            assert_eq!(data.name.dialect(&ir), "adt");
-            assert_eq!(data.name.strip_dialect(&ir), kind);
+            assert_eq!(ir.get_type(ty).name, kind);
             assert!(
                 ir.type_attrs(ty)
                     .get_str("name")
@@ -3499,9 +3499,9 @@ fn main() -> Nil {}
                 .expect("CPS converts published layout fields");
             }
             for (function, nominal, kind) in [
-                ("keep_a", "A::Token$Nat", "struct"),
-                ("keep_b", "B::Token$Nat", "struct"),
-                ("keep_choice", "Choice$Nat", "enum"),
+                ("keep_a", "A::Token$Nat", STRUCT),
+                ("keep_b", "B::Token$Nat", STRUCT),
+                ("keep_choice", "Choice$Nat", ENUM),
             ] {
                 let parameter = logical
                     .module
@@ -3531,19 +3531,19 @@ fn main() -> Nil {}
                 layout(&ir, &name, kind);
             }
             assert_ne!(
-                layout(&ir, &Symbol::new("A::Token$Nat"), "struct"),
-                layout(&ir, &Symbol::new("B::Token$Nat"), "struct")
+                layout(&ir, &Symbol::new("A::Token$Nat"), STRUCT),
+                layout(&ir, &Symbol::new("B::Token$Nat"), STRUCT)
             );
             for (owner, target) in [("Node", "Node"), ("First", "Second"), ("Second", "First")] {
-                let owner = layout(&ir, &Symbol::new(owner), "struct");
+                let owner = layout(&ir, &Symbol::new(owner), STRUCT);
                 let field = get_struct_fields(&ir, owner).unwrap()[0].1;
                 let name = reference_name(&ir, field);
                 assert_eq!(name, Symbol::new(target));
-                layout(&ir, &name, "struct");
+                layout(&ir, &name, STRUCT);
             }
-            let holder = layout(&ir, &Symbol::new("Holder"), "struct");
+            let holder = layout(&ir, &Symbol::new("Holder"), STRUCT);
             let pair = get_struct_fields(&ir, holder).unwrap()[0].1;
-            let tuple = layout(&ir, &reference_name(&ir, pair), "struct");
+            let tuple = layout(&ir, &reference_name(&ir, pair), STRUCT);
             let fields = get_struct_fields(&ir, tuple).unwrap();
             let callback = ir.get_type(fields[1].1);
             if after_cps {

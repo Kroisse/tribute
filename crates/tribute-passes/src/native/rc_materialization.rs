@@ -169,8 +169,8 @@ fn allocation_size_for_type(
     // to an exact release function before deallocation. It is never a shallow
     // fallback and is not inferred from physical definitions.
     let data = ctx.get_type(ty);
-    if data.name.dialect(ctx) == "tribute_rt"
-        && matches!(data.name.strip_dialect(ctx), "anyref" | "intref")
+    if tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty)
+        || tribute_ir::dialect::tribute_rt::Intref::matches(ctx, ty)
     {
         return Ok(0);
     }

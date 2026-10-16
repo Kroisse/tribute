@@ -656,11 +656,11 @@ mod canonicalize_tests {
             .apply_partial(ctx, module)
     }
 
-    fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
+    fn count_ops(ctx: &IrContext, module: Module, name: crate::OpName) -> usize {
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
-            if data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name {
+            if data.name == name {
                 count += 1;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -690,9 +690,12 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "scf", "if"), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::scf::If::NAME), 0);
         // The then-region's `arith.addi` is now at the parent block.
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            1
+        );
         insta::assert_snapshot!(print_module(&ctx, module.op()));
     }
 
@@ -717,8 +720,11 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "scf", "if"), 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::scf::If::NAME), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            1
+        );
     }
 
     #[test]
@@ -740,7 +746,7 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "scf", "if"), 1);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::scf::If::NAME), 1);
     }
 
     #[test]
@@ -764,7 +770,7 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "scf", "if"), 1);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::scf::If::NAME), 1);
     }
 
     #[test]
@@ -788,7 +794,7 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "scf", "if"), 1);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::scf::If::NAME), 1);
     }
 
     #[test]
@@ -812,11 +818,14 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "scf", "if"), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::scf::If::NAME), 0);
         // The else region's addi was dropped along with the if op (it
         // was unreachable). Only the parent's `func.return` remains for
         // `arith` ops, plus the const cond.
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
     }
 
     const SWITCH_FALLTHROUGH: &str = r#"core.module @test {
@@ -850,9 +859,18 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "scf", "switch"), 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "muli"), 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            0
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
+            1
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
         insta::assert_snapshot!(print_module(&ctx, module.op()));
     }
 
@@ -863,9 +881,18 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "scf", "switch"), 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "muli"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            0
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
+            0
+        );
     }
 
     #[test]
@@ -888,9 +915,18 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "scf", "switch"), 0);
-        assert_eq!(count_ops(&ctx, module, "func", "return"), 1);
-        assert_eq!(count_ops(&ctx, module, "func", "unreachable"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            0
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::func::Return::NAME),
+            1
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::func::Unreachable::NAME),
+            0
+        );
     }
 
     #[test]
@@ -914,7 +950,10 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "scf", "switch"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            1
+        );
     }
 
     #[test]
@@ -937,7 +976,10 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "scf", "switch"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            1
+        );
     }
 
     #[test]
@@ -958,7 +1000,10 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "scf", "switch"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            1
+        );
     }
 
     #[test]
@@ -968,6 +1013,9 @@ mod canonicalize_tests {
 
         let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "scf", "switch"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            1
+        );
     }
 }

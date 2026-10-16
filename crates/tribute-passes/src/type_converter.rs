@@ -20,20 +20,16 @@
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
 
-fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
-    ctx.get_type(ty).name.dialect(ctx) == dialect
-        && ctx.get_type(ty).name.strip_dialect(ctx) == name
-}
-
 fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, "adt", "struct")
+    tribute_ir::dialect::adt::Struct::matches(ctx, ty)
 }
 
 fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, "adt", "typeref")
+    tribute_ir::dialect::adt::Typeref::matches(ctx, ty)
 }
 
 /// Create an TypeConverter configured for target-agnostic type conversions.

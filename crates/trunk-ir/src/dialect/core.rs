@@ -321,11 +321,11 @@ mod canonicalize_tests {
             .apply_partial(ctx, module)
     }
 
-    fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
+    fn count_ops(ctx: &IrContext, module: Module, name: crate::OpName) -> usize {
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
-            if data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name {
+            if data.name == name {
                 count += 1;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -373,7 +373,11 @@ mod canonicalize_tests {
         let result = run_core_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(
-            count_ops(&ctx, module, "core", "unrealized_conversion_cast"),
+            count_ops(
+                &ctx,
+                module,
+                crate::dialect::core::UnrealizedConversionCast::NAME
+            ),
             0
         );
         insta::assert_snapshot!(print_module(&ctx, module.op()));
@@ -393,7 +397,11 @@ mod canonicalize_tests {
         let result = run_core_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
         assert_eq!(
-            count_ops(&ctx, module, "core", "unrealized_conversion_cast"),
+            count_ops(
+                &ctx,
+                module,
+                crate::dialect::core::UnrealizedConversionCast::NAME
+            ),
             1
         );
     }
@@ -414,7 +422,11 @@ mod canonicalize_tests {
         assert!(result.total_changes >= 1);
         // Inner cast remains (now dead); outer is gone.
         assert_eq!(
-            count_ops(&ctx, module, "core", "unrealized_conversion_cast"),
+            count_ops(
+                &ctx,
+                module,
+                crate::dialect::core::UnrealizedConversionCast::NAME
+            ),
             1
         );
         insta::assert_snapshot!(print_module(&ctx, module.op()));
@@ -435,7 +447,11 @@ mod canonicalize_tests {
         let result = run_core_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
         assert_eq!(
-            count_ops(&ctx, module, "core", "unrealized_conversion_cast"),
+            count_ops(
+                &ctx,
+                module,
+                crate::dialect::core::UnrealizedConversionCast::NAME
+            ),
             2
         );
     }

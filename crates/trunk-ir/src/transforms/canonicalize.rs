@@ -350,11 +350,11 @@ mod tests {
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
-    fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
+    fn count_ops(ctx: &IrContext, module: Module, name: crate::OpName) -> usize {
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
-            if data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name {
+            if data.name == name {
                 count += 1;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -362,11 +362,11 @@ mod tests {
         count
     }
 
-    fn count_ops_under(ctx: &IrContext, root: OpRef, dialect: &str, name: &str) -> usize {
+    fn count_ops_under(ctx: &IrContext, root: OpRef, name: crate::OpName) -> usize {
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, root, &mut |op| {
             let data = ctx.op(op);
-            if data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name {
+            if data.name == name {
                 count += 1;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -396,7 +396,10 @@ mod tests {
 
         let result = canonicalize(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
     }
 
     #[test]
@@ -417,7 +420,10 @@ mod tests {
         let result = canonicalize(&mut ctx, module);
         assert!(result.reached_fixpoint);
         assert!(result.total_changes >= 2);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
     }
 
     #[test]
@@ -446,9 +452,18 @@ mod tests {
         let result = canonicalize(&mut ctx, funcs[0]);
 
         assert!(result.reached_fixpoint);
-        assert_eq!(count_ops_under(&ctx, funcs[0].op_ref(), "arith", "addi"), 0);
-        assert_eq!(count_ops_under(&ctx, funcs[1].op_ref(), "arith", "addi"), 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+        assert_eq!(
+            count_ops_under(&ctx, funcs[0].op_ref(), crate::dialect::arith::Addi::NAME),
+            0
+        );
+        assert_eq!(
+            count_ops_under(&ctx, funcs[1].op_ref(), crate::dialect::arith::Addi::NAME),
+            1
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            1
+        );
     }
 
     #[test]
@@ -472,9 +487,15 @@ mod tests {
 
         let result = canonicalize(&mut ctx, module);
         assert!(result.reached_fixpoint);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
         // muli %s, %x stays — only one operand is const.
-        assert_eq!(count_ops(&ctx, module, "arith", "muli"), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
+            1
+        );
     }
 
     #[test]
@@ -506,12 +527,18 @@ mod tests {
         let result = canonicalize(&mut ctx, module);
         assert!(result.reached_fixpoint);
         // scf.if is gone; the then-region's body was spliced out.
-        assert_eq!(count_ops(&ctx, module, "scf", "if"), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::scf::If::NAME), 0);
         // arith.addi was folded away (`x + 0` → `x`).
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
         // The else region's `arith.muli` was orphaned with the erased
         // `scf.if`; it should not appear in the walked module.
-        assert_eq!(count_ops(&ctx, module, "arith", "muli"), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
+            0
+        );
     }
 
     #[test]

@@ -45,6 +45,7 @@ use trunk_ir::callable::CallableBody;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::{OpDef, OpName, SymbolPath};
 use wasm_encoder::{
@@ -912,8 +913,8 @@ fn emit_op_nested(
         if let Some(&result_ty) = ctx.op_result_types(op).first() {
             let ty_data = ctx.get_type(result_ty);
             debug!("wasm.nop: result_ty={}", ty_data.name.display(ctx));
-            if is_type(ctx, result_ty, "wasm", "func_sig")
-                || is_type(ctx, result_ty, "wasm", "funcref")
+            if trunk_ir::dialect::wasm::FuncSig::matches(ctx, result_ty)
+                || trunk_ir::dialect::wasm::Funcref::matches(ctx, result_ty)
             {
                 debug!("wasm.nop: emitting ref.null func");
                 function.instruction(&Instruction::RefNull(HeapType::Abstract {
@@ -921,8 +922,8 @@ fn emit_op_nested(
                     ty: AbstractHeapType::Func,
                 }));
                 set_result_local(ctx, op, emit_ctx, function)?;
-            } else if is_type(ctx, result_ty, "wasm", "anyref")
-                || is_type(ctx, result_ty, "wasm", "structref")
+            } else if trunk_ir::dialect::wasm::Anyref::matches(ctx, result_ty)
+                || trunk_ir::dialect::wasm::Structref::matches(ctx, result_ty)
             {
                 debug!("wasm.nop: emitting ref.null any");
                 function.instruction(&Instruction::RefNull(HeapType::Abstract {
@@ -1549,7 +1550,7 @@ mod tests {
             panic!("expected wasm.func_sig signature")
         };
         assert_eq!(result.len(), 1);
-        assert!(helpers::is_type(&ctx, result[0], "wasm", "funcref"));
+        assert!(trunk_ir::dialect::wasm::Funcref::matches(&ctx, result[0]));
     }
 
     #[test]

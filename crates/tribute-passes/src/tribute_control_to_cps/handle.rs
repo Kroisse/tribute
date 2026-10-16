@@ -136,7 +136,7 @@ impl Converter<'_> {
                 "general operation has no verified Dispatch boundary",
             )
         })?;
-        let perform = if type_is(self.ctx, input_type, "core", "never") {
+        let perform = if trunk_ir::dialect::core::Never::matches(self.ctx, input_type) {
             ability::Abort::operands(evidence, frame, args)
                 .ability(ability)
                 .op_name(op_name)
@@ -243,11 +243,9 @@ impl Converter<'_> {
         let source_block = self.ctx.region(source_region).blocks[0];
         let source_args = self.ctx.block_args(source_block).to_vec();
         let has_resume_token = source_args.last().is_some_and(|arg| {
-            type_is(
+            tribute_ir::dialect::tribute_control::ResumeToken::matches(
                 self.ctx,
                 self.ctx.value_ty(*arg),
-                "tribute_control",
-                "resume_token",
             )
         });
         let evidence_type = self.evidence_type();

@@ -818,12 +818,10 @@ mod tests {
             .iter()
             .copied()
             .find(|&op| {
-                let data = ctx.op(op);
                 let Some(ty) = ctx.op_attrs(op).get_type("type") else {
                     return false;
                 };
-                data.name.dialect(&ctx) == wasm_gc_dialect::DIALECT_NAME
-                    && data.name.strip_dialect(&ctx) == "struct_get"
+                wasm_gc_dialect::StructGet::matches(&ctx, op)
                     && wasm_gc_dialect::Struct::matches(&ctx, ty)
             })
             .expect("lowered variant_get");
@@ -963,14 +961,13 @@ mod tests {
             .iter()
             .copied()
             .filter_map(|op| {
-                let data = ctx.op(op);
-                if data.name.dialect(&ctx) != wasm_gc_dialect::DIALECT_NAME {
-                    return None;
-                }
-                match data.name.strip_dialect(&ctx) {
-                    "struct_new" | "struct_get" => ctx.op_attrs(op).get_type("type"),
-                    "ref_test" | "ref_cast" => ctx.op_attrs(op).get_type("target_type"),
-                    _ => None,
+                use wasm_gc_dialect::{RefCast, RefTest, StructGet, StructNew};
+                if StructNew::matches(&ctx, op) || StructGet::matches(&ctx, op) {
+                    ctx.op_attrs(op).get_type("type")
+                } else if RefTest::matches(&ctx, op) || RefCast::matches(&ctx, op) {
+                    ctx.op_attrs(op).get_type("target_type")
+                } else {
+                    None
                 }
             })
             .collect();

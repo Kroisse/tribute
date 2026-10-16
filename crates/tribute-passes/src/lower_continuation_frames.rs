@@ -449,12 +449,14 @@ mod tests {
                     .type_alias_by_text(&name)
                     .expect("the layout is registered");
                 let answer = continuation_frame::result_type(&ctx, layout).unwrap();
-                ctx.get_type(answer).name.strip_dialect(&ctx).to_owned()
+                ctx.get_type(answer).name
             })
         };
-        assert_eq!(answers(0, "core.i32", "core.i64"), ["i32", "i64"]);
-        assert_eq!(answers(17, "core.i32", "core.i64"), ["i32", "i64"]);
-        assert_eq!(answers(0, "core.i64", "core.i32"), ["i64", "i32"]);
+        use trunk_ir::dialect::core::{I32, I64};
+        let (i32, i64) = (I32::NAME, I64::NAME);
+        assert_eq!(answers(0, "core.i32", "core.i64"), [i32, i64]);
+        assert_eq!(answers(17, "core.i32", "core.i64"), [i32, i64]);
+        assert_eq!(answers(0, "core.i64", "core.i32"), [i64, i32]);
     }
 
     const TYPES: &str = r#"  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>

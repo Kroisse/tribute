@@ -208,14 +208,19 @@ pub mod layout;
 /// holding each field's name. Both are strings.
 pub const STRUCT_NAME_ATTR: &str = "name";
 
+/// Whether `ty` is an `adt.struct`, `adt.enum` or `adt.typeref`: a type
+/// named by its `name` attribute.
+pub fn is_nominal(ctx: &IrContext, ty: TypeRef) -> bool {
+    let name = ctx.get_type(ty).name;
+    name == <Struct as DialectType>::NAME
+        || name == <Enum as DialectType>::NAME
+        || name == Typeref::NAME
+}
+
 /// The nominal name of an `adt.struct`, `adt.enum` or `adt.typeref`: its
 /// `name` type attribute.
 pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
-    let name = ctx.get_type(ty).name;
-    let nominal = name == <Struct as DialectType>::NAME
-        || name == <Enum as DialectType>::NAME
-        || name == Typeref::NAME;
-    nominal
+    is_nominal(ctx, ty)
         .then(|| ctx.type_attrs(ty).get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
 }

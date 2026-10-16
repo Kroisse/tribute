@@ -1302,7 +1302,6 @@ pub fn debug_assert_valid(ctx: &IrContext, module: Module, pass_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Symbol;
     use crate::context::OperationDataBuilder;
     use crate::dialect::{arith, core, func};
     use crate::location::Span;
@@ -1487,14 +1486,12 @@ mod tests {
         }
     }
 
-    fn operations_named(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> Vec<OpRef> {
+    fn operations_named(ctx: &IrContext, module: Module, name: crate::OpName) -> Vec<OpRef> {
         let mut operations = Vec::new();
-        let dialect = Symbol::new(dialect);
-        let name = Symbol::new(name);
         let body = module.body(ctx).expect("test module must have a body");
         walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
             let data = ctx.op(op);
-            if data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name {
+            if data.name == name {
                 operations.push(op);
             }
             std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
@@ -2689,7 +2686,7 @@ mod tests {
 
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
-        let branches = operations_named(&ctx, module, "cf", "br");
+        let branches = operations_named(&ctx, module, crate::dialect::cf::Br::NAME);
         assert_eq!(branches.len(), 1);
         let branch = branches[0];
         let interface = BranchOps::get(&ctx, branch).expect("cf.br must implement Branch");
@@ -2726,7 +2723,7 @@ mod tests {
 
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
-        let branch = operations_named(&ctx, module, "cf", "switch")[0];
+        let branch = operations_named(&ctx, module, crate::dialect::cf::Switch::NAME)[0];
         let successors = BranchOps::get(&ctx, branch)
             .expect("cf.switch must implement Branch")
             .successors(&ctx, branch)
@@ -2786,7 +2783,7 @@ mod tests {
 
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
-        let branches = operations_named(&ctx, module, "cf", "cond_br");
+        let branches = operations_named(&ctx, module, crate::dialect::cf::CondBr::NAME);
         assert_eq!(branches.len(), 1);
         let branch = branches[0];
         let successors = BranchOps::get(&ctx, branch)
@@ -2857,7 +2854,7 @@ mod tests {
 
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
-        let ifs = operations_named(&ctx, module, "scf", "if");
+        let ifs = operations_named(&ctx, module, crate::dialect::scf::If::NAME);
         assert_eq!(ifs.len(), 2);
         for if_op in ifs {
             let interface = RegionBranchOps::get(&ctx, if_op).unwrap();
@@ -2892,7 +2889,7 @@ mod tests {
 
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
-        let loops = operations_named(&ctx, module, "scf", "loop");
+        let loops = operations_named(&ctx, module, crate::dialect::scf::Loop::NAME);
         assert_eq!(loops.len(), 1);
         let loop_op = loops[0];
         let interface = RegionBranchOps::get(&ctx, loop_op).unwrap();
@@ -2903,7 +2900,7 @@ mod tests {
         let RegionSuccessor::Region(body) = entry.as_slice()[0] else {
             unreachable!()
         };
-        let continues = operations_named(&ctx, module, "scf", "continue");
+        let continues = operations_named(&ctx, module, crate::dialect::scf::Continue::NAME);
         assert_eq!(continues.len(), 1);
         let continue_op = continues[0];
         let backedge = RegionBranchOps::value_transfer(
@@ -2916,7 +2913,7 @@ mod tests {
         assert_eq!(backedge.forwarded.as_slice().len(), 1);
         assert_eq!(backedge.inputs.as_slice().len(), 1);
 
-        let breaks = operations_named(&ctx, module, "scf", "break");
+        let breaks = operations_named(&ctx, module, crate::dialect::scf::Break::NAME);
         assert_eq!(breaks.len(), 1);
         let break_op = breaks[0];
         let exit = RegionBranchOps::value_transfer(
@@ -2951,7 +2948,7 @@ mod tests {
 
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
-        let switches = operations_named(&ctx, module, "scf", "switch");
+        let switches = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME);
         assert_eq!(switches.len(), 1);
         let switch = switches[0];
         let interface = RegionBranchOps::get(&ctx, switch).unwrap();
@@ -2965,9 +2962,13 @@ mod tests {
                 .iter()
                 .all(|successor| matches!(successor, RegionSuccessor::Region(_)))
         );
-        for wrapper in operations_named(&ctx, module, "scf", "case")
+        for wrapper in operations_named(&ctx, module, crate::dialect::scf::Case::NAME)
             .into_iter()
-            .chain(operations_named(&ctx, module, "scf", "default"))
+            .chain(operations_named(
+                &ctx,
+                module,
+                crate::dialect::scf::Default::NAME,
+            ))
         {
             assert!(RegionBranchOps::get(&ctx, wrapper).is_some());
         }
@@ -3019,11 +3020,11 @@ mod tests {
                 .and_then(|region| ctx.region(region).parent_op)
         };
 
-        let if_op = operations_named(&ctx, module, "scf", "if")[0];
-        let switch = operations_named(&ctx, module, "scf", "switch")[0];
-        let case = operations_named(&ctx, module, "scf", "case")[0];
-        let default = operations_named(&ctx, module, "scf", "default")[0];
-        let yields = operations_named(&ctx, module, "scf", "yield");
+        let if_op = operations_named(&ctx, module, crate::dialect::scf::If::NAME)[0];
+        let switch = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME)[0];
+        let case = operations_named(&ctx, module, crate::dialect::scf::Case::NAME)[0];
+        let default = operations_named(&ctx, module, crate::dialect::scf::Default::NAME)[0];
+        let yields = operations_named(&ctx, module, crate::dialect::scf::Yield::NAME);
         let if_yield = *yields
             .iter()
             .find(|&&op| direct_owner(op) == Some(if_op))
@@ -3080,7 +3081,7 @@ mod tests {
             );
         }
 
-        let loops = operations_named(&ctx, module, "scf", "loop");
+        let loops = operations_named(&ctx, module, crate::dialect::scf::Loop::NAME);
         let result_loop = *loops
             .iter()
             .find(|&&op| !ctx.op_results(op).is_empty())
@@ -3105,7 +3106,7 @@ mod tests {
             unreachable!()
         };
 
-        let continues = operations_named(&ctx, module, "scf", "continue");
+        let continues = operations_named(&ctx, module, crate::dialect::scf::Continue::NAME);
         let continue_op = *continues
             .iter()
             .find(|&&op| direct_owner(op) == Some(result_loop))
@@ -3144,7 +3145,7 @@ mod tests {
                 .is_err()
         );
 
-        let breaks = operations_named(&ctx, module, "scf", "break");
+        let breaks = operations_named(&ctx, module, crate::dialect::scf::Break::NAME);
         let result_break = *breaks
             .iter()
             .find(|&&op| direct_owner(op) == Some(result_loop))
@@ -3185,7 +3186,7 @@ mod tests {
                 .contains("no enclosing scf.loop")
         );
 
-        let constant = operations_named(&ctx, module, "arith", "const")[0];
+        let constant = operations_named(&ctx, module, crate::dialect::arith::Const::NAME)[0];
         assert!(
             RegionBranchOps::value_transfer(
                 &ctx,
@@ -3270,15 +3271,15 @@ mod tests {
             );
         }
 
-        let branch = operations_named(&ctx, module, "cf", "br")[0];
-        let cond_branch = operations_named(&ctx, module, "cf", "cond_br")[0];
-        let if_op = operations_named(&ctx, module, "scf", "if")[0];
-        let switches = operations_named(&ctx, module, "scf", "switch");
-        let loop_op = operations_named(&ctx, module, "scf", "loop")[0];
-        let case = operations_named(&ctx, module, "scf", "case")[0];
-        let yield_op = operations_named(&ctx, module, "scf", "yield")[0];
-        let break_op = operations_named(&ctx, module, "scf", "break")[0];
-        let wrong_op = operations_named(&ctx, module, "func", "return")[0];
+        let branch = operations_named(&ctx, module, crate::dialect::cf::Br::NAME)[0];
+        let cond_branch = operations_named(&ctx, module, crate::dialect::cf::CondBr::NAME)[0];
+        let if_op = operations_named(&ctx, module, crate::dialect::scf::If::NAME)[0];
+        let switches = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME);
+        let loop_op = operations_named(&ctx, module, crate::dialect::scf::Loop::NAME)[0];
+        let case = operations_named(&ctx, module, crate::dialect::scf::Case::NAME)[0];
+        let yield_op = operations_named(&ctx, module, crate::dialect::scf::Yield::NAME)[0];
+        let break_op = operations_named(&ctx, module, crate::dialect::scf::Break::NAME)[0];
+        let wrong_op = operations_named(&ctx, module, crate::dialect::func::Return::NAME)[0];
 
         assert!(
             BranchOps::get(&ctx, branch)

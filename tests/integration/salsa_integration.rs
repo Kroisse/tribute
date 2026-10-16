@@ -10,7 +10,7 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use tribute_front::ast::{Decl, ExprKind, ModuleItem, NodeId};
 use tribute_ir::dialect::tribute_control;
 use trunk_ir::Span;
-use trunk_ir::dialect::arith;
+use trunk_ir::dialect::{arith, core};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::{Attribute, ValueDef};
 use trunk_ir::{IrContext, Module};
@@ -35,7 +35,7 @@ fn assert_source_signature(
     module: &Module,
     name: &str,
     arity: usize,
-    result: &str,
+    result: trunk_ir::TypeName,
 ) {
     let function = source_function(ctx, module, name);
     let signature = tribute_control::FuncSig::from_type_ref(ctx, function.r#type(ctx))
@@ -45,12 +45,9 @@ fn assert_source_signature(
         signature
             .inputs(ctx)
             .iter()
-            .all(|&ty| ctx.get_type(ty).name.is(ctx, "core.i32"))
+            .all(|&ty| core::I32::matches(ctx, ty))
     );
-    assert_eq!(
-        ctx.get_type(signature.result(ctx)).name.strip_dialect(ctx),
-        result
-    );
+    assert_eq!(ctx.get_type(signature.result(ctx)).name, result);
     let entry = ctx.region(function.body(ctx)).blocks[0];
     itertools::assert_equal(
         ctx.block_args(entry).iter().map(|&arg| ctx.value_ty(arg)),
@@ -130,9 +127,9 @@ fn main() -> Nil {
 
         for func_name in expected_funcs {
             let (arity, result) = if func_name == "factorial" {
-                (1, "i32")
+                (1, core::I32::NAME)
             } else {
-                (0, "nil")
+                (0, core::Nil::NAME)
             };
             assert_source_signature(&ctx, &module, func_name, arity, result);
         }
@@ -162,7 +159,7 @@ fn test_salsa_incremental_computation_detailed() {
     let tree = parser.parse(text, None).expect("tree");
     let source_file = SourceCst::from_path(&db, "incremental.trb", text.into(), Some(tree));
     let (ctx1, module1) = expect_compilation_success(&db, source_file);
-    assert_source_signature(&ctx1, &module1, "value", 0, "i32");
+    assert_source_signature(&ctx1, &module1, "value", 0, core::I32::NAME);
     assert_eq!(returned_constant(&ctx1, &module1, "value"), 3);
 
     let updated_text = "fn value() -> Nat { 10 } fn main() -> Nil {}";
@@ -170,11 +167,11 @@ fn test_salsa_incremental_computation_detailed() {
     source_file.set_text(&mut db).to(updated_text.into());
     source_file.set_tree(&mut db).to(Some(updated_tree));
     let (ctx2, module2) = expect_compilation_success(&db, source_file);
-    assert_source_signature(&ctx2, &module2, "value", 0, "i32");
+    assert_source_signature(&ctx2, &module2, "value", 0, core::I32::NAME);
     assert_eq!(returned_constant(&ctx2, &module2, "value"), 10);
 
     let (ctx3, module3) = expect_compilation_success(&db, source_file);
-    assert_source_signature(&ctx3, &module3, "value", 0, "i32");
+    assert_source_signature(&ctx3, &module3, "value", 0, core::I32::NAME);
     assert_eq!(returned_constant(&ctx3, &module3, "value"), 10);
     assert_eq!(
         returned_constant(&ctx2, &module2, "value"),
@@ -343,9 +340,9 @@ fn main() ->{std::io::Io} Nil { std::io::print_line("test") }
     let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
     let (ctx, module) = expect_compilation_success(db, source);
 
-    assert_source_signature(&ctx, &module, "add", 2, "i32");
-    assert_source_signature(&ctx, &module, "multiply", 2, "i32");
-    assert_source_signature(&ctx, &module, "main", 0, "nil");
+    assert_source_signature(&ctx, &module, "add", 2, core::I32::NAME);
+    assert_source_signature(&ctx, &module, "multiply", 2, core::I32::NAME);
+    assert_source_signature(&ctx, &module, "main", 0, core::Nil::NAME);
 }
 
 #[test]
@@ -391,5 +388,5 @@ fn test_function_lowering(db: &salsa::DatabaseImpl) {
     let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
     let (ctx, module) = expect_compilation_success(db, source_file);
 
-    assert_source_signature(&ctx, &module, "main", 0, "nil");
+    assert_source_signature(&ctx, &module, "main", 0, core::Nil::NAME);
 }

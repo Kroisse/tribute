@@ -232,13 +232,10 @@ fn materialize_result_noop(
 
 /// Helper: Check if a type is an ADT type that maps to ptr in the native backend.
 fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    if data.name.dialect(ctx) != "adt" {
-        return false;
-    }
     // struct, enum, typeref, variant instance
-    matches!(data.name.strip_dialect(ctx), "typeref" | "struct" | "enum")
-        || ctx.type_attrs(ty).get_bool("is_variant") == Some(true)
+    tribute_ir::dialect::adt::is_nominal(ctx, ty)
+        || (ctx.get_type(ty).name.dialect(ctx) == "adt"
+            && ctx.type_attrs(ty).get_bool("is_variant") == Some(true))
 }
 
 /// Helper: Check if a type is closure.closure.

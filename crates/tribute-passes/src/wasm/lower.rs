@@ -249,10 +249,7 @@ fn check_all_wasm_dialect(ctx: &IrContext, module: Module) {
     };
     for &block in ctx.region(body).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
-            let data = ctx.op(op);
-            if data.name.dialect(ctx) == wasm_dialect::DIALECT_NAME
-                && data.name.strip_dialect(ctx) == "func"
-            {
+            if wasm_dialect::Func::matches(ctx, op) {
                 check_function_body(ctx, op);
             }
         }
@@ -266,11 +263,8 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
     };
     for &block in ctx.region(body).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
-            let data = ctx.op(op);
             // Check for func.func or wasm.func operations
-            if data.name.dialect(ctx) == func::DIALECT_NAME
-                && data.name.strip_dialect(ctx) == "func"
-            {
+            if func::Func::matches(ctx, op) {
                 if let Some(fn_ty) = ctx.op_attrs(op).get_type("type") {
                     let Some(function) = func::FuncSig::from_type_ref(ctx, fn_ty) else {
                         continue;
@@ -286,8 +280,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                     let sym_name = ctx.op_attrs(op).get_str("sym_name").unwrap_or_default();
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
                 }
-            } else if data.name.dialect(ctx) == wasm_dialect::DIALECT_NAME
-                && data.name.strip_dialect(ctx) == "func"
+            } else if wasm_dialect::Func::matches(ctx, op)
                 && let Some(fn_ty) = ctx.op_attrs(op).get_type("type")
             {
                 let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty) else {
@@ -400,11 +393,11 @@ impl WasmLowerer {
 
                 if data.name.dialect(ctx) == wasm_dialect::DIALECT_NAME {
                     // Track wasm module-level metadata
-                    if data.name.strip_dialect(ctx) == "memory" {
+                    if wasm_dialect::Memory::matches(ctx, op) {
                         self.memory_plan.has_memory = true;
-                    } else if data.name.strip_dialect(ctx) == "export_memory" {
+                    } else if wasm_dialect::ExportMemory::matches(ctx, op) {
                         self.memory_plan.has_exported_memory = true;
-                    } else if data.name.strip_dialect(ctx) == "func" {
+                    } else if wasm_dialect::Func::matches(ctx, op) {
                         self.scan_wasm_func(ctx, op);
                     }
                 }

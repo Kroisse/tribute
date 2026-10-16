@@ -55,9 +55,9 @@ impl RewritePattern for ReferenceUpcastElisionPattern {
 }
 
 fn is_abstract_gc_reference(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.name.dialect(ctx) == "wasm"
-        && ["anyref", "structref", "arrayref"].contains(&data.name.strip_dialect(ctx))
+    use trunk_ir::dialect::wasm::{Anyref, Arrayref, Structref};
+    use trunk_ir::ops::DialectType;
+    [Anyref::NAME, Structref::NAME, Arrayref::NAME].contains(&ctx.get_type(ty).name)
 }
 
 #[cfg(test)]

@@ -318,9 +318,9 @@ fn is_typed_managed_reference(
     }
     let data = ctx.get_type(ty);
     (data.name == tribute_ir::dialect::adt::Typeref::NAME)
-        || (data.name.dialect(ctx) == "tribute_rt"
-            && (matches!(data.name.strip_dialect(ctx), "anyref" | "intref")))
-        || (data.name.is(ctx, "core.bytes"))
+        || tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty)
+        || tribute_ir::dialect::tribute_rt::Intref::matches(ctx, ty)
+        || trunk_ir::dialect::core::Bytes::matches(ctx, ty)
         || tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
 }
 
@@ -528,9 +528,8 @@ impl ManagedLayoutCollector {
     }
 
     fn index_nominal_layout(&mut self, ctx: &IrContext, ty: TypeRef) {
-        let data = ctx.get_type(ty);
-        if data.name.dialect(ctx) == "adt"
-            && (matches!(data.name.strip_dialect(ctx), "struct" | "enum"))
+        if (tribute_ir::dialect::adt::Struct::matches(ctx, ty)
+            || tribute_ir::dialect::adt::Enum::matches(ctx, ty))
             && let Some(name) = ctx.type_attrs(ty).get_string_ref("name")
         {
             let layouts = self.nominal_layouts.entry(name).or_default();
@@ -546,8 +545,8 @@ impl ManagedLayoutCollector {
         }
         let data = ctx.get_type(ty);
         self.index_nominal_layout(ctx, ty);
-        if (data.name.dialect(ctx) == "adt")
-            && (matches!(data.name.strip_dialect(ctx), "struct" | "enum"))
+        if tribute_ir::dialect::adt::Struct::matches(ctx, ty)
+            || tribute_ir::dialect::adt::Enum::matches(ctx, ty)
         {
             self.layouts.insert(ty);
         }
@@ -624,9 +623,8 @@ fn build_field_kinds(
 /// [`is_typed_managed_reference`], so release and ownership agree.
 fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) -> FieldKind {
     if is_typed_managed_reference(ctx, ty, managed_layouts) {
-        let data = ctx.get_type(ty);
-        let dynamic = data.name.dialect(ctx) == "tribute_rt"
-            && (matches!(data.name.strip_dialect(ctx), "anyref" | "intref"));
+        let dynamic = tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty)
+            || tribute_ir::dialect::tribute_rt::Intref::matches(ctx, ty);
         return if dynamic {
             FieldKind::Dynamic
         } else {

@@ -1199,7 +1199,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
         .expect("ability.perform resume has a function signature");
     assert_eq!(erased.inputs(&ctx).len(), 3);
     assert!(
-        type_is(&ctx, erased.inputs(&ctx)[2], "tribute_rt", "anyref"),
+        tribute_ir::dialect::tribute_rt::Anyref::matches(&ctx, erased.inputs(&ctx)[2]),
         "ability.perform must receive Resume<anyref, R>, not the exact continuation: {}",
         print_module(&ctx, module.op())
     );
@@ -1213,7 +1213,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
                 .and_then(|function| func::FuncSig::from_type_ref(&ctx, function))
                 .is_some_and(|function| {
                     function.inputs(&ctx).len() == 3
-                        && type_is(&ctx, function.inputs(&ctx)[2], "core", "i32")
+                        && trunk_ir::dialect::core::I32::matches(&ctx, function.inputs(&ctx)[2])
                 })
         }),
         "the erased adapter must capture the declared ResumeExact<I, R>: {}",
@@ -2185,12 +2185,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
         .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
         .expect("reject continuation has a CPS callable signature");
     assert!(
-        type_is(
-            &ctx,
-            resume_signature.inputs(&ctx)[2],
-            "tribute_rt",
-            "anyref"
-        ),
+        tribute_ir::dialect::tribute_rt::Anyref::matches(&ctx, resume_signature.inputs(&ctx)[2]),
         "reject continuation must accept the canonical erased resume input"
     );
     let trunk_ir::ValueDef::OpResult(reject, _) = ctx.value_def(resume) else {

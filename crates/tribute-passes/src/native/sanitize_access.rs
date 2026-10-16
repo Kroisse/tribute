@@ -76,22 +76,23 @@ fn access_of(ctx: &IrContext, op: OpRef) -> Option<Access> {
 
 /// Bytes an access of `ty` touches on the supported 64-bit native targets.
 fn access_width(ctx: &IrContext, ty: TypeRef) -> Result<i64, String> {
-    let data = ctx.get_type(ty);
-    if data.name.dialect(ctx) == "core" {
-        let width = {
-            let name = data.name.strip_dialect(ctx);
-            match name {
-                "nil" => Some(0),
-                "i1" | "i8" => Some(1),
-                "i16" => Some(2),
-                "i32" | "f32" => Some(4),
-                "i64" | "f64" | "ptr" => Some(8),
-                _ => None,
-            }
-        };
-        if let Some(width) = width {
-            return Ok(width);
-        }
+    use trunk_ir::dialect::core::{F32, F64, I1, I8, I16, I32, I64, Nil, Ptr};
+    use trunk_ir::ops::DialectType;
+
+    let name = ctx.get_type(ty).name;
+    let widths = [
+        (Nil::NAME, 0),
+        (I1::NAME, 1),
+        (I8::NAME, 1),
+        (I16::NAME, 2),
+        (I32::NAME, 4),
+        (F32::NAME, 4),
+        (I64::NAME, 8),
+        (F64::NAME, 8),
+        (Ptr::NAME, 8),
+    ];
+    if let Some(&(_, width)) = widths.iter().find(|(type_name, _)| *type_name == name) {
+        return Ok(width);
     }
     Err(format!("memory access of type {ty} has no known width"))
 }

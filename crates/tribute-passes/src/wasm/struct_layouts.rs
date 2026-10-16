@@ -22,6 +22,7 @@ use trunk_ir::rewrite::Module;
 use super::descriptors::has_descriptor_field;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm;
+use trunk_ir::ops::DialectType;
 
 /// The `wasm_gc.struct` of the user struct layout `ty`, or `None` when `ty`
 /// is not a user `adt.struct`.
@@ -87,16 +88,14 @@ fn described_struct(ctx: &mut IrContext, fields: impl IntoIterator<Item = TypeRe
 /// type.
 fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
-    if data.name.is(ctx, "core.i1") {
+    if data.name == core::I1::NAME {
         return core::I32::type_ref(ctx);
     }
-    if data.name.dialect(ctx) == "adt" {
-        if data.name.strip_dialect(ctx) == "typeref" {
-            return wasm::structref(ctx).as_type_ref();
-        }
-        if data.name.strip_dialect(ctx) == "enum" {
-            return wasm::anyref(ctx).as_type_ref();
-        }
+    if data.name == tribute_ir::dialect::adt::Typeref::NAME {
+        return wasm::structref(ctx).as_type_ref();
+    }
+    if tribute_ir::dialect::adt::Enum::matches(ctx, ty) {
+        return wasm::anyref(ctx).as_type_ref();
     }
     struct_type(ctx, ty).unwrap_or(ty)
 }
