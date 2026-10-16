@@ -228,7 +228,7 @@ fn validate_clif_function(
     let name = qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::new([function.sym_name(ctx)]));
     let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
         .expect("schema-verified clif.func_sig");
-    let has_abi = ctx.op(op).attributes.contains_key(ctx, "abi");
+    let has_abi = ctx.op_attrs(op).contains_key("abi");
     // External callers of foreign bindings and the exported entry point use
     // the platform convention.
     if signature.call_conv(ctx) == Some(func::CallConv::Tail)
@@ -335,7 +335,7 @@ fn validate_clif_region(
 
             let operands = ctx.op_operands(op);
             if clif::Call::matches(ctx, op) {
-                let Some(name) = ctx.op(op).attributes.get_symbol_ref(ctx, "callee") else {
+                let Some(name) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                     errors.push("clif.call requires a symbol callee".into());
                     continue;
                 };
@@ -367,7 +367,7 @@ fn validate_clif_region(
                     errors.push("clif.return_call requires a nearest clif.func owner".into());
                     continue;
                 };
-                let Some(callee) = ctx.op(op).attributes.get_symbol_ref(ctx, "callee") else {
+                let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                     errors.push("clif.return_call requires a symbol callee".into());
                     continue;
                 };

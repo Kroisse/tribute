@@ -552,9 +552,8 @@ impl CallableExitModel for TailCall {
         ctx: &crate::IrContext,
     ) -> Result<(), ControlFlowInterfaceError> {
         if ctx
-            .op(self.op_ref())
-            .attributes
-            .get_symbol_ref(ctx, "callee")
+            .op_attrs(self.op_ref())
+            .get_symbol_ref("callee")
             .is_some()
         {
             Ok(())
@@ -576,7 +575,7 @@ impl CallableExitModel for TailCallIndirect {
                 "func.tail_call_indirect CallableExit requires a callee operand",
             ));
         }
-        match ctx.op(self.op_ref()).attributes.get(ctx, "signature") {
+        match ctx.op_attrs(self.op_ref()).get("signature") {
             None => Ok(()),
             Some(Attribute::Type(signature))
                 if FuncSig::from_type_ref(ctx, *signature).is_some() =>
@@ -649,7 +648,7 @@ pub fn set_indirect_call_signature(
     {
         return false;
     }
-    ctx.set_attr(
+    ctx.set_op_attr(
         op,
         INDIRECT_CALL_SIGNATURE_ATTR,
         crate::Attribute::Type(signature),
@@ -660,9 +659,8 @@ pub fn set_indirect_call_signature(
 /// Read the exact signature without assuming the operation passed its schema;
 /// interface queries must fail closed on malformed IR.
 fn indirect_call_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<crate::TypeRef> {
-    ctx.op(op)
-        .attributes
-        .get_type(ctx, INDIRECT_CALL_SIGNATURE_ATTR)
+    ctx.op_attrs(op)
+        .get_type(INDIRECT_CALL_SIGNATURE_ATTR)
         .filter(|&ty| FuncSig::from_type_ref(ctx, ty).is_some())
 }
 
@@ -697,10 +695,7 @@ fn print_func(
     // Extract sym_name before mutable operations
     let sym_name = {
         let ctx = h.ctx();
-        ctx.op(op)
-            .attributes
-            .get_str(ctx, "sym_name")
-            .map(str::to_owned)
+        ctx.op_attrs(op).get_str("sym_name").map(str::to_owned)
     };
 
     write!(h, "{indent_str}func.func")?;
@@ -882,9 +877,8 @@ inventory::submit! {
 
 impl crate::op_interface::CallableOwnerModel for Func {
     fn callable_signature(self, ctx: &crate::IrContext) -> Option<crate::dialect::func::FuncSig> {
-        ctx.op(self.op_ref())
-            .attributes
-            .get_type(ctx, "type")
+        ctx.op_attrs(self.op_ref())
+            .get_type("type")
             .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(ctx, ty))
     }
 }
@@ -1102,7 +1096,7 @@ mod tests {
         );
         let function = Func::from_op(&ctx, module.ops(&ctx)[0]).expect("tail function");
         let tail = ctx.block(ctx.region(function.body(&ctx)).blocks[0]).ops[0];
-        ctx.set_attr(tail, "signature", Attribute::Int(0));
+        ctx.set_op_attr(tail, "signature", Attribute::Int(0));
 
         assert!(CallableExitOps::exits_callable(&ctx, tail).is_err());
     }
@@ -1133,8 +1127,8 @@ mod result_list_tests {
                     let a = Module::new(&ctx, op).unwrap().ops(&ctx)[0];
                     let b = Module::new(&ctx, copy).unwrap().ops(&ctx)[0];
                     assert_eq!(
-                        ctx.op(a).attributes.get_type(&ctx, "type"),
-                        ctx.op(b).attributes.get_type(&ctx, "type")
+                        ctx.op_attrs(a).get_type("type"),
+                        ctx.op_attrs(b).get_type("type")
                     );
                     assert_eq!(print_module(&ctx, copy), printed);
                 }
@@ -1152,8 +1146,8 @@ mod result_list_tests {
             let a = Module::new(&ctx, op).unwrap().ops(&ctx)[0];
             let b = Module::new(&ctx, copy).unwrap().ops(&ctx)[0];
             assert_eq!(
-                ctx.op(a).attributes.get_type(&ctx, "type"),
-                ctx.op(b).attributes.get_type(&ctx, "type")
+                ctx.op_attrs(a).get_type("type"),
+                ctx.op_attrs(b).get_type("type")
             );
         }
         let mut ctx = IrContext::new();

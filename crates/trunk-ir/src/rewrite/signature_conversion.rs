@@ -174,7 +174,7 @@ pub fn rewrite_function_signature(
 
     // Create replacement op with new type
     let new_op = make_op(ctx, new_func_type, body);
-    ctx.extend_attrs(new_op, attrs_to_preserve);
+    ctx.extend_op_attrs(new_op, attrs_to_preserve);
 
     rewriter.replace_op(new_op);
     true
@@ -624,16 +624,13 @@ mod result_list_tests {
         let nil = core::nil(&mut ctx).as_type_ref();
         let ptr = core::ptr(&mut ctx).as_type_ref();
         let bad_signature = func::func_sig(&mut ctx, [nil, nil], []).as_type_ref();
-        ctx.set_attr(op, "type", Attribute::Type(bad_signature));
+        ctx.set_op_attr(op, "type", Attribute::Type(bad_signature));
         let before = crate::printer::print_module(&ctx, module.op());
         let mut converter = TypeConverter::new();
         converter.add_conversion(move |_, ty| (ty == nil).then_some(ptr));
         let mut rewriter = PatternRewriter::new(&converter);
         assert!(!FuncSignatureConversionPattern.match_and_rewrite(&mut ctx, op, &mut rewriter));
-        assert_eq!(
-            ctx.op(op).attributes.get_type(&ctx, "type"),
-            Some(bad_signature)
-        );
+        assert_eq!(ctx.op_attrs(op).get_type("type"), Some(bad_signature));
         let entry = ctx.region(function.body(&ctx)).blocks[0];
         assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), nil);
         assert_eq!(crate::printer::print_module(&ctx, module.op()), before);

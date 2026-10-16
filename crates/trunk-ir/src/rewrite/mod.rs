@@ -73,9 +73,8 @@ impl Module {
 
     /// Get the module name (from `sym_name` attribute).
     pub fn name(self, ctx: &IrContext) -> Option<crate::symbol::Symbol> {
-        ctx.op(self.0)
-            .attributes
-            .get_str(ctx, "sym_name")
+        ctx.op_attrs(self.0)
+            .get_str("sym_name")
             .map(crate::symbol::Symbol::new)
     }
 

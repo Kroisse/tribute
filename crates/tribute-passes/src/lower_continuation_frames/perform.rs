@@ -207,12 +207,8 @@ impl ExpandDispatches {
     ) -> Option<()> {
         let location = ctx.op(op).location;
         let evidence = ctx.op_operands(op)[0];
-        let ability = ctx
-            .op(op)
-            .attributes
-            .get_symbol_ref(ctx, "ability")?
-            .clone();
-        let op_name = ctx.op(op).attributes.get_string_ref(ctx, "op_name")?;
+        let ability = ctx.op_attrs(op).get_symbol_ref("ability")?.clone();
+        let op_name = ctx.op_attrs(op).get_string_ref("op_name")?;
         let types = self.frames.of(ctx, ctx.value_ty(frame))?;
         let block = make_block(ctx, location, &[]);
         let resume = match resumption {

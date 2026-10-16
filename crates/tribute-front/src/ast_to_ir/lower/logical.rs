@@ -156,7 +156,7 @@ fn attach_evidence_plan<'db>(
         .map(|step| lower_evidence_step(ctx, step, declarations))
         .collect();
     if let Some(plan) = tribute_control::EvidenceStep::plan_attribute(ir, steps) {
-        ir.set_attr(op, tribute_control::EVIDENCE_PLAN_ATTR, plan);
+        ir.set_op_attr(op, tribute_control::EVIDENCE_PLAN_ATTR, plan);
     }
 }
 
@@ -1142,7 +1142,7 @@ fn lower_extern<'db>(
     let function = tribute_control::func_declaration(ir, location, &name, callable);
     if let Some(identity) = ctx.compiler_intrinsic(decl.id) {
         let identity_text = ir.intern_symbol_text(&identity);
-        ir.set_attr(
+        ir.set_op_attr(
             function.op_ref(),
             tribute_control::COMPILER_INTRINSIC_ATTR,
             Attribute::String(identity_text),
@@ -1159,12 +1159,12 @@ fn lower_extern<'db>(
             .sort_by_key(|declaration| (declaration.symbol.clone(), declaration.identity.clone()));
     }
     let abi = decl.abi.with_str(|abi| ir.string_attr(abi));
-    ir.set_attr(function.op_ref(), "abi", abi);
+    ir.set_op_attr(function.op_ref(), "abi", abi);
     // C linkage has one flat namespace: the declaration links under its
     // declared name, wherever it is declared.
     if decl.abi == "C" {
         let link_name = ir.intern_symbol_text(&decl.name);
-        ir.set_attr(
+        ir.set_op_attr(
             function.op_ref(),
             trunk_ir::symbol_table::LINK_NAME,
             Attribute::String(link_name),

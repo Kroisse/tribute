@@ -62,8 +62,7 @@ impl Pass for LowerListIntrinsics {
                 .all
                 .insert(SymbolPath::new([name.clone()]));
             if is_prepend_intrinsic(&SymbolPath::new([name.clone()]))
-                && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
-                    == Some(PREPEND_INTRINSIC)
+                && ctx.op_attrs(op).get_str(COMPILER_INTRINSIC_ATTR) == Some(PREPEND_INTRINSIC)
                 && {
                     func::FuncSig::from_type_ref(ctx, function.r#type(ctx)).is_some_and(
                         |signature| {
@@ -78,7 +77,7 @@ impl Pass for LowerListIntrinsics {
                         // signature intact for a specialized generic intrinsic;
                         // this target-neutral lowering only needs its callable
                         // arity and must not recreate trust from the symbol.
-                        && ctx.op(op).attributes.get_str(ctx, "abi") == Some("intrinsic")
+                        && ctx.op_attrs(op).get_str("abi") == Some("intrinsic")
                 }
             {
                 intrinsic_declarations

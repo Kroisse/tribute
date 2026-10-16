@@ -239,7 +239,7 @@ impl Converter<'_> {
             .attributes
             .get_string_ref(self.ctx, "op_name")
             .unwrap();
-        let general = self.ctx.op(source).attributes.get_str(self.ctx, "kind") == Some("op");
+        let general = self.ctx.op_attrs(source).get_str("kind") == Some("op");
         let operation_result = self
             .ctx
             .op(source)

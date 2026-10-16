@@ -370,10 +370,7 @@ fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
             return None;
         }
         if scf::Case::matches(ctx, arm) {
-            cases.push((
-                ctx.op(arm).attributes.get(ctx, "value")?.clone(),
-                arm_region,
-            ));
+            cases.push((ctx.op_attrs(arm).get("value")?.clone(), arm_region));
         } else if scf::Default::matches(ctx, arm) {
             if default_region.replace(arm_region).is_some() {
                 return None;

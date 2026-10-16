@@ -42,7 +42,7 @@ pub fn provides(name: &Symbol) -> bool {
 
 /// Whether `op` is a bodyless `abi = "C"` declaration.
 pub fn is_c_declaration(ctx: &IrContext, op: OpRef) -> bool {
-    !ctx.op_has_regions(op) && ctx.op(op).attributes.get_str(ctx, "abi") == Some("C")
+    !ctx.op_has_regions(op) && ctx.op_attrs(op).get_str("abi") == Some("C")
 }
 
 /// The C link name of the declaration the reference `callee`, held by `op`,

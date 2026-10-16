@@ -474,9 +474,8 @@ fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationE
     use crate::ops::DialectOp;
     if func::Func::matches(ctx, op) {
         let Some(signature) = ctx
-            .op(op)
-            .attributes
-            .get_type(ctx, "type")
+            .op_attrs(op)
+            .get_type("type")
             .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
         else {
             errors.push(operation_verifier_error(
@@ -628,9 +627,8 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
             return Some(None);
         }
         Some(
-            ctx.op(found)
-                .attributes
-                .get_type(ctx, "type")
+            ctx.op_attrs(found)
+                .get_type("type")
                 .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty)),
         )
     };
@@ -673,7 +671,7 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
             }
             let operands = ctx.op_operands(op);
             let (signature, args) = if direct {
-                let Some(name) = ctx.op(op).attributes.get_symbol_ref(ctx, "callee") else {
+                let Some(name) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                     return;
                 };
                 let Some(signature) = resolve(op, name) else {
@@ -693,9 +691,8 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
                     return;
                 };
                 let signature = ctx
-                    .op(op)
-                    .attributes
-                    .get_type(ctx, "signature")
+                    .op_attrs(op)
+                    .get_type("signature")
                     .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
                     .or_else(|| typed_callee_signature(ctx, callee));
                 let Some(signature) = signature else {
@@ -1187,7 +1184,7 @@ fn parameter_count(ctx: &IrContext, op: OpRef) -> Option<usize> {
     if !is_arity_checked_function(ctx, op) {
         return None;
     }
-    let func_ty = ctx.op(op).attributes.get_type(ctx, "type")?;
+    let func_ty = ctx.op_attrs(op).get_type("type")?;
     let func_ty = crate::dialect::func::FuncSig::from_type_ref(ctx, func_ty)?;
     Some(func_ty.inputs(ctx).len())
 }
@@ -1274,7 +1271,7 @@ pub fn link_name_conflicts(ctx: &IrContext, module: Module) -> Vec<String> {
     let mut errors = Vec::new();
     let _ = walk::walk_op::<()>(ctx, module.op(), &mut |op| {
         if !ctx.op_has_regions(op)
-            && let Some(ty) = ctx.op(op).attributes.get_type(ctx, "type")
+            && let Some(ty) = ctx.op_attrs(op).get_type("type")
             && let Some(name) = link_name(ctx, op)
             && let Some(path) = qualified_name(ctx, op)
         {
@@ -1403,7 +1400,7 @@ mod tests {
             &mut ctx,
             "core.module @m { func.func @f() { func.return } }",
         );
-        ctx.remove_attr(module.op(), "sym_name");
+        ctx.remove_op_attr(module.op(), "sym_name");
         let text = validate_all(&ctx, module, &mut Default::default()).to_string();
         assert!(
             text.contains("core.module") && text.contains("missing required attribute `sym_name`"),
@@ -3684,7 +3681,7 @@ mod tests {
         assert!(validate_operation_verifiers(&ctx, module).is_ok());
 
         let attribute = Attribute::List(vec![Attribute::SymbolRef(SymbolPath::root())]);
-        ctx.set_attr(module.op(), "referenced", attribute);
+        ctx.set_op_attr(module.op(), "referenced", attribute);
         let verifiers = validate_operation_verifiers(&ctx, module);
         assert_eq!(
             operation_error_messages(&verifiers)

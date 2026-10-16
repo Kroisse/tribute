@@ -247,11 +247,7 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> HelperRequir
 
 fn has_function(ctx: &IrContext, module: Module, name: &'static str) -> bool {
     module.ops(ctx).iter().copied().any(|op| {
-        ctx.op(op)
-            .attributes
-            .get_str(ctx, "sym_name")
-            .map(Symbol::new)
-            == Some(Symbol::new(name))
+        ctx.op_attrs(op).get_str("sym_name").map(Symbol::new) == Some(Symbol::new(name))
             && (func::Func::matches(ctx, op) || wasm_dialect::Func::matches(ctx, op))
     })
 }

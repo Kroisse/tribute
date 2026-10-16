@@ -13,13 +13,13 @@ pub struct WellKnownTypes {
 impl WellKnownTypes {
     pub fn from_module(ctx: &IrContext, module: OpRef) -> Self {
         Self {
-            string: ctx.op(module).attributes.get_type(ctx, STRING_TYPE_ATTR),
+            string: ctx.op_attrs(module).get_type(STRING_TYPE_ATTR),
         }
     }
 
     pub fn attach(self, ctx: &mut IrContext, module: OpRef) {
         if let Some(string) = self.string {
-            ctx.set_attr(module, STRING_TYPE_ATTR, Attribute::Type(string));
+            ctx.set_op_attr(module, STRING_TYPE_ATTR, Attribute::Type(string));
         }
     }
 }

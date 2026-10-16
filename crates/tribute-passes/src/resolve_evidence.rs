@@ -245,7 +245,7 @@ fn take_evidence_plan(
     ctx: &mut IrContext,
     op: OpRef,
 ) -> Result<Vec<EvidenceStep>, ResolveEvidenceError> {
-    let Some(plan) = ctx.remove_attr(op, EVIDENCE_PLAN_ATTR) else {
+    let Some(plan) = ctx.remove_op_attr(op, EVIDENCE_PLAN_ATTR) else {
         return Ok(Vec::new());
     };
     let Attribute::List(items) = plan else {
@@ -351,7 +351,7 @@ fn resolve_call_selection(
     block: BlockRef,
     op: OpRef,
 ) -> Result<(), ResolveEvidenceError> {
-    if !ctx.op(op).attributes.contains_key(ctx, EVIDENCE_PLAN_ATTR) {
+    if !ctx.op_attrs(op).contains_key(EVIDENCE_PLAN_ATTR) {
         return Ok(());
     }
     let Some(index) = call_evidence_operand(ctx, op) else {
@@ -510,11 +510,7 @@ mod tests {
         for name in [ability::evidence_abi::LOOKUP, ability::evidence_abi::EXTEND] {
             assert!(
                 module.ops(&ctx).iter().copied().all(|op| {
-                    ctx.op(op)
-                        .attributes
-                        .get_str(&ctx, "sym_name")
-                        .map(Symbol::new)
-                        != Some(Symbol::new(name))
+                    ctx.op_attrs(op).get_str("sym_name").map(Symbol::new) != Some(Symbol::new(name))
                 }),
                 "shared resolution must not fabricate target helper {name}"
             );
@@ -678,10 +674,7 @@ mod tests {
             .iter()
             .copied()
             .find(|&op| {
-                ctx.op(op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
+                ctx.op_attrs(op).get_str("sym_name").map(Symbol::new)
                     == Some(Symbol::new("__tribute_next_tag"))
             })
             .expect("runtime tag declaration");
@@ -689,7 +682,7 @@ mod tests {
             trunk_ir::callable::classify_callable_body(&ctx, next_tag),
             Ok(trunk_ir::callable::CallableBody::Declaration)
         );
-        assert_eq!(ctx.op(next_tag).attributes.get_str(&ctx, "abi"), Some("C"));
+        assert_eq!(ctx.op_attrs(next_tag).get_str("abi"), Some("C"));
         assert_eq!(resolved.matches("func.call").count(), 1, "{resolved}");
     }
 
@@ -870,11 +863,7 @@ mod tests {
             .iter()
             .copied()
             .find(|&op| {
-                ctx.op(op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
-                    == Some(Symbol::new("body"))
+                ctx.op_attrs(op).get_str("sym_name").map(Symbol::new) == Some(Symbol::new("body"))
             })
             .unwrap();
         let entry = ctx.region(ctx.op_region(body, 0).unwrap()).blocks[0];

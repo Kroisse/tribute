@@ -1698,12 +1698,9 @@ core.module @test {
         let function = ctx
             .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
+        assert_eq!(ctx.op_attrs(function).get_str("sym_name"), Some("generic"));
         assert_eq!(
-            ctx.op(function).attributes.get_str(&ctx, "sym_name"),
-            Some("generic")
-        );
-        assert_eq!(
-            ctx.op(function).attributes.get_type(&ctx, "type"),
+            ctx.op_attrs(function).get_type("type"),
             ctx.type_alias_by_text("signature")
         );
     }
@@ -1718,7 +1715,7 @@ core.module @test {
         let function = ctx
             .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
-        let signature = ctx.op(function).attributes.get_type(&ctx, "type").unwrap();
+        let signature = ctx.op_attrs(function).get_type("type").unwrap();
         assert!(func::FuncSig::from_type_ref(&ctx, signature).is_some());
         assert!(crate::dialect::wasm::FuncSig::from_type_ref(&ctx, signature).is_none());
         assert!(
@@ -1743,7 +1740,7 @@ core.module @test {
         let function = ctx
             .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
-        let signature = ctx.op(function).attributes.get_type(&ctx, "type").unwrap();
+        let signature = ctx.op_attrs(function).get_type("type").unwrap();
         assert!(clif::FuncSig::from_type_ref(&ctx, signature).is_some());
         assert!(func::FuncSig::from_type_ref(&ctx, signature).is_none());
         assert_roundtrip(&ctx, module);

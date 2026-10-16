@@ -402,9 +402,8 @@ pub fn build_native_ownership_plan(
 fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, OwnershipPlanError> {
     classify_callable_body(ctx, op).map_err(|error| {
         let symbol = ctx
-            .op(op)
-            .attributes
-            .get_str(ctx, "sym_name")
+            .op_attrs(op)
+            .get_str("sym_name")
             .map(Symbol::new)
             .map(|name| format!("@{name}"))
             .unwrap_or_else(|| "<unnamed>".into());
@@ -643,9 +642,8 @@ fn validate_function_contract(
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<(), OwnershipPlanError> {
     let signature = ctx
-        .op(function_op)
-        .attributes
-        .get_type(ctx, "type")
+        .op_attrs(function_op)
+        .get_type("type")
         .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
         .ok_or_else(|| OwnershipPlanError::new("defined function lacks exact signature"))?;
     let entry_args = ctx.block_args(cfg.entry());

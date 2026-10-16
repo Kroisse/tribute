@@ -408,8 +408,13 @@ impl IrContext {
         symbol.with_str(|text| self.intern_str(text))
     }
 
+    /// The attributes of `op`, read through this context.
+    pub fn op_attrs(&self, op: OpRef) -> AttributeView<'_> {
+        self.ops[op].attributes.view(self)
+    }
+
     /// Set an attribute of `op`, returning the value it replaces.
-    pub fn set_attr(
+    pub fn set_op_attr(
         &mut self,
         op: OpRef,
         key: impl Into<StringArg>,
@@ -423,7 +428,7 @@ impl IrContext {
 
     /// Set every attribute in `entries` on `op`; later entries replace
     /// earlier ones with the same key.
-    pub fn extend_attrs<K: Into<StringArg>, V: Into<Attribute>>(
+    pub fn extend_op_attrs<K: Into<StringArg>, V: Into<Attribute>>(
         &mut self,
         op: OpRef,
         entries: impl IntoIterator<Item = (K, V)>,
@@ -449,7 +454,7 @@ impl IrContext {
     }
 
     /// Remove an attribute of `op`, returning its value.
-    pub fn remove_attr(&mut self, op: OpRef, key: impl AttributeKey) -> Option<Attribute> {
+    pub fn remove_op_attr(&mut self, op: OpRef, key: impl AttributeKey) -> Option<Attribute> {
         self.bump_revision();
         self.ops[op].attributes.remove(&self.strings, key)
     }
@@ -1705,10 +1710,7 @@ mod tests {
         assert_eq!(ctx.op(op).dialect, Symbol::new("arith"));
         assert_eq!(ctx.op(op).name, Symbol::new("const"));
         assert_eq!(ctx.op_result_types(op), &[i32_ty]);
-        assert_eq!(
-            ctx.op(op).attributes.get(&ctx, "value"),
-            Some(&Attribute::Int(42))
-        );
+        assert_eq!(ctx.op_attrs(op).get("value"), Some(&Attribute::Int(42)));
     }
 
     #[test]
@@ -2264,12 +2266,7 @@ mod tests {
         let cloned_region = ctx.clone_region(body_region, &mut mapping);
 
         // Build a new func.func with the cloned region
-        let func_ty = ctx
-            .op(func_op)
-            .attributes
-            .get(&ctx, "type")
-            .cloned()
-            .unwrap();
+        let func_ty = ctx.op_attrs(func_op).get("type").cloned().unwrap();
         let new_func = OperationDataBuilder::new(
             ctx.op(func_op).location,
             Symbol::new("func"),

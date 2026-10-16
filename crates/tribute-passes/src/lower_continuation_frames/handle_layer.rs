@@ -805,9 +805,8 @@ impl ExpandHandles {
             frames,
             completion_type: ctx.value_ty(completion),
             plan: ctx
-                .op(op)
-                .attributes
-                .get(ctx, tribute_control::EVIDENCE_PLAN_ATTR)
+                .op_attrs(op)
+                .get(tribute_control::EVIDENCE_PLAN_ATTR)
                 .cloned(),
             dispatch_factory: helper_symbol("make_local_dispatch", index),
             passthrough_factory,

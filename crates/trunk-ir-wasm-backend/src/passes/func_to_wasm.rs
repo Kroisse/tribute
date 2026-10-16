@@ -436,7 +436,7 @@ impl RewritePattern for FuncFuncPattern {
                 ctx.create_op(data)
             }
         };
-        ctx.extend_attrs(new_op, attrs_to_preserve);
+        ctx.extend_op_attrs(new_op, attrs_to_preserve);
         rewriter.replace_op(new_op);
         true
     }
@@ -645,7 +645,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             .table(0)
             .signature(Some(signature))
             .build(ctx, loc);
-        ctx.extend_attrs(new_op.op_ref(), converted_attrs);
+        ctx.extend_op_attrs(new_op.op_ref(), converted_attrs);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -747,14 +747,14 @@ mod tests {
 }"#,
         );
         let original = module.ops(&ctx)[0];
-        ctx.set_attr(original, "custom", Attribute::Int(7));
+        ctx.set_op_attr(original, "custom", Attribute::Int(7));
 
         lower(&mut ctx, module, TypeConverter::new());
 
         let lowered = module.ops(&ctx)[0];
         assert!(wasm_dialect::Func::from_op(&ctx, lowered).is_ok());
         assert_eq!(
-            ctx.op(lowered).attributes.get(&ctx, "custom"),
+            ctx.op_attrs(lowered).get("custom"),
             Some(&Attribute::Int(7))
         );
     }
@@ -776,9 +776,8 @@ mod tests {
         );
         let function = module.ops(&ctx)[0];
         let original = ctx
-            .op(function)
-            .attributes
-            .get_type(&ctx, "type")
+            .op_attrs(function)
+            .get_type("type")
             .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
             .unwrap();
         let inputs = original.inputs(&ctx).to_vec();
@@ -801,7 +800,7 @@ mod tests {
             attrs,
         )
         .as_type_ref();
-        ctx.set_attr(function, "type", Attribute::Type(outer));
+        ctx.set_op_attr(function, "type", Attribute::Type(outer));
         let original_body = ctx.op_region(function, 0).unwrap();
         let original_block = ctx.region(original_body).blocks[0];
         ctx.set_block_arg_attr(original_block, 0, "metadata", Attribute::Type(nested));
@@ -849,7 +848,7 @@ mod tests {
         let original_ops = module.ops(&ctx);
         let declaration_location = ctx.op(original_ops[0]).location;
         let definition_location = ctx.op(original_ops[1]).location;
-        ctx.set_attr(original_ops[0], "custom", Attribute::Int(7));
+        ctx.set_op_attr(original_ops[0], "custom", Attribute::Int(7));
 
         lower(&mut ctx, module, TypeConverter::new());
 
@@ -866,7 +865,7 @@ mod tests {
         assert!(!ctx.op_has_regions(lowered_ops[0]));
         assert_eq!(ctx.op_region_count(lowered_ops[1]), 1);
         assert_eq!(
-            ctx.op(lowered_ops[0]).attributes.get(&ctx, "custom"),
+            ctx.op_attrs(lowered_ops[0]).get("custom"),
             Some(&Attribute::Int(7))
         );
 

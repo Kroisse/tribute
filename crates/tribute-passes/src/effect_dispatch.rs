@@ -93,16 +93,8 @@ pub(crate) fn is_valid_tail_dispatch(
     let results = ctx.op_result_types(op).to_vec();
     if operands.len() != 2
         || results.len() != 1
-        || ctx
-            .op(op)
-            .attributes
-            .get_symbol_ref(ctx, "ability")
-            .is_none()
-        || ctx
-            .op(op)
-            .attributes
-            .get_string_ref(ctx, "op_name")
-            .is_none()
+        || ctx.op_attrs(op).get_symbol_ref("ability").is_none()
+        || ctx.op_attrs(op).get_string_ref("op_name").is_none()
     {
         return false;
     }
@@ -186,17 +178,9 @@ pub(crate) fn is_valid_cps_dispatch(
     converter: &TypeConverter,
 ) -> bool {
     if !ctx.op_result_types(op).is_empty()
-        || ctx.op(op).attributes.get_type(ctx, "answer_type").is_none()
-        || ctx
-            .op(op)
-            .attributes
-            .get_symbol_ref(ctx, "ability")
-            .is_none()
-        || ctx
-            .op(op)
-            .attributes
-            .get_string_ref(ctx, "op_name")
-            .is_none()
+        || ctx.op_attrs(op).get_type("answer_type").is_none()
+        || ctx.op_attrs(op).get_symbol_ref("ability").is_none()
+        || ctx.op_attrs(op).get_string_ref("op_name").is_none()
         || ctx.op_operands(op).len() != 4
     {
         return false;

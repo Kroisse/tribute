@@ -471,9 +471,8 @@ impl crate::ops::Verify for FuncReloc {
 /// Read the exact signature without assuming the operation passed its schema;
 /// interface queries must fail closed on malformed IR.
 fn exact_indirect_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<crate::TypeRef> {
-    ctx.op(op)
-        .attributes
-        .get_type(ctx, "sig")
+    ctx.op_attrs(op)
+        .get_type("sig")
         .filter(|&ty| FuncSig::from_type_ref(ctx, ty).is_some())
 }
 
@@ -531,7 +530,7 @@ pub fn set_indirect_call_signature(
     {
         return false;
     }
-    ctx.set_attr(
+    ctx.set_op_attr(
         op,
         INDIRECT_CALL_SIGNATURE_ATTR,
         crate::Attribute::Type(signature),

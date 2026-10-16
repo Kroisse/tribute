@@ -217,7 +217,7 @@ not carry a `StringRef` to another context:
 ```rust
 let abi = ctx.string_attr("C");
 attrs.insert(ctx, "abi", abi);
-let is_c = ctx.op(op).attributes.get_str(ctx, "abi") == Some("C");
+let is_c = ctx.op_attrs(op).get_str("abi") == Some("C");
 let value: &str = string_const.value(ctx); // generated accessor
 ```
 
@@ -252,17 +252,20 @@ keeps its handle through `insert_ref` or `AttributeMap::from_refs`:
 
 ```rust
 let attrs = AttributeMap::from_entries(ctx, [("bind_name", name)]);
-let callee = ctx.op(op).attributes.get_symbol_ref(ctx, "callee");
+let callee = ctx.op_attrs(op).get_symbol_ref("callee");
 let copied = AttributeMap::from_refs(ctx, source.iter().map(|(key, value)| (key, value.clone())));
 ```
 
-An operation's own map is changed through the context, because inserting a
-key borrows the context while the map is part of it:
+An operation's attributes are read through `ctx.op_attrs(op)`, a view bound
+to the context whose lookups take only the key; `attrs.view(ctx)` binds any
+other map the same way. They are changed through the context, because
+inserting a key borrows the context while the map is part of it:
 
 ```rust
-ctx.set_attr(op, "type", Attribute::Type(ty));
-ctx.remove_attr(op, "signature");
-ctx.extend_attrs(op, preserved);
+let is_bodyless = !ctx.op_attrs(op).contains_key("body");
+ctx.set_op_attr(op, "type", Attribute::Type(ty));
+ctx.remove_op_attr(op, "signature");
+ctx.extend_op_attrs(op, preserved);
 ctx.set_block_arg_attr(block, 0, "bind_name", name);
 ```
 

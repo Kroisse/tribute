@@ -624,10 +624,7 @@ mod tests {
         ] {
             let function = func_by_name_recursive(&ctx, module, name);
             assert!(!ctx.op_has_regions(function.op_ref()));
-            assert_eq!(
-                ctx.op(function.op_ref()).attributes.get_str(&ctx, "abi"),
-                Some("C")
-            );
+            assert_eq!(ctx.op_attrs(function.op_ref()).get_str("abi"), Some("C"));
             let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
             let parameter_types: Vec<_> = signature
                 .inputs(&ctx)
@@ -964,7 +961,7 @@ mod tests {
             lower_evidence_to_native_func(&mut ctx, function);
             let block = ctx.region(function.body(&ctx)).blocks[0];
             let tail = *ctx.block(block).ops.last().unwrap();
-            assert!(!ctx.op(tail).attributes.contains_key(&ctx, "answer_type"));
+            assert!(!ctx.op_attrs(tail).contains_key("answer_type"));
             signatures.push(
                 func::TailCallIndirect::from_op(&ctx, tail)
                     .unwrap()

@@ -626,6 +626,96 @@ impl AttributeMap {
     }
 }
 
+impl AttributeMap {
+    /// Read these attributes through `ctx`, so lookups need no context
+    /// argument.
+    pub fn view<'a>(&'a self, ctx: &'a IrContext) -> AttributeView<'a> {
+        AttributeView { map: self, ctx }
+    }
+}
+
+/// An [`AttributeMap`] bound to its context; see [`AttributeMap::view`] and
+/// [`IrContext::op_attrs`].
+#[derive(Clone, Copy)]
+pub struct AttributeView<'a> {
+    map: &'a AttributeMap,
+    ctx: &'a IrContext,
+}
+
+impl<'a> AttributeView<'a> {
+    /// The underlying map.
+    pub fn map(self) -> &'a AttributeMap {
+        self.map
+    }
+
+    pub fn get(self, key: impl AttributeKey) -> Option<&'a Attribute> {
+        self.map.get(self.ctx, key)
+    }
+
+    pub fn contains_key(self, key: impl AttributeKey) -> bool {
+        self.map.contains_key(self.ctx, key)
+    }
+
+    pub fn get_bool(self, key: impl AttributeKey) -> Option<bool> {
+        self.map.get_bool(self.ctx, key)
+    }
+
+    pub fn get_i128(self, key: impl AttributeKey) -> Option<i128> {
+        self.map.get_i128(self.ctx, key)
+    }
+
+    pub fn get_i64(self, key: impl AttributeKey) -> Result<Option<i64>, IntegerOutOfRange> {
+        self.map.get_i64(self.ctx, key)
+    }
+
+    pub fn get_i32(self, key: impl AttributeKey) -> Result<Option<i32>, IntegerOutOfRange> {
+        self.map.get_i32(self.ctx, key)
+    }
+
+    pub fn get_u64(self, key: impl AttributeKey) -> Result<Option<u64>, IntegerOutOfRange> {
+        self.map.get_u64(self.ctx, key)
+    }
+
+    pub fn get_u32(self, key: impl AttributeKey) -> Result<Option<u32>, IntegerOutOfRange> {
+        self.map.get_u32(self.ctx, key)
+    }
+
+    pub fn get_u8(self, key: impl AttributeKey) -> Result<Option<u8>, IntegerOutOfRange> {
+        self.map.get_u8(self.ctx, key)
+    }
+
+    pub fn get_string_ref(self, key: impl AttributeKey) -> Option<StringRef> {
+        self.map.get_string_ref(self.ctx, key)
+    }
+
+    pub fn get_str(self, key: impl AttributeKey) -> Option<&'a str> {
+        self.map.get_str(self.ctx, key)
+    }
+
+    pub fn get_symbol_ref(self, key: impl AttributeKey) -> Option<&'a SymbolPath> {
+        self.map.get_symbol_ref(self.ctx, key)
+    }
+
+    pub fn get_type(self, key: impl AttributeKey) -> Option<TypeRef> {
+        self.map.get_type(self.ctx, key)
+    }
+
+    /// Each key's text with its value, in key order.
+    pub fn iter(self) -> impl DoubleEndedIterator<Item = (&'a str, &'a Attribute)> + 'a {
+        self.map
+            .iter()
+            .map(move |(key, value)| (self.ctx.str(key), value))
+    }
+
+    pub fn len(self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.map.is_empty()
+    }
+}
+
 /// An [`AttributeMap`] formatted through its context; see
 /// [`AttributeMap::display`].
 pub struct AttributeMapDisplay<'a> {

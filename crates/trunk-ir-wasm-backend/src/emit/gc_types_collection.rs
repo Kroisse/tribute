@@ -377,8 +377,7 @@ pub(crate) fn collect_gc_types(
 
     // The GC types that received user indices, in index order. A structural
     // struct type declares its fields, so its builder starts complete.
-    let declared_types: Vec<TypeRef> = match ctx.op(module.op()).attributes.get(ctx, GC_TYPES_ATTR)
-    {
+    let declared_types: Vec<TypeRef> = match ctx.op_attrs(module.op()).get(GC_TYPES_ATTR) {
         Some(Attribute::List(types)) => types
             .iter()
             .map(|attr| match attr {

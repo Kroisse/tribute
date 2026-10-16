@@ -139,9 +139,8 @@ pub(crate) fn handle_return_call_indirect(
             )
         })?;
     let table_index = ctx
-        .op(op)
-        .attributes
-        .get(ctx, "table")
+        .op_attrs(op)
+        .get("table")
         .map(|_| attr_u32(ctx, &ctx.op(op).attributes, "table"))
         .transpose()?
         .unwrap_or(0);

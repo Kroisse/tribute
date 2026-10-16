@@ -112,9 +112,8 @@ fn enclosing_wasm_func_signature(ctx: &IrContext, mut op: OpRef) -> Option<wasm_
         let parent = ctx.region(region).parent_op?;
         if wasm_dialect::Func::matches(ctx, parent) {
             return ctx
-                .op(parent)
-                .attributes
-                .get_type(ctx, "type")
+                .op_attrs(parent)
+                .get_type("type")
                 .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty));
         }
         op = parent;
@@ -138,9 +137,8 @@ fn resolve_wasm_callee(
         return Some(None);
     }
     Some(
-        ctx.op(found)
-            .attributes
-            .get_type(ctx, "type")
+        ctx.op_attrs(found)
+            .get_type("type")
             .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty)),
     )
 }
@@ -256,7 +254,7 @@ fn validate_direct_callable_contracts(
     if !is_direct {
         return;
     }
-    let Some(callee) = ctx.op(op).attributes.get_symbol_ref(ctx, "callee") else {
+    let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
         errors.push(format!(
             "wasm.{} requires a symbol callee attribute",
             ctx.op(op).name
@@ -346,9 +344,8 @@ fn validate_return_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<St
         return;
     };
     let Some(signature) = ctx
-        .op(op)
-        .attributes
-        .get_type(ctx, "signature")
+        .op_attrs(op)
+        .get_type("signature")
         .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty))
     else {
         // The exact helper above already produced the local diagnostic.

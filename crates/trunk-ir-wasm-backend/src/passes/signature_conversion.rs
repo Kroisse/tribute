@@ -205,7 +205,7 @@ mod tests {
             )
             .as_type_ref();
             let func = make_wasm_func(&mut ctx, loc, "f", signature, &[i32, ptr]);
-            ctx.set_attr(func, "custom", Attribute::Int(7));
+            ctx.set_op_attr(func, "custom", Attribute::Int(7));
             let module = make_module(&mut ctx, loc, vec![func]);
 
             let result = PatternApplicator::new(i32_to_i64(i32, i64))
@@ -245,7 +245,7 @@ mod tests {
             );
             assert_eq!(ctx.get_type(function.r#type(&ctx)).attrs.len(), 4);
             assert_eq!(
-                ctx.op(module.ops(&ctx)[0]).attributes.get(&ctx, "custom"),
+                ctx.op_attrs(module.ops(&ctx)[0]).get("custom"),
                 Some(&Attribute::Int(7))
             );
             let entry = ctx.region(function.body(&ctx)).blocks[0];
@@ -291,11 +291,9 @@ mod tests {
         let ops = module.ops(&ctx);
         for (op, results) in ops.iter().take(3).zip([vec![], vec![i64], vec![i64, i64]]) {
             assert!(!ctx.op_has_regions(*op));
-            let converted = wasm::FuncSig::from_type_ref(
-                &ctx,
-                ctx.op(*op).attributes.get_type(&ctx, "type").unwrap(),
-            )
-            .unwrap();
+            let converted =
+                wasm::FuncSig::from_type_ref(&ctx, ctx.op_attrs(*op).get_type("type").unwrap())
+                    .unwrap();
             assert_eq!(converted.inputs(&ctx), [i64]);
             assert_eq!(converted.results(&ctx), results);
         }
@@ -347,9 +345,7 @@ mod tests {
             .unwrap();
         assert!(result.reached_fixpoint);
         assert_eq!(
-            ctx.op(module.ops(&ctx)[0])
-                .attributes
-                .get_type(&ctx, "type"),
+            ctx.op_attrs(module.ops(&ctx)[0]).get_type("type"),
             Some(malformed)
         );
         assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);

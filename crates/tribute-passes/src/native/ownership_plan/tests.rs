@@ -1296,14 +1296,13 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
     let missing_tag = ctx.string_attr("Missing");
     for (key, invalid) in [("tag", missing_tag), ("field", trunk_ir::Attribute::Int(1))] {
         let original = ctx
-            .op(projection)
-            .attributes
-            .get(&ctx, key)
+            .op_attrs(projection)
+            .get(key)
             .expect("projection attribute")
             .clone();
-        ctx.set_attr(projection, key, invalid);
+        ctx.set_op_attr(projection, key, invalid);
         assert_unchanged_on_error(&mut ctx, module, |ctx, module| production_plan(ctx, module));
-        ctx.set_attr(projection, key, original);
+        ctx.set_op_attr(projection, key, original);
     }
 }
 
@@ -1971,9 +1970,8 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
     assert_eq!(function.entries(), [EntryOwnership::Plain; 4]);
     assert!(function.actions().is_empty());
     for ty in ctx
-        .op(function.operation())
-        .attributes
-        .get_type(&ctx, "type")
+        .op_attrs(function.operation())
+        .get_type("type")
         .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
         .unwrap()
         .inputs(&ctx)
@@ -2765,7 +2763,7 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
 
     let (type_converter, _) = native_type_converter(&mut ctx);
     for &candidate in &candidates {
-        ctx.set_attr(allocation, "type", trunk_ir::Attribute::Type(candidate));
+        ctx.set_op_attr(allocation, "type", trunk_ir::Attribute::Type(candidate));
         assert!(plan.validate_against(&ctx, module).is_err());
         assert!(
             crate::native::rtti::generate_rtti(&mut ctx, module, &type_converter).is_err(),

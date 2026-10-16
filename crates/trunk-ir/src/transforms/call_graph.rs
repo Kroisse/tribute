@@ -484,7 +484,7 @@ mod tests {
         let body = ctx.op_region(caller, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let call = ctx.block(block).ops[0];
-        ctx.set_attr(
+        ctx.set_op_attr(
             call,
             "callee",
             Attribute::SymbolRef(SymbolPath::new(["other"])),

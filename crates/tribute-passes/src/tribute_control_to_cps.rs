@@ -56,9 +56,8 @@ fn carry_evidence_plan(ctx: &mut IrContext, source: OpRef, target: OpRef) {
 
 /// The `evidence_plan` of a source call, resume, or handle.
 fn evidence_plan_of(ctx: &IrContext, source: OpRef) -> Option<Attribute> {
-    ctx.op(source)
-        .attributes
-        .get(ctx, tribute_control::EVIDENCE_PLAN_ATTR)
+    ctx.op_attrs(source)
+        .get(tribute_control::EVIDENCE_PLAN_ATTR)
         .cloned()
 }
 
@@ -391,9 +390,8 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         .filter(|&op| tribute_control::Func::matches(ctx, op))
         .map(|op| {
             let logical_type = ctx
-                .op(op)
-                .attributes
-                .get_type(ctx, "type")
+                .op_attrs(op)
+                .get_type("type")
                 .expect("pre-CPS validation checked function type");
             let callable = tribute_control::FuncSig::from_type_ref(ctx, logical_type)
                 .expect("pre-CPS validation checked callable type");
@@ -405,7 +403,7 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
                     convention: convert_convention(convention),
                     source_result: callable.result(ctx),
                     source_params: callable.inputs(ctx).to_vec(),
-                    platform: ctx.op(op).attributes.contains_key(ctx, "abi"),
+                    platform: ctx.op_attrs(op).contains_key("abi"),
                 },
             )
         })

@@ -67,7 +67,7 @@ impl TryFrom<u8> for CallingConvention {
 
 /// Attach the logical calling convention to a high-level IR operation.
 pub fn set_calling_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
-    ctx.set_attr(
+    ctx.set_op_attr(
         op,
         CALLING_CONVENTION_ATTR,
         Attribute::Int(convention as i128),
@@ -76,11 +76,7 @@ pub fn set_calling_convention(ctx: &mut IrContext, op: OpRef, convention: Callin
 
 /// Read explicitly attached calling-convention metadata.
 pub fn get_calling_convention(ctx: &IrContext, op: OpRef) -> Option<CallingConvention> {
-    let code = ctx
-        .op(op)
-        .attributes
-        .get_u8(ctx, CALLING_CONVENTION_ATTR)
-        .ok()??;
+    let code = ctx.op_attrs(op).get_u8(CALLING_CONVENTION_ATTR).ok()??;
     code.try_into().ok()
 }
 

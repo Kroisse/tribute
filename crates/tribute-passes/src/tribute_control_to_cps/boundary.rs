@@ -247,7 +247,7 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             });
             return;
         };
-        if ctx.op(def).attributes.get_i64(ctx, CALLING_CONVENTION_ATTR) != Ok(Some(expected)) {
+        if ctx.op_attrs(def).get_i64(CALLING_CONVENTION_ATTR) != Ok(Some(expected)) {
             failures.push(BoundaryFailure {
                 op: Some(def),
                 location: Some(ctx.op(def).location),

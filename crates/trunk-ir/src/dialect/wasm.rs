@@ -751,7 +751,7 @@ pub fn set_indirect_call_signature(
     {
         return false;
     }
-    ctx.set_attr(
+    ctx.set_op_attr(
         op,
         INDIRECT_CALL_SIGNATURE_ATTR,
         crate::Attribute::Type(signature),

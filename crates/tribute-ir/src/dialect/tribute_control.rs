@@ -337,7 +337,7 @@ pub(crate) fn verify_evidence_plan(
     op: OpRef,
     site: EvidencePlanSite,
 ) -> Result<(), String> {
-    let Some(plan) = ctx.op(op).attributes.get(ctx, EVIDENCE_PLAN_ATTR) else {
+    let Some(plan) = ctx.op_attrs(op).get(EVIDENCE_PLAN_ATTR) else {
         return Ok(());
     };
     let Attribute::List(items) = plan else {
@@ -709,9 +709,7 @@ pub fn func_declaration(
 impl Func {
     /// Return the optional semantic identity attached by the trusted frontend registry.
     pub fn compiler_intrinsic_identity<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
-        ctx.op(self.op_ref())
-            .attributes
-            .get_str(ctx, COMPILER_INTRINSIC_ATTR)
+        ctx.op_attrs(self.op_ref()).get_str(COMPILER_INTRINSIC_ATTR)
     }
 }
 
@@ -1723,7 +1721,7 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
         return;
     };
     let callable_ty = if is_control_op(ctx, owner, "func") {
-        ctx.op(owner).attributes.get_type(ctx, "type")
+        ctx.op_attrs(owner).get_type("type")
     } else if is_control_op(ctx, owner, "lambda") {
         ctx.op_result_types(owner).first().copied()
     } else {
@@ -1764,9 +1762,8 @@ fn tail_call_owner_signature(ctx: &IrContext, op: OpRef) -> Result<TypeRef, &'st
         };
         if is_control_op(ctx, owner, "func") {
             return ctx
-                .op(owner)
-                .attributes
-                .get_type(ctx, "type")
+                .op_attrs(owner)
+                .get_type("type")
                 .ok_or("must be inside a tribute_control.func or lambda body");
         }
         if is_control_op(ctx, owner, "lambda") {
@@ -1861,7 +1858,7 @@ fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationErr
 }
 
 fn validate_perform(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    match ctx.op(op).attributes.get_str(ctx, "operation_kind") {
+    match ctx.op_attrs(op).get_str("operation_kind") {
         Some("fn" | "op") => {}
         Some(kind) => push_op_error(
             ctx,
@@ -2000,7 +1997,7 @@ fn region_contains_resume(ctx: &IrContext, region: RegionRef) -> bool {
 }
 
 fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let kind = ctx.op(op).attributes.get_str(ctx, "kind");
+    let kind = ctx.op_attrs(op).get_str("kind");
     if let Some(kind) = kind
         && !matches!(kind, "fn" | "op")
     {
@@ -2018,7 +2015,7 @@ fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
         return;
     };
     let yield_op = terminator(ctx, op, block, "tribute_control", "yield", errors);
-    let result_type = ctx.op(op).attributes.get_type(ctx, "operation_result_type");
+    let result_type = ctx.op_attrs(op).get_type("operation_result_type");
     let handle_result = parent_op(ctx, op)
         .filter(|parent| is_control_op(ctx, *parent, "handle"))
         .and_then(|parent| ctx.op_result_types(parent).first().copied());
@@ -2230,7 +2227,7 @@ fn validate_symbol_use(
 ) {
     {
         if is_control_op(ctx, op, "func_ref") {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref(ctx, "func_ref") else {
+            let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("func_ref") else {
                 return;
             };
             let Some(target) = funcs
@@ -2247,7 +2244,7 @@ fn validate_symbol_use(
                 );
                 return;
             };
-            let Some(target_ty) = ctx.op(target).attributes.get_type(ctx, "type") else {
+            let Some(target_ty) = ctx.op_attrs(target).get_type("type") else {
                 return;
             };
             let Some(result_ty) = ctx.op_result_types(op).first().copied() else {
@@ -2273,7 +2270,7 @@ fn validate_symbol_use(
                 );
             }
         } else if is_control_op(ctx, op, "call") {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref(ctx, "callee") else {
+            let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                 return;
             };
             let Some(target) = funcs
@@ -2285,7 +2282,7 @@ fn validate_symbol_use(
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
             };
-            let Some(target_ty) = ctx.op(target).attributes.get_type(ctx, "type") else {
+            let Some(target_ty) = ctx.op_attrs(target).get_type("type") else {
                 return;
             };
             let Some((result, params, _)) = func_sig_parts(ctx, target_ty) else {
@@ -2308,7 +2305,7 @@ fn validate_symbol_use(
                 errors,
             );
         } else if is_control_op(ctx, op, "tail_call") {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref(ctx, "callee") else {
+            let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                 return;
             };
             let Some(target) = funcs
@@ -2320,7 +2317,7 @@ fn validate_symbol_use(
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
             };
-            if ctx.op(target).attributes.get(ctx, "abi").is_some() {
+            if ctx.op_attrs(target).get("abi").is_some() {
                 push_op_error(
                     ctx,
                     op,
@@ -2328,7 +2325,7 @@ fn validate_symbol_use(
                     format!("cannot tail call foreign function @{symbol}"),
                 );
             }
-            let Some(target_ty) = ctx.op(target).attributes.get_type(ctx, "type") else {
+            let Some(target_ty) = ctx.op_attrs(target).get_type("type") else {
                 return;
             };
             let Some((result, params, _)) = func_sig_parts(ctx, target_ty) else {
@@ -2877,7 +2874,7 @@ fn callable_block_arg_has_source_contract(
     let func_sig_type = if is_control_op(ctx, owner, "func") {
         ctx.op_regions(owner)
             .eq([region])
-            .then(|| ctx.op(owner).attributes.get_type(ctx, "type"))
+            .then(|| ctx.op_attrs(owner).get_type("type"))
             .flatten()
     } else if is_control_op(ctx, owner, "lambda") {
         ctx.op_regions(owner)
@@ -2946,16 +2943,12 @@ fn callable_has_semantic_provenance(
                 || ((is_control_op(ctx, producer, "func_ref")
                     || is_control_op(ctx, producer, "call"))
                     && ctx
-                        .op(producer)
-                        .attributes
-                        .get_symbol_ref(
-                            ctx,
-                            if is_control_op(ctx, producer, "func_ref") {
-                                "func_ref"
-                            } else {
-                                "callee"
-                            },
-                        )
+                        .op_attrs(producer)
+                        .get_symbol_ref(if is_control_op(ctx, producer, "func_ref") {
+                            "func_ref"
+                        } else {
+                            "callee"
+                        })
                         .and_then(|symbol| provenance.functions.resolve(ctx, producer, symbol))
                         .filter(|&function| is_control_op(ctx, function, "func"))
                         .is_some_and(|function| {
@@ -2992,7 +2985,7 @@ fn verified_callable_declaration(
         Func::from_op(ctx, function)
             .ok()
             .and_then(|function| function.compiler_intrinsic_identity(ctx)),
-        ctx.op(function).attributes.get_type(ctx, "type"),
+        ctx.op_attrs(function).get_type("type"),
     ) else {
         return false;
     };
@@ -3159,7 +3152,7 @@ fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
                 return;
             };
             if is_control_op(ctx, current, "func") {
-                break ctx.op(current).attributes.get_type(ctx, "type");
+                break ctx.op_attrs(current).get_type("type");
             }
             if is_control_op(ctx, current, "lambda") {
                 break ctx.op_result_types(current).first().copied();
@@ -3212,7 +3205,7 @@ fn validate_declaration_uses(
             (
                 "kind",
                 args,
-                ctx.op(op).attributes.get_type(ctx, "operation_result_type"),
+                ctx.op_attrs(op).get_type("operation_result_type"),
             )
         } else {
             return;
@@ -3292,7 +3285,7 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     if !is_control_op(ctx, op, "call") {
         return false;
     }
-    let Some(callee) = ctx.op(op).attributes.get_symbol_ref(ctx, "callee") else {
+    let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
         return false;
     };
     let mut owner = parent_op(ctx, op);
@@ -3303,9 +3296,8 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
             return parent_op(ctx, current)
                 .is_some_and(|module| trunk_ir::dialect::core::Module::matches(ctx, module))
                 && ctx
-                    .op(current)
-                    .attributes
-                    .get_str(ctx, "sym_name")
+                    .op_attrs(current)
+                    .get_str("sym_name")
                     .is_some_and(|name| *callee == [name]);
         }
         owner = parent_op(ctx, current);
@@ -4292,47 +4284,27 @@ mod tests {
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
-                    == Some(Symbol::new("decl"))
+                ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new) == Some(Symbol::new("decl"))
             })
             .unwrap();
         let definition = funcs
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
+                ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new)
                     == Some(Symbol::new("definition"))
             })
             .unwrap();
-        let shared = ctx
-            .op(declaration)
-            .attributes
-            .get_type(&ctx, "type")
-            .unwrap();
-        assert_eq!(
-            shared,
-            ctx.op(definition)
-                .attributes
-                .get_type(&ctx, "type")
-                .unwrap()
-        );
+        let shared = ctx.op_attrs(declaration).get_type("type").unwrap();
+        assert_eq!(shared, ctx.op_attrs(definition).get_type("type").unwrap());
         let distinct = funcs
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
+                ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new)
                     == Some(Symbol::new("different"))
             })
-            .and_then(|op| ctx.op(op).attributes.get_type(&ctx, "type"))
+            .and_then(|op| ctx.op_attrs(op).get_type("type"))
             .unwrap();
         assert_ne!(shared, distinct);
         assert!(matches!(
@@ -4340,9 +4312,7 @@ mod tests {
             Some(Attribute::List(_))
         ));
         assert_eq!(
-            ctx.op(declaration)
-                .attributes
-                .get_symbol_ref(&ctx, "metadata"),
+            ctx.op_attrs(declaration).get_symbol_ref("metadata"),
             Some(&SymbolPath::new(["declaration"]))
         );
 
@@ -4497,8 +4467,8 @@ mod tests {
         // The custom func parser derives and hides sym_name/type, so malformed
         // values for those two required attributes are not text-representable.
         let malformed_func = control_op(&ctx, module, "func");
-        ctx.set_attr(malformed_func, "sym_name", Attribute::Int(1));
-        ctx.set_attr(malformed_func, "type", Attribute::Int(2));
+        ctx.set_op_attr(malformed_func, "sym_name", Attribute::Int(1));
+        ctx.set_op_attr(malformed_func, "type", Attribute::Int(2));
 
         let result = validate_local(&ctx, module);
         assert_op_diagnostics(
@@ -4690,16 +4660,13 @@ mod tests {
         let bad_func = control_ops(&ctx, module, "func")
             .into_iter()
             .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
+                ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new)
                     == Some(Symbol::new("bad_func"))
             })
             .unwrap();
         // Custom assembly always derives a callable type and permits at most one
         // body. Mutate only those parser-enforced fields.
-        ctx.set_attr(bad_func, "type", Attribute::Type(i32_ty));
+        ctx.set_op_attr(bad_func, "type", Attribute::Type(i32_ty));
         let extra_block = block(&mut ctx, loc, &[]);
         let extra_region = region(&mut ctx, loc, extra_block);
         ctx.push_op_region(bad_func, extra_region);
@@ -4709,7 +4676,7 @@ mod tests {
 
         let bad_func_ref = control_ops(&ctx, module, "func_ref")
             .into_iter()
-            .find(|op| ctx.op(*op).attributes.contains_key(&ctx, "unexpected"))
+            .find(|op| ctx.op_attrs(*op).contains_key("unexpected"))
             .unwrap();
         let bad_call = control_op(&ctx, module, "call");
         let indirects = control_ops(&ctx, module, "call_indirect");
@@ -5640,7 +5607,7 @@ mod tests {
 }"#,
         );
         let function = control_op(&ctx, module, "func");
-        let func_sig_type = ctx.op(function).attributes.get_type(&ctx, "type").unwrap();
+        let func_sig_type = ctx.op_attrs(function).get_type("type").unwrap();
         let exact = CompilerIntrinsicDeclaration::new(
             SymbolPath::new(["Nat::+"]),
             Symbol::new("Nat::+"),
@@ -5680,7 +5647,7 @@ mod tests {
 }"#,
         );
         let function = control_op(&ctx, module, "func");
-        let func_sig_type = ctx.op(function).attributes.get_type(&ctx, "type").unwrap();
+        let func_sig_type = ctx.op_attrs(function).get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
             SymbolPath::new(["read"]),
             Symbol::new("read"),
@@ -5711,14 +5678,11 @@ mod tests {
         let intrinsic = control_ops(&ctx, module, "func")
             .into_iter()
             .find(|op| {
-                ctx.op(*op)
-                    .attributes
-                    .get_str(&ctx, "sym_name")
-                    .map(Symbol::new)
+                ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new)
                     == Some(Symbol::new("Nat::+"))
             })
             .unwrap();
-        let func_sig_type = ctx.op(intrinsic).attributes.get_type(&ctx, "type").unwrap();
+        let func_sig_type = ctx.op_attrs(intrinsic).get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
             SymbolPath::new(["Nat::+"]),
             Symbol::new("Nat::+"),
@@ -5747,17 +5711,13 @@ mod tests {
                 .iter()
                 .copied()
                 .find(|op| {
-                    ctx.op(*op)
-                        .attributes
-                        .get_str(&ctx, "sym_name")
-                        .map(Symbol::new)
-                        == Some(symbol.clone())
+                    ctx.op_attrs(*op).get_str("sym_name").map(Symbol::new) == Some(symbol.clone())
                 })
                 .unwrap();
             CompilerIntrinsicDeclaration::new(
                 SymbolPath::new([symbol.clone()]),
                 symbol,
-                ctx.op(function).attributes.get_type(&ctx, "type").unwrap(),
+                ctx.op_attrs(function).get_type("type").unwrap(),
             )
         };
         let nat = declaration(Symbol::new("Nat::+"));
@@ -6018,15 +5978,13 @@ mod tests {
         let handler_block = ctx.region(handler_region).blocks[0];
         let callback_type = ctx.value_ty(ctx.block_args(handler_block)[0]);
         let ability = ctx
-            .op(handler)
-            .attributes
-            .get_symbol_ref(&ctx, "ability")
+            .op_attrs(handler)
+            .get_symbol_ref("ability")
             .cloned()
             .unwrap();
         let operation_result = ctx
-            .op(handler)
-            .attributes
-            .get_type(&ctx, "operation_result_type")
+            .op_attrs(handler)
+            .get_type("operation_result_type")
             .unwrap();
         let declaration = OperationDeclaration::new(
             ability,

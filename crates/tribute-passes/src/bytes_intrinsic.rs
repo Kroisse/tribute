@@ -55,8 +55,7 @@ pub(crate) fn lower_get_or_panic(
         .copied()
         .filter(|&op| {
             func::Func::matches(ctx, op)
-                && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
-                    == Some(BYTES_GET_OR_PANIC)
+                && ctx.op_attrs(op).get_str(COMPILER_INTRINSIC_ATTR) == Some(BYTES_GET_OR_PANIC)
         })
         .collect();
     if declarations.is_empty() {

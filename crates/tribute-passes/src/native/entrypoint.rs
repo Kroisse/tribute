@@ -131,7 +131,7 @@ fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: boo
     }
 
     let func_ty = func::func_sig(ctx, [], [i32_ty]).as_type_ref();
-    ctx.set_attr(main.op_ref(), "type", Attribute::Type(func_ty));
+    ctx.set_op_attr(main.op_ref(), "type", Attribute::Type(func_ty));
 }
 
 fn prepend_op(ctx: &mut IrContext, block: BlockRef, op: OpRef) {

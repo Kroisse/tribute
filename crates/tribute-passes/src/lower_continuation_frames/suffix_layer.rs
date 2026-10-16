@@ -326,9 +326,8 @@ pub(super) fn build_dispatch_adapters(
 }
 
 fn evidence_plan(ctx: &IrContext, op: OpRef) -> Option<Attribute> {
-    ctx.op(op)
-        .attributes
-        .get(ctx, tribute_control::EVIDENCE_PLAN_ATTR)
+    ctx.op_attrs(op)
+        .get(tribute_control::EVIDENCE_PLAN_ATTR)
         .cloned()
 }
 

@@ -270,7 +270,7 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
             return None;
         }
         if scf::Case::matches(ctx, arm) {
-            cases.push((ctx.op(arm).attributes.get(ctx, "value")?.clone(), body));
+            cases.push((ctx.op_attrs(arm).get("value")?.clone(), body));
         } else if scf::Default::matches(ctx, arm) {
             if default.replace(body).is_some() {
                 return None;

@@ -89,12 +89,9 @@ mod tests {
             classify_callable_body(&ctx, op),
             Ok(CallableBody::Declaration)
         );
-        assert_eq!(ctx.op(op).attributes.get_str(&ctx, "abi"), Some("C"));
-        let signature = func::FuncSig::from_type_ref(
-            &ctx,
-            ctx.op(op).attributes.get_type(&ctx, "type").unwrap(),
-        )
-        .unwrap();
+        assert_eq!(ctx.op_attrs(op).get_str("abi"), Some("C"));
+        let signature =
+            func::FuncSig::from_type_ref(&ctx, ctx.op_attrs(op).get_type("type").unwrap()).unwrap();
         assert_eq!(signature.inputs(&ctx), &[ptr, i32]);
         assert_eq!(signature.results(&ctx), &[ptr]);
     }

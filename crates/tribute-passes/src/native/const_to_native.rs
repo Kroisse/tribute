@@ -219,12 +219,7 @@ fn declare_rodata(
 
     let mut taken = HashSet::default();
     for &op in ctx.block(module_block).ops.iter() {
-        if let Some(name) = ctx
-            .op(op)
-            .attributes
-            .get_str(ctx, "sym_name")
-            .map(Symbol::new)
-        {
+        if let Some(name) = ctx.op_attrs(op).get_str("sym_name").map(Symbol::new) {
             taken.insert(name);
         }
         if let Ok(data) = clif::Data::from_op(ctx, op)

@@ -342,7 +342,7 @@ mod tests {
                 assert!(wasm::RefCast::matches(&ctx, producer));
                 let target = crate::wasm::type_converter::closure_adt_type(&mut ctx);
                 assert_eq!(ctx.value_ty(arg), target);
-                let signature = ctx.op(tail).attributes.get_type(&ctx, "signature").unwrap();
+                let signature = ctx.op_attrs(tail).get_type("signature").unwrap();
                 assert_eq!(ctx.get_type(signature).params[0], target);
             } else {
                 assert!(

@@ -2277,9 +2277,8 @@ fn main() -> Nil {
 
     fn clif_indirect_signature(ctx: &IrContext, call: trunk_ir::OpRef) -> clif::FuncSig {
         let signature = ctx
-            .op(call)
-            .attributes
-            .get_type(ctx, "sig")
+            .op_attrs(call)
+            .get_type("sig")
             .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty))
             .expect("indirect call must have an exact signature");
         let operands = ctx.op_operands(call);
@@ -2386,12 +2385,7 @@ fn main() ->{Io} Nil {
             panic!("CPS Done tail must have one callee, its environment, and the value");
         };
         assert!(clif::ReturnCallIndirect::matches(&ctx, call));
-        assert_eq!(
-            ctx.op(call)
-                .attributes
-                .get(&ctx, "tribute.calling_convention"),
-            None
-        );
+        assert_eq!(ctx.op_attrs(call).get("tribute.calling_convention"), None);
         let trunk_ir::refs::ValueDef::OpResult(environment_load, 0) =
             ctx.value_def(*continuation_environment)
         else {
@@ -3772,13 +3766,9 @@ mod Nested {
             module.ops(&ctx).iter().copied().find_map(|op| {
                 let function = func::Func::from_op(&ctx, op).ok()?;
                 (function.sym_name(&ctx) == name).then(|| {
-                    assert_eq!(
-                        ctx.op(op).attributes.get_str(&ctx, "abi"),
-                        Some("intrinsic")
-                    );
-                    ctx.op(op)
-                        .attributes
-                        .get_str(&ctx, COMPILER_INTRINSIC_ATTR)
+                    assert_eq!(ctx.op_attrs(op).get_str("abi"), Some("intrinsic"));
+                    ctx.op_attrs(op)
+                        .get_str(COMPILER_INTRINSIC_ATTR)
                         .map(str::to_owned)
                 })
             })
@@ -3818,10 +3808,7 @@ mod Nested {
 
             for &op in module.ops(&ctx) {
                 assert!(
-                    ctx.op(op)
-                        .attributes
-                        .get(&ctx, COMPILER_INTRINSIC_ATTR)
-                        .is_none(),
+                    ctx.op_attrs(op).get(COMPILER_INTRINSIC_ATTR).is_none(),
                     "{target:?}: the identity is consumed at the boundary exit"
                 );
                 let declares_intrinsic = func::Func::from_op(&ctx, op)

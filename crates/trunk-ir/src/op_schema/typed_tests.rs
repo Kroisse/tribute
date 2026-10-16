@@ -365,12 +365,7 @@ fn fluent_builders_group_inputs_by_kind() {
         .build(&mut ctx, loc);
     assert!(ctx.op_result_types(declared.op_ref()).is_empty());
     assert_eq!(ctx.op_region_count(declared.op_ref()), 1);
-    assert!(
-        ctx.op(declared.op_ref())
-            .attributes
-            .get(&ctx, "label")
-            .is_none()
-    );
+    assert!(ctx.op_attrs(declared.op_ref()).get("label").is_none());
 
     let then_region = empty_region(&mut ctx, loc);
     let else_region = empty_region(&mut ctx, loc);
@@ -681,7 +676,7 @@ fn list_attributes_build_read_and_verify_their_elements() {
 
     let mixed = op.op_ref();
     let label = ctx.string_attr("label");
-    ctx.set_attr(
+    ctx.set_op_attr(
         mixed,
         "labels",
         Attribute::List(vec![label, Attribute::Int(1)]),
@@ -717,7 +712,7 @@ fn a_dialect_defines_its_own_attribute_kind() {
         ])
     );
     assert_eq!(
-        ctx.op(op.op_ref()).attributes.get(&ctx, "linkage"),
+        ctx.op_attrs(op.op_ref()).get("linkage"),
         Some(&Attribute::SymbolRef(SymbolPath::new(["public"])))
     );
     assert!(test_typed::Export::DEF.verify(&ctx, op.op_ref()).is_empty());
@@ -762,7 +757,7 @@ fn dict_attributes_build_read_and_verify_their_values() {
 
     let mixed = op.op_ref();
     let entries = crate::AttributeMap::from_entries(&mut ctx, [("a", Attribute::Int(1))]);
-    ctx.set_attr(mixed, "notes", Attribute::Dict(entries));
+    ctx.set_op_attr(mixed, "notes", Attribute::Dict(entries));
     let violations = test_typed::Annotated::DEF.verify(&ctx, mixed);
     itertools::assert_equal(
         violations.iter().map(ToString::to_string),

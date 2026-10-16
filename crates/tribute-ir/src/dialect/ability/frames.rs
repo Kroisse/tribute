@@ -256,7 +256,7 @@ impl trunk_ir::ops::Verify for Handle {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
         let op = self.op_ref();
         verify_evidence_plan(ctx, op, EvidencePlanSite::Handle)?;
-        let Some(Attribute::List(items)) = ctx.op(op).attributes.get(ctx, "handlers") else {
+        let Some(Attribute::List(items)) = ctx.op_attrs(op).get("handlers") else {
             return Err("ability.handle requires a handlers list".into());
         };
         let bindings = items

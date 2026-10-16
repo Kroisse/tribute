@@ -248,7 +248,7 @@ impl RewritePattern for FuncCallPattern {
         for (index, result_ty) in rewriter.result_types(ctx, op).into_iter().enumerate() {
             ctx.set_op_result_type(new_op, index as u32, result_ty);
         }
-        ctx.set_attr(new_op, "callee", Attribute::SymbolRef(callee));
+        ctx.set_op_attr(new_op, "callee", Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
         true
     }
@@ -362,7 +362,7 @@ impl RewritePattern for FuncTailCallPattern {
             Symbol::new("clif"),
             Symbol::new("return_call"),
         );
-        ctx.set_attr(new_op, "callee", Attribute::SymbolRef(callee));
+        ctx.set_op_attr(new_op, "callee", Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
         true
     }
@@ -572,9 +572,9 @@ mod tests {
             let op = module.ops(&ctx)[0];
             if malformed {
                 let ty = TypeDataBuilder::new("func", "func_sig").intern(&mut ctx);
-                ctx.set_attr(op, "type", trunk_ir::Attribute::Type(ty));
+                ctx.set_op_attr(op, "type", trunk_ir::Attribute::Type(ty));
             } else {
-                ctx.remove_attr(op, "type");
+                ctx.remove_op_attr(op, "type");
             }
             let before = print_module(&ctx, module.op());
             let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();

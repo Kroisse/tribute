@@ -117,9 +117,8 @@ impl Converter<'_> {
     /// replaces `source` in the same module refers to it the same way.
     fn written_callee(&self, source: OpRef) -> SymbolPath {
         self.ctx
-            .op(source)
-            .attributes
-            .get_symbol_ref(self.ctx, "callee")
+            .op_attrs(source)
+            .get_symbol_ref("callee")
             .expect("pre-CPS validation checked direct callee")
             .clone()
     }

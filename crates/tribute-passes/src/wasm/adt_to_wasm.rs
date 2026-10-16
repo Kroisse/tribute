@@ -829,9 +829,8 @@ mod tests {
             })
             .expect("lowered variant_get");
         let variant_ty = ctx
-            .op(variant_get)
-            .attributes
-            .get_type(&ctx, "type")
+            .op_attrs(variant_get)
+            .get_type("type")
             .expect("struct_get type must be a Type attribute");
         assert_eq!(variant_ty, ctx.value_ty(ctx.op_operands(variant_get)[0]));
     }

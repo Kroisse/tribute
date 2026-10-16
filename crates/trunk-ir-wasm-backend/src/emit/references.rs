@@ -122,7 +122,7 @@ fn collect_op(
 
     match kind {
         Some(kind) => {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref(ctx, attribute) else {
+            let Some(symbol) = ctx.op_attrs(op).get_symbol_ref(attribute) else {
                 return Err(CompilationError::invalid_module(format!(
                     "wasm.{} requires a symbol `{}` attribute",
                     ctx.op(op).name,
@@ -136,7 +136,7 @@ fn collect_op(
         }
         None => {
             for owned in FUNCTION_SYMBOL_ATTRIBUTES {
-                if ctx.op(op).attributes.get(ctx, owned).is_some() {
+                if ctx.op_attrs(op).get(owned).is_some() {
                     return Err(CompilationError::invalid_module(format!(
                         "wasm.{} owns `{}` but is not a modeled function-symbol user",
                         ctx.op(op).name,
@@ -410,7 +410,7 @@ mod tests {
         let inner = ctx.region(ctx.op_region(main, 0).unwrap()).blocks[0];
         let call = ctx.block(inner).ops[0];
         assert!(wasm_dialect::Call::matches(&ctx, call));
-        ctx.remove_attr(call, "callee");
+        ctx.remove_op_attr(call, "callee");
 
         let error = collect_function_references(&ctx, module)
             .err()
@@ -437,7 +437,7 @@ mod tests {
         let inner = ctx.region(ctx.op_region(main, 0).unwrap()).blocks[0];
         let ret = ctx.block(inner).ops[0];
         assert!(wasm_dialect::Return::matches(&ctx, ret));
-        ctx.set_attr(
+        ctx.set_op_attr(
             ret,
             "callee",
             Attribute::SymbolRef(SymbolPath::new(["helper"])),

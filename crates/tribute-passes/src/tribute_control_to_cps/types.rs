@@ -177,7 +177,7 @@ impl Converter<'_> {
         let attrs = self.convert_attrs(&self.ctx.op(source).attributes.clone());
         for (key, value) in attrs {
             if !excluded.contains(&self.ctx.str(key)) {
-                self.ctx.set_attr(target, key, value);
+                self.ctx.set_op_attr(target, key, value);
             }
         }
     }

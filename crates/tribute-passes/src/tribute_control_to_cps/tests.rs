@@ -71,11 +71,7 @@ fn first_ability(ctx: &IrContext, module: Module) -> SymbolPath {
     let mut found = None;
     let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
         if found.is_none() {
-            found = ctx
-                .op(op)
-                .attributes
-                .get_symbol_ref(ctx, "ability")
-                .cloned();
+            found = ctx.op_attrs(op).get_symbol_ref("ability").cloned();
         }
         std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
     });
@@ -521,7 +517,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
         .copied()
         .find(|op| func::Func::matches(&ctx, *op))
         .unwrap();
-    let physical = ctx.op(lowered).attributes.get_type(&ctx, "type").unwrap();
+    let physical = ctx.op_attrs(lowered).get_type("type").unwrap();
     let physical = func::FuncSig::from_type_ref(&ctx, physical).unwrap();
     let Attribute::List(function_metadata) = ctx
         .get_type(physical.as_type_ref())
@@ -550,9 +546,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
             .is_none()
     );
     assert_eq!(
-        ctx.op(lowered)
-            .attributes
-            .get_i128(&ctx, CALLING_CONVENTION_ATTR),
+        ctx.op_attrs(lowered).get_i128(CALLING_CONVENTION_ATTR),
         Some(CallingConvention::Direct as i128)
     );
 
@@ -637,7 +631,7 @@ fn malformed_or_retired_source_signatures_fail_before_conversion() {
         }
         let malformed = builder.intern(&mut ctx);
         let function = module.ops(&ctx)[0];
-        ctx.set_attr(function, "type", Attribute::Type(malformed));
+        ctx.set_op_attr(function, "type", Attribute::Type(malformed));
 
         let before = print_module(&ctx, module.op());
         let error =
@@ -1166,11 +1160,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
         for block in ctx.region(region).blocks.iter().copied() {
             for op in ctx.block(block).ops.iter().copied() {
                 if tribute_control::Handler::matches(ctx, op) {
-                    *found = ctx
-                        .op(op)
-                        .attributes
-                        .get_symbol_ref(ctx, "ability")
-                        .cloned();
+                    *found = ctx.op_attrs(op).get_symbol_ref("ability").cloned();
                 }
                 for nested in ctx.op_regions(op) {
                     find_ability(ctx, nested, found);
@@ -1362,8 +1352,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
     assert_eq!(delimiters.len(), 2, "expected the handle's two delimiters");
     for delimiter in delimiters {
         assert_eq!(ctx.op_operands(delimiter).len(), 3);
-        let Some(Attribute::List(abilities)) = ctx.op(delimiter).attributes.get(&ctx, "abilities")
-        else {
+        let Some(Attribute::List(abilities)) = ctx.op_attrs(delimiter).get("abilities") else {
             panic!("final delimiter must have abilities");
         };
         assert_eq!(abilities.len(), 1);
@@ -2246,9 +2235,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     let dispatch_cps = dispatch_cps.expect("ability.perform lowers to effect.dispatch_cps");
     assert!(ctx.op_results(dispatch_cps).is_empty());
     assert_eq!(
-        ctx.op(dispatch_cps)
-            .attributes
-            .get_type(&ctx, "answer_type"),
+        ctx.op_attrs(dispatch_cps).get_type("answer_type"),
         Some(i32_type)
     );
     assert!(printed.contains("func.unreachable"));

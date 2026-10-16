@@ -77,11 +77,10 @@ fn compute_entry_contracts(
             }
             CallableBody::Definition { entry, .. } => entry,
         };
-        let ineligible = recursive.contains(&op) || ctx.op(op).attributes.contains_key(ctx, "abi");
+        let ineligible = recursive.contains(&op) || ctx.op_attrs(op).contains_key("abi");
         let signature = ctx
-            .op(op)
-            .attributes
-            .get_type(ctx, "type")
+            .op_attrs(op)
+            .get_type("type")
             .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
             .ok_or_else(|| OwnershipPlanError::new("function definition lacks exact signature"))?;
         let consumed = consumed_inputs(ctx, signature)?;
@@ -157,7 +156,7 @@ fn bodyless_c_entry_contract(
     op: OpRef,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Option<Vec<EntryOwnership>> {
-    if ctx.op(op).attributes.get_str(ctx, "abi") != Some("C") {
+    if ctx.op_attrs(op).get_str("abi") != Some("C") {
         return None;
     }
     Some(
@@ -248,12 +247,11 @@ fn validate_bodyless_signature(
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<func::FuncSig, OwnershipPlanError> {
     let signature = ctx
-        .op(op)
-        .attributes
-        .get_type(ctx, "type")
+        .op_attrs(op)
+        .get_type("type")
         .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
         .ok_or_else(|| OwnershipPlanError::new("bodyless function lacks exact signature"))?;
-    if ctx.op(op).attributes.get_str(ctx, "abi") == Some("C") {
+    if ctx.op_attrs(op).get_str("abi") == Some("C") {
         return Ok(signature);
     }
     if signature

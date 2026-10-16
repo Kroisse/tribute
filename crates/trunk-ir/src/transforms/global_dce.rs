@@ -156,10 +156,10 @@ fn run(
 fn is_root(ctx: &IrContext, module: Module, op: OpRef) -> bool {
     let entry = nearest_table(ctx, op) == Some(module.op())
         && matches!(
-            ctx.op(op).attributes.get_str(ctx, "sym_name"),
+            ctx.op_attrs(op).get_str("sym_name"),
             Some("main" | "_start")
         );
-    entry || (ctx.op(op).attributes.contains_key(ctx, "abi") && ctx.op_has_regions(op))
+    entry || (ctx.op_attrs(op).contains_key("abi") && ctx.op_has_regions(op))
 }
 
 /// Functions reachable from `roots` via BFS over call and reference edges.
@@ -219,7 +219,7 @@ mod tests {
   }
 }"#,
         );
-        ctx.set_attr(
+        ctx.set_op_attr(
             module.op(),
             "entry",
             Attribute::SymbolRef(SymbolPath::new(["named_by_module"])),

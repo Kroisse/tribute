@@ -140,7 +140,7 @@ fn declare_host_resources(
     }
     match memory {
         Some(memory) if memory.min(ctx) < required_pages => {
-            ctx.set_attr(memory.op_ref(), "min", Attribute::from(required_pages));
+            ctx.set_op_attr(memory.op_ref(), "min", Attribute::from(required_pages));
         }
         Some(_) => {}
         None => {
