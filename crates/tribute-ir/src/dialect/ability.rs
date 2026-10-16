@@ -313,11 +313,11 @@ inventory::submit! { CallableExitOps::register::<Handle>() }
 // === ADT Type Functions ===
 
 use crate::runtime_layout;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, Location, StringRef, TypeDataBuilder};
-use trunk_ir::{Symbol, SymbolPath};
 
 /// Canonical field identifiers for the `_Marker` ADT used by ability evidence.
 #[repr(u32)]
@@ -344,12 +344,10 @@ pub enum MarkerFieldType {
 
 impl MarkerFieldType {
     fn type_ref(self, ctx: &mut IrContext) -> TypeRef {
-        let dialect = Symbol::new("core");
-        let name = match self {
-            Self::I32 => Symbol::new("i32"),
-            Self::Ptr => Symbol::new("ptr"),
-        };
-        TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
+        match self {
+            Self::I32 => trunk_ir::dialect::core::I32::type_ref(ctx),
+            Self::Ptr => trunk_ir::dialect::core::ptr(ctx).as_type_ref(),
+        }
     }
 }
 

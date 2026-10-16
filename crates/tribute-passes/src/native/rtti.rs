@@ -39,7 +39,6 @@ use std::ops::ControlFlow;
 use tribute_ir::dialect::adt::layout::{compute_struct_layout, compute_variant_layout};
 use tribute_ir::dialect::tribute_rtti::FieldKind;
 use trunk_ir::SymbolPath;
-use trunk_ir::TypeDataBuilder;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::clif;
 use trunk_ir::location::Span;
@@ -66,15 +65,12 @@ struct ClifTypes {
 
 impl ClifTypes {
     fn intern(ctx: &mut IrContext) -> Self {
-        let mk = |ctx: &mut IrContext, name: &'static str| {
-            TypeDataBuilder::new(format!("core.{name}")).intern(ctx)
-        };
         Self {
-            ptr: mk(ctx, "ptr"),
-            nil: mk(ctx, "nil"),
-            i64: mk(ctx, "i64"),
-            i32: mk(ctx, "i32"),
-            i8: mk(ctx, "i8"),
+            ptr: trunk_ir::dialect::core::ptr(ctx).as_type_ref(),
+            nil: trunk_ir::dialect::core::nil(ctx).as_type_ref(),
+            i64: trunk_ir::dialect::core::I64::type_ref(ctx),
+            i32: trunk_ir::dialect::core::I32::type_ref(ctx),
+            i8: trunk_ir::dialect::core::I8::type_ref(ctx),
         }
     }
 }
@@ -961,6 +957,7 @@ impl trunk_ir::pass::Pass for GenerateRtti {
 mod tests {
     use super::*;
     use trunk_ir::Span;
+    use trunk_ir::TypeDataBuilder;
 
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
     use trunk_ir::dialect::func;

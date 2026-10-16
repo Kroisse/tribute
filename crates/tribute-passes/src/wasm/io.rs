@@ -88,7 +88,7 @@ fn declare_host_resources(
     block: trunk_ir::BlockRef,
     loc: Location,
 ) -> Result<(), ConversionError> {
-    let i32_ty = simple_type(ctx, "core", "i32");
+    let i32_ty = simple_type(ctx, "core.i32");
     let import_ty = wasm_dialect::func_sig(ctx, [i32_ty; 4], [i32_ty]).as_type_ref();
 
     let mut import = None;
@@ -205,7 +205,7 @@ impl RewritePattern for WritePattern {
 }
 
 fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
-    let i32_ty = simple_type(ctx, "core", "i32");
+    let i32_ty = simple_type(ctx, "core.i32");
     let bytes_ty = super::bytes::bytes_struct_type(ctx);
     let nil_ty = core::nil(ctx).as_type_ref();
     let body = ctx.create_block(BlockData {
@@ -629,8 +629,8 @@ fn i32_const(
     result
 }
 
-fn simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
+fn simple_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+    TypeDataBuilder::new(name).intern(ctx)
 }
 
 fn block_arg(ty: TypeRef) -> BlockArgData {

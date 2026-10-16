@@ -18,14 +18,13 @@
 //! type converters.
 
 use tribute_ir::dialect::tribute_rt;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
 use trunk_ir::types::TypeDataBuilder;
 
-fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
-    TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
+fn intern_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+    TypeDataBuilder::new(name).intern(ctx)
 }
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
@@ -48,14 +47,14 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
 /// additional conversions.
 pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Pre-intern commonly used types (TypeRef is Copy)
-    let tribute_rt_int = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("int"));
-    let tribute_rt_nat = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("nat"));
-    let tribute_rt_bool = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("bool"));
-    let tribute_rt_float = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("float"));
-    let tribute_rt_anyref = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("anyref"));
-    let core_i32 = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
-    let core_i1 = intern_type(ctx, Symbol::new("core"), Symbol::new("i1"));
-    let core_f64 = intern_type(ctx, Symbol::new("core"), Symbol::new("f64"));
+    let tribute_rt_int = intern_type(ctx, "tribute_rt.int");
+    let tribute_rt_nat = intern_type(ctx, "tribute_rt.nat");
+    let tribute_rt_bool = intern_type(ctx, "tribute_rt.bool");
+    let tribute_rt_float = intern_type(ctx, "tribute_rt.float");
+    let tribute_rt_anyref = intern_type(ctx, "tribute_rt.anyref");
+    let core_i32 = intern_type(ctx, "core.i32");
+    let core_i1 = intern_type(ctx, "core.i1");
+    let core_f64 = intern_type(ctx, "core.f64");
 
     let canonical_closure = crate::closure_lower::closure_struct_type_ref(ctx);
 
@@ -399,7 +398,7 @@ mod tests {
     }
 
     fn anyref_type(ctx: &mut IrContext) -> TypeRef {
-        intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("anyref"))
+        intern_type(ctx, "tribute_rt.anyref")
     }
 
     fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {

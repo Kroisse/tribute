@@ -139,11 +139,11 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
         return;
     }
 
-    let ptr_ty = intern_type(ctx, "core", "ptr");
-    let i64_ty = intern_type(ctx, "core", "i64");
-    let i32_ty = intern_type(ctx, "core", "i32");
-    let i8_ty = intern_type(ctx, "core", "i8");
-    let nil_ty = intern_type(ctx, "core", "nil");
+    let ptr_ty = intern_type(ctx, "core.ptr");
+    let i64_ty = intern_type(ctx, "core.i64");
+    let i32_ty = intern_type(ctx, "core.i32");
+    let i8_ty = intern_type(ctx, "core.i8");
+    let nil_ty = intern_type(ctx, "core.nil");
 
     // Process the block: iterate ops, when we hit an RC op, split.
     // `current_block` is where ops before the RC op live.
@@ -328,9 +328,9 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
 }
 
 /// Intern a type in the arena context.
-fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
+fn intern_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
     use trunk_ir::TypeDataBuilder;
-    TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
+    TypeDataBuilder::new(name).intern(ctx)
 }
 
 /// Generate retain RC ops (atomic increment) in a block.

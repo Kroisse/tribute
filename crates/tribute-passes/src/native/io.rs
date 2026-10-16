@@ -62,7 +62,7 @@ fn ensure_runtime_declarations(ctx: &mut IrContext, module: Module) {
     };
     let loc = ctx.op(module.op()).location;
     let bytes_ty = core::bytes(ctx).as_type_ref();
-    let bool_ty = intern_type(ctx, "core", "i1");
+    let bool_ty = intern_type(ctx, "core.i1");
     let ptr_ty = core::ptr(ctx).as_type_ref();
     let nil_ty = core::nil(ctx).as_type_ref();
 
@@ -92,8 +92,8 @@ fn has_function(ctx: &IrContext, block: trunk_ir::BlockRef, name: &str) -> bool 
         .any(|op| func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == name))
 }
 
-fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
+fn intern_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+    TypeDataBuilder::new(name).intern(ctx)
 }
 
 struct NativeWritePattern;
@@ -141,7 +141,7 @@ impl RewritePattern for NativeReadLinePattern {
         let result_ty = ctx.op_result_types(op)[0];
         let ptr_ty = core::ptr(ctx).as_type_ref();
         let bytes_ty = core::bytes(ctx).as_type_ref();
-        let i32_ty = intern_type(ctx, "core", "i32");
+        let i32_ty = intern_type(ctx, "core.i32");
         let nil_ty = core::nil(ctx).as_type_ref();
 
         let descriptor = func::Call::operands([])

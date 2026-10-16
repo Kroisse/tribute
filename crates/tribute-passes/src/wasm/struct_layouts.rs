@@ -64,13 +64,13 @@ fn reference_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
         .and_then(|name| ctx.type_alias_by_text(name));
     named
         .and_then(|layout| struct_type(ctx, layout))
-        .unwrap_or_else(|| intern(ctx, "wasm", "structref"))
+        .unwrap_or_else(|| intern(ctx, "wasm.structref"))
 }
 
 /// A struct of the descriptor field followed by `fields` in their Wasm
 /// storage representation.
 fn described_struct(ctx: &mut IrContext, fields: impl IntoIterator<Item = TypeRef>) -> TypeRef {
-    let descriptor = intern(ctx, "core", "i32");
+    let descriptor = intern(ctx, "core.i32");
     let mut params = vec![descriptor];
     for field in fields {
         params.push(field_type(ctx, field));
@@ -87,21 +87,21 @@ fn described_struct(ctx: &mut IrContext, fields: impl IntoIterator<Item = TypeRe
 fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
     if data.name.is(ctx, "core.i1") {
-        return intern(ctx, "core", "i32");
+        return intern(ctx, "core.i32");
     }
     if data.name.dialect(ctx) == "adt" {
         if data.name.strip_dialect(ctx) == "typeref" {
-            return intern(ctx, "wasm", "structref");
+            return intern(ctx, "wasm.structref");
         }
         if data.name.strip_dialect(ctx) == "enum" {
-            return intern(ctx, "wasm", "anyref");
+            return intern(ctx, "wasm.anyref");
         }
     }
     struct_type(ctx, ty).unwrap_or(ty)
 }
 
-fn intern(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
+fn intern(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+    TypeDataBuilder::new(name).intern(ctx)
 }
 
 #[cfg(test)]
@@ -140,10 +140,7 @@ mod tests {
 
         assert_eq!(point, size);
         assert_eq!(point, rect);
-        let [i32_ty, f64_ty] = [
-            intern(&mut ctx, "core", "i32"),
-            intern(&mut ctx, "core", "f64"),
-        ];
+        let [i32_ty, f64_ty] = [intern(&mut ctx, "core.i32"), intern(&mut ctx, "core.f64")];
         assert_eq!(fields(&ctx, point), [i32_ty, f64_ty, f64_ty]);
     }
 
@@ -169,9 +166,9 @@ mod tests {
             panic!("three parameters")
         };
         let [i32_ty, i64_ty, structref] = [
-            intern(&mut ctx, "core", "i32"),
-            intern(&mut ctx, "core", "i64"),
-            intern(&mut ctx, "wasm", "structref"),
+            intern(&mut ctx, "core.i32"),
+            intern(&mut ctx, "core.i64"),
+            intern(&mut ctx, "wasm.structref"),
         ];
         assert_eq!(fields(&ctx, ctx.value_ty(pair)), [i32_ty, i64_ty, i64_ty]);
         assert_eq!(ctx.value_ty(shape), structref);
@@ -194,9 +191,9 @@ mod tests {
         let [outer, inner] = ["Outer", "Inner"].map(|name| alias(&ctx, name));
         let outer = struct_type(&mut ctx, outer).expect("user struct");
         let inner = struct_type(&mut ctx, inner).expect("user struct");
-        let i32_ty = intern(&mut ctx, "core", "i32");
-        let structref = intern(&mut ctx, "wasm", "structref");
-        let anyref = intern(&mut ctx, "wasm", "anyref");
+        let i32_ty = intern(&mut ctx, "core.i32");
+        let structref = intern(&mut ctx, "wasm.structref");
+        let anyref = intern(&mut ctx, "wasm.anyref");
 
         assert_eq!(
             fields(&ctx, outer),
