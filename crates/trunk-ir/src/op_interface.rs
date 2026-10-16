@@ -480,11 +480,7 @@ fn callable_exit_model<T: CallableExitModel>(
     op: OpRef,
 ) -> Result<(), ControlFlowInterfaceError> {
     let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!(
-            "malformed {}.{}: {error:?}",
-            T::DIALECT_NAME,
-            T::OP_NAME
-        ))
+        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
     })?;
     model.exits_callable(ctx)
 }
@@ -785,11 +781,7 @@ fn branch_model_successors<T: BranchModel>(
     op: OpRef,
 ) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
     let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!(
-            "malformed {}.{}: {error:?}",
-            T::DIALECT_NAME,
-            T::OP_NAME
-        ))
+        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
     })?;
     model.successors(ctx)
 }
@@ -886,11 +878,7 @@ fn region_branch_model_successors<T: RegionBranchModel>(
     point: RegionBranchPoint,
 ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
     let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!(
-            "malformed {}.{}: {error:?}",
-            T::DIALECT_NAME,
-            T::OP_NAME
-        ))
+        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
     })?;
     model.successors(ctx, point)
 }
@@ -901,11 +889,7 @@ fn region_branch_model_entry_operands<T: RegionBranchModel>(
     successor: RegionSuccessor,
 ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
     let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!(
-            "malformed {}.{}: {error:?}",
-            T::DIALECT_NAME,
-            T::OP_NAME
-        ))
+        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
     })?;
     model.entry_successor_operands(ctx, successor)
 }
@@ -1043,11 +1027,7 @@ fn region_terminator_model_operands<T: RegionBranchTerminatorModel>(
     successor: RegionSuccessor,
 ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
     let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!(
-            "malformed {}.{}: {error:?}",
-            T::DIALECT_NAME,
-            T::OP_NAME
-        ))
+        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
     })?;
     model.successor_operands(ctx, successor)
 }

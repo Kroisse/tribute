@@ -627,8 +627,6 @@ inventory::submit! {
 }
 
 impl DialectType for FuncSig {
-    const DIALECT_NAME: &'static str = "wasm";
-    const TYPE_NAME: &'static str = "func_sig";
     const DEF: &'static crate::type_def::TypeDef = &FUNC_SIG_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {

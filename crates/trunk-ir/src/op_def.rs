@@ -8,7 +8,7 @@
 
 use std::sync::LazyLock;
 
-use crate::name::{Definition, Name, NameArg, QualifiedName, Registry};
+use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
 use crate::op_schema::{OpSchema, SchemaViolation};
 use crate::{IrContext, OpRef};
 
@@ -51,9 +51,9 @@ impl OpDef {
         }
     }
 
-    /// The registered definition named `dialect.name`.
-    pub fn lookup(dialect: &str, name: &str) -> Option<&'static OpDef> {
-        REGISTRY.get(dialect, name)
+    /// The registered definition written `dialect.name`.
+    pub fn lookup(name: &str) -> Option<&'static OpDef> {
+        REGISTRY.get(name)
     }
 
     /// The registered definition of an operation.
@@ -67,8 +67,8 @@ impl Definition for OpDef {
         &self.name
     }
 
-    fn lookup(dialect: &str, name: &str) -> Option<&'static Self> {
-        REGISTRY.get(dialect, name)
+    fn lookup(name: &str) -> Option<&'static Self> {
+        REGISTRY.get(name)
     }
 }
 
@@ -90,8 +90,8 @@ pub struct OpDefRegistration(pub &'static OpDef);
 
 inventory::collect!(OpDefRegistration);
 
-static REGISTRY: LazyLock<Registry<OpDef>> = LazyLock::new(|| {
-    Registry::collect(
+static REGISTRY: LazyLock<DefinitionTable<OpDef>> = LazyLock::new(|| {
+    DefinitionTable::collect(
         "operation",
         inventory::iter::<OpDefRegistration>
             .into_iter()
@@ -106,11 +106,11 @@ mod tests {
 
     #[test]
     fn registry_finds_definitions_across_dialects() {
-        let def = OpDef::lookup("func", "return").expect("func.return should be registered");
+        let def = OpDef::lookup("func.return").expect("func.return should be registered");
         assert_eq!(def.name.as_str(), "func.return");
         assert_eq!((def.schema.dialect, def.schema.name), ("func", "return"));
         assert_eq!(def.schema.operands[0].arity, Arity::Variadic);
-        assert!(OpDef::lookup("func", "no_such_op").is_none());
+        assert!(OpDef::lookup("func.no_such_op").is_none());
     }
 
     #[test]

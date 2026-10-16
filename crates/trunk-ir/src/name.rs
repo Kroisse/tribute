@@ -91,20 +91,19 @@ pub fn split_qualified(text: &str) -> Option<(&str, &str)> {
 pub trait Definition: Sync + 'static {
     fn qualified_name(&self) -> &QualifiedName;
 
-    /// The registered definition named `dialect.name`.
-    fn lookup(dialect: &str, name: &str) -> Option<&'static Self>;
+    /// The registered definition written `dialect.name`.
+    fn lookup(name: &str) -> Option<&'static Self>;
 }
 
-/// Registered definitions of one kind by `(dialect, name)`.
-pub(crate) struct Registry<D: 'static>(HashMap<(&'static str, &'static str), &'static D>);
+/// Registered definitions of one kind by their `dialect.name` text.
+pub(crate) struct DefinitionTable<D: 'static>(HashMap<&'static str, &'static D>);
 
-impl<D: Definition> Registry<D> {
+impl<D: Definition> DefinitionTable<D> {
     pub(crate) fn collect(kind: &str, defs: impl IntoIterator<Item = &'static D>) -> Self {
         let mut map = HashMap::default();
         for def in defs {
             let name = def.qualified_name();
-            let key = (name.dialect(), name.strip_dialect());
-            if let Some(previous) = map.insert(key, def) {
+            if let Some(previous) = map.insert(name.as_str(), def) {
                 panic!(
                     "{kind} {} is registered twice ({:p} and {def:p})",
                     name.as_str(),
@@ -115,8 +114,8 @@ impl<D: Definition> Registry<D> {
         Self(map)
     }
 
-    pub(crate) fn get(&self, dialect: &str, name: &str) -> Option<&'static D> {
-        self.0.get(&(dialect, name)).copied()
+    pub(crate) fn get(&self, name: &str) -> Option<&'static D> {
+        self.0.get(name).copied()
     }
 }
 
@@ -150,28 +149,34 @@ impl<D: Definition> Name<D> {
         Self(Repr::Registered(def))
     }
 
-    /// The handle of `dialect.name`: its registered definition, or strings
-    /// interned in `strings`.
-    pub(crate) fn intern(strings: &mut StringPool, dialect: &str, name: &str) -> Self {
-        match D::lookup(dialect, name) {
-            Some(def) => Self::registered(def),
-            None => Self(Repr::Unregistered {
-                dialect: strings.intern(dialect),
-                name: strings.intern(name),
-            }),
+    /// The handle of the name written `text`: its registered definition, or
+    /// strings interned in `strings`.
+    ///
+    /// # Panics
+    ///
+    /// If `text` has no `.` separating a non-empty dialect and name.
+    pub(crate) fn intern(strings: &mut StringPool, text: &str) -> Self {
+        if let Some(def) = D::lookup(text) {
+            return Self::registered(def);
         }
+        let (dialect, name) = split_or_panic(text);
+        Self(Repr::Unregistered {
+            dialect: strings.intern(dialect),
+            name: strings.intern(name),
+        })
     }
 
-    /// The handle of `dialect.name` if it is registered or its strings are
-    /// already in `strings`, without adding to the pool.
-    pub(crate) fn lookup(strings: &StringPool, dialect: &str, name: &str) -> Option<Self> {
-        match D::lookup(dialect, name) {
-            Some(def) => Some(Self::registered(def)),
-            None => Some(Self(Repr::Unregistered {
-                dialect: strings.lookup(dialect)?,
-                name: strings.lookup(name)?,
-            })),
+    /// The handle of the name written `text` if it is registered or its
+    /// strings are already in `strings`, without adding to the pool.
+    pub(crate) fn lookup(strings: &StringPool, text: &str) -> Option<Self> {
+        if let Some(def) = D::lookup(text) {
+            return Some(Self::registered(def));
         }
+        let (dialect, name) = split_or_panic(text);
+        Some(Self(Repr::Unregistered {
+            dialect: strings.lookup(dialect)?,
+            name: strings.lookup(name)?,
+        }))
     }
 
     /// The registered definition, or `None` for an unregistered name.
@@ -301,24 +306,13 @@ impl<D: Definition> NameArg<D> {
     pub(crate) fn resolve(self, strings: &mut StringPool) -> Name<D> {
         match self {
             NameArg::Name(name) => name,
-            NameArg::Text(text) => intern_text(strings, &text),
+            NameArg::Text(text) => Name::intern(strings, &text),
         }
     }
 }
 
-/// Find `dialect.name` text without adding to the pool, panicking if it is
-/// not qualified.
-pub(crate) fn lookup_text<D: Definition>(strings: &StringPool, text: &str) -> Option<Name<D>> {
-    let (dialect, name) = split_qualified(text)
-        .unwrap_or_else(|| panic!("`{text}` is not a qualified `dialect.name`"));
-    Name::lookup(strings, dialect, name)
-}
-
-/// Intern `dialect.name` text, panicking if it is not qualified.
-pub(crate) fn intern_text<D: Definition>(strings: &mut StringPool, text: &str) -> Name<D> {
-    let (dialect, name) = split_qualified(text)
-        .unwrap_or_else(|| panic!("`{text}` is not a qualified `dialect.name`"));
-    Name::intern(strings, dialect, name)
+fn split_or_panic(text: &str) -> (&str, &str) {
+    split_qualified(text).unwrap_or_else(|| panic!("`{text}` is not a qualified `dialect.name`"))
 }
 
 impl<D: Definition> From<Name<D>> for NameArg<D> {

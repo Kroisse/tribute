@@ -398,8 +398,6 @@ inventory::submit! {
 }
 
 impl DialectType for Struct {
-    const DIALECT_NAME: &'static str = "adt";
-    const TYPE_NAME: &'static str = "struct";
     const DEF: &'static trunk_ir::TypeDef = &STRUCT_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
@@ -565,7 +563,6 @@ fn write_struct_type(
 /// Anything else, including a generic spelling, backtracks to generic parsing.
 fn parse_struct_type<'a>(
     input: &mut &'a str,
-    dialect: &'a str,
     name: &'a str,
 ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
     use trunk_ir::parser::raw::{
@@ -611,7 +608,6 @@ fn parse_struct_type<'a>(
         params.push(param);
     }
     Ok(RawType::Concrete {
-        dialect,
         name,
         params,
         attrs,
@@ -773,8 +769,6 @@ inventory::submit! {
 }
 
 impl DialectType for Enum {
-    const DIALECT_NAME: &'static str = "adt";
-    const TYPE_NAME: &'static str = "enum";
     const DEF: &'static trunk_ir::TypeDef = &ENUM_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
@@ -906,7 +900,6 @@ fn write_enum_type(
 /// Anything else, including a generic spelling, backtracks to generic parsing.
 fn parse_enum_type<'a>(
     input: &mut &'a str,
-    dialect: &'a str,
     name: &'a str,
 ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
     use trunk_ir::parser::raw::{
@@ -971,14 +964,12 @@ fn parse_enum_type<'a>(
             field_params.push(param);
         }
         params.push(RawParam::from(RawType::Concrete {
-            dialect: "adt",
-            name: "variant",
+            name: "adt.variant",
             params: field_params,
             attrs: vec![(STRUCT_NAME_ATTR.into(), RawAttribute::String(variant))],
         }));
     }
     Ok(RawType::Concrete {
-        dialect,
         name,
         params,
         attrs,

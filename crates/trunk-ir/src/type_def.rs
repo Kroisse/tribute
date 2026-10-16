@@ -2,7 +2,7 @@
 
 use std::sync::LazyLock;
 
-use crate::name::{Definition, Name, NameArg, QualifiedName, Registry};
+use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
 
 /// The name of a type.
 pub type TypeName = Name<TypeDef>;
@@ -21,9 +21,9 @@ pub struct TypeDef {
 }
 
 impl TypeDef {
-    /// The registered definition named `dialect.name`.
-    pub fn lookup(dialect: &str, name: &str) -> Option<&'static TypeDef> {
-        REGISTRY.get(dialect, name)
+    /// The registered definition written `dialect.name`.
+    pub fn lookup(name: &str) -> Option<&'static TypeDef> {
+        REGISTRY.get(name)
     }
 }
 
@@ -32,8 +32,8 @@ impl Definition for TypeDef {
         &self.name
     }
 
-    fn lookup(dialect: &str, name: &str) -> Option<&'static Self> {
-        REGISTRY.get(dialect, name)
+    fn lookup(name: &str) -> Option<&'static Self> {
+        REGISTRY.get(name)
     }
 }
 
@@ -44,8 +44,8 @@ pub struct TypeDefRegistration(pub &'static TypeDef);
 
 inventory::collect!(TypeDefRegistration);
 
-static REGISTRY: LazyLock<Registry<TypeDef>> = LazyLock::new(|| {
-    Registry::collect(
+static REGISTRY: LazyLock<DefinitionTable<TypeDef>> = LazyLock::new(|| {
+    DefinitionTable::collect(
         "type",
         inventory::iter::<TypeDefRegistration>
             .into_iter()

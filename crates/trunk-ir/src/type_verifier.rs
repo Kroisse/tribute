@@ -13,8 +13,7 @@ use crate::{IrContext, TypeRef};
 /// The verifier of one type, registered via `inventory::submit!` at the
 /// dialect definition site.
 pub struct TypeVerifier {
-    dialect: &'static str,
-    type_name: &'static str,
+    def: &'static crate::TypeDef,
     /// Checks one interned type of this kind.
     pub verify_fn: fn(&IrContext, TypeRef) -> Result<(), String>,
 }
@@ -25,8 +24,7 @@ impl TypeVerifier {
         verify_fn: fn(&IrContext, TypeRef) -> Result<(), String>,
     ) -> Self {
         Self {
-            dialect: T::DIALECT_NAME,
-            type_name: T::TYPE_NAME,
+            def: T::DEF,
             verify_fn,
         }
     }
@@ -35,16 +33,17 @@ impl TypeVerifier {
 inventory::collect!(TypeVerifier);
 
 impl Registered for TypeVerifier {
+    type Def = crate::TypeDef;
     const KIND: &'static str = "TypeVerifier";
 
-    fn key(&self) -> (&'static str, &'static str) {
-        (self.dialect, self.type_name)
+    fn def(&self) -> &'static crate::TypeDef {
+        self.def
     }
 }
 
 static TYPE_VERIFIERS: LazyLock<Registry<TypeVerifier>> = LazyLock::new(Registry::collect);
 
 /// Look up the registered verifier for the given type kind.
-pub fn lookup_type_verifier(dialect: &str, name: &str) -> Option<&'static TypeVerifier> {
-    TYPE_VERIFIERS.get(dialect, name)
+pub fn lookup_type_verifier(name: crate::TypeName) -> Option<&'static TypeVerifier> {
+    TYPE_VERIFIERS.get(name)
 }

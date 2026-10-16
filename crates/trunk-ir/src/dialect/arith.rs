@@ -992,7 +992,16 @@ mod canonicalize_tests {
 
         /// Binary integer operations with a constant fold.
         const BINARY_OPS: [&str; 10] = [
-            "addi", "subi", "muli", "divsi", "divui", "remsi", "remui", "and", "or", "xor",
+            "arith.addi",
+            "arith.subi",
+            "arith.muli",
+            "arith.divsi",
+            "arith.divui",
+            "arith.remsi",
+            "arith.remui",
+            "arith.and",
+            "arith.or",
+            "arith.xor",
         ];
 
         /// Native Rust integer widths, so the expected value comes straight
@@ -1012,7 +1021,7 @@ mod canonicalize_tests {
   func.func @f() -> core.i{width} {{
     %a = arith.const {{value = {a}}} : core.i{width}
     %b = arith.const {{value = {b}}} : core.i{width}
-    %r = arith.{op} %a, %b : core.i{width}
+    %r = {op} %a, %b : core.i{width}
     func.return %r
   }}
 }}"
@@ -1020,7 +1029,7 @@ mod canonicalize_tests {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &input);
             let result = run_arith_patterns(&mut ctx, module);
-            let def = crate::OpDef::lookup("arith", op).expect("registered arith op");
+            let def = crate::OpDef::lookup(op).expect("registered arith op");
             let remaining = count_ops(&ctx, module, crate::OpName::registered(def));
             if result.total_changes == 0 {
                 prop_assert_eq!(remaining, 1);
@@ -1041,16 +1050,16 @@ mod canonicalize_tests {
                     let (a, b) = (a as $s, b as $s);
                     let (ua, ub) = (a as $u, b as $u);
                     match op {
-                        "addi" => Some(a.wrapping_add(b) as i128),
-                        "subi" => Some(a.wrapping_sub(b) as i128),
-                        "muli" => Some(a.wrapping_mul(b) as i128),
-                        "divsi" => a.checked_div(b).map(|r| r as i128),
-                        "remsi" => a.checked_rem(b).map(|r| r as i128),
-                        "divui" => ua.checked_div(ub).map(|r| r as $s as i128),
-                        "remui" => ua.checked_rem(ub).map(|r| r as $s as i128),
-                        "and" => Some((a & b) as i128),
-                        "or" => Some((a | b) as i128),
-                        "xor" => Some((a ^ b) as i128),
+                        "arith.addi" => Some(a.wrapping_add(b) as i128),
+                        "arith.subi" => Some(a.wrapping_sub(b) as i128),
+                        "arith.muli" => Some(a.wrapping_mul(b) as i128),
+                        "arith.divsi" => a.checked_div(b).map(|r| r as i128),
+                        "arith.remsi" => a.checked_rem(b).map(|r| r as i128),
+                        "arith.divui" => ua.checked_div(ub).map(|r| r as $s as i128),
+                        "arith.remui" => ua.checked_rem(ub).map(|r| r as $s as i128),
+                        "arith.and" => Some((a & b) as i128),
+                        "arith.or" => Some((a | b) as i128),
+                        "arith.xor" => Some((a ^ b) as i128),
                         _ => unreachable!("unknown op {op}"),
                     }
                 }};
@@ -1134,16 +1143,16 @@ mod canonicalize_tests {
                 let min = reference_wrap(1i128 << (width - 1), width);
                 let signed_trap = b == 0 || (a == min && b == -1);
                 let expected = match op {
-                    "addi" => Some(a.wrapping_add(b)),
-                    "subi" => Some(a.wrapping_sub(b)),
-                    "muli" => Some(a.wrapping_mul(b)),
-                    "divsi" => (!signed_trap).then(|| a.wrapping_div(b)),
-                    "remsi" => (!signed_trap).then(|| a.wrapping_rem(b)),
-                    "divui" => (unsigned(b) != 0).then(|| (unsigned(a) / unsigned(b)) as i128),
-                    "remui" => (unsigned(b) != 0).then(|| (unsigned(a) % unsigned(b)) as i128),
-                    "and" => Some(a & b),
-                    "or" => Some(a | b),
-                    "xor" => Some(a ^ b),
+                    "arith.addi" => Some(a.wrapping_add(b)),
+                    "arith.subi" => Some(a.wrapping_sub(b)),
+                    "arith.muli" => Some(a.wrapping_mul(b)),
+                    "arith.divsi" => (!signed_trap).then(|| a.wrapping_div(b)),
+                    "arith.remsi" => (!signed_trap).then(|| a.wrapping_rem(b)),
+                    "arith.divui" => (unsigned(b) != 0).then(|| (unsigned(a) / unsigned(b)) as i128),
+                    "arith.remui" => (unsigned(b) != 0).then(|| (unsigned(a) % unsigned(b)) as i128),
+                    "arith.and" => Some(a & b),
+                    "arith.or" => Some(a | b),
+                    "arith.xor" => Some(a ^ b),
                     _ => unreachable!("unknown op {op}"),
                 }
                 .map(|r| reference_wrap(r, width));
@@ -1154,7 +1163,7 @@ mod canonicalize_tests {
             /// the neighbouring `(MIN + 1) / -1` is.
             #[test]
             fn signed_div_rem_overflow_corner_is_left_alone(
-                op in prop::sample::select(&["divsi", "remsi"][..]),
+                op in prop::sample::select(&["arith.divsi", "arith.remsi"][..]),
                 width in 1u32..=128,
             ) {
                 let min = reference_wrap(1i128 << (width - 1), width);

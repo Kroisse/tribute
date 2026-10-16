@@ -415,25 +415,25 @@ impl IrContext {
     ///
     /// If `text` has no `.` separating a non-empty dialect and name.
     pub fn intern_op_name(&mut self, text: &str) -> OpName {
-        crate::name::intern_text(&mut self.strings, text)
+        OpName::intern(&mut self.strings, text)
     }
 
     /// The handle of the type name written `dialect.name`; see
     /// [`intern_op_name`](Self::intern_op_name).
     pub fn intern_type_name(&mut self, text: &str) -> TypeName {
-        crate::name::intern_text(&mut self.strings, text)
+        TypeName::intern(&mut self.strings, text)
     }
 
     /// The handle of the operation name written `dialect.name`, or `None`
     /// if it is neither registered nor used in this context.
     pub fn lookup_op_name(&self, text: &str) -> Option<OpName> {
-        crate::name::lookup_text(&self.strings, text)
+        OpName::lookup(&self.strings, text)
     }
 
     /// The handle of the type name written `dialect.name`, or `None` if it
     /// is neither registered nor used in this context.
     pub fn lookup_type_name(&self, text: &str) -> Option<TypeName> {
-        crate::name::lookup_text(&self.strings, text)
+        TypeName::lookup(&self.strings, text)
     }
 
     /// The attributes of `op`, read through this context.

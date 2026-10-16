@@ -35,8 +35,8 @@ impl std::error::Error for ParseError {}
 #[derive(Debug, Clone)]
 pub struct RawOperation<'a> {
     pub results: Vec<&'a str>,
-    pub dialect: &'a str,
-    pub op_name: &'a str,
+    /// The operation's `dialect.name`.
+    pub name: &'a str,
     /// Optional symbol name parsed from `@name` after `dialect.op`.
     pub sym_name: Option<String>,
     /// Optional function-style parameters: `(%arg: type, ...)`.
@@ -88,14 +88,14 @@ impl<'a> From<RawType<'a>> for RawParam<'a> {
 pub enum RawType<'a> {
     /// `dialect.name` or `dialect.name<params..., {attrs}>`.
     Concrete {
-        dialect: &'a str,
+        /// The type's `dialect.name`.
         name: &'a str,
         params: Vec<RawParam<'a>>,
         attrs: RawAttrDict<'a>,
     },
     /// Function syntax `dialect.name<(inputs...) -> results, {attrs}>`.
     Function {
-        dialect: &'a str,
+        /// The type's `dialect.name`.
         name: &'a str,
         inputs: Vec<RawParam<'a>>,
         results: Vec<RawParam<'a>>,
@@ -197,11 +197,9 @@ pub fn block_label<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     .parse_next(input)
 }
 
-/// Parse a dialect-qualified name: dialect.name
-pub fn qualified_name<'a>(input: &mut &'a str) -> ModalResult<(&'a str, &'a str)> {
-    (ident, '.', ident)
-        .map(|(d, _, n)| (d, n))
-        .parse_next(input)
+/// Parse a dialect-qualified name, `dialect.name`, as one slice.
+pub fn qualified_name<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
+    (ident, '.', ident).take().parse_next(input)
 }
 
 /// Parse an integer literal (signed or unsigned).
@@ -329,11 +327,10 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
         return type_alias_ref.parse_next(input);
     }
 
-    let (dialect, name) = qualified_name.parse_next(input)?;
+    let name = qualified_name.parse_next(input)?;
 
     if !input.starts_with('<') {
         return Ok(RawType::Concrete {
-            dialect,
             name,
             params: vec![],
             attrs: vec![],
@@ -342,9 +339,11 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     '<'.parse_next(input)?;
     ws.parse_next(input)?;
 
-    if let Some(format) = crate::asm_format::lookup_type_asm_format(dialect, name) {
+    if let Some(format) = crate::TypeDef::lookup(name)
+        .and_then(|def| crate::asm_format::lookup_type_asm_format(crate::TypeName::registered(def)))
+    {
         let checkpoint = *input;
-        match (format.parse_fn)(input, dialect, name) {
+        match (format.parse_fn)(input, name) {
             Ok(ty) => return Ok(ty),
             Err(winnow::error::ErrMode::Backtrack(_)) => *input = checkpoint,
             Err(error) => return Err(error),
@@ -368,7 +367,6 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
         ws.parse_next(input)?;
         '>'.parse_next(input)?;
         return Ok(RawType::Function {
-            dialect,
             name,
             inputs,
             results,
@@ -396,7 +394,6 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     '>'.parse_next(input)?;
 
     Ok(RawType::Concrete {
-        dialect,
         name,
         params,
         attrs,
@@ -649,21 +646,22 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     ws.parse_next(input)?;
 
     // dialect.op
-    let (dialect, op_name) = qualified_name.parse_next(input)?;
+    let name = qualified_name.parse_next(input)?;
 
     // Optional @symbol (e.g., core.module @test, func.func @main)
     let sym_name = opt(preceded(ws, symbol_ref)).parse_next(input)?;
 
     ws.parse_next(input)?;
     // A bare attribute dictionary is generic syntax, even for func.func.
-    let generic_func = dialect == "func" && op_name == "func" && input.starts_with('{');
+    let generic_func = name == "func.func" && input.starts_with('{');
     // Generic operations begin with attributes or operands. Only those shapes
     // may recover from a custom parser's Backtrack into generic parsing.
     let generic_custom_shape =
         input.starts_with('{') || input.starts_with('%') || input.starts_with(':');
     // Check custom assembly format registry
-    if let Some(fmt) =
-        crate::asm_format::lookup_asm_format(dialect, op_name).filter(|_| !generic_func)
+    if let Some(fmt) = crate::OpDef::lookup(name)
+        .and_then(|def| crate::asm_format::lookup_asm_format(crate::OpName::registered(def)))
+        .filter(|_| !generic_func)
     {
         let checkpoint = *input;
         match (fmt.parse_fn)(input, results.clone(), sym_name.clone()) {
@@ -726,8 +724,7 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
 
     Ok(RawOperation {
         results,
-        dialect,
-        op_name,
+        name,
         sym_name,
         has_func_signature,
         func_params: func_params_parsed,
@@ -873,14 +870,9 @@ mod tests {
     use super::*;
 
     /// Helper to unwrap a concrete RawType.
-    fn unwrap_concrete<'a, 'b>(ty: &'b RawType<'a>) -> (&'a str, &'a str, &'b [RawParam<'a>]) {
+    fn unwrap_concrete<'a, 'b>(ty: &'b RawType<'a>) -> (&'a str, &'b [RawParam<'a>]) {
         match ty {
-            RawType::Concrete {
-                dialect,
-                name,
-                params,
-                ..
-            } => (dialect, name, params),
+            RawType::Concrete { name, params, .. } => (name, params),
             RawType::Function { .. } => panic!("expected Concrete, got Function"),
             RawType::Alias(name) => panic!("expected Concrete, got Alias(!{name})"),
         }
@@ -935,9 +927,8 @@ mod tests {
     fn test_parse_type() {
         let mut input = "core.i32";
         let raw = raw_type.parse_next(&mut input).expect("should parse type");
-        let (dialect, name, params) = unwrap_concrete(&raw);
-        assert_eq!(dialect, "core");
-        assert_eq!(name, "i32");
+        let (name, params) = unwrap_concrete(&raw);
+        assert_eq!(name, "core.i32");
         assert!(params.is_empty());
     }
 
@@ -945,9 +936,8 @@ mod tests {
     fn test_parse_parameterized_type() {
         let mut input = "core.tuple<core.nil, core.i32, core.i32>";
         let raw = raw_type.parse_next(&mut input).expect("should parse type");
-        let (dialect, name, params) = unwrap_concrete(&raw);
-        assert_eq!(dialect, "core");
-        assert_eq!(name, "tuple");
+        let (name, params) = unwrap_concrete(&raw);
+        assert_eq!(name, "core.tuple");
         assert_eq!(params.len(), 3);
     }
 
@@ -1101,13 +1091,11 @@ mod tests {
         let result = raw_type.parse_next(&mut input).expect("should parse");
         match &result {
             RawType::Concrete {
-                dialect,
                 name,
                 params,
                 attrs,
             } => {
-                assert_eq!(*dialect, "core");
-                assert_eq!(*name, "tuple");
+                assert_eq!(*name, "core.tuple");
                 assert_eq!(params.len(), 2);
                 assert_eq!(attrs.len(), 1);
                 assert_eq!(attrs[0].0, "tag");
@@ -1178,7 +1166,7 @@ mod tests {
         let raw = raw_type
             .parse_next(&mut input)
             .expect("should parse the name");
-        let (_, _, params) = unwrap_concrete(&raw);
+        let (_, params) = unwrap_concrete(&raw);
         assert!(params.is_empty());
         assert_eq!(input, "(core.i32)");
     }

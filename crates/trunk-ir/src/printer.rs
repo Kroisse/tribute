@@ -112,10 +112,8 @@ impl<'a> PrintState<'a> {
             return self.write_func_sig_type(f, ty, inputs, results);
         }
         let data = self.ctx.get_type(ty);
-        if let Some(format) = crate::asm_format::lookup_type_asm_format(
-            data.name.dialect(self.ctx),
-            data.name.strip_dialect(self.ctx),
-        ) && let Some(result) = (format.print_fn)(&mut TypePrintHelper { state: self, f }, ty)
+        if let Some(format) = crate::asm_format::lookup_type_asm_format(data.name)
+            && let Some(result) = (format.print_fn)(&mut TypePrintHelper { state: self, f }, ty)
         {
             return result;
         }
@@ -879,10 +877,7 @@ fn print_operation(
     }
 
     // Check custom assembly format registry
-    let name = state.ctx.op(op).name;
-    if let Some(fmt) =
-        crate::asm_format::lookup_asm_format(name.dialect(state.ctx), name.strip_dialect(state.ctx))
-    {
+    if let Some(fmt) = crate::asm_format::lookup_asm_format(state.ctx.op(op).name) {
         let mut helper = OpPrintHelper { state, f };
         return (fmt.print_fn)(&mut helper, op, indent);
     }

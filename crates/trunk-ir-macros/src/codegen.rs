@@ -70,8 +70,6 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
         static #def_static: #crate_path::op_def::OpDef = #def;
 
         impl #crate_path::ops::DialectOp for #sname {
-            const DIALECT_NAME: &'static str = #dialect;
-            const OP_NAME: &'static str = #op_name;
             const DEF: &'static #crate_path::op_def::OpDef = &#def_static;
 
             fn from_op(
@@ -1063,8 +1061,6 @@ fn gen_type_struct_and_trait(
         }
 
         impl #crate_path::ops::DialectType for #sname {
-            const DIALECT_NAME: &'static str = #dialect;
-            const TYPE_NAME: &'static str = #type_name;
             const DEF: &'static #crate_path::type_def::TypeDef = &#def_static;
 
             fn from_type_ref(

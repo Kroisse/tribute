@@ -447,9 +447,7 @@ fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 ),
             });
         }
-        let Some(verifier) =
-            lookup_type_verifier(data.name.dialect(ctx), data.name.strip_dialect(ctx))
-        else {
+        let Some(verifier) = lookup_type_verifier(data.name) else {
             continue;
         };
         if let Err(error) = (verifier.verify_fn)(ctx, ty) {

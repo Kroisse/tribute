@@ -86,8 +86,6 @@ pub enum ConversionError {
 
 /// Trait for arena-based dialect operation wrappers.
 pub trait DialectOp: Sized + Copy {
-    const DIALECT_NAME: &'static str;
-    const OP_NAME: &'static str;
     /// Definition generated from the dialect declaration.
     const DEF: &'static OpDef;
     /// The operation's name, which points to [`DEF`](Self::DEF).
@@ -142,8 +140,6 @@ pub mod __private {
 
 /// Trait for arena-based dialect type wrappers.
 pub trait DialectType: Sized + Copy {
-    const DIALECT_NAME: &'static str;
-    const TYPE_NAME: &'static str;
     /// Definition generated from the dialect declaration.
     const DEF: &'static TypeDef;
     /// The type's name, which points to [`DEF`](Self::DEF).

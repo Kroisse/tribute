@@ -212,8 +212,7 @@ fn parse_closure_lambda<'a>(
 
     // Reconstruct closure.closure<func.func_sig<(param_types...) -> return_ty>> type.
     let func_raw_ty = RawType::Function {
-        dialect: "func",
-        name: "func_sig",
+        name: "func.func_sig",
         inputs: params.iter().map(|(_, ty)| ty.clone().into()).collect(),
         results: ret_ty.into_iter().map(Into::into).collect(),
         attrs: vec![],
@@ -221,16 +220,14 @@ fn parse_closure_lambda<'a>(
 
     // closure.closure<func.func_sig<...>>
     let closure_raw_ty = RawType::Concrete {
-        dialect: "closure",
-        name: "closure",
+        name: "closure.closure",
         params: vec![func_raw_ty.into()],
         attrs: vec![],
     };
 
     Ok(RawOperation {
         results,
-        dialect: "closure",
-        op_name: "lambda",
+        name: "closure.lambda",
         sym_name,
         has_func_signature: false,
         func_params: vec![],

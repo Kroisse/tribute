@@ -34,9 +34,11 @@ impl OpKey {
                 OpKey::Registered(name)
             }
             OpNameArg::Text(text) => {
-                let (dialect, op) = split_qualified(&text)
-                    .unwrap_or_else(|| panic!("`{text}` is not a qualified `dialect.name`"));
-                match <OpDef as crate::name::Definition>::lookup(dialect, op) {
+                assert!(
+                    split_qualified(&text).is_some(),
+                    "`{text}` is not a qualified `dialect.name`"
+                );
+                match OpDef::lookup(&text) {
                     Some(def) => OpKey::Registered(OpName::registered(def)),
                     None => OpKey::Unregistered(text.into()),
                 }

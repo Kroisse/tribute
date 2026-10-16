@@ -501,8 +501,6 @@ inventory::submit! {
 }
 
 impl DialectType for FuncSig {
-    const DIALECT_NAME: &'static str = "tribute_control";
-    const TYPE_NAME: &'static str = "func_sig";
     const DEF: &'static trunk_ir::TypeDef = &FUNC_SIG_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
@@ -1063,8 +1061,7 @@ fn func_sig_raw_type<'a>(
         attrs.push((ABILITY_ROW_ATTR.into(), row));
     }
     RawType::Function {
-        dialect: "tribute_control",
-        name: "func_sig",
+        name: "tribute_control.func_sig",
         inputs: params.iter().map(|(_, ty)| ty.clone().into()).collect(),
         results: vec![result.into()],
         attrs,
@@ -1135,8 +1132,7 @@ fn parse_func<'a>(
 
     Ok(RawOperation {
         results,
-        dialect: "tribute_control",
-        op_name: "func",
+        name: "tribute_control.func",
         sym_name,
         has_func_signature: false,
         func_params: vec![],
@@ -1274,8 +1270,7 @@ fn parse_lambda<'a>(
 
     Ok(RawOperation {
         results,
-        dialect: "tribute_control",
-        op_name: "lambda",
+        name: "tribute_control.lambda",
         sym_name,
         has_func_signature: false,
         func_params: vec![],

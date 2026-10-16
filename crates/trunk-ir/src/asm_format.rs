@@ -53,8 +53,7 @@ pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 /// [`OpAsmFormat::new`] via `inventory::submit!` at dialect definition sites.
 /// The printer/parser dispatch automatically routes to the registered format.
 pub struct OpAsmFormat {
-    dialect: &'static str,
-    op_name: &'static str,
+    def: &'static crate::OpDef,
     /// Custom printer. Called instead of generic printing.
     pub print_fn: OpPrintFn,
     /// Custom parser. Called after `dialect.op` and optional `@sym_name` are consumed.
@@ -76,8 +75,7 @@ impl OpAsmFormat {
     /// Custom assembly format for the operation wrapped by `T`.
     pub const fn new<T: DialectOp>(print_fn: OpPrintFn, parse_fn: OpParseFn) -> Self {
         Self {
-            dialect: T::DIALECT_NAME,
-            op_name: T::OP_NAME,
+            def: T::DEF,
             print_fn,
             parse_fn,
         }
@@ -87,18 +85,19 @@ impl OpAsmFormat {
 inventory::collect!(OpAsmFormat);
 
 impl Registered for OpAsmFormat {
+    type Def = crate::OpDef;
     const KIND: &'static str = "OpAsmFormat";
 
-    fn key(&self) -> (&'static str, &'static str) {
-        (self.dialect, self.op_name)
+    fn def(&self) -> &'static crate::OpDef {
+        self.def
     }
 }
 
 static OP_ASM_FORMATS: LazyLock<Registry<OpAsmFormat>> = LazyLock::new(Registry::collect);
 
 /// Look up a registered custom assembly format for the given operation.
-pub fn lookup_asm_format(dialect: &str, op_name: &str) -> Option<&'static OpAsmFormat> {
-    OP_ASM_FORMATS.get(dialect, op_name)
+pub fn lookup_asm_format(name: crate::OpName) -> Option<&'static OpAsmFormat> {
+    OP_ASM_FORMATS.get(name)
 }
 
 // =============================================================================
@@ -111,8 +110,7 @@ pub fn lookup_asm_format(dialect: &str, op_name: &str) -> Option<&'static OpAsmF
 /// its type's textual syntax. Like every type, the custom form is
 /// self-delimiting: it is written inside `dialect.name<...>`.
 pub struct TypeAsmFormat {
-    dialect: &'static str,
-    type_name: &'static str,
+    def: &'static crate::TypeDef,
     /// Custom printer. Writes the whole type, including `dialect.name<` and
     /// the closing `>`, or returns `None` to leave a type it cannot represent,
     /// such as a malformed one, to generic printing.
@@ -132,7 +130,6 @@ pub type TypePrintFn =
 /// other type.
 pub type TypeParseFn = for<'a> fn(
     input: &mut &'a str,
-    dialect: &'a str,
     name: &'a str,
 ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>>;
 
@@ -140,8 +137,7 @@ impl TypeAsmFormat {
     /// Custom assembly format for the type wrapped by `T`.
     pub const fn new<T: DialectType>(print_fn: TypePrintFn, parse_fn: TypeParseFn) -> Self {
         Self {
-            dialect: T::DIALECT_NAME,
-            type_name: T::TYPE_NAME,
+            def: T::DEF,
             print_fn,
             parse_fn,
         }
@@ -151,16 +147,17 @@ impl TypeAsmFormat {
 inventory::collect!(TypeAsmFormat);
 
 impl Registered for TypeAsmFormat {
+    type Def = crate::TypeDef;
     const KIND: &'static str = "TypeAsmFormat";
 
-    fn key(&self) -> (&'static str, &'static str) {
-        (self.dialect, self.type_name)
+    fn def(&self) -> &'static crate::TypeDef {
+        self.def
     }
 }
 
 static TYPE_ASM_FORMATS: LazyLock<Registry<TypeAsmFormat>> = LazyLock::new(Registry::collect);
 
 /// Look up a registered custom assembly format for the given type.
-pub fn lookup_type_asm_format(dialect: &str, name: &str) -> Option<&'static TypeAsmFormat> {
-    TYPE_ASM_FORMATS.get(dialect, name)
+pub fn lookup_type_asm_format(name: crate::TypeName) -> Option<&'static TypeAsmFormat> {
+    TYPE_ASM_FORMATS.get(name)
 }

@@ -329,8 +329,6 @@ inventory::submit! {
 }
 
 impl DialectType for FuncSig {
-    const DIALECT_NAME: &'static str = "func";
-    const TYPE_NAME: &'static str = "func_sig";
     const DEF: &'static crate::type_def::TypeDef = &FUNC_SIG_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
@@ -850,8 +848,7 @@ fn parse_func<'a>(
 
     Ok(RawOperation {
         results,
-        dialect: "func",
-        op_name: "func",
+        name: "func.func",
         sym_name,
         has_func_signature: true,
         func_params: params,
