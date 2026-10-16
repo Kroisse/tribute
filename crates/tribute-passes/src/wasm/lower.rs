@@ -473,13 +473,9 @@ mod tests {
     use super::*;
     use trunk_ir::SymbolPath;
     use trunk_ir::context::{BlockData, RegionData};
+    use trunk_ir::dialect::core;
     use trunk_ir::refs::TypeRef;
     use trunk_ir::smallvec::smallvec;
-    use trunk_ir::types::TypeDataBuilder;
-
-    fn intern_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(name).intern(ctx)
-    }
 
     fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
         wasm_dialect::func_sig(ctx, params, [result]).as_type_ref()
@@ -617,11 +613,11 @@ mod tests {
         trunk_ir::rewrite::erase_op(&mut ctx, placeholder);
 
         let location = Location::new(PathRef::from_u32(0), Span::default());
-        let i32_ty = intern_type(&mut ctx, "core.i32");
-        let i64_ty = intern_type(&mut ctx, "core.i64");
-        let f32_ty = intern_type(&mut ctx, "core.f32");
-        let f64_ty = intern_type(&mut ctx, "core.f64");
-        let nil_ty = intern_type(&mut ctx, "core.nil");
+        let i32_ty = core::I32::type_ref(&mut ctx);
+        let i64_ty = core::I64::type_ref(&mut ctx);
+        let f32_ty = core::F32::type_ref(&mut ctx);
+        let f64_ty = core::F64::type_ref(&mut ctx);
+        let nil_ty = core::nil(&mut ctx).as_type_ref();
         let body_block = ctx.create_block(BlockData {
             location,
             args: vec![],
@@ -710,8 +706,8 @@ mod tests {
         let module = empty_module_with_block(&mut ctx);
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let module_block = module.first_block(&ctx).expect("module body block");
-        let i32_ty = intern_type(&mut ctx, "core.i32");
-        let nil_ty = intern_type(&mut ctx, "core.nil");
+        let i32_ty = core::I32::type_ref(&mut ctx);
+        let nil_ty = core::nil(&mut ctx).as_type_ref();
 
         let memory = wasm_dialect::Memory::operands()
             .min(1)

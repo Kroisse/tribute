@@ -444,11 +444,8 @@ mod canonicalize_tests {
 #[cfg(test)]
 mod scalar_category_tests {
     use super::*;
+    use crate::dialect::core;
     use crate::types::{Attribute, TypeDataBuilder};
-
-    fn ty(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(name).intern(ctx)
-    }
 
     #[test]
     fn integer_like_accepts_bare_core_integer_widths() {
@@ -458,7 +455,7 @@ mod scalar_category_tests {
             ("core.i32", Some(32)),
             ("core.i128", Some(128)),
         ] {
-            let t = ty(&mut ctx, name);
+            let t = TypeDataBuilder::new(name).intern(&mut ctx);
             assert_eq!(IntegerLike::width(&ctx, t), width, "{name}");
         }
         for name in [
@@ -472,7 +469,7 @@ mod scalar_category_tests {
             "core.f32",
             "tribute_rt.i32",
         ] {
-            let t = ty(&mut ctx, name);
+            let t = TypeDataBuilder::new(name).intern(&mut ctx);
             assert!(!IntegerLike::matches(&ctx, t), "{name}");
         }
         let with_attr = TypeDataBuilder::new("core.i32")
@@ -484,17 +481,17 @@ mod scalar_category_tests {
     #[test]
     fn bool_and_float_categories() {
         let mut ctx = IrContext::new();
-        let i1 = ty(&mut ctx, "core.i1");
-        let i8 = ty(&mut ctx, "core.i8");
-        let f32 = ty(&mut ctx, "core.f32");
-        let f64 = ty(&mut ctx, "core.f64");
-        let f16 = ty(&mut ctx, "core.f16");
+        let i1 = core::I1::type_ref(&mut ctx);
+        let i8 = core::I8::type_ref(&mut ctx);
+        let f32 = core::F32::type_ref(&mut ctx);
+        let f64 = core::F64::type_ref(&mut ctx);
+        let f16 = TypeDataBuilder::new("core.f16").intern(&mut ctx);
         assert!(BoolLike::matches(&ctx, i1));
         assert!(!BoolLike::matches(&ctx, i8));
         assert_eq!(FloatLike::width(&ctx, f32), Some(32));
         assert_eq!(FloatLike::width(&ctx, f64), Some(64));
         assert!(!FloatLike::matches(&ctx, f16));
-        let f064 = ty(&mut ctx, "core.f064");
+        let f064 = TypeDataBuilder::new("core.f064").intern(&mut ctx);
         assert!(!FloatLike::matches(&ctx, f064));
         assert!(!FloatLike::matches(&ctx, i1));
     }

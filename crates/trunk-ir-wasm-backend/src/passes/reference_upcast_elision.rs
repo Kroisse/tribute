@@ -153,10 +153,8 @@ mod tests {
         let module = parse_test_module(&mut ctx, input);
         // An upcast whose declared result still converts is left to the cast
         // legalization pattern.
-        let new_type =
-            |ctx: &mut IrContext, name| trunk_ir::types::TypeDataBuilder::new(name).intern(ctx);
-        let structref = new_type(&mut ctx, "wasm.structref");
-        let anyref = new_type(&mut ctx, "wasm.anyref");
+        let structref = trunk_ir::dialect::wasm::structref(&mut ctx).as_type_ref();
+        let anyref = trunk_ir::dialect::wasm::anyref(&mut ctx).as_type_ref();
         let mut tc = TypeConverter::new();
         tc.add_conversion(move |_ctx, ty| (ty == structref).then_some(anyref));
 

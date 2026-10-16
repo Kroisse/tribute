@@ -63,6 +63,7 @@ use tribute_ir::dialect::tribute_rt;
 
 use super::rtti::DEEP_RELEASE_FN;
 use trunk_ir::SymbolPath;
+use trunk_ir::dialect::core;
 
 /// Lower all `tribute_rt.retain` and `tribute_rt.release` operations to
 /// inline `clif.*` operations.
@@ -139,11 +140,11 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
         return;
     }
 
-    let ptr_ty = intern_type(ctx, "core.ptr");
-    let i64_ty = intern_type(ctx, "core.i64");
-    let i32_ty = intern_type(ctx, "core.i32");
-    let i8_ty = intern_type(ctx, "core.i8");
-    let nil_ty = intern_type(ctx, "core.nil");
+    let ptr_ty = core::ptr(ctx).as_type_ref();
+    let i64_ty = core::I64::type_ref(ctx);
+    let i32_ty = core::I32::type_ref(ctx);
+    let i8_ty = core::I8::type_ref(ctx);
+    let nil_ty = core::nil(ctx).as_type_ref();
 
     // Process the block: iterate ops, when we hit an RC op, split.
     // `current_block` is where ops before the RC op live.
@@ -325,12 +326,6 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
 
         i += 1;
     }
-}
-
-/// Intern a type in the arena context.
-fn intern_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    use trunk_ir::TypeDataBuilder;
-    TypeDataBuilder::new(name).intern(ctx)
 }
 
 /// Generate retain RC ops (atomic increment) in a block.

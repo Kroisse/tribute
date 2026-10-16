@@ -417,6 +417,7 @@ mod tests {
     use trunk_ir::Span;
 
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
+    use trunk_ir::dialect::core;
     use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
@@ -429,10 +430,6 @@ mod tests {
         let path = ctx.intern_path("file:///test.trb");
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
-    }
-
-    fn intern_ty(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(name).intern(ctx)
     }
 
     fn build_and_lower(
@@ -522,7 +519,7 @@ mod tests {
         .expect("typed ownership plan");
         // Model the representation-only signature rewrite that occurs after
         // planning in the production pipeline to isolate ADT lowering here.
-        let ptr_ty = intern_ty(ctx, "core.ptr");
+        let ptr_ty = core::ptr(ctx).as_type_ref();
         let erased_func_ty =
             func::func_sig(ctx, field_types.iter().copied(), [ptr_ty]).as_type_ref();
         ctx.op_attrs_mut(func_op.op_ref())
@@ -539,7 +536,7 @@ mod tests {
     #[test]
     fn test_struct_new_to_clif() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core.i32");
+        let i32_ty = core::I32::type_ref(&mut ctx);
 
         // Point(x: i32, y: i32) - two scalar fields
         let point_ty =

@@ -90,6 +90,7 @@ mod tests {
 
     use trunk_ir::SymbolPath;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
+    use trunk_ir::dialect::core;
     use trunk_ir::location::Span;
     use trunk_ir::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
     use trunk_ir::smallvec::smallvec;
@@ -100,10 +101,6 @@ mod tests {
         let path = ctx.intern_path("test.trb");
         let loc = trunk_ir::types::Location::new(path, Span::new(0, 0));
         (ctx, loc)
-    }
-
-    fn type_ref(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(name).intern(ctx)
     }
 
     fn make_module(ctx: &mut IrContext, loc: trunk_ir::types::Location, ops: Vec<OpRef>) -> Module {
@@ -171,9 +168,9 @@ mod tests {
     fn converts_wasm_results_inputs_and_metadata() {
         for results in [0, 1, 2] {
             let (mut ctx, loc) = test_ctx();
-            let i32 = type_ref(&mut ctx, "core.i32");
-            let i64 = type_ref(&mut ctx, "core.i64");
-            let ptr = type_ref(&mut ctx, "core.ptr");
+            let i32 = core::I32::type_ref(&mut ctx);
+            let i64 = core::I64::type_ref(&mut ctx);
+            let ptr = core::ptr(&mut ctx).as_type_ref();
             let mut attrs = trunk_ir::AttributeMap::new();
             attrs.view_mut(&mut ctx).insert(
                 "nested",
@@ -250,8 +247,8 @@ mod tests {
     #[test]
     fn preserves_bodyless_declarations_and_avoids_noop_rewrites() {
         let (mut ctx, loc) = test_ctx();
-        let i32 = type_ref(&mut ctx, "core.i32");
-        let i64 = type_ref(&mut ctx, "core.i64");
+        let i32 = core::I32::type_ref(&mut ctx);
+        let i64 = core::I64::type_ref(&mut ctx);
         let unchanged = wasm::func_sig(&mut ctx, [i64], []).as_type_ref();
         let declarations: Vec<OpRef> = [vec![], vec![i32], vec![i32, i32]]
             .into_iter()
@@ -300,8 +297,8 @@ mod tests {
     #[test]
     fn rejects_entry_arity_mismatch_without_mutating() {
         let (mut ctx, loc) = test_ctx();
-        let i32 = type_ref(&mut ctx, "core.i32");
-        let i64 = type_ref(&mut ctx, "core.i64");
+        let i32 = core::I32::type_ref(&mut ctx);
+        let i64 = core::I64::type_ref(&mut ctx);
         let signature = wasm::func_sig(&mut ctx, [i32, i32], []).as_type_ref();
         let func = make_wasm_func(&mut ctx, loc, "bad", signature, &[i32]);
         let module = make_module(&mut ctx, loc, vec![func]);
@@ -323,8 +320,8 @@ mod tests {
     #[test]
     fn rejects_malformed_wasm_signature_without_mutating() {
         let (mut ctx, loc) = test_ctx();
-        let i32 = type_ref(&mut ctx, "core.i32");
-        let i64 = type_ref(&mut ctx, "core.i64");
+        let i32 = core::I32::type_ref(&mut ctx);
+        let i64 = core::I64::type_ref(&mut ctx);
         let malformed = TypeDataBuilder::new("wasm.func_sig").intern(&mut ctx);
         let bad = ctx.intern_str("bad");
         let func = make_bodyless_wasm_func(&mut ctx, loc, bad, malformed);

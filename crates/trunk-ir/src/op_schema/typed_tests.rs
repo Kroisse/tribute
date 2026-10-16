@@ -4,6 +4,7 @@ use super::*;
 use crate::Symbol;
 use crate::SymbolPath;
 use crate::attr_kind::Dict;
+use crate::dialect::core;
 use crate::dialect::core::{BoolLike, I32, IntegerLike, Ptr};
 use crate::dialect::func;
 use crate::ops::DialectOp;
@@ -150,10 +151,6 @@ fn location(ctx: &mut IrContext) -> Location {
     Location::new(path, crate::Span::new(0, 0))
 }
 
-fn scalar(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(name).intern(ctx)
-}
-
 fn block_args(ctx: &mut IrContext, loc: Location, tys: &[TypeRef]) -> Vec<ValueRef> {
     let block = ctx.create_block(BlockData {
         location: loc,
@@ -272,8 +269,8 @@ fn wildcard_entities_are_unconstrained() {
 #[test]
 fn generated_type_constraints_check_parameters_and_project() {
     let mut ctx = IrContext::new();
-    let i32_ty = scalar(&mut ctx, "core.i32");
-    let i1_ty = scalar(&mut ctx, "core.i1");
+    let i32_ty = core::I32::type_ref(&mut ctx);
+    let i1_ty = core::I1::type_ref(&mut ctx);
     let pair = test_typed::pair(&mut ctx, i32_ty, i1_ty).as_type_ref();
     let malformed = TypeDataBuilder::new("test_typed.pair")
         .param(i32_ty)
@@ -330,8 +327,8 @@ fn generated_type_constraints_check_parameters_and_project() {
 fn fluent_builders_group_inputs_by_kind() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
-    let i32_ty = scalar(&mut ctx, "core.i32");
-    let i1_ty = scalar(&mut ctx, "core.i1");
+    let i32_ty = core::I32::type_ref(&mut ctx);
+    let i1_ty = core::I1::type_ref(&mut ctx);
     let ptr_ty = crate::dialect::core::ptr(&mut ctx).as_type_ref();
     let sig = func::func_sig(&mut ctx, [i32_ty], [i1_ty]).as_type_ref();
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty, ptr_ty, i1_ty]);
@@ -412,7 +409,7 @@ fn fluent_builders_group_inputs_by_kind() {
 fn fluent_builder_rejects_missing_required_attribute() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
-    let i32_ty = scalar(&mut ctx, "core.i32");
+    let i32_ty = core::I32::type_ref(&mut ctx);
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty]);
     test_typed::Cmp::operands(args[0], args[1])
         .results(i32_ty)
@@ -424,7 +421,7 @@ fn fluent_builder_rejects_missing_required_attribute() {
 fn fluent_builder_rejects_missing_results() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
-    let i32_ty = scalar(&mut ctx, "core.i32");
+    let i32_ty = core::I32::type_ref(&mut ctx);
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty]);
     test_typed::Cmp::operands(args[0], args[1])
         .predicate("slt")
@@ -435,9 +432,9 @@ fn fluent_builder_rejects_missing_results() {
 fn fluent_builders_infer_bound_projected_and_fixed_results() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
-    let i64_ty = scalar(&mut ctx, "core.i64");
-    let i32_ty = scalar(&mut ctx, "core.i32");
-    let i1_ty = scalar(&mut ctx, "core.i1");
+    let i64_ty = core::I64::type_ref(&mut ctx);
+    let i32_ty = core::I32::type_ref(&mut ctx);
+    let i1_ty = core::I1::type_ref(&mut ctx);
     let pair_ty = test_typed::pair(&mut ctx, i64_ty, i1_ty).as_type_ref();
     let args = block_args(&mut ctx, loc, &[i64_ty, pair_ty]);
 
@@ -454,7 +451,7 @@ fn fluent_builders_infer_bound_projected_and_fixed_results() {
 fn fluent_builder_rejects_unprojectable_sources() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
-    let i64_ty = scalar(&mut ctx, "core.i64");
+    let i64_ty = core::I64::type_ref(&mut ctx);
     let args = block_args(&mut ctx, loc, &[i64_ty]);
     test_typed::First::operands(args[0]).build(&mut ctx, loc);
 }
@@ -621,7 +618,7 @@ fn scalar_bounds_match_one_core_type_and_verify_wasm_add() {
     let i64_ty = crate::dialect::core::I64::type_ref(&mut ctx);
     assert!(I32::matches(&ctx, i32_ty));
     assert!(!I32::matches(&ctx, i64_ty));
-    let f64_ty = scalar(&mut ctx, "core.f64");
+    let f64_ty = core::F64::type_ref(&mut ctx);
     assert!(crate::dialect::core::F64::matches(&ctx, f64_ty));
 
     let text = verify_errors(
@@ -812,7 +809,7 @@ fn bound_constraints_are_recorded_in_the_schema() {
 fn type_attributes_bind_variables_and_type_is_an_ordinary_name() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
-    let i64_ty = scalar(&mut ctx, "core.i64");
+    let i64_ty = core::I64::type_ref(&mut ctx);
     let holder = test_typed::holder(&mut ctx, i64_ty).as_type_ref();
     let args = block_args(&mut ctx, loc, &[holder]);
 
@@ -837,9 +834,9 @@ fn type_attributes_bind_variables_and_type_is_an_ordinary_name() {
 fn builders_infer_results_through_bound_constraints() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
-    let i64_ty = scalar(&mut ctx, "core.i64");
-    let i32_ty = scalar(&mut ctx, "core.i32");
-    let i1_ty = scalar(&mut ctx, "core.i1");
+    let i64_ty = core::I64::type_ref(&mut ctx);
+    let i32_ty = core::I32::type_ref(&mut ctx);
+    let i1_ty = core::I1::type_ref(&mut ctx);
     let pair = test_typed::pair(&mut ctx, i64_ty, i1_ty).as_type_ref();
     let sig = func::func_sig(&mut ctx, [pair, i32_ty], [i64_ty]).as_type_ref();
     let outer = test_typed::pair(&mut ctx, pair, i32_ty).as_type_ref();
@@ -861,7 +858,7 @@ fn builders_infer_results_through_bound_constraints() {
 fn builders_reject_inputs_a_bound_constraint_does_not_apply_to() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
-    let i32_ty = scalar(&mut ctx, "core.i32");
+    let i32_ty = core::I32::type_ref(&mut ctx);
     let sig = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
     let args = block_args(&mut ctx, loc, &[sig]);
     test_typed::Unpack::operands(args[0]).build(&mut ctx, loc);

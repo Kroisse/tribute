@@ -243,11 +243,10 @@ fn replace_cast(ctx: &mut IrContext, op: OpRef, value: ValueRef) {
 mod tests {
     use super::*;
     use crate::OperationDataBuilder;
+    use crate::dialect::core;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
     use crate::rewrite::type_converter::MaterializeResult;
-
-    use crate::types::TypeDataBuilder;
 
     fn cast_count(ctx: &IrContext, module: Module) -> usize {
         collect_casts(ctx, module).len()
@@ -264,16 +263,12 @@ mod tests {
         );
     }
 
-    fn named_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(name).intern(ctx)
-    }
-
     /// Converts `core.i64` to `core.i32` and materializes `core.i32` →
     /// `core.f64` with a `test.box` operation. Every other pair is a no-op.
     fn test_converter(ctx: &mut IrContext) -> TypeConverter {
-        let i32_ty = named_type(ctx, "core.i32");
-        let i64_ty = named_type(ctx, "core.i64");
-        let f64_ty = named_type(ctx, "core.f64");
+        let i32_ty = core::I32::type_ref(ctx);
+        let i64_ty = core::I64::type_ref(ctx);
+        let f64_ty = core::F64::type_ref(ctx);
         let mut tc = TypeConverter::new();
         tc.add_conversion(move |_ctx, ty| (ty == i64_ty).then_some(i32_ty));
         tc.set_materializer(move |ctx, loc, value, from, to| {
@@ -352,8 +347,8 @@ mod tests {
 }"#,
         );
         // i64 converts to f64, and the materializer would emit a real op.
-        let i64_ty = named_type(&mut ctx, "core.i64");
-        let f64_ty = named_type(&mut ctx, "core.f64");
+        let i64_ty = core::I64::type_ref(&mut ctx);
+        let f64_ty = core::F64::type_ref(&mut ctx);
         let mut tc = TypeConverter::new();
         tc.add_conversion(move |_ctx, ty| (ty == i64_ty).then_some(f64_ty));
         let calls = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -448,11 +443,11 @@ mod tests {
   }
 }"#,
         );
-        let i32_ty = named_type(&mut ctx, "core.i32");
-        let i64_ty = named_type(&mut ctx, "core.i64");
+        let i32_ty = core::I32::type_ref(&mut ctx);
+        let i64_ty = core::I64::type_ref(&mut ctx);
         let mut tc = TypeConverter::new();
         tc.add_conversion(move |_ctx, ty| (ty == i64_ty).then_some(i32_ty));
-        let f32_ty = named_type(&mut ctx, "core.f32");
+        let f32_ty = core::F32::type_ref(&mut ctx);
         tc.set_materializer(move |_ctx, _loc, value, from, _to| {
             (from != f32_ty).then_some(MaterializeResult { value, ops: vec![] })
         });

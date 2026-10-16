@@ -16,7 +16,7 @@ use trunk_ir::rewrite::{
     PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, Location};
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
 const IO_TO_WASM: &str = "io-to-wasm";
@@ -88,7 +88,7 @@ fn declare_host_resources(
     block: trunk_ir::BlockRef,
     loc: Location,
 ) -> Result<(), ConversionError> {
-    let i32_ty = simple_type(ctx, "core.i32");
+    let i32_ty = core::I32::type_ref(ctx);
     let import_ty = wasm_dialect::func_sig(ctx, [i32_ty; 4], [i32_ty]).as_type_ref();
 
     let mut import = None;
@@ -205,7 +205,7 @@ impl RewritePattern for WritePattern {
 }
 
 fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
-    let i32_ty = simple_type(ctx, "core.i32");
+    let i32_ty = core::I32::type_ref(ctx);
     let bytes_ty = super::bytes::bytes_struct_type(ctx);
     let nil_ty = core::nil(ctx).as_type_ref();
     let body = ctx.create_block(BlockData {
@@ -627,10 +627,6 @@ fn i32_const(
     let result = op.result(ctx);
     ctx.push_op(block, op.op_ref());
     result
-}
-
-fn simple_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(name).intern(ctx)
 }
 
 fn block_arg(ty: TypeRef) -> BlockArgData {

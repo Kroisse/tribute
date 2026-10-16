@@ -26,19 +26,16 @@ use tribute_ir::dialect::ability::marker_adt_type_ref;
 use tribute_ir::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
 use tribute_ir::dialect::adt;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
-use trunk_ir::types::{AttributeMap, Location, TypeDataBuilder};
+use trunk_ir::types::{AttributeMap, Location};
 
 // =============================================================================
 // Helper: intern a simple type (no params, no attrs)
 // =============================================================================
-
-fn intern_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(name).intern(ctx)
-}
 
 // =============================================================================
 // Helper: check if a TypeRef matches a given dialect.name
@@ -60,8 +57,8 @@ fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
 /// IMPORTANT: Must use wasm.anyref (not tribute_rt.anyref) to ensure consistent
 /// type identity for emit lookups.
 pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = intern_type(ctx, "core.i32");
-    let anyref_ty = intern_type(ctx, "wasm.anyref");
+    let i32_ty = core::I32::type_ref(ctx);
+    let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
 
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(tribute_ir::runtime_layout::CLOSURE);
@@ -80,7 +77,7 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
 /// Get the `Described` type: the supertype of every user struct and variant,
 /// holding only the runtime type descriptor field.
 pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = intern_type(ctx, "core.i32");
+    let i32_ty = core::I32::type_ref(ctx);
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(tribute_ir::runtime_layout::DESCRIBED);
     attrs
@@ -238,10 +235,10 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
     let shared_closure = crate::closure_lower::closure_struct_type_ref(ctx);
     let closure = closure_adt_type(ctx);
     let bytes = super::bytes::bytes_struct_type(ctx);
-    let i32_ty = intern_type(ctx, "core.i32");
-    let f64_ty = intern_type(ctx, "core.f64");
-    let anyref_ty = intern_type(ctx, "wasm.anyref");
-    let i31ref_ty = intern_type(ctx, "wasm.i31ref");
+    let i32_ty = core::I32::type_ref(ctx);
+    let f64_ty = core::F64::type_ref(ctx);
+    let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
+    let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
     crate::closure_lower::substitute_module_types(ctx, module, move |ctx, ty| {
         if ty == shared_closure {
             return Some(closure);
@@ -273,12 +270,12 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
 /// by performing conversions at the IR level.
 pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Pre-compute commonly used types (TypeRef is Copy)
-    let i32_ty = intern_type(ctx, "core.i32");
-    let f64_ty = intern_type(ctx, "core.f64");
-    let anyref_ty = intern_type(ctx, "wasm.anyref");
-    let i31ref_ty = intern_type(ctx, "wasm.i31ref");
-    let structref_ty = intern_type(ctx, "wasm.structref");
-    let arrayref_ty = intern_type(ctx, "wasm.arrayref");
+    let i32_ty = core::I32::type_ref(ctx);
+    let f64_ty = core::F64::type_ref(ctx);
+    let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
+    let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
+    let structref_ty = wasm_dialect::structref(ctx).as_type_ref();
+    let arrayref_ty = wasm_dialect::arrayref(ctx).as_type_ref();
     let closure_ty = closure_adt_type(ctx);
     let shared_closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let evidence_ty = evidence_wasm_type(ctx);
@@ -667,8 +664,8 @@ mod tests {
         let path = ctx.intern_path("test.trb");
         let location = Location::new(path, trunk_ir::location::Span::new(0, 0));
         let tc = wasm_type_converter(&mut ctx);
-        let anyref = intern_type(&mut ctx, "wasm.anyref");
-        let ptr = intern_type(&mut ctx, "core.ptr");
+        let anyref = wasm_dialect::anyref(&mut ctx).as_type_ref();
+        let ptr = core::ptr(&mut ctx).as_type_ref();
         let concrete = closure_adt_type(&mut ctx);
 
         let source_data = trunk_ir::OperationDataBuilder::new(location, "test.source")
@@ -773,7 +770,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let shared = crate::closure_lower::closure_struct_type_ref(&mut ctx);
         let target = closure_adt_type(&mut ctx);
-        let generic = intern_type(&mut ctx, "wasm.structref");
+        let generic = wasm_dialect::structref(&mut ctx).as_type_ref();
         let mut near = ctx.get_type(shared).clone();
         near.attrs
             .view_mut(&mut ctx)
@@ -783,8 +780,8 @@ mod tests {
         assert_eq!(converter.convert_type_or_identity(&ctx, shared), target);
         assert_eq!(converter.convert_type_or_identity(&ctx, near), near);
         assert_eq!(converter.convert_type_or_identity(&ctx, generic), generic);
-        let anyref = intern_type(&mut ctx, "wasm.anyref");
-        let i32_ty = intern_type(&mut ctx, "core.i32");
+        let anyref = wasm_dialect::anyref(&mut ctx).as_type_ref();
+        let i32_ty = core::I32::type_ref(&mut ctx);
         itertools::assert_equal(
             adt::Struct::from_type_ref(&ctx, target)
                 .unwrap()

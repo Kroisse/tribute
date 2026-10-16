@@ -19,13 +19,9 @@
 
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
-use trunk_ir::types::TypeDataBuilder;
-
-fn intern_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(name).intern(ctx)
-}
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
     ctx.get_type(ty).name.dialect(ctx) == dialect
@@ -47,14 +43,14 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
 /// additional conversions.
 pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Pre-intern commonly used types (TypeRef is Copy)
-    let tribute_rt_int = intern_type(ctx, "tribute_rt.int");
-    let tribute_rt_nat = intern_type(ctx, "tribute_rt.nat");
-    let tribute_rt_bool = intern_type(ctx, "tribute_rt.bool");
-    let tribute_rt_float = intern_type(ctx, "tribute_rt.float");
-    let tribute_rt_anyref = intern_type(ctx, "tribute_rt.anyref");
-    let core_i32 = intern_type(ctx, "core.i32");
-    let core_i1 = intern_type(ctx, "core.i1");
-    let core_f64 = intern_type(ctx, "core.f64");
+    let tribute_rt_int = tribute_rt::int(ctx).as_type_ref();
+    let tribute_rt_nat = tribute_rt::nat(ctx).as_type_ref();
+    let tribute_rt_bool = tribute_rt::bool(ctx).as_type_ref();
+    let tribute_rt_float = tribute_rt::float(ctx).as_type_ref();
+    let tribute_rt_anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let core_i32 = core::I32::type_ref(ctx);
+    let core_i1 = core::I1::type_ref(ctx);
+    let core_f64 = core::F64::type_ref(ctx);
 
     let canonical_closure = crate::closure_lower::closure_struct_type_ref(ctx);
 
@@ -257,6 +253,7 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::pass::Pass;
     use trunk_ir::refs::ValueRef;
+    use trunk_ir::types::TypeDataBuilder;
     use trunk_ir::types::{Attribute, Location};
     use trunk_ir::walk::{WalkAction, walk_op};
 
@@ -398,7 +395,7 @@ mod tests {
     }
 
     fn anyref_type(ctx: &mut IrContext) -> TypeRef {
-        intern_type(ctx, "tribute_rt.anyref")
+        tribute_rt::anyref(ctx).as_type_ref()
     }
 
     fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {
