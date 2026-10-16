@@ -431,7 +431,7 @@ pub(crate) fn collect_gc_types(
 
     // Process collected ops
     for op in ops_to_visit {
-        if ctx.op(op).name.dialect(ctx) != "wasm" {
+        if ctx.op(op).name.dialect(ctx) != wasm_dialect::DIALECT_NAME {
             continue;
         }
 

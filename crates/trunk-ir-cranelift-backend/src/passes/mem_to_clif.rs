@@ -33,8 +33,8 @@ pub fn lower(
 
 fn mem_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
-        .legal_dialect("clif")
-        .illegal_dialect("mem")
+        .legal_dialect(clif::DIALECT_NAME)
+        .illegal_dialect(mem::DIALECT_NAME)
 }
 
 struct MemLoadPattern;

@@ -162,7 +162,7 @@ impl RewritePattern for ArithBinOpPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.name.dialect(ctx) != "arith" {
+        if data.name.dialect(ctx) != arith::DIALECT_NAME {
             return false;
         }
 
@@ -616,7 +616,7 @@ impl RewritePattern for ArithBitwisePattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.name.dialect(ctx) != "arith" {
+        if data.name.dialect(ctx) != arith::DIALECT_NAME {
             return false;
         }
 

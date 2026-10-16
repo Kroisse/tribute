@@ -23,7 +23,7 @@ fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
         .add_pattern(EmptyPattern)
         .add_pattern(PrependPattern)
         .add_pattern(IsEmptyPattern)
-        .with_target(ConversionTarget::new().illegal_dialect("list"))
+        .with_target(ConversionTarget::new().illegal_dialect(list::DIALECT_NAME))
         .apply_partial_conversion(ctx, module, "list-to-native")?;
     Ok(())
 }

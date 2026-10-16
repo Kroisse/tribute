@@ -33,8 +33,8 @@ pub fn lower(
 
 fn cf_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
-        .legal_dialect("clif")
-        .illegal_dialect("cf")
+        .legal_dialect(clif::DIALECT_NAME)
+        .illegal_dialect(cf::DIALECT_NAME)
 }
 
 /// Pattern: `cf.br` -> `clif.jump`

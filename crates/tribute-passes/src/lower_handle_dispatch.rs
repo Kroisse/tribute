@@ -23,7 +23,7 @@ const ABILITY_LOWERED_BOUNDARY: &str = "ability-lowered";
 /// Conversion target for IR after shared ability lowering.
 pub fn ability_lowered_target() -> ConversionTarget {
     ConversionTarget::new()
-        .illegal_dialect("ability")
+        .illegal_dialect(ability::DIALECT_NAME)
         .legal_op("ability.decl")
         .recursive_legal_op("ability.decl")
 }

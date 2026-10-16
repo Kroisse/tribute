@@ -937,7 +937,7 @@ fn emit_op_nested(
     nesting: &[NestingKind],
 ) -> CompilationResult<()> {
     let op_data = ctx.op(op);
-    if op_data.name.dialect(ctx) != "wasm" {
+    if op_data.name.dialect(ctx) != wasm_dialect::DIALECT_NAME {
         return Err(CompilationError::unsupported_feature(
             "non-wasm op in wasm backend",
         ));

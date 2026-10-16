@@ -226,7 +226,7 @@ mod tests {
             let data = ctx.op(op);
             if data.name.is(&ctx, "func.func") {
                 ControlFlow::<(), _>::Continue(WalkAction::Skip)
-            } else if data.name.dialect(&ctx) == "arith" {
+            } else if data.name.dialect(&ctx) == crate::dialect::arith::DIALECT_NAME {
                 found_const = true;
                 ControlFlow::Continue(WalkAction::Advance)
             } else {

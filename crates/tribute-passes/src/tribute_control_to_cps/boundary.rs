@@ -75,21 +75,21 @@ impl Error for TributeControlToCpsError {}
 /// Full frontend-side operation target for verified direct-style control IR.
 pub fn tribute_control_pre_cps_target() -> ConversionTarget {
     ConversionTarget::new()
-        .legal_dialect("core")
-        .legal_dialect("tribute_control")
-        .legal_dialect("scf")
-        .legal_dialect("arith")
-        .legal_dialect("adt")
-        .legal_dialect("list")
-        .legal_dialect("tribute_rt")
-        .legal_dialect("tribute_io")
+        .legal_dialect(trunk_ir::dialect::core::DIALECT_NAME)
+        .legal_dialect(tribute_ir::dialect::tribute_control::DIALECT_NAME)
+        .legal_dialect(trunk_ir::dialect::scf::DIALECT_NAME)
+        .legal_dialect(trunk_ir::dialect::arith::DIALECT_NAME)
+        .legal_dialect(tribute_ir::dialect::adt::DIALECT_NAME)
+        .legal_dialect(tribute_ir::dialect::list::DIALECT_NAME)
+        .legal_dialect(tribute_ir::dialect::tribute_rt::DIALECT_NAME)
+        .legal_dialect(tribute_ir::dialect::tribute_io::DIALECT_NAME)
         .legal_op("ability.decl")
         .recursive_legal_op("ability.decl")
 }
 
 /// Partial post-legalization target. Unknown operations belong to later passes.
 pub fn tribute_control_post_cps_target() -> ConversionTarget {
-    ConversionTarget::new().illegal_dialect("tribute_control")
+    ConversionTarget::new().illegal_dialect(tribute_ir::dialect::tribute_control::DIALECT_NAME)
 }
 
 #[derive(Clone, Copy)]
@@ -123,9 +123,11 @@ fn walk_type(
         TypeBoundary::Pre => {
             trunk_ir::dialect::func::FuncSig::matches(ctx, ty)
                 || tribute_ir::dialect::closure::Closure::matches(ctx, ty)
-                || matches!(data.name.dialect(ctx), "ability" | "effect")
+                || [ability::DIALECT_NAME, effect::DIALECT_NAME].contains(&data.name.dialect(ctx))
         }
-        TypeBoundary::Post => data.name.dialect(ctx) == "tribute_control",
+        TypeBoundary::Post => {
+            data.name.dialect(ctx) == tribute_ir::dialect::tribute_control::DIALECT_NAME
+        }
     };
     if forbidden {
         errors.push(format!(
@@ -287,7 +289,7 @@ fn enclosing_func_result(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
             let ty = function.r#type(ctx);
             return func::FuncSig::from_type_ref(ctx, ty)?.single_result(ctx);
         }
-        if ctx.op(owner).name.dialect(ctx) != "scf" {
+        if ctx.op(owner).name.dialect(ctx) != trunk_ir::dialect::scf::DIALECT_NAME {
             return None;
         }
         current = owner;

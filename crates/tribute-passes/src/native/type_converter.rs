@@ -234,7 +234,7 @@ fn materialize_result_noop(
 fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     // struct, enum, typeref, variant instance
     tribute_ir::dialect::adt::is_nominal(ctx, ty)
-        || (ctx.get_type(ty).name.dialect(ctx) == "adt"
+        || (ctx.get_type(ty).name.dialect(ctx) == tribute_ir::dialect::adt::DIALECT_NAME
             && ctx.type_attrs(ty).get_bool("is_variant") == Some(true))
 }
 
