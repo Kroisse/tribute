@@ -5,7 +5,6 @@
 //! so module assembly reads them from the IR.
 
 use tribute_ir::dialect::tribute_io;
-use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -141,9 +140,8 @@ fn declare_host_resources(
     }
     match memory {
         Some(memory) if memory.min(ctx) < required_pages => {
-            ctx.op_mut(memory.op_ref())
-                .attributes
-                .insert(Symbol::new("min"), Attribute::from(required_pages));
+            ctx.op_attrs_mut(memory.op_ref())
+                .insert("min", Attribute::from(required_pages));
         }
         Some(_) => {}
         None => {
@@ -633,7 +631,7 @@ fn i32_const(
 }
 
 fn simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+    TypeDataBuilder::new(dialect, name).intern(ctx)
 }
 
 fn block_arg(ty: TypeRef) -> BlockArgData {
@@ -697,7 +695,7 @@ mod tests {
         );
         let ops = module.ops(&ctx);
         let import = wasm_dialect::ImportFunc::from_op(&ctx, ops[0]).expect("import");
-        assert_eq!(import.module(&ctx), Symbol::new(WASI_MODULE));
+        assert_eq!(import.module(&ctx), trunk_ir::Symbol::new(WASI_MODULE));
         assert_eq!(import.sym_name(&ctx), FD_WRITE);
         let memory = wasm_dialect::Memory::from_op(&ctx, ops[1]).expect("memory");
         assert_eq!(memory.min(&ctx), 1);

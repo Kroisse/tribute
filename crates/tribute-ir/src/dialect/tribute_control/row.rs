@@ -44,13 +44,13 @@ impl Row {
     }
 
     /// Decode a row, or say why it is malformed.
-    pub fn from_attribute(attr: &Attribute) -> Result<Self, String> {
+    pub fn from_attribute(ctx: &IrContext, attr: &Attribute) -> Result<Self, String> {
         let Attribute::Dict(entries) = attr else {
             return Err("a row must be a dictionary".into());
         };
         let mut row = Self::default();
-        for (key, value) in entries.iter() {
-            key.with_str(|key| match (key, value) {
+        for (key, value) in entries.view(ctx).iter() {
+            (match (key, value) {
                 ("instances", Attribute::List(instances)) => {
                     row.instances = instances
                         .iter()
@@ -76,24 +76,47 @@ impl Row {
         Ok(row)
     }
 
-    pub fn to_attribute(&self) -> Attribute {
-        let mut entries = AttributeMap::new();
-        if !self.instances.is_empty() {
-            entries.insert(
-                Symbol::new("instances"),
-                Attribute::List(
-                    self.instances
-                        .iter()
-                        .cloned()
-                        .map(Attribute::SymbolRef)
-                        .collect(),
-                ),
-            );
-        }
-        if let Some(tail) = self.tail {
-            entries.insert(Symbol::new("tail"), Attribute::Int(i128::from(tail)));
-        }
-        Attribute::Dict(entries)
+    pub fn to_attribute(&self, ctx: &mut IrContext) -> Attribute {
+        let (instances, tail) = self.entries();
+        let entries = instances
+            .map(|value| ("instances", value))
+            .into_iter()
+            .chain(tail.map(|value| ("tail", value)));
+        Attribute::Dict(AttributeMap::from_entries(ctx, entries))
+    }
+
+    /// [`Self::to_attribute`] without interning, `None` when no attribute of
+    /// the context can hold this row.
+    pub fn find_attribute(&self, ctx: &IrContext) -> Option<Attribute> {
+        let (instances, tail) = self.entries();
+        let instances = match instances {
+            Some(value) => Some((ctx.lookup_str("instances")?, value)),
+            None => None,
+        };
+        let tail = match tail {
+            Some(value) => Some((ctx.lookup_str("tail")?, value)),
+            None => None,
+        };
+        Some(Attribute::Dict(AttributeMap::from_refs(
+            ctx,
+            instances.into_iter().chain(tail),
+        )))
+    }
+
+    fn entries(&self) -> (Option<Attribute>, Option<Attribute>) {
+        let instances = (!self.instances.is_empty()).then(|| {
+            Attribute::List(
+                self.instances
+                    .iter()
+                    .cloned()
+                    .map(Attribute::SymbolRef)
+                    .collect(),
+            )
+        });
+        (
+            instances,
+            self.tail.map(|tail| Attribute::Int(i128::from(tail))),
+        )
     }
 
     /// This row with its tail replaced by the row argument it names, or
@@ -116,12 +139,12 @@ impl trunk_ir::attr_kind::AttrKind for Row {
     type Out<'ctx> = Row;
     type In = Row;
 
-    fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> Row {
-        Self::from_attribute(attr).unwrap_or_else(|error| panic!("unverified row: {error}"))
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> Row {
+        Self::from_attribute(ctx, attr).unwrap_or_else(|error| panic!("unverified row: {error}"))
     }
 
-    fn write(_: &mut IrContext, value: Row) -> Attribute {
-        value.to_attribute()
+    fn write(ctx: &mut IrContext, value: Row) -> Attribute {
+        value.to_attribute(ctx)
     }
 }
 
@@ -191,10 +214,11 @@ pub struct RowUnion {
 }
 
 impl RowUnion {
-    pub fn from_attribute(attr: &Attribute) -> Result<Self, String> {
+    pub fn from_attribute(ctx: &IrContext, attr: &Attribute) -> Result<Self, String> {
         let Attribute::Dict(entries) = attr else {
             return Err("a row union must be a dictionary".into());
         };
+        let entries = entries.view(ctx);
         let index = |value: &Attribute| match value {
             Attribute::Int(index) => u32::try_from(*index).ok(),
             _ => None,
@@ -216,22 +240,22 @@ impl RowUnion {
         Ok(Self { result, sources })
     }
 
-    pub fn to_attribute(&self) -> Attribute {
-        let mut entries = AttributeMap::new();
-        entries.insert(
-            Symbol::new("result"),
-            Attribute::Int(i128::from(self.result)),
-        );
-        entries.insert(
-            Symbol::new("sources"),
-            Attribute::List(
-                self.sources
-                    .iter()
-                    .map(|source| Attribute::Int(i128::from(*source)))
-                    .collect(),
-            ),
-        );
-        Attribute::Dict(entries)
+    pub fn to_attribute(&self, ctx: &mut IrContext) -> Attribute {
+        Attribute::Dict(AttributeMap::from_entries(
+            ctx,
+            [
+                ("result", Attribute::Int(i128::from(self.result))),
+                (
+                    "sources",
+                    Attribute::List(
+                        self.sources
+                            .iter()
+                            .map(|source| Attribute::Int(i128::from(*source)))
+                            .collect(),
+                    ),
+                ),
+            ],
+        ))
     }
 }
 
@@ -241,12 +265,13 @@ impl trunk_ir::attr_kind::AttrKind for RowUnion {
     type Out<'ctx> = RowUnion;
     type In = RowUnion;
 
-    fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> RowUnion {
-        Self::from_attribute(attr).unwrap_or_else(|error| panic!("unverified row union: {error}"))
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> RowUnion {
+        Self::from_attribute(ctx, attr)
+            .unwrap_or_else(|error| panic!("unverified row union: {error}"))
     }
 
-    fn write(_: &mut IrContext, value: RowUnion) -> Attribute {
-        value.to_attribute()
+    fn write(ctx: &mut IrContext, value: RowUnion) -> Attribute {
+        value.to_attribute(ctx)
     }
 }
 
@@ -255,20 +280,22 @@ fn read_list<T>(
     ctx: &IrContext,
     op: trunk_ir::OpRef,
     key: &str,
-    decode: impl Fn(&Attribute) -> Result<T, String>,
+    decode: impl Fn(&IrContext, &Attribute) -> Result<T, String>,
 ) -> Result<Option<Vec<T>>, String> {
-    match ctx.op(op).attributes.get(key) {
+    match ctx.op_attrs(op).get(key) {
         None => Ok(None),
-        Some(Attribute::List(items)) => {
-            items.iter().map(decode).collect::<Result<_, _>>().map(Some)
-        }
+        Some(Attribute::List(items)) => items
+            .iter()
+            .map(|item| decode(ctx, item))
+            .collect::<Result<_, _>>()
+            .map(Some),
         Some(_) => Err(format!("{key} must be a list")),
     }
 }
 
 /// The row binders `op` declares, or why they are malformed.
 pub fn row_binders(ctx: &IrContext, op: trunk_ir::OpRef) -> Result<Vec<RowBinder>, String> {
-    let binders = read_list(ctx, op, ROW_BINDERS_ATTR, |binder| match binder {
+    let binders = read_list(ctx, op, ROW_BINDERS_ATTR, |ctx, binder| match binder {
         Attribute::String(keyword) => RowBinder::from_keyword(ctx.str(*keyword))
             .ok_or_else(|| format!("unknown row binder kind '{}'", ctx.str(*keyword))),
         _ => Err("row binders must be strings".into()),
@@ -307,14 +334,15 @@ fn is_func_sig(data: &TypeData) -> bool {
 
 /// The ability row a type stores, if it is a callable type with a well-formed
 /// row.
-pub(crate) fn stored_row(data: &TypeData) -> Option<Result<Row, String>> {
+pub(crate) fn stored_row(ctx: &IrContext, data: &TypeData) -> Option<Result<Row, String>> {
     if !is_func_sig(data) {
         return None;
     }
     Some(
         data.attrs
+            .view(ctx)
             .get(ABILITY_ROW_ATTR)
-            .map_or_else(|| Ok(Row::default()), Row::from_attribute),
+            .map_or_else(|| Ok(Row::default()), |row| Row::from_attribute(ctx, row)),
     )
 }
 
@@ -352,11 +380,9 @@ pub fn logical_tuple_type(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef 
     let layout = tuple_layout_data(ctx, &name, elements);
     ctx.register_type_alias(Symbol::new(&name), layout);
     let name = ctx.intern_str(&name);
-    ctx.intern_type(
-        trunk_ir::types::TypeDataBuilder::new("adt", "typeref")
-            .attr("name", Attribute::String(name))
-            .build(),
-    )
+    trunk_ir::types::TypeDataBuilder::new("adt", "typeref")
+        .attr("name", Attribute::String(name))
+        .intern(ctx)
 }
 
 /// The element types of a compiler-generated tuple layout.
@@ -365,7 +391,7 @@ pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]
     if data.dialect != "adt" || data.name != "typeref" {
         return None;
     }
-    let name = data.attrs.get_str(ctx, "name")?;
+    let name = data.attrs.view(ctx).get_str("name")?;
     if !name.starts_with(LOGICAL_TUPLE_PREFIX) {
         return None;
     }
@@ -383,6 +409,8 @@ trait TypeSink {
     fn ctx(&self) -> &IrContext;
     fn make(&mut self, data: TypeData) -> Option<TypeRef>;
     fn tuple(&mut self, elements: &[TypeRef]) -> Option<TypeRef>;
+    /// The key `ability_row` and `row` encoded as its value.
+    fn row(&mut self, row: &Row) -> Option<(trunk_ir::types::StringRef, Attribute)>;
 }
 
 struct Intern<'a>(&'a mut IrContext);
@@ -398,6 +426,13 @@ impl TypeSink for Intern<'_> {
 
     fn tuple(&mut self, elements: &[TypeRef]) -> Option<TypeRef> {
         Some(logical_tuple_type(self.0, elements))
+    }
+
+    fn row(&mut self, row: &Row) -> Option<(trunk_ir::types::StringRef, Attribute)> {
+        Some((
+            self.0.intern_str(ABILITY_ROW_ATTR),
+            row.to_attribute(self.0),
+        ))
     }
 }
 
@@ -416,12 +451,24 @@ impl TypeSink for Lookup<'_> {
 
     fn tuple(&mut self, elements: &[TypeRef]) -> Option<TypeRef> {
         let name = logical_tuple_name(self.0, elements);
-        let ty = self.0.types().lookup(
-            &trunk_ir::types::TypeDataBuilder::new("adt", "typeref")
-                .attr("name", Attribute::String(self.0.strings().lookup(&name)?))
-                .build(),
-        )?;
+        let entry = (
+            self.0.lookup_str("name")?,
+            Attribute::String(self.0.lookup_str(&name)?),
+        );
+        let ty = self.0.types().lookup(&TypeData {
+            dialect: Symbol::new("adt"),
+            name: Symbol::new("typeref"),
+            params: Default::default(),
+            attrs: AttributeMap::from_refs(self.0, [entry]),
+        })?;
         (logical_tuple_elements(self.0, ty)? == elements).then_some(ty)
+    }
+
+    fn row(&mut self, row: &Row) -> Option<(trunk_ir::types::StringRef, Attribute)> {
+        Some((
+            self.0.lookup_str(ABILITY_ROW_ATTR)?,
+            row.find_attribute(self.0)?,
+        ))
     }
 }
 
@@ -459,7 +506,7 @@ impl<S: TypeSink> Substitution<'_, S> {
             return Some(ty);
         }
         let mut data = data.clone();
-        let row = stored_row(&data).transpose().ok()?;
+        let row = stored_row(self.sink.ctx(), &data).transpose().ok()?;
         let mut changed = false;
         for param in data.params.iter_mut() {
             let substituted = self.ty(*param)?;
@@ -470,8 +517,15 @@ impl<S: TypeSink> Substitution<'_, S> {
             let substituted = row.substitute(self.args)?;
             if substituted != row {
                 changed = true;
-                data.attrs
-                    .insert(Symbol::new(ABILITY_ROW_ATTR), substituted.to_attribute());
+                let (key, value) = self.sink.row(&substituted)?;
+                let entries: Vec<_> = data
+                    .attrs
+                    .iter()
+                    .filter(|(existing, _)| *existing != key)
+                    .map(|(existing, attr)| (existing, attr.clone()))
+                    .chain((!substituted.is_empty()).then_some((key, value)))
+                    .collect();
+                data.attrs = AttributeMap::from_refs(self.sink.ctx(), entries);
             }
         }
         if changed {
@@ -529,8 +583,8 @@ fn visit_rows_in(
         return;
     }
     let data = ctx.get_type(ty);
-    if data.attrs.get(ABILITY_ROW_ATTR).is_some()
-        && let Some(row) = stored_row(data)
+    if data.attrs.view(ctx).contains_key(ABILITY_ROW_ATTR)
+        && let Some(row) = stored_row(ctx, data)
     {
         visit(row);
     }

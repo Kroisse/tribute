@@ -113,20 +113,25 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
 
     fn type_shape(ctx: &IrContext, ty: TypeRef) -> String {
         let data = ctx.get_type(ty);
-        if let Some(result) = data.attrs.get_type(continuation_frame::RESULT_ATTR) {
+        if let Some(result) = data
+            .attrs
+            .view(ctx)
+            .get_type(continuation_frame::RESULT_ATTR)
+        {
             return format!("Frame<{}>", type_shape(ctx, result));
         }
         // Physicalization consumes the frame answer type, and the generated
         // frame name only numbers it.
         if data
             .attrs
-            .get_str(ctx, "name")
+            .view(ctx)
+            .get_str("name")
             .is_some_and(|name| name.starts_with(continuation_frame::NAME_PREFIX))
         {
             return "Frame".to_owned();
         }
         let mut shape = format!("{}.{}", data.dialect, data.name);
-        if let Some(name) = data.attrs.get_str(ctx, "name") {
+        if let Some(name) = data.attrs.view(ctx).get_str("name") {
             shape.push_str(&format!("<{name}>"));
         }
         // A struct layout's parameters are its fields; its name is its shape.

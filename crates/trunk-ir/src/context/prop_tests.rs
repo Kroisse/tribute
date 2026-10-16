@@ -898,7 +898,7 @@ impl StateMachineTest for UseTest {
     fn init_test(_: &UseModel) -> UseSut {
         let mut ctx = IrContext::new();
         let loc = location(&mut ctx);
-        let ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
         let module_block = new_block(&mut ctx, loc, ty, 2);
         let module_region = ctx.create_region(RegionData {
             location: loc,

@@ -86,12 +86,12 @@ impl ConstCollector {
 
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == "string_const" {
-                if let Some(s) = data.attributes.get_str(ctx, "value") {
+                if let Some(s) = data.attributes.view(ctx).get_str("value") {
                     self.intern(s.as_bytes());
                     self.has_string_consts = true;
                 }
             } else if data.name == "bytes_const"
-                && let Some(Attribute::Bytes(b)) = data.attributes.get("value")
+                && let Some(Attribute::Bytes(b)) = data.attributes.view(ctx).get("value")
             {
                 self.intern(b);
             }
@@ -169,8 +169,8 @@ fn lower(
     }
 
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i64_ty = TypeDataBuilder::new("core", "i64").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
 
     let content_to_symbol = declare_rodata(ctx, module, &analysis.contents);
     let string_enum_ty = analysis.string_enum_ty;
@@ -219,12 +219,7 @@ fn declare_rodata(
 
     let mut taken = HashSet::default();
     for &op in ctx.block(module_block).ops.iter() {
-        if let Some(name) = ctx
-            .op(op)
-            .attributes
-            .get_str(ctx, "sym_name")
-            .map(Symbol::new)
-        {
+        if let Some(name) = ctx.op_attrs(op).get_str("sym_name").map(Symbol::new) {
             taken.insert(name);
         }
         if let Ok(data) = clif::Data::from_op(ctx, op)

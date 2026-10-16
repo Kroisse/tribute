@@ -121,7 +121,7 @@ fn anyref_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 fn i32_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+    TypeDataBuilder::new("core", "i32").intern(ctx)
 }
 
 /// The block arguments of a `Dispatch<R>` over `frame`.
@@ -805,8 +805,7 @@ impl ExpandHandles {
             frames,
             completion_type: ctx.value_ty(completion),
             plan: ctx
-                .op(op)
-                .attributes
+                .op_attrs(op)
                 .get(tribute_control::EVIDENCE_PLAN_ATTR)
                 .cloned(),
             dispatch_factory: helper_symbol("make_local_dispatch", index),

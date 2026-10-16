@@ -35,7 +35,7 @@ pub fn convert_signature_components<'a>(
     converter: &TypeConverter,
     old_inputs: &[TypeRef],
     old_results: &[TypeRef],
-    attrs: impl IntoIterator<Item = (&'a crate::Symbol, &'a Attribute)>,
+    attrs: impl IntoIterator<Item = (crate::StringRef, &'a Attribute)>,
 ) -> ConvertedSignatureComponents {
     let inputs: Vec<_> = old_inputs
         .iter()
@@ -46,14 +46,12 @@ pub fn convert_signature_components<'a>(
         .map(|&ty| converter.convert_type_or_identity(ctx, ty))
         .collect();
     let mut attrs_changed = false;
-    let attrs = attrs
-        .into_iter()
-        .map(|(key, value)| {
-            let converted = convert_attribute_types(ctx, converter, value);
-            attrs_changed |= converted != *value;
-            (key.clone(), converted)
-        })
-        .collect();
+    let attrs = attrs.into_iter().map(|(key, value)| {
+        let converted = convert_attribute_types(ctx, converter, value);
+        attrs_changed |= converted != *value;
+        (key, converted)
+    });
+    let attrs = crate::AttributeMap::from_refs(ctx, attrs);
     let changed = inputs != old_inputs || results != old_results;
 
     ConvertedSignatureComponents {
@@ -176,7 +174,7 @@ pub fn rewrite_function_signature(
 
     // Create replacement op with new type
     let new_op = make_op(ctx, new_func_type, body);
-    ctx.op_mut(new_op).attributes.extend(attrs_to_preserve);
+    ctx.op_attrs_mut(new_op).extend(attrs_to_preserve);
 
     rewriter.replace_op(new_op);
     true
@@ -271,11 +269,11 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     fn i64_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i64").build())
+        TypeDataBuilder::new("core", "i64").intern(ctx)
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
@@ -360,7 +358,9 @@ mod tests {
         let i64_ty = i64_type(&mut ctx);
 
         let mut type_attrs = crate::AttributeMap::new();
-        type_attrs.insert(Symbol::new("metadata_type"), Attribute::Type(i32_ty));
+        type_attrs
+            .view_mut(&mut ctx)
+            .insert("metadata_type", Attribute::Type(i32_ty));
         let func_ty =
             func::func_sig_with_attrs(&mut ctx, [i32_ty], [i32_ty], type_attrs).as_type_ref();
         let func_op = make_func_op(&mut ctx, loc, "test_fn", func_ty, &[i32_ty]);
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(function.inputs(&ctx), &[i64_ty]);
         assert_eq!(function.single_result(&ctx), Some(i64_ty));
         assert_eq!(
-            ctx.get_type(new_type).attrs.get_type("metadata_type"),
+            ctx.type_attrs(new_type).get_type("metadata_type"),
             Some(i64_ty),
             "nested type attributes should be converted and preserved"
         );
@@ -471,7 +471,7 @@ mod tests {
             for (index, expected_regions) in [(0, 0), (1, 1)] {
                 let data = ctx.op(ops[index]);
                 assert_eq!(ctx.op_region_count(ops[index]), expected_regions);
-                let func_ty = data.attributes.get_type("type").unwrap();
+                let func_ty = data.attributes.view(&ctx).get_type("type").unwrap();
                 let function = func::FuncSig::from_type_ref(&ctx, func_ty).unwrap();
                 assert_eq!(function.inputs(&ctx), [i64_ty]);
                 assert_eq!(function.results(&ctx), vec![i64_ty; result_count]);
@@ -554,7 +554,7 @@ mod result_list_tests {
     use super::*;
     use crate::SymbolPath;
     use crate::dialect::core;
-    use crate::{Symbol, ops::DialectOp, parser::parse_test_module};
+    use crate::{ops::DialectOp, parser::parse_test_module};
 
     #[test]
     fn conversion_preserves_all_cardinalities_and_nested_attributes() {
@@ -564,25 +564,17 @@ mod result_list_tests {
                 let nil = core::nil(&mut ctx).as_type_ref();
                 let ptr = core::ptr(&mut ctx).as_type_ref();
                 let mut attrs = crate::AttributeMap::new();
-                attrs.insert(
-                    Symbol::new("nested"),
+                attrs.view_mut(&mut ctx).insert(
+                    "nested",
                     Attribute::List(vec![Attribute::List(vec![Attribute::Type(nil)])]),
                 );
-                attrs.insert(
-                    Symbol::new("dict"),
-                    Attribute::Dict(
-                        [(
-                            Symbol::new("ty"),
-                            Attribute::List(vec![Attribute::Type(nil)]),
-                        )]
-                        .into_iter()
-                        .collect(),
-                    ),
+                let dict = crate::AttributeMap::from_entries(
+                    &mut ctx,
+                    [("ty", Attribute::List(vec![Attribute::Type(nil)]))],
                 );
-                attrs.insert(
-                    Symbol::new("tag"),
-                    Attribute::SymbolRef(SymbolPath::new(["keep"])),
-                );
+                let mut attrs_view = attrs.view_mut(&mut ctx);
+                attrs_view.insert("dict", Attribute::Dict(dict));
+                attrs_view.insert("tag", Attribute::SymbolRef(SymbolPath::new(["keep"])));
                 let signature = func::func_sig_with_attrs(
                     &mut ctx,
                     vec![nil; inputs],
@@ -597,24 +589,21 @@ mod result_list_tests {
                 assert_eq!(function.inputs(&ctx), vec![ptr; inputs]);
                 assert_eq!(function.results(&ctx), vec![ptr; results]);
                 assert_eq!(
-                    ctx.get_type(converted).attrs.get("nested"),
+                    ctx.type_attrs(converted).get("nested"),
                     Some(&Attribute::List(vec![Attribute::List(vec![
                         Attribute::Type(ptr)
                     ])]))
                 );
-                assert_eq!(
-                    ctx.get_type(converted).attrs.get("dict"),
-                    Some(&Attribute::Dict(
-                        [(
-                            Symbol::new("ty"),
-                            Attribute::List(vec![Attribute::Type(ptr)])
-                        )]
-                        .into_iter()
-                        .collect()
-                    ))
+                let expected_dict = crate::AttributeMap::from_entries(
+                    &mut ctx,
+                    [("ty", Attribute::List(vec![Attribute::Type(ptr)]))],
                 );
                 assert_eq!(
-                    ctx.get_type(converted).attrs.get_symbol_ref("tag"),
+                    ctx.type_attrs(converted).get("dict"),
+                    Some(&Attribute::Dict(expected_dict))
+                );
+                assert_eq!(
+                    ctx.type_attrs(converted).get_symbol_ref("tag"),
                     Some(&SymbolPath::new(["keep"]))
                 );
             }
@@ -633,15 +622,14 @@ mod result_list_tests {
         let nil = core::nil(&mut ctx).as_type_ref();
         let ptr = core::ptr(&mut ctx).as_type_ref();
         let bad_signature = func::func_sig(&mut ctx, [nil, nil], []).as_type_ref();
-        ctx.op_mut(op)
-            .attributes
-            .insert(Symbol::new("type"), Attribute::Type(bad_signature));
+        ctx.op_attrs_mut(op)
+            .insert("type", Attribute::Type(bad_signature));
         let before = crate::printer::print_module(&ctx, module.op());
         let mut converter = TypeConverter::new();
         converter.add_conversion(move |_, ty| (ty == nil).then_some(ptr));
         let mut rewriter = PatternRewriter::new(&converter);
         assert!(!FuncSignatureConversionPattern.match_and_rewrite(&mut ctx, op, &mut rewriter));
-        assert_eq!(ctx.op(op).attributes.get_type("type"), Some(bad_signature));
+        assert_eq!(ctx.op_attrs(op).get_type("type"), Some(bad_signature));
         let entry = ctx.region(function.body(&ctx)).blocks[0];
         assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), nil);
         assert_eq!(crate::printer::print_module(&ctx, module.op()), before);

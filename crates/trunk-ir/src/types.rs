@@ -204,11 +204,11 @@ impl Attribute {
                     .map(|item| item.try_map_types(f))
                     .collect::<Result<_, _>>()?,
             ),
-            Attribute::Dict(dict) => Attribute::Dict(
+            Attribute::Dict(dict) => Attribute::Dict(AttributeMap(
                 dict.iter()
-                    .map(|(key, value)| Ok((key.clone(), value.try_map_types(f)?)))
+                    .map(|(key, value)| Ok((key, value.try_map_types(f)?)))
                     .collect::<Result<_, _>>()?,
-            ),
+            )),
             Attribute::Unit
             | Attribute::Bool(_)
             | Attribute::Int(_)
@@ -252,7 +252,7 @@ impl Attribute {
             }
             Attribute::Dict(dict) => {
                 dict.iter()
-                    .map(|(key, value)| key.with_str(|s| s.len()) + 3 + value.complexity(strings))
+                    .map(|(key, value)| strings.get(key).len() + 3 + value.complexity(strings))
                     .sum::<usize>()
                     + dict.len() * 2
                     + 2
@@ -322,36 +322,31 @@ impl From<Location> for Attribute {
     }
 }
 
-/// A deterministic map of IR attributes with ergonomic symbol and string lookup.
+/// A deterministic map of IR attributes keyed by name.
 ///
-/// Entries are kept in a vector sorted by key. Maps hold only a few entries, so
-/// lookups scan with `Symbol` equality, which compares interned ids without
-/// resolving strings; only inserting a new key orders it by `Symbol::cmp`.
-/// Iteration, equality, and hashing follow key order, independent of the
-/// order in which entries were inserted.
+/// Keys are names, not symbols: they are read and written through the owning
+/// context, which resolves their text. Entries are kept in a vector sorted by
+/// key text. Maps hold only a few entries, so lookups scan; only inserting a
+/// new key orders it. Iteration, equality, and hashing follow key order,
+/// independent of the order in which entries were inserted.
 #[derive(Clone, Default, PartialEq, Eq, Hash)]
-pub struct AttributeMap(Vec<(Symbol, Attribute)>);
+pub struct AttributeMap(Vec<(StringRef, Attribute)>);
 
-/// A key accepted by [`AttributeMap::get`].
+/// A key accepted by [`AttributeMap::get`]: the key's text, or its pooled
+/// handle.
 pub trait AttributeKey {
-    fn matches(&self, key: &Symbol) -> bool;
-}
-
-impl AttributeKey for Symbol {
-    fn matches(&self, key: &Symbol) -> bool {
-        self == key
-    }
-}
-
-impl AttributeKey for &Symbol {
-    fn matches(&self, key: &Symbol) -> bool {
-        *self == key
-    }
+    fn matches(&self, strings: &StringPool, key: StringRef) -> bool;
 }
 
 impl AttributeKey for &str {
-    fn matches(&self, key: &Symbol) -> bool {
-        key.as_str() == *self
+    fn matches(&self, strings: &StringPool, key: StringRef) -> bool {
+        strings.get(key) == *self
+    }
+}
+
+impl AttributeKey for StringRef {
+    fn matches(&self, _strings: &StringPool, key: StringRef) -> bool {
+        *self == key
     }
 }
 
@@ -360,95 +355,64 @@ impl AttributeMap {
         Self(Vec::new())
     }
 
-    fn position(&self, key: impl AttributeKey) -> Option<usize> {
+    /// A map holding `entries`; later entries replace earlier ones with the
+    /// same key.
+    pub fn from_entries<K: Into<StringArg>, V: Into<Attribute>>(
+        ctx: &mut IrContext,
+        entries: impl IntoIterator<Item = (K, V)>,
+    ) -> Self {
+        let mut map = Self::new();
+        map.view_mut(ctx).extend(entries);
+        map
+    }
+
+    /// A map holding `entries`, whose keys are already pooled in `ctx`;
+    /// later entries replace earlier ones with the same key.
+    pub fn from_refs(
+        ctx: &impl AsRef<StringPool>,
+        entries: impl IntoIterator<Item = (StringRef, Attribute)>,
+    ) -> Self {
+        let strings = ctx.as_ref();
+        let entries = entries.into_iter();
+        let mut map = Self::new();
+        map.0.reserve_exact(entries.size_hint().0.min(4));
+        for (key, value) in entries {
+            map.insert_in(strings, key, value);
+        }
+        map
+    }
+
+    /// Read these attributes through `ctx`.
+    pub fn view<'a>(&'a self, ctx: &'a impl AsRef<StringPool>) -> AttributeView<'a> {
+        AttributeView {
+            map: self,
+            strings: ctx.as_ref(),
+        }
+    }
+
+    /// Change these attributes through `ctx`, which interns new keys. For a
+    /// map inside the context, use [`IrContext::op_attrs_mut`] or
+    /// [`IrContext::block_arg_attrs_mut`].
+    pub fn view_mut<'a>(&'a mut self, ctx: &'a mut IrContext) -> AttributeViewMut<'a> {
+        AttributeViewMut {
+            map: self,
+            strings: ctx.strings_mut(),
+        }
+    }
+
+    fn position(&self, strings: &StringPool, key: impl AttributeKey) -> Option<usize> {
         self.0
             .iter()
-            .position(|(existing, _)| key.matches(existing))
+            .position(|&(existing, _)| key.matches(strings, existing))
     }
 
-    /// Return the attribute associated with a symbol or its text.
-    pub fn get(&self, key: impl AttributeKey) -> Option<&Attribute> {
-        let index = self.position(key)?;
-        Some(&self.0[index].1)
-    }
-
-    pub fn get_mut(&mut self, key: impl AttributeKey) -> Option<&mut Attribute> {
-        let index = self.position(key)?;
-        Some(&mut self.0[index].1)
-    }
-
-    pub fn get_bool(&self, key: impl AttributeKey) -> Option<bool> {
-        self.get(key).and_then(Attribute::as_bool)
-    }
-
-    pub fn get_i128(&self, key: impl AttributeKey) -> Option<i128> {
-        self.get(key).and_then(Attribute::as_i128)
-    }
-
-    pub fn get_i64(&self, key: impl AttributeKey) -> Result<Option<i64>, IntegerOutOfRange> {
-        self.get_integer(key, "i64", i64::try_from)
-    }
-
-    pub fn get_i32(&self, key: impl AttributeKey) -> Result<Option<i32>, IntegerOutOfRange> {
-        self.get_integer(key, "i32", i32::try_from)
-    }
-
-    pub fn get_u64(&self, key: impl AttributeKey) -> Result<Option<u64>, IntegerOutOfRange> {
-        self.get_integer(key, "u64", u64::try_from)
-    }
-
-    pub fn get_u32(&self, key: impl AttributeKey) -> Result<Option<u32>, IntegerOutOfRange> {
-        self.get_integer(key, "u32", u32::try_from)
-    }
-
-    pub fn get_u8(&self, key: impl AttributeKey) -> Result<Option<u8>, IntegerOutOfRange> {
-        self.get_integer(key, "u8", u8::try_from)
-    }
-
-    pub fn get_string_ref(&self, key: impl AttributeKey) -> Option<StringRef> {
-        self.get(key).and_then(Attribute::as_string_ref)
-    }
-
-    /// The text of a string attribute, resolved through the owning context.
-    pub fn get_str<'a>(&self, ctx: &'a IrContext, key: impl AttributeKey) -> Option<&'a str> {
-        self.get_string_ref(key).map(|s| ctx.str(s))
-    }
-
-    pub fn get_symbol_ref(&self, key: impl AttributeKey) -> Option<&SymbolPath> {
-        self.get(key).and_then(Attribute::as_symbol_ref)
-    }
-
-    pub fn get_type(&self, key: impl AttributeKey) -> Option<TypeRef> {
-        self.get(key).and_then(Attribute::as_type)
-    }
-
-    fn get_integer<T>(
-        &self,
-        key: impl AttributeKey,
-        target: &'static str,
-        convert: impl FnOnce(i128) -> Result<T, std::num::TryFromIntError>,
-    ) -> Result<Option<T>, IntegerOutOfRange> {
-        let Some(value) = self.get_i128(key) else {
-            return Ok(None);
-        };
-        convert(value)
-            .map(Some)
-            .map_err(|_| IntegerOutOfRange { value, target })
-    }
-
-    pub fn contains_key(&self, key: impl AttributeKey) -> bool {
-        self.position(key).is_some()
-    }
-
-    /// Insert or replace an entry, returning the replaced value.
-    pub fn insert(
+    fn insert_in(
         &mut self,
-        key: impl Into<Symbol>,
-        value: impl Into<Attribute>,
+        strings: &StringPool,
+        key: StringRef,
+        value: Attribute,
     ) -> Option<Attribute> {
-        let key = key.into();
-        let value = value.into();
-        if let Some(index) = self.position(&key) {
+        if let Some(index) = self.0.iter().position(|&(existing, _)| existing == key) {
             return Some(std::mem::replace(&mut self.0[index].1, value));
         }
         // Most maps hold one or two entries. A `Vec`'s first push reserves
@@ -456,14 +420,12 @@ impl AttributeMap {
         if self.0.capacity() == 0 {
             self.0.reserve_exact(1);
         }
-        let index = self.0.partition_point(|(existing, _)| *existing < key);
+        let text = strings.get(key);
+        let index = self
+            .0
+            .partition_point(|&(existing, _)| strings.get(existing) < text);
         self.0.insert(index, (key, value));
         None
-    }
-
-    pub fn remove(&mut self, key: impl AttributeKey) -> Option<Attribute> {
-        let index = self.position(key)?;
-        Some(self.0.remove(index).1)
     }
 
     pub fn iter(&self) -> AttributeIter<'_> {
@@ -513,27 +475,212 @@ impl fmt::Debug for AttributeMap {
     }
 }
 
-/// Later entries replace earlier ones with the same key.
-impl FromIterator<(Symbol, Attribute)> for AttributeMap {
-    fn from_iter<T: IntoIterator<Item = (Symbol, Attribute)>>(iter: T) -> Self {
-        let mut map = Self::new();
-        map.extend(iter);
-        map
+/// An [`AttributeMap`] read through its context, so lookups take only the
+/// key and keys print as text; see [`AttributeMap::view`] and
+/// [`IrContext::op_attrs`].
+#[derive(Clone, Copy)]
+pub struct AttributeView<'a> {
+    map: &'a AttributeMap,
+    strings: &'a StringPool,
+}
+
+impl<'a> AttributeView<'a> {
+    /// The underlying map.
+    pub fn map(self) -> &'a AttributeMap {
+        self.map
+    }
+
+    pub fn get(self, key: impl AttributeKey) -> Option<&'a Attribute> {
+        let index = self.map.position(self.strings, key)?;
+        Some(&self.map.0[index].1)
+    }
+
+    pub fn contains_key(self, key: impl AttributeKey) -> bool {
+        self.map.position(self.strings, key).is_some()
+    }
+
+    pub fn get_bool(self, key: impl AttributeKey) -> Option<bool> {
+        self.get(key).and_then(Attribute::as_bool)
+    }
+
+    pub fn get_i128(self, key: impl AttributeKey) -> Option<i128> {
+        self.get(key).and_then(Attribute::as_i128)
+    }
+
+    pub fn get_i64(self, key: impl AttributeKey) -> Result<Option<i64>, IntegerOutOfRange> {
+        self.get_integer(key, "i64", i64::try_from)
+    }
+
+    pub fn get_i32(self, key: impl AttributeKey) -> Result<Option<i32>, IntegerOutOfRange> {
+        self.get_integer(key, "i32", i32::try_from)
+    }
+
+    pub fn get_u64(self, key: impl AttributeKey) -> Result<Option<u64>, IntegerOutOfRange> {
+        self.get_integer(key, "u64", u64::try_from)
+    }
+
+    pub fn get_u32(self, key: impl AttributeKey) -> Result<Option<u32>, IntegerOutOfRange> {
+        self.get_integer(key, "u32", u32::try_from)
+    }
+
+    pub fn get_u8(self, key: impl AttributeKey) -> Result<Option<u8>, IntegerOutOfRange> {
+        self.get_integer(key, "u8", u8::try_from)
+    }
+
+    pub fn get_string_ref(self, key: impl AttributeKey) -> Option<StringRef> {
+        self.get(key).and_then(Attribute::as_string_ref)
+    }
+
+    /// The text of a string attribute.
+    pub fn get_str(self, key: impl AttributeKey) -> Option<&'a str> {
+        self.get_string_ref(key)
+            .map(|value| self.strings.get(value))
+    }
+
+    pub fn get_symbol_ref(self, key: impl AttributeKey) -> Option<&'a SymbolPath> {
+        self.get(key).and_then(Attribute::as_symbol_ref)
+    }
+
+    pub fn get_type(self, key: impl AttributeKey) -> Option<TypeRef> {
+        self.get(key).and_then(Attribute::as_type)
+    }
+
+    fn get_integer<T>(
+        self,
+        key: impl AttributeKey,
+        target: &'static str,
+        convert: impl FnOnce(i128) -> Result<T, std::num::TryFromIntError>,
+    ) -> Result<Option<T>, IntegerOutOfRange> {
+        let Some(value) = self.get_i128(key) else {
+            return Ok(None);
+        };
+        convert(value)
+            .map(Some)
+            .map_err(|_| IntegerOutOfRange { value, target })
+    }
+
+    /// Each key's text with its value, in key order.
+    pub fn iter(self) -> impl DoubleEndedIterator<Item = (&'a str, &'a Attribute)> + 'a {
+        self.map
+            .iter()
+            .map(move |(key, value)| (self.strings.get(key), value))
+    }
+
+    pub fn len(self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.map.is_empty()
     }
 }
 
-impl Extend<(Symbol, Attribute)> for AttributeMap {
-    fn extend<T: IntoIterator<Item = (Symbol, Attribute)>>(&mut self, iter: T) {
-        let iter = iter.into_iter();
+/// Keys and string values print as text.
+impl fmt::Debug for AttributeView<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(self.iter().map(|(key, value)| {
+                (
+                    key,
+                    AttributeDisplay {
+                        attribute: value,
+                        strings: self.strings,
+                    },
+                )
+            }))
+            .finish()
+    }
+}
+
+impl fmt::Display for AttributeView<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+struct AttributeDisplay<'a> {
+    attribute: &'a Attribute,
+    strings: &'a StringPool,
+}
+
+impl fmt::Debug for AttributeDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.attribute {
+            Attribute::String(value) => fmt::Debug::fmt(self.strings.get(*value), f),
+            Attribute::List(items) => f
+                .debug_list()
+                .entries(items.iter().map(|attribute| AttributeDisplay {
+                    attribute,
+                    strings: self.strings,
+                }))
+                .finish(),
+            Attribute::Dict(map) => fmt::Debug::fmt(&map.view(self.strings), f),
+            other => fmt::Debug::fmt(other, f),
+        }
+    }
+}
+
+/// An [`AttributeMap`] borrowed together with its context's string pool, so
+/// that inserting a key can intern it; see [`AttributeMap::view_mut`],
+/// [`IrContext::op_attrs_mut`] and [`IrContext::block_arg_attrs_mut`].
+pub struct AttributeViewMut<'a> {
+    map: &'a mut AttributeMap,
+    strings: &'a mut StringPool,
+}
+
+impl<'a> AttributeViewMut<'a> {
+    pub(crate) fn new(map: &'a mut AttributeMap, strings: &'a mut StringPool) -> Self {
+        Self { map, strings }
+    }
+
+    /// Read the map through the same context.
+    pub fn view(&self) -> AttributeView<'_> {
+        self.map.view(&*self.strings)
+    }
+
+    pub fn get(&self, key: impl AttributeKey) -> Option<&Attribute> {
+        let index = self.map.position(self.strings, key)?;
+        Some(&self.map.0[index].1)
+    }
+
+    pub fn contains_key(&self, key: impl AttributeKey) -> bool {
+        self.map.position(self.strings, key).is_some()
+    }
+
+    /// Insert or replace an entry, returning the replaced value.
+    pub fn insert(
+        &mut self,
+        key: impl Into<StringArg>,
+        value: impl Into<Attribute>,
+    ) -> Option<Attribute> {
+        let key = match key.into() {
+            StringArg::Ref(key) => key,
+            StringArg::Text(text) => self.strings.intern(&text),
+        };
+        self.map.insert_in(self.strings, key, value.into())
+    }
+
+    /// Insert every entry; later entries replace earlier ones with the same
+    /// key.
+    pub fn extend<K: Into<StringArg>, V: Into<Attribute>>(
+        &mut self,
+        entries: impl IntoIterator<Item = (K, V)>,
+    ) {
+        let entries = entries.into_iter();
         // Repeated keys replace earlier entries, so the iterator length only
         // bounds the map's size from above. Reserve at most a small map
         // exactly and let inserts grow anything larger.
-        if self.0.capacity() == 0 {
-            self.0.reserve_exact(iter.size_hint().0.min(4));
+        if self.map.0.capacity() == 0 {
+            self.map.0.reserve_exact(entries.size_hint().0.min(4));
         }
-        for (key, value) in iter {
+        for (key, value) in entries {
             self.insert(key, value);
         }
+    }
+
+    pub fn remove(&mut self, key: impl AttributeKey) -> Option<Attribute> {
+        let index = self.map.position(self.strings, key)?;
+        Some(self.map.0.remove(index).1)
     }
 }
 
@@ -569,37 +716,37 @@ macro_rules! attribute_iterator {
 attribute_iterator!(
     /// Entries of an [`AttributeMap`] in key order.
     #[derive(Clone)]
-    AttributeIter<'a>(std::slice::Iter<'a, (Symbol, Attribute)>)
-        -> (&'a Symbol, &'a Attribute) = |(key, value)| (key, value)
+    AttributeIter<'a>(std::slice::Iter<'a, (StringRef, Attribute)>)
+        -> (StringRef, &'a Attribute) = |(key, value)| (*key, value)
 );
 attribute_iterator!(
     /// Entries of an [`AttributeMap`] in key order, with mutable values.
-    AttributeIterMut<'a>(std::slice::IterMut<'a, (Symbol, Attribute)>)
-        -> (&'a Symbol, &'a mut Attribute) = |(key, value)| (&*key, value)
+    AttributeIterMut<'a>(std::slice::IterMut<'a, (StringRef, Attribute)>)
+        -> (StringRef, &'a mut Attribute) = |(key, value)| (*key, value)
 );
 attribute_iterator!(
     /// Keys of an [`AttributeMap`] in order.
     #[derive(Clone)]
-    AttributeKeys<'a>(std::slice::Iter<'a, (Symbol, Attribute)>)
-        -> &'a Symbol = |(key, _)| key
+    AttributeKeys<'a>(std::slice::Iter<'a, (StringRef, Attribute)>)
+        -> StringRef = |(key, _)| *key
 );
 attribute_iterator!(
     /// Values of an [`AttributeMap`] in key order.
     #[derive(Clone)]
-    AttributeValues<'a>(std::slice::Iter<'a, (Symbol, Attribute)>)
+    AttributeValues<'a>(std::slice::Iter<'a, (StringRef, Attribute)>)
         -> &'a Attribute = |(_, value)| value
 );
 attribute_iterator!(
     /// Mutable values of an [`AttributeMap`] in key order.
-    AttributeValuesMut<'a>(std::slice::IterMut<'a, (Symbol, Attribute)>)
+    AttributeValuesMut<'a>(std::slice::IterMut<'a, (StringRef, Attribute)>)
         -> &'a mut Attribute = |(_, value)| value
 );
 
 /// Owned entries of an [`AttributeMap`] in key order.
-pub type AttributeIntoIter = std::vec::IntoIter<(Symbol, Attribute)>;
+pub type AttributeIntoIter = std::vec::IntoIter<(StringRef, Attribute)>;
 
 impl IntoIterator for AttributeMap {
-    type Item = (Symbol, Attribute);
+    type Item = (StringRef, Attribute);
     type IntoIter = AttributeIntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -608,7 +755,7 @@ impl IntoIterator for AttributeMap {
 }
 
 impl<'a> IntoIterator for &'a AttributeMap {
-    type Item = (&'a Symbol, &'a Attribute);
+    type Item = (StringRef, &'a Attribute);
     type IntoIter = AttributeIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -617,7 +764,7 @@ impl<'a> IntoIterator for &'a AttributeMap {
 }
 
 impl<'a> IntoIterator for &'a mut AttributeMap {
-    type Item = (&'a Symbol, &'a mut Attribute);
+    type Item = (StringRef, &'a mut Attribute);
     type IntoIter = AttributeIterMut<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -698,8 +845,13 @@ impl TypeData {
     ///
     /// Assumes a well-formed [`PARAM_ATTRS_ATTR`]; see
     /// [`TypeData::validate_param_attrs`].
-    pub fn param_attrs(&self, index: usize) -> &AttributeMap {
+    pub fn param_attrs<'a>(
+        &'a self,
+        ctx: &'a impl AsRef<StringPool>,
+        index: usize,
+    ) -> &'a AttributeMap {
         self.attrs
+            .view(ctx)
             .get(PARAM_ATTRS_ATTR)
             .and_then(Attribute::as_list)
             .and_then(|entries| entries.get(index))
@@ -708,24 +860,34 @@ impl TypeData {
     }
 
     /// Each type parameter with its attributes.
-    pub fn params_with_attrs(&self) -> impl Iterator<Item = (TypeRef, &AttributeMap)> {
+    pub fn params_with_attrs<'a>(
+        &'a self,
+        ctx: &'a impl AsRef<StringPool>,
+    ) -> impl Iterator<Item = (TypeRef, &'a AttributeMap)> {
         self.params
             .iter()
             .enumerate()
-            .map(|(index, &ty)| (ty, self.param_attrs(index)))
+            .map(move |(index, &ty)| (ty, self.param_attrs(ctx, index)))
     }
 
     /// Check that [`PARAM_ATTRS_ATTR`], if present, is canonical: one
     /// dictionary per type parameter, not all of them empty.
-    pub fn validate_param_attrs(&self) -> Result<(), ParamAttrsError> {
-        validate_param_attrs(&self.attrs, self.params.len())
+    pub fn validate_param_attrs(
+        &self,
+        ctx: &impl AsRef<StringPool>,
+    ) -> Result<(), ParamAttrsError> {
+        validate_param_attrs(ctx, &self.attrs, self.params.len())
     }
 }
 
 /// Check that [`PARAM_ATTRS_ATTR`] in `attrs`, if present, is canonical for a
 /// type with `params` type parameters.
-pub fn validate_param_attrs(attrs: &AttributeMap, params: usize) -> Result<(), ParamAttrsError> {
-    let Some(value) = attrs.get(PARAM_ATTRS_ATTR) else {
+pub fn validate_param_attrs(
+    ctx: &impl AsRef<StringPool>,
+    attrs: &AttributeMap,
+    params: usize,
+) -> Result<(), ParamAttrsError> {
+    let Some(value) = attrs.view(ctx).get(PARAM_ATTRS_ATTR) else {
         return Ok(());
     };
     let entries = value.as_list().ok_or(ParamAttrsError::NotList)?;
@@ -753,10 +915,12 @@ pub fn validate_param_attrs(attrs: &AttributeMap, params: usize) -> Result<(), P
 /// spelling of "no parameter attributes", is removed; any other malformed
 /// value is kept and reported.
 pub fn normalize_param_attrs(
+    ctx: &mut IrContext,
     attrs: &mut AttributeMap,
     params: usize,
 ) -> Result<(), ParamAttrsError> {
     let all_empty = attrs
+        .view(ctx)
         .get(PARAM_ATTRS_ATTR)
         .and_then(Attribute::as_list)
         .is_some_and(|entries| {
@@ -766,9 +930,9 @@ pub fn normalize_param_attrs(
                     .all(|entry| entry.as_dict().is_some_and(AttributeMap::is_empty))
         });
     if all_empty {
-        attrs.remove(PARAM_ATTRS_ATTR);
+        attrs.view_mut(ctx).remove(PARAM_ATTRS_ATTR);
     }
-    validate_param_attrs(attrs, params)
+    validate_param_attrs(ctx, attrs, params)
 }
 
 /// Builder for constructing `TypeData` with a fluent API.
@@ -781,7 +945,8 @@ pub struct TypeDataBuilder {
     /// parameters fit inline there does not allocate here either; at 32 bytes
     /// per entry the inline buffer is 128 bytes.
     params: SmallVec<[(TypeRef, AttributeMap); 4]>,
-    attrs: AttributeMap,
+    /// Keys are interned when the type data is built.
+    attrs: Vec<(StringArg, Attribute)>,
 }
 
 impl TypeDataBuilder {
@@ -790,7 +955,7 @@ impl TypeDataBuilder {
             dialect: dialect.into(),
             name: name.into(),
             params: SmallVec::new(),
-            attrs: AttributeMap::new(),
+            attrs: Vec::new(),
         }
     }
 
@@ -811,9 +976,15 @@ impl TypeDataBuilder {
         self
     }
 
-    pub fn attr(mut self, key: impl Into<Symbol>, val: impl Into<Attribute>) -> Self {
-        self.attrs.insert(key, val);
+    pub fn attr(mut self, key: impl Into<StringArg>, val: impl Into<Attribute>) -> Self {
+        self.attrs.push((key.into(), val.into()));
         self
+    }
+
+    /// Build the type data and intern it.
+    pub fn intern(self, ctx: &mut IrContext) -> TypeRef {
+        let data = self.build(ctx);
+        ctx.intern_type(data)
     }
 
     /// Build the type data. Parameter attributes given with
@@ -822,19 +993,20 @@ impl TypeDataBuilder {
     /// [`attr`](Self::attr); an explicit all-empty value is dropped. A
     /// malformed explicit value is kept and rejected when the type is interned
     /// or validated.
-    pub fn build(mut self) -> TypeData {
+    pub fn build(self, ctx: &mut IrContext) -> TypeData {
         let (params, param_attrs): (SmallVec<[TypeRef; 4]>, Vec<_>) =
             self.params.into_iter().unzip();
+        let mut attrs = AttributeMap::from_entries(ctx, self.attrs);
         if let Some(value) = param_attrs_attribute(param_attrs) {
-            self.attrs.insert(PARAM_ATTRS_ATTR, value);
+            attrs.view_mut(ctx).insert(PARAM_ATTRS_ATTR, value);
         } else {
-            let _ = normalize_param_attrs(&mut self.attrs, params.len());
+            let _ = normalize_param_attrs(ctx, &mut attrs, params.len());
         }
         TypeData {
             dialect: self.dialect,
             name: self.name,
             params,
-            attrs: self.attrs,
+            attrs,
         }
     }
 }
@@ -978,7 +1150,7 @@ impl TypeInterner {
             size += self.complexity(param, strings) + 2; // ", " separator
         }
         for (key, val) in &data.attrs {
-            size += key.with_str(|s| s.len()) + 3; // "key = "
+            size += strings.get(key).len() + 3; // "key = "
             size += val.complexity(strings);
         }
         size
@@ -1110,6 +1282,12 @@ impl StringPool {
     }
 }
 
+impl AsRef<StringPool> for StringPool {
+    fn as_ref(&self) -> &StringPool {
+        self
+    }
+}
+
 impl Default for StringPool {
     fn default() -> Self {
         Self::new()
@@ -1123,85 +1301,68 @@ mod prop_tests;
 mod tests {
     use super::*;
     use crate::IrContext;
-    use crate::Symbol;
 
     #[test]
     fn parameter_attributes_are_canonical_and_part_of_identity() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let marked: AttributeMap = [(
-            Symbol::new("k"),
-            Attribute::SymbolRef(SymbolPath::new(["v"])),
-        )]
-        .into_iter()
-        .collect();
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let marked = AttributeMap::from_entries(
+            &mut ctx,
+            [("k", Attribute::SymbolRef(SymbolPath::new(["v"])))],
+        );
 
-        let plain = ctx.intern_type(
-            TypeDataBuilder::new("core", "tuple")
-                .params([i32_ty, i32_ty])
-                .build(),
-        );
-        let empty = ctx.intern_type(
-            TypeDataBuilder::new("core", "tuple")
-                .param_with_attrs(i32_ty, AttributeMap::new())
-                .param(i32_ty)
-                .build(),
-        );
-        let explicit_empty = ctx.intern_type(
-            TypeDataBuilder::new("core", "tuple")
-                .params([i32_ty, i32_ty])
-                .attr(
-                    PARAM_ATTRS_ATTR,
-                    Attribute::List(vec![
-                        Attribute::Dict(AttributeMap::new()),
-                        Attribute::Dict(AttributeMap::new()),
-                    ]),
-                )
-                .build(),
-        );
+        let plain = TypeDataBuilder::new("core", "tuple")
+            .params([i32_ty, i32_ty])
+            .intern(&mut ctx);
+        let empty = TypeDataBuilder::new("core", "tuple")
+            .param_with_attrs(i32_ty, AttributeMap::new())
+            .param(i32_ty)
+            .intern(&mut ctx);
+        let explicit_empty = TypeDataBuilder::new("core", "tuple")
+            .params([i32_ty, i32_ty])
+            .attr(
+                PARAM_ATTRS_ATTR,
+                Attribute::List(vec![
+                    Attribute::Dict(AttributeMap::new()),
+                    Attribute::Dict(AttributeMap::new()),
+                ]),
+            )
+            .intern(&mut ctx);
         assert_eq!(plain, empty);
         assert_eq!(plain, explicit_empty);
-        assert!(!ctx.get_type(plain).attrs.contains_key(PARAM_ATTRS_ATTR));
+        assert!(!ctx.type_attrs(plain).contains_key(PARAM_ATTRS_ATTR));
 
-        let with_attrs = ctx.intern_type(
-            TypeDataBuilder::new("core", "tuple")
-                .param(i32_ty)
-                .param_with_attrs(i32_ty, marked.clone())
-                .build(),
-        );
+        let with_attrs = TypeDataBuilder::new("core", "tuple")
+            .param(i32_ty)
+            .param_with_attrs(i32_ty, marked.clone())
+            .intern(&mut ctx);
         assert_ne!(plain, with_attrs);
         let data = ctx.get_type(with_attrs);
-        assert!(data.param_attrs(0).is_empty());
-        assert_eq!(data.param_attrs(1), &marked);
+        assert!(data.param_attrs(&ctx, 0).is_empty());
+        assert_eq!(data.param_attrs(&ctx, 1), &marked);
         itertools::assert_equal(
-            data.params_with_attrs(),
+            data.params_with_attrs(&ctx),
             vec![(i32_ty, &AttributeMap::new()), (i32_ty, &marked)],
         );
-        assert_eq!(data.validate_param_attrs(), Ok(()));
+        assert_eq!(data.validate_param_attrs(&ctx), Ok(()));
     }
 
     #[test]
     fn malformed_parameter_attributes_are_reported() {
-        let dict = |entries: Vec<(&str, Attribute)>| {
-            Attribute::Dict(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (Symbol::new(key), value))
-                    .collect(),
-            )
-        };
-        let attrs = |value| -> AttributeMap {
-            [(Symbol::new(PARAM_ATTRS_ATTR), value)]
-                .into_iter()
-                .collect()
-        };
+        let mut ctx = IrContext::new();
+        let k_entry = AttributeMap::from_entries(&mut ctx, [("k", Attribute::Unit)]);
+        let dict =
+            |entries: Option<&AttributeMap>| Attribute::Dict(entries.cloned().unwrap_or_default());
+        let key = ctx.intern_str(PARAM_ATTRS_ATTR);
+        let attrs = |ctx: &IrContext, value| AttributeMap::from_refs(ctx, [(key, value)]);
         assert_eq!(
-            validate_param_attrs(&attrs(Attribute::Unit), 1),
+            validate_param_attrs(&ctx, &attrs(&ctx, Attribute::Unit), 1),
             Err(ParamAttrsError::NotList)
         );
         assert_eq!(
             validate_param_attrs(
-                &attrs(Attribute::List(vec![dict(vec![("k", Attribute::Unit)])])),
+                &ctx,
+                &attrs(&ctx, Attribute::List(vec![dict(Some(&k_entry))])),
                 2
             ),
             Err(ParamAttrsError::LengthMismatch {
@@ -1211,31 +1372,32 @@ mod tests {
         );
         assert_eq!(
             validate_param_attrs(
-                &attrs(Attribute::List(vec![
-                    dict(vec![("k", Attribute::Unit)]),
-                    Attribute::Unit
-                ])),
+                &ctx,
+                &attrs(
+                    &ctx,
+                    Attribute::List(vec![dict(Some(&k_entry)), Attribute::Unit])
+                ),
                 2
             ),
             Err(ParamAttrsError::NotDict(1))
         );
         assert_eq!(
-            validate_param_attrs(&attrs(Attribute::List(vec![dict(vec![])])), 1),
+            validate_param_attrs(&ctx, &attrs(&ctx, Attribute::List(vec![dict(None)])), 1),
             Err(ParamAttrsError::AllEmpty)
         );
-        assert_eq!(validate_param_attrs(&AttributeMap::new(), 3), Ok(()));
+        assert_eq!(validate_param_attrs(&ctx, &AttributeMap::new(), 3), Ok(()));
 
-        let mut wrong_length = attrs(Attribute::List(vec![dict(vec![])]));
+        let mut wrong_length = attrs(&ctx, Attribute::List(vec![dict(None)]));
         assert_eq!(
-            normalize_param_attrs(&mut wrong_length, 2),
+            normalize_param_attrs(&mut ctx, &mut wrong_length, 2),
             Err(ParamAttrsError::LengthMismatch {
                 params: 2,
                 attrs: 1
             })
         );
-        assert!(wrong_length.contains_key(PARAM_ATTRS_ATTR));
-        let mut all_empty = attrs(Attribute::List(vec![dict(vec![]), dict(vec![])]));
-        assert_eq!(normalize_param_attrs(&mut all_empty, 2), Ok(()));
+        assert!(wrong_length.view(&ctx).contains_key(PARAM_ATTRS_ATTR));
+        let mut all_empty = attrs(&ctx, Attribute::List(vec![dict(None), dict(None)]));
+        assert_eq!(normalize_param_attrs(&mut ctx, &mut all_empty, 2), Ok(()));
         assert!(all_empty.is_empty());
     }
 
@@ -1244,18 +1406,15 @@ mod tests {
         let mut ctx = IrContext::new();
         let reference = |name| Attribute::SymbolRef(SymbolPath::new([name]));
         let mut attrs = AttributeMap::new();
-        attrs.insert("callee", reference("direct"));
-        attrs.insert("name", ctx.string_attr("not_a_reference"));
-        attrs.insert(
+        attrs
+            .view_mut(&mut ctx)
+            .insert("callee", reference("direct"));
+        let name = ctx.string_attr("not_a_reference");
+        attrs.view_mut(&mut ctx).insert("name", name);
+        let nested = AttributeMap::from_entries(&mut ctx, [("target", reference("nested"))]);
+        attrs.view_mut(&mut ctx).insert(
             "table",
-            Attribute::List(vec![
-                reference("first"),
-                Attribute::Dict(
-                    [(Symbol::new("target"), reference("nested"))]
-                        .into_iter()
-                        .collect(),
-                ),
-            ]),
+            Attribute::List(vec![reference("first"), Attribute::Dict(nested)]),
         );
 
         let mut visited = Vec::new();
@@ -1271,20 +1430,18 @@ mod tests {
     #[test]
     fn nested_types_are_visited_and_mapped_through_lists_and_dicts() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i64_ty = TypeDataBuilder::new("core", "i64").intern(&mut ctx);
+        let ty_key = ctx.intern_str("ty");
+        let tag_key = ctx.intern_str("tag");
         let dict = |ty| {
-            Attribute::Dict(
+            Attribute::Dict(AttributeMap::from_refs(
+                ctx.strings(),
                 [
-                    (Symbol::new("ty"), Attribute::Type(ty)),
-                    (
-                        Symbol::new("tag"),
-                        Attribute::SymbolRef(SymbolPath::new(["keep"])),
-                    ),
-                ]
-                .into_iter()
-                .collect(),
-            )
+                    (ty_key, Attribute::Type(ty)),
+                    (tag_key, Attribute::SymbolRef(SymbolPath::new(["keep"]))),
+                ],
+            ))
         };
         let attribute = Attribute::List(vec![Attribute::Type(i32_ty), dict(i32_ty)]);
 
@@ -1304,20 +1461,37 @@ mod tests {
     }
 
     #[test]
+    fn attribute_maps_display_their_keys_and_strings_as_text() {
+        let mut ctx = IrContext::new();
+        let text = ctx.string_attr("hello");
+        let nested = AttributeMap::from_entries(&mut ctx, [("inner", text.clone())]);
+        let attrs = AttributeMap::from_entries(
+            &mut ctx,
+            [
+                ("name", text),
+                ("list", Attribute::List(vec![Attribute::Dict(nested)])),
+                ("count", Attribute::Int(3)),
+            ],
+        );
+        assert_eq!(
+            attrs.view(&ctx).to_string(),
+            r#"{"count": Int(3), "list": [{"inner": "hello"}], "name": "hello"}"#
+        );
+    }
+
+    #[test]
     fn attribute_map_starts_at_exactly_the_entries_it_holds() {
+        let mut ctx = IrContext::new();
         let mut attrs = AttributeMap::new();
-        attrs.insert("only", Attribute::Unit);
+        attrs.view_mut(&mut ctx).insert("only", Attribute::Unit);
         assert_eq!(attrs.0.capacity(), 1);
 
-        let collected: AttributeMap = ["a", "b", "c"]
-            .into_iter()
-            .map(|key| (Symbol::new(key), Attribute::Unit))
-            .collect();
+        let collected =
+            AttributeMap::from_entries(&mut ctx, ["a", "b", "c"].map(|key| (key, Attribute::Unit)));
         assert_eq!(collected.0.capacity(), 3);
 
-        let repeated: AttributeMap = (0..100)
-            .map(|_| (Symbol::new("same"), Attribute::Unit))
-            .collect();
+        let repeated =
+            AttributeMap::from_entries(&mut ctx, (0..100).map(|_| ("same", Attribute::Unit)));
         assert_eq!(repeated.len(), 1);
         assert!(repeated.0.capacity() <= 4);
     }

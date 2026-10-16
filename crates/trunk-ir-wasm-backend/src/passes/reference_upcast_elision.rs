@@ -160,7 +160,7 @@ mod tests {
         // An upcast whose declared result still converts is left to the cast
         // legalization pattern.
         let new_type = |ctx: &mut IrContext, name| {
-            ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("wasm", name).build())
+            trunk_ir::types::TypeDataBuilder::new("wasm", name).intern(ctx)
         };
         let structref = new_type(&mut ctx, "structref");
         let anyref = new_type(&mut ctx, "anyref");

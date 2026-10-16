@@ -125,9 +125,17 @@ impl trunk_ir::op_interface::CallableExitModel for DispatchCps {
     ) -> Result<(), trunk_ir::op_interface::ControlFlowInterfaceError> {
         let data = ctx.op(self.op_ref());
         if ctx.op_operands(self.op_ref()).len() == 4
-            && data.attributes.get_symbol_ref("ability").is_some()
-            && data.attributes.get_string_ref("op_name").is_some()
-            && data.attributes.get_type("answer_type").is_some()
+            && data
+                .attributes
+                .view(ctx)
+                .get_symbol_ref("ability")
+                .is_some()
+            && data
+                .attributes
+                .view(ctx)
+                .get_string_ref("op_name")
+                .is_some()
+            && data.attributes.view(ctx).get_type("answer_type").is_some()
         {
             Ok(())
         } else {
@@ -153,7 +161,7 @@ mod tests {
     }
 
     fn type_ref(ctx: &mut IrContext, dialect: &str, name: &str) -> trunk_ir::TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+        TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).intern(ctx)
     }
 
     fn ability(_: &mut IrContext, name: &str) -> trunk_ir::SymbolPath {

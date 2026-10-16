@@ -55,8 +55,7 @@ pub(crate) fn lower_get_or_panic(
         .copied()
         .filter(|&op| {
             func::Func::matches(ctx, op)
-                && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
-                    == Some(BYTES_GET_OR_PANIC)
+                && ctx.op_attrs(op).get_str(COMPILER_INTRINSIC_ATTR) == Some(BYTES_GET_OR_PANIC)
         })
         .collect();
     if declarations.is_empty() {
@@ -146,7 +145,7 @@ pub(crate) fn replace_call(ctx: &mut IrContext, call: OpRef, ops: &[OpRef], valu
 /// The intrinsic's exact signature: `(core.bytes, core.i32) -> core.i32`.
 fn exact_signature(ctx: &mut IrContext) -> TypeRef {
     let bytes = core::bytes(ctx).as_type_ref();
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
     func::func_sig(ctx, [bytes, i32_ty], [i32_ty]).as_type_ref()
 }
 

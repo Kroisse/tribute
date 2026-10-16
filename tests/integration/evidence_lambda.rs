@@ -61,8 +61,7 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
         .first()
         .is_some_and(|ty| tribute_ir::dialect::ability::is_evidence_type_ref(ctx, *ty));
     let is_cps = ctx
-        .op(func_op.op_ref())
-        .attributes
+        .op_attrs(func_op.op_ref())
         .get("tribute.calling_convention")
         .is_some_and(|attr| *attr == trunk_ir::Attribute::Int(2));
     let hidden_count = usize::from(has_evidence) + usize::from(has_evidence && is_cps);
@@ -106,8 +105,7 @@ fn is_i32(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
 }
 
 fn is_continuation_frame(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
-    ctx.get_type(ty)
-        .attrs
+    ctx.type_attrs(ty)
         .contains_key("tribute.cps_continuation_frame_result")
 }
 
@@ -451,10 +449,7 @@ fn main() -> Nil { }
             classify_callable_body(&ctx, function.op_ref()),
             Ok(CallableBody::Declaration)
         );
-        assert_eq!(
-            ctx.op(function.op_ref()).attributes.get_str(&ctx, "abi"),
-            Some("C")
-        );
+        assert_eq!(ctx.op_attrs(function.op_ref()).get_str("abi"), Some("C"));
         let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
         assert_eq!(signature.inputs(&ctx).len(), 1);
         assert_eq!(signature.results(&ctx), signature.inputs(&ctx));

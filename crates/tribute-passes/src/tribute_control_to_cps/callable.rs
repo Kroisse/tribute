@@ -117,8 +117,7 @@ impl Converter<'_> {
     /// replaces `source` in the same module refers to it the same way.
     fn written_callee(&self, source: OpRef) -> SymbolPath {
         self.ctx
-            .op(source)
-            .attributes
+            .op_attrs(source)
             .get_symbol_ref("callee")
             .expect("pre-CPS validation checked direct callee")
             .clone()
@@ -133,6 +132,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_symbol_ref("func_ref")
             .expect("pre-CPS validation checked func_ref target")
             .clone();
@@ -258,13 +258,15 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
-            .get_str(self.ctx, "sym_name")
+            .view(self.ctx)
+            .get_str("sym_name")
             .map(Symbol::new)
             .expect("pre-CPS validation checked function symbol");
         let logical_type = self
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_type("type")
             .expect("pre-CPS validation checked function type");
         let info = self
@@ -283,7 +285,7 @@ impl Converter<'_> {
                     .attr("type", Attribute::Type(physical_type));
             for (key, value) in self.convert_attrs(&self.ctx.op(source).attributes.clone()) {
                 if !matches!(
-                    key.as_str(),
+                    self.ctx.str(key),
                     "sym_name"
                         | "type"
                         | tribute_control::ROW_BINDERS_ATTR
@@ -389,6 +391,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_symbol_ref("callee")
             .expect("pre-CPS validation checked direct callee")
             .clone();
@@ -452,6 +455,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_symbol_ref("callee")
             .expect("pre-CPS validation checked tail callee")
             .clone();

@@ -317,8 +317,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
         });
         indices.insert(ty, idx);
     }
-    ctx.op_mut(module.op())
-        .attributes
+    ctx.op_attrs_mut(module.op())
         .insert(GC_TYPES_ATTR, Attribute::List(user_types));
 
     PatternApplicator::new(TypeConverter::new())
@@ -399,7 +398,7 @@ mod tests {
         // A struct named only by a signature or by another struct's field
         // still receives an index, so every value type naming it is concrete.
         assert_eq!(
-            ctx.op(module.op()).attributes.get(GC_TYPES_ATTR),
+            ctx.op_attrs(module.op()).get(GC_TYPES_ATTR),
             Some(&Attribute::List(expected.to_vec()))
         );
     }

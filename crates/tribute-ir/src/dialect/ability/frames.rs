@@ -65,20 +65,20 @@ impl HandlerBinding {
                 entries.len()
             ));
         }
-        let ability = match entries.get("ability") {
+        let ability = match entries.view(ctx).get("ability") {
             Some(Attribute::SymbolRef(ability)) => ability.clone(),
             _ => return Err("handlers ability must be a symbol reference".into()),
         };
-        let op_name = match entries.get("op_name") {
+        let op_name = match entries.view(ctx).get("op_name") {
             Some(Attribute::String(name)) => *name,
             _ => return Err("handlers op_name must be a string".into()),
         };
-        let kind = match entries.get("kind") {
+        let kind = match entries.view(ctx).get("kind") {
             Some(Attribute::String(kind)) => OperationKind::from_keyword(ctx.str(*kind))
                 .ok_or_else(|| "handlers kind must be fn or op".to_string())?,
             _ => return Err("handlers kind must be fn or op".into()),
         };
-        let operation_result_type = match entries.get("operation_result_type") {
+        let operation_result_type = match entries.view(ctx).get("operation_result_type") {
             Some(Attribute::Type(ty)) => *ty,
             _ => return Err("handlers operation_result_type must be a type".into()),
         };
@@ -93,10 +93,11 @@ impl HandlerBinding {
     pub fn to_attribute(&self, ctx: &mut IrContext) -> Attribute {
         let kind = ctx.string_attr(self.kind.keyword());
         let mut entries = AttributeMap::new();
-        entries.insert("ability", Attribute::SymbolRef(self.ability.clone()));
-        entries.insert("op_name", Attribute::String(self.op_name));
-        entries.insert("kind", kind);
-        entries.insert(
+        let mut entries_view = entries.view_mut(ctx);
+        entries_view.insert("ability", Attribute::SymbolRef(self.ability.clone()));
+        entries_view.insert("op_name", Attribute::String(self.op_name));
+        entries_view.insert("kind", kind);
+        entries_view.insert(
             "operation_result_type",
             Attribute::Type(self.operation_result_type),
         );
@@ -135,7 +136,7 @@ fn closure_signature(ctx: &IrContext, ty: TypeRef) -> Option<(CallingConvention,
     if data.dialect != "closure" || data.name != "closure" {
         return None;
     }
-    let convention = match data.attrs.get(CALLING_CONVENTION_ATTR) {
+    let convention = match data.attrs.view(ctx).get(CALLING_CONVENTION_ATTR) {
         Some(Attribute::Int(code)) => CallingConvention::try_from(*code).ok()?,
         _ => return None,
     };
@@ -255,7 +256,7 @@ impl trunk_ir::ops::Verify for Handle {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
         let op = self.op_ref();
         verify_evidence_plan(ctx, op, EvidencePlanSite::Handle)?;
-        let Some(Attribute::List(items)) = ctx.op(op).attributes.get("handlers") else {
+        let Some(Attribute::List(items)) = ctx.op_attrs(op).get("handlers") else {
             return Err("ability.handle requires a handlers list".into());
         };
         let bindings = items
@@ -669,8 +670,8 @@ mod tests {
     fn handler_binding_round_trips_through_its_attribute() {
         let mut ctx = IrContext::new();
         let state = trunk_ir::SymbolPath::new(["State"]);
-        let never = ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "never").build());
-        let i32_ty = ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
+        let never = trunk_ir::types::TypeDataBuilder::new("core", "never").intern(&mut ctx);
+        let i32_ty = trunk_ir::types::TypeDataBuilder::new("core", "i32").intern(&mut ctx);
         let op_name = ctx.intern_str("get");
         for (kind, result, resumptive) in [
             (super::OperationKind::Op, i32_ty, true),

@@ -100,7 +100,7 @@ fn concise_rows_cover_instances_tails_and_both() {
         );
         let (ctx, module) = parse(&input);
         let func = module.ops(&ctx)[0];
-        let ty = ctx.op(func).attributes.get_type("type").unwrap();
+        let ty = ctx.op_attrs(func).get_type("type").unwrap();
         assert_eq!(FuncSig::from_type_ref(&ctx, ty).unwrap().row(&ctx), row);
         assert!(print_module(&ctx, module.op()).contains(written));
     }
@@ -266,7 +266,7 @@ fn a_union_names_binders_and_excludes_its_result() {
 #[test]
 fn substitution_rebuilds_callables_and_tuple_layouts() {
     let mut ctx = IrContext::new();
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
     let a = SymbolPath::new(["A"]);
     let b = SymbolPath::new(["B"]);
     let open = func_sig_with_row(
@@ -292,4 +292,22 @@ fn substitution_rebuilds_callables_and_tuple_layouts() {
 
     assert_eq!(substitute_rows(&mut ctx, tuple, &[]), None);
     assert_eq!(substitute_rows(&mut ctx, i32_ty, &[]), Some(i32_ty));
+}
+
+#[test]
+fn finding_a_substituted_row_needs_only_the_keys_it_holds() {
+    let mut ctx = IrContext::new();
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+    let open = func_sig_with_row(
+        &mut ctx,
+        i32_ty,
+        [i32_ty],
+        &Row::new([], Some(0)),
+        CallingConvention::Cps,
+    )
+    .as_type_ref();
+    let args = [Row::new([], Some(1))];
+    let substituted = substitute_rows(&mut ctx, open, &args).unwrap();
+    assert_eq!(ctx.lookup_str("instances"), None);
+    assert_eq!(find_substituted_rows(&ctx, open, &args), Some(substituted));
 }

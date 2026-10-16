@@ -119,8 +119,8 @@ impl<'a> PrintState<'a> {
             return result;
         }
         write!(f, "{}.{}", data.dialect, data.name)?;
-        let inline_param_attrs = data.validate_param_attrs().is_ok();
-        let mut attrs = visible_type_attrs(data, inline_param_attrs, &[]).peekable();
+        let inline_param_attrs = data.validate_param_attrs(self.ctx).is_ok();
+        let mut attrs = visible_type_attrs(self.ctx, data, inline_param_attrs, &[]).peekable();
         if data.params.is_empty() && attrs.peek().is_none() {
             return Ok(());
         }
@@ -148,7 +148,7 @@ impl<'a> PrintState<'a> {
         results: &[TypeRef],
     ) -> fmt::Result {
         let data = self.ctx.get_type(ty);
-        let inline_param_attrs = data.validate_param_attrs().is_ok();
+        let inline_param_attrs = data.validate_param_attrs(self.ctx).is_ok();
         write!(f, "{}.{}<(", data.dialect, data.name)?;
         for (index, &input) in inputs.iter().enumerate() {
             if index > 0 {
@@ -172,6 +172,7 @@ impl<'a> PrintState<'a> {
         }
 
         let mut attrs = visible_type_attrs(
+            self.ctx,
             data,
             inline_param_attrs,
             &[
@@ -198,7 +199,7 @@ impl<'a> PrintState<'a> {
         param: TypeRef,
     ) -> fmt::Result {
         self.write_type(f, param)?;
-        let attrs = data.param_attrs(index);
+        let attrs = data.param_attrs(self.ctx, index);
         if inline_param_attrs && !attrs.is_empty() {
             f.write_char(' ')?;
             self.write_attr_dict(f, attrs.iter())?;
@@ -209,14 +210,14 @@ impl<'a> PrintState<'a> {
     fn write_attr_dict<'b>(
         &self,
         f: &mut dyn Write,
-        attrs: impl Iterator<Item = (&'b crate::Symbol, &'b Attribute)>,
+        attrs: impl Iterator<Item = (StringRef, &'b Attribute)>,
     ) -> fmt::Result {
         f.write_char('{')?;
         for (index, (key, value)) in attrs.enumerate() {
             if index > 0 {
                 f.write_str(", ")?;
             }
-            write_attribute_key(f, key)?;
+            write_attribute_key(f, self.ctx.str(key))?;
             f.write_str(" = ")?;
             self.write_attribute(f, value)?;
         }
@@ -275,15 +276,14 @@ impl<'a> PrintState<'a> {
 /// parameter attributes. Malformed parameter attributes stay in the dictionary
 /// so the printed form shows them.
 fn visible_type_attrs<'b>(
+    ctx: &'b IrContext,
     data: &'b TypeData,
     inline_param_attrs: bool,
     hidden: &'b [&'static str],
-) -> impl Iterator<Item = (&'b crate::Symbol, &'b Attribute)> {
-    data.attrs.iter().filter(move |(key, _)| {
-        !(inline_param_attrs && **key == crate::Symbol::new(PARAM_ATTRS_ATTR))
-            && !hidden
-                .iter()
-                .any(|hidden| **key == crate::Symbol::new(hidden))
+) -> impl Iterator<Item = (StringRef, &'b Attribute)> {
+    data.attrs.iter().filter(move |&(key, _)| {
+        let key = ctx.str(key);
+        !(inline_param_attrs && key == PARAM_ATTRS_ATTR) && !hidden.contains(&key)
     })
 }
 
@@ -309,11 +309,19 @@ fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef
     {
         return None;
     }
-    let num_inputs = match data.attrs.get(crate::dialect::func::NUM_INPUTS_ATTR) {
+    let num_inputs = match data
+        .attrs
+        .view(ctx)
+        .get(crate::dialect::func::NUM_INPUTS_ATTR)
+    {
         Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
         _ => return None,
     };
-    let num_results = match data.attrs.get(crate::dialect::func::NUM_RESULTS_ATTR) {
+    let num_results = match data
+        .attrs
+        .view(ctx)
+        .get(crate::dialect::func::NUM_RESULTS_ATTR)
+    {
         Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
         _ => return None,
     };
@@ -356,7 +364,7 @@ impl<'a, 'ctx> TypePrintHelper<'a, 'ctx> {
     /// Write `{key = value, ...}`.
     pub fn write_attr_dict<'b>(
         &mut self,
-        attrs: impl Iterator<Item = (&'b crate::Symbol, &'b Attribute)>,
+        attrs: impl Iterator<Item = (StringRef, &'b Attribute)>,
     ) -> fmt::Result {
         self.state.write_attr_dict(&mut *self.f, attrs)
     }
@@ -396,7 +404,7 @@ pub struct OpPrintHelper<'a, 'ctx> {
 
 impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
     /// Access the IR context.
-    pub fn ctx(&self) -> &IrContext {
+    pub fn ctx(&self) -> &'ctx IrContext {
         self.state.ctx
     }
 
@@ -582,16 +590,14 @@ fn write_type_alias_name(f: &mut dyn Write, name: &str) -> fmt::Result {
 }
 
 /// Write a dictionary key bare when the reader accepts it, otherwise quoted.
-fn write_attribute_key(f: &mut dyn Write, key: &crate::symbol::Symbol) -> fmt::Result {
-    key.with_str(|s| {
-        if crate::parser::raw::is_bare_attribute_key(s) {
-            f.write_str(s)
-        } else {
-            f.write_char('"')?;
-            write_escaped_string(f, s)?;
-            f.write_char('"')
-        }
-    })
+fn write_attribute_key(f: &mut dyn Write, key: &str) -> fmt::Result {
+    if crate::parser::raw::is_bare_attribute_key(key) {
+        f.write_str(key)
+    } else {
+        f.write_char('"')?;
+        write_escaped_string(f, key)?;
+        f.write_char('"')
+    }
 }
 
 /// Write `name` bare when it is an identifier (`[A-Za-z_][A-Za-z0-9_]*`),
@@ -953,7 +959,7 @@ fn print_generic_op(
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "{key} = ")?;
+            write!(f, "{} = ", state.ctx.str(key))?;
             state.write_attribute(f, val)?;
         }
         f.write_char('}')?;
@@ -1052,7 +1058,7 @@ fn print_module_op(
     write!(f, "{indent_str}core.module")?;
 
     // Module name
-    if let Some(name) = data.attributes.get_str(state.ctx, "sym_name") {
+    if let Some(name) = data.attributes.view(state.ctx).get_str("sym_name") {
         f.write_char(' ')?;
         write_symbol_text(f, name)?;
     }
@@ -1062,7 +1068,7 @@ fn print_module_op(
     let mut attrs = data
         .attributes
         .iter()
-        .filter(|(key, _)| **key != crate::Symbol::new("sym_name"))
+        .filter(|&(key, _)| state.ctx.str(key) != "sym_name")
         .peekable();
     if attrs.peek().is_some() {
         let expanded = PrintState::without_aliases(state.ctx);
@@ -1071,7 +1077,7 @@ fn print_module_op(
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write_attribute_key(f, key)?;
+            write_attribute_key(f, state.ctx.str(key))?;
             f.write_str(" = ")?;
             expanded.write_attribute(f, val)?;
         }
@@ -1171,7 +1177,7 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     /// Create a one-result `func.func_sig` type.
@@ -1250,13 +1256,11 @@ mod tests {
     fn malformed_func_sig_storage_prints_as_concrete_type() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let foreign = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("foreign"), Symbol::new("func_sig"))
-                .param(i32_ty)
-                .attr(func::NUM_INPUTS_ATTR, Attribute::Int(2))
-                .attr(func::NUM_RESULTS_ATTR, Attribute::Int(1))
-                .build(),
-        );
+        let foreign = TypeDataBuilder::new(Symbol::new("foreign"), Symbol::new("func_sig"))
+            .param(i32_ty)
+            .attr(func::NUM_INPUTS_ATTR, Attribute::Int(2))
+            .attr(func::NUM_RESULTS_ATTR, Attribute::Int(1))
+            .intern(&mut ctx);
         assert_eq!(
             print_type(&ctx, foreign),
             "foreign.func_sig<core.i32, {num_inputs = 2, num_results = 1}>"
@@ -1264,13 +1268,11 @@ mod tests {
 
         // Shared signatures have a stricter one-result contract, so raw
         // multi-result storage must not be printed in arrow syntax either.
-        let shared = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
-                .params([i32_ty, i32_ty, i32_ty])
-                .attr(func::NUM_INPUTS_ATTR, Attribute::Int(1))
-                .attr(func::NUM_RESULTS_ATTR, Attribute::Int(2))
-                .build(),
-        );
+        let shared = TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+            .params([i32_ty, i32_ty, i32_ty])
+            .attr(func::NUM_INPUTS_ATTR, Attribute::Int(1))
+            .attr(func::NUM_RESULTS_ATTR, Attribute::Int(2))
+            .intern(&mut ctx);
         assert_eq!(
             print_type(&ctx, shared),
             "func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 2}>"
@@ -1636,7 +1638,7 @@ mod tests {
 
     inventory::submit!(crate::asm_format::TypeAliasHint {
         dialect: "alias_test",
-        suggest: |ctx, ty| ctx.get_type(ty).attrs.get_str(ctx, "name"),
+        suggest: |ctx, ty| ctx.type_attrs(ty).get_str("name"),
     });
 
     /// Helper: build a named `alias_test.record` type, which suggests its
@@ -1645,11 +1647,12 @@ mod tests {
         let mut builder = TypeDataBuilder::new("alias_test", "record");
         for (field, ty) in fields {
             let mut attrs = AttributeMap::new();
-            attrs.insert("name", ctx.string_attr(field));
+            let field = ctx.string_attr(field);
+            attrs.view_mut(ctx).insert("name", field);
             builder = builder.param_with_attrs(*ty, attrs);
         }
         let name = ctx.string_attr(name);
-        ctx.intern_type(builder.attr("name", name).build())
+        builder.attr("name", name).intern(ctx)
     }
 
     /// Helper: build a module with given functions.

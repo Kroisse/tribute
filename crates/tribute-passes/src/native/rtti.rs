@@ -67,7 +67,7 @@ struct ClifTypes {
 impl ClifTypes {
     fn intern(ctx: &mut IrContext) -> Self {
         let mk = |ctx: &mut IrContext, name: &'static str| {
-            ctx.intern_type(TypeDataBuilder::new("core", name).build())
+            TypeDataBuilder::new("core", name).intern(ctx)
         };
         Self {
             ptr: mk(ctx, "ptr"),
@@ -987,7 +987,7 @@ mod tests {
     }
 
     fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+        TypeDataBuilder::new(dialect, name).intern(ctx)
     }
 
     /// Build a module containing a function that creates a struct via adt.struct_new.

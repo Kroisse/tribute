@@ -618,15 +618,10 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Continuation { arg, result, .. } => {
                 let arg = self.convert_logical_type(ir, *arg);
                 let result = self.convert_logical_type(ir, *result);
-                ir.intern_type(
-                    TypeDataBuilder::new(
-                        Symbol::new("tribute_control"),
-                        Symbol::new("resume_token"),
-                    )
+                TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("resume_token"))
                     .param(arg)
                     .param(result)
-                    .build(),
-                )
+                    .intern(ir)
             }
         }
     }
@@ -861,7 +856,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.i32` type.
     pub fn i32_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ir)
     }
 
     /// Get the `core.nil` type.
@@ -871,12 +866,12 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.i1` (bool) type.
     pub fn bool_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.intern_type(TypeDataBuilder::new("core", "i1").build())
+        TypeDataBuilder::new("core", "i1").intern(ir)
     }
 
     /// Get the `core.f64` type.
     pub fn f64_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.intern_type(TypeDataBuilder::new("core", "f64").build())
+        TypeDataBuilder::new("core", "f64").intern(ir)
     }
 
     /// Get the `core.bytes` type.
@@ -937,7 +932,9 @@ impl<'db> IrLoweringCtx<'db> {
         definition: Location,
     ) -> TypeRef {
         let mut attrs = AttributeMap::new();
-        attrs.insert("tribute.definition", Attribute::Location(definition));
+        attrs
+            .view_mut(ir)
+            .insert("tribute.definition", Attribute::Location(definition));
         Self::enum_type(ir, name, variants, attrs)
     }
 
@@ -958,11 +955,9 @@ impl<'db> IrLoweringCtx<'db> {
     /// Create an `adt.typeref` type — a reference to a named type.
     pub fn adt_typeref(&self, ir: &mut IrContext, name: &Symbol) -> TypeRef {
         let name = ir.intern_symbol_text(name);
-        ir.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-                .attr("name", name)
-                .build(),
-        )
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+            .attr("name", name)
+            .intern(ir)
     }
 }
 

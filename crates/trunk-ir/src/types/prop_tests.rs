@@ -109,57 +109,69 @@ fn check_lookup(
     key: &str,
 ) {
     let expected = model.get(key);
-    let symbol = Symbol::new(key);
-    assert_eq!(attrs.get(key), expected);
-    assert_eq!(attrs.get(&symbol), expected);
-    assert_eq!(attrs.contains_key(key), expected.is_some());
-    assert_eq!(attrs.get_bool(key), expected.and_then(Attribute::as_bool));
-    assert_eq!(attrs.get_i128(key), expected.and_then(Attribute::as_i128));
+    assert_eq!(attrs.view(ctx).get(key), expected);
+    if let Some(pooled) = ctx.lookup_str(key) {
+        assert_eq!(attrs.view(ctx).get(pooled), expected);
+    }
+    assert_eq!(attrs.view(ctx).contains_key(key), expected.is_some());
     assert_eq!(
-        attrs.get_i64(key),
+        attrs.view(ctx).get_bool(key),
+        expected.and_then(Attribute::as_bool)
+    );
+    assert_eq!(
+        attrs.view(ctx).get_i128(key),
+        expected.and_then(Attribute::as_i128)
+    );
+    assert_eq!(
+        attrs.view(ctx).get_i64(key),
         expected_integer(expected, "i64", i64::try_from)
     );
     assert_eq!(
-        attrs.get_i32(key),
+        attrs.view(ctx).get_i32(key),
         expected_integer(expected, "i32", i32::try_from)
     );
     assert_eq!(
-        attrs.get_u64(key),
+        attrs.view(ctx).get_u64(key),
         expected_integer(expected, "u64", u64::try_from)
     );
     assert_eq!(
-        attrs.get_u32(key),
+        attrs.view(ctx).get_u32(key),
         expected_integer(expected, "u32", u32::try_from)
     );
     assert_eq!(
-        attrs.get_u8(key),
+        attrs.view(ctx).get_u8(key),
         expected_integer(expected, "u8", u8::try_from)
     );
     assert_eq!(
-        attrs.get_str(ctx, key),
+        attrs.view(ctx).get_str(key),
         expected.and_then(|value| value.as_str(ctx))
     );
     assert_eq!(
-        attrs.get_symbol_ref(key),
+        attrs.view(ctx).get_symbol_ref(key),
         expected.and_then(Attribute::as_symbol_ref)
     );
 }
 
 /// `attrs` must hold exactly the model's entries, in the model's key order,
 /// and equal (with the same hash) a map built from them in reverse order.
-fn check_map(attrs: &AttributeMap, model: &BTreeMap<String, Attribute>, hasher: &RandomState) {
+fn check_map(
+    ctx: &IrContext,
+    attrs: &AttributeMap,
+    model: &BTreeMap<String, Attribute>,
+    hasher: &RandomState,
+) {
     assert_eq!(attrs.len(), model.len());
     assert_eq!(attrs.is_empty(), model.is_empty());
     assert!(
         attrs
             .iter()
-            .map(|(key, value)| (key.as_str(), value))
+            .map(|(key, value)| (ctx.str(key), value))
             .eq(model.iter().map(|(key, value)| (key.as_str(), value)))
     );
     assert!(
         attrs
             .keys()
-            .map(Symbol::as_str)
+            .map(|key| ctx.str(key))
             .eq(model.keys().map(String::as_str))
     );
     assert!(attrs.values().eq(model.values()));
@@ -167,15 +179,17 @@ fn check_map(attrs: &AttributeMap, model: &BTreeMap<String, Attribute>, hasher: 
         attrs
             .iter()
             .rev()
-            .map(|(key, _)| key.as_str())
+            .map(|(key, _)| ctx.str(key))
             .eq(model.keys().rev().map(String::as_str))
     );
 
-    let reversed: AttributeMap = model
-        .iter()
-        .rev()
-        .map(|(key, value)| (Symbol::new(key), value.clone()))
-        .collect();
+    let reversed = AttributeMap::from_refs(
+        ctx,
+        model.iter().rev().map(|(key, value)| {
+            let key = ctx.lookup_str(key).expect("the map holds this key");
+            (key, value.clone())
+        }),
+    );
     assert_eq!(attrs, &reversed);
     assert_eq!(hasher.hash_one(attrs), hasher.hash_one(&reversed));
 }
@@ -270,14 +284,17 @@ impl StateMachineTest for MapTest {
         match action {
             MapAction::Insert(key, spec) => {
                 let value = build_value(&mut sut.ctx, &spec);
-                let previous = sut.attrs.get(key.as_str()).cloned();
-                let replaced = sut.attrs.insert(Symbol::new(&key), value);
+                let previous = sut.attrs.view(&sut.ctx).get(key.as_str()).cloned();
+                let replaced = sut.attrs.view_mut(&mut sut.ctx).insert(key.clone(), value);
                 assert_eq!(replaced, previous);
                 touched.push(key);
             }
             MapAction::Remove(key) => {
-                let previous = sut.attrs.get(key.as_str()).cloned();
-                assert_eq!(sut.attrs.remove(key.as_str()), previous);
+                let previous = sut.attrs.view(&sut.ctx).get(key.as_str()).cloned();
+                assert_eq!(
+                    sut.attrs.view_mut(&mut sut.ctx).remove(key.as_str()),
+                    previous
+                );
                 touched.push(key);
             }
             MapAction::Extend(entries) => {
@@ -285,10 +302,10 @@ impl StateMachineTest for MapTest {
                     .into_iter()
                     .map(|(key, spec)| (key, build_value(&mut sut.ctx, &spec)))
                     .collect();
-                sut.attrs.extend(
+                sut.attrs.view_mut(&mut sut.ctx).extend(
                     entries
                         .iter()
-                        .map(|(key, value)| (Symbol::new(key), value.clone())),
+                        .map(|(key, value)| (key.clone(), value.clone())),
                 );
                 touched.extend(entries.into_iter().map(|(key, _)| key));
             }
@@ -303,7 +320,7 @@ impl StateMachineTest for MapTest {
 
     fn check_invariants(sut: &MapSut, model: &MapModel) {
         let expected = model.expected(&sut.ctx);
-        check_map(&sut.attrs, &expected, &sut.hasher);
+        check_map(&sut.ctx, &sut.attrs, &expected, &sut.hasher);
         for key in &model.probes {
             check_lookup(&sut.ctx, &sut.attrs, &expected, key);
         }
@@ -316,10 +333,13 @@ impl StateMachineTest for MapTest {
         }
 
         // Collecting the same entries in any order yields an equal map.
-        let collected: AttributeMap = expected
-            .iter()
-            .map(|(key, value)| (Symbol::new(key), value.clone()))
-            .collect();
+        let collected = AttributeMap::from_refs(
+            &sut.ctx,
+            expected.iter().map(|(key, value)| {
+                let key = sut.ctx.lookup_str(key).expect("the map holds this key");
+                (key, value.clone())
+            }),
+        );
         assert_eq!(&collected, &sut.attrs);
     }
 }
@@ -403,36 +423,41 @@ fn type_spec(known: usize) -> impl Strategy<Value = TypeSpec> {
         })
 }
 
-fn small_map(entries: impl IntoIterator<Item = (&'static str, i8)>) -> AttributeMap {
-    entries
-        .into_iter()
-        .map(|(key, value)| (Symbol::new(key), Attribute::Int(value.into())))
-        .collect()
+fn small_map(
+    ctx: &mut IrContext,
+    entries: impl IntoIterator<Item = (&'static str, i8)>,
+) -> AttributeMap {
+    AttributeMap::from_entries(
+        ctx,
+        entries
+            .into_iter()
+            .map(|(key, value)| (key, Attribute::Int(value.into()))),
+    )
 }
 
 /// Build the data for `spec`; parameters resolve against `refs`.
-fn build_type(spec: &TypeSpec, refs: &[TypeRef]) -> TypeData {
+fn build_type(ctx: &mut IrContext, spec: &TypeSpec, refs: &[TypeRef]) -> TypeData {
     let mut builder = TypeDataBuilder::new(spec.dialect, spec.name);
     for (param, attrs) in &spec.params {
-        builder = builder.param_with_attrs(refs[*param], small_map(attrs.iter().copied()));
+        builder = builder.param_with_attrs(refs[*param], small_map(ctx, attrs.iter().copied()));
     }
     for &(key, value) in &spec.attrs {
         builder = builder.attr(key, Attribute::Int(value.into()));
     }
-    builder.build()
+    builder.build(ctx)
 }
 
 /// Build a fresh copy of the data for `key`.
-fn build_key(key: &TypeKey, refs: &[TypeRef]) -> TypeData {
+fn build_key(ctx: &mut IrContext, key: &TypeKey, refs: &[TypeRef]) -> TypeData {
     let mut builder = TypeDataBuilder::new(key.dialect, key.name);
     for (param, attrs) in &key.params {
-        let attrs = small_map(attrs.iter().map(|(&key, &value)| (key, value)));
+        let attrs = small_map(ctx, attrs.iter().map(|(&key, &value)| (key, value)));
         builder = builder.param_with_attrs(refs[*param], attrs);
     }
     for (&name, &value) in &key.attrs {
         builder = builder.attr(name, Attribute::Int(value.into()));
     }
-    builder.build()
+    builder.build(ctx)
 }
 
 #[derive(Clone, Debug)]
@@ -488,6 +513,8 @@ impl ReferenceStateMachine for TypeInternMachine {
 }
 
 struct TypeInternSut {
+    /// Holds the attribute keys; types are interned in `interner`.
+    ctx: IrContext,
     interner: TypeInterner,
     /// The reference of each distinct type, in interning order.
     refs: Vec<TypeRef>,
@@ -503,6 +530,7 @@ impl StateMachineTest for TypeInternTest {
 
     fn init_test(_: &InternModel) -> TypeInternSut {
         TypeInternSut {
+            ctx: IrContext::new(),
             interner: TypeInterner::new(),
             refs: Vec::new(),
             known: Vec::new(),
@@ -511,12 +539,13 @@ impl StateMachineTest for TypeInternTest {
 
     fn apply(mut sut: TypeInternSut, model: &InternModel, action: InternAction) -> TypeInternSut {
         let (data, key) = match action {
-            InternAction::Intern(spec) => (build_type(&spec, &sut.refs), spec.key()),
-            InternAction::Reintern(index) => {
-                (build_key(&model[index], &sut.refs), model[index].clone())
-            }
+            InternAction::Intern(spec) => (build_type(&mut sut.ctx, &spec, &sut.refs), spec.key()),
+            InternAction::Reintern(index) => (
+                build_key(&mut sut.ctx, &model[index], &sut.refs),
+                model[index].clone(),
+            ),
         };
-        assert_eq!(data.validate_param_attrs(), Ok(()));
+        assert_eq!(data.validate_param_attrs(&sut.ctx), Ok(()));
         let index = model
             .iter()
             .position(|known| *known == key)
@@ -528,7 +557,7 @@ impl StateMachineTest for TypeInternTest {
             Some(existing) => assert_eq!(r, existing),
             None => {
                 assert!(sut.refs.iter().all(|&other| other != r));
-                sut.known.push(build_key(&key, &sut.refs));
+                sut.known.push(build_key(&mut sut.ctx, &key, &sut.refs));
                 sut.refs.push(r);
             }
         }

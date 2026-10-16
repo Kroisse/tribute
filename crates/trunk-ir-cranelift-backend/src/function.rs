@@ -888,7 +888,10 @@ mod tests {
         func::CallConv::Tail.set_in(&mut ctx, &mut attrs);
         let tail = clif::func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs).as_type_ref();
         let mut malformed_attrs = trunk_ir::AttributeMap::new();
-        malformed_attrs.insert(Symbol::new(func::CALL_CONV_ATTR), ctx.string_attr("fast"));
+        let call_conv = ctx.string_attr("fast");
+        malformed_attrs
+            .view_mut(&mut ctx)
+            .insert(func::CALL_CONV_ATTR, call_conv);
         let malformed =
             clif::func_sig_with_attrs(&mut ctx, [i32_ty], [], malformed_attrs).as_type_ref();
 

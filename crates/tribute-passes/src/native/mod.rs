@@ -82,18 +82,16 @@ mod tests {
         let path = ctx.intern_path("test.ir");
         let loc = Location::new(path, Span::new(0, 0));
         let ptr = core::ptr(&mut ctx).as_type_ref();
-        let i32 = ctx.intern_type(
-            trunk_ir::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
-        );
+        let i32 = trunk_ir::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
+            .intern(&mut ctx);
         let op = build_extern_func(&mut ctx, loc, "runtime", &[ptr, i32], ptr);
         assert_eq!(
             classify_callable_body(&ctx, op),
             Ok(CallableBody::Declaration)
         );
-        assert_eq!(ctx.op(op).attributes.get_str(&ctx, "abi"), Some("C"));
+        assert_eq!(ctx.op_attrs(op).get_str("abi"), Some("C"));
         let signature =
-            func::FuncSig::from_type_ref(&ctx, ctx.op(op).attributes.get_type("type").unwrap())
-                .unwrap();
+            func::FuncSig::from_type_ref(&ctx, ctx.op_attrs(op).get_type("type").unwrap()).unwrap();
         assert_eq!(signature.inputs(&ctx), &[ptr, i32]);
         assert_eq!(signature.results(&ctx), &[ptr]);
     }

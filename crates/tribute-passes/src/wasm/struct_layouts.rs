@@ -59,9 +59,8 @@ pub fn convert(ctx: &mut IrContext, module: Module) {
 /// an unresolved name.
 fn reference_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let named = ctx
-        .get_type(ty)
-        .attrs
-        .get_str(ctx, "name")
+        .type_attrs(ty)
+        .get_str("name")
         .and_then(|name| ctx.type_alias_by_text(name));
     named
         .and_then(|layout| struct_type(ctx, layout))
@@ -102,7 +101,7 @@ fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
 }
 
 fn intern(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+    TypeDataBuilder::new(dialect, name).intern(ctx)
 }
 
 #[cfg(test)]

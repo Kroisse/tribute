@@ -121,6 +121,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_symbol_ref("ability")
             .cloned()
             .expect("pre-CPS validation checked perform ability");
@@ -128,6 +129,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_string_ref("op_name")
             .expect("pre-CPS validation checked perform operation");
         let evidence = self.current_evidence(source, flow)?;
@@ -189,6 +191,7 @@ impl Converter<'_> {
                     ArmEvidence::Outside(instances) => (
                         self.current_evidence(source, flow)?,
                         tribute_control::EvidenceStep::plan_attribute(
+                            self.ctx,
                             instances
                                 .into_iter()
                                 .rev()
@@ -229,6 +232,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_symbol_ref("ability")
             .cloned()
             .unwrap();
@@ -236,13 +240,15 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_string_ref("op_name")
             .unwrap();
-        let general = self.ctx.op(source).attributes.get_str(self.ctx, "kind") == Some("op");
+        let general = self.ctx.op_attrs(source).get_str("kind") == Some("op");
         let operation_result = self
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_type("operation_result_type")
             .unwrap();
         let source_region = self.ctx.op_region(source, 0).ok_or_else(|| {
@@ -486,6 +492,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_symbol_ref("ability")
             .cloned()
             .expect("pre-CPS validation checked perform ability");
@@ -493,6 +500,7 @@ impl Converter<'_> {
             .ctx
             .op(source)
             .attributes
+            .view(self.ctx)
             .get_string_ref("op_name")
             .expect("pre-CPS validation checked perform operation");
         let call = ability::Call::operands(args)

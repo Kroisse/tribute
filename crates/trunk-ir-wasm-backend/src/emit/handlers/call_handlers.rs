@@ -84,8 +84,9 @@ pub(crate) fn handle_call_indirect(
         })?;
     let attrs = &ctx.op(op).attributes;
     let table_index = attrs
+        .view(ctx)
         .get("table")
-        .map(|_| attr_u32(attrs, "table"))
+        .map(|_| attr_u32(ctx, attrs, "table"))
         .transpose()?
         .unwrap_or(0);
 
@@ -139,10 +140,9 @@ pub(crate) fn handle_return_call_indirect(
             )
         })?;
     let table_index = ctx
-        .op(op)
-        .attributes
+        .op_attrs(op)
         .get("table")
-        .map(|_| attr_u32(&ctx.op(op).attributes, "table"))
+        .map(|_| attr_u32(ctx, &ctx.op(op).attributes, "table"))
         .transpose()?
         .unwrap_or(0);
     let table_index_value = IndirectCallLikeOps::callee(ctx, op).ok_or_else(|| {

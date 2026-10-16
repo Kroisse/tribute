@@ -26,9 +26,8 @@ fn parse(input: &str) -> (IrContext, Module) {
 fn shared_function_conversion_preserves_lists_and_nested_attributes() {
     let (mut ctx, module) = parse("core.module @m { func.func @placeholder() { func.return } }");
     let block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
-    let i32_ty = ctx.intern_type(
-        trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
-    );
+    let i32_ty = trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
+        .intern(&mut ctx);
     let source_callable = tribute_control::func_sig(
         &mut ctx,
         i32_ty,
@@ -38,7 +37,7 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
     .as_type_ref();
     for results in [vec![], vec![source_callable]] {
         let attrs =
-            AttributeMap::from_iter([(Symbol::new("nested"), Attribute::Type(source_callable))]);
+            AttributeMap::from_entries(&mut ctx, [("nested", Attribute::Type(source_callable))]);
         let source = func::func_sig_with_attrs(&mut ctx, [source_callable], results.clone(), attrs)
             .as_type_ref();
         let mut converter = Converter::new(&mut ctx, block, CallableGraph::default());
@@ -57,7 +56,12 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
             assert_eq!(function.results(converter.ctx), [converted_callable]);
         }
         assert_eq!(
-            converter.ctx.get_type(converted).attrs.get_type("nested"),
+            converter
+                .ctx
+                .get_type(converted)
+                .attrs
+                .view(converter.ctx)
+                .get_type("nested"),
             Some(converted_callable)
         );
     }
@@ -68,7 +72,7 @@ fn first_ability(ctx: &IrContext, module: Module) -> SymbolPath {
     let mut found = None;
     let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
         if found.is_none() {
-            found = ctx.op(op).attributes.get_symbol_ref("ability").cloned();
+            found = ctx.op_attrs(op).get_symbol_ref("ability").cloned();
         }
         std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
     });
@@ -514,11 +518,10 @@ fn source_signature_metadata_roundtrips_before_conversion() {
         .copied()
         .find(|op| func::Func::matches(&ctx, *op))
         .unwrap();
-    let physical = ctx.op(lowered).attributes.get_type("type").unwrap();
+    let physical = ctx.op_attrs(lowered).get_type("type").unwrap();
     let physical = func::FuncSig::from_type_ref(&ctx, physical).unwrap();
     let Attribute::List(function_metadata) = ctx
-        .get_type(physical.as_type_ref())
-        .attrs
+        .type_attrs(physical.as_type_ref())
         .get("metadata")
         .unwrap()
     else {
@@ -537,13 +540,12 @@ fn source_signature_metadata_roundtrips_before_conversion() {
     assert_eq!(*function_tag, SymbolPath::new(["function"]));
     assert!(closure::Closure::matches(&ctx, *function_nested));
     assert!(
-        ctx.get_type(physical.as_type_ref())
-            .attrs
+        ctx.type_attrs(physical.as_type_ref())
             .get(CALLING_CONVENTION_ATTR)
             .is_none()
     );
     assert_eq!(
-        ctx.op(lowered).attributes.get_i128(CALLING_CONVENTION_ATTR),
+        ctx.op_attrs(lowered).get_i128(CALLING_CONVENTION_ATTR),
         Some(CallingConvention::Direct as i128)
     );
 
@@ -553,10 +555,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
         let closure_ty = ctx.op_result_types(lambda)[0];
         let closure = closure::Closure::from_type_ref(&ctx, closure_ty)?;
         let signature = func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx))?;
-        let Attribute::List(metadata) = ctx
-            .get_type(signature.as_type_ref())
-            .attrs
-            .get("metadata")?
+        let Attribute::List(metadata) = ctx.type_attrs(signature.as_type_ref()).get("metadata")?
         else {
             return None;
         };
@@ -626,10 +625,9 @@ fn malformed_or_retired_source_signatures_fail_before_conversion() {
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
-        let malformed = ctx.intern_type(builder.build());
+        let malformed = builder.intern(&mut ctx);
         let function = module.ops(&ctx)[0];
-        ctx.op_mut(function)
-            .attributes
+        ctx.op_attrs_mut(function)
             .insert("type", Attribute::Type(malformed));
 
         let before = print_module(&ctx, module.op());
@@ -850,7 +848,7 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
     let before = print_module(&ctx, candidate.op());
     let source_aliases = ctx.type_aliases().to_vec();
     let (alias_name, source_type) = source_aliases[0].clone();
-    let converted_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let converted_type = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
     ctx.register_type_alias(alias_name.clone(), converted_type);
 
     let error = verify_candidate_or_restore_aliases(
@@ -1159,7 +1157,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
         for block in ctx.region(region).blocks.iter().copied() {
             for op in ctx.block(block).ops.iter().copied() {
                 if tribute_control::Handler::matches(ctx, op) {
-                    *found = ctx.op(op).attributes.get_symbol_ref("ability").cloned();
+                    *found = ctx.op_attrs(op).get_symbol_ref("ability").cloned();
                 }
                 for nested in ctx.op_regions(op) {
                     find_ability(ctx, nested, found);
@@ -1236,9 +1234,8 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
         consumed_set: &mut Option<ValueRef>,
     ) {
         let is_one_shot_type = |ty: TypeRef| {
-            ctx.get_type(ty)
-                .attrs
-                .get_str(ctx, "name")
+            ctx.type_attrs(ty)
+                .get_str("name")
                 .is_some_and(|name| name.starts_with("__tribute_one_shot_state"))
         };
         if let Ok(get) = adt::StructGet::from_op(ctx, op)
@@ -1351,7 +1348,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
     assert_eq!(delimiters.len(), 2, "expected the handle's two delimiters");
     for delimiter in delimiters {
         assert_eq!(ctx.op_operands(delimiter).len(), 3);
-        let Some(Attribute::List(abilities)) = ctx.op(delimiter).attributes.get("abilities") else {
+        let Some(Attribute::List(abilities)) = ctx.op_attrs(delimiter).get("abilities") else {
             panic!("final delimiter must have abilities");
         };
         assert_eq!(abilities.len(), 1);
@@ -1686,12 +1683,10 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let marked: AttributeMap = [(
-        Symbol::new("k"),
-        Attribute::SymbolRef(SymbolPath::new(["v"])),
-    )]
-    .into_iter()
-    .collect();
+    let marked = AttributeMap::from_entries(
+        &mut ctx,
+        [("k", Attribute::SymbolRef(SymbolPath::new(["v"])))],
+    );
     let empty = AttributeMap::new;
     let adapter_type = |ctx: &IrContext| {
         let adapter = module
@@ -1728,7 +1723,7 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
     let contract = crate::target_abi::physical_parameter_attrs(&mut ctx, CallingConvention::Cps);
     let consumed = || contract.clone();
     let mut marked_consumed = marked;
-    marked_consumed.extend(consumed());
+    marked_consumed.view_mut(&mut ctx).extend(consumed());
     itertools::assert_equal(
         physical
             .inputs_with_attrs(&ctx)
@@ -2236,7 +2231,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     let dispatch_cps = dispatch_cps.expect("ability.perform lowers to effect.dispatch_cps");
     assert!(ctx.op_results(dispatch_cps).is_empty());
     assert_eq!(
-        ctx.op(dispatch_cps).attributes.get_type("answer_type"),
+        ctx.op_attrs(dispatch_cps).get_type("answer_type"),
         Some(i32_type)
     );
     assert!(printed.contains("func.unreachable"));
@@ -2439,7 +2434,7 @@ fn a_cps_call_in_a_callable_that_is_not_cps_runs_under_a_value_delimiter() {
     let (mut ctx, module) = parse(input);
     run_pre_cps(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let i32_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_type = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
     // A Direct flow receives no evidence; its delimiter starts on the
     // initial one.
     assert_eq!(delimiters(&ctx, module, "direct"), [(true, i32_type)]);
@@ -2480,7 +2475,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     .unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let i32_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_type = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
     assert_eq!(delimiters(&ctx, module, "run"), [(true, i32_type)]);
     let printed = print_module(&ctx, module.op());
     // The handle and its operation are in the delimited Cps closure.

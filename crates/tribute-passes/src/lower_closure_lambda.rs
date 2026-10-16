@@ -229,7 +229,7 @@ fn lower_single_lambda(
         .build(ctx, location);
     if let Some(convention) = convention {
         set_calling_convention(ctx, func_op.op_ref(), convention);
-        ctx.op_mut(func_op.op_ref()).attributes.insert(
+        ctx.op_attrs_mut(func_op.op_ref()).insert(
             CLOSURE_ENVIRONMENT_INDEX_ATTR,
             Attribute::Int(environment_index as i128),
         );
@@ -464,7 +464,8 @@ impl LambdaNamer {
 /// Create a `bind_name` attribute map for a block argument.
 fn make_bind_name_attrs(ctx: &mut IrContext, name: &str) -> AttributeMap {
     let mut attrs = AttributeMap::new();
-    attrs.insert("bind_name", ctx.string_attr(name));
+    let bind_name = ctx.string_attr(name);
+    attrs.view_mut(ctx).insert("bind_name", bind_name);
     attrs
 }
 
@@ -512,7 +513,7 @@ mod tests {
     }
 
     fn make_i32_ty(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+        TypeDataBuilder::new("core", "i32").intern(ctx)
     }
 
     #[test]
@@ -553,12 +554,10 @@ mod tests {
 
         // closure type: closure.closure<func.func_sig<i32, i32>>, whose input
         // carries a parameter attribute.
-        let marked: AttributeMap = [(
-            Symbol::new("k"),
-            Attribute::SymbolRef(SymbolPath::new(["v"])),
-        )]
-        .into_iter()
-        .collect();
+        let marked = AttributeMap::from_entries(
+            &mut ctx,
+            [("k", Attribute::SymbolRef(SymbolPath::new(["v"])))],
+        );
         let func_ty = func::func_sig_with_param_attrs(
             &mut ctx,
             [(i32_ty, marked.clone())],
@@ -696,7 +695,7 @@ mod tests {
                 closure_type =
                     closure_type.attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(index));
             }
-            let lambda_ty = ctx.intern_type(closure_type.build());
+            let lambda_ty = closure_type.intern(&mut ctx);
             let lambda = closure::Lambda::operands(Vec::<ValueRef>::new())
                 .results(lambda_ty)
                 .regions(lambda_body)

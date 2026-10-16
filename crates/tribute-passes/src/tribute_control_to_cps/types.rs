@@ -36,10 +36,13 @@ impl Converter<'_> {
         attribute.map_types(|ty| self.convert_type(ty))
     }
 
-    pub(super) fn convert_attrs(&mut self, attrs: &AttributeMap) -> Vec<(Symbol, Attribute)> {
+    pub(super) fn convert_attrs(
+        &mut self,
+        attrs: &AttributeMap,
+    ) -> Vec<(trunk_ir::StringRef, Attribute)> {
         attrs
             .iter()
-            .map(|(key, value)| (key.clone(), self.convert_attribute(value)))
+            .map(|(key, value)| (key, self.convert_attribute(value)))
             .collect()
     }
 
@@ -68,7 +71,7 @@ impl Converter<'_> {
                 .map(|result| self.convert_type(result))
                 .collect::<Vec<_>>();
             let mut attrs = data.attrs;
-            func::FuncSig::remove_reserved_attrs(&mut attrs);
+            func::FuncSig::remove_reserved_attrs(self.ctx, &mut attrs);
             for value in attrs.values_mut() {
                 *value = self.convert_attribute(value);
             }
@@ -97,12 +100,12 @@ impl Converter<'_> {
         let attrs: Vec<_> = data
             .attrs
             .iter()
-            .map(|(key, value)| (key.clone(), self.convert_attribute(value)))
+            .map(|(key, value)| (key, self.convert_attribute(value)))
             .collect();
         if params == data.params.as_slice()
             && attrs
                 .iter()
-                .all(|(key, value)| data.attrs.get(key) == Some(value))
+                .all(|(key, value)| data.attrs.view(self.ctx).get(*key) == Some(value))
         {
             self.converted_types.insert(ty, ty);
             return ty;
@@ -111,7 +114,7 @@ impl Converter<'_> {
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
-        let converted = self.ctx.intern_type(builder.build());
+        let converted = builder.intern(self.ctx);
         self.converted_types.insert(ty, converted);
         converted
     }
@@ -156,7 +159,7 @@ impl Converter<'_> {
             abi.source_result
         };
         let mut attrs = self.ctx.get_type(logical).attrs.clone();
-        tribute_control::FuncSig::remove_reserved_attrs(&mut attrs);
+        tribute_control::FuncSig::remove_reserved_attrs(self.ctx, &mut attrs);
         for value in attrs.values_mut() {
             *value = self.convert_attribute(value);
         }
@@ -166,15 +169,15 @@ impl Converter<'_> {
     }
 
     pub(super) fn convert_attr_map(&mut self, attrs: &AttributeMap) -> AttributeMap {
-        self.convert_attrs(attrs).into_iter().collect()
+        let attrs = self.convert_attrs(attrs);
+        AttributeMap::from_refs(self.ctx, attrs)
     }
 
     pub(super) fn copy_extra_attrs(&mut self, source: OpRef, target: OpRef, excluded: &[&str]) {
-        let excluded: HashSet<Symbol> = excluded.iter().map(|name| Symbol::new(name)).collect();
         let attrs = self.convert_attrs(&self.ctx.op(source).attributes.clone());
         for (key, value) in attrs {
-            if !excluded.contains(&key) {
-                self.ctx.op_mut(target).attributes.insert(key, value);
+            if !excluded.contains(&self.ctx.str(key)) {
+                self.ctx.op_attrs_mut(target).insert(key, value);
             }
         }
     }

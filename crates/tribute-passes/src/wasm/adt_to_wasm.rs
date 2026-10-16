@@ -89,7 +89,7 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
     if data.dialect != "adt" || data.name != "typeref" {
         return None;
     }
-    let name = data.attrs.get_str(ctx, "name")?;
+    let name = data.attrs.view(ctx).get_str("name")?;
     let enum_ty = ctx.type_alias_by_text(name)?;
     canonical_enum_type(ctx, enum_ty)
 }
@@ -99,7 +99,7 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
 fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
     if data.dialect == "adt" && data.name == "typeref" {
-        return ctx.intern_type(TypeDataBuilder::new("wasm", "structref").build());
+        return TypeDataBuilder::new("wasm", "structref").intern(ctx);
     }
     ty
 }
@@ -123,7 +123,7 @@ fn descriptor_operand(
     loc: trunk_ir::types::Location,
 ) -> Option<trunk_ir::refs::ValueRef> {
     let number = *numbers.get(&descriptor)?;
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
     let constant = wasm_dialect::I32Const::operands()
         .value(number as i32)
         .results(i32_ty)
@@ -345,7 +345,7 @@ impl RewritePattern for VariantIsPattern {
             return false;
         };
 
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
         let Some(&number) = self.numbers.get(&(enum_type, Some(tag))) else {
             let never = wasm_dialect::I32Const::operands()
                 .value(0)
@@ -820,7 +820,7 @@ mod tests {
             .copied()
             .find(|&op| {
                 let data = ctx.op(op);
-                let Some(ty) = data.attributes.get_type("type") else {
+                let Some(ty) = data.attributes.view(&ctx).get_type("type") else {
                     return false;
                 };
                 data.dialect == wasm_gc_dialect::DIALECT_NAME()
@@ -829,8 +829,7 @@ mod tests {
             })
             .expect("lowered variant_get");
         let variant_ty = ctx
-            .op(variant_get)
-            .attributes
+            .op_attrs(variant_get)
             .get_type("type")
             .expect("struct_get type must be a Type attribute");
         assert_eq!(variant_ty, ctx.value_ty(ctx.op_operands(variant_get)[0]));
@@ -970,8 +969,8 @@ mod tests {
                     return None;
                 }
                 match data.name.as_str() {
-                    "struct_new" | "struct_get" => data.attributes.get_type("type"),
-                    "ref_test" | "ref_cast" => data.attributes.get_type("target_type"),
+                    "struct_new" | "struct_get" => data.attributes.view(&ctx).get_type("type"),
+                    "ref_test" | "ref_cast" => data.attributes.view(&ctx).get_type("target_type"),
                     _ => None,
                 }
             })
@@ -991,8 +990,8 @@ mod tests {
         );
         assert_ne!(empty, cons);
         // The recursive tail is the abstract struct supertype.
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let structref = ctx.intern_type(TypeDataBuilder::new("wasm", "structref").build());
+        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let structref = TypeDataBuilder::new("wasm", "structref").intern(&mut ctx);
         assert_eq!(
             wasm_gc_dialect::Struct::from_type_ref(&ctx, cons)
                 .expect("structural variant")

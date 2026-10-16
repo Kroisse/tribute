@@ -31,7 +31,7 @@ pub(crate) fn handle_ref_null(
     let heap_type = if let Some(type_idx) = ref_null.type_idx(ctx) {
         HeapType::Concrete(type_idx)
     } else {
-        attr_heap_type(ctx, &ctx.op(op).attributes, ATTR_HEAP_TYPE())?
+        attr_heap_type(ctx, &ctx.op(op).attributes, ATTR_HEAP_TYPE().as_str())?
     };
 
     function.instruction(&Instruction::RefNull(heap_type));
@@ -70,7 +70,7 @@ pub(crate) fn handle_ref_cast(
     let heap_type = if let Some(type_idx) = ref_cast.type_idx(ctx) {
         HeapType::Concrete(type_idx)
     } else {
-        attr_heap_type(ctx, &ctx.op(op).attributes, ATTR_TARGET_TYPE())?
+        attr_heap_type(ctx, &ctx.op(op).attributes, ATTR_TARGET_TYPE().as_str())?
     };
 
     let result_is_non_null = ctx
@@ -106,7 +106,7 @@ pub(crate) fn handle_ref_test(
     let heap_type = if let Some(type_idx) = ref_test.type_idx(ctx) {
         HeapType::Concrete(type_idx)
     } else {
-        attr_heap_type(ctx, &ctx.op(op).attributes, ATTR_TARGET_TYPE())?
+        attr_heap_type(ctx, &ctx.op(op).attributes, ATTR_TARGET_TYPE().as_str())?
     };
 
     function.instruction(&Instruction::RefTestNullable(heap_type));
@@ -138,13 +138,11 @@ mod tests {
     fn ref_cast_uses_non_null_instruction_for_non_null_result() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
-        let anyref_ty = ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
+        let anyref_ty = TypeDataBuilder::new("wasm", "anyref").intern(&mut ctx);
         let bytes_layout = ctx.string_attr(crate::gc_types::BYTES_LAYOUT);
-        let bytes_ty = ctx.intern_type(
-            TypeDataBuilder::new("test", "bytes")
-                .attr(trunk_ir::types::LAYOUT_ATTR, bytes_layout)
-                .build(),
-        );
+        let bytes_ty = TypeDataBuilder::new("test", "bytes")
+            .attr(trunk_ir::types::LAYOUT_ATTR, bytes_layout)
+            .intern(&mut ctx);
         let null = wasm_dialect::RefNull::operands()
             .heap_type("anyref")
             .type_idx(None)

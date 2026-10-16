@@ -97,13 +97,8 @@ impl RewritePattern for LowerCallPattern {
         }
 
         let location = ctx.op(op).location;
-        let ability = ctx
-            .op(op)
-            .attributes
-            .get_symbol_ref("ability")
-            .cloned()
-            .unwrap();
-        let op_name = ctx.op(op).attributes.get_string_ref("op_name").unwrap();
+        let ability = ctx.op_attrs(op).get_symbol_ref("ability").cloned().unwrap();
+        let op_name = ctx.op_attrs(op).get_string_ref("op_name").unwrap();
         let result_types = ctx.op_result_types(op).to_vec();
         let [result_type] = result_types.as_slice() else {
             return false;
@@ -175,8 +170,7 @@ fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
                 return None;
             }
             let environment_index = ctx
-                .op(parent)
-                .attributes
+                .op_attrs(parent)
                 .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
                 .ok()
                 .flatten();

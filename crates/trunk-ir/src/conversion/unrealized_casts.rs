@@ -265,7 +265,7 @@ mod tests {
     }
 
     fn named_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", name).build())
+        TypeDataBuilder::new("core", name).intern(ctx)
     }
 
     /// Converts `core.i64` to `core.i32` and materializes `core.i32` →

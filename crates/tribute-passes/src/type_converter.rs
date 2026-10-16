@@ -25,7 +25,7 @@ use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
 use trunk_ir::types::TypeDataBuilder;
 
 fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+    TypeDataBuilder::new(dialect, name).intern(ctx)
 }
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
@@ -342,7 +342,7 @@ mod tests {
                 assert!(wasm::RefCast::matches(&ctx, producer));
                 let target = crate::wasm::type_converter::closure_adt_type(&mut ctx);
                 assert_eq!(ctx.value_ty(arg), target);
-                let signature = ctx.op(tail).attributes.get_type("signature").unwrap();
+                let signature = ctx.op_attrs(tail).get_type("signature").unwrap();
                 assert_eq!(ctx.get_type(signature).params[0], target);
             } else {
                 assert!(
@@ -366,7 +366,9 @@ mod tests {
         let anyref = ctx.value_ty(value);
         let canonical = crate::closure_lower::closure_struct_type_ref(&mut ctx);
         let mut near = ctx.get_type(canonical).clone();
-        near.attrs.insert("unrelated", Attribute::Bool(true));
+        near.attrs
+            .view_mut(&mut ctx)
+            .insert("unrelated", Attribute::Bool(true));
         let near = ctx.intern_type(near);
         let tc = generic_type_converter(&mut ctx);
         let location: Location = ctx.op(function.op_ref()).location;
@@ -401,20 +403,16 @@ mod tests {
 
     fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {
         let name_attr = ctx.string_attr("String");
-        ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-                .attr("name", name_attr)
-                .build(),
-        )
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+            .attr("name", name_attr)
+            .intern(ctx)
     }
 
     fn struct_type(ctx: &mut IrContext) -> TypeRef {
         let name_attr = ctx.string_attr("Payload");
-        ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-                .attr("name", name_attr)
-                .build(),
-        )
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .attr("name", name_attr)
+            .intern(ctx)
     }
 
     fn dynamic_value(ctx: &mut IrContext, location: Location) -> ValueRef {

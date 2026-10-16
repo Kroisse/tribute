@@ -1080,7 +1080,11 @@ fn emit_op_nested(
             op_data.dialect,
             ctx.op_operands(op).len(),
             ctx.op_result_types(op).len(),
-            op_data.attributes.keys().collect::<Vec<_>>()
+            op_data
+                .attributes
+                .keys()
+                .map(|key| ctx.str(key))
+                .collect::<Vec<_>>()
         );
         Err(CompilationError::unsupported_feature_msg(format!(
             "wasm op not supported: {}",
