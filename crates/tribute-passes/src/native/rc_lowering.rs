@@ -330,7 +330,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
 /// Intern a type in the arena context.
 fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
     use trunk_ir::TypeDataBuilder;
-    TypeDataBuilder::new(dialect, name).intern(ctx)
+    TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
 }
 
 /// Generate retain RC ops (atomic increment) in a block.

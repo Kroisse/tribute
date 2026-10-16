@@ -424,7 +424,7 @@ fn build_function(
 ) -> OpRef {
     // The generated builder requires a body, so build the operation
     // generically to allow a bodyless declaration.
-    let mut builder = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+    let mut builder = OperationDataBuilder::new(loc, "func.func")
         .attr(
             "sym_name",
             Attribute::String(ctx.intern_str(&function.name)),
@@ -470,7 +470,7 @@ fn build_reference(
             .build(ctx, loc)
             .op_ref(),
         RefKind::NonCallCallee => {
-            let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("ref"))
+            let data = OperationDataBuilder::new(loc, "test.ref")
                 .attr("callee", Attribute::SymbolRef(target))
                 .build(ctx);
             ctx.create_op(data)
@@ -483,7 +483,7 @@ fn build_reference(
     let inner = empty_block(ctx, loc);
     ctx.push_op(inner, op);
     let region = single_block_region(ctx, loc, inner);
-    let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("scope"))
+    let data = OperationDataBuilder::new(loc, "test.scope")
         .region(region)
         .build(ctx);
     ctx.create_op(data)
@@ -555,7 +555,7 @@ fn module_op(ctx: &mut IrContext, loc: Location, name: &'static str, block: Bloc
 }
 
 fn table(ctx: &mut IrContext, loc: Location, target: SymbolPath) -> OpRef {
-    let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("table"))
+    let data = OperationDataBuilder::new(loc, "test.table")
         .attr(
             "entries",
             Attribute::List(vec![Attribute::SymbolRef(target)]),

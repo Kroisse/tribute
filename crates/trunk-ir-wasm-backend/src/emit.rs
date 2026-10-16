@@ -42,10 +42,11 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Module as IrModule;
 use trunk_ir::callable::CallableBody;
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::{Symbol, SymbolPath};
+use trunk_ir::{OpDef, OpName, SymbolPath};
 use wasm_encoder::{
     AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
@@ -85,7 +86,7 @@ trunk_ir::symbols! {
 
 /// Simple wasm operations that follow the pattern:
 /// emit operands → single instruction → set result local
-static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::new(|| {
+static SIMPLE_OPS: LazyLock<HashMap<OpName, Instruction<'static>>> = LazyLock::new(|| {
     [
         // i32 arithmetic
         ("i32_add", Instruction::I32Add),
@@ -209,7 +210,11 @@ static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::n
         ("i31_get_u", Instruction::I31GetU),
     ]
     .into_iter()
-    .map(|(k, v)| (Symbol::new(k), v))
+    .map(|(name, instr)| {
+        let def = OpDef::lookup("wasm", name)
+            .unwrap_or_else(|| panic!("wasm.{name} is not a registered operation"));
+        (OpName::registered(def), instr)
+    })
     .collect()
 });
 
@@ -368,12 +373,12 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
                 .iter()
                 .map(|t| {
                     let d = ctx.get_type(*t);
-                    format!("{}.{}", d.dialect, d.name)
+                    format!("{}", d.name.display(ctx))
                 })
                 .collect::<Vec<_>>(),
             signature_results
                 .iter()
-                .map(|ty| format!("{}.{}", ctx.get_type(*ty).dialect, ctx.get_type(*ty).name))
+                .map(|ty| format!("{}", ctx.get_type(*ty).name.display(ctx)))
                 .collect::<Vec<_>>()
         );
         let params = params_refs
@@ -559,16 +564,9 @@ fn collect_wasm_ops_from_region(
     region: RegionRef,
     info: &mut ModuleInfo,
 ) -> CompilationResult<()> {
-    let core_dialect = Symbol::new("core");
-    let module_name = Symbol::new("module");
-
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
-            let op_data = ctx.op(op);
-            let dialect = op_data.dialect.clone();
-            let name = op_data.name.clone();
-
-            if dialect == core_dialect && name == module_name {
+            if core::Module::matches(ctx, op) {
                 for nested_region in ctx.op_regions(op) {
                     collect_wasm_ops_from_region(ctx, nested_region, info)?;
                 }
@@ -766,10 +764,9 @@ fn assign_locals_in_region(
             locals.push(val_type);
             let ty_data = ctx.get_type(arg_ty);
             tracing::debug!(
-                "Allocated local {} for block arg type {}.{}",
+                "Allocated local {} for block arg type {}",
                 local_index,
-                ty_data.dialect,
-                ty_data.name
+                ty_data.name.display(ctx)
             );
         }
 
@@ -789,8 +786,9 @@ fn assign_locals_in_region(
                         Err(e) => {
                             let op_data = ctx.op(op);
                             debug!(
-                                "type_to_valtype failed for op {}.{}: {:?}",
-                                op_data.dialect, op_data.name, e
+                                "type_to_valtype failed for op {}: {:?}",
+                                op_data.name.display(ctx),
+                                e
                             );
                             return Err(e);
                         }
@@ -898,23 +896,22 @@ fn emit_op_nested(
     nesting: &[NestingKind],
 ) -> CompilationResult<()> {
     let op_data = ctx.op(op);
-    let wasm_dialect = Symbol::new("wasm");
-    if op_data.dialect != wasm_dialect {
+    if op_data.name.dialect(ctx) != "wasm" {
         return Err(CompilationError::unsupported_feature(
             "non-wasm op in wasm backend",
         ));
     }
 
-    let name = op_data.name.clone();
+    let name = op_data.name;
     let operands = ctx.op_operands(op);
 
-    debug!("emit_op: wasm.{}", name);
+    debug!("emit_op: {}", name.display(ctx));
 
     // Handle wasm.nop
     if wasm_dialect::Nop::matches(ctx, op) {
         if let Some(&result_ty) = ctx.op_result_types(op).first() {
             let ty_data = ctx.get_type(result_ty);
-            debug!("wasm.nop: result_ty={}.{}", ty_data.dialect, ty_data.name);
+            debug!("wasm.nop: result_ty={}", ty_data.name.display(ctx));
             if is_type(ctx, result_ty, "wasm", "func_sig")
                 || is_type(ctx, result_ty, "wasm", "funcref")
             {
@@ -1075,9 +1072,8 @@ fn emit_op_nested(
     } else {
         let op_data = ctx.op(op);
         tracing::error!(
-            "unsupported wasm op: {} (dialect={}, operands={}, results={}, attrs={:?})",
-            name,
-            op_data.dialect,
+            "unsupported wasm op: {} (operands={}, results={}, attrs={:?})",
+            name.display(ctx),
             ctx.op_operands(op).len(),
             ctx.op_result_types(op).len(),
             op_data
@@ -1088,7 +1084,7 @@ fn emit_op_nested(
         );
         Err(CompilationError::unsupported_feature_msg(format!(
             "wasm op not supported: {}",
-            name
+            name.display(ctx)
         )))
     }
 }
@@ -1472,9 +1468,9 @@ mod tests {
         let Some((params, result)) = helpers::func_type_parts(&ctx, *signature) else {
             panic!("expected wasm.func_sig signature")
         };
-        assert_eq!(ctx.get_type(params[0]).name, Symbol::new("anyref"));
+        assert!(ctx.get_type(params[0]).name.is(&ctx, "wasm.anyref"));
         assert_eq!(result.len(), 1);
-        assert_eq!(ctx.get_type(result[0]).name, Symbol::new("i32"));
+        assert!(ctx.get_type(result[0]).name.is(&ctx, "core.i32"));
 
         let bytes = crate::emit_module_to_wasm(&mut ctx, module)
             .expect("exact ordinary indirect call must emit")

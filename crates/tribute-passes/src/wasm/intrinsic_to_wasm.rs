@@ -42,7 +42,7 @@ fn extract_bytes_fields(
     location: trunk_ir::types::Location,
     bytes_value: ValueRef,
 ) -> (BytesFields, Vec<OpRef>) {
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
     let array_ref_ty = super::bytes::bytes_data_type(ctx);
 
     let get_data = wasm_dialect::StructGet::operands(bytes_value)
@@ -130,7 +130,7 @@ impl RewritePattern for BytesLenPattern {
         };
 
         let location = ctx.op(op).location;
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
 
         // struct.get to get len field (field 2)
         let get_len = wasm_dialect::StructGet::operands(bytes_ref)
@@ -172,7 +172,7 @@ impl RewritePattern for BytesRangeEqualPattern {
         }
         let location = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
         let nil_ty = core::nil(ctx).as_type_ref();
         let (left, left_ops) = extract_bytes_fields(ctx, location, operands[0]);
         let (right, right_ops) = extract_bytes_fields(ctx, location, operands[2]);
@@ -353,7 +353,7 @@ impl RewritePattern for BytesConcatPattern {
         let right = operands[1];
 
         let location = ctx.op(op).location;
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
         let array_ref_ty = super::bytes::bytes_data_type(ctx);
 
@@ -456,7 +456,7 @@ impl RewritePattern for BytesSliceOrPanicPattern {
         };
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
         let nil_ty = core::nil(ctx).as_type_ref();
 
         let (fields, field_ops) = extract_bytes_fields(ctx, location, bytes);

@@ -26,6 +26,7 @@ pub use type_converter::TypeConverter;
 
 use super::context::IrContext;
 use super::refs::OpRef;
+use crate::ops::DialectOp;
 
 /// Thin wrapper around an `OpRef` pointing to a `core.module` operation.
 ///
@@ -36,10 +37,7 @@ pub struct Module(OpRef);
 impl Module {
     /// Create an `Module` wrapper, verifying it points to a `core.module` op.
     pub fn new(ctx: &IrContext, op: OpRef) -> Option<Self> {
-        let data = ctx.op(op);
-        if data.dialect == crate::symbol::Symbol::new("core")
-            && data.name == crate::symbol::Symbol::new("module")
-        {
+        if crate::dialect::core::Module::matches(ctx, op) {
             Some(Module(op))
         } else {
             None
@@ -95,7 +93,7 @@ impl From<crate::dialect::core::Module> for Module {
 mod tests {
     use super::*;
     use crate::location::Span;
-    use crate::symbol::Symbol;
+
     use crate::*;
     use smallvec::smallvec;
 
@@ -109,8 +107,7 @@ mod tests {
     #[test]
     fn module_new_rejects_non_module_op() {
         let (mut ctx, loc) = test_ctx();
-        let op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .build(&mut ctx);
+        let op_data = OperationDataBuilder::new(loc, "func.func").build(&mut ctx);
         let op = ctx.create_op(op_data);
 
         assert!(Module::new(&ctx, op).is_none());
@@ -120,7 +117,7 @@ mod tests {
     fn module_body_returns_none_without_regions() {
         let (mut ctx, loc) = test_ctx();
         // Create a core.module op without any regions.
-        let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+        let op_data = OperationDataBuilder::new(loc, "core.module")
             .attr("sym_name", Attribute::String(ctx.intern_str("empty")))
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
@@ -145,7 +142,7 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+        let op_data = OperationDataBuilder::new(loc, "core.module")
             .attr("sym_name", Attribute::String(ctx.intern_str("m")))
             .region(region)
             .build(&mut ctx);
@@ -161,7 +158,7 @@ mod tests {
         use crate::ops::DialectOp;
 
         let (mut ctx, loc) = test_ctx();
-        let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+        let op_data = OperationDataBuilder::new(loc, "core.module")
             .attr("sym_name", Attribute::String(ctx.intern_str("m")))
             .build(&mut ctx);
         let op = ctx.create_op(op_data);

@@ -33,7 +33,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::walk::{WalkAction, walk_op};
-use trunk_ir::{OpRef, OperationDataBuilder, Symbol, SymbolPath, TypeRef, ValueRef};
+use trunk_ir::{OpRef, OperationDataBuilder, SymbolPath, TypeRef, ValueRef};
 
 /// Runtime check for a read; see `tribute-runtime`'s `asan` module.
 const LOAD_CHECK_FN: &str = "__tribute_asan_load";
@@ -77,15 +77,18 @@ fn access_of(ctx: &IrContext, op: OpRef) -> Option<Access> {
 /// Bytes an access of `ty` touches on the supported 64-bit native targets.
 fn access_width(ctx: &IrContext, ty: TypeRef) -> Result<i64, String> {
     let data = ctx.get_type(ty);
-    if data.dialect == "core" {
-        let width = data.name.with_str(|name| match name {
-            "nil" => Some(0),
-            "i1" | "i8" => Some(1),
-            "i16" => Some(2),
-            "i32" | "f32" => Some(4),
-            "i64" | "f64" | "ptr" => Some(8),
-            _ => None,
-        });
+    if data.name.dialect(ctx) == "core" {
+        let width = {
+            let name = data.name.strip_dialect(ctx);
+            match name {
+                "nil" => Some(0),
+                "i1" | "i8" => Some(1),
+                "i16" => Some(2),
+                "i32" | "f32" => Some(4),
+                "i64" | "f64" | "ptr" => Some(8),
+                _ => None,
+            }
+        };
         if let Some(width) = width {
             return Ok(width);
         }
@@ -131,7 +134,7 @@ impl RewritePattern for CheckMemoryAccess {
             return false;
         }
         let loc = ctx.op(op).location;
-        let i64_ty = trunk_ir::TypeDataBuilder::new("core", "i64").intern(ctx);
+        let i64_ty = trunk_ir::TypeDataBuilder::new("core.i64").intern(ctx);
         let ptr_ty = core::ptr(ctx).as_type_ref();
         let nil_ty = core::nil(ctx).as_type_ref();
 
@@ -185,11 +188,11 @@ fn instrument_function(ctx: &mut IrContext, function: clif::Func) -> Result<(), 
 }
 
 fn declare_check(ctx: &mut IrContext, loc: Location, name: &str) -> OpRef {
-    let i64_ty = trunk_ir::TypeDataBuilder::new("core", "i64").intern(ctx);
+    let i64_ty = trunk_ir::TypeDataBuilder::new("core.i64").intern(ctx);
     let ptr_ty = core::ptr(ctx).as_type_ref();
     let nil_ty = core::nil(ctx).as_type_ref();
     let signature = clif::func_sig(ctx, [ptr_ty, i64_ty], [nil_ty]).as_type_ref();
-    let data = OperationDataBuilder::new(loc, Symbol::new("clif"), Symbol::new("func"))
+    let data = OperationDataBuilder::new(loc, "clif.func")
         .attr("sym_name", Attribute::String(ctx.intern_str(name)))
         .attr("type", Attribute::Type(signature))
         .attr("abi", ctx.string_attr("C"))

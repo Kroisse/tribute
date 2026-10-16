@@ -31,7 +31,8 @@ pub(crate) fn is_type(
     dialect: &'static str,
     name: &'static str,
 ) -> bool {
-    ctx.types().is_dialect(ty, dialect, name)
+    ctx.get_type(ty).name.dialect(ctx) == dialect
+        && ctx.get_type(ty).name.strip_dialect(ctx) == name
 }
 
 // ============================================================================
@@ -247,8 +248,8 @@ pub(crate) fn type_to_valtype(
         }))
     } else if is_type(ctx, ty, "wasm", "func_sig") {
         Ok(ValType::Ref(RefType::FUNCREF))
-    } else if ctx.get_type(ty).dialect == "wasm" {
-        let name = ctx.get_type(ty).name.clone();
+    } else if ctx.get_type(ty).name.dialect(ctx) == "wasm" {
+        let name = ctx.get_type(ty).name.strip_dialect(ctx);
         if name == "structref" {
             Ok(ValType::Ref(RefType {
                 nullable: true,
@@ -307,8 +308,8 @@ pub(crate) fn type_to_valtype(
     } else {
         let data = ctx.get_type(ty);
         Err(CompilationError::type_error(format!(
-            "unsupported wasm value type: {}.{}",
-            data.dialect, data.name
+            "unsupported wasm value type: {}",
+            data.name.display(ctx)
         )))
     }
 }
@@ -352,9 +353,9 @@ pub(crate) fn attr_heap_type(
         Some(Attribute::String(name)) => symbol_to_abstract_heap_type(ctx.str(*name)),
         Some(Attribute::Type(ty)) => {
             let data = ctx.get_type(*ty);
-            if data.dialect == "wasm" {
-                let name = data.name.clone();
-                name.with_str(symbol_to_abstract_heap_type)
+            if data.name.dialect(ctx) == "wasm" {
+                let name = data.name.strip_dialect(ctx);
+                symbol_to_abstract_heap_type(name)
             } else {
                 Err(CompilationError::from(
                     CompilationErrorKind::MissingAttribute("non-wasm type for heap_type"),
@@ -443,12 +444,12 @@ mod tests {
     fn builtin_closure_is_identified_by_layout_not_name() {
         let mut ctx = IrContext::new();
         let name_attr = ctx.string_attr("_closure");
-        let named = TypeDataBuilder::new("test", "layout")
+        let named = TypeDataBuilder::new("test.layout")
             .attr("name", name_attr)
             .intern(&mut ctx);
         let closure_layout = ctx.string_attr(crate::gc_types::CLOSURE_LAYOUT);
         let name_attr = ctx.string_attr("Other");
-        let layout = TypeDataBuilder::new("test", "layout")
+        let layout = TypeDataBuilder::new("test.layout")
             .attr("name", name_attr)
             .attr(trunk_ir::types::LAYOUT_ATTR, closure_layout)
             .intern(&mut ctx);
@@ -460,8 +461,8 @@ mod tests {
     #[test]
     fn core_array_uses_nullable_abstract_array_value_type() {
         let mut ctx = IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
-        let array_ty = TypeDataBuilder::new("core", "array")
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let array_ty = TypeDataBuilder::new("core.array")
             .param(i32_ty)
             .intern(&mut ctx);
 
@@ -480,7 +481,7 @@ mod tests {
     #[test]
     fn func_sig_uses_nullable_funcref_value_type() {
         let mut ctx = IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let signature = wasm::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
 
         assert_eq!(

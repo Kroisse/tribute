@@ -175,8 +175,7 @@ fn incompatible(ctx: &IrContext, op: OpRef, reason: String) -> ConversionError {
     let data = ctx.op(op);
     let conflict = IllegalOp {
         op,
-        dialect: data.dialect.clone(),
-        name: data.name.clone(),
+        name: data.name.to_text(ctx),
         legality: LegalityCheck::Illegal,
         reason: None,
     }
@@ -631,7 +630,7 @@ fn i32_const(
 }
 
 fn simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(dialect, name).intern(ctx)
+    TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
 }
 
 fn block_arg(ty: TypeRef) -> BlockArgData {
@@ -652,7 +651,7 @@ mod tests {
             .ops(ctx)
             .iter()
             .copied()
-            .map(|op| format!("{}.{}", ctx.op(op).dialect, ctx.op(op).name))
+            .map(|op| format!("{}", ctx.op(op).name.display(ctx)))
             .collect()
     }
 

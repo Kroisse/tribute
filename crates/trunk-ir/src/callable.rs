@@ -46,15 +46,14 @@ pub fn classify_callable_body(
 mod tests {
     use super::*;
     use crate::smallvec::smallvec;
-    use crate::{BlockData, Location, OperationDataBuilder, RegionData, Span, Symbol};
+    use crate::{BlockData, Location, OperationDataBuilder, RegionData, Span};
 
     #[test]
     fn classifies_topology_without_dialect_signature_or_binding() {
         let mut ctx = IrContext::new();
         let path = ctx.intern_path("test.ir");
         let loc = Location::new(path, Span::new(0, 0));
-        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("callable"))
-            .build(&mut ctx);
+        let data = OperationDataBuilder::new(loc, "test.callable").build(&mut ctx);
         let op = ctx.create_op(data);
         assert_eq!(
             classify_callable_body(&ctx, op),

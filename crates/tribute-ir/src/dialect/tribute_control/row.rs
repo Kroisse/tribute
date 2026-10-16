@@ -329,7 +329,7 @@ pub fn quantified_count(binders: &[RowBinder]) -> usize {
 }
 
 fn is_func_sig(data: &TypeData) -> bool {
-    data.dialect == "tribute_control" && data.name == "func_sig"
+    data.name == <super::FuncSig as trunk_ir::ops::DialectType>::NAME
 }
 
 /// The ability row a type stores, if it is a callable type with a well-formed
@@ -380,7 +380,7 @@ pub fn logical_tuple_type(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef 
     let layout = tuple_layout_data(ctx, &name, elements);
     ctx.register_type_alias(Symbol::new(&name), layout);
     let name = ctx.intern_str(&name);
-    trunk_ir::types::TypeDataBuilder::new("adt", "typeref")
+    trunk_ir::types::TypeDataBuilder::new(crate::dialect::adt::Typeref::NAME)
         .attr("name", Attribute::String(name))
         .intern(ctx)
 }
@@ -388,7 +388,7 @@ pub fn logical_tuple_type(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef 
 /// The element types of a compiler-generated tuple layout.
 pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]> {
     let data = ctx.get_type(ty);
-    if data.dialect != "adt" || data.name != "typeref" {
+    if data.name != crate::dialect::adt::Typeref::NAME {
         return None;
     }
     let name = data.attrs.view(ctx).get_str("name")?;
@@ -396,7 +396,7 @@ pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]
         return None;
     }
     let layout = ctx.type_alias_by_text(name)?;
-    if !ctx.types().is_dialect(layout, "adt", "struct") {
+    if !ctx.get_type(layout).name.is(ctx, "adt.struct") {
         return None;
     }
     adt::Struct::validate(ctx, layout)
@@ -456,8 +456,7 @@ impl TypeSink for Lookup<'_> {
             Attribute::String(self.0.lookup_str(&name)?),
         );
         let ty = self.0.types().lookup(&TypeData {
-            dialect: Symbol::new("adt"),
-            name: Symbol::new("typeref"),
+            name: crate::dialect::adt::Typeref::NAME,
             params: Default::default(),
             attrs: AttributeMap::from_refs(self.0, [entry]),
         })?;
@@ -502,7 +501,7 @@ impl<S: TypeSink> Substitution<'_, S> {
             };
         }
         let data = self.sink.ctx().get_type(ty);
-        if data.dialect == "adt" && data.name == "typeref" {
+        if data.name == crate::dialect::adt::Typeref::NAME {
             return Some(ty);
         }
         let mut data = data.clone();

@@ -8,7 +8,6 @@
 use std::fmt;
 use std::sync::LazyLock;
 
-use crate::Symbol;
 use crate::ops::{DialectOp, DialectType};
 use crate::registry::{Registered, Registry};
 use crate::{IrContext, OpRef, TypeRef};
@@ -33,10 +32,9 @@ inventory::collect!(TypeAliasHint);
 
 /// Query all registered `TypeAliasHint`s to find a suggested name for the given type.
 pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
-    let data = ctx.get_type(ty);
-    let dialect = data.dialect.clone();
+    let dialect = ctx.get_type(ty).name.dialect(ctx);
     for hint in inventory::iter::<TypeAliasHint> {
-        if dialect.with_str(|s| s == hint.dialect)
+        if dialect == hint.dialect
             && let Some(name) = (hint.suggest)(ctx, ty)
         {
             return Some(name);
@@ -99,7 +97,7 @@ impl Registered for OpAsmFormat {
 static OP_ASM_FORMATS: LazyLock<Registry<OpAsmFormat>> = LazyLock::new(Registry::collect);
 
 /// Look up a registered custom assembly format for the given operation.
-pub fn lookup_asm_format(dialect: Symbol, op_name: Symbol) -> Option<&'static OpAsmFormat> {
+pub fn lookup_asm_format(dialect: &str, op_name: &str) -> Option<&'static OpAsmFormat> {
     OP_ASM_FORMATS.get(dialect, op_name)
 }
 
@@ -163,6 +161,6 @@ impl Registered for TypeAsmFormat {
 static TYPE_ASM_FORMATS: LazyLock<Registry<TypeAsmFormat>> = LazyLock::new(Registry::collect);
 
 /// Look up a registered custom assembly format for the given type.
-pub fn lookup_type_asm_format(dialect: Symbol, name: Symbol) -> Option<&'static TypeAsmFormat> {
+pub fn lookup_type_asm_format(dialect: &str, name: &str) -> Option<&'static TypeAsmFormat> {
     TYPE_ASM_FORMATS.get(dialect, name)
 }

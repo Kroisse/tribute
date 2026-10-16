@@ -114,17 +114,15 @@ fn validate_structured_control(
         let has_never = (scf::If::matches(ctx, op) || scf::Loop::matches(ctx, op))
             && ctx.op_results(op).iter().any(|&value| {
                 let ty = ctx.get_type(ctx.value_ty(value));
-                ty.dialect == "core" && ty.name == "never"
+                ty.name.is(ctx, "core.never")
             });
         if has_never {
             if analysis.has_terminal_unused_never_result(op) {
                 accept(op, ControlLowering::DropNeverResult);
             } else {
-                let data = ctx.op(op);
                 return ControlFlow::Break(ConversionError::new(SCF_TO_WASM_BOUNDARY, vec![IllegalOp {
                     op,
-                    dialect: data.dialect.clone(),
-                    name: data.name.clone(),
+                    name: ctx.op(op).name.to_text(ctx),
                     legality: LegalityCheck::Illegal,
                     reason: Some("Never control requires one unused result, final block position, and terminal region successors".into()),
                 }]));
@@ -154,8 +152,7 @@ pub fn validate_lowerable_switches(ctx: &IrContext, module: Module) -> Result<()
             vec![
                 IllegalOp {
                     op,
-                    dialect: data.dialect.clone(),
-                    name: data.name.clone(),
+                    name: data.name.to_text(ctx),
                     legality: LegalityCheck::Illegal,
                     reason: None,
                 }
@@ -296,8 +293,8 @@ fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweri
     let Some(width) = switch_width(ctx, shape.discriminant) else {
         let ty = ctx.get_type(ctx.value_ty(shape.discriminant));
         return Err(SwitchLoweringReason::UnsupportedDiscriminantType(format!(
-            "{}.{}",
-            ty.dialect, ty.name
+            "{}",
+            ty.name.display(ctx)
         )));
     };
     let mut cases = Vec::with_capacity(shape.cases.len());
@@ -1280,22 +1277,21 @@ mod tests {
             let mut controls = Vec::new();
             let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
                 let data = ctx.op(op);
-                assert_ne!(data.dialect, "scf");
-                if data.dialect == "wasm" && (matches!(data.name.as_str(), "if" | "block" | "loop"))
+                assert_ne!(data.name.dialect(&ctx), "scf");
+                if data.name.dialect(&ctx) == "wasm"
+                    && (matches!(data.name.strip_dialect(&ctx), "if" | "block" | "loop"))
                 {
                     assert!(ctx.op_results(op).is_empty(), "{body}");
-                    controls.push(data.name.to_string());
+                    controls.push(data.name.strip_dialect(&ctx).to_owned());
                 }
                 for &ty in ctx.op_result_types(op) {
-                    assert!(
-                        !(ctx.get_type(ty).dialect == "core" && ctx.get_type(ty).name == "never")
-                    );
+                    assert!(!(ctx.get_type(ty).name.is(&ctx, "core.never")));
                 }
                 for region in ctx.op_regions(op) {
                     for &block in &ctx.region(region).blocks {
                         for &arg in ctx.block_args(block) {
                             let ty = ctx.get_type(ctx.value_ty(arg));
-                            assert!(!(ty.dialect == "core" && ty.name == "never"));
+                            assert!(!(ty.name.is(&ctx, "core.never")));
                         }
                     }
                 }
@@ -1465,12 +1461,12 @@ mod tests {
                 .unwrap();
                 let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
                     let data = ctx.op(op);
-                    if data.dialect == "wasm"
-                        && (matches!(data.name.as_str(), "if" | "block" | "loop"))
+                    if data.name.dialect(&ctx) == "wasm"
+                        && (matches!(data.name.strip_dialect(&ctx), "if" | "block" | "loop"))
                     {
                         assert_eq!(ctx.op_result_types(op).len(), 1);
                         let result = ctx.get_type(ctx.op_result_types(op)[0]);
-                        assert_eq!(format!("{}.{}", result.dialect, result.name), ty);
+                        assert_eq!(format!("{}", result.name.display(&ctx)), ty);
                     }
                     std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
                 });
@@ -1481,15 +1477,12 @@ mod tests {
 
     /// Convert `core.array` to the abstract `wasm.arrayref` type.
     fn array_to_arrayref_converter(ctx: &mut IrContext) -> TypeConverter {
-        let arrayref_ty = trunk_ir::types::TypeDataBuilder::new(
-            trunk_ir::Symbol::new("wasm"),
-            trunk_ir::Symbol::new("arrayref"),
-        )
-        .intern(ctx);
+        let arrayref_ty = trunk_ir::types::TypeDataBuilder::new("wasm.arrayref").intern(ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            ctx.types()
-                .is_dialect(ty, "core", "array")
+            ctx.get_type(ty)
+                .name
+                .is(ctx, "core.array")
                 .then_some(arrayref_ty)
         });
         type_converter

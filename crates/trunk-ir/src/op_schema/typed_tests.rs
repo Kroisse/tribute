@@ -151,7 +151,7 @@ fn location(ctx: &mut IrContext) -> Location {
 }
 
 fn scalar(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new("core", name).intern(ctx)
+    TypeDataBuilder::new(format!("core.{name}")).intern(ctx)
 }
 
 fn block_args(ctx: &mut IrContext, loc: Location, tys: &[TypeRef]) -> Vec<ValueRef> {
@@ -275,7 +275,7 @@ fn generated_type_constraints_check_parameters_and_project() {
     let i32_ty = scalar(&mut ctx, "i32");
     let i1_ty = scalar(&mut ctx, "i1");
     let pair = test_typed::pair(&mut ctx, i32_ty, i1_ty).as_type_ref();
-    let malformed = TypeDataBuilder::new("test_typed", "pair")
+    let malformed = TypeDataBuilder::new("test_typed.pair")
         .param(i32_ty)
         .intern(&mut ctx);
 
@@ -308,7 +308,7 @@ fn generated_type_constraints_check_parameters_and_project() {
     // Declared type attributes are part of the exact-bound invariant.
     let ref_desc = <crate::dialect::core::Ref as TypeConstraint>::DESC;
     let ref_with = |ctx: &mut IrContext, attr: Option<crate::Attribute>| {
-        let mut builder = TypeDataBuilder::new("core", "ref").param(i32_ty);
+        let mut builder = TypeDataBuilder::new("core.ref").param(i32_ty);
         if let Some(attr) = attr {
             builder = builder.attr("nullable", attr);
         }

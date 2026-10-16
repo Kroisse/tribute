@@ -28,7 +28,7 @@ use super::op_interface::{
     BranchOps, CallableExitOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps,
     RegionSuccessor, RegionValueTransfer,
 };
-use super::ops::DialectType;
+use super::ops::{DialectOp, DialectType};
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
 use super::symbol_table::{SymbolTable, link_name, qualified_name};
@@ -125,8 +125,7 @@ fn collect_region_top_level(ctx: &IrContext, region: RegionRef, defined: &mut Ha
 fn describe_value(ctx: &IrContext, v: ValueRef) -> String {
     match ctx.value_def(v) {
         ValueDef::OpResult(op, idx) => {
-            let data = ctx.op(op);
-            let full_name = format!("{}.{}", data.dialect, data.name);
+            let full_name = ctx.op(op).name.display(ctx);
             match ctx.op_attrs(op).get_str("sym_name") {
                 Some(s) => {
                     format!("result #{} of {} (@{})", idx, full_name, s)
@@ -163,10 +162,9 @@ fn check_operands_in_region(
         for &op in &ctx.block(block).ops {
             for (i, &operand) in ctx.op_operands(op).iter().enumerate() {
                 if !visible.contains(&operand) {
-                    let data = ctx.op(op);
                     errors.push(ValidationError::StaleValue {
                         function_name: function_name.to_string(),
-                        consumer_op: format!("{}.{}", data.dialect, data.name),
+                        consumer_op: ctx.op(op).name.display(ctx).to_string(),
                         operand_index: i,
                         stale_value_description: describe_value(ctx, operand),
                     });
@@ -204,15 +202,10 @@ fn validate_functions_in_region(
     region: RegionRef,
     errors: &mut Vec<ValidationError>,
 ) {
-    let func_dialect = Symbol::new("func");
-    let wasm_dialect = Symbol::new("wasm");
-    let func_name_sym = Symbol::new("func");
-
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
-            let data = ctx.op(op);
-            let is_function = (data.dialect == func_dialect || data.dialect == wasm_dialect)
-                && data.name == func_name_sym;
+            let is_function = crate::dialect::func::Func::matches(ctx, op)
+                || crate::dialect::wasm::Func::matches(ctx, op);
             if is_function {
                 // This is a func.func or wasm.func
                 let fn_name = ctx.op_attrs(op).get_str("sym_name").unwrap_or("<unnamed>");
@@ -278,11 +271,13 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
         for region in ctx.op_regions(op) {
             let parent = ctx.region(region).parent_op;
             if parent != Some(op) {
-                let data = ctx.op(op);
                 errors.push(ValidationError::RegionLink {
                     message: format!(
-                        "{}.{} ({:?}) lists {:?}, whose parent is {:?}",
-                        data.dialect, data.name, op, region, parent,
+                        "{} ({:?}) lists {:?}, whose parent is {:?}",
+                        ctx.op(op).name.display(ctx),
+                        op,
+                        region,
+                        parent,
                     ),
                 });
             }
@@ -300,11 +295,13 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
                 .iter()
                 .any(|u| u.user == op && u.operand_index == idx as u32)
             {
-                let data = ctx.op(op);
                 errors.push(ValidationError::UseChain {
                     message: format!(
-                        "operand #{} of {}.{} ({:?}) uses {:?} but no use-chain entry exists",
-                        idx, data.dialect, data.name, op, val,
+                        "operand #{} of {} ({:?}) uses {:?} but no use-chain entry exists",
+                        idx,
+                        ctx.op(op).name.display(ctx),
+                        op,
+                        val,
                     ),
                 });
             }
@@ -445,19 +442,21 @@ fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
         if let Err(error) = data.validate_param_attrs(ctx) {
             errors.push(ValidationError::Operation {
                 message: format!(
-                    "type verifier failed for {}.{} ({ty}): {error}",
-                    data.dialect, data.name
+                    "type verifier failed for {} ({ty}): {error}",
+                    data.name.display(ctx)
                 ),
             });
         }
-        let Some(verifier) = lookup_type_verifier(data.dialect.clone(), data.name.clone()) else {
+        let Some(verifier) =
+            lookup_type_verifier(data.name.dialect(ctx), data.name.strip_dialect(ctx))
+        else {
             continue;
         };
         if let Err(error) = (verifier.verify_fn)(ctx, ty) {
             errors.push(ValidationError::Operation {
                 message: format!(
-                    "type verifier failed for {}.{} ({ty}): {error}",
-                    data.dialect, data.name
+                    "type verifier failed for {} ({ty}): {error}",
+                    data.name.display(ctx)
                 ),
             });
         }
@@ -555,7 +554,7 @@ fn typed_callee_signature(
 ) -> Option<crate::dialect::func::FuncSig> {
     let ty = ctx.value_ty(value);
     let data = ctx.get_type(ty);
-    let ty = if data.dialect == "closure" && data.name == "closure" {
+    let ty = if data.name.is(ctx, "closure.closure") {
         let [ty] = data.params.as_slice() else {
             return None;
         };
@@ -732,12 +731,10 @@ fn operation_verifier_error(
     op: OpRef,
     detail: impl Into<String>,
 ) -> ValidationError {
-    let data = ctx.op(op);
     ValidationError::Operation {
         message: format!(
-            "operation verifier failed for {}.{} ({}): {}",
-            data.dialect,
-            data.name,
+            "operation verifier failed for {} ({}): {}",
+            ctx.op(op).name.display(ctx),
             op,
             detail.into(),
         ),
@@ -1083,28 +1080,23 @@ fn validate_region_branch_terminator_interface(
 /// Return whether `op` is a resultless transfer that may terminate a
 /// structured `core.never` region without an `scf.yield`.
 pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
-    let data = ctx.op(op);
-    (data.dialect == "func"
-        && matches!(
-            data.name.with_str(|name| name.to_owned()).as_str(),
-            "tail_call" | "tail_call_indirect" | "unreachable"
-        ))
-        || (data.dialect == "ability"
+    use crate::dialect::{func, scf};
+    let name = ctx.op(op).name;
+    func::TailCall::matches(ctx, op)
+        || func::TailCallIndirect::matches(ctx, op)
+        || func::Unreachable::matches(ctx, op)
+        || (name.dialect(ctx) == "ability"
             && matches!(
-                data.name.with_str(|name| name.to_owned()).as_str(),
+                name.strip_dialect(ctx),
                 "perform" | "handle_dispatch" | "exit" | "handle" | "abort"
             ))
-        || (data.dialect == "effect" && data.name == "dispatch_cps")
-        || (data.dialect == "scf"
-            && matches!(
-                data.name.with_str(|name| name.to_owned()).as_str(),
-                "if" | "switch"
-            ))
+        || name.is(ctx, "effect.dispatch_cps")
+        || scf::If::matches(ctx, op)
+        || scf::Switch::matches(ctx, op)
 }
 
 fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let data = ctx.op(op);
-    if data.dialect != "scf" || data.name != "if" {
+    if !crate::dialect::scf::If::matches(ctx, op) {
         return;
     }
 
@@ -1132,13 +1124,9 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
             continue;
         };
 
-        let yield_data = ctx.op(yield_op);
-        if yield_data.dialect != "scf" || yield_data.name != "yield" {
+        if !crate::dialect::scf::Yield::matches(ctx, yield_op) {
             let never_result = match ctx.op_result_types(op) {
-                [ty] => {
-                    let ty = ctx.get_type(*ty);
-                    ty.dialect == "core" && ty.name == "never"
-                }
+                [ty] => crate::dialect::core::Never::matches(ctx, *ty),
                 _ => false,
             };
             if never_result && is_proper_tail_terminator(ctx, yield_op) {
@@ -1167,11 +1155,9 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
 
 /// Whether `op` is a `func`, `wasm` or `clif` function definition.
 fn is_arity_checked_function(ctx: &IrContext, op: OpRef) -> bool {
-    let data = ctx.op(op);
-    (data.dialect == crate::symbol!("func")
-        || data.dialect == crate::symbol!("wasm")
-        || data.dialect == crate::symbol!("clif"))
-        && data.name == crate::symbol!("func")
+    crate::dialect::func::Func::matches(ctx, op)
+        || crate::dialect::wasm::Func::matches(ctx, op)
+        || crate::dialect::clif::Func::matches(ctx, op)
 }
 
 /// The parameter count of the function definition `op`.
@@ -1191,18 +1177,9 @@ fn check_call_arity_in_region(
     symbols: &SymbolTable,
     enclosing_fn: &SymbolPath,
 ) {
-    let func_dialect = Symbol::new("func");
-    let call_name = Symbol::new("call");
-    let tail_call_name = Symbol::new("tail_call");
-
     walk::walk_region::<std::convert::Infallible>(ctx, region, &mut |op| {
-        let data = ctx.op(op);
-        if data.dialect != func_dialect {
-            return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
-        }
-
-        let is_call = data.name == call_name;
-        let is_tail_call = data.name == tail_call_name;
+        let is_call = crate::dialect::func::Call::matches(ctx, op);
+        let is_tail_call = crate::dialect::func::TailCall::matches(ctx, op);
         if !is_call && !is_tail_call {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
@@ -1218,7 +1195,7 @@ fn check_call_arity_in_region(
             let actual = ctx.op_operands(op).len();
             if actual != expected {
                 ctx.report_warning(
-                    data.location.span,
+                    ctx.op(op).location.span,
                     format!(
                         "arity mismatch in '{}': call to '{}' has {} argument(s), expected {}",
                         enclosing_fn, callee_sym, actual, expected,
@@ -1339,7 +1316,7 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> super::super::refs::TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn make_func_type(
@@ -1403,7 +1380,7 @@ mod tests {
         );
 
         let loc = test_location(&mut ctx);
-        let bodyless = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+        let bodyless = OperationDataBuilder::new(loc, "core.module")
             .attr("sym_name", Attribute::SymbolRef(SymbolPath::new(["m"])))
             .build(&mut ctx);
         let bodyless = ctx.create_op(bodyless);
@@ -1421,68 +1398,68 @@ mod tests {
         let cases = [
             (
                 "missing num_inputs",
-                TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                TypeDataBuilder::new("func.func_sig")
                     .attr(func::NUM_RESULTS_ATTR, Attribute::Int(0)),
                 "missing required `num_inputs`",
             ),
             (
                 "missing num_results",
-                TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                TypeDataBuilder::new("func.func_sig")
                     .attr(func::NUM_INPUTS_ATTR, Attribute::Int(0)),
                 "missing required `num_results`",
             ),
             (
                 "wrong num_inputs type",
-                TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                TypeDataBuilder::new("func.func_sig")
                     .attr(func::NUM_INPUTS_ATTR, Attribute::Bool(false))
                     .attr(func::NUM_RESULTS_ATTR, Attribute::Int(0)),
                 "`num_inputs` must be a u32",
             ),
             (
                 "wrong num_results type",
-                TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                TypeDataBuilder::new("func.func_sig")
                     .attr(func::NUM_INPUTS_ATTR, Attribute::Int(0))
                     .attr(func::NUM_RESULTS_ATTR, Attribute::Bool(false)),
                 "`num_results` must be a u32",
             ),
             (
                 "count sum mismatch",
-                TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                TypeDataBuilder::new("func.func_sig")
                     .attr(func::NUM_INPUTS_ATTR, Attribute::Int(1))
                     .attr(func::NUM_RESULTS_ATTR, Attribute::Int(0)),
                 "must equal params length",
             ),
             (
                 "negative input",
-                TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                TypeDataBuilder::new("func.func_sig")
                     .attr("num_inputs", Attribute::Int(-1))
                     .attr("num_results", Attribute::Int(0)),
                 "`num_inputs` must be a u32",
             ),
             (
                 "negative result",
-                TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                TypeDataBuilder::new("func.func_sig")
                     .attr("num_results", Attribute::Int(-1))
                     .attr("num_inputs", Attribute::Int(0)),
                 "`num_results` must be a u32",
             ),
             (
                 "input outside u32",
-                TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                TypeDataBuilder::new("func.func_sig")
                     .attr("num_inputs", Attribute::Int(u32::MAX as i128 + 1))
                     .attr("num_results", Attribute::Int(0)),
                 "`num_inputs` must be a u32",
             ),
             (
                 "result outside u32",
-                TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                TypeDataBuilder::new("func.func_sig")
                     .attr("num_results", Attribute::Int(u32::MAX as i128 + 1))
                     .attr("num_inputs", Attribute::Int(0)),
                 "`num_results` must be a u32",
             ),
             (
                 "multiple results",
-                TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                TypeDataBuilder::new("func.func_sig")
                     .attr(func::NUM_INPUTS_ATTR, Attribute::Int(0))
                     .attr(func::NUM_RESULTS_ATTR, Attribute::Int(2)),
                 "supports at most one result",
@@ -1517,7 +1494,7 @@ mod tests {
         let body = module.body(ctx).expect("test module must have a body");
         walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == dialect && data.name == name {
+            if data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name {
                 operations.push(op);
             }
             std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
@@ -1536,8 +1513,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let mut yield_builder =
-            OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"));
+        let mut yield_builder = OperationDataBuilder::new(loc, "scf.yield");
         for value in values {
             yield_builder = yield_builder.operand(value);
         }
@@ -1862,7 +1838,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let yield_then = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
+        let yield_then = OperationDataBuilder::new(loc, "scf.yield")
             .operand(param)
             .build(&mut ctx);
         let yield_then = ctx.create_op(yield_then);
@@ -1889,7 +1865,7 @@ mod tests {
         let sum = arith::Addi::operands(param, c1_val).build(&mut ctx, loc);
         ctx.push_op(else_block, sum.op_ref());
         let sum_val = sum.result(&ctx);
-        let yield_else = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
+        let yield_else = OperationDataBuilder::new(loc, "scf.yield")
             .operand(sum_val)
             .build(&mut ctx);
         let yield_else = ctx.create_op(yield_else);
@@ -1901,7 +1877,7 @@ mod tests {
         });
 
         // Create a bool condition
-        let i1_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
+        let i1_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
         let cond = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
@@ -1910,7 +1886,7 @@ mod tests {
         let cond_val = cond.result(&ctx);
 
         // scf.if
-        let if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
+        let if_op = OperationDataBuilder::new(loc, "scf.if")
             .operand(cond_val)
             .result(i32_ty)
             .region(then_region)
@@ -2102,12 +2078,11 @@ mod tests {
             parent_op: None,
         });
         // Build wasm.func manually
-        let wasm_func_data =
-            OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("func_b")))
-                .attr("type", Attribute::Type(wasm_func_ty))
-                .region(body_b)
-                .build(&mut ctx);
+        let wasm_func_data = OperationDataBuilder::new(loc, "wasm.func")
+            .attr("sym_name", Attribute::String(ctx.intern_str("func_b")))
+            .attr("type", Attribute::Type(wasm_func_ty))
+            .region(body_b)
+            .build(&mut ctx);
         let wasm_func_op = ctx.create_op(wasm_func_data);
 
         // module
@@ -2145,7 +2120,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
+        let i1_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -2167,7 +2142,7 @@ mod tests {
             .build(&mut ctx, loc);
         ctx.push_op(then_block, inner_const.op_ref());
         let inner_val = inner_const.result(&ctx);
-        let yield_then = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
+        let yield_then = OperationDataBuilder::new(loc, "scf.yield")
             .operand(inner_val)
             .build(&mut ctx);
         let yield_then_op = ctx.create_op(yield_then);
@@ -2191,7 +2166,7 @@ mod tests {
             .build(&mut ctx, loc);
         ctx.push_op(else_block, else_const.op_ref());
         let else_val = else_const.result(&ctx);
-        let yield_else = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
+        let yield_else = OperationDataBuilder::new(loc, "scf.yield")
             .operand(else_val)
             .build(&mut ctx);
         let yield_else_op = ctx.create_op(yield_else);
@@ -2211,7 +2186,7 @@ mod tests {
         let cond = cond_op.result(&ctx);
 
         // scf.if
-        let if_data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
+        let if_data = OperationDataBuilder::new(loc, "scf.if")
             .operand(cond)
             .result(i32_ty)
             .region(then_region)
@@ -3137,7 +3112,9 @@ mod tests {
             .unwrap();
         let stray_continue = *continues
             .iter()
-            .find(|&&op| direct_owner(op).is_some_and(|owner| ctx.op(owner).dialect == "func"))
+            .find(|&&op| {
+                direct_owner(op).is_some_and(|owner| ctx.op(owner).name.dialect(&ctx) == "func")
+            })
             .unwrap();
         assert!(
             RegionBranchTerminatorOps::get(&ctx, continue_op)
@@ -3182,9 +3159,7 @@ mod tests {
             .iter()
             .find(|&&op| {
                 direct_owner(op).is_some_and(|owner| {
-                    ctx.op(owner).dialect == "scf"
-                        && ctx.op(owner).name == "loop"
-                        && ctx.op_results(owner).is_empty()
+                    ctx.op(owner).name.is(&ctx, "scf.loop") && ctx.op_results(owner).is_empty()
                 })
             })
             .unwrap();
@@ -3197,7 +3172,9 @@ mod tests {
         );
         let stray_break = *breaks
             .iter()
-            .find(|&&op| direct_owner(op).is_some_and(|owner| ctx.op(owner).dialect == "func"))
+            .find(|&&op| {
+                direct_owner(op).is_some_and(|owner| ctx.op(owner).name.dialect(&ctx) == "func")
+            })
             .unwrap();
         assert!(
             RegionBranchTerminatorOps::get(&ctx, stray_break)
@@ -3449,8 +3426,7 @@ mod tests {
             };
             let first = empty_block(ctx);
             let second = empty_block(ctx);
-            let yield_op =
-                OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield")).build(ctx);
+            let yield_op = OperationDataBuilder::new(loc, "scf.yield").build(ctx);
             let yield_op = ctx.create_op(yield_op);
             ctx.push_op(first, yield_op);
             ctx.create_region(RegionData {
@@ -3486,7 +3462,7 @@ mod tests {
             let mut ctx = IrContext::new();
             let loc = test_location(&mut ctx);
             let i32_ty = make_i32_type(&mut ctx);
-            let i1_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
+            let i1_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
 
             let entry = ctx.create_block(BlockData {
                 location: loc,
@@ -3494,7 +3470,7 @@ mod tests {
                 ops: smallvec![],
                 parent_region: None,
             });
-            let mut if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"));
+            let mut if_op = OperationDataBuilder::new(loc, "scf.if");
             for index in 0..condition_count {
                 let cond = arith::Const::operands()
                     .value(Attribute::Int(i128::from(1 - index)))
@@ -3549,7 +3525,7 @@ mod tests {
             blocks: smallvec![loop_body],
             parent_op: None,
         });
-        let loop_data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("loop"))
+        let loop_data = OperationDataBuilder::new(loc, "scf.loop")
             .result(i32_ty)
             .result(i32_ty)
             .region(loop_region)
@@ -3573,7 +3549,7 @@ mod tests {
             blocks: smallvec![switch_body],
             parent_op: None,
         });
-        let switch_data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("switch"))
+        let switch_data = OperationDataBuilder::new(loc, "scf.switch")
             .operand(discriminant.result(&ctx))
             .result(i32_ty)
             .region(switch_region)

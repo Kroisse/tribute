@@ -108,7 +108,7 @@ pub(crate) fn fold_unbox_bool(ctx: &IrContext, op: OpRef) -> Option<FoldResult> 
 #[cfg(test)]
 mod tests {
     use trunk_ir::Span;
-    use trunk_ir::Symbol;
+
     use trunk_ir::ops::DialectOp;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
@@ -119,11 +119,11 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn make_ptr_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
-        TypeDataBuilder::new("core", "ptr").intern(ctx)
+        TypeDataBuilder::new("core.ptr").intern(ctx)
     }
 
     #[test]
@@ -132,10 +132,10 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
         let ptr_ty = make_ptr_type(&mut ctx);
-        let f64_ty = TypeDataBuilder::new("core", "f64").intern(&mut ctx);
-        let bool_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
+        let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
+        let bool_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
         let name_attr = ctx.string_attr("Box");
-        let managed_ty = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+        let managed_ty = TypeDataBuilder::new(crate::dialect::adt::Typeref::NAME)
             .attr("name", name_attr)
             .intern(&mut ctx);
 

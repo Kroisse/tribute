@@ -125,7 +125,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         {
             return "Frame".to_owned();
         }
-        let mut shape = format!("{}.{}", data.dialect, data.name);
+        let mut shape = format!("{}", data.name.display(ctx));
         if let Some(name) = ctx.type_attrs(ty).get_str("name") {
             shape.push_str(&format!("<{name}>"));
         }
@@ -168,9 +168,9 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         if native {
             let _ = walk_op::<()>(&ctx, op, &mut |nested| {
                 let data = ctx.op(nested);
-                if data.dialect == "func"
+                if data.name.dialect(&ctx) == "func"
                     && matches!(
-                        data.name.to_string().as_str(),
+                        data.name.strip_dialect(&ctx),
                         "tail_call" | "tail_call_indirect"
                     )
                 {
@@ -211,9 +211,9 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         let mut transfers = BTreeMap::<String, usize>::new();
         let _ = walk_op::<()>(&ctx, op, &mut |nested| {
             let data = ctx.op(nested);
-            if data.dialect == "func"
+            if data.name.dialect(&ctx) == "func"
                 && matches!(
-                    data.name.to_string().as_str(),
+                    data.name.strip_dialect(&ctx),
                     "tail_call"
                         | "tail_call_indirect"
                         | "call"
@@ -221,10 +221,10 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
                         | "return"
                         | "unreachable"
                 )
-                || data.dialect == "effect"
+                || data.name.dialect(&ctx) == "effect"
             {
                 if matches!(
-                    data.name.to_string().as_str(),
+                    data.name.strip_dialect(&ctx),
                     "tail_call" | "tail_call_indirect"
                 ) {
                     assert!(
@@ -233,9 +233,8 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
                     );
                 }
                 let key = format!(
-                    "{}.{} operands={} results={}",
-                    data.dialect,
-                    data.name,
+                    "{} operands={} results={}",
+                    data.name.display(&ctx),
                     ctx.op_operands(nested).len(),
                     ctx.op_result_types(nested).len()
                 );

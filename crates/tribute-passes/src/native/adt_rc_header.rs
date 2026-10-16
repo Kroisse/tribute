@@ -47,8 +47,8 @@ fn lower(
     let rtti_map = &tribute_ir::dialect::tribute_rtti::Layout::declared_indices(ctx, module);
     // Pre-intern types
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let i64_ty = TypeDataBuilder::new("core", "i64").intern(ctx);
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
 
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern {
@@ -65,8 +65,8 @@ fn lower(
         });
 
     let target = ConversionTarget::new()
-        .illegal_op("adt", "struct_new")
-        .illegal_op("adt", "variant_new");
+        .illegal_op("adt.struct_new")
+        .illegal_op("adt.variant_new");
     applicator
         .with_target(target)
         .apply_partial_conversion(ctx, module, "adt-rc-header")?;
@@ -415,7 +415,7 @@ impl trunk_ir::pass::Pass for AdtRcHeader {
 mod tests {
     use super::*;
     use trunk_ir::Span;
-    use trunk_ir::Symbol;
+
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
@@ -432,7 +432,7 @@ mod tests {
     }
 
     fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(dialect, name).intern(ctx)
+        TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
     }
 
     fn build_and_lower(
@@ -466,12 +466,11 @@ mod tests {
             .map(|i| ctx.block_arg(entry, i as u32))
             .collect();
 
-        let struct_new_data =
-            OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
-                .operands(field_vals)
-                .result(struct_ty)
-                .attr("type", Attribute::Type(struct_ty))
-                .build(ctx);
+        let struct_new_data = OperationDataBuilder::new(loc, "adt.struct_new")
+            .operands(field_vals)
+            .result(struct_ty)
+            .attr("type", Attribute::Type(struct_ty))
+            .build(ctx);
         let struct_new_ref = ctx.create_op(struct_new_data);
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
@@ -505,11 +504,10 @@ mod tests {
             parent_op: None,
         });
 
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(module_region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(module_region)
+            .build(ctx);
         let module_op = ctx.create_op(module_data);
         let module = Module::new(ctx, module_op).expect("valid arena module");
 

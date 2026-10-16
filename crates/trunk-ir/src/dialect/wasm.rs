@@ -5,7 +5,7 @@ use crate::attr_kind::{Bytes, Type};
 use crate::dialect::core::I32;
 use crate::op_interface::{CallLikeModel, CallLikeOps, IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
-use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
+use crate::{Attribute, AttributeMap, IrContext, TypeDataBuilder, TypeRef};
 
 crate::register_isolated_op!(Func);
 
@@ -509,12 +509,6 @@ pub const NUM_INPUTS_ATTR: &str = "num_inputs";
 /// Reserved delimiter attribute for the number of Wasm signature results.
 pub const NUM_RESULTS_ATTR: &str = "num_results";
 
-#[allow(non_snake_case)]
-#[inline]
-pub fn FUNC_SIG() -> Symbol {
-    Symbol::new("func_sig")
-}
-
 /// Why a name-matching `wasm.func_sig` does not satisfy its storage invariant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FuncSigTypeError {
@@ -557,7 +551,7 @@ crate::impl_func_sig_constraint!(FuncSig, "wasm.func_sig");
 impl FuncSig {
     pub(crate) fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
         let data = ctx.get_type(ty);
-        debug_assert!(data.dialect == DIALECT_NAME() && data.name == FUNC_SIG());
+        debug_assert!(data.name == <Self as DialectType>::NAME);
         let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)?;
         let num_results = read_count(ctx, &data.attrs, NUM_RESULTS_ATTR)?;
         let total = num_inputs
@@ -624,9 +618,18 @@ impl FuncSig {
     }
 }
 
+static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef {
+    name: crate::name::QualifiedName::new("wasm.func_sig"),
+};
+
+inventory::submit! {
+    crate::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
+}
+
 impl DialectType for FuncSig {
     const DIALECT_NAME: &'static str = "wasm";
     const TYPE_NAME: &'static str = "func_sig";
+    const DEF: &'static crate::type_def::TypeDef = &FUNC_SIG_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
         Self::matches(ctx, ty)
@@ -684,7 +687,7 @@ pub fn func_sig_with_attrs(
     let results: Vec<_> = results.into_iter().collect();
     let num_inputs = u32::try_from(inputs.len()).expect("wasm.func_sig input count exceeds u32");
     let num_results = u32::try_from(results.len()).expect("wasm.func_sig result count exceeds u32");
-    let mut builder = TypeDataBuilder::new(DIALECT_NAME(), FUNC_SIG())
+    let mut builder = TypeDataBuilder::new(<FuncSig as DialectType>::NAME)
         .params(inputs)
         .params(results);
     for (key, value) in attrs {

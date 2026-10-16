@@ -90,8 +90,8 @@ impl ManagedRef {
     pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
         let data = ctx.get_type(ty);
         inventory::iter::<ManagedRefType>().any(|registered| {
-            data.dialect == trunk_ir::Symbol::new(registered.dialect)
-                && data.name == trunk_ir::Symbol::new(registered.type_name)
+            data.name.dialect(ctx) == registered.dialect
+                && data.name.strip_dialect(ctx) == registered.type_name
         })
     }
 }
@@ -121,8 +121,7 @@ impl FieldKind {
     pub fn scalar(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
         let data = ctx.get_type(ty);
         let is = |dialect: &'static str, name: &'static str| {
-            data.dialect == trunk_ir::Symbol::new(dialect)
-                && data.name == trunk_ir::Symbol::new(name)
+            data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name
         };
         if is("core", "i1") || is("tribute_rt", "bool") {
             return Some(Self::Bool);
@@ -146,10 +145,12 @@ impl FieldKind {
             return Some(Self::Float { width: 32 });
         }
         // A `core` integer carries no sign, so it records as unsigned.
-        let width = (data.dialect == "core")
+        let width = (data.name.dialect(ctx) == "core")
             .then(|| {
                 data.name
-                    .with_str(|name| name.strip_prefix('i').and_then(|width| width.parse().ok()))
+                    .strip_dialect(ctx)
+                    .strip_prefix('i')
+                    .and_then(|width| width.parse().ok())
             })
             .flatten()?;
         Some(Self::Int {

@@ -512,7 +512,7 @@ fn is_signed_overflow_at_width(a: i128, b: i128, width: u32) -> bool {
 #[cfg(test)]
 mod canonicalize_tests {
     use super::*;
-    use crate::Symbol;
+
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
@@ -532,12 +532,10 @@ mod canonicalize_tests {
     }
 
     fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::new(dialect);
-        let name_sym = Symbol::new(name);
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == dialect_sym && data.name == name_sym {
+            if data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name {
                 count += 1;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -551,16 +549,12 @@ mod canonicalize_tests {
     /// by a const-int op. Lets value-shaped tests assert the folded
     /// constant directly without going through textual snapshots.
     fn return_value_int_const(ctx: &IrContext, module: Module) -> Option<i128> {
-        let func_return_dialect = Symbol::new("func");
-        let return_name = Symbol::new("return");
         let mut found = None;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             if found.is_some() {
                 return ControlFlow::Continue(WalkAction::Advance);
             }
-            let data = ctx.op(op);
-            if data.dialect == func_return_dialect
-                && data.name == return_name
+            if crate::dialect::func::Return::matches(ctx, op)
                 && let Some(&v) = ctx.op_operands(op).first()
             {
                 found = const_int_value(ctx, v);

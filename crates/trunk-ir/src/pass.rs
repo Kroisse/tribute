@@ -333,13 +333,12 @@ fn ensure_nested_anchor_is_isolated(ctx: &IrContext, op: OpRef) -> PassResult {
         return Ok(());
     }
 
-    let data = ctx.op(op);
     Err(PassError::verification(
         "nested-pass-manager",
         VerifyError {
             message: format!(
-                "nested pass target `{}.{}` is not registered IsolatedFromAbove",
-                data.dialect, data.name
+                "nested pass target `{}` is not registered IsolatedFromAbove",
+                ctx.op(op).name.display(ctx)
             ),
         },
     ))
@@ -620,7 +619,7 @@ mod tests {
     use crate::context::{BlockData, OperationDataBuilder, RegionData};
     use crate::dialect::{arith, core, func};
     use crate::location::Span;
-    use crate::symbol::Symbol;
+
     use crate::types::{Attribute, Location};
     use smallvec::smallvec;
 
@@ -671,7 +670,7 @@ mod tests {
     ) -> OpRef {
         let nil_ty = core::nil(ctx).as_type_ref();
         let func_ty = func::func_sig(ctx, [], [nil_ty]).as_type_ref();
-        let op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+        let op_data = OperationDataBuilder::new(loc, "func.func")
             .attr("sym_name", Attribute::String(ctx.intern_str(name)))
             .attr("type", Attribute::Type(func_ty))
             .build(ctx);

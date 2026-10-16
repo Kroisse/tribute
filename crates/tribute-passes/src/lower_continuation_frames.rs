@@ -173,7 +173,7 @@ fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameType
         .collect();
     let evidence = ability::evidence_adt_type_ref(ctx);
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
-    let i32_type = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i32_type = TypeDataBuilder::new("core.i32").intern(ctx);
     let mut resolved = HashMap::default();
     let mut layouts = Vec::with_capacity(answers.len());
     for source_answer in answers {
@@ -371,7 +371,7 @@ mod tests {
     }
 
     fn frame_of_answer(ctx: &mut IrContext, answer: &str) -> TypeRef {
-        let answer = TypeDataBuilder::new("core", answer).intern(ctx);
+        let answer = TypeDataBuilder::new(format!("core.{answer}")).intern(ctx);
         ability::frame(ctx, answer).as_type_ref()
     }
 
@@ -427,7 +427,7 @@ mod tests {
             let mut ctx = IrContext::new();
             for index in 0..unrelated_types {
                 let name = ctx.string_attr(&format!("unrelated{index}"));
-                TypeDataBuilder::new("test", "unrelated")
+                TypeDataBuilder::new("test.unrelated")
                     .attr("name", name)
                     .intern(&mut ctx);
             }
@@ -449,7 +449,7 @@ mod tests {
                     .type_alias_by_text(&name)
                     .expect("the layout is registered");
                 let answer = continuation_frame::result_type(&ctx, layout).unwrap();
-                ctx.get_type(answer).name.to_string()
+                ctx.get_type(answer).name.strip_dialect(&ctx).to_owned()
             })
         };
         assert_eq!(answers(0, "i32", "i64"), ["i32", "i64"]);

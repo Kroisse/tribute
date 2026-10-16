@@ -308,7 +308,7 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     /// A call graph with each symbol spelled by its root-qualified path.
@@ -414,11 +414,10 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str(name)))
-                .region(region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str(name)))
+            .region(region)
+            .build(ctx);
         ctx.create_op(module_data)
     }
 

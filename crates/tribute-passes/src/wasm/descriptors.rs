@@ -67,18 +67,20 @@ pub fn declare(ctx: &mut IrContext, module: Module) {
 /// GC reference is dynamic.
 fn field_kind(ctx: &IrContext, ty: TypeRef) -> FieldKind {
     let data = ctx.get_type(ty);
-    if data.dialect == "adt" || (data.dialect == "core" && data.name == "array") {
+    if data.name.dialect(ctx) == "adt" || (data.name.is(ctx, "core.array")) {
         return FieldKind::Managed;
     }
-    let dynamic = (data.dialect == "tribute_rt"
-        && (matches!(data.name.as_str(), "anyref" | "intref")))
-        || (data.dialect == "wasm"
-            && data.name.with_str(|name| {
+    let dynamic = (data.name.dialect(ctx) == "tribute_rt"
+        && (matches!(data.name.strip_dialect(ctx), "anyref" | "intref")))
+        || (data.name.dialect(ctx) == "wasm" && {
+            let name = data.name.strip_dialect(ctx);
+            {
                 matches!(
                     name,
                     "anyref" | "eqref" | "structref" | "arrayref" | "i31ref"
                 )
-            }));
+            }
+        });
     if dynamic {
         return FieldKind::Dynamic;
     }

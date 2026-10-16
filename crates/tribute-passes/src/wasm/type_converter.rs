@@ -38,7 +38,7 @@ use trunk_ir::types::{AttributeMap, Location, TypeDataBuilder};
 // =============================================================================
 
 fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
-    TypeDataBuilder::new(dialect, name).intern(ctx)
+    TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
 }
 
 // =============================================================================
@@ -46,7 +46,8 @@ fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
 // =============================================================================
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
-    ctx.types().is_dialect(ty, dialect, name)
+    ctx.get_type(ty).name.dialect(ctx) == dialect
+        && ctx.get_type(ty).name.strip_dialect(ctx) == name
 }
 
 // =============================================================================
@@ -250,16 +251,19 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
             return Some(bytes);
         }
         let data = ctx.get_type(ty);
-        if data.dialect != "tribute_rt" {
+        if data.name.dialect(ctx) != "tribute_rt" {
             return None;
         }
-        data.name.with_str(|name| match name {
-            "int" | "nat" | "bool" => Some(i32_ty),
-            "float" => Some(f64_ty),
-            "anyref" => Some(anyref_ty),
-            "intref" => Some(i31ref_ty),
-            _ => None,
-        })
+        {
+            let name = data.name.strip_dialect(ctx);
+            match name {
+                "int" | "nat" | "bool" => Some(i32_ty),
+                "float" => Some(f64_ty),
+                "anyref" => Some(anyref_ty),
+                "intref" => Some(i31ref_ty),
+                _ => None,
+            }
+        }
     });
 }
 
@@ -668,13 +672,9 @@ mod tests {
         let ptr = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("ptr"));
         let concrete = closure_adt_type(&mut ctx);
 
-        let source_data = trunk_ir::OperationDataBuilder::new(
-            location,
-            Symbol::new("test"),
-            Symbol::new("source"),
-        )
-        .result(anyref)
-        .build(&mut ctx);
+        let source_data = trunk_ir::OperationDataBuilder::new(location, "test.source")
+            .result(anyref)
+            .build(&mut ctx);
         let source = ctx.create_op(source_data);
         let value = ctx.op_result(source, 0);
         // An upcast is elided by the target, and a representation match is not

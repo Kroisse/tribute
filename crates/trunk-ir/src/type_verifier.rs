@@ -6,7 +6,6 @@
 
 use std::sync::LazyLock;
 
-use crate::Symbol;
 use crate::ops::DialectType;
 use crate::registry::{Registered, Registry};
 use crate::{IrContext, TypeRef};
@@ -46,6 +45,6 @@ impl Registered for TypeVerifier {
 static TYPE_VERIFIERS: LazyLock<Registry<TypeVerifier>> = LazyLock::new(Registry::collect);
 
 /// Look up the registered verifier for the given type kind.
-pub fn lookup_type_verifier(dialect: Symbol, name: Symbol) -> Option<&'static TypeVerifier> {
+pub fn lookup_type_verifier(dialect: &str, name: &str) -> Option<&'static TypeVerifier> {
     TYPE_VERIFIERS.get(dialect, name)
 }

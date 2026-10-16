@@ -9,12 +9,11 @@ use tracing::debug;
 
 use trunk_ir::IrContext;
 use trunk_ir::Module;
-use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
-use trunk_ir::types::{Attribute, TypeData};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{self, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, MARKER_IDX};
@@ -104,7 +103,7 @@ fn register_type(
     // reference type elsewhere in the module. Builtin ABI mappings are seeded
     // separately and must not be inferred from individual operations.
     let data = ctx.get_type(ty);
-    if data.dialect == "wasm"
+    if data.name.dialect(ctx) == "wasm"
         && [
             "anyref",
             "structref",
@@ -114,8 +113,7 @@ fn register_type(
             "i31ref",
             "eqref",
         ]
-        .iter()
-        .any(|name| data.name == *name)
+        .contains(&data.name.strip_dialect(ctx))
     {
         return;
     }
@@ -194,7 +192,7 @@ fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     // Wasm has no i1 storage type. Match type_to_valtype before comparing
     // constructor, getter, and setter observations of the same field.
     if helpers::is_type(ctx, ty, "core", "i1") {
-        return trunk_ir::types::TypeDataBuilder::new("core", "i32").intern(ctx);
+        return trunk_ir::types::TypeDataBuilder::new("core.i32").intern(ctx);
     }
 
     ty
@@ -282,13 +280,11 @@ fn record_struct_field(
             let existing_data = ctx.get_type(existing);
             let new_data = ctx.get_type(ty);
             return Err(CompilationError::type_error(format!(
-                "struct type index {type_idx} field {field_idx} type mismatch: existing={:?} ({}.{}), new={:?} ({}.{})",
+                "struct type index {type_idx} field {field_idx} type mismatch: existing={:?} ({}), new={:?} ({})",
                 existing,
-                existing_data.dialect,
-                existing_data.name,
+                existing_data.name.display(ctx),
                 ty,
-                new_data.dialect,
-                new_data.name,
+                new_data.name.display(ctx),
             )));
         }
         // A structural type declares its fields; accesses do not refine them.
@@ -348,12 +344,7 @@ fn type_to_field_type(
 
 /// Create the physical WasmGC struct supertype `structref`.
 fn intern_wasm_structref(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeData {
-        dialect: Symbol::new("wasm"),
-        name: Symbol::new("structref"),
-        params: Default::default(),
-        attrs: Default::default(),
-    })
+    TypeDataBuilder::new("wasm.structref").intern(ctx)
 }
 
 // ============================================================================
@@ -368,7 +359,6 @@ pub(crate) fn collect_gc_types(
     ctx: &mut IrContext,
     module: Module,
 ) -> CompilationResult<GcTypesResult> {
-    let wasm_dialect = Symbol::new("wasm");
     let mut builders: Vec<GcTypeBuilder> = Vec::new();
     let mut type_idx_by_type: HashMap<TypeRef, u32> = HashMap::default();
     let body = module
@@ -412,19 +402,10 @@ pub(crate) fn collect_gc_types(
     let ops_to_visit = {
         let mut ops = Vec::new();
         fn collect_ops_from_region(ctx: &IrContext, region: RegionRef, ops: &mut Vec<OpRef>) {
-            let wasm_dialect = Symbol::new("wasm");
-            let core_dialect = Symbol::new("core");
-            let module_name = Symbol::new("module");
-            let func_name = Symbol::new("func");
-
             for &block in ctx.region(region).blocks.iter() {
                 for &op in ctx.block(block).ops.iter() {
-                    let op_data = ctx.op(op);
-                    let dialect = op_data.dialect.clone();
-                    let name = op_data.name.clone();
-
                     // Recurse into nested core.module operations
-                    if dialect == core_dialect && name == module_name {
+                    if trunk_ir::dialect::core::Module::matches(ctx, op) {
                         for nested_region in ctx.op_regions(op) {
                             collect_ops_from_region(ctx, nested_region, ops);
                         }
@@ -432,7 +413,7 @@ pub(crate) fn collect_gc_types(
                     }
 
                     // Visit wasm.func body (recursively including nested regions)
-                    if dialect == wasm_dialect && name == func_name {
+                    if wasm_dialect::Func::matches(ctx, op) {
                         if let Some(func_region) = ctx.op_region(op, 0) {
                             collect_all_ops_recursive(ctx, func_region, ops);
                         }
@@ -462,8 +443,7 @@ pub(crate) fn collect_gc_types(
 
     // Process collected ops
     for op in ops_to_visit {
-        let op_data = ctx.op(op);
-        if op_data.dialect != wasm_dialect {
+        if ctx.op(op).name.dialect(ctx) != "wasm" {
             continue;
         }
 
@@ -508,8 +488,10 @@ pub(crate) fn collect_gc_types(
                         CompilationError::invalid_module("struct field index out of u32 range")
                     })?;
                     debug!(
-                        "GC: struct_new type_idx={} recording field {} with type {}.{}",
-                        type_idx, field_idx, ty_data.dialect, ty_data.name
+                        "GC: struct_new type_idx={} recording field {} with type {}",
+                        type_idx,
+                        field_idx,
+                        ty_data.name.display(ctx)
                     );
                     record_struct_field(ctx, type_idx, builder, field_idx_u32, ty)?;
                 }
@@ -549,8 +531,10 @@ pub(crate) fn collect_gc_types(
                 if let Some(&result_ty) = result_types.first() {
                     let result_data = ctx.get_type(result_ty);
                     debug!(
-                        "GC: struct_get type_idx={} recording field {} with result_ty {}.{}",
-                        type_idx, field_idx, result_data.dialect, result_data.name
+                        "GC: struct_get type_idx={} recording field {} with result_ty {}",
+                        type_idx,
+                        field_idx,
+                        result_data.name.display(ctx)
                     );
                     record_struct_field(ctx, type_idx, builder, field_idx, result_ty)?;
                 }
@@ -786,11 +770,7 @@ mod tests {
                     let b_ty = ctx.type_alias_by_text("B").unwrap();
                     assert_eq!(map.get(&a_ty), Some(&a));
                     assert_eq!(map.get(&b_ty), Some(&b));
-                    let abstract_ty = TypeDataBuilder::new(
-                        Symbol::new("wasm"),
-                        Symbol::new(reference.strip_prefix("wasm.").unwrap()),
-                    )
-                    .intern(&mut ctx);
+                    let abstract_ty = TypeDataBuilder::new(reference).intern(&mut ctx);
                     assert!(!map.contains_key(&abstract_ty), "{reference}: {projection}");
                     let binary = crate::emit_module_to_wasm(&mut ctx, module).unwrap();
                     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
@@ -945,7 +925,7 @@ wasm.return
     fn record_struct_field_widens_concrete_to_anyref() {
         let mut ctx = IrContext::new();
         let concrete = intern_wasm_structref(&mut ctx);
-        let anyref = TypeDataBuilder::new("wasm", "anyref").intern(&mut ctx);
+        let anyref = TypeDataBuilder::new("wasm.anyref").intern(&mut ctx);
         let mut builder = GcTypeBuilder::new();
 
         record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, concrete)
@@ -959,7 +939,7 @@ wasm.return
     #[test]
     fn structural_struct_fields_compare_as_the_struct_supertype() {
         let mut ctx = IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let structural = wasm_gc::r#struct(&mut ctx, [i32_ty]).as_type_ref();
         let structref = intern_wasm_structref(&mut ctx);
 
@@ -972,14 +952,14 @@ wasm.return
         let mut ctx = IrContext::new();
         let mut closure_layout = |name: &'static str| {
             let layout = ctx.string_attr(crate::gc_types::CLOSURE_LAYOUT);
-            TypeDataBuilder::new("test", name)
+            TypeDataBuilder::new(format!("test.{name}"))
                 .attr(trunk_ir::types::LAYOUT_ATTR, layout)
                 .intern(&mut ctx)
         };
         let reference = closure_layout("reference");
         let declaration = closure_layout("declaration");
         let bytes_layout = ctx.string_attr(crate::gc_types::BYTES_LAYOUT);
-        let bytes = TypeDataBuilder::new("test", "bytes")
+        let bytes = TypeDataBuilder::new("test.bytes")
             .attr(trunk_ir::types::LAYOUT_ATTR, bytes_layout)
             .intern(&mut ctx);
         let types_before = ctx.types().iter().count();
@@ -994,12 +974,12 @@ wasm.return
     fn same_named_types_with_different_attributes_are_not_gc_equivalent() {
         let mut ctx = IrContext::new();
         let name_attr = ctx.string_attr("String");
-        let canonical = TypeDataBuilder::new("test", "named")
+        let canonical = TypeDataBuilder::new("test.named")
             .attr("name", name_attr)
             .attr("layout", Attribute::Bool(true))
             .intern(&mut ctx);
         let name_attr = ctx.string_attr("String");
-        let unrelated = TypeDataBuilder::new("test", "named")
+        let unrelated = TypeDataBuilder::new("test.named")
             .attr("name", name_attr)
             .attr("layout", Attribute::Bool(false))
             .intern(&mut ctx);

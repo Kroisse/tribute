@@ -8,7 +8,6 @@
 //! rule ([`is_wasm_physical_argument_assignable`]): only widenings the
 //! emission performs without a runtime cast qualify.
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
@@ -57,13 +56,8 @@ impl RewritePattern for ReferenceUpcastElisionPattern {
 
 fn is_abstract_gc_reference(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "wasm"
-        && [
-            Symbol::new("anyref"),
-            Symbol::new("structref"),
-            Symbol::new("arrayref"),
-        ]
-        .contains(&data.name)
+    data.name.dialect(ctx) == "wasm"
+        && ["anyref", "structref", "arrayref"].contains(&data.name.strip_dialect(ctx))
 }
 
 #[cfg(test)]
@@ -160,7 +154,7 @@ mod tests {
         // An upcast whose declared result still converts is left to the cast
         // legalization pattern.
         let new_type = |ctx: &mut IrContext, name| {
-            trunk_ir::types::TypeDataBuilder::new("wasm", name).intern(ctx)
+            trunk_ir::types::TypeDataBuilder::new(format!("wasm.{name}")).intern(ctx)
         };
         let structref = new_type(&mut ctx, "structref");
         let anyref = new_type(&mut ctx, "anyref");

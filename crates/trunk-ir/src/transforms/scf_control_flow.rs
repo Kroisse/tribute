@@ -7,7 +7,7 @@ use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalys
 use crate::context::IrContext;
 use crate::dialect::scf;
 use crate::op_interface::{CallableExitOps, RegionBranchOps, RegionBranchPoint, RegionSuccessor};
-use crate::ops::DialectOp;
+use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, RegionRef};
 use crate::walk::{WalkAction, walk_op};
 
@@ -74,11 +74,11 @@ impl Analysis for StructuredControlAnalysis {
                 continue;
             }
             let results = ir.op_results(op);
-            if let [result] = results {
-                let ty = ir.get_type(ir.value_ty(*result));
-                if ty.dialect == "core" && ty.name == "never" && !ir.has_uses(*result) {
-                    analysis.unused_never_controls.insert(op);
-                }
+            if let [result] = results
+                && crate::dialect::core::Never::matches(ir, ir.value_ty(*result))
+                && !ir.has_uses(*result)
+            {
+                analysis.unused_never_controls.insert(op);
             }
             if scf::Switch::matches(ir, op) && results.is_empty() {
                 analysis.terminal_switches.insert(op);

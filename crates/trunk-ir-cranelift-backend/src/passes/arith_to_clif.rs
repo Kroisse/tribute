@@ -48,7 +48,7 @@ fn arith_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
         .legal_dialect("clif")
         .illegal_dialect("arith")
-        .illegal_op("core", "nil_value")
+        .illegal_op("core.nil_value")
 }
 
 /// Classify a type into the clif lowering category.
@@ -180,7 +180,7 @@ impl RewritePattern for ArithBinOpPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.dialect != "arith" {
+        if data.name.dialect(ctx) != "arith" {
             return false;
         }
 
@@ -192,59 +192,59 @@ impl RewritePattern for ArithBinOpPattern {
             return false;
         };
         let loc = ctx.op(op).location;
-        let name = data.name.clone();
+        let name = data.name;
 
-        let new_op = if name == "addi" {
+        let new_op = if name == arith::Addi::NAME {
             clif::Iadd::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "addf" {
+        } else if name == arith::Addf::NAME {
             clif::Fadd::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "subi" {
+        } else if name == arith::Subi::NAME {
             clif::Isub::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "subf" {
+        } else if name == arith::Subf::NAME {
             clif::Fsub::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "muli" {
+        } else if name == arith::Muli::NAME {
             clif::Imul::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "mulf" {
+        } else if name == arith::Mulf::NAME {
             clif::Fmul::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "divsi" {
+        } else if name == arith::Divsi::NAME {
             clif::Sdiv::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "divui" {
+        } else if name == arith::Divui::NAME {
             clif::Udiv::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "divf" {
+        } else if name == arith::Divf::NAME {
             clif::Fdiv::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "remsi" {
+        } else if name == arith::Remsi::NAME {
             clif::Srem::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "remui" {
+        } else if name == arith::Remui::NAME {
             clif::Urem::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
@@ -299,7 +299,7 @@ impl RewritePattern for ArithCmpPattern {
         // Cranelift's icmp/fcmp always return i8, so emit the comparison with
         // core.i8 result, then uextend to the converted result type (core.i32)
         // so downstream consumers get the expected width.
-        let i8_ty = TypeDataBuilder::new("core", "i8").intern(ctx);
+        let i8_ty = TypeDataBuilder::new("core.i8").intern(ctx);
 
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             let lhs = cmpi.lhs(ctx);
@@ -400,12 +400,20 @@ impl RewritePattern for ArithBitwisePattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.dialect != "arith" {
+        if data.name.dialect(ctx) != "arith" {
             return false;
         }
 
-        let name = data.name.clone();
-        let is_bitwise = matches!(name.as_str(), "and" | "or" | "xor" | "shl" | "shr" | "shru");
+        let name = data.name;
+        let is_bitwise = [
+            arith::And::NAME,
+            arith::Or::NAME,
+            arith::Xor::NAME,
+            arith::Shl::NAME,
+            arith::Shr::NAME,
+            arith::Shru::NAME,
+        ]
+        .contains(&name);
         if !is_bitwise {
             return false;
         }
@@ -419,32 +427,32 @@ impl RewritePattern for ArithBitwisePattern {
         };
         let loc = ctx.op(op).location;
 
-        let new_op = if name == "and" {
+        let new_op = if name == arith::And::NAME {
             clif::Band::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "or" {
+        } else if name == arith::Or::NAME {
             clif::Bor::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "xor" {
+        } else if name == arith::Xor::NAME {
             clif::Bxor::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "shl" {
+        } else if name == arith::Shl::NAME {
             clif::Ishl::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "shr" {
+        } else if name == arith::Shr::NAME {
             clif::Sshr::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == "shru" {
+        } else if name == arith::Shru::NAME {
             clif::Ushr::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)

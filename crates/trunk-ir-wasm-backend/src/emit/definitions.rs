@@ -108,18 +108,17 @@ pub(crate) fn extract_function_def(
     if let Some(result_ty) = function.single_result(ctx) {
         let result_data = ctx.get_type(result_ty);
         debug!(
-            "extract_function_def: {} fn_params={:?}, result={}.{}",
+            "extract_function_def: {} fn_params={:?}, result={}",
             name,
             function
                 .inputs(ctx)
                 .iter()
                 .map(|p| {
                     let d = ctx.get_type(*p);
-                    format!("{}.{}", d.dialect, d.name)
+                    format!("{}", d.name.display(ctx))
                 })
                 .collect::<Vec<_>>(),
-            result_data.dialect,
-            result_data.name,
+            result_data.name.display(ctx),
         );
     }
 
@@ -307,7 +306,7 @@ mod tests {
     fn import_function_requires_valid_func_sig_counts() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
-        let malformed = TypeDataBuilder::new("wasm", "func_sig").intern(&mut ctx);
+        let malformed = TypeDataBuilder::new("wasm.func_sig").intern(&mut ctx);
         let import = wasm_dialect::ImportFunc::operands()
             .module("env")
             .name("run")

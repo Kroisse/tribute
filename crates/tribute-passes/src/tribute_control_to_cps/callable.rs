@@ -270,13 +270,12 @@ impl Converter<'_> {
             .expect("validated function is present in the callable graph");
         let physical_type = self.physical_function_type(logical_type);
         if !self.ctx.op_has_regions(source) {
-            let mut builder =
-                OperationDataBuilder::new(location, Symbol::new("func"), Symbol::new("func"))
-                    .attr(
-                        "sym_name",
-                        Attribute::String(self.ctx.intern_symbol_text(&symbol)),
-                    )
-                    .attr("type", Attribute::Type(physical_type));
+            let mut builder = OperationDataBuilder::new(location, "func.func")
+                .attr(
+                    "sym_name",
+                    Attribute::String(self.ctx.intern_symbol_text(&symbol)),
+                )
+                .attr("type", Attribute::Type(physical_type));
             for (key, value) in self.convert_attrs(&self.ctx.op(source).attributes.clone()) {
                 if !matches!(
                     self.ctx.str(key),

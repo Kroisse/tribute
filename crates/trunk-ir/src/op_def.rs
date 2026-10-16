@@ -6,15 +6,27 @@
 //! name so that verification and other tooling can look them up for any
 //! operation.
 
-use rustc_hash::FxHashMap as HashMap;
 use std::sync::LazyLock;
 
+use crate::name::{Definition, Name, NameArg, QualifiedName, Registry};
 use crate::op_schema::{OpSchema, SchemaViolation};
-use crate::{IrContext, OpRef, Symbol};
+use crate::{IrContext, OpRef};
+
+/// The name of an operation.
+pub type OpName = Name<OpDef>;
+
+/// An operation name given to a builder.
+pub type OpNameArg = NameArg<OpDef>;
 
 /// Everything `#[dialect]` registers for one operation.
+///
+/// `#[dialect]` emits each definition as a `static`, so its address
+/// identifies the operation: an [`OpName`] of a registered operation points
+/// to it.
 #[derive(Debug)]
 pub struct OpDef {
+    /// The operation's `dialect.name`.
+    pub name: QualifiedName,
     /// Declarative constraints on the operation's entities.
     pub schema: OpSchema,
     /// Calls the wrapper's [`Verify`](crate::ops::Verify) impl for
@@ -39,15 +51,24 @@ impl OpDef {
         }
     }
 
-    /// Look up the registered definition for `dialect.name`.
-    pub fn lookup(dialect: Symbol, name: Symbol) -> Option<&'static OpDef> {
-        REGISTRY.get(&(dialect, name)).copied()
+    /// The registered definition named `dialect.name`.
+    pub fn lookup(dialect: &str, name: &str) -> Option<&'static OpDef> {
+        REGISTRY.get(dialect, name)
     }
 
-    /// Look up the registered definition for an operation.
+    /// The registered definition of an operation.
     pub fn of(ctx: &IrContext, op: OpRef) -> Option<&'static OpDef> {
-        let data = ctx.op(op);
-        Self::lookup(data.dialect.clone(), data.name.clone())
+        ctx.op(op).name.def()
+    }
+}
+
+impl Definition for OpDef {
+    fn qualified_name(&self) -> &QualifiedName {
+        &self.name
+    }
+
+    fn lookup(dialect: &str, name: &str) -> Option<&'static Self> {
+        REGISTRY.get(dialect, name)
     }
 }
 
@@ -69,19 +90,13 @@ pub struct OpDefRegistration(pub &'static OpDef);
 
 inventory::collect!(OpDefRegistration);
 
-static REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static OpDef>> = LazyLock::new(|| {
-    let mut registry = HashMap::default();
-    for OpDefRegistration(def) in inventory::iter::<OpDefRegistration> {
-        let schema = &def.schema;
-        let key = (Symbol::new(schema.dialect), Symbol::new(schema.name));
-        if let Some(previous) = registry.insert(key, *def) {
-            panic!(
-                "operation {}.{} is registered twice ({previous:p} and {def:p})",
-                schema.dialect, schema.name,
-            );
-        }
-    }
-    registry
+static REGISTRY: LazyLock<Registry<OpDef>> = LazyLock::new(|| {
+    Registry::collect(
+        "operation",
+        inventory::iter::<OpDefRegistration>
+            .into_iter()
+            .map(|OpDefRegistration(def)| *def),
+    )
 });
 
 #[cfg(test)]
@@ -91,10 +106,43 @@ mod tests {
 
     #[test]
     fn registry_finds_definitions_across_dialects() {
-        let def = OpDef::lookup(Symbol::new("func"), Symbol::new("return"))
-            .expect("func.return should be registered");
+        let def = OpDef::lookup("func", "return").expect("func.return should be registered");
+        assert_eq!(def.name.as_str(), "func.return");
         assert_eq!((def.schema.dialect, def.schema.name), ("func", "return"));
         assert_eq!(def.schema.operands[0].arity, Arity::Variadic);
-        assert!(OpDef::lookup(Symbol::new("func"), Symbol::new("no_such_op")).is_none());
+        assert!(OpDef::lookup("func", "no_such_op").is_none());
+    }
+
+    #[test]
+    fn every_registered_name_has_one_handle() {
+        let mut ctx = IrContext::new();
+        for OpDefRegistration(def) in inventory::iter::<OpDefRegistration> {
+            let name = def.name;
+            assert_eq!(
+                (name.dialect(), name.strip_dialect()),
+                (def.schema.dialect, def.schema.name)
+            );
+            assert_eq!(ctx.intern_op_name(name.as_str()), OpName::registered(def));
+        }
+        assert_eq!(
+            <crate::dialect::arith::Addi as crate::ops::DialectOp>::NAME,
+            ctx.intern_op_name("arith.addi")
+        );
+    }
+
+    #[test]
+    fn unregistered_names_are_context_strings() {
+        let mut ctx = IrContext::new();
+        let name = ctx.intern_op_name("test.op");
+        assert!(!name.is_registered());
+        assert_eq!(name, ctx.intern_op_name("test.op"));
+        assert_ne!(name, ctx.intern_op_name("test.other"));
+        assert_eq!(ctx.lookup_op_name("test.op"), Some(name));
+        assert_eq!(ctx.lookup_op_name("test.missing"), None);
+        assert_eq!(name.dialect(&ctx), "test");
+        assert_eq!(name.strip_dialect(&ctx), "op");
+        assert_eq!(name.display(&ctx).to_string(), "test.op");
+        assert!(name.is(&ctx, "test.op"));
+        assert!(!name.is(&ctx, "test.opx"));
     }
 }

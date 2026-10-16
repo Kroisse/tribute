@@ -26,8 +26,7 @@ fn parse(input: &str) -> (IrContext, Module) {
 fn shared_function_conversion_preserves_lists_and_nested_attributes() {
     let (mut ctx, module) = parse("core.module @m { func.func @placeholder() { func.return } }");
     let block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
-    let i32_ty = trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
-        .intern(&mut ctx);
+    let i32_ty = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(&mut ctx);
     let source_callable = tribute_control::func_sig(
         &mut ctx,
         i32_ty,
@@ -81,7 +80,7 @@ fn operation_declarations(
     let i32_type = ctx
         .types()
         .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+        .find_map(|(ty, data)| (data.name.is(ctx, "core.i32")).then_some(ty))
         .expect("test module declares core.i32");
     operations
         .iter()
@@ -614,9 +613,9 @@ fn malformed_or_retired_source_signatures_fail_before_conversion() {
         let i32_ty = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+            .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
             .unwrap();
-        let mut builder = TypeDataBuilder::new("tribute_control", name).params([i32_ty]);
+        let mut builder = TypeDataBuilder::new(format!("tribute_control.{name}")).params([i32_ty]);
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
@@ -843,7 +842,7 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
     let before = print_module(&ctx, candidate.op());
     let source_aliases = ctx.type_aliases().to_vec();
     let (alias_name, source_type) = source_aliases[0].clone();
-    let converted_type = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+    let converted_type = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     ctx.register_type_alias(alias_name.clone(), converted_type);
 
     let error = verify_candidate_or_restore_aliases(
@@ -1164,7 +1163,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     let i32_type = ctx
         .types()
         .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
         ability.unwrap(),
@@ -1299,7 +1298,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
     let i32_type = ctx
         .types()
         .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
         .unwrap();
     let declarations = [
         tribute_control::OperationDeclaration::new(
@@ -1401,7 +1400,7 @@ fn textual_scf_branch_captures_only_the_selected_suffix() {
     let i32_type = ctx
         .types()
         .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
         ability.clone(),
@@ -1457,7 +1456,7 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
     let i32_type = ctx
         .types()
         .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
         .unwrap();
     let declarations = [
         tribute_control::OperationDeclaration::new(
@@ -1616,7 +1615,7 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
     let i32_type = ctx
         .types()
         .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
         ability.clone(),
@@ -2134,12 +2133,12 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     let i32_type = ctx
         .types()
         .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
         .unwrap();
     let never_type = ctx
         .types()
         .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "never").then_some(ty))
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.never")).then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
         ability.clone(),
@@ -2260,7 +2259,7 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
     let i32_type = ctx
         .types()
         .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
         ability.clone(),
@@ -2334,7 +2333,7 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
     let i32_type = ctx
         .types()
         .iter()
-        .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
         .unwrap();
     let declarations = [tribute_control::OperationDeclaration::new(
         ability.clone(),
@@ -2429,7 +2428,7 @@ fn a_cps_call_in_a_callable_that_is_not_cps_runs_under_a_value_delimiter() {
     let (mut ctx, module) = parse(input);
     run_pre_cps(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let i32_type = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+    let i32_type = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     // A Direct flow receives no evidence; its delimiter starts on the
     // initial one.
     assert_eq!(delimiters(&ctx, module, "direct"), [(true, i32_type)]);
@@ -2470,7 +2469,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     .unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let i32_type = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+    let i32_type = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     assert_eq!(delimiters(&ctx, module, "run"), [(true, i32_type)]);
     let printed = print_module(&ctx, module.op());
     // The handle and its operation are in the delimited Cps closure.

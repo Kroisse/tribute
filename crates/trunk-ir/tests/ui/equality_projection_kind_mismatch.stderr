@@ -2,7 +2,7 @@ error[E0080]: evaluation panicked: bound constraint equates a single-type projec
  --> tests/ui/equality_projection_kind_mismatch.rs:5:5
   |
 5 |     #[trunk_ir::dialect]
-  |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `<d::Probe as trunk_ir::ops::DialectOp>::DEF::_` failed inside this call
+  |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `d::__PROBE_DEF::_` failed inside this call
   |
 note: inside `check_same_kind`
  --> $RUST/core/src/panic.rs

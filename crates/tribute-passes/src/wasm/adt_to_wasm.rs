@@ -86,7 +86,7 @@ fn canonical_enum_type(ctx: &IrContext, attr_ty: TypeRef) -> Option<TypeRef> {
 /// not fall back to structural or same-name equivalence here.
 fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
     let data = ctx.get_type(ty);
-    if data.dialect != "adt" || data.name != "typeref" {
+    if data.name != tribute_ir::dialect::adt::Typeref::NAME {
         return None;
     }
     let name = ctx.type_attrs(ty).get_str("name")?;
@@ -98,8 +98,8 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
 /// Wasm physical representation.
 fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
-    if data.dialect == "adt" && data.name == "typeref" {
-        return TypeDataBuilder::new("wasm", "structref").intern(ctx);
+    if data.name == tribute_ir::dialect::adt::Typeref::NAME {
+        return TypeDataBuilder::new("wasm.structref").intern(ctx);
     }
     ty
 }
@@ -123,7 +123,7 @@ fn descriptor_operand(
     loc: trunk_ir::types::Location,
 ) -> Option<trunk_ir::refs::ValueRef> {
     let number = *numbers.get(&descriptor)?;
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
     let constant = wasm_dialect::I32Const::operands()
         .value(number as i32)
         .results(i32_ty)
@@ -345,7 +345,7 @@ impl RewritePattern for VariantIsPattern {
             return false;
         };
 
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
         let Some(&number) = self.numbers.get(&(enum_type, Some(tag))) else {
             let never = wasm_dialect::I32Const::operands()
                 .value(0)
@@ -474,8 +474,7 @@ impl RewritePattern for VariantGetPattern {
             return false;
         }
         let operand_data = ctx.get_type(operand_ty);
-        if operand_data.dialect == "adt"
-            && operand_data.name == "typeref"
+        if operand_data.name == tribute_ir::dialect::adt::Typeref::NAME
             && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)
         {
             return false;
@@ -802,14 +801,14 @@ mod tests {
             .block(block)
             .ops
             .iter()
-            .filter(|&&op| ctx.op(op).dialect == adt::DIALECT_NAME())
+            .filter(|&&op| ctx.op(op).name.dialect(&ctx) == adt::DIALECT_NAME)
             .count();
         assert_eq!(remaining_adt_ops, 2, "only malformed arrays should remain");
         assert_eq!(
             ctx.block(block)
                 .ops
                 .iter()
-                .filter(|&&op| ctx.op(op).dialect == wasm_gc_dialect::DIALECT_NAME())
+                .filter(|&&op| ctx.op(op).name.dialect(&ctx) == wasm_gc_dialect::DIALECT_NAME)
                 .count(),
             14
         );
@@ -823,8 +822,8 @@ mod tests {
                 let Some(ty) = ctx.op_attrs(op).get_type("type") else {
                     return false;
                 };
-                data.dialect == wasm_gc_dialect::DIALECT_NAME()
-                    && data.name == "struct_get"
+                data.name.dialect(&ctx) == wasm_gc_dialect::DIALECT_NAME
+                    && data.name.strip_dialect(&ctx) == "struct_get"
                     && wasm_gc_dialect::Struct::matches(&ctx, ty)
             })
             .expect("lowered variant_get");
@@ -965,10 +964,10 @@ mod tests {
             .copied()
             .filter_map(|op| {
                 let data = ctx.op(op);
-                if data.dialect != wasm_gc_dialect::DIALECT_NAME() {
+                if data.name.dialect(&ctx) != wasm_gc_dialect::DIALECT_NAME {
                     return None;
                 }
-                match data.name.as_str() {
+                match data.name.strip_dialect(&ctx) {
                     "struct_new" | "struct_get" => ctx.op_attrs(op).get_type("type"),
                     "ref_test" | "ref_cast" => ctx.op_attrs(op).get_type("target_type"),
                     _ => None,
@@ -990,8 +989,8 @@ mod tests {
         );
         assert_ne!(empty, cons);
         // The recursive tail is the abstract struct supertype.
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
-        let structref = TypeDataBuilder::new("wasm", "structref").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let structref = TypeDataBuilder::new("wasm.structref").intern(&mut ctx);
         assert_eq!(
             wasm_gc_dialect::Struct::from_type_ref(&ctx, cons)
                 .expect("structural variant")
@@ -1199,7 +1198,7 @@ mod tests {
         assert_eq!(lowered_result_types.len(), 3);
         assert!(lowered_result_types.iter().any(|&ty| {
             let data = ctx.get_type(ty);
-            data.dialect == "core" && data.name == "i32"
+            data.name.is(&ctx, "core.i32")
         }));
         assert!(lowered_result_types.iter().any(|&ty| has_runtime_layout(
             &ctx,
@@ -1208,7 +1207,7 @@ mod tests {
         )));
         assert!(lowered_result_types.iter().any(|&ty| {
             let data = ctx.get_type(ty);
-            data.dialect == "wasm" && data.name == "structref"
+            data.name.is(&ctx, "wasm.structref")
         }));
         assert_eq!(
             ctx.block(block)

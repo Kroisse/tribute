@@ -198,7 +198,7 @@ pub(super) fn build_dispatch_adapter_factory(
     let LayerFrames { value, boundary } = *frames;
     let evidence_type = ability::evidence_adt_type_ref(ctx);
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
-    let i32_type = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i32_type = TypeDataBuilder::new("core.i32").intern(ctx);
     let completion_type = cps_completion_type(ctx, evidence_type, value.answer, boundary.reference);
     let factory_type =
         func::func_sig(ctx, [completion_type, boundary.dispatch], [value.dispatch]).as_type_ref();

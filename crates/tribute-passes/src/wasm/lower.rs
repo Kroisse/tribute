@@ -77,7 +77,7 @@ pub fn wasm_backend_ready_target() -> ConversionTarget {
 pub fn wasm_emission_ready_target() -> ConversionTarget {
     wasm_backend_ready_target()
         .illegal_dialect("wasm_gc")
-        .illegal_op("core", "unrealized_conversion_cast")
+        .illegal_op("core.unrealized_conversion_cast")
 }
 
 /// Run the full WASM lowering pipeline on arena IR.
@@ -250,7 +250,9 @@ fn check_all_wasm_dialect(ctx: &IrContext, module: Module) {
     for &block in ctx.region(body).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             let data = ctx.op(op);
-            if data.dialect == wasm_dialect::DIALECT_NAME() && data.name == "func" {
+            if data.name.dialect(ctx) == wasm_dialect::DIALECT_NAME
+                && data.name.strip_dialect(ctx) == "func"
+            {
                 check_function_body(ctx, op);
             }
         }
@@ -266,7 +268,9 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
         for &op in ctx.block(block).ops.iter() {
             let data = ctx.op(op);
             // Check for func.func or wasm.func operations
-            if data.dialect == func::DIALECT_NAME() && data.name == "func" {
+            if data.name.dialect(ctx) == func::DIALECT_NAME
+                && data.name.strip_dialect(ctx) == "func"
+            {
                 if let Some(fn_ty) = ctx.op_attrs(op).get_type("type") {
                     let Some(function) = func::FuncSig::from_type_ref(ctx, fn_ty) else {
                         continue;
@@ -276,14 +280,14 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                         .iter()
                         .map(|t| {
                             let td = ctx.get_type(*t);
-                            format!("{}.{}", td.dialect, td.name)
+                            format!("{}", td.name.display(ctx))
                         })
                         .collect();
                     let sym_name = ctx.op_attrs(op).get_str("sym_name").unwrap_or_default();
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
                 }
-            } else if data.dialect == wasm_dialect::DIALECT_NAME()
-                && data.name == "func"
+            } else if data.name.dialect(ctx) == wasm_dialect::DIALECT_NAME
+                && data.name.strip_dialect(ctx) == "func"
                 && let Some(fn_ty) = ctx.op_attrs(op).get_type("type")
             {
                 let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty) else {
@@ -294,7 +298,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                     .iter()
                     .map(|t| {
                         let td = ctx.get_type(*t);
-                        format!("{}.{}", td.dialect, td.name)
+                        format!("{}", td.name.display(ctx))
                     })
                     .collect();
                 let sym_name = ctx.op_attrs(op).get_str("sym_name").unwrap_or_default();
@@ -309,12 +313,11 @@ fn check_function_body(ctx: &IrContext, func_op: OpRef) {
     if let Some(body_region) = ctx.op_region(func_op, 0) {
         for &block in ctx.region(body_region).blocks.iter() {
             for &op in ctx.block(block).ops.iter() {
-                let dialect = ctx.op(op).dialect.clone();
-                if dialect != "wasm" {
+                let name = ctx.op(op).name;
+                if name.dialect(ctx) != "wasm" {
                     error!(
-                        "Found non-wasm operation in function body: {}.{}",
-                        dialect,
-                        ctx.op(op).name
+                        "Found non-wasm operation in function body: {}",
+                        name.display(ctx)
                     );
                 }
             }
@@ -395,25 +398,24 @@ impl WasmLowerer {
             for &op in ctx.block(block).ops.iter() {
                 let data = ctx.op(op);
 
-                if data.dialect == wasm_dialect::DIALECT_NAME() {
+                if data.name.dialect(ctx) == wasm_dialect::DIALECT_NAME {
                     // Track wasm module-level metadata
-                    if data.name == "memory" {
+                    if data.name.strip_dialect(ctx) == "memory" {
                         self.memory_plan.has_memory = true;
-                    } else if data.name == "export_memory" {
+                    } else if data.name.strip_dialect(ctx) == "export_memory" {
                         self.memory_plan.has_exported_memory = true;
-                    } else if data.name == "func" {
+                    } else if data.name.strip_dialect(ctx) == "func" {
                         self.scan_wasm_func(ctx, op);
                     }
                 }
 
                 // Debug: warn about unexpected dialects
                 if cfg!(debug_assertions) {
-                    let dialect_str = data.dialect.to_string();
                     let allowed = ["wasm", "core"];
-                    if !allowed.contains(&dialect_str.as_str()) {
+                    if !allowed.contains(&data.name.dialect(ctx)) {
                         warn!(
-                            "Unhandled operation in lowering: {}.{} (this may cause emit errors)",
-                            data.dialect, data.name
+                            "Unhandled operation in lowering: {} (this may cause emit errors)",
+                            data.name.display(ctx)
                         );
                     }
                 }
@@ -476,7 +478,7 @@ mod tests {
     use trunk_ir::types::TypeDataBuilder;
 
     fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(dialect, name).intern(ctx)
+        TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
     }
 
     fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
@@ -835,8 +837,7 @@ mod tests {
 
         assert_eq!(error.boundary(), WASM_BACKEND_READY_BOUNDARY);
         assert_eq!(error.operations().len(), 1);
-        assert_eq!(error.operations()[0].dialect, "effect");
-        assert_eq!(error.operations()[0].name, "dispatch_tail");
+        assert_eq!(error.operations()[0].name, "effect.dispatch_tail");
         assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
     }
 
@@ -874,8 +875,10 @@ mod tests {
             .expect_err("a remaining cast should fail the wasm emission boundary");
 
         assert_eq!(error.operations().len(), 1);
-        assert_eq!(error.operations()[0].dialect, "core");
-        assert_eq!(error.operations()[0].name, "unrealized_conversion_cast");
+        assert_eq!(
+            error.operations()[0].name,
+            "core.unrealized_conversion_cast"
+        );
         assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
     }
 

@@ -496,7 +496,7 @@ mod tests {
     use crate::ops::DialectOp;
     use crate::printer::print_module;
     use crate::rewrite::conversion_target::ConversionTarget;
-    use crate::symbol::Symbol;
+
     use crate::*;
     use smallvec::smallvec;
 
@@ -508,7 +508,7 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn make_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
@@ -526,11 +526,10 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(region)
+            .build(ctx);
         let module_op = ctx.create_op(module_data);
         Module::new(ctx, module_op).expect("test module should be valid")
     }
@@ -550,10 +549,9 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let container_data =
-            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("container"))
-                .region(region)
-                .build(ctx);
+        let container_data = OperationDataBuilder::new(loc, "test.container")
+            .region(region)
+            .build(ctx);
         ctx.create_op(container_data)
     }
 
@@ -579,7 +577,7 @@ mod tests {
         });
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
         let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
-        let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+        let func_data = OperationDataBuilder::new(loc, "func.func")
             .attr("sym_name", Attribute::String(ctx.intern_str(name)))
             .attr("type", Attribute::Type(func_ty))
             .region(region)
@@ -625,7 +623,7 @@ mod tests {
     ) -> OpRef {
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
         let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
-        let op_data = OperationDataBuilder::new(loc, Symbol::new(dialect), Symbol::new("func"))
+        let op_data = OperationDataBuilder::new(loc, format!("{dialect}.func"))
             .attr("sym_name", Attribute::String(ctx.intern_str(name)))
             .attr("type", Attribute::Type(func_ty))
             .build(ctx);
@@ -649,17 +647,16 @@ mod tests {
             rewriter: &mut PatternRewriter<'_>,
         ) -> bool {
             let data = ctx.op(op);
-            if data.dialect != "test" || data.name != "source" {
+            if !data.name.is(ctx, "test.source") {
                 return false;
             }
 
             let loc = data.location;
             let result_types: Vec<TypeRef> = ctx.op_result_types(op).to_vec();
 
-            let new_data =
-                OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("target"))
-                    .results(result_types)
-                    .build(ctx);
+            let new_data = OperationDataBuilder::new(loc, "test.target")
+                .results(result_types)
+                .build(ctx);
             let new_op = ctx.create_op(new_data);
             rewriter.replace_op(new_op);
             true
@@ -671,7 +668,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
 
-        let op_data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
+        let op_data = OperationDataBuilder::new(loc, "test.source")
             .result(i32_ty)
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
@@ -681,7 +678,7 @@ mod tests {
 
         let mut target = ConversionTarget::new();
         target.add_legal_dialect("test");
-        target.add_illegal_op("test", "source");
+        target.add_illegal_op("test.source");
 
         let result = applicator
             .with_target(target)
@@ -693,7 +690,7 @@ mod tests {
         // Verify the op was renamed
         let ops = module.ops(&ctx);
         assert_eq!(ops.len(), 1);
-        assert_eq!(ctx.op(ops[0]).name, Symbol::new("target"));
+        assert!(ctx.op(ops[0]).name.is(&ctx, "test.target"));
     }
 
     #[test]
@@ -702,14 +699,14 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
 
         // op1: test.source -> %0
-        let op1_data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
+        let op1_data = OperationDataBuilder::new(loc, "test.source")
             .result(i32_ty)
             .build(&mut ctx);
         let op1 = ctx.create_op(op1_data);
         let v1 = ctx.op_result(op1, 0);
 
         // op2: test.use(%0)
-        let op2_data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("use"))
+        let op2_data = OperationDataBuilder::new(loc, "test.use")
             .operand(v1)
             .build(&mut ctx);
         let op2 = ctx.create_op(op2_data);
@@ -737,8 +734,7 @@ mod tests {
     fn full_conversion_rejects_unknown_ops() {
         let (mut ctx, loc) = test_ctx();
 
-        let op_data = OperationDataBuilder::new(loc, Symbol::new("unknown"), Symbol::new("op"))
-            .build(&mut ctx);
+        let op_data = OperationDataBuilder::new(loc, "unknown.op").build(&mut ctx);
         let op = ctx.create_op(op_data);
         let module = make_module(&mut ctx, loc, vec![op]);
 
@@ -763,7 +759,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
 
-        let op_data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
+        let op_data = OperationDataBuilder::new(loc, "test.source")
             .result(i32_ty)
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
@@ -773,14 +769,14 @@ mod tests {
             PatternApplicator::new(TypeConverter::new()).add_pattern(RenamePattern);
         applicator
             .conversion_target_mut()
-            .add_legal_op("test", "source");
+            .add_legal_op("test.source");
 
         let result = applicator
             .apply_partial_conversion(&mut ctx, module, "test-boundary")
             .unwrap();
 
         assert_eq!(result.total_changes, 0);
-        assert_eq!(ctx.op(module.ops(&ctx)[0]).name, Symbol::new("source"));
+        assert!(ctx.op(module.ops(&ctx)[0]).name.is(&ctx, "test.source"));
     }
 
     #[test]
@@ -788,15 +784,14 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
 
-        let nested_data =
-            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
-                .result(i32_ty)
-                .build(&mut ctx);
+        let nested_data = OperationDataBuilder::new(loc, "test.source")
+            .result(i32_ty)
+            .build(&mut ctx);
         let nested = ctx.create_op(nested_data);
         let container = make_container(&mut ctx, loc, vec![nested]);
         let module = make_module(&mut ctx, loc, vec![container]);
 
-        let target = ConversionTarget::new().legal_op("test", "container");
+        let target = ConversionTarget::new().legal_op("test.container");
         let result = PatternApplicator::new(TypeConverter::new())
             .add_pattern(RenamePattern)
             .with_target(target)
@@ -805,7 +800,7 @@ mod tests {
 
         assert_eq!(result.total_changes, 1);
         let rewritten = first_nested_op(&ctx, container);
-        assert_eq!(ctx.op(rewritten).name, Symbol::new("target"));
+        assert!(ctx.op(rewritten).name.is(&ctx, "test.target"));
     }
 
     #[test]
@@ -813,17 +808,16 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
 
-        let nested_data =
-            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
-                .result(i32_ty)
-                .build(&mut ctx);
+        let nested_data = OperationDataBuilder::new(loc, "test.source")
+            .result(i32_ty)
+            .build(&mut ctx);
         let nested = ctx.create_op(nested_data);
         let container = make_container(&mut ctx, loc, vec![nested]);
         let module = make_module(&mut ctx, loc, vec![container]);
 
         let target = ConversionTarget::new()
-            .legal_op("test", "container")
-            .recursive_legal_op("test", "container");
+            .legal_op("test.container")
+            .recursive_legal_op("test.container");
         let result = PatternApplicator::new(TypeConverter::new())
             .add_pattern(RenamePattern)
             .with_target(target)
@@ -832,7 +826,7 @@ mod tests {
 
         assert_eq!(result.total_changes, 0);
         let skipped = first_nested_op(&ctx, container);
-        assert_eq!(ctx.op(skipped).name, Symbol::new("source"));
+        assert!(ctx.op(skipped).name.is(&ctx, "test.source"));
     }
 
     #[test]
@@ -840,17 +834,15 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
 
-        let selected_nested =
-            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
-                .result(i32_ty)
-                .build(&mut ctx);
+        let selected_nested = OperationDataBuilder::new(loc, "test.source")
+            .result(i32_ty)
+            .build(&mut ctx);
         let selected_nested = ctx.create_op(selected_nested);
         let selected_func = make_func_container(&mut ctx, loc, "selected", vec![selected_nested]);
 
-        let sibling_nested =
-            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
-                .result(i32_ty)
-                .build(&mut ctx);
+        let sibling_nested = OperationDataBuilder::new(loc, "test.source")
+            .result(i32_ty)
+            .build(&mut ctx);
         let sibling_nested = ctx.create_op(sibling_nested);
         let sibling_func = make_func_container(&mut ctx, loc, "sibling", vec![sibling_nested]);
         let _module = make_module(
@@ -864,13 +856,15 @@ mod tests {
             .apply_partial(&mut ctx, selected_func);
 
         assert_eq!(result.total_changes, 1);
-        assert_eq!(
-            ctx.op(first_nested_op(&ctx, selected_func.op_ref())).name,
-            Symbol::new("target")
+        assert!(
+            ctx.op(first_nested_op(&ctx, selected_func.op_ref()))
+                .name
+                .is(&ctx, "test.target")
         );
-        assert_eq!(
-            ctx.op(first_nested_op(&ctx, sibling_func.op_ref())).name,
-            Symbol::new("source")
+        assert!(
+            ctx.op(first_nested_op(&ctx, sibling_func.op_ref()))
+                .name
+                .is(&ctx, "test.source")
         );
     }
 
@@ -879,10 +873,9 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
         let bodyless = make_bodyless_func(&mut ctx, loc, "func", "extern");
-        let nested_data =
-            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
-                .result(i32_ty)
-                .build(&mut ctx);
+        let nested_data = OperationDataBuilder::new(loc, "test.source")
+            .result(i32_ty)
+            .build(&mut ctx);
         let nested = ctx.create_op(nested_data);
         let bodyful = make_func_container(&mut ctx, loc, "defined", vec![nested]);
         let module = make_module(&mut ctx, loc, vec![bodyless, bodyful.op_ref()]);
@@ -898,9 +891,10 @@ mod tests {
             .add_pattern(RenamePattern)
             .apply_partial(&mut ctx, bodyful);
         assert_eq!(result.total_changes, 1);
-        assert_eq!(
-            ctx.op(first_nested_op(&ctx, bodyful.op_ref())).name,
-            Symbol::new("target")
+        assert!(
+            ctx.op(first_nested_op(&ctx, bodyful.op_ref()))
+                .name
+                .is(&ctx, "test.target")
         );
     }
 
@@ -909,10 +903,9 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
         let bodyless = make_bodyless_func(&mut ctx, loc, "wasm", "extern");
-        let nested_data =
-            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
-                .result(i32_ty)
-                .build(&mut ctx);
+        let nested_data = OperationDataBuilder::new(loc, "test.source")
+            .result(i32_ty)
+            .build(&mut ctx);
         let nested = ctx.create_op(nested_data);
         let bodyful = make_wasm_func_container(&mut ctx, loc, "defined", vec![nested]);
         let module = make_module(&mut ctx, loc, vec![bodyless, bodyful.op_ref()]);
@@ -928,9 +921,10 @@ mod tests {
             .add_pattern(RenamePattern)
             .apply_partial(&mut ctx, bodyful);
         assert_eq!(result.total_changes, 1);
-        assert_eq!(
-            ctx.op(first_nested_op(&ctx, bodyful.op_ref())).name,
-            Symbol::new("target")
+        assert!(
+            ctx.op(first_nested_op(&ctx, bodyful.op_ref()))
+                .name
+                .is(&ctx, "test.target")
         );
     }
 

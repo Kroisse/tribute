@@ -641,7 +641,7 @@ mod canonicalize_tests {
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
-    use crate::symbol::Symbol;
+
     use crate::transforms::canonicalize::{FoldDispatchPattern, folds_for_dialect};
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
@@ -657,12 +657,10 @@ mod canonicalize_tests {
     }
 
     fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::new(dialect);
-        let name_sym = Symbol::new(name);
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == dialect_sym && data.name == name_sym {
+            if data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name {
                 count += 1;
             }
             ControlFlow::Continue(WalkAction::Advance)

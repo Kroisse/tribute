@@ -12,7 +12,6 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -212,12 +211,7 @@ impl RewritePattern for FuncFuncPattern {
             .view_mut(ctx)
             .insert("type", Attribute::Type(new_func_ty));
 
-        let new_op = crate::passes::cf_to_clif::rebuild_op_as(
-            ctx,
-            op,
-            Symbol::new("clif"),
-            Symbol::new("func"),
-        );
+        let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.func");
         // Patch attributes on the new op
         ctx.op_mut(new_op).attributes = new_attrs;
         // Update dialect/name (already done by rebuild_op_as)
@@ -241,12 +235,7 @@ impl RewritePattern for FuncCallPattern {
         };
 
         let callee = call_op.callee(ctx).clone();
-        let new_op = crate::passes::cf_to_clif::rebuild_op_as(
-            ctx,
-            op,
-            Symbol::new("clif"),
-            Symbol::new("call"),
-        );
+        let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.call");
         for (index, result_ty) in rewriter.result_types(ctx, op).into_iter().enumerate() {
             ctx.set_op_result_type(new_op, index as u32, result_ty);
         }
@@ -300,12 +289,7 @@ impl RewritePattern for FuncCallIndirectPattern {
             return false;
         }
 
-        let new_op = crate::passes::cf_to_clif::rebuild_op_as(
-            ctx,
-            op,
-            Symbol::new("clif"),
-            Symbol::new("call_indirect"),
-        );
+        let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.call_indirect");
         let mut attributes = std::mem::take(&mut ctx.op_mut(new_op).attributes);
         func::remove_indirect_call_signature(ctx, &mut attributes);
         ctx.op_mut(new_op).attributes = attributes;
@@ -333,12 +317,7 @@ impl RewritePattern for FuncReturnPattern {
         if func::Return::from_op(ctx, op).is_err() {
             return false;
         }
-        let new_op = crate::passes::cf_to_clif::rebuild_op_as(
-            ctx,
-            op,
-            Symbol::new("clif"),
-            Symbol::new("return"),
-        );
+        let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return");
         rewriter.replace_op(new_op);
         true
     }
@@ -359,12 +338,7 @@ impl RewritePattern for FuncTailCallPattern {
         };
 
         let callee = tail_call.callee(ctx).clone();
-        let new_op = crate::passes::cf_to_clif::rebuild_op_as(
-            ctx,
-            op,
-            Symbol::new("clif"),
-            Symbol::new("return_call"),
-        );
+        let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return_call");
         ctx.op_attrs_mut(new_op)
             .insert("callee", Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
@@ -415,12 +389,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             return false;
         }
 
-        let new_op = crate::passes::cf_to_clif::rebuild_op_as(
-            ctx,
-            op,
-            Symbol::new("clif"),
-            Symbol::new("return_call_indirect"),
-        );
+        let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return_call_indirect");
         let mut attributes = std::mem::take(&mut ctx.op_mut(new_op).attributes);
         func::remove_indirect_call_signature(ctx, &mut attributes);
         ctx.op_mut(new_op).attributes = attributes;
@@ -575,7 +544,7 @@ mod tests {
             );
             let op = module.ops(&ctx)[0];
             if malformed {
-                let ty = TypeDataBuilder::new("func", "func_sig").intern(&mut ctx);
+                let ty = TypeDataBuilder::new("func.func_sig").intern(&mut ctx);
                 ctx.op_attrs_mut(op)
                     .insert("type", trunk_ir::Attribute::Type(ty));
             } else {
@@ -617,7 +586,7 @@ mod tests {
   }
 }"#,
         );
-        let anyref_ty = TypeDataBuilder::new("test", "anyref").intern(&mut ctx);
+        let anyref_ty = TypeDataBuilder::new("test.anyref").intern(&mut ctx);
         let ptr_ty = core::ptr(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == anyref_ty).then_some(ptr_ty));
@@ -636,8 +605,8 @@ mod tests {
     #[test]
     fn nested_callable_metadata_uses_the_native_owned_signature() {
         let mut ctx = IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
-        let i64_ty = TypeDataBuilder::new("core", "i64").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
 
@@ -677,8 +646,8 @@ mod tests {
     #[test]
     fn parameter_attributes_are_preserved_and_their_types_converted() {
         let mut ctx = IrContext::new();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
-        let i64_ty = TypeDataBuilder::new("core", "i64").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
         let witness = ctx.intern_str("witness");
@@ -890,11 +859,8 @@ mod tests {
         );
         let ptr_ty = core::ptr(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
-        type_converter.add_conversion(move |ctx, ty| {
-            ctx.types()
-                .is_dialect(ty, "core", "array")
-                .then_some(ptr_ty)
-        });
+        type_converter
+            .add_conversion(move |ctx, ty| core::Array::matches(ctx, ty).then_some(ptr_ty));
 
         let error = super::lower(&mut ctx, module, type_converter).unwrap_err();
         assert!(error.to_string().contains("func.call_indirect"), "{error}");

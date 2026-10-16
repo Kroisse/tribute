@@ -169,12 +169,14 @@ fn allocation_size_for_type(
     // to an exact release function before deallocation. It is never a shallow
     // fallback and is not inferred from physical definitions.
     let data = ctx.get_type(ty);
-    if data.dialect == "tribute_rt" && matches!(data.name.as_str(), "anyref" | "intref") {
+    if data.name.dialect(ctx) == "tribute_rt"
+        && matches!(data.name.strip_dialect(ctx), "anyref" | "intref")
+    {
         return Ok(0);
     }
     // A `Bytes` object and an evidence are released by their reserved RTTI
     // entries.
-    if (data.dialect == "core" && data.name == "bytes")
+    if (data.name.is(ctx, "core.bytes"))
         || tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
     {
         return Ok(0);

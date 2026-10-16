@@ -146,14 +146,14 @@ mod tests {
     use trunk_ir::printer::print_op;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
-    use trunk_ir::{IrContext, Span, Symbol};
+    use trunk_ir::{IrContext, Span};
 
     fn dummy_location() -> Location {
         Location::new(PathRef::from_u32(0), Span::default())
     }
 
     fn type_ref(ctx: &mut IrContext, dialect: &str, name: &str) -> trunk_ir::TypeRef {
-        TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).intern(ctx)
+        TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
     }
 
     fn ability(_: &mut IrContext, name: &str) -> trunk_ir::SymbolPath {

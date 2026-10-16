@@ -262,7 +262,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
                         .map(|&a| {
                             let ty = ctx.value_ty(a);
                             let td = ctx.get_type(ty);
-                            format!("{}.{}", td.dialect, td.name)
+                            format!("{}", td.name.display(ctx))
                         })
                         .collect();
                     let func_ty_data = ctx.get_type(func_type_ref);
@@ -271,7 +271,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
                         .iter()
                         .map(|&p| {
                             let td = ctx.get_type(p);
-                            format!("{}.{}", td.dialect, td.name)
+                            format!("{}", td.name.display(ctx))
                         })
                         .collect();
                     return Err(CompilationError::codegen(format!(
@@ -294,8 +294,9 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
                     translator.translate_op(ir_op).map_err(|e| {
                         let op_data = ctx.op(ir_op);
                         CompilationError::codegen(format!(
-                            "{e} (in {}.{} of function {})",
-                            op_data.dialect, op_data.name, name_sym,
+                            "{e} (in {} of function {})",
+                            op_data.name.display(ctx),
+                            name_sym,
                         ))
                     })?;
                 }
@@ -386,7 +387,7 @@ fn collect_clif_funcs_from_region(ctx: &IrContext, region: RegionRef, funcs: &mu
                 funcs.push(op);
             } else {
                 let op_data = ctx.op(op);
-                if op_data.dialect == "core" && op_data.name == "module" {
+                if op_data.name.is(ctx, "core.module") {
                     for nested_region in ctx.op_regions(op) {
                         collect_clif_funcs_from_region(ctx, nested_region, funcs);
                     }

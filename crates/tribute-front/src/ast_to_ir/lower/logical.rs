@@ -122,8 +122,7 @@ fn op(
 ) -> OpRef {
     let data = build(OperationDataBuilder::new(
         location,
-        Symbol::new("tribute_control"),
-        Symbol::new(name),
+        format!("tribute_control.{name}"),
     ))
     .build(ir);
     let op = ir.create_op(data);
@@ -2743,8 +2742,7 @@ fn lower_handler<'db>(
         operation_result,
     );
     declarations.record(ir, declaration, ability_id, &arguments, location, ctx.db);
-    let is_never = ir.get_type(operation_result).dialect == "core"
-        && ir.get_type(operation_result).name == "never";
+    let is_never = trunk_ir::dialect::core::Never::matches(ir, operation_result);
     let mut block_args: Vec<_> = parameter_types
         .iter()
         .map(|ty| BlockArgData {
@@ -2753,13 +2751,10 @@ fn lower_handler<'db>(
         })
         .collect();
     if kind == OpDeclKind::Op && !is_never {
-        let token = trunk_ir::types::TypeDataBuilder::new(
-            Symbol::new("tribute_control"),
-            Symbol::new("resume_token"),
-        )
-        .param(operation_result)
-        .param(answer_ty)
-        .intern(ir);
+        let token = trunk_ir::types::TypeDataBuilder::new("tribute_control.resume_token")
+            .param(operation_result)
+            .param(answer_ty)
+            .intern(ir);
         block_args.push(BlockArgData {
             ty: token,
             attrs: Default::default(),

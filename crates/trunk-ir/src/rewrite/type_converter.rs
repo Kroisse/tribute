@@ -110,11 +110,11 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn i64_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i64").intern(ctx)
+        TypeDataBuilder::new("core.i64").intern(ctx)
     }
 
     #[test]

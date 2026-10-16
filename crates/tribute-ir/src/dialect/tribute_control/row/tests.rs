@@ -266,7 +266,7 @@ fn a_union_names_binders_and_excludes_its_result() {
 #[test]
 fn substitution_rebuilds_callables_and_tuple_layouts() {
     let mut ctx = IrContext::new();
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     let a = SymbolPath::new(["A"]);
     let b = SymbolPath::new(["B"]);
     let open = func_sig_with_row(
@@ -297,7 +297,7 @@ fn substitution_rebuilds_callables_and_tuple_layouts() {
 #[test]
 fn finding_a_substituted_row_needs_only_the_keys_it_holds() {
     let mut ctx = IrContext::new();
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     let open = func_sig_with_row(
         &mut ctx,
         i32_ty,

@@ -255,13 +255,13 @@ impl<'a> Verifier<'a> {
     fn check_op(&mut self, op: OpRef, functions: &SymbolTable) {
         let ctx = self.ctx;
         let data = ctx.op(op);
-        let op_name = format!("{}.{}", data.dialect, data.name);
-        let dialect = data.dialect.to_string();
-        if FORBIDDEN_DIALECTS.contains(&dialect.as_str()) {
+        let op_name = data.name.display(ctx).to_string();
+        let dialect = data.name.dialect(ctx);
+        if FORBIDDEN_DIALECTS.contains(&dialect) {
             self.report(
                 ViolationKind::ForbiddenOp {
-                    dialect,
-                    name: data.name.to_string(),
+                    dialect: dialect.to_owned(),
+                    name: data.name.strip_dialect(ctx).to_owned(),
                 },
                 Some(op),
                 op_name.clone(),
@@ -386,11 +386,11 @@ impl<'a> Verifier<'a> {
         let ctx = self.ctx;
         let data = ctx.get_type(ty);
         let mut found = Vec::new();
-        if data.dialect == "closure" && data.name == "closure" {
+        if data.name.is(ctx, "closure.closure") {
             found.push((
                 ViolationKind::ForbiddenType {
-                    dialect: data.dialect.to_string(),
-                    name: data.name.to_string(),
+                    dialect: data.name.dialect(ctx).to_owned(),
+                    name: data.name.strip_dialect(ctx).to_owned(),
                 },
                 String::new(),
             ));

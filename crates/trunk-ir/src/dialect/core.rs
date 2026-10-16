@@ -40,11 +40,11 @@ use crate::refs::TypeRef;
 /// Parse a bare `core.<prefix>{N}` scalar type name.
 fn core_scalar_width(ctx: &IrContext, ty: TypeRef, prefix: char) -> Option<u32> {
     let data = ctx.get_type(ty);
-    if data.dialect != "core" || !data.params.is_empty() || !data.attrs.is_empty() {
+    if data.name.dialect(ctx) != "core" || !data.params.is_empty() || !data.attrs.is_empty() {
         return None;
     }
-    data.name.with_str(|s| {
-        let digits = s.strip_prefix(prefix)?;
+    {
+        let digits = data.name.strip_dialect(ctx).strip_prefix(prefix)?;
         // Accept only canonical decimal widths: `u32::from_str` alone would
         // also accept `i+32` and `i032`.
         let canonical = !digits.is_empty()
@@ -54,7 +54,7 @@ fn core_scalar_width(ctx: &IrContext, ty: TypeRef, prefix: char) -> Option<u32> 
             return None;
         }
         digits.parse().ok()
-    })
+    }
 }
 
 /// Fixed-width signless integer types `core.i{N}` with `1 <= N <= 128`.
@@ -176,10 +176,7 @@ impl ScalarLike {
     pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
         NumericLike::matches(ctx, ty) || {
             let data = ctx.get_type(ty);
-            data.dialect == "core"
-                && data.name == "ptr"
-                && data.params.is_empty()
-                && data.attrs.is_empty()
+            data.name.is(ctx, "core.ptr") && data.params.is_empty() && data.attrs.is_empty()
         }
     }
 }
@@ -191,14 +188,28 @@ macro_rules! scalar_types {
         pub struct $wrapper;
 
         impl $wrapper {
+            /// The scalar's registered definition.
+            pub const DEF: &'static crate::TypeDef = {
+                static DEF: crate::TypeDef = crate::TypeDef {
+                    name: crate::name::QualifiedName::new(concat!("core.", $name)),
+                };
+                &DEF
+            };
+            /// The scalar's name, which points to [`DEF`](Self::DEF).
+            pub const NAME: crate::TypeName = crate::TypeName::registered(Self::DEF);
+
             pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
                 $category::width(ctx, ty) == Some($width)
             }
 
             /// Intern this scalar type.
             pub fn type_ref(ctx: &mut IrContext) -> TypeRef {
-                crate::TypeDataBuilder::new("core", $name).intern(ctx)
+                crate::TypeDataBuilder::new(Self::NAME).intern(ctx)
             }
+        }
+
+        inventory::submit! {
+            crate::type_def::TypeDefRegistration($wrapper::DEF)
         }
 
         impl crate::type_constraint::TypeConstraint for $wrapper {
@@ -298,7 +309,7 @@ mod canonicalize_tests {
     use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
     use crate::walk::{WalkAction, walk_op};
-    use crate::{Attribute, AttributeMap, Symbol};
+    use crate::{Attribute, AttributeMap};
     use std::ops::ControlFlow;
 
     use crate::transforms::canonicalize::{FoldDispatchPattern, folds_for_dialect};
@@ -311,12 +322,10 @@ mod canonicalize_tests {
     }
 
     fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::new(dialect);
-        let name_sym = Symbol::new(name);
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == dialect_sym && data.name == name_sym {
+            if data.name.dialect(ctx) == dialect && data.name.strip_dialect(ctx) == name {
                 count += 1;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -438,7 +447,7 @@ mod scalar_category_tests {
     use crate::types::{Attribute, TypeDataBuilder};
 
     fn ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(dialect, name).intern(ctx)
+        TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
     }
 
     #[test]
@@ -462,7 +471,7 @@ mod scalar_category_tests {
             let t = ty(&mut ctx, dialect, name);
             assert!(!IntegerLike::matches(&ctx, t), "{dialect}.{name}");
         }
-        let with_attr = TypeDataBuilder::new("core", "i32")
+        let with_attr = TypeDataBuilder::new("core.i32")
             .attr("x", Attribute::Int(0))
             .intern(&mut ctx);
         assert!(!IntegerLike::matches(&ctx, with_attr));

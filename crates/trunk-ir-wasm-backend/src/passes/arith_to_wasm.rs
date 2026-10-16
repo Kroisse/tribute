@@ -162,7 +162,7 @@ impl RewritePattern for ArithBinOpPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.dialect != "arith" {
+        if data.name.dialect(ctx) != "arith" {
             return false;
         }
 
@@ -178,17 +178,21 @@ impl RewritePattern for ArithBinOpPattern {
             return false;
         };
         let loc = ctx.op(op).location;
-        let name = data.name.clone();
+        let name = data.name;
         // Division reads the unspecified upper bits of a narrow integer.
         if is_narrow(ctx, result_ty)
-            && ["divsi", "divui", "remsi", "remui"]
-                .into_iter()
-                .any(|reads_upper| name == reads_upper)
+            && [
+                arith::Divsi::NAME,
+                arith::Divui::NAME,
+                arith::Remsi::NAME,
+                arith::Remui::NAME,
+            ]
+            .contains(&name)
         {
             return false;
         }
 
-        let new_op = if name == "addi" {
+        let new_op = if name == arith::Addi::NAME {
             match suffix {
                 // `wasm.i32_add` is declared on `core.i32` and infers that
                 // result. Narrower integers have no defined wrap-around
@@ -204,7 +208,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "addf" {
+        } else if name == arith::Addf::NAME {
             match suffix {
                 "f32" => wasm_dialect::F32Add::operands(lhs, rhs)
                     .results(result_ty)
@@ -216,7 +220,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "subi" {
+        } else if name == arith::Subi::NAME {
             match suffix {
                 "i32" => wasm_dialect::I32Sub::operands(lhs, rhs)
                     .results(result_ty)
@@ -228,7 +232,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "subf" {
+        } else if name == arith::Subf::NAME {
             match suffix {
                 "f32" => wasm_dialect::F32Sub::operands(lhs, rhs)
                     .results(result_ty)
@@ -240,7 +244,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "muli" {
+        } else if name == arith::Muli::NAME {
             match suffix {
                 "i32" => wasm_dialect::I32Mul::operands(lhs, rhs)
                     .results(result_ty)
@@ -252,7 +256,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "mulf" {
+        } else if name == arith::Mulf::NAME {
             match suffix {
                 "f32" => wasm_dialect::F32Mul::operands(lhs, rhs)
                     .results(result_ty)
@@ -264,7 +268,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "divsi" {
+        } else if name == arith::Divsi::NAME {
             match suffix {
                 "i32" => wasm_dialect::I32DivS::operands(lhs, rhs)
                     .results(result_ty)
@@ -276,7 +280,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "divui" {
+        } else if name == arith::Divui::NAME {
             match suffix {
                 "i32" => wasm_dialect::I32DivU::operands(lhs, rhs)
                     .results(result_ty)
@@ -288,7 +292,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "divf" {
+        } else if name == arith::Divf::NAME {
             match suffix {
                 "f32" => wasm_dialect::F32Div::operands(lhs, rhs)
                     .results(result_ty)
@@ -300,7 +304,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "remsi" {
+        } else if name == arith::Remsi::NAME {
             match suffix {
                 "i32" => wasm_dialect::I32RemS::operands(lhs, rhs)
                     .results(result_ty)
@@ -312,7 +316,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "remui" {
+        } else if name == arith::Remui::NAME {
             match suffix {
                 "i32" => wasm_dialect::I32RemU::operands(lhs, rhs)
                     .results(result_ty)
@@ -612,12 +616,20 @@ impl RewritePattern for ArithBitwisePattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.dialect != "arith" {
+        if data.name.dialect(ctx) != "arith" {
             return false;
         }
 
-        let name = data.name.clone();
-        let is_bitwise = matches!(name.as_str(), "and" | "or" | "xor" | "shl" | "shr" | "shru");
+        let name = data.name;
+        let is_bitwise = [
+            arith::And::NAME,
+            arith::Or::NAME,
+            arith::Xor::NAME,
+            arith::Shl::NAME,
+            arith::Shr::NAME,
+            arith::Shru::NAME,
+        ]
+        .contains(&name);
 
         if !is_bitwise {
             return false;
@@ -633,7 +645,7 @@ impl RewritePattern for ArithBitwisePattern {
         };
         // A right shift moves the unspecified upper bits of a narrow integer
         // into the result.
-        if is_narrow(ctx, result_ty) && (matches!(name.as_str(), "shr" | "shru")) {
+        if is_narrow(ctx, result_ty) && (name == arith::Shr::NAME || name == arith::Shru::NAME) {
             return false;
         }
         let Some(suffix) = type_suffix(ctx, result_ty) else {
@@ -641,7 +653,7 @@ impl RewritePattern for ArithBitwisePattern {
         };
         let loc = ctx.op(op).location;
 
-        let new_op = if name == "and" {
+        let new_op = if name == arith::And::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64And::operands(lhs, rhs)
                     .results(result_ty)
@@ -653,7 +665,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "or" {
+        } else if name == arith::Or::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64Or::operands(lhs, rhs)
                     .results(result_ty)
@@ -665,7 +677,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "xor" {
+        } else if name == arith::Xor::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64Xor::operands(lhs, rhs)
                     .results(result_ty)
@@ -677,7 +689,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "shl" {
+        } else if name == arith::Shl::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64Shl::operands(lhs, rhs)
                     .results(result_ty)
@@ -689,7 +701,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "shr" {
+        } else if name == arith::Shr::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64ShrS::operands(lhs, rhs)
                     .results(result_ty)
@@ -701,7 +713,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == "shru" {
+        } else if name == arith::Shru::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64ShrU::operands(lhs, rhs)
                     .results(result_ty)
@@ -926,13 +938,13 @@ pub(crate) fn type_suffix(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> 
 /// Intern a core.i32 type.
 pub(crate) fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    TypeDataBuilder::new("core", "i32").intern(ctx)
+    TypeDataBuilder::new("core.i32").intern(ctx)
 }
 
 /// Intern a core.i64 type.
 pub(crate) fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    TypeDataBuilder::new("core", "i64").intern(ctx)
+    TypeDataBuilder::new("core.i64").intern(ctx)
 }
 
 #[cfg(test)]

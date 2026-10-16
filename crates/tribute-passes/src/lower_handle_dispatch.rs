@@ -24,8 +24,8 @@ const ABILITY_LOWERED_BOUNDARY: &str = "ability-lowered";
 pub fn ability_lowered_target() -> ConversionTarget {
     ConversionTarget::new()
         .illegal_dialect("ability")
-        .legal_op("ability", "decl")
-        .recursive_legal_op("ability", "decl")
+        .legal_op("ability.decl")
+        .recursive_legal_op("ability.decl")
 }
 
 /// Lower resultless handle delimiters and establish the ability boundary.
@@ -107,7 +107,7 @@ impl RewritePattern for LowerHandleDispatchPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::Symbol;
+
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
@@ -189,8 +189,7 @@ mod tests {
 
         assert_eq!(error.boundary(), "ability-lowered");
         assert_eq!(error.operations().len(), 1);
-        assert_eq!(error.operations()[0].dialect, Symbol::new("ability"));
-        assert_eq!(error.operations()[0].name, Symbol::new("perform"));
+        assert_eq!(error.operations()[0].name, "ability.perform");
         assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
     }
 

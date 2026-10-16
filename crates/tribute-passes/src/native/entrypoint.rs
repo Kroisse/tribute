@@ -77,7 +77,7 @@ fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: boo
         .expect("entrypoint: root `main` must have an entry block");
 
     let nil_ty = core::nil(ctx).as_type_ref();
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
 
     if !has_tribute_init {
         let init_op = super::build_extern_func(ctx, loc, "__tribute_init", &[], nil_ty);

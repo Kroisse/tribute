@@ -437,7 +437,7 @@ fn small_map(
 
 /// Build the data for `spec`; parameters resolve against `refs`.
 fn build_type(ctx: &mut IrContext, spec: &TypeSpec, refs: &[TypeRef]) -> TypeData {
-    let mut builder = TypeDataBuilder::new(spec.dialect, spec.name);
+    let mut builder = TypeDataBuilder::new(format!("{}.{}", spec.dialect, spec.name));
     for (param, attrs) in &spec.params {
         builder = builder.param_with_attrs(refs[*param], small_map(ctx, attrs.iter().copied()));
     }
@@ -449,7 +449,7 @@ fn build_type(ctx: &mut IrContext, spec: &TypeSpec, refs: &[TypeRef]) -> TypeDat
 
 /// Build a fresh copy of the data for `key`.
 fn build_key(ctx: &mut IrContext, key: &TypeKey, refs: &[TypeRef]) -> TypeData {
-    let mut builder = TypeDataBuilder::new(key.dialect, key.name);
+    let mut builder = TypeDataBuilder::new(format!("{}.{}", key.dialect, key.name));
     for (param, attrs) in &key.params {
         let attrs = small_map(ctx, attrs.iter().map(|(&key, &value)| (key, value)));
         builder = builder.param_with_attrs(refs[*param], attrs);

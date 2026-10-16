@@ -492,9 +492,18 @@ pub enum FuncSigTypeError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(TypeRef);
 
+static FUNC_SIG_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
+    name: trunk_ir::name::QualifiedName::new("tribute_control.func_sig"),
+};
+
+inventory::submit! {
+    trunk_ir::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
+}
+
 impl DialectType for FuncSig {
     const DIALECT_NAME: &'static str = "tribute_control";
     const TYPE_NAME: &'static str = "func_sig";
+    const DEF: &'static trunk_ir::TypeDef = &FUNC_SIG_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
         Self::matches(ctx, ty)
@@ -730,7 +739,7 @@ fn build_func_sig(
 ) -> FuncSig {
     let inputs: Vec<_> = inputs.into_iter().collect();
     let count = u32::try_from(inputs.len()).expect("source func_sig input count exceeds u32");
-    let mut builder = TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+    let mut builder = TypeDataBuilder::new("tribute_control.func_sig")
         .params(inputs)
         .param(result);
     for (key, value) in attrs {
@@ -773,17 +782,13 @@ pub fn func_declaration(
     sym_name: &Symbol,
     func_sig_type: TypeRef,
 ) -> Func {
-    let data = trunk_ir::OperationDataBuilder::new(
-        location,
-        Symbol::new("tribute_control"),
-        Symbol::new("func"),
-    )
-    .attr(
-        "sym_name",
-        Attribute::String(ctx.intern_symbol_text(sym_name)),
-    )
-    .attr("type", Attribute::Type(func_sig_type))
-    .build(ctx);
+    let data = trunk_ir::OperationDataBuilder::new(location, "tribute_control.func")
+        .attr(
+            "sym_name",
+            Attribute::String(ctx.intern_symbol_text(sym_name)),
+        )
+        .attr("type", Attribute::Type(func_sig_type))
+        .build(ctx);
     let op = ctx.create_op(data);
     Func::from_op(ctx, op).expect("newly built tribute_control.func")
 }
@@ -1506,7 +1511,7 @@ fn push_type_error(errors: &mut Vec<ValidationError>, message: impl Into<String>
 
 fn is_control_op(ctx: &IrContext, op: OpRef, name: &str) -> bool {
     let data = ctx.op(op);
-    data.dialect == "tribute_control" && data.name == name
+    data.name.dialect(ctx) == "tribute_control" && data.name.strip_dialect(ctx) == name
 }
 
 fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
@@ -1522,13 +1527,13 @@ fn parent_region(ctx: &IrContext, op: OpRef) -> Option<RegionRef> {
 
 fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "never"
+    data.name.is(ctx, "core.never")
 }
 
 fn is_unresolved_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    let unresolved_name = matches!(data.name.as_str(), "var" | "infer" | "unresolved");
-    (matches!(data.dialect.as_str(), "type" | "tribute")) && unresolved_name
+    let unresolved_name = matches!(data.name.strip_dialect(ctx), "var" | "infer" | "unresolved");
+    (matches!(data.name.dialect(ctx), "type" | "tribute")) && unresolved_name
 }
 
 fn contains_unresolved_type(ctx: &IrContext, ty: TypeRef, visiting: &mut HashSet<TypeRef>) -> bool {
@@ -1555,8 +1560,8 @@ fn contains_forbidden_logical_component(
         return true;
     }
     let data = ctx.get_type(ty);
-    let forbidden = (data.dialect == "func" && data.name == "func_sig")
-        || (data.dialect == "closure" && data.name == "closure")
+    let forbidden = (data.name.is(ctx, "func.func_sig"))
+        || (data.name.is(ctx, "closure.closure"))
         || ResumeToken::matches(ctx, ty)
         || is_unresolved_type(ctx, ty)
         || data
@@ -1570,10 +1575,10 @@ fn contains_forbidden_logical_component(
 
 fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     for (ty, data) in ctx.types().iter() {
-        if data.dialect != "tribute_control" {
+        if data.name.dialect(ctx) != "tribute_control" {
             continue;
         }
-        if data.name == "func_sig" {
+        if data.name.strip_dialect(ctx) == "func_sig" {
             if let Err(error) = FuncSig::validate(ctx, ty) {
                 push_type_error(
                     errors,
@@ -1591,7 +1596,7 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                     );
                 }
             }
-        } else if data.name == "resume_token" {
+        } else if data.name.strip_dialect(ctx) == "resume_token" {
             if data.params.len() != 2 {
                 push_type_error(
                     errors,
@@ -1615,7 +1620,10 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
         } else {
             push_type_error(
                 errors,
-                format!("{ty}: unsupported tribute_control type '{}'", data.name),
+                format!(
+                    "{ty}: unsupported tribute_control type '{}'",
+                    data.name.strip_dialect(ctx)
+                ),
             );
         }
     }
@@ -1708,7 +1716,7 @@ fn terminator(
         return None;
     };
     let data = ctx.op(op);
-    if data.dialect != dialect || data.name != name {
+    if data.name.dialect(ctx) != dialect || data.name.strip_dialect(ctx) != name {
         push_op_error(
             ctx,
             owner,
@@ -2345,10 +2353,10 @@ fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>)
 
 fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
-    if data.dialect != "tribute_control" {
+    if data.name.dialect(ctx) != "tribute_control" {
         return;
     }
-    let name = data.name.with_str(|name| name.to_owned());
+    let name = data.name.strip_dialect(ctx);
     let Some(def) = OpDef::of(ctx, op) else {
         push_op_error(
             ctx,
@@ -2371,10 +2379,10 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
         ctx,
         op,
         &def.schema,
-        matches!(name.as_str(), "func" | "lambda"),
+        matches!(name, "func" | "lambda"),
         errors,
     );
-    match name.as_str() {
+    match name {
         "func" => validate_func(ctx, op, errors),
         "lambda" => validate_lambda(ctx, op, errors),
         "call" => validate_call(ctx, op, errors),
@@ -2749,7 +2757,7 @@ fn declaration_map<'a>(
 
 fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "adt" && data.name == "typeref"
+    data.name == crate::dialect::adt::Typeref::NAME
 }
 
 fn contains_adt_typeref(ctx: &IrContext, ty: TypeRef, visiting: &mut HashSet<TypeRef>) -> bool {
@@ -2804,7 +2812,9 @@ fn canonical_nominal_layouts(
             }
             continue;
         }
-        if data.dialect != "adt" || !(matches!(data.name.as_str(), "struct" | "enum")) {
+        if data.name.dialect(ctx) != "adt"
+            || !(matches!(data.name.strip_dialect(ctx), "struct" | "enum"))
+        {
             continue;
         }
         let Some(name) = ctx.type_attrs(ty).get_string_ref("name") else {
@@ -2832,8 +2842,8 @@ fn canonical_nominal_layouts(
             .types()
             .iter()
             .filter_map(|(ty, data)| {
-                (data.dialect == "adt"
-                    && (matches!(data.name.as_str(), "struct" | "enum"))
+                (data.name.dialect(ctx) == "adt"
+                    && (matches!(data.name.strip_dialect(ctx), "struct" | "enum"))
                     && data.attrs.view(ctx).get_string_ref("name") == Some(name))
                 .then_some(ty)
             })
@@ -2855,7 +2865,7 @@ fn canonical_nominal_layouts(
 
 fn is_core_ptr(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "ptr"
+    data.name.is(ctx, "core.ptr")
 }
 
 fn collect_attribute_types(ctx: &IrContext, attribute: &Attribute, types: &mut HashSet<TypeRef>) {
@@ -2969,7 +2979,7 @@ fn validate_managed_reference_boundaries(
 
     walk_region_ops(ctx, body, &mut |op| {
         let data = ctx.op(op);
-        if data.dialect == "adt" && data.name == "ref_null" {
+        if data.name.is(ctx, "adt.ref_null") {
             let ([], [result], Some(declared)) = (
                 ctx.op_operands(op),
                 ctx.op_result_types(op),
@@ -2987,7 +2997,7 @@ fn validate_managed_reference_boundaries(
                 );
             }
         }
-        if data.dialect == "adt" && data.name == "ref_cast" {
+        if data.name.is(ctx, "adt.ref_cast") {
             let ([operand], [result], Some(declared)) = (
                 ctx.op_operands(op),
                 ctx.op_result_types(op),
@@ -4187,7 +4197,7 @@ mod tests {
     }
 
     fn simple_type(ctx: &mut IrContext, dialect: &str, name: &str) -> TypeRef {
-        TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).intern(ctx)
+        TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
     }
 
     fn ability_type(_: &mut IrContext, name: &str) -> SymbolPath {
@@ -4648,11 +4658,11 @@ mod tests {
         let (mut ctx, module) = parse_fixture("core.module @test {}");
         let i32_ty = simple_type(&mut ctx, "core", "i32");
         let malformed = [
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+            TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
                 .build(&mut ctx),
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+            TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
                 .attr(
                     trunk_ir::dialect::func::NUM_INPUTS_ATTR,
@@ -4661,13 +4671,13 @@ mod tests {
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
                 .build(&mut ctx),
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+            TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
                 .attr(trunk_ir::dialect::func::NUM_INPUTS_ATTR, Attribute::Int(2))
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
                 .build(&mut ctx),
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+            TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
                 .attr(
                     trunk_ir::dialect::func::NUM_INPUTS_ATTR,
@@ -4676,7 +4686,7 @@ mod tests {
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
                 .build(&mut ctx),
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+            TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
                 .attr(trunk_ir::dialect::func::NUM_INPUTS_ATTR, Attribute::Int(0))
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(2))
@@ -4702,8 +4712,8 @@ mod tests {
         let body = fixture.module.body(ctx).expect("module body");
         walk_region_ops(ctx, body, &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == "tribute_control" {
-                names.insert(data.name.clone());
+            if data.name.dialect(ctx) == "tribute_control" {
+                names.insert(data.name.strip_dialect(ctx));
                 assert_eq!(data.location.span, Span::new(7, 19));
             }
         });
@@ -4720,7 +4730,7 @@ mod tests {
             "resume",
             "yield",
         ] {
-            assert!(names.contains(&Symbol::new(expected)), "{expected}");
+            assert!(names.contains(expected), "{expected}");
         }
 
         let handler = Handler::from_op(ctx, fixture.handler).expect("typed handler accessor");
@@ -5031,7 +5041,7 @@ mod tests {
         let never = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "never").then_some(ty))
+            .find_map(|(ty, data)| (data.name.is(&ctx, "core.never")).then_some(ty))
             .expect("core.never");
         assert!(!contains_unresolved_type(
             &ctx,
@@ -5138,29 +5148,23 @@ mod tests {
         let i32_ty = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+            .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
             .unwrap();
         let i32_value = module
             .ops(&ctx)
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op).dialect == "arith"
-                    && ctx.op(*op).name == "const"
-                    && ctx.op_result_types(*op) == [i32_ty]
+                ctx.op(*op).name.is(&ctx, "arith.const") && ctx.op_result_types(*op) == [i32_ty]
             })
             .map(|op| ctx.op_result(op, 0))
             .unwrap();
 
         // Custom func assembly requires its symbol and callable type, so the
         // parser cannot represent their simultaneous absence.
-        let missing_func = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("tribute_control"),
-            Symbol::new("func"),
-        )
-        .operand(i32_value)
-        .build(&mut ctx);
+        let missing_func = trunk_ir::OperationDataBuilder::new(loc, "tribute_control.func")
+            .operand(i32_value)
+            .build(&mut ctx);
         let missing_func = ctx.create_op(missing_func);
         append_module_op(&mut ctx, module, missing_func);
 
@@ -5380,16 +5384,13 @@ mod tests {
                     regions.push(region(&mut ctx, loc, region_block));
                 }
             }
-            let malformed_handle = trunk_ir::OperationDataBuilder::new(
-                loc,
-                Symbol::new("tribute_control"),
-                Symbol::new("handle"),
-            )
-            .result(i32_ty)
-            .region(regions[0])
-            .region(regions[1])
-            .region(regions[2])
-            .build(&mut ctx);
+            let malformed_handle =
+                trunk_ir::OperationDataBuilder::new(loc, "tribute_control.handle")
+                    .result(i32_ty)
+                    .region(regions[0])
+                    .region(regions[1])
+                    .region(regions[2])
+                    .build(&mut ctx);
             let malformed_handle = ctx.create_op(malformed_handle);
             append_module_op(&mut ctx, module, malformed_handle);
         }
@@ -5526,7 +5527,7 @@ mod tests {
         let i32_ty = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
+            .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
             .expect("core.i32");
         let declaration = OperationDeclaration {
             ability: SymbolPath::new(["State"]),
@@ -5811,9 +5812,9 @@ mod tests {
         let mut switch = None;
         walk_region_ops(&ctx, module.body(&ctx).unwrap(), &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == "tribute_control" && data.name == "lambda" {
+            if data.name.is(&ctx, "tribute_control.lambda") {
                 branch_lambda.get_or_insert(op);
-            } else if data.dialect == "scf" && data.name == "switch" {
+            } else if data.name.is(&ctx, "scf.switch") {
                 switch = Some(op);
             }
         });

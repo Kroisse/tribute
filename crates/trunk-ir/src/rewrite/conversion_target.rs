@@ -10,9 +10,61 @@ use std::collections::hash_map::Entry;
 use derive_more::Error;
 
 use crate::context::IrContext;
+use crate::name::split_qualified;
+use crate::op_def::{OpDef, OpName, OpNameArg};
 use crate::refs::OpRef;
-use crate::symbol::Symbol;
 use crate::walk;
+
+/// An operation named by a target rule: its handle when it is registered,
+/// or its text, so that a rule needs no context.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum OpKey {
+    Registered(OpName),
+    Unregistered(Box<str>),
+}
+
+impl OpKey {
+    fn new(name: impl Into<OpNameArg>) -> Self {
+        match name.into() {
+            OpNameArg::Name(name) => {
+                assert!(
+                    name.is_registered(),
+                    "a target rule names an unregistered operation by its text"
+                );
+                OpKey::Registered(name)
+            }
+            OpNameArg::Text(text) => {
+                let (dialect, op) = split_qualified(&text)
+                    .unwrap_or_else(|| panic!("`{text}` is not a qualified `dialect.name`"));
+                match <OpDef as crate::name::Definition>::lookup(dialect, op) {
+                    Some(def) => OpKey::Registered(OpName::registered(def)),
+                    None => OpKey::Unregistered(text.into()),
+                }
+            }
+        }
+    }
+
+    fn of(ctx: &IrContext, op: OpRef) -> Self {
+        let name = ctx.op(op).name;
+        if name.is_registered() {
+            OpKey::Registered(name)
+        } else {
+            OpKey::Unregistered(name.display(ctx).to_string().into())
+        }
+    }
+}
+
+impl std::fmt::Display for OpKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpKey::Registered(name) => match name.def() {
+                Some(def) => f.write_str(def.name.as_str()),
+                None => unreachable!("an op key holds only registered handles"),
+            },
+            OpKey::Unregistered(text) => f.write_str(text),
+        }
+    }
+}
 
 /// Result of a legality check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,21 +121,21 @@ pub enum ConversionMode {
 /// operations remain. Full verification additionally rejects unknown operations.
 pub struct ConversionTarget {
     /// Entire dialects marked as legal.
-    legal_dialects: HashSet<Symbol>,
+    legal_dialects: HashSet<Box<str>>,
     /// Entire dialects marked as illegal.
-    illegal_dialects: HashSet<Symbol>,
-    /// Specific operations marked as legal: (dialect, op_name).
-    legal_ops: HashSet<(Symbol, Symbol)>,
-    /// Specific operations marked as illegal: (dialect, op_name).
-    illegal_ops: HashSet<(Symbol, Symbol)>,
+    illegal_dialects: HashSet<Box<str>>,
+    /// Specific operations marked as legal.
+    legal_ops: HashSet<OpKey>,
+    /// Specific operations marked as illegal.
+    illegal_ops: HashSet<OpKey>,
     /// Statically legal operations whose nested regions are recursively legal.
-    recursive_legal_ops: HashSet<(Symbol, Symbol)>,
+    recursive_legal_ops: HashSet<OpKey>,
     /// Dynamically legal operations whose nested regions are recursively legal.
-    recursive_dynamic_ops: HashSet<(Symbol, Symbol)>,
-    /// Dynamic legality checks for specific operations: (dialect, op_name).
-    dynamic_ops: HashMap<(Symbol, Symbol), Box<DynamicCheckFn>>,
+    recursive_dynamic_ops: HashSet<OpKey>,
+    /// Dynamic legality checks for specific operations.
+    dynamic_ops: HashMap<OpKey, Box<DynamicCheckFn>>,
     /// Dynamic legality checks for entire dialects.
-    dynamic_dialects: HashMap<Symbol, Box<DynamicCheckFn>>,
+    dynamic_dialects: HashMap<Box<str>, Box<DynamicCheckFn>>,
     /// Dynamic fallback for operations not decided by op or dialect rules.
     dynamic_unknown: Option<Box<DynamicCheckFn>>,
 }
@@ -120,37 +172,36 @@ impl ConversionTarget {
     }
 
     /// Mark a specific operation as legal and return the updated target.
-    pub fn legal_op(mut self, dialect: &str, op_name: &str) -> Self {
-        self.add_legal_op(dialect, op_name);
+    pub fn legal_op(mut self, name: impl Into<OpNameArg>) -> Self {
+        self.add_legal_op(name);
         self
     }
 
     /// Mark a specific operation as illegal and return the updated target.
-    pub fn illegal_op(mut self, dialect: &str, op_name: &str) -> Self {
-        self.add_illegal_op(dialect, op_name);
+    pub fn illegal_op(mut self, name: impl Into<OpNameArg>) -> Self {
+        self.add_illegal_op(name);
         self
     }
 
     /// Mark a statically legal operation as recursively legal and return the updated target.
-    pub fn recursive_legal_op(mut self, dialect: &str, op_name: &str) -> Self {
-        self.add_recursive_legal_op(dialect, op_name);
+    pub fn recursive_legal_op(mut self, name: impl Into<OpNameArg>) -> Self {
+        self.add_recursive_legal_op(name);
         self
     }
 
     /// Mark a dynamically legal operation as recursively legal and return the updated target.
-    pub fn recursive_dynamic_op(mut self, dialect: &str, op_name: &str) -> Self {
-        self.add_recursive_dynamic_op(dialect, op_name);
+    pub fn recursive_dynamic_op(mut self, name: impl Into<OpNameArg>) -> Self {
+        self.add_recursive_dynamic_op(name);
         self
     }
 
     /// Add a dynamic legality check for a specific operation and return the updated target.
     pub fn dynamic_op(
         mut self,
-        dialect: &str,
-        op_name: &str,
+        name: impl Into<OpNameArg>,
         f: impl Fn(&IrContext, OpRef) -> LegalityDecision + 'static,
     ) -> Self {
-        self.add_dynamic_op(dialect, op_name, f);
+        self.add_dynamic_op(name, f);
         self
     }
 
@@ -175,7 +226,7 @@ impl ConversionTarget {
 
     /// Mark an entire dialect as legal.
     pub fn add_legal_dialect(&mut self, dialect: &str) {
-        let dialect = Symbol::new(dialect);
+        let dialect: Box<str> = dialect.into();
         assert!(
             !self.illegal_dialects.contains(&dialect),
             "dialect `{dialect}` is already registered as illegal"
@@ -188,7 +239,7 @@ impl ConversionTarget {
 
     /// Mark an entire dialect as illegal.
     pub fn add_illegal_dialect(&mut self, dialect: &str) {
-        let dialect = Symbol::new(dialect);
+        let dialect: Box<str> = dialect.into();
         assert!(
             !self.legal_dialects.contains(&dialect),
             "dialect `{dialect}` is already registered as legal"
@@ -200,36 +251,28 @@ impl ConversionTarget {
     }
 
     /// Mark a specific operation as legal.
-    pub fn add_legal_op(&mut self, dialect: &str, op_name: &str) {
-        let key = (Symbol::new(dialect), Symbol::new(op_name));
+    pub fn add_legal_op(&mut self, name: impl Into<OpNameArg>) {
+        let key = OpKey::new(name);
         assert!(
             !self.illegal_ops.contains(&key),
-            "operation `{}.{}` is already registered as illegal",
-            key.0,
-            key.1
+            "operation `{key}` is already registered as illegal"
         );
         assert!(
             self.legal_ops.insert(key.clone()),
-            "operation `{}.{}` is already registered as legal",
-            key.0,
-            key.1
+            "operation `{key}` is already registered as legal"
         );
     }
 
     /// Mark a specific operation as illegal.
-    pub fn add_illegal_op(&mut self, dialect: &str, op_name: &str) {
-        let key = (Symbol::new(dialect), Symbol::new(op_name));
+    pub fn add_illegal_op(&mut self, name: impl Into<OpNameArg>) {
+        let key = OpKey::new(name);
         assert!(
             !self.legal_ops.contains(&key),
-            "operation `{}.{}` is already registered as legal",
-            key.0,
-            key.1
+            "operation `{key}` is already registered as legal"
         );
         assert!(
             self.illegal_ops.insert(key.clone()),
-            "operation `{}.{}` is already registered as illegal",
-            key.0,
-            key.1
+            "operation `{key}` is already registered as illegal"
         );
     }
 
@@ -238,19 +281,15 @@ impl ConversionTarget {
     /// The operation must already be registered as statically legal. Dynamic
     /// legality still takes precedence: if a dynamic rule marks the operation
     /// illegal, the recursive marker does not apply.
-    pub fn add_recursive_legal_op(&mut self, dialect: &str, op_name: &str) {
-        let key = (Symbol::new(dialect), Symbol::new(op_name));
+    pub fn add_recursive_legal_op(&mut self, name: impl Into<OpNameArg>) {
+        let key = OpKey::new(name);
         assert!(
             self.legal_ops.contains(&key),
-            "operation `{}.{}` must be registered as legal before recursive legality",
-            key.0,
-            key.1
+            "operation `{key}` must be registered as legal before recursive legality"
         );
         assert!(
             self.recursive_legal_ops.insert(key.clone()),
-            "operation `{}.{}` is already registered as recursively legal",
-            key.0,
-            key.1
+            "operation `{key}` is already registered as recursively legal"
         );
     }
 
@@ -260,21 +299,17 @@ impl ConversionTarget {
     /// operation rule and then lower-precedence tiers.
     pub fn add_dynamic_op(
         &mut self,
-        dialect: &str,
-        op_name: &str,
+        name: impl Into<OpNameArg>,
         f: impl Fn(&IrContext, OpRef) -> LegalityDecision + 'static,
     ) {
-        let key = (Symbol::new(dialect), Symbol::new(op_name));
+        let key = OpKey::new(name);
         match self.dynamic_ops.entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(Box::new(f));
             }
             Entry::Occupied(entry) => {
                 let key = entry.key();
-                panic!(
-                    "operation `{}.{}` already has a dynamic legality rule",
-                    key.0, key.1
-                );
+                panic!("operation `{key}` already has a dynamic legality rule");
             }
         }
     }
@@ -283,19 +318,15 @@ impl ConversionTarget {
     ///
     /// The operation must already have a dynamic operation rule. The recursive
     /// marker applies only when that rule returns `Legal`.
-    pub fn add_recursive_dynamic_op(&mut self, dialect: &str, op_name: &str) {
-        let key = (Symbol::new(dialect), Symbol::new(op_name));
+    pub fn add_recursive_dynamic_op(&mut self, name: impl Into<OpNameArg>) {
+        let key = OpKey::new(name);
         assert!(
             self.dynamic_ops.contains_key(&key),
-            "operation `{}.{}` must have a dynamic legality rule before dynamic recursive legality",
-            key.0,
-            key.1
+            "operation `{key}` must have a dynamic legality rule before dynamic recursive legality"
         );
         assert!(
             self.recursive_dynamic_ops.insert(key.clone()),
-            "operation `{}.{}` is already registered as dynamically recursively legal",
-            key.0,
-            key.1
+            "operation `{key}` is already registered as dynamically recursively legal"
         );
     }
 
@@ -308,8 +339,7 @@ impl ConversionTarget {
         dialect: &str,
         f: impl Fn(&IrContext, OpRef) -> LegalityDecision + 'static,
     ) {
-        let dialect = Symbol::new(dialect);
-        match self.dynamic_dialects.entry(dialect) {
+        match self.dynamic_dialects.entry(dialect.into()) {
             Entry::Vacant(entry) => {
                 entry.insert(Box::new(f));
             }
@@ -359,8 +389,8 @@ impl ConversionTarget {
     /// 5. Unknown-operation dynamic fallback.
     /// 6. Default: Unknown.
     pub fn is_legal(&self, ctx: &IrContext, op: OpRef) -> LegalityCheck {
-        let data = ctx.op(op);
-        let key = (data.dialect.clone(), data.name.clone());
+        let key = OpKey::of(ctx, op);
+        let dialect = ctx.op(op).name.dialect(ctx);
 
         // 1. Operation dynamic rule.
         if let Some(check) = self.dynamic_ops.get(&key)
@@ -378,17 +408,17 @@ impl ConversionTarget {
         }
 
         // 3. Dialect dynamic rule.
-        if let Some(check) = self.dynamic_dialects.get(&data.dialect)
+        if let Some(check) = self.dynamic_dialects.get(dialect)
             && let Some(result) = check(ctx, op).into_check()
         {
             return result;
         }
 
         // 4. Dialect rules
-        if self.legal_dialects.contains(&data.dialect) {
+        if self.legal_dialects.contains(dialect) {
             return LegalityCheck::Legal;
         }
-        if self.illegal_dialects.contains(&data.dialect) {
+        if self.illegal_dialects.contains(dialect) {
             return LegalityCheck::Illegal;
         }
 
@@ -405,8 +435,7 @@ impl ConversionTarget {
 
     /// Check whether a legal operation makes its nested regions recursively legal.
     pub fn is_recursively_legal(&self, ctx: &IrContext, op: OpRef) -> bool {
-        let data = ctx.op(op);
-        let key = (data.dialect.clone(), data.name.clone());
+        let key = OpKey::of(ctx, op);
 
         if self.recursive_dynamic_ops.contains(&key)
             && let Some(check) = self.dynamic_ops.get(&key)
@@ -451,11 +480,9 @@ impl ConversionTarget {
                 ConversionMode::Full => legality != LegalityCheck::Legal,
             };
             if failed {
-                let data = ctx.op(op);
                 failures.push(IllegalOp {
                     op,
-                    dialect: data.dialect.clone(),
-                    name: data.name.clone(),
+                    name: ctx.op(op).name.to_text(ctx),
                     legality,
                     reason: None,
                 });
@@ -482,8 +509,8 @@ impl Default for ConversionTarget {
 #[derive(Debug)]
 pub struct IllegalOp {
     pub op: OpRef,
-    pub dialect: Symbol,
-    pub name: Symbol,
+    /// The operation's `dialect.name`.
+    pub name: std::borrow::Cow<'static, str>,
     pub legality: LegalityCheck,
     /// Optional conversion-specific explanation for this otherwise illegal operation.
     pub reason: Option<String>,
@@ -499,11 +526,7 @@ impl IllegalOp {
 
 impl std::fmt::Display for IllegalOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}.{} ({}, {:?})",
-            self.dialect, self.name, self.op, self.legality
-        )?;
+        write!(f, "{} ({}, {:?})", self.name, self.op, self.legality)?;
         if let Some(reason) = &self.reason {
             write!(f, ": {reason}")?;
         }
@@ -564,8 +587,8 @@ mod tests {
         (ctx, loc)
     }
 
-    fn make_op(ctx: &mut IrContext, loc: Location, dialect: Symbol, name: Symbol) -> OpRef {
-        let op_data = OperationDataBuilder::new(loc, dialect, name).build(ctx);
+    fn make_op(ctx: &mut IrContext, loc: Location, name: &'static str) -> OpRef {
+        let op_data = OperationDataBuilder::new(loc, name).build(ctx);
         ctx.create_op(op_data)
     }
 
@@ -592,12 +615,11 @@ mod tests {
     fn make_container_op(
         ctx: &mut IrContext,
         loc: Location,
-        dialect: Symbol,
-        name: Symbol,
+        name: &'static str,
         nested_ops: Vec<OpRef>,
     ) -> OpRef {
         let region = make_region(ctx, loc, nested_ops);
-        let op_data = OperationDataBuilder::new(loc, dialect, name)
+        let op_data = OperationDataBuilder::new(loc, name)
             .region(region)
             .build(ctx);
         ctx.create_op(op_data)
@@ -606,7 +628,7 @@ mod tests {
     #[test]
     fn legality_rules_follow_structural_precedence_for_one_operation() {
         let (mut ctx, loc) = test_ctx();
-        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let op = make_op(&mut ctx, loc, "test.op");
         let cases = [
             (
                 "unspecified operations are unknown",
@@ -616,22 +638,22 @@ mod tests {
             (
                 "dynamic operation rule precedes static operation rule",
                 ConversionTarget::new()
-                    .legal_op("test", "op")
-                    .dynamic_op("test", "op", |_, _| LegalityDecision::Illegal),
+                    .legal_op("test.op")
+                    .dynamic_op("test.op", |_, _| LegalityDecision::Illegal),
                 LegalityCheck::Illegal,
             ),
             (
                 "dynamic operation rule can defer to static operation rule",
                 ConversionTarget::new()
                     .illegal_dialect("test")
-                    .legal_op("test", "op")
-                    .dynamic_op("test", "op", |_, _| LegalityDecision::Defer),
+                    .legal_op("test.op")
+                    .dynamic_op("test.op", |_, _| LegalityDecision::Defer),
                 LegalityCheck::Legal,
             ),
             (
                 "operation rule precedes dynamic dialect rule",
                 ConversionTarget::new()
-                    .legal_op("test", "op")
+                    .legal_op("test.op")
                     .dynamic_dialect("test", |_, _| LegalityDecision::Illegal),
                 LegalityCheck::Legal,
             ),
@@ -669,11 +691,11 @@ mod tests {
     #[test]
     fn fluent_rules_preserve_operation_precedence() {
         let (mut ctx, loc) = test_ctx();
-        let allowed = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("allowed"));
-        let rejected = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("rejected"));
+        let allowed = make_op(&mut ctx, loc, "test.allowed");
+        let rejected = make_op(&mut ctx, loc, "test.rejected");
         let target = ConversionTarget::new()
             .illegal_dialect("test")
-            .legal_op("test", "allowed");
+            .legal_op("test.allowed");
 
         assert_eq!(target.is_legal(&ctx, allowed), LegalityCheck::Legal);
         assert_eq!(target.is_legal(&ctx, rejected), LegalityCheck::Illegal);
@@ -682,15 +704,15 @@ mod tests {
     #[test]
     fn dynamic_registration_order_does_not_change_structural_precedence() {
         let (mut ctx, loc) = test_ctx();
-        let special = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("special"));
-        let ordinary = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("ordinary"));
+        let special = make_op(&mut ctx, loc, "test.special");
+        let ordinary = make_op(&mut ctx, loc, "test.ordinary");
 
         let op_then_dialect = ConversionTarget::new()
-            .dynamic_op("test", "special", |_, _| LegalityDecision::Illegal)
+            .dynamic_op("test.special", |_, _| LegalityDecision::Illegal)
             .dynamic_dialect("test", |_, _| LegalityDecision::Legal);
         let dialect_then_op = ConversionTarget::new()
             .dynamic_dialect("test", |_, _| LegalityDecision::Legal)
-            .dynamic_op("test", "special", |_, _| LegalityDecision::Illegal);
+            .dynamic_op("test.special", |_, _| LegalityDecision::Illegal);
 
         assert_eq!(
             op_then_dialect.is_legal(&ctx, special),
@@ -713,18 +735,12 @@ mod tests {
     #[test]
     fn recursive_legal_op_skips_full_verification_of_descendants() {
         let (mut ctx, loc) = test_ctx();
-        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
-        let parent = make_container_op(
-            &mut ctx,
-            loc,
-            Symbol::new("test"),
-            Symbol::new("container"),
-            vec![nested],
-        );
+        let nested = make_op(&mut ctx, loc, "unknown.op");
+        let parent = make_container_op(&mut ctx, loc, "test.container", vec![nested]);
         let region = make_region(&mut ctx, loc, vec![parent]);
         let target = ConversionTarget::new()
-            .legal_op("test", "container")
-            .recursive_legal_op("test", "container");
+            .legal_op("test.container")
+            .recursive_legal_op("test.container");
 
         assert!(target.verify_full(&ctx, region).is_empty());
     }
@@ -732,16 +748,10 @@ mod tests {
     #[test]
     fn legal_op_without_recursive_marker_checks_descendants() {
         let (mut ctx, loc) = test_ctx();
-        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
-        let parent = make_container_op(
-            &mut ctx,
-            loc,
-            Symbol::new("test"),
-            Symbol::new("container"),
-            vec![nested],
-        );
+        let nested = make_op(&mut ctx, loc, "unknown.op");
+        let parent = make_container_op(&mut ctx, loc, "test.container", vec![nested]);
         let region = make_region(&mut ctx, loc, vec![parent]);
-        let target = ConversionTarget::new().legal_op("test", "container");
+        let target = ConversionTarget::new().legal_op("test.container");
 
         let failures = target.verify_full(&ctx, region);
         assert_eq!(failures.len(), 1);
@@ -751,19 +761,13 @@ mod tests {
     #[test]
     fn recursive_legal_op_skips_partial_verification_of_illegal_descendants() {
         let (mut ctx, loc) = test_ctx();
-        let nested = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("illegal"));
-        let parent = make_container_op(
-            &mut ctx,
-            loc,
-            Symbol::new("test"),
-            Symbol::new("container"),
-            vec![nested],
-        );
+        let nested = make_op(&mut ctx, loc, "test.illegal");
+        let parent = make_container_op(&mut ctx, loc, "test.container", vec![nested]);
         let region = make_region(&mut ctx, loc, vec![parent]);
         let target = ConversionTarget::new()
-            .legal_op("test", "container")
-            .recursive_legal_op("test", "container")
-            .illegal_op("test", "illegal");
+            .legal_op("test.container")
+            .recursive_legal_op("test.container")
+            .illegal_op("test.illegal");
 
         assert!(target.verify(&ctx, region).is_empty());
     }
@@ -771,25 +775,13 @@ mod tests {
     #[test]
     fn recursive_legal_op_skips_multiple_nested_levels() {
         let (mut ctx, loc) = test_ctx();
-        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
-        let inner = make_container_op(
-            &mut ctx,
-            loc,
-            Symbol::new("test"),
-            Symbol::new("inner"),
-            vec![nested],
-        );
-        let outer = make_container_op(
-            &mut ctx,
-            loc,
-            Symbol::new("test"),
-            Symbol::new("outer"),
-            vec![inner],
-        );
+        let nested = make_op(&mut ctx, loc, "unknown.op");
+        let inner = make_container_op(&mut ctx, loc, "test.inner", vec![nested]);
+        let outer = make_container_op(&mut ctx, loc, "test.outer", vec![inner]);
         let region = make_region(&mut ctx, loc, vec![outer]);
         let target = ConversionTarget::new()
-            .legal_op("test", "outer")
-            .recursive_legal_op("test", "outer");
+            .legal_op("test.outer")
+            .recursive_legal_op("test.outer");
 
         assert!(target.verify_full(&ctx, region).is_empty());
     }
@@ -797,18 +789,12 @@ mod tests {
     #[test]
     fn dynamic_recursive_op_applies_when_dynamic_rule_returns_legal() {
         let (mut ctx, loc) = test_ctx();
-        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
-        let parent = make_container_op(
-            &mut ctx,
-            loc,
-            Symbol::new("test"),
-            Symbol::new("container"),
-            vec![nested],
-        );
+        let nested = make_op(&mut ctx, loc, "unknown.op");
+        let parent = make_container_op(&mut ctx, loc, "test.container", vec![nested]);
         let region = make_region(&mut ctx, loc, vec![parent]);
         let target = ConversionTarget::new()
-            .dynamic_op("test", "container", |_, _| LegalityDecision::Legal)
-            .recursive_dynamic_op("test", "container");
+            .dynamic_op("test.container", |_, _| LegalityDecision::Legal)
+            .recursive_dynamic_op("test.container");
 
         assert!(target.verify_full(&ctx, region).is_empty());
     }
@@ -816,19 +802,13 @@ mod tests {
     #[test]
     fn dynamic_recursive_op_does_not_apply_when_dynamic_rule_defers() {
         let (mut ctx, loc) = test_ctx();
-        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
-        let parent = make_container_op(
-            &mut ctx,
-            loc,
-            Symbol::new("test"),
-            Symbol::new("container"),
-            vec![nested],
-        );
+        let nested = make_op(&mut ctx, loc, "unknown.op");
+        let parent = make_container_op(&mut ctx, loc, "test.container", vec![nested]);
         let region = make_region(&mut ctx, loc, vec![parent]);
         let target = ConversionTarget::new()
-            .legal_op("test", "container")
-            .dynamic_op("test", "container", |_, _| LegalityDecision::Defer)
-            .recursive_dynamic_op("test", "container");
+            .legal_op("test.container")
+            .dynamic_op("test.container", |_, _| LegalityDecision::Defer)
+            .recursive_dynamic_op("test.container");
 
         let failures = target.verify_full(&ctx, region);
         assert_eq!(failures.len(), 1);
@@ -838,19 +818,13 @@ mod tests {
     #[test]
     fn dynamic_illegal_rule_prevents_static_recursive_legality() {
         let (mut ctx, loc) = test_ctx();
-        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
-        let parent = make_container_op(
-            &mut ctx,
-            loc,
-            Symbol::new("test"),
-            Symbol::new("container"),
-            vec![nested],
-        );
+        let nested = make_op(&mut ctx, loc, "unknown.op");
+        let parent = make_container_op(&mut ctx, loc, "test.container", vec![nested]);
         let region = make_region(&mut ctx, loc, vec![parent]);
         let target = ConversionTarget::new()
-            .legal_op("test", "container")
-            .recursive_legal_op("test", "container")
-            .dynamic_op("test", "container", |_, _| LegalityDecision::Illegal);
+            .legal_op("test.container")
+            .recursive_legal_op("test.container")
+            .dynamic_op("test.container", |_, _| LegalityDecision::Illegal);
 
         let failures = target.verify_full(&ctx, region);
         assert_eq!(failures.len(), 2);
@@ -862,16 +836,16 @@ mod tests {
     #[should_panic(expected = "already registered as legal")]
     fn conflicting_static_operation_registration_panics() {
         let mut target = ConversionTarget::new();
-        target.add_legal_op("test", "op");
-        target.add_illegal_op("test", "op");
+        target.add_legal_op("test.op");
+        target.add_illegal_op("test.op");
     }
 
     #[test]
     #[should_panic(expected = "already has a dynamic legality rule")]
     fn duplicate_dynamic_operation_registration_panics() {
         let mut target = ConversionTarget::new();
-        target.add_dynamic_op("test", "op", |_, _| LegalityDecision::Legal);
-        target.add_dynamic_op("test", "op", |_, _| LegalityDecision::Illegal);
+        target.add_dynamic_op("test.op", |_, _| LegalityDecision::Legal);
+        target.add_dynamic_op("test.op", |_, _| LegalityDecision::Illegal);
     }
 
     #[test]
@@ -886,20 +860,20 @@ mod tests {
     #[should_panic(expected = "must be registered as legal")]
     fn recursive_legal_op_requires_static_legal_op() {
         let mut target = ConversionTarget::new();
-        target.add_recursive_legal_op("test", "op");
+        target.add_recursive_legal_op("test.op");
     }
 
     #[test]
     #[should_panic(expected = "must have a dynamic legality rule")]
     fn recursive_dynamic_op_requires_dynamic_op() {
         let mut target = ConversionTarget::new();
-        target.add_recursive_dynamic_op("test", "op");
+        target.add_recursive_dynamic_op("test.op");
     }
 
     #[test]
     fn partial_verification_allows_unknown_operations() {
         let (mut ctx, loc) = test_ctx();
-        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let op = make_op(&mut ctx, loc, "test.op");
         let region = make_region(&mut ctx, loc, vec![op]);
         let target = ConversionTarget::new();
 
@@ -909,7 +883,7 @@ mod tests {
     #[test]
     fn full_verification_rejects_unknown_operations() {
         let (mut ctx, loc) = test_ctx();
-        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let op = make_op(&mut ctx, loc, "test.op");
         let region = make_region(&mut ctx, loc, vec![op]);
         let target = ConversionTarget::new();
 

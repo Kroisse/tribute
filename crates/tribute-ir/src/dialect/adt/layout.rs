@@ -53,23 +53,17 @@ pub struct StructLayout {
 /// Unknown types default to pointer size (8 bytes) for safety.
 pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
     let data = ctx.get_type(ty);
-    if data.dialect != "core" {
+    if data.name.dialect(ctx) != "core" {
         return (8, 8);
     }
-    let name = data.name.clone();
-    if name == "i8" {
-        (1, 1)
-    } else if name == "i16" {
-        (2, 2)
-    } else if matches!(name.as_str(), "i32" | "i1") {
-        (4, 4)
-    } else if name == "i64" {
-        (8, 8)
-    } else if name == "f32" {
-        (4, 4)
-    } else {
+    match data.name.strip_dialect(ctx) {
+        "i8" => (1, 1),
+        "i16" => (2, 2),
+        "i32" | "i1" => (4, 4),
+        "i64" => (8, 8),
+        "f32" => (4, 4),
         // f64, ptr, and any unknown types default to 8-byte size/align
-        (8, 8)
+        _ => (8, 8),
     }
 }
 

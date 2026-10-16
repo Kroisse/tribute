@@ -28,10 +28,12 @@ pub mod attr_kind;
 mod registry;
 
 // === Operation and type utilities ===
+pub mod name;
 pub mod op_def;
 pub mod op_schema;
 pub mod ops;
 pub mod type_constraint;
+pub mod type_def;
 pub mod type_verifier;
 
 // === IR core structures ===
@@ -83,6 +85,7 @@ pub use inventory;
 pub use smallvec;
 
 pub use location::{Span, Spanned};
+pub use op_def::{OpDef, OpName, OpNameArg};
 pub use ops::ConversionError;
 pub use symbol::{BlockId, IdVec, Symbol, SymbolPath, SymbolVec};
 
@@ -96,6 +99,7 @@ pub use context::{
 pub use ir_mapping::IrMapping;
 pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef};
 pub use rewrite::Module;
+pub use type_def::{TypeDef, TypeName, TypeNameArg};
 pub use types::{
     Attribute, AttributeIntoIter, AttributeIter, AttributeIterMut, AttributeKey, AttributeKeys,
     AttributeMap, AttributeValues, AttributeValuesMut, AttributeView, AttributeViewMut,

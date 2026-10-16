@@ -27,7 +27,7 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> crate::TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn make_func_type(ctx: &mut IrContext) -> crate::TypeRef {
@@ -550,7 +550,7 @@ mod tests {
                 let dialect = stringify!($dialect);
                 let mut ctx = IrContext::new();
                 let i32 = make_i32_type(&mut ctx);
-                let i64 = TypeDataBuilder::new("core", "i64").intern(&mut ctx);
+                let i64 = TypeDataBuilder::new("core.i64").intern(&mut ctx);
                 let kept =
                     crate::AttributeMap::from_entries(&mut ctx, [("kept", Attribute::Type(i64))]);
                 let zero = func_sig(&mut ctx, [i32], []).as_type_ref();
@@ -587,14 +587,14 @@ mod tests {
         macro_rules! check {
             ($dialect:ident) => {{
                 use super::$dialect::{
-                    FUNC_SIG, FuncSig, FuncSigTypeError, NUM_INPUTS_ATTR, NUM_RESULTS_ATTR,
+                    FuncSig, FuncSigTypeError, NUM_INPUTS_ATTR, NUM_RESULTS_ATTR,
                 };
                 let dialect = stringify!($dialect);
                 let mut ctx = IrContext::new();
                 let i32 = make_i32_type(&mut ctx);
                 let sig =
                     |ctx: &mut IrContext, params: &[_], counts: &[(&'static str, Attribute)]| {
-                        let mut builder = TypeDataBuilder::new(Symbol::new(dialect), FUNC_SIG());
+                        let mut builder = TypeDataBuilder::new(format!("{dialect}.func_sig"));
                         for &param in params {
                             builder = builder.param(param);
                         }

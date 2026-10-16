@@ -25,11 +25,12 @@ use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
 use trunk_ir::types::TypeDataBuilder;
 
 fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
-    TypeDataBuilder::new(dialect, name).intern(ctx)
+    TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
 }
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
-    ctx.types().is_dialect(ty, dialect, name)
+    ctx.get_type(ty).name.dialect(ctx) == dialect
+        && ctx.get_type(ty).name.strip_dialect(ctx) == name
 }
 
 fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -403,24 +404,23 @@ mod tests {
 
     fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {
         let name_attr = ctx.string_attr("String");
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+        TypeDataBuilder::new(tribute_ir::dialect::adt::Typeref::NAME)
             .attr("name", name_attr)
             .intern(ctx)
     }
 
     fn struct_type(ctx: &mut IrContext) -> TypeRef {
         let name_attr = ctx.string_attr("Payload");
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+        TypeDataBuilder::new("adt.struct")
             .attr("name", name_attr)
             .intern(ctx)
     }
 
     fn dynamic_value(ctx: &mut IrContext, location: Location) -> ValueRef {
         let anyref_ty = anyref_type(ctx);
-        let source_data =
-            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))
-                .result(anyref_ty)
-                .build(ctx);
+        let source_data = OperationDataBuilder::new(location, "test.source")
+            .result(anyref_ty)
+            .build(ctx);
         let source = ctx.create_op(source_data);
         ctx.op_result(source, 0)
     }
@@ -464,12 +464,6 @@ mod tests {
         let wasm_result = wasm_converter
             .materialize(&mut ctx, location, value, anyref_ty, wasm_target)
             .expect("Wasm target consumes nominal recovery");
-        assert_eq!(
-            (
-                ctx.op(wasm_result.ops[0]).dialect.clone(),
-                ctx.op(wasm_result.ops[0]).name.clone()
-            ),
-            (Symbol::new("wasm_gc"), Symbol::new("ref_cast"))
-        );
+        assert!(ctx.op(wasm_result.ops[0]).name.is(&ctx, "wasm_gc.ref_cast"));
     }
 }

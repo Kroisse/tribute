@@ -121,7 +121,7 @@ fn anyref_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 fn i32_type(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core", "i32").intern(ctx)
+    TypeDataBuilder::new("core.i32").intern(ctx)
 }
 
 /// The block arguments of a `Dispatch<R>` over `frame`.

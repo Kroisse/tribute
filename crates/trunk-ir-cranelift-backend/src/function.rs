@@ -11,17 +11,17 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataId, FuncId, Module as _};
 use cranelift_object::ObjectModule;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
-use trunk_ir::{Symbol, SymbolPath};
 
 use crate::{CompilationError, CompilationResult};
 
 pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let ty = ctx.get_type(ty);
-    ty.dialect == "core" && ty.name == "nil" && ty.params.is_empty()
+    ty.name.is(ctx, "core.nil") && ty.params.is_empty()
 }
 
 /// Parse a condition symbol into a Cranelift integer condition code.
@@ -90,9 +90,8 @@ pub(crate) fn translate_type(
     ptr_ty: cl_types::Type,
 ) -> CompilationResult<cl_types::Type> {
     let td = ctx.get_type(ty);
-    let core_dialect = Symbol::new("core");
-    if td.dialect == core_dialect {
-        return td.name.with_str(|n| match n {
+    if td.name.dialect(ctx) == "core" {
+        return match td.name.strip_dialect(ctx) {
             "i1" => Ok(cl_types::I8),
             "i8" => Ok(cl_types::I8),
             "i16" => Ok(cl_types::I16),
@@ -104,11 +103,11 @@ pub(crate) fn translate_type(
             other => Err(CompilationError::type_error(format!(
                 "unsupported type for Cranelift: core.{other}"
             ))),
-        });
+        };
     }
     Err(CompilationError::type_error(format!(
-        "unsupported type for Cranelift: {}.{}",
-        td.dialect, td.name,
+        "unsupported type for Cranelift: {}",
+        td.name.display(ctx),
     )))
 }
 
@@ -245,8 +244,8 @@ impl<'a> FunctionTranslator<'a> {
                     let op_data = self.ctx.op(op);
                     let parent_block = op_data.parent_block;
                     let in_block_map = parent_block.map(|b| self.block_map.contains_key(&b)).unwrap_or(false);
-                    format!("op={:?} idx={} dialect={} name={} parent_block={:?} in_block_map={}",
-                        op, idx, op_data.dialect, op_data.name, parent_block, in_block_map)
+                    format!("op={:?} idx={} name={} parent_block={:?} in_block_map={}",
+                        op, idx, op_data.name.display(self.ctx), parent_block, in_block_map)
                 }
                 trunk_ir::refs::ValueDef::BlockArg(block, idx) => {
                     let in_block_map = self.block_map.contains_key(&block);
@@ -254,10 +253,9 @@ impl<'a> FunctionTranslator<'a> {
                 }
             };
             CompilationError::codegen(format!(
-                "TrunkIR value not found in Cranelift mapping (mapped {} values total, type: {}.{}, def: {})",
+                "TrunkIR value not found in Cranelift mapping (mapped {} values total, type: {}, def: {})",
                 self.values.len(),
-                ty_data.dialect,
-                ty_data.name,
+                ty_data.name.display(self.ctx),
                 def_info,
             ))
         })
@@ -333,7 +331,7 @@ impl<'a> FunctionTranslator<'a> {
             let result_ty = ctx.op_result_types(op)[0];
             // Nil constants have no runtime representation — skip emission.
             let td = ctx.get_type(result_ty);
-            if td.dialect == "core" && td.name == "nil" {
+            if td.name.is(ctx, "core.nil") {
                 return Ok(());
             }
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -533,7 +531,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(load) = clif::Load::from_op(ctx, op) {
             let result_ty = ctx.op_result_types(op)[0];
             let td = ctx.get_type(result_ty);
-            if td.dialect == "core" && td.name == "nil" {
+            if td.name.is(ctx, "core.nil") {
                 return Ok(());
             }
             let operands = ctx.op_operands(op);
@@ -763,8 +761,8 @@ impl<'a> FunctionTranslator<'a> {
 
         let op_data = ctx.op(op);
         Err(CompilationError::codegen(format!(
-            "unsupported operation: {}.{}",
-            op_data.dialect, op_data.name,
+            "unsupported operation: {}",
+            op_data.name.display(ctx),
         )))
     }
 
@@ -801,15 +799,9 @@ impl<'a> FunctionTranslator<'a> {
 mod tests {
     use super::*;
     use trunk_ir::context::IrContext;
-    use trunk_ir::types::TypeData;
 
     fn make_core_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        ctx.intern_type(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new(name),
-            params: Default::default(),
-            attrs: Default::default(),
-        })
+        trunk_ir::TypeDataBuilder::new(format!("core.{name}")).intern(ctx)
     }
 
     #[test]

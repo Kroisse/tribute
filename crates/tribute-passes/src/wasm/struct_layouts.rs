@@ -25,7 +25,7 @@ use super::descriptors::has_descriptor_field;
 /// The `wasm_gc.struct` of the user struct layout `ty`, or `None` when `ty`
 /// is not a user `adt.struct`.
 pub fn struct_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
-    if !ctx.types().is_dialect(ty, "adt", "struct") || !has_descriptor_field(ctx, ty) {
+    if !ctx.get_type(ty).name.is(ctx, "adt.struct") || !has_descriptor_field(ctx, ty) {
         return None;
     }
     let fields = get_struct_fields(ctx, ty)?;
@@ -47,7 +47,7 @@ pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: StringRef) -> Op
 /// each `adt.typeref` with the type of the layout it names.
 pub fn convert(ctx: &mut IrContext, module: Module) {
     crate::closure_lower::substitute_module_types(ctx, module, |ctx, ty| {
-        if ctx.types().is_dialect(ty, "adt", "typeref") {
+        if ctx.get_type(ty).name == tribute_ir::dialect::adt::Typeref::NAME {
             return Some(reference_type(ctx, ty));
         }
         struct_type(ctx, ty)
@@ -86,14 +86,14 @@ fn described_struct(ctx: &mut IrContext, fields: impl IntoIterator<Item = TypeRe
 /// type.
 fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
-    if data.dialect == "core" && data.name == "i1" {
+    if data.name.is(ctx, "core.i1") {
         return intern(ctx, "core", "i32");
     }
-    if data.dialect == "adt" {
-        if data.name == "typeref" {
+    if data.name.dialect(ctx) == "adt" {
+        if data.name.strip_dialect(ctx) == "typeref" {
             return intern(ctx, "wasm", "structref");
         }
-        if data.name == "enum" {
+        if data.name.strip_dialect(ctx) == "enum" {
             return intern(ctx, "wasm", "anyref");
         }
     }
@@ -101,7 +101,7 @@ fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
 }
 
 fn intern(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    TypeDataBuilder::new(dialect, name).intern(ctx)
+    TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
 }
 
 #[cfg(test)]

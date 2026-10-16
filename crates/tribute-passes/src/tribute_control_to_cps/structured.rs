@@ -9,19 +9,18 @@ impl Converter<'_> {
         mapping: &mut HashMap<ValueRef, ValueRef>,
     ) -> Result<OpRef, TributeControlToCpsError> {
         let data = self.ctx.op(source);
-        if data.dialect == "tribute_control" {
+        if data.name.dialect(self.ctx) == "tribute_control" {
             return Err(TributeControlToCpsError::post_op(
                 source,
                 data.location,
                 format!(
                     "unsupported tribute_control operation {} reached plain cloning",
-                    data.name
+                    data.name.display(self.ctx)
                 ),
             ));
         }
         let location = data.location;
-        let dialect = data.dialect.clone();
-        let name = data.name.clone();
+        let name = data.name;
         let operands: Vec<_> = self
             .ctx
             .op_operands(source)
@@ -39,7 +38,7 @@ impl Converter<'_> {
             ));
         }
 
-        let mut builder = OperationDataBuilder::new(location, dialect.clone(), name.clone());
+        let mut builder = OperationDataBuilder::new(location, name);
         for operand in operands {
             builder = builder.operand(operand);
         }
@@ -51,7 +50,7 @@ impl Converter<'_> {
             builder = builder.attr(key, value);
         }
         for region in regions {
-            let converted = if dialect == "core" && name == "module" {
+            let converted = if name == core::Module::NAME {
                 self.clone_module_region(region)?
             } else {
                 self.clone_plain_region(region, mapping)?
@@ -112,7 +111,7 @@ impl Converter<'_> {
                 for source_op in source_ops {
                     let converted = if tribute_control::Func::matches(self.ctx, source_op) {
                         self.convert_func(source_op)?
-                    } else if self.ctx.op(source_op).dialect == "tribute_control" {
+                    } else if self.ctx.op(source_op).name.dialect(self.ctx) == "tribute_control" {
                         return Err(TributeControlToCpsError::one(
                             PRE_CPS_BOUNDARY,
                             Some(source_op),
@@ -184,7 +183,7 @@ impl Converter<'_> {
         self.ctx.op_regions(op).any(|region| {
             self.ctx.region(region).blocks.iter().copied().any(|block| {
                 self.ctx.block(block).ops.iter().copied().any(|child| {
-                    self.ctx.op(child).dialect == "tribute_control"
+                    self.ctx.op(child).name.dialect(self.ctx) == "tribute_control"
                         || self.contains_tribute_control(child)
                 })
             })
@@ -442,9 +441,7 @@ impl Converter<'_> {
             return Ok(());
         }
 
-        let mut builder =
-            OperationDataBuilder::new(location, Symbol::new("scf"), Symbol::new("if"))
-                .operand(condition);
+        let mut builder = OperationDataBuilder::new(location, "scf.if").operand(condition);
         for result_type in result_types {
             builder = builder.result(self.convert_type(result_type));
         }
@@ -511,8 +508,8 @@ impl Converter<'_> {
         for case in source_cases {
             let case_data = self.ctx.op(case);
             let case_location = case_data.location;
-            let is_case = case_data.dialect == "scf" && case_data.name == "case";
-            let is_default = case_data.dialect == "scf" && case_data.name == "default";
+            let is_case = case_data.name.is(self.ctx, "scf.case");
+            let is_default = case_data.name.is(self.ctx, "scf.default");
             if !is_case && !is_default {
                 return Err(TributeControlToCpsError::post_op(
                     case,

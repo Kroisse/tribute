@@ -80,13 +80,13 @@ impl ConstCollector {
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
 
-        if data.dialect == adt::DIALECT_NAME() {
-            if data.name == "string_const" {
+        if data.name.dialect(ctx) == adt::DIALECT_NAME {
+            if data.name.strip_dialect(ctx) == "string_const" {
                 if let Some(s) = ctx.op_attrs(op).get_str("value") {
                     self.has_string_consts = true;
                     self.collect_content(s.as_bytes());
                 }
-            } else if data.name == "bytes_const"
+            } else if data.name.strip_dialect(ctx) == "bytes_const"
                 && let Some(Attribute::Bytes(b)) = ctx.op_attrs(op).get("value")
             {
                 self.collect_content(b);
@@ -161,9 +161,11 @@ pub fn validate_for_wasm(
             return;
         };
         let ty = ctx.get_type(result_ty);
-        if ty.dialect != wasm_dialect::DIALECT_NAME() || ty.name != "anyref" {
+        if ty.name.dialect(ctx) != wasm_dialect::DIALECT_NAME
+            || ty.name.strip_dialect(ctx) != "anyref"
+        {
             result = Err(ConstValidationError::InvalidStringResultType {
-                actual: format!("{}.{}", ty.dialect, ty.name),
+                actual: format!("{}", ty.name.display(ctx)),
             });
         }
     });
@@ -539,7 +541,7 @@ mod tests {
     fn string_lowering_preserves_constants_when_analysis_is_incomplete() {
         let mut missing_data_ctx = IrContext::new();
         let missing_data_module = string_module(&mut missing_data_ctx, &["hello"]);
-        let placeholder_ty = TypeDataBuilder::new("adt", "enum").intern(&mut missing_data_ctx);
+        let placeholder_ty = TypeDataBuilder::new("adt.enum").intern(&mut missing_data_ctx);
         lower(
             &mut missing_data_ctx,
             missing_data_module,

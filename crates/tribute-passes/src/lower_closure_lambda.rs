@@ -500,7 +500,7 @@ mod tests {
             blocks: trunk_ir::smallvec::smallvec![module_block],
             parent_op: None,
         });
-        let module_op = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+        let module_op = OperationDataBuilder::new(loc, "core.module")
             .attr("sym_name", Attribute::String(ctx.intern_str("test")))
             .region(module_region)
             .build(ctx);
@@ -513,7 +513,7 @@ mod tests {
     }
 
     fn make_i32_ty(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     #[test]
@@ -683,8 +683,7 @@ mod tests {
             let lambda_func_ty =
                 func::func_sig(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]);
             let mut closure_type =
-                TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
-                    .param(lambda_func_ty.as_type_ref());
+                TypeDataBuilder::new("closure.closure").param(lambda_func_ty.as_type_ref());
             if let Some(provenance) = provenance {
                 closure_type = closure_type.attr(
                     tribute_core::CALLING_CONVENTION_ATTR,

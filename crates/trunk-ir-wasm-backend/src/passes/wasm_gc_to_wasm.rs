@@ -21,7 +21,7 @@ pub fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
 
 fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "wasm"
+    data.name.dialect(ctx) == "wasm"
         && [
             "anyref",
             "eqref",
@@ -31,8 +31,7 @@ fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
             "funcref",
             "externref",
         ]
-        .into_iter()
-        .any(|name| data.name == name)
+        .contains(&data.name.strip_dialect(ctx))
 }
 
 /// Module attribute listing the GC types that received user indices, in
@@ -270,8 +269,8 @@ impl RewritePattern for LowerTypedGcPattern {
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::RefNull::from_op(ctx, op) {
             let target = old.target_type(ctx);
-            let heap_type = ctx.get_type(target).name.clone();
-            let heap_type = heap_type.with_str(|name| ctx.intern_str(name));
+            let heap_type = ctx.get_type(target).name.strip_dialect(ctx).to_owned();
+            let heap_type = ctx.intern_str(&heap_type);
             let new = wasm::RefNull::operands()
                 .heap_type(heap_type)
                 .type_idx(self.index(target))
@@ -364,7 +363,7 @@ mod tests {
             ctx.block(block)
                 .ops
                 .iter()
-                .all(|&op| ctx.op(op).dialect != wasm_gc::DIALECT_NAME())
+                .all(|&op| ctx.op(op).name.dialect(&ctx) != wasm_gc::DIALECT_NAME)
         );
     }
 
@@ -558,7 +557,7 @@ mod tests {
         let ops = &ctx.block(block).ops;
         assert!(
             ops.iter()
-                .all(|&op| ctx.op(op).dialect != wasm_gc::DIALECT_NAME())
+                .all(|&op| ctx.op(op).name.dialect(&ctx) != wasm_gc::DIALECT_NAME)
         );
 
         let struct_new = ops

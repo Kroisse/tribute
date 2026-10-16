@@ -36,7 +36,7 @@ fn create_op(
     regions: &[RegionRef],
     successors: &[BlockRef],
 ) -> OpRef {
-    let mut builder = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"));
+    let mut builder = OperationDataBuilder::new(loc, "test.op");
     for &region in regions {
         builder = builder.region(region);
     }
@@ -898,7 +898,7 @@ impl StateMachineTest for UseTest {
     fn init_test(_: &UseModel) -> UseSut {
         let mut ctx = IrContext::new();
         let loc = location(&mut ctx);
-        let ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let module_block = new_block(&mut ctx, loc, ty, 2);
         let module_region = ctx.create_region(RegionData {
             location: loc,
@@ -935,10 +935,9 @@ impl StateMachineTest for UseTest {
             } => {
                 let block = sut.blocks[block];
                 let ty = sut.ty;
-                let mut builder =
-                    OperationDataBuilder::new(sut.loc, Symbol::new("test"), Symbol::new("op"))
-                        .operands(operands.iter().map(|&v| sut.values[v]))
-                        .results((0..results).map(|_| ty));
+                let mut builder = OperationDataBuilder::new(sut.loc, "test.op")
+                    .operands(operands.iter().map(|&v| sut.values[v]))
+                    .results((0..results).map(|_| ty));
                 if container {
                     let body = sut.new_block(1);
                     let region = sut.ctx.create_region(RegionData {

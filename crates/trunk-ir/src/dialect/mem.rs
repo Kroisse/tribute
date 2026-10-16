@@ -65,7 +65,7 @@ mod tests {
                 .find_map(|(alias, ty)| (*alias == name).then_some(*ty))
                 .expect("declared alias")
         };
-        let i32_ty = crate::types::TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = crate::types::TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let ptr_ty = crate::dialect::core::ptr(&mut ctx).as_type_ref();
 
         let pair = super::r#struct(&mut ctx, [i32_ty, ptr_ty]);

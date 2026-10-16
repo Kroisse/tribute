@@ -77,21 +77,17 @@ fn make_bodyless_wasm_func(
     sym_name: trunk_ir::types::StringRef,
     func_type: TypeRef,
 ) -> OpRef {
-    let data = OperationDataBuilder::new(
-        loc,
-        trunk_ir::Symbol::new("wasm"),
-        trunk_ir::Symbol::new("func"),
-    )
-    .attr("sym_name", Attribute::String(sym_name))
-    .attr("type", Attribute::Type(func_type))
-    .build(ctx);
+    let data = OperationDataBuilder::new(loc, "wasm.func")
+        .attr("sym_name", Attribute::String(sym_name))
+        .attr("type", Attribute::Type(func_type))
+        .build(ctx);
     ctx.create_op(data)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::Symbol;
+
     use trunk_ir::SymbolPath;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
     use trunk_ir::location::Span;
@@ -107,7 +103,7 @@ mod tests {
     }
 
     fn type_ref(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new("core", name).intern(ctx)
+        TypeDataBuilder::new(format!("core.{name}")).intern(ctx)
     }
 
     fn make_module(ctx: &mut IrContext, loc: trunk_ir::types::Location, ops: Vec<OpRef>) -> Module {
@@ -125,7 +121,7 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let module = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+        let module = OperationDataBuilder::new(loc, "core.module")
             .attr("sym_name", Attribute::String(ctx.intern_str("test")))
             .region(region)
             .build(ctx);
@@ -329,7 +325,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32 = type_ref(&mut ctx, "i32");
         let i64 = type_ref(&mut ctx, "i64");
-        let malformed = TypeDataBuilder::new("wasm", "func_sig").intern(&mut ctx);
+        let malformed = TypeDataBuilder::new("wasm.func_sig").intern(&mut ctx);
         let bad = ctx.intern_str("bad");
         let func = make_bodyless_wasm_func(&mut ctx, loc, bad, malformed);
         let module = make_module(&mut ctx, loc, vec![func]);

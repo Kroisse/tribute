@@ -77,14 +77,14 @@ impl NativeTypeRefs {
             tribute_rt_float: tribute_rt::float(ctx).as_type_ref(),
             tribute_rt_intref: tribute_rt::intref(ctx).as_type_ref(),
             tribute_rt_anyref: tribute_rt::anyref(ctx).as_type_ref(),
-            core_i1: TypeDataBuilder::new("core", "i1").intern(ctx),
+            core_i1: TypeDataBuilder::new("core.i1").intern(ctx),
 
-            core_i32: TypeDataBuilder::new("core", "i32").intern(ctx),
-            core_i64: TypeDataBuilder::new("core", "i64").intern(ctx),
-            core_f64: TypeDataBuilder::new("core", "f64").intern(ctx),
+            core_i32: TypeDataBuilder::new("core.i32").intern(ctx),
+            core_i64: TypeDataBuilder::new("core.i64").intern(ctx),
+            core_f64: TypeDataBuilder::new("core.f64").intern(ctx),
             core_ptr: core::ptr(ctx).as_type_ref(),
             core_nil: core::nil(ctx).as_type_ref(),
-            core_i8: TypeDataBuilder::new("core", "i8").intern(ctx),
+            core_i8: TypeDataBuilder::new("core.i8").intern(ctx),
 
             evidence_ty: ability::evidence_adt_type_ref(ctx),
             marker_ty: ability::marker_adt_type_ref(ctx),
@@ -233,36 +233,36 @@ fn materialize_result_noop(
 /// Helper: Check if a type is an ADT type that maps to ptr in the native backend.
 fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    if data.dialect != "adt" {
+    if data.name.dialect(ctx) != "adt" {
         return false;
     }
     // struct, enum, typeref, variant instance
-    matches!(data.name.as_str(), "typeref" | "struct" | "enum")
+    matches!(data.name.strip_dialect(ctx), "typeref" | "struct" | "enum")
         || ctx.type_attrs(ty).get_bool("is_variant") == Some(true)
 }
 
 /// Helper: Check if a type is closure.closure.
 fn is_closure_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "closure" && data.name == "closure"
+    data.name.is(ctx, "closure.closure")
 }
 
 /// Helper: Check if a type is func.func_sig.
 fn is_func_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "func" && data.name == "func_sig"
+    data.name.is(ctx, "func.func_sig")
 }
 
 /// Helper: Check if a type is core.array.
 fn is_array_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "array"
+    data.name.is(ctx, "core.array")
 }
 
 /// Helper: Check if a type is core.bytes.
 fn is_bytes_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == "core" && data.name == "bytes"
+    data.name.is(ctx, "core.bytes")
 }
 
 impl NativeTypeRefs {

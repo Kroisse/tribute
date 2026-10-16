@@ -24,8 +24,8 @@ mod tests {
     fn io_ops_round_trip() {
         let mut ctx = IrContext::new();
         let loc = location();
-        let ty = TypeDataBuilder::new("core", "ptr").intern(&mut ctx);
-        let bool_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
+        let ty = TypeDataBuilder::new("core.ptr").intern(&mut ctx);
+        let bool_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
         let bytes = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(ty)

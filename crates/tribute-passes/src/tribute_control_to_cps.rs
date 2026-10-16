@@ -217,9 +217,8 @@ impl<'a> Converter<'a> {
                 start: index + 1,
             };
             let location = self.ctx.op(source).location;
-            let dialect = self.ctx.op(source).dialect.clone();
-            let name = self.ctx.op(source).name.clone();
-            if dialect == "scf" && name == "yield" {
+            let name = self.ctx.op(source).name;
+            if name == scf::Yield::NAME {
                 if let Some(join) = &flow.tail_join
                     && self.ctx.op(source).parent_block.and_then(|block| {
                         self.ctx
@@ -268,15 +267,15 @@ impl<'a> Converter<'a> {
                 self.emit_exit(block, location, value, flow)?;
                 return Ok(());
             }
-            if dialect == "scf" && name == "switch" && self.contains_tribute_control(source) {
+            if name == scf::Switch::NAME && self.contains_tribute_control(source) {
                 self.lower_structured_switch(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
-            if dialect == "scf" && name == "if" && self.contains_tribute_control(source) {
+            if name == scf::If::NAME && self.contains_tribute_control(source) {
                 self.lower_structured_if(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
-            if dialect != "tribute_control" {
+            if name.dialect(self.ctx) != "tribute_control" {
                 let cloned = self.clone_plain_op(source, mapping)?;
                 self.ctx.push_op(block, cloned);
                 index += 1;
@@ -290,7 +289,7 @@ impl<'a> Converter<'a> {
                 continue;
             }
 
-            match name.with_str(|value| value.to_owned()).as_str() {
+            match name.strip_dialect(self.ctx).to_owned().as_str() {
                 "return" | "yield" => {
                     let value = self.ctx.op_operands(source)[0];
                     let value = mapping.get(&value).copied().unwrap_or(value);
@@ -493,7 +492,7 @@ pub fn tribute_control_to_cps(
             if tribute_control::Func::matches(converter.ctx, source) {
                 let function = converter.convert_func(source)?;
                 converter.ctx.push_op(new_block, function);
-            } else if converter.ctx.op(source).dialect == "tribute_control" {
+            } else if converter.ctx.op(source).name.dialect(converter.ctx) == "tribute_control" {
                 return Err(TributeControlToCpsError::one(
                     PRE_CPS_BOUNDARY,
                     Some(source),

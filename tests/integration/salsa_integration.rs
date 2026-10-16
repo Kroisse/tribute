@@ -45,9 +45,12 @@ fn assert_source_signature(
         signature
             .inputs(ctx)
             .iter()
-            .all(|&ty| ctx.get_type(ty).dialect == "core" && ctx.get_type(ty).name == "i32")
+            .all(|&ty| ctx.get_type(ty).name.is(ctx, "core.i32"))
     );
-    assert_eq!(ctx.get_type(signature.result(ctx)).name, result);
+    assert_eq!(
+        ctx.get_type(signature.result(ctx)).name.strip_dialect(ctx),
+        result
+    );
     let entry = ctx.region(function.body(ctx)).blocks[0];
     itertools::assert_equal(
         ctx.block_args(entry).iter().map(|&arg| ctx.value_ty(arg)),

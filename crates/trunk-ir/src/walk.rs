@@ -81,7 +81,7 @@ where
 mod tests {
     use super::*;
     use crate::location::Span;
-    use crate::symbol::Symbol;
+
     use crate::*;
     use smallvec::smallvec;
 
@@ -93,7 +93,7 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     #[test]
@@ -101,12 +101,12 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
 
-        let op1_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+        let op1_data = OperationDataBuilder::new(loc, "arith.const")
             .result(i32_ty)
             .attr("value", Attribute::Int(1))
             .build(&mut ctx);
         let op1 = ctx.create_op(op1_data);
-        let op2_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+        let op2_data = OperationDataBuilder::new(loc, "arith.const")
             .result(i32_ty)
             .attr("value", Attribute::Int(2))
             .build(&mut ctx);
@@ -140,11 +140,11 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
 
-        let op1_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+        let op1_data = OperationDataBuilder::new(loc, "arith.const")
             .result(i32_ty)
             .build(&mut ctx);
         let op1 = ctx.create_op(op1_data);
-        let op2_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+        let op2_data = OperationDataBuilder::new(loc, "arith.const")
             .result(i32_ty)
             .build(&mut ctx);
         let op2 = ctx.create_op(op2_data);
@@ -180,10 +180,9 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
 
         // Inner const
-        let inner_op_data =
-            OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
-                .result(i32_ty)
-                .build(&mut ctx);
+        let inner_op_data = OperationDataBuilder::new(loc, "arith.const")
+            .result(i32_ty)
+            .build(&mut ctx);
         let inner_op = ctx.create_op(inner_op_data);
         let inner_block = ctx.create_block(BlockData {
             location: loc,
@@ -201,7 +200,7 @@ mod tests {
         // Outer func op containing inner region
         let nil_ty = crate::dialect::core::nil(&mut ctx).as_type_ref();
         let func_ty = crate::dialect::func::func_sig(&mut ctx, [], [nil_ty]).as_type_ref();
-        let func_op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+        let func_op_data = OperationDataBuilder::new(loc, "func.func")
             .result(func_ty)
             .region(inner_region)
             .attr("sym_name", Attribute::String(ctx.intern_str("test_fn")))
@@ -225,9 +224,9 @@ mod tests {
         let mut found_const = false;
         let _ = walk_region::<()>(&ctx, outer_region, &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == "func" && data.name == "func" {
+            if data.name.is(&ctx, "func.func") {
                 ControlFlow::<(), _>::Continue(WalkAction::Skip)
-            } else if data.dialect == "arith" {
+            } else if data.name.dialect(&ctx) == "arith" {
                 found_const = true;
                 ControlFlow::Continue(WalkAction::Advance)
             } else {

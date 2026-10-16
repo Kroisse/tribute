@@ -67,7 +67,7 @@ struct ClifTypes {
 impl ClifTypes {
     fn intern(ctx: &mut IrContext) -> Self {
         let mk = |ctx: &mut IrContext, name: &'static str| {
-            TypeDataBuilder::new("core", name).intern(ctx)
+            TypeDataBuilder::new(format!("core.{name}")).intern(ctx)
         };
         Self {
             ptr: mk(ctx, "ptr"),
@@ -961,7 +961,7 @@ impl trunk_ir::pass::Pass for GenerateRtti {
 mod tests {
     use super::*;
     use trunk_ir::Span;
-    use trunk_ir::Symbol;
+
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
     use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
@@ -987,7 +987,7 @@ mod tests {
     }
 
     fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(dialect, name).intern(ctx)
+        TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
     }
 
     /// Build a module containing a function that creates a struct via adt.struct_new.
@@ -1021,12 +1021,11 @@ mod tests {
             .map(|i| ctx.block_arg(entry, i as u32))
             .collect();
 
-        let struct_new_data =
-            OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
-                .operands(field_vals)
-                .result(struct_ty)
-                .attr("type", Attribute::Type(struct_ty))
-                .build(ctx);
+        let struct_new_data = OperationDataBuilder::new(loc, "adt.struct_new")
+            .operands(field_vals)
+            .result(struct_ty)
+            .attr("type", Attribute::Type(struct_ty))
+            .build(ctx);
         let struct_new_ref = ctx.create_op(struct_new_data);
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
@@ -1060,11 +1059,10 @@ mod tests {
             parent_op: None,
         });
 
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(module_region)
-                .build(ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(module_region)
+            .build(ctx);
         let module_op = ctx.create_op(module_data);
 
         Module::new(ctx, module_op).expect("valid arena module")
@@ -1305,7 +1303,7 @@ mod tests {
         let next = ctx.block_arg(entry, 2);
 
         // First struct_new: Point(x, y)
-        let sn1 = OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
+        let sn1 = OperationDataBuilder::new(loc, "adt.struct_new")
             .operands([x, y])
             .result(point_ty)
             .attr("type", Attribute::Type(point_ty))
@@ -1314,7 +1312,7 @@ mod tests {
         ctx.push_op(entry, sn1_ref);
 
         // Second struct_new: Node(x, next)
-        let sn2 = OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
+        let sn2 = OperationDataBuilder::new(loc, "adt.struct_new")
             .operands([x, next])
             .result(node_ty)
             .attr("type", Attribute::Type(node_ty))
@@ -1350,11 +1348,10 @@ mod tests {
             blocks: smallvec![module_block],
             parent_op: None,
         });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(module_region)
-                .build(&mut ctx);
+        let module_data = OperationDataBuilder::new(loc, "core.module")
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+            .region(module_region)
+            .build(&mut ctx);
         let module_op = ctx.create_op(module_data);
         let module = Module::new(&ctx, module_op).expect("valid");
 

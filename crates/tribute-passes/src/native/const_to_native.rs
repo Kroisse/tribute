@@ -84,13 +84,13 @@ impl ConstCollector {
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
 
-        if data.dialect == adt::DIALECT_NAME() {
-            if data.name == "string_const" {
+        if data.name.dialect(ctx) == adt::DIALECT_NAME {
+            if data.name.strip_dialect(ctx) == "string_const" {
                 if let Some(s) = ctx.op_attrs(op).get_str("value") {
                     self.intern(s.as_bytes());
                     self.has_string_consts = true;
                 }
-            } else if data.name == "bytes_const"
+            } else if data.name.strip_dialect(ctx) == "bytes_const"
                 && let Some(Attribute::Bytes(b)) = ctx.op_attrs(op).get("value")
             {
                 self.intern(b);
@@ -169,8 +169,8 @@ fn lower(
     }
 
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let i64_ty = TypeDataBuilder::new("core", "i64").intern(ctx);
-    let i32_ty = TypeDataBuilder::new("core", "i32").intern(ctx);
+    let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
 
     let content_to_symbol = declare_rodata(ctx, module, &analysis.contents);
     let string_enum_ty = analysis.string_enum_ty;
@@ -194,8 +194,8 @@ fn lower(
     }
 
     let target = ConversionTarget::new()
-        .illegal_op("adt", "bytes_const")
-        .illegal_op("adt", "string_const");
+        .illegal_op("adt.bytes_const")
+        .illegal_op("adt.string_const");
     applicator
         .with_target(target)
         .apply_partial_conversion(ctx, module, "const-to-native")?;
@@ -570,7 +570,7 @@ mod tests {
             error
                 .operations()
                 .iter()
-                .any(|illegal| { illegal.dialect == "adt" && illegal.name == "string_const" })
+                .any(|illegal| { illegal.name == "adt.string_const" })
         );
     }
 

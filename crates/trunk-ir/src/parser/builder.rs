@@ -25,7 +25,7 @@ use crate::refs::*;
 use crate::rewrite::Module;
 use crate::types::*;
 use crate::{BlockArgData, BlockData, RegionData};
-use crate::{Symbol, SymbolPath};
+use crate::{OpName, Symbol, SymbolPath, TypeName};
 
 /// The types of `params`, without their attributes.
 fn param_types(params: &[(TypeRef, AttributeMap)]) -> impl ExactSizeIterator<Item = TypeRef> + '_ {
@@ -85,12 +85,11 @@ impl<'a> ArenaIrBuilder<'a> {
                 params,
                 attrs,
             } => {
-                let dialect = Symbol::new(dialect);
-                let name = Symbol::new(name);
+                let name = TypeName::intern(self.ctx.strings_mut(), dialect, name);
                 let params = self.build_params(params)?;
-                let attrs = self.build_type_attrs(&dialect, &name, attrs)?;
+                let attrs = self.build_type_attrs(&name.to_text(self.ctx), attrs)?;
 
-                let mut builder = TypeDataBuilder::new(dialect, name);
+                let mut builder = TypeDataBuilder::new(name);
                 for (ty, param_attrs) in params {
                     builder = builder.param_with_attrs(ty, param_attrs);
                 }
@@ -140,14 +139,13 @@ impl<'a> ArenaIrBuilder<'a> {
     /// parameter, so an explicit [`PARAM_ATTRS_ATTR`] key is rejected.
     fn build_type_attrs(
         &mut self,
-        dialect: &Symbol,
-        name: &Symbol,
+        type_name: &str,
         attrs: &RawAttrDict<'_>,
     ) -> Result<AttributeMap, ParseError> {
         if attrs.iter().any(|(key, _)| key == PARAM_ATTRS_ATTR) {
             return Err(ParseError {
                 message: format!(
-                    "{dialect}.{name}: `{PARAM_ATTRS_ATTR}` is reserved; write parameter attributes after each parameter"
+                    "{type_name}: `{PARAM_ATTRS_ATTR}` is reserved; write parameter attributes after each parameter"
                 ),
                 offset: 0,
             });
@@ -159,13 +157,12 @@ impl<'a> ArenaIrBuilder<'a> {
     /// its inputs and results in canonical [`PARAM_ATTRS_ATTR`] form.
     fn build_function_type_attrs(
         &mut self,
-        dialect: &Symbol,
-        name: &Symbol,
+        type_name: &str,
         attrs: &RawAttrDict<'_>,
         inputs: &[(TypeRef, AttributeMap)],
         results: &[(TypeRef, AttributeMap)],
     ) -> Result<AttributeMap, ParseError> {
-        let mut attrs = self.build_type_attrs(dialect, name, attrs)?;
+        let mut attrs = self.build_type_attrs(type_name, attrs)?;
         let param_attrs = inputs.iter().chain(results).map(|(_, attrs)| attrs.clone());
         if let Some(value) = param_attrs_attribute(param_attrs) {
             attrs.view_mut(self.ctx).insert(PARAM_ATTRS_ATTR, value);
@@ -212,13 +209,7 @@ impl<'a> ArenaIrBuilder<'a> {
         }
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
-        let attrs = self.build_function_type_attrs(
-            &Symbol::new("wasm"),
-            &Symbol::new("func_sig"),
-            attrs,
-            &inputs,
-            &results,
-        )?;
+        let attrs = self.build_function_type_attrs("wasm.func_sig", attrs, &inputs, &results)?;
         let (inputs, results) = (param_types(&inputs), param_types(&results));
         Ok(
             crate::dialect::wasm::func_sig_with_attrs(self.ctx, inputs, results, attrs)
@@ -246,13 +237,7 @@ impl<'a> ArenaIrBuilder<'a> {
         }
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
-        let attrs = self.build_function_type_attrs(
-            &Symbol::new("clif"),
-            &Symbol::new("func_sig"),
-            attrs,
-            &inputs,
-            &results,
-        )?;
+        let attrs = self.build_function_type_attrs("clif.func_sig", attrs, &inputs, &results)?;
         let (inputs, results) = (param_types(&inputs), param_types(&results));
         Ok(
             crate::dialect::clif::func_sig_with_attrs(self.ctx, inputs, results, attrs)
@@ -290,13 +275,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
-        let attrs = self.build_function_type_attrs(
-            &crate::symbol!("func"),
-            &Symbol::new("func_sig"),
-            attrs,
-            &inputs,
-            &results,
-        )?;
+        let attrs = self.build_function_type_attrs("func.func_sig", attrs, &inputs, &results)?;
         let (inputs, results) = (param_types(&inputs), param_types(&results));
         Ok(
             crate::dialect::func::func_sig_with_attrs(self.ctx, inputs, results, attrs)
@@ -327,13 +306,8 @@ impl<'a> ArenaIrBuilder<'a> {
         }
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
-        let attrs = self.build_function_type_attrs(
-            &Symbol::new(dialect),
-            &Symbol::new(name),
-            attrs,
-            &inputs,
-            &results,
-        )?;
+        let attrs =
+            self.build_function_type_attrs(&format!("{dialect}.{name}"), attrs, &inputs, &results)?;
         let (inputs, results) = (param_types(&inputs), param_types(&results));
         let num_inputs = u32::try_from(inputs.len()).map_err(|_| ParseError {
             message: format!("{dialect}.{name} input count exceeds u32"),
@@ -343,7 +317,7 @@ impl<'a> ArenaIrBuilder<'a> {
             message: format!("{dialect}.{name} result count exceeds u32"),
             offset: 0,
         })?;
-        let mut builder = TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name))
+        let mut builder = TypeDataBuilder::new(format!("{dialect}.{name}"))
             .params(inputs)
             .params(results);
         for (key, value) in attrs {
@@ -585,18 +559,14 @@ impl<'a> ArenaIrBuilder<'a> {
             let bt = self.build_type(block_ty)?;
             let pt = self.build_type(param_ty)?;
             if bt != pt {
-                let (bd, bn) = {
-                    let d = self.ctx.get_type(bt);
-                    (d.dialect.clone(), d.name.clone())
-                };
-                let (pd, pn) = {
-                    let d = self.ctx.get_type(pt);
-                    (d.dialect.clone(), d.name.clone())
-                };
+                let block_name = self.ctx.get_type(bt).name;
+                let param_name = self.ctx.get_type(pt).name;
                 return Err(ParseError {
                     message: format!(
-                        "entry block arg {} type mismatch: block has {}.{} but function param has {}.{}",
-                        j, bd, bn, pd, pn,
+                        "entry block arg {} type mismatch: block has {} but function param has {}",
+                        j,
+                        block_name.display(self.ctx),
+                        param_name.display(self.ctx),
                     ),
                     offset: 0,
                 });
@@ -611,8 +581,7 @@ impl<'a> ArenaIrBuilder<'a> {
     // ----------------------------------------------------------------
 
     fn build_operation(&mut self, raw: &RawOperation<'_>) -> Result<OpRef, ParseError> {
-        let dialect = Symbol::new(raw.dialect);
-        let op_name = Symbol::new(raw.op_name);
+        let name = OpName::intern(self.ctx.strings_mut(), raw.dialect, raw.op_name);
 
         // Resolve operands
         let operands: Vec<ValueRef> = raw
@@ -740,7 +709,7 @@ impl<'a> ArenaIrBuilder<'a> {
             .collect::<Result<_, _>>()?;
 
         // Build regions (inject func_params as entry block args for the first region)
-        let is_module = dialect == "core" && op_name == "module";
+        let is_module = raw.dialect == "core" && raw.op_name == "module";
         let mut regions = Vec::with_capacity(raw.regions.len());
         for (i, r) in raw.regions.iter().enumerate() {
             let extra_args = if i == 0 && !raw.func_params.is_empty() {
@@ -767,7 +736,7 @@ impl<'a> ArenaIrBuilder<'a> {
         }
 
         // Assemble OperationData via builder
-        let mut builder = OperationDataBuilder::new(self.location, dialect, op_name);
+        let mut builder = OperationDataBuilder::new(self.location, name);
         for v in operands {
             builder = builder.operand(v);
         }
@@ -890,7 +859,7 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> TypeRef {
-        TypeDataBuilder::new("core", "i32").intern(ctx)
+        TypeDataBuilder::new("core.i32").intern(ctx)
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
@@ -1161,7 +1130,7 @@ core.module @test {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = TypeDataBuilder::new("core", "i1").intern(&mut ctx);
+        let i1_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
 
         // Entry block with param
@@ -1191,7 +1160,7 @@ core.module @test {
             ops: smallvec![],
             parent_region: None,
         });
-        let yield_then = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
+        let yield_then = OperationDataBuilder::new(loc, "scf.yield")
             .operand(param)
             .build(&mut ctx);
         let yield_then = ctx.create_op(yield_then);
@@ -1218,7 +1187,7 @@ core.module @test {
         let sum = arith::Addi::operands(param, c1_val).build(&mut ctx, loc);
         ctx.push_op(else_block, sum.op_ref());
         let sum_val = sum.result(&ctx);
-        let yield_else = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
+        let yield_else = OperationDataBuilder::new(loc, "scf.yield")
             .operand(sum_val)
             .build(&mut ctx);
         let yield_else = ctx.create_op(yield_else);
@@ -1230,7 +1199,7 @@ core.module @test {
         });
 
         // scf.if
-        let if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
+        let if_op = OperationDataBuilder::new(loc, "scf.if")
             .operand(cond_val)
             .result(i32_ty)
             .region(then_region)
@@ -1619,8 +1588,7 @@ core.module @test {
         let ops = module.ops(&ctx);
         assert_eq!(ops.len(), 1);
         let func_data = ctx.op(ops[0]);
-        assert_eq!(func_data.dialect, crate::symbol!("func"));
-        assert_eq!(func_data.name, crate::symbol!("func"));
+        assert_eq!(func_data.name, crate::dialect::func::Func::NAME);
     }
 
     // ================================================================
@@ -2041,7 +2009,7 @@ core.module @test {
                 let i32_ty = make_i32_type(&mut ctx);
                 let callee = SymbolPath::new(callee.iter().map(String::as_str));
                 let string_attr = ctx.string_attr(&string);
-                let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("make"))
+                let data = OperationDataBuilder::new(loc, "test.make")
                     .attr("bytes", Attribute::Bytes(bytes.as_slice().into()))
                     .attr("text", string_attr)
                     .attr("callee", Attribute::SymbolRef(callee.clone()))

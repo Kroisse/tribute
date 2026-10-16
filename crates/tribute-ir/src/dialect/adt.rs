@@ -212,8 +212,8 @@ pub const STRUCT_NAME_ATTR: &str = "name";
 /// `name` type attribute.
 pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
     let data = ctx.get_type(ty);
-    let nominal =
-        data.dialect == "adt" && (matches!(data.name.as_str(), "struct" | "enum" | "typeref"));
+    let nominal = data.name.dialect(ctx) == "adt"
+        && (matches!(data.name.strip_dialect(ctx), "struct" | "enum" | "typeref"));
     nominal
         .then(|| ctx.type_attrs(ty).get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
@@ -383,9 +383,18 @@ fn field_name(ctx: &IrContext, attrs: &AttributeMap) -> StringRef {
         .expect("validated adt.struct fields must retain their names")
 }
 
+static STRUCT_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
+    name: trunk_ir::name::QualifiedName::new("adt.struct"),
+};
+
+inventory::submit! {
+    trunk_ir::type_def::TypeDefRegistration(&STRUCT_DEF)
+}
+
 impl DialectType for Struct {
     const DIALECT_NAME: &'static str = "adt";
     const TYPE_NAME: &'static str = "struct";
+    const DEF: &'static trunk_ir::TypeDef = &STRUCT_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
         if !Self::matches(ctx, ty) {
@@ -455,7 +464,7 @@ pub fn try_struct_type<N: Into<StringArg>>(
     fields: impl IntoIterator<Item = (N, TypeRef, AttributeMap)>,
     attrs: AttributeMap,
 ) -> Result<Struct, StructTypeError> {
-    let mut builder = TypeDataBuilder::new("adt", "struct");
+    let mut builder = TypeDataBuilder::new("adt.struct");
     for (field, ty, mut field_attrs) in fields {
         let field = ctx.intern_string_arg(field.into());
         field_attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, field);
@@ -707,17 +716,60 @@ impl Enum {
     }
 }
 
+macro_rules! nominal_types {
+    ($($(#[$meta:meta])* $wrapper:ident = $name:literal;)*) => {$(
+        $(#[$meta])*
+        pub struct $wrapper;
+
+        impl $wrapper {
+            /// The type's registered definition.
+            pub const DEF: &'static trunk_ir::TypeDef = {
+                static DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
+                    name: trunk_ir::name::QualifiedName::new($name),
+                };
+                &DEF
+            };
+            /// The type's name, which points to [`DEF`](Self::DEF).
+            pub const NAME: trunk_ir::TypeName = trunk_ir::TypeName::registered(Self::DEF);
+
+            pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+                ctx.get_type(ty).name == Self::NAME
+            }
+        }
+
+        inventory::submit! {
+            trunk_ir::type_def::TypeDefRegistration($wrapper::DEF)
+        }
+    )*};
+}
+
+nominal_types! {
+    /// `adt.typeref`: a reference to a nominal layout by its `name`.
+    Typeref = "adt.typeref";
+    /// `adt.variant`: one variant of an `adt.enum`, named by its `name`.
+    Variant = "adt.variant";
+}
+
 /// The name of an `adt.variant` type.
 fn variant_name(ctx: &IrContext, variant: TypeRef) -> Option<StringRef> {
     let data = ctx.get_type(variant);
-    (data.dialect == "adt" && data.name == "variant")
+    (data.name == Variant::NAME)
         .then(|| ctx.type_attrs(variant).get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
+}
+
+static ENUM_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
+    name: trunk_ir::name::QualifiedName::new("adt.enum"),
+};
+
+inventory::submit! {
+    trunk_ir::type_def::TypeDefRegistration(&ENUM_DEF)
 }
 
 impl DialectType for Enum {
     const DIALECT_NAME: &'static str = "adt";
     const TYPE_NAME: &'static str = "enum";
+    const DEF: &'static trunk_ir::TypeDef = &ENUM_DEF;
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
         if !Self::matches(ctx, ty) {
@@ -758,10 +810,10 @@ pub fn enum_type<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
     variants: impl IntoIterator<Item = (N, F)>,
     mut attrs: AttributeMap,
 ) -> Enum {
-    let mut builder = TypeDataBuilder::new("adt", "enum");
+    let mut builder = TypeDataBuilder::new(<Enum as DialectType>::NAME);
     for (variant, fields) in variants {
         let variant = ctx.intern_string_arg(variant.into());
-        let variant = TypeDataBuilder::new("adt", "variant")
+        let variant = TypeDataBuilder::new(Variant::NAME)
             .params(fields)
             .attr(STRUCT_NAME_ATTR, variant)
             .intern(ctx);
@@ -1041,7 +1093,7 @@ mod tests {
             .iter()
             .map(|(name, ty)| (name.to_string(), *ty))
             .collect();
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
 
         let option = Enum::from_type_ref(&ctx, aliases["option"]).unwrap();
         assert_eq!(option.name(&ctx), "Option");
@@ -1150,20 +1202,20 @@ mod tests {
     fn malformed_adt_struct_types_are_rejected_by_type_validation() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, "core.module @test {}");
-        let i32_ty = TypeDataBuilder::new("core", "i32").intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let x = ctx.string_attr("x");
         let p = ctx.string_attr("P");
         let named_field = AttributeMap::from_entries(&mut ctx, [("name", x.clone())]);
         let cases = [
             (
                 "missing `name` string",
-                TypeDataBuilder::new("adt", "struct")
+                TypeDataBuilder::new("adt.struct")
                     .param_with_attrs(i32_ty, named_field.clone())
                     .build(&mut ctx),
             ),
             (
                 "field 1 has no `name` string",
-                TypeDataBuilder::new("adt", "struct")
+                TypeDataBuilder::new("adt.struct")
                     .param_with_attrs(i32_ty, named_field.clone())
                     .param(i32_ty)
                     .attr("name", p.clone())
@@ -1171,7 +1223,7 @@ mod tests {
             ),
             (
                 "duplicate field name \"x\"",
-                TypeDataBuilder::new("adt", "struct")
+                TypeDataBuilder::new("adt.struct")
                     .param_with_attrs(i32_ty, named_field.clone())
                     .param_with_attrs(i32_ty, named_field.clone())
                     .attr("name", p.clone())
@@ -1179,7 +1231,7 @@ mod tests {
             ),
             (
                 "`fields` is not an `adt.struct` attribute",
-                TypeDataBuilder::new("adt", "struct")
+                TypeDataBuilder::new("adt.struct")
                     .attr("name", p)
                     .attr("fields", Attribute::List(vec![]))
                     .build(&mut ctx),

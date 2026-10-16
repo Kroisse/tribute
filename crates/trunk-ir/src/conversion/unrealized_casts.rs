@@ -246,7 +246,7 @@ mod tests {
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
     use crate::rewrite::type_converter::MaterializeResult;
-    use crate::symbol::Symbol;
+
     use crate::types::TypeDataBuilder;
 
     fn cast_count(ctx: &IrContext, module: Module) -> usize {
@@ -265,7 +265,7 @@ mod tests {
     }
 
     fn named_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new("core", name).intern(ctx)
+        TypeDataBuilder::new(format!("core.{name}")).intern(ctx)
     }
 
     /// Converts `core.i64` to `core.i32` and materializes `core.i32` →
@@ -278,7 +278,7 @@ mod tests {
         tc.add_conversion(move |_ctx, ty| (ty == i64_ty).then_some(i32_ty));
         tc.set_materializer(move |ctx, loc, value, from, to| {
             if from == i32_ty && to == f64_ty {
-                let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("box"))
+                let data = OperationDataBuilder::new(loc, "test.box")
                     .operand(value)
                     .result(to)
                     .build(ctx);
@@ -360,7 +360,7 @@ mod tests {
         let counter = calls.clone();
         tc.set_materializer(move |ctx, loc, value, _from, to| {
             counter.set(counter.get() + 1);
-            let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("convert"))
+            let data = OperationDataBuilder::new(loc, "test.convert")
                 .operand(value)
                 .result(to)
                 .build(ctx);
