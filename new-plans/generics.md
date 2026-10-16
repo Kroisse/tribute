@@ -318,76 +318,10 @@ template은 허용하되, 도달하는 함수 인스턴스나 ability 인자가 
 ### Row 변수의 convention class
 
 Effect row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실행 중 evidence로
-전달한다. 특수화하는 것은 row 변수가 요구하는 calling convention뿐이며, 이를 그
-변수의 **convention class**라 한다. Class는 기존 순서
-`Direct < EvidenceDirect < Cps`의 세 값 중 하나다.
-
-**Class 변수.** 정의의 스킴이 양화한 row 변수 중 그 class가 정의의 코드를 바꾸는
-것이 class 변수다. 다음 가운데 하나에 해당하는 변수이며, 순서는 스킴의 row binder
-순서를 따른다.
-
-- 매개변수 타입이나 결과 타입에 포함된 함수 타입의 row tail
-- 본문의 람다나 지역 callable 타입의 row tail
-- 본문이 참조하는 정의의 class 변수 자리에 넘기는 row의 tail
-- 본문이 `let`에 묶인 람다의 row 변수 자리에 넘기는 row의 tail
-
-결과 타입의 함수 타입도 정의의 코드를 바꾼다. 정의가 돌려주는 callable의
-convention이 그 row의 class이고, 호출한 쪽은 그 결과를 자기가 고정한 row의
-class로 읽기 때문이다. 이름 붙은 함수를 그대로 돌려주는 정의는 본문에 람다가 없어도
-이 조건으로 class 변수를 가진다.
-
-셋째 조건은 참조되는 정의의 class 변수에 의존하므로, 모든 정의에 대한 최소
-고정점으로 정한다. 정의 자신의 row에만 나타나는 tail도 이 조건으로 class 변수가 될
-수 있다.
-
-정의의 signature나 본문에서 ability 인자 안에 나타나는 row 변수는 class 변수가
-아니다. Ability instance identity가 그 row를 포함하므로, handler와 perform 지점이
-같은 callable convention을 보아야 한다. 이런 변수의 class는 항상 `Cps`다.
-
-Compiler가 생성하는 정의도 같은 규칙을 따른다. 필드의 `modify`는 callback의 row
-변수를 class 변수로 가진다.
-
-**`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수의 class는 사용처마다 row
-인자에서 계산한다. 람다는 그것을 묶은 인스턴스 안에서 쓰이는 class 조합마다 한 번
-생성하고, 각 사용처는 자기 class의 생성물을 읽는다. 생성물마다 람다 자신의
-convention과 본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 생성물마다
-따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의
-class가 정해진 뒤에 계산한다.
-
-**Class 인자.** 참조 지점의 class 인자는 checked instance가 기록한 row 인자에서
-계산한다. Callable 타입에서 역추론하지 않는다.
-
-```text
-class({A₁, ..., Aₙ})     = requirement(A₁) ⊔ ... ⊔ requirement(Aₙ)
-class({A₁, ..., Aₙ | e}) = 위 값 ⊔ class(e)
-
-class(e) = 참조를 포함한 인스턴스가 e에 고정한 class   (e가 그 인스턴스의 class 변수)
-         = Cps                                          (그 밖의 row 변수)
-```
-
-`requirement`는 ability 단위의
-[convention bound](implementation.md#selective-transformation)다.
-
-**인스턴스.** 인스턴스 key는 `(선언, 타입 인자, class 인자)`다. Clone의 NodeId를
-구별하는 값도 타입 인자와 class 인자를 함께 반영한다. Class 인자가 모두 `Cps`인
-인스턴스는 class 특수화가 없는 정의와 같은 convention과 이름을 가진다.
-
-Root `main`은 참조 없이 존재하는 인스턴스다. 그 row를 instantiate하는 호출자가
-없으므로 tail은 비어 있고, class 변수는 모두 `Direct`로 고정한다.
-
-**인스턴스 안에서의 규칙.** 인스턴스는 class 변수에서 class로 가는 표를 가진다.
-Lowering이 row의 convention을 계산할 때 tail이 표에 있으면 그 class를 쓰고, 없으면
-열린 row의 규칙대로 `Cps`를 쓴다. 매개변수의 callable 타입, 그 callable의 호출,
-인스턴스 자신의 worker convention이 모두 이 표를 따른다. 따라서 호출자가 넘긴
-callable의 convention과 인스턴스가 기대하는 convention이 class 인자에서 함께
-정해진다.
-
-Class 특수화는 row를 스킴이나 metadata에 치환하지 않는다. 호출의 evidence 선택은
-typechecking이 원래 정의에 대해 계산한 것을 그대로 물려받으며 다시 계산하지 않는다.
-Evidence를 받지 않는 convention의 호출에는 선택을 싣지 않는다.
-
-Class 값은 셋뿐이므로 class 변수가 `n`개인 정의의 인스턴스는 타입 인자 조합마다
-최대 `3ⁿ`개다. 재귀가 새 class 인자를 만들어도 이 한도 안에서 고정점에 도달한다.
+전달한다. 실행 전략은 row 변수가 요구하는 calling convention마다 정의를 따로 만들 수
+있으며, CPS 전략에서 이를 그 변수의
+[convention class](cps-effects.md#row-변수의-convention-class)라 한다. 인스턴스
+key와 이름은 이 class를 함께 반영한다.
 
 ### Nominal 타입 수집과 재작성
 

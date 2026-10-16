@@ -149,7 +149,8 @@ fn length(xs: List(a)) -> Nat
 
 `std::io::Io`도 effect row의 concrete label로 전파된다. 다만 compiler-owned
 ambient ability이므로 handler로 제거할 수 없고 `main`에 terminal effect로 남을
-수 있다. Calling convention과 표준 API는 [io.md](io.md)를 따른다.
+수 있다. 표준 API는 [io.md](io.md)를, calling convention은
+[cps-effects.md](cps-effects.md#호출-규약)를 따른다.
 
 `List(a)`도 compiler-owned nominal identity를 갖는다. List literal과 list pattern은
 resolver scope의 short name을 다시 검색하지 않고 이 identity로 constraint를 만든다.
@@ -658,7 +659,7 @@ open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
 escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
 받은 람다와, 본문에서 effect를 수행한 람다의 convention은 이 결과에서 그대로
 계산한다. 본문의 `handle`은 람다의 convention을 바꾸지 않는다
-([implementation.md](implementation.md#selective-transformation)).
+([cps-effects.md](cps-effects.md#row와-호출-규약)).
 
 #### 함수 적용 (Infer)
 

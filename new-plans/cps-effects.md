@@ -8,6 +8,210 @@ pipeline 조합은 [implementation.md](implementation.md#직접형-제어-소유
 핵심 전략은 **tail-call CPS + evidence-based handler dispatch**이다.
 모든 CPS 이전은 proper tail call이며 제어 값을 반환하지 않는다.
 
+## 호출 규약
+
+이 절은 CPS 전략이 source-logical callable에 부여하는 호출 규약을 정한다. 규약은
+callable의 effect row, ability 선언의 operation kind, 그리고 callable을 담은
+인스턴스가 row 변수에 고정한 class에서 계산되는 값이다. 언어 계약은 effect row와
+evidence, 중단 가능성, `become`의 proper tail call만 정하며 규약을 정하지 않는다.
+
+### 규약 단계
+
+함수 effect와 호출 규약은 다음 세 단계로 분류한다.
+
+| Convention | Parameters | Result | Requirement |
+| ---------- | ---------- | ------ | ----------- |
+| `Direct` | source parameters | source result | closed empty effect row or pure named worker |
+| `EvidenceDirect` | evidence + source parameters | source result | `Io` or tail-resumptive `fn` effect |
+| `Cps` | evidence + `ContinuationFrame<R>` + source parameters | source result를 직접 반환하지 않음 | general `op`, `Throw`, or another CPS effect |
+
+규약을 합성할 때 `Direct < EvidenceDirect < Cps` 순서로 더 강한 규약이
+우선한다.
+
+명시적인 빈 effect annotation `->{}`는 닫힌 빈 effect row를 뜻하므로
+`Direct`를 사용한다. Effect annotation을 생략한 함수와 달리 effect-polymorphic하지
+않지만, 빈 row 자체는 evidence parameter를 요구하지 않는다.
+
+Effect annotation을 생략한 `fn(...) -> T`의 semantic type은
+`fn(...) ->{e} T`다. 열린 row의 간접 호출은 `Cps`지만, 정의에서 concrete residual
+effect가 발견되지 않으면 해당 named definition은 별도의 `Direct` worker를 가질 수
+있다.
+
+`Io`만 요구하는 함수는 현재 `EvidenceDirect`를 사용한다. Evidence는 전달되지만
+`Io` operation을 dispatch하기 위한 handler lookup은 수행하지 않는다. Evidence의
+concrete representation과 ambient runtime capability 저장 여부는 backend 구현
+세부사항이다. Ambient-only 함수에서 evidence를 완전히 제거하는 최적화는 후속
+작업이다.
+
+```text
+print_line(ev, message) -> Nil
+main(ev) -> Nil
+```
+
+`read_line`은 실패 시 `Throw(Error)`를 수행하므로 CPS 규약을 사용한다. 두 번째
+인자는 `Done<R>`과 `Dispatch<R>`를 함께 담은 `ContinuationFrame<R>`다. 논리적
+ABI에서 함수와 frame의 transfer target의 control result는 `Never`다. Physical
+lowering은 이를 empty-result callable과 proper tail transfer로 바꾸며 control carrier를
+만들지 않는다.
+
+```text
+read_line(ev, frame: ContinuationFrame<String>) -> Never
+```
+
+### Row와 호출 규약
+
+Source effect row는 operation 집합이 아니라 **ability identity의 집합**을
+기록한다. Semantic function type의 calling convention은 row에 들어 있는 각
+ability가 요구하는 convention의 상한으로 결정한다.
+
+```text
+requirement({A₁, ..., Aₙ | e})
+  = requirement(A₁) ⊔ ... ⊔ requirement(Aₙ) ⊔ requirement(e)
+
+closed empty row `->{}`    → Direct
+fn-only or empty ability    → EvidenceDirect
+ability containing any op  → Cps
+unknown ability             → Cps
+tail e                      → 아래 tail 규칙
+```
+
+이 ability-level convention bound는 operation declaration의 source `fn`/`op`
+kind를 erase하지 않는다. Typechecking이 resolve된 operation에 kind를 저장하고
+frontend가 각 `tribute_control.perform.operation_kind`에 이를 복사한다.
+`tribute_control_to_cps`는 이를 직접 소비하며 `CallingConvention`, handler-body
+analysis, effect-row bound 중 어느 것도 kind를 재구성하거나 변경하지 않는다.
+
+Typechecking은 convention을 계산하지 않는다. Function type은 effect row만 가지며,
+type 추론과 unification은 convention을 보지 않는다. Convention은 typechecking 뒤의
+특수화와 source-logical lowering이 row와 ability의 operation kind에서 계산한다.
+
+Effect annotation 생략은 closed-empty 추론이 아니다.
+
+```text
+fn(a) -> b ≡ fn(a) ->{e} b
+```
+
+따라서 class로 읽을 수 없는 `e`를 가진 타입을 통한 **간접 호출**은 `Cps`다.
+
+정의와 람다의 convention은 자신의 row에서 위 식으로 계산하며, 본문의 내용으로
+바뀌지 않는다. Row의 tail은 다음과 같이 읽는다.
+
+```text
+class 변수인 tail                      → 그 인스턴스에 고정된 class
+ability 인자에 나타나 class가 없는 tail → Cps
+그 밖의 tail                           → 요구 없음
+```
+
+[Class 변수](#row-변수의-convention-class)의 requirement는 인스턴스가
+고정한다. Class가 전부 `Cps`인 인스턴스, 곧 특수화하지 않은 정의에서는 class 변수인
+tail이 `Cps`를 요구한다.
+
+마지막 줄은 생략된 annotation에서 생긴 tail 중 정의 안의 어떤 callable에도 닿지 않는
+것이다. 그런 tail은 정의의 코드를 바꾸지 않는다. 그러므로 effect-polymorphic `add`는
+Direct이고, 명시적인 `->{}`도 닫힌 빈 row이므로 Direct다.
+
+정의가 `Cps`가 아니면 그 row에는 `op`를 가진 ability도 class 없는 tail도 없다.
+본문의 `handle`, `resume`, `Cps` 호출은
+[값 delimiter](#값-delimiter) 안에서 실행한다. 호출자의 convention은
+호출 대상의 본문 때문에 달라지지 않는다.
+
+`let`으로 묶인 람다도 같은 규칙을 따른다. Frontend는 한 람다 식을 쓰이는
+convention마다 한 번씩 생성한다.
+
+여기서 `Cps`는 source result를 직접 반환하지 않고 ContinuationFrame의 `Done<R>`으로
+전달한다는 논리적 convention이다. Lowering은 `core.never`를 empty-result proper tail
+transfer로 바꾸며 대체 carrier를 선택하지 않는다.
+
+따라서 `fn`과 `op`를 함께 선언한 ability는 함수 ABI를 정할 때 `Cps`로
+분류한다. 이는 안전한 **ability 단위 상한**이다. 다만 CPS 함수 안에서도 개별
+`fn` operation 호출은 `tr_dispatch_fn`을 통한 evidence-direct fast path를
+사용할 수 있다. 함수 표현을 결정하는 상한과 operation call-site의 dispatch
+최적화는 서로 다른 결정이다.
+
+Operation 종류를 source effect row에 기록하는 대안은 채택하지 않는다. 예를 들어
+`{State::get}`과 `{State::get, State::set}`을 서로 다른 effect로 만들면 이 차이가
+함수 타입, effect polymorphism, subtyping, 간접 호출 및 별도 컴파일 단위의 ABI에
+모두 관여해야 한다. 내부 calling-convention 정보로만 operation 집합을 추적하면
+간접 호출에서 실제 callee가 더 강한 convention을 요구할 수 있으므로 sound하지 않다.
+
+Source effect row는 ability 단위로 유지한다. Operation별 precision을 숨은 ABI
+metadata로 도입하지 않는다. Open-row indirect call은 보수적인 `Cps`를 사용하고,
+named definition의 worker convention은 검사된 metadata에서 별도로 계산한다.
+
+### Row 변수의 convention class
+
+Effect row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실행 중 evidence로
+전달한다. 특수화하는 것은 row 변수가 요구하는 calling convention뿐이며, 이를 그
+변수의 **convention class**라 한다. Class는 기존 순서
+`Direct < EvidenceDirect < Cps`의 세 값 중 하나다.
+
+**Class 변수.** 정의의 스킴이 양화한 row 변수 중 그 class가 정의의 코드를 바꾸는
+것이 class 변수다. 다음 가운데 하나에 해당하는 변수이며, 순서는 스킴의 row binder
+순서를 따른다.
+
+- 매개변수 타입이나 결과 타입에 포함된 함수 타입의 row tail
+- 본문의 람다나 지역 callable 타입의 row tail
+- 본문이 참조하는 정의의 class 변수 자리에 넘기는 row의 tail
+- 본문이 `let`에 묶인 람다의 row 변수 자리에 넘기는 row의 tail
+
+결과 타입의 함수 타입도 정의의 코드를 바꾼다. 정의가 돌려주는 callable의
+convention이 그 row의 class이고, 호출한 쪽은 그 결과를 자기가 고정한 row의
+class로 읽기 때문이다. 이름 붙은 함수를 그대로 돌려주는 정의는 본문에 람다가 없어도
+이 조건으로 class 변수를 가진다.
+
+셋째 조건은 참조되는 정의의 class 변수에 의존하므로, 모든 정의에 대한 최소
+고정점으로 정한다. 정의 자신의 row에만 나타나는 tail도 이 조건으로 class 변수가 될
+수 있다.
+
+정의의 signature나 본문에서 ability 인자 안에 나타나는 row 변수는 class 변수가
+아니다. Ability instance identity가 그 row를 포함하므로, handler와 perform 지점이
+같은 callable convention을 보아야 한다. 이런 변수의 class는 항상 `Cps`다.
+
+Compiler가 생성하는 정의도 같은 규칙을 따른다. 필드의 `modify`는 callback의 row
+변수를 class 변수로 가진다.
+
+**`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수의 class는 사용처마다 row
+인자에서 계산한다. 람다는 그것을 묶은 인스턴스 안에서 쓰이는 class 조합마다 한 번
+생성하고, 각 사용처는 자기 class의 생성물을 읽는다. 생성물마다 람다 자신의
+convention과 본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 생성물마다
+따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의
+class가 정해진 뒤에 계산한다.
+
+**Class 인자.** 참조 지점의 class 인자는 checked instance가 기록한 row 인자에서
+계산한다. Callable 타입에서 역추론하지 않는다.
+
+```text
+class({A₁, ..., Aₙ})     = requirement(A₁) ⊔ ... ⊔ requirement(Aₙ)
+class({A₁, ..., Aₙ | e}) = 위 값 ⊔ class(e)
+
+class(e) = 참조를 포함한 인스턴스가 e에 고정한 class   (e가 그 인스턴스의 class 변수)
+         = Cps                                          (그 밖의 row 변수)
+```
+
+`requirement`는 ability 단위의
+[convention bound](#row와-호출-규약)다.
+
+**인스턴스.** 인스턴스 key는 `(선언, 타입 인자, class 인자)`다. Clone의 NodeId를
+구별하는 값도 타입 인자와 class 인자를 함께 반영한다. Class 인자가 모두 `Cps`인
+인스턴스는 class 특수화가 없는 정의와 같은 convention과 이름을 가진다.
+
+Root `main`은 참조 없이 존재하는 인스턴스다. 그 row를 instantiate하는 호출자가
+없으므로 tail은 비어 있고, class 변수는 모두 `Direct`로 고정한다.
+
+**인스턴스 안에서의 규칙.** 인스턴스는 class 변수에서 class로 가는 표를 가진다.
+Lowering이 row의 convention을 계산할 때 tail이 표에 있으면 그 class를 쓰고, 없으면
+열린 row의 규칙대로 `Cps`를 쓴다. 매개변수의 callable 타입, 그 callable의 호출,
+인스턴스 자신의 worker convention이 모두 이 표를 따른다. 따라서 호출자가 넘긴
+callable의 convention과 인스턴스가 기대하는 convention이 class 인자에서 함께
+정해진다.
+
+Class 특수화는 row를 스킴이나 metadata에 치환하지 않는다. 호출의 evidence 선택은
+typechecking이 원래 정의에 대해 계산한 것을 그대로 물려받으며 다시 계산하지 않는다.
+Evidence를 받지 않는 convention의 호출에는 선택을 싣지 않는다.
+
+Class 값은 셋뿐이므로 class 변수가 `n`개인 정의의 인스턴스는 타입 인자 조합마다
+최대 `3ⁿ`개다. 재귀가 새 class 인자를 만들어도 이 한도 안에서 고정점에 도달한다.
+
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="direct-style-control-boundary"></a>
 
@@ -16,8 +220,9 @@ pipeline 조합은 [implementation.md](implementation.md#직접형-제어-소유
 모든 ability operation invocation은 typechecking이 확정한
 `operation_kind = "fn" | "op"`를 가진 `tribute_control.perform`이다. 일반 callable도
 `tribute_control.func`, `lambda`, `func_ref`, `call`, `call_indirect`, `return`을
-사용한다. Operation kind와 callable convention은 typechecking 결과이며
-frontend나 conversion이 body 형상에서 추론하거나 재분류하지 않는다.
+사용한다. Operation kind는 typechecking 결과이고 callable convention은
+[row에서 계산한 값](#row와-호출-규약)이며, frontend나 conversion이 body 형상에서
+추론하거나 재분류하지 않는다.
 
 ```text
 Direct < EvidenceDirect < Cps
@@ -26,7 +231,7 @@ Direct < EvidenceDirect < Cps
 Effect row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌지 않는다.
 
 Callable의 convention은 그 row만으로 정해진다
-([convention bound](implementation.md#effect-row-granularity-and-convention-bound)).
+([convention bound](#row와-호출-규약)).
 본문에 `handle`이 있는지, 무엇을 호출하는지는 convention을 바꾸지 않는다. `Cps`가
 아닌 callable 안에서 CPS 제어가 필요한 계산은 [값 delimiter](#값-delimiter) 안에서
 실행하며, 그 결과는 일반 값이다.
@@ -35,7 +240,7 @@ Local lambda의 convention도 typechecking이 확정한 effect row에서 계산�
 본문은 닫힌 빈 accumulator로 검사하고, 본문이 남긴 open row 또는 lambda를
 검사한 callable context의 open tail만 callable type에 남긴다. 본문이 요구한
 ability는 row에 남으며 그 ability의 convention lower bound를 적용한다. Row의 tail은
-람다를 둘러싼 정의의 [convention class](generics.md#row-변수의-convention-class)로
+람다를 둘러싼 정의의 [convention class](#row-변수의-convention-class)로
 읽는다. `let`에 묶인 람다가 양화한 tail은 그 binding의 class로 읽는다. Class가 없는
 tail만 `Cps`를 요구한다.
 

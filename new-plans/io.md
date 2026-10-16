@@ -83,46 +83,9 @@ module export와 virtual `Io` binding은 resolver의 동일한 `std::io` namespa
 
 ## Calling Convention
 
-함수 effect와 호출 규약은 다음 세 단계로 분류한다.
-
-| Convention | Parameters | Result | Requirement |
-| ---------- | ---------- | ------ | ----------- |
-| `Direct` | source parameters | source result | closed empty effect row or pure named worker |
-| `EvidenceDirect` | evidence + source parameters | source result | `Io` or tail-resumptive `fn` effect |
-| `Cps` | evidence + `ContinuationFrame<R>` + source parameters | source result를 직접 반환하지 않음 | general `op`, `Throw`, or another CPS effect |
-
-규약을 합성할 때 `Direct < EvidenceDirect < Cps` 순서로 더 강한 규약이
-우선한다.
-
-명시적인 빈 effect annotation `->{}`는 닫힌 빈 effect row를 뜻하므로
-`Direct`를 사용한다. Effect annotation을 생략한 함수와 달리 effect-polymorphic하지
-않지만, 빈 row 자체는 evidence parameter를 요구하지 않는다.
-
-Effect annotation을 생략한 `fn(...) -> T`의 semantic type은
-`fn(...) ->{e} T`다. 열린 row의 간접 호출은 `Cps`지만, 정의에서 concrete residual
-effect가 발견되지 않으면 해당 named definition은 별도의 `Direct` worker를 가질 수
-있다.
-
-`Io`만 요구하는 함수는 현재 `EvidenceDirect`를 사용한다. Evidence는 전달되지만
-`Io` operation을 dispatch하기 위한 handler lookup은 수행하지 않는다. Evidence의
-concrete representation과 ambient runtime capability 저장 여부는 backend 구현
-세부사항이다. Ambient-only 함수에서 evidence를 완전히 제거하는 최적화는 후속
-작업이다.
-
-```text
-print_line(ev, message) -> Nil
-main(ev) -> Nil
-```
-
-`read_line`은 실패 시 `Throw(Error)`를 수행하므로 CPS 규약을 사용한다. 두 번째
-인자는 `Done<R>`과 `Dispatch<R>`를 함께 담은 `ContinuationFrame<R>`다. 논리적
-ABI에서 함수와 frame의 transfer target의 control result는 `Never`다. Physical
-lowering은 이를 empty-result callable과 proper tail transfer로 바꾸며 control carrier를
-만들지 않는다.
-
-```text
-read_line(ev, frame: ContinuationFrame<String>) -> Never
-```
+`Io`를 요구하는 함수와 `read_line`처럼 실패할 수 있는 operation을 수행하는 함수가
+어떤 호출 규약을 쓰는지는 [CPS 전략](cps-effects.md#호출-규약)이 정한다. 언어
+수준에서 `Io`는 handler 없이 수행할 수 있는 ambient ability라는 점만 정한다.
 
 ## Entrypoint
 
