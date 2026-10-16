@@ -367,7 +367,7 @@ fn tail_results_agree(ctx: &IrContext, caller: &[TypeRef], callee: &[TypeRef]) -
 fn is_allowed_dialect(ctx: &IrContext, op: OpRef, depth: usize) -> bool {
     let op_data = ctx.op(op);
 
-    if op_data.name.dialect(ctx) == "wasm" {
+    if op_data.name.dialect(ctx) == wasm_dialect::DIALECT_NAME {
         return true;
     }
 

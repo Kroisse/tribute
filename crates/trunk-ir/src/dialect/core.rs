@@ -40,7 +40,7 @@ use crate::refs::TypeRef;
 /// Parse a bare `core.<prefix>{N}` scalar type name.
 fn core_scalar_width(ctx: &IrContext, ty: TypeRef, prefix: char) -> Option<u32> {
     let data = ctx.get_type(ty);
-    if data.name.dialect(ctx) != "core" || !data.params.is_empty() || !data.attrs.is_empty() {
+    if data.name.dialect(ctx) != DIALECT_NAME || !data.params.is_empty() || !data.attrs.is_empty() {
         return None;
     }
     {

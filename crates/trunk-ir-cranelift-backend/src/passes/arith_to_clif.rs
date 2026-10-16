@@ -46,8 +46,8 @@ pub fn lower(
 
 fn arith_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
-        .legal_dialect("clif")
-        .illegal_dialect("arith")
+        .legal_dialect(clif::DIALECT_NAME)
+        .illegal_dialect(arith::DIALECT_NAME)
         .illegal_op("core.nil_value")
 }
 
@@ -180,7 +180,7 @@ impl RewritePattern for ArithBinOpPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.name.dialect(ctx) != "arith" {
+        if data.name.dialect(ctx) != arith::DIALECT_NAME {
             return false;
         }
 
@@ -400,7 +400,7 @@ impl RewritePattern for ArithBitwisePattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.name.dialect(ctx) != "arith" {
+        if data.name.dialect(ctx) != arith::DIALECT_NAME {
             return false;
         }
 

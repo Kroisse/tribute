@@ -33,7 +33,7 @@ const SCF_TO_WASM_BOUNDARY: &str = "scf-to-wasm";
 
 /// Require successful conversion to remove every SCF operation.
 pub fn scf_to_wasm_target() -> ConversionTarget {
-    ConversionTarget::new().illegal_dialect("scf")
+    ConversionTarget::new().illegal_dialect(scf::DIALECT_NAME)
 }
 
 /// Lower scf dialect to wasm dialect using arena IR.

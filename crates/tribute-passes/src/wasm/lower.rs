@@ -66,8 +66,8 @@ impl From<PassError> for WasmLowerError {
 /// ability/effect ABI operations.
 pub fn wasm_backend_ready_target() -> ConversionTarget {
     ConversionTarget::new()
-        .illegal_dialect("ability")
-        .illegal_dialect("effect")
+        .illegal_dialect(tribute_ir::dialect::ability::DIALECT_NAME)
+        .illegal_dialect(tribute_ir::dialect::effect::DIALECT_NAME)
 }
 
 /// Conversion target immediately before WebAssembly emission.
@@ -76,7 +76,7 @@ pub fn wasm_backend_ready_target() -> ConversionTarget {
 /// reconciled by now; a remaining one is a conversion bug.
 pub fn wasm_emission_ready_target() -> ConversionTarget {
     wasm_backend_ready_target()
-        .illegal_dialect("wasm_gc")
+        .illegal_dialect(trunk_ir::dialect::wasm_gc::DIALECT_NAME)
         .illegal_op("core.unrealized_conversion_cast")
 }
 
@@ -307,7 +307,7 @@ fn check_function_body(ctx: &IrContext, func_op: OpRef) {
         for &block in ctx.region(body_region).blocks.iter() {
             for &op in ctx.block(block).ops.iter() {
                 let name = ctx.op(op).name;
-                if name.dialect(ctx) != "wasm" {
+                if name.dialect(ctx) != wasm_dialect::DIALECT_NAME {
                     error!(
                         "Found non-wasm operation in function body: {}",
                         name.display(ctx)

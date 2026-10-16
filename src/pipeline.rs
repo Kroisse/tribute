@@ -3959,8 +3959,9 @@ fn main() ->{std::io::Io} Nil {
 
     #[salsa_test]
     fn wasm_lowering_leaves_no_tribute_rt_types(db: &salsa::DatabaseImpl) {
-        let not_tribute_rt =
-            |ctx: &IrContext, ty| ctx.get_type(ty).name.dialect(ctx) != "tribute_rt";
+        let not_tribute_rt = |ctx: &IrContext, ty| {
+            ctx.get_type(ty).name.dialect(ctx) != tribute_ir::dialect::tribute_rt::DIALECT_NAME
+        };
         for (path, text) in [
             (
                 "native_effects.trb",
@@ -3987,7 +3988,7 @@ fn main() ->{std::io::Io} Nil {
         // and knows no other `adt` type.
         let builtin_layout_or_not_adt = |ctx: &IrContext, ty| {
             let data = ctx.get_type(ty);
-            data.name.dialect(ctx) != "adt"
+            data.name.dialect(ctx) != tribute_ir::dialect::adt::DIALECT_NAME
                 || ctx
                     .type_attrs(ty)
                     .get(trunk_ir::types::LAYOUT_ATTR)

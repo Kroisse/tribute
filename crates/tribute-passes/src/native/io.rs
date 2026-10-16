@@ -39,7 +39,7 @@ fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
         .add_pattern(NativeReadLinePattern {
             read_line_result_ty,
         })
-        .with_target(ConversionTarget::new().illegal_dialect("tribute_io"))
+        .with_target(ConversionTarget::new().illegal_dialect(tribute_io::DIALECT_NAME))
         .apply_partial_conversion(ctx, module, "io-to-native")?;
     Ok(())
 }

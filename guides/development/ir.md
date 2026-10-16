@@ -413,6 +413,8 @@ Read a name's text through the context, the way a string attribute is read:
 `name.dialect(ctx)`, `name.strip_dialect(ctx)`, and `name.display(ctx)` for
 `dialect.name`. Prefer a wrapper's `matches` to comparing text; compare text
 with `name.is(ctx, "dialect.name")` only for a name no wrapper declares.
+Compare a dialect with the constant `#[dialect]` generates for it,
+`name.dialect(ctx) == wasm::DIALECT_NAME`, rather than a string literal.
 
 An operation's regions and successors are read through the context, not
 through `OperationData`: `ctx.op_regions(op)` and `ctx.op_successors(op)`

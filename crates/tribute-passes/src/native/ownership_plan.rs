@@ -569,7 +569,8 @@ impl ManagedLayoutCollector {
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
     let identity = |ty| {
         let data = ctx.get_type(ty);
-        (data.name.dialect(ctx) == "adt").then(|| ctx.type_attrs(ty).get_string_ref("name"))?
+        (data.name.dialect(ctx) == adt::DIALECT_NAME)
+            .then(|| ctx.type_attrs(ty).get_string_ref("name"))?
     };
     identity(left).is_some() && identity(left) == identity(right)
 }

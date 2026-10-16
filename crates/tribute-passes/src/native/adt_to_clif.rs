@@ -65,8 +65,8 @@ fn lower(
 
 fn adt_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
-        .legal_dialect("clif")
-        .illegal_dialect("adt")
+        .legal_dialect(clif::DIALECT_NAME)
+        .illegal_dialect(adt::DIALECT_NAME)
         .illegal_op("tribute_rtti.descriptor")
         .legal_op("adt.struct_new")
         .legal_op("adt.variant_new")

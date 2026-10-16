@@ -181,7 +181,7 @@ fn lower(
 
 fn tribute_rt_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
-        .illegal_dialect("tribute_rt")
+        .illegal_dialect(tribute_rt::DIALECT_NAME)
         .legal_op("tribute_rt.retain")
         .legal_op("tribute_rt.release")
 }

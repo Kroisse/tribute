@@ -435,7 +435,7 @@ fn check_tail_call_conv(
 /// Conversion target for IR that is ready for Cranelift emission.
 pub fn native_backend_ready_target() -> ConversionTarget {
     let mut target = ConversionTarget::new();
-    target.add_legal_dialect("clif");
+    target.add_legal_dialect(clif::DIALECT_NAME);
     target.add_legal_op("core.module");
     target
 }

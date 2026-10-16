@@ -214,7 +214,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
                 || func::CallIndirect::matches(&ctx, nested)
                 || func::Return::matches(&ctx, nested)
                 || func::Unreachable::matches(&ctx, nested)
-                || data.name.dialect(&ctx) == "effect"
+                || data.name.dialect(&ctx) == tribute_ir::dialect::effect::DIALECT_NAME
             {
                 if tail {
                     assert!(

@@ -237,7 +237,7 @@ pub(crate) fn type_to_valtype(
         }))
     } else if trunk_ir::dialect::wasm::FuncSig::matches(ctx, ty) {
         Ok(ValType::Ref(RefType::FUNCREF))
-    } else if ctx.get_type(ty).name.dialect(ctx) == "wasm" {
+    } else if ctx.get_type(ty).name.dialect(ctx) == wasm::DIALECT_NAME {
         if trunk_ir::dialect::wasm::Structref::matches(ctx, ty) {
             Ok(ValType::Ref(RefType {
                 nullable: true,
@@ -341,7 +341,7 @@ pub(crate) fn attr_heap_type(
         Some(Attribute::String(name)) => symbol_to_abstract_heap_type(ctx.str(*name)),
         Some(Attribute::Type(ty)) => {
             let data = ctx.get_type(*ty);
-            if data.name.dialect(ctx) == "wasm" {
+            if data.name.dialect(ctx) == wasm::DIALECT_NAME {
                 let name = data.name.strip_dialect(ctx);
                 symbol_to_abstract_heap_type(name)
             } else {

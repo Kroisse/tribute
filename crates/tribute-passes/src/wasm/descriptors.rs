@@ -68,7 +68,9 @@ pub fn declare(ctx: &mut IrContext, module: Module) {
 /// GC reference is dynamic.
 fn field_kind(ctx: &IrContext, ty: TypeRef) -> FieldKind {
     let data = ctx.get_type(ty);
-    if data.name.dialect(ctx) == "adt" || trunk_ir::dialect::core::Array::matches(ctx, ty) {
+    if data.name.dialect(ctx) == tribute_ir::dialect::adt::DIALECT_NAME
+        || trunk_ir::dialect::core::Array::matches(ctx, ty)
+    {
         return FieldKind::Managed;
     }
     let dynamic = {

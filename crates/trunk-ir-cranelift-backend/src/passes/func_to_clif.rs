@@ -172,8 +172,8 @@ fn convert_to_clif_func_type(
 
 fn func_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
-        .legal_dialect("clif")
-        .illegal_dialect("func")
+        .legal_dialect(clif::DIALECT_NAME)
+        .illegal_dialect(func::DIALECT_NAME)
 }
 
 fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {

@@ -275,7 +275,7 @@ impl<'a> Converter<'a> {
                 self.lower_structured_if(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
-            if name.dialect(self.ctx) != "tribute_control" {
+            if name.dialect(self.ctx) != tribute_control::DIALECT_NAME {
                 let cloned = self.clone_plain_op(source, mapping)?;
                 self.ctx.push_op(block, cloned);
                 index += 1;
@@ -485,7 +485,9 @@ pub fn tribute_control_to_cps(
             if tribute_control::Func::matches(converter.ctx, source) {
                 let function = converter.convert_func(source)?;
                 converter.ctx.push_op(new_block, function);
-            } else if converter.ctx.op(source).name.dialect(converter.ctx) == "tribute_control" {
+            } else if converter.ctx.op(source).name.dialect(converter.ctx)
+                == tribute_control::DIALECT_NAME
+            {
                 return Err(TributeControlToCpsError::one(
                     PRE_CPS_BOUNDARY,
                     Some(source),

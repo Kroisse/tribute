@@ -71,7 +71,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
 
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(WritePattern)
-        .with_target(ConversionTarget::new().illegal_dialect("tribute_io"))
+        .with_target(ConversionTarget::new().illegal_dialect(tribute_io::DIALECT_NAME))
         .apply_partial_conversion(ctx, module, IO_TO_WASM)?;
     Ok(())
 }

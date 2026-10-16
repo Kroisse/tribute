@@ -3112,7 +3112,8 @@ mod tests {
         let stray_continue = *continues
             .iter()
             .find(|&&op| {
-                direct_owner(op).is_some_and(|owner| ctx.op(owner).name.dialect(&ctx) == "func")
+                direct_owner(op)
+                    .is_some_and(|owner| ctx.op(owner).name.dialect(&ctx) == func::DIALECT_NAME)
             })
             .unwrap();
         assert!(
@@ -3172,7 +3173,8 @@ mod tests {
         let stray_break = *breaks
             .iter()
             .find(|&&op| {
-                direct_owner(op).is_some_and(|owner| ctx.op(owner).name.dialect(&ctx) == "func")
+                direct_owner(op)
+                    .is_some_and(|owner| ctx.op(owner).name.dialect(&ctx) == func::DIALECT_NAME)
             })
             .unwrap();
         assert!(

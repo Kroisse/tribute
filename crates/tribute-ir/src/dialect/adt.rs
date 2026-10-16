@@ -2,7 +2,7 @@
 
 // === Type alias hint registration ===
 inventory::submit!(trunk_ir::asm_format::TypeAliasHint {
-    dialect: "adt",
+    dialect: DIALECT_NAME,
     suggest: |ctx, ty| { ctx.type_attrs(ty).get_str("name") },
 });
 

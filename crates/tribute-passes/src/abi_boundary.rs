@@ -24,7 +24,12 @@ use trunk_ir::types::Attribute;
 use trunk_ir::walk::{WalkAction, walk_op};
 
 /// Dialects whose operations must be consumed inside the boundary.
-const FORBIDDEN_DIALECTS: &[&str] = &["tribute_control", "ability", "effect", "closure"];
+const FORBIDDEN_DIALECTS: &[&str] = &[
+    tribute_ir::dialect::tribute_control::DIALECT_NAME,
+    tribute_ir::dialect::ability::DIALECT_NAME,
+    tribute_ir::dialect::effect::DIALECT_NAME,
+    tribute_ir::dialect::closure::DIALECT_NAME,
+];
 
 /// Semantic control metadata that must not cross the boundary.
 const FORBIDDEN_ATTRIBUTES: &[&str] = &[

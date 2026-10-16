@@ -1565,7 +1565,7 @@ fn contains_forbidden_logical_component(
 
 fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     for (ty, data) in ctx.types().iter() {
-        if data.name.dialect(ctx) != "tribute_control" {
+        if data.name.dialect(ctx) != DIALECT_NAME {
             continue;
         }
         if FuncSig::matches(ctx, ty) {
@@ -2335,7 +2335,7 @@ fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>)
 
 fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
-    if data.name.dialect(ctx) != "tribute_control" {
+    if data.name.dialect(ctx) != DIALECT_NAME {
         return;
     }
     let Some(def) = OpDef::of(ctx, op) else {
@@ -4700,7 +4700,7 @@ mod tests {
         let body = fixture.module.body(ctx).expect("module body");
         walk_region_ops(ctx, body, &mut |op| {
             let data = ctx.op(op);
-            if data.name.dialect(ctx) == "tribute_control" {
+            if data.name.dialect(ctx) == DIALECT_NAME {
                 names.insert(data.name);
                 assert_eq!(data.location.span, Span::new(7, 19));
             }
