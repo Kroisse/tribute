@@ -31,7 +31,7 @@ use super::list;
 mod row;
 
 pub use row::{
-    EFFECT_ROW_ATTR, INFERRED_ROW_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR, ROW_UNIONS_ATTR, Row,
+    ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR, ROW_UNIONS_ATTR, Row,
     RowBinder, RowUnion, find_substituted_rows, logical_tuple_elements, logical_tuple_name,
     logical_tuple_type, quantified_count, row_args, row_binders, row_unions, substitute_rows,
     visit_rows,
@@ -333,7 +333,7 @@ pub(crate) enum EvidencePlanSite {
 }
 
 /// Check the shape of an operation's `evidence_plan`. Whether the selection
-/// matches the effect rows is typechecking's responsibility.
+/// matches the ability rows is typechecking's responsibility.
 pub(crate) fn verify_evidence_plan(
     ctx: &IrContext,
     op: OpRef,
@@ -468,7 +468,7 @@ pub enum FuncSigTypeError {
     LengthMismatch,
     ResultCount(u32),
     Convention,
-    /// The effect row is malformed, or written out although closed and empty.
+    /// The ability row is malformed, or written out although closed and empty.
     Row,
 }
 
@@ -549,7 +549,7 @@ impl FuncSig {
                 .ok_or(FuncSigTypeError::Convention)?,
         )
         .map_err(|_| FuncSigTypeError::Convention)?;
-        if let Some(row) = data.attrs.get(EFFECT_ROW_ATTR)
+        if let Some(row) = data.attrs.get(ABILITY_ROW_ATTR)
             && Row::from_attribute(row).is_ok_and(|row| row.is_empty())
         {
             return Err(FuncSigTypeError::Row);
@@ -608,7 +608,7 @@ impl FuncSig {
         .expect("validated source func_sig retains convention domain")
     }
 
-    /// The callable's effect row; closed and empty when the type omits it.
+    /// The callable's ability row; closed and empty when the type omits it.
     pub fn row(self, ctx: &IrContext) -> Row {
         row::stored_row(ctx.get_type(self.0))
             .expect("a func_sig stores a row")
@@ -623,7 +623,7 @@ impl FuncSig {
         attrs.remove(trunk_ir::dialect::func::NUM_INPUTS_ATTR);
         attrs.remove(trunk_ir::dialect::func::NUM_RESULTS_ATTR);
         attrs.remove(CALLING_CONVENTION_ATTR);
-        attrs.remove(EFFECT_ROW_ATTR);
+        attrs.remove(ABILITY_ROW_ATTR);
     }
 
     /// Whether this signature carries type-owned metadata beyond storage and
@@ -655,7 +655,7 @@ pub fn func_sig(
     func_sig_with_attrs(ctx, result, inputs, convention, AttributeMap::new())
 }
 
-/// Build a logical source signature with effect row `row`.
+/// Build a logical source signature with ability row `row`.
 pub fn func_sig_with_row(
     ctx: &mut IrContext,
     result: TypeRef,
@@ -665,7 +665,7 @@ pub fn func_sig_with_row(
 ) -> FuncSig {
     let mut attrs = AttributeMap::new();
     if !row.is_empty() {
-        attrs.insert(Symbol::new(EFFECT_ROW_ATTR), row.to_attribute());
+        attrs.insert(Symbol::new(ABILITY_ROW_ATTR), row.to_attribute());
     }
     build_func_sig(ctx, result, inputs, convention, attrs)
 }
@@ -682,7 +682,7 @@ pub fn func_sig_with_attrs(
         !attrs.contains_key(trunk_ir::dialect::func::NUM_INPUTS_ATTR)
             && !attrs.contains_key(trunk_ir::dialect::func::NUM_RESULTS_ATTR)
             && !attrs.contains_key(CALLING_CONVENTION_ATTR)
-            && !attrs.contains_key(EFFECT_ROW_ATTR),
+            && !attrs.contains_key(ABILITY_ROW_ATTR),
         "source func_sig reserves delimiters, convention, and row metadata"
     );
     build_func_sig(ctx, result, inputs, convention, attrs)
@@ -980,7 +980,7 @@ fn parse_convention(input: &mut &str) -> winnow::ModalResult<CallingConvention> 
 }
 
 /// The concise row of a source signature, `row(@A, @B | 1)`, as the raw
-/// `effect_row` attribute; `None` when the signature writes no row.
+/// `ability_row` attribute; `None` when the signature writes no row.
 fn parse_row<'a>(
     input: &mut &'a str,
 ) -> winnow::ModalResult<Option<trunk_ir::parser::raw::RawAttribute<'a>>> {
@@ -1033,7 +1033,7 @@ fn func_sig_raw_type<'a>(
         RawAttribute::Int(convention as i128),
     )];
     if let Some(row) = row {
-        attrs.push((EFFECT_ROW_ATTR.into(), row));
+        attrs.push((ABILITY_ROW_ATTR.into(), row));
     }
     RawType::Function {
         dialect: "tribute_control",
@@ -1053,7 +1053,7 @@ fn has_duplicate_convention_attr(
 ) -> bool {
     attrs
         .iter()
-        .any(|(key, _)| key == CALLING_CONVENTION_ATTR || key == EFFECT_ROW_ATTR)
+        .any(|(key, _)| key == CALLING_CONVENTION_ATTR || key == ABILITY_ROW_ATTR)
 }
 
 fn parse_func<'a>(
@@ -1617,13 +1617,13 @@ fn validate_attr_keys(
             ),
         );
     }
-    if data.attributes.get(EFFECT_ROW_ATTR).is_some() {
+    if data.attributes.get(ABILITY_ROW_ATTR).is_some() {
         push_op_error(
             ctx,
             op,
             errors,
             format!(
-                "{EFFECT_ROW_ATTR} belongs only on tribute_control.func_sig, not on the operation"
+                "{ABILITY_ROW_ATTR} belongs only on tribute_control.func_sig, not on the operation"
             ),
         );
     }

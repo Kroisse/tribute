@@ -2511,9 +2511,9 @@ fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
 }
 
 #[test]
-fn legalization_drops_effect_rows_and_row_metadata() {
+fn legalization_drops_ability_rows_and_row_metadata() {
     let with_rows = r#"core.module @test {
-  !open = tribute_control.func_sig<(core.i32) -> core.i32, {effect_row = {tail = 0}, tribute.calling_convention = 2}>
+  !open = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 2}>
   ability.decl {sym_name = "A"} {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
   }
@@ -2530,7 +2530,7 @@ fn legalization_drops_effect_rows_and_row_metadata() {
   }
 }"#;
     let without_rows = with_rows
-        .replace("effect_row = {tail = 0}, ", "")
+        .replace("ability_row = {tail = 0}, ", "")
         .replace(" row(| 0)", "")
         .replace(" row(@A)", "")
         .replace(

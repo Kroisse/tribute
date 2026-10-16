@@ -1,4 +1,4 @@
-//! Effect rows of source-logical callable types, the row binders a definition
+//! Ability rows of source-logical callable types, the row binders a definition
 //! declares, and the substitution a reference applies to its callee's type.
 
 use rustc_hash::FxHashMap as HashMap;
@@ -7,8 +7,8 @@ use trunk_ir::{IrContext, Symbol, SymbolPath, TypeRef};
 
 use crate::dialect::adt;
 
-/// Type attribute of `tribute_control.func_sig` holding its effect row.
-pub const EFFECT_ROW_ATTR: &str = "effect_row";
+/// Type attribute of `tribute_control.func_sig` holding its ability row.
+pub const ABILITY_ROW_ATTR: &str = "ability_row";
 /// `tribute_control.func` attribute declaring its row binders.
 pub const ROW_BINDERS_ATTR: &str = "row_binders";
 /// `tribute_control.func` attribute declaring its row tail unions.
@@ -22,7 +22,7 @@ pub const ROW_ARGS_ATTR: &str = "row_args";
 
 const LOGICAL_TUPLE_PREFIX: &str = "__logical_tuple_";
 
-/// An effect row: ability instances, sorted by path with repetitions kept,
+/// An ability row: ability instances, sorted by path with repetitions kept,
 /// and an optional tail naming a row binder of the enclosing definition.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Row {
@@ -305,7 +305,7 @@ fn is_func_sig(data: &TypeData) -> bool {
     data.dialect == "tribute_control" && data.name == "func_sig"
 }
 
-/// The effect row a type stores, if it is a callable type with a well-formed
+/// The ability row a type stores, if it is a callable type with a well-formed
 /// row.
 pub(crate) fn stored_row(data: &TypeData) -> Option<Result<Row, String>> {
     if !is_func_sig(data) {
@@ -313,7 +313,7 @@ pub(crate) fn stored_row(data: &TypeData) -> Option<Result<Row, String>> {
     }
     Some(
         data.attrs
-            .get(EFFECT_ROW_ATTR)
+            .get(ABILITY_ROW_ATTR)
             .map_or_else(|| Ok(Row::default()), Row::from_attribute),
     )
 }
@@ -471,7 +471,7 @@ impl<S: TypeSink> Substitution<'_, S> {
             if substituted != row {
                 changed = true;
                 data.attrs
-                    .insert(Symbol::new(EFFECT_ROW_ATTR), substituted.to_attribute());
+                    .insert(Symbol::new(ABILITY_ROW_ATTR), substituted.to_attribute());
             }
         }
         if changed {
@@ -506,7 +506,7 @@ pub fn find_substituted_rows(ctx: &IrContext, ty: TypeRef, args: &[Row]) -> Opti
     .ty(ty)
 }
 
-/// Visit every effect row inside `ty`, including those of the tuple layouts
+/// Visit every ability row inside `ty`, including those of the tuple layouts
 /// it names. Visits a malformed row as an error.
 pub fn visit_rows(ctx: &IrContext, ty: TypeRef, visit: &mut impl FnMut(Result<Row, String>)) {
     let mut seen = rustc_hash::FxHashSet::default();
@@ -529,7 +529,7 @@ fn visit_rows_in(
         return;
     }
     let data = ctx.get_type(ty);
-    if data.attrs.get(EFFECT_ROW_ATTR).is_some()
+    if data.attrs.get(ABILITY_ROW_ATTR).is_some()
         && let Some(row) = stored_row(data)
     {
         visit(row);

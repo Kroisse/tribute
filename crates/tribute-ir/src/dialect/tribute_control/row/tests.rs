@@ -12,9 +12,9 @@ use super::super::{
 use super::*;
 
 const MODULE: &str = r#"core.module @test {
-  !open = tribute_control.func_sig<(core.i32) -> core.i32, {effect_row = {tail = 0}, tribute.calling_convention = 2}>
-  !closed = tribute_control.func_sig<(core.i32) -> core.i32, {effect_row = {instances = [@A, @B]}, tribute.calling_convention = 2}>
-  !applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32, {effect_row = {instances = [@A, @B]}, tribute.calling_convention = 2}>
+  !open = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 2}>
+  !closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}, tribute.calling_convention = 2}>
+  !applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}, tribute.calling_convention = 2}>
 
   ability.decl {sym_name = "A"} {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
@@ -158,8 +158,8 @@ fn rows_must_be_sorted_and_not_written_when_closed_and_empty() {
     );
     assert_rejects(
         &MODULE.replace(
-            "!closed = tribute_control.func_sig<(core.i32) -> core.i32, {effect_row = {instances = [@A, @B]}",
-            "!closed = tribute_control.func_sig<(core.i32) -> core.i32, {effect_row = {}",
+            "!closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}",
+            "!closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {}",
         ),
         "malformed tribute_control.func_sig: Row",
     );
@@ -199,7 +199,7 @@ fn the_row_belongs_to_the_signature_type() {
     let mut ctx = IrContext::new();
     let input = MODULE.replace(
         r#"attributes {row_binders = ["param"]}"#,
-        r#"attributes {row_binders = ["param"], effect_row = {tail = 0}}"#,
+        r#"attributes {row_binders = ["param"], ability_row = {tail = 0}}"#,
     );
     assert!(parse_module(&mut ctx, &input).is_err());
 }
