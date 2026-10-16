@@ -952,12 +952,12 @@ wasm.return
         let mut ctx = IrContext::new();
         let mut closure_layout = |name: &'static str| {
             let layout = ctx.string_attr(crate::gc_types::CLOSURE_LAYOUT);
-            TypeDataBuilder::new(format!("test.{name}"))
+            TypeDataBuilder::new(name)
                 .attr(trunk_ir::types::LAYOUT_ATTR, layout)
                 .intern(&mut ctx)
         };
-        let reference = closure_layout("reference");
-        let declaration = closure_layout("declaration");
+        let reference = closure_layout("test.reference");
+        let declaration = closure_layout("test.declaration");
         let bytes_layout = ctx.string_attr(crate::gc_types::BYTES_LAYOUT);
         let bytes = TypeDataBuilder::new("test.bytes")
             .attr(trunk_ir::types::LAYOUT_ATTR, bytes_layout)

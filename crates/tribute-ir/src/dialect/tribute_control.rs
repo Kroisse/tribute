@@ -4196,8 +4196,8 @@ mod tests {
         Location::new(path, Span::new(7, 19))
     }
 
-    fn simple_type(ctx: &mut IrContext, dialect: &str, name: &str) -> TypeRef {
-        TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
+    fn simple_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+        TypeDataBuilder::new(name).intern(ctx)
     }
 
     fn ability_type(_: &mut IrContext, name: &str) -> SymbolPath {
@@ -4270,7 +4270,7 @@ mod tests {
     fn builder_fixture() -> ValidFixture {
         let mut ctx = IrContext::new();
         let loc = location(&mut ctx);
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let i32_ty = simple_type(&mut ctx, "core.i32");
         let ability = ability_type(&mut ctx, "State");
         let direct = func_sig(&mut ctx, i32_ty, [i32_ty], CallingConvention::Direct).as_type_ref();
 
@@ -4609,7 +4609,7 @@ mod tests {
     #[test]
     fn callable_codes_and_resume_token_accessors_are_exact() {
         let mut ctx = IrContext::new();
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let i32_ty = simple_type(&mut ctx, "core.i32");
 
         for (convention, code) in [
             (CallingConvention::Direct, 0),
@@ -4656,7 +4656,7 @@ mod tests {
     #[test]
     fn func_sig_rejects_raw_delimiter_failures_before_conversion() {
         let (mut ctx, module) = parse_fixture("core.module @test {}");
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let i32_ty = simple_type(&mut ctx, "core.i32");
         let malformed = [
             TypeDataBuilder::new("tribute_control.func_sig")
                 .param(i32_ty)
@@ -5366,7 +5366,7 @@ mod tests {
 
         let mut ctx = IrContext::new();
         let loc = location(&mut ctx);
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let i32_ty = simple_type(&mut ctx, "core.i32");
         let module = module(&mut ctx, loc, &[]);
         // Textual regions always receive an implicit entry block, so zero-block
         // regions require direct in-memory construction.

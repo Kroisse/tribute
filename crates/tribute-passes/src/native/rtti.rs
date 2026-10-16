@@ -983,8 +983,8 @@ mod tests {
         (ctx, loc)
     }
 
-    fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
+    fn intern_ty(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+        TypeDataBuilder::new(name).intern(ctx)
     }
 
     /// Build a module containing a function that creates a struct via adt.struct_new.
@@ -1068,7 +1068,7 @@ mod tests {
     #[test]
     fn declarations_receive_user_indices_in_plan_order() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let i32_ty = intern_ty(&mut ctx, "core.i32");
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty)]);
         let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty]);
 
@@ -1085,7 +1085,7 @@ mod tests {
     #[test]
     fn generation_rejects_an_undeclared_allocation_layout() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let i32_ty = intern_ty(&mut ctx, "core.i32");
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty)]);
         let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty]);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
@@ -1231,7 +1231,7 @@ mod tests {
     #[test]
     fn test_struct_no_ptr_fields() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let i32_ty = intern_ty(&mut ctx, "core.i32");
 
         // Point(x: i32, y: i32) - no managed fields
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
@@ -1248,8 +1248,8 @@ mod tests {
     #[test]
     fn test_struct_with_ptr_fields() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
-        let managed_ty = intern_ty(&mut ctx, "tribute_rt", "anyref");
+        let i32_ty = intern_ty(&mut ctx, "core.i32");
+        let managed_ty = intern_ty(&mut ctx, "tribute_rt.anyref");
 
         // Node(value: i32, next: anyref) has one typed managed field.
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", managed_ty)]);
@@ -1266,8 +1266,8 @@ mod tests {
     #[test]
     fn test_multiple_struct_types() {
         let (mut ctx, loc) = test_ctx();
-        let i32_ty = intern_ty(&mut ctx, "core", "i32");
-        let ptr_ty = intern_ty(&mut ctx, "core", "ptr");
+        let i32_ty = intern_ty(&mut ctx, "core.i32");
+        let ptr_ty = intern_ty(&mut ctx, "core.ptr");
 
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
@@ -1372,8 +1372,8 @@ mod tests {
     #[test]
     fn test_closure_struct_skips_func_ptr() {
         let (mut ctx, loc) = test_ctx();
-        let ptr_ty = intern_ty(&mut ctx, "core", "ptr");
-        let managed_ty = intern_ty(&mut ctx, "tribute_rt", "anyref");
+        let ptr_ty = intern_ty(&mut ctx, "core.ptr");
+        let managed_ty = intern_ty(&mut ctx, "tribute_rt.anyref");
 
         // The raw code pointer is unmanaged; the typed environment is managed.
         let closure_ty = make_struct_type(&mut ctx, &[("func_ptr", ptr_ty), ("env", managed_ty)]);

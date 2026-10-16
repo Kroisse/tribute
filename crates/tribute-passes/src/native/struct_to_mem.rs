@@ -310,13 +310,12 @@ mod tests {
             panic!("one struct access")
         };
 
-        let scalar = |ctx: &mut IrContext, name: &'static str| {
-            TypeDataBuilder::new(format!("core.{name}")).intern(ctx)
-        };
-        let i8_ty = scalar(&mut ctx, "i8");
-        let i16_ty = scalar(&mut ctx, "i16");
-        let i32_ty = scalar(&mut ctx, "i32");
-        let f64_ty = scalar(&mut ctx, "f64");
+        let scalar =
+            |ctx: &mut IrContext, name: &'static str| TypeDataBuilder::new(name).intern(ctx);
+        let i8_ty = scalar(&mut ctx, "core.i8");
+        let i16_ty = scalar(&mut ctx, "core.i16");
+        let i32_ty = scalar(&mut ctx, "core.i32");
+        let f64_ty = scalar(&mut ctx, "core.f64");
         let ptr_ty = core::ptr(&mut ctx).as_type_ref();
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
         assert_eq!(

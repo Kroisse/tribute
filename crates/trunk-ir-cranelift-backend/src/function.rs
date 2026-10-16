@@ -801,26 +801,26 @@ mod tests {
     use trunk_ir::context::IrContext;
 
     fn make_core_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        trunk_ir::TypeDataBuilder::new(format!("core.{name}")).intern(ctx)
+        trunk_ir::TypeDataBuilder::new(name).intern(ctx)
     }
 
     #[test]
     fn test_translate_type() {
         let mut ctx = IrContext::new();
         for (name, expected) in [
-            ("i8", Some(cl_types::I8)),
-            ("i16", Some(cl_types::I16)),
-            ("i32", Some(cl_types::I32)),
-            ("i64", Some(cl_types::I64)),
-            ("f32", Some(cl_types::F32)),
-            ("f64", Some(cl_types::F64)),
-            ("nil", None),
+            ("core.i8", Some(cl_types::I8)),
+            ("core.i16", Some(cl_types::I16)),
+            ("core.i32", Some(cl_types::I32)),
+            ("core.i64", Some(cl_types::I64)),
+            ("core.f32", Some(cl_types::F32)),
+            ("core.f64", Some(cl_types::F64)),
+            ("core.nil", None),
         ] {
             let ty = make_core_type(&mut ctx, name);
             let translated = translate_type(&ctx, ty, cl_types::I64);
             match expected {
-                Some(expected) => assert_eq!(translated.ok(), Some(expected), "core.{name}"),
-                None => assert!(translated.is_err(), "core.{name} must be unsupported"),
+                Some(expected) => assert_eq!(translated.ok(), Some(expected), "{name}"),
+                None => assert!(translated.is_err(), "{name} must be unsupported"),
             }
         }
     }
@@ -828,9 +828,9 @@ mod tests {
     #[test]
     fn test_translate_signature_params_and_results() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_core_type(&mut ctx, "i32");
-        let i64_ty = make_core_type(&mut ctx, "i64");
-        let nil_ty = make_core_type(&mut ctx, "nil");
+        let i32_ty = make_core_type(&mut ctx, "core.i32");
+        let i64_ty = make_core_type(&mut ctx, "core.i64");
+        let nil_ty = make_core_type(&mut ctx, "core.nil");
         // (case, inputs, results, expected params, expected returns);
         // nil parameters and results are omitted in order.
         let cases: [(&str, &[_], &[_], &[_], &[_]); 6] = [
@@ -874,7 +874,7 @@ mod tests {
     #[test]
     fn signature_call_conv_selects_the_cranelift_convention() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_core_type(&mut ctx, "i32");
+        let i32_ty = make_core_type(&mut ctx, "core.i32");
         let platform = clif::func_sig(&mut ctx, [i32_ty], []).as_type_ref();
         let mut attrs = trunk_ir::AttributeMap::new();
         func::CallConv::Tail.set_in(&mut ctx, &mut attrs);

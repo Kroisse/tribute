@@ -360,7 +360,6 @@ type SmallAttrs = Vec<(&'static str, i8)>;
 /// order and may carry their own attributes.
 #[derive(Clone, Debug)]
 struct TypeSpec {
-    dialect: &'static str,
     name: &'static str,
     params: Vec<(usize, SmallAttrs)>,
     attrs: SmallAttrs,
@@ -370,7 +369,6 @@ struct TypeSpec {
 /// their keys are equal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TypeKey {
-    dialect: &'static str,
     name: &'static str,
     params: Vec<(usize, BTreeMap<&'static str, i8>)>,
     attrs: BTreeMap<&'static str, i8>,
@@ -379,7 +377,6 @@ struct TypeKey {
 impl TypeSpec {
     fn key(&self) -> TypeKey {
         TypeKey {
-            dialect: self.dialect,
             name: self.name,
             params: self
                 .params
@@ -410,13 +407,18 @@ fn type_spec(known: usize) -> impl Strategy<Value = TypeSpec> {
         .boxed()
     };
     (
-        select(vec!["core", "test"]),
-        select(vec!["i32", "tuple", "numbered"]),
+        select(vec![
+            "core.i32",
+            "core.tuple",
+            "core.numbered",
+            "test.i32",
+            "test.tuple",
+            "test.numbered",
+        ]),
         params,
         small_attrs(),
     )
-        .prop_map(|(dialect, name, params, attrs)| TypeSpec {
-            dialect,
+        .prop_map(|(name, params, attrs)| TypeSpec {
             name,
             params,
             attrs,
@@ -437,7 +439,7 @@ fn small_map(
 
 /// Build the data for `spec`; parameters resolve against `refs`.
 fn build_type(ctx: &mut IrContext, spec: &TypeSpec, refs: &[TypeRef]) -> TypeData {
-    let mut builder = TypeDataBuilder::new(format!("{}.{}", spec.dialect, spec.name));
+    let mut builder = TypeDataBuilder::new(spec.name);
     for (param, attrs) in &spec.params {
         builder = builder.param_with_attrs(refs[*param], small_map(ctx, attrs.iter().copied()));
     }
@@ -449,7 +451,7 @@ fn build_type(ctx: &mut IrContext, spec: &TypeSpec, refs: &[TypeRef]) -> TypeDat
 
 /// Build a fresh copy of the data for `key`.
 fn build_key(ctx: &mut IrContext, key: &TypeKey, refs: &[TypeRef]) -> TypeData {
-    let mut builder = TypeDataBuilder::new(format!("{}.{}", key.dialect, key.name));
+    let mut builder = TypeDataBuilder::new(key.name);
     for (param, attrs) in &key.params {
         let attrs = small_map(ctx, attrs.iter().map(|(&key, &value)| (key, value)));
         builder = builder.param_with_attrs(refs[*param], attrs);

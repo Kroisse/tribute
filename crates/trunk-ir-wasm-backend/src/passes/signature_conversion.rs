@@ -103,7 +103,7 @@ mod tests {
     }
 
     fn type_ref(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(format!("core.{name}")).intern(ctx)
+        TypeDataBuilder::new(name).intern(ctx)
     }
 
     fn make_module(ctx: &mut IrContext, loc: trunk_ir::types::Location, ops: Vec<OpRef>) -> Module {
@@ -171,9 +171,9 @@ mod tests {
     fn converts_wasm_results_inputs_and_metadata() {
         for results in [0, 1, 2] {
             let (mut ctx, loc) = test_ctx();
-            let i32 = type_ref(&mut ctx, "i32");
-            let i64 = type_ref(&mut ctx, "i64");
-            let ptr = type_ref(&mut ctx, "ptr");
+            let i32 = type_ref(&mut ctx, "core.i32");
+            let i64 = type_ref(&mut ctx, "core.i64");
+            let ptr = type_ref(&mut ctx, "core.ptr");
             let mut attrs = trunk_ir::AttributeMap::new();
             attrs.view_mut(&mut ctx).insert(
                 "nested",
@@ -250,8 +250,8 @@ mod tests {
     #[test]
     fn preserves_bodyless_declarations_and_avoids_noop_rewrites() {
         let (mut ctx, loc) = test_ctx();
-        let i32 = type_ref(&mut ctx, "i32");
-        let i64 = type_ref(&mut ctx, "i64");
+        let i32 = type_ref(&mut ctx, "core.i32");
+        let i64 = type_ref(&mut ctx, "core.i64");
         let unchanged = wasm::func_sig(&mut ctx, [i64], []).as_type_ref();
         let declarations: Vec<OpRef> = [vec![], vec![i32], vec![i32, i32]]
             .into_iter()
@@ -300,8 +300,8 @@ mod tests {
     #[test]
     fn rejects_entry_arity_mismatch_without_mutating() {
         let (mut ctx, loc) = test_ctx();
-        let i32 = type_ref(&mut ctx, "i32");
-        let i64 = type_ref(&mut ctx, "i64");
+        let i32 = type_ref(&mut ctx, "core.i32");
+        let i64 = type_ref(&mut ctx, "core.i64");
         let signature = wasm::func_sig(&mut ctx, [i32, i32], []).as_type_ref();
         let func = make_wasm_func(&mut ctx, loc, "bad", signature, &[i32]);
         let module = make_module(&mut ctx, loc, vec![func]);
@@ -323,8 +323,8 @@ mod tests {
     #[test]
     fn rejects_malformed_wasm_signature_without_mutating() {
         let (mut ctx, loc) = test_ctx();
-        let i32 = type_ref(&mut ctx, "i32");
-        let i64 = type_ref(&mut ctx, "i64");
+        let i32 = type_ref(&mut ctx, "core.i32");
+        let i64 = type_ref(&mut ctx, "core.i64");
         let malformed = TypeDataBuilder::new("wasm.func_sig").intern(&mut ctx);
         let bad = ctx.intern_str("bad");
         let func = make_bodyless_wasm_func(&mut ctx, loc, bad, malformed);

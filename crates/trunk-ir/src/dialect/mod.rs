@@ -590,11 +590,12 @@ mod tests {
                     FuncSig, FuncSigTypeError, NUM_INPUTS_ATTR, NUM_RESULTS_ATTR,
                 };
                 let dialect = stringify!($dialect);
+                let sig_name = concat!(stringify!($dialect), ".func_sig");
                 let mut ctx = IrContext::new();
                 let i32 = make_i32_type(&mut ctx);
                 let sig =
                     |ctx: &mut IrContext, params: &[_], counts: &[(&'static str, Attribute)]| {
-                        let mut builder = TypeDataBuilder::new(format!("{dialect}.func_sig"));
+                        let mut builder = TypeDataBuilder::new(sig_name);
                         for &param in params {
                             builder = builder.param(param);
                         }

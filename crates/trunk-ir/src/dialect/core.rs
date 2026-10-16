@@ -446,30 +446,34 @@ mod scalar_category_tests {
     use super::*;
     use crate::types::{Attribute, TypeDataBuilder};
 
-    fn ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        TypeDataBuilder::new(format!("{dialect}.{name}")).intern(ctx)
+    fn ty(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+        TypeDataBuilder::new(name).intern(ctx)
     }
 
     #[test]
     fn integer_like_accepts_bare_core_integer_widths() {
         let mut ctx = IrContext::new();
-        for (name, width) in [("i1", Some(1)), ("i32", Some(32)), ("i128", Some(128))] {
-            let t = ty(&mut ctx, "core", name);
+        for (name, width) in [
+            ("core.i1", Some(1)),
+            ("core.i32", Some(32)),
+            ("core.i128", Some(128)),
+        ] {
+            let t = ty(&mut ctx, name);
             assert_eq!(IntegerLike::width(&ctx, t), width, "{name}");
         }
-        for (dialect, name) in [
-            ("core", "i0"),
-            ("core", "i129"),
-            ("core", "i"),
-            ("core", "i-1"),
-            ("core", "i+32"),
-            ("core", "i032"),
-            ("core", "int"),
-            ("core", "f32"),
-            ("tribute_rt", "i32"),
+        for name in [
+            "core.i0",
+            "core.i129",
+            "core.i",
+            "core.i-1",
+            "core.i+32",
+            "core.i032",
+            "core.int",
+            "core.f32",
+            "tribute_rt.i32",
         ] {
-            let t = ty(&mut ctx, dialect, name);
-            assert!(!IntegerLike::matches(&ctx, t), "{dialect}.{name}");
+            let t = ty(&mut ctx, name);
+            assert!(!IntegerLike::matches(&ctx, t), "{name}");
         }
         let with_attr = TypeDataBuilder::new("core.i32")
             .attr("x", Attribute::Int(0))
@@ -480,17 +484,17 @@ mod scalar_category_tests {
     #[test]
     fn bool_and_float_categories() {
         let mut ctx = IrContext::new();
-        let i1 = ty(&mut ctx, "core", "i1");
-        let i8 = ty(&mut ctx, "core", "i8");
-        let f32 = ty(&mut ctx, "core", "f32");
-        let f64 = ty(&mut ctx, "core", "f64");
-        let f16 = ty(&mut ctx, "core", "f16");
+        let i1 = ty(&mut ctx, "core.i1");
+        let i8 = ty(&mut ctx, "core.i8");
+        let f32 = ty(&mut ctx, "core.f32");
+        let f64 = ty(&mut ctx, "core.f64");
+        let f16 = ty(&mut ctx, "core.f16");
         assert!(BoolLike::matches(&ctx, i1));
         assert!(!BoolLike::matches(&ctx, i8));
         assert_eq!(FloatLike::width(&ctx, f32), Some(32));
         assert_eq!(FloatLike::width(&ctx, f64), Some(64));
         assert!(!FloatLike::matches(&ctx, f16));
-        let f064 = ty(&mut ctx, "core", "f064");
+        let f064 = ty(&mut ctx, "core.f064");
         assert!(!FloatLike::matches(&ctx, f064));
         assert!(!FloatLike::matches(&ctx, i1));
     }

@@ -585,7 +585,7 @@ fn malformed_pre_boundary_is_atomic() {
 fn malformed_or_retired_source_signatures_fail_before_conversion() {
     for (name, attrs, expected) in [
         (
-            "func_sig",
+            "tribute_control.func_sig",
             vec![
                 (func::NUM_INPUTS_ATTR, Attribute::Int(2)),
                 (func::NUM_RESULTS_ATTR, Attribute::Int(1)),
@@ -594,7 +594,7 @@ fn malformed_or_retired_source_signatures_fail_before_conversion() {
             "malformed tribute_control.func_sig",
         ),
         (
-            "callable",
+            "tribute_control.callable",
             vec![
                 (func::NUM_INPUTS_ATTR, Attribute::Int(1)),
                 (func::NUM_RESULTS_ATTR, Attribute::Int(1)),
@@ -615,7 +615,7 @@ fn malformed_or_retired_source_signatures_fail_before_conversion() {
             .iter()
             .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
             .unwrap();
-        let mut builder = TypeDataBuilder::new(format!("tribute_control.{name}")).params([i32_ty]);
+        let mut builder = TypeDataBuilder::new(name).params([i32_ty]);
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
