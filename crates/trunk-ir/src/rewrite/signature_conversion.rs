@@ -469,9 +469,8 @@ mod tests {
 
             let ops = module.ops(&ctx);
             for (index, expected_regions) in [(0, 0), (1, 1)] {
-                let data = ctx.op(ops[index]);
                 assert_eq!(ctx.op_region_count(ops[index]), expected_regions);
-                let func_ty = data.attributes.view(&ctx).get_type("type").unwrap();
+                let func_ty = ctx.op_attrs(ops[index]).get_type("type").unwrap();
                 let function = func::FuncSig::from_type_ref(&ctx, func_ty).unwrap();
                 assert_eq!(function.inputs(&ctx), [i64_ty]);
                 assert_eq!(function.results(&ctx), vec![i64_ty; result_count]);
@@ -563,18 +562,21 @@ mod result_list_tests {
                 let mut ctx = IrContext::new();
                 let nil = core::nil(&mut ctx).as_type_ref();
                 let ptr = core::ptr(&mut ctx).as_type_ref();
-                let mut attrs = crate::AttributeMap::new();
-                attrs.view_mut(&mut ctx).insert(
-                    "nested",
-                    Attribute::List(vec![Attribute::List(vec![Attribute::Type(nil)])]),
-                );
                 let dict = crate::AttributeMap::from_entries(
                     &mut ctx,
                     [("ty", Attribute::List(vec![Attribute::Type(nil)]))],
                 );
-                let mut attrs_view = attrs.view_mut(&mut ctx);
-                attrs_view.insert("dict", Attribute::Dict(dict));
-                attrs_view.insert("tag", Attribute::SymbolRef(SymbolPath::new(["keep"])));
+                let attrs = crate::AttributeMap::from_entries(
+                    &mut ctx,
+                    [
+                        (
+                            "nested",
+                            Attribute::List(vec![Attribute::List(vec![Attribute::Type(nil)])]),
+                        ),
+                        ("dict", Attribute::Dict(dict)),
+                        ("tag", Attribute::SymbolRef(SymbolPath::new(["keep"]))),
+                    ],
+                );
                 let signature = func::func_sig_with_attrs(
                     &mut ctx,
                     vec![nil; inputs],

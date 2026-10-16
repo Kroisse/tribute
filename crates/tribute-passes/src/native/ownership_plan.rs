@@ -206,7 +206,7 @@ impl NativeOwnershipPlan {
                 "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
             )));
         }
-        let name = data.attrs.view(ctx).get_string_ref("name").ok_or_else(|| {
+        let name = ctx.type_attrs(ty).get_string_ref("name").ok_or_else(|| {
             OwnershipPlanError::new("managed release typeref lacks nominal allocation identity")
         })?;
         let mut layouts = self
@@ -530,7 +530,7 @@ impl ManagedLayoutCollector {
         let data = ctx.get_type(ty);
         if data.dialect == "adt"
             && (matches!(data.name.as_str(), "struct" | "enum"))
-            && let Some(name) = data.attrs.view(ctx).get_string_ref("name")
+            && let Some(name) = ctx.type_attrs(ty).get_string_ref("name")
         {
             let layouts = self.nominal_layouts.entry(name).or_default();
             if !layouts.contains(&ty) {
@@ -567,7 +567,7 @@ impl ManagedLayoutCollector {
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
     let identity = |ty| {
         let data = ctx.get_type(ty);
-        (data.dialect == "adt").then(|| data.attrs.view(ctx).get_string_ref("name"))?
+        (data.dialect == "adt").then(|| ctx.type_attrs(ty).get_string_ref("name"))?
     };
     identity(left).is_some() && identity(left) == identity(right)
 }

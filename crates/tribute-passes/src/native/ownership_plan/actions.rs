@@ -559,9 +559,7 @@ impl ActionPlanner<'_> {
         } else {
             let callee = self
                 .ir
-                .op(op)
-                .attributes
-                .view(self.ir)
+                .op_attrs(op)
                 .get_symbol_ref("callee")
                 .ok_or_else(|| OwnershipPlanError::new("direct call lacks callee identity"))?;
             let Some(callee_op) = self.module.callee(self.ir, op, callee) else {
@@ -577,9 +575,7 @@ impl ActionPlanner<'_> {
             };
             let signature = self
                 .ir
-                .op(callee_op)
-                .attributes
-                .view(self.ir)
+                .op_attrs(callee_op)
                 .get_type("type")
                 .and_then(|ty| func::FuncSig::from_type_ref(self.ir, ty))
                 .ok_or_else(|| OwnershipPlanError::new("direct callee lacks exact signature"))?;

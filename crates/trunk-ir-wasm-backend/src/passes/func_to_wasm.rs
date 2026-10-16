@@ -611,9 +611,8 @@ impl RewritePattern for FuncTailCallIndirectPattern {
 
         let mut converted_attrs = ctx.op(op).attributes.clone();
         func::remove_indirect_call_signature(ctx, &mut converted_attrs);
-        let mut converted_attrs_view = converted_attrs.view_mut(ctx);
-        converted_attrs_view.remove("table");
-        converted_attrs_view.remove("type_idx");
+        converted_attrs.view_mut(ctx).remove("table");
+        converted_attrs.view_mut(ctx).remove("type_idx");
 
         // This is intentionally checked before creating any replacement.
         // Missing or malformed metadata remains a residual `func.*` op and is

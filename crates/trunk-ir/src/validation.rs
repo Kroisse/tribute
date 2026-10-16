@@ -127,7 +127,7 @@ fn describe_value(ctx: &IrContext, v: ValueRef) -> String {
         ValueDef::OpResult(op, idx) => {
             let data = ctx.op(op);
             let full_name = format!("{}.{}", data.dialect, data.name);
-            match data.attributes.view(ctx).get_str("sym_name") {
+            match ctx.op_attrs(op).get_str("sym_name") {
                 Some(s) => {
                     format!("result #{} of {} (@{})", idx, full_name, s)
                 }
@@ -215,11 +215,7 @@ fn validate_functions_in_region(
                 && data.name == func_name_sym;
             if is_function {
                 // This is a func.func or wasm.func
-                let fn_name = data
-                    .attributes
-                    .view(ctx)
-                    .get_str("sym_name")
-                    .unwrap_or("<unnamed>");
+                let fn_name = ctx.op_attrs(op).get_str("sym_name").unwrap_or("<unnamed>");
 
                 // Check operands with visibility-based scoping.
                 // No values from outside the function body are visible.
@@ -1211,7 +1207,7 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
 
-        let Some(callee_sym) = data.attributes.view(ctx).get_symbol_ref("callee") else {
+        let Some(callee_sym) = ctx.op_attrs(op).get_symbol_ref("callee") else {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 

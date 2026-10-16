@@ -76,9 +76,7 @@ impl RewritePattern for IndirectCallSignaturePattern {
             inputs.push(if converted { actual } else { declared });
         }
         let mut attrs = ctx.get_type(signature_ty).attrs.clone();
-        let mut attrs_view = attrs.view_mut(ctx);
-        attrs_view.remove(func::NUM_INPUTS_ATTR);
-        attrs_view.remove(func::NUM_RESULTS_ATTR);
+        func::FuncSig::remove_reserved_attrs(ctx, &mut attrs);
         let new_signature = func::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref();
 
         if new_signature == signature_ty {

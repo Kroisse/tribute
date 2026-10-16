@@ -92,16 +92,18 @@ impl HandlerBinding {
 
     pub fn to_attribute(&self, ctx: &mut IrContext) -> Attribute {
         let kind = ctx.string_attr(self.kind.keyword());
-        let mut entries = AttributeMap::new();
-        let mut entries_view = entries.view_mut(ctx);
-        entries_view.insert("ability", Attribute::SymbolRef(self.ability.clone()));
-        entries_view.insert("op_name", Attribute::String(self.op_name));
-        entries_view.insert("kind", kind);
-        entries_view.insert(
-            "operation_result_type",
-            Attribute::Type(self.operation_result_type),
-        );
-        Attribute::Dict(entries)
+        Attribute::Dict(AttributeMap::from_entries(
+            ctx,
+            [
+                ("ability", Attribute::SymbolRef(self.ability.clone())),
+                ("op_name", Attribute::String(self.op_name)),
+                ("kind", kind),
+                (
+                    "operation_result_type",
+                    Attribute::Type(self.operation_result_type),
+                ),
+            ],
+        ))
     }
 
     /// Whether the arm receives resume tokens.
@@ -136,7 +138,7 @@ fn closure_signature(ctx: &IrContext, ty: TypeRef) -> Option<(CallingConvention,
     if data.dialect != "closure" || data.name != "closure" {
         return None;
     }
-    let convention = match data.attrs.view(ctx).get(CALLING_CONVENTION_ATTR) {
+    let convention = match ctx.type_attrs(ty).get(CALLING_CONVENTION_ATTR) {
         Some(Attribute::Int(code)) => CallingConvention::try_from(*code).ok()?,
         _ => return None,
     };

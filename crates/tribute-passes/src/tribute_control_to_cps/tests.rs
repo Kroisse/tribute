@@ -56,12 +56,7 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
             assert_eq!(function.results(converter.ctx), [converted_callable]);
         }
         assert_eq!(
-            converter
-                .ctx
-                .get_type(converted)
-                .attrs
-                .view(converter.ctx)
-                .get_type("nested"),
+            converter.ctx.type_attrs(converted).get_type("nested"),
             Some(converted_callable)
         );
     }

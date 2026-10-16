@@ -571,9 +571,7 @@ mod tests {
         fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
             let marker = ctx
                 .ir()
-                .op(target)
-                .attributes
-                .view(ctx.ir())
+                .op_attrs(target)
                 .get("marker")
                 .and_then(|a| a.as_i128());
             Ok(Self(marker))
@@ -691,14 +689,7 @@ mod tests {
             let body = ctx.ir().op_region(target, 0).unwrap();
             let block = ctx.ir().region(body).blocks[0];
             let first_child = ctx.ir().block(block).ops[0];
-            if ctx
-                .ir()
-                .op(first_child)
-                .attributes
-                .view(ctx.ir())
-                .get_str("sym_name")
-                == Some("first")
-            {
+            if ctx.ir().op_attrs(first_child).get_str("sym_name") == Some("first") {
                 let _ = ctx.get::<ChoicePrerequisiteFirst>(first_child)?;
             } else {
                 let _ = ctx.get::<ChoicePrerequisiteSecond>(first_child)?;

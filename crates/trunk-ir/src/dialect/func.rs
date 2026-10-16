@@ -301,9 +301,9 @@ impl FuncSig {
 
     /// Remove input/result count delimiters from owned function metadata before rebuilding it.
     pub fn remove_reserved_attrs(ctx: &mut crate::IrContext, attrs: &mut AttributeMap) {
-        let mut attrs_view = attrs.view_mut(ctx);
-        attrs_view.remove(NUM_INPUTS_ATTR);
-        attrs_view.remove(NUM_RESULTS_ATTR);
+        let mut attrs = attrs.view_mut(ctx);
+        attrs.remove(NUM_INPUTS_ATTR);
+        attrs.remove(NUM_RESULTS_ATTR);
     }
 
     pub fn is_resultless(&self, ctx: &IrContext) -> bool {
@@ -722,9 +722,8 @@ fn print_func(
 
     // Extract the validated input/result lists from the func.func_sig type attribute.
     let type_info = {
-        let data = h.ctx().op(op);
-        data.attributes
-            .view(h.ctx())
+        h.ctx()
+            .op_attrs(op)
             .get_type("type")
             .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(h.ctx(), ty))
             .map(|func| (func.single_result(h.ctx()), func.inputs(h.ctx()).to_vec()))
@@ -774,19 +773,13 @@ fn print_func(
     // Extra attributes (everything except sym_name and type, which are
     // already encoded in the signature).  Clone to avoid borrow conflicts
     // with the mutable write helpers.
-    let preserve_type = h
-        .ctx()
-        .op(op)
-        .attributes
-        .view(h.ctx())
-        .get_type("type")
-        .is_some_and(|ty| {
-            h.ctx()
-                .get_type(ty)
-                .attrs
-                .keys()
-                .any(|key| ![NUM_INPUTS_ATTR, NUM_RESULTS_ATTR].contains(&h.ctx().str(key)))
-        });
+    let preserve_type = h.ctx().op_attrs(op).get_type("type").is_some_and(|ty| {
+        h.ctx()
+            .get_type(ty)
+            .attrs
+            .keys()
+            .any(|key| ![NUM_INPUTS_ATTR, NUM_RESULTS_ATTR].contains(&h.ctx().str(key)))
+    });
     let extra_attrs: Vec<_> = h
         .ctx()
         .op_attrs(op)

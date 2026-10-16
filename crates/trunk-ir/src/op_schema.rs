@@ -535,7 +535,6 @@ impl OpSchema {
     /// accessors of the operation are safe to use unless this returns an
     /// empty list.
     pub fn verify_structure(&self, ctx: &IrContext, op: OpRef) -> Vec<SchemaViolation> {
-        let data = ctx.op(op);
         let mut violations = Vec::new();
 
         let operands = ctx.op_operands(op).len();
@@ -575,7 +574,7 @@ impl OpSchema {
         }
 
         for attr in self.attributes {
-            match data.attributes.view(ctx).get(attr.name) {
+            match ctx.op_attrs(op).get(attr.name) {
                 None if attr.optional => {}
                 None => violations.push(SchemaViolation::MissingAttribute { name: attr.name }),
                 Some(value) if attr.kind.accepts(value) => {}
@@ -1026,10 +1025,9 @@ struct TypeSlots {
 impl TypeSlots {
     fn collect(schema: &OpSchema, ctx: &IrContext, op: OpRef) -> Self {
         let mut slots = TypeSlots::default();
-        let data = ctx.op(op);
         for attr in schema.attributes {
             if let (Some(var), Some(Attribute::Type(ty))) =
-                (attr.binds, data.attributes.view(ctx).get(attr.name))
+                (attr.binds, ctx.op_attrs(op).get(attr.name))
             {
                 slots.types.push(TypeSlot {
                     site: Site::Attribute { name: attr.name },

@@ -215,7 +215,7 @@ pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
     let nominal =
         data.dialect == "adt" && (matches!(data.name.as_str(), "struct" | "enum" | "typeref"));
     nominal
-        .then(|| data.attrs.view(ctx).get_string_ref(STRUCT_NAME_ATTR))
+        .then(|| ctx.type_attrs(ty).get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
 }
 
@@ -249,12 +249,11 @@ impl Struct {
     pub fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, StructTypeError> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
-        if data.attrs.view(ctx).contains_key("fields") {
+        if ctx.type_attrs(ty).contains_key("fields") {
             return Err(StructTypeError::FieldsAttribute);
         }
-        if data
-            .attrs
-            .view(ctx)
+        if ctx
+            .type_attrs(ty)
             .get_string_ref(STRUCT_NAME_ATTR)
             .is_none()
         {
@@ -473,9 +472,8 @@ fn finish_struct_type(
     mut builder: TypeDataBuilder,
     mut attrs: AttributeMap,
 ) -> Result<Struct, StructTypeError> {
-    let mut attrs_view = attrs.view_mut(ctx);
-    attrs_view.remove(PARAM_ATTRS_ATTR);
-    attrs_view.insert(STRUCT_NAME_ATTR, name);
+    attrs.view_mut(ctx).remove(PARAM_ATTRS_ATTR);
+    attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, name);
     for (key, value) in attrs {
         builder = builder.attr(key, value);
     }
@@ -636,19 +634,15 @@ impl Enum {
     pub fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, EnumTypeError> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
-        if data.attrs.view(ctx).contains_key("variants") {
+        let attrs = ctx.type_attrs(ty);
+        if attrs.contains_key("variants") {
             return Err(EnumTypeError::VariantsAttribute);
         }
         // The syntax has no place for them, so printing would drop them.
-        if data.attrs.view(ctx).contains_key(PARAM_ATTRS_ATTR) {
+        if attrs.contains_key(PARAM_ATTRS_ATTR) {
             return Err(EnumTypeError::VariantAttributes);
         }
-        if data
-            .attrs
-            .view(ctx)
-            .get_string_ref(STRUCT_NAME_ATTR)
-            .is_none()
-        {
+        if attrs.get_string_ref(STRUCT_NAME_ATTR).is_none() {
             return Err(EnumTypeError::MissingName);
         }
         let mut names: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
@@ -717,7 +711,7 @@ impl Enum {
 fn variant_name(ctx: &IrContext, variant: TypeRef) -> Option<StringRef> {
     let data = ctx.get_type(variant);
     (data.dialect == "adt" && data.name == "variant")
-        .then(|| data.attrs.view(ctx).get_string_ref(STRUCT_NAME_ATTR))
+        .then(|| ctx.type_attrs(variant).get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
 }
 
