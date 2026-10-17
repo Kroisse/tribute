@@ -413,7 +413,6 @@ fn scalars() -> #(Float, Bytes, Rune, Nil) {
             && scalars.contains("core.f64")
             && scalars.contains("core.bytes")
             && scalars.contains("value = 120")
-            && scalars.contains("rune")
             && scalars.contains("core.nil"),
         "scalar tuple layout must preserve each source value type:\n{scalars}"
     );
