@@ -349,15 +349,102 @@ pub(crate) fn stored_row(ctx: &IrContext, data: &TypeData) -> Option<Result<Row,
 /// The name of the compiler-generated tuple layout whose fields have the
 /// logical types `elements`.
 pub fn logical_tuple_name(ctx: &IrContext, elements: &[TypeRef]) -> String {
-    let mut name = format!("{LOGICAL_TUPLE_PREFIX}{}", elements.len());
-    for element in elements {
-        let text = trunk_ir::printer::print_type(ctx, *element);
-        name.push('_');
-        name.push_str(&text.len().to_string());
-        name.push('_');
-        name.push_str(&text);
-    }
+    let mut name = LOGICAL_TUPLE_PREFIX.to_owned();
+    name.push_str(&key(
+        "tuple",
+        elements.iter().map(|element| type_key(ctx, *element)),
+    ));
     name
+}
+
+/// `tag_N` followed by each of the `N` parts as `_length_part`, so that a
+/// key reads back in only one way; just `tag` without parts.
+fn key(tag: &str, parts: impl IntoIterator<Item = String>) -> String {
+    let parts: Vec<_> = parts.into_iter().collect();
+    if parts.is_empty() {
+        return tag.to_owned();
+    }
+    let mut key = format!("{tag}_{}", parts.len());
+    for part in parts {
+        key.push('_');
+        key.push_str(&part.len().to_string());
+        key.push('_');
+        key.push_str(&part);
+    }
+    key
+}
+
+fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
+    let data = ctx.get_type(ty);
+    if data.name == crate::dialect::adt::Typeref::NAME
+        && let Some(name) = data.attrs.view(ctx).get_str("name")
+    {
+        return key("named", [name.to_owned()]);
+    }
+    if let Some(signature) = <super::FuncSig as trunk_ir::ops::DialectType>::from_type_ref(ctx, ty)
+    {
+        let row = signature.row(ctx);
+        let row = key(
+            "row",
+            row.instances.iter().map(ToString::to_string).chain([row
+                .tail
+                .map_or_else(|| "closed".to_owned(), |tail| tail.to_string())]),
+        );
+        return key(
+            "callable",
+            signature
+                .inputs(ctx)
+                .iter()
+                .chain([&signature.result(ctx)])
+                .map(|ty| type_key(ctx, *ty))
+                .chain([signature.convention(ctx).keyword().to_owned(), row])
+                .chain(
+                    data.attrs
+                        .view(ctx)
+                        .iter()
+                        .filter(|(name, _)| !super::RESERVED_ATTRS.contains(name))
+                        .map(|(name, attr)| key(name, [attribute_key(ctx, attr)])),
+                ),
+        );
+    }
+    key(
+        &format!(
+            "{}_{}",
+            data.name.dialect(ctx),
+            data.name.strip_dialect(ctx)
+        ),
+        data.params.iter().map(|param| type_key(ctx, *param)).chain(
+            data.attrs
+                .view(ctx)
+                .iter()
+                .map(|(name, attr)| key(name, [attribute_key(ctx, attr)])),
+        ),
+    )
+}
+
+fn attribute_key(ctx: &IrContext, attr: &Attribute) -> String {
+    match attr {
+        Attribute::Bool(value) => key("bool", [value.to_string()]),
+        Attribute::Int(value) => key("int", [value.to_string()]),
+        Attribute::FloatBits(bits) => key("float", [format!("{bits:x}")]),
+        Attribute::String(value) => key("string", [ctx.str(*value).to_owned()]),
+        Attribute::SymbolRef(path) => key("symbol", [path.to_string()]),
+        Attribute::Type(ty) => key("type", [type_key(ctx, *ty)]),
+        Attribute::List(items) => key("list", items.iter().map(|item| attribute_key(ctx, item))),
+        Attribute::Dict(entries) => key(
+            "dict",
+            entries
+                .view(ctx)
+                .iter()
+                .map(|(name, value)| key(name, [attribute_key(ctx, value)])),
+        ),
+        Attribute::Bytes(bytes) => key(
+            "bytes",
+            [bytes.iter().map(|byte| format!("{byte:02x}")).collect()],
+        ),
+        Attribute::Unit => "unit".to_owned(),
+        Attribute::Location(_) => "location".to_owned(),
+    }
 }
 
 fn tuple_layout_data(ctx: &mut IrContext, name: &str, elements: &[TypeRef]) -> TypeRef {

@@ -311,3 +311,28 @@ fn finding_a_substituted_row_needs_only_the_keys_it_holds() {
     assert_eq!(ctx.lookup_str("instances"), None);
     assert_eq!(find_substituted_rows(&ctx, open, &args), Some(substituted));
 }
+
+#[test]
+fn tuple_names_tell_callables_apart_by_their_attributes() {
+    let mut ctx = IrContext::new();
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+    let noted = |ctx: &mut IrContext, value| {
+        let attrs = trunk_ir::types::AttributeMap::from_entries(ctx, [("note", value)]);
+        super::super::func_sig_with_attrs(ctx, i32_ty, [i32_ty], CallingConvention::Direct, attrs)
+            .as_type_ref()
+    };
+    let plain = func_sig_with_row(
+        &mut ctx,
+        i32_ty,
+        [i32_ty],
+        &Row::default(),
+        CallingConvention::Direct,
+    )
+    .as_type_ref();
+    let int = noted(&mut ctx, trunk_ir::types::Attribute::Int(1));
+    let one = ctx.string_attr("1");
+    let string = noted(&mut ctx, one);
+    let names = [plain, int, string].map(|ty| logical_tuple_name(&ctx, &[ty]));
+    assert_ne!(names[0], names[1]);
+    assert_ne!(names[1], names[2]);
+}
