@@ -23,7 +23,7 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use crate::SortedMap;
 use crate::ast::{
-    Arm, CallingConvention, CtorId, Decl, DeclEntry, EffectRow, Expr, ExprKind, ExternFuncDecl,
+    AbilityRow, Arm, CallingConvention, CtorId, Decl, DeclEntry, Expr, ExprKind, ExternFuncDecl,
     FieldInit, FuncDecl, HandlerArm, HandlerKind, OpDeclKind, Pattern, PatternKind, ResolvedRef,
     Stmt, TypeKind, TypedRef,
 };
@@ -162,7 +162,7 @@ fn lower_evidence_step<'db>(
     declarations: &mut Declarations<'db>,
 ) -> tribute_control::EvidenceStep {
     use crate::typeck::EvidenceStep;
-    let mut symbol_of = |instance: &crate::ast::Effect<'db>| {
+    let mut symbol_of = |instance: &crate::ast::AbilityInstance<'db>| {
         let symbol = ctx.ability_symbol(&instance.ability_id.qualified(ctx.db), &instance.args);
         declarations.instance(&symbol, instance.ability_id, &instance.args);
         symbol
@@ -504,9 +504,9 @@ fn prescan_definition_conventions<'db>(
                     let tail = effect
                         .rest(ctx.db)
                         .filter(|tail| classes.iter().any(|(variable, _)| variable == tail));
-                    let row = EffectRow::new(ctx.db, effect.effects(ctx.db), tail);
+                    let row = AbilityRow::new(ctx.db, effect.instances(ctx.db), tail);
                     let outer = ctx.enter_definition(&name);
-                    convention = ctx.calling_convention_for_effect_row(row);
+                    convention = ctx.calling_convention_for_ability_row(row);
                     ctx.leave_definition(outer);
                 }
                 ctx.register_definition_convention(name, convention);

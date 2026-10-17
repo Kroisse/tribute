@@ -77,7 +77,7 @@ const ASK: &str = "ability Ask {\n    op ask() -> Nat\n}\n\n";
 /// An omitted row is exactly a fresh `->{e}`, and an explicit open row
 /// admits only its named effects; neither is widened by the body.
 #[salsa_test]
-fn effect_rows_are_not_widened_by_the_body(db: &salsa::DatabaseImpl) {
+fn ability_rows_are_not_widened_by_the_body(db: &salsa::DatabaseImpl) {
     for signature in [
         "fn f() -> Nat",
         "fn f() ->{e} Nat",
@@ -208,8 +208,8 @@ fn callback_effects_need_a_shared_row_variable(db: &salsa::DatabaseImpl) {
             "fn apply(f: fn(Nat) -> Nat, x: Nat) -> Nat { f(x) }\n\nfn main() -> Nil { }\n"
         ),
         [
-            "function 'apply' performs the effects of an omitted effect row without declaring them; \
-             use the same effect variable in its own effect row"
+            "function 'apply' performs the effects of an omitted ability row without declaring them; \
+             use the same row variable in its own ability row"
         ],
     );
     let shared = format!(

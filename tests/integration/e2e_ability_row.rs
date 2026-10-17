@@ -1,6 +1,6 @@
-//! End-to-end tests for effect row polymorphism runtime behavior (#502).
+//! End-to-end tests for ability row polymorphism runtime behavior (#502).
 //!
-//! These tests verify that row-polymorphic effect variables are correctly
+//! These tests verify that row-polymorphic row variables are correctly
 //! instantiated and propagated at runtime — higher-order functions accepting
 //! effectful callbacks, pure-for-effectful substitution, and unification
 //! across multiple call sites.
@@ -10,7 +10,7 @@ use crate::common;
 use common::assert_native_output;
 
 // =============================================================================
-// Effect Row Polymorphism Tests
+// Ability Row Polymorphism Tests
 // =============================================================================
 
 /// Test row-polymorphic higher-order function with effectful callback.
@@ -19,7 +19,7 @@ use common::assert_native_output;
 /// a `State` handler, `e` is instantiated to `{State(Nat)}`, so the callback
 /// can perform State operations.
 #[test]
-fn test_effect_row_poly_higher_order_function_slow() {
+fn test_ability_row_poly_higher_order_function_slow() {
     let code = r#"ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -48,7 +48,7 @@ fn main() -> Nil {
 }
 "#;
     // apply calls the callback with x=7, which does set(7), get() → 7
-    assert_native_output("effect_row_poly_higher_order.trb", code, "7");
+    assert_native_output("ability_row_poly_higher_order.trb", code, "7");
 }
 
 /// Test row variable instantiated to multiple concrete abilities.
@@ -56,7 +56,7 @@ fn main() -> Nil {
 /// `apply` accepts `fn() ->{e} Nat`. The callback uses both State and Reader,
 /// so `e` is instantiated to `{State(Nat), Reader(Nat)}`.
 #[test]
-fn test_effect_row_poly_multiple_abilities() {
+fn test_ability_row_poly_multiple_abilities() {
     let code = r#"ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -99,7 +99,7 @@ fn main() -> Nil {
 }
 "#;
     // callback: ask() → 42, set(42), get() → 42
-    assert_native_output("effect_row_poly_multiple_abilities.trb", code, "42");
+    assert_native_output("ability_row_poly_multiple_abilities.trb", code, "42");
 }
 
 /// Test pure function passed to a row-polymorphic parameter.
@@ -107,7 +107,7 @@ fn main() -> Nil {
 /// `apply` accepts `fn(Nat) ->{e} Nat`. When called with a pure lambda,
 /// `e` is instantiated to `{}` (empty row), so no handler is needed.
 #[test]
-fn test_effect_row_poly_pure_for_effectful() {
+fn test_ability_row_poly_pure_for_effectful() {
     let code = r#"fn apply(f: fn(Nat) ->{e} Nat, x: Nat) ->{e} Nat {
     f(x)
 }
@@ -118,7 +118,7 @@ fn main() -> Nil {
 }
 "#;
     // pure lambda: 5 + 10 = 15, no handler needed
-    assert_native_output("effect_row_poly_pure.trb", code, "15");
+    assert_native_output("ability_row_poly_pure.trb", code, "15");
 }
 
 /// Test same row-polymorphic function called with different effect instantiations.
@@ -126,7 +126,7 @@ fn main() -> Nil {
 /// `apply` is called twice: once where `e = {State(Nat)}` and once where
 /// `e = {Reader(Nat)}`. Each call site independently instantiates the row variable.
 #[test]
-fn test_effect_row_poly_unification_across_call_sites_slow() {
+fn test_ability_row_poly_unification_across_call_sites_slow() {
     let code = r#"ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -171,7 +171,7 @@ fn main() -> Nil {
 "#;
     // call 1: get() with State(init=10) → 10
     // call 2: ask() with Reader(value=20) → 20
-    assert_native_output("effect_row_poly_unification.trb", code, "10\n20");
+    assert_native_output("ability_row_poly_unification.trb", code, "10\n20");
 }
 
 /// Test closure returned from a function and called via local variable.
@@ -201,7 +201,7 @@ fn main() -> Nil {
 /// `keep` is used at `a = fn() ->{Ask} Nat` and `a = fn() ->{Tell} Nat`. Each
 /// function type selects its own specialization.
 #[test]
-fn test_specializations_distinguish_function_argument_effect_rows() {
+fn test_specializations_distinguish_function_argument_ability_rows() {
     let code = r#"ability Ask {
     op ask() -> Nat
 }
@@ -237,13 +237,13 @@ fn main() -> Nil {
 }
 "#;
     // ask() → 40, tell() → 2
-    assert_native_output("effect_row_specializations.trb", code, "42");
+    assert_native_output("ability_row_specializations.trb", code, "42");
 }
 
 /// A method whose receiver is typed after solving runs under the handler of
 /// the effects it performs, with the callback it is given.
 #[test]
-fn test_effect_row_method_resolved_after_solving() {
+fn test_ability_row_method_resolved_after_solving() {
     let code = r#"
 ability Ask {
     op ask() -> Nat
@@ -272,5 +272,5 @@ fn main() -> Nil {
 }
 "#;
     // each(bump) → 1 + 20, asks() → 1 + 20
-    assert_native_output("effect_row_late_method.trb", code, "42");
+    assert_native_output("ability_row_late_method.trb", code, "42");
 }

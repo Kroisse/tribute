@@ -138,8 +138,8 @@ pub struct TypeChecker<'db> {
     lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     exhaustive_cases: Vec<NodeId>,
     /// Source origins for concrete effects in each collected function signature.
-    effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
-    signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::EffectVar>>,
+    effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::AbilityAnnotationOrigins>,
+    signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::RowVar>>,
     signature_type_names: HashMap<FuncDefId<'db>, HashMap<Symbol, u32>>,
     /// Each collected function, checked against the field getters once
     /// every declaration is collected.

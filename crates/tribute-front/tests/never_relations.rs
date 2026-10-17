@@ -675,7 +675,7 @@ fn bad() -> Nat {
 }
 
 #[salsa_test]
-fn a_pure_join_generalizes_callable_type_and_effect_variables(db: &salsa::DatabaseImpl) {
+fn a_pure_join_generalizes_callable_type_and_row_variables(db: &salsa::DatabaseImpl) {
     let errors = type_errors(
         db,
         "generic_callable_join.trb",

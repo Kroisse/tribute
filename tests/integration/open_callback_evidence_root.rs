@@ -142,7 +142,7 @@ fn main() ->{Io} Nil {
 
 /// Root `main` is the instance of its own row with an empty tail, so a call
 /// it makes with a pure callback selects the `Direct` instance even when its
-/// effect annotation is omitted.
+/// ability annotation is omitted.
 #[salsa_test]
 fn root_main_selects_instances_for_an_empty_tail(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(

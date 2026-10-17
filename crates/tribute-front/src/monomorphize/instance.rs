@@ -12,9 +12,9 @@ use trunk_ir::Symbol;
 use super::MonomorphizeMetadata;
 use crate::ast::visit::{Visit, walk_expr, walk_pattern};
 use crate::ast::{
-    AbilityId, CallingConvention, Decl, DeclEntry, DeclTable, EffectVar, Expr, ExprKind, FuncDecl,
-    FuncDefId, NodeId, Pattern, PatternKind, RowClasses, Stmt, Type, TypeKind, TypeScheme,
-    TypedRef, calling_convention_for_effect_row_in, collect_effect_vars,
+    AbilityId, CallingConvention, Decl, DeclEntry, DeclTable, Expr, ExprKind, FuncDecl, FuncDefId,
+    NodeId, Pattern, PatternKind, RowClasses, RowVar, Stmt, Type, TypeKind, TypeScheme, TypedRef,
+    calling_convention_for_ability_row_in, collect_row_vars,
 };
 use crate::typeck::{FunctionInstance, FunctionInstanceOrigin};
 
@@ -60,7 +60,7 @@ pub(crate) const ROOT_MAIN: &str = "main";
 
 /// The convention class of each class variable of every function instance,
 /// by the instance's name.
-pub type InstanceRowClasses = HashMap<SymbolPath, Vec<(EffectVar, CallingConvention)>>;
+pub type InstanceRowClasses = HashMap<SymbolPath, Vec<(RowVar, CallingConvention)>>;
 
 /// What a reference needs to select an instance: the class variables of each
 /// definition, the convention each ability requires, and the classes of the
@@ -68,7 +68,7 @@ pub type InstanceRowClasses = HashMap<SymbolPath, Vec<(EffectVar, CallingConvent
 pub(crate) struct InstanceKeys<'db> {
     db: &'db dyn salsa::Database,
     /// Class variables of each definition with their binder positions.
-    class_variables: HashMap<FuncDefId<'db>, Vec<(usize, EffectVar)>>,
+    class_variables: HashMap<FuncDefId<'db>, Vec<(usize, RowVar)>>,
     abilities: HashMap<AbilityId<'db>, CallingConvention>,
     pub(crate) row_classes: InstanceRowClasses,
 }
@@ -146,7 +146,7 @@ impl<'db> InstanceKeys<'db> {
                     .row_arguments
                     .get(*position)
                     .map_or(CallingConvention::Cps, |row| {
-                        calling_convention_for_effect_row_in(
+                        calling_convention_for_ability_row_in(
                             self.db,
                             *row,
                             &self.abilities,
@@ -165,13 +165,13 @@ impl<'db> InstanceKeys<'db> {
     /// The class of each of `rows` inside the instance `enclosing`.
     pub(crate) fn classes_of_rows(
         &self,
-        rows: &[crate::ast::EffectRow<'db>],
+        rows: &[crate::ast::AbilityRow<'db>],
         enclosing: &[Symbol],
     ) -> Vec<CallingConvention> {
         let classes: &RowClasses = self.row_classes.get(enclosing).map_or(&[], Vec::as_slice);
         rows.iter()
             .map(|row| {
-                calling_convention_for_effect_row_in(self.db, *row, &self.abilities, classes)
+                calling_convention_for_ability_row_in(self.db, *row, &self.abilities, classes)
             })
             .collect()
     }
@@ -205,7 +205,7 @@ impl<'db> InstanceKeys<'db> {
             });
             let enclosing = self.row_classes.get(name);
             let mut classes = enclosing.cloned().unwrap_or_default();
-            let mut locals: Vec<(EffectVar, CallingConvention)> = Vec::new();
+            let mut locals: Vec<(RowVar, CallingConvention)> = Vec::new();
             function.body.for_each(|expr| {
                 let Some(instance) = metadata.local_instances.get(&expr.id) else {
                     return;
@@ -218,8 +218,8 @@ impl<'db> InstanceKeys<'db> {
                 };
                 // The lambda's own type spells the rows its scheme quantifies
                 // with the variables its body uses.
-                let quantified = collect_effect_vars(self.db, instance.scheme.body(self.db));
-                let spelled = collect_effect_vars(self.db, signature.function_type);
+                let quantified = collect_row_vars(self.db, instance.scheme.body(self.db));
+                let spelled = collect_row_vars(self.db, signature.function_type);
                 if quantified.len() != spelled.len() {
                     return;
                 }
@@ -228,7 +228,7 @@ impl<'db> InstanceKeys<'db> {
                     let Some(at) = quantified.iter().position(|var| var == variable) else {
                         continue;
                     };
-                    let class = calling_convention_for_effect_row_in(
+                    let class = calling_convention_for_ability_row_in(
                         self.db,
                         *row,
                         &self.abilities,
@@ -310,12 +310,12 @@ struct Definition<'db> {
     /// The row variables the scheme quantifies, in binder order, without
     /// those that occur inside an ability argument of the signature or the
     /// body.
-    candidates: Vec<(usize, EffectVar)>,
+    candidates: Vec<(usize, RowVar)>,
     /// The candidates known to be class variables.
-    selected: HashSet<EffectVar>,
+    selected: HashSet<RowVar>,
     /// The tail of each row argument of every function reference in the
     /// body, by the referenced definition.
-    references: Vec<(FuncDefId<'db>, Vec<Option<EffectVar>>)>,
+    references: Vec<(FuncDefId<'db>, Vec<Option<RowVar>>)>,
 }
 
 impl<'db> Definition<'db> {
@@ -330,9 +330,9 @@ impl<'db> Definition<'db> {
             db: &'db dyn salsa::Database,
             metadata: &'a MonomorphizeMetadata<'db>,
             accessors: &'a mut HashMap<FuncDefId<'db>, TypeScheme<'db>>,
-            excluded: HashSet<EffectVar>,
-            callable_tails: Vec<EffectVar>,
-            references: Vec<(FuncDefId<'db>, Vec<Option<EffectVar>>)>,
+            excluded: HashSet<RowVar>,
+            callable_tails: Vec<RowVar>,
+            references: Vec<(FuncDefId<'db>, Vec<Option<RowVar>>)>,
         }
         impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for Body<'_, 'db> {
             fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
@@ -358,8 +358,7 @@ impl<'db> Definition<'db> {
                     .chain(perform.map(|operation| &operation.ability_args))
                     .flatten();
                 for argument in arguments {
-                    self.excluded
-                        .extend(collect_effect_vars(self.db, *argument));
+                    self.excluded.extend(collect_row_vars(self.db, *argument));
                 }
                 if let Some(ty) = self.metadata.node_types.get(&id) {
                     collect_ability_argument_tails(self.db, *ty, &mut self.excluded);
@@ -418,8 +417,8 @@ impl<'db> Definition<'db> {
     fn of_signature(
         db: &'db dyn salsa::Database,
         scheme: TypeScheme<'db>,
-        mut excluded: HashSet<EffectVar>,
-        mut callable_tails: Vec<EffectVar>,
+        mut excluded: HashSet<RowVar>,
+        mut callable_tails: Vec<RowVar>,
     ) -> Self {
         collect_ability_argument_tails(db, scheme.body(db), &mut excluded);
         if let TypeKind::Func { params, result, .. } = scheme.body(db).kind(db) {
@@ -453,8 +452,8 @@ impl<'db> Definition<'db> {
 /// for a class variable of a definition it references.
 fn settle_class_variables<'db>(
     mut definitions: Vec<(FuncDefId<'db>, Definition<'db>)>,
-) -> HashMap<FuncDefId<'db>, Vec<(usize, EffectVar)>> {
-    let positions = |definition: &Definition<'db>| -> Vec<(usize, EffectVar)> {
+) -> HashMap<FuncDefId<'db>, Vec<(usize, RowVar)>> {
+    let positions = |definition: &Definition<'db>| -> Vec<(usize, RowVar)> {
         definition
             .candidates
             .iter()
@@ -499,7 +498,7 @@ fn settle_class_variables<'db>(
 fn collect_callable_tails<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
-    found: &mut Vec<EffectVar>,
+    found: &mut Vec<RowVar>,
 ) {
     match ty.kind(db) {
         TypeKind::Named { args, .. } | TypeKind::Tuple(args) => {
@@ -534,12 +533,12 @@ fn collect_callable_tails<'db>(
 fn collect_ability_argument_tails<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
-    excluded: &mut HashSet<EffectVar>,
+    excluded: &mut HashSet<RowVar>,
 ) {
-    let row = |effect: crate::ast::EffectRow<'db>, excluded: &mut HashSet<EffectVar>| {
-        for ability in effect.effects(db) {
+    let row = |effect: crate::ast::AbilityRow<'db>, excluded: &mut HashSet<RowVar>| {
+        for ability in effect.instances(db) {
             for arg in &ability.args {
-                excluded.extend(collect_effect_vars(db, *arg));
+                excluded.extend(collect_row_vars(db, *arg));
             }
         }
     };
@@ -583,7 +582,7 @@ fn collect_ability_argument_tails<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Effect, EffectRow};
+    use crate::ast::{AbilityInstance, AbilityRow};
 
     #[salsa::db]
     #[derive(Default)]
@@ -598,7 +597,7 @@ mod tests {
         db: &'db TestDb,
         params: Vec<Type<'db>>,
         result: Type<'db>,
-        effect: EffectRow<'db>,
+        effect: AbilityRow<'db>,
     ) -> Type<'db> {
         Type::new(
             db,
@@ -610,12 +609,12 @@ mod tests {
         )
     }
 
-    fn open(db: &TestDb, id: u64) -> EffectRow<'_> {
-        EffectRow::open(db, EffectVar { id })
+    fn open(db: &TestDb, id: u64) -> AbilityRow<'_> {
+        AbilityRow::open(db, RowVar { id })
     }
 
     fn definition<'db>(db: &'db TestDb, row_vars: &[u64], body: Type<'db>) -> Definition<'db> {
-        let effect_params = row_vars.iter().map(|id| EffectVar { id: *id }).collect();
+        let effect_params = row_vars.iter().map(|id| RowVar { id: *id }).collect();
         let scheme = TypeScheme::new(db, Vec::new(), effect_params, body);
         Definition::of_signature(db, scheme, HashSet::default(), Vec::new())
     }
@@ -630,15 +629,15 @@ mod tests {
         let int = Type::new(&db, TypeKind::Int);
         let first = func(&db, vec![], int, open(&db, 2));
         let nested = func(&db, vec![], int, open(&db, 1));
-        let second = func(&db, vec![nested], int, EffectRow::pure(&db));
-        let both = func(&db, vec![first, second], int, EffectRow::pure(&db));
+        let second = func(&db, vec![nested], int, AbilityRow::pure(&db));
+        let both = func(&db, vec![first, second], int, AbilityRow::pure(&db));
         let settled =
             settle_class_variables(vec![(id(&db, "both"), definition(&db, &[1, 2], both))]);
 
         // Binder order, not the order of occurrence.
         assert_eq!(
             settled[&id(&db, "both")],
-            [(0, EffectVar { id: 1 }), (1, EffectVar { id: 2 })]
+            [(0, RowVar { id: 1 }), (1, RowVar { id: 2 })]
         );
     }
 
@@ -658,13 +657,13 @@ mod tests {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
         let returned = func(&db, vec![], int, open(&db, 1));
-        let result = func(&db, vec![int], returned, EffectRow::pure(&db));
+        let result = func(&db, vec![int], returned, AbilityRow::pure(&db));
         let settled =
             settle_class_variables(vec![(id(&db, "result"), definition(&db, &[1], result))]);
 
         assert_eq!(
             settled.get(&id(&db, "result")),
-            Some(&vec![(0, EffectVar { id: 1 })])
+            Some(&vec![(0, RowVar { id: 1 })])
         );
     }
 
@@ -677,9 +676,9 @@ mod tests {
         let own_row = func(&db, vec![int], int, open(&db, 7));
         // `outer` calls `inner` with its own tail, and `inner` calls `app`.
         let mut inner = definition(&db, &[7], own_row);
-        inner.references = vec![(id(&db, "app"), vec![Some(EffectVar { id: 7 })])];
+        inner.references = vec![(id(&db, "app"), vec![Some(RowVar { id: 7 })])];
         let mut outer = definition(&db, &[7], own_row);
-        outer.references = vec![(id(&db, "inner"), vec![Some(EffectVar { id: 7 })])];
+        outer.references = vec![(id(&db, "inner"), vec![Some(RowVar { id: 7 })])];
         let mut closed = definition(&db, &[7], own_row);
         closed.references = vec![(id(&db, "app"), vec![None])];
         let settled = settle_class_variables(vec![
@@ -689,8 +688,8 @@ mod tests {
             (id(&db, "app"), definition(&db, &[1], app)),
         ]);
 
-        assert_eq!(settled[&id(&db, "inner")], [(0, EffectVar { id: 7 })]);
-        assert_eq!(settled[&id(&db, "outer")], [(0, EffectVar { id: 7 })]);
+        assert_eq!(settled[&id(&db, "inner")], [(0, RowVar { id: 7 })]);
+        assert_eq!(settled[&id(&db, "outer")], [(0, RowVar { id: 7 })]);
         assert!(!settled.contains_key(&id(&db, "closed")));
     }
 
@@ -699,7 +698,7 @@ mod tests {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
         let stored = func(&db, vec![], int, open(&db, 1));
-        let ability = Effect {
+        let ability = AbilityInstance {
             ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::new(["State"])),
             args: vec![stored],
         };
@@ -708,7 +707,7 @@ mod tests {
             &db,
             vec![callback],
             int,
-            EffectRow::new(&db, vec![ability], None),
+            AbilityRow::new(&db, vec![ability], None),
         );
         let settled = settle_class_variables(vec![(id(&db, "run"), definition(&db, &[1], body))]);
 

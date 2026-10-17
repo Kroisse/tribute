@@ -208,7 +208,7 @@ Specialization mangle은 type argument의 identity에 대해 단사(injective)�
 다른 type argument 목록은 서로 다른 이름을 얻는다. 함수 타입, 튜플, bound type
 variable, compiler-owned nominal 타입처럼 소스 선언이 이름 짓지 않는 타입은 숫자
 태그로 시작하므로, 같은 철자의 소스 타입 이름과 구분된다. 함수 타입은 parameter와 result
-외에 effect row와 calling-convention 하한을 함께 인코딩한다. Effect row는 각
+외에 ability row와 calling-convention 하한을 함께 인코딩한다. Ability row는 각
 ability의 origin과 qualified identity, ability argument를 row에 저장된 순서대로 쓰고,
 열린 row의 row variable은 한 mangle 안에서 처음 나타난 순서로 번호를 매겨 추론
 번호에 의존하지 않는다. Closed 빈 row와 `Direct` 하한을 가진 함수 타입의 mangle은
@@ -397,7 +397,7 @@ suspended-operation 값을 검사하는 loop를 생성하지 않는다.
 ### Evidence 전달 규칙
 
 1. **Direct 함수**는 evidence를 전달받지 않는다. 명시적인 닫힌 빈 row `->{}`는
-   Direct다. Effect annotation을 생략한 `fn(a) -> b`의 semantic type은
+   Direct다. Ability annotation을 생략한 `fn(a) -> b`의 semantic type은
    `fn(a) ->{e} b`이지만 concrete residual effect가 없는 definition의 worker는
    Direct일 수 있다.
 2. **EvidenceDirect 함수**는 evidence를 받고 source result를 직접 반환한다.
@@ -440,9 +440,9 @@ Direct transfer는 `func.tail_call`, dynamic continuation transfer는
 
 ## Selective Transformation
 
-### Effect Row와 호출 규약
+### Ability Row와 호출 규약
 
-Source effect row는 operation 집합이 아니라 ability identity의 집합을 기록한다.
+Source ability row는 operation 집합이 아니라 ability identity의 집합을 기록한다.
 Row에서 callable의 호출 규약을 정하는 규칙은
 [CPS 전략](cps-effects.md#row와-호출-규약)에 있다. Typechecking은 규약을 계산하지
 않는다.
@@ -802,33 +802,33 @@ them concrete and generalizes remaining polymorphic variables into stable
 `BoundVar` indices. Generalization covers the function signature, checked body,
 and post-solve deferred UFCS callee types so later monomorphization does
 not see raw solver variables in typed references. Each type-scheme
-instantiation freshens both bound type variables and quantified effect-row variables,
+instantiation freshens both bound type variables and quantified ability-row variables,
 while preserving repeated references to the same row variable within that
 single instantiation.
 
 Local scopes store `TypeScheme` bindings. At each `let`, the checker solves the
 constraint prefix through that binding and separately tracks the effect of
 evaluating the right-hand side. A closed-pure evaluation generalizes type and
-effect-row variables not free in the surrounding local environment; an
+ability-row variables not free in the surrounding local environment; an
 effectful evaluation stores a monomorphic scheme. Latent effects inside a
 lambda's function type do not make evaluation of the lambda effectful.
 
 Constraints produced from calls, lambdas, and handler boundaries retain their
-source origin through solving. User-facing failures render effect rows in
+source origin through solving. User-facing failures render ability rows in
 canonical source syntax, hide internal row-variable identities, and attach the
 primary diagnostic to the originating expression with the enclosing effect
 contract as secondary context. A frontend error stops the pipeline before AST
 to IR conversion and shared lowering so invalid source does not produce
 cascading diagnostics containing internal IR operation identities.
 
-타입과 effect의 진단 표기는 AST 타입 계층이 소유한다. Effect row의 구체적인
+타입과 effect의 진단 표기는 AST 타입 계층이 소유한다. Ability row의 구체적인
 effect들은 표시 문자열의 사전순으로 출력하고, 열린 tail은 마지막에 `e`로
 표시한다. 각 effect의 표시 문자열을 정렬 키와 출력에 함께 사용한다. 표시
 문자열이 같더라도 선언이나 타입의 identity가 같다는 뜻은 아니며, 이 문자열을
 추론·제약 해결의 동등성 판정에 사용하지 않는다.
 
 Effect-annotation conversion also preserves the source origin of each concrete
-effect separately from the semantic `EffectRow`. Duplicate annotations are
+effect separately from the semantic `AbilityRow`. Duplicate annotations are
 diagnosed at the repeated annotation after solving, with the first matching
 annotation attached as secondary context; parameterized and qualified effects
 keep the origin recorded at their shared annotation-to-row conversion point.
@@ -880,7 +880,7 @@ annotation에서 타입을 재구성하지 않는다. 해결되지 않은 참조
 
 타입 체커 내부에서 선언 환경, 표현식 검사, 제약 해결, 치환·일반화, 결과
 확정, 진단 출력은 구분된 책임이다. 제약 해결 상태와 해결 순서는 하나의
-solver가 소유한다. Equality, coercion, common-result join과 effect-row
+solver가 소유한다. Equality, coercion, common-result join과 ability-row
 관계의 의미를 모듈 분리 때문에 바꾸지 않는다. 함수 binder, 지역 binder,
 추론 변수의 치환 정책은 구분하며, 타입 순회에는 effect 인자와 유지되는
 row 관계도 포함한다.
@@ -911,8 +911,8 @@ query는 모듈 결과에서 해당 함수를 선택한다. 함수 이름으로 
 ### Logical representation
 
 Shared IR의 Evidence는 `Array(Marker)`이고 Marker의 field identity는
-`ability::MarkerField`가 정의한다. Typechecked effect row는 실행에 필요한 ability
-instance를 결정한다. Evidence 배열 자체에 source effect-row parameter를 붙이지
+`ability::MarkerField`가 정의한다. Typechecked ability row는 실행에 필요한 ability
+instance를 결정한다. Evidence 배열 자체에 source ability-row parameter를 붙이지
 않으며 exact target callable contract로 전달한다.
 
 Native와 Wasm의 concrete array/marker 표현 및 lookup helper 반환형은 서로 다르다.

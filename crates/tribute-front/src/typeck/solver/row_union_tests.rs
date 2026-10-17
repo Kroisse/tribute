@@ -7,9 +7,9 @@ fn row_removal_defers_ambiguous_types(db: &salsa::DatabaseImpl) {
     let nat = Type::new(db, TypeKind::Nat);
     let int = Type::new(db, TypeKind::Int);
     let row = |ty| {
-        EffectRow::single(
+        AbilityRow::single(
             db,
-            Effect {
+            AbilityInstance {
                 ability_id: ability,
                 args: vec![ty],
             },
@@ -17,16 +17,16 @@ fn row_removal_defers_ambiguous_types(db: &salsa::DatabaseImpl) {
     };
     for reverse in [false, true] {
         let mut solver = TypeSolver::new(db);
-        let result = EffectRow::open(db, solver.fresh_row_var());
+        let result = AbilityRow::open(db, solver.fresh_row_var());
         let mut labels = vec![
-            row(nat).effects(db)[0].clone(),
-            row(int).effects(db)[0].clone(),
+            row(nat).instances(db)[0].clone(),
+            row(int).instances(db)[0].clone(),
         ];
         if reverse {
             labels.reverse();
         }
         solver.add_row_removals(vec![crate::ast::RowRemoval {
-            source: EffectRow::new(db, labels, None),
+            source: AbilityRow::new(db, labels, None),
             removed: row(nat),
             result,
         }]);
@@ -35,7 +35,7 @@ fn row_removal_defers_ambiguous_types(db: &salsa::DatabaseImpl) {
     }
     let mut solver = TypeSolver::new(db);
     let unknown = solver.fresh_type_var(db);
-    let result = EffectRow::open(db, solver.fresh_row_var());
+    let result = AbilityRow::open(db, solver.fresh_row_var());
     solver.add_row_removals(vec![crate::ast::RowRemoval {
         source: row(unknown),
         removed: row(nat),
@@ -54,11 +54,11 @@ fn row_removal_defers_ambiguous_types(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn row_removal_empty_result_does_not_close_its_source(db: &salsa::DatabaseImpl) {
     let mut solver = TypeSolver::new(db);
-    let source = EffectRow::open(db, solver.fresh_row_var());
+    let source = AbilityRow::open(db, solver.fresh_row_var());
     solver.add_row_removals(vec![crate::ast::RowRemoval {
         source,
         removed: label(db, "Ping"),
-        result: EffectRow::pure(db),
+        result: AbilityRow::pure(db),
     }]);
     solver.finalize_relations().unwrap();
     assert_eq!(solver.row_subst().apply(db, source), source);
@@ -71,7 +71,7 @@ fn row_removal_empty_result_does_not_close_its_source(db: &salsa::DatabaseImpl) 
 #[salsa_test]
 fn row_removal_rejects_reintroduced_labels(db: &salsa::DatabaseImpl) {
     let mut solver = TypeSolver::new(db);
-    let source = EffectRow::open(db, solver.fresh_row_var());
+    let source = AbilityRow::open(db, solver.fresh_row_var());
     solver.add_row_removals(vec![crate::ast::RowRemoval {
         source,
         removed: label(db, "Ping"),
@@ -90,27 +90,27 @@ fn row_removal_uses_exact_ability_identity(db: &salsa::DatabaseImpl) {
         trunk_ir::SymbolPath::new([name.clone()]),
     );
     let source = crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new([name]));
-    let effect = |ability_id| Effect {
+    let effect = |ability_id| AbilityInstance {
         ability_id,
         args: vec![],
     };
-    let result = EffectRow::open(db, solver.fresh_row_var());
+    let result = AbilityRow::open(db, solver.fresh_row_var());
     solver.add_row_removals(vec![crate::ast::RowRemoval {
-        source: EffectRow::new(db, vec![effect(builtin), effect(source)], None),
-        removed: EffectRow::single(db, effect(builtin)),
+        source: AbilityRow::new(db, vec![effect(builtin), effect(source)], None),
+        removed: AbilityRow::single(db, effect(builtin)),
         result,
     }]);
     solver.finalize_relations().unwrap();
     assert_eq!(
         solver.row_subst().apply(db, result),
-        EffectRow::single(db, effect(source))
+        AbilityRow::single(db, effect(source))
     );
 }
 
-fn label<'db>(db: &'db dyn salsa::Database, name: &str) -> EffectRow<'db> {
-    EffectRow::single(
+fn label<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityRow<'db> {
+    AbilityRow::single(
         db,
-        Effect {
+        AbilityInstance {
             ability_id: crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new([name])),
             args: vec![],
         },
@@ -120,8 +120,8 @@ fn label<'db>(db: &'db dyn salsa::Database, name: &str) -> EffectRow<'db> {
 #[salsa_test]
 fn unrelated_row_union_stays_in_solver_without_entering_value_scheme(db: &salsa::DatabaseImpl) {
     let mut solver = TypeSolver::new(db);
-    let left = EffectRow::open(db, EffectVar { id: 1 });
-    let right = EffectRow::open(db, EffectVar { id: 2 });
+    let left = AbilityRow::open(db, RowVar { id: 1 });
+    let right = AbilityRow::open(db, RowVar { id: 2 });
     solver.add_row_unions(vec![crate::ast::RowUnion {
         sources: vec![left, right],
         result: label(db, "Writer"),
@@ -147,9 +147,9 @@ fn scheme_row_dependencies_follow_shared_effect_type_arguments(db: &salsa::Datab
             id: UniVarId::new(db, crate::ast::UniVarSource::Anonymous(813), 0),
         },
     );
-    let result = EffectRow::single(
+    let result = AbilityRow::single(
         db,
-        Effect {
+        AbilityInstance {
             ability_id: crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"])),
             args: vec![variable],
         },
@@ -157,8 +157,8 @@ fn scheme_row_dependencies_follow_shared_effect_type_arguments(db: &salsa::Datab
     for first in [1, 3] {
         solver.add_row_unions(vec![crate::ast::RowUnion {
             sources: vec![
-                EffectRow::open(db, EffectVar { id: first }),
-                EffectRow::open(db, EffectVar { id: first + 1 }),
+                AbilityRow::open(db, RowVar { id: first }),
+                AbilityRow::open(db, RowVar { id: first + 1 }),
             ],
             result,
         }]);
@@ -170,7 +170,7 @@ fn scheme_row_dependencies_follow_shared_effect_type_arguments(db: &salsa::Datab
         TypeKind::Func {
             params: vec![],
             result: nil,
-            effect: EffectRow::open(db, EffectVar { id: 1 }),
+            effect: AbilityRow::open(db, RowVar { id: 1 }),
         },
     );
     // The second union is reachable only through the first union's
@@ -183,9 +183,9 @@ fn scheme_row_dependencies_follow_shared_effect_type_arguments(db: &salsa::Datab
 fn row_union_retains_both_delayed_sources(db: &salsa::DatabaseImpl) {
     for reverse in [false, true] {
         let mut solver = TypeSolver::new(db);
-        let left = EffectRow::open(db, EffectVar { id: 10 });
-        let right = EffectRow::open(db, EffectVar { id: 11 });
-        let result = EffectRow::open(db, EffectVar { id: 12 });
+        let left = AbilityRow::open(db, RowVar { id: 10 });
+        let right = AbilityRow::open(db, RowVar { id: 11 });
+        let result = AbilityRow::open(db, RowVar { id: 12 });
         let sources = if reverse {
             vec![right, left]
         } else {
@@ -204,7 +204,7 @@ fn row_union_retains_both_delayed_sources(db: &salsa::DatabaseImpl) {
         solver.solve(constraints).unwrap();
         let result = solver.row_subst.apply(db, result);
         assert!(result.rest(db).is_none());
-        assert_eq!(result.effects(db).len(), 2);
+        assert_eq!(result.instances(db).len(), 2);
         assert!(solver.retained_row_unions().is_empty());
     }
 }
@@ -212,8 +212,8 @@ fn row_union_retains_both_delayed_sources(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn row_union_closed_result_does_not_choose_a_source(db: &salsa::DatabaseImpl) {
     let mut solver = TypeSolver::new(db);
-    let left = EffectRow::open(db, EffectVar { id: 1 });
-    let right = EffectRow::open(db, EffectVar { id: 2 });
+    let left = AbilityRow::open(db, RowVar { id: 1 });
+    let right = AbilityRow::open(db, RowVar { id: 2 });
     solver.add_row_unions(vec![crate::ast::RowUnion {
         sources: vec![left, right],
         result: label(db, "Writer"),
@@ -233,9 +233,9 @@ fn signature_boundary_closes_free_tails_of_a_closed_union(db: &salsa::DatabaseIm
     let writer = label(db, "Writer");
     for named in [None, Some(writer)] {
         let mut solver = TypeSolver::new(db);
-        let effects = named.map_or(vec![], |row| row.effects(db).to_vec());
-        let left = EffectRow::new(db, effects, Some(EffectVar { id: 1 }));
-        let right = EffectRow::open(db, EffectVar { id: 2 });
+        let effects = named.map_or(vec![], |row| row.instances(db).to_vec());
+        let left = AbilityRow::new(db, effects, Some(RowVar { id: 1 }));
+        let right = AbilityRow::open(db, RowVar { id: 2 });
         solver.add_row_unions(vec![crate::ast::RowUnion {
             sources: vec![left, right],
             result: writer,
@@ -244,7 +244,7 @@ fn signature_boundary_closes_free_tails_of_a_closed_union(db: &salsa::DatabaseIm
         solver.settle_signature_relations(&[]).unwrap();
         assert_eq!(
             solver.row_subst.apply(db, left),
-            named.unwrap_or(EffectRow::pure(db))
+            named.unwrap_or(AbilityRow::pure(db))
         );
         assert!(solver.row_subst.apply(db, right).is_pure(db));
         assert!(solver.retained_row_unions().is_empty());
@@ -256,8 +256,8 @@ fn signature_boundary_closes_free_tails_of_a_closed_union(db: &salsa::DatabaseIm
 #[salsa_test]
 fn signature_boundary_leaves_a_removal_source_to_its_removal(db: &salsa::DatabaseImpl) {
     let mut solver = TypeSolver::new(db);
-    let removed_from = EffectRow::open(db, EffectVar { id: 1 });
-    let free = EffectRow::open(db, EffectVar { id: 2 });
+    let removed_from = AbilityRow::open(db, RowVar { id: 1 });
+    let free = AbilityRow::open(db, RowVar { id: 2 });
     solver.add_row_unions(vec![crate::ast::RowUnion {
         sources: vec![removed_from, free],
         result: label(db, "Tell"),
@@ -276,11 +276,11 @@ fn signature_boundary_leaves_a_removal_source_to_its_removal(db: &salsa::Databas
 #[salsa_test]
 fn row_union_pure_result_closes_every_source(db: &salsa::DatabaseImpl) {
     let mut solver = TypeSolver::new(db);
-    let left = EffectRow::open(db, EffectVar { id: 1 });
-    let right = EffectRow::open(db, EffectVar { id: 2 });
+    let left = AbilityRow::open(db, RowVar { id: 1 });
+    let right = AbilityRow::open(db, RowVar { id: 2 });
     solver.add_row_unions(vec![crate::ast::RowUnion {
         sources: vec![left, right],
-        result: EffectRow::pure(db),
+        result: AbilityRow::pure(db),
     }]);
     solver.finalize_relations().unwrap();
     assert!(solver.row_subst.apply(db, left).is_pure(db));
@@ -297,13 +297,13 @@ fn row_union_defers_ambiguous_instance_until_type_constraint_arrives(db: &salsa:
     let nat = Type::new(db, TypeKind::Nat);
     let int = Type::new(db, TypeKind::Int);
     let ability = crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"]));
-    let effect = |arg| Effect {
+    let effect = |arg| AbilityInstance {
         ability_id: ability,
         args: vec![arg],
     };
     for (reverse, swap) in [(false, false), (true, false), (false, true), (true, true)] {
-        let source = EffectRow::new(db, vec![effect(variable), effect(nat)], None);
-        let result = EffectRow::new(
+        let source = AbilityRow::new(db, vec![effect(variable), effect(nat)], None);
+        let result = AbilityRow::new(
             db,
             if reverse {
                 vec![effect(int), effect(nat)]

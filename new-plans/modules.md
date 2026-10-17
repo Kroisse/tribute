@@ -327,7 +327,7 @@ mod b {
 
 두 타입은 같은 nominal 선언이거나 같은 primitive이면 맞는다. 함수 타입과 tuple은
 항목 수가 같으면 맞는다. 후보의 타입 변수는 어떤 타입과도 맞는다. 아직 정해지지
-않은 인자나 결과의 타입은 어느 후보도 배제하지 않는다. Effect row는 선택에 쓰지
+않은 인자나 결과의 타입은 어느 후보도 배제하지 않는다. Ability row는 선택에 쓰지
 않는다.
 
 후보가 하나뿐이면 고를 것이 없다. 호출은 그 함수로 검사하고, 맞지 않는 인자는
@@ -628,7 +628,7 @@ use pkg::api::Response       // api::Response (패키지 루트에서)
 `pkg`로 시작하는 경로로 가리킨다.
 
 이 규칙은 `use` 경로, 값 경로(호출, 생성자, 패턴, handler arm의 ability), 타입과
-effect annotation에 똑같이 적용한다. 패키지 루트에서 쓴 `super`, 그리고 첫
+ability annotation에 똑같이 적용한다. 패키지 루트에서 쓴 `super`, 그리고 첫
 segment가 아닌 위치의 키워드는 이름 해석 오류다.
 
 ### 인라인 모듈의 이름 범위

@@ -233,8 +233,8 @@ fn main() -> Nil {{
 }
 
 /// Constructors and abilities imported inside an inline module resolve in
-/// expressions, effect annotations, handler arms, and unqualified operation
-/// calls under an effect annotation.
+/// expressions, ability annotations, handler arms, and unqualified operation
+/// calls under an ability annotation.
 #[salsa_test]
 fn inline_module_imports_cover_constructors_and_abilities(db: &salsa::DatabaseImpl) {
     let errors = errors(
@@ -344,7 +344,7 @@ fn main() -> Nil {
     );
 }
 
-/// An effect annotation may reach an ability through a module an inline
+/// An ability annotation may reach an ability through a module an inline
 /// module imports under an alias, and its operations are callable unqualified.
 #[salsa_test]
 fn inline_module_import_prefixes_qualified_effect_annotations(db: &salsa::DatabaseImpl) {
@@ -379,7 +379,7 @@ fn main() -> Nil {
     assert!(errors.is_empty(), "{errors:#?}");
 }
 
-/// Effect annotations follow the same precedence as other names: an ability
+/// Ability annotations follow the same precedence as other names: an ability
 /// the inline module defines itself wins over one it imports under the same
 /// name.
 #[salsa_test]
@@ -425,7 +425,7 @@ mod outer {
 }
 
 /// An inline module may import a package-root ability under an alias; the
-/// alias names the package-root ability in effect annotations, unqualified
+/// alias names the package-root ability in ability annotations, unqualified
 /// operation calls, and handler arms.
 #[salsa_test]
 fn inline_module_import_aliases_a_root_ability(db: &salsa::DatabaseImpl) {

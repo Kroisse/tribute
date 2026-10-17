@@ -550,9 +550,9 @@ FunctionType ::= 'fn' '(' TypeList? ')' ReturnType
 TypeList ::= Type (',' Type)* ','?
 
 ReturnType ::= '->' Type                      // 암묵적 effect polymorphic
-             | '->' '{' EffectRow? '}' Type   // 명시적 effect
+             | '->' '{' AbilityRow? '}' Type   // 명시적 effect
 
-EffectRow ::= EffectItem (',' EffectItem)* EffectTail? ','?
+AbilityRow ::= EffectItem (',' EffectItem)* EffectTail? ','?
 EffectItem ::= TypePath TypeArgs?
 EffectTail ::= ',' LowerIdentifier            // row variable
 ```
@@ -719,7 +719,7 @@ Param ::= Identifier (':' Type)?
 ```
 
 함수 선언은 파라미터 타입과 반환 타입을 모두 적는다. `main`도 `fn main() -> Nil`로
-쓴다. Effect row는 생략할 수 있으며, 생략하면 fresh row 변수이다. 람다의
+쓴다. Ability row는 생략할 수 있으며, 생략하면 fresh row 변수이다. 람다의
 파라미터 타입은 생략할 수 있다([Lambda Expression](#lambda-expression)).
 
 **예시:**
@@ -975,7 +975,7 @@ Proper tail call을 보장하는 것은 `become`뿐이다. `become`이 없는 �
   아니다. Handler arm(`do`, `fn`, `op`)의 결과는 handle 식의 값이나 resume 값이 되므로
   역시 tail position이 아니다.
 - **타입:** 호출 결과 타입은 감싼 callable의 결과 타입과 같아야 하고, callee의 effect
-  row는 일반 호출처럼 감싼 callable의 effect row에 포함되어야 한다. `become` 식의
+  row는 일반 호출처럼 감싼 callable의 ability row에 포함되어야 한다. `become` 식의
   타입은 호출 결과 타입이다.
 
 인자는 일반 호출처럼 왼쪽에서 오른쪽으로 평가한다. 모든 인자를 평가한 뒤 현재

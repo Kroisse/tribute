@@ -96,7 +96,7 @@ fn main() -> Nil {}
     assert!(
         errors
             .iter()
-            .any(|diagnostic| diagnostic.inner.message.contains("effect")),
+            .any(|diagnostic| diagnostic.inner.message.contains("ability row mismatch")),
         "{errors:?}"
     );
 }

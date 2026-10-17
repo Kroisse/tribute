@@ -104,7 +104,7 @@ pub struct Resolver<'db> {
     span_map: SpanMap,
     /// Stack of LocalIds for `resume` in `op` handler arms.
     resume_local_id_stack: Vec<LocalId>,
-    /// Ability operations injected from effect annotations (effect-directed resolution).
+    /// Ability operations injected from ability annotations (effect-directed resolution).
     /// Maps unqualified operation name → Binding. Cleared on each function scope.
     effect_ops: HashMap<Symbol, Binding<'db>>,
     /// Lexical nested-module namespace used for unqualified references in an
@@ -972,7 +972,7 @@ impl<'db> Resolver<'db> {
             self.resolve_annotation_paths(ty);
         }
 
-        // Resolve imported ability names in effect annotations to qualified paths.
+        // Resolve imported ability names in ability annotations to qualified paths.
         // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
         let mut effects = func.effects.clone();
         if let Some(effs) = &mut effects {
@@ -984,7 +984,7 @@ impl<'db> Resolver<'db> {
                 .for_each(|ann| self.resolve_annotation_paths(ann));
         }
 
-        // Inject ability operations from effect annotations into scope.
+        // Inject ability operations from ability annotations into scope.
         // This enables effect-directed name resolution: when a function declares
         // an effect like `->{abilities::Abort}`, its operations (e.g., `abort()`)
         // become directly callable without qualification. The resolved row names
@@ -1011,9 +1011,9 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Inject ability operations from effect annotations into the current scope.
+    /// Inject ability operations from ability annotations into the current scope.
     ///
-    /// For each ability in the effect row, look up its operations in the module
+    /// For each ability in the ability row, look up its operations in the module
     /// environment and make them available as unqualified names. This enables
     /// calling `abort()` instead of `abilities::Abort::abort()` when the function
     /// declares `->{abilities::Abort}`.
@@ -1061,7 +1061,7 @@ impl<'db> Resolver<'db> {
     ///
     /// When an ability is imported via `use` (e.g., `use abilities::Abort`), the
     /// import stores the original module path. This method rewrites unqualified
-    /// ability names in effect annotations to their qualified form so that
+    /// ability names in ability annotations to their qualified form so that
     /// `annotation_to_effect` creates the correct AbilityId. Inside an inline
     /// module, `resolve_annotation_paths` resolves imports instead.
     fn resolve_effect_annotations(&self, effects: &mut [TypeAnnotation]) {

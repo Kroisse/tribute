@@ -11,8 +11,8 @@ pipeline 조합은 [implementation.md](implementation.md#직접형-제어-소유
 ## 호출 규약
 
 이 절은 CPS 전략이 source-logical callable에 부여하는 호출 규약을 정한다. 규약은
-callable의 effect row, ability 선언의 operation kind, 그리고 callable을 담은
-인스턴스가 row 변수에 고정한 class에서 계산되는 값이다. 언어 계약은 effect row와
+callable의 ability row, ability 선언의 operation kind, 그리고 callable을 담은
+인스턴스가 row 변수에 고정한 class에서 계산되는 값이다. 언어 계약은 ability row와
 evidence, 중단 가능성, `become`의 proper tail call만 정하며 규약을 정하지 않는다.
 
 ### 규약 단계
@@ -21,18 +21,18 @@ evidence, 중단 가능성, `become`의 proper tail call만 정하며 규약을 
 
 | Convention | Parameters | Result | Requirement |
 | ---------- | ---------- | ------ | ----------- |
-| `Direct` | source parameters | source result | closed empty effect row or pure named worker |
+| `Direct` | source parameters | source result | closed empty ability row or pure named worker |
 | `EvidenceDirect` | evidence + source parameters | source result | `Io` or tail-resumptive `fn` effect |
 | `Cps` | evidence + `ContinuationFrame<R>` + source parameters | source result를 직접 반환하지 않음 | general `op`, `Throw`, or another CPS effect |
 
 규약을 합성할 때 `Direct < EvidenceDirect < Cps` 순서로 더 강한 규약이
 우선한다.
 
-명시적인 빈 effect annotation `->{}`는 닫힌 빈 effect row를 뜻하므로
-`Direct`를 사용한다. Effect annotation을 생략한 함수와 달리 effect-polymorphic하지
+명시적인 빈 ability annotation `->{}`는 닫힌 빈 ability row를 뜻하므로
+`Direct`를 사용한다. Ability annotation을 생략한 함수와 달리 effect-polymorphic하지
 않지만, 빈 row 자체는 evidence parameter를 요구하지 않는다.
 
-Effect annotation을 생략한 `fn(...) -> T`의 semantic type은
+Ability annotation을 생략한 `fn(...) -> T`의 semantic type은
 `fn(...) ->{e} T`다. 열린 row의 간접 호출은 `Cps`지만, 정의에서 concrete residual
 effect가 발견되지 않으면 해당 named definition은 별도의 `Direct` worker를 가질 수
 있다.
@@ -60,7 +60,7 @@ read_line(ev, frame: ContinuationFrame<String>) -> Never
 
 ### Row와 호출 규약
 
-Source effect row는 operation 집합이 아니라 **ability identity의 집합**을
+Source ability row는 operation 집합이 아니라 **ability identity의 집합**을
 기록한다. Semantic function type의 calling convention은 row에 들어 있는 각
 ability가 요구하는 convention의 상한으로 결정한다.
 
@@ -79,13 +79,13 @@ tail e                      → 아래 tail 규칙
 kind를 erase하지 않는다. Typechecking이 resolve된 operation에 kind를 저장하고
 frontend가 각 `tribute_control.perform.operation_kind`에 이를 복사한다.
 `tribute_control_to_cps`는 이를 직접 소비하며 `CallingConvention`, handler-body
-analysis, effect-row bound 중 어느 것도 kind를 재구성하거나 변경하지 않는다.
+analysis, ability-row bound 중 어느 것도 kind를 재구성하거나 변경하지 않는다.
 
-Typechecking은 convention을 계산하지 않는다. Function type은 effect row만 가지며,
+Typechecking은 convention을 계산하지 않는다. Function type은 ability row만 가지며,
 type 추론과 unification은 convention을 보지 않는다. Convention은 typechecking 뒤의
 특수화와 source-logical lowering이 row와 ability의 operation kind에서 계산한다.
 
-Effect annotation 생략은 closed-empty 추론이 아니다.
+Ability annotation 생략은 closed-empty 추론이 아니다.
 
 ```text
 fn(a) -> b ≡ fn(a) ->{e} b
@@ -128,19 +128,19 @@ transfer로 바꾸며 대체 carrier를 선택하지 않는다.
 사용할 수 있다. 함수 표현을 결정하는 상한과 operation call-site의 dispatch
 최적화는 서로 다른 결정이다.
 
-Operation 종류를 source effect row에 기록하는 대안은 채택하지 않는다. 예를 들어
+Operation 종류를 source ability row에 기록하는 대안은 채택하지 않는다. 예를 들어
 `{State::get}`과 `{State::get, State::set}`을 서로 다른 effect로 만들면 이 차이가
 함수 타입, effect polymorphism, subtyping, 간접 호출 및 별도 컴파일 단위의 ABI에
 모두 관여해야 한다. 내부 calling-convention 정보로만 operation 집합을 추적하면
 간접 호출에서 실제 callee가 더 강한 convention을 요구할 수 있으므로 sound하지 않다.
 
-Source effect row는 ability 단위로 유지한다. Operation별 precision을 숨은 ABI
+Source ability row는 ability 단위로 유지한다. Operation별 precision을 숨은 ABI
 metadata로 도입하지 않는다. Open-row indirect call은 보수적인 `Cps`를 사용하고,
 named definition의 worker convention은 검사된 metadata에서 별도로 계산한다.
 
 ### Row 변수의 convention class
 
-Effect row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실행 중 evidence로
+Ability row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실행 중 evidence로
 전달한다. 특수화하는 것은 row 변수가 요구하는 calling convention뿐이며, 이를 그
 변수의 **convention class**라 한다. Class는 기존 순서
 `Direct < EvidenceDirect < Cps`의 세 값 중 하나다.
@@ -228,7 +228,7 @@ Class 값은 셋뿐이므로 class 변수가 `n`개인 정의의 인스턴스는
 Direct < EvidenceDirect < Cps
 ```
 
-Effect row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌지 않는다.
+Ability row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌지 않는다.
 
 Callable의 convention은 그 row만으로 정해진다
 ([convention bound](#row와-호출-규약)).
@@ -236,7 +236,7 @@ Callable의 convention은 그 row만으로 정해진다
 아닌 callable 안에서 CPS 제어가 필요한 계산은 [값 delimiter](#값-delimiter) 안에서
 실행하며, 그 결과는 일반 값이다.
 
-Local lambda의 convention도 typechecking이 확정한 effect row에서 계산한다. Lambda
+Local lambda의 convention도 typechecking이 확정한 ability row에서 계산한다. Lambda
 본문은 닫힌 빈 accumulator로 검사하고, 본문이 남긴 open row 또는 lambda를
 검사한 callable context의 open tail만 callable type에 남긴다. 본문이 요구한
 ability는 row에 남으며 그 ability의 convention lower bound를 적용한다. Row의 tail은
@@ -267,7 +267,7 @@ Source `become`인 [`tribute_control.tail_call`](ir.md#tribute_controltail_call)
 [`tribute_control.tail_call_indirect`](ir.md#tribute_controltail_call_indirect)는
 `tribute_control_to_cps`가 모든 convention 조합에서 proper tail transfer로 바꾼다.
 Callee convention은 caller convention보다 강할 수 없으므로(`Direct < EvidenceDirect <
-Cps`, callee effect row는 caller row에 포함) 조합은 다음 셋이다:
+Cps`, callee ability row는 caller row에 포함) 조합은 다음 셋이다:
 
 - **값을 반환하는 caller와 callee** (`Direct`/`EvidenceDirect` 사이): named target은
   `func.tail_call`, callable value는 `func.tail_call_indirect`가 된다. Hidden

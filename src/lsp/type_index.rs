@@ -71,7 +71,7 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
             let params_str: Vec<String> = params.iter().map(|t| print_ast_type(db, *t)).collect();
             let result_str = print_ast_type(db, *result);
 
-            let effects = effect.effects(db);
+            let effects = effect.instances(db);
             let has_rest = effect.rest(db).is_some();
 
             if effects.is_empty() && !has_rest {
@@ -315,12 +315,12 @@ mod tests {
 
     #[test]
     fn test_print_ast_type_function() {
-        use tribute_front::ast::EffectRow;
+        use tribute_front::ast::AbilityRow;
 
         let db = salsa::DatabaseImpl::default();
 
         let int_ty = Type::new(&db, TypeKind::Int);
-        let pure_effect = EffectRow::pure(&db);
+        let pure_effect = AbilityRow::pure(&db);
         let func_ty = Type::new(
             &db,
             TypeKind::Func {
@@ -492,23 +492,23 @@ mod tests {
 
     #[test]
     fn test_print_ast_type_function_with_effects() {
-        use tribute_front::ast::{AbilityId, Effect, EffectRow};
+        use tribute_front::ast::{AbilityId, AbilityInstance, AbilityRow};
 
         let db = salsa::DatabaseImpl::default();
 
         let int_ty = Type::new(&db, TypeKind::Int);
         let io_id = AbilityId::source(&db, trunk_ir::SymbolPath::new(["IO"]));
-        let effect = Effect {
+        let effect = AbilityInstance {
             ability_id: io_id,
             args: vec![],
         };
-        let effect_row = EffectRow::new(&db, vec![effect], None);
+        let ability_row = AbilityRow::new(&db, vec![effect], None);
         let func_ty = Type::new(
             &db,
             TypeKind::Func {
                 params: vec![int_ty],
                 result: int_ty,
-                effect: effect_row,
+                effect: ability_row,
             },
         );
         assert_eq!(print_ast_type(&db, func_ty), "fn(Int) ->{IO} Int");

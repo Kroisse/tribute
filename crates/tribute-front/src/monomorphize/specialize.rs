@@ -417,12 +417,12 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
             effect,
             ..
         } => {
-            // Preserve the effect row as ability annotations. Each Effect
+            // Preserve the ability row as ability annotations. Each Effect
             // becomes a Named (or App) annotation; a row variable (`rest`) is
             // represented as `Infer`, matching the "effect polymorphic" encoding
             // documented on TypeAnnotationKind::Func.
             let mut abilities: Vec<TypeAnnotation> = effect
-                .effects(db)
+                .instances(db)
                 .iter()
                 .map(|eff| {
                     let name = eff.ability_id.name(db);
@@ -597,7 +597,7 @@ impl<'db> VisitMut<TypedRef<'db>> for Substitute<'_, 'db> {
 mod tests {
     use super::super::mangle::mangle_name;
     use crate::ast::{
-        Arm, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind, Module, Pattern,
+        AbilityRow, Arm, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind, Module, Pattern,
         PatternKind, ResolvedRef, Stmt, TypeParam,
     };
 
@@ -612,8 +612,8 @@ mod tests {
     #[salsa::db]
     impl salsa::Database for TestDb {}
 
-    fn pure_effect(db: &dyn salsa::Database) -> EffectRow<'_> {
-        EffectRow::new(db, vec![], None)
+    fn pure_effect(db: &dyn salsa::Database) -> AbilityRow<'_> {
+        AbilityRow::new(db, vec![], None)
     }
 
     fn node_id(n: usize) -> NodeId {
@@ -872,9 +872,9 @@ mod tests {
         );
         let writer = crate::ast::AbilityId::source(&db, trunk_ir::SymbolPath::new(["Writer"]));
         let row = |ty| {
-            crate::ast::EffectRow::single(
+            crate::ast::AbilityRow::single(
                 &db,
-                crate::ast::Effect {
+                crate::ast::AbilityInstance {
                     ability_id: writer,
                     args: vec![ty],
                 },
@@ -980,7 +980,7 @@ mod tests {
         }
     }
 
-    /// Regression: effect row must be preserved when converting Func types
+    /// Regression: ability row must be preserved when converting Func types
     /// back to annotations (previously the `abilities` field was hardcoded
     /// to `vec![]`, silently turning effectful functions into pure ones).
     #[test]
@@ -995,14 +995,14 @@ mod tests {
             &db,
             trunk_ir::SymbolPath::new(["std", "state", "State"]),
         );
-        let effect = EffectRow::new(
+        let effect = AbilityRow::new(
             &db,
             vec![
-                crate::ast::Effect {
+                crate::ast::AbilityInstance {
                     ability_id: console_id,
                     args: vec![],
                 },
-                crate::ast::Effect {
+                crate::ast::AbilityInstance {
                     ability_id: state_id,
                     args: vec![int],
                 },
@@ -1050,13 +1050,13 @@ mod tests {
         }
     }
 
-    /// Regression: a row variable on the effect row should map to `Infer`
+    /// Regression: a row variable on the ability row should map to `Infer`
     /// (effect-polymorphic), not be silently dropped.
     #[test]
     fn test_type_to_annotation_func_preserves_rest_var() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let effect = EffectRow::new(&db, vec![], Some(crate::ast::EffectVar { id: 0 }));
+        let effect = AbilityRow::new(&db, vec![], Some(crate::ast::RowVar { id: 0 }));
         let func_ty = Type::new(
             &db,
             TypeKind::Func {
@@ -1084,7 +1084,7 @@ mod tests {
             TypeKind::Func {
                 params: vec![int],
                 result: int,
-                effect: EffectRow::pure(&db),
+                effect: AbilityRow::pure(&db),
             },
         );
 

@@ -223,7 +223,7 @@ fn is_concrete_type_cached<'db>(
                 .iter()
                 .all(|param| is_concrete_type_cached(db, *param, cache))
                 && is_concrete_type_cached(db, *result, cache)
-                && is_concrete_effect_row_cached(db, *effect, cache)
+                && is_concrete_ability_row_cached(db, *effect, cache)
         }
         TypeKind::Tuple(elements) => elements
             .iter()
@@ -248,20 +248,20 @@ fn is_concrete_type_cached<'db>(
         } => {
             is_concrete_type_cached(db, *arg, cache)
                 && is_concrete_type_cached(db, *result, cache)
-                && is_concrete_effect_row_cached(db, *effect, cache)
+                && is_concrete_ability_row_cached(db, *effect, cache)
         }
     };
     cache.insert(ty, concrete);
     concrete
 }
 
-fn is_concrete_effect_row_cached<'db>(
+fn is_concrete_ability_row_cached<'db>(
     db: &'db dyn salsa::Database,
-    row: crate::ast::EffectRow<'db>,
+    row: crate::ast::AbilityRow<'db>,
     cache: &mut HashMap<Type<'db>, bool>,
 ) -> bool {
     row.rest(db).is_none()
-        && row.effects(db).iter().all(|effect| {
+        && row.instances(db).iter().all(|effect| {
             effect
                 .args
                 .iter()
@@ -356,7 +356,7 @@ fn collect_from_type_inner<'db>(
                 collect_from_type_inner(db, *p, index, result, seen);
             }
             collect_from_type_inner(db, *ret, index, result, seen);
-            for effect in effect.effects(db) {
+            for effect in effect.instances(db) {
                 for arg in &effect.args {
                     collect_from_type_inner(db, *arg, index, result, seen);
                 }
@@ -380,7 +380,7 @@ fn collect_from_type_inner<'db>(
         } => {
             collect_from_type_inner(db, *arg, index, result, seen);
             collect_from_type_inner(db, *ret, index, result, seen);
-            for effect in effect.effects(db) {
+            for effect in effect.instances(db) {
                 for arg in &effect.args {
                     collect_from_type_inner(db, *arg, index, result, seen);
                 }
@@ -394,7 +394,7 @@ fn collect_from_type_inner<'db>(
 #[cfg(test)]
 mod tests {
     use crate::ast::{
-        AbilityId, Decl, Effect, EffectRow, EffectVar, Module, ModuleItem, NodeId, TypeParam,
+        AbilityId, AbilityInstance, AbilityRow, Decl, Module, ModuleItem, NodeId, RowVar, TypeParam,
     };
     use trunk_ir::Symbol;
 
@@ -418,13 +418,13 @@ mod tests {
         TypeScheme::new(db, type_params, Vec::new(), body)
     }
 
-    fn pure_effect(db: &dyn salsa::Database) -> EffectRow<'_> {
-        EffectRow::new(db, vec![], None)
+    fn pure_effect(db: &dyn salsa::Database) -> AbilityRow<'_> {
+        AbilityRow::new(db, vec![], None)
     }
 
     fn direct_function_type<'db>(
         db: &'db dyn salsa::Database,
-        effect: EffectRow<'db>,
+        effect: AbilityRow<'db>,
     ) -> Type<'db> {
         let int = Type::new(db, TypeKind::Int);
         Type::new(
@@ -438,12 +438,12 @@ mod tests {
     }
 
     #[test]
-    fn concrete_type_accepts_closed_effect_rows_with_concrete_ability_arguments() {
+    fn concrete_type_accepts_closed_ability_rows_with_concrete_ability_arguments() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let row = EffectRow::new(
+        let row = AbilityRow::new(
             &db,
-            vec![Effect {
+            vec![AbilityInstance {
                 ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::new(["State"])),
                 args: vec![int],
             }],
@@ -454,9 +454,9 @@ mod tests {
     }
 
     #[test]
-    fn concrete_type_rejects_open_effect_rows() {
+    fn concrete_type_rejects_open_ability_rows() {
         let db = TestDb::default();
-        let open = EffectRow::open(&db, EffectVar { id: 0 });
+        let open = AbilityRow::open(&db, RowVar { id: 0 });
         let int = Type::new(&db, TypeKind::Int);
         let continuation = Type::new(
             &db,
@@ -475,9 +475,9 @@ mod tests {
     fn concrete_type_rejects_error_types_in_effect_arguments() {
         let db = TestDb::default();
         let error = Type::new(&db, TypeKind::Error);
-        let row = EffectRow::new(
+        let row = AbilityRow::new(
             &db,
-            vec![Effect {
+            vec![AbilityInstance {
                 ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::new(["State"])),
                 args: vec![error],
             }],

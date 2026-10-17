@@ -1,6 +1,6 @@
-//! Proptest strategies for the typeck `Type` and `EffectRow` representations.
+//! Proptest strategies for the typeck `Type` and `AbilityRow` representations.
 //!
-//! `Type` and `EffectRow` are Salsa-interned, so strategies cannot produce
+//! `Type` and `AbilityRow` are Salsa-interned, so strategies cannot produce
 //! them directly. They produce database-free shapes ([`TypeShape`],
 //! [`RowShape`]) that a test interns with `build(db)`. Shapes compare
 //! structurally, and interning is structural, so two shapes are equal exactly
@@ -21,7 +21,7 @@ use proptest::prelude::*;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, Effect, EffectRow, EffectVar, NodeId, Type, TypeDefId, TypeKind, UniVarId,
+    AbilityId, AbilityInstance, AbilityRow, NodeId, RowVar, Type, TypeDefId, TypeKind, UniVarId,
     UniVarSource,
 };
 
@@ -165,18 +165,18 @@ pub(crate) enum TypeShape {
     },
 }
 
-/// A database-free description of an [`Effect`].
+/// A database-free description of an [`AbilityInstance`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct EffectShape {
+pub(crate) struct AbilityInstanceShape {
     pub ability: usize,
     pub args: Vec<TypeShape>,
 }
 
-/// A database-free description of an [`EffectRow`]. Generated rows hold
+/// A database-free description of an [`AbilityRow`]. Generated rows hold
 /// each effect at most once.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct RowShape {
-    pub effects: Vec<EffectShape>,
+    pub effects: Vec<AbilityInstanceShape>,
     pub rest: Option<u64>,
 }
 
@@ -324,7 +324,7 @@ impl TypeShape {
                 effects: row
                     .effects
                     .iter()
-                    .map(|effect| EffectShape {
+                    .map(|effect| AbilityInstanceShape {
                         ability: effect.ability,
                         args: all(&effect.args, n),
                     })
@@ -461,9 +461,9 @@ fn build_all<'db>(db: &'db dyn salsa::Database, shapes: &[TypeShape]) -> Vec<Typ
     shapes.iter().map(|shape| shape.build(db)).collect()
 }
 
-impl EffectShape {
-    pub(crate) fn build<'db>(&self, db: &'db dyn salsa::Database) -> Effect<'db> {
-        Effect {
+impl AbilityInstanceShape {
+    pub(crate) fn build<'db>(&self, db: &'db dyn salsa::Database) -> AbilityInstance<'db> {
+        AbilityInstance {
             ability_id: ability_id(db, self.ability),
             args: build_all(db, &self.args),
         }
@@ -471,21 +471,21 @@ impl EffectShape {
 }
 
 impl RowShape {
-    pub(crate) fn closed(effects: Vec<EffectShape>) -> Self {
+    pub(crate) fn closed(effects: Vec<AbilityInstanceShape>) -> Self {
         Self {
             effects,
             rest: None,
         }
     }
 
-    pub(crate) fn build<'db>(&self, db: &'db dyn salsa::Database) -> EffectRow<'db> {
-        EffectRow::new(
+    pub(crate) fn build<'db>(&self, db: &'db dyn salsa::Database) -> AbilityRow<'db> {
+        AbilityRow::new(
             db,
             self.effects
                 .iter()
                 .map(|effect| effect.build(db))
                 .collect::<Vec<_>>(),
-            self.rest.map(|id| EffectVar { id }),
+            self.rest.map(|id| RowVar { id }),
         )
     }
 
@@ -500,7 +500,7 @@ impl RowShape {
             effects: self
                 .effects
                 .iter()
-                .map(|effect| EffectShape {
+                .map(|effect| AbilityInstanceShape {
                     ability: effect.ability,
                     args: effect.args.iter().map(|arg| arg.map(f)).collect(),
                 })
@@ -640,19 +640,22 @@ fn arity_args(arity: usize, inner: &BoxedStrategy<TypeShape>) -> BoxedStrategy<V
 }
 
 /// Strategy for one effect drawn from the ability pool.
-fn effect_with(inner: BoxedStrategy<TypeShape>) -> BoxedStrategy<EffectShape> {
+fn effect_with(inner: BoxedStrategy<TypeShape>) -> BoxedStrategy<AbilityInstanceShape> {
     (0..ABILITIES.len())
         .prop_flat_map(move |ability| {
             arity_args(ABILITIES[ability].2, &inner)
-                .prop_map(move |args| EffectShape { ability, args })
+                .prop_map(move |args| AbilityInstanceShape { ability, args })
         })
         .boxed()
 }
 
 /// Remove repeated effects (or repeated abilities, under `unique_abilities`)
 /// keeping the first occurrence.
-fn dedup_effects(effects: Vec<EffectShape>, unique_abilities: bool) -> Vec<EffectShape> {
-    let mut kept: Vec<EffectShape> = Vec::with_capacity(effects.len());
+fn dedup_effects(
+    effects: Vec<AbilityInstanceShape>,
+    unique_abilities: bool,
+) -> Vec<AbilityInstanceShape> {
+    let mut kept: Vec<AbilityInstanceShape> = Vec::with_capacity(effects.len());
     for effect in effects {
         let repeated = kept.iter().any(|seen| {
             if unique_abilities {
@@ -750,7 +753,7 @@ pub(crate) fn row_shape(cfg: TypeGen) -> BoxedStrategy<RowShape> {
 }
 
 /// Strategy for a single effect under `cfg`.
-pub(crate) fn effect_shape(cfg: TypeGen) -> BoxedStrategy<EffectShape> {
+pub(crate) fn ability_instance_shape(cfg: TypeGen) -> BoxedStrategy<AbilityInstanceShape> {
     effect_with(row_args(cfg, &type_shape(TypeGen { depth: 1, ..cfg })))
 }
 
@@ -884,7 +887,7 @@ fn generalize_row(row: &RowShape, sharing: Sharing) -> BoxedStrategy<RowShape> {
         .map(|effect| {
             let ability = effect.ability;
             generalize_all(&effect.args, sharing)
-                .prop_map(move |args| EffectShape { ability, args })
+                .prop_map(move |args| AbilityInstanceShape { ability, args })
         })
         .collect::<Vec<_>>();
     let rest = row.rest;
@@ -1052,19 +1055,19 @@ pub(crate) fn types_equiv<'db>(
 /// Row comparison used by [`types_equiv`].
 pub(crate) fn rows_equiv<'db>(
     db: &'db dyn salsa::Database,
-    left: EffectRow<'db>,
-    right: EffectRow<'db>,
+    left: AbilityRow<'db>,
+    right: AbilityRow<'db>,
     relation: RowRelation,
 ) -> bool {
     match relation {
         RowRelation::Ignore => return true,
-        RowRelation::PureSubsumes if left.is_pure(db) && !right.effects(db).is_empty() => {
+        RowRelation::PureSubsumes if left.is_pure(db) && !right.instances(db).is_empty() => {
             return true;
         }
         _ => {}
     }
-    let contains = |row: EffectRow<'db>, effect: &Effect<'db>| {
-        row.effects(db).iter().any(|candidate| {
+    let contains = |row: AbilityRow<'db>, effect: &AbilityInstance<'db>| {
+        row.instances(db).iter().any(|candidate| {
             candidate.ability_id == effect.ability_id
                 && candidate.args.len() == effect.args.len()
                 && candidate
@@ -1076,11 +1079,11 @@ pub(crate) fn rows_equiv<'db>(
     };
     left.rest(db) == right.rest(db)
         && left
-            .effects(db)
+            .instances(db)
             .iter()
             .all(|effect| contains(right, effect))
         && right
-            .effects(db)
+            .instances(db)
             .iter()
             .all(|effect| contains(left, effect))
 }

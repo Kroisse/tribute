@@ -13,7 +13,7 @@ use trunk_ir::SymbolPath;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, AbilityOrigin, CtorId, EffectRow, FuncDefId, OpDeclKind, Type, TypeDefId, TypeKind,
+    AbilityId, AbilityOrigin, AbilityRow, CtorId, FuncDefId, OpDeclKind, Type, TypeDefId, TypeKind,
     TypeParam, TypeScheme,
 };
 
@@ -340,18 +340,18 @@ impl<'db> ModuleTypeEnv<'db> {
                 .map(|index| Type::new(self.db, TypeKind::BoundVar { index }))
                 .collect(),
         );
-        let pure = EffectRow::pure(self.db);
+        let pure = AbilityRow::pure(self.db);
         let body = match kind {
             FieldFunctionKind::Get => self.func_type(vec![receiver], field_ty, pure),
             FieldFunctionKind::Set => self.func_type(vec![receiver, field_ty], receiver, pure),
             FieldFunctionKind::Modify => {
                 // A row variable the field's own type does not use.
-                let id = crate::ast::collect_effect_vars(self.db, field_ty)
+                let id = crate::ast::collect_row_vars(self.db, field_ty)
                     .iter()
                     .map(|var| var.id + 1)
                     .max()
                     .unwrap_or(0);
-                let row = EffectRow::open(self.db, crate::ast::EffectVar { id });
+                let row = AbilityRow::open(self.db, crate::ast::RowVar { id });
                 let callback = self.func_type(vec![field_ty], field_ty, row);
                 self.func_type(vec![receiver, callback], receiver, row)
             }
@@ -359,7 +359,7 @@ impl<'db> ModuleTypeEnv<'db> {
         let scheme = TypeScheme::new(
             self.db,
             parameters,
-            crate::ast::collect_effect_vars(self.db, body),
+            crate::ast::collect_row_vars(self.db, body),
             body,
         );
         Some(FieldFunction {
@@ -699,7 +699,7 @@ impl<'db> ModuleTypeEnv<'db> {
         &self,
         params: Vec<Type<'db>>,
         result: Type<'db>,
-        effect: EffectRow<'db>,
+        effect: AbilityRow<'db>,
     ) -> Type<'db> {
         Type::new(
             self.db,
@@ -1057,7 +1057,7 @@ mod tests {
     // UFCS utility function tests
     // =========================================================================
 
-    use crate::ast::EffectRow;
+    use crate::ast::AbilityRow;
 
     /// Test helper: create a Named type from a string.
     fn named<'db>(db: &'db dyn salsa::Database, name: &str) -> Type<'db> {
@@ -1082,7 +1082,7 @@ mod tests {
             TypeKind::Func {
                 params: params.to_vec(),
                 result,
-                effect: EffectRow::pure(db),
+                effect: AbilityRow::pure(db),
             },
         )
     }

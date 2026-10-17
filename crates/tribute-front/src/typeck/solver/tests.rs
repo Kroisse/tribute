@@ -1,5 +1,5 @@
 use super::*;
-use crate::ast::{AbilityId, Effect, EffectRow, TypeDefId, UniVarSource};
+use crate::ast::{AbilityId, AbilityInstance, AbilityRow, TypeDefId, UniVarSource};
 use trunk_ir::Symbol;
 
 // Unification and row-unification laws (reflexivity, symmetry, soundness,
@@ -26,19 +26,19 @@ fn fresh_var(db: &dyn salsa::Database, n: u64) -> Type<'_> {
 #[test]
 fn fresh_row_var_avoids_rows_already_present_in_constraints() {
     let db = test_db();
-    let existing = EffectVar { id: 1000 };
-    let existing_row = EffectRow::open(&db, existing);
+    let existing = RowVar { id: 1000 };
+    let existing_row = AbilityRow::open(&db, existing);
     let mut constraints = ConstraintSet::new();
     constraints.add_row_eq(existing_row, existing_row);
     let mut solver = TypeSolver::new(&db);
 
     solver.solve(constraints).expect("constraint should solve");
 
-    assert_eq!(solver.fresh_row_var(), EffectVar { id: 1001 });
+    assert_eq!(solver.fresh_row_var(), RowVar { id: 1001 });
 }
 
 #[test]
-fn test_occurs_check_applies_effect_row_substitution() {
+fn test_occurs_check_applies_ability_row_substitution() {
     let db = test_db();
     let mut solver = TypeSolver::new(&db);
 
@@ -46,10 +46,10 @@ fn test_occurs_check_applies_effect_row_substitution() {
     let TypeKind::UniVar { id: var_id } = var_ty.kind(&db) else {
         unreachable!("fresh_var must create a UniVar")
     };
-    let row_var = EffectVar { id: 7 };
-    let substituted = EffectRow::new(
+    let row_var = RowVar { id: 7 };
+    let substituted = AbilityRow::new(
         &db,
-        vec![Effect {
+        vec![AbilityInstance {
             ability_id: test_ability_id(&db, "State"),
             args: vec![var_ty],
         }],
@@ -58,7 +58,7 @@ fn test_occurs_check_applies_effect_row_substitution() {
     solver.row_subst.insert(row_var.id, substituted);
 
     let int_ty = Type::new(&db, TypeKind::Int);
-    let effect = EffectRow::open(&db, row_var);
+    let effect = AbilityRow::open(&db, row_var);
     let func_ty = Type::new(
         &db,
         TypeKind::Func {
@@ -83,7 +83,7 @@ fn test_occurs_check_applies_effect_row_substitution() {
 #[test]
 fn test_occurs_check_not_triggered_for_different_var_in_effect() {
     // Unifying ?a with fn() ->{State(?b)} Int should succeed,
-    // because ?a does not appear in the effect row.
+    // because ?a does not appear in the ability row.
     let db = test_db();
     let mut solver = TypeSolver::new(&db);
 
@@ -91,9 +91,9 @@ fn test_occurs_check_not_triggered_for_different_var_in_effect() {
     let var_b = fresh_var(&db, 1);
     let int_ty = Type::new(&db, TypeKind::Int);
 
-    let effect = EffectRow::new(
+    let effect = AbilityRow::new(
         &db,
-        vec![Effect {
+        vec![AbilityInstance {
             ability_id: test_ability_id(&db, "State"),
             args: vec![var_b],
         }],
@@ -123,20 +123,20 @@ fn test_occurs_check_not_triggered_for_different_var_in_effect() {
 #[test]
 fn test_pure_callee_in_effectful_context() {
     // Test that calling a pure function from an effectful context succeeds
-    // without modifying the caller's effect row.
+    // without modifying the caller's ability row.
     let db = test_db();
     let mut solver = TypeSolver::new(&db);
 
-    // Create a pure effect row (callee's effect)
-    let pure_effect = EffectRow::new(&db, vec![], None);
+    // Create a pure ability row (callee's effect)
+    let pure_effect = AbilityRow::new(&db, vec![], None);
 
     // Create an effectful row with State effect (caller's context)
-    let row_var = EffectVar { id: 100 };
-    let state_effect = Effect {
+    let row_var = RowVar { id: 100 };
+    let state_effect = AbilityInstance {
         ability_id: test_ability_id(&db, "State"),
         args: vec![Type::new(&db, TypeKind::Int)],
     };
-    let effectful_row = EffectRow::new(&db, vec![state_effect], Some(row_var));
+    let effectful_row = AbilityRow::new(&db, vec![state_effect], Some(row_var));
 
     // Unifying pure with effectful should succeed
     let result = solver.unify_rows(pure_effect, effectful_row);
@@ -320,8 +320,8 @@ fn deferred_producers_with_equal_results_retain_distinct_dependencies() {
     let result = Type::new(&db, TypeKind::Bool);
     let first_node = NodeId::from_raw(1);
     let second_node = NodeId::from_raw(2);
-    solver.defer_producer(first_node, result, vec![first], EffectRow::pure(&db));
-    solver.defer_producer(second_node, result, vec![second], EffectRow::pure(&db));
+    solver.defer_producer(first_node, result, vec![first], AbilityRow::pure(&db));
+    solver.defer_producer(second_node, result, vec![second], AbilityRow::pure(&db));
     assert_eq!(solver.pending_variables().0.len(), 2);
     solver.resolve_producer(first_node);
     let TypeKind::UniVar { id } = second.kind(&db) else {
@@ -341,7 +341,7 @@ fn deferred_join_keeps_actual_producer_and_reports_a_late_mismatch_once() {
         node_id: NodeId::from_raw(1),
         kind: super::super::constraint::ConstraintOriginKind::Expression,
     };
-    solver.defer_producer(origin.node_id, actual, vec![], EffectRow::pure(&db));
+    solver.defer_producer(origin.node_id, actual, vec![], AbilityRow::pure(&db));
     let mut constraints = ConstraintSet::new();
     constraints.add(Constraint::TypeJoin {
         sources: vec![(actual, origin), (nat, origin)],
@@ -420,7 +420,7 @@ fn test_generalize_single_univar() {
     let row_subst = RowSubst::new();
 
     let var_ty = fresh_var(&db, 0);
-    let effect = EffectRow::new(&db, vec![], None);
+    let effect = AbilityRow::new(&db, vec![], None);
     let func_ty = Type::new(
         &db,
         TypeKind::Func {
@@ -458,7 +458,7 @@ fn test_generalize_two_univars() {
 
     let var_a = fresh_var(&db, 0);
     let var_b = fresh_var(&db, 1);
-    let effect = EffectRow::new(&db, vec![], None);
+    let effect = AbilityRow::new(&db, vec![], None);
     let func_ty = Type::new(
         &db,
         TypeKind::Func {
@@ -502,7 +502,7 @@ fn test_generalize_resolved_univar_not_generalized() {
     };
     subst.insert(var_id, int_ty);
 
-    let effect = EffectRow::new(&db, vec![], None);
+    let effect = AbilityRow::new(&db, vec![], None);
     let func_ty = Type::new(
         &db,
         TypeKind::Func {
@@ -542,30 +542,30 @@ fn test_different_effect_arity_returns_arity_mismatch() {
 
     let int_ty = Type::new(&db, TypeKind::Int);
 
-    let state_with_arg = Effect {
+    let state_with_arg = AbilityInstance {
         ability_id: test_ability_id(&db, "State"),
         args: vec![int_ty],
     };
-    let state_no_arg = Effect {
+    let state_no_arg = AbilityInstance {
         ability_id: test_ability_id(&db, "State"),
         args: vec![],
     };
 
-    let r1 = EffectRow::new(&db, vec![state_with_arg], None);
-    let r2 = EffectRow::new(&db, vec![state_no_arg], None);
+    let r1 = AbilityRow::new(&db, vec![state_with_arg], None);
+    let r2 = AbilityRow::new(&db, vec![state_no_arg], None);
 
     let result = solver.unify_rows(r1, r2);
     // Same ability name but different arity is an arity mismatch error
     assert!(
         matches!(
             result,
-            Err(SolveError::EffectArgArityMismatch {
+            Err(SolveError::AbilityArgArityMismatch {
                 ref effect_name,
                 expected: 1,
                 found: 0,
             }) if *effect_name == trunk_ir::Symbol::new("State")
         ),
-        "Expected EffectArgArityMismatch error, got {:?}",
+        "Expected AbilityArgArityMismatch error, got {:?}",
         result
     );
 }
@@ -580,11 +580,11 @@ fn test_row_occurs_in_func_params() {
     let db = test_db();
     let solver = TypeSolver::new(&db);
 
-    let row_var = EffectVar { id: 42 };
+    let row_var = RowVar { id: 42 };
     let int_ty = Type::new(&db, TypeKind::Int);
 
     // fn(fn() ->{e} Int) -> Int where we check for e in outer func
-    let inner_effect = EffectRow::new(&db, vec![], Some(row_var));
+    let inner_effect = AbilityRow::new(&db, vec![], Some(row_var));
     let inner_func = Type::new(
         &db,
         TypeKind::Func {
@@ -593,7 +593,7 @@ fn test_row_occurs_in_func_params() {
             effect: inner_effect,
         },
     );
-    let outer_effect = EffectRow::new(&db, vec![], None);
+    let outer_effect = AbilityRow::new(&db, vec![], None);
     let outer_func = Type::new(
         &db,
         TypeKind::Func {
@@ -615,11 +615,11 @@ fn test_row_occurs_in_func_result() {
     let db = test_db();
     let solver = TypeSolver::new(&db);
 
-    let row_var = EffectVar { id: 42 };
+    let row_var = RowVar { id: 42 };
     let int_ty = Type::new(&db, TypeKind::Int);
 
     // fn() -> fn() ->{e} Int where we check for e in outer func
-    let inner_effect = EffectRow::new(&db, vec![], Some(row_var));
+    let inner_effect = AbilityRow::new(&db, vec![], Some(row_var));
     let inner_func = Type::new(
         &db,
         TypeKind::Func {
@@ -628,7 +628,7 @@ fn test_row_occurs_in_func_result() {
             effect: inner_effect,
         },
     );
-    let outer_effect = EffectRow::new(&db, vec![], None);
+    let outer_effect = AbilityRow::new(&db, vec![], None);
     let outer_func = Type::new(
         &db,
         TypeKind::Func {
@@ -650,12 +650,12 @@ fn test_row_not_in_func_if_absent() {
     let db = test_db();
     let solver = TypeSolver::new(&db);
 
-    let row_var = EffectVar { id: 42 };
-    let other_var = EffectVar { id: 99 };
+    let row_var = RowVar { id: 42 };
+    let other_var = RowVar { id: 99 };
     let int_ty = Type::new(&db, TypeKind::Int);
 
     // fn() -> Int with empty effect
-    let effect = EffectRow::new(&db, vec![], Some(other_var));
+    let effect = AbilityRow::new(&db, vec![], Some(other_var));
     let func = Type::new(
         &db,
         TypeKind::Func {

@@ -310,7 +310,7 @@ pub struct FunctionSignature {
     pub return_ty: Option<String>,
     /// Comma-separated list of effect names, without surrounding braces.
     /// For example, a function declared `fn foo() ->{IO, State} Int` stores
-    /// `Some("IO, State")` here. `None` means no effect annotation was present.
+    /// `Some("IO, State")` here. `None` means no ability annotation was present.
     /// Callers formatting this value should split on `,` and trim whitespace;
     /// the `{}` delimiters are *not* included in the stored string.
     pub effects: Option<String>,

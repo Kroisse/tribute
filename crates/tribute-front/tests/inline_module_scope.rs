@@ -97,7 +97,7 @@ fn main() -> Nil {
     assert_eq!(errors, Vec::<String>::new());
 }
 
-/// An ability of the package root is named the same way in an effect row and
+/// An ability of the package root is named the same way in an ability row and
 /// in the operation call, so their instances agree.
 #[salsa_test]
 fn imported_ability_with_arguments_checks_in_a_module(db: &salsa::DatabaseImpl) {

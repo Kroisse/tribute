@@ -91,7 +91,7 @@ conformance 검증은 [`tests/integration/optimization_conformance.rs`](../tests
 다음 최적화는 현재 pipeline의 별도 pass나 지원 주장이 아니다. 도입할 때에도
 source-logical 경계와 위 검증 조건을 유지해야 한다.
 
-- **Effect specialization와 handler inlining:** concrete effect row만으로 handler
+- **Effect specialization와 handler inlining:** concrete ability row만으로 handler
   identity나 구현을 확정하지 않는다. 명시적인 dispatch와 closure provenance가
   뒷받침할 때만 evidence lookup 또는 간접 호출을 제거한다. Open row는 선언된
   callable convention을 유지한다.

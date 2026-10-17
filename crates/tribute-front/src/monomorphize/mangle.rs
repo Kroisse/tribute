@@ -4,8 +4,7 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use super::instance::InstanceKey;
 use crate::ast::{
-    AbilityOrigin, BuiltinAbility, CallingConvention, EffectRow, EffectVar, Type, TypeDefId,
-    TypeKind,
+    AbilityOrigin, AbilityRow, BuiltinAbility, CallingConvention, RowVar, Type, TypeDefId, TypeKind,
 };
 
 /// Generate a mangled symbol for a specialized generic function or type.
@@ -17,7 +16,7 @@ use crate::ast::{
 /// starting with a letter is always a primitive or a source-declared name:
 /// `$6` starts a function type, `$7` a tuple, `$8$n` the `n`th bound type
 /// variable, and `$5` a compiler-owned nominal type or ability. Before its
-/// result, a function type writes its effect row between `$2` and `$1`, or
+/// result, a function type writes its ability row between `$2` and `$1`, or
 /// `$3$n` for the `n`th row variable of an open row, and a calling-convention
 /// floor above `Direct` after `$4`. Distinct type argument lists get distinct
 /// names:
@@ -114,7 +113,7 @@ fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol
 fn write_type_mangled(
     db: &dyn salsa::Database,
     ty: Type<'_>,
-    row_vars: &mut Vec<EffectVar>,
+    row_vars: &mut Vec<RowVar>,
     f: &mut impl fmt::Write,
 ) -> fmt::Result {
     match ty.kind(db) {
@@ -144,7 +143,7 @@ fn write_type_mangled(
             write_type_mangled_list(db, params, row_vars, f)?;
             f.write_str("$1$")?;
             if !effect.is_pure(db) {
-                write_effect_row_mangled(db, *effect, row_vars, f)?;
+                write_ability_row_mangled(db, *effect, row_vars, f)?;
             }
             write_type_mangled(db, *result, row_vars, f)
         }
@@ -168,7 +167,7 @@ fn write_type_mangled(
 fn write_type_mangled_list(
     db: &dyn salsa::Database,
     types: &[Type<'_>],
-    row_vars: &mut Vec<EffectVar>,
+    row_vars: &mut Vec<RowVar>,
     f: &mut impl fmt::Write,
 ) -> fmt::Result {
     for (index, ty) in types.iter().enumerate() {
@@ -184,14 +183,14 @@ fn write_type_mangled_list(
 /// type identity, which distinguishes rows listing the same effects in
 /// another order. Row variables are numbered by first appearance within the
 /// mangled name, so the name does not depend on inference numbering.
-fn write_effect_row_mangled(
+fn write_ability_row_mangled(
     db: &dyn salsa::Database,
-    row: EffectRow<'_>,
-    row_vars: &mut Vec<EffectVar>,
+    row: AbilityRow<'_>,
+    row_vars: &mut Vec<RowVar>,
     f: &mut impl fmt::Write,
 ) -> fmt::Result {
     f.write_str("2")?;
-    for effect in row.effects(db) {
+    for effect in row.instances(db) {
         f.write_char('$')?;
         match effect.ability_id.origin(db) {
             AbilityOrigin::Source => {}
@@ -426,21 +425,25 @@ mod tests {
             TypeKind::Func {
                 params: vec![int_ty],
                 result: bool_ty,
-                effect: crate::ast::EffectRow::new(&db, vec![], None),
+                effect: crate::ast::AbilityRow::new(&db, vec![], None),
             },
         );
         let result = mangle_name(&db, &base, &[func_ty]);
         assert_eq!(result.to_string(), "apply$6$0$Int$1$Bool");
     }
 
-    fn ability<'db>(db: &'db TestDb, name: &str, args: Vec<Type<'db>>) -> crate::ast::Effect<'db> {
-        crate::ast::Effect {
+    fn ability<'db>(
+        db: &'db TestDb,
+        name: &str,
+        args: Vec<Type<'db>>,
+    ) -> crate::ast::AbilityInstance<'db> {
+        crate::ast::AbilityInstance {
             ability_id: crate::ast::AbilityId::source(db, trunk_ir::SymbolPath::new([name])),
             args,
         }
     }
 
-    fn thunk<'db>(db: &'db TestDb, effect: EffectRow<'db>) -> Type<'db> {
+    fn thunk<'db>(db: &'db TestDb, effect: AbilityRow<'db>) -> Type<'db> {
         Type::new(
             db,
             TypeKind::Func {
@@ -452,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn test_function_types_mangle_effect_rows_distinctly() {
+    fn test_function_types_mangle_ability_rows_distinctly() {
         let db = TestDb::default();
         let base = Symbol::new("run_state");
         let int_ty = Type::new(&db, TypeKind::Int);
@@ -460,7 +463,7 @@ mod tests {
             mangle_name(
                 &db,
                 &base,
-                &[thunk(&db, EffectRow::new(&db, effects, None))],
+                &[thunk(&db, AbilityRow::new(&db, effects, None))],
             )
             .to_string()
         };
@@ -501,11 +504,11 @@ mod tests {
         let builtin = crate::ast::AbilityId::builtin_io(&db);
         let source = crate::ast::AbilityId::source(&db, builtin.path(&db).clone());
         let mangle = |ability_id| {
-            let effect = crate::ast::Effect {
+            let effect = crate::ast::AbilityInstance {
                 ability_id,
                 args: vec![],
             };
-            mangle_name(&db, &base, &[thunk(&db, EffectRow::single(&db, effect))]).to_string()
+            mangle_name(&db, &base, &[thunk(&db, AbilityRow::single(&db, effect))]).to_string()
         };
 
         assert_eq!(mangle(source), "f$6$0$$1$2$std::io::Io$1$Nat");
@@ -513,10 +516,10 @@ mod tests {
     }
 
     #[test]
-    fn test_effect_row_belongs_to_its_own_function_type() {
+    fn test_ability_row_belongs_to_its_own_function_type() {
         let db = TestDb::default();
         let base = Symbol::new("f");
-        let ask = || EffectRow::single(&db, ability(&db, "Ask", vec![]));
+        let ask = || AbilityRow::single(&db, ability(&db, "Ask", vec![]));
         let returning = |result, effect| {
             Type::new(
                 &db,
@@ -527,7 +530,7 @@ mod tests {
                 },
             )
         };
-        let pure = EffectRow::pure(&db);
+        let pure = AbilityRow::pure(&db);
 
         let outer = returning(thunk(&db, pure), ask());
         let inner = returning(thunk(&db, ask()), pure);
@@ -542,10 +545,10 @@ mod tests {
     }
 
     #[test]
-    fn test_open_effect_rows_number_variables_by_first_appearance() {
+    fn test_open_ability_rows_number_variables_by_first_appearance() {
         let db = TestDb::default();
         let base = Symbol::new("f");
-        let open = |id| thunk(&db, EffectRow::open(&db, EffectVar { id }));
+        let open = |id| thunk(&db, AbilityRow::open(&db, RowVar { id }));
 
         assert_eq!(
             mangle_name(&db, &base, &[open(7)]).to_string(),
@@ -586,12 +589,12 @@ mod tests {
     }
 
     #[test]
-    fn test_type_names_mangle_effect_rows_distinctly() {
+    fn test_type_names_mangle_ability_rows_distinctly() {
         let db = TestDb::default();
         let name = Symbol::new("Holder");
         let id = TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new([name.clone()]));
         let mangle = |effect: &str| {
-            let row = EffectRow::single(&db, ability(&db, effect, vec![]));
+            let row = AbilityRow::single(&db, ability(&db, effect, vec![]));
             mangle_type_path(&db, id, &[thunk(&db, row)]).to_string()
         };
 
@@ -826,7 +829,7 @@ mod laws {
                 TypeKind::Func {
                     params,
                     result,
-                    effect: EffectRow::pure(&db),
+                    effect: AbilityRow::pure(&db),
                 },
             )
         };

@@ -1,6 +1,6 @@
 //! Evidence selection of calls and resumes.
 //!
-//! A callable receives evidence shaped by its own effect row: the handler of
+//! A callable receives evidence shaped by its own ability row: the handler of
 //! each explicit ability instance is the top marker of that instance, and the
 //! row tail's handlers lie beneath. A call keeps that shape for its callee by
 //! counting, for each instance explicit in the caller's row, how many callee
@@ -41,7 +41,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use crate::ast::{Effect, EffectRow, EffectVar, LocalId, NodeId, RowUnion};
+use crate::ast::{AbilityInstance, AbilityRow, LocalId, NodeId, RowUnion, RowVar};
 
 use super::EvidenceStep;
 
@@ -49,12 +49,12 @@ use super::EvidenceStep;
 #[derive(Clone, Debug)]
 enum EvidenceScope<'db> {
     /// A function or lambda body, with its signature row once it is known.
-    Callable(Option<EffectRow<'db>>),
+    Callable(Option<AbilityRow<'db>>),
     /// A handle body: the enclosing scope's evidence with a new handler for
     /// each handled instance.
     HandleBody {
         parent: usize,
-        handled: Option<EffectRow<'db>>,
+        handled: Option<AbilityRow<'db>>,
     },
 }
 
@@ -63,7 +63,7 @@ enum EvidenceSite<'db> {
     /// A call whose callee has this (unsolved) row.
     Call {
         scope: usize,
-        callee: EffectRow<'db>,
+        callee: AbilityRow<'db>,
     },
     /// A resume made from `scope` into the computation of the handle body
     /// `body`.
@@ -99,9 +99,9 @@ pub(crate) struct EvidenceTracker<'db> {
 /// The evidence of a scope: its explicit instances, the row tail beneath
 /// them, and the row tails that tail is a declared union of.
 struct ScopeEvidence<'db> {
-    explicit: Vec<Effect<'db>>,
-    tail: Option<EffectVar>,
-    tails: Vec<EffectVar>,
+    explicit: Vec<AbilityInstance<'db>>,
+    tail: Option<RowVar>,
+    tails: Vec<RowVar>,
 }
 
 impl<'db> EvidenceTracker<'db> {
@@ -122,7 +122,7 @@ impl<'db> EvidenceTracker<'db> {
     /// [`Self::set_callable_row`] when it is inferred from the body.
     pub(crate) fn enter_callable(
         &mut self,
-        row: Option<EffectRow<'db>>,
+        row: Option<AbilityRow<'db>>,
     ) -> (usize, SavedEvidenceScope) {
         let saved = self.save();
         let scope = self.scopes.len();
@@ -135,7 +135,7 @@ impl<'db> EvidenceTracker<'db> {
         (scope, saved)
     }
 
-    pub(crate) fn set_callable_row(&mut self, scope: usize, row: EffectRow<'db>) {
+    pub(crate) fn set_callable_row(&mut self, scope: usize, row: AbilityRow<'db>) {
         if let Some(EvidenceScope::Callable(slot)) = self.scopes.get_mut(scope) {
             *slot = Some(row);
         }
@@ -146,7 +146,7 @@ impl<'db> EvidenceTracker<'db> {
     pub(crate) fn enter_handle_body(
         &mut self,
         handle: NodeId,
-        handled: Option<EffectRow<'db>>,
+        handled: Option<AbilityRow<'db>>,
     ) -> Option<(usize, SavedEvidenceScope)> {
         let parent = self.current?;
         let saved = self.save();
@@ -160,7 +160,7 @@ impl<'db> EvidenceTracker<'db> {
         Some((scope, saved))
     }
 
-    pub(crate) fn set_handled(&mut self, scope: usize, row: EffectRow<'db>) {
+    pub(crate) fn set_handled(&mut self, scope: usize, row: AbilityRow<'db>) {
         if let Some(EvidenceScope::HandleBody { handled, .. }) = self.scopes.get_mut(scope) {
             *handled = Some(row);
         }
@@ -191,7 +191,7 @@ impl<'db> EvidenceTracker<'db> {
     }
 
     /// Record a call whose callee has the given row.
-    pub(crate) fn record_call(&mut self, call: NodeId, callee: EffectRow<'db>) {
+    pub(crate) fn record_call(&mut self, call: NodeId, callee: AbilityRow<'db>) {
         if let Some(scope) = self.current {
             self.sites
                 .entry(call)
@@ -217,7 +217,7 @@ impl<'db> EvidenceTracker<'db> {
     pub(crate) fn plans(
         &self,
         db: &'db dyn salsa::Database,
-        resolve: impl Fn(EffectRow<'db>) -> EffectRow<'db>,
+        resolve: impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
     ) -> HashMap<NodeId, Vec<EvidenceStep<'db>>> {
         let mut explicit = HashMap::default();
         let mut plans = HashMap::default();
@@ -236,7 +236,7 @@ impl<'db> EvidenceTracker<'db> {
                         let plans = sources
                             .map(|source| {
                                 let source = resolve(source);
-                                let positions = unique(source.effects(db).iter().cloned());
+                                let positions = unique(source.instances(db).iter().cloned());
                                 caller.select(&positions, source.rest(db))
                             })
                             .collect();
@@ -257,7 +257,7 @@ impl<'db> EvidenceTracker<'db> {
                     };
                     let (parent, _) = self.explicit(db, *parent, &resolve, &mut explicit);
                     handled
-                        .map(|row| resolve(row).effects(db).to_vec())
+                        .map(|row| resolve(row).instances(db).to_vec())
                         .unwrap_or_default()
                         .into_iter()
                         .filter(|instance| parent.contains(instance))
@@ -277,9 +277,9 @@ impl<'db> EvidenceTracker<'db> {
     fn declared_tails(
         &self,
         db: &'db dyn salsa::Database,
-        tail: Option<EffectVar>,
-        resolve: &impl Fn(EffectRow<'db>) -> EffectRow<'db>,
-    ) -> Vec<EffectVar> {
+        tail: Option<RowVar>,
+        resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
+    ) -> Vec<RowVar> {
         let Some(tail) = tail else {
             return Vec::new();
         };
@@ -300,8 +300,8 @@ impl<'db> EvidenceTracker<'db> {
     fn callee_tails(
         &self,
         db: &'db dyn salsa::Database,
-        callee: EffectRow<'db>,
-    ) -> Option<impl Iterator<Item = EffectRow<'db>>> {
+        callee: AbilityRow<'db>,
+    ) -> Option<impl Iterator<Item = AbilityRow<'db>>> {
         let tail = callee.rest(db)?;
         self.unions
             .iter()
@@ -317,9 +317,9 @@ impl<'db> EvidenceTracker<'db> {
         &self,
         db: &'db dyn salsa::Database,
         scope: usize,
-        resolve: &impl Fn(EffectRow<'db>) -> EffectRow<'db>,
-        memo: &mut HashMap<usize, (Vec<Effect<'db>>, Option<EffectVar>)>,
-    ) -> (Vec<Effect<'db>>, Option<EffectVar>) {
+        resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
+        memo: &mut HashMap<usize, (Vec<AbilityInstance<'db>>, Option<RowVar>)>,
+    ) -> (Vec<AbilityInstance<'db>>, Option<RowVar>) {
         if let Some(found) = memo.get(&scope) {
             return found.clone();
         }
@@ -328,7 +328,7 @@ impl<'db> EvidenceTracker<'db> {
                 let row = resolve(*row);
                 // The ambient `Io` has no handler marker to select.
                 let selectable = row
-                    .effects(db)
+                    .instances(db)
                     .iter()
                     .filter(|instance| !instance.ability_id.is_builtin_io(db))
                     .cloned();
@@ -338,7 +338,7 @@ impl<'db> EvidenceTracker<'db> {
             EvidenceScope::HandleBody { parent, handled } => {
                 let (parent, tail) = self.explicit(db, *parent, resolve, memo);
                 let handled = handled
-                    .map(|row| resolve(row).effects(db).to_vec())
+                    .map(|row| resolve(row).instances(db).to_vec())
                     .unwrap_or_default();
                 (unique(handled.into_iter().chain(parent)), tail)
             }
@@ -352,17 +352,17 @@ impl<'db> EvidenceTracker<'db> {
 /// the callee's row tail after instantiation.
 fn callee_positions<'db>(
     db: &'db dyn salsa::Database,
-    callee: EffectRow<'db>,
-    resolve: &impl Fn(EffectRow<'db>) -> EffectRow<'db>,
-) -> (Vec<Effect<'db>>, Option<EffectVar>) {
+    callee: AbilityRow<'db>,
+    resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
+) -> (Vec<AbilityInstance<'db>>, Option<RowVar>) {
     // Resolve the declared instances and the tail separately so an instance
     // named by both keeps both positions. Within one part, an instance takes
     // one position however many times solving left it in the row.
-    let declared = resolve(EffectRow::new(db, callee.effects(db).to_vec(), None));
-    let mut positions = unique(declared.effects(db).iter().cloned());
+    let declared = resolve(AbilityRow::new(db, callee.instances(db).to_vec(), None));
+    let mut positions = unique(declared.instances(db).iter().cloned());
     let tail = callee.rest(db).and_then(|tail| {
-        let tail = resolve(EffectRow::open(db, tail));
-        positions.extend(unique(tail.effects(db).iter().cloned()));
+        let tail = resolve(AbilityRow::open(db, tail));
+        positions.extend(unique(tail.instances(db).iter().cloned()));
         tail.rest(db)
     });
     (positions, tail)
@@ -373,7 +373,7 @@ fn callee_positions<'db>(
 fn open_sources<'db>(
     db: &'db dyn salsa::Database,
     union: &RowUnion<'db>,
-) -> impl Iterator<Item = EffectRow<'db>> {
+) -> impl Iterator<Item = AbilityRow<'db>> {
     union
         .sources
         .iter()
@@ -386,8 +386,8 @@ impl<'db> ScopeEvidence<'db> {
     /// row tail `target` from this scope's evidence.
     fn select(
         &self,
-        positions: &[Effect<'db>],
-        target: Option<EffectVar>,
+        positions: &[AbilityInstance<'db>],
+        target: Option<RowVar>,
     ) -> Vec<EvidenceStep<'db>> {
         let index = target.and_then(|target| self.tails.iter().position(|tail| *tail == target));
         let Some(index) = index else {
@@ -410,14 +410,14 @@ impl<'db> ScopeEvidence<'db> {
 }
 
 /// Whether operations through a callee's row tail reach the caller's tail.
-fn opens_into(callee_tail: Option<EffectVar>, caller_tail: Option<EffectVar>) -> bool {
+fn opens_into(callee_tail: Option<RowVar>, caller_tail: Option<RowVar>) -> bool {
     callee_tail.is_some() && callee_tail == caller_tail
 }
 
 /// Select the evidence for a callee from the caller's explicit instances.
 fn call_plan<'db>(
-    caller: &[Effect<'db>],
-    positions: &[Effect<'db>],
+    caller: &[AbilityInstance<'db>],
+    positions: &[AbilityInstance<'db>],
     open: bool,
 ) -> Vec<EvidenceStep<'db>> {
     let mut plan = Vec::new();
@@ -435,7 +435,9 @@ fn call_plan<'db>(
     plan
 }
 
-fn unique<'db>(effects: impl IntoIterator<Item = Effect<'db>>) -> Vec<Effect<'db>> {
+fn unique<'db>(
+    effects: impl IntoIterator<Item = AbilityInstance<'db>>,
+) -> Vec<AbilityInstance<'db>> {
     let mut unique = Vec::new();
     for effect in effects {
         if !unique.contains(&effect) {

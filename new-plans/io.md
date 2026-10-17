@@ -5,7 +5,7 @@
 
 ## Goals
 
-- 외부 입출력을 effect row에서 추적한다.
+- 외부 입출력을 ability row에서 추적한다.
 - `print`, `print_line`, `read_line`을 일반 함수 API로 제공한다.
 - 런타임 경계인 `Io`와 사용자가 처리할 수 있는 algebraic ability를 구분한다.
 - Native와 Wasm이 같은 source API와 target-independent I/O boundary를 사용한다.
@@ -39,7 +39,7 @@ pub fn read_line() ->{Io, Throw(Error)} String
 ```
 
 사용자는 resolver가 제공하는 `std::io::Io`를 `use std::io::Io` 또는 qualified
-effect annotation으로 참조한다. `Io`를 사용하기 위해 별도의 ability를 선언하지 않는다.
+ability annotation으로 참조한다. `Io`를 사용하기 위해 별도의 ability를 선언하지 않는다.
 
 API 이름은 Tribute의 일반 함수 naming을 따른다. 개행을 추가하는 함수는
 `println`이 아니라 기존 이름인 `print_line`을 사용한다.
@@ -47,7 +47,7 @@ API 이름은 Tribute의 일반 함수 naming을 따른다. 개행을 추가하�
 ## `Io`: Builtin Ambient Ability
 
 `std::io::Io`는 operation이 없는 compiler-owned builtin ability다. 타입
-시스템은 일반 effect label처럼 전파하고 effect annotation과 diagnostic에
+시스템은 일반 effect label처럼 전파하고 ability annotation과 diagnostic에
 표시한다.
 
 ```rust
@@ -70,7 +70,7 @@ Compiler는 이름 문자열만 비교하지 않고 canonical builtin identity
 
 `Io`의 semantic identity는 source ability identity와 구분되는 compiler-owned
 builtin discriminator를 가진다. Resolver는 `std::io::Io`를 virtual builtin binding으로
-노출하므로 `use std::io::Io`와 qualified effect annotation은 일반 module export처럼
+노출하므로 `use std::io::Io`와 qualified ability annotation은 일반 module export처럼
 동작하지만, 사용자 AST에 synthetic `ability` declaration을 삽입하지 않는다. 따라서
 사용자가 선언한 `ability Io {}`는 이름이 같아도 builtin metadata를 얻지 않는다.
 

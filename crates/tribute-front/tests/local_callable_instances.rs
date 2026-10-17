@@ -323,7 +323,9 @@ fn main() -> Nil {}
     );
     let errors = common::ast_pipeline_error_messages(db, source);
     assert!(
-        errors.iter().any(|error| error.contains("effect mismatch")),
+        errors
+            .iter()
+            .any(|error| error.contains("ability row mismatch")),
         "{errors:?}"
     );
 }

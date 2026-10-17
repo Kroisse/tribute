@@ -1,28 +1,28 @@
-//! Tests for EffectVar collision detection.
+//! Tests for RowVar collision detection.
 //!
-//! This test verifies that effect variables from function annotation collection
-//! and fresh effect variables from lambda inference don't collide.
+//! This test verifies that row variables from function annotation collection
+//! and fresh row variables from lambda inference don't collide.
 //!
 //! ## Background
 //!
-//! In `collect.rs`, function signatures with effect annotations use a placeholder
-//! `EffectVar { id: 0 }`. During function checking, `FunctionInferenceContext`
-//! creates fresh effect variables starting from id=0. If these collide, a pure
+//! In `collect.rs`, function signatures with ability annotations use a placeholder
+//! `RowVar { id: 0 }`. During function checking, `FunctionInferenceContext`
+//! creates fresh row variables starting from id=0. If these collide, a pure
 //! lambda inside an effectful function might be incorrectly unified with the
-//! function's effect row.
+//! function's ability row.
 
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_with_diagnostics;
 use tribute_front::SourceCst;
 
-/// Test that pure lambdas inside effectful functions have distinct effect variables.
+/// Test that pure lambdas inside effectful functions have distinct row variables.
 ///
 /// This test verifies that:
-/// 1. A function with `->{State(Int)}` annotation has State(Int) in its effect row
+/// 1. A function with `->{State(Int)}` annotation has State(Int) in its ability row
 /// 2. A lambda `fn(x: Int) { x + 1 }` inside that function should be pure
-/// 3. The lambda's effect variable should NOT be the same as the function's effect variable
+/// 3. The lambda's row variable should NOT be the same as the function's row variable
 #[salsa_test]
-fn test_lambda_effect_var_independence(db: &salsa::DatabaseImpl) {
+fn test_lambda_row_var_independence(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
     fn get() -> s
@@ -52,7 +52,7 @@ fn main() -> Nil { }
     );
 }
 
-/// Test that multiple lambdas in the same function get independent effect variables.
+/// Test that multiple lambdas in the same function get independent row variables.
 #[salsa_test]
 fn test_multiple_lambdas_independence(db: &salsa::DatabaseImpl) {
     let code = r#"
@@ -85,16 +85,16 @@ fn main() -> Nil { }
     );
 }
 
-/// Test effect variable collision scenario: passing pure lambda where pure is required.
+/// Test row variable collision scenario: passing pure lambda where pure is required.
 ///
-/// If effect variables collide, a "pure" lambda inside an effectful function
+/// If row variables collide, a "pure" lambda inside an effectful function
 /// might get incorrectly typed as effectful, causing this to fail.
 ///
 /// This is the KEY test for the bug:
 /// - `apply_pure` requires `fn(Int) ->{} Int` (explicit pure function)
 /// - `effectful_using_pure` is `->{State(Int)}`
 /// - The lambda `fn(x: Int) { x * 2 }` inside should be inferred as pure
-/// - If EffectVar { id: 0 } collision occurs, the lambda might get typed as effectful
+/// - If RowVar { id: 0 } collision occurs, the lambda might get typed as effectful
 /// - This would cause a type error when passing to `apply_pure`
 #[salsa_test]
 fn test_pure_lambda_in_effectful_context(db: &salsa::DatabaseImpl) {
@@ -109,7 +109,7 @@ fn apply_pure(f: fn(Int) ->{} Int, x: Int) ->{} Int {
 }
 
 fn effectful_using_pure(init: Int) ->{State(Int)} Int {
-    // This lambda should be pure (empty effect row)
+    // This lambda should be pure (empty ability row)
     let pure_fn = fn(x: Int) { x * +2 }
 
     // Calling apply_pure requires a pure function
@@ -129,12 +129,12 @@ fn main() -> Nil { }
     }
 
     // This should succeed - the lambda should be inferred as pure
-    // If effect variables collide, this might fail because pure_fn
+    // If row variables collide, this might fail because pure_fn
     // would be incorrectly typed as effectful
     assert!(
         result.diagnostics.is_empty(),
         "Type checking should succeed - pure lambda should remain pure even in effectful context. \
-         Got {} diagnostics. If this fails with a type mismatch, it indicates EffectVar collision.",
+         Got {} diagnostics. If this fails with a type mismatch, it indicates RowVar collision.",
         result.diagnostics.len()
     );
 }
@@ -143,7 +143,7 @@ fn main() -> Nil { }
 ///
 /// This validates that the type system correctly distinguishes effectful from pure.
 /// If this test passes but `test_pure_lambda_in_effectful_context` fails,
-/// it strongly suggests an EffectVar collision bug.
+/// it strongly suggests an RowVar collision bug.
 #[salsa_test]
 fn test_effectful_lambda_rejected_for_pure(db: &salsa::DatabaseImpl) {
     let code = r#"

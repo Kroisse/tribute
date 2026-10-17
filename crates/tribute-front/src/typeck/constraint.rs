@@ -7,11 +7,11 @@
 //! C ::= τ₁ = τ₂           -- type equality
 //!     | τ₁ ⇒ τ₂           -- expression coercion (actual to expected)
 //!     | join(τs) = τ      -- common non-Never result
-//!     | ρ₁ = ρ₂           -- effect row equality
+//!     | ρ₁ = ρ₂           -- ability row equality
 //!     | C₁ ∧ C₂           -- conjunction
 //! ```
 
-use crate::ast::{EffectRow, NodeId, Type};
+use crate::ast::{AbilityRow, NodeId, Type};
 
 /// Source location and semantic role for a generated constraint.
 ///
@@ -40,8 +40,8 @@ pub enum Constraint<'db> {
     /// Type equality: τ₁ = τ₂
     TypeEq(Type<'db>, Type<'db>),
 
-    /// Effect row equality: ρ₁ = ρ₂
-    RowEq(EffectRow<'db>, EffectRow<'db>),
+    /// Ability row equality: ρ₁ = ρ₂
+    RowEq(AbilityRow<'db>, AbilityRow<'db>),
 
     /// Type equality with a source origin.
     TypeEqAt(Type<'db>, Type<'db>, ConstraintOrigin),
@@ -57,8 +57,8 @@ pub enum Constraint<'db> {
         complete: bool,
     },
 
-    /// Effect row equality with a source origin.
-    RowEqAt(EffectRow<'db>, EffectRow<'db>, ConstraintOrigin),
+    /// Ability row equality with a source origin.
+    RowEqAt(AbilityRow<'db>, AbilityRow<'db>, ConstraintOrigin),
 
     /// Exact effect accumulation; neither source tail is equated to the other.
     RowUnion(crate::ast::RowUnion<'db>, Option<ConstraintOrigin>),
@@ -75,7 +75,7 @@ impl<'db> Constraint<'db> {
     }
 
     /// Create a row equality constraint.
-    pub fn row_eq(r1: EffectRow<'db>, r2: EffectRow<'db>) -> Self {
+    pub fn row_eq(r1: AbilityRow<'db>, r2: AbilityRow<'db>) -> Self {
         Self::RowEq(r1, r2)
     }
 
@@ -85,7 +85,7 @@ impl<'db> Constraint<'db> {
     }
 
     /// Create a source-originated row equality constraint.
-    pub fn row_eq_at(r1: EffectRow<'db>, r2: EffectRow<'db>, origin: ConstraintOrigin) -> Self {
+    pub fn row_eq_at(r1: AbilityRow<'db>, r2: AbilityRow<'db>, origin: ConstraintOrigin) -> Self {
         Self::RowEqAt(r1, r2, origin)
     }
 
@@ -128,7 +128,7 @@ impl<'db> ConstraintSet<'db> {
     }
 
     /// Add a row equality constraint.
-    pub fn add_row_eq(&mut self, r1: EffectRow<'db>, r2: EffectRow<'db>) {
+    pub fn add_row_eq(&mut self, r1: AbilityRow<'db>, r2: AbilityRow<'db>) {
         self.add(Constraint::row_eq(r1, r2));
     }
 
@@ -147,11 +147,11 @@ impl<'db> ConstraintSet<'db> {
         self.add(Constraint::TypeCoerce(actual, expected, origin));
     }
 
-    /// Add a source-originated effect row equality constraint.
+    /// Add a source-originated ability row equality constraint.
     pub fn add_row_eq_at(
         &mut self,
-        r1: EffectRow<'db>,
-        r2: EffectRow<'db>,
+        r1: AbilityRow<'db>,
+        r2: AbilityRow<'db>,
         origin: ConstraintOrigin,
     ) {
         self.add(Constraint::row_eq_at(r1, r2, origin));

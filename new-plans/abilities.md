@@ -17,9 +17,9 @@ fn(a) ->{E} b
 - `{E}`: 이 함수가 수행할 수 있는 ability 집합
 - 화살표 `->`와 ability `{E}`가 붙어있어 "이 ability들을 수행하며 b를 반환"이라는 인과관계가 명확함
 
-### Effect Annotation 생략
+### Ability Annotation 생략
 
-Effect annotation을 생략하면 fresh한 ability 변수가 생성된다:
+Ability annotation을 생략하면 fresh한 ability 변수가 생성된다:
 
 ```rust
 fn(a) -> b       // fn(a) ->{e} b (fresh e)
@@ -71,7 +71,7 @@ fn(String) ->{Http, Async} Response      // Http와 Async
 ### Builtin Ambient Ability
 
 `std::io::Io`는 컴파일러가 소유하는 builtin ambient ability다. 외부 세계와의
-입출력을 effect row에서 추적하지만 사용자가 handler를 설치해 제거할 수는 없다.
+입출력을 ability row에서 추적하지만 사용자가 handler를 설치해 제거할 수는 없다.
 
 ```rust
 use std::abilities::Throw
@@ -89,7 +89,7 @@ fn prompt() ->{Io, Throw(Error)} String {
 ```
 
 `Io`에는 operation이 없다. `print`, `print_line`, `read_line`은 runtime이
-제공하는 일반 함수이며 `Io`를 effect annotation으로 요구한다. 사용자는
+제공하는 일반 함수이며 `Io`를 ability annotation으로 요구한다. 사용자는
 `ambient ability`나 `builtin ability`를 선언하는 문법을 사용할 수 없다.
 오직 canonical builtin identity인 `std::io::Io`만 ambient로 취급된다.
 Compiler는 builtin/source origin을 포함한 identity로 이를 구분하고,
@@ -247,10 +247,10 @@ ability Fail {
 }
 ```
 
-### Operation의 Effect Row 규칙
+### Operation의 Ability Row 규칙
 
 Ability operation은 **자신이 속한 ability의 effect만** 암시적으로 수행한다.
-Operation 시그니처에 effect annotation을 적을 수 없다:
+Operation 시그니처에 ability annotation을 적을 수 없다:
 
 ```rust
 // ✅ OK: effect는 암시적으로 부여됨
@@ -258,7 +258,7 @@ ability Stream(a) {
     op emit(value: a) -> Nil
 }
 
-// ❌ 불가: effect annotation 자체가 문법 오류
+// ❌ 불가: ability annotation 자체가 문법 오류
 ability Stream(a) {
     op emit(value: a) ->{Stream(a)} Nil
 }
@@ -518,7 +518,7 @@ fn main() ->{Io} Nil {
 | 규칙 | 설명 |
 | ---- | ---- |
 | 암시적 effect | Operation은 자신이 속한 ability의 effect를 암시적으로 수행 |
-| effect annotation 금지 | Operation 시그니처에 effect annotation을 적을 수 없음 |
+| ability annotation 금지 | Operation 시그니처에 ability annotation을 적을 수 없음 |
 | 다른 effect 필요 시 | Handler 구현부에서 처리 |
 | `fn` 선언 보증 | `fn`으로 선언 → 모든 handler에서 `fn`으로 구현 필수 |
 | `op` handler 유연성 | `op`으로 선언 → handler에서 `fn` 또는 `op`으로 구현 가능 |
@@ -528,7 +528,7 @@ fn main() ->{Io} Nil {
 | 문법 | 의미 |
 | ---- | ---- |
 | `fn(a) -> b` | `fn(a) ->{e} b` (fresh e) |
-| `fn(a) ->{} b` | 빈 effect row를 명시한 pure 함수 타입 |
+| `fn(a) ->{} b` | 빈 ability row를 명시한 pure 함수 타입 |
 | `fn(a) ->{E} b` | ability E를 수행하는 함수 타입 |
 | `fn(a) ->{e, E} b` | ability E + 나머지 e |
 | `Nil` | Unit 타입/값 |

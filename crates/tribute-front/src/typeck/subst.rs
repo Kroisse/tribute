@@ -5,7 +5,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeScheme};
+use crate::ast::{AbilityInstance, AbilityRow, RowVar, Type, TypeKind, TypeScheme};
 
 /// Result of BoundVar substitution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,7 +100,7 @@ pub fn substitute_bound_vars<'db>(
                 SubstResult::Ok(ty) => ty,
                 err @ SubstResult::OutOfBounds { .. } => return err,
             };
-            let new_effect = match substitute_effect_row(db, *effect, subst) {
+            let new_effect = match substitute_ability_row(db, *effect, subst) {
                 Ok(row) => row,
                 Err(BoundVarOutOfBounds { index, max }) => {
                     return SubstResult::OutOfBounds { index, max };
@@ -158,7 +158,7 @@ pub fn substitute_bound_vars<'db>(
                 SubstResult::Ok(ty) => ty,
                 err @ SubstResult::OutOfBounds { .. } => return err,
             };
-            let new_effect = match substitute_effect_row(db, *effect, subst) {
+            let new_effect = match substitute_ability_row(db, *effect, subst) {
                 Ok(row) => row,
                 Err(BoundVarOutOfBounds { index, max }) => {
                     return SubstResult::OutOfBounds { index, max };
@@ -178,15 +178,15 @@ pub fn substitute_bound_vars<'db>(
     }
 }
 
-/// Substitute BoundVars within an effect row.
+/// Substitute BoundVars within an ability row.
 ///
 /// Returns [`BoundVarOutOfBounds`] if a BoundVar index exceeds `subst.len()`.
-pub fn substitute_effect_row<'db>(
+pub fn substitute_ability_row<'db>(
     db: &'db dyn salsa::Database,
-    row: EffectRow<'db>,
+    row: AbilityRow<'db>,
     subst: &[Type<'db>],
-) -> Result<EffectRow<'db>, BoundVarOutOfBounds> {
-    let effects = row.effects(db);
+) -> Result<AbilityRow<'db>, BoundVarOutOfBounds> {
+    let effects = row.instances(db);
     let mut changed = false;
 
     let mut new_effects = Vec::with_capacity(effects.len());
@@ -203,14 +203,14 @@ pub fn substitute_effect_row<'db>(
         if new_args != effect.args {
             changed = true;
         }
-        new_effects.push(Effect {
+        new_effects.push(AbilityInstance {
             ability_id: effect.ability_id,
             args: new_args,
         });
     }
 
     if changed {
-        Ok(EffectRow::new(db, new_effects, row.rest(db)))
+        Ok(AbilityRow::new(db, new_effects, row.rest(db)))
     } else {
         Ok(row)
     }
@@ -220,7 +220,7 @@ pub fn substitute_effect_row<'db>(
 pub struct SchemeInstance<'db> {
     pub ty: Type<'db>,
     pub type_args: Vec<Type<'db>>,
-    pub row_args: Vec<EffectRow<'db>>,
+    pub row_args: Vec<AbilityRow<'db>>,
     pub row_unions: Vec<crate::ast::RowUnion<'db>>,
     pub row_removals: Vec<crate::ast::RowRemoval<'db>>,
 }
@@ -229,7 +229,7 @@ pub fn instantiate_with_arguments<'db>(
     db: &'db dyn salsa::Database,
     scheme: TypeScheme<'db>,
     type_args: Vec<Type<'db>>,
-    row_vars: Vec<EffectVar>,
+    row_vars: Vec<RowVar>,
 ) -> SchemeInstance<'db> {
     assert_eq!(scheme.type_params(db).len(), type_args.len());
     assert_eq!(scheme.effect_params(db).len(), row_vars.len());
@@ -242,17 +242,16 @@ pub fn instantiate_with_arguments<'db>(
     let mut fresh = || unreachable!("all quantified rows have allocated identities");
     let mut map_type = |ty| {
         // Freshen only scheme-owned rows before inserting caller-owned types.
-        let ty =
-            freshen_effect_vars_inner(db, ty, scheme.effect_params(db), &mut fresh, &mut mapping);
+        let ty = freshen_row_vars_inner(db, ty, scheme.effect_params(db), &mut fresh, &mut mapping);
         substitute_bound_vars(db, ty, &type_args)
             .unwrap_or_else(|index, max| panic!("scheme binder {index} out of {max}"))
     };
     let ty = map_type(scheme.body(db));
-    let mut map_row = |row: &mut EffectRow<'db>| {
+    let mut map_row = |row: &mut AbilityRow<'db>| {
         let effects: Vec<_> = row
-            .effects(db)
+            .instances(db)
             .iter()
-            .map(|effect| Effect {
+            .map(|effect| AbilityInstance {
                 ability_id: effect.ability_id,
                 args: effect.args.iter().copied().map(&mut map_type).collect(),
             })
@@ -264,7 +263,7 @@ pub fn instantiate_with_arguments<'db>(
                 .position(|p| *p == var)
                 .map_or(var, |i| row_vars[i])
         });
-        *row = EffectRow::new(db, effects, rest);
+        *row = AbilityRow::new(db, effects, rest);
     };
     let mut row_unions = scheme.row_unions(db).to_vec();
     for union in &mut row_unions {
@@ -279,7 +278,7 @@ pub fn instantiate_with_arguments<'db>(
         type_args,
         row_args: row_vars
             .into_iter()
-            .map(|var| EffectRow::open(db, var))
+            .map(|var| AbilityRow::open(db, var))
             .collect(),
         row_unions,
         row_removals,
@@ -304,15 +303,15 @@ pub fn instantiate_scheme_details_for_solver<'db>(
     scheme: TypeScheme<'db>,
     solver: &mut super::solver::TypeSolver<'db>,
 ) -> SchemeInstance<'db> {
-    solver.reserve_effect_vars_in_type(scheme.body(db));
+    solver.reserve_row_vars_in_type(scheme.body(db));
     for union in scheme.row_unions(db) {
         for row in union.sources.iter().chain(std::iter::once(&union.result)) {
-            solver.reserve_effect_vars_in_row(*row);
+            solver.reserve_row_vars_in_row(*row);
         }
     }
     for removal in scheme.row_removals(db) {
         for row in removal.rows() {
-            solver.reserve_effect_vars_in_row(row);
+            solver.reserve_row_vars_in_row(row);
         }
     }
     let types = scheme
@@ -331,43 +330,38 @@ pub fn instantiate_scheme_details_for_solver<'db>(
     instance
 }
 
-fn freshen_effect_vars_inner<'db>(
+fn freshen_row_vars_inner<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
-    quantified_rows: &[EffectVar],
-    fresh_row_var: &mut impl FnMut() -> EffectVar,
-    row_vars: &mut HashMap<u64, EffectVar>,
+    quantified_rows: &[RowVar],
+    fresh_row_var: &mut impl FnMut() -> RowVar,
+    row_vars: &mut HashMap<u64, RowVar>,
 ) -> Type<'db> {
-    let freshen_row =
-        |row: EffectRow<'db>, fresh_row_var: &mut _, row_vars: &mut HashMap<u64, EffectVar>| {
-            let effects: Vec<_> = row
-                .effects(db)
-                .iter()
-                .map(|effect| Effect {
-                    ability_id: effect.ability_id,
-                    args: effect
-                        .args
-                        .iter()
-                        .map(|arg| {
-                            freshen_effect_vars_inner(
-                                db,
-                                *arg,
-                                quantified_rows,
-                                fresh_row_var,
-                                row_vars,
-                            )
-                        })
-                        .collect(),
-                })
-                .collect();
-            let rest = row.rest(db).map(|var| {
-                if !quantified_rows.contains(&var) {
-                    return var;
-                }
-                *row_vars.entry(var.id).or_insert_with(&mut *fresh_row_var)
-            });
-            EffectRow::new(db, effects, rest)
-        };
+    let freshen_row = |row: AbilityRow<'db>,
+                       fresh_row_var: &mut _,
+                       row_vars: &mut HashMap<u64, RowVar>| {
+        let effects: Vec<_> = row
+            .instances(db)
+            .iter()
+            .map(|effect| AbilityInstance {
+                ability_id: effect.ability_id,
+                args: effect
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        freshen_row_vars_inner(db, *arg, quantified_rows, fresh_row_var, row_vars)
+                    })
+                    .collect(),
+            })
+            .collect();
+        let rest = row.rest(db).map(|var| {
+            if !quantified_rows.contains(&var) {
+                return var;
+            }
+            *row_vars.entry(var.id).or_insert_with(&mut *fresh_row_var)
+        });
+        AbilityRow::new(db, effects, rest)
+    };
 
     match ty.kind(db) {
         TypeKind::Named { id, name, args } => Type::new(
@@ -378,13 +372,7 @@ fn freshen_effect_vars_inner<'db>(
                 args: args
                     .iter()
                     .map(|arg| {
-                        freshen_effect_vars_inner(
-                            db,
-                            *arg,
-                            quantified_rows,
-                            fresh_row_var,
-                            row_vars,
-                        )
+                        freshen_row_vars_inner(db, *arg, quantified_rows, fresh_row_var, row_vars)
                     })
                     .collect(),
             },
@@ -399,16 +387,10 @@ fn freshen_effect_vars_inner<'db>(
                 params: params
                     .iter()
                     .map(|param| {
-                        freshen_effect_vars_inner(
-                            db,
-                            *param,
-                            quantified_rows,
-                            fresh_row_var,
-                            row_vars,
-                        )
+                        freshen_row_vars_inner(db, *param, quantified_rows, fresh_row_var, row_vars)
                     })
                     .collect(),
-                result: freshen_effect_vars_inner(
+                result: freshen_row_vars_inner(
                     db,
                     *result,
                     quantified_rows,
@@ -424,7 +406,7 @@ fn freshen_effect_vars_inner<'db>(
                 elements
                     .iter()
                     .map(|element| {
-                        freshen_effect_vars_inner(
+                        freshen_row_vars_inner(
                             db,
                             *element,
                             quantified_rows,
@@ -438,23 +420,11 @@ fn freshen_effect_vars_inner<'db>(
         TypeKind::App { ctor, args } => Type::new(
             db,
             TypeKind::App {
-                ctor: freshen_effect_vars_inner(
-                    db,
-                    *ctor,
-                    quantified_rows,
-                    fresh_row_var,
-                    row_vars,
-                ),
+                ctor: freshen_row_vars_inner(db, *ctor, quantified_rows, fresh_row_var, row_vars),
                 args: args
                     .iter()
                     .map(|arg| {
-                        freshen_effect_vars_inner(
-                            db,
-                            *arg,
-                            quantified_rows,
-                            fresh_row_var,
-                            row_vars,
-                        )
+                        freshen_row_vars_inner(db, *arg, quantified_rows, fresh_row_var, row_vars)
                     })
                     .collect(),
             },
@@ -466,8 +436,8 @@ fn freshen_effect_vars_inner<'db>(
         } => Type::new(
             db,
             TypeKind::Continuation {
-                arg: freshen_effect_vars_inner(db, *arg, quantified_rows, fresh_row_var, row_vars),
-                result: freshen_effect_vars_inner(
+                arg: freshen_row_vars_inner(db, *arg, quantified_rows, fresh_row_var, row_vars),
+                result: freshen_row_vars_inner(
                     db,
                     *result,
                     quantified_rows,
@@ -495,7 +465,7 @@ fn freshen_effect_vars_inner<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, EffectRow};
+    use crate::ast::{AbilityId, AbilityRow};
     use crate::typeck::TypeSolver;
     use salsa_test_macros::salsa_test;
 
@@ -512,7 +482,7 @@ mod tests {
 
     #[salsa_test]
     fn instantiation_does_not_capture_rows_in_caller_type_arguments(db: &dyn salsa::Database) {
-        let shared_id = EffectVar { id: 7 };
+        let shared_id = RowVar { id: 7 };
         let nil = Type::new(db, TypeKind::Nil);
         let bound = Type::new(db, TypeKind::BoundVar { index: 0 });
         let callback = Type::new(
@@ -520,12 +490,12 @@ mod tests {
             TypeKind::Func {
                 params: vec![],
                 result: nil,
-                effect: EffectRow::open(db, shared_id),
+                effect: AbilityRow::open(db, shared_id),
             },
         );
-        let row = EffectRow::new(
+        let row = AbilityRow::new(
             db,
-            vec![Effect {
+            vec![AbilityInstance {
                 ability_id: test_ability_id(db, "Writer"),
                 args: vec![bound],
             }],
@@ -550,7 +520,7 @@ mod tests {
         }])
         .build(db);
         for id in [8, 9] {
-            let fresh = EffectVar { id };
+            let fresh = RowVar { id };
             let instance = instantiate_with_arguments(db, scheme, vec![callback], vec![fresh]);
             let TypeKind::Func {
                 params,
@@ -569,20 +539,20 @@ mod tests {
                 .chain(std::iter::once(&instance.row_unions[0].result))
             {
                 assert_eq!(row.rest(db), Some(fresh));
-                assert_eq!(row.effects(db)[0].args, vec![callback]);
+                assert_eq!(row.instances(db)[0].args, vec![callback]);
             }
         }
     }
 
     #[salsa_test]
-    fn solver_instantiation_freshens_quantified_effect_rows(db: &dyn salsa::Database) {
-        let quantified_row = EffectVar { id: 5000 };
+    fn solver_instantiation_freshens_quantified_ability_rows(db: &dyn salsa::Database) {
+        let quantified_row = RowVar { id: 5000 };
         let function_ty = Type::new(
             db,
             TypeKind::Func {
                 params: Vec::new(),
                 result: Type::new(db, TypeKind::Nil),
-                effect: EffectRow::new(db, Vec::new(), Some(quantified_row)),
+                effect: AbilityRow::new(db, Vec::new(), Some(quantified_row)),
             },
         );
         let scheme = TypeScheme::new(
@@ -606,7 +576,7 @@ mod tests {
                     let TypeKind::Func { effect, .. } = element.kind(db) else {
                         panic!("tuple element should remain a function");
                     };
-                    effect.rest(db).expect("effect row should remain open")
+                    effect.rest(db).expect("ability row should remain open")
                 })
                 .collect::<Vec<_>>()
         };
@@ -745,7 +715,7 @@ mod laws {
             let ty = ty.build(&db);
             prop_assert_eq!(substitute_bound_vars(&db, ty, &args), SubstResult::Ok(ty));
             let row = row.build(&db);
-            prop_assert_eq!(substitute_effect_row(&db, row, &args), Ok(row));
+            prop_assert_eq!(substitute_ability_row(&db, row, &args), Ok(row));
         }
 
         /// Substituting each bound variable by itself is the identity.
@@ -791,7 +761,7 @@ mod laws {
         }
 
         /// An index past the arguments is reported with the argument count,
-        /// including one inside an effect row.
+        /// including one inside an ability row.
         #[test]
         fn out_of_range_index_is_reported(
             (ty, args) in (0u32..=2).prop_flat_map(|n| (
@@ -814,13 +784,13 @@ mod laws {
         }
     }
 
-    /// An out-of-range index in a function type's effect row is reported as
+    /// An out-of-range index in a function type's ability row is reported as
     /// `OutOfBounds` rather than panicking.
     #[test]
-    fn out_of_range_bound_var_in_effect_row_is_reported() {
+    fn out_of_range_bound_var_in_ability_row_is_reported() {
         let db = salsa::DatabaseImpl::new();
         let bound = TypeShape::BoundVar(1);
-        let state = crate::typeck::prop::EffectShape {
+        let state = crate::typeck::prop::AbilityInstanceShape {
             ability: 1,
             args: vec![bound],
         };

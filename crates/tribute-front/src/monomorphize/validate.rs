@@ -175,9 +175,9 @@ pub(super) fn validate<'db>(
                 continue;
             };
             let mut solver = crate::typeck::TypeSolver::new(db);
-            solver.reserve_effect_vars_in_type(callable);
+            solver.reserve_row_vars_in_type(callable);
             for row in &instance.row_arguments {
-                solver.reserve_effect_vars_in_row(*row);
+                solver.reserve_row_vars_in_row(*row);
             }
             let selected = crate::typeck::subst::instantiate_scheme_details_for_solver(
                 db,
@@ -190,7 +190,7 @@ pub(super) fn validate<'db>(
             }
             let mut invalid_row = false;
             for (variable, row) in selected.row_args.iter().zip(&instance.row_arguments) {
-                let Ok(row) = crate::typeck::subst::substitute_effect_row(db, *row, &arguments)
+                let Ok(row) = crate::typeck::subst::substitute_ability_row(db, *row, &arguments)
                 else {
                     invalid_row = true;
                     break;

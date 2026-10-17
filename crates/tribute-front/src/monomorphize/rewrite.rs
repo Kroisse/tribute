@@ -297,14 +297,14 @@ pub fn rewrite_type<'db>(
 
 pub(super) fn rewrite_row<'db>(
     db: &'db dyn salsa::Database,
-    row: crate::ast::EffectRow<'db>,
+    row: crate::ast::AbilityRow<'db>,
     map: &TypeRewriteMap<'db>,
-) -> crate::ast::EffectRow<'db> {
-    crate::ast::EffectRow::new(
+) -> crate::ast::AbilityRow<'db> {
+    crate::ast::AbilityRow::new(
         db,
-        row.effects(db)
+        row.instances(db)
             .iter()
-            .map(|effect| crate::ast::Effect {
+            .map(|effect| crate::ast::AbilityInstance {
                 ability_id: effect.ability_id,
                 args: effect
                     .args
@@ -392,7 +392,7 @@ fn find_mangled_for_typedef<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::EffectRow;
+    use crate::ast::AbilityRow;
 
     #[salsa::db]
     #[derive(Default)]
@@ -403,8 +403,8 @@ mod tests {
     #[salsa::db]
     impl salsa::Database for TestDb {}
 
-    fn pure_effect(db: &dyn salsa::Database) -> EffectRow<'_> {
-        EffectRow::new(db, vec![], None)
+    fn pure_effect(db: &dyn salsa::Database) -> AbilityRow<'_> {
+        AbilityRow::new(db, vec![], None)
     }
 
     fn make_type_rewrite_map<'db>(

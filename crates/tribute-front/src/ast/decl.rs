@@ -115,7 +115,7 @@ pub struct FuncDecl<V> {
     pub params: Vec<ParamDecl>,
     /// Return type annotation (optional, can be inferred).
     pub return_ty: Option<TypeAnnotation>,
-    /// Effect annotation (optional).
+    /// Ability annotation (optional).
     pub effects: Option<Vec<TypeAnnotation>>,
     /// Function body.
     pub body: Expr<V>,

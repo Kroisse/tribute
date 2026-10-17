@@ -12,9 +12,10 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    AbilityId, Arm, BinOpKind, Effect, EffectRow, Expr, ExprKind, FieldInit, FieldPattern,
-    HandlerArm, HandlerKind, LiteralPattern, LocalId, ModulePath, NodeId, OpDeclKind, Pattern,
-    PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef, collect_effect_vars,
+    AbilityId, AbilityInstance, AbilityRow, Arm, BinOpKind, Expr, ExprKind, FieldInit,
+    FieldPattern, HandlerArm, HandlerKind, LiteralPattern, LocalId, ModulePath, NodeId, OpDeclKind,
+    Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef,
+    collect_row_vars,
 };
 
 use super::super::constraint::ConstraintOriginKind;
@@ -116,7 +117,7 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
         } => {
             params.iter().any(|p| type_contains_univar(db, *p))
                 || type_contains_univar(db, *result)
-                || effect_row_contains_univar(db, *effect)
+                || ability_row_contains_univar(db, *effect)
         }
         TypeKind::Tuple(elems) => elems.iter().any(|e| type_contains_univar(db, *e)),
         TypeKind::App { ctor, args } => {
@@ -129,7 +130,7 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
         } => {
             type_contains_univar(db, *arg)
                 || type_contains_univar(db, *result)
-                || effect_row_contains_univar(db, *effect)
+                || ability_row_contains_univar(db, *effect)
         }
         TypeKind::Int
         | TypeKind::Nat
@@ -145,9 +146,9 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
     }
 }
 
-/// Check if an effect row contains any unification variables.
-fn effect_row_contains_univar<'db>(db: &'db dyn salsa::Database, row: EffectRow<'db>) -> bool {
-    for effect in row.effects(db) {
+/// Check if an ability row contains any unification variables.
+fn ability_row_contains_univar<'db>(db: &'db dyn salsa::Database, row: AbilityRow<'db>) -> bool {
+    for effect in row.instances(db) {
         for arg in &effect.args {
             if type_contains_univar(db, *arg) {
                 return true;
@@ -245,7 +246,7 @@ impl<'db> TypeChecker<'db> {
                 ) = (&*callee.kind, callee_ty.kind(self.db()))
                 {
                     let matching: Vec<_> = effect
-                        .effects(self.db())
+                        .instances(self.db())
                         .iter()
                         .filter(|effect| effect.ability_id == *ability)
                         .collect();
@@ -365,7 +366,7 @@ impl<'db> TypeChecker<'db> {
                 // Accumulate performed effects from the set identity. Contextual
                 // row slack is introduced after accumulation, not as a source of
                 // every union in the body.
-                ctx.set_current_effect(EffectRow::pure(self.db()));
+                ctx.set_current_effect(AbilityRow::pure(self.db()));
 
                 // Use a new scope for lambda parameters so they don't leak out
                 ctx.push_scope();
@@ -411,17 +412,17 @@ impl<'db> TypeChecker<'db> {
                     // local row joins the continuation row instead of naming
                     // its tail.
                     (None, Some(resume_effect)) => {
-                        let mut effects = resume_effect.effects(self.db()).to_vec();
-                        for effect in accumulated.effects(self.db()) {
+                        let mut effects = resume_effect.instances(self.db()).to_vec();
+                        for effect in accumulated.instances(self.db()) {
                             if !effects.contains(effect) {
                                 effects.push(effect.clone());
                             }
                         }
-                        EffectRow::new(self.db(), effects, resume_effect.rest(self.db()))
+                        AbilityRow::new(self.db(), effects, resume_effect.rest(self.db()))
                     }
-                    (None, None) => EffectRow::new(
+                    (None, None) => AbilityRow::new(
                         self.db(),
-                        accumulated.effects(self.db()),
+                        accumulated.instances(self.db()),
                         expected_effect
                             .and_then(|effect| effect.rest(self.db()).map(|_| ctx.fresh_row_var())),
                     ),
@@ -431,7 +432,7 @@ impl<'db> TypeChecker<'db> {
                 // Restore the outer context's effect
                 ctx.set_current_effect(outer_effect);
 
-                // A `resume` selects the effect row of the captured continuation.
+                // A `resume` selects the ability row of the captured continuation.
                 // An open local row keeps its latent tail as the lambda's
                 // signature and is constrained to the continuation row so
                 // solving retains both the continuation identity and local
@@ -493,14 +494,14 @@ impl<'db> TypeChecker<'db> {
                 // Handle expression:
                 // 1. Infer the body's type (body may have effects)
                 // 2. Extract handled effects from handler arms
-                // 3. Remove handled effects from the current effect row
+                // 3. Remove handled effects from the current ability row
                 // 4. Return the body's type
 
                 // Save the current effect state before checking body
                 let effect_before_body = ctx.current_effect();
 
                 // A handler removes effects from the actual computation.
-                ctx.set_current_effect(EffectRow::pure(self.db()));
+                ctx.set_current_effect(AbilityRow::pure(self.db()));
 
                 // Infer the body's type
                 let body_evidence = ctx.evidence.enter_handle_body(expr.id, None);
@@ -560,7 +561,7 @@ impl<'db> TypeChecker<'db> {
                 for ability_id in &handled_ability_ids {
                     if selected_effects
                         .iter()
-                        .any(|effect: &Effect<'db>| effect.ability_id == *ability_id)
+                        .any(|effect: &AbilityInstance<'db>| effect.ability_id == *ability_id)
                     {
                         continue;
                     }
@@ -568,22 +569,22 @@ impl<'db> TypeChecker<'db> {
                         .env
                         .lookup_ability(*ability_id)
                         .map_or(0, |ability| ability.type_params.len());
-                    selected_effects.push(Effect {
+                    selected_effects.push(AbilityInstance {
                         ability_id: *ability_id,
                         args: (0..count).map(|_| ctx.fresh_type_var()).collect(),
                     });
                 }
-                let handled_effects = EffectRow::new(self.db(), selected_effects, None);
+                let handled_effects = AbilityRow::new(self.db(), selected_effects, None);
                 if let Some((scope, _)) = body_evidence {
                     ctx.evidence.set_handled(scope, handled_effects);
                 }
-                // Create a result effect row that excludes handled effects
+                // Create a result ability row that excludes handled effects
                 // This is the effect that propagates out of the handle expression
                 let result_effect = if handled_ability_ids.is_empty() {
                     // No effect handlers, body's effect propagates as-is
                     body_effect_after
                 } else {
-                    // Remove handled effects from the body's effect row
+                    // Remove handled effects from the body's ability row
                     self.remove_handled_effects(ctx, body_effect_after, handled_effects)
                 };
 
@@ -822,7 +823,7 @@ impl<'db> TypeChecker<'db> {
                 ) = (&*callee.kind, callee_ty.kind(self.db()))
                 {
                     let matching: Vec<_> = effect
-                        .effects(self.db())
+                        .instances(self.db())
                         .iter()
                         .filter(|effect| effect.ability_id == *ability)
                         .collect();
@@ -964,7 +965,7 @@ impl<'db> TypeChecker<'db> {
                 let params = params.iter().map(|_| ctx.fresh_type_var()).collect();
                 let result =
                     Self::literal_callable_shape(ctx, body).unwrap_or_else(|| ctx.fresh_type_var());
-                let effect = ctx.fresh_effect_row();
+                let effect = ctx.fresh_ability_row();
                 Some(ctx.func_type(params, result, effect))
             }
             ExprKind::Block { value, .. } => Self::literal_callable_shape(ctx, value),
@@ -1381,7 +1382,7 @@ impl<'db> TypeChecker<'db> {
                 // Look up the ability operation signature from the module type env
                 if let Some(op_info) = self.env.lookup_ability_op(*ability, op) {
                     // Create a function type from the operation signature
-                    // The effect row contains this ability (with a row variable tail for polymorphism)
+                    // The ability row contains this ability (with a row variable tail for polymorphism)
 
                     // Generate fresh type vars for parameterized abilities
                     let ability_args: Vec<Type<'db>> =
@@ -1397,7 +1398,7 @@ impl<'db> TypeChecker<'db> {
 
                     if let Some(contract) = ctx.effect_contract {
                         let candidates: Vec<_> = contract
-                            .effects(self.db())
+                            .instances(self.db())
                             .iter()
                             .filter(|effect| effect.ability_id == *ability)
                             .collect();
@@ -1432,11 +1433,11 @@ impl<'db> TypeChecker<'db> {
                                 )
                             });
 
-                    let ability_effect = Effect {
+                    let ability_effect = AbilityInstance {
                         ability_id: *ability,
                         args: ability_args,
                     };
-                    let effect = EffectRow::new(self.db(), vec![ability_effect], None);
+                    let effect = AbilityRow::new(self.db(), vec![ability_effect], None);
                     ctx.func_type(param_types, return_type, effect)
                 } else {
                     ctx.error_type()
@@ -1557,7 +1558,7 @@ impl<'db> TypeChecker<'db> {
         };
         let effect = ctx
             .deferred_method_effect(node)
-            .unwrap_or_else(|| ctx.fresh_effect_row());
+            .unwrap_or_else(|| ctx.fresh_ability_row());
         ctx.evidence.record_call(node, effect);
         ctx.merge_effect_at(effect, node);
         ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
@@ -1587,7 +1588,7 @@ impl<'db> TypeChecker<'db> {
         let result_ty = ctx.fresh_type_var();
         let effect = ctx
             .deferred_method_effect(node)
-            .unwrap_or_else(|| ctx.fresh_effect_row());
+            .unwrap_or_else(|| ctx.fresh_ability_row());
         ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
             node_id: node,
             value: true,
@@ -1622,12 +1623,12 @@ impl<'db> TypeChecker<'db> {
     ///
     /// This method:
     /// 1. Creates fresh type variables for parameter and result types
-    /// 2. Creates a fresh effect row for the callee's effect
+    /// 2. Creates a fresh ability row for the callee's effect
     /// 3. Constrains the callee to have the expected function type (or continuation type)
     /// 4. Constrains the callee's effect to be a subset of the current function's effect
     ///
     /// Effect propagation ensures that if we call `State::get()`, the `State`
-    /// effect constraint is added to the current function's effect row.
+    /// effect constraint is added to the current function's ability row.
     fn infer_call_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -1676,7 +1677,7 @@ impl<'db> TypeChecker<'db> {
             // Create a continuation type for potential unification.
             let cont_arg_ty = ctx.fresh_type_var();
             let cont_result_ty = ctx.fresh_type_var();
-            let cont_effect = ctx.fresh_effect_row();
+            let cont_effect = ctx.fresh_ability_row();
             let expected_cont_ty = Type::new(
                 self.db(),
                 TypeKind::Continuation {
@@ -1687,7 +1688,7 @@ impl<'db> TypeChecker<'db> {
             );
 
             // Also create function type for the normal case
-            let callee_effect = ctx.fresh_effect_row();
+            let callee_effect = ctx.fresh_ability_row();
             let expected_func_ty = ctx.func_type(param_types.clone(), result_ty, callee_effect);
 
             // Try to match the callee type: if it's already a concrete Continuation type,
@@ -1697,7 +1698,7 @@ impl<'db> TypeChecker<'db> {
                 // Callee is a continuation - constrain as continuation call.
                 // Note: We intentionally do NOT merge cont_effect into the current effect
                 // context here, unlike the function call path below. The continuation's
-                // effect row is already the handler body's effect row (assigned in
+                // ability row is already the handler body's ability row (assigned in
                 // convert_handler_arm_with_ctx), so it's already accounted for in the
                 // enclosing handle expression's effect propagation.
                 ctx.constrain_eq_at(
@@ -1735,7 +1736,7 @@ impl<'db> TypeChecker<'db> {
         }
 
         // Multiple arguments (or zero): must be a function call
-        let callee_effect = ctx.fresh_effect_row();
+        let callee_effect = ctx.fresh_ability_row();
         let expected_func_ty = ctx.func_type(param_types.clone(), result_ty, callee_effect);
         ctx.constrain_eq_at(
             callee_ty,
@@ -1756,15 +1757,15 @@ impl<'db> TypeChecker<'db> {
         result_ty
     }
 
-    /// Resolve the effect row to merge for a function call.
+    /// Resolve the ability row to merge for a function call.
     ///
     /// If the callee type is already a concrete function type, uses that function's
-    /// effect row directly. Otherwise, falls back to the fresh effect row.
+    /// ability row directly. Otherwise, falls back to the fresh ability row.
     fn resolve_callee_effect(
         &self,
         callee_ty: Type<'db>,
-        fallback: EffectRow<'db>,
-    ) -> EffectRow<'db> {
+        fallback: AbilityRow<'db>,
+    ) -> AbilityRow<'db> {
         if let TypeKind::Func { effect, .. } = callee_ty.kind(self.db()) {
             *effect
         } else {
@@ -2183,7 +2184,7 @@ impl<'db> TypeChecker<'db> {
                             TypeKind::Func { effect, .. } => Some(*effect),
                             _ => None,
                         });
-                ctx.set_current_effect(EffectRow::pure(self.db()));
+                ctx.set_current_effect(AbilityRow::pure(self.db()));
                 let (_, outer_evidence) = ctx.evidence.enter_callable(ctx.effect_contract);
 
                 // Bind lambda parameters so that references to them in the body
@@ -2245,7 +2246,7 @@ impl<'db> TypeChecker<'db> {
                 // context; without isolation, the body's effects would leak
                 // into the enclosing scope during convert-phase re-inference.
                 let outer_effect = ctx.current_effect();
-                ctx.set_current_effect(EffectRow::pure(self.db()));
+                ctx.set_current_effect(AbilityRow::pure(self.db()));
                 let body_evidence = ctx
                     .evidence
                     .enter_handle_body(expr_id, Some(handle_ctx.handled_effects));
@@ -2341,7 +2342,7 @@ impl<'db> TypeChecker<'db> {
                 pattern, value, ty, ..
             } => {
                 let outer_effect = ctx.current_effect();
-                ctx.set_current_effect(EffectRow::pure(self.db()));
+                ctx.set_current_effect(AbilityRow::pure(self.db()));
                 let value_ty = if let Some(ann) = ty {
                     let expected = self.annotation_to_type_with_ctx(ctx, ann);
                     let inferred = self.infer_expr_with_expected(ctx, value, expected);
@@ -2384,7 +2385,7 @@ impl<'db> TypeChecker<'db> {
                 ty,
             } => {
                 let outer_effect = ctx.current_effect();
-                ctx.set_current_effect(EffectRow::pure(self.db()));
+                ctx.set_current_effect(AbilityRow::pure(self.db()));
                 let value = if let Some(ann) = ty {
                     let expected = self.annotation_to_type_with_ctx(ctx, ann);
                     self.check_expr_with_ctx(ctx, value, Mode::Check(expected))
@@ -2460,7 +2461,7 @@ impl<'db> TypeChecker<'db> {
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         pattern: &Pattern<ResolvedRef<'db>>,
         value_ty: Type<'db>,
-        evaluation_effect: EffectRow<'db>,
+        evaluation_effect: AbilityRow<'db>,
     ) {
         // A revisited `let` keeps the schemes of its first visit. Solving
         // again can fail once an unrelated error has been constrained, and a
@@ -2521,7 +2522,7 @@ impl<'db> TypeChecker<'db> {
             .apply(self.db(), evaluation_effect)
             .is_pure(self.db());
 
-        let (mut environment_type_vars, mut environment_effect_vars) = solver.pending_variables();
+        let (mut environment_type_vars, mut environment_row_vars) = solver.pending_variables();
         if should_generalize {
             for ty in ctx.annotation_type_parameters() {
                 type_subst.collect_univars_from_type(
@@ -2540,17 +2541,17 @@ impl<'db> TypeChecker<'db> {
                     &row_subst,
                     &mut environment_type_vars,
                 );
-                for var in collect_effect_vars(self.db(), body) {
+                for var in collect_row_vars(self.db(), body) {
                     if !scheme.effect_params(self.db()).contains(&var)
-                        && !environment_effect_vars.contains(&var)
+                        && !environment_row_vars.contains(&var)
                     {
-                        environment_effect_vars.push(var);
+                        environment_row_vars.push(var);
                     }
                 }
             }
         }
 
-        solver.expand_union_dependencies(&mut environment_type_vars, &mut environment_effect_vars);
+        solver.expand_union_dependencies(&mut environment_type_vars, &mut environment_row_vars);
         let resolved_value = type_subst.apply_with_rows(self.db(), value_ty, &row_subst);
         let mut bindings = Vec::new();
         self.collect_pattern_bindings_with_ctx(
@@ -2609,11 +2610,11 @@ impl<'db> TypeChecker<'db> {
                     let_quantifiers.entry(var).or_insert(next);
                 }
                 let mut effect_params = Vec::new();
-                for var in collect_effect_vars(self.db(), generalized)
+                for var in collect_row_vars(self.db(), generalized)
                     .into_iter()
                     .chain(union_rows)
                 {
-                    if !environment_effect_vars.contains(&var) && !effect_params.contains(&var) {
+                    if !environment_row_vars.contains(&var) && !effect_params.contains(&var) {
                         effect_params.push(var);
                     }
                 }
@@ -3464,11 +3465,11 @@ impl<'db> TypeChecker<'db> {
         let body_row = solver.row_subst().apply(self.db(), handle_ctx.body_effect);
         let mut matching_effects = Vec::new();
         for effect in body_row
-            .effects(self.db())
+            .instances(self.db())
             .iter()
             .filter(|effect| effect.ability_id == ability_id)
         {
-            let effect = Effect {
+            let effect = AbilityInstance {
                 ability_id,
                 args: effect
                     .args
@@ -3495,7 +3496,7 @@ impl<'db> TypeChecker<'db> {
             }
             [] if body_row.rest(self.db()).is_some() => handle_ctx
                 .handled_effects
-                .effects(self.db())
+                .instances(self.db())
                 .iter()
                 .find(|effect| effect.ability_id == ability_id)
                 .expect("handler selection was recorded during inference")
@@ -3535,7 +3536,7 @@ impl<'db> TypeChecker<'db> {
 
         if let Some(selected) = handle_ctx
             .handled_effects
-            .effects(self.db())
+            .instances(self.db())
             .iter()
             .find(|effect| effect.ability_id == ability_id)
         {
@@ -3713,21 +3714,21 @@ impl<'db> TypeChecker<'db> {
                         ctx.constrain_row_union(crate::ast::RowUnion {
                             sources: rows
                                 .into_iter()
-                                .map(|row| EffectRow::open(self.db(), row))
+                                .map(|row| AbilityRow::open(self.db(), row))
                                 .collect(),
-                            result: EffectRow::open(self.db(), result),
+                            result: AbilityRow::open(self.db(), result),
                         });
                         Some(result)
                     }
                 };
-                let converted = crate::ast::abilities_to_effect_row(
+                let converted = crate::ast::abilities_to_ability_row(
                     self.db(),
                     abilities,
                     self.current_prefix(),
                     &mut |a| self.annotation_to_type_with_ctx(ctx, a),
                     || rest.expect("row annotations allocate a tail"),
                 );
-                let effect = EffectRow::new(self.db(), converted.effects(self.db()), rest);
+                let effect = AbilityRow::new(self.db(), converted.instances(self.db()), rest);
                 ctx.func_type(param_types, result_ty, effect)
             }
             TypeAnnotationKind::Tuple(elems) => {
@@ -3835,9 +3836,9 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Remove handled effects from an effect row.
+    /// Remove handled effects from an ability row.
     ///
-    /// Creates a new effect row with the specified abilities removed.
+    /// Creates a new ability row with the specified abilities removed.
     /// If the row has a row variable tail, we add a constraint to ensure
     /// the tail cannot contain the handled effects.
     ///
@@ -3846,10 +3847,10 @@ impl<'db> TypeChecker<'db> {
     fn remove_handled_effects(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        source: EffectRow<'db>,
-        removed: EffectRow<'db>,
-    ) -> EffectRow<'db> {
-        let result = ctx.fresh_effect_row();
+        source: AbilityRow<'db>,
+        removed: AbilityRow<'db>,
+    ) -> AbilityRow<'db> {
+        let result = ctx.fresh_ability_row();
         ctx.constrain_row_removal(crate::ast::RowRemoval {
             source,
             removed,
@@ -3867,7 +3868,7 @@ mod tests {
     use trunk_ir::Symbol;
 
     use crate::ast::{
-        AbilityId, EffectRow, Expr, ExprKind, FuncDefId, HandlerArm, HandlerKind, LocalId, NodeId,
+        AbilityId, AbilityRow, Expr, ExprKind, FuncDefId, HandlerArm, HandlerKind, LocalId, NodeId,
         OpDeclKind, Pattern, PatternKind, ResolvedRef, SpanMap, Type, TypeAnnotation,
         TypeAnnotationKind, TypeDefId, TypeKind,
     };
@@ -3968,12 +3969,12 @@ mod tests {
         );
         let nat = ctx.nat_type();
         let boolean = ctx.bool_type();
-        let expected = ctx.func_type(vec![], nat, EffectRow::pure(db));
+        let expected = ctx.func_type(vec![], nat, AbilityRow::pure(db));
         checker.check_expr_with_ctx(&mut ctx, &lambda, Mode::Check(expected));
         checker.check_expr_with_ctx(&mut ctx, &lambda, Mode::Infer);
         let mut solver = super::TypeSolver::new(db);
         solver.solve(ctx.constraints_snapshot()).unwrap();
-        let incompatible = ctx.func_type(vec![], boolean, EffectRow::pure(db));
+        let incompatible = ctx.func_type(vec![], boolean, AbilityRow::pure(db));
         checker.check_expr_with_ctx(&mut ctx, &lambda, Mode::Check(incompatible));
         assert!(solver.solve(ctx.take_constraints()).is_err());
     }
@@ -4047,11 +4048,11 @@ mod tests {
         let handle_node_id = NodeId::from_raw(0);
         let _ = ctx.begin_result_join(handle_node_id);
         let handle_ctx = HandleContext {
-            handled_effects: EffectRow::pure(db),
+            handled_effects: AbilityRow::pure(db),
             node_id: handle_node_id,
             answer_ty: body_ty,
             body_ty,
-            body_effect: EffectRow::pure(db),
+            body_effect: AbilityRow::pure(db),
             evidence_body: None,
         };
 
@@ -4146,11 +4147,11 @@ mod tests {
         let handle_node_id = NodeId::from_raw(0);
         let _ = ctx.begin_result_join(handle_node_id);
         let handle_ctx = HandleContext {
-            handled_effects: EffectRow::pure(db),
+            handled_effects: AbilityRow::pure(db),
             node_id: handle_node_id,
             answer_ty: Type::new(db, TypeKind::Nil),
             body_ty: Type::new(db, TypeKind::Nil),
-            body_effect: EffectRow::pure(db),
+            body_effect: AbilityRow::pure(db),
             evidence_body: None,
         };
         let name = Symbol::new("value");
@@ -4302,7 +4303,7 @@ mod tests {
             assert_eq!(params.len(), 1);
             assert_eq!(params[0], Type::new(db, TypeKind::Int));
             assert_eq!(*result, Type::new(db, TypeKind::Bool));
-            // Empty abilities means open effect row (fresh row var)
+            // Empty abilities means open ability row (fresh row var)
             assert!(effect.rest(db).is_some() || effect.is_pure(db));
         } else {
             panic!("Func annotation should be Func type");
@@ -4340,7 +4341,7 @@ mod tests {
             assert_eq!(params[0], Type::new(db, TypeKind::Int));
             assert_eq!(*result, Type::new(db, TypeKind::Bool));
             // Should have IO effect
-            let effects = effect.effects(db);
+            let effects = effect.instances(db);
             assert_eq!(effects.len(), 1);
             assert_eq!(effects[0].ability_id.name(db), Symbol::new("IO"));
         } else {

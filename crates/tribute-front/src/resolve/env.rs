@@ -75,7 +75,7 @@ pub struct ModuleEnv<'db> {
     /// Qualified paths (namespace → name → binding).
     namespaces: HashMap<SymbolPath, HashMap<Symbol, Binding<'db>>>,
     /// Original paths for resolved `use` imports (import name → original path).
-    /// Used to rewrite effect annotations from imported names to qualified paths.
+    /// Used to rewrite ability annotations from imported names to qualified paths.
     use_paths: HashMap<Symbol, Vec<Symbol>>,
     /// The paths of the names that several `use`s import, in declaration
     /// order.
