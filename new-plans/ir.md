@@ -843,10 +843,13 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 - **의미:** named function을 first-class source value로 만든다. Source가 named
   function을 higher-order value로 사용할 수 있으므로 필요하다. Result는 대상과
   같은 source signature이며 convention은 대상 worker와 같거나 더 강할 수 있다.
+  바깥 row도 대상의 row를 포함하는 더 넓은 row일 수 있다. 순수 함수를 열린 row의
+  callable 자리에 넘기는 포섭이 이 경우다.
 - **검증:** local verifier는 attribute와 result 형상을 검사한다. Whole-IR
   verifier는 symbol resolution과, result가 대상 type에 [`row_args`](#row-인자와-치환)를
-  치환한 signature와 바깥 convention을 빼고 같은지, 바깥 convention이 대상보다
-  약하지 않은지를 검사한다.
+  치환한 signature와 바깥 row와 convention을 빼고 같은지, 바깥 row가 치환한 row의
+  instance를 같은 횟수 이상 담고 그 tail이 있으면 같은 tail을 가지는지, 바깥
+  convention이 대상보다 약하지 않은지를 검사한다.
 - **소유권과 값 흐름:** 결과는 일반 SSA value다.
 - **위치:** named function을 값으로 사용한 source reference span이다.
 

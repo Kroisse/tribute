@@ -379,3 +379,38 @@ fn tuple_names_keep_symbol_path_components_apart() {
     });
     assert_ne!(names[0], names[1]);
 }
+
+#[test]
+fn row_inclusion_counts_instances_and_keeps_the_tail() {
+    let a = SymbolPath::new(["A"]);
+    let b = SymbolPath::new(["B"]);
+    let wide = Row::new([a.clone(), a.clone(), b.clone()], Some(1));
+    assert!(wide.includes(&Row::new([a.clone(), b.clone()], None)));
+    assert!(wide.includes(&Row::new([a.clone()], Some(1))));
+    assert!(!wide.includes(&Row::new([a.clone()], Some(0))));
+    assert!(!Row::new([a.clone()], None).includes(&Row::new([a.clone(), a], None)));
+    assert!(!Row::new([b], None).includes(&Row::new([], Some(1))));
+}
+
+#[test]
+fn a_function_reference_may_widen_the_row_of_its_target() {
+    let input = MODULE.replace(
+        "{func_ref = @apply, row_args = [{instances = [@A, @B]}]}",
+        "{func_ref = @apply, row_args = [{instances = [@A]}]}",
+    );
+    let narrowed = input.replace(
+        "!applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}",
+        "!narrow = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A]}, tribute.calling_convention = 2}>\n  !applied = tribute_control.func_sig<(!narrow, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}",
+    );
+    let (ctx, module) = parse(&narrowed);
+    let result = validate(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+
+    assert_rejects(
+        &narrowed.replace(
+            "-> core.i32, {ability_row = {instances = [@A, @B]}, tribute.calling_convention = 2}>\n\n",
+            "-> core.i32, {ability_row = {instances = [@B]}, tribute.calling_convention = 2}>\n\n",
+        ),
+        "func_ref result source signature does not match its target",
+    );
+}
