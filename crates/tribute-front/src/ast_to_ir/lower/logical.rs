@@ -11,7 +11,7 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{
     list,
-    tribute_control::{self, CompilerIntrinsicDeclaration, OperationDeclaration},
+    tribute_control::{self, CompilerIntrinsicDeclaration, OperationDeclaration, Row, RowBinder},
 };
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
 use trunk_ir::dialect::{arith, core, scf};
@@ -28,7 +28,7 @@ use crate::ast::{
     Stmt, TypeKind, TypedRef,
 };
 
-use super::super::context::IrLoweringCtx;
+use super::super::context::{IrLoweringCtx, LogicalGeneratedSignature};
 use super::super::{FrontendIrModule, TypedModule};
 use super::{FuncSignature, IrBuilder};
 
@@ -54,6 +54,8 @@ struct Declarations<'db> {
     exhaustive_cases: HashSet<crate::ast::NodeId>,
     evidence_plans: SortedMap<crate::ast::NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     local_instances: SortedMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    /// The instance each reference to a generic function selects.
+    function_instances: SortedMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
     local_callables: local_callables::Plan<'db>,
     /// The plan of each function, by its declaration, until it is lowered.
     function_local_callables: HashMap<crate::ast::NodeId, local_callables::Plan<'db>>,
@@ -189,7 +191,9 @@ fn result(ir: &IrContext, op: OpRef) -> ValueRef {
     ir.op_result(op, 0)
 }
 
-fn control_convention(convention: CallingConvention) -> tribute_control::CallingConvention {
+pub(super) fn control_convention(
+    convention: CallingConvention,
+) -> tribute_control::CallingConvention {
     match convention {
         CallingConvention::Direct => tribute_control::CallingConvention::Direct,
         CallingConvention::EvidenceDirect => tribute_control::CallingConvention::EvidenceDirect,
@@ -201,9 +205,11 @@ fn func_sig_type(
     ir: &mut IrContext,
     result: TypeRef,
     params: impl IntoIterator<Item = TypeRef>,
+    row: &Row,
     convention: CallingConvention,
 ) -> TypeRef {
-    tribute_control::func_sig(ir, result, params, control_convention(convention)).as_type_ref()
+    tribute_control::func_sig_with_row(ir, result, params, row, control_convention(convention))
+        .as_type_ref()
 }
 
 /// Lower a named function value at its exact source-logical callable contract.
@@ -216,6 +222,8 @@ fn lower_function_ref<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     name: SymbolPath,
+    reference: RowArguments,
+    declarations: &Declarations<'db>,
     expected_ty: Option<TypeRef>,
 ) -> ValueRef {
     let mut signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
@@ -225,12 +233,10 @@ fn lower_function_ref<'db>(
         .function_calling_convention(&name)
         .unwrap_or(signature.convention);
     ensure_prelude_declaration(builder, location, &name, &signature);
-    let worker_ty = func_sig_type(
-        builder.ir,
-        signature.return_type,
-        signature.param_types,
-        signature.convention,
-    );
+    let args = reference.rows(builder.ctx, declarations, &name, &signature);
+    let worker_ty = signature
+        .instantiate(builder.ir, &args)
+        .callable_type(builder.ir);
     let ty = expected_ty
         .filter(|expected_ty| {
             let Some(expected) = tribute_control::FuncSig::from_type_ref(builder.ir, *expected_ty)
@@ -241,24 +247,70 @@ fn lower_function_ref<'db>(
                 .expect("worker function reference must have a logical callable type");
             expected.result(builder.ir) == worker.result(builder.ir)
                 && expected.inputs(builder.ir) == worker.inputs(builder.ir)
-                && tribute_control::func_sig_convention(builder.ir, *expected_ty)
-                    >= tribute_control::func_sig_convention(builder.ir, worker_ty)
+                && expected.row(builder.ir).includes(&worker.row(builder.ir))
+                && expected.convention(builder.ir) >= worker.convention(builder.ir)
         })
         .unwrap_or(worker_ty);
     let symbol = builder.ctx.function_symbol(&name);
+    let row_args = FuncSignature::row_args_attribute(builder.ir, &args);
     let op = op(
         builder.ir,
         builder.block,
         location,
         tribute_control::FuncRef::DEF,
         |builder| {
-            builder
+            let builder = builder
                 .result(ty)
-                .attr("func_ref", Attribute::SymbolRef(SymbolPath::new([symbol])))
+                .attr("func_ref", Attribute::SymbolRef(SymbolPath::new([symbol])));
+            match row_args {
+                Some(row_args) => builder.attr(tribute_control::ROW_ARGS_ATTR, row_args),
+                None => builder,
+            }
         },
     );
     builder.ctx.record_function_ref(op, name);
     result(builder.ir, op)
+}
+
+/// Where a reference finds the row arguments it passes to its callee.
+#[derive(Clone)]
+enum RowArguments {
+    /// The function instance type checking selected for this node.
+    Instance(crate::ast::NodeId),
+    /// These rows, of a reference already lowered.
+    Rows(Vec<Row>),
+}
+
+impl RowArguments {
+    /// The rows a reference to `name` passes, in the current definition's
+    /// binders: one for each binder `signature` quantifies.
+    fn rows<'db>(
+        self,
+        ctx: &IrLoweringCtx<'db>,
+        declarations: &Declarations<'db>,
+        name: &SymbolPath,
+        signature: &FuncSignature,
+    ) -> Vec<Row> {
+        let quantified = tribute_control::quantified_count(&signature.binders);
+        let rows = match self {
+            Self::Rows(rows) => rows,
+            Self::Instance(_) if quantified == 0 => vec![],
+            Self::Instance(node) => declarations
+                .function_instances
+                .get(&node)
+                .unwrap_or_else(|| panic!("reference to {name} selects no function instance"))
+                .row_arguments
+                .iter()
+                .map(|row| ctx.ability_row(*row))
+                .collect(),
+        };
+        assert_eq!(
+            rows.len(),
+            quantified,
+            "a reference to {name} passes one row for each quantified binder"
+        );
+        rows
+    }
 }
 
 /// Lower a named function value under a callable parameter's exact contract.
@@ -282,10 +334,14 @@ fn lower_expr_for_callable_parameter<'db>(
                         builder.ir.value_def(value)
                     && let Some(name) = builder.ctx.function_ref_path(producer).cloned()
                 {
+                    let rows = tribute_control::row_args(builder.ir, producer)
+                        .expect("a lowered func_ref has well-formed row arguments");
                     return Some(lower_function_ref(
                         builder,
                         builder.location(expr.id),
                         name,
+                        RowArguments::Rows(rows),
+                        declarations,
                         Some(expected_ty),
                     ));
                 }
@@ -300,6 +356,8 @@ fn lower_expr_for_callable_parameter<'db>(
                         builder,
                         builder.location(expr.id),
                         id.path(builder.ctx.db).clone(),
+                        RowArguments::Instance(expr.id),
+                        declarations,
                         Some(expected_ty),
                     )
                 })
@@ -339,6 +397,7 @@ pub(super) fn lower_module<'db>(
         specialized_enum_variants,
         node_types,
         local_instances,
+        function_instances,
         ability_conventions,
         ability_definitions,
         handler_operations,
@@ -394,9 +453,12 @@ pub(super) fn lower_module<'db>(
         exhaustive_cases,
         evidence_plans,
         local_instances,
+        function_instances,
         local_callables: local_callables::Plan::default(),
         function_local_callables: HashMap::default(),
     };
+    prescan_row_binders(&mut ctx, &ast.entries, &declarations);
+    let row_effects = row_effects(&ctx, &ast.entries, &declarations);
     prescan_definition_conventions(&mut ctx, &ast.entries);
     let mut well_known_type_prescan = super::decl::WellKnownTypePrescan::new(well_known_types);
     collect_logical_nominal_identities(&mut ctx, &ast.entries);
@@ -415,6 +477,11 @@ pub(super) fn lower_module<'db>(
     for entry in ast.entries {
         lower_decl(&mut ctx, ir, module_block, entry, &mut declarations);
     }
+    // An instance only a row names still needs its declaration.
+    for effect in row_effects {
+        let symbol = ctx.ability_symbol(&effect.ability_id.qualified(db), &effect.args);
+        declarations.instance(&symbol, effect.ability_id, &effect.args);
+    }
     ctx.set_module(SymbolPath::root());
     let region = ir.create_region(RegionData {
         location,
@@ -428,7 +495,12 @@ pub(super) fn lower_module<'db>(
     well_known_types.attach(ir, module.op_ref());
     let module = IrModule::new(ir, module.op_ref()).expect("valid core.module operation");
     let operations = instance_operations(&ctx, ir, &declarations);
-    tribute_control::declare_operations(ir, module, &operations);
+    tribute_control::declare_abilities(
+        ir,
+        module,
+        declarations.instances.iter().map(|(symbol, ..)| symbol),
+        &operations,
+    );
     FrontendIrModule {
         module,
         compiler_intrinsics: declarations.compiler_intrinsics,
@@ -473,6 +545,120 @@ fn instance_operations<'db>(
         }
     }
     operations
+}
+
+/// Number the row variables of each function definition.
+fn prescan_row_binders<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    entries: &[DeclEntry<TypedRef<'db>>],
+    declarations: &Declarations<'db>,
+) {
+    for entry in entries {
+        let Decl::Function(function) = &entry.decl else {
+            continue;
+        };
+        let name = entry.module.child(function.name.clone());
+        let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
+            continue;
+        };
+        let quantified = scheme.effect_params(ctx.db);
+        let local_copies: Vec<_> = ctx
+            .row_classes_of(&name)
+            .iter()
+            .map(|(variable, _)| *variable)
+            .filter(|variable| !quantified.contains(variable))
+            .collect();
+        let body = crate::ast_to_ir::row_binders::BodyTypes {
+            node_types: ctx.node_types(),
+            handler_operations: &declarations.handler_operations,
+            perform_operations: &declarations.perform_operations,
+            local_instances: &declarations.local_instances,
+        };
+        let binders = crate::ast_to_ir::row_binders::of_definition(
+            ctx.db,
+            scheme,
+            function,
+            &body,
+            &local_copies,
+        );
+        ctx.register_row_binders(name, binders);
+    }
+}
+
+/// Every ability instance a row of the module names, in first-occurrence
+/// order.
+fn row_effects<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    entries: &[DeclEntry<TypedRef<'db>>],
+    declarations: &Declarations<'db>,
+) -> Vec<crate::ast::AbilityInstance<'db>> {
+    fn visit<'db>(
+        db: &'db dyn salsa::Database,
+        ty: crate::ast::Type<'db>,
+        found: &mut Vec<crate::ast::AbilityInstance<'db>>,
+    ) {
+        let row = |effect: crate::ast::AbilityRow<'db>, found: &mut Vec<_>| {
+            for ability in effect.instances(db) {
+                for argument in &ability.args {
+                    visit(db, *argument, found);
+                }
+                if !found.contains(ability) {
+                    found.push(ability.clone());
+                }
+            }
+        };
+        match ty.kind(db) {
+            TypeKind::Named { args, .. } | TypeKind::Tuple(args) => {
+                for arg in args {
+                    visit(db, *arg, found);
+                }
+            }
+            TypeKind::App { ctor, args } => {
+                visit(db, *ctor, found);
+                for arg in args {
+                    visit(db, *arg, found);
+                }
+            }
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
+                for param in params {
+                    visit(db, *param, found);
+                }
+                visit(db, *result, found);
+                row(*effect, found);
+            }
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
+                visit(db, *arg, found);
+                visit(db, *result, found);
+                row(*effect, found);
+            }
+            _ => {}
+        }
+    }
+    let db = ctx.db;
+    let mut found = Vec::new();
+    for entry in entries {
+        if let Decl::Function(function) = &entry.decl
+            && let Some(scheme) =
+                ctx.lookup_function_type(&entry.module.child(function.name.clone()))
+        {
+            visit(db, scheme.body(db), &mut found);
+        }
+    }
+    for ty in ctx.node_types().values() {
+        visit(db, *ty, &mut found);
+    }
+    for instance in declarations.function_instances.values() {
+        visit(db, instance.callable, &mut found);
+    }
+    found
 }
 
 /// Seed worker conventions from each body's concrete residual effects. The
@@ -810,11 +996,16 @@ fn prescan_struct_accessor_signatures<'db>(
                 .get(index)
                 .map(|(_, ty)| *ty)
                 .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
+            let closed = |param_types, return_type| LogicalGeneratedSignature {
+                param_types,
+                return_type,
+                row: Row::default(),
+                binders: vec![],
+                convention: CallingConvention::Direct,
+            };
             ctx.register_logical_generated_signature(
                 &getter_name,
-                vec![struct_type],
-                field_type,
-                CallingConvention::Direct,
+                closed(vec![struct_type], field_type),
             );
             if field.name.is_none() {
                 continue;
@@ -822,18 +1013,21 @@ fn prescan_struct_accessor_signatures<'db>(
             let [setter_name, modifier_name] = field_update_names(&getter_name);
             ctx.register_logical_generated_signature(
                 &setter_name,
-                vec![struct_type, field_type],
-                struct_type,
-                CallingConvention::Direct,
+                closed(vec![struct_type, field_type], struct_type),
             );
             // The modifier performs whatever its callback performs.
+            let row = Row::new([], Some(0));
             for (modifier_name, class) in modifier_instances(ctx, modifier_name) {
-                let callback = func_sig_type(ir, field_type, [field_type], class);
+                let callback = func_sig_type(ir, field_type, [field_type], &row, class);
                 ctx.register_logical_generated_signature(
                     &modifier_name,
-                    vec![struct_type, callback],
-                    struct_type,
-                    class,
+                    LogicalGeneratedSignature {
+                        param_types: vec![struct_type, callback],
+                        return_type: struct_type,
+                        row: row.clone(),
+                        binders: vec![RowBinder::Param],
+                        convention: class,
+                    },
                 );
             }
         }
@@ -908,7 +1102,13 @@ fn lower_struct_accessors<'db>(
             blocks: trunk_ir::smallvec::smallvec![entry],
             parent_op: None,
         });
-        let callable = func_sig_type(ir, field_type, [struct_type], CallingConvention::Direct);
+        let callable = func_sig_type(
+            ir,
+            field_type,
+            [struct_type],
+            &Row::default(),
+            CallingConvention::Direct,
+        );
         let getter =
             tribute_control::func_declaration(ir, location, &getter_name.to_symbol(), callable);
         ir.push_op_region(getter.op_ref(), body);
@@ -925,8 +1125,9 @@ fn lower_struct_accessors<'db>(
                 .collect();
         let [setter_name, modifier_name] = field_update_names(&getter_name);
         let mut functions = vec![(setter_name, field_type, CallingConvention::Direct, false)];
+        let callback_row = Row::new([], Some(0));
         for (name, class) in modifier_instances(ctx, modifier_name) {
-            let callback = func_sig_type(ir, field_type, [field_type], class);
+            let callback = func_sig_type(ir, field_type, [field_type], &callback_row, class);
             functions.push((name, callback, class, true));
         }
         for (name, argument_ty, convention, modifies) in functions {
@@ -1002,9 +1203,27 @@ fn lower_struct_accessors<'db>(
                 blocks: trunk_ir::smallvec::smallvec![entry],
                 parent_op: None,
             });
-            let callable = func_sig_type(ir, struct_type, [struct_type, argument_ty], convention);
+            let row = if modifies {
+                callback_row.clone()
+            } else {
+                Row::default()
+            };
+            let callable = func_sig_type(
+                ir,
+                struct_type,
+                [struct_type, argument_ty],
+                &row,
+                convention,
+            );
             let function =
                 tribute_control::func_declaration(ir, location, &name.to_symbol(), callable);
+            if modifies {
+                let param = ir.string_attr(RowBinder::Param.keyword());
+                ir.op_attrs_mut(function.op_ref()).insert(
+                    tribute_control::ROW_BINDERS_ATTR,
+                    Attribute::List(vec![param]),
+                );
+            }
             ir.push_op_region(function.op_ref(), body);
             ir.push_op(top, function.op_ref());
         }
@@ -1053,12 +1272,9 @@ fn lower_function<'db>(
         .type_params(ctx.db)
         .len();
     let signature = function_signature(ctx, ir, &function);
-    let callable = func_sig_type(
-        ir,
-        signature.return_type,
-        signature.param_types.iter().copied(),
-        signature.convention,
-    );
+    let callable = signature.callable_type(ir);
+    let inferred_row = function.effects.is_none()
+        || crate::is_root_main(&function.name, ctx.module_path().is_root());
     let args = function
         .params
         .iter()
@@ -1127,6 +1343,11 @@ fn lower_function<'db>(
     });
     let name = ctx.qualify_name(&function.name).to_symbol();
     let function = tribute_control::func_declaration(ir, location, &name, callable);
+    signature.attach_rows(ir, function.op_ref());
+    if inferred_row {
+        ir.op_attrs_mut(function.op_ref())
+            .insert(tribute_control::INFERRED_ROW_ATTR, Attribute::Bool(true));
+    }
     ir.push_op_region(function.op_ref(), body);
     ir.push_op(top, function.op_ref());
 }
@@ -1152,14 +1373,10 @@ fn lower_extern<'db>(
             decl.name
         )
     });
-    let callable = func_sig_type(
-        ir,
-        signature.return_type,
-        signature.param_types,
-        signature.convention,
-    );
+    let callable = signature.callable_type(ir);
     let name = ctx.function_symbol(&ctx.qualify_name(&decl.name));
     let function = tribute_control::func_declaration(ir, location, &name, callable);
+    signature.attach_rows(ir, function.op_ref());
     if let Some(identity) = ctx.compiler_intrinsic(decl.id) {
         let identity_text = ir.intern_symbol_text(&identity);
         ir.op_attrs_mut(function.op_ref()).insert(
@@ -1206,14 +1423,10 @@ fn ensure_prelude_declaration(
     {
         return;
     }
-    let callable = func_sig_type(
-        builder.ir,
-        signature.return_type,
-        signature.param_types.iter().copied(),
-        signature.convention,
-    );
+    let callable = signature.callable_type(builder.ir);
     let symbol = builder.ctx.function_symbol(name);
     let declaration = tribute_control::func_declaration(builder.ir, location, &symbol, callable);
+    signature.attach_rows(builder.ir, declaration.op_ref());
     let top = builder
         .ctx
         .module_block()
@@ -1444,7 +1657,14 @@ fn lower_expr<'db>(
             ),
             ResolvedRef::Function { id } => {
                 let name = id.path(builder.ctx.db);
-                Some(lower_function_ref(builder, location, name.clone(), None))
+                Some(lower_function_ref(
+                    builder,
+                    location,
+                    name.clone(),
+                    RowArguments::Instance(expr.id),
+                    declarations,
+                    None,
+                ))
             }
             ResolvedRef::AbilityOp { .. } => {
                 // Typechecking has already diagnosed this non-call operation
@@ -2153,7 +2373,19 @@ pub(super) fn emit_named_call(
     name: SymbolPath,
     values: Vec<ValueRef>,
 ) -> ValueRef {
-    let call = named_call(builder, location, name, values, CallPosition::Value);
+    let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
+        .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
+    // A call the compiler adds performs nothing: each row it passes is empty.
+    let args = vec![Row::default(); tribute_control::quantified_count(&signature.binders)];
+    let call = named_call(
+        builder,
+        location,
+        &name,
+        &signature,
+        &args,
+        values,
+        CallPosition::Value,
+    );
     result(builder.ir, call)
 }
 
@@ -2164,16 +2396,20 @@ enum CallPosition {
     Tail,
 }
 
+/// Call `name`, whose signature is `declared` in its own binders, passing
+/// the row arguments `args`.
 fn named_call(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
-    name: SymbolPath,
+    name: &SymbolPath,
+    declared: &FuncSignature,
+    args: &[Row],
     values: Vec<ValueRef>,
     position: CallPosition,
 ) -> OpRef {
-    let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
-        .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
-    ensure_prelude_declaration(builder, location, &name, &signature);
+    ensure_prelude_declaration(builder, location, name, declared);
+    let signature = declared.instantiate(builder.ir, args);
+    let row_args = FuncSignature::row_args_attribute(builder.ir, args);
     if values.len() != signature.param_types.len() {
         panic!("typechecked call arity disagrees with logical signature for {name}");
     }
@@ -2182,8 +2418,12 @@ fn named_call(
         .zip(signature.param_types.iter().copied())
         .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
         .collect();
-    let symbol = builder.ctx.function_symbol(&name);
+    let symbol = builder.ctx.function_symbol(name);
     let callee = Attribute::SymbolRef(SymbolPath::new([symbol]));
+    let with_rows = |builder: OperationDataBuilder| match row_args {
+        Some(row_args) => builder.attr(tribute_control::ROW_ARGS_ATTR, row_args),
+        None => builder,
+    };
     match position {
         CallPosition::Value => op(
             builder.ir,
@@ -2191,10 +2431,12 @@ fn named_call(
             location,
             tribute_control::Call::DEF,
             |builder| {
-                builder
-                    .operands(values)
-                    .result(signature.return_type)
-                    .attr("callee", callee)
+                with_rows(
+                    builder
+                        .operands(values)
+                        .result(signature.return_type)
+                        .attr("callee", callee),
+                )
             },
         ),
         CallPosition::Tail => op(
@@ -2202,7 +2444,7 @@ fn named_call(
             builder.block,
             location,
             tribute_control::TailCall::DEF,
-            |builder| builder.operands(values).attr("callee", callee),
+            |builder| with_rows(builder.operands(values).attr("callee", callee)),
         ),
     }
 }
@@ -2300,10 +2542,16 @@ fn lower_call<'db>(
         ExprKind::Var(reference) => match reference.resolved {
             ResolvedRef::Function { id } => {
                 let name = id.path(builder.ctx.db);
-                Some(
-                    FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
-                        .unwrap_or_else(|| panic!("missing logical signature for call {name}")),
-                )
+                let declared = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
+                    .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
+                let args = RowArguments::Instance(callee.id).rows(
+                    builder.ctx,
+                    declarations,
+                    name,
+                    &declared,
+                );
+                let signature = declared.instantiate(builder.ir, &args);
+                Some((declared, args, signature))
             }
             _ => None,
         },
@@ -2321,7 +2569,7 @@ fn lower_call<'db>(
     });
     let parameter_types = named_signature
         .as_ref()
-        .map(|signature| signature.param_types.clone())
+        .map(|(_, _, signature)| signature.param_types.clone())
         .or_else(|| {
             let value = callable_value?;
             let signature =
@@ -2408,7 +2656,10 @@ fn lower_call<'db>(
             }
             ResolvedRef::Function { id } => {
                 let name = id.path(builder.ctx.db);
-                let call = named_call(builder, location, name.clone(), values, position);
+                let (declared, args, _) = named_signature
+                    .as_ref()
+                    .expect("a named callee has a signature");
+                let call = named_call(builder, location, name, declared, args, values, position);
                 finish_call(
                     builder,
                     location,
@@ -2485,11 +2736,12 @@ fn lower_lambda<'db>(
     let TypeKind::Func {
         params: signature_params,
         result: signature_result,
-        ..
+        effect,
     } = signature.function_type.kind(builder.db())
     else {
         panic!("solved logical lambda signature is not a function type");
     };
+    let own_row = builder.ctx.ability_row(*effect);
     let param_types = signature_params
         .iter()
         .map(|ty| builder.ctx.convert_logical_type(builder.ir, *ty))
@@ -2501,22 +2753,26 @@ fn lower_lambda<'db>(
         .ctx
         .calling_convention_for_type(signature.function_type)
         .expect("solved logical lambda signature is a function type");
-    let convention = expected_ty
+    let (row, convention) = expected_ty
         .and_then(|expected_ty| {
             let expected = tribute_control::FuncSig::from_type_ref(builder.ir, expected_ty)?;
-            let expected_convention =
-                tribute_control::func_sig_convention(builder.ir, expected_ty)?;
+            let expected_convention = expected.convention(builder.ir);
             (expected.result(builder.ir) == result_type
                 && expected.inputs(builder.ir) == param_types
                 && expected_convention >= control_convention(row_convention))
-            .then_some(expected_convention)
+            .then(|| (expected.row(builder.ir), expected_convention))
         })
-        .map(|convention| match convention {
-            tribute_control::CallingConvention::Direct => CallingConvention::Direct,
-            tribute_control::CallingConvention::EvidenceDirect => CallingConvention::EvidenceDirect,
-            tribute_control::CallingConvention::Cps => CallingConvention::Cps,
+        .map(|(row, convention)| {
+            let convention = match convention {
+                tribute_control::CallingConvention::Direct => CallingConvention::Direct,
+                tribute_control::CallingConvention::EvidenceDirect => {
+                    CallingConvention::EvidenceDirect
+                }
+                tribute_control::CallingConvention::Cps => CallingConvention::Cps,
+            };
+            (row, convention)
         })
-        .unwrap_or(row_convention);
+        .unwrap_or((own_row, row_convention));
     let entry = builder.ir.create_block(BlockData {
         location,
         args: param_types
@@ -2566,7 +2822,7 @@ fn lower_lambda<'db>(
         parent_op: None,
     });
     let captures = local_callables::captures(builder.ctx, builder.ir, region);
-    let callable = func_sig_type(builder.ir, result_type, param_types, convention);
+    let callable = func_sig_type(builder.ir, result_type, param_types, &row, convention);
     let lambda = op(
         builder.ir,
         builder.block,

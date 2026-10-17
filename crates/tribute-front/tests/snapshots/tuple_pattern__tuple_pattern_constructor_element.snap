@@ -9,7 +9,7 @@ core.module @test {
   !__logical_tuple_tuple_2_14_named_1_4_Item_10_coreZ2ei32_1 = adt.typeref<{name = "__logical_tuple_tuple_2_14_named_1_4_Item_10_coreZ2ei32"}>
 
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
-  tribute_control.func @first(%0: !__logical_tuple_tuple_2_14_named_1_4_Item_10_coreZ2ei32_1) -> core.i32 convention(direct) {
+  tribute_control.func @first(%0: !__logical_tuple_tuple_2_14_named_1_4_Item_10_coreZ2ei32_1) -> core.i32 row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
       %1 = adt.struct_get %0 {field = 0, type = !__logical_tuple_tuple_2_14_named_1_4_Item_10_coreZ2ei32} : !Item_1
       %2 = adt.variant_is %1 {tag = "Number", type = !Item} : core.i1
       %3 = scf.if %2 : core.i1 {

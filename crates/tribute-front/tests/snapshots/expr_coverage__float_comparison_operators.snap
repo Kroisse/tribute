@@ -13,7 +13,7 @@ core.module @test {
   tribute_control.func @"std::Float::<="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
   tribute_control.func @"std::Float::>"(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
   tribute_control.func @"std::Float::>="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
-  tribute_control.func @comparisons(%0: core.f64, %1: core.f64) -> !__logical_tuple_tuple_6_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_1 convention(direct) {
+  tribute_control.func @comparisons(%0: core.f64, %1: core.f64) -> !__logical_tuple_tuple_6_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_1 row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
       %2 = tribute_control.call %0, %1 {callee = @"std::Float::=="} : core.i1
       %3 = tribute_control.call %0, %1 {callee = @"std::Float::!="} : core.i1
       %4 = tribute_control.call %0, %1 {callee = @"std::Float::<"} : core.i1

@@ -274,6 +274,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             .collect(),
         node_types: mono.metadata.node_types.into_iter().collect(),
         local_instances: mono.metadata.local_instances.into_iter().collect(),
+        function_instances: mono.metadata.function_instances.into_iter().collect(),
         ability_conventions: tribute_front::monomorphize::ability_conventions(
             checked.ability_definitions(db),
         ),
@@ -381,6 +382,7 @@ fn lower_specialized_source(
             .collect(),
         node_types: mono.metadata.node_types.into_iter().collect(),
         local_instances: mono.metadata.local_instances.into_iter().collect(),
+        function_instances: mono.metadata.function_instances.into_iter().collect(),
         ability_conventions: tribute_front::monomorphize::ability_conventions(
             checked.ability_definitions(db),
         ),
@@ -439,6 +441,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .iter()
             .cloned()
             .collect(),
+        function_instances: checked.expression_types(db).function_instances.clone(),
         span_map: checked.span_map(db),
         function_types: checked.function_types(db).iter().cloned().collect(),
         constructor_types: checked

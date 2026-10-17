@@ -8,6 +8,7 @@ use rustc_hash::FxHashSet as HashSet;
 use std::ops::{Deref, DerefMut};
 
 use tribute_ir::dialect::adt;
+use tribute_ir::dialect::tribute_control::{Row, RowBinder, RowUnion};
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
@@ -16,6 +17,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::refs::{BlockRef, OpRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
+use super::row_binders::RowBinders;
 use crate::SortedMap;
 use crate::ast::{
     AbilityId, CallingConvention, CtorId, LocalId, NodeId, RowClasses, RowVar, SpanMap, TypeKind,
@@ -57,7 +59,15 @@ fn logical_convention_key(convention: CallingConvention) -> String {
 pub(crate) struct LogicalGeneratedSignature {
     pub param_types: Vec<TypeRef>,
     pub return_type: TypeRef,
+    pub row: Row,
+    pub binders: Vec<RowBinder>,
     pub convention: CallingConvention,
+}
+
+/// The definition scope [`IrLoweringCtx::enter_definition`] replaced.
+pub(crate) struct DefinitionScope {
+    classes: Vec<(RowVar, CallingConvention)>,
+    binders: RowBinders,
 }
 
 /// Context for lowering AST to arena TrunkIR.
@@ -118,6 +128,10 @@ pub struct IrLoweringCtx<'db> {
     row_classes: HashMap<SymbolPath, Vec<(RowVar, CallingConvention)>>,
     /// The classes of the definition whose types are being read.
     current_row_classes: Vec<(RowVar, CallingConvention)>,
+    /// The row binders of each function definition of the module.
+    row_binders: HashMap<SymbolPath, RowBinders>,
+    /// The row binders of the definition whose types are being read.
+    current_row_binders: RowBinders,
     /// The `==` functions that `String` and `Bytes` literal patterns call.
     literal_equalities: LiteralEqualities,
     /// Node types from type checking, keyed by NodeId.
@@ -171,6 +185,8 @@ impl<'db> IrLoweringCtx<'db> {
             compiler_intrinsics: HashMap::default(),
             row_classes: HashMap::default(),
             current_row_classes: Vec::new(),
+            row_binders: HashMap::default(),
+            current_row_binders: Vec::new(),
             literal_equalities: LiteralEqualities::default(),
 
             node_types,
@@ -198,15 +214,100 @@ impl<'db> IrLoweringCtx<'db> {
         self.row_classes.get(name).map_or(&[], Vec::as_slice)
     }
 
-    /// Read types as the definition `name` sees them, and return the classes
+    /// Read types as the definition `name` sees them, and return the scope
     /// to restore with [`Self::leave_definition`].
-    pub(crate) fn enter_definition(&mut self, name: &[Symbol]) -> Vec<(RowVar, CallingConvention)> {
+    pub(crate) fn enter_definition(&mut self, name: &[Symbol]) -> DefinitionScope {
         let classes = self.row_classes.get(name).cloned().unwrap_or_default();
-        std::mem::replace(&mut self.current_row_classes, classes)
+        let binders = self.row_binders_of(name);
+        DefinitionScope {
+            classes: std::mem::replace(&mut self.current_row_classes, classes),
+            binders: std::mem::replace(&mut self.current_row_binders, binders),
+        }
     }
 
-    pub(crate) fn leave_definition(&mut self, outer: Vec<(RowVar, CallingConvention)>) {
-        self.current_row_classes = outer;
+    pub(crate) fn leave_definition(&mut self, outer: DefinitionScope) {
+        self.current_row_classes = outer.classes;
+        self.current_row_binders = outer.binders;
+    }
+
+    /// Record the row binders of the function definition `name`.
+    pub(crate) fn register_row_binders(&mut self, name: SymbolPath, binders: RowBinders) {
+        self.row_binders.insert(name, binders);
+    }
+
+    /// The row binders of the function `name`; those its scheme quantifies
+    /// when it has no definition in the module.
+    pub(crate) fn row_binders_of(&self, name: &[Symbol]) -> RowBinders {
+        self.row_binders.get(name).cloned().unwrap_or_else(|| {
+            self.lookup_function_type(name)
+                .map(|scheme| super::row_binders::of_scheme(self.db, *scheme))
+                .unwrap_or_default()
+        })
+    }
+
+    /// The row binders of the definition whose types are being read.
+    pub(crate) fn current_row_binders(&self) -> &RowBinders {
+        &self.current_row_binders
+    }
+
+    /// The IR row of `row` in the current definition.
+    ///
+    /// # Panics
+    ///
+    /// If the row's tail is not a binder of the current definition.
+    pub(crate) fn ability_row(&self, row: crate::ast::AbilityRow<'db>) -> Row {
+        let instances = row
+            .instances(self.db)
+            .iter()
+            .map(|effect| self.ability_symbol(&effect.ability_id.qualified(self.db), &effect.args));
+        // A module-level type, such as a nominal field's callable, has no
+        // binder to name its tail.
+        let tail = row
+            .rest(self.db)
+            .filter(|_| !self.current_row_binders.is_empty())
+            .map(|variable| {
+                let index = self
+                    .current_row_binders
+                    .iter()
+                    .position(|(bound, _)| *bound == variable)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "row variable {} has no binder in the current definition",
+                            variable.id
+                        )
+                    });
+                u32::try_from(index).expect("row binder index fits u32")
+            });
+        Row::new(instances, tail)
+    }
+
+    /// The tail unions `scheme` declares, numbered by the current binders.
+    /// Only a union of several open sources selects evidence by tail.
+    pub(crate) fn row_unions(&self, scheme: TypeScheme<'db>) -> Vec<RowUnion> {
+        let index = |variable: RowVar| {
+            self.current_row_binders
+                .iter()
+                .position(|(bound, _)| *bound == variable)
+                .and_then(|index| u32::try_from(index).ok())
+        };
+        scheme
+            .row_unions(self.db)
+            .iter()
+            .filter_map(|union| {
+                let result = union.result.rest(self.db)?;
+                let sources: Vec<_> = union
+                    .sources
+                    .iter()
+                    .filter_map(|source| source.rest(self.db))
+                    .filter(|source| *source != result)
+                    .map(index)
+                    .collect::<Option<_>>()?;
+                (sources.len() > 1).then_some(RowUnion {
+                    result: index(result)?,
+                    sources,
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn with_source_paths(mut self, source_paths: HashMap<u64, PathRef>) -> Self {
@@ -335,15 +436,8 @@ impl<'db> IrLoweringCtx<'db> {
     pub(crate) fn register_logical_generated_signature(
         &mut self,
         name: &SymbolPath,
-        param_types: Vec<TypeRef>,
-        return_type: TypeRef,
-        convention: CallingConvention,
+        signature: LogicalGeneratedSignature,
     ) {
-        let signature = LogicalGeneratedSignature {
-            param_types,
-            return_type,
-            convention,
-        };
         if let Some(existing) = self
             .logical_generated_signatures
             .insert(name.clone(), signature.clone())
@@ -351,6 +445,8 @@ impl<'db> IrLoweringCtx<'db> {
             assert!(
                 existing.param_types == signature.param_types
                     && existing.return_type == signature.return_type
+                    && existing.row == signature.row
+                    && existing.binders == signature.binders
                     && existing.convention == signature.convention,
                 "conflicting logical generated signature for {name}"
             );
@@ -519,6 +615,11 @@ impl<'db> IrLoweringCtx<'db> {
         }
     }
 
+    /// The type of every node, from type checking.
+    pub(crate) fn node_types(&self) -> &SortedMap<NodeId, crate::ast::Type<'db>> {
+        &self.node_types
+    }
+
     pub fn get_node_type(&self, node_id: NodeId) -> Option<&crate::ast::Type<'db>> {
         self.node_types.get(&node_id)
     }
@@ -568,7 +669,11 @@ impl<'db> IrLoweringCtx<'db> {
                 self.adt_typeref(ir, &id.qualified(self.db))
             }
             TypeKind::Named { .. } => self.anyref_type(ir),
-            TypeKind::Func { params, result, .. } => {
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
                 let params = params
                     .iter()
                     .map(|param| self.convert_logical_type(ir, *param))
@@ -577,10 +682,11 @@ impl<'db> IrLoweringCtx<'db> {
                 let convention = self
                     .calling_convention_for_type(ty)
                     .unwrap_or(crate::ast::CallingConvention::Cps);
-                tribute_ir::dialect::tribute_control::func_sig(
+                tribute_ir::dialect::tribute_control::func_sig_with_row(
                     ir,
                     result,
                     params,
+                    &self.ability_row(*effect),
                     match convention {
                         crate::ast::CallingConvention::Direct => {
                             tribute_ir::dialect::tribute_control::CallingConvention::Direct
@@ -1248,18 +1354,26 @@ mod tests {
         let generated = SymbolPath::new(["Forward", "value"]);
         ctx.register_logical_generated_signature(
             &generated,
-            vec![i32_ty],
-            i32_ty,
-            CallingConvention::Direct,
+            LogicalGeneratedSignature {
+                param_types: vec![i32_ty],
+                return_type: i32_ty,
+                row: Row::default(),
+                binders: vec![],
+                convention: CallingConvention::Direct,
+            },
         );
         // Re-registering the exact semantic signature is a deterministic
         // no-op; a conflicting signature remains fail-closed in the lowering
         // context rather than being silently replaced.
         ctx.register_logical_generated_signature(
             &generated,
-            vec![i32_ty],
-            i32_ty,
-            CallingConvention::Direct,
+            LogicalGeneratedSignature {
+                param_types: vec![i32_ty],
+                return_type: i32_ty,
+                row: Row::default(),
+                binders: vec![],
+                convention: CallingConvention::Direct,
+            },
         );
         let generated_signature = ctx
             .lookup_logical_generated_signature(&generated)

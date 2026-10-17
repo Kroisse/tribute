@@ -6,15 +6,15 @@ core.module @test {
   !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32 = adt.struct<__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32("0": core.i32, "1": core.i32)>
   !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1 = adt.typeref<{name = "__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32"}>
 
-  tribute_control.func @make_pair(%0: core.i32, %1: core.i32) -> !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1 convention(direct) {
+  tribute_control.func @make_pair(%0: core.i32, %1: core.i32) -> !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1 row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
       %2 = adt.struct_new %0, %1 {type = !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32} : !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1
       tribute_control.return %2
   }
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
-  tribute_control.func @test() -> core.i32 convention(direct) {
+  tribute_control.func @test() -> core.i32 row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
       %0 = arith.const {value = 10} : core.i32
       %1 = arith.const {value = 20} : core.i32
-      %2 = tribute_control.call %0, %1 {callee = @make_pair} : !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1
+      %2 = tribute_control.call %0, %1 {callee = @make_pair, row_args = [{tail = 0}]} : !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1
       %3 = adt.struct_get %2 {field = 0, type = !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32} : core.i32
       %4 = adt.struct_get %2 {field = 1, type = !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32} : core.i32
       %5 = tribute_control.call %3, %4 {callee = @"std::Nat::+"} : core.i32
