@@ -165,7 +165,7 @@ fn main() -> Nil {
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
     assert!(
-        main.starts_with(") -> core.nil convention(direct)"),
+        main.starts_with(") -> core.nil row(| 0) convention(direct)"),
         "{main}"
     );
     assert!(main.contains("callee = @\"apply$9D\""), "{main}");
@@ -219,7 +219,7 @@ fn main() ->{Io} Nil {
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("each");
     assert!(
-        each.starts_with("%0: core.i32) -> core.i32 convention(direct)"),
+        each.starts_with("%0: core.i32) -> core.i32 row(| 0) convention(direct)"),
         "{each}"
     );
     assert!(
@@ -262,7 +262,7 @@ fn main() -> Nil {
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("the Direct instance");
     assert!(
-        instance.starts_with("%0: core.i32) -> core.i32 convention(direct)"),
+        instance.starts_with("%0: core.i32) -> core.i32 row(| 0) convention(direct)"),
         "{instance}"
     );
     assert!(
@@ -330,7 +330,7 @@ fn main() ->{Io} Nil {
     assert!(!run.contains("callee = @\"m::app\"}"), "{run}");
     let each = function("m::each");
     assert!(
-        each.starts_with("%0: core.i32) -> core.i32 convention(direct)"),
+        each.starts_with("%0: core.i32) -> core.i32 row(| 0) convention(direct)"),
         "{each}"
     );
     assert!(

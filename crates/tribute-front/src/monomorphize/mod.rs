@@ -1,5 +1,7 @@
 pub mod collect;
 mod instance;
+
+pub(crate) use instance::collect_ability_argument_tails;
 mod local;
 pub mod mangle;
 mod nominal;

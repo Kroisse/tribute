@@ -3,9 +3,9 @@ source: crates/tribute-front/tests/lambda_effect_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.func_sig<() -> core.i32, {tribute.calling_convention = 2}>
+  !t0 = tribute_control.func_sig<() -> core.i32, {ability_row = {instances = [@ability_2_5_State_3_int]}, tribute.calling_convention = 2}>
 
-  tribute_control.func @run_with_state(%0: !t0) -> core.i32 convention(direct) {
+  tribute_control.func @run_with_state(%0: !t0) -> core.i32 row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
       %1 = tribute_control.handle : core.i32 {
           %2 = tribute_control.call_indirect %0 : core.i32
           tribute_control.yield %2
@@ -28,12 +28,12 @@ core.module @test {
       }
       tribute_control.return %1
   }
-  tribute_control.func @main() -> core.i32 convention(direct) {
-      %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
+  tribute_control.func @main() -> core.i32 row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
+      %0 = tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_int) convention(cps) captures [] {
           %1 = tribute_control.perform {ability = @ability_2_5_State_3_int, op_name = "get", operation_kind = "op"} : core.i32
           tribute_control.return %1
       }
-      %2 = tribute_control.call %0 {callee = @run_with_state} : core.i32
+      %2 = tribute_control.call %0 {callee = @run_with_state, row_args = [{tail = 0}]} : core.i32
       tribute_control.return %2
   }
   ability.decl {sym_name = "ability_2_5_State_3_int"} {

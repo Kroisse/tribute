@@ -10,6 +10,7 @@ mod logical;
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_ir::dialect::tribute_control;
+use tribute_ir::dialect::tribute_control::{Row, RowBinder, RowUnion};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -26,6 +27,10 @@ use crate::ast::{CallingConvention, CtorId, NodeId, ResolvedRef, TypeKind};
 pub(super) struct FuncSignature {
     pub param_types: Vec<TypeRef>,
     pub return_type: TypeRef,
+    /// The callable's row, in its own binders.
+    pub row: Row,
+    pub binders: Vec<RowBinder>,
+    pub unions: Vec<RowUnion>,
     pub convention: CallingConvention,
 }
 
@@ -50,21 +55,104 @@ impl FuncSignature {
             return Some(Self {
                 param_types: signature.param_types.clone(),
                 return_type: signature.return_type,
+                row: signature.row.clone(),
+                binders: signature.binders.clone(),
+                unions: vec![],
                 convention: signature.convention,
             });
         }
         let scheme = *ctx.lookup_function_type(name)?;
         let body = scheme.body(ctx.db);
         match body.kind(ctx.db) {
-            TypeKind::Func { params, result, .. } => Some(Self {
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => Some(Self {
                 param_types: params
                     .iter()
                     .map(|ty| ctx.convert_logical_type(ir, *ty))
                     .collect(),
                 return_type: ctx.convert_logical_type(ir, *result),
+                row: ctx.ability_row(*effect),
+                binders: ctx
+                    .current_row_binders()
+                    .iter()
+                    .map(|(_, binder)| *binder)
+                    .collect(),
+                unions: ctx.row_unions(scheme),
                 convention: ctx.calling_convention_for_type(body)?,
             }),
             _ => None,
+        }
+    }
+
+    /// This signature as a reference passing the row arguments `args` sees
+    /// it, in the referring definition's binders.
+    pub fn instantiate(&self, ir: &mut IrContext, args: &[Row]) -> Self {
+        let mut substitute = |ty| {
+            tribute_control::substitute_rows(ir, ty, args)
+                .expect("a signature's row tails name its quantified binders")
+        };
+        Self {
+            param_types: self.param_types.iter().map(|ty| substitute(*ty)).collect(),
+            return_type: substitute(self.return_type),
+            row: self
+                .row
+                .substitute(args)
+                .expect("a signature's row tail names a quantified binder"),
+            binders: vec![],
+            unions: vec![],
+            convention: self.convention,
+        }
+    }
+
+    /// The `row_args` attribute passing `args`, absent when there are none.
+    pub fn row_args_attribute(
+        ir: &mut IrContext,
+        args: &[Row],
+    ) -> Option<trunk_ir::types::Attribute> {
+        (!args.is_empty()).then(|| {
+            trunk_ir::types::Attribute::List(args.iter().map(|row| row.to_attribute(ir)).collect())
+        })
+    }
+
+    /// The logical callable type of this signature.
+    pub fn callable_type(&self, ir: &mut IrContext) -> TypeRef {
+        tribute_control::func_sig_with_row(
+            ir,
+            self.return_type,
+            self.param_types.iter().copied(),
+            &self.row,
+            logical::control_convention(self.convention),
+        )
+        .as_type_ref()
+    }
+
+    /// Mark `function`, a declaration or definition of this signature, with
+    /// its row binders and unions.
+    pub fn attach_rows(&self, ir: &mut IrContext, function: trunk_ir::refs::OpRef) {
+        if !self.binders.is_empty() {
+            let binders: Vec<_> = self
+                .binders
+                .iter()
+                .map(|binder| ir.string_attr(binder.keyword()))
+                .collect();
+            ir.op_attrs_mut(function).insert(
+                tribute_control::ROW_BINDERS_ATTR,
+                trunk_ir::types::Attribute::List(binders),
+            );
+        }
+        if !self.unions.is_empty() {
+            let unions: Vec<_> = self
+                .unions
+                .iter()
+                .map(|union| union.to_attribute(ir))
+                .collect();
+            ir.op_attrs_mut(function).insert(
+                tribute_control::ROW_UNIONS_ATTR,
+                trunk_ir::types::Attribute::List(unions),
+            );
         }
     }
 }
@@ -147,16 +235,26 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         let target = tribute_control::FuncSig::from_type_ref(self.ir, target_ty)?;
         if target.result(self.ir) != source.result(self.ir)
             || target.inputs(self.ir) != source.inputs(self.ir)
-            || tribute_control::func_sig_convention(self.ir, target_ty)
-                < tribute_control::func_sig_convention(self.ir, self.ir.value_ty(value))
+            || !target.row(self.ir).includes(&source.row(self.ir))
+            || target.convention(self.ir) < source.convention(self.ir)
         {
             return None;
         }
         let function = named.func_ref(self.ir).clone();
+        let row_args = self
+            .ir
+            .op_attrs(producer)
+            .get(tribute_control::ROW_ARGS_ATTR)
+            .cloned();
         let reference = tribute_control::FuncRef::operands()
             .func_ref(function)
             .results(target_ty)
             .build(self.ir, location);
+        if let Some(row_args) = row_args {
+            self.ir
+                .op_attrs_mut(reference.op_ref())
+                .insert(tribute_control::ROW_ARGS_ATTR, row_args);
+        }
         self.ir.push_op(self.block, reference.op_ref());
         if let Some(path) = self.ctx.function_ref_path(producer).cloned() {
             self.ctx.record_function_ref(reference.op_ref(), path);

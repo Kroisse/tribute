@@ -314,13 +314,13 @@ fn logical_root_main_preserves_pure_and_io_conventions(db: &salsa::DatabaseImpl)
     let pure = SourceCst::from_source_str(db, "pure.trb", "fn main() -> Nil { }");
     let pure_ir = run_ast_pipeline_with_ir(db, pure);
     assert!(
-        pure_ir.contains("tribute_control.func @main() -> core.nil convention(direct)"),
+        pure_ir.contains("tribute_control.func @main() -> core.nil row(| 0) convention(direct)"),
         "pure root main must be direct:\n{pure_ir}"
     );
     let io = SourceCst::from_source_str(db, "io.trb", "fn main() ->{std::io::Io} Nil { Nil }");
     let io_ir = run_ast_pipeline_with_ir(db, io);
     assert!(
-        io_ir.contains("tribute_control.func @main() -> core.nil convention(evidence_direct)"),
+        io_ir.contains("tribute_control.func @main() -> core.nil row(@\"ability_1_11_std::io::Io\") convention(evidence_direct)"),
         "Io root main must preserve EvidenceDirect:\n{io_ir}"
     );
 }
@@ -344,7 +344,9 @@ fn main() -> Nil { }
     );
     let ir_text = run_ast_pipeline_with_ir(db, source);
     assert!(
-        ir_text.contains("tribute_control.func @\"Nested::main\"() -> core.i32 convention(cps)"),
+        ir_text.contains(
+            "tribute_control.func @\"Nested::main\"() -> core.i32 row(@ability_1_5_State) convention(cps)"
+        ),
         "nested main must preserve its ordinary checker-selected CPS convention:\n{ir_text}"
     );
 }
