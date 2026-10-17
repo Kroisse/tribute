@@ -119,6 +119,20 @@ impl Row {
         )
     }
 
+    /// Whether a callable of this row may stand for one of `other`: it names
+    /// every instance `other` names, as often, over the same tail if
+    /// `other` has one. Both rows' instances are in canonical order.
+    pub fn includes(&self, other: &Row) -> bool {
+        if other.tail.is_some() && other.tail != self.tail {
+            return false;
+        }
+        let mut remaining = self.instances.iter();
+        other
+            .instances
+            .iter()
+            .all(|instance| remaining.any(|candidate| candidate == instance))
+    }
+
     /// This row with its tail replaced by the row argument it names, or
     /// `None` when the tail names no argument.
     pub fn substitute(&self, args: &[Row]) -> Option<Self> {

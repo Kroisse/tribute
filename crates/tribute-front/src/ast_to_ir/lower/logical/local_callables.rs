@@ -43,7 +43,7 @@ impl<'db> Plan<'db> {
                             ExprKind::Var(reference) => {
                                 match reference.resolved {
                                     ResolvedRef::Function { id } => {
-                                        named.insert(*local, id);
+                                        named.insert(*local, (id, value.id));
                                     }
                                     ResolvedRef::Local { id, .. } => {
                                         if let Some(function) = named.get(&id).copied() {
@@ -73,12 +73,11 @@ impl<'db> Plan<'db> {
                 let parameters = match &*callee.kind {
                     ExprKind::Var(reference) => match reference.resolved {
                         ResolvedRef::Function { id } => {
-                            FuncSignature::lookup_logical(ctx, ir, id.path(ctx.db))
-                                .map(|signature| signature.param_types)
+                            instantiated_parameters(ctx, ir, declarations, id, callee.id)
                         }
                         ResolvedRef::Local { id, .. } if named.contains_key(&id) => {
-                            FuncSignature::lookup_logical(ctx, ir, named[&id].path(ctx.db))
-                                .map(|signature| signature.param_types)
+                            let (function, reference) = named[&id];
+                            instantiated_parameters(ctx, ir, declarations, function, reference)
                         }
                         _ => match reference.ty.kind(ctx.db) {
                             TypeKind::Func { params, .. } => Some(
@@ -447,4 +446,18 @@ pub(super) fn captures(
         .chain(uses)
         .filter(|value| external.contains(value) && seen.insert(*value))
         .collect()
+}
+
+/// The parameter types of `function` as the reference `reference` sees them.
+fn instantiated_parameters<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    declarations: &Declarations<'db>,
+    function: crate::ast::FuncDefId<'db>,
+    reference: NodeId,
+) -> Option<Vec<trunk_ir::refs::TypeRef>> {
+    let name = function.path(ctx.db).clone();
+    let declared = FuncSignature::lookup_logical(ctx, ir, &name)?;
+    let args = super::RowArguments::Instance(reference).rows(ctx, declarations, &name, &declared);
+    Some(declared.instantiate(ir, &args).param_types)
 }

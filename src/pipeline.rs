@@ -618,6 +618,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
         ast_to_ir::TypedModule {
             ast: typed.module(db).clone(),
             local_instances: typed.expression_types(db).local_instances.clone(),
+            function_instances: typed.expression_types(db).function_instances.clone(),
             span_map: typed.span_map(db).clone(),
             function_types: typed.function_types(db).iter().cloned().collect(),
             constructor_types: typed

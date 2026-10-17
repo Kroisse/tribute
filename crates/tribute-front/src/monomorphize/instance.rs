@@ -530,7 +530,7 @@ fn collect_callable_tails<'db>(
 
 /// Collect the row variables that occur inside an ability argument of a row
 /// anywhere in `ty`.
-fn collect_ability_argument_tails<'db>(
+pub(crate) fn collect_ability_argument_tails<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     excluded: &mut HashSet<RowVar>,

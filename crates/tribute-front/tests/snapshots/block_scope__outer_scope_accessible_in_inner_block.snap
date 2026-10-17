@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/block_scope.rs
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @example() -> core.i32 convention(direct) {
+  tribute_control.func @example() -> core.i32 row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
       %0 = arith.const {value = 10} : core.i32
       tribute_control.return %0
   }

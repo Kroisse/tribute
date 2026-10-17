@@ -26,6 +26,7 @@
 
 mod context;
 mod lower;
+mod row_binders;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -151,6 +152,8 @@ pub struct TypedModule<'db> {
     pub specialized_enum_variants: SortedMap<NodeId, TypeScheme<'db>>,
     pub node_types: SortedMap<NodeId, Type<'db>>,
     pub local_instances: SortedMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    /// The instance each reference to a generic function selects.
+    pub function_instances: SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
     pub ability_definitions: HashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
     pub handler_operations: SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,

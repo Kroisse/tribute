@@ -392,7 +392,9 @@ fn main() -> Nat {
     let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_eq!(
         ir_text
-            .match_indices("tribute_control.lambda() -> core.i32 convention(cps)")
+            .match_indices(
+                "tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_nat | 0) convention(cps)"
+            )
             .count(),
         4,
         "every direct or wrapped generic State operation lambda must retain the same solved signature:\n{ir_text}"
