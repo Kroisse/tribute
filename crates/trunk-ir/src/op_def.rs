@@ -2,12 +2,13 @@
 //!
 //! An [`OpDef`] bundles everything the dialect macro registers for one
 //! operation: its declarative [`OpSchema`] and the hooks the declaration
-//! opts into, such as `#[verify]`. Definitions are registered by operation
+//! opts into, such as `#[verify]` and `#[asm_format]`. Definitions are registered by operation
 //! name so that verification and other tooling can look them up for any
 //! operation.
 
 use std::sync::LazyLock;
 
+use crate::asm_format::OpAsmHooks;
 use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
 use crate::op_schema::{OpSchema, SchemaViolation};
 use crate::{IrContext, OpRef};
@@ -32,6 +33,9 @@ pub struct OpDef {
     /// Calls the wrapper's [`Verify`](crate::ops::Verify) impl for
     /// `#[verify]` operations.
     pub verifier: Option<OpVerifier>,
+    /// Calls the wrapper's [`OpAsmFormat`](crate::asm_format::OpAsmFormat) impl
+    /// for `#[asm_format]` operations.
+    pub asm_format: Option<OpAsmHooks>,
 }
 
 /// An operation-local verifier generated from `#[verify]`.
@@ -111,6 +115,14 @@ mod tests {
         assert_eq!((def.schema.dialect, def.schema.name), ("func", "return"));
         assert_eq!(def.schema.operands[0].arity, Arity::Variadic);
         assert!(OpDef::lookup("func.no_such_op").is_none());
+    }
+
+    #[test]
+    fn asm_format_operations_carry_their_hooks() {
+        let func = OpDef::lookup("func.func").expect("func.func should be registered");
+        assert!(func.asm_format.is_some());
+        let ret = OpDef::lookup("func.return").expect("func.return should be registered");
+        assert!(ret.asm_format.is_none());
     }
 
     #[test]
