@@ -250,20 +250,23 @@ pub enum StructTypeError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Struct(TypeRef);
 
-impl Struct {
+impl trunk_ir::type_verifier::VerifyType for Struct {
     /// Validate a name-matching `adt.struct`.
-    pub fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, StructTypeError> {
+    fn verify(
+        ctx: &IrContext,
+        ty: TypeRef,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
         if ctx.type_attrs(ty).contains_key("fields") {
-            return Err(StructTypeError::FieldsAttribute);
+            return Err(StructTypeError::FieldsAttribute.into());
         }
         if ctx
             .type_attrs(ty)
             .get_string_ref(STRUCT_NAME_ATTR)
             .is_none()
         {
-            return Err(StructTypeError::MissingName);
+            return Err(StructTypeError::MissingName.into());
         }
         let mut names: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
         for index in 0..data.params.len() {
@@ -273,15 +276,15 @@ impl Struct {
                 .get_string_ref(STRUCT_NAME_ATTR)
                 .ok_or(StructTypeError::MissingFieldName(index))?;
             if names.contains(&name) {
-                return Err(StructTypeError::DuplicateFieldName(
-                    ctx.str(name).to_owned(),
-                ));
+                return Err(StructTypeError::DuplicateFieldName(ctx.str(name).to_owned()).into());
             }
             names.push(name);
         }
         Ok(Self(ty))
     }
+}
 
+impl Struct {
     pub fn as_type_ref(self) -> TypeRef {
         self.0
     }
@@ -389,11 +392,9 @@ fn field_name(ctx: &IrContext, attrs: &AttributeMap) -> StringRef {
         .expect("validated adt.struct fields must retain their names")
 }
 
-static STRUCT_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
-    verifier: Some(<Struct as trunk_ir::type_verifier::VerifyType>::verify),
-    asm_format: Some(trunk_ir::asm_format::TypeAsmHooks::of::<Struct>()),
-    ..trunk_ir::TypeDef::new("adt.struct")
-};
+static STRUCT_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new("adt.struct")
+    .with_verifier::<Struct>()
+    .with_asm_format::<Struct>();
 
 inventory::submit! {
     trunk_ir::type_def::TypeDefRegistration(&STRUCT_DEF)
@@ -406,19 +407,11 @@ impl DialectType for Struct {
         if !Self::matches(ctx, ty) {
             return None;
         }
-        Self::validate(ctx, ty).ok()
+        <Self as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty).ok()
     }
 
     fn as_type_ref(&self) -> TypeRef {
         self.0
-    }
-}
-
-impl trunk_ir::type_verifier::VerifyType for Struct {
-    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<(), String> {
-        Struct::validate(ctx, ty)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
     }
 }
 
@@ -645,35 +638,38 @@ pub enum EnumTypeError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Enum(TypeRef);
 
-impl Enum {
+impl trunk_ir::type_verifier::VerifyType for Enum {
     /// Validate a name-matching `adt.enum`.
-    pub fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, EnumTypeError> {
+    fn verify(
+        ctx: &IrContext,
+        ty: TypeRef,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
         let attrs = ctx.type_attrs(ty);
         if attrs.contains_key("variants") {
-            return Err(EnumTypeError::VariantsAttribute);
+            return Err(EnumTypeError::VariantsAttribute.into());
         }
         // The syntax has no place for them, so printing would drop them.
         if attrs.contains_key(PARAM_ATTRS_ATTR) {
-            return Err(EnumTypeError::VariantAttributes);
+            return Err(EnumTypeError::VariantAttributes.into());
         }
         if attrs.get_string_ref(STRUCT_NAME_ATTR).is_none() {
-            return Err(EnumTypeError::MissingName);
+            return Err(EnumTypeError::MissingName.into());
         }
         let mut names: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
         for (index, &variant) in data.params.iter().enumerate() {
             let name = variant_name(ctx, variant).ok_or(EnumTypeError::MalformedVariant(index))?;
             if names.contains(&name) {
-                return Err(EnumTypeError::DuplicateVariantName(
-                    ctx.str(name).to_owned(),
-                ));
+                return Err(EnumTypeError::DuplicateVariantName(ctx.str(name).to_owned()).into());
             }
             names.push(name);
         }
         Ok(Self(ty))
     }
+}
 
+impl Enum {
     pub fn as_type_ref(self) -> TypeRef {
         self.0
     }
@@ -763,11 +759,9 @@ fn variant_name(ctx: &IrContext, variant: TypeRef) -> Option<StringRef> {
         .flatten()
 }
 
-static ENUM_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
-    verifier: Some(<Enum as trunk_ir::type_verifier::VerifyType>::verify),
-    asm_format: Some(trunk_ir::asm_format::TypeAsmHooks::of::<Enum>()),
-    ..trunk_ir::TypeDef::new("adt.enum")
-};
+static ENUM_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new("adt.enum")
+    .with_verifier::<Enum>()
+    .with_asm_format::<Enum>();
 
 inventory::submit! {
     trunk_ir::type_def::TypeDefRegistration(&ENUM_DEF)
@@ -780,19 +774,11 @@ impl DialectType for Enum {
         if !Self::matches(ctx, ty) {
             return None;
         }
-        Self::validate(ctx, ty).ok()
+        <Self as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty).ok()
     }
 
     fn as_type_ref(&self) -> TypeRef {
         self.0
-    }
-}
-
-impl trunk_ir::type_verifier::VerifyType for Enum {
-    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<(), String> {
-        Enum::validate(ctx, ty)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
     }
 }
 
@@ -832,7 +818,8 @@ pub fn enum_type<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
         builder = builder.attr(key, value);
     }
     let ty = builder.intern(ctx);
-    Enum::validate(ctx, ty).unwrap_or_else(|error| panic!("adt.enum: {error}"))
+    <Enum as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty)
+        .unwrap_or_else(|error| panic!("adt.enum: {error}"))
 }
 
 // === Textual syntax: `adt.enum<Name { Variant(field: type, ...), ... }, {attrs}>` ===

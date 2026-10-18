@@ -620,8 +620,10 @@ mod tests {
 
                 let missing = sig(&mut ctx, &[i32], &[(NUM_INPUTS_ATTR, Attribute::Int(1))]);
                 assert_eq!(
-                    FuncSig::validate(&ctx, missing),
-                    Err(FuncSigTypeError::MissingCount(NUM_RESULTS_ATTR)),
+                    <FuncSig as crate::type_verifier::VerifyType>::verify(&ctx, missing)
+                        .err()
+                        .and_then(|error| error.downcast_ref::<FuncSigTypeError>().copied()),
+                    Some(FuncSigTypeError::MissingCount(NUM_RESULTS_ATTR)),
                     "{dialect}"
                 );
 
@@ -637,8 +639,10 @@ mod tests {
                     ],
                 );
                 assert_eq!(
-                    FuncSig::validate(&ctx, wrong_kind),
-                    Err(FuncSigTypeError::InvalidCount(NUM_INPUTS_ATTR)),
+                    <FuncSig as crate::type_verifier::VerifyType>::verify(&ctx, wrong_kind)
+                        .err()
+                        .and_then(|error| error.downcast_ref::<FuncSigTypeError>().copied()),
+                    Some(FuncSigTypeError::InvalidCount(NUM_INPUTS_ATTR)),
                     "{dialect}"
                 );
 
@@ -651,8 +655,10 @@ mod tests {
                     ],
                 );
                 assert_eq!(
-                    FuncSig::validate(&ctx, overflow),
-                    Err(FuncSigTypeError::CountOverflow),
+                    <FuncSig as crate::type_verifier::VerifyType>::verify(&ctx, overflow)
+                        .err()
+                        .and_then(|error| error.downcast_ref::<FuncSigTypeError>().copied()),
+                    Some(FuncSigTypeError::CountOverflow),
                     "{dialect}"
                 );
             }};

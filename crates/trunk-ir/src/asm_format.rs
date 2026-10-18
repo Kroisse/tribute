@@ -78,20 +78,14 @@ pub trait OpAsmFormat: DialectOp {
 #[derive(Clone, Copy, Debug)]
 pub struct OpAsmHooks {
     /// Custom printer. Called instead of generic printing.
-    pub print: OpPrintFn,
+    pub print: fn(&mut OpPrintHelper<'_, '_>, OpRef) -> fmt::Result,
     /// Custom parser. Called after `dialect.op` and optional `@sym_name` are consumed.
-    pub parse: OpParseFn,
+    pub parse: for<'a> fn(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<RawOperation<'a>>,
 }
-
-/// Custom printer of an [`OpAsmHooks`].
-pub type OpPrintFn = fn(&mut OpPrintHelper<'_, '_>, OpRef) -> fmt::Result;
-
-/// Custom parser of an [`OpAsmHooks`].
-pub type OpParseFn = for<'a> fn(
-    input: &mut &'a str,
-    results: Vec<&'a str>,
-    sym_name: Option<String>,
-) -> winnow::ModalResult<RawOperation<'a>>;
 
 // =============================================================================
 // TypeAsmFormat — custom assembly format for types (print + parse)
@@ -101,7 +95,7 @@ pub type OpParseFn = for<'a> fn(
 ///
 /// The type's [`TypeDef`](crate::TypeDef) holds the hooks: a type declared in
 /// `#[dialect]` opts in with `#[asm_format]`, and a hand-written definition
-/// sets [`TypeAsmHooks::of`]. Like every type, the custom form is
+/// adds it with [`TypeDef::with_asm_format`](crate::TypeDef::with_asm_format). Like every type, the custom form is
 /// self-delimiting: it is written inside `dialect.name<...>`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is declared with `#[asm_format]` but does not implement `TypeAsmFormat`",
@@ -125,14 +119,14 @@ pub trait TypeAsmFormat: DialectType {
 #[derive(Clone, Copy, Debug)]
 pub struct TypeAsmHooks {
     /// Custom printer, or `None` to leave the type to generic printing.
-    pub print: TypePrintFn,
+    pub print: fn(&mut TypePrintHelper<'_, '_>, TypeRef) -> Option<fmt::Result>,
     /// Custom parser. Called after `dialect.name<` is consumed.
-    pub parse: TypeParseFn,
+    pub parse: for<'a> fn(input: &mut &'a str, name: &'a str) -> winnow::ModalResult<RawType<'a>>,
 }
 
 impl TypeAsmHooks {
     /// The hooks calling `T`'s [`TypeAsmFormat`] impl.
-    pub const fn of<T: TypeAsmFormat>() -> Self {
+    pub(crate) const fn of<T: TypeAsmFormat>() -> Self {
         Self {
             print: print_type::<T>,
             parse: T::parse,
@@ -147,10 +141,3 @@ fn print_type<T: TypeAsmFormat>(
     let ty = T::from_type_ref(h.ctx(), ty)?;
     Some(ty.print(h))
 }
-
-/// Custom printer of a [`TypeAsmHooks`].
-pub type TypePrintFn = fn(&mut TypePrintHelper<'_, '_>, TypeRef) -> Option<fmt::Result>;
-
-/// Custom parser of a [`TypeAsmHooks`].
-pub type TypeParseFn =
-    for<'a> fn(input: &mut &'a str, name: &'a str) -> winnow::ModalResult<RawType<'a>>;

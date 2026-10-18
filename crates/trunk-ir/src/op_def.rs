@@ -6,6 +6,7 @@
 //! name so that verification and other tooling can look them up for any
 //! operation.
 
+use std::error::Error;
 use std::sync::LazyLock;
 
 use crate::asm_format::OpAsmHooks;
@@ -39,7 +40,7 @@ pub struct OpDef {
 }
 
 /// An operation-local verifier generated from `#[verify]`.
-pub type OpVerifier = fn(&IrContext, OpRef) -> Result<(), String>;
+pub type OpVerifier = fn(&IrContext, OpRef) -> Result<(), Box<dyn Error + Send + Sync>>;
 
 impl OpDef {
     /// Run the declarative schema stages and then the `#[verify]` hook,
@@ -50,7 +51,7 @@ impl OpDef {
             return violations.into_iter().map(OpViolation::Schema).collect();
         }
         match self.verifier.map(|verifier| verifier(ctx, op)) {
-            Some(Err(message)) => vec![OpViolation::Verifier(message)],
+            Some(Err(error)) => vec![OpViolation::Verifier(error.to_string())],
             _ => Vec::new(),
         }
     }

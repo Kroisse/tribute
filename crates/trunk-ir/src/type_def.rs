@@ -1,11 +1,12 @@
 //! Registered type definitions generated from `#[dialect]` or written by
 //! hand.
 
+use std::error::Error;
 use std::sync::LazyLock;
 
-use crate::asm_format::TypeAsmHooks;
+use crate::asm_format::{TypeAsmFormat, TypeAsmHooks};
 use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
-use crate::type_verifier::TypeVerifierFn;
+use crate::type_verifier::{VerifyType, erased_verifier};
 use crate::{IrContext, TypeRef};
 
 /// The name of a type.
@@ -25,11 +26,14 @@ pub struct TypeDef {
     pub name: QualifiedName,
     /// Calls the wrapper's [`VerifyType`](crate::type_verifier::VerifyType)
     /// impl for types with a verifier.
-    pub verifier: Option<TypeVerifierFn>,
+    pub verifier: Option<TypeVerifier>,
     /// Calls the wrapper's [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat)
     /// impl for types with a custom assembly format.
     pub asm_format: Option<TypeAsmHooks>,
 }
+
+/// A type verifier, calling the wrapper's [`VerifyType`] impl.
+pub type TypeVerifier = fn(&IrContext, TypeRef) -> Result<(), Box<dyn Error + Send + Sync>>;
 
 impl TypeDef {
     /// A definition without hooks.
@@ -38,6 +42,23 @@ impl TypeDef {
             name: QualifiedName::new(name),
             verifier: None,
             asm_format: None,
+        }
+    }
+
+    /// This definition with `T`'s [`VerifyType`] impl as its verifier.
+    pub const fn with_verifier<T: VerifyType>(self) -> Self {
+        Self {
+            verifier: Some(erased_verifier::<T>),
+            ..self
+        }
+    }
+
+    /// This definition with `T`'s [`TypeAsmFormat`] impl as its assembly
+    /// format.
+    pub const fn with_asm_format<T: TypeAsmFormat>(self) -> Self {
+        Self {
+            asm_format: Some(TypeAsmHooks::of::<T>()),
+            ..self
         }
     }
 
@@ -92,10 +113,13 @@ mod tests {
     }
 
     impl crate::type_verifier::VerifyType for Checked {
-        fn verify(ctx: &IrContext, ty: TypeRef) -> Result<(), String> {
+        fn verify(
+            ctx: &IrContext,
+            ty: TypeRef,
+        ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
             match ctx.type_attrs(ty).contains_key("bad") {
                 true => Err("bad checked type".into()),
-                false => Ok(()),
+                false => Ok(Self(ty)),
             }
         }
     }
@@ -134,7 +158,8 @@ mod tests {
             .attr("bad", crate::Attribute::Bool(true))
             .intern(&mut ctx);
         let verifier = TypeDef::of(&ctx, bad).and_then(|def| def.verifier).unwrap();
-        assert_eq!(verifier(&ctx, bad), Err("bad checked type".into()));
+        let error = verifier(&ctx, bad).unwrap_err();
+        assert_eq!(error.to_string(), "bad checked type");
 
         let ty = crate::TypeDataBuilder::new(Custom::NAME).intern(&mut ctx);
         assert_eq!(

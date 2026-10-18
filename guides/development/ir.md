@@ -136,9 +136,10 @@ where
   type (`-> Value<I32>`); it must denote exactly one type.
 - `#[verify]` on an operation requires an implementation of
   `trunk_ir::ops::Verify` (`fn verify(self, ctx: &IrContext) ->
-  Result<(), String>`) for its wrapper, and reserves the entity name
-  `verify`. It checks what the schema cannot express and runs only after
-  every generated check passed.
+  Result<(), Box<dyn Error + Send + Sync>>`) for its wrapper, and reserves
+  the entity name `verify`. It checks what the schema cannot express and
+  runs only after every generated check passed. A message becomes the error
+  with `.into()`, and a dialect's error type with `?`.
 - `#[asm_format]` on an operation requires an implementation of
   `trunk_ir::asm_format::OpAsmFormat` for its wrapper: `print` writes the
   operation's line through an `OpPrintHelper`, which owns its indentation
@@ -150,19 +151,21 @@ where
   entity names `print` and `parse`.
 - On a type `struct`, `#[verify]` requires
   `trunk_ir::type_verifier::VerifyType` (`fn verify(ctx: &IrContext, ty:
-  TypeRef) -> Result<(), String>`), which checks the rules a type's data must
-  satisfy beyond its generic shape; IR validation runs it on every interned
-  type of that kind. `#[asm_format]` requires
+  TypeRef) -> Result<Self, Box<dyn Error + Send + Sync>>`), which checks the
+  rules a type's data must satisfy beyond its generic shape and wraps the
+  type; IR validation runs it on every interned type of that kind. Unlike
+  `Verify`, it takes the raw type, because the wrapper's `from_type_ref` and
+  its exact bound accept only types that pass it. Tests recover a dialect's
+  error with `downcast_ref`. `#[asm_format]` requires
   `trunk_ir::asm_format::TypeAsmFormat`: `print` writes the whole type,
   including `dialect.name<` and `>`, and `parse` reads it after
   `dialect.name<`; a backtrack falls back to the generic form. Generic
   printing keeps a type the wrapper's `from_type_ref` rejects. Both store
   their hooks in the type's `TypeDef` and reserve the accessor names
-  `verify`, or `print` and `parse`. A hand-written `TypeDef` sets only the
-  hooks its type has and takes the other fields from `..TypeDef::new(name)`:
-  `func.func_sig` sets `verifier: Some(<T as VerifyType>::verify)`, and
-  `adt.struct` and `adt.enum` also set
-  `asm_format: Some(TypeAsmHooks::of::<T>())`.
+  `verify`, or `print` and `parse`. A hand-written `TypeDef` adds only the
+  hooks its type has to `TypeDef::new(name)`: the `func_sig` types use
+  `.with_verifier::<FuncSig>()`, and `adt.struct` and `adt.enum` also
+  `.with_asm_format::<T>()`.
 
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:
