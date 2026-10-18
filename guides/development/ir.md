@@ -134,39 +134,16 @@ where
   fails to compile.
 - A bound written directly in a result, without `impl`, is that one fixed
   type (`-> Value<I32>`); it must denote exactly one type.
-- `#[verify]` on an operation requires an implementation of
-  `trunk_ir::ops::Verify` (`fn verify(self, ctx: &IrContext) ->
-  Result<(), VerificationError>`) for its wrapper, and reserves the entity
-  name `verify`. It checks what the schema cannot express and runs only
-  after every generated check passed. `ops::VerificationError` is a boxed
-  `std::error::Error`: a message becomes one with `.into()`, and a dialect's
-  error type with `?`.
-- `#[asm_format]` on an operation requires an implementation of
-  `trunk_ir::asm_format::OpAsmFormat` for its wrapper: `print` writes the
-  operation's line through an `OpPrintHelper`, which owns its indentation
-  and newline (`print_body` prints a region in braces), and `parse` reads
-  the rest of it after the generic parser consumed its results, name, and
-  optional `@sym_name`. The printer and the parser reach these hooks through the
-  operation's `OpDef`. A parse that backtracks on input shaped like generic
-  syntax (`{`, `%`, or `:`) falls back to the generic form. It reserves the
-  entity names `print` and `parse`.
-- On a type `struct`, `#[verify]` requires
-  `trunk_ir::type_verifier::VerifyType` (`fn verify(ctx: &IrContext, ty:
-  TypeRef) -> Result<Self, VerificationError>`), which checks the
-  rules a type's data must satisfy beyond its generic shape and wraps the
-  type; IR validation runs it on every interned type of that kind. Unlike
-  `Verify`, it takes the raw type, because the wrapper's `from_type_ref` and
-  its exact bound accept only types that pass it. Tests recover a dialect's
-  error with `downcast_ref`. `#[asm_format]` requires
-  `trunk_ir::asm_format::TypeAsmFormat`: `print` writes the whole type,
-  including `dialect.name<` and `>`, and `parse` reads it after
-  `dialect.name<`; a backtrack falls back to the generic form. Generic
-  printing keeps a type the wrapper's `from_type_ref` rejects. Both store
-  their hooks in the type's `TypeDef` and reserve the accessor names
-  `verify`, or `print` and `parse`. A hand-written `TypeDef` adds only the
-  hooks its type has to `TypeDef::new(name)`: the `func_sig` types use
-  `.with_verifier::<FuncSig>()`, and `adt.struct` and `adt.enum` also
-  `.with_asm_format::<T>()`.
+- `#[verify]` on an operation requires `trunk_ir::ops::Verify` for its
+  wrapper. It checks what the schema cannot express and runs only after
+  every generated check passed.
+- `#[asm_format]` on an operation requires `trunk_ir::asm_format::OpAsmFormat`
+  for its wrapper, which prints and parses the operation's custom syntax.
+  Generic syntax stays readable for every operation.
+- On a type `struct`, `#[verify]` requires `trunk_ir::type_verifier::VerifyType`
+  and `#[asm_format]` requires `trunk_ir::asm_format::TypeAsmFormat`. A
+  hand-written `TypeDef` adds the same hooks with `with_verifier` and
+  `with_asm_format`.
 
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:
