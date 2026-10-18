@@ -1057,6 +1057,27 @@ fn gen_type_struct_and_trait(
     let sname = struct_name(&td.name);
     let full_name = format!("{dialect}.{type_name}");
     let def_static = format_ident!("__{}_TYPE_DEF", type_name.to_shouty_snake_case());
+    // The spans point a missing impl at its attribute.
+    let verifier = match td.verify {
+        Some(span) => {
+            let mut sname = sname.clone();
+            sname.set_span(span);
+            quote_spanned!(span=> Some(
+                <#sname as #crate_path::ops::__private::DeclaredVerifyType>::VERIFIER
+            ))
+        }
+        None => quote!(None),
+    };
+    let asm_format = match td.asm_format {
+        Some(span) => {
+            let mut sname = sname.clone();
+            sname.set_span(span);
+            quote_spanned!(span=> Some(
+                <#sname as #crate_path::ops::__private::DeclaredTypeAsmFormat>::ASM_HOOKS
+            ))
+        }
+        None => quote!(None),
+    };
 
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1066,6 +1087,8 @@ fn gen_type_struct_and_trait(
         #[doc(hidden)]
         static #def_static: #crate_path::type_def::TypeDef = #crate_path::type_def::TypeDef {
             name: #crate_path::name::QualifiedName::new(#full_name),
+            verifier: #verifier,
+            asm_format: #asm_format,
         };
 
         #crate_path::inventory::submit! {

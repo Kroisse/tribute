@@ -104,15 +104,15 @@ fn case_pattern(width: u32, case: i64) -> Option<i128> {
 impl crate::ops::Verify for Switch {
     /// Every case has one target and is a distinct value of the
     /// discriminant's type.
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+    fn verify(self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         let cases: Vec<i64> = self.cases(ctx).collect();
         let targets = self.targets(ctx).count();
         if cases.len() != targets {
-            return Err(format!("{} case(s) but {targets} target(s)", cases.len()));
+            return Err(format!("{} case(s) but {targets} target(s)", cases.len()).into());
         }
         let width = IntegerLike::width(ctx, ctx.value_ty(self.discriminant(ctx)))
             .expect("schema-verified integer discriminant");
-        Self::check_cases(width, &cases)
+        Ok(Self::check_cases(width, &cases)?)
     }
 }
 

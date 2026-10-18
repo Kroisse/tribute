@@ -2,6 +2,7 @@
 //!
 //! Parses the module body into structured types for code generation.
 
+use heck::ToSnakeCase;
 use proc_macro2::{Delimiter, Ident, TokenTree};
 use rustc_hash::FxHashSet as HashSet;
 use unsynn::{Parser, ToTokenIter, TokenIter};
@@ -51,6 +52,10 @@ pub struct TypeDefData {
     pub raw_ident: Ident,
     pub params: Vec<TypeParam>,
     pub attrs: Vec<AttrDef>,
+    /// `#[verify]`: run the wrapper's `VerifyType` impl in IR validation. Holds the attribute's span for diagnostics.
+    pub verify: Option<proc_macro2::Span>,
+    /// `#[asm_format]`: print and parse through the wrapper's `TypeAsmFormat` impl. Holds the attribute's span for diagnostics.
+    pub asm_format: Option<proc_macro2::Span>,
 }
 
 pub struct TypeParam {
@@ -285,13 +290,27 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             if rest_results {
                 return Err("#[rest_results] is not allowed on struct items".into());
             }
-            if verify.is_some() {
-                return Err("#[verify] is not allowed on struct items".into());
+            let mut td = parse_struct_def(iter, op_attrs)?;
+            let accessors: Vec<String> = td
+                .params
+                .iter()
+                .map(|param| param.raw_ident.to_string().to_snake_case())
+                .chain(td.attrs.iter().map(|attr| attr.name.clone()))
+                .collect();
+            for (span, attr, names) in [
+                (verify, "#[verify]", &["verify"][..]),
+                (asm_format, "#[asm_format]", &["print", "parse"][..]),
+            ] {
+                if span.is_some()
+                    && let Some(name) = accessors.iter().find(|name| names.contains(&name.as_str()))
+                {
+                    return Err(format!(
+                        "{attr} reserves the name `{name}` for the trait method"
+                    ));
+                }
             }
-            if asm_format.is_some() {
-                return Err("#[asm_format] is not allowed on struct items".into());
-            }
-            let td = parse_struct_def(iter, op_attrs)?;
+            td.verify = verify;
+            td.asm_format = asm_format;
             Ok(DialectItem::TypeDef(td))
         }
         other => Err(format!("expected `fn` or `struct`, got `{other}`")),
@@ -523,6 +542,8 @@ fn parse_struct_def(iter: &mut TokenIter, attrs: Vec<AttrDef>) -> Result<TypeDef
         raw_ident: name_ident,
         params,
         attrs,
+        verify: None,
+        asm_format: None,
     })
 }
 
@@ -1270,10 +1291,10 @@ mod tests {
                 quote!(
                     mod test {
                         #[verify]
-                        struct Ty;
+                        struct Ty<Verify>;
                     }
                 ),
-                "#[verify] is not allowed on struct items",
+                "#[verify] reserves the name `verify`",
             ),
             (
                 quote!(
@@ -1297,6 +1318,29 @@ mod tests {
             let err = parse_test_module(item).err().expect("should fail");
             assert!(err.contains(expected), "unexpected error: {err}");
         }
+    }
+
+    #[test]
+    fn test_hooks_mark_types() {
+        let module = parse_test_module(quote! {
+            mod test {
+                #[verify]
+                struct Checked;
+                #[asm_format]
+                struct Custom<Elem>;
+                struct Plain;
+            }
+        })
+        .unwrap();
+        let flags: Vec<(bool, bool)> = module
+            .items
+            .iter()
+            .map(|item| match item {
+                DialectItem::TypeDef(td) => (td.verify.is_some(), td.asm_format.is_some()),
+                DialectItem::Operation(_) => unreachable!(),
+            })
+            .collect();
+        assert_eq!(flags, [(true, false), (false, true), (false, false)]);
     }
 
     #[test]
@@ -1335,10 +1379,11 @@ mod tests {
                 quote!(
                     mod test {
                         #[asm_format]
+                        #[attr(parse: String)]
                         struct Ty;
                     }
                 ),
-                "#[asm_format] is not allowed on struct items",
+                "#[asm_format] reserves the name `parse`",
             ),
             (
                 quote!(

@@ -32,7 +32,6 @@ use super::ops::{DialectOp, DialectType};
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
 use super::symbol_table::{SymbolTable, link_name, qualified_name};
-use super::type_verifier::lookup_type_verifier;
 use super::walk;
 
 use crate::{Symbol, SymbolPath};
@@ -447,10 +446,10 @@ fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 ),
             });
         }
-        let Some(verifier) = lookup_type_verifier(data.name) else {
+        let Some(verifier) = data.name.def().and_then(|def| def.verifier) else {
             continue;
         };
-        if let Err(error) = (verifier.verify_fn)(ctx, ty) {
+        if let Err(error) = verifier(ctx, ty) {
             errors.push(ValidationError::Operation {
                 message: format!(
                     "type verifier failed for {} ({ty}): {error}",

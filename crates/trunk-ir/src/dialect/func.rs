@@ -177,16 +177,16 @@ pub struct FuncSig(TypeRef);
 
 crate::impl_func_sig_constraint!(FuncSig, "func.func_sig");
 
-impl FuncSig {
+impl crate::type_verifier::VerifyType for FuncSig {
     /// Validate a name-matching `func.func_sig`, including both delimiter counts.
-    pub(crate) fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, crate::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(data.name == <Self as DialectType>::NAME);
 
         let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)?;
         let num_results = read_count(ctx, &data.attrs, NUM_RESULTS_ATTR)?;
         if num_results > 1 {
-            return Err(FuncSigTypeError::UnsupportedResultCount(num_results));
+            return Err(FuncSigTypeError::UnsupportedResultCount(num_results).into());
         }
         let total = num_inputs
             .checked_add(num_results)
@@ -196,11 +196,14 @@ impl FuncSig {
                 num_inputs,
                 num_results,
                 params: data.params.len(),
-            });
+            }
+            .into());
         }
         Ok(Self(ty))
     }
+}
 
+impl FuncSig {
     fn counts(self, ctx: &IrContext) -> (usize, usize) {
         let data = ctx.get_type(self.0);
         let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)
@@ -321,9 +324,8 @@ impl FuncSig {
     }
 }
 
-static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef {
-    name: crate::name::QualifiedName::new("func.func_sig"),
-};
+static FUNC_SIG_DEF: crate::type_def::TypeDef =
+    crate::type_def::TypeDef::new("func.func_sig").with_verifier::<FuncSig>();
 
 inventory::submit! {
     crate::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
@@ -336,7 +338,7 @@ impl DialectType for FuncSig {
         if !Self::matches(ctx, ty) {
             return None;
         }
-        Self::validate(ctx, ty).ok()
+        <Self as crate::type_verifier::VerifyType>::verify(ctx, ty).ok()
     }
 
     fn as_type_ref(&self) -> TypeRef {
@@ -439,7 +441,8 @@ pub fn func_sig_with_attrs(
         .attr(NUM_INPUTS_ATTR, Attribute::from(num_inputs))
         .attr(NUM_RESULTS_ATTR, Attribute::from(num_results))
         .intern(ctx);
-    FuncSig::validate(ctx, ty).expect("func.func_sig constructor must produce a valid type")
+    <FuncSig as crate::type_verifier::VerifyType>::verify(ctx, ty)
+        .expect("func.func_sig constructor must produce a valid type")
 }
 
 // One-result source producers use these explicit convenience accessors. Generic
@@ -489,14 +492,22 @@ impl IndirectCallLikeModel for CallIndirect {
 }
 
 impl crate::ops::Verify for CallIndirect {
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
-        verify_typed_callee(ctx, self.callee(ctx), self.signature(ctx))
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
+        Ok(verify_typed_callee(
+            ctx,
+            self.callee(ctx),
+            self.signature(ctx),
+        )?)
     }
 }
 
 impl crate::ops::Verify for TailCallIndirect {
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
-        verify_typed_callee(ctx, self.callee(ctx), self.signature(ctx))
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
+        Ok(verify_typed_callee(
+            ctx,
+            self.callee(ctx),
+            self.signature(ctx),
+        )?)
     }
 }
 
@@ -632,12 +643,6 @@ inventory::submit! {
 
 inventory::submit! {
     IndirectCallLikeOps::register::<TailCallIndirect>()
-}
-
-inventory::submit! {
-    crate::type_verifier::TypeVerifier::new::<FuncSig>(|ctx, ty| {
-        FuncSig::validate(ctx, ty).map(|_| ()).map_err(|error| error.to_string())
-    })
 }
 
 /// Attach an exact callable contract to a `func` indirect transfer.

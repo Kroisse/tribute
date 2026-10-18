@@ -190,9 +190,7 @@ macro_rules! scalar_types {
         impl $wrapper {
             /// The scalar's registered definition.
             pub const DEF: &'static crate::TypeDef = {
-                static DEF: crate::TypeDef = crate::TypeDef {
-                    name: crate::name::QualifiedName::new(concat!("core.", $name)),
-                };
+                static DEF: crate::TypeDef = crate::TypeDef::new(concat!("core.", $name));
                 &DEF
             };
             /// The scalar's name, which points to [`DEF`](Self::DEF).
