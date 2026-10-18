@@ -311,3 +311,71 @@ fn finding_a_substituted_row_needs_only_the_keys_it_holds() {
     assert_eq!(ctx.lookup_str("instances"), None);
     assert_eq!(find_substituted_rows(&ctx, open, &args), Some(substituted));
 }
+
+#[test]
+fn tuple_names_tell_callables_apart_by_their_attributes() {
+    let mut ctx = IrContext::new();
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+    let noted = |ctx: &mut IrContext, value| {
+        let attrs = trunk_ir::types::AttributeMap::from_entries(ctx, [("note", value)]);
+        super::super::func_sig_with_attrs(ctx, i32_ty, [i32_ty], CallingConvention::Direct, attrs)
+            .as_type_ref()
+    };
+    let plain = func_sig_with_row(
+        &mut ctx,
+        i32_ty,
+        [i32_ty],
+        &Row::default(),
+        CallingConvention::Direct,
+    )
+    .as_type_ref();
+    let int = noted(&mut ctx, trunk_ir::types::Attribute::Int(1));
+    let one = ctx.string_attr("1");
+    let string = noted(&mut ctx, one);
+    let names = [plain, int, string].map(|ty| logical_tuple_name(&ctx, &[ty]));
+    assert_ne!(names[0], names[1]);
+    assert_ne!(names[1], names[2]);
+}
+
+#[test]
+fn tuple_names_keep_attribute_names_and_text_apart() {
+    let mut ctx = IrContext::new();
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+    let with = |ctx: &mut IrContext, name: &'static str, value| {
+        let attrs = trunk_ir::types::AttributeMap::from_entries(ctx, [(name, value)]);
+        super::super::func_sig_with_attrs(ctx, i32_ty, [i32_ty], CallingConvention::Direct, attrs)
+            .as_type_ref()
+    };
+    use trunk_ir::types::Attribute;
+    let list = with(&mut ctx, "x", Attribute::List(vec![Attribute::Unit]));
+    let unit = with(&mut ctx, "x_1_13_list", Attribute::Unit);
+    assert_ne!(
+        logical_tuple_name(&ctx, &[list]),
+        logical_tuple_name(&ctx, &[unit])
+    );
+    let spaced = ctx.string_attr("hello world");
+    let spaced = with(&mut ctx, "note", spaced);
+    let name = logical_tuple_name(&ctx, &[spaced]);
+    assert!(
+        name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "{name}"
+    );
+}
+
+#[test]
+fn tuple_names_keep_symbol_path_components_apart() {
+    let mut ctx = IrContext::new();
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+    let names = [SymbolPath::new(["a::b"]), SymbolPath::new(["a", "b"])].map(|instance| {
+        let callable = func_sig_with_row(
+            &mut ctx,
+            i32_ty,
+            [i32_ty],
+            &Row::new([instance], None),
+            CallingConvention::Cps,
+        )
+        .as_type_ref();
+        logical_tuple_name(&ctx, &[callable])
+    });
+    assert_ne!(names[0], names[1]);
+}

@@ -203,24 +203,16 @@ pub(super) fn get_or_create_logical_tuple_type<'db>(
     let TypeKind::Tuple(elem_tys) = ast_ty.kind(ctx.db) else {
         return None;
     };
-    let ir_fields: Vec<(Symbol, TypeRef)> = elem_tys
+    let elements: Vec<TypeRef> = elem_tys
         .iter()
-        .enumerate()
-        .map(|(i, ty)| {
-            let name = Symbol::new(&i.to_string());
-            let ir_ty = ctx.convert_logical_type(ir, *ty);
-            (name, ir_ty)
-        })
+        .map(|ty| ctx.convert_logical_type(ir, *ty))
         .collect();
-    let tuple_name = ctx.logical_tuple_name(*ast_ty);
-
-    if let Some(struct_ty) = ctx.get_type(&tuple_name) {
-        return Some((tuple_name, struct_ty));
-    }
-
-    let struct_ty = ctx.adt_struct_type(ir, &tuple_name, &ir_fields);
-    ctx.register_type(tuple_name.clone(), struct_ty);
-    Some((tuple_name, struct_ty))
+    tribute_control::logical_tuple_type(ir, &elements);
+    let name = tribute_control::logical_tuple_name(ir, &elements);
+    let layout = ir
+        .type_alias_by_text(&name)
+        .expect("a logical tuple layout is registered under its name");
+    Some((Symbol::new(&name), layout))
 }
 
 /// Validate that a natural number literal fits in the i31 range.
