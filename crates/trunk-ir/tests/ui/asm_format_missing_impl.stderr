@@ -1,0 +1,13 @@
+error[E0277]: `Probe` is declared with `#[asm_format]` but does not implement `AsmFormat`
+ --> tests/ui/asm_format_missing_impl.rs:4:11
+  |
+4 |         #[asm_format]
+  |           ^^^^^^^^^^ `#[asm_format]` requires this implementation
+  |
+help: the trait `trunk_ir::ops::__private::DeclaredAsmFormat` is not implemented for `Probe`
+ --> tests/ui/asm_format_missing_impl.rs:2:5
+  |
+2 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  = note: add `impl AsmFormat for Probe { fn print(..) { .. } fn parse(..) { .. } }`
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

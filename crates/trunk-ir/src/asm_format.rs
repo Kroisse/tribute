@@ -1,7 +1,7 @@
 //! Textual assembly format hooks.
 //!
-//! Dialects register these hooks to control how their operations and types
-//! are spelled in textual IR. They affect only the printer and the parser:
+//! Operations declare these hooks with `#[asm_format]`, and types register
+//! them, to control how they are spelled in textual IR. They affect only the printer and the parser:
 //! unlike [operation interfaces](crate::op_interface), they carry no meaning
 //! that passes or analyses consult.
 
@@ -9,6 +9,8 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use crate::ops::{DialectOp, DialectType};
+use crate::parser::raw::RawOperation;
+use crate::printer::OpPrintHelper;
 use crate::registry::{Registered, Registry};
 use crate::{IrContext, OpRef, TypeRef};
 
@@ -44,61 +46,53 @@ pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 }
 
 // =============================================================================
-// OpAsmFormat — custom assembly format for operations (print + parse)
+// AsmFormat — custom assembly format for operations (print + parse)
 // =============================================================================
 
 /// Custom assembly format for an operation — bundles print + parse.
 ///
-/// Modeled after MLIR's `hasCustomAssemblyFormat`. Register
-/// [`OpAsmFormat::new`] via `inventory::submit!` at dialect definition sites.
-/// The printer/parser dispatch automatically routes to the registered format.
-pub struct OpAsmFormat {
-    def: &'static crate::OpDef,
-    /// Custom printer. Called instead of generic printing.
-    pub print_fn: OpPrintFn,
-    /// Custom parser. Called after `dialect.op` and optional `@sym_name` are consumed.
-    /// `results` and `sym_name` are already parsed by the generic parser.
-    pub parse_fn: OpParseFn,
+/// Modeled after MLIR's `hasCustomAssemblyFormat`. Required for operations
+/// declared with `#[asm_format]`; the operation's [`OpDef`](crate::OpDef)
+/// holds the hooks, so the printer and the parser reach them through its
+/// name.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is declared with `#[asm_format]` but does not implement `AsmFormat`",
+    label = "`#[asm_format]` requires this implementation",
+    note = "add `impl AsmFormat for {Self} {{ fn print(..) {{ .. }} fn parse(..) {{ .. }} }}`"
+)]
+pub trait AsmFormat: DialectOp {
+    /// Print the operation. Called instead of generic printing.
+    fn print(self, h: &mut OpPrintHelper<'_, '_>, indent: usize) -> fmt::Result;
+
+    /// Parse the operation. Called after `dialect.op` and optional
+    /// `@sym_name` are consumed; `results` and `sym_name` are already parsed
+    /// by the generic parser.
+    fn parse<'a>(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<RawOperation<'a>>;
 }
 
-/// Custom printer of an [`OpAsmFormat`].
-pub type OpPrintFn = fn(&mut crate::printer::OpPrintHelper<'_, '_>, OpRef, usize) -> fmt::Result;
+/// The hooks an [`OpDef`](crate::OpDef) stores for an `#[asm_format]`
+/// operation.
+#[derive(Clone, Copy, Debug)]
+pub struct OpAsmHooks {
+    /// Custom printer. Called instead of generic printing.
+    pub print: OpPrintFn,
+    /// Custom parser. Called after `dialect.op` and optional `@sym_name` are consumed.
+    pub parse: OpParseFn,
+}
 
-/// Custom parser of an [`OpAsmFormat`].
+/// Custom printer of an [`OpAsmHooks`].
+pub type OpPrintFn = fn(&mut OpPrintHelper<'_, '_>, OpRef, usize) -> fmt::Result;
+
+/// Custom parser of an [`OpAsmHooks`].
 pub type OpParseFn = for<'a> fn(
     input: &mut &'a str,
     results: Vec<&'a str>,
     sym_name: Option<String>,
-) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>>;
-
-impl OpAsmFormat {
-    /// Custom assembly format for the operation wrapped by `T`.
-    pub const fn new<T: DialectOp>(print_fn: OpPrintFn, parse_fn: OpParseFn) -> Self {
-        Self {
-            def: T::DEF,
-            print_fn,
-            parse_fn,
-        }
-    }
-}
-
-inventory::collect!(OpAsmFormat);
-
-impl Registered for OpAsmFormat {
-    type Def = crate::OpDef;
-    const KIND: &'static str = "OpAsmFormat";
-
-    fn def(&self) -> &'static crate::OpDef {
-        self.def
-    }
-}
-
-static OP_ASM_FORMATS: LazyLock<Registry<OpAsmFormat>> = LazyLock::new(Registry::collect);
-
-/// Look up a registered custom assembly format for the given operation.
-pub fn lookup_asm_format(name: crate::OpName) -> Option<&'static OpAsmFormat> {
-    OP_ASM_FORMATS.get(name)
-}
+) -> winnow::ModalResult<RawOperation<'a>>;
 
 // =============================================================================
 // TypeAsmFormat — custom assembly format for types (print + parse)

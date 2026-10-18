@@ -22,6 +22,7 @@ mod closure {
     /// Captured values are referenced from the parent scope (NOT isolated from above).
     /// A downstream `lower_closure_lambda` pass extracts the body into a top-level
     /// `func.func` and replaces this op with `closure.new`.
+    #[asm_format]
     fn lambda(captures: Variadic<_>) -> Value<_> {
         #[region(body)]
         {}
@@ -240,8 +241,22 @@ fn parse_closure_lambda<'a>(
     })
 }
 
-inventory::submit! {
-    trunk_ir::asm_format::OpAsmFormat::new::<Lambda>(print_closure_lambda, parse_closure_lambda)
+impl trunk_ir::asm_format::AsmFormat for Lambda {
+    fn print(
+        self,
+        h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+        indent: usize,
+    ) -> std::fmt::Result {
+        print_closure_lambda(h, self.op_ref(), indent)
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
+        parse_closure_lambda(input, results, sym_name)
+    }
 }
 
 impl trunk_ir::op_interface::CallableOwnerModel for Lambda {

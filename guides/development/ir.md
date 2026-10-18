@@ -139,6 +139,14 @@ where
   Result<(), String>`) for its wrapper, and reserves the entity name
   `verify`. It checks what the schema cannot express and runs only after
   every generated check passed.
+- `#[asm_format]` on an operation requires an implementation of
+  `trunk_ir::asm_format::AsmFormat` for its wrapper: `print` writes the
+  operation through an `OpPrintHelper`, and `parse` reads the rest of it
+  after the generic parser consumed its results, name, and optional
+  `@sym_name`. The printer and the parser reach these hooks through the
+  operation's `OpDef`. A parse that backtracks on input shaped like generic
+  syntax (`{`, `%`, or `:`) falls back to the generic form. It reserves the
+  entity names `print` and `parse`.
 - A type whose data must satisfy rules beyond its generic shape registers
   `inventory::submit! { TypeVerifier::new::<T>(verify_fn) }`
   (`trunk_ir::type_verifier`). IR validation runs it on every interned type
@@ -169,9 +177,9 @@ input types.
 `DialectOp::DEF`, the `static` `op_def::OpDef` the declaration emits.
 `OpDef::of(ctx, op)` reads it from the operation's name handle. An `OpDef`
 holds the declarative `op_schema::OpSchema` and the hooks its declaration
-opts into, such as `#[verify]`. `OpSchema::verify` runs the declarative
-stages: counts and attributes, individual type constraints, variable
-bindings, then projections and type lists. `OpDef::verify` adds the
+opts into, such as `#[verify]` and `#[asm_format]`. `OpSchema::verify` runs
+the declarative stages: counts and attributes, individual type constraints,
+variable bindings, then projections and type lists. `OpDef::verify` adds the
 `#[verify]` hook after them; each stage runs only if the earlier ones passed.
 `validate_operation_verifiers` runs `OpDef::verify` on each operation.
 Remaining operation-specific checks run afterwards and may assume the

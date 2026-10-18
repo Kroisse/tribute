@@ -385,7 +385,8 @@ impl Write for TypePrintHelper<'_, '_> {
 // OpPrintHelper — public wrapper for custom assembly format printers
 // ============================================================================
 
-/// Public wrapper around printer state for custom `OpAsmFormat` implementations.
+/// Public wrapper around printer state for custom
+/// [`AsmFormat`](crate::asm_format::AsmFormat) implementations.
 ///
 /// Provides access to IR context, value naming, type/attribute printing, and
 /// region printing without exposing `PrintState` internals.
@@ -876,10 +877,10 @@ fn print_operation(
         return print_module_op(state, f, op, indent);
     }
 
-    // Check custom assembly format registry
-    if let Some(fmt) = crate::asm_format::lookup_asm_format(state.ctx.op(op).name) {
+    // Check the operation's custom assembly format
+    if let Some(hooks) = crate::OpDef::of(state.ctx, op).and_then(|def| def.asm_format) {
         let mut helper = OpPrintHelper { state, f };
-        return (fmt.print_fn)(&mut helper, op, indent);
+        return (hooks.print)(&mut helper, op, indent);
     }
 
     print_generic_op(state, f, op, indent)

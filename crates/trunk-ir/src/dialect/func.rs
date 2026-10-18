@@ -44,6 +44,7 @@ crate::register_isolated_op!(Func);
 
 #[trunk_ir::dialect]
 mod func {
+    #[asm_format]
     fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
         #[region(body?)]
         {}
@@ -861,8 +862,22 @@ fn parse_func<'a>(
     })
 }
 
-inventory::submit! {
-    crate::asm_format::OpAsmFormat::new::<Func>(print_func, parse_func)
+impl crate::asm_format::AsmFormat for Func {
+    fn print(
+        self,
+        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        indent: usize,
+    ) -> std::fmt::Result {
+        print_func(h, self.op_ref(), indent)
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>> {
+        parse_func(input, results, sym_name)
+    }
 }
 
 impl crate::op_interface::CallableOwnerModel for Func {

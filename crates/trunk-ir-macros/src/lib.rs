@@ -42,7 +42,9 @@ mod parse;
 /// - A builder started by `Wrapper::operands(..)` (empty for operations
 ///   without operands) and finished by `.build(ctx, location)`
 /// - `OpDef` registration: the declarative `OpSchema`, plus a call to the
-///   wrapper's `trunk_ir::ops::Verify` impl for `#[verify]` operations
+///   wrapper's `trunk_ir::ops::Verify` impl for `#[verify]` operations and
+///   the wrapper's `trunk_ir::asm_format::AsmFormat` print/parse hooks for
+///   `#[asm_format]` operations
 #[proc_macro_attribute]
 pub fn dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match dialect_impl(attr.into(), item.into()) {

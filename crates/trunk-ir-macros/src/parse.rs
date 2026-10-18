@@ -39,6 +39,8 @@ pub struct OperationDef {
     pub relations: Vec<RelationDef>,
     /// `#[verify]`: call the wrapper's `Verify` impl after the schema checks. Holds the attribute's span for diagnostics.
     pub verify: Option<proc_macro2::Span>,
+    /// `#[asm_format]`: print and parse through the wrapper's `AsmFormat` impl. Holds the attribute's span for diagnostics.
+    pub asm_format: Option<proc_macro2::Span>,
 }
 
 pub struct TypeDefData {
@@ -188,9 +190,10 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut op_attrs = Vec::new();
     let mut rest_results = false;
     let mut verify = None;
+    let mut asm_format = None;
 
     // Collect outer attributes: #[doc = "..."] (skip), #[attr(...)],
-    // #[rest_results], #[verify]
+    // #[rest_results], #[verify], #[asm_format]
     while peek_punct(iter, '#') {
         let attr = parse_outer_attr(iter)?;
         match attr {
@@ -215,6 +218,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 }
                 verify = Some(span);
             }
+            OuterAttr::AsmFormat(span) => {
+                if asm_format.is_some() {
+                    return Err("duplicate #[asm_format] on the same operation".into());
+                }
+                asm_format = Some(span);
+            }
         }
     }
 
@@ -235,6 +244,13 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             let mut op = parse_operation(iter)?;
             if verify.is_some() && entity_names(&op).any(|name| name == "verify") {
                 return Err("#[verify] reserves the name `verify` for `Verify::verify`".into());
+            }
+            if asm_format.is_some()
+                && let Some(name) = entity_names(&op).find(|name| ["print", "parse"].contains(name))
+            {
+                return Err(format!(
+                    "#[asm_format] reserves the name `{name}` for `AsmFormat::{name}`"
+                ));
             }
             for name in entity_names(&op) {
                 if RESERVED_WRAPPER_NAMES.contains(&name) {
@@ -262,6 +278,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 }
             }
             op.verify = verify;
+            op.asm_format = asm_format;
             Ok(DialectItem::Operation(op))
         }
         "struct" => {
@@ -270,6 +287,9 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             if verify.is_some() {
                 return Err("#[verify] is not allowed on struct items".into());
+            }
+            if asm_format.is_some() {
+                return Err("#[asm_format] is not allowed on struct items".into());
             }
             let td = parse_struct_def(iter, op_attrs)?;
             Ok(DialectItem::TypeDef(td))
@@ -283,6 +303,7 @@ enum OuterAttr {
     OpAttrs(Vec<AttrDef>),
     RestResults,
     Verify(proc_macro2::Span),
+    AsmFormat(proc_macro2::Span),
 }
 
 /// Methods every operation wrapper defines itself; an entity accessor must not
@@ -309,8 +330,8 @@ fn entity_names(op: &OperationDef) -> impl Iterator<Item = &str> {
         .chain(results)
 }
 
-/// Parse `#[...]` — `#[doc = "..."]`, `#[attr(...)]`, `#[rest_results]`, or
-/// `#[verify]`.
+/// Parse `#[...]` — `#[doc = "..."]`, `#[attr(...)]`, `#[rest_results]`,
+/// `#[verify]`, or `#[asm_format]`.
 fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
     expect_punct(iter, '#')?;
     let bracket = expect_group(iter, Delimiter::Bracket)?;
@@ -338,8 +359,12 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             expect_consumed(&inner, "#[verify]")?;
             Ok(OuterAttr::Verify(ident.span()))
         }
+        "asm_format" => {
+            expect_consumed(&inner, "#[asm_format]")?;
+            Ok(OuterAttr::AsmFormat(ident.span()))
+        }
         other => Err(format!(
-            "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, or `verify`"
+            "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, `verify`, or `asm_format`"
         )),
     }
 }
@@ -1267,6 +1292,71 @@ mod tests {
                     }
                 ),
                 "reserves the name `verify`",
+            ),
+        ] {
+            let err = parse_test_module(item).err().expect("should fail");
+            assert!(err.contains(expected), "unexpected error: {err}");
+        }
+    }
+
+    #[test]
+    fn test_asm_format_marks_operations() {
+        let module = parse_test_module(quote! {
+            mod test {
+                #[asm_format]
+                #[verify]
+                fn custom(x: Value<_>) {}
+                fn plain(xs: Variadic<_>) {}
+            }
+        })
+        .unwrap();
+        let flags: Vec<(bool, bool)> = module
+            .items
+            .iter()
+            .map(|item| match item {
+                DialectItem::Operation(op) => (op.asm_format.is_some(), op.verify.is_some()),
+                DialectItem::TypeDef(_) => unreachable!(),
+            })
+            .collect();
+        assert_eq!(flags, [(true, true), (false, false)]);
+
+        for (item, expected) in [
+            (
+                quote!(
+                    mod test {
+                        #[asm_format]
+                        #[asm_format]
+                        fn op() {}
+                    }
+                ),
+                "duplicate #[asm_format]",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[asm_format]
+                        struct Ty;
+                    }
+                ),
+                "#[asm_format] is not allowed on struct items",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[asm_format(custom)]
+                        fn op() {}
+                    }
+                ),
+                "#[asm_format]",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[asm_format]
+                        fn op(print: Value<_>) {}
+                    }
+                ),
+                "reserves the name `print`",
             ),
         ] {
             let err = parse_test_module(item).err().expect("should fail");

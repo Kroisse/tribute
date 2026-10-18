@@ -90,6 +90,7 @@ mod tribute_control {
     struct ResumeToken<Input, Answer>;
 
     // FuncSig operations
+    #[asm_format]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
@@ -101,6 +102,7 @@ mod tribute_control {
         {}
     }
 
+    #[asm_format]
     fn lambda(captures: Variadic<_>) -> Value<impl FuncSig> {
         #[region(body)]
         {}
@@ -1145,8 +1147,22 @@ fn parse_func<'a>(
     })
 }
 
-inventory::submit! {
-    trunk_ir::asm_format::OpAsmFormat::new::<Func>(print_func, parse_func)
+impl trunk_ir::asm_format::AsmFormat for Func {
+    fn print(
+        self,
+        h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+        indent: usize,
+    ) -> std::fmt::Result {
+        print_func(h, self.op_ref(), indent)
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
+        parse_func(input, results, sym_name)
+    }
 }
 
 // === Custom assembly: tribute_control.lambda ===
@@ -1283,8 +1299,22 @@ fn parse_lambda<'a>(
     })
 }
 
-inventory::submit! {
-    trunk_ir::asm_format::OpAsmFormat::new::<Lambda>(print_lambda, parse_lambda)
+impl trunk_ir::asm_format::AsmFormat for Lambda {
+    fn print(
+        self,
+        h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+        indent: usize,
+    ) -> std::fmt::Result {
+        print_lambda(h, self.op_ref(), indent)
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
+        parse_lambda(input, results, sym_name)
+    }
 }
 
 // === Explicit Tribute validation entry point ===
