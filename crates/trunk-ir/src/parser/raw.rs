@@ -658,13 +658,13 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     // may recover from a custom parser's Backtrack into generic parsing.
     let generic_custom_shape =
         input.starts_with('{') || input.starts_with('%') || input.starts_with(':');
-    // Check custom assembly format registry
-    if let Some(fmt) = crate::OpDef::lookup(name)
-        .and_then(|def| crate::asm_format::lookup_asm_format(crate::OpName::registered(def)))
+    // Check the operation's custom assembly format
+    if let Some(hooks) = crate::OpDef::lookup(name)
+        .and_then(|def| def.asm_format)
         .filter(|_| !generic_func)
     {
         let checkpoint = *input;
-        match (fmt.parse_fn)(input, results.clone(), sym_name.clone()) {
+        match (hooks.parse)(input, results.clone(), sym_name.clone()) {
             Ok(operation) => return Ok(operation),
             Err(winnow::error::ErrMode::Backtrack(_)) if generic_custom_shape => {
                 *input = checkpoint;

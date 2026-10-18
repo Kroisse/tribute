@@ -617,6 +617,7 @@ pub(super) fn parse_typed_operation(
         result_constraint,
         relations,
         verify: None,
+        asm_format: None,
     })
 }
 
