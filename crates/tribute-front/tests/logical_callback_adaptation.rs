@@ -10,7 +10,8 @@ fn named_function_header<'a>(ir: &'a str, name: &str) -> &'a str {
     ir.lines()
         .find(|line| {
             line.trim_start()
-                .starts_with(&format!("tribute_control.func @{name}("))
+                .strip_prefix(&format!("tribute_control.func @{name}"))
+                .is_some_and(|rest| rest.starts_with(['(', '[']))
         })
         .unwrap_or_else(|| panic!("missing lowered function @{name}:\n{ir}"))
 }

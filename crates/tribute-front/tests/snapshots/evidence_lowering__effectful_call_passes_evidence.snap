@@ -16,7 +16,7 @@ core.module @test {
       %2 = tribute_control.call %0, %1 {callee = @"std::Nat::+"} : core.i32
       tribute_control.return %2
   }
-  tribute_control.func @main() -> core.nil row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
+  tribute_control.func @main['a0]() -> core.nil row(| 'a0) inferred convention(direct) {
       %0 = core.nil_value : core.nil
       tribute_control.return %0
   }

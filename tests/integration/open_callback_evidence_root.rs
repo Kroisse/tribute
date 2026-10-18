@@ -160,12 +160,12 @@ fn main() -> Nil {
     let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
-        .split("tribute_control.func @main(")
+        .split("tribute_control.func @main")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
     assert!(
-        main.starts_with(") -> core.nil row(| 0) convention(direct)"),
+        main.starts_with("['a0]() -> core.nil row(| 'a0) inferred convention(direct)"),
         "{main}"
     );
     assert!(main.contains("callee = @\"apply$9D\""), "{main}");
@@ -204,7 +204,7 @@ fn main() ->{Io} Nil {
     let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
-        .split("tribute_control.func @main(")
+        .split("tribute_control.func @main")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
@@ -214,12 +214,12 @@ fn main() ->{Io} Nil {
     assert!(!main.contains("callee = @app}"), "{main}");
     // `step` is used at an empty row, so it and `each` need no Cps control.
     let each = ir
-        .split("tribute_control.func @each(")
+        .split("tribute_control.func @each")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("each");
     assert!(
-        each.starts_with("%0: core.i32) -> core.i32 row(| 0) convention(direct)"),
+        each.starts_with("['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct)"),
         "{each}"
     );
     assert!(
@@ -257,12 +257,14 @@ fn main() -> Nil {
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     assert!(ir.contains("callee = @\"countdown$9D\""), "{ir}");
     let instance = ir
-        .split("tribute_control.func @\"countdown$9D\"(")
+        .split("tribute_control.func @\"countdown$9D\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("the Direct instance");
     assert!(
-        instance.starts_with("%0: core.i32) -> core.i32 row(| 0) convention(direct)"),
+        instance.starts_with(
+            "['a0, local 'a1](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct)"
+        ),
         "{instance}"
     );
     assert!(
@@ -319,7 +321,7 @@ fn main() ->{Io} Nil {
     let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let function = |name: &str| {
-        ir.split(&format!("tribute_control.func @\"{name}\"("))
+        ir.split(&format!("tribute_control.func @\"{name}\""))
             .nth(1)
             .and_then(|rest| rest.split("\n  }\n").next())
             .unwrap_or_else(|| panic!("{name} in\n{ir}"))
@@ -330,7 +332,7 @@ fn main() ->{Io} Nil {
     assert!(!run.contains("callee = @\"m::app\"}"), "{run}");
     let each = function("m::each");
     assert!(
-        each.starts_with("%0: core.i32) -> core.i32 row(| 0) convention(direct)"),
+        each.starts_with("['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct)"),
         "{each}"
     );
     assert!(

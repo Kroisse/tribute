@@ -5,7 +5,7 @@ expression: ir_text
 core.module @test {
   !Option = adt.enum<Option { Some(tribute_rt.anyref), None() }>
 
-  tribute_control.func @example(%0: adt.typeref<{name = "Option"}>) -> core.i32 row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
+  tribute_control.func @example['a0](%0: adt.typeref<{name = "Option"}>) -> core.i32 row(| 'a0) inferred convention(direct) {
       %1 = adt.variant_is %0 {tag = "Some", type = !Option} : core.i1
       %2 = scf.if %1 : core.i1 {
           %3 = adt.variant_cast %0 {tag = "Some", type = !Option} : !Option

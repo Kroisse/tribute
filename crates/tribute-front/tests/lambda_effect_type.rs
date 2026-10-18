@@ -393,7 +393,7 @@ fn main() -> Nat {
     assert_eq!(
         ir_text
             .match_indices(
-                "tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_nat | 0) convention(cps)"
+                "tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_nat | 'a0) convention(cps)"
             )
             .count(),
         4,

@@ -723,14 +723,28 @@ attribute와 body를 출력하고 entry label을 생략한다. `captures [...]`�
 없어도 `captures []`로 항상 출력하며 canonical 순서는 convention, captures,
 선택적 attributes, body다.
 
-Row는 convention 앞에 `row(@A, @B | 1)` 형식으로 쓴다. Instance 목록과 `|` 뒤의
-tail binder index이며, instance가 없으면 `row(| 1)`, tail이 없으면 `row(@A)`다. 닫힌
-빈 row는 쓰지 않는다. `row_binders`, `row_unions`, `inferred_row`는 선택적
-`attributes {...}`에 둔다.
+Row binder는 위치로 이름을 붙여 `'a0`, `'a1`, …로 쓴다. `func`는 symbol 바로 뒤의
+`[...]`에 binder를 순서대로 선언한다. 종류가 `param`이 아니면 이름 앞에 `ability_arg`,
+`local`, `body` 중 하나를 쓰고, 합집합의 결과인 binder는 `'a0 = 'a1 | 'a2`처럼 source를
+선언 순서로 적는다. Binder가 없으면 `[...]`를 생략한다. 이름은 위치에서 정해지므로
+parser는 `i`번째 binder의 이름이 `'ai`가 아니면 거부한다. 이 표기가
+`row_binders`와 `row_unions` 속성을 대신한다.
+
+Row는 convention 앞에 `row(@A, @B | 'a1)` 형식으로 쓴다. Instance 목록과 `|` 뒤의
+tail binder이며, instance가 없으면 `row(| 'a1)`, tail이 없으면 `row(@A)`다. 닫힌 빈
+row는 쓰지 않는다. [추론된 row](#추론된-row)인 정의는 row와 convention 사이에
+`inferred`를 쓰며 이것이 `inferred_row` 속성을 대신한다. `lambda`의 row tail은 둘러싼
+`func`의 binder 이름을 쓴다. 이름은 위치에서 정해지므로 type alias 안의 tail도 같은
+뜻이다.
 
 ```text
-tribute_control.func @map(%xs: !List, %f: !F) -> !List row(| 0) convention(cps)
-    attributes {row_binders = ["param"]} {
+tribute_control.func @map['a0](%xs: !List, %f: !F) -> !List row(| 'a0) convention(cps) {
+  ...
+}
+
+tribute_control.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: T) -> T row(| 'a0) convention(cps)
+
+tribute_control.func @main['a0]() -> core.nil row(| 'a0) inferred convention(direct) {
   ...
 }
 ```

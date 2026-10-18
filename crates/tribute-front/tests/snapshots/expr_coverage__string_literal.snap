@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @greeting() -> tribute_rt.anyref row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
+  tribute_control.func @greeting['a0]() -> tribute_rt.anyref row(| 'a0) inferred convention(direct) {
       %0 = adt.string_const {value = "hello"} : tribute_rt.anyref
       tribute_control.return %0
   }

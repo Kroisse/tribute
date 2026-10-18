@@ -420,7 +420,7 @@ fn main() -> Nil {
     let ir = run_ast_pipeline_with_ir(db, source);
     let main = ir
         .lines()
-        .find(|line| line.contains("func @main("))
+        .find(|line| line.contains("func @main(") || line.contains("func @main["))
         .expect("IR must contain main");
     assert!(
         main.contains("convention(direct)"),

@@ -3,10 +3,10 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @id(%0: core.i32) -> core.i32 row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
+  tribute_control.func @id['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {
       tribute_control.return %0
   }
-  tribute_control.func @test_ref() -> core.i32 row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param", "local"]} {
+  tribute_control.func @test_ref['a0, local 'a1]() -> core.i32 row(| 'a0) inferred convention(direct) {
       %0 = tribute_control.func_ref {func_ref = @id, row_args = [{tail = 1}]} : tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 1}, tribute.calling_convention = 0}>
       %1 = arith.const {value = 1} : core.i32
       %2 = tribute_control.call_indirect %0, %1 : core.i32

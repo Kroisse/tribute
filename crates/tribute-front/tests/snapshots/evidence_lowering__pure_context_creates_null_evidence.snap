@@ -7,7 +7,7 @@ core.module @test {
       %0 = tribute_control.perform {ability = @ability_1_3_Ask, op_name = "ask", operation_kind = "op"} : core.i32
       tribute_control.return %0
   }
-  tribute_control.func @main() -> core.nil row(| 0) convention(direct) attributes {inferred_row = true, row_binders = ["param"]} {
+  tribute_control.func @main['a0]() -> core.nil row(| 'a0) inferred convention(direct) {
       %0 = tribute_control.handle : core.i32 {
           %1 = tribute_control.call {callee = @use_ask} : core.i32
           tribute_control.yield %1
