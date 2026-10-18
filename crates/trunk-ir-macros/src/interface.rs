@@ -109,6 +109,9 @@ fn parse_trait(item: TokenStream) -> Result<InterfaceTrait, String> {
 
 type TokenIter = std::iter::Peekable<proc_macro2::token_stream::IntoIter>;
 
+/// The vtable's `name` field and the handle's generated functions.
+const RESERVED_METHOD_NAMES: &[&str] = &["name", "get", "is_implemented", "implementors", "op"];
+
 fn parse_outer_attrs(iter: &mut TokenIter) -> Result<Vec<TokenStream>, String> {
     let mut attrs = Vec::new();
     while matches!(iter.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
@@ -153,6 +156,14 @@ fn parse_method(iter: &mut TokenIter, interface: &Ident) -> Result<(TokenStream,
         }
         _ => return Err("expected a method name".into()),
     };
+    if RESERVED_METHOD_NAMES
+        .iter()
+        .any(|reserved| name == reserved)
+    {
+        return Err(format!(
+            "interface method name `{name}` is reserved by the generated vtable and handle"
+        ));
+    }
 
     let mut lifetimes = TokenStream::new();
     if matches!(iter.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '<') {
@@ -642,6 +653,10 @@ mod tests {
         assert!(
             expand_err(quote! { trait X: DialectOp { fn f(self, n: u32); } })
                 .contains("IR context")
+        );
+        assert!(
+            expand_err(quote! { trait X: DialectOp { fn op(self, ctx: &IrContext); } })
+                .contains("reserved")
         );
     }
 }
