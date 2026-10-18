@@ -168,6 +168,17 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
         }
         None => quote!(None),
     };
+    // Likewise for a missing `OpAsmFormat` impl and `#[asm_format]`.
+    let asm_format = match op.asm_format {
+        Some(span) => {
+            let mut sname = struct_name(&op.name);
+            sname.set_span(span);
+            quote_spanned!(span=> Some(
+                <#sname as #crate_path::ops::__private::DeclaredOpAsmFormat>::ASM_HOOKS
+            ))
+        }
+        None => quote!(None),
+    };
 
     let full_name = format!("{dialect}.{op_name}");
     quote! {
@@ -186,6 +197,7 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
                 relations: &[#(#relations),*],
             },
             verifier: #verifier,
+            asm_format: #asm_format,
         }
     }
 }

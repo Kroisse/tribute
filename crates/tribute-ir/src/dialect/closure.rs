@@ -22,6 +22,7 @@ mod closure {
     /// Captured values are referenced from the parent scope (NOT isolated from above).
     /// A downstream `lower_closure_lambda` pass extracts the body into a top-level
     /// `func.func` and replaces this op with `closure.new`.
+    #[asm_format]
     fn lambda(captures: Variadic<_>) -> Value<_> {
         #[region(body)]
         {}
@@ -43,21 +44,18 @@ inventory::submit! { trunk_ir::op_interface::PureOps::register::<Lambda>() }
 fn print_closure_lambda(
     h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
     op: trunk_ir::OpRef,
-    indent: usize,
 ) -> std::fmt::Result {
     use std::fmt::Write;
     use trunk_ir::ops::DialectType;
 
     let Some(region) = h.ctx().op_region(op, 0) else {
-        return h.print_generic(op, indent);
+        return h.print_generic(op);
     };
-
-    let indent_str = " ".repeat(indent);
 
     // Assign result name
     let results = h.ctx().op_results(op);
     let name = h.assign_value_name(results[0]);
-    write!(h, "{indent_str}{name} = closure.lambda")?;
+    write!(h, "{name} = closure.lambda")?;
 
     // "(%param: type, ...)" — entry block args (formal parameters)
     let entry_args: Vec<_> = {
@@ -129,9 +127,7 @@ fn print_closure_lambda(
     }
 
     // " { body }" — entry label elided
-    writeln!(h, " {{")?;
-    h.print_region_eliding_entry(region, indent + 2)?;
-    writeln!(h, "{indent_str}}}")
+    h.print_body(region)
 }
 
 /// Lookahead: does the input start with an attribute dict `{key = ...}`?
@@ -240,8 +236,18 @@ fn parse_closure_lambda<'a>(
     })
 }
 
-inventory::submit! {
-    trunk_ir::asm_format::OpAsmFormat::new::<Lambda>(print_closure_lambda, parse_closure_lambda)
+impl trunk_ir::asm_format::OpAsmFormat for Lambda {
+    fn print(self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+        print_closure_lambda(h, self.op_ref())
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
+        parse_closure_lambda(input, results, sym_name)
+    }
 }
 
 impl trunk_ir::op_interface::CallableOwnerModel for Lambda {
