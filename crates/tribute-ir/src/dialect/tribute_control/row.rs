@@ -389,6 +389,14 @@ fn text(text: &str) -> String {
     encoded
 }
 
+/// A symbol path, one part per component.
+fn path_key(path: &SymbolPath) -> String {
+    key(
+        "path",
+        path.iter().map(|component| component.with_str(text)),
+    )
+}
+
 fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
     if let Some(elements) = logical_tuple_elements(ctx, ty) {
         return key(
@@ -415,12 +423,9 @@ fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
         let row = signature.row(ctx);
         let row = key(
             "row",
-            row.instances
-                .iter()
-                .map(|instance| text(&instance.to_string()))
-                .chain([row
-                    .tail
-                    .map_or_else(|| "closed".to_owned(), |tail| tail.to_string())]),
+            row.instances.iter().map(path_key).chain([row
+                .tail
+                .map_or_else(|| "closed".to_owned(), |tail| tail.to_string())]),
         );
         return key(
             "callable",
@@ -449,7 +454,7 @@ fn attribute_key(ctx: &IrContext, attr: &Attribute) -> String {
         Attribute::Int(value) => key("int", [text(&value.to_string())]),
         Attribute::FloatBits(bits) => key("float", [format!("{bits:x}")]),
         Attribute::String(value) => key("string", [text(ctx.str(*value))]),
-        Attribute::SymbolRef(path) => key("symbol", [text(&path.to_string())]),
+        Attribute::SymbolRef(path) => key("symbol", [path_key(path)]),
         Attribute::Type(ty) => key("type", [type_key(ctx, *ty)]),
         Attribute::List(items) => key("list", items.iter().map(|item| attribute_key(ctx, item))),
         Attribute::Dict(entries) => key(

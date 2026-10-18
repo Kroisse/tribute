@@ -361,3 +361,21 @@ fn tuple_names_keep_attribute_names_and_text_apart() {
         "{name}"
     );
 }
+
+#[test]
+fn tuple_names_keep_symbol_path_components_apart() {
+    let mut ctx = IrContext::new();
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+    let names = [SymbolPath::new(["a::b"]), SymbolPath::new(["a", "b"])].map(|instance| {
+        let callable = func_sig_with_row(
+            &mut ctx,
+            i32_ty,
+            [i32_ty],
+            &Row::new([instance], None),
+            CallingConvention::Cps,
+        )
+        .as_type_ref();
+        logical_tuple_name(&ctx, &[callable])
+    });
+    assert_ne!(names[0], names[1]);
+}
