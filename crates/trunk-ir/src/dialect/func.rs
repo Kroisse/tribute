@@ -690,18 +690,12 @@ impl Func {
 
 /// Print func.func with decomposed signature:
 /// `func.func @name(%arg: type, ...) -> return_type effects eff_type { body }`
-fn print_func(
-    h: &mut crate::printer::OpPrintHelper<'_, '_>,
-    op: crate::OpRef,
-    indent: usize,
-) -> std::fmt::Result {
+fn print_func(h: &mut crate::printer::OpPrintHelper<'_, '_>, op: crate::OpRef) -> std::fmt::Result {
     use std::fmt::Write;
-
-    let indent_str = " ".repeat(indent);
 
     let sym_name = h.ctx().op_attrs(op).get_str("sym_name");
 
-    write!(h, "{indent_str}func.func")?;
+    write!(h, "func.func")?;
 
     // Function name
     if let Some(name) = sym_name {
@@ -801,12 +795,7 @@ fn print_func(
     }
 
     if let Some(region) = region {
-        // Body
-        writeln!(h, " {{")?;
-        h.print_region_eliding_entry(region, indent + 2)?;
-        writeln!(h, "{indent_str}}}")?;
-    } else {
-        writeln!(h)?;
+        h.print_body(region)?;
     }
 
     Ok(())
@@ -863,12 +852,8 @@ fn parse_func<'a>(
 }
 
 impl crate::asm_format::AsmFormat for Func {
-    fn print(
-        self,
-        h: &mut crate::printer::OpPrintHelper<'_, '_>,
-        indent: usize,
-    ) -> std::fmt::Result {
-        print_func(h, self.op_ref(), indent)
+    fn print(self, h: &mut crate::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+        print_func(h, self.op_ref())
     }
 
     fn parse<'a>(

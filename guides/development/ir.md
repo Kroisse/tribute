@@ -141,9 +141,10 @@ where
   every generated check passed.
 - `#[asm_format]` on an operation requires an implementation of
   `trunk_ir::asm_format::AsmFormat` for its wrapper: `print` writes the
-  operation through an `OpPrintHelper`, and `parse` reads the rest of it
-  after the generic parser consumed its results, name, and optional
-  `@sym_name`. The printer and the parser reach these hooks through the
+  operation's line through an `OpPrintHelper`, which owns its indentation
+  and newline (`print_body` prints a region as ` { .. }`), and `parse` reads
+  the rest of it after the generic parser consumed its results, name, and
+  optional `@sym_name`. The printer and the parser reach these hooks through the
   operation's `OpDef`. A parse that backtracks on input shaped like generic
   syntax (`{`, `%`, or `:`) falls back to the generic form. It reserves the
   entity names `print` and `parse`.

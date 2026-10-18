@@ -395,6 +395,8 @@ impl Write for TypePrintHelper<'_, '_> {
 pub struct OpPrintHelper<'a, 'ctx> {
     state: &'a mut PrintState<'ctx>,
     f: &'a mut dyn Write,
+    /// The indentation of the operation's line.
+    indent: usize,
 }
 
 impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
@@ -428,12 +430,12 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         self.state.write_attribute(&mut *self.f, attr)
     }
 
-    /// Print an operation with generic assembly.
+    /// Print the operation with generic assembly.
     ///
     /// Custom formats use this when their concise form cannot represent the
     /// complete operation without loss.
-    pub fn print_generic(&mut self, op: OpRef, indent: usize) -> fmt::Result {
-        print_generic_op(self.state, &mut *self.f, op, indent)
+    pub fn print_generic(&mut self, op: OpRef) -> fmt::Result {
+        print_generic_op(self.state, &mut *self.f, op, self.indent)
     }
 
     /// Reset value and block numbering (for func.func — each function restarts at %0).
@@ -441,14 +443,21 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         self.state.reset_numbering();
     }
 
-    /// Print a region with the entry block label elided.
+    /// Print ` { .. }` holding a region with the entry block label elided.
     ///
     /// Entry block args are assumed to have been printed externally (e.g., as
     /// function parameters in the operation signature). For single-block regions,
     /// the entry label is omitted entirely. For multi-block regions, the entry
     /// block label is printed without args, and non-entry blocks are printed
     /// normally.
-    pub fn print_region_eliding_entry(&mut self, region: RegionRef, indent: usize) -> fmt::Result {
+    pub fn print_body(&mut self, region: RegionRef) -> fmt::Result {
+        self.f.write_str(" {\n")?;
+        self.print_region_eliding_entry(region, self.indent + 2)?;
+        let indent_str = " ".repeat(self.indent);
+        write!(self.f, "{indent_str}}}")
+    }
+
+    fn print_region_eliding_entry(&mut self, region: RegionRef, indent: usize) -> fmt::Result {
         // The context outlives `self`, so the child lists are read in place
         // while the print state is updated.
         let ctx = self.state.ctx;
@@ -877,15 +886,19 @@ fn print_operation(
         return print_module_op(state, f, op, indent);
     }
 
+    let indent_str = " ".repeat(indent);
+    f.write_str(&indent_str)?;
     // Check the operation's custom assembly format
     if let Some(hooks) = crate::OpDef::of(state.ctx, op).and_then(|def| def.asm_format) {
-        let mut helper = OpPrintHelper { state, f };
-        return (hooks.print)(&mut helper, op, indent);
+        (hooks.print)(&mut OpPrintHelper { state, f, indent }, op)?;
+    } else {
+        print_generic_op(state, f, op, indent)?;
     }
-
-    print_generic_op(state, f, op, indent)
+    f.write_char('\n')
 }
 
+/// Print an operation in generic syntax, after its line's indentation and
+/// before its newline.
 fn print_generic_op(
     state: &mut PrintState<'_>,
     f: &mut dyn Write,
@@ -893,7 +906,6 @@ fn print_generic_op(
     indent: usize,
 ) -> fmt::Result {
     let indent_str = " ".repeat(indent);
-    write!(f, "{indent_str}")?;
 
     // Results
     let results = state.ctx.op_results(op);
@@ -973,7 +985,7 @@ fn print_generic_op(
         write!(f, "{indent_str}}}")?;
     }
 
-    f.write_char('\n')
+    Ok(())
 }
 
 // ============================================================================

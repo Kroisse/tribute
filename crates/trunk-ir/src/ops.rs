@@ -152,8 +152,8 @@ pub mod __private {
     #[diagnostic::do_not_recommend]
     impl<T: AsmFormat> DeclaredAsmFormat for T {
         const ASM_HOOKS: OpAsmHooks = OpAsmHooks {
-            print: |h, op, indent| match T::from_op(h.ctx(), op) {
-                Ok(op) => op.print(h, indent),
+            print: |h, op| match T::from_op(h.ctx(), op) {
+                Ok(op) => op.print(h),
                 Err(_) => Err(std::fmt::Error),
             },
             parse: T::parse,

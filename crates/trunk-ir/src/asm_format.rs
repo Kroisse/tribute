@@ -61,8 +61,9 @@ pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
     note = "add `impl AsmFormat for {Self} {{ fn print(..) {{ .. }} fn parse(..) {{ .. }} }}`"
 )]
 pub trait AsmFormat: DialectOp {
-    /// Print the operation. Called instead of generic printing.
-    fn print(self, h: &mut OpPrintHelper<'_, '_>, indent: usize) -> fmt::Result;
+    /// Print the operation. Called instead of generic printing, after the
+    /// line's indentation and before its newline.
+    fn print(self, h: &mut OpPrintHelper<'_, '_>) -> fmt::Result;
 
     /// Parse the operation. Called after `dialect.op` and optional
     /// `@sym_name` are consumed; `results` and `sym_name` are already parsed
@@ -85,7 +86,7 @@ pub struct OpAsmHooks {
 }
 
 /// Custom printer of an [`OpAsmHooks`].
-pub type OpPrintFn = fn(&mut OpPrintHelper<'_, '_>, OpRef, usize) -> fmt::Result;
+pub type OpPrintFn = fn(&mut OpPrintHelper<'_, '_>, OpRef) -> fmt::Result;
 
 /// Custom parser of an [`OpAsmHooks`].
 pub type OpParseFn = for<'a> fn(

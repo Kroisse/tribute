@@ -938,22 +938,18 @@ fn print_signature_params(
     write!(h, ")")
 }
 
-fn print_func(
-    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
-    op: OpRef,
-    indent: usize,
-) -> fmt::Result {
+fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fmt::Result {
     use fmt::Write;
 
     let symbol = h.ctx().op_attrs(op).get_str("sym_name");
     let callable_ty = h.ctx().op_attrs(op).get_type("type");
     let region = h.ctx().op_region(op, 0);
     if !has_concise_func_sig(h.ctx(), callable_ty) {
-        return h.print_generic(op, indent);
+        return h.print_generic(op);
     }
     let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
 
-    write!(h, "{}tribute_control.func ", " ".repeat(indent))?;
+    write!(h, "tribute_control.func ")?;
     if let Some(symbol) = symbol {
         h.write_symbol_text(symbol)?;
     } else {
@@ -977,12 +973,9 @@ fn print_func(
     }
     print_extra_attributes(h, op, &["sym_name", "type", CALLING_CONVENTION_ATTR])?;
 
-    if let Some(region) = region {
-        writeln!(h, " {{")?;
-        h.print_region_eliding_entry(region, indent + 2)?;
-        writeln!(h, "{}}}", " ".repeat(indent))
-    } else {
-        writeln!(h)
+    match region {
+        Some(region) => h.print_body(region),
+        None => Ok(()),
     }
 }
 
@@ -1148,12 +1141,8 @@ fn parse_func<'a>(
 }
 
 impl trunk_ir::asm_format::AsmFormat for Func {
-    fn print(
-        self,
-        h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
-        indent: usize,
-    ) -> std::fmt::Result {
-        print_func(h, self.op_ref(), indent)
+    fn print(self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+        print_func(h, self.op_ref())
     }
 
     fn parse<'a>(
@@ -1167,17 +1156,13 @@ impl trunk_ir::asm_format::AsmFormat for Func {
 
 // === Custom assembly: tribute_control.lambda ===
 
-fn print_lambda(
-    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
-    op: OpRef,
-    indent: usize,
-) -> fmt::Result {
+fn print_lambda(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fmt::Result {
     use fmt::Write;
 
     let result_types = h.ctx().op_result_types(op);
     let callable_ty = result_types.first().copied();
     if result_types.len() != 1 || !has_concise_func_sig(h.ctx(), callable_ty) {
-        return h.print_generic(op, indent);
+        return h.print_generic(op);
     }
 
     let result = h.ctx().op_results(op).first().copied();
@@ -1185,7 +1170,6 @@ fn print_lambda(
     let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
     let region = h.ctx().op_region(op, 0);
 
-    write!(h, "{}", " ".repeat(indent))?;
     if let Some(name) = result_name {
         write!(h, "{name} = ")?;
     }
@@ -1220,12 +1204,9 @@ fn print_lambda(
     write!(h, "]")?;
     print_extra_attributes(h, op, &[CALLING_CONVENTION_ATTR])?;
 
-    if let Some(region) = region {
-        writeln!(h, " {{")?;
-        h.print_region_eliding_entry(region, indent + 2)?;
-        writeln!(h, "{}}}", " ".repeat(indent))
-    } else {
-        writeln!(h)
+    match region {
+        Some(region) => h.print_body(region),
+        None => Ok(()),
     }
 }
 
@@ -1300,12 +1281,8 @@ fn parse_lambda<'a>(
 }
 
 impl trunk_ir::asm_format::AsmFormat for Lambda {
-    fn print(
-        self,
-        h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
-        indent: usize,
-    ) -> std::fmt::Result {
-        print_lambda(h, self.op_ref(), indent)
+    fn print(self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+        print_lambda(h, self.op_ref())
     }
 
     fn parse<'a>(
