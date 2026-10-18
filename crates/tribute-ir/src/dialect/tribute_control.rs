@@ -434,59 +434,90 @@ fn verify_evidence_steps(
 }
 
 impl trunk_ir::ops::Verify for FuncRef {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        row_args(ctx, self.op_ref()).map(drop)
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        Ok(row_args(ctx, self.op_ref()).map(drop)?)
     }
 }
 
 impl trunk_ir::ops::Verify for Call {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         row_args(ctx, self.op_ref())?;
-        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
+        Ok(verify_evidence_plan(
+            ctx,
+            self.op_ref(),
+            EvidencePlanSite::Source,
+        )?)
     }
 }
 
 impl trunk_ir::ops::Verify for CallIndirect {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        Ok(verify_evidence_plan(
+            ctx,
+            self.op_ref(),
+            EvidencePlanSite::Source,
+        )?)
     }
 }
 
 impl trunk_ir::ops::Verify for TailCall {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         row_args(ctx, self.op_ref())?;
-        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
+        Ok(verify_evidence_plan(
+            ctx,
+            self.op_ref(),
+            EvidencePlanSite::Source,
+        )?)
     }
 }
 
 impl trunk_ir::ops::Verify for TailCallIndirect {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        Ok(verify_evidence_plan(
+            ctx,
+            self.op_ref(),
+            EvidencePlanSite::Source,
+        )?)
     }
 }
 
 impl trunk_ir::ops::Verify for Resume {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Source)
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        Ok(verify_evidence_plan(
+            ctx,
+            self.op_ref(),
+            EvidencePlanSite::Source,
+        )?)
     }
 }
 
 impl trunk_ir::ops::Verify for Handle {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Handle)
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        Ok(verify_evidence_plan(
+            ctx,
+            self.op_ref(),
+            EvidencePlanSite::Handle,
+        )?)
     }
 }
 
 /// Why a name-matching source signature does not satisfy its storage contract.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
 pub enum FuncSigTypeError {
-    MissingCount(&'static str),
-    InvalidCount(&'static str),
+    #[display("missing required `{_0}` u32 attribute")]
+    MissingCount(#[error(not(source))] &'static str),
+    #[display("`{_0}` must be a u32 attribute")]
+    InvalidCount(#[error(not(source))] &'static str),
+    #[display("input and result counts overflow u32")]
     CountOverflow,
+    #[display("input and result counts must equal the parameter count")]
     LengthMismatch,
-    ResultCount(u32),
+    #[display("a source signature has exactly one result, found {_0}")]
+    ResultCount(#[error(not(source))] u32),
+    #[display("malformed calling convention")]
     Convention,
     /// The ability row is malformed, or written out although closed and empty.
+    #[display("malformed ability row")]
     Row,
 }
 
@@ -494,9 +525,8 @@ pub enum FuncSigTypeError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(TypeRef);
 
-static FUNC_SIG_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
-    name: trunk_ir::name::QualifiedName::new("tribute_control.func_sig"),
-};
+static FUNC_SIG_DEF: trunk_ir::TypeDef =
+    trunk_ir::TypeDef::new("tribute_control.func_sig").with_verifier::<FuncSig>();
 
 inventory::submit! {
     trunk_ir::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
@@ -507,7 +537,7 @@ impl DialectType for FuncSig {
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
         Self::matches(ctx, ty)
-            .then(|| Self::validate(ctx, ty).ok())
+            .then(|| <Self as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty).ok())
             .flatten()
     }
 
@@ -554,19 +584,19 @@ impl From<FuncSig> for TypeRef {
     }
 }
 
-impl FuncSig {
-    fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
+impl trunk_ir::type_verifier::VerifyType for FuncSig {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
         let data = ctx.get_type(ty);
         let inputs = read_count(ctx, &data.attrs, trunk_ir::dialect::func::NUM_INPUTS_ATTR)?;
         let results = read_count(ctx, &data.attrs, trunk_ir::dialect::func::NUM_RESULTS_ATTR)?;
         if results != 1 {
-            return Err(FuncSigTypeError::ResultCount(results));
+            return Err(FuncSigTypeError::ResultCount(results).into());
         }
         let total = inputs
             .checked_add(results)
             .ok_or(FuncSigTypeError::CountOverflow)?;
         if usize::try_from(total).ok() != Some(data.params.len()) {
-            return Err(FuncSigTypeError::LengthMismatch);
+            return Err(FuncSigTypeError::LengthMismatch.into());
         }
         CallingConvention::try_from(
             ctx.type_attrs(ty)
@@ -577,14 +607,16 @@ impl FuncSig {
         if let Some(row) = data.attrs.view(ctx).get(ABILITY_ROW_ATTR)
             && Row::from_attribute(ctx, row).is_ok_and(|row| row.is_empty())
         {
-            return Err(FuncSigTypeError::Row);
+            return Err(FuncSigTypeError::Row.into());
         }
         row::stored_row(ctx, data)
             .expect("a func_sig stores a row")
             .map_err(|_| FuncSigTypeError::Row)?;
         Ok(Self(ty))
     }
+}
 
+impl FuncSig {
     pub fn as_type_ref(self) -> TypeRef {
         self.0
     }
@@ -1780,7 +1812,7 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
             continue;
         }
         if FuncSig::matches(ctx, ty) {
-            if let Err(error) = FuncSig::validate(ctx, ty) {
+            if let Err(error) = <FuncSig as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty) {
                 push_type_error(
                     errors,
                     format!("{ty}: malformed tribute_control.func_sig: {error:?}"),

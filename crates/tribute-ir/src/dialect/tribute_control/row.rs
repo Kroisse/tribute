@@ -2,6 +2,7 @@
 //! declares, and the substitution a reference applies to its callee's type.
 
 use rustc_hash::FxHashMap as HashMap;
+use trunk_ir::ops::DialectType;
 use trunk_ir::types::{Attribute, AttributeMap, TypeData};
 use trunk_ir::{IrContext, Symbol, SymbolPath, TypeRef};
 
@@ -526,9 +527,7 @@ pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]
     if !ctx.get_type(layout).name.is(ctx, "adt.struct") {
         return None;
     }
-    adt::Struct::validate(ctx, layout)
-        .ok()
-        .map(|layout| layout.field_types(ctx))
+    adt::Struct::from_type_ref(ctx, layout).map(|layout| layout.field_types(ctx))
 }
 
 /// Where substitution finds or makes the types it produces.

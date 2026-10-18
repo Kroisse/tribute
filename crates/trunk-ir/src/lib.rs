@@ -25,7 +25,6 @@ pub mod op_interface;
 // === Textual assembly format hooks ===
 pub mod asm_format;
 pub mod attr_kind;
-mod registry;
 
 // === Operation and type utilities ===
 pub mod name;

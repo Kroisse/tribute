@@ -548,8 +548,8 @@ pub struct FuncSig(TypeRef);
 
 crate::impl_func_sig_constraint!(FuncSig, "wasm.func_sig");
 
-impl FuncSig {
-    pub(crate) fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
+impl crate::type_verifier::VerifyType for FuncSig {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, crate::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(data.name == <Self as DialectType>::NAME);
         let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)?;
@@ -562,11 +562,14 @@ impl FuncSig {
                 num_inputs,
                 num_results,
                 params: data.params.len(),
-            });
+            }
+            .into());
         }
         Ok(Self(ty))
     }
+}
 
+impl FuncSig {
     fn counts(self, ctx: &IrContext) -> (usize, usize) {
         let data = ctx.get_type(self.0);
         let inputs = usize::try_from(
@@ -618,9 +621,8 @@ impl FuncSig {
     }
 }
 
-static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef {
-    name: crate::name::QualifiedName::new("wasm.func_sig"),
-};
+static FUNC_SIG_DEF: crate::type_def::TypeDef =
+    crate::type_def::TypeDef::new("wasm.func_sig").with_verifier::<FuncSig>();
 
 inventory::submit! {
     crate::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
@@ -631,7 +633,7 @@ impl DialectType for FuncSig {
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
         Self::matches(ctx, ty)
-            .then(|| Self::validate(ctx, ty).ok())
+            .then(|| <Self as crate::type_verifier::VerifyType>::verify(ctx, ty).ok())
             .flatten()
     }
 

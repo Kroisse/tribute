@@ -112,8 +112,8 @@ impl<'a> PrintState<'a> {
             return self.write_func_sig_type(f, ty, inputs, results);
         }
         let data = self.ctx.get_type(ty);
-        if let Some(format) = crate::asm_format::lookup_type_asm_format(data.name)
-            && let Some(result) = (format.print_fn)(&mut TypePrintHelper { state: self, f }, ty)
+        if let Some(hooks) = data.name.def().and_then(|def| def.asm_format)
+            && let Some(result) = (hooks.print)(&mut TypePrintHelper { state: self, f }, ty)
         {
             return result;
         }
@@ -330,8 +330,8 @@ fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef
 // TypePrintHelper — public wrapper for custom type format printers
 // ============================================================================
 
-/// Printer access for custom [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat)
-/// implementations.
+/// Printer access for custom
+/// [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat) implementations.
 ///
 /// Implements `fmt::Write` so `write!(helper, ...)` can be used directly.
 pub struct TypePrintHelper<'a, 'ctx> {

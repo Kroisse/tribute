@@ -250,20 +250,20 @@ pub enum StructTypeError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Struct(TypeRef);
 
-impl Struct {
+impl trunk_ir::type_verifier::VerifyType for Struct {
     /// Validate a name-matching `adt.struct`.
-    pub fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, StructTypeError> {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
         if ctx.type_attrs(ty).contains_key("fields") {
-            return Err(StructTypeError::FieldsAttribute);
+            return Err(StructTypeError::FieldsAttribute.into());
         }
         if ctx
             .type_attrs(ty)
             .get_string_ref(STRUCT_NAME_ATTR)
             .is_none()
         {
-            return Err(StructTypeError::MissingName);
+            return Err(StructTypeError::MissingName.into());
         }
         let mut names: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
         for index in 0..data.params.len() {
@@ -273,15 +273,15 @@ impl Struct {
                 .get_string_ref(STRUCT_NAME_ATTR)
                 .ok_or(StructTypeError::MissingFieldName(index))?;
             if names.contains(&name) {
-                return Err(StructTypeError::DuplicateFieldName(
-                    ctx.str(name).to_owned(),
-                ));
+                return Err(StructTypeError::DuplicateFieldName(ctx.str(name).to_owned()).into());
             }
             names.push(name);
         }
         Ok(Self(ty))
     }
+}
 
+impl Struct {
     pub fn as_type_ref(self) -> TypeRef {
         self.0
     }
@@ -389,9 +389,9 @@ fn field_name(ctx: &IrContext, attrs: &AttributeMap) -> StringRef {
         .expect("validated adt.struct fields must retain their names")
 }
 
-static STRUCT_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
-    name: trunk_ir::name::QualifiedName::new("adt.struct"),
-};
+static STRUCT_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new("adt.struct")
+    .with_verifier::<Struct>()
+    .with_asm_format::<Struct>();
 
 inventory::submit! {
     trunk_ir::type_def::TypeDefRegistration(&STRUCT_DEF)
@@ -404,18 +404,12 @@ impl DialectType for Struct {
         if !Self::matches(ctx, ty) {
             return None;
         }
-        Self::validate(ctx, ty).ok()
+        <Self as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty).ok()
     }
 
     fn as_type_ref(&self) -> TypeRef {
         self.0
     }
-}
-
-inventory::submit! {
-    trunk_ir::type_verifier::TypeVerifier::new::<Struct>(|ctx, ty| {
-        Struct::validate(ctx, ty).map(|_| ()).map_err(|error| error.to_string())
-    })
 }
 
 impl From<Struct> for TypeRef {
@@ -511,16 +505,17 @@ fn finish_struct_type(
 //
 // Names are bare identifiers, or quoted strings when they are not identifiers.
 
-inventory::submit! {
-    trunk_ir::asm_format::TypeAsmFormat::new::<Struct>(print_struct_type, parse_struct_type)
-}
+impl trunk_ir::asm_format::TypeAsmFormat for Struct {
+    fn print(self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        write_struct_type(h, self)
+    }
 
-fn print_struct_type(
-    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
-    ty: TypeRef,
-) -> Option<std::fmt::Result> {
-    let adt_struct = Struct::from_type_ref(h.ctx(), ty)?;
-    Some(write_struct_type(h, adt_struct))
+    fn parse<'a>(
+        input: &mut &'a str,
+        name: &'a str,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
+        parse_struct_type(input, name)
+    }
 }
 
 fn write_struct_type(
@@ -640,35 +635,35 @@ pub enum EnumTypeError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Enum(TypeRef);
 
-impl Enum {
+impl trunk_ir::type_verifier::VerifyType for Enum {
     /// Validate a name-matching `adt.enum`.
-    pub fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, EnumTypeError> {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
         let attrs = ctx.type_attrs(ty);
         if attrs.contains_key("variants") {
-            return Err(EnumTypeError::VariantsAttribute);
+            return Err(EnumTypeError::VariantsAttribute.into());
         }
         // The syntax has no place for them, so printing would drop them.
         if attrs.contains_key(PARAM_ATTRS_ATTR) {
-            return Err(EnumTypeError::VariantAttributes);
+            return Err(EnumTypeError::VariantAttributes.into());
         }
         if attrs.get_string_ref(STRUCT_NAME_ATTR).is_none() {
-            return Err(EnumTypeError::MissingName);
+            return Err(EnumTypeError::MissingName.into());
         }
         let mut names: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
         for (index, &variant) in data.params.iter().enumerate() {
             let name = variant_name(ctx, variant).ok_or(EnumTypeError::MalformedVariant(index))?;
             if names.contains(&name) {
-                return Err(EnumTypeError::DuplicateVariantName(
-                    ctx.str(name).to_owned(),
-                ));
+                return Err(EnumTypeError::DuplicateVariantName(ctx.str(name).to_owned()).into());
             }
             names.push(name);
         }
         Ok(Self(ty))
     }
+}
 
+impl Enum {
     pub fn as_type_ref(self) -> TypeRef {
         self.0
     }
@@ -726,9 +721,7 @@ macro_rules! nominal_types {
         impl $wrapper {
             /// The type's registered definition.
             pub const DEF: &'static trunk_ir::TypeDef = {
-                static DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
-                    name: trunk_ir::name::QualifiedName::new($name),
-                };
+                static DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new($name);
                 &DEF
             };
             /// The type's name, which points to [`DEF`](Self::DEF).
@@ -760,9 +753,9 @@ fn variant_name(ctx: &IrContext, variant: TypeRef) -> Option<StringRef> {
         .flatten()
 }
 
-static ENUM_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
-    name: trunk_ir::name::QualifiedName::new("adt.enum"),
-};
+static ENUM_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new("adt.enum")
+    .with_verifier::<Enum>()
+    .with_asm_format::<Enum>();
 
 inventory::submit! {
     trunk_ir::type_def::TypeDefRegistration(&ENUM_DEF)
@@ -775,18 +768,12 @@ impl DialectType for Enum {
         if !Self::matches(ctx, ty) {
             return None;
         }
-        Self::validate(ctx, ty).ok()
+        <Self as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty).ok()
     }
 
     fn as_type_ref(&self) -> TypeRef {
         self.0
     }
-}
-
-inventory::submit! {
-    trunk_ir::type_verifier::TypeVerifier::new::<Enum>(|ctx, ty| {
-        Enum::validate(ctx, ty).map(|_| ()).map_err(|error| error.to_string())
-    })
 }
 
 impl From<Enum> for TypeRef {
@@ -825,7 +812,8 @@ pub fn enum_type<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
         builder = builder.attr(key, value);
     }
     let ty = builder.intern(ctx);
-    Enum::validate(ctx, ty).unwrap_or_else(|error| panic!("adt.enum: {error}"))
+    <Enum as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty)
+        .unwrap_or_else(|error| panic!("adt.enum: {error}"))
 }
 
 // === Textual syntax: `adt.enum<Name { Variant(field: type, ...), ... }, {attrs}>` ===
@@ -833,16 +821,17 @@ pub fn enum_type<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
 // A field is `name: type` or, without a name, `type`. Either may be followed
 // by the field's other attributes.
 
-inventory::submit! {
-    trunk_ir::asm_format::TypeAsmFormat::new::<Enum>(print_enum_type, parse_enum_type)
-}
+impl trunk_ir::asm_format::TypeAsmFormat for Enum {
+    fn print(self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        write_enum_type(h, self)
+    }
 
-fn print_enum_type(
-    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
-    ty: TypeRef,
-) -> Option<std::fmt::Result> {
-    let adt_enum = Enum::from_type_ref(h.ctx(), ty)?;
-    Some(write_enum_type(h, adt_enum))
+    fn parse<'a>(
+        input: &mut &'a str,
+        name: &'a str,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
+        parse_enum_type(input, name)
+    }
 }
 
 fn write_enum_type(

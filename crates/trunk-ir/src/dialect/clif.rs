@@ -210,11 +210,11 @@ pub struct FuncSig(crate::TypeRef);
 
 crate::impl_func_sig_constraint!(FuncSig, "clif.func_sig");
 
-impl FuncSig {
-    pub(crate) fn validate(
+impl crate::type_verifier::VerifyType for FuncSig {
+    fn verify(
         ctx: &crate::IrContext,
         ty: crate::TypeRef,
-    ) -> Result<Self, FuncSigTypeError> {
+    ) -> Result<Self, crate::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(data.name == <Self as DialectType>::NAME);
         let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)?;
@@ -227,11 +227,14 @@ impl FuncSig {
                 num_inputs,
                 num_results,
                 params: data.params.len(),
-            });
+            }
+            .into());
         }
         Ok(Self(ty))
     }
+}
 
+impl FuncSig {
     fn counts(self, ctx: &crate::IrContext) -> (usize, usize) {
         let data = ctx.get_type(self.0);
         let inputs = usize::try_from(
@@ -288,9 +291,8 @@ impl FuncSig {
     }
 }
 
-static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef {
-    name: crate::name::QualifiedName::new("clif.func_sig"),
-};
+static FUNC_SIG_DEF: crate::type_def::TypeDef =
+    crate::type_def::TypeDef::new("clif.func_sig").with_verifier::<FuncSig>();
 
 inventory::submit! {
     crate::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
@@ -301,7 +303,7 @@ impl DialectType for FuncSig {
 
     fn from_type_ref(ctx: &crate::IrContext, ty: crate::TypeRef) -> Option<Self> {
         Self::matches(ctx, ty)
-            .then(|| Self::validate(ctx, ty).ok())
+            .then(|| <Self as crate::type_verifier::VerifyType>::verify(ctx, ty).ok())
             .flatten()
     }
 
@@ -371,7 +373,7 @@ pub fn func_sig_with_attrs(
 impl crate::ops::Verify for CallIndirect {
     /// Results match the signature's result list, or its projection without
     /// zero-width `core.nil` slots, which the emitter does not materialize.
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let signature =
             FuncSig::from_type_ref(ctx, self.sig(ctx)).expect("schema-verified clif.func_sig");
         let expected = signature.results(ctx);
@@ -393,7 +395,8 @@ impl crate::ops::Verify for CallIndirect {
                 .iter()
                 .map(|&ty| crate::printer::print_type(ctx, ty))
                 .format(", "),
-        ))
+        )
+        .into())
     }
 }
 
@@ -420,15 +423,15 @@ fn reloc_ops(ctx: &crate::IrContext, op: crate::OpRef) -> impl Iterator<Item = c
 
 impl crate::ops::Verify for Switch {
     /// Every case has one target, and no case value repeats.
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let cases = self.cases(ctx).count();
         let targets = self.targets(ctx).count();
         if cases != targets {
-            return Err(format!("{cases} case(s) but {targets} target(s)"));
+            return Err(format!("{cases} case(s) but {targets} target(s)").into());
         }
         let mut seen = HashSet::default();
         match self.cases(ctx).find(|&case| !seen.insert(case)) {
-            Some(case) => Err(format!("duplicate case {case}")),
+            Some(case) => Err(format!("duplicate case {case}").into()),
             None => Ok(()),
         }
     }
@@ -437,18 +440,19 @@ impl crate::ops::Verify for Switch {
 impl crate::ops::Verify for Data {
     /// The relocation region holds only `func_reloc` declarations at distinct
     /// offsets.
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let mut offsets = HashSet::default();
         for op in reloc_ops(ctx, self.op_ref()) {
             let Ok(reloc) = FuncReloc::from_op(ctx, op) else {
                 return Err(format!(
                     "relocation region holds {}, not clif.func_reloc",
                     ctx.op(op).name.display(ctx)
-                ));
+                )
+                .into());
             };
             let offset = reloc.offset(ctx);
             if !offsets.insert(offset) {
-                return Err(format!("duplicate relocation offset {offset}"));
+                return Err(format!("duplicate relocation offset {offset}").into());
             }
         }
         Ok(())
@@ -457,7 +461,7 @@ impl crate::ops::Verify for Data {
 
 impl crate::ops::Verify for FuncReloc {
     /// A relocation belongs to the region of a `data` object.
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let owner = ctx
             .op(self.op_ref())
             .parent_block

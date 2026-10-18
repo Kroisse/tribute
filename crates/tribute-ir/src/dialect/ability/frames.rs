@@ -249,13 +249,17 @@ fn frame_result(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
 }
 
 impl trunk_ir::ops::Verify for SuffixFrame {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        verify_evidence_plan(ctx, self.op_ref(), EvidencePlanSite::Legalized)
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        Ok(verify_evidence_plan(
+            ctx,
+            self.op_ref(),
+            EvidencePlanSite::Legalized,
+        )?)
     }
 }
 
 impl trunk_ir::ops::Verify for Handle {
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         let op = self.op_ref();
         verify_evidence_plan(ctx, op, EvidencePlanSite::Handle)?;
         let Some(Attribute::List(items)) = ctx.op_attrs(op).get("handlers") else {
@@ -271,7 +275,8 @@ impl trunk_ir::ops::Verify for Handle {
                 return Err(format!(
                     "ability.handle binds operation {} twice",
                     ctx.str(binding.op_name)
-                ));
+                )
+                .into());
             }
         }
         let arms = self.arms(ctx);
@@ -280,7 +285,8 @@ impl trunk_ir::ops::Verify for Handle {
                 "ability.handle has {} handlers but {} arms",
                 bindings.len(),
                 arms.len()
-            ));
+            )
+            .into());
         }
 
         let exit = ctx.value_ty(self.exit(ctx));
