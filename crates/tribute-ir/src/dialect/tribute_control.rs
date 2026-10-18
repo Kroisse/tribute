@@ -851,9 +851,178 @@ fn print_row(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, row: &Row) -> fmt
         if !row.instances.is_empty() {
             write!(h, " ")?;
         }
-        write!(h, "| {tail}")?;
+        write!(h, "| 'a{tail}")?;
     }
     write!(h, ")")
+}
+
+/// A definition's row binders as its header declares them, or `None` when
+/// the stored attributes cannot be written that way.
+struct BinderHeader {
+    binders: Vec<RowBinder>,
+    unions: Vec<RowUnion>,
+    inferred: bool,
+}
+
+impl BinderHeader {
+    fn of(ctx: &IrContext, op: OpRef) -> Option<Self> {
+        let binders = row_binders(ctx, op).ok()?;
+        let unions = row_unions(ctx, op).ok()?;
+        let in_range = |index: u32| usize::try_from(index).is_ok_and(|index| index < binders.len());
+        let mut results = HashSet::default();
+        let well_formed = unions.iter().all(|union| {
+            in_range(union.result)
+                && union.sources.iter().copied().all(in_range)
+                && results.insert(union.result)
+        });
+        let inferred = match ctx.op_attrs(op).get(INFERRED_ROW_ATTR) {
+            None => false,
+            Some(Attribute::Bool(true)) => true,
+            Some(_) => return None,
+        };
+        // An empty list written out has no header form.
+        let attrs = ctx.op_attrs(op);
+        let written_empty = (attrs.contains_key(ROW_BINDERS_ATTR) && binders.is_empty())
+            || (attrs.contains_key(ROW_UNIONS_ATTR) && unions.is_empty());
+        (well_formed && !written_empty).then_some(Self {
+            binders,
+            unions,
+            inferred,
+        })
+    }
+
+    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> fmt::Result {
+        use fmt::Write;
+        if self.binders.is_empty() {
+            return Ok(());
+        }
+        write!(h, "[")?;
+        for (index, binder) in self.binders.iter().enumerate() {
+            if index > 0 {
+                write!(h, ", ")?;
+            }
+            if *binder != RowBinder::Param {
+                write!(h, "{} ", binder.keyword())?;
+            }
+            write!(h, "'a{index}")?;
+            let union = self
+                .unions
+                .iter()
+                .find(|union| usize::try_from(union.result).ok() == Some(index));
+            if let Some(union) = union {
+                write!(h, " = ")?;
+                for (position, source) in union.sources.iter().enumerate() {
+                    if position > 0 {
+                        write!(h, " | ")?;
+                    }
+                    write!(h, "'a{source}")?;
+                }
+            }
+        }
+        write!(h, "]")
+    }
+}
+
+/// `'a<index>`, a row binder named by its position.
+fn parse_binder_name(input: &mut &str) -> winnow::ModalResult<u32> {
+    use winnow::ascii::digit1;
+    use winnow::prelude::*;
+
+    "'a".parse_next(input)?;
+    digit1.try_map(str::parse::<u32>).parse_next(input)
+}
+
+/// A definition header's `[...]` binder list, as the raw `row_binders` and
+/// `row_unions` attributes; nothing when the header has none.
+fn parse_binders<'a>(
+    input: &mut &'a str,
+) -> winnow::ModalResult<
+    Vec<(
+        std::borrow::Cow<'a, str>,
+        trunk_ir::parser::raw::RawAttribute<'a>,
+    )>,
+> {
+    use trunk_ir::parser::raw::{RawAttribute, ident, ws};
+    use winnow::combinator::{opt, separated};
+    use winnow::prelude::*;
+
+    let reject = || winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new());
+    let checkpoint = *input;
+    ws.parse_next(input)?;
+    if opt('[').parse_next(input)?.is_none() {
+        *input = checkpoint;
+        return Ok(Vec::new());
+    }
+    let mut kinds = Vec::new();
+    let mut unions = Vec::new();
+    loop {
+        ws.parse_next(input)?;
+        let kind = match opt(ident).parse_next(input)?.map(RowBinder::from_keyword) {
+            Some(Some(kind)) if kind != RowBinder::Param => {
+                ws.parse_next(input)?;
+                kind
+            }
+            None => RowBinder::Param,
+            Some(_) => return Err(reject()),
+        };
+        let index = parse_binder_name(input)?;
+        if usize::try_from(index).ok() != Some(kinds.len()) {
+            return Err(reject());
+        }
+        kinds.push(RawAttribute::String(kind.keyword().to_owned()));
+        ws.parse_next(input)?;
+        if opt('=').parse_next(input)?.is_some() {
+            let sources: Vec<u32> = separated(
+                1..,
+                (ws, parse_binder_name, ws).map(|(_, source, _)| source),
+                '|',
+            )
+            .parse_next(input)?;
+            unions.push(RawAttribute::Dict(vec![
+                ("result".into(), RawAttribute::Int(i128::from(index))),
+                (
+                    "sources".into(),
+                    RawAttribute::List(
+                        sources
+                            .into_iter()
+                            .map(|source| RawAttribute::Int(i128::from(source)))
+                            .collect(),
+                    ),
+                ),
+            ]));
+        }
+        ws.parse_next(input)?;
+        if opt(',').parse_next(input)?.is_none() {
+            break;
+        }
+    }
+    ']'.parse_next(input)?;
+    let mut attributes = vec![(ROW_BINDERS_ATTR.into(), RawAttribute::List(kinds))];
+    if !unions.is_empty() {
+        attributes.push((ROW_UNIONS_ATTR.into(), RawAttribute::List(unions)));
+    }
+    Ok(attributes)
+}
+
+/// The `inferred` keyword before a definition's convention.
+fn parse_inferred(input: &mut &str) -> winnow::ModalResult<bool> {
+    use trunk_ir::parser::raw::ws;
+    use winnow::combinator::opt;
+    use winnow::prelude::*;
+
+    let checkpoint = *input;
+    ws.parse_next(input)?;
+    if opt((
+        "inferred",
+        winnow::combinator::peek(winnow::ascii::multispace1),
+    ))
+    .parse_next(input)?
+    .is_some()
+    {
+        return Ok(true);
+    }
+    *input = checkpoint;
+    Ok(false)
 }
 
 fn func_sig_parts(
@@ -944,9 +1113,10 @@ fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fm
     let symbol = h.ctx().op_attrs(op).get_str("sym_name");
     let callable_ty = h.ctx().op_attrs(op).get_type("type");
     let region = h.ctx().op_region(op, 0);
-    if !has_concise_func_sig(h.ctx(), callable_ty) {
+    let header = BinderHeader::of(h.ctx(), op);
+    let Some(header) = header.filter(|_| has_concise_func_sig(h.ctx(), callable_ty)) else {
         return h.print_generic(op);
-    }
+    };
     let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
 
     write!(h, "tribute_control.func ")?;
@@ -955,6 +1125,7 @@ fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fm
     } else {
         write!(h, "@<missing>")?;
     }
+    header.print(h)?;
     h.reset_numbering();
 
     let param_types = parts
@@ -969,9 +1140,23 @@ fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fm
         if let Some(ty) = callable_ty {
             print_row(h, &FuncSig(ty).row(h.ctx()))?;
         }
+        if header.inferred {
+            write!(h, " inferred")?;
+        }
         write!(h, " convention({})", convention.keyword())?;
     }
-    print_extra_attributes(h, op, &["sym_name", "type", CALLING_CONVENTION_ATTR])?;
+    print_extra_attributes(
+        h,
+        op,
+        &[
+            "sym_name",
+            "type",
+            CALLING_CONVENTION_ATTR,
+            ROW_BINDERS_ATTR,
+            ROW_UNIONS_ATTR,
+            INFERRED_ROW_ATTR,
+        ],
+    )?;
 
     match region {
         Some(region) => h.print_body(region),
@@ -999,13 +1184,12 @@ fn parse_convention(input: &mut &str) -> winnow::ModalResult<CallingConvention> 
     Ok(convention)
 }
 
-/// The concise row of a source signature, `row(@A, @B | 1)`, as the raw
+/// The concise row of a source signature, `row(@A, @B | 'a1)`, as the raw
 /// `ability_row` attribute; `None` when the signature writes no row.
 fn parse_row<'a>(
     input: &mut &'a str,
 ) -> winnow::ModalResult<Option<trunk_ir::parser::raw::RawAttribute<'a>>> {
     use trunk_ir::parser::raw::{RawAttribute, symbol_path, ws};
-    use winnow::ascii::digit1;
     use winnow::combinator::{opt, separated};
     use winnow::prelude::*;
 
@@ -1019,7 +1203,7 @@ fn parse_row<'a>(
     let instances: Vec<Vec<String>> =
         separated(0.., (ws, symbol_path, ws).map(|(_, path, _)| path), ',').parse_next(input)?;
     ws.parse_next(input)?;
-    let tail = opt(('|', ws, digit1.try_map(str::parse::<u32>), ws))
+    let tail = opt(('|', ws, parse_binder_name, ws))
         .parse_next(input)?
         .map(|(_, _, tail, _)| tail);
     ')'.parse_next(input)?;
@@ -1090,19 +1274,24 @@ fn parse_func<'a>(
         ));
     }
 
+    let binders = parse_binders(input)?;
     ws.parse_next(input)?;
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
     let row = parse_row(input)?;
+    let inferred = parse_inferred(input)?;
     let convention = parse_convention(input)?;
     let attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
         .map(|(_, _, _, attrs)| attrs)
         .unwrap_or_default();
     if has_duplicate_convention_attr(&attributes)
-        || attributes
-            .iter()
-            .any(|(key, _)| matches!(key.as_ref(), "sym_name" | "type"))
+        || attributes.iter().any(|(key, _)| {
+            matches!(
+                key.as_ref(),
+                "sym_name" | "type" | ROW_BINDERS_ATTR | ROW_UNIONS_ATTR | INFERRED_ROW_ATTR
+            )
+        })
     {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::new(),
@@ -1123,6 +1312,10 @@ fn parse_func<'a>(
 
     let signature = func_sig_raw_type(result, &params, row, convention);
     let mut attributes = attributes;
+    attributes.extend(binders);
+    if inferred {
+        attributes.push((INFERRED_ROW_ATTR.into(), RawAttribute::Bool(true)));
+    }
     attributes.push(("type".into(), RawAttribute::Type(signature)));
 
     Ok(RawOperation {
