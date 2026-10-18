@@ -173,7 +173,7 @@ impl RewritePattern for BytesRangeEqualPattern {
         let location = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let nil_ty = core::nil(ctx).as_type_ref();
+        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
         let (left, left_ops) = extract_bytes_fields(ctx, location, operands[0]);
         let (right, right_ops) = extract_bytes_fields(ctx, location, operands[2]);
         let left_start =
@@ -457,7 +457,7 @@ impl RewritePattern for BytesSliceOrPanicPattern {
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let nil_ty = core::nil(ctx).as_type_ref();
+        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
 
         let (fields, field_ops) = extract_bytes_fields(ctx, location, bytes);
         let reversed = wasm_dialect::I32GtU::operands(start, end)

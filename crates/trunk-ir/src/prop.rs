@@ -524,7 +524,7 @@ fn location(ctx: &mut IrContext) -> Location {
 }
 
 fn unit_sig(ctx: &mut IrContext) -> TypeRef {
-    let nil = core::nil(ctx).as_type_ref();
+    let nil = core::Nil::params().intern(ctx).as_type_ref();
     func::func_sig(ctx, [], [nil]).as_type_ref()
 }
 

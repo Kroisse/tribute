@@ -42,7 +42,7 @@ pub fn bytes_struct_type(ctx: &mut IrContext) -> TypeRef {
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(BYTES);
     attrs.view_mut(ctx).insert(LAYOUT_ATTR, layout);
-    adt::struct_type(
+    adt::Struct::from_fields(
         ctx,
         "_Bytes",
         [("data", data_ty), ("offset", i32_ty), ("len", i32_ty)],
@@ -128,7 +128,7 @@ mod tests {
         assert!(has_runtime_layout(&ctx, bytes, BYTES));
         assert!(has_runtime_layout(&ctx, data, BYTES_DATA));
         let i8_ty = TypeDataBuilder::new("core.i8").intern(&mut ctx);
-        let plain_i8_array = core::array(&mut ctx, i8_ty).as_type_ref();
+        let plain_i8_array = core::Array::params(i8_ty).intern(&mut ctx).as_type_ref();
         assert_ne!(plain_i8_array, data);
     }
 

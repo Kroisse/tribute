@@ -5,7 +5,7 @@ use super::*;
 
 impl Converter<'_> {
     pub(super) fn never_type(&mut self) -> TypeRef {
-        core::never(self.ctx).as_type_ref()
+        core::Never::params().intern(self.ctx).as_type_ref()
     }
 
     pub(super) fn evidence_type(&mut self) -> TypeRef {
@@ -13,7 +13,7 @@ impl Converter<'_> {
     }
 
     pub(super) fn anyref_type(&mut self) -> TypeRef {
-        tribute_rt::anyref(self.ctx).as_type_ref()
+        tribute_rt::Anyref::params().intern(self.ctx).as_type_ref()
     }
 
     pub(super) fn resumption_type(&mut self, input: TypeRef, answer: TypeRef) -> TypeRef {

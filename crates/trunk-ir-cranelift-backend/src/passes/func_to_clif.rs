@@ -177,7 +177,7 @@ fn func_to_clif_target() -> ConversionTarget {
 }
 
 fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
-    core::ptr(ctx).as_type_ref()
+    core::Ptr::params().intern(ctx).as_type_ref()
 }
 
 /// Pattern: `func.func` -> `clif.func`
@@ -587,7 +587,7 @@ mod tests {
 }"#,
         );
         let anyref_ty = TypeDataBuilder::new("test.anyref").intern(&mut ctx);
-        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == anyref_ty).then_some(ptr_ty));
 
@@ -821,7 +821,7 @@ mod tests {
         let caller = module.ops(&ctx)[0];
         let entry = ctx.region(ctx.op_region(caller, 0).unwrap()).blocks[0];
         let evidence_ty = ctx.value_ty(ctx.block_args(entry)[1]);
-        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == evidence_ty).then_some(ptr_ty));
 
@@ -857,7 +857,7 @@ mod tests {
   }
 }"#,
         );
-        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter
             .add_conversion(move |ctx, ty| core::Array::matches(ctx, ty).then_some(ptr_ty));

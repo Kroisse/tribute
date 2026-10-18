@@ -185,7 +185,9 @@ mod tests {
     }
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
-        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        let nil_ty = crate::dialect::core::Nil::params()
+            .intern(ctx)
+            .as_type_ref();
         crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref()
     }
 
@@ -431,7 +433,9 @@ mod tests {
             });
 
             // Outer op that owns the inner region (use func.func as container)
-            let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+            let nil_ty = crate::dialect::core::Nil::params()
+                .intern(ctx)
+                .as_type_ref();
             let fn_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
             let nested_func = func::Func::operands()
                 .sym_name("nested")
@@ -505,7 +509,9 @@ mod tests {
                 parent_op: None,
             });
 
-            let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+            let nil_ty = crate::dialect::core::Nil::params()
+                .intern(ctx)
+                .as_type_ref();
             let fn_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
             let nested_func = func::Func::operands()
                 .sym_name("nested")

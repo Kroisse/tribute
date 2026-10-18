@@ -30,7 +30,7 @@ fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
 
 fn node_type(ctx: &mut IrContext, element_ty: TypeRef) -> TypeRef {
     let list_ty = TypeDataBuilder::new("tribute_rt.anyref").intern(ctx);
-    adt::struct_type(
+    adt::Struct::from_fields(
         ctx,
         "__native_list_node",
         [("element", element_ty), ("tail", list_ty)],

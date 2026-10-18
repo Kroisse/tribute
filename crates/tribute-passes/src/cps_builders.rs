@@ -97,7 +97,7 @@ pub(crate) fn emit_cps_tail_call_indirect(
             "CPS indirect tail callee contract is not func.func_sig",
         )
     })?;
-    let never = core::never(ctx).as_type_ref();
+    let never = core::Never::params().intern(ctx).as_type_ref();
     if callable.results(ctx) != [never]
         || callable.inputs(ctx).len() != args.len()
         || callable

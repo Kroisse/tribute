@@ -136,8 +136,8 @@ impl RewritePattern for CheckMemoryAccess {
         }
         let loc = ctx.op(op).location;
         let i64_ty = trunk_ir::TypeDataBuilder::new("core.i64").intern(ctx);
-        let ptr_ty = core::ptr(ctx).as_type_ref();
-        let nil_ty = core::nil(ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
 
         let addr = if access.offset == 0 {
             access.addr
@@ -190,8 +190,8 @@ fn instrument_function(ctx: &mut IrContext, function: clif::Func) -> Result<(), 
 
 fn declare_check(ctx: &mut IrContext, loc: Location, name: &str) -> OpRef {
     let i64_ty = trunk_ir::TypeDataBuilder::new("core.i64").intern(ctx);
-    let ptr_ty = core::ptr(ctx).as_type_ref();
-    let nil_ty = core::nil(ctx).as_type_ref();
+    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
     let signature = clif::func_sig(ctx, [ptr_ty, i64_ty], [nil_ty]).as_type_ref();
     let data = OperationDataBuilder::new(loc, "clif.func")
         .attr("sym_name", Attribute::String(ctx.intern_str(name)))

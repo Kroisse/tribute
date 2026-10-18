@@ -212,7 +212,7 @@ impl RewritePattern for RefNullPattern {
             return false;
         }
         let loc = ctx.op(op).location;
-        let ptr_ty = core::ptr(ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
         let iconst_op = clif::Iconst::operands()
             .value(0)
             .results(ptr_ty)
@@ -254,7 +254,7 @@ impl RewritePattern for RefIsNullPattern {
         };
 
         let loc = ctx.op(op).location;
-        let ptr_ty = core::ptr(ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
         let Some(result_ty) = flag_result_type(ctx, op, rewriter) else {
             return false;
         };

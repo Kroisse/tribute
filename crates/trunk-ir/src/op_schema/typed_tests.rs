@@ -271,7 +271,9 @@ fn generated_type_constraints_check_parameters_and_project() {
     let mut ctx = IrContext::new();
     let i32_ty = core::I32::type_ref(&mut ctx);
     let i1_ty = core::I1::type_ref(&mut ctx);
-    let pair = test_typed::pair(&mut ctx, i32_ty, i1_ty).as_type_ref();
+    let pair = test_typed::Pair::params(i32_ty, i1_ty)
+        .intern(&mut ctx)
+        .as_type_ref();
     let malformed = TypeDataBuilder::new("test_typed.pair")
         .param(i32_ty)
         .intern(&mut ctx);
@@ -329,7 +331,9 @@ fn fluent_builders_group_inputs_by_kind() {
     let loc = location(&mut ctx);
     let i32_ty = core::I32::type_ref(&mut ctx);
     let i1_ty = core::I1::type_ref(&mut ctx);
-    let ptr_ty = crate::dialect::core::ptr(&mut ctx).as_type_ref();
+    let ptr_ty = crate::dialect::core::Ptr::params()
+        .intern(&mut ctx)
+        .as_type_ref();
     let sig = func::func_sig(&mut ctx, [i32_ty], [i1_ty]).as_type_ref();
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty, ptr_ty, i1_ty]);
     let (a, b, callee, cond) = (args[0], args[1], args[2], args[3]);
@@ -435,7 +439,9 @@ fn fluent_builders_infer_bound_projected_and_fixed_results() {
     let i64_ty = core::I64::type_ref(&mut ctx);
     let i32_ty = core::I32::type_ref(&mut ctx);
     let i1_ty = core::I1::type_ref(&mut ctx);
-    let pair_ty = test_typed::pair(&mut ctx, i64_ty, i1_ty).as_type_ref();
+    let pair_ty = test_typed::Pair::params(i64_ty, i1_ty)
+        .intern(&mut ctx)
+        .as_type_ref();
     let args = block_args(&mut ctx, loc, &[i64_ty, pair_ty]);
 
     let first = test_typed::First::operands(args[1]).build(&mut ctx, loc);
@@ -461,7 +467,9 @@ fn fluent_builder_rejects_unprojectable_sources() {
 fn fluent_builder_rejects_missing_binding_attribute() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
-    let ptr_ty = crate::dialect::core::ptr(&mut ctx).as_type_ref();
+    let ptr_ty = crate::dialect::core::Ptr::params()
+        .intern(&mut ctx)
+        .as_type_ref();
     let args = block_args(&mut ctx, loc, &[ptr_ty]);
     test_typed::Call::operands(args[0], []).build(&mut ctx, loc);
 }
@@ -810,7 +818,9 @@ fn type_attributes_bind_variables_and_type_is_an_ordinary_name() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
     let i64_ty = core::I64::type_ref(&mut ctx);
-    let holder = test_typed::holder(&mut ctx, i64_ty).as_type_ref();
+    let holder = test_typed::Holder::params(i64_ty)
+        .intern(&mut ctx)
+        .as_type_ref();
     let args = block_args(&mut ctx, loc, &[holder]);
 
     let held = test_typed::Held::operands(args[0]).build(&mut ctx, loc);
@@ -837,9 +847,13 @@ fn builders_infer_results_through_bound_constraints() {
     let i64_ty = core::I64::type_ref(&mut ctx);
     let i32_ty = core::I32::type_ref(&mut ctx);
     let i1_ty = core::I1::type_ref(&mut ctx);
-    let pair = test_typed::pair(&mut ctx, i64_ty, i1_ty).as_type_ref();
+    let pair = test_typed::Pair::params(i64_ty, i1_ty)
+        .intern(&mut ctx)
+        .as_type_ref();
     let sig = func::func_sig(&mut ctx, [pair, i32_ty], [i64_ty]).as_type_ref();
-    let outer = test_typed::pair(&mut ctx, pair, i32_ty).as_type_ref();
+    let outer = test_typed::Pair::params(pair, i32_ty)
+        .intern(&mut ctx)
+        .as_type_ref();
     let args = block_args(&mut ctx, loc, &[sig, outer]);
 
     let unpack = test_typed::Unpack::operands(args[0]).build(&mut ctx, loc);

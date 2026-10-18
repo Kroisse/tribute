@@ -2535,7 +2535,7 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
 }"#,
     );
     let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
-    let stale = tribute_ir::dialect::adt::struct_type(
+    let stale = tribute_ir::dialect::adt::Struct::from_fields(
         &mut ctx,
         "R",
         [("x", i64_ty)],

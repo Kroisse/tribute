@@ -106,13 +106,16 @@ mod tests {
     #[crate::dialect]
     mod type_hooks_test {
         #[verify]
-        struct Checked;
+        struct Checked {
+            bad: Option<Attr<bool>>,
+        }
 
         #[asm_format]
         struct Custom;
 
-        #[attr(tag: String)]
-        struct Tagged<Elem>;
+        struct Tagged<Elem> {
+            tag: Attr<String>,
+        }
     }
 
     impl crate::type_verifier::VerifyType for Checked {
@@ -208,6 +211,46 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn builders_intern_the_declared_shape() {
+        use crate::ops::DialectType;
+
+        let mut ctx = IrContext::new();
+        let elem = Custom::params().intern(&mut ctx).as_type_ref();
+        let marked =
+            crate::AttributeMap::from_entries(&mut ctx, [("k", crate::Attribute::Bool(true))]);
+        let tagged = Tagged::params(elem)
+            .tag("t")
+            .param_attrs([marked])
+            .intern(&mut ctx);
+        assert_eq!(
+            Tagged::from_type_ref(&ctx, tagged.as_type_ref()),
+            Some(tagged)
+        );
+        assert_eq!(tagged.elem(&ctx), elem);
+        assert_eq!(tagged.tag(&ctx), "t");
+        assert_eq!(
+            ctx.get_type(tagged.as_type_ref())
+                .param_attrs(&ctx, 0)
+                .view(&ctx)
+                .get("k"),
+            Some(&crate::Attribute::Bool(true))
+        );
+
+        let good = Checked::params().intern(&mut ctx).unwrap();
+        assert_eq!(good.bad(&ctx), None);
+        let error = Checked::params().bad(true).intern(&mut ctx).unwrap_err();
+        assert_eq!(error.to_string(), "bad checked type");
+    }
+
+    #[test]
+    #[should_panic(expected = "type_hooks_test.tagged: missing attribute `tag`")]
+    fn builders_require_their_attributes() {
+        let mut ctx = IrContext::new();
+        let elem = Custom::params().intern(&mut ctx).as_type_ref();
+        let _ = Tagged::params(elem).intern(&mut ctx);
     }
 
     #[test]

@@ -90,9 +90,6 @@ fn scan_dialects(text: &str, atoms: &mut BTreeSet<String>) {
                 insert_name(&before[begin..], atoms);
             }
         }
-        for (at, _) in body.match_indices("#[attr(") {
-            insert_name(identifier(&body[at + "#[attr(".len()..]), atoms);
-        }
     }
 }
 

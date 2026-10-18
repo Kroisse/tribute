@@ -117,7 +117,7 @@ fn evidence_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 fn anyref_type(ctx: &mut IrContext) -> TypeRef {
-    tribute_rt::anyref(ctx).as_type_ref()
+    tribute_rt::Anyref::params().intern(ctx).as_type_ref()
 }
 
 fn i32_type(ctx: &mut IrContext) -> TypeRef {
@@ -510,7 +510,7 @@ fn build_local_dispatcher_instance(
     let (foreign_op, foreign_dispatch) =
         build_local_foreign_dispatch(ctx, location, layer, values, parent_dispatch)?;
     ctx.push_op(block, foreign_op);
-    let never = core::never(ctx).as_type_ref();
+    let never = core::Never::params().intern(ctx).as_type_ref();
     let switch_block = make_block(ctx, location, &[]);
     let general_arms = layer
         .arms

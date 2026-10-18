@@ -26,7 +26,7 @@ fn resume_block(
     frame: &FrameTypes,
 ) -> (BlockRef, TypeRef) {
     let evidence_type = ability::evidence_adt_type_ref(ctx);
-    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let block = make_block(ctx, location, &[evidence_type, frame.reference, anyref]);
     let resume_type = cps_resume_type(ctx, evidence_type, frame.reference, anyref);
     (block, resume_type)
@@ -53,7 +53,7 @@ fn push_one_shot_resume(
         })?;
     let i1_type = TypeDataBuilder::new("core.i1").intern(ctx);
     let state_name = ctx.intern_str("__tribute_one_shot_state");
-    let state_type = adt::struct_type(
+    let state_type = adt::Struct::from_fields(
         ctx,
         state_name,
         [("consumed", i1_type)],
@@ -132,7 +132,7 @@ fn push_one_shot_resume(
     )?;
     let enter_region = single_block_region(ctx, location, enter_block);
 
-    let never = core::never(ctx).as_type_ref();
+    let never = core::Never::params().intern(ctx).as_type_ref();
     let guard = scf::If::operands(consumed.result(ctx))
         .results(never)
         .regions(reject_region, enter_region)
@@ -217,7 +217,7 @@ impl ExpandDispatches {
         };
         let dispatch = frame_dispatch(ctx, block, location, &types, frame);
         detach_into(ctx, block, rewriter);
-        let anyref = tribute_rt::anyref(ctx).as_type_ref();
+        let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
         let payload = pack_payload(ctx, rewriter, location, &ability, op_name, values, anyref);
         let dispatch = effect::DispatchCps::operands(evidence, dispatch, resume, payload)
             .ability(ability)

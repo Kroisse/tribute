@@ -772,11 +772,13 @@ mod tests {
     }
 
     fn nil_type(ctx: &mut IrContext) -> TypeRef {
-        core::nil(ctx).as_type_ref()
+        core::Nil::params().intern(ctx).as_type_ref()
     }
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
-        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        let nil_ty = crate::dialect::core::Nil::params()
+            .intern(ctx)
+            .as_type_ref();
         crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref()
     }
 

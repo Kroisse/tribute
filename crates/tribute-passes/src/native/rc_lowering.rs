@@ -140,11 +140,11 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
         return;
     }
 
-    let ptr_ty = core::ptr(ctx).as_type_ref();
+    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
     let i64_ty = core::I64::type_ref(ctx);
     let i32_ty = core::I32::type_ref(ctx);
     let i8_ty = core::I8::type_ref(ctx);
-    let nil_ty = core::nil(ctx).as_type_ref();
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
 
     // Process the block: iterate ops, when we hit an RC op, split.
     // `current_block` is where ops before the RC op live.

@@ -80,7 +80,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let path = ctx.intern_path("test.ir");
         let loc = Location::new(path, Span::new(0, 0));
-        let ptr = core::ptr(&mut ctx).as_type_ref();
+        let ptr = core::Ptr::params().intern(&mut ctx).as_type_ref();
         let i32 = trunk_ir::TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let op = build_extern_func(&mut ctx, loc, "runtime", &[ptr, i32], ptr);
         assert_eq!(

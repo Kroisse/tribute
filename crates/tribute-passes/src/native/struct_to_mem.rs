@@ -229,7 +229,7 @@ fn structural_layout(
     plan: &NativeOwnershipPlan,
     type_converter: &TypeConverter,
 ) -> TypeRef {
-    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let fields: Vec<TypeRef> = fields
         .into_iter()
         .enumerate()
@@ -245,7 +245,7 @@ fn structural_layout(
             }
         })
         .collect();
-    mem::r#struct(ctx, fields).as_type_ref()
+    mem::Struct::params(fields).intern(ctx).as_type_ref()
 }
 
 #[cfg(test)]
@@ -313,8 +313,8 @@ mod tests {
         let i16_ty = core::I16::type_ref(&mut ctx);
         let i32_ty = core::I32::type_ref(&mut ctx);
         let f64_ty = core::F64::type_ref(&mut ctx);
-        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
-        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(&mut ctx).as_type_ref();
+        let anyref = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
         assert_eq!(
             mem::Struct::from_type_ref(&ctx, structural)
                 .expect("mem.struct")

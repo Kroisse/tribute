@@ -489,7 +489,7 @@ fn attribute_key(ctx: &IrContext, attr: &Attribute) -> String {
 }
 
 fn tuple_layout_data(ctx: &mut IrContext, name: &str, elements: &[TypeRef]) -> TypeRef {
-    adt::struct_type(
+    adt::Struct::from_fields(
         ctx,
         name.to_owned(),
         elements

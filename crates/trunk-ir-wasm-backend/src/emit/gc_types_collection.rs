@@ -928,7 +928,9 @@ wasm.return
     fn structural_struct_fields_compare_as_the_struct_supertype() {
         let mut ctx = IrContext::new();
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        let structural = wasm_gc::r#struct(&mut ctx, [i32_ty]).as_type_ref();
+        let structural = wasm_gc::Struct::params([i32_ty])
+            .intern(&mut ctx)
+            .as_type_ref();
         let structref = intern_wasm_structref(&mut ctx);
 
         assert!(types_equivalent_for_gc(&mut ctx, structural, structref));

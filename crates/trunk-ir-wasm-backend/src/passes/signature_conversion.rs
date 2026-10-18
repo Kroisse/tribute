@@ -170,7 +170,7 @@ mod tests {
             let (mut ctx, loc) = test_ctx();
             let i32 = core::I32::type_ref(&mut ctx);
             let i64 = core::I64::type_ref(&mut ctx);
-            let ptr = core::ptr(&mut ctx).as_type_ref();
+            let ptr = core::Ptr::params().intern(&mut ctx).as_type_ref();
             let mut attrs = trunk_ir::AttributeMap::new();
             attrs.view_mut(&mut ctx).insert(
                 "nested",

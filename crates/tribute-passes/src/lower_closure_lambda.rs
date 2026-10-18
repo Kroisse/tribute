@@ -160,7 +160,7 @@ fn lower_single_lambda(
 
     // Convention-proven physical closures define the only legal environment
     // insertion slot. Do not recover hidden operands from a lambda's shape.
-    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let convention = get_calling_convention(ctx, lambda_ref);
     let environment_index = match (convention, get_physical_closure_convention(ctx, result_ty)) {
         (Some(convention), Some(provenance)) if provenance == convention => {
@@ -198,7 +198,7 @@ fn lower_single_lambda(
             .map(|(i, &ty)| (format!("_{i}"), ty))
             .collect();
         let env_name = format!("{lifted_name}::env");
-        Some(adt::struct_type(ctx, env_name, fields, AttributeMap::new()).as_type_ref())
+        Some(adt::Struct::from_fields(ctx, env_name, fields, AttributeMap::new()).as_type_ref())
     };
 
     // === Build the lifted function ===
@@ -509,7 +509,7 @@ mod tests {
     }
 
     fn make_anyref_ty(ctx: &mut IrContext) -> TypeRef {
-        tribute_rt::anyref(ctx).as_type_ref()
+        tribute_rt::Anyref::params().intern(ctx).as_type_ref()
     }
 
     fn make_i32_ty(ctx: &mut IrContext) -> TypeRef {

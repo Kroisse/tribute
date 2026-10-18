@@ -8,6 +8,7 @@ use rustc_hash::FxHashSet as HashSet;
 use unsynn::{Parser, ToTokenIter, TokenIter};
 
 mod constraint;
+use constraint::parse_type_fields;
 pub use constraint::{
     BoundPath, KindType, ListExpr, Projection, RelationDef, RelationExpr, TypeExpr, TypeVar,
     ValueExpr,
@@ -77,6 +78,8 @@ pub struct AttrDef {
     pub list: bool,
     pub optional: bool,
     pub binds: Option<usize>,
+    /// Doc comments, forwarded to the accessor.
+    pub docs: Vec<proc_macro2::Group>,
 }
 
 /// The kind of a declared attribute, or of a list attribute's elements.
@@ -194,26 +197,19 @@ fn parse_module_inner(iter: &mut TokenIter) -> Result<DialectModule, String> {
 // ============================================================================
 
 fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
-    let mut op_attrs = Vec::new();
+    let mut legacy_attrs = false;
     let mut rest_results = false;
     let mut verify = None;
     let mut asm_format = None;
     let mut docs = Vec::new();
 
-    // Collect outer attributes: #[doc = "..."] (skip), #[attr(...)],
-    // #[rest_results], #[verify], #[asm_format]
+    // Collect outer attributes: #[doc = "..."], #[verify], #[asm_format],
+    // and the legacy #[attr(...)] and #[rest_results], rejected below
     while peek_punct(iter, '#') {
         let attr = parse_outer_attr(iter)?;
         match attr {
             OuterAttr::Doc(group) => docs.push(group),
-            OuterAttr::OpAttrs(attrs) => {
-                if !op_attrs.is_empty() {
-                    return Err(
-                        "duplicate #[attr(...)] on the same operation; merge into a single #[attr(...)]".into(),
-                    );
-                }
-                op_attrs = attrs;
-            }
+            OuterAttr::LegacyAttrs => legacy_attrs = true,
             OuterAttr::RestResults => {
                 if rest_results {
                     return Err("duplicate #[rest_results] on the same operation".into());
@@ -240,7 +236,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
 
     match kw.to_string().as_str() {
         "fn" => {
-            if !op_attrs.is_empty() {
+            if legacy_attrs {
                 return Err(
                     "`#[attr(..)]` is not supported on operations; declare `Attr<..>` parameters"
                         .into(),
@@ -290,16 +286,37 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             Ok(DialectItem::Operation(op))
         }
         "struct" => {
+            if legacy_attrs {
+                return Err(
+                    "`#[attr(..)]` is not supported on types; declare `Attr<..>` fields".into(),
+                );
+            }
             if rest_results {
                 return Err("#[rest_results] is not allowed on struct items".into());
             }
-            let mut td = parse_struct_def(iter, op_attrs)?;
+            let mut td = parse_struct_def(iter)?;
+            // Each parameter, attribute, and string attribute handle has an
+            // accessor on the wrapper.
             let accessors: Vec<String> = td
                 .params
                 .iter()
                 .map(|param| param.raw_ident.to_string().to_snake_case())
-                .chain(td.attrs.iter().map(|attr| attr.name.clone()))
+                .chain(td.attrs.iter().flat_map(|attr| {
+                    let handle = attr.kind.is_string().then(|| format!("{}_ref", attr.name));
+                    std::iter::once(attr.name.clone()).chain(handle)
+                }))
                 .collect();
+            let mut seen = HashSet::default();
+            for name in &accessors {
+                if RESERVED_TYPE_NAMES.contains(&name.as_str()) {
+                    return Err(format!(
+                        "`{name}` is reserved for the type wrapper's or builder's own method"
+                    ));
+                }
+                if !seen.insert(name) {
+                    return Err(format!("two accessors of the type are named `{name}`"));
+                }
+            }
             for (span, attr, names) in [
                 (verify, "#[verify]", &["verify"][..]),
                 (asm_format, "#[asm_format]", &["print", "parse"][..]),
@@ -324,7 +341,8 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
 enum OuterAttr {
     /// The bracketed `doc = ".."` attribute.
     Doc(proc_macro2::Group),
-    OpAttrs(Vec<AttrDef>),
+    /// The legacy `#[attr(..)]`, superseded by typed parameters and fields.
+    LegacyAttrs,
     RestResults,
     Verify(proc_macro2::Span),
     AsmFormat(proc_macro2::Span),
@@ -333,6 +351,17 @@ enum OuterAttr {
 /// Methods every operation wrapper defines itself; an entity accessor must not
 /// take one of these names.
 const RESERVED_WRAPPER_NAMES: &[&str] = &["op_ref", "from_op", "matches", "operands"];
+
+/// Methods every type wrapper and its builder define themselves; a parameter
+/// or attribute accessor must not take one of these names.
+const RESERVED_TYPE_NAMES: &[&str] = &[
+    "as_type_ref",
+    "from_type_ref",
+    "matches",
+    "params",
+    "param_attrs",
+    "intern",
+];
 
 /// Names of an operation's entities, each of which becomes an accessor.
 fn entity_names(op: &OperationDef) -> impl Iterator<Item = &str> {
@@ -366,12 +395,7 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
 
     match ident.to_string().as_str() {
         "doc" => Ok(OuterAttr::Doc(bracket)),
-        "attr" => {
-            let paren = expect_group(&mut inner, Delimiter::Parenthesis)?;
-            expect_consumed(&inner, "#[attr(...)]")?;
-            let attrs = parse_attr_list(paren.stream())?;
-            Ok(OuterAttr::OpAttrs(attrs))
-        }
+        "attr" => Ok(OuterAttr::LegacyAttrs),
         "rest_results" => {
             expect_consumed(&inner, "#[rest_results]")?;
             Ok(OuterAttr::RestResults)
@@ -388,53 +412,6 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, `verify`, or `asm_format`"
         )),
     }
-}
-
-/// Parse comma-separated attribute definitions: `name: Type, opt?: Type`.
-fn parse_attr_list(stream: proc_macro2::TokenStream) -> Result<Vec<AttrDef>, String> {
-    let mut iter = stream.to_token_iter();
-    let mut attrs = Vec::new();
-    let mut seen_names = HashSet::default();
-
-    while has_remaining(&iter) {
-        let name_ident: Ident =
-            Ident::parser(&mut iter).map_err(|e| format!("expected attribute name: {e}"))?;
-
-        let name = ident_str(&name_ident);
-        if !seen_names.insert(name.clone()) {
-            return Err(format!("duplicate attribute name: `{name}`"));
-        }
-
-        // Check for optional marker '?'
-        let optional = peek_punct(&iter, '?');
-        if optional {
-            consume_punct(&mut iter)?;
-        }
-
-        expect_punct(&mut iter, ':')?;
-
-        let ty_ident: Ident =
-            Ident::parser(&mut iter).map_err(|e| format!("expected attribute type: {e}"))?;
-
-        attrs.push(AttrDef {
-            name,
-            raw_ident: name_ident,
-            kind: AttrKind::Path(KindType::from_ident(ty_ident)),
-            list: false,
-            optional,
-            binds: None,
-        });
-
-        // Require comma between elements (trailing comma is allowed)
-        if has_remaining(&iter) {
-            if !peek_punct(&iter, ',') {
-                return Err("expected `,` between attributes".into());
-            }
-            consume_punct(&mut iter)?;
-        }
-    }
-
-    Ok(attrs)
 }
 
 // ============================================================================
@@ -523,8 +500,9 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
 // Struct (type) definition parsing
 // ============================================================================
 
-/// Parse `struct Name;` or `struct Name<Param, ...>;`
-fn parse_struct_def(iter: &mut TokenIter, attrs: Vec<AttrDef>) -> Result<TypeDefData, String> {
+/// Parse `struct Name;`, `struct Name<Param, ...>;`, or either with
+/// attribute fields in place of the `;`: `struct Name<Param> { attr: Attr<K> }`.
+fn parse_struct_def(iter: &mut TokenIter) -> Result<TypeDefData, String> {
     // Parse type name
     let name_ident: Ident =
         Ident::parser(iter).map_err(|e| format!("expected struct name: {e}"))?;
@@ -537,7 +515,19 @@ fn parse_struct_def(iter: &mut TokenIter, attrs: Vec<AttrDef>) -> Result<TypeDef
         Vec::new()
     };
 
-    expect_punct(iter, ';')?;
+    let attrs = match iter.clone().next() {
+        Some(TokenTree::Group(body)) if body.delimiter() == Delimiter::Brace => {
+            iter.next();
+            parse_type_fields(body.stream())?
+        }
+        Some(TokenTree::Group(body)) if body.delimiter() == Delimiter::Parenthesis => {
+            return Err("a type declares its attributes as named fields in `{ .. }`".into());
+        }
+        _ => {
+            expect_punct(iter, ';')?;
+            Vec::new()
+        }
+    };
 
     Ok(TypeDefData {
         name,
@@ -1212,8 +1202,11 @@ mod tests {
     fn test_parse_struct_with_attrs() {
         let module = parse_test_module(quote! {
             mod core {
-                #[attr(nullable: bool)]
-                struct Ref<Pointee>;
+                struct Ref<Pointee> {
+                    /// Whether the reference may be null.
+                    nullable: Attr<bool>,
+                    tags: Option<Attr<[String]>>,
+                }
             }
         })
         .unwrap();
@@ -1222,11 +1215,144 @@ mod tests {
             DialectItem::TypeDef(td) => {
                 assert_eq!(td.name, "Ref");
                 assert_eq!(td.params.len(), 1);
-                assert_eq!(td.attrs.len(), 1);
+                assert_eq!(td.attrs.len(), 2);
                 assert_eq!(td.attrs[0].name, "nullable");
                 assert!(matches!(&td.attrs[0].kind, AttrKind::Path(path) if path.is_ident("bool")));
+                assert!(!td.attrs[0].optional && !td.attrs[0].list);
+                assert_eq!(td.attrs[0].docs.len(), 1);
+                assert_eq!(td.attrs[1].name, "tags");
+                assert!(td.attrs[1].optional && td.attrs[1].list);
             }
             _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_rejects_malformed_fields() {
+        for (item, expected) in [
+            (
+                quote!(
+                    mod t {
+                        #[attr(nullable: bool)]
+                        struct Ref<Pointee>;
+                    }
+                ),
+                "`#[attr(..)]` is not supported on types; declare `Attr<..>` fields",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref<Pointee> {
+                            pub nullable: Attr<bool>,
+                        }
+                    }
+                ),
+                "take no visibility",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref<Pointee> {
+                            nullable: bool,
+                        }
+                    }
+                ),
+                "must be `Attr<..>` or `Option<Attr<..>>`",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref<Pointee> {
+                            nullable: Value<_>,
+                        }
+                    }
+                ),
+                "must be `Attr<..>` or `Option<Attr<..>>`",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref<Pointee> {
+                            a: Attr<bool>,
+                            a: Attr<bool>,
+                        }
+                    }
+                ),
+                "duplicate attribute name: `a`",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref<Pointee> {
+                            r#type: Attr<TypeOf<Pointee>>,
+                        }
+                    }
+                ),
+                "declares no type variables",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref(bool);
+                    }
+                ),
+                "named fields",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref<Pointee> {
+                            pointee: Attr<bool>,
+                        }
+                    }
+                ),
+                "two accessors of the type are named `pointee`",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref {
+                            name: Attr<String>,
+                            name_ref: Attr<bool>,
+                        }
+                    }
+                ),
+                "two accessors of the type are named `name_ref`",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref<Params>;
+                    }
+                ),
+                "`params` is reserved",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref {
+                            intern: Attr<bool>,
+                        }
+                    }
+                ),
+                "`intern` is reserved",
+            ),
+            (
+                quote!(
+                    mod t {
+                        struct Ref {
+                            #[allow(unused)]
+                            a: Attr<bool>,
+                        }
+                    }
+                ),
+                "only doc comments",
+            ),
+        ] {
+            let Err(err) = parse_test_module(item) else {
+                panic!("expected `{expected}`");
+            };
+            assert!(err.contains(expected), "expected `{expected}`, got: {err}");
         }
     }
 
@@ -1382,8 +1508,9 @@ mod tests {
                 quote!(
                     mod test {
                         #[asm_format]
-                        #[attr(parse: String)]
-                        struct Ty;
+                        struct Ty {
+                            parse: Attr<String>,
+                        }
                     }
                 ),
                 "#[asm_format] reserves the name `parse`",
@@ -1492,7 +1619,7 @@ mod tests {
     fn test_parse_struct_mixed_fixed_and_variadic() {
         let module = parse_test_module(quote! {
             mod core {
-                struct Func<Return, #[rest] Params>;
+                struct Func<Return, #[rest] Inputs>;
             }
         })
         .unwrap();
@@ -1503,7 +1630,7 @@ mod tests {
                 assert!(!td.params[0].variadic);
                 assert_eq!(td.params[0].raw_ident.to_string(), "Return");
                 assert!(td.params[1].variadic);
-                assert_eq!(td.params[1].raw_ident.to_string(), "Params");
+                assert_eq!(td.params[1].raw_ident.to_string(), "Inputs");
             }
             _ => panic!("expected TypeDef"),
         }

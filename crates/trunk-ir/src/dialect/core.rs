@@ -23,8 +23,9 @@ mod core {
     struct Bytes;
     struct Ptr;
     struct Array<Element>;
-    #[attr(nullable: bool)]
-    struct Ref<Pointee>;
+    struct Ref<Pointee> {
+        nullable: Attr<bool>,
+    }
     struct Tuple<#[rest] Elements>;
 }
 
@@ -338,7 +339,7 @@ mod canonicalize_tests {
         FuncSig::remove_reserved_attrs(&mut ctx, &mut attrs);
         assert!(attrs.is_empty());
 
-        let nil = nil(&mut ctx).as_type_ref();
+        let nil = Nil::params().intern(&mut ctx).as_type_ref();
         let metadata = AttributeMap::from_entries(
             &mut ctx,
             [

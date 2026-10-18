@@ -242,7 +242,9 @@ mod tests {
         use trunk_ir::context::{BlockArgData, BlockData};
         use trunk_ir::types::Location;
         let location = Location::new(path, Default::default());
-        let nil_ty = trunk_ir::dialect::core::nil(ir).as_type_ref();
+        let nil_ty = trunk_ir::dialect::core::Nil::params()
+            .intern(ir)
+            .as_type_ref();
         let block = ir.create_block(BlockData {
             location,
             args: vec![BlockArgData {

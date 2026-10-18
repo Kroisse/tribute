@@ -666,7 +666,7 @@ mod malformed_owner_tests {
             let host = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
             let lambda = ctx.block(ctx.region(host.body(&ctx)).blocks[0]).ops[0];
             assert!(super::Lambda::matches(&ctx, lambda));
-            let nil = core::nil(&mut ctx).as_type_ref();
+            let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
             ctx.set_op_result_type(lambda, 0, nil);
             assert_eq!(
                 trunk_ir::op_interface::CallableOwnerOps::signature(&ctx, lambda),

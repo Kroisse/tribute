@@ -1197,7 +1197,9 @@ mod tests {
     fn test_print_type_with_params() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let tuple_ty = crate::dialect::core::tuple(&mut ctx, [i32_ty, i32_ty]).as_type_ref();
+        let tuple_ty = crate::dialect::core::Tuple::params([i32_ty, i32_ty])
+            .intern(&mut ctx)
+            .as_type_ref();
         assert_eq!(print_type(&ctx, tuple_ty), "core.tuple<core.i32, core.i32>");
     }
 

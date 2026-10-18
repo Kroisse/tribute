@@ -63,7 +63,7 @@ fn insert_closure_parts(
     rewriter: &mut PatternRewriter<'_>,
 ) -> (ValueRef, ValueRef) {
     let i32_ty = i32_type(ctx);
-    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let function = adt::StructGet::operands(closure)
         .r#type(closure_ty)
@@ -88,7 +88,7 @@ pub(crate) fn is_valid_tail_dispatch(
     converter: &TypeConverter,
 ) -> bool {
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
-    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let operands = ctx.op_operands(op).to_vec();
     let results = ctx.op_result_types(op).to_vec();
     if operands.len() != 2
@@ -146,7 +146,7 @@ pub(crate) fn lower_tail_dispatch(
 /// The fixed physical signature of a CPS handler dispatch closure.
 pub(crate) fn cps_dispatch_signature(ctx: &mut IrContext) -> TypeRef {
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
-    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let i32_ty = i32_type(ctx);
     let contract = physical_parameter_attrs(ctx, CallingConvention::Cps);
@@ -186,7 +186,7 @@ pub(crate) fn is_valid_cps_dispatch(
         return false;
     }
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
-    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let expected = [evidence_ty, closure_ty, closure_ty, anyref_ty];
     ctx.op_operands(op)

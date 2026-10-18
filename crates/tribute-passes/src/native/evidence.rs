@@ -975,7 +975,7 @@ mod tests {
             .iter()
             .map(|ty| converter.convert_type_or_identity(&ctx, *ty))
             .collect();
-        let ptr = core::ptr(&mut ctx).as_type_ref();
+        let ptr = core::Ptr::params().intern(&mut ctx).as_type_ref();
         let i32_ty = core_i32_type(&mut ctx);
         assert_eq!(actual, [ptr, ptr, ptr, i32_ty, i32_ty, i32_ty, ptr]);
         for index in 0..4 {

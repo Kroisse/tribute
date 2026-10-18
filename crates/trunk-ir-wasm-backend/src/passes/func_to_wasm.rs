@@ -725,7 +725,7 @@ fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a wasm.funcref type.
 fn intern_funcref_type(ctx: &mut IrContext) -> TypeRef {
-    wasm_dialect::funcref(ctx).as_type_ref()
+    wasm_dialect::Funcref::params().intern(ctx).as_type_ref()
 }
 
 #[cfg(test)]

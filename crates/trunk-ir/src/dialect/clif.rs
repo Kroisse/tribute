@@ -580,7 +580,9 @@ mod tests {
         let direct = body_op(2);
         assert!(IndirectCallLikeOps::exact_signature(&ctx, ordinary).is_some());
         assert!(IndirectCallLikeOps::exact_signature(&ctx, tail).is_some());
-        let nil = crate::dialect::core::nil(&mut ctx).as_type_ref();
+        let nil = crate::dialect::core::Nil::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         let shared_sig = func::func_sig(&mut ctx, [], [nil]).as_type_ref();
         assert!(
             !set_indirect_call_signature(&mut ctx, ordinary, shared_sig),

@@ -1367,7 +1367,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
             .expect("the indirect tail signature is a func.func_sig");
         assert_eq!(
             callable.single_result(&ctx).unwrap(),
-            core::never(&mut ctx).as_type_ref()
+            core::Never::params().intern(&mut ctx).as_type_ref()
         );
         assert_eq!(
             callable.inputs(&ctx).len() + 1,
@@ -1516,7 +1516,7 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
             .expect("the indirect tail signature is a func.func_sig");
         assert_eq!(
             callable.single_result(&ctx).unwrap(),
-            core::never(&mut ctx).as_type_ref()
+            core::Never::params().intern(&mut ctx).as_type_ref()
         );
         assert_eq!(
             callable.inputs(&ctx).len() + 1,
@@ -1576,7 +1576,7 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
     );
     let module_block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
     let location = ctx.op(module.op()).location;
-    let never = core::never(&mut ctx).as_type_ref();
+    let never = core::Never::params().intern(&mut ctx).as_type_ref();
     let raw_type = func::func_sig(&mut ctx, [], [never]).as_type_ref();
     let raw = func::Constant::operands()
         .func_ref(SymbolPath::new(["raw"]))

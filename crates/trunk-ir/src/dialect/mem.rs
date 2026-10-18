@@ -66,9 +66,11 @@ mod tests {
                 .expect("declared alias")
         };
         let i32_ty = crate::types::TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        let ptr_ty = crate::dialect::core::ptr(&mut ctx).as_type_ref();
+        let ptr_ty = crate::dialect::core::Ptr::params()
+            .intern(&mut ctx)
+            .as_type_ref();
 
-        let pair = super::r#struct(&mut ctx, [i32_ty, ptr_ty]);
+        let pair = super::Struct::params([i32_ty, ptr_ty]).intern(&mut ctx);
         assert_eq!(pair.as_type_ref(), alias(&ctx, "Pair"));
         assert_eq!(pair.fields(&ctx), [i32_ty, ptr_ty]);
         let empty = super::Struct::from_type_ref(&ctx, alias(&ctx, "Empty")).expect("mem.struct");

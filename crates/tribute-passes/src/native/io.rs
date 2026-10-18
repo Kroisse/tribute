@@ -57,10 +57,10 @@ fn ensure_runtime_declarations(ctx: &mut IrContext, module: Module) {
         return;
     };
     let loc = ctx.op(module.op()).location;
-    let bytes_ty = core::bytes(ctx).as_type_ref();
+    let bytes_ty = core::Bytes::params().intern(ctx).as_type_ref();
     let bool_ty = core::I1::type_ref(ctx);
-    let ptr_ty = core::ptr(ctx).as_type_ref();
-    let nil_ty = core::nil(ctx).as_type_ref();
+    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
 
     for (name, params, result) in [
         (WRITE_FN, vec![bytes_ty, bool_ty], nil_ty),
@@ -131,10 +131,10 @@ impl RewritePattern for NativeReadLinePattern {
 
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
-        let ptr_ty = core::ptr(ctx).as_type_ref();
-        let bytes_ty = core::bytes(ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+        let bytes_ty = core::Bytes::params().intern(ctx).as_type_ref();
         let i32_ty = core::I32::type_ref(ctx);
-        let nil_ty = core::nil(ctx).as_type_ref();
+        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
 
         let descriptor = func::Call::operands([])
             .callee(SymbolPath::new([READ_LINE_FN]))

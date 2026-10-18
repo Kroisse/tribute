@@ -575,7 +575,9 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        let nil_ty = crate::dialect::core::Nil::params()
+            .intern(ctx)
+            .as_type_ref();
         let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         let func_data = OperationDataBuilder::new(loc, "func.func")
             .attr("sym_name", Attribute::String(ctx.intern_str(name)))
@@ -606,7 +608,9 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        let nil_ty = crate::dialect::core::Nil::params()
+            .intern(ctx)
+            .as_type_ref();
         let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         wasm::Func::operands()
             .sym_name(name)
@@ -621,7 +625,9 @@ mod tests {
         func_op: &'static crate::OpDef,
         name: &'static str,
     ) -> OpRef {
-        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        let nil_ty = crate::dialect::core::Nil::params()
+            .intern(ctx)
+            .as_type_ref();
         let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         let op_data = OperationDataBuilder::new(loc, func_op)
             .attr("sym_name", Attribute::String(ctx.intern_str(name)))

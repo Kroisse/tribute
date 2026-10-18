@@ -555,8 +555,8 @@ mod result_list_tests {
         for inputs in [0, 2] {
             for results in [0, 1] {
                 let mut ctx = IrContext::new();
-                let nil = core::nil(&mut ctx).as_type_ref();
-                let ptr = core::ptr(&mut ctx).as_type_ref();
+                let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
+                let ptr = core::Ptr::params().intern(&mut ctx).as_type_ref();
                 let dict = crate::AttributeMap::from_entries(
                     &mut ctx,
                     [("ty", Attribute::List(vec![Attribute::Type(nil)]))],
@@ -616,8 +616,8 @@ mod result_list_tests {
         );
         let op = module.ops(&ctx)[0];
         let function = func::Func::from_op(&ctx, op).unwrap();
-        let nil = core::nil(&mut ctx).as_type_ref();
-        let ptr = core::ptr(&mut ctx).as_type_ref();
+        let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
+        let ptr = core::Ptr::params().intern(&mut ctx).as_type_ref();
         let bad_signature = func::func_sig(&mut ctx, [nil, nil], []).as_type_ref();
         ctx.op_attrs_mut(op)
             .insert("type", Attribute::Type(bad_signature));

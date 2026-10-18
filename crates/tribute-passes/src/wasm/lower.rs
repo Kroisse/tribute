@@ -610,7 +610,7 @@ mod tests {
         let i64_ty = core::I64::type_ref(&mut ctx);
         let f32_ty = core::F32::type_ref(&mut ctx);
         let f64_ty = core::F64::type_ref(&mut ctx);
-        let nil_ty = core::nil(&mut ctx).as_type_ref();
+        let nil_ty = core::Nil::params().intern(&mut ctx).as_type_ref();
         let body_block = ctx.create_block(BlockData {
             location,
             args: vec![],
@@ -700,7 +700,7 @@ mod tests {
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let module_block = module.first_block(&ctx).expect("module body block");
         let i32_ty = core::I32::type_ref(&mut ctx);
-        let nil_ty = core::nil(&mut ctx).as_type_ref();
+        let nil_ty = core::Nil::params().intern(&mut ctx).as_type_ref();
 
         let memory = wasm_dialect::Memory::operands()
             .min(1)

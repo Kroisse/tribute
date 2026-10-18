@@ -831,7 +831,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let i32_ty = core::I32::type_ref(&mut ctx);
         let i64_ty = core::I64::type_ref(&mut ctx);
-        let nil_ty = core::nil(&mut ctx).as_type_ref();
+        let nil_ty = core::Nil::params().intern(&mut ctx).as_type_ref();
         // (case, inputs, results, expected params, expected returns);
         // nil parameters and results are omitted in order.
         let cases: [(&str, &[_], &[_], &[_], &[_]); 6] = [

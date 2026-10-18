@@ -113,8 +113,8 @@ pub fn lower_cps_signatures_to_physical(
     module: Module,
 ) -> Result<(), TargetAbiError> {
     let ops = collect_ops(ctx, module.op());
-    let never = core::never(ctx).as_type_ref();
-    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let never = core::Never::params().intern(ctx).as_type_ref();
+    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let functions = collect_functions(ctx, &ops, never, anyref)?;
     validate_transfers(ctx, &ops, &functions, never)?;
     validate_dispatch_contracts(ctx, module)?;
@@ -317,7 +317,7 @@ fn validate_root_entry(
     phase: ContractPhase,
 ) -> Result<Option<RootEntryContract>, TargetAbiError> {
     let expected_results = match phase {
-        ContractPhase::Logical => vec![core::never(ctx).as_type_ref()],
+        ContractPhase::Logical => vec![core::Never::params().intern(ctx).as_type_ref()],
         ContractPhase::Physical => vec![],
     };
     let expected_results = expected_results.as_slice();
@@ -345,7 +345,7 @@ fn validate_root_entry(
         return Ok(None);
     }
     // The root contract fixes the source result of `main`.
-    let source_result = core::nil(ctx).as_type_ref();
+    let source_result = core::Nil::params().intern(ctx).as_type_ref();
     let worker = func::Func::from_op(ctx, worker_op)
         .map_err(|_| TargetAbiError::new("target root bridge: main is not func.func"))?;
     let worker_callable = func::FuncSig::from_type_ref(ctx, worker.r#type(ctx))
@@ -437,7 +437,7 @@ pub fn compose_root_entry_bridge(
         .ok_or_else(|| TargetAbiError::new("target root bridge: main is not func.func_sig"))?;
     let inputs = signature.inputs(ctx).to_vec();
     let results = signature.results(ctx).to_vec();
-    let nil_ty = core::nil(ctx).as_type_ref();
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let convention = get_calling_convention(ctx, worker_op);
     match (convention, &cps_root) {
@@ -703,10 +703,10 @@ impl TerminalFunctions {
     /// A `core.nil` answer is stored as it is. Any other answer is stored
     /// erased, because the cell needs a value before the answer exists.
     fn slot_type(ctx: &mut IrContext, answer: TypeRef) -> TypeRef {
-        if answer == core::nil(ctx).as_type_ref() {
+        if answer == core::Nil::params().intern(ctx).as_type_ref() {
             answer
         } else {
-            tribute_rt::anyref(ctx).as_type_ref()
+            tribute_rt::Anyref::params().intern(ctx).as_type_ref()
         }
     }
 
@@ -720,7 +720,7 @@ impl TerminalFunctions {
     ) -> Result<Self, TargetAbiError> {
         let slot = Self::slot_type(ctx, answer);
         let cell_ty = completion_cell_type(ctx, slot);
-        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
         let contract = physical_parameter_attrs(ctx, CallingConvention::Cps);
         let done_ty = func::func_sig_with_param_attrs(
             ctx,
@@ -832,7 +832,7 @@ impl TerminalFunctions {
     /// Build a fresh cell and the frame whose `Done` writes it.
     fn build_frame(&self, ctx: &mut IrContext, location: Location) -> TerminalFrame {
         let mut ops = Vec::new();
-        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
         let initial = if Self::slot_type(ctx, self.answer) != anyref_ty {
             core::NilValue::operands().build(ctx, location).op_ref()
         } else {
@@ -926,12 +926,12 @@ fn build_initial_evidence(
 }
 
 fn completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
-    let name = if value_ty == core::nil(ctx).as_type_ref() {
+    let name = if value_ty == core::Nil::params().intern(ctx).as_type_ref() {
         ROOT_COMPLETION_CELL_NAME
     } else {
         ERASED_COMPLETION_CELL_NAME
     };
-    adt::struct_type(
+    adt::Struct::from_fields(
         ctx,
         name,
         [(ROOT_COMPLETION_CELL_VALUE_FIELD, value_ty)],
@@ -1013,7 +1013,7 @@ pub(crate) fn validate_dispatch_contracts(
         let [evidence, dispatch, resume, payload] = operands.as_slice() else {
             return Err(TargetAbiError::new("CPS dispatch requires four operands"));
         };
-        let packed_payload = tribute_rt::anyref(ctx).as_type_ref();
+        let packed_payload = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
         if ctx.value_ty(*payload) != packed_payload {
             return Err(TargetAbiError::new(
                 "CPS dispatch packed payload must have exact tribute_rt.anyref type",
@@ -1984,7 +1984,7 @@ mod tests {
                         .insert("answer_type", Attribute::Int(0));
                 }
                 2 => {
-                    let wrong = core::nil(&mut ctx).as_type_ref();
+                    let wrong = core::Nil::params().intern(&mut ctx).as_type_ref();
                     ctx.op_attrs_mut(dispatch)
                         .insert("answer_type", Attribute::Type(wrong));
                 }
@@ -2020,7 +2020,7 @@ mod tests {
                     let ty = if mutation == 7 {
                         TypeDataBuilder::new("core.i32").intern(&mut ctx)
                     } else {
-                        core::ptr(&mut ctx).as_type_ref()
+                        core::Ptr::params().intern(&mut ctx).as_type_ref()
                     };
                     let entry = ctx.op(dispatch).parent_block.unwrap();
                     ctx.set_block_arg_type(entry, 3, ty);
@@ -2149,7 +2149,7 @@ mod tests {
 
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
 
-        let never = core::never(&mut ctx).as_type_ref();
+        let never = core::Never::params().intern(&mut ctx).as_type_ref();
         for (name, expected) in [
             ("direct", Some(never)),
             ("evidence", Some(never)),
@@ -2217,8 +2217,8 @@ mod tests {
 }"#,
         );
         let main = function(&ctx, module, "main");
-        let nil = core::nil(&mut ctx).as_type_ref();
-        let never = core::never(&mut ctx).as_type_ref();
+        let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
+        let never = core::Never::params().intern(&mut ctx).as_type_ref();
         let evidence = ability::evidence_adt_type_ref(&mut ctx);
         let done_callable = func::func_sig(&mut ctx, [nil], [never]).as_type_ref();
         let done = tribute_core::calling_convention::physical_closure_type_with_environment_index(
@@ -2229,7 +2229,7 @@ mod tests {
         );
         let frame_name = "__tribute_continuation_frame_root_nil";
         let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
-        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let anyref = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
             &mut ctx, evidence, frame, anyref, i32_ty,
@@ -2551,8 +2551,8 @@ mod tests {
 }"#,
             );
             let main = function(&ctx, module, "main");
-            let nil = core::nil(&mut ctx).as_type_ref();
-            let never = core::never(&mut ctx).as_type_ref();
+            let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
+            let never = core::Never::params().intern(&mut ctx).as_type_ref();
             let evidence = ability::evidence_adt_type_ref(&mut ctx);
             let frame_name = "__tribute_malformed_root_frame";
             let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
@@ -2562,9 +2562,13 @@ mod tests {
                 if frame_result { nil } else { i32_ty },
             );
             if malformed_layout {
-                let wrong =
-                    adt::struct_type::<String>(&mut ctx, frame_name, [], AttributeMap::new())
-                        .as_type_ref();
+                let wrong = adt::Struct::from_fields::<String>(
+                    &mut ctx,
+                    frame_name,
+                    [],
+                    AttributeMap::new(),
+                )
+                .as_type_ref();
                 ctx.register_type_alias(Symbol::new(frame_name), wrong);
             }
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
@@ -2596,13 +2600,13 @@ mod tests {
 }"#,
         );
         let main = function(&ctx, module, "main");
-        let nil = core::nil(&mut ctx).as_type_ref();
-        let never = core::never(&mut ctx).as_type_ref();
+        let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
+        let never = core::Never::params().intern(&mut ctx).as_type_ref();
         let evidence = ability::evidence_adt_type_ref(&mut ctx);
         let frame_name = "__tribute_parameterized_dispatch_tag";
         let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
         let done = tribute_core::calling_convention::cps_done_type(&mut ctx, nil);
-        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let anyref = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
         let parameterized_i32 = TypeDataBuilder::new("core.i32").param(nil).intern(&mut ctx);
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
             &mut ctx,
@@ -2803,7 +2807,7 @@ mod tests {
 
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
 
-        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let anyref = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
         for (name, parameter_count) in [("generated_zero", 1), ("generated_one", 2)] {
             let function = function(&ctx, module, name);
             let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();

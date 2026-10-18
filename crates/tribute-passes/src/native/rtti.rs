@@ -66,8 +66,12 @@ struct ClifTypes {
 impl ClifTypes {
     fn intern(ctx: &mut IrContext) -> Self {
         Self {
-            ptr: trunk_ir::dialect::core::ptr(ctx).as_type_ref(),
-            nil: trunk_ir::dialect::core::nil(ctx).as_type_ref(),
+            ptr: trunk_ir::dialect::core::Ptr::params()
+                .intern(ctx)
+                .as_type_ref(),
+            nil: trunk_ir::dialect::core::Nil::params()
+                .intern(ctx)
+                .as_type_ref(),
             i64: trunk_ir::dialect::core::I64::type_ref(ctx),
             i32: trunk_ir::dialect::core::I32::type_ref(ctx),
             i8: trunk_ir::dialect::core::I8::type_ref(ctx),
@@ -927,8 +931,13 @@ fn gen_dealloc_and_return_with_size(
 #[cfg(test)]
 pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, TypeRef)]) -> TypeRef {
     let fields = fields.iter().map(|&(name, ty)| (name, ty));
-    tribute_ir::dialect::adt::struct_type(ctx, "Test", fields, trunk_ir::types::AttributeMap::new())
-        .as_type_ref()
+    tribute_ir::dialect::adt::Struct::from_fields(
+        ctx,
+        "Test",
+        fields,
+        trunk_ir::types::AttributeMap::new(),
+    )
+    .as_type_ref()
 }
 
 /// Pass form of [`generate_rtti`].
@@ -1246,7 +1255,7 @@ mod tests {
     fn test_struct_with_ptr_fields() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = core::I32::type_ref(&mut ctx);
-        let managed_ty = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let managed_ty = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
 
         // Node(value: i32, next: anyref) has one typed managed field.
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", managed_ty)]);
@@ -1264,7 +1273,7 @@ mod tests {
     fn test_multiple_struct_types() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = core::I32::type_ref(&mut ctx);
-        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(&mut ctx).as_type_ref();
 
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
@@ -1369,8 +1378,8 @@ mod tests {
     #[test]
     fn test_closure_struct_skips_func_ptr() {
         let (mut ctx, loc) = test_ctx();
-        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
-        let managed_ty = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(&mut ctx).as_type_ref();
+        let managed_ty = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
 
         // The raw code pointer is unmanaged; the typed environment is managed.
         let closure_ty = make_struct_type(&mut ctx, &[("func_ptr", ptr_ty), ("env", managed_ty)]);
