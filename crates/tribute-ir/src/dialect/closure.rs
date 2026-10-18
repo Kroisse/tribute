@@ -250,7 +250,7 @@ impl trunk_ir::asm_format::OpAsmFormat for Lambda {
     }
 }
 
-impl trunk_ir::op_interface::CallableOwnerModel for Lambda {
+impl trunk_ir::op_interface::CallableOwner for Lambda {
     fn callable_signature(
         self,
         ctx: &trunk_ir::IrContext,

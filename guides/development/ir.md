@@ -333,11 +333,46 @@ every other reference an operation holds takes its target's address, which
 the call graph records as an escape:
 
 ```rust
-impl CallLikeModel for Call {}
+impl CallLike for Call {}
 inventory::submit! {
     CallLikeOps::register::<Call>()
 }
 ```
+
+### Operation Interfaces
+
+An operation interface is a trait that operation wrappers implement,
+declared with `#[trunk_ir::op_interface]`:
+
+```rust
+#[op_interface]
+pub trait Branch: DialectOp {
+    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
+}
+
+impl Branch for Br {
+    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> { .. }
+}
+```
+
+Each method takes `self` or `&self`, then the context (`&IrContext` or
+`&mut IrContext`), and may be generic over lifetimes only; default bodies
+are dispatched like other methods. The macro generates `DynBranch`, a
+copyable handle to an operation and its implementation, found by the
+operation's name:
+
+```rust
+if let Some(branch) = DynBranch::get(ctx, op) {
+    let successors = branch.successors(ctx)?;
+}
+let is_branch = DynBranch::is_implemented(ctx, op);
+```
+
+A query that combines interfaces, or turns a missing implementation into an
+error, is an ordinary function next to the trait, such as
+`RegionBranchOps::value_transfer` and `CallableExitOps::exits_callable`.
+Any crate can declare an interface; an implementation follows the orphan
+rule, so it lives with the interface or with the operation.
 
 Per-parameter attributes (`param_attrs`, see
 [the type model](../../new-plans/ir.md#타입-매개변수-속성)) are built with the

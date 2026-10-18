@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
-use trunk_ir::op_interface::BranchOps;
+use trunk_ir::op_interface::DynBranch;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::{BlockList, BlockRef, OpRef, RegionRef, ValueRef};
 
@@ -65,8 +65,8 @@ impl ValidatedFlatCfg {
             }
 
             let block_successors: BlockList = ctx.op_successors(terminator).collect();
-            if let Some(interface) = BranchOps::get(ctx, terminator) {
-                let edges = interface.successors(ctx, terminator).map_err(|error| {
+            if let Some(interface) = DynBranch::get(ctx, terminator) {
+                let edges = interface.successors(ctx).map_err(|error| {
                     OwnershipPlanError::new(format!("Branch interface is incomplete: {error}"))
                 })?;
                 if edges.as_slice().len() != block_successors.len() {
@@ -166,7 +166,7 @@ impl ValidatedFlatCfg {
 }
 
 fn is_native_terminator(ctx: &IrContext, op: OpRef) -> bool {
-    BranchOps::get(ctx, op).is_some()
+    DynBranch::is_implemented(ctx, op)
         || func::Return::matches(ctx, op)
         || func::TailCall::matches(ctx, op)
         || func::TailCallIndirect::matches(ctx, op)

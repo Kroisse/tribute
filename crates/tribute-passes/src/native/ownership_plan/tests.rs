@@ -3,7 +3,7 @@ use crate::native::evidence::lower_evidence_to_native;
 use crate::native::rc_materialization::materialize;
 use crate::native::type_converter::native_type_converter;
 use trunk_ir::op_interface::{
-    BranchModel, BranchOps, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
+    Branch, BranchOps, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
 };
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
@@ -53,7 +53,7 @@ mod test {
     }
 }
 
-impl BranchModel for IncompleteBranch {
+impl Branch for IncompleteBranch {
     fn successors(self, _ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         Err(ControlFlowInterfaceError::new(
             "test branch interface is incomplete",
@@ -61,13 +61,13 @@ impl BranchModel for IncompleteBranch {
     }
 }
 
-impl BranchModel for MissingEdgeBranch {
+impl Branch for MissingEdgeBranch {
     fn successors(self, _ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         Ok(BranchSuccessors::default())
     }
 }
 
-impl BranchModel for ReversedBranch {
+impl Branch for ReversedBranch {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         Ok(BranchSuccessors::new([
             BranchSuccessor::new(self.right(ctx), []),
@@ -76,7 +76,7 @@ impl BranchModel for ReversedBranch {
     }
 }
 
-impl BranchModel for MultiForwardingBranch {
+impl Branch for MultiForwardingBranch {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         let forwarded = self.value(ctx);
         Ok(BranchSuccessors::new([

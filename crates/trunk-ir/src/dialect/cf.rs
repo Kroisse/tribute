@@ -32,10 +32,10 @@ mod cf {
 use crate::IrContext;
 use crate::dialect::core::IntegerLike;
 use crate::op_interface::{
-    BranchModel, BranchOps, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
+    Branch, BranchOps, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
 };
 
-impl BranchModel for Br {
+impl Branch for Br {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         if ctx.op_successor_count(self.op_ref()) != 1 {
             return Err(ControlFlowInterfaceError::new(
@@ -49,7 +49,7 @@ impl BranchModel for Br {
     }
 }
 
-impl BranchModel for CondBr {
+impl Branch for CondBr {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         let op = self.op_ref();
         if ctx.op_operands(op).len() != 1 || ctx.op_successor_count(op) != 2 {
@@ -116,7 +116,7 @@ impl crate::ops::Verify for Switch {
     }
 }
 
-impl BranchModel for Switch {
+impl Branch for Switch {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         let op = self.op_ref();
         if ctx.op_operands(op).len() != 1 || !ctx.op_has_successors(op) {

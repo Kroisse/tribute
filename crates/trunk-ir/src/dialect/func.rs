@@ -3,8 +3,8 @@
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::Type;
 use crate::op_interface::{
-    CallLikeModel, CallLikeOps, CallableExitModel, CallableExitOps, ControlFlowInterfaceError,
-    IndirectCallLikeModel, IndirectCallLikeOps,
+    self, CallLikeOps, CallableExit, CallableExitOps, ControlFlowInterfaceError, IndirectCallLike,
+    IndirectCallLikeOps,
 };
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, TypeDataBuilder, TypeRef};
@@ -481,7 +481,7 @@ impl CallLike for CallIndirect {
     }
 }
 
-impl IndirectCallLikeModel for CallIndirect {
+impl IndirectCallLike for CallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         indirect_call_signature(ctx, self.op_ref())
     }
@@ -549,7 +549,7 @@ impl CallLike for TailCallIndirect {
     }
 }
 
-impl IndirectCallLikeModel for TailCallIndirect {
+impl IndirectCallLike for TailCallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         indirect_call_signature(ctx, self.op_ref())
     }
@@ -561,9 +561,9 @@ impl IndirectCallLikeModel for TailCallIndirect {
 
 impl TailCallLike for TailCallIndirect {}
 
-impl CallableExitModel for Return {}
+impl CallableExit for Return {}
 
-impl CallableExitModel for TailCall {
+impl CallableExit for TailCall {
     fn verify_callable_exit(
         &self,
         ctx: &crate::IrContext,
@@ -582,7 +582,7 @@ impl CallableExitModel for TailCall {
     }
 }
 
-impl CallableExitModel for TailCallIndirect {
+impl CallableExit for TailCallIndirect {
     fn verify_callable_exit(
         &self,
         ctx: &crate::IrContext,
@@ -606,7 +606,7 @@ impl CallableExitModel for TailCallIndirect {
     }
 }
 
-impl CallableExitModel for Unreachable {
+impl CallableExit for Unreachable {
     fn verify_callable_exit(
         &self,
         ctx: &crate::IrContext,
@@ -626,8 +626,8 @@ inventory::submit! { CallableExitOps::register::<TailCall>() }
 inventory::submit! { CallableExitOps::register::<TailCallIndirect>() }
 inventory::submit! { CallableExitOps::register::<Unreachable>() }
 
-impl CallLikeModel for Call {}
-impl CallLikeModel for TailCall {}
+impl op_interface::CallLike for Call {}
+impl op_interface::CallLike for TailCall {}
 
 inventory::submit! {
     CallLikeOps::register::<Call>()
@@ -870,7 +870,7 @@ impl crate::asm_format::OpAsmFormat for Func {
     }
 }
 
-impl crate::op_interface::CallableOwnerModel for Func {
+impl crate::op_interface::CallableOwner for Func {
     fn callable_signature(self, ctx: &crate::IrContext) -> Option<crate::dialect::func::FuncSig> {
         ctx.op_attrs(self.op_ref())
             .get_type("type")
@@ -883,7 +883,7 @@ inventory::submit! { crate::op_interface::CallableOwnerOps::register::<Func>() }
 mod tests {
     use super::*;
     use crate::SymbolPath;
-    use crate::op_interface::{CallableExitOps, IndirectCallLikeOps};
+    use crate::op_interface::{CallableExitOps, DynIndirectCallLike, IndirectCallLikeOps};
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
@@ -1021,7 +1021,7 @@ mod tests {
             .block(ctx.region(function.body_if_present(&ctx).unwrap()).blocks[0])
             .ops;
         for &op in ops {
-            assert!(IndirectCallLikeOps::get(&ctx, op).is_some());
+            assert!(DynIndirectCallLike::get(&ctx, op).is_some());
             assert_eq!(IndirectCallLikeOps::exact_signature(&ctx, op), None);
         }
     }
@@ -1059,8 +1059,8 @@ mod tests {
             .block(ctx.region(direct.body_if_present(&ctx).unwrap()).blocks[0])
             .ops[0];
 
-        assert!(IndirectCallLikeOps::get(&ctx, ordinary_op).is_some());
-        assert!(IndirectCallLikeOps::get(&ctx, tail_op).is_some());
+        assert!(DynIndirectCallLike::get(&ctx, ordinary_op).is_some());
+        assert!(DynIndirectCallLike::get(&ctx, tail_op).is_some());
         assert!(IndirectCallLikeOps::exact_signature(&ctx, ordinary_op).is_some());
         assert!(IndirectCallLikeOps::exact_signature(&ctx, tail_op).is_some());
         for op in [ordinary_op, tail_op] {
@@ -1071,7 +1071,7 @@ mod tests {
                 Some(&operands[1..])
             );
         }
-        assert!(IndirectCallLikeOps::get(&ctx, direct_op).is_none());
+        assert!(DynIndirectCallLike::get(&ctx, direct_op).is_none());
         assert_eq!(IndirectCallLikeOps::callee(&ctx, direct_op), None);
         assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct_op), None);
     }

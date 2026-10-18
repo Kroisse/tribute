@@ -23,7 +23,7 @@ use trunk_ir::SymbolPath;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::op_interface::IndirectCallLikeModel;
+use trunk_ir::op_interface::IndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{

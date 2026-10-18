@@ -3,7 +3,6 @@
 //! This module provides an interface system similar to `type_interface.rs` but for operations.
 //! It uses the `inventory` crate to build a registry of operation properties at compile time.
 
-use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::sync::LazyLock;
@@ -13,6 +12,7 @@ use smallvec::SmallVec;
 use crate::ops::DialectOp;
 use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
 use crate::{OpName, SymbolPath};
+use trunk_ir_macros::op_interface;
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
 ///
@@ -380,70 +380,38 @@ pub struct RegionValueTransfer {
 
 /// Exact callable region signature supplied by the owning dialect.
 /// A registered owner with an invalid signature is still an ownership boundary.
-pub trait CallableOwnerModel: DialectOp {
+#[op_interface]
+pub trait CallableOwner: DialectOp {
     fn callable_signature(self, ctx: &IrContext) -> Option<crate::dialect::func::FuncSig>;
 }
 
-pub struct CallableOwnerRegistration {
-    name: OpName,
-    signature: fn(&IrContext, OpRef) -> Option<crate::dialect::func::FuncSig>,
-}
-
-fn callable_owner_signature<T: CallableOwnerModel>(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Option<crate::dialect::func::FuncSig> {
-    T::from_op(ctx, op).ok()?.callable_signature(ctx)
-}
-
-inventory::collect!(CallableOwnerRegistration);
-
-static CALLABLE_OWNER_REGISTRY: LazyLock<HashMap<OpName, &'static CallableOwnerRegistration>> =
-    LazyLock::new(|| {
-        let mut registry = HashMap::default();
-        for registration in inventory::iter::<CallableOwnerRegistration> {
-            assert!(
-                registry.insert(registration.name, registration).is_none(),
-                "duplicate callable owner registration"
-            );
-        }
-        registry
-    });
-
+/// Static queries and registration entry point for [`CallableOwner`].
 pub struct CallableOwnerOps;
+
 impl CallableOwnerOps {
-    pub const fn register<T: CallableOwnerModel>() -> CallableOwnerRegistration {
-        CallableOwnerRegistration {
-            name: T::NAME,
-            signature: callable_owner_signature::<T>,
-        }
+    #[doc(hidden)]
+    pub const fn register<T: CallableOwner>() -> __CallableOwnerVTable {
+        T::__TRUNK_IR_INTERFACE
     }
 
     /// Outer None means unregistered; Some(None) means a malformed owner.
     pub fn signature(ctx: &IrContext, op: OpRef) -> Option<Option<crate::dialect::func::FuncSig>> {
-        let data = ctx.op(op);
-        CALLABLE_OWNER_REGISTRY
-            .get(&data.name)
-            .map(|registration| (registration.signature)(ctx, op))
+        DynCallableOwner::get(ctx, op).map(|owner| owner.callable_signature(ctx))
     }
 }
 
-/// Object-safe semantic query for operations that leave the current callable.
+/// Semantics of operations that leave the current callable.
 ///
 /// Callable exits are distinct from generic structured-region terminators:
 /// a yield, break, or continue can transfer control to an enclosing structured
 /// operation, while a callable exit cannot execute a following operation in
 /// that callable.
-pub trait CallableExit: Sync {
-    fn exits_callable(&self, ctx: &IrContext, op: OpRef) -> Result<(), ControlFlowInterfaceError>;
-}
-
-/// Typed callable-exit semantics supplied by a generated dialect operation
-/// wrapper. The default contract rejects results, raw block successors, and
-/// nested regions. A model may explicitly permit regions and supplies only
-/// its dialect-specific checks; registration alone is never proof of
-/// termination.
-pub trait CallableExitModel: DialectOp {
+///
+/// The default contract rejects results, raw block successors, and nested
+/// regions. A model may explicitly permit regions and supplies only its
+/// dialect-specific checks; registration alone is never proof of termination.
+#[op_interface]
+pub trait CallableExit: DialectOp {
     /// Whether this callable exit may own structured regions.
     fn allows_nested_regions(&self, _ctx: &IrContext) -> bool {
         false
@@ -475,60 +443,13 @@ pub trait CallableExitModel: DialectOp {
     }
 }
 
-fn callable_exit_model<T: CallableExitModel>(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Result<(), ControlFlowInterfaceError> {
-    let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
-    })?;
-    model.exits_callable(ctx)
-}
-
-/// Registry entry for [`CallableExit`].
-pub struct CallableExitRegistration {
-    name: OpName,
-    exits_callable: fn(&IrContext, OpRef) -> Result<(), ControlFlowInterfaceError>,
-}
-
-impl CallableExit for CallableExitRegistration {
-    fn exits_callable(&self, ctx: &IrContext, op: OpRef) -> Result<(), ControlFlowInterfaceError> {
-        (self.exits_callable)(ctx, op)
-    }
-}
-
-inventory::collect!(CallableExitRegistration);
-
-static CALLABLE_EXIT_REGISTRY: LazyLock<HashMap<OpName, &'static CallableExitRegistration>> =
-    LazyLock::new(|| {
-        let mut registry = HashMap::default();
-        for registration in inventory::iter::<CallableExitRegistration> {
-            assert!(
-                registry.insert(registration.name, registration).is_none(),
-                "duplicate CallableExit registration for {:?}",
-                registration.name,
-            );
-        }
-        registry
-    });
-
-/// Dynamic query and registration entry point for [`CallableExit`].
+/// Static queries and registration entry point for [`CallableExit`].
 pub struct CallableExitOps;
 
 impl CallableExitOps {
     #[doc(hidden)]
-    pub const fn register<T: CallableExitModel>() -> CallableExitRegistration {
-        CallableExitRegistration {
-            name: T::NAME,
-            exits_callable: callable_exit_model::<T>,
-        }
-    }
-
-    pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn CallableExit> {
-        let data = ctx.op(op);
-        CALLABLE_EXIT_REGISTRY
-            .get(&data.name)
-            .map(|registration| *registration as &dyn CallableExit)
+    pub const fn register<T: CallableExit>() -> __CallableExitVTable {
+        T::__TRUNK_IR_INTERFACE
     }
 
     /// Prove that an operation leaves the current callable.
@@ -536,11 +457,11 @@ impl CallableExitOps {
     /// A missing registration and a failed typed query are both errors so
     /// generic consumers remain conservative.
     pub fn exits_callable(ctx: &IrContext, op: OpRef) -> Result<(), ControlFlowInterfaceError> {
-        Self::get(ctx, op)
+        DynCallableExit::get(ctx, op)
             .ok_or_else(|| {
                 ControlFlowInterfaceError::new("operation has no CallableExit registration")
             })?
-            .exits_callable(ctx, op)
+            .exits_callable(ctx)
     }
 }
 
@@ -548,7 +469,8 @@ impl CallableExitOps {
 ///
 /// The callee is the one symbol reference of the operation that transfers
 /// control to its target. Any other reference takes the target's address.
-pub trait CallLikeModel: DialectOp {
+#[op_interface]
+pub trait CallLike: DialectOp {
     /// `None` for a malformed call; read fallibly since unverified IR may be
     /// queried.
     fn direct_callee(self, ctx: &IrContext) -> Option<SymbolPath> {
@@ -558,76 +480,35 @@ pub trait CallLikeModel: DialectOp {
     }
 }
 
-/// Registry entry for [`CallLikeModel`].
-pub struct CallLikeRegistration {
-    name: OpName,
-    callee: fn(&IrContext, OpRef) -> Option<SymbolPath>,
-}
-
-fn call_like_model_callee<T: CallLikeModel>(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
-    T::from_op(ctx, op)
-        .ok()
-        .and_then(|model| model.direct_callee(ctx))
-}
-
-inventory::collect!(CallLikeRegistration);
-
-static CALL_LIKE_REGISTRY: LazyLock<HashMap<OpName, &'static CallLikeRegistration>> =
-    LazyLock::new(|| {
-        let mut registry = HashMap::default();
-        for registration in inventory::iter::<CallLikeRegistration> {
-            assert!(
-                registry.insert(registration.name, registration).is_none(),
-                "duplicate CallLike registration for {:?}",
-                registration.name,
-            );
-        }
-        registry
-    });
-
-/// Dynamic query and registration entry point for direct calls.
+/// Static queries and registration entry point for [`CallLike`].
 pub struct CallLikeOps;
 
 impl CallLikeOps {
     #[doc(hidden)]
-    pub const fn register<T: CallLikeModel>() -> CallLikeRegistration {
-        CallLikeRegistration {
-            name: T::NAME,
-            callee: call_like_model_callee::<T>,
-        }
+    pub const fn register<T: CallLike>() -> __CallLikeVTable {
+        T::__TRUNK_IR_INTERFACE
     }
 
     /// The callee of a direct call, or `None` if `op` is not one or is
     /// malformed.
     pub fn callee(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
-        let data = ctx.op(op);
-        CALL_LIKE_REGISTRY
-            .get(&data.name)
-            .and_then(|registration| (registration.callee)(ctx, op))
+        DynCallLike::get(ctx, op).and_then(|call| call.direct_callee(ctx))
     }
 }
 
-/// Object-safe semantic accessors for indirect calls.
+/// Semantic accessors for indirect calls.
 ///
 /// An exact signature is optional on otherwise valid ordinary indirect
 /// transfers. When it is absent, consumers must not reconstruct a contract
 /// from erased operands or operation result types.
-pub trait IndirectCallLike: Sync {
-    fn callee(&self, ctx: &IrContext, op: OpRef) -> Option<ValueRef>;
-
-    fn arguments<'a>(&self, ctx: &'a IrContext, op: OpRef) -> Option<&'a [ValueRef]>;
-
-    fn exact_signature(&self, ctx: &IrContext, op: OpRef) -> Option<TypeRef>;
-
-    fn set_exact_signature(&self, ctx: &mut IrContext, op: OpRef, signature: TypeRef) -> bool;
-}
-
-/// Typed indirect-call semantics supplied by a generated operation wrapper.
-pub trait IndirectCallLikeModel: DialectOp {
+#[op_interface]
+pub trait IndirectCallLike: DialectOp {
+    /// The erased runtime callee or table-index value.
     fn indirect_callee(self, ctx: &IrContext) -> Option<ValueRef> {
         ctx.op_operands(self.op_ref()).first().copied()
     }
 
+    /// The arguments supplied to the transfer, excluding its callee.
     fn indirect_arguments(self, ctx: &IrContext) -> Option<&[ValueRef]> {
         ctx.op_operands(self.op_ref()).get(1..)
     }
@@ -637,228 +518,56 @@ pub trait IndirectCallLikeModel: DialectOp {
     fn set_exact_signature(self, ctx: &mut IrContext, signature: TypeRef) -> bool;
 }
 
-fn indirect_call_like_model_callee<T: IndirectCallLikeModel>(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Option<ValueRef> {
-    T::from_op(ctx, op)
-        .ok()
-        .and_then(|model| model.indirect_callee(ctx))
-}
-
-fn indirect_call_like_model_arguments<T: IndirectCallLikeModel>(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Option<&[ValueRef]> {
-    T::from_op(ctx, op)
-        .ok()
-        .and_then(|model| model.indirect_arguments(ctx))
-}
-
-fn indirect_call_like_model_signature<T: IndirectCallLikeModel>(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Option<TypeRef> {
-    T::from_op(ctx, op)
-        .ok()
-        .and_then(|model| model.exact_signature(ctx))
-}
-
-fn indirect_call_like_model_set_signature<T: IndirectCallLikeModel>(
-    ctx: &mut IrContext,
-    op: OpRef,
-    signature: TypeRef,
-) -> bool {
-    let Ok(model) = T::from_op(ctx, op) else {
-        return false;
-    };
-    model.set_exact_signature(ctx, signature)
-}
-
-/// Registry entry for [`IndirectCallLike`].
-pub struct IndirectCallLikeRegistration {
-    name: OpName,
-    callee: fn(&IrContext, OpRef) -> Option<ValueRef>,
-    arguments: fn(&IrContext, OpRef) -> Option<&[ValueRef]>,
-    exact_signature: fn(&IrContext, OpRef) -> Option<TypeRef>,
-    set_exact_signature: fn(&mut IrContext, OpRef, TypeRef) -> bool,
-}
-
-impl IndirectCallLike for IndirectCallLikeRegistration {
-    fn callee(&self, ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
-        (self.callee)(ctx, op)
-    }
-
-    fn arguments<'a>(&self, ctx: &'a IrContext, op: OpRef) -> Option<&'a [ValueRef]> {
-        (self.arguments)(ctx, op)
-    }
-
-    fn exact_signature(&self, ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
-        (self.exact_signature)(ctx, op)
-    }
-
-    fn set_exact_signature(&self, ctx: &mut IrContext, op: OpRef, signature: TypeRef) -> bool {
-        (self.set_exact_signature)(ctx, op, signature)
-    }
-}
-
-inventory::collect!(IndirectCallLikeRegistration);
-
-static INDIRECT_CALL_LIKE_REGISTRY: LazyLock<
-    HashMap<OpName, &'static IndirectCallLikeRegistration>,
-> = LazyLock::new(|| {
-    let mut registry = HashMap::default();
-    for registration in inventory::iter::<IndirectCallLikeRegistration> {
-        assert!(
-            registry.insert(registration.name, registration).is_none(),
-            "duplicate IndirectCallLike registration for {:?}",
-            registration.name,
-        );
-    }
-    registry
-});
-
-/// Dynamic query and registration entry point for [`IndirectCallLike`].
+/// Static queries and registration entry point for [`IndirectCallLike`].
 pub struct IndirectCallLikeOps;
 
 impl IndirectCallLikeOps {
     #[doc(hidden)]
-    pub const fn register<T: IndirectCallLikeModel>() -> IndirectCallLikeRegistration {
-        IndirectCallLikeRegistration {
-            name: T::NAME,
-            callee: indirect_call_like_model_callee::<T>,
-            arguments: indirect_call_like_model_arguments::<T>,
-            exact_signature: indirect_call_like_model_signature::<T>,
-            set_exact_signature: indirect_call_like_model_set_signature::<T>,
-        }
-    }
-
-    pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn IndirectCallLike> {
-        let data = ctx.op(op);
-        INDIRECT_CALL_LIKE_REGISTRY
-            .get(&data.name)
-            .map(|registration| *registration as &dyn IndirectCallLike)
+    pub const fn register<T: IndirectCallLike>() -> __IndirectCallLikeVTable {
+        T::__TRUNK_IR_INTERFACE
     }
 
     /// Read an indirect transfer's exact callable signature, if it has one.
     pub fn exact_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
-        Self::get(ctx, op).and_then(|interface| interface.exact_signature(ctx, op))
+        DynIndirectCallLike::get(ctx, op).and_then(|call| call.exact_signature(ctx))
     }
 
     /// Set an indirect transfer's exact callable signature.
     pub fn set_exact_signature(ctx: &mut IrContext, op: OpRef, signature: TypeRef) -> bool {
-        Self::get(ctx, op)
-            .is_some_and(|interface| interface.set_exact_signature(ctx, op, signature))
+        DynIndirectCallLike::get(ctx, op)
+            .is_some_and(|call| call.set_exact_signature(ctx, signature))
     }
 
     /// Read an indirect transfer's erased runtime callee or table-index value.
     pub fn callee(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
-        Self::get(ctx, op).and_then(|interface| interface.callee(ctx, op))
+        DynIndirectCallLike::get(ctx, op).and_then(|call| call.indirect_callee(ctx))
     }
 
     /// Read arguments supplied to an indirect transfer, excluding its callee.
     pub fn arguments(ctx: &IrContext, op: OpRef) -> Option<&[ValueRef]> {
-        Self::get(ctx, op).and_then(|interface| interface.arguments(ctx, op))
+        DynIndirectCallLike::get(ctx, op).and_then(|call| call.indirect_arguments(ctx))
     }
 }
 
-/// Object-safe block branch semantics.
-pub trait Branch: Sync {
-    fn successors(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-    ) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
-}
-
-/// Typed block-branch semantics supplied by a generated dialect operation wrapper.
-pub trait BranchModel: DialectOp {
+/// Block branch semantics.
+#[op_interface]
+pub trait Branch: DialectOp {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
 }
 
-fn branch_model_successors<T: BranchModel>(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
-    let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
-    })?;
-    model.successors(ctx)
-}
-
-pub type BranchSuccessorsFn =
-    fn(&IrContext, OpRef) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
-
-/// Registry entry for [`Branch`].
-pub struct BranchRegistration {
-    name: OpName,
-    successors: BranchSuccessorsFn,
-}
-
-impl Branch for BranchRegistration {
-    fn successors(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-    ) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
-        (self.successors)(ctx, op)
-    }
-}
-
-inventory::collect!(BranchRegistration);
-
-static BRANCH_REGISTRY: LazyLock<HashMap<OpName, &'static BranchRegistration>> =
-    LazyLock::new(|| {
-        let mut registry = HashMap::default();
-        for registration in inventory::iter::<BranchRegistration> {
-            assert!(
-                registry.insert(registration.name, registration).is_none(),
-                "duplicate Branch registration for {:?}",
-                registration.name,
-            );
-        }
-        registry
-    });
-
-/// Dyn query and registration entry point for [`Branch`].
+/// Registration entry point for [`Branch`].
 pub struct BranchOps;
 
 impl BranchOps {
     #[doc(hidden)]
-    pub const fn register<T: BranchModel>() -> BranchRegistration {
-        BranchRegistration {
-            name: T::NAME,
-            successors: branch_model_successors::<T>,
-        }
-    }
-
-    pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn Branch> {
-        let data = ctx.op(op);
-        BRANCH_REGISTRY
-            .get(&data.name)
-            .map(|registration| *registration as &dyn Branch)
+    pub const fn register<T: Branch>() -> __BranchVTable {
+        T::__TRUNK_IR_INTERFACE
     }
 }
 
-/// Object-safe control-flow semantics between an operation and nested regions.
-pub trait RegionBranch: Sync {
-    fn successors(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-        point: RegionBranchPoint,
-    ) -> Result<RegionSuccessors, ControlFlowInterfaceError>;
-
-    fn entry_successor_operands(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-        successor: RegionSuccessor,
-    ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
-}
-
-/// Typed structured-region semantics supplied by a generated dialect operation wrapper.
-pub trait RegionBranchModel: DialectOp {
+/// Control-flow semantics between an operation and nested regions.
+#[op_interface]
+pub trait RegionBranch: DialectOp {
     fn successors(
         self,
         ctx: &IrContext,
@@ -872,93 +581,13 @@ pub trait RegionBranchModel: DialectOp {
     ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
 }
 
-fn region_branch_model_successors<T: RegionBranchModel>(
-    ctx: &IrContext,
-    op: OpRef,
-    point: RegionBranchPoint,
-) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
-    let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
-    })?;
-    model.successors(ctx, point)
-}
-
-fn region_branch_model_entry_operands<T: RegionBranchModel>(
-    ctx: &IrContext,
-    op: OpRef,
-    successor: RegionSuccessor,
-) -> Result<ForwardedValues, ControlFlowInterfaceError> {
-    let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
-    })?;
-    model.entry_successor_operands(ctx, successor)
-}
-
-pub type RegionSuccessorsFn =
-    fn(&IrContext, OpRef, RegionBranchPoint) -> Result<RegionSuccessors, ControlFlowInterfaceError>;
-pub type EntrySuccessorOperandsFn =
-    fn(&IrContext, OpRef, RegionSuccessor) -> Result<ForwardedValues, ControlFlowInterfaceError>;
-
-/// Registry entry for [`RegionBranch`].
-pub struct RegionBranchRegistration {
-    name: OpName,
-    successors: RegionSuccessorsFn,
-    entry_successor_operands: EntrySuccessorOperandsFn,
-}
-
-impl RegionBranch for RegionBranchRegistration {
-    fn successors(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-        point: RegionBranchPoint,
-    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
-        (self.successors)(ctx, op, point)
-    }
-
-    fn entry_successor_operands(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-        successor: RegionSuccessor,
-    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
-        (self.entry_successor_operands)(ctx, op, successor)
-    }
-}
-
-inventory::collect!(RegionBranchRegistration);
-
-static REGION_BRANCH_REGISTRY: LazyLock<HashMap<OpName, &'static RegionBranchRegistration>> =
-    LazyLock::new(|| {
-        let mut registry = HashMap::default();
-        for registration in inventory::iter::<RegionBranchRegistration> {
-            assert!(
-                registry.insert(registration.name, registration).is_none(),
-                "duplicate RegionBranch registration for {:?}",
-                registration.name,
-            );
-        }
-        registry
-    });
-
-/// Dyn query and transfer helpers for [`RegionBranch`].
+/// Transfer helpers and registration entry point for [`RegionBranch`].
 pub struct RegionBranchOps;
 
 impl RegionBranchOps {
     #[doc(hidden)]
-    pub const fn register<T: RegionBranchModel>() -> RegionBranchRegistration {
-        RegionBranchRegistration {
-            name: T::NAME,
-            successors: region_branch_model_successors::<T>,
-            entry_successor_operands: region_branch_model_entry_operands::<T>,
-        }
-    }
-
-    pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn RegionBranch> {
-        let data = ctx.op(op);
-        REGION_BRANCH_REGISTRY
-            .get(&data.name)
-            .map(|registration| *registration as &dyn RegionBranch)
+    pub const fn register<T: RegionBranch>() -> __RegionBranchVTable {
+        T::__TRUNK_IR_INTERFACE
     }
 
     /// Build the named value transfer for one already-reported successor.
@@ -968,19 +597,19 @@ impl RegionBranchOps {
         point: RegionBranchPoint,
         successor: RegionSuccessor,
     ) -> Result<RegionValueTransfer, ControlFlowInterfaceError> {
-        let interface = Self::get(ctx, op).ok_or_else(|| {
+        let interface = DynRegionBranch::get(ctx, op).ok_or_else(|| {
             ControlFlowInterfaceError::new("operation has no RegionBranch registration")
         })?;
         let forwarded = match point {
-            RegionBranchPoint::Parent => interface.entry_successor_operands(ctx, op, successor)?,
+            RegionBranchPoint::Parent => interface.entry_successor_operands(ctx, successor)?,
             RegionBranchPoint::Terminator(terminator) => {
-                let terminator_interface = RegionBranchTerminatorOps::get(ctx, terminator)
+                DynRegionBranchTerminator::get(ctx, terminator)
                     .ok_or_else(|| {
                         ControlFlowInterfaceError::new(format!(
                             "terminator {terminator} has no RegionBranchTerminator registration"
                         ))
-                    })?;
-                terminator_interface.successor_operands(ctx, terminator, successor)?
+                    })?
+                    .successor_operands(ctx, successor)?
             }
         };
         let inputs = match successor {
@@ -1002,18 +631,9 @@ impl RegionBranchOps {
     }
 }
 
-/// Object-safe SSA forwarding semantics for a nested-region terminator.
-pub trait RegionBranchTerminator: Sync {
-    fn successor_operands(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-        successor: RegionSuccessor,
-    ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
-}
-
-/// Typed region-exit forwarding supplied by a generated dialect operation wrapper.
-pub trait RegionBranchTerminatorModel: DialectOp {
+/// SSA forwarding semantics for a nested-region terminator.
+#[op_interface]
+pub trait RegionBranchTerminator: DialectOp {
     fn successor_operands(
         self,
         ctx: &IrContext,
@@ -1021,70 +641,13 @@ pub trait RegionBranchTerminatorModel: DialectOp {
     ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
 }
 
-fn region_terminator_model_operands<T: RegionBranchTerminatorModel>(
-    ctx: &IrContext,
-    op: OpRef,
-    successor: RegionSuccessor,
-) -> Result<ForwardedValues, ControlFlowInterfaceError> {
-    let model = T::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!("malformed {}: {error:?}", T::DEF.name.as_str()))
-    })?;
-    model.successor_operands(ctx, successor)
-}
-
-pub type RegionSuccessorOperandsFn =
-    fn(&IrContext, OpRef, RegionSuccessor) -> Result<ForwardedValues, ControlFlowInterfaceError>;
-
-/// Registry entry for [`RegionBranchTerminator`].
-pub struct RegionBranchTerminatorRegistration {
-    name: OpName,
-    successor_operands: RegionSuccessorOperandsFn,
-}
-
-impl RegionBranchTerminator for RegionBranchTerminatorRegistration {
-    fn successor_operands(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-        successor: RegionSuccessor,
-    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
-        (self.successor_operands)(ctx, op, successor)
-    }
-}
-
-inventory::collect!(RegionBranchTerminatorRegistration);
-
-static REGION_BRANCH_TERMINATOR_REGISTRY: LazyLock<
-    HashMap<OpName, &'static RegionBranchTerminatorRegistration>,
-> = LazyLock::new(|| {
-    let mut registry = HashMap::default();
-    for registration in inventory::iter::<RegionBranchTerminatorRegistration> {
-        assert!(
-            registry.insert(registration.name, registration).is_none(),
-            "duplicate RegionBranchTerminator registration for {:?}",
-            registration.name,
-        );
-    }
-    registry
-});
-
-/// Dyn query and registration entry point for [`RegionBranchTerminator`].
+/// Registration entry point for [`RegionBranchTerminator`].
 pub struct RegionBranchTerminatorOps;
 
 impl RegionBranchTerminatorOps {
     #[doc(hidden)]
-    pub const fn register<T: RegionBranchTerminatorModel>() -> RegionBranchTerminatorRegistration {
-        RegionBranchTerminatorRegistration {
-            name: T::NAME,
-            successor_operands: region_terminator_model_operands::<T>,
-        }
-    }
-
-    pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn RegionBranchTerminator> {
-        let data = ctx.op(op);
-        REGION_BRANCH_TERMINATOR_REGISTRY
-            .get(&data.name)
-            .map(|registration| *registration as &dyn RegionBranchTerminator)
+    pub const fn register<T: RegionBranchTerminator>() -> __RegionBranchTerminatorVTable {
+        T::__TRUNK_IR_INTERFACE
     }
 }
 

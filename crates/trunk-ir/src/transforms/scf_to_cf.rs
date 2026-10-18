@@ -725,10 +725,10 @@ mod test_exit_dialect {
 }
 
 #[cfg(test)]
-impl crate::op_interface::CallableExitModel for Exit {}
+impl crate::op_interface::CallableExit for Exit {}
 
 #[cfg(test)]
-impl crate::op_interface::CallableExitModel for MalformedExit {
+impl crate::op_interface::CallableExit for MalformedExit {
     fn verify_callable_exit(
         &self,
         _ctx: &crate::IrContext,

@@ -16,7 +16,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
-use trunk_ir::op_interface::IndirectCallLikeModel;
+use trunk_ir::op_interface::IndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{

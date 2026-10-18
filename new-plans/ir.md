@@ -101,6 +101,16 @@ verifiers should remain responsible for graph-wide invariants that require
 walking use-def chains, symbol tables, or nested region relationships. Operation
 interfaces describe behavior, not validation phases.
 
+Operation interface는 operation wrapper가 구현하는 trait 하나로 선언한다. 같은
+trait이 interface의 이름이고, typed 구현과 dynamic query가 따로 갈라지지 않는다.
+Consumer는 operation 이름으로 registry에서 구현을 찾고, 찾은 handle은 그
+operation에 묶이므로 다른 operation에 적용할 수 없다. 한 operation은 interface마다
+구현을 하나만 등록할 수 있으며, 중복 등록은 registry를 처음 사용할 때 오류다.
+Interface는 열려 있다. 어느 crate든 새 interface를 정의할 수 있고, 다른 crate가
+정의한 operation에도 구현을 붙일 수 있다. Verifier와 custom assembly처럼 core
+infrastructure가 operation 정의를 통해 찾는 hook은 interface가 아니라 operation
+definition에 속한다.
+
 ### 선언적 operation schema
 
 Operation verifier의 로컬 계약은 `#[dialect]` operation 정의에서 선언적으로
@@ -397,10 +407,9 @@ SCF lowering이 지원하는 기존 단일 값 결과의 개수와 타입 변환
 미사용 결과를 제거하는 rewrite는 새 결과가 비어 있고 기존 결과에 use가 없음을
 검사하는 명시적 경로를 사용한다. 일반 operation 교체는 결과를 1:1로 대응시킨다.
 
-These interfaces are queried through TrunkIR's operation registry and remain
-object-safe. Their dyn-facing methods return named concrete small collections;
-they do not use RPITIT, GATs, caller-visible tuples, or dialect-specific
-downcasts. The collections describe transfers from the existing operand,
+These interfaces are queried through TrunkIR's operation registry by operation
+name. Their query methods return named concrete small collections; they do not
+use RPITIT, GATs, caller-visible tuples, or dialect-specific downcasts. The collections describe transfers from the existing operand,
 result, block, region, and successor lists rather than storing a second copy of
 those IR facts.
 

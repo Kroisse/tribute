@@ -540,7 +540,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
 mod tests {
     use super::*;
     use std::ops::ControlFlow;
-    use trunk_ir::op_interface::IndirectCallLikeModel;
+    use trunk_ir::op_interface::IndirectCallLike;
     use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;

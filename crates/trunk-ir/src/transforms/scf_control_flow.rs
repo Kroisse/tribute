@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
 use crate::context::IrContext;
 use crate::dialect::scf;
-use crate::op_interface::{CallableExitOps, RegionBranchOps, RegionBranchPoint, RegionSuccessor};
+use crate::op_interface::{CallableExitOps, DynRegionBranch, RegionBranchPoint, RegionSuccessor};
 use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, RegionRef};
 use crate::walk::{WalkAction, walk_op};
@@ -52,10 +52,10 @@ impl Analysis for StructuredControlAnalysis {
             {
                 continue;
             }
-            let Some(interface) = RegionBranchOps::get(ir, op) else {
+            let Some(interface) = DynRegionBranch::get(ir, op) else {
                 continue;
             };
-            let Ok(successors) = interface.successors(ir, op, RegionBranchPoint::Parent) else {
+            let Ok(successors) = interface.successors(ir, RegionBranchPoint::Parent) else {
                 continue;
             };
             if successors.as_slice().is_empty()
