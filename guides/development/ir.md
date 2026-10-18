@@ -158,10 +158,11 @@ where
   `dialect.name<`; a backtrack falls back to the generic form. Generic
   printing keeps a type the wrapper's `from_type_ref` rejects. Both store
   their hooks in the type's `TypeDef` and reserve the accessor names
-  `verify`, or `print` and `parse`. A hand-written `TypeDef`, such as
-  `func.func_sig`, `adt.struct`, or `adt.enum`, sets its `verifier` to
-  `Some(<T as VerifyType>::verify)` and its `asm_format` to
-  `Some(TypeAsmHooks::of::<T>())`.
+  `verify`, or `print` and `parse`. A hand-written `TypeDef` sets only the
+  hooks its type has and takes the other fields from `..TypeDef::new(name)`:
+  `func.func_sig` sets `verifier: Some(<T as VerifyType>::verify)`, and
+  `adt.struct` and `adt.enum` also set
+  `asm_format: Some(TypeAsmHooks::of::<T>())`.
 
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:
