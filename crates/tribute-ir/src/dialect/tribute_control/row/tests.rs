@@ -336,3 +336,28 @@ fn tuple_names_tell_callables_apart_by_their_attributes() {
     assert_ne!(names[0], names[1]);
     assert_ne!(names[1], names[2]);
 }
+
+#[test]
+fn tuple_names_keep_attribute_names_and_text_apart() {
+    let mut ctx = IrContext::new();
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+    let with = |ctx: &mut IrContext, name: &'static str, value| {
+        let attrs = trunk_ir::types::AttributeMap::from_entries(ctx, [(name, value)]);
+        super::super::func_sig_with_attrs(ctx, i32_ty, [i32_ty], CallingConvention::Direct, attrs)
+            .as_type_ref()
+    };
+    use trunk_ir::types::Attribute;
+    let list = with(&mut ctx, "x", Attribute::List(vec![Attribute::Unit]));
+    let unit = with(&mut ctx, "x_1_13_list", Attribute::Unit);
+    assert_ne!(
+        logical_tuple_name(&ctx, &[list]),
+        logical_tuple_name(&ctx, &[unit])
+    );
+    let spaced = ctx.string_attr("hello world");
+    let spaced = with(&mut ctx, "note", spaced);
+    let name = logical_tuple_name(&ctx, &[spaced]);
+    assert!(
+        name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "{name}"
+    );
+}

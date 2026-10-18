@@ -357,8 +357,9 @@ pub fn logical_tuple_name(ctx: &IrContext, elements: &[TypeRef]) -> String {
     name
 }
 
-/// `tag_N` followed by each of the `N` parts as `_length_part`, so that a
-/// key reads back in only one way; just `tag` without parts.
+/// `tag_N` followed by each of the `N` parts as `_length_part`; just `tag`
+/// without parts. A tag holds no `_` and every part is a key or [`text`], so
+/// a key reads back in only one way.
 fn key(tag: &str, parts: impl IntoIterator<Item = String>) -> String {
     let parts: Vec<_> = parts.into_iter().collect();
     if parts.is_empty() {
@@ -374,21 +375,52 @@ fn key(tag: &str, parts: impl IntoIterator<Item = String>) -> String {
     key
 }
 
+/// `text` in identifier characters without `_`: a letter or digit other than
+/// `Z` stays, and every other byte is `Z` and its two hexadecimal digits.
+fn text(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() && byte != b'Z' {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("Z{byte:02x}"));
+        }
+    }
+    encoded
+}
+
 fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
+    if let Some(elements) = logical_tuple_elements(ctx, ty) {
+        return key(
+            "tuple",
+            elements.iter().map(|element| type_key(ctx, *element)),
+        );
+    }
     let data = ctx.get_type(ty);
     if data.name == crate::dialect::adt::Typeref::NAME
         && let Some(name) = data.attrs.view(ctx).get_str("name")
     {
-        return key("named", [name.to_owned()]);
+        return key("named", [text(name)]);
     }
+    let attributes = |reserved: &[&str]| -> Vec<String> {
+        data.attrs
+            .view(ctx)
+            .iter()
+            .filter(|(name, _)| !reserved.contains(name))
+            .map(|(name, attr)| key("attr", [text(name), attribute_key(ctx, attr)]))
+            .collect()
+    };
     if let Some(signature) = <super::FuncSig as trunk_ir::ops::DialectType>::from_type_ref(ctx, ty)
     {
         let row = signature.row(ctx);
         let row = key(
             "row",
-            row.instances.iter().map(ToString::to_string).chain([row
-                .tail
-                .map_or_else(|| "closed".to_owned(), |tail| tail.to_string())]),
+            row.instances
+                .iter()
+                .map(|instance| text(&instance.to_string()))
+                .chain([row
+                    .tail
+                    .map_or_else(|| "closed".to_owned(), |tail| tail.to_string())]),
         );
         return key(
             "callable",
@@ -398,37 +430,26 @@ fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
                 .chain([&signature.result(ctx)])
                 .map(|ty| type_key(ctx, *ty))
                 .chain([signature.convention(ctx).keyword().to_owned(), row])
-                .chain(
-                    data.attrs
-                        .view(ctx)
-                        .iter()
-                        .filter(|(name, _)| !super::RESERVED_ATTRS.contains(name))
-                        .map(|(name, attr)| key(name, [attribute_key(ctx, attr)])),
-                ),
+                .chain(attributes(&super::RESERVED_ATTRS)),
         );
     }
+    let tag = text(&data.name.display(ctx).to_string());
     key(
-        &format!(
-            "{}_{}",
-            data.name.dialect(ctx),
-            data.name.strip_dialect(ctx)
-        ),
-        data.params.iter().map(|param| type_key(ctx, *param)).chain(
-            data.attrs
-                .view(ctx)
-                .iter()
-                .map(|(name, attr)| key(name, [attribute_key(ctx, attr)])),
-        ),
+        &tag,
+        data.params
+            .iter()
+            .map(|param| type_key(ctx, *param))
+            .chain(attributes(&[])),
     )
 }
 
 fn attribute_key(ctx: &IrContext, attr: &Attribute) -> String {
     match attr {
         Attribute::Bool(value) => key("bool", [value.to_string()]),
-        Attribute::Int(value) => key("int", [value.to_string()]),
+        Attribute::Int(value) => key("int", [text(&value.to_string())]),
         Attribute::FloatBits(bits) => key("float", [format!("{bits:x}")]),
-        Attribute::String(value) => key("string", [ctx.str(*value).to_owned()]),
-        Attribute::SymbolRef(path) => key("symbol", [path.to_string()]),
+        Attribute::String(value) => key("string", [text(ctx.str(*value))]),
+        Attribute::SymbolRef(path) => key("symbol", [text(&path.to_string())]),
         Attribute::Type(ty) => key("type", [type_key(ctx, *ty)]),
         Attribute::List(items) => key("list", items.iter().map(|item| attribute_key(ctx, item))),
         Attribute::Dict(entries) => key(
@@ -436,7 +457,7 @@ fn attribute_key(ctx: &IrContext, attr: &Attribute) -> String {
             entries
                 .view(ctx)
                 .iter()
-                .map(|(name, value)| key(name, [attribute_key(ctx, value)])),
+                .map(|(name, value)| key("entry", [text(name), attribute_key(ctx, value)])),
         ),
         Attribute::Bytes(bytes) => key(
             "bytes",
