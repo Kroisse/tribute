@@ -249,7 +249,7 @@ fn frame_result(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
 }
 
 impl trunk_ir::ops::Verify for SuffixFrame {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -259,7 +259,7 @@ impl trunk_ir::ops::Verify for SuffixFrame {
 }
 
 impl trunk_ir::ops::Verify for Handle {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         let op = self.op_ref();
         verify_evidence_plan(ctx, op, EvidencePlanSite::Handle)?;
         let Some(Attribute::List(items)) = ctx.op_attrs(op).get("handlers") else {

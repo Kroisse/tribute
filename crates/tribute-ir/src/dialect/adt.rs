@@ -252,10 +252,7 @@ pub struct Struct(TypeRef);
 
 impl trunk_ir::type_verifier::VerifyType for Struct {
     /// Validate a name-matching `adt.struct`.
-    fn verify(
-        ctx: &IrContext,
-        ty: TypeRef,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
         if ctx.type_attrs(ty).contains_key("fields") {
@@ -640,10 +637,7 @@ pub struct Enum(TypeRef);
 
 impl trunk_ir::type_verifier::VerifyType for Enum {
     /// Validate a name-matching `adt.enum`.
-    fn verify(
-        ctx: &IrContext,
-        ty: TypeRef,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
         let attrs = ctx.type_attrs(ty);

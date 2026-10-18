@@ -214,7 +214,7 @@ impl crate::type_verifier::VerifyType for FuncSig {
     fn verify(
         ctx: &crate::IrContext,
         ty: crate::TypeRef,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Self, crate::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(data.name == <Self as DialectType>::NAME);
         let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)?;
@@ -373,10 +373,7 @@ pub fn func_sig_with_attrs(
 impl crate::ops::Verify for CallIndirect {
     /// Results match the signature's result list, or its projection without
     /// zero-width `core.nil` slots, which the emitter does not materialize.
-    fn verify(
-        self,
-        ctx: &crate::IrContext,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let signature =
             FuncSig::from_type_ref(ctx, self.sig(ctx)).expect("schema-verified clif.func_sig");
         let expected = signature.results(ctx);
@@ -426,10 +423,7 @@ fn reloc_ops(ctx: &crate::IrContext, op: crate::OpRef) -> impl Iterator<Item = c
 
 impl crate::ops::Verify for Switch {
     /// Every case has one target, and no case value repeats.
-    fn verify(
-        self,
-        ctx: &crate::IrContext,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let cases = self.cases(ctx).count();
         let targets = self.targets(ctx).count();
         if cases != targets {
@@ -446,10 +440,7 @@ impl crate::ops::Verify for Switch {
 impl crate::ops::Verify for Data {
     /// The relocation region holds only `func_reloc` declarations at distinct
     /// offsets.
-    fn verify(
-        self,
-        ctx: &crate::IrContext,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let mut offsets = HashSet::default();
         for op in reloc_ops(ctx, self.op_ref()) {
             let Ok(reloc) = FuncReloc::from_op(ctx, op) else {
@@ -470,10 +461,7 @@ impl crate::ops::Verify for Data {
 
 impl crate::ops::Verify for FuncReloc {
     /// A relocation belongs to the region of a `data` object.
-    fn verify(
-        self,
-        ctx: &crate::IrContext,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let owner = ctx
             .op(self.op_ref())
             .parent_block

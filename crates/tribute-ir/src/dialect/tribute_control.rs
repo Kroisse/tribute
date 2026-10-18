@@ -434,13 +434,13 @@ fn verify_evidence_steps(
 }
 
 impl trunk_ir::ops::Verify for FuncRef {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(row_args(ctx, self.op_ref()).map(drop)?)
     }
 }
 
 impl trunk_ir::ops::Verify for Call {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         row_args(ctx, self.op_ref())?;
         Ok(verify_evidence_plan(
             ctx,
@@ -451,7 +451,7 @@ impl trunk_ir::ops::Verify for Call {
 }
 
 impl trunk_ir::ops::Verify for CallIndirect {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -461,7 +461,7 @@ impl trunk_ir::ops::Verify for CallIndirect {
 }
 
 impl trunk_ir::ops::Verify for TailCall {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         row_args(ctx, self.op_ref())?;
         Ok(verify_evidence_plan(
             ctx,
@@ -472,7 +472,7 @@ impl trunk_ir::ops::Verify for TailCall {
 }
 
 impl trunk_ir::ops::Verify for TailCallIndirect {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -482,7 +482,7 @@ impl trunk_ir::ops::Verify for TailCallIndirect {
 }
 
 impl trunk_ir::ops::Verify for Resume {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -492,7 +492,7 @@ impl trunk_ir::ops::Verify for Resume {
 }
 
 impl trunk_ir::ops::Verify for Handle {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -585,10 +585,7 @@ impl From<FuncSig> for TypeRef {
 }
 
 impl trunk_ir::type_verifier::VerifyType for FuncSig {
-    fn verify(
-        ctx: &IrContext,
-        ty: TypeRef,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
         let data = ctx.get_type(ty);
         let inputs = read_count(ctx, &data.attrs, trunk_ir::dialect::func::NUM_INPUTS_ATTR)?;
         let results = read_count(ctx, &data.attrs, trunk_ir::dialect::func::NUM_RESULTS_ATTR)?;

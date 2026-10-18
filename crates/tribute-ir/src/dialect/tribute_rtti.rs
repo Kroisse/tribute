@@ -338,7 +338,7 @@ impl Layout {
 
 impl trunk_ir::ops::Verify for Layout {
     /// `fields` matches the field shape of the declared descriptor.
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(self.decode(ctx).map(|_| ())?)
     }
 }

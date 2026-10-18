@@ -1,11 +1,11 @@
 //! Registered type definitions generated from `#[dialect]` or written by
 //! hand.
 
-use std::error::Error;
 use std::sync::LazyLock;
 
 use crate::asm_format::{TypeAsmFormat, TypeAsmHooks};
 use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
+use crate::ops::VerificationError;
 use crate::type_verifier::{VerifyType, erased_verifier};
 use crate::{IrContext, TypeRef};
 
@@ -33,7 +33,7 @@ pub struct TypeDef {
 }
 
 /// A type verifier, calling the wrapper's [`VerifyType`] impl.
-pub type TypeVerifier = fn(&IrContext, TypeRef) -> Result<(), Box<dyn Error + Send + Sync>>;
+pub type TypeVerifier = fn(&IrContext, TypeRef) -> Result<(), VerificationError>;
 
 impl TypeDef {
     /// A definition without hooks.
@@ -113,10 +113,7 @@ mod tests {
     }
 
     impl crate::type_verifier::VerifyType for Checked {
-        fn verify(
-            ctx: &IrContext,
-            ty: TypeRef,
-        ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, VerificationError> {
             match ctx.type_attrs(ty).contains_key("bad") {
                 true => Err("bad checked type".into()),
                 false => Ok(Self(ty)),

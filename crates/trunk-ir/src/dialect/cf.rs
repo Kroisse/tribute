@@ -104,7 +104,7 @@ fn case_pattern(width: u32, case: i64) -> Option<i128> {
 impl crate::ops::Verify for Switch {
     /// Every case has one target and is a distinct value of the
     /// discriminant's type.
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         let cases: Vec<i64> = self.cases(ctx).collect();
         let targets = self.targets(ctx).count();
         if cases.len() != targets {

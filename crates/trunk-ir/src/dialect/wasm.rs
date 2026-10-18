@@ -549,10 +549,7 @@ pub struct FuncSig(TypeRef);
 crate::impl_func_sig_constraint!(FuncSig, "wasm.func_sig");
 
 impl crate::type_verifier::VerifyType for FuncSig {
-    fn verify(
-        ctx: &IrContext,
-        ty: TypeRef,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, crate::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(data.name == <Self as DialectType>::NAME);
         let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)?;

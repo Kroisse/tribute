@@ -137,7 +137,7 @@ mod test_typed {
     }
 
     impl crate::ops::Verify for Nonempty {
-        fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        fn verify(self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
             if self.values(ctx).is_empty() {
                 return Err("needs at least one value".into());
             }

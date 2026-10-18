@@ -179,10 +179,7 @@ crate::impl_func_sig_constraint!(FuncSig, "func.func_sig");
 
 impl crate::type_verifier::VerifyType for FuncSig {
     /// Validate a name-matching `func.func_sig`, including both delimiter counts.
-    fn verify(
-        ctx: &IrContext,
-        ty: TypeRef,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, crate::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(data.name == <Self as DialectType>::NAME);
 
@@ -495,10 +492,7 @@ impl IndirectCallLikeModel for CallIndirect {
 }
 
 impl crate::ops::Verify for CallIndirect {
-    fn verify(
-        self,
-        ctx: &crate::IrContext,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         Ok(verify_typed_callee(
             ctx,
             self.callee(ctx),
@@ -508,10 +502,7 @@ impl crate::ops::Verify for CallIndirect {
 }
 
 impl crate::ops::Verify for TailCallIndirect {
-    fn verify(
-        self,
-        ctx: &crate::IrContext,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         Ok(verify_typed_callee(
             ctx,
             self.callee(ctx),

@@ -5,9 +5,7 @@
 //! IR validation runs the verifier of every interned type whose
 //! [`TypeDef`](crate::TypeDef) has one.
 
-use std::error::Error;
-
-use crate::ops::DialectType;
+use crate::ops::{DialectType, VerificationError};
 use crate::{IrContext, TypeRef};
 
 /// Rules a type's data must satisfy beyond its generic shape.
@@ -20,17 +18,17 @@ use crate::{IrContext, TypeRef};
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is declared with `#[verify]` but does not implement `VerifyType`",
     label = "`#[verify]` requires this implementation",
-    note = "add `impl VerifyType for {Self} {{ fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, Box<dyn Error + Send + Sync>> {{ .. }} }}`"
+    note = "add `impl VerifyType for {Self} {{ fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, VerificationError> {{ .. }} }}`"
 )]
 pub trait VerifyType: DialectType {
     /// Check a type of this kind, given by name, and wrap it.
-    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, Box<dyn Error + Send + Sync>>;
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, VerificationError>;
 }
 
 /// `T`'s verifier as a [`TypeDef`](crate::TypeDef) stores it.
 pub(crate) fn erased_verifier<T: VerifyType>(
     ctx: &IrContext,
     ty: TypeRef,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<(), VerificationError> {
     T::verify(ctx, ty).map(|_| ())
 }

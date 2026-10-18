@@ -125,7 +125,7 @@ use itertools::Itertools;
 const SUPPORTED_CMPF_PREDICATES: [&str; 6] = ["oeq", "une", "olt", "ole", "ogt", "oge"];
 
 impl crate::ops::Verify for Const {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         let ty = ctx.value_ty(self.result(ctx));
         let accepted = match self.value(ctx) {
             Attribute::Int(_) => IntegerLike::matches(ctx, ty),
@@ -147,7 +147,7 @@ impl crate::ops::Verify for Const {
 }
 
 impl crate::ops::Verify for Cmpf {
-    fn verify(self, ctx: &IrContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn verify(self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         let predicate = self.predicate(ctx);
         if SUPPORTED_CMPF_PREDICATES.contains(&predicate) {
             return Ok(());
@@ -190,10 +190,7 @@ fn verify_width(
 macro_rules! width_verifier {
     ($op:ident, $width:path, $widens:literal) => {
         impl crate::ops::Verify for $op {
-            fn verify(
-                self,
-                ctx: &IrContext,
-            ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            fn verify(self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
                 Ok(verify_width(ctx, self.op_ref(), $width, $widens)?)
             }
         }

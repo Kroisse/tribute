@@ -136,10 +136,11 @@ where
   type (`-> Value<I32>`); it must denote exactly one type.
 - `#[verify]` on an operation requires an implementation of
   `trunk_ir::ops::Verify` (`fn verify(self, ctx: &IrContext) ->
-  Result<(), Box<dyn Error + Send + Sync>>`) for its wrapper, and reserves
-  the entity name `verify`. It checks what the schema cannot express and
-  runs only after every generated check passed. A message becomes the error
-  with `.into()`, and a dialect's error type with `?`.
+  Result<(), VerificationError>`) for its wrapper, and reserves the entity
+  name `verify`. It checks what the schema cannot express and runs only
+  after every generated check passed. `ops::VerificationError` is a boxed
+  `std::error::Error`: a message becomes one with `.into()`, and a dialect's
+  error type with `?`.
 - `#[asm_format]` on an operation requires an implementation of
   `trunk_ir::asm_format::OpAsmFormat` for its wrapper: `print` writes the
   operation's line through an `OpPrintHelper`, which owns its indentation
@@ -151,7 +152,7 @@ where
   entity names `print` and `parse`.
 - On a type `struct`, `#[verify]` requires
   `trunk_ir::type_verifier::VerifyType` (`fn verify(ctx: &IrContext, ty:
-  TypeRef) -> Result<Self, Box<dyn Error + Send + Sync>>`), which checks the
+  TypeRef) -> Result<Self, VerificationError>`), which checks the
   rules a type's data must satisfy beyond its generic shape and wraps the
   type; IR validation runs it on every interned type of that kind. Unlike
   `Verify`, it takes the raw type, because the wrapper's `from_type_ref` and
