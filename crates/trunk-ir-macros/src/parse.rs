@@ -56,6 +56,8 @@ pub struct TypeDefData {
     pub verify: Option<proc_macro2::Span>,
     /// `#[asm_format]`: print and parse through the wrapper's `TypeAsmFormat` impl. Holds the attribute's span for diagnostics.
     pub asm_format: Option<proc_macro2::Span>,
+    /// Doc comments, forwarded to the wrapper struct.
+    pub docs: Vec<proc_macro2::Group>,
 }
 
 pub struct TypeParam {
@@ -196,13 +198,14 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut rest_results = false;
     let mut verify = None;
     let mut asm_format = None;
+    let mut docs = Vec::new();
 
     // Collect outer attributes: #[doc = "..."] (skip), #[attr(...)],
     // #[rest_results], #[verify], #[asm_format]
     while peek_punct(iter, '#') {
         let attr = parse_outer_attr(iter)?;
         match attr {
-            OuterAttr::Doc => { /* skip doc comments */ }
+            OuterAttr::Doc(group) => docs.push(group),
             OuterAttr::OpAttrs(attrs) => {
                 if !op_attrs.is_empty() {
                     return Err(
@@ -311,6 +314,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             td.verify = verify;
             td.asm_format = asm_format;
+            td.docs = docs;
             Ok(DialectItem::TypeDef(td))
         }
         other => Err(format!("expected `fn` or `struct`, got `{other}`")),
@@ -318,7 +322,8 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
 }
 
 enum OuterAttr {
-    Doc,
+    /// The bracketed `doc = ".."` attribute.
+    Doc(proc_macro2::Group),
     OpAttrs(Vec<AttrDef>),
     RestResults,
     Verify(proc_macro2::Span),
@@ -360,10 +365,7 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
         Ident::parser(&mut inner).map_err(|e| format!("expected attribute name: {e}"))?;
 
     match ident.to_string().as_str() {
-        "doc" => {
-            // doc attributes may have `= "..."` content; skip remaining tokens
-            Ok(OuterAttr::Doc)
-        }
+        "doc" => Ok(OuterAttr::Doc(bracket)),
         "attr" => {
             let paren = expect_group(&mut inner, Delimiter::Parenthesis)?;
             expect_consumed(&inner, "#[attr(...)]")?;
@@ -544,6 +546,7 @@ fn parse_struct_def(iter: &mut TokenIter, attrs: Vec<AttrDef>) -> Result<TypeDef
         attrs,
         verify: None,
         asm_format: None,
+        docs: Vec::new(),
     })
 }
 

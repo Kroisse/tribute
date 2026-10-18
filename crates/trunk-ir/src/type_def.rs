@@ -157,6 +157,9 @@ mod tests {
         let verifier = TypeDef::of(&ctx, bad).and_then(|def| def.verifier).unwrap();
         let error = verifier(&ctx, bad).unwrap_err();
         assert_eq!(error.to_string(), "bad checked type");
+        assert!(Checked::from_type_ref(&ctx, bad).is_none());
+        let good = crate::TypeDataBuilder::new(Checked::NAME).intern(&mut ctx);
+        assert!(Checked::from_type_ref(&ctx, good).is_some());
 
         let ty = crate::TypeDataBuilder::new(Custom::NAME).intern(&mut ctx);
         assert_eq!(

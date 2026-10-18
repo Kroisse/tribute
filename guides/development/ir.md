@@ -143,7 +143,8 @@ where
 - On a type `struct`, `#[verify]` requires `trunk_ir::type_verifier::VerifyType`
   and `#[asm_format]` requires `trunk_ir::asm_format::TypeAsmFormat`. A
   hand-written `TypeDef` adds the same hooks with `with_verifier` and
-  `with_asm_format`.
+  `with_asm_format`. A `#[verify]` type's wrapper accepts only types that
+  pass the verifier, so the macro generates no constructor for it.
 
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:

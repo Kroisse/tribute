@@ -5,6 +5,7 @@
 //! refer to itself recursively.
 
 use trunk_ir::context::IrContext;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, AttributeMap, StringArg, TypeDataBuilder};
 
@@ -28,7 +29,6 @@ pub fn ref_type(ctx: &mut IrContext, name: impl Into<StringArg>, result: TypeRef
 
 /// Read the result type only from an explicit frame reference or layout.
 pub fn result_type(ctx: &IrContext, frame: TypeRef) -> Option<TypeRef> {
-    use trunk_ir::ops::DialectType;
     (adt::Typeref::matches(ctx, frame) || adt::Struct::matches(ctx, frame))
         .then(|| ctx.type_attrs(frame).get_type(RESULT_ATTR))
         .flatten()

@@ -954,7 +954,12 @@ fn gen_type_def(crate_path: &TokenStream, dialect: &str, td: &TypeDefData) -> To
     let ir_type_name = td.name.to_snake_case();
     let struct_and_trait = gen_type_struct_and_trait(crate_path, dialect, &ir_type_name, td);
     let impl_block = gen_type_impl_block(crate_path, td);
-    let constructor = gen_type_constructor(crate_path, td);
+    // A verified type's wrapper accepts only types that pass its verifier,
+    // which a constructor from the declared shape cannot guarantee.
+    let constructor = match td.verify {
+        Some(_) => quote!(),
+        None => gen_type_constructor(crate_path, td),
+    };
     let constraint = gen_type_constraint(crate_path, dialect, &ir_type_name, td);
 
     quote! {
@@ -1026,7 +1031,7 @@ fn gen_type_constraint(
                     exact: true,
                     projections: &[#(#projections),*],
                     matches: |ctx, ty| {
-                        <Self as #crate_path::ops::DialectType>::matches(ctx, ty)
+                        <Self as #crate_path::ops::DialectType>::from_type_ref(ctx, ty).is_some()
                             && {
                                 let data = ctx.get_type(ty);
                                 let params = &data.params;
@@ -1079,7 +1084,9 @@ fn gen_type_struct_and_trait(
         None => quote!(None),
     };
 
+    let docs = &td.docs;
     quote! {
+        #(# #docs)*
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub struct #sname(#crate_path::TypeRef);
 
@@ -1102,7 +1109,10 @@ fn gen_type_struct_and_trait(
                 ctx: &#crate_path::IrContext,
                 ty: #crate_path::TypeRef,
             ) -> Option<Self> {
-                if !Self::matches(ctx, ty) {
+                // A type with a verifier has a wrapper only when it passes.
+                if !Self::matches(ctx, ty)
+                    || #def_static.verifier.is_some_and(|verify| verify(ctx, ty).is_err())
+                {
                     return None;
                 }
                 Some(Self(ty))
