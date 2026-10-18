@@ -1298,6 +1298,22 @@ fn gen_type_builder(crate_path: &TokenStream, dialect: &str, td: &TypeDefData) -
         None => "Intern the type.",
     };
     let excess = format!("{full_name}: more parameter attributes than parameters");
+    // A type without parameters has no parameter attributes to set.
+    let param_attrs_method = if td.params.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            /// Set the parameters' own attributes, in parameter order; a
+            /// parameter without an entry has none.
+            pub fn param_attrs(
+                mut self,
+                attrs: impl IntoIterator<Item = #crate_path::AttributeMap>,
+            ) -> Self {
+                self.param_attrs = attrs.into_iter().collect();
+                self
+            }
+        }
+    };
     let builder_doc = format!("Builder for `{full_name}`.");
 
     quote! {
@@ -1327,15 +1343,7 @@ fn gen_type_builder(crate_path: &TokenStream, dialect: &str, td: &TypeDefData) -
         impl #bname {
             #(#methods)*
 
-            /// Set the parameters' own attributes, in parameter order; a
-            /// parameter without an entry has none.
-            pub fn param_attrs(
-                mut self,
-                attrs: impl IntoIterator<Item = #crate_path::AttributeMap>,
-            ) -> Self {
-                self.param_attrs = attrs.into_iter().collect();
-                self
-            }
+            #param_attrs_method
 
             #[doc = #intern_doc]
             pub fn intern(self, ctx: &mut #crate_path::IrContext) -> #output {
