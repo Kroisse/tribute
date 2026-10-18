@@ -390,7 +390,9 @@ fn field_name(ctx: &IrContext, attrs: &AttributeMap) -> StringRef {
 }
 
 static STRUCT_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
-    name: trunk_ir::name::QualifiedName::new("adt.struct"),
+    verifier: Some(<Struct as trunk_ir::type_verifier::VerifyType>::verify),
+    asm_format: Some(trunk_ir::asm_format::TypeAsmHooks::of::<Struct>()),
+    ..trunk_ir::TypeDef::new("adt.struct")
 };
 
 inventory::submit! {
@@ -412,10 +414,12 @@ impl DialectType for Struct {
     }
 }
 
-inventory::submit! {
-    trunk_ir::type_verifier::TypeVerifier::new::<Struct>(|ctx, ty| {
-        Struct::validate(ctx, ty).map(|_| ()).map_err(|error| error.to_string())
-    })
+impl trunk_ir::type_verifier::VerifyType for Struct {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<(), String> {
+        Struct::validate(ctx, ty)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
 }
 
 impl From<Struct> for TypeRef {
@@ -511,16 +515,17 @@ fn finish_struct_type(
 //
 // Names are bare identifiers, or quoted strings when they are not identifiers.
 
-inventory::submit! {
-    trunk_ir::asm_format::TypeAsmFormat::new::<Struct>(print_struct_type, parse_struct_type)
-}
+impl trunk_ir::asm_format::TypeAsmFormat for Struct {
+    fn print(self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        write_struct_type(h, self)
+    }
 
-fn print_struct_type(
-    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
-    ty: TypeRef,
-) -> Option<std::fmt::Result> {
-    let adt_struct = Struct::from_type_ref(h.ctx(), ty)?;
-    Some(write_struct_type(h, adt_struct))
+    fn parse<'a>(
+        input: &mut &'a str,
+        name: &'a str,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
+        parse_struct_type(input, name)
+    }
 }
 
 fn write_struct_type(
@@ -726,9 +731,7 @@ macro_rules! nominal_types {
         impl $wrapper {
             /// The type's registered definition.
             pub const DEF: &'static trunk_ir::TypeDef = {
-                static DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
-                    name: trunk_ir::name::QualifiedName::new($name),
-                };
+                static DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new($name);
                 &DEF
             };
             /// The type's name, which points to [`DEF`](Self::DEF).
@@ -761,7 +764,9 @@ fn variant_name(ctx: &IrContext, variant: TypeRef) -> Option<StringRef> {
 }
 
 static ENUM_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
-    name: trunk_ir::name::QualifiedName::new("adt.enum"),
+    verifier: Some(<Enum as trunk_ir::type_verifier::VerifyType>::verify),
+    asm_format: Some(trunk_ir::asm_format::TypeAsmHooks::of::<Enum>()),
+    ..trunk_ir::TypeDef::new("adt.enum")
 };
 
 inventory::submit! {
@@ -783,10 +788,12 @@ impl DialectType for Enum {
     }
 }
 
-inventory::submit! {
-    trunk_ir::type_verifier::TypeVerifier::new::<Enum>(|ctx, ty| {
-        Enum::validate(ctx, ty).map(|_| ()).map_err(|error| error.to_string())
-    })
+impl trunk_ir::type_verifier::VerifyType for Enum {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<(), String> {
+        Enum::validate(ctx, ty)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
 }
 
 impl From<Enum> for TypeRef {
@@ -833,16 +840,17 @@ pub fn enum_type<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
 // A field is `name: type` or, without a name, `type`. Either may be followed
 // by the field's other attributes.
 
-inventory::submit! {
-    trunk_ir::asm_format::TypeAsmFormat::new::<Enum>(print_enum_type, parse_enum_type)
-}
+impl trunk_ir::asm_format::TypeAsmFormat for Enum {
+    fn print(self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        write_enum_type(h, self)
+    }
 
-fn print_enum_type(
-    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
-    ty: TypeRef,
-) -> Option<std::fmt::Result> {
-    let adt_enum = Enum::from_type_ref(h.ctx(), ty)?;
-    Some(write_enum_type(h, adt_enum))
+    fn parse<'a>(
+        input: &mut &'a str,
+        name: &'a str,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
+        parse_enum_type(input, name)
+    }
 }
 
 fn write_enum_type(

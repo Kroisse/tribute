@@ -148,11 +148,20 @@ where
   operation's `OpDef`. A parse that backtracks on input shaped like generic
   syntax (`{`, `%`, or `:`) falls back to the generic form. It reserves the
   entity names `print` and `parse`.
-- A type whose data must satisfy rules beyond its generic shape registers
-  `inventory::submit! { TypeVerifier::new::<T>(verify_fn) }`
-  (`trunk_ir::type_verifier`). IR validation runs it on every interned type
-  of that kind; `func.func_sig`, `adt.struct`, and `adt.enum` register theirs
-  this way.
+- On a type `struct`, `#[verify]` requires
+  `trunk_ir::type_verifier::VerifyType` (`fn verify(ctx: &IrContext, ty:
+  TypeRef) -> Result<(), String>`), which checks the rules a type's data must
+  satisfy beyond its generic shape; IR validation runs it on every interned
+  type of that kind. `#[asm_format]` requires
+  `trunk_ir::asm_format::TypeAsmFormat`: `print` writes the whole type,
+  including `dialect.name<` and `>`, and `parse` reads it after
+  `dialect.name<`; a backtrack falls back to the generic form. Generic
+  printing keeps a type the wrapper's `from_type_ref` rejects. Both store
+  their hooks in the type's `TypeDef` and reserve the accessor names
+  `verify`, or `print` and `parse`. A hand-written `TypeDef`, such as
+  `func.func_sig`, `adt.struct`, or `adt.enum`, sets its `verifier` to
+  `Some(<T as VerifyType>::verify)` and its `asm_format` to
+  `Some(TypeAsmHooks::of::<T>())`.
 
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:

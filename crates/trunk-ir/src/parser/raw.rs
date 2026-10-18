@@ -339,11 +339,9 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     '<'.parse_next(input)?;
     ws.parse_next(input)?;
 
-    if let Some(format) = crate::TypeDef::lookup(name)
-        .and_then(|def| crate::asm_format::lookup_type_asm_format(crate::TypeName::registered(def)))
-    {
+    if let Some(hooks) = crate::TypeDef::lookup(name).and_then(|def| def.asm_format) {
         let checkpoint = *input;
-        match (format.parse_fn)(input, name) {
+        match (hooks.parse)(input, name) {
             Ok(ty) => return Ok(ty),
             Err(winnow::error::ErrMode::Backtrack(_)) => *input = checkpoint,
             Err(error) => return Err(error),

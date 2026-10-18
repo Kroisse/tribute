@@ -322,7 +322,8 @@ impl FuncSig {
 }
 
 static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef {
-    name: crate::name::QualifiedName::new("func.func_sig"),
+    verifier: Some(<FuncSig as crate::type_verifier::VerifyType>::verify),
+    ..crate::type_def::TypeDef::new("func.func_sig")
 };
 
 inventory::submit! {
@@ -634,10 +635,12 @@ inventory::submit! {
     IndirectCallLikeOps::register::<TailCallIndirect>()
 }
 
-inventory::submit! {
-    crate::type_verifier::TypeVerifier::new::<FuncSig>(|ctx, ty| {
-        FuncSig::validate(ctx, ty).map(|_| ()).map_err(|error| error.to_string())
-    })
+impl crate::type_verifier::VerifyType for FuncSig {
+    fn verify(ctx: &crate::IrContext, ty: crate::TypeRef) -> Result<(), String> {
+        FuncSig::validate(ctx, ty)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
 }
 
 /// Attach an exact callable contract to a `func` indirect transfer.

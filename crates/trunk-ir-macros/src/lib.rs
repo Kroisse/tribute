@@ -45,6 +45,10 @@ mod parse;
 ///   wrapper's `trunk_ir::ops::Verify` impl for `#[verify]` operations and
 ///   the wrapper's `trunk_ir::asm_format::OpAsmFormat` print/parse hooks for
 ///   `#[asm_format]` operations
+///
+/// For each type `struct`, a `static` `TypeDef` holding the wrapper's
+/// `trunk_ir::type_verifier::VerifyType` impl for `#[verify]` and its
+/// `trunk_ir::asm_format::TypeAsmFormat` impl for `#[asm_format]`.
 #[proc_macro_attribute]
 pub fn dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match dialect_impl(attr.into(), item.into()) {

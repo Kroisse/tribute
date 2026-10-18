@@ -494,9 +494,7 @@ pub enum FuncSigTypeError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(TypeRef);
 
-static FUNC_SIG_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef {
-    name: trunk_ir::name::QualifiedName::new("tribute_control.func_sig"),
-};
+static FUNC_SIG_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new("tribute_control.func_sig");
 
 inventory::submit! {
     trunk_ir::type_def::TypeDefRegistration(&FUNC_SIG_DEF)

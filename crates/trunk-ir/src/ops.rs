@@ -117,7 +117,8 @@ pub trait Verify: DialectOp {
 #[doc(hidden)]
 pub mod __private {
     use super::{IrContext, Verify};
-    use crate::asm_format::{OpAsmFormat, OpAsmHooks};
+    use crate::asm_format::{OpAsmFormat, OpAsmHooks, TypeAsmFormat, TypeAsmHooks};
+    use crate::type_verifier::{TypeVerifierFn, VerifyType};
 
     /// Entry point for generated verifiers. Requiring this instead of
     /// [`Verify`] keeps a missing impl's error from listing every other
@@ -158,6 +159,36 @@ pub mod __private {
             },
             parse: T::parse,
         };
+    }
+
+    /// Entry point for generated type verifiers.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` is declared with `#[verify]` but does not implement `VerifyType`",
+        label = "`#[verify]` requires this implementation",
+        note = "add `impl VerifyType for {Self} {{ fn verify(ctx: &IrContext, ty: TypeRef) -> Result<(), String> {{ .. }} }}`"
+    )]
+    pub trait DeclaredVerifyType {
+        const VERIFIER: TypeVerifierFn;
+    }
+
+    #[diagnostic::do_not_recommend]
+    impl<T: VerifyType> DeclaredVerifyType for T {
+        const VERIFIER: TypeVerifierFn = T::verify;
+    }
+
+    /// Entry point for generated type assembly format hooks.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` is declared with `#[asm_format]` but does not implement `TypeAsmFormat`",
+        label = "`#[asm_format]` requires this implementation",
+        note = "add `impl TypeAsmFormat for {Self} {{ fn print(..) {{ .. }} fn parse(..) {{ .. }} }}`"
+    )]
+    pub trait DeclaredTypeAsmFormat {
+        const ASM_HOOKS: TypeAsmHooks;
+    }
+
+    #[diagnostic::do_not_recommend]
+    impl<T: TypeAsmFormat> DeclaredTypeAsmFormat for T {
+        const ASM_HOOKS: TypeAsmHooks = TypeAsmHooks::of::<T>();
     }
 }
 

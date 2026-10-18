@@ -1,17 +1,15 @@
 //! Textual assembly format hooks.
 //!
-//! Operations declare these hooks with `#[asm_format]`, and types register
-//! them, to control how they are spelled in textual IR. They affect only the printer and the parser:
-//! unlike [operation interfaces](crate::op_interface), they carry no meaning
+//! Operations and types declare these hooks with `#[asm_format]`, and their
+//! definitions hold them, to control how they are spelled in textual IR. They
+//! affect only the printer and the parser: unlike [operation interfaces](crate::op_interface), they carry no meaning
 //! that passes or analyses consult.
 
 use std::fmt;
-use std::sync::LazyLock;
 
 use crate::ops::{DialectOp, DialectType};
-use crate::parser::raw::RawOperation;
-use crate::printer::OpPrintHelper;
-use crate::registry::{Registered, Registry};
+use crate::parser::raw::{RawOperation, RawType};
+use crate::printer::{OpPrintHelper, TypePrintHelper};
 use crate::{IrContext, OpRef, TypeRef};
 
 // =============================================================================
@@ -101,58 +99,58 @@ pub type OpParseFn = for<'a> fn(
 
 /// Custom assembly format for a type — bundles print + parse.
 ///
-/// A dialect registers [`TypeAsmFormat::new`] via `inventory::submit!` to own
-/// its type's textual syntax. Like every type, the custom form is
+/// The type's [`TypeDef`](crate::TypeDef) holds the hooks: a type declared in
+/// `#[dialect]` opts in with `#[asm_format]`, and a hand-written definition
+/// sets [`TypeAsmHooks::of`]. Like every type, the custom form is
 /// self-delimiting: it is written inside `dialect.name<...>`.
-pub struct TypeAsmFormat {
-    def: &'static crate::TypeDef,
-    /// Custom printer. Writes the whole type, including `dialect.name<` and
-    /// the closing `>`, or returns `None` to leave a type it cannot represent,
-    /// such as a malformed one, to generic printing.
-    pub print_fn: TypePrintFn,
-    /// Custom parser. Called after `dialect.name<` is consumed; it consumes the
-    /// closing `>`. A backtrack falls back to the generic form.
-    pub parse_fn: TypeParseFn,
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is declared with `#[asm_format]` but does not implement `TypeAsmFormat`",
+    label = "`#[asm_format]` requires this implementation",
+    note = "add `impl TypeAsmFormat for {Self} {{ fn print(..) {{ .. }} fn parse(..) {{ .. }} }}`"
+)]
+pub trait TypeAsmFormat: DialectType {
+    /// Print the whole type, including `dialect.name<` and the closing `>`.
+    /// A type the wrapper does not accept, such as a malformed one, is left
+    /// to generic printing.
+    fn print(self, h: &mut TypePrintHelper<'_, '_>) -> fmt::Result;
+
+    /// Parse the type after `dialect.name<` is consumed, including the
+    /// closing `>`, into its generic raw form, so the parser builds it like
+    /// any other type. A backtrack falls back to the generic form.
+    fn parse<'a>(input: &mut &'a str, name: &'a str) -> winnow::ModalResult<RawType<'a>>;
 }
 
-/// Custom printer of a [`TypeAsmFormat`].
-pub type TypePrintFn =
-    fn(&mut crate::printer::TypePrintHelper<'_, '_>, TypeRef) -> Option<fmt::Result>;
+/// The hooks a [`TypeDef`](crate::TypeDef) stores for a type with a custom
+/// assembly format.
+#[derive(Clone, Copy, Debug)]
+pub struct TypeAsmHooks {
+    /// Custom printer, or `None` to leave the type to generic printing.
+    pub print: TypePrintFn,
+    /// Custom parser. Called after `dialect.name<` is consumed.
+    pub parse: TypeParseFn,
+}
 
-/// Custom parser of a [`TypeAsmFormat`].
-///
-/// It returns the type in generic raw form, so the parser builds it like any
-/// other type.
-pub type TypeParseFn = for<'a> fn(
-    input: &mut &'a str,
-    name: &'a str,
-) -> winnow::ModalResult<crate::parser::raw::RawType<'a>>;
-
-impl TypeAsmFormat {
-    /// Custom assembly format for the type wrapped by `T`.
-    pub const fn new<T: DialectType>(print_fn: TypePrintFn, parse_fn: TypeParseFn) -> Self {
+impl TypeAsmHooks {
+    /// The hooks calling `T`'s [`TypeAsmFormat`] impl.
+    pub const fn of<T: TypeAsmFormat>() -> Self {
         Self {
-            def: T::DEF,
-            print_fn,
-            parse_fn,
+            print: print_type::<T>,
+            parse: T::parse,
         }
     }
 }
 
-inventory::collect!(TypeAsmFormat);
-
-impl Registered for TypeAsmFormat {
-    type Def = crate::TypeDef;
-    const KIND: &'static str = "TypeAsmFormat";
-
-    fn def(&self) -> &'static crate::TypeDef {
-        self.def
-    }
+fn print_type<T: TypeAsmFormat>(
+    h: &mut TypePrintHelper<'_, '_>,
+    ty: TypeRef,
+) -> Option<fmt::Result> {
+    let ty = T::from_type_ref(h.ctx(), ty)?;
+    Some(ty.print(h))
 }
 
-static TYPE_ASM_FORMATS: LazyLock<Registry<TypeAsmFormat>> = LazyLock::new(Registry::collect);
+/// Custom printer of a [`TypeAsmHooks`].
+pub type TypePrintFn = fn(&mut TypePrintHelper<'_, '_>, TypeRef) -> Option<fmt::Result>;
 
-/// Look up a registered custom assembly format for the given type.
-pub fn lookup_type_asm_format(name: crate::TypeName) -> Option<&'static TypeAsmFormat> {
-    TYPE_ASM_FORMATS.get(name)
-}
+/// Custom parser of a [`TypeAsmHooks`].
+pub type TypeParseFn =
+    for<'a> fn(input: &mut &'a str, name: &'a str) -> winnow::ModalResult<RawType<'a>>;

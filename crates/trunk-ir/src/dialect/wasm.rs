@@ -618,9 +618,7 @@ impl FuncSig {
     }
 }
 
-static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef {
-    name: crate::name::QualifiedName::new("wasm.func_sig"),
-};
+static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef::new("wasm.func_sig");
 
 inventory::submit! {
     crate::type_def::TypeDefRegistration(&FUNC_SIG_DEF)

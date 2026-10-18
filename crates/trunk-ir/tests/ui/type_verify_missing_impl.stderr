@@ -1,0 +1,13 @@
+error[E0277]: `Probe` is declared with `#[verify]` but does not implement `VerifyType`
+ --> tests/ui/type_verify_missing_impl.rs:4:11
+  |
+4 |         #[verify]
+  |           ^^^^^^ `#[verify]` requires this implementation
+  |
+help: the trait `trunk_ir::ops::__private::DeclaredVerifyType` is not implemented for `Probe`
+ --> tests/ui/type_verify_missing_impl.rs:2:5
+  |
+2 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  = note: add `impl VerifyType for Probe { fn verify(ctx: &IrContext, ty: TypeRef) -> Result<(), String> { .. } }`
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)
