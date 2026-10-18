@@ -2501,7 +2501,7 @@ fn legalization_drops_ability_rows_and_row_metadata() {
   ability.decl {sym_name = "A"} {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
   }
-  tribute_control.func @apply[e0 = e1, body e1](%f: !open, %x: core.i32) -> core.i32 row(| e0) inferred convention(cps) {
+  tribute_control.func @apply['a0 = 'a1, body 'a1](%f: !open, %x: core.i32) -> core.i32 row(| 'a0) inferred convention(cps) {
     %r = tribute_control.call_indirect %f, %x : core.i32
     tribute_control.return %r
   }
@@ -2515,8 +2515,8 @@ fn legalization_drops_ability_rows_and_row_metadata() {
 }"#;
     let without_rows = with_rows
         .replace("ability_row = {tail = 0}, ", "")
-        .replace("[e0 = e1, body e1]", "")
-        .replace(" row(| e0) inferred", "")
+        .replace("['a0 = 'a1, body 'a1]", "")
+        .replace(" row(| 'a0) inferred", "")
         .replace(" row(@A)", "")
         .replace(", row_args = [{instances = [@A]}]", "");
     let legalize = |input: &str| {

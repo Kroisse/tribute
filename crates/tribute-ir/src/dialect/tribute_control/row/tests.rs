@@ -22,7 +22,7 @@ const MODULE: &str = r#"core.module @test {
   ability.decl {sym_name = "B"} {
     ability.operation {kind = "op", op_name = "put", param_types = [core.i32], result_type = core.i32}
   }
-  tribute_control.func @apply[e0](%f: !open, %x: core.i32) -> core.i32 row(| e0) convention(cps) {
+  tribute_control.func @apply['a0](%f: !open, %x: core.i32) -> core.i32 row(| 'a0) convention(cps) {
     %r = tribute_control.call_indirect %f, %x : core.i32
     tribute_control.return %r
   }
@@ -73,7 +73,7 @@ fn rows_validate_and_round_trip_in_concise_syntax() {
     let printed = print_module(&ctx, module.op());
     assert!(
         printed.contains(
-            "@apply[e0](%0: !open, %1: core.i32) -> core.i32 row(| e0) convention(cps) {"
+            "@apply['a0](%0: !open, %1: core.i32) -> core.i32 row(| 'a0) convention(cps) {"
         ),
         "{printed}"
     );
@@ -91,9 +91,9 @@ fn rows_validate_and_round_trip_in_concise_syntax() {
 fn concise_rows_cover_instances_tails_and_both() {
     for (written, row) in [
         ("row(@A)", Row::new([SymbolPath::new(["A"])], None)),
-        ("row(| e0)", Row::new([], Some(0))),
+        ("row(| 'a0)", Row::new([], Some(0))),
         (
-            "row(@A, @B | e0)",
+            "row(@A, @B | 'a0)",
             Row::new([SymbolPath::new(["A"]), SymbolPath::new(["B"])], Some(0)),
         ),
     ] {
@@ -172,7 +172,7 @@ fn a_tail_names_a_binder_of_the_enclosing_definition() {
     assert_rejects(
         &MODULE.replace(
             "-> core.i32 row(@A, @B) convention(cps) {\n    %f",
-            "-> core.i32 row(@A, @B | e0) convention(cps) {\n    %f",
+            "-> core.i32 row(@A, @B | 'a0) convention(cps) {\n    %f",
         ),
         "row tail 0 names no row binder in scope",
     );
@@ -200,8 +200,8 @@ fn row_instances_name_ability_declarations() {
 fn the_row_belongs_to_the_signature_type() {
     let mut ctx = IrContext::new();
     let input = MODULE.replace(
-        "row(| e0) convention(cps) {\n    %r",
-        "row(| e0) convention(cps) attributes {ability_row = {tail = 0}} {\n    %r",
+        "row(| 'a0) convention(cps) {\n    %r",
+        "row(| 'a0) convention(cps) attributes {ability_row = {tail = 0}} {\n    %r",
     );
     assert!(parse_module(&mut ctx, &input).is_err());
 }
@@ -209,7 +209,7 @@ fn the_row_belongs_to_the_signature_type() {
 #[test]
 fn row_binders_put_quantified_binders_first() {
     assert_rejects(
-        &MODULE.replace("@apply[e0]", "@apply[body e0, e1]"),
+        &MODULE.replace("@apply['a0]", "@apply[body 'a0, 'a1]"),
         "quantified row binders must come before the others",
     );
 }
@@ -218,10 +218,10 @@ const UNIONS: &str = r#"core.module @test {
   ability.decl {sym_name = "A"} {
     ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
   }
-  tribute_control.func @join[e0 = e1 | e2, e1, e2](%x: core.i32) -> core.i32 row(| e0) convention(cps) {
+  tribute_control.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: core.i32) -> core.i32 row(| 'a0) convention(cps) {
     tribute_control.return %x
   }
-  tribute_control.func @caller[e0 = e1 | e2, e1, e2](%x: core.i32) -> core.i32 row(| e0) convention(cps) {
+  tribute_control.func @caller['a0 = 'a1 | 'a2, 'a1, 'a2](%x: core.i32) -> core.i32 row(| 'a0) convention(cps) {
     %r = tribute_control.call %x {callee = @join, evidence_plan = PLAN, row_args = [{tail = 0}, {tail = 1}, {tail = 2}]} : core.i32
     tribute_control.return %r
   }
@@ -249,13 +249,13 @@ fn a_union_names_binders_and_excludes_its_result() {
     assert_rejects(
         &UNIONS
             .replace("PLAN", "[{select = 0}]")
-            .replace("@caller[e0 = e1 | e2,", "@caller[e0 = e0 | e2,"),
+            .replace("@caller['a0 = 'a1 | 'a2,", "@caller['a0 = 'a0 | 'a2,"),
         "row union lists its result among its sources",
     );
     assert_rejects(
         &UNIONS
             .replace("PLAN", "[{select = 0}]")
-            .replace("@caller[e0 = e1 | e2,", "@caller[e0 = e1 | e3,"),
+            .replace("@caller['a0 = 'a1 | 'a2,", "@caller['a0 = 'a1 | 'a3,"),
         "row union names a tail that is not a binder",
     );
 }
@@ -380,7 +380,7 @@ fn tuple_names_keep_symbol_path_components_apart() {
 #[test]
 fn binder_headers_name_kinds_unions_and_an_inferred_row() {
     let input = r#"core.module @test {
-  tribute_control.func @f[e0 = e1 | e2, ability_arg e1, local e2, body e3](%x: core.i32) -> core.i32 row(| e0) inferred convention(cps) {
+  tribute_control.func @f['a0 = 'a1 | 'a2, ability_arg 'a1, local 'a2, body 'a3](%x: core.i32) -> core.i32 row(| 'a0) inferred convention(cps) {
     tribute_control.return %x
   }
 }"#;
@@ -409,7 +409,7 @@ fn binder_headers_name_kinds_unions_and_an_inferred_row() {
     let printed = print_module(&ctx, module.op());
     assert!(
         printed.contains(
-            "@f[e0 = e1 | e2, ability_arg e1, local e2, body e3](%0: core.i32) -> core.i32 row(| e0) inferred convention(cps) {"
+            "@f['a0 = 'a1 | 'a2, ability_arg 'a1, local 'a2, body 'a3](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(cps) {"
         ),
         "{printed}"
     );
@@ -421,7 +421,7 @@ fn a_binder_is_named_by_its_position() {
     assert!(
         parse_module(
             &mut ctx,
-            "core.module @test {\n  tribute_control.func @f[e1]() -> core.i32 convention(cps)\n}",
+            "core.module @test {\n  tribute_control.func @f['a1]() -> core.i32 convention(cps)\n}",
         )
         .is_err()
     );

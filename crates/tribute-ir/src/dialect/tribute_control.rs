@@ -849,7 +849,7 @@ fn print_row(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, row: &Row) -> fmt
         if !row.instances.is_empty() {
             write!(h, " ")?;
         }
-        write!(h, "| e{tail}")?;
+        write!(h, "| 'a{tail}")?;
     }
     write!(h, ")")
 }
@@ -902,7 +902,7 @@ impl BinderHeader {
             if *binder != RowBinder::Param {
                 write!(h, "{} ", binder.keyword())?;
             }
-            write!(h, "e{index}")?;
+            write!(h, "'a{index}")?;
             let union = self
                 .unions
                 .iter()
@@ -913,7 +913,7 @@ impl BinderHeader {
                     if position > 0 {
                         write!(h, " | ")?;
                     }
-                    write!(h, "e{source}")?;
+                    write!(h, "'a{source}")?;
                 }
             }
         }
@@ -921,12 +921,12 @@ impl BinderHeader {
     }
 }
 
-/// `e<index>`, a row binder named by its position.
+/// `'a<index>`, a row binder named by its position.
 fn parse_binder_name(input: &mut &str) -> winnow::ModalResult<u32> {
     use winnow::ascii::digit1;
     use winnow::prelude::*;
 
-    'e'.parse_next(input)?;
+    "'a".parse_next(input)?;
     digit1.try_map(str::parse::<u32>).parse_next(input)
 }
 
@@ -955,17 +955,13 @@ fn parse_binders<'a>(
     let mut unions = Vec::new();
     loop {
         ws.parse_next(input)?;
-        let start = *input;
-        let word = ident.parse_next(input)?;
-        let kind = match RowBinder::from_keyword(word) {
-            Some(kind) if kind != RowBinder::Param => {
+        let kind = match opt(ident).parse_next(input)?.map(RowBinder::from_keyword) {
+            Some(Some(kind)) if kind != RowBinder::Param => {
                 ws.parse_next(input)?;
                 kind
             }
-            _ => {
-                *input = start;
-                RowBinder::Param
-            }
+            None => RowBinder::Param,
+            Some(_) => return Err(reject()),
         };
         let index = parse_binder_name(input)?;
         if usize::try_from(index).ok() != Some(kinds.len()) {
@@ -1193,7 +1189,7 @@ fn parse_convention(input: &mut &str) -> winnow::ModalResult<CallingConvention> 
     Ok(convention)
 }
 
-/// The concise row of a source signature, `row(@A, @B | e1)`, as the raw
+/// The concise row of a source signature, `row(@A, @B | 'a1)`, as the raw
 /// `ability_row` attribute; `None` when the signature writes no row.
 fn parse_row<'a>(
     input: &mut &'a str,
