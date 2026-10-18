@@ -3,14 +3,13 @@ source: crates/tribute-front/tests/become_tail_calls.rs
 expression: "run_ast_pipeline_with_ir(db, source)"
 ---
 core.module @test {
-  !t0 = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {tribute.calling_convention = 0}>
-  !t1 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 2}>
-  !t2 = tribute_control.func_sig<(core.i32) -> core.i1, {tribute.calling_convention = 0}>
+  !t0 = tribute_control.func_sig<(core.i32) -> core.i1, {ability_row = {tail = 0}, tribute.calling_convention = 0}>
+  !t1 = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {tribute.calling_convention = 0}>
 
   tribute_control.func @"std::Int::=="(%arg0: core.i32, %arg1: core.i32) -> core.i1 convention(direct)
   tribute_control.func @"std::Int::-"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
-  tribute_control.func @sum(%0: core.i32, %1: core.i32) -> core.i32 convention(direct) {
+  tribute_control.func @sum['a0](%0: core.i32, %1: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {
       %2 = arith.const {value = 0} : core.i32
       %3 = tribute_control.call %0, %2 {callee = @"std::Int::=="} : core.i1
       %4 = arith.const {value = true} : core.i1
@@ -22,11 +21,11 @@ core.module @test {
           %8 = tribute_control.call %0, %7 {callee = @"std::Int::-"} : core.i32
           %9 = arith.const {value = 1} : core.i32
           %10 = tribute_control.call %1, %9 {callee = @"std::Int::+"} : core.i32
-          tribute_control.tail_call %8, %10 {callee = @sum}
+          tribute_control.tail_call %8, %10 {callee = @sum, row_args = [{tail = 0}]}
       }
       tribute_control.return %6
   }
-  tribute_control.func @is_even(%0: core.i32) -> core.i1 convention(direct) {
+  tribute_control.func @is_even['a0](%0: core.i32) -> core.i1 row(| 'a0) inferred convention(direct) {
       %1 = arith.const {value = 0} : core.i32
       %2 = tribute_control.call %0, %1 {callee = @"std::Int::=="} : core.i1
       %3 = arith.const {value = true} : core.i1
@@ -37,11 +36,11 @@ core.module @test {
       } {
           %7 = arith.const {value = 1} : core.i32
           %8 = tribute_control.call %0, %7 {callee = @"std::Int::-"} : core.i32
-          tribute_control.tail_call %8 {callee = @is_odd}
+          tribute_control.tail_call %8 {callee = @is_odd, row_args = [{tail = 0}]}
       }
       tribute_control.return %5
   }
-  tribute_control.func @is_odd(%0: core.i32) -> core.i1 convention(direct) {
+  tribute_control.func @is_odd['a0](%0: core.i32) -> core.i1 row(| 'a0) inferred convention(direct) {
       %1 = arith.const {value = 0} : core.i32
       %2 = tribute_control.call %0, %1 {callee = @"std::Int::=="} : core.i1
       %3 = arith.const {value = true} : core.i1
@@ -52,15 +51,15 @@ core.module @test {
       } {
           %7 = arith.const {value = 1} : core.i32
           %8 = tribute_control.call %0, %7 {callee = @"std::Int::-"} : core.i32
-          tribute_control.tail_call %8 {callee = @is_even}
+          tribute_control.tail_call %8 {callee = @is_even, row_args = [{tail = 0}]}
       }
       tribute_control.return %5
   }
-  tribute_control.func @apply(%0: !t1, %1: core.i32) -> core.i32 convention(cps) {
+  tribute_control.func @apply['a0](%0: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 2}>, %1: core.i32) -> core.i32 row(| 'a0) convention(cps) {
       tribute_control.tail_call_indirect %0, %1
   }
-  tribute_control.func @countdown(%0: core.i32) -> core.i32 convention(direct) {
-      %1 = tribute_control.lambda(%2: core.i32) -> core.i32 convention(cps) captures [] {
+  tribute_control.func @countdown['a0, body 'a1](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {
+      %1 = tribute_control.lambda(%2: core.i32) -> core.i32 row(| 'a1) convention(cps) captures [] {
           %3 = arith.const {value = 0} : core.i32
           %4 = tribute_control.call %2, %3 {callee = @"std::Int::=="} : core.i1
           %5 = arith.const {value = true} : core.i1
@@ -70,7 +69,7 @@ core.module @test {
           } {
               %8 = arith.const {value = 1} : core.i32
               %9 = tribute_control.call %2, %8 {callee = @"std::Int::-"} : core.i32
-              tribute_control.tail_call %9 {callee = @countdown}
+              tribute_control.tail_call %9 {callee = @countdown, row_args = [{tail = 1}]}
           }
           tribute_control.return %7
       }

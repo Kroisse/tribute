@@ -1579,18 +1579,29 @@ pub fn declare_operations(
     module: Module,
     declarations: &[OperationDeclaration],
 ) {
-    use trunk_ir::context::{BlockData, RegionData};
-
-    let location = ctx.op(module.op()).location;
-    let module_block = module
-        .first_block(ctx)
-        .expect("a module that declares ability operations has a body block");
     let mut instances = Vec::new();
     for declaration in declarations {
         if !instances.contains(&&declaration.ability) {
             instances.push(&declaration.ability);
         }
     }
+    declare_abilities(ctx, module, instances, declarations);
+}
+
+/// Add an `ability.decl` to `module` for each of `instances`, in order,
+/// holding the operations `declarations` gives for it, if any.
+pub fn declare_abilities<'a>(
+    ctx: &mut IrContext,
+    module: Module,
+    instances: impl IntoIterator<Item = &'a SymbolPath>,
+    declarations: &[OperationDeclaration],
+) {
+    use trunk_ir::context::{BlockData, RegionData};
+
+    let location = ctx.op(module.op()).location;
+    let module_block = module
+        .first_block(ctx)
+        .expect("a module that declares ability operations has a body block");
     for ability in instances {
         let block = ctx.create_block(BlockData {
             location,
@@ -2746,7 +2757,9 @@ fn validate_symbol_use(
                 .is_some_and(|(expected, signature)| {
                     Some(signature.result(ctx)) == expected.result
                         && types_match(signature.inputs(ctx), &expected.inputs)
-                        && Some(signature.row(ctx)) == expected.row
+                        && expected
+                            .row
+                            .is_some_and(|row| signature.row(ctx).includes(&row))
                 });
             if !same_signature {
                 push_op_error(
@@ -4269,8 +4282,7 @@ fn check_selects(steps: &[EvidenceStep], sources: Option<&[u32]>) -> Result<(), 
     Ok(())
 }
 
-/// `select` and `tails` count the sources of row tail unions. Checked for
-/// definitions that declare their row binders.
+/// `select` and `tails` count the sources of row tail unions.
 fn validate_evidence_tails(
     ctx: &IrContext,
     body: RegionRef,
@@ -4291,9 +4303,6 @@ fn validate_evidence_tails(
         let Some((tail, func)) = enclosing_row_tail(ctx, op) else {
             return;
         };
-        if ctx.op_attrs(func).get(ROW_BINDERS_ATTR).is_none() {
-            return;
-        }
         let sources = union_sources(ctx, func, tail);
         if let Err(message) = check_selects(&steps, sources.as_deref()) {
             push_op_error(ctx, op, errors, message);
@@ -4309,9 +4318,6 @@ fn validate_evidence_tails(
         let Some(callee) = callee else {
             return;
         };
-        if ctx.op_attrs(callee).get(ROW_BINDERS_ATTR).is_none() {
-            return;
-        }
         let callee_tail = ctx
             .op_attrs(callee)
             .get_type("type")

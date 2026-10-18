@@ -10,19 +10,10 @@ fn named_function_header<'a>(ir: &'a str, name: &str) -> &'a str {
     ir.lines()
         .find(|line| {
             line.trim_start()
-                .starts_with(&format!("tribute_control.func @{name}("))
+                .strip_prefix(&format!("tribute_control.func @{name}"))
+                .is_some_and(|rest| rest.starts_with(['(', '[']))
         })
         .unwrap_or_else(|| panic!("missing lowered function @{name}:\n{ir}"))
-}
-
-fn parameter_type(header: &str, index: usize) -> &str {
-    header
-        .split_once('(')
-        .and_then(|(_, tail)| tail.split_once(") ->"))
-        .and_then(|(params, _)| params.split(',').nth(index))
-        .and_then(|parameter| parameter.rsplit_once(": "))
-        .map(|(_, ty)| ty.trim())
-        .unwrap_or_else(|| panic!("missing parameter {index} in {header}"))
 }
 
 fn value_name(line: &str) -> &str {
@@ -38,9 +29,26 @@ fn type_after_colon(line: &str) -> &str {
         .unwrap_or_else(|| panic!("missing type in {line}"))
 }
 
-fn callable_convention<'a>(ir: &'a str, callable_ty: &str) -> &'a str {
+/// `callable_ty` without its ability row, which names the binders of the
+/// definition it is written in.
+fn without_row(callable_ty: &str) -> String {
+    match callable_ty.split_once("ability_row = {") {
+        Some((head, tail)) => {
+            let rest = tail.split_once("}, ").map_or("", |(_, rest)| rest);
+            format!("{head}{rest}")
+        }
+        None => callable_ty.to_owned(),
+    }
+}
+
+fn callable_convention<'a>(ir: &'a str, callable_ty: &'a str) -> &'a str {
     ir.lines()
         .find(|line| line.trim_start().starts_with(&format!("{callable_ty} =")))
+        .or_else(|| {
+            callable_ty
+                .contains("tribute.calling_convention")
+                .then_some(callable_ty)
+        })
         .and_then(|line| line.split("tribute.calling_convention = ").nth(1))
         .and_then(|suffix| suffix.split('}').next())
         .map(str::trim)
@@ -87,10 +95,10 @@ fn main() -> Nil { apply(double, 21) }
     );
     let double_ref = refs[0];
     let callback_ty = type_after_colon(double_ref);
-    assert_eq!(
-        parameter_type(named_function_header(&ir, "apply"), 0),
-        callback_ty,
-        "the fresh function reference must have apply's exact callback type:\n{ir}"
+    assert!(
+        without_row(named_function_header(&ir, "apply"))
+            .contains(&format!("(%0: {}, ", without_row(callback_ty))),
+        "the fresh function reference must have apply's callback type, up to its row:\n{ir}"
     );
     assert_eq!(callable_convention(&ir, callback_ty), "2");
     assert!(

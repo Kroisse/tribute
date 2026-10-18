@@ -151,7 +151,9 @@ fn main() -> Int { run(fn() State::get()) }
     );
     let ir = common::run_ast_pipeline_with_ir(db, source);
     assert!(
-        ir.contains("tribute_control.lambda() -> core.i32 convention(cps)"),
+        ir.contains(
+            "tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_int) convention(cps)"
+        ),
         "a lambda that performs an effect must remain CPS:\n{ir}"
     );
 }
