@@ -426,3 +426,29 @@ fn a_binder_is_named_by_its_position() {
         .is_err()
     );
 }
+
+#[test]
+fn a_header_may_declare_only_unquantified_binders() {
+    let input = r#"core.module @test {
+  tribute_control.func @run[local 'a0, body 'a1]() -> core.i32 convention(direct) {
+    %f = tribute_control.lambda() -> core.i32 row(| 'a0) convention(cps) captures [] {
+      %x = arith.const {value = 1} : core.i32
+      tribute_control.return %x
+    }
+    %y = arith.const {value = 2} : core.i32
+    tribute_control.return %y
+  }
+}"#;
+    let (ctx, module) = parse(input);
+    let result = validate(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+    let printed = print_module(&ctx, module.op());
+    assert!(
+        printed.contains("@run[local 'a0, body 'a1]() -> core.i32 convention(direct) {"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("row(| 'a0) convention(cps) captures []"),
+        "{printed}"
+    );
+}
