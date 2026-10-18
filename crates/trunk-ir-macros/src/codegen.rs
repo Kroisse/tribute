@@ -979,23 +979,6 @@ fn gen_type_constraint(
     let sname = struct_name(&td.name);
     let full_name = format!("{dialect}.{type_name}");
     let fixed = td.params.iter().filter(|p| !p.variadic).count();
-    // Declared attributes are part of the wrapper invariant: required ones
-    // must be present, and every present one must match its kind.
-    let attrs_ok = td.attrs.iter().map(|attr| {
-        let name = &attr.name;
-        let kind = attr_kind_trait(crate_path, attr);
-        let kind = quote!(#kind::KIND);
-        if attr.optional {
-            quote!(attrs.view(ctx).get(#name).is_none_or(|attr| #kind.accepts(attr)))
-        } else {
-            quote!(attrs.view(ctx).get(#name).is_some_and(|attr| #kind.accepts(attr)))
-        }
-    });
-    let count_ok = if td.params.iter().any(|p| p.variadic) {
-        quote!(params.len() >= #fixed)
-    } else {
-        quote!(params.len() == #fixed)
-    };
     let projections = td.params.iter().map(|param| {
         let name = &param.name;
         let kind = if param.variadic {
@@ -1014,8 +997,9 @@ fn gen_type_constraint(
             quote!(#i => Some(#crate_path::type_constraint::Projected::One(params[#i])),)
         }
     });
-    // A type without parameters or attributes has exactly one instance.
-    let fixed_type = if td.params.is_empty() && td.attrs.is_empty() {
+    // A type without parameters or attributes has exactly one instance,
+    // unless a verifier may reject it.
+    let fixed_type = if td.params.is_empty() && td.attrs.is_empty() && td.verify.is_none() {
         quote!(Some(|ctx| {
             #crate_path::TypeDataBuilder::new(<#sname as #crate_path::ops::DialectType>::NAME)
                 .intern(ctx)
@@ -1032,13 +1016,6 @@ fn gen_type_constraint(
                     projections: &[#(#projections),*],
                     matches: |ctx, ty| {
                         <Self as #crate_path::ops::DialectType>::from_type_ref(ctx, ty).is_some()
-                            && {
-                                let data = ctx.get_type(ty);
-                                let params = &data.params;
-                                #[allow(unused_variables)]
-                                let attrs = &data.attrs;
-                                #count_ok #(&& #attrs_ok)*
-                            }
                     },
                     project: |ctx, ty, index| {
                         if !(<Self as #crate_path::type_constraint::TypeConstraint>::DESC.matches)(ctx, ty) {
@@ -1084,6 +1061,7 @@ fn gen_type_struct_and_trait(
         None => quote!(None),
     };
 
+    let shape_ok = gen_type_shape_check(crate_path, td);
     let docs = &td.docs;
     quote! {
         #(# #docs)*
@@ -1109,8 +1087,10 @@ fn gen_type_struct_and_trait(
                 ctx: &#crate_path::IrContext,
                 ty: #crate_path::TypeRef,
             ) -> Option<Self> {
-                // A type with a verifier has a wrapper only when it passes.
+                // A type has a wrapper only in its declared shape, and then
+                // only when its verifier, if any, accepts it.
                 if !Self::matches(ctx, ty)
+                    || !#shape_ok
                     || #def_static.verifier.is_some_and(|verify| verify(ctx, ty).is_err())
                 {
                     return None;
@@ -1129,6 +1109,33 @@ fn gen_type_struct_and_trait(
             }
         }
     }
+}
+
+/// Whether `ty` has the declared parameter count and attributes: required
+/// ones present, and every present one of its declared kind.
+fn gen_type_shape_check(crate_path: &TokenStream, td: &TypeDefData) -> TokenStream {
+    let fixed = td.params.iter().filter(|p| !p.variadic).count();
+    let count_ok = if td.params.iter().any(|p| p.variadic) {
+        quote!(params.len() >= #fixed)
+    } else {
+        quote!(params.len() == #fixed)
+    };
+    let attrs_ok = td.attrs.iter().map(|attr| {
+        let name = &attr.name;
+        let kind = attr_kind_trait(crate_path, attr);
+        if attr.optional {
+            quote!(attrs.view(ctx).get(#name).is_none_or(|attr| #kind::KIND.accepts(attr)))
+        } else {
+            quote!(attrs.view(ctx).get(#name).is_some_and(|attr| #kind::KIND.accepts(attr)))
+        }
+    });
+    quote!({
+        let data = ctx.get_type(ty);
+        let params = &data.params;
+        #[allow(unused_variables)]
+        let attrs = &data.attrs;
+        #count_ok #(&& #attrs_ok)*
+    })
 }
 
 fn gen_type_impl_block(crate_path: &TokenStream, td: &TypeDefData) -> TokenStream {

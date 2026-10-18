@@ -57,7 +57,8 @@ Operations and types are defined with the `#[trunk_ir::dialect]` attribute
 macro on a `mod`; it takes no arguments.
 
 - `struct` definitions generate typed type wrappers. `#[attr(..)]` declares
-  type attributes, and `#[rest]` marks a variadic last type parameter.
+  type attributes, and `#[rest]` marks a variadic last type parameter. A
+  wrapper accepts only types with the declared parameters and attributes.
 - `fn` definitions declare operations. The signature declares each entity and
   its type constraint, following
   [the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema).
