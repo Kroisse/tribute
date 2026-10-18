@@ -12,9 +12,7 @@ inventory::submit!(trunk_ir::asm_format::TypeAliasHint {
 // an allocation of that layout.
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Struct>());
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Enum>());
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::of(
-    Typeref::DEF
-));
+inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Typeref>());
 
 // === Pure operation registrations ===
 trunk_ir::register_pure_op!(StructNew);
@@ -40,6 +38,34 @@ use trunk_ir::dialect::core::{Array, IntegerLike};
 
 #[trunk_ir::dialect]
 mod adt {
+    /// Validated wrapper for a nominal `adt.struct` layout type.
+    ///
+    /// Field types are the type's parameters, each field's name is its parameter's
+    /// `name` attribute, and the struct's name is the type's `name` attribute.
+    #[verify]
+    #[asm_format]
+    #[attr(name: String)]
+    struct Struct<#[rest] FieldTypes>;
+
+    /// Validated wrapper for a nominal `adt.enum` layout type.
+    ///
+    /// Each variant is one type parameter: an `adt.variant` whose parameters are
+    /// the variant's field types and whose `name` attribute is the variant's
+    /// name. A field may carry a `name` parameter attribute. The enum's name is
+    /// the type's `name` attribute.
+    #[verify]
+    #[asm_format]
+    #[attr(name: String)]
+    struct Enum<#[rest] VariantTypes>;
+
+    /// `adt.typeref`: a reference to a nominal layout by its `name`.
+    #[attr(name: String)]
+    struct Typeref;
+
+    /// `adt.variant`: one variant of an `adt.enum`, named by its `name`.
+    #[attr(name: String)]
+    struct Variant<#[rest] Fields>;
+
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
@@ -243,13 +269,6 @@ pub enum StructTypeError {
     FieldsAttribute,
 }
 
-/// Validated wrapper for a nominal `adt.struct` layout type.
-///
-/// Field types are the type's parameters, each field's name is its parameter's
-/// `name` attribute, and the struct's name is the type's `name` attribute.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Struct(TypeRef);
-
 impl trunk_ir::type_verifier::VerifyType for Struct {
     /// Validate a name-matching `adt.struct`.
     fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
@@ -282,27 +301,6 @@ impl trunk_ir::type_verifier::VerifyType for Struct {
 }
 
 impl Struct {
-    pub fn as_type_ref(self) -> TypeRef {
-        self.0
-    }
-
-    /// The struct's name.
-    pub fn name(self, ctx: &IrContext) -> &str {
-        ctx.str(self.name_ref(ctx))
-    }
-
-    /// The struct's name as a pooled handle.
-    pub fn name_ref(self, ctx: &IrContext) -> StringRef {
-        ctx.type_attrs(self.0)
-            .get_string_ref(STRUCT_NAME_ATTR)
-            .expect("validated adt.struct must retain its name")
-    }
-
-    /// The field types, in declaration order.
-    pub fn field_types(self, ctx: &IrContext) -> &[TypeRef] {
-        &ctx.get_type(self.0).params
-    }
-
     pub fn field_count(self, ctx: &IrContext) -> usize {
         ctx.get_type(self.0).params.len()
     }
@@ -387,35 +385,6 @@ fn field_name(ctx: &IrContext, attrs: &AttributeMap) -> StringRef {
         .view(ctx)
         .get_string_ref(STRUCT_NAME_ATTR)
         .expect("validated adt.struct fields must retain their names")
-}
-
-static STRUCT_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new("adt.struct")
-    .with_verifier::<Struct>()
-    .with_asm_format::<Struct>();
-
-inventory::submit! {
-    trunk_ir::type_def::TypeDefRegistration(&STRUCT_DEF)
-}
-
-impl DialectType for Struct {
-    const DEF: &'static trunk_ir::TypeDef = &STRUCT_DEF;
-
-    fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
-        if !Self::matches(ctx, ty) {
-            return None;
-        }
-        <Self as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty).ok()
-    }
-
-    fn as_type_ref(&self) -> TypeRef {
-        self.0
-    }
-}
-
-impl From<Struct> for TypeRef {
-    fn from(ty: Struct) -> Self {
-        ty.0
-    }
 }
 
 /// Construct an `adt.struct` named `name` with `fields` in declaration order.
@@ -626,15 +595,6 @@ pub enum EnumTypeError {
     VariantAttributes,
 }
 
-/// Validated wrapper for a nominal `adt.enum` layout type.
-///
-/// Each variant is one type parameter: an `adt.variant` whose parameters are
-/// the variant's field types and whose `name` attribute is the variant's
-/// name. A field may carry a `name` parameter attribute. The enum's name is
-/// the type's `name` attribute.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Enum(TypeRef);
-
 impl trunk_ir::type_verifier::VerifyType for Enum {
     /// Validate a name-matching `adt.enum`.
     fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
@@ -664,22 +624,6 @@ impl trunk_ir::type_verifier::VerifyType for Enum {
 }
 
 impl Enum {
-    pub fn as_type_ref(self) -> TypeRef {
-        self.0
-    }
-
-    /// The enum's name.
-    pub fn name(self, ctx: &IrContext) -> &str {
-        ctx.str(self.name_ref(ctx))
-    }
-
-    /// The enum's name as a pooled handle.
-    pub fn name_ref(self, ctx: &IrContext) -> StringRef {
-        ctx.type_attrs(self.0)
-            .get_string_ref(STRUCT_NAME_ATTR)
-            .expect("validated adt.enum must retain its name")
-    }
-
     pub fn variant_count(self, ctx: &IrContext) -> usize {
         ctx.get_type(self.0).params.len()
     }
@@ -713,73 +657,12 @@ impl Enum {
     }
 }
 
-macro_rules! nominal_types {
-    ($($(#[$meta:meta])* $wrapper:ident = $name:literal;)*) => {$(
-        $(#[$meta])*
-        pub struct $wrapper;
-
-        impl $wrapper {
-            /// The type's registered definition.
-            pub const DEF: &'static trunk_ir::TypeDef = {
-                static DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new($name);
-                &DEF
-            };
-            /// The type's name, which points to [`DEF`](Self::DEF).
-            pub const NAME: trunk_ir::TypeName = trunk_ir::TypeName::registered(Self::DEF);
-
-            pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
-                ctx.get_type(ty).name == Self::NAME
-            }
-        }
-
-        inventory::submit! {
-            trunk_ir::type_def::TypeDefRegistration($wrapper::DEF)
-        }
-    )*};
-}
-
-nominal_types! {
-    /// `adt.typeref`: a reference to a nominal layout by its `name`.
-    Typeref = "adt.typeref";
-    /// `adt.variant`: one variant of an `adt.enum`, named by its `name`.
-    Variant = "adt.variant";
-}
-
 /// The name of an `adt.variant` type.
 fn variant_name(ctx: &IrContext, variant: TypeRef) -> Option<StringRef> {
     let data = ctx.get_type(variant);
     (data.name == Variant::NAME)
         .then(|| ctx.type_attrs(variant).get_string_ref(STRUCT_NAME_ATTR))
         .flatten()
-}
-
-static ENUM_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new("adt.enum")
-    .with_verifier::<Enum>()
-    .with_asm_format::<Enum>();
-
-inventory::submit! {
-    trunk_ir::type_def::TypeDefRegistration(&ENUM_DEF)
-}
-
-impl DialectType for Enum {
-    const DEF: &'static trunk_ir::TypeDef = &ENUM_DEF;
-
-    fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
-        if !Self::matches(ctx, ty) {
-            return None;
-        }
-        <Self as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty).ok()
-    }
-
-    fn as_type_ref(&self) -> TypeRef {
-        self.0
-    }
-}
-
-impl From<Enum> for TypeRef {
-    fn from(ty: Enum) -> Self {
-        ty.0
-    }
 }
 
 /// Construct an `adt.enum` named `name` with `variants` in declaration order,

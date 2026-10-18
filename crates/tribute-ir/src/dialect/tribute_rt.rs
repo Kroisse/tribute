@@ -109,7 +109,7 @@ pub(crate) fn fold_unbox_bool(ctx: &IrContext, op: OpRef) -> Option<FoldResult> 
 mod tests {
     use trunk_ir::Span;
 
-    use trunk_ir::ops::DialectOp;
+    use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
     use trunk_ir::{Attribute, IrContext, TypeDataBuilder};

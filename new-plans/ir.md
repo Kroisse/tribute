@@ -1766,6 +1766,12 @@ opaque nominal builtin whose shared construction and sequence-view observations
 use `list.*`; target-specific passes choose and eliminate its private
 representation.
 
+Dialect 타입의 정의는 그 타입의 type verifier와 전용 textual 문법을 함께
+소유한다. Type verifier가 있는 타입의 typed wrapper와 exact bound는 verifier를
+통과한 타입만 받으므로, wrapper의 accessor는 verifier가 보장하는 invariant에
+기댈 수 있다. 그런 타입에는 선언된 매개변수와 속성만으로 만드는 일반 생성자를
+두지 않으며, 타입을 정의하는 dialect가 invariant를 지키는 생성자를 제공한다.
+
 ### 타입 textual form
 
 타입은 스스로 끝을 표시한다(self-delimiting). 타입이 소유하는 매개변수와 속성은

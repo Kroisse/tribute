@@ -6,6 +6,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::{Deref, DerefMut};
+use trunk_ir::ops::DialectType;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_control::{Row, RowBinder, RowUnion};

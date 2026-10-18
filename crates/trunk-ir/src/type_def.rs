@@ -110,6 +110,9 @@ mod tests {
 
         #[asm_format]
         struct Custom;
+
+        #[attr(tag: String)]
+        struct Tagged<Elem>;
     }
 
     impl crate::type_verifier::VerifyType for Checked {
@@ -142,6 +145,35 @@ mod tests {
     }
 
     #[test]
+    fn wrappers_require_the_declared_shape() {
+        use crate::ops::DialectType;
+        use crate::type_constraint::TypeConstraint;
+
+        let mut ctx = IrContext::new();
+        let elem = crate::TypeDataBuilder::new(Custom::NAME).intern(&mut ctx);
+        let tag = ctx.string_attr("t");
+        let tagged = crate::TypeDataBuilder::new(Tagged::NAME)
+            .param(elem)
+            .attr("tag", tag.clone())
+            .intern(&mut ctx);
+        assert!(Tagged::from_type_ref(&ctx, tagged).is_some());
+        let missing_param = crate::TypeDataBuilder::new(Tagged::NAME)
+            .attr("tag", tag)
+            .intern(&mut ctx);
+        let wrong_kind = crate::TypeDataBuilder::new(Tagged::NAME)
+            .param(elem)
+            .attr("tag", crate::Attribute::Bool(true))
+            .intern(&mut ctx);
+        for ty in [missing_param, wrong_kind] {
+            assert!(Tagged::from_type_ref(&ctx, ty).is_none());
+            assert!(!(<Tagged as TypeConstraint>::DESC.matches)(&ctx, ty));
+        }
+
+        assert!(<Custom as TypeConstraint>::DESC.fixed.is_some());
+        assert!(<Checked as TypeConstraint>::DESC.fixed.is_none());
+    }
+
+    #[test]
     fn declared_type_hooks_reach_their_definitions() {
         use crate::ops::DialectType;
 
@@ -157,6 +189,9 @@ mod tests {
         let verifier = TypeDef::of(&ctx, bad).and_then(|def| def.verifier).unwrap();
         let error = verifier(&ctx, bad).unwrap_err();
         assert_eq!(error.to_string(), "bad checked type");
+        assert!(Checked::from_type_ref(&ctx, bad).is_none());
+        let good = crate::TypeDataBuilder::new(Checked::NAME).intern(&mut ctx);
+        assert!(Checked::from_type_ref(&ctx, good).is_some());
 
         let ty = crate::TypeDataBuilder::new(Custom::NAME).intern(&mut ctx);
         assert_eq!(
