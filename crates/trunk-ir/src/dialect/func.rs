@@ -851,7 +851,7 @@ fn parse_func<'a>(
     })
 }
 
-impl crate::asm_format::AsmFormat for Func {
+impl crate::asm_format::OpAsmFormat for Func {
     fn print(self, h: &mut crate::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
         print_func(h, self.op_ref())
     }

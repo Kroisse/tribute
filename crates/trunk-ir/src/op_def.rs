@@ -33,7 +33,7 @@ pub struct OpDef {
     /// Calls the wrapper's [`Verify`](crate::ops::Verify) impl for
     /// `#[verify]` operations.
     pub verifier: Option<OpVerifier>,
-    /// Calls the wrapper's [`AsmFormat`](crate::asm_format::AsmFormat) impl
+    /// Calls the wrapper's [`OpAsmFormat`](crate::asm_format::OpAsmFormat) impl
     /// for `#[asm_format]` operations.
     pub asm_format: Option<OpAsmHooks>,
 }

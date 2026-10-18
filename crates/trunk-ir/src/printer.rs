@@ -386,7 +386,7 @@ impl Write for TypePrintHelper<'_, '_> {
 // ============================================================================
 
 /// Public wrapper around printer state for custom
-/// [`AsmFormat`](crate::asm_format::AsmFormat) implementations.
+/// [`OpAsmFormat`](crate::asm_format::OpAsmFormat) implementations.
 ///
 /// Provides access to IR context, value naming, type/attribute printing, and
 /// region printing without exposing `PrintState` internals.

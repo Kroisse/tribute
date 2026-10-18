@@ -46,7 +46,7 @@ pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 }
 
 // =============================================================================
-// AsmFormat — custom assembly format for operations (print + parse)
+// OpAsmFormat — custom assembly format for operations (print + parse)
 // =============================================================================
 
 /// Custom assembly format for an operation — bundles print + parse.
@@ -56,11 +56,11 @@ pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 /// holds the hooks, so the printer and the parser reach them through its
 /// name.
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` is declared with `#[asm_format]` but does not implement `AsmFormat`",
+    message = "`{Self}` is declared with `#[asm_format]` but does not implement `OpAsmFormat`",
     label = "`#[asm_format]` requires this implementation",
-    note = "add `impl AsmFormat for {Self} {{ fn print(..) {{ .. }} fn parse(..) {{ .. }} }}`"
+    note = "add `impl OpAsmFormat for {Self} {{ fn print(..) {{ .. }} fn parse(..) {{ .. }} }}`"
 )]
-pub trait AsmFormat: DialectOp {
+pub trait OpAsmFormat: DialectOp {
     /// Print the operation. Called instead of generic printing, after the
     /// line's indentation and before its newline.
     fn print(self, h: &mut OpPrintHelper<'_, '_>) -> fmt::Result;

@@ -117,7 +117,7 @@ pub trait Verify: DialectOp {
 #[doc(hidden)]
 pub mod __private {
     use super::{IrContext, Verify};
-    use crate::asm_format::{AsmFormat, OpAsmHooks};
+    use crate::asm_format::{OpAsmFormat, OpAsmHooks};
 
     /// Entry point for generated verifiers. Requiring this instead of
     /// [`Verify`] keeps a missing impl's error from listing every other
@@ -141,16 +141,16 @@ pub mod __private {
     /// Entry point for generated assembly format hooks, as
     /// [`DeclaredVerify`] is for verifiers.
     #[diagnostic::on_unimplemented(
-        message = "`{Self}` is declared with `#[asm_format]` but does not implement `AsmFormat`",
+        message = "`{Self}` is declared with `#[asm_format]` but does not implement `OpAsmFormat`",
         label = "`#[asm_format]` requires this implementation",
-        note = "add `impl AsmFormat for {Self} {{ fn print(..) {{ .. }} fn parse(..) {{ .. }} }}`"
+        note = "add `impl OpAsmFormat for {Self} {{ fn print(..) {{ .. }} fn parse(..) {{ .. }} }}`"
     )]
-    pub trait DeclaredAsmFormat {
+    pub trait DeclaredOpAsmFormat {
         const ASM_HOOKS: OpAsmHooks;
     }
 
     #[diagnostic::do_not_recommend]
-    impl<T: AsmFormat> DeclaredAsmFormat for T {
+    impl<T: OpAsmFormat> DeclaredOpAsmFormat for T {
         const ASM_HOOKS: OpAsmHooks = OpAsmHooks {
             print: |h, op| match T::from_op(h.ctx(), op) {
                 Ok(op) => op.print(h),

@@ -39,7 +39,7 @@ pub struct OperationDef {
     pub relations: Vec<RelationDef>,
     /// `#[verify]`: call the wrapper's `Verify` impl after the schema checks. Holds the attribute's span for diagnostics.
     pub verify: Option<proc_macro2::Span>,
-    /// `#[asm_format]`: print and parse through the wrapper's `AsmFormat` impl. Holds the attribute's span for diagnostics.
+    /// `#[asm_format]`: print and parse through the wrapper's `OpAsmFormat` impl. Holds the attribute's span for diagnostics.
     pub asm_format: Option<proc_macro2::Span>,
 }
 
@@ -249,7 +249,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 && let Some(name) = entity_names(&op).find(|name| ["print", "parse"].contains(name))
             {
                 return Err(format!(
-                    "#[asm_format] reserves the name `{name}` for `AsmFormat::{name}`"
+                    "#[asm_format] reserves the name `{name}` for `OpAsmFormat::{name}`"
                 ));
             }
             for name in entity_names(&op) {

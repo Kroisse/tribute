@@ -1140,7 +1140,7 @@ fn parse_func<'a>(
     })
 }
 
-impl trunk_ir::asm_format::AsmFormat for Func {
+impl trunk_ir::asm_format::OpAsmFormat for Func {
     fn print(self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
         print_func(h, self.op_ref())
     }
@@ -1280,7 +1280,7 @@ fn parse_lambda<'a>(
     })
 }
 
-impl trunk_ir::asm_format::AsmFormat for Lambda {
+impl trunk_ir::asm_format::OpAsmFormat for Lambda {
     fn print(self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
         print_lambda(h, self.op_ref())
     }
