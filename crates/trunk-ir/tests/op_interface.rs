@@ -26,6 +26,11 @@ pub trait Consumes: DialectOp {
         ctx.op_operands(self.op_ref()).len()
     }
 
+    /// Whether `op` is this operation; `this` is a tag returned on a match.
+    fn same_as(self, _ctx: &IrContext, op: OpRef, this: u32) -> Option<u32> {
+        (self.op_ref() == op).then_some(this)
+    }
+
     fn forget_last(self, ctx: &mut IrContext, keep: u32) -> bool {
         let op = self.op_ref();
         if ctx.op_operands(op).len() <= keep as usize {
@@ -97,6 +102,8 @@ fn queries_dispatch_to_each_implementation() {
         &ctx.op_operands(pair)[..1]
     );
     assert_eq!(pair_interface.count(&ctx), 2);
+    assert_eq!(pair_interface.same_as(&ctx, pair, 7), Some(7));
+    assert_eq!(pair_interface.same_as(&ctx, addi, 7), None);
 
     let addi_interface = DynConsumes::get(&ctx, addi).expect("arith.addi implements Consumes");
     assert_eq!(

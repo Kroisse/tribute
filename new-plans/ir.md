@@ -409,9 +409,10 @@ SCF lowering이 지원하는 기존 단일 값 결과의 개수와 타입 변환
 
 These interfaces are queried through TrunkIR's operation registry by operation
 name. Their query methods return named concrete small collections; they do not
-use RPITIT, GATs, caller-visible tuples, or dialect-specific downcasts. The collections describe transfers from the existing operand,
-result, block, region, and successor lists rather than storing a second copy of
-those IR facts.
+use RPITIT, GATs, caller-visible tuples, or dialect-specific downcasts. The
+collections describe transfers from the existing operand, result, block,
+region, and successor lists rather than storing a second copy of those IR
+facts.
 
 Shared interface verification is fail-closed for every registered mapping. A
 block edge must report every raw successor exactly once, remain in the source

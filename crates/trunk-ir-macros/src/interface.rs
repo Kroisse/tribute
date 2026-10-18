@@ -400,16 +400,16 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         let lifetimes = &m.lifetimes;
         let lifetimes = (!lifetimes.is_empty()).then(|| quote!(#lifetimes,));
         let this = match m.receiver {
-            Receiver::Value => quote!(this),
-            Receiver::Ref => quote!(&this),
+            Receiver::Value => quote!(__trunk_ir_this),
+            Receiver::Ref => quote!(&__trunk_ir_this),
         };
         quote! {
             fn #thunk<#lifetimes T: #name>(
                 #ctx: #ctx_ty,
-                op: #krate::OpRef
+                __trunk_ir_op: #krate::OpRef
                 #(, #args: #tys)*
             ) #ret {
-                let this = <T as #krate::ops::DialectOp>::from_op(&*#ctx, op).expect(#expect_msg);
+                let __trunk_ir_this = <T as #krate::ops::DialectOp>::from_op(&*#ctx, __trunk_ir_op).expect(#expect_msg);
                 <T as #name>::#method(#this, #ctx #(, #args)*)
             }
         }
@@ -559,7 +559,7 @@ mod tests {
             "got: {out}"
         );
         assert!(
-            out.contains("< T as Branch > :: successors (this , ctx)"),
+            out.contains("< T as Branch > :: successors (__trunk_ir_this , ctx)"),
             "got: {out}"
         );
         assert!(out.contains("pub struct DynBranch"), "got: {out}");
@@ -611,7 +611,7 @@ mod tests {
             }
         });
         assert!(
-            out.contains("< T as Sig > :: allowed (& this , ctx)"),
+            out.contains("< T as Sig > :: allowed (& __trunk_ir_this , ctx)"),
             "got: {out}"
         );
         assert!(
@@ -621,7 +621,7 @@ mod tests {
             "got: {out}"
         );
         assert!(
-            out.contains("< T as Sig > :: set (this , ctx , signature)"),
+            out.contains("< T as Sig > :: set (__trunk_ir_this , ctx , signature)"),
             "got: {out}"
         );
     }
