@@ -651,8 +651,9 @@ fn test_execute_wasm_evidence_marker_stacks() {
         &mut ctx,
         r#"core.module @test {
   !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
-  func.func @__tribute_evidence_extend(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: wasm.anyref, %outer: !Evidence) -> !Evidence attributes {abi = "C"}
+  func.func @__tribute_evidence_extend(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !Closure, %outer: !Evidence) -> !Evidence attributes {abi = "C"}
   func.func @__tribute_evidence_outer(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
   func.func @__tribute_evidence_mask(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
   func.func @__tribute_evidence_dup(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
@@ -664,7 +665,7 @@ fn test_execute_wasm_evidence_marker_stacks() {
     %ten = wasm.i32_const {value = 10} : core.i32
     %state = wasm.i32_const {value = 10} : core.i32
     %console = wasm.i32_const {value = 20} : core.i32
-    %null = wasm.ref_null {heap_type = "any"} : wasm.anyref
+    %null = wasm.ref_null {heap_type = "struct", type_idx = 3} : !Closure
     %empty = wasm.array_new_default %zero {type_idx = 5} : !Evidence
     %with_console = wasm.call %empty, %console, %nine, %null, %empty {callee = @__tribute_evidence_extend} : !Evidence
     %outer = wasm.call %with_console, %state, %one, %null, %with_console {callee = @__tribute_evidence_extend} : !Evidence
@@ -718,4 +719,81 @@ fn test_execute_wasm_evidence_marker_stacks() {
     // ability's tag and the slot count after and before removing a slot,
     // then the tag in the evidence the copied inner handler was installed on.
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "212191921");
+}
+
+/// The Marker dispatch field holds the closure base, so the helpers that
+/// store, copy, and read it pass the closure through without a cast.
+#[test]
+fn test_wasm_marker_dispatch_field_holds_the_closure_base() {
+    use wasmparser::{Operator, Payload};
+
+    let mut ctx = trunk_ir::IrContext::new();
+    let module = trunk_ir::parser::parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  func.func @__tribute_evidence_lookup_tr(%ev: !Evidence, %id: core.i32) -> !Closure attributes {abi = "C"}
+  func.func @__tribute_evidence_extend(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !Closure, %outer: !Evidence) -> !Evidence attributes {abi = "C"}
+  func.func @__tribute_evidence_dup(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
+  func.func @__tribute_evidence_push(%ev: !Evidence, %source: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
+  func.func @__tribute_evidence_with_tail(%ev: !Evidence, %slot: core.i32, %tail: !Evidence) -> !Evidence attributes {abi = "C"}
+  wasm.func @check() -> core.i32 {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %state = wasm.i32_const {value = 10} : core.i32
+    %tag = wasm.i32_const {value = 7} : core.i32
+    %slot = wasm.i32_const {value = 30} : core.i32
+    %nine = wasm.i32_const {value = 9} : core.i32
+    %ten = wasm.i32_const {value = 10} : core.i32
+    %closure = wasm.struct_new %zero {type_idx = 3} : !Closure
+    %empty = wasm.array_new_default %zero {type_idx = 5} : !Evidence
+    %extended = wasm.call %empty, %state, %tag, %closure, %empty {callee = @__tribute_evidence_extend} : !Evidence
+    %dup = wasm.call %extended, %state {callee = @__tribute_evidence_dup} : !Evidence
+    %pushed = wasm.call %empty, %dup, %state {callee = @__tribute_evidence_push} : !Evidence
+    %tailed = wasm.call %pushed, %slot, %extended {callee = @__tribute_evidence_with_tail} : !Evidence
+    %dup_dispatch = wasm.call %dup, %state {callee = @__tribute_evidence_lookup_tr} : !Closure
+    %dup_absent = wasm.ref_is_null %dup_dispatch : core.i32
+    %pushed_dispatch = wasm.call %tailed, %state {callee = @__tribute_evidence_lookup_tr} : !Closure
+    %pushed_absent = wasm.ref_is_null %pushed_dispatch : core.i32
+    %slot_dispatch = wasm.call %tailed, %slot {callee = @__tribute_evidence_lookup_tr} : !Closure
+    %slot_absent = wasm.ref_is_null %slot_dispatch : core.i32
+    %d0 = wasm.i32_mul %nine, %ten : core.i32
+    %d1 = wasm.i32_add %d0, %dup_absent : core.i32
+    %d2 = wasm.i32_mul %d1, %ten : core.i32
+    %d3 = wasm.i32_add %d2, %pushed_absent : core.i32
+    %d4 = wasm.i32_mul %d3, %ten : core.i32
+    %d5 = wasm.i32_add %d4, %slot_absent : core.i32
+    wasm.return %d5
+  }
+  wasm.export_func {name = "check", func = @check}
+}"#,
+    );
+    tribute_passes::wasm::evidence_to_wasm::bind_wasm_evidence_runtime(&mut ctx, module);
+    tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
+    let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();
+
+    let mut casts = 0;
+    for payload in wasmparser::Parser::new(0).parse_all(&binary.bytes) {
+        if let Payload::CodeSectionEntry(body) = payload.expect("Wasm payload") {
+            for operator in body.get_operators_reader().expect("operators") {
+                if matches!(
+                    operator.expect("operator"),
+                    Operator::RefCastNonNull { .. } | Operator::RefCastNullable { .. }
+                ) {
+                    casts += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(casts, 0, "the dispatch closure needs no recovery cast");
+
+    let output = run_wasm_invoking(&binary.bytes, "check");
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The handler's closure survives `dup` and `push`; the row tail slot has
+    // no dispatch closure.
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9001");
 }

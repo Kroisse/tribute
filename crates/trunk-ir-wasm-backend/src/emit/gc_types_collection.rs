@@ -137,9 +137,13 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
             return Err(invalid());
         }
         // Marker pointer fields are target-owned GC references, as specified
-        // by the builtin layout, even in the retained pre-target declaration.
+        // by the builtin layout, even in the retained pre-target declaration:
+        // the dispatch closure is the closure base and the others are anyref.
         let actual = if trunk_ir::dialect::core::Ptr::matches(ctx, ty) {
-            ValType::Ref(wasm_encoder::RefType::ANYREF)
+            let StorageType::Val(reference @ ValType::Ref(_)) = expected.element_type else {
+                return Err(invalid());
+            };
+            reference
         } else {
             helpers::type_to_valtype(ctx, ty, &HashMap::default())?
         };
@@ -807,7 +811,14 @@ mod tests {
 
     #[test]
     fn incompatible_named_marker_and_evidence_layouts_are_rejected_before_emission() {
-        for field_type in ["core.i64", "wasm.anyref"] {
+        for (field_type, dispatch_type) in [
+            ("core.i64", "core.ptr"),
+            ("wasm.anyref", "core.ptr"),
+            // A pointer only stands for a reference field.
+            ("core.ptr", "core.ptr"),
+            // The dispatch field holds the closure base, not an erased anyref.
+            ("core.i32", "wasm.anyref"),
+        ] {
             for evidence in [false, true] {
                 let mut ctx = IrContext::new();
                 let producer = if evidence {
@@ -821,7 +832,7 @@ mod tests {
                 };
                 let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
                     "core.module @test {{
-                        !Marker = test.layout<{field_type} {{name = \"ability_id\"}}, core.i32 {{name = \"prompt_tag\"}}, core.ptr {{name = \"tr_dispatch_fn\"}}, core.ptr {{name = \"shadowed\"}}, core.ptr {{name = \"outer\"}}, {{name = \"_Marker\", layout = \"evidence_marker\"}}>
+                        !Marker = test.layout<{field_type} {{name = \"ability_id\"}}, core.i32 {{name = \"prompt_tag\"}}, {dispatch_type} {{name = \"tr_dispatch_fn\"}}, core.ptr {{name = \"shadowed\"}}, core.ptr {{name = \"outer\"}}, {{name = \"_Marker\", layout = \"evidence_marker\"}}>
                         wasm.func @test(%marker: !Marker) -> core.i32 {{
                             {producer}
                             wasm.unreachable

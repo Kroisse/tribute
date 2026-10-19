@@ -29,7 +29,7 @@
 //!
 //! ```text
 //! Evidence = Array(Marker)
-//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref }
+//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: (ref null Closure), shadowed: anyref, outer: anyref }
 //! ```
 //!
 //! Marker construction and field access stay inside the helper
@@ -51,7 +51,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::{StringRef, SymbolPath};
-use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
+use trunk_ir_wasm_backend::gc_types::{CLOSURE_STRUCT_IDX, EVIDENCE_IDX, MARKER_IDX};
 
 use crate::effect_dispatch;
 
@@ -697,11 +697,12 @@ fn build_helper(
         Helper::Dup => {
             let i32_ty = intern_i32(ctx);
             let anyref_ty = intern_anyref(ctx);
+            let closure_ty = super::type_converter::closure_adt_type(ctx);
             let top = find_marker(ctx);
             let fields = [
                 marker_field(ctx, top, MarkerField::AbilityId, i32_ty),
                 marker_field(ctx, top, MarkerField::PromptTag, i32_ty),
-                marker_field(ctx, top, MarkerField::TrDispatchFn, anyref_ty),
+                marker_field(ctx, top, MarkerField::TrDispatchFn, closure_ty),
                 top,
                 marker_field(ctx, top, MarkerField::Outer, anyref_ty),
             ];
@@ -763,12 +764,12 @@ fn build_helper(
             return finish_helper(ctx, location, name, inputs, result_ty, block);
         }
         Helper::WithTail => {
-            let anyref_ty = intern_anyref(ctx);
+            let closure_ty = super::type_converter::closure_adt_type(ctx);
             let shadowed = find_marker(ctx);
             let no_dispatch = wasm_dialect::RefNull::operands()
-                .heap_type("anyref")
-                .type_idx(None)
-                .results(anyref_ty)
+                .heap_type("struct")
+                .type_idx(CLOSURE_STRUCT_IDX)
+                .results(closure_ty)
                 .build(ctx, location);
             ctx.push_op(block, no_dispatch.op_ref());
             // A row tail slot has no prompt; the field repeats the slot.
@@ -780,6 +781,7 @@ fn build_helper(
         Helper::Push => {
             let i32_ty = intern_i32(ctx);
             let anyref_ty = intern_anyref(ctx);
+            let closure_ty = super::type_converter::closure_adt_type(ctx);
             let top_of = |ctx: &mut IrContext, evidence: ValueRef| {
                 let marker = wasm_dialect::Call::operands([evidence, args[2]])
                     .callee(SymbolPath::new([FIND_MARKER]))
@@ -793,7 +795,7 @@ fn build_helper(
             let fields = [
                 args[2],
                 marker_field(ctx, pushed, MarkerField::PromptTag, i32_ty),
-                marker_field(ctx, pushed, MarkerField::TrDispatchFn, anyref_ty),
+                marker_field(ctx, pushed, MarkerField::TrDispatchFn, closure_ty),
                 shadowed,
                 marker_field(ctx, pushed, MarkerField::Outer, anyref_ty),
             ];
@@ -1564,9 +1566,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
+  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 attributes {abi = "C"}
-  func.func @__tribute_evidence_lookup_tr(%ev: wasm.arrayref, %id: core.i32) -> wasm.anyref attributes {abi = "C"}
-  func.func @__tribute_evidence_extend(%ev: wasm.arrayref, %id: core.i32, %prompt: core.i32, %tr: wasm.anyref, %outer: wasm.arrayref) -> wasm.arrayref attributes {abi = "C"}
+  func.func @__tribute_evidence_lookup_tr(%ev: wasm.arrayref, %id: core.i32) -> !Closure attributes {abi = "C"}
+  func.func @__tribute_evidence_extend(%ev: wasm.arrayref, %id: core.i32, %prompt: core.i32, %tr: !Closure, %outer: wasm.arrayref) -> wasm.arrayref attributes {abi = "C"}
 }"#,
         );
 
