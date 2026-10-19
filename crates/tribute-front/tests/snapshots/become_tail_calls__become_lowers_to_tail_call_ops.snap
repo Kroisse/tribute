@@ -1,10 +1,12 @@
 ---
 source: crates/tribute-front/tests/become_tail_calls.rs
+assertion_line: 64
 expression: "run_ast_pipeline_with_ir(db, source)"
 ---
 core.module @test {
-  !t0 = tribute_control.func_sig<(core.i32) -> core.i1, {ability_row = {tail = 0}, tribute.calling_convention = 0}>
-  !t1 = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !t0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 2}>
+  !t1 = tribute_control.func_sig<(core.i32) -> core.i1, {ability_row = {tail = 0}, tribute.calling_convention = 0}>
+  !t2 = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {tribute.calling_convention = 0}>
 
   tribute_control.func @"std::Int::=="(%arg0: core.i32, %arg1: core.i32) -> core.i1 convention(direct)
   tribute_control.func @"std::Int::-"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
@@ -55,11 +57,11 @@ core.module @test {
       }
       tribute_control.return %5
   }
-  tribute_control.func @apply['a0](%0: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 2}>, %1: core.i32) -> core.i32 row(| 'a0) convention(cps) {
+  tribute_control.func @apply['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) convention(cps) {
       tribute_control.tail_call_indirect %0, %1
   }
-  tribute_control.func @countdown['a0, body 'a1](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {
-      %1 = tribute_control.lambda(%2: core.i32) -> core.i32 row(| 'a1) convention(cps) captures [] {
+  tribute_control.func @countdown['a0, local 'a1](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {
+      %1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) convention(cps) captures [] {
           %3 = arith.const {value = 0} : core.i32
           %4 = tribute_control.call %2, %3 {callee = @"std::Int::=="} : core.i1
           %5 = arith.const {value = true} : core.i1
@@ -73,7 +75,8 @@ core.module @test {
           }
           tribute_control.return %7
       }
-      %10 = tribute_control.call_indirect %1, %0 : core.i32
-      tribute_control.return %10
+      %10 = tribute_control.instantiate %1 {row_args = [{tail = 0}]} : !t0
+      %11 = tribute_control.call_indirect %10, %0 : core.i32
+      tribute_control.return %11
   }
 }

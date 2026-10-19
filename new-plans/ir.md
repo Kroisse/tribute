@@ -662,7 +662,7 @@ binder의 종류를 나타내는 문자열이다.
 | `param` | 정의의 scheme이 양화한 row 변수 |
 | `ability_arg` | scheme이 양화했고 signature나 본문의 ability 인자 안에 나타나는 row 변수 |
 | `local` | 값이 람다인 `let`의 지역 scheme이 양화한 row 변수. 그 람다의 type이 적는 변수이며 람다가 [소유](#지역-람다의-양화와-인스턴스화)한다 |
-| `body` | 어느 scheme도 양화하지 않은 row 변수, 또는 값이 람다가 아닌 `let`의 지역 scheme이 양화한 row 변수 |
+| `body` | 어느 scheme도 양화하지 않은 row 변수, 또는 지역 scheme이 양화했지만 [양화하는 람다가 없는](#지역-람다의-양화와-인스턴스화) row 변수 |
 
 양화된 binder(`param`, `ability_arg`)가 scheme의 binder 순서로 먼저 오며, 그 위치가
 row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 뒤에 온다. 속성이 없으면
@@ -711,6 +711,13 @@ binder를 만들지는 않는다. 모든 `local` binder는 정확히 한 람다�
 본문 안에 있는 사용도 그 자리의 `instantiate`이며, row 인자의 tail은 바깥 람다가
 소유한 binder를 가리킬 수 있다. Binder 번호는 정의 하나에서 평평하므로 scope가
 중첩되지 않는다.
+
+Frontend가 사용처마다 그 사용의 type으로 따로 만든 람다는 row를 양화하지 않는다.
+그 람다의 type에는 인스턴스화된 row만 있으므로 header와 `instantiate`가 없고, 지역
+scheme이 양화한 변수는 `body`다. 쓰이지 않는 람다도 양화할 사용이 없으므로 그
+변수는 `body`다. 다른 `let`의 값으로 람다를 다시 묶는
+별칭은 람다가 아닌 값이다. 별칭 자리에서 람다를 한 번 인스턴스화하며, 별칭의 지역
+scheme이 양화한 변수는 `body`다.
 
 #### Row 인자와 치환
 

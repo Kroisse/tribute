@@ -431,7 +431,7 @@ fn a_binder_is_named_by_its_position() {
 fn a_header_may_declare_only_unquantified_binders() {
     let input = r#"core.module @test {
   tribute_control.func @run[local 'a0, body 'a1]() -> core.i32 convention(direct) {
-    %f = tribute_control.lambda() -> core.i32 row(| 'a0) convention(cps) captures [] {
+    %f = tribute_control.lambda['a0]() -> core.i32 row(| 'a0) convention(cps) captures [] {
       %x = arith.const {value = 1} : core.i32
       tribute_control.return %x
     }
@@ -448,7 +448,7 @@ fn a_header_may_declare_only_unquantified_binders() {
         "{printed}"
     );
     assert!(
-        printed.contains("row(| 'a0) convention(cps) captures []"),
+        printed.contains("lambda['a0]() -> core.i32 row(| 'a0) convention(cps) captures []"),
         "{printed}"
     );
 }
@@ -493,7 +493,7 @@ const LOCALS: &str = r#"core.module @test {
   !step0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 0}>
   ability.decl {sym_name = "A"} {
   }
-  tribute_control.func @f['a0, local 'a1, local 'a2](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {
+  tribute_control.func @f['a0, local 'a1](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {
     %g = tribute_control.lambda['a1](%y: core.i32) -> core.i32 row(| 'a1) convention(direct) captures [] {
       tribute_control.return %y
     }
@@ -551,8 +551,8 @@ fn instantiate_checks_its_lambda_arguments_and_result() {
         "instantiate passes 2 row arguments for 1 quantified binders",
     );
     assert_rejects(
-        &locals("{tail = 3}", "!step0"),
-        "row tail 3 names no row binder in scope",
+        &locals("{tail = 2}", "!step0"),
+        "row tail 2 names no row binder in scope",
     );
     assert_rejects(
         &locals("{tail = 0}", "!step0").replace("lambda['a1]", "lambda"),
@@ -569,6 +569,11 @@ fn instantiate_checks_its_lambda_arguments_and_result() {
 
 #[test]
 fn a_lambda_quantifies_local_binders_it_alone_owns() {
+    assert_rejects(
+        &locals("{tail = 0}", "!step0")
+            .replace("@f['a0, local 'a1]", "@f['a0, local 'a1, local 'a2]"),
+        "local binder 2 is quantified by no lambda",
+    );
     assert_rejects(
         &locals("{tail = 0}", "!step0").replace("lambda['a1]", "lambda['a0]"),
         "lambda quantifies binder 0, which is not local",

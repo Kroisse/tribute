@@ -4210,9 +4210,9 @@ fn check_type_rows(
 
 /// Every row tail inside a definition names one of its binders, and every
 /// row instance is declared. Module-level types have no binders.
-/// A lambda quantifies only `local` binders, no other lambda quantifies the
-/// same one, and every use of it is an `instantiate` whose result is the
-/// lambda's type with its row arguments substituted.
+/// Every `local` binder is quantified by exactly one lambda, and every use
+/// of such a lambda is an `instantiate` whose result is the lambda's type
+/// with its row arguments substituted.
 fn validate_local_quantification(
     ctx: &IrContext,
     module: Module,
@@ -4274,6 +4274,16 @@ fn validate_local_quantification(
                 validate_instantiate(ctx, op, errors);
             }
         });
+        for (binder, kind) in (0u32..).zip(&binders) {
+            if *kind == RowBinder::Local && !owners.contains(&binder) {
+                push_op_error(
+                    ctx,
+                    func,
+                    errors,
+                    format!("local binder {binder} is quantified by no lambda"),
+                );
+            }
+        }
     }
 }
 

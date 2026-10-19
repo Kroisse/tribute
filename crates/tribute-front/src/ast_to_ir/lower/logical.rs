@@ -59,6 +59,8 @@ struct Declarations<'db> {
     local_callables: local_callables::Plan<'db>,
     /// The plan of each function, by its declaration, until it is lowered.
     function_local_callables: HashMap<crate::ast::NodeId, local_callables::Plan<'db>>,
+    /// The uses of the let-bound lambdas of the function being lowered.
+    local_uses: Vec<crate::monomorphize::LocalInstantiation<'db>>,
 }
 
 /// Fully typed semantic inputs for one source ability-operation call.
@@ -326,8 +328,8 @@ fn lower_expr_for_callable_parameter<'db>(
     match &*expr.kind {
         ExprKind::Var(reference) => {
             if let ResolvedRef::Local { id, .. } = reference.resolved {
-                if let Some(value) = local_callables::lookup(builder.ctx, expr.id, declarations) {
-                    return Some(value);
+                if local_callables::lookup(builder.ctx, expr.id, declarations).is_some() {
+                    return lower_local_reference(builder, expr.id, id, declarations);
                 }
                 if let Some(value) = builder.ctx.lookup(id)
                     && let trunk_ir::refs::ValueDef::OpResult(producer, _) =
@@ -456,6 +458,7 @@ pub(super) fn lower_module<'db>(
         function_instances,
         local_callables: local_callables::Plan::default(),
         function_local_callables: HashMap::default(),
+        local_uses: Vec::new(),
     };
     prescan_row_binders(&mut ctx, &ast.entries, &declarations);
     let row_effects = row_effects(&ctx, &ast.entries, &declarations);
@@ -547,6 +550,20 @@ fn instance_operations<'db>(
     operations
 }
 
+/// Each use of a let-bound lambda in `function`.
+fn local_instantiations<'db>(
+    db: &'db dyn salsa::Database,
+    function: &FuncDecl<TypedRef<'db>>,
+    declarations: &Declarations<'db>,
+) -> Vec<crate::monomorphize::LocalInstantiation<'db>> {
+    crate::monomorphize::local_instantiations(
+        db,
+        function,
+        |node| declarations.local_instances.get(node),
+        |node| declarations.lambda_signatures.get(node),
+    )
+}
+
 /// Number the row variables of each function definition.
 fn prescan_row_binders<'db>(
     ctx: &mut IrLoweringCtx<'db>,
@@ -561,26 +578,24 @@ fn prescan_row_binders<'db>(
         let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
             continue;
         };
-        let quantified = scheme.effect_params(ctx.db);
-        let local_copies: Vec<_> = ctx
-            .row_classes_of(&name)
-            .iter()
-            .map(|(variable, _)| *variable)
-            .filter(|variable| !quantified.contains(variable))
-            .collect();
+        // A let-bound lambda, and each copy of it, quantifies the rows its
+        // own type spells.
+        let mut local = Vec::new();
+        for (variable, _) in local_instantiations(ctx.db, function, declarations)
+            .into_iter()
+            .flat_map(|use_| use_.rows)
+        {
+            if !local.contains(&variable) {
+                local.push(variable);
+            }
+        }
         let body = crate::ast_to_ir::row_binders::BodyTypes {
             node_types: ctx.node_types(),
             handler_operations: &declarations.handler_operations,
             perform_operations: &declarations.perform_operations,
-            local_instances: &declarations.local_instances,
         };
-        let binders = crate::ast_to_ir::row_binders::of_definition(
-            ctx.db,
-            scheme,
-            function,
-            &body,
-            &local_copies,
-        );
+        let binders =
+            crate::ast_to_ir::row_binders::of_definition(ctx.db, scheme, function, &body, &local);
         ctx.register_row_binders(name, binders);
     }
 }
@@ -743,10 +758,10 @@ fn plan_local_callables<'db>(
             declarations,
             scheme.type_params(ctx.db).len(),
         );
+        ctx.leave_definition(outer);
         declarations
             .function_local_callables
             .insert(function.id, plan);
-        ctx.leave_definition(outer);
     }
 }
 
@@ -1303,6 +1318,7 @@ fn lower_function<'db>(
                 );
             }
         }
+        declarations.local_uses = local_instantiations(scope.db, &function, declarations);
         declarations.local_callables = declarations
             .function_local_callables
             .remove(&function.id)
@@ -1651,8 +1667,7 @@ fn lower_expr<'db>(
         }
         ExprKind::Var(reference) => match reference.resolved {
             ResolvedRef::Local { id, .. } => Some(
-                local_callables::lookup(builder.ctx, expr.id, declarations)
-                    .or_else(|| builder.ctx.lookup(id))
+                lower_local_reference(builder, expr.id, id, declarations)
                     .unwrap_or_else(|| panic!("missing logical binding for local {id:?}")),
             ),
             ResolvedRef::Function { id } => {
@@ -2324,6 +2339,85 @@ fn emit_bool(builder: &mut IrBuilder<'_, '_>, location: Location, value: bool) -
     op.result(builder.ir)
 }
 
+/// Declare on the lambda `binding` binds the local binders its uses
+/// instantiate.
+fn quantify_local_rows<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    binding: crate::ast::NodeId,
+    lambda: ValueRef,
+    declarations: &Declarations<'db>,
+) {
+    let Some(use_) = declarations
+        .local_uses
+        .iter()
+        .find(|use_| use_.binding == binding && !use_.rows.is_empty())
+    else {
+        return;
+    };
+    let trunk_ir::refs::ValueDef::OpResult(op, _) = builder.ir.value_def(lambda) else {
+        return;
+    };
+    let binders: Vec<_> = use_
+        .rows
+        .iter()
+        .map(|(variable, _)| {
+            let tail = builder
+                .ctx
+                .ability_row(AbilityRow::open(builder.ctx.db, *variable))
+                .tail
+                .expect("an open row has a tail");
+            Attribute::Int(i128::from(tail))
+        })
+        .collect();
+    builder.ir.op_attrs_mut(op).insert(
+        tribute_control::QUANTIFIED_ROWS_ATTR,
+        Attribute::List(binders),
+    );
+}
+
+/// The value the local reference `node` reads: a lambda that quantifies
+/// rows is instantiated with the rows this use passes.
+fn lower_local_reference<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    node: crate::ast::NodeId,
+    local: crate::ast::LocalId,
+    declarations: &Declarations<'db>,
+) -> Option<ValueRef> {
+    let value = local_callables::lookup(builder.ctx, node, declarations)
+        .or_else(|| builder.ctx.lookup(local))?;
+    let trunk_ir::refs::ValueDef::OpResult(lambda, _) = builder.ir.value_def(value) else {
+        return Some(value);
+    };
+    let quantified = tribute_control::quantified_rows(builder.ir, lambda)
+        .expect("a lowered lambda has well-formed quantified rows");
+    if quantified.is_empty() || !tribute_control::Lambda::matches(builder.ir, lambda) {
+        return Some(value);
+    }
+    let use_ = declarations
+        .local_uses
+        .iter()
+        .find(|use_| use_.site == node)
+        .expect("typeck records an instance for every use of a binding or for none");
+    let rows: Vec<_> = use_
+        .rows
+        .iter()
+        .map(|(_, row)| builder.ctx.ability_row(*row))
+        .collect();
+    let ty = tribute_control::substitute_rows(
+        builder.ir,
+        builder.ir.value_ty(value),
+        tribute_control::RowArgs::Binders(&quantified, &rows),
+    )
+    .expect("instantiation substitutes only the lambda's binders");
+    let location = builder.location(node);
+    let instantiate = tribute_control::Instantiate::operands(value)
+        .row_args(rows)
+        .results(ty)
+        .build(builder.ir, location);
+    builder.ir.push_op(builder.block, instantiate.op_ref());
+    Some(instantiate.result(builder.ir))
+}
+
 fn lower_statement<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     statement: Stmt<TypedRef<'db>>,
@@ -2332,7 +2426,14 @@ fn lower_statement<'db>(
     match statement {
         Stmt::Let { pattern, value, .. } => {
             let lowered = local_callables::materialize(builder, &pattern, &value, declarations)
-                .or_else(|| lower_expr(builder, value, declarations));
+                .or_else(|| {
+                    let lambda = matches!(&*value.kind, ExprKind::Lambda { .. });
+                    let lowered = lower_expr(builder, value, declarations)?;
+                    if lambda {
+                        quantify_local_rows(builder, pattern.id, lowered, declarations);
+                    }
+                    Some(lowered)
+                });
             if let Some(value) = lowered {
                 bind_pattern(builder, &pattern, value);
             }
@@ -2560,8 +2661,7 @@ fn lower_call<'db>(
     let callable_value = indirect_callee.or_else(|| match &*callee.kind {
         ExprKind::Var(reference) => match reference.resolved {
             ResolvedRef::Local { id, .. } => {
-                local_callables::lookup(builder.ctx, callee.id, declarations)
-                    .or_else(|| builder.ctx.lookup(id))
+                lower_local_reference(builder, callee.id, id, declarations)
             }
             _ => None,
         },
@@ -2671,8 +2771,7 @@ fn lower_call<'db>(
                 )
             }
             ResolvedRef::Local { id, .. } => {
-                let callable = local_callables::lookup(builder.ctx, callee.id, declarations)
-                    .or_else(|| builder.ctx.lookup(id))
+                let callable = callable_value
                     .unwrap_or_else(|| panic!("missing logical callable binding for local {id:?}"));
                 let call = indirect_call(builder, location, callable, values, position);
                 finish_call(
