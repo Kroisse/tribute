@@ -57,7 +57,9 @@ use trunk_ir::dialect::clif;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
 use trunk_ir::rewrite::helpers::erase_op;
-use trunk_ir::{BlockArgData, BlockData, BlockRef, OpRef, RegionData, RegionRef, TypeRef, ValueRef};
+use trunk_ir::{
+    BlockArgData, BlockData, BlockRef, OpRef, RegionData, RegionRef, TypeRef, ValueRef,
+};
 
 use tribute_ir::dialect::tribute_rt;
 
@@ -115,8 +117,8 @@ fn outline_moving_releases(ctx: &mut IrContext, module_block: BlockRef) {
     let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
     let mut functions = HashMap::<(u64, Vec<i32>, usize), SymbolPath>::default();
     for op in releases {
-        let release = tribute_rt::ReleaseMoving::from_op(ctx, op)
-            .expect("collected moving release");
+        let release =
+            tribute_rt::ReleaseMoving::from_op(ctx, op).expect("collected moving release");
         let alloc_size = release.alloc_size(ctx);
         let release_offsets = release.release_offsets(ctx).collect::<Vec<_>>();
         let operands = std::iter::once(release.ptr(ctx))
@@ -126,11 +128,10 @@ fn outline_moving_releases(ctx: &mut IrContext, module_block: BlockRef) {
         let callee = match functions.get(&key) {
             Some(callee) => callee.clone(),
             None => {
-                let callee = SymbolPath::new([format!(
-                    "{RELEASE_MOVING_FN_PREFIX}{}",
-                    functions.len()
-                )
-                .as_str()]);
+                let callee =
+                    SymbolPath::new([
+                        format!("{RELEASE_MOVING_FN_PREFIX}{}", functions.len()).as_str()
+                    ]);
                 let location = ctx.op(op).location;
                 let function =
                     moving_release_function(ctx, &callee, &key, location, ptr_ty, nil_ty);
