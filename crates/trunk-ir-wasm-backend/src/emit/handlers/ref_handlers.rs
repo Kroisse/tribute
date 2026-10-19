@@ -138,7 +138,9 @@ mod tests {
     fn ref_cast_uses_non_null_instruction_for_non_null_result() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
-        let anyref_ty = TypeDataBuilder::new("wasm.anyref").intern(&mut ctx);
+        let anyref_ty = wasm_dialect::Anyref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         let bytes_layout = ctx.string_attr(crate::gc_types::BYTES_LAYOUT);
         let bytes_ty = TypeDataBuilder::new("test.bytes")
             .attr(trunk_ir::types::LAYOUT_ATTR, bytes_layout)

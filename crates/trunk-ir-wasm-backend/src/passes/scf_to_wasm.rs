@@ -1477,7 +1477,7 @@ mod tests {
 
     /// Convert `core.array` to the abstract `wasm.arrayref` type.
     fn array_to_arrayref_converter(ctx: &mut IrContext) -> TypeConverter {
-        let arrayref_ty = trunk_ir::types::TypeDataBuilder::new("wasm.arrayref").intern(ctx);
+        let arrayref_ty = wasm_dialect::Arrayref::params().intern(ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.get_type(ty)

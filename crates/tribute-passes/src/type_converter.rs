@@ -249,7 +249,6 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::pass::Pass;
     use trunk_ir::refs::ValueRef;
-    use trunk_ir::types::TypeDataBuilder;
     use trunk_ir::types::{Attribute, Location};
     use trunk_ir::walk::{WalkAction, walk_op};
 
@@ -395,17 +394,18 @@ mod tests {
     }
 
     fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {
-        let name_attr = ctx.string_attr("String");
-        TypeDataBuilder::new(tribute_ir::dialect::adt::Typeref::NAME)
-            .attr("name", name_attr)
+        tribute_ir::dialect::adt::Typeref::params()
+            .name("String")
             .intern(ctx)
+            .as_type_ref()
     }
 
     fn struct_type(ctx: &mut IrContext) -> TypeRef {
-        let name_attr = ctx.string_attr("Payload");
-        TypeDataBuilder::new("adt.struct")
-            .attr("name", name_attr)
+        tribute_ir::dialect::adt::Struct::params([])
+            .name("Payload")
             .intern(ctx)
+            .expect("a struct without fields is valid")
+            .as_type_ref()
     }
 
     fn dynamic_value(ctx: &mut IrContext, location: Location) -> ValueRef {

@@ -99,7 +99,7 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
 fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
     if data.name == tribute_ir::dialect::adt::Typeref::NAME {
-        return TypeDataBuilder::new("wasm.structref").intern(ctx);
+        return wasm_dialect::Structref::params().intern(ctx).as_type_ref();
     }
     ty
 }
@@ -987,7 +987,9 @@ mod tests {
         assert_ne!(empty, cons);
         // The recursive tail is the abstract struct supertype.
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        let structref = TypeDataBuilder::new("wasm.structref").intern(&mut ctx);
+        let structref = wasm_dialect::Structref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         assert_eq!(
             wasm_gc_dialect::Struct::from_type_ref(&ctx, cons)
                 .expect("structural variant")

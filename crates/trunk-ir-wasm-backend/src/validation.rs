@@ -549,7 +549,9 @@ mod tests {
         let alias = |ctx: &IrContext, name: &str| ctx.type_alias_by_text(name).unwrap();
         let evidence = alias(&ctx, "Evidence");
         let plain = alias(&ctx, "Plain");
-        let arrayref = trunk_ir::types::TypeDataBuilder::new("wasm.arrayref").intern(&mut ctx);
+        let arrayref = wasm_dialect::Arrayref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
 
         assert!(is_wasm_physical_result_assignable(&ctx, arrayref, plain));
         assert!(!is_wasm_physical_result_assignable(

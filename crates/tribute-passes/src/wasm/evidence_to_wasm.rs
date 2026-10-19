@@ -1357,7 +1357,7 @@ fn intern_i32(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a `wasm.anyref` type.
 fn intern_anyref(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("wasm.anyref").intern(ctx)
+    wasm_dialect::Anyref::params().intern(ctx).as_type_ref()
 }
 
 fn empty_block(ctx: &mut IrContext, location: Location) -> BlockRef {

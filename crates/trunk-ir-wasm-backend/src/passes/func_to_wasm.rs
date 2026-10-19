@@ -1043,7 +1043,9 @@ mod tests {
 }"#,
         );
 
-        let anyref_ty = TypeDataBuilder::new("wasm.anyref").intern(&mut ctx);
+        let anyref_ty = wasm_dialect::Anyref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
@@ -1096,7 +1098,9 @@ mod tests {
 }"#,
         );
 
-        let anyref_ty = TypeDataBuilder::new("wasm.anyref").intern(&mut ctx);
+        let anyref_ty = wasm_dialect::Anyref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
@@ -1198,7 +1202,9 @@ mod tests {
 }"#,
         );
 
-        let structref_ty = TypeDataBuilder::new("wasm.structref").intern(&mut ctx);
+        let structref_ty = wasm_dialect::Structref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.get_type(ty)

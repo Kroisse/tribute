@@ -678,7 +678,9 @@ mod tests {
     fn handler_binding_round_trips_through_its_attribute() {
         let mut ctx = IrContext::new();
         let state = trunk_ir::SymbolPath::new(["State"]);
-        let never = trunk_ir::types::TypeDataBuilder::new("core.never").intern(&mut ctx);
+        let never = trunk_ir::dialect::core::Never::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         let i32_ty = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let op_name = ctx.intern_str("get");
         for (kind, result, resumptive) in [

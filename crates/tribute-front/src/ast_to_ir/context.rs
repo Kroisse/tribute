@@ -6,7 +6,6 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::{Deref, DerefMut};
-use trunk_ir::ops::DialectType;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_control::{Row, RowBinder, RowUnion};
@@ -713,10 +712,9 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Continuation { arg, result, .. } => {
                 let arg = self.convert_logical_type(ir, *arg);
                 let result = self.convert_logical_type(ir, *result);
-                TypeDataBuilder::new("tribute_control.resume_token")
-                    .param(arg)
-                    .param(result)
+                tribute_ir::dialect::tribute_control::ResumeToken::params(arg, result)
                     .intern(ir)
+                    .as_type_ref()
             }
         }
     }
@@ -1043,9 +1041,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// Create an `adt.typeref` type — a reference to a named type.
     pub fn adt_typeref(&self, ir: &mut IrContext, name: &Symbol) -> TypeRef {
         let name = ir.intern_symbol_text(name);
-        TypeDataBuilder::new(tribute_ir::dialect::adt::Typeref::NAME)
-            .attr("name", name)
-            .intern(ir)
+        adt::Typeref::params().name(name).intern(ir).as_type_ref()
     }
 }
 

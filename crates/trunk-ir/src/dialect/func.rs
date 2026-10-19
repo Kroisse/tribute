@@ -935,7 +935,9 @@ mod tests {
     fn inserting_a_parameter_moves_parameter_attributes_with_their_parameters() {
         let mut ctx = crate::IrContext::new();
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        let ptr_ty = TypeDataBuilder::new("core.ptr").intern(&mut ctx);
+        let ptr_ty = crate::dialect::core::Ptr::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         let marked = AttributeMap::from_entries(
             &mut ctx,
             [("k", Attribute::SymbolRef(SymbolPath::new(["v"])))],
