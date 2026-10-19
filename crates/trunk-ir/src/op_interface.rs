@@ -278,26 +278,12 @@ impl CallableExitOps {
 ///
 /// The callee is the one symbol reference of the operation that transfers
 /// control to its target. Any other reference takes the target's address.
+///
+/// Queries assume the operation satisfies its schema, so an implementation
+/// reads its callee through the wrapper's generated accessor.
 #[op_interface]
 pub trait CallLike: DialectOp {
-    /// `None` for a malformed call; read fallibly since unverified IR may be
-    /// queried.
-    fn direct_callee(self, ctx: &IrContext) -> Option<SymbolPath> {
-        ctx.op_attrs(self.op_ref())
-            .get_symbol_ref("callee")
-            .cloned()
-    }
-}
-
-/// Static queries for [`CallLike`].
-pub struct CallLikeOps;
-
-impl CallLikeOps {
-    /// The callee of a direct call, or `None` if `op` is not one or is
-    /// malformed.
-    pub fn callee(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
-        DynCallLike::get(ctx, op).and_then(|call| call.direct_callee(ctx))
-    }
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath;
 }
 
 /// Semantic accessors for indirect calls.

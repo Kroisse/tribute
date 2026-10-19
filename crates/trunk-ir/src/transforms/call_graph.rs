@@ -1,7 +1,7 @@
 //! Call graph analysis for TrunkIR.
 //!
 //! Builds a directed graph of function call relationships from every symbol
-//! reference in a function body. A [`CallLikeOps`] callee is a call; any
+//! reference in a function body. A [`CallLike`](crate::op_interface::CallLike) callee is a call; any
 //! other reference takes its target's address. Provides Tarjan's SCC
 //! for detecting recursive functions (direct self-recursion and mutual
 //! recursion), which is a prerequisite for inlining (`inline.rs`) and other
@@ -18,7 +18,7 @@ use std::ops::ControlFlow;
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
 use crate::context::IrContext;
 use crate::dialect::func;
-use crate::op_interface::CallLikeOps;
+use crate::op_interface::DynCallLike;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, RegionRef};
 use crate::rewrite::Module;
@@ -121,9 +121,9 @@ fn collect_calls(
         if is_function(ctx, op) {
             return ControlFlow::Continue(WalkAction::Skip);
         }
-        let mut callee = CallLikeOps::callee(ctx, op);
+        let mut callee = DynCallLike::get(ctx, op).map(|call| call.direct_callee(ctx));
         ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
-            let is_callee = callee.as_ref() == Some(reference);
+            let is_callee = callee == Some(reference);
             if is_callee {
                 callee = None;
             }

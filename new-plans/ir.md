@@ -106,6 +106,10 @@ trait이 interface의 이름이고, typed 구현과 dynamic query가 따로 갈�
 Consumer는 operation 이름으로 registry에서 구현을 찾고, 찾은 handle은 그
 operation에 묶이므로 다른 operation에 적용할 수 없다. 한 operation은 interface마다
 구현을 하나만 등록할 수 있으며, 중복 등록은 registry를 처음 사용할 때 오류다.
+Interface는 query가 schema를 통과한 operation에만 오는지를 계약으로 정한다.
+Validator처럼 검증되지 않은 IR에도 묻는 interface는 불완전한 operation에 대한
+실패를 결과로 돌려준다. Schema를 통과한 IR에서만 묻는 interface(`CallLike`)는
+그 전제를 두고 operation의 선언된 entity를 그대로 읽는다.
 Interface는 열려 있다. 어느 crate든 새 interface를 정의할 수 있고, 다른 crate가
 정의한 operation에도 구현을 붙일 수 있다. Verifier와 custom assembly처럼 core
 infrastructure가 operation 정의를 통해 찾는 hook은 interface가 아니라 operation

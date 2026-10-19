@@ -843,8 +843,16 @@ impl Func {
     }
 }
 
-impl CallLike for Call {}
-impl CallLike for TailCall {}
+impl CallLike for Call {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
+}
+impl CallLike for TailCall {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
+}
 
 // A source `become` ends its callable: the callee's result is the caller's.
 impl CallableExit for TailCall {}

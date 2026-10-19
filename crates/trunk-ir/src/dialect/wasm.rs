@@ -6,7 +6,7 @@ use crate::dialect::core::I32;
 use crate::op_flag::IsolatedFromAbove;
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
-use crate::{Attribute, AttributeMap, IrContext, TypeDataBuilder, TypeRef};
+use crate::{Attribute, AttributeMap, IrContext, SymbolPath, TypeDataBuilder, TypeRef};
 
 #[trunk_ir::dialect]
 mod wasm {
@@ -741,8 +741,16 @@ impl IndirectCallLike for ReturnCallIndirect {
     }
 }
 
-impl CallLike for Call {}
-impl CallLike for ReturnCall {}
+impl CallLike for Call {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
+}
+impl CallLike for ReturnCall {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
+}
 
 /// Attach an exact callable contract to a `wasm` indirect transfer.
 ///

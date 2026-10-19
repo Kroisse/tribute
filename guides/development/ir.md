@@ -206,8 +206,10 @@ assignability rule. The converter-free `ReconcileUnrealizedCasts` pass then fold
 identities and cast chains, and a cast left after that is rejected by the
 target emission boundary.
 Typed accessors do not check the schema; for an optional region or result,
-inspect the operation before calling the accessor. Interface queries that may
-see unverified IR read attributes fallibly instead.
+inspect the operation before calling the accessor. An interface queried on
+unverified IR, such as `Branch` for the validator, reads attributes fallibly
+and reports failure in its result; an interface queried only on IR that
+satisfies its schema, such as `CallLike`, reads through the accessors.
 
 ## Operation Interfaces
 
@@ -417,8 +419,20 @@ root for diagnostics only; do not look a written reference up by it.
 A direct call operation implements the `CallLike`
 [operation interface](#operation-interfaces), declared with
 `#[implements(CallLike)]`, so analyses can tell its callee
-from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;
-every other reference an operation holds takes its target's address, which
+from an address reference. Each implementation names its callee through the
+wrapper's accessor:
+
+```rust
+impl CallLike for Call {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
+}
+
+let callee = DynCallLike::get(ctx, op).map(|call| call.direct_callee(ctx));
+```
+
+Every other reference an operation holds takes its target's address, which
 the call graph records as an escape.
 
 Per-parameter attributes (`param_attrs`, see
