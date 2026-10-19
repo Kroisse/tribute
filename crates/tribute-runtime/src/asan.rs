@@ -522,6 +522,25 @@ pub unsafe fn alloc(size: usize) -> *mut u8 {
     payload
 }
 
+/// Whether the live block at `payload` holds exactly `size` bytes.
+///
+/// The granule after the padded payload must start the right red zone, and
+/// the last payload granule must hold `size % 8` valid bytes, or all 8; only
+/// one size satisfies both.
+fn payload_size_matches(payload: usize, size: usize) -> bool {
+    let Some(padded) = size.checked_next_multiple_of(GRANULE) else {
+        return false;
+    };
+    let Some(padded_end) = payload.checked_add(padded) else {
+        return false;
+    };
+    let shadow_at = |addr| shadow(addr, 1).map(|byte| byte[0].load(Ordering::Relaxed));
+    let last = (size % GRANULE) as u8;
+    padded != 0
+        && shadow_at(padded_end - GRANULE) == Some(last)
+        && shadow_at(padded_end) == Some(SHADOW_REDZONE)
+}
+
 /// ASan-instrumented deallocation.
 ///
 /// Checks red zone integrity, poisons the entire allocation, and places it
@@ -543,6 +562,12 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
     if let Err(error) = mark_freed(ptr as usize) {
         report(format_args!(
             "==ERROR: TributeASan: {error} on address {:#x}\n",
+            ptr as usize
+        ));
+    }
+    if !payload_size_matches(ptr as usize, size) {
+        report(format_args!(
+            "==ERROR: TributeASan: dealloc size {size} does not match the block at {:#x}\n",
             ptr as usize
         ));
     }
@@ -633,11 +658,11 @@ mod tests {
         ASAN_ENABLED.store(false, Ordering::SeqCst);
     }
 
-    /// Free enough blocks to evict every block the quarantine holds now.
+    /// Evict every block the quarantine holds now, allocating nothing after
+    /// the first eviction, so no evicted memory is handed out again.
     unsafe fn flush_quarantine() {
-        for _ in 0..(QUARANTINE_MAX / 1024 + 2) {
-            unsafe { dealloc(alloc(1024), 1024) };
-        }
+        let size = QUARANTINE_MAX - 2 * REDZONE_SIZE;
+        unsafe { dealloc(alloc(size), size) };
     }
 
     #[test]
@@ -950,6 +975,24 @@ mod tests {
     #[test]
     fn test_asan_a_refused_reservation_yields_its_errno() {
         assert!(reserve_shadow(usize::MAX & !0xFFFF).is_err_and(|errno| errno != 0));
+    }
+
+    #[test]
+    fn test_asan_matches_the_dealloc_size_to_the_block() {
+        let _lock = enable();
+
+        unsafe {
+            for size in [8, 13, 16] {
+                let ptr = alloc(size) as usize;
+                assert!(payload_size_matches(ptr, size));
+                for wrong in [size - 1, size + 1, size + 8, size - 8, 0, usize::MAX] {
+                    assert!(!payload_size_matches(ptr, wrong), "{size} as {wrong}");
+                }
+                dealloc(ptr as *mut u8, size);
+            }
+        }
+
+        disable();
     }
 
     #[test]

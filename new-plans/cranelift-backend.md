@@ -412,8 +412,9 @@ Runtime은 address space의 8 byte granule마다 shadow byte 하나를 둔다. �
   받아들인다. 이 검사는 block의 어떤 byte보다 먼저 읽으며, 상태는 atomic
   compare-and-swap으로 할당에서 해제로 바꾼다. 따라서 한 block을 동시에 두 번
   해제해도 하나만 통과한다. 이미 해제 상태이면 double free로, 그 밖의 값이면
-  할당되지 않은 memory의 해제로 보고한다. 통과한 block은 전체를 해제로 표시하고
-  quarantine에 넣는다.
+  할당되지 않은 memory의 해제로 보고한다. 해제에 넘긴 크기는 payload의 마지막
+  granule과 그 뒤 red zone의 shadow가 가리키는 크기와 같아야 하며, 다르면 block을
+  건드리기 전에 보고한다. 통과한 block은 전체를 해제로 표시하고 quarantine에 넣는다.
 - **Quarantine에서 내보냄:** Quarantine이 한도를 넘어 block을 underlying
   allocator에 돌려줄 때는, 돌려주기 전에 block 전체의 shadow를 0으로 되돌린다.
   돌려받은 memory는 runtime이 직접 잡는 buffer가 될 수 있고, 생성된 code가 이를
