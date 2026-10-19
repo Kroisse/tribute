@@ -547,9 +547,11 @@ fn test_lambda_identity() {
             &ctx,
             ctx.value_ty(boxed)
         ));
-        let cast = defining_op(&ctx, boxed);
-        assert!(core::UnrealizedConversionCast::matches(&ctx, cast));
-        let input = ctx.op_operands(cast);
+        let box_int = defining_op(&ctx, boxed);
+        assert!(tribute_ir::dialect::tribute_rt::BoxInt::matches(
+            &ctx, box_int
+        ));
+        let input = ctx.op_operands(box_int);
         assert_eq!(input.len(), 1);
         assert!(core::I32::matches(&ctx, ctx.value_ty(input[0])));
         let argument = arith::Const::from_op(&ctx, defining_op(&ctx, input[0])).unwrap();

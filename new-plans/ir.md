@@ -234,15 +234,21 @@ Target 타입 변환을 여러 단계로 나누어 수행할 때도 같은 규�
 타입이 그 operation의 선언적 제약을 어기면, 그 use 앞에 원래 타입으로 되돌리는
 cast를 둔다. 바뀐 타입을 그대로 받는 operation은 값을 직접 쓴다.
 
-Cast 처리는 materialization과 reconciliation으로 나뉜다. Target 타입 변환 전의
-materialization은 boxing처럼 실제 operation이 필요한 cast만 물리화하고, 타입만
-바꾸는 cast는 남긴다. Target 타입 변환은 op 결과, block 인자, cast 결과를
-포함한 모든 값의 타입을 변환한다. Target materialization은 boxing, unboxing,
-reference cast처럼 실제 representation을 바꾸는 operation만 만들며, 타입이 다른
-값을 그대로 넘기지 않는다. 표현이 같은 두 타입은 target 타입 변환 뒤 같은
+값의 타입을 지우거나 복원하는 변환은 그 변환을 만드는 pass가 representation
+변경 여부를 결정한다. Scalar와 `tribute_rt.anyref` 사이처럼 표현이 바뀌는
+변환이면 그 pass가 그 자리에 boxing이나 unboxing operation을 직접 만들고, 타입만
+바꾸는 변환에만 `core.unrealized_conversion_cast`를 둔다. 따라서 target 타입
+변환 전에 다른 pass가 만든 cast를 모아 물리화하는 단계는 없다. Boxing 직후의
+unboxing처럼 제자리로 돌아오는 왕복은 canonicalization이 접는다.
+
+Cast 처리는 target materialization과 reconciliation으로 나뉜다. Target 타입
+변환은 op 결과, block 인자, cast 결과를 포함한 모든 값의 타입을 변환한다.
+Target materialization은 boxing, unboxing, reference cast처럼 실제
+representation을 바꾸는 operation만 만들며, 타입이 다른 값을 그대로 넘기지
+않는다. 표현이 같은 두 타입은 target 타입 변환 뒤 같은
 타입이 되므로 그 사이의 cast는 동일 타입 cast로 남는다.
 
-공용 materialization과 type converter는 subtype 관계를 다루지 않는다. WasmGC처럼
+Pass가 만드는 boxing·unboxing과 type converter는 subtype 관계를 다루지 않는다. WasmGC처럼
 서브타입 참조를 상위 타입 자리에 그대로 받는 target은 target 변환 단계에서
 backend의 물리적 할당 가능성 규칙에 따라 서브타입에서 상위 타입으로 가는 cast를
 지우고 source 값을 그대로 쓴다(upcast elision). 표현이 같다는 사실만으로는
@@ -1861,9 +1867,9 @@ target dialect lowering에 들어가기 전에 컴파일이 실패한다. 이 �
 
 #### Unrealized cast
 
-공유 converter로 알 수 있는 materialization(boxing 등)은 출구 전에 끝난다.
-출구에는 target type 변환을 기다리는 `core.unrealized_conversion_cast`가 남을 수
-있다. 이런 cast의 적법성은 target 타입에 따라 정해지므로 target type 변환이 결과
+Boxing과 unboxing은 변환을 만든 pass가 이미 만들었으므로, 출구에 남는
+`core.unrealized_conversion_cast`는 타입만 바꾸며 target type 변환을 기다린다.
+이런 cast의 적법성은 target 타입에 따라 정해지므로 target type 변환이 결과
 타입을 변환하고 필요한 representation 변경을 materialize한다. 그 끝에서 converter
 없는 `ReconcileUnrealizedCasts` pass가 cast를 닫으며, 그 뒤 남은 cast는 target emission
 경계가 거부한다.

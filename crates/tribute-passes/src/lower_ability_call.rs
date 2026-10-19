@@ -20,7 +20,7 @@
 
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, func};
+use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
@@ -138,13 +138,12 @@ impl RewritePattern for LowerCallPattern {
         // The target-independent dispatch ABI erases the operation result.
         // Restore its exact source type before replacing the typed call result;
         // later CPS continuations still consume that logical value directly.
-        let typed_result = core::UnrealizedConversionCast::operands(dispatch_op.result(ctx))
-            .results(*result_type)
-            .build(ctx, location);
-        rewriter.insert_op(typed_result.op_ref());
+        let typed_result =
+            tribute_rt::convert_value(ctx, location, dispatch_op.result(ctx), *result_type);
+        rewriter.insert_op(typed_result);
 
         // === 4. Erase ability.call, mapping its result to the typed dispatch result ===
-        rewriter.erase_op(vec![typed_result.result(ctx)]);
+        rewriter.erase_op(vec![ctx.op_result(typed_result, 0)]);
 
         true
     }
@@ -289,7 +288,7 @@ mod tests {
         assert!(!ir.contains("ability.call"), "{ir}");
         assert!(ir.contains("effect.dispatch_tail"), "{ir}");
         assert!(ir.contains("core.i32"), "{ir}");
-        assert!(ir.contains("core.unrealized_conversion_cast"), "{ir}");
+        assert!(ir.contains("tribute_rt.unbox_int"), "{ir}");
         let mut reparsed = IrContext::new();
         parse_test_module(&mut reparsed, &ir);
     }

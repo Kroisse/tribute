@@ -94,11 +94,9 @@ fn push_one_shot_resume(
         ctx.push_op(wrapper_block, recovered.op_ref());
         recovered.result(ctx)
     } else {
-        let recovered = core::UnrealizedConversionCast::operands(args[2])
-            .results(input_type)
-            .build(ctx, location);
-        ctx.push_op(wrapper_block, recovered.op_ref());
-        recovered.result(ctx)
+        let recovered = tribute_rt::convert_value(ctx, location, args[2], input_type);
+        ctx.push_op(wrapper_block, recovered);
+        ctx.op_result(recovered, 0)
     };
     let consumed = adt::StructGet::operands(state)
         .r#type(state_type)

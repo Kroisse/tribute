@@ -262,12 +262,9 @@ pub(crate) fn pack_payload(
     let dynamic_values = values
         .iter()
         .map(|&value| {
-            let cast = core::UnrealizedConversionCast::operands(value)
-                .results(anyref)
-                .build(ctx, location);
-            let result = cast.result(ctx);
-            rewriter.insert_op(cast.op_ref());
-            result
+            let cast = tribute_rt::convert_value(ctx, location, value, anyref);
+            rewriter.insert_op(cast);
+            ctx.op_result(cast, 0)
         })
         .collect::<Vec<_>>();
     let payload = adt::StructNew::operands(dynamic_values)

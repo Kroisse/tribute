@@ -1,12 +1,11 @@
-//! Materialization and reconciliation of `core.unrealized_conversion_cast`.
+//! Legalization and reconciliation of `core.unrealized_conversion_cast`.
 //!
 //! Dialect conversion leaves `unrealized_conversion_cast` placeholders where
-//! a value's type and the type its uses declare disagree. Three steps handle
-//! them, following MLIR's split between materialization and reconciliation:
+//! a value's type and the type its uses declare disagree. A pass that creates
+//! such a cast emits any representation change (such as boxing) itself, so a
+//! cast only retypes a value. Two steps then handle the casts, following
+//! MLIR's split between materialization and reconciliation:
 //!
-//! - [`materialize_unrealized_casts`] runs before target type conversion and
-//!   replaces only the casts whose conversion needs real operations (such as
-//!   boxing). Casts that only retype a value stay.
 //! - [`UnrealizedCastConversionPattern`] is the cast legalization pattern of a
 //!   target conversion. It converts each cast's result type and materializes
 //!   only conversions that need real operations; it never forwards a value of
@@ -25,40 +24,8 @@ use crate::dialect::core;
 use crate::ops::DialectOp;
 use crate::pass::{Pass, PassRunResult};
 use crate::refs::{BlockRef, OpRef, TypeRef, ValueDef, ValueRef};
-use crate::rewrite::{Module, PatternRewriter, RewritePattern, TypeConverter};
+use crate::rewrite::{Module, PatternRewriter, RewritePattern};
 use crate::walk::{WalkAction, walk_op};
-
-/// Replace the casts whose conversion needs real operations.
-///
-/// Runs before target type conversion. A cast is replaced only when its
-/// declared result type does not convert, its source differs from that type,
-/// and materialization emits operations. Other casts stay: they retype the
-/// value until the target conversion makes both sides agree. In particular,
-/// materializing toward a converted type would retype the uses before the
-/// target conversion, so such casts are left without calling the materializer.
-pub fn materialize_unrealized_casts(ctx: &mut IrContext, module: Module, tc: &TypeConverter) {
-    for op in collect_casts(ctx, module) {
-        let Some((block, input, declared)) = cast_parts(ctx, op) else {
-            continue;
-        };
-        let from = ctx.value_ty(input);
-        if from == declared || tc.convert_type_or_identity(ctx, declared) != declared {
-            continue;
-        }
-        let location = ctx.op(op).location;
-        match tc.materialize(ctx, location, input, from, declared) {
-            Some(mat) if !mat.ops.is_empty() => {
-                for mat_op in mat.ops {
-                    ctx.insert_op_before(block, op, mat_op);
-                }
-                replace_cast(ctx, op, mat.value);
-            }
-            // A no-op materialization still changes the static type; keep the
-            // cast until the target conversion unifies both sides.
-            _ => {}
-        }
-    }
-}
 
 /// Cast legalization pattern for a target type conversion.
 ///
@@ -246,6 +213,7 @@ mod tests {
     use crate::dialect::core;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
+    use crate::rewrite::TypeConverter;
     use crate::rewrite::type_converter::MaterializeResult;
 
     fn cast_count(ctx: &IrContext, module: Module) -> usize {
@@ -286,91 +254,6 @@ mod tests {
             Some(MaterializeResult { value, ops: vec![] })
         });
         tc
-    }
-
-    #[test]
-    fn materialize_replaces_only_casts_that_emit_operations() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @f(%x: core.i32) -> core.i32 {
-    %boxed = core.unrealized_conversion_cast %x : core.f64
-    %retyped = core.unrealized_conversion_cast %x : core.i64
-    %noop = core.unrealized_conversion_cast %x : core.i16
-    %same = core.unrealized_conversion_cast %x : core.i32
-    func.return %same
-  }
-}"#,
-        );
-        let tc = test_converter(&mut ctx);
-
-        materialize_unrealized_casts(&mut ctx, module, &tc);
-
-        // Only the boxing cast is materialized; the conversion-only, no-op,
-        // and identity casts are kept for later stages.
-        assert_eq!(cast_count(&ctx, module), 3);
-        let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("test.box"), "{printed}");
-    }
-
-    #[test]
-    fn materialize_keeps_casts_without_materialization() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @f(%x: core.i32) -> core.i64 {
-    %r = core.unrealized_conversion_cast %x : core.f32
-    func.return %x
-  }
-}"#,
-        );
-        let mut tc = TypeConverter::new();
-        tc.set_materializer(|_, _, _, _, _| None);
-
-        materialize_unrealized_casts(&mut ctx, module, &tc);
-
-        assert_eq!(cast_count(&ctx, module), 1);
-    }
-
-    #[test]
-    fn materialize_does_not_materialize_toward_a_converted_type() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @f(%x: core.i32) -> core.i64 {
-    %r = core.unrealized_conversion_cast %x : core.i64
-    func.return %r
-  }
-}"#,
-        );
-        // i64 converts to f64, and the materializer would emit a real op.
-        let i64_ty = core::I64::type_ref(&mut ctx);
-        let f64_ty = core::F64::type_ref(&mut ctx);
-        let mut tc = TypeConverter::new();
-        tc.add_conversion(move |_ctx, ty| (ty == i64_ty).then_some(f64_ty));
-        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
-        let counter = calls.clone();
-        tc.set_materializer(move |ctx, loc, value, _from, to| {
-            counter.set(counter.get() + 1);
-            let data = OperationDataBuilder::new(loc, "test.convert")
-                .operand(value)
-                .result(to)
-                .build(ctx);
-            let op = ctx.create_op(data);
-            Some(MaterializeResult {
-                value: ctx.op_result(op, 0),
-                ops: vec![op],
-            })
-        });
-        let before = print_module(&ctx, module.op());
-
-        materialize_unrealized_casts(&mut ctx, module, &tc);
-
-        assert_eq!(print_module(&ctx, module.op()), before, "the cast stays");
-        assert_eq!(calls.get(), 0, "no materialization op is created");
     }
 
     fn apply_cast_pattern(ctx: &mut IrContext, module: Module, tc: TypeConverter) {

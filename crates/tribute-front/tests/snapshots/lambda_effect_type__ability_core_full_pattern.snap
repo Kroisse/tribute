@@ -52,9 +52,9 @@ core.module @test {
       }
       %4 = arith.const {value = 0} : core.i32
       %5 = core.unrealized_conversion_cast %0 : tribute_control.func_sig<() -> tribute_rt.anyref, {ability_row = {instances = [@ability_2_5_State_11_bound_1_1_1], tail = 1}, tribute.calling_convention = 2}>
-      %6 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
+      %6 = tribute_rt.box_int %4 : tribute_rt.anyref
       %7 = tribute_control.call %5, %6 {callee = @run_state, row_args = [{tail = 1}]} : tribute_rt.anyref
-      %8 = core.unrealized_conversion_cast %7 : core.i32
+      %8 = tribute_rt.unbox_int %7 : core.i32
       tribute_control.return %8
   }
   ability.decl {sym_name = "ability_2_5_State_3_int"} {

@@ -203,9 +203,10 @@ declare. `PatternApplicator` does this for a staged conversion with
 operands only of operations the target declares illegal. Where it retypes a
 block argument or a replaced result that an operation the target has no rule
 for still uses, it casts back to the old type if the new one violates that
-operation's schema. Shared cleanup's `materialize_unrealized_casts`
-materializes only casts that need real operations and keeps such retyping
-casts. A target
+operation's schema. A pass that erases or recovers a value's type emits any
+representation change itself: `tribute_rt::convert_value` boxes or unboxes a
+scalar crossing `tribute_rt.anyref` and casts every other pair, so a cast
+before target conversion only retypes a value. A target
 conversion converts every value's type, including cast results through
 `UnrealizedCastConversionPattern`; its materializer builds only real
 representation changes and never forwards a value of another type. A target

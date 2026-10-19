@@ -42,9 +42,9 @@ core.module @test {
       }
       %2 = arith.const {value = 42} : core.i32
       %3 = core.unrealized_conversion_cast %0 : !t0
-      %4 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
+      %4 = tribute_rt.box_int %2 : tribute_rt.anyref
       %5 = tribute_control.call %3, %4 {callee = @with_state, row_args = [{tail = 0}]} : tribute_rt.anyref
-      %6 = core.unrealized_conversion_cast %5 : core.i32
+      %6 = tribute_rt.unbox_int %5 : core.i32
       tribute_control.return %6
   }
   ability.decl {sym_name = "ability_2_5_State_11_bound_1_1_1"} {
