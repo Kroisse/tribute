@@ -761,11 +761,9 @@ impl TerminalFunctions {
         let stored = if slot == answer {
             done_args[1]
         } else {
-            let erased = core::UnrealizedConversionCast::operands(done_args[1])
-                .results(slot)
-                .build(ctx, location);
-            ctx.push_op(done_entry, erased.op_ref());
-            erased.result(ctx)
+            let erased = tribute_rt::convert_value(ctx, location, done_args[1], slot);
+            ctx.push_op(done_entry, erased);
+            ctx.op_result(erased, 0)
         };
         let store = adt::StructSet::operands(cell, stored)
             .r#type(cell_ty)
@@ -883,10 +881,12 @@ impl TerminalFunctions {
             .build(ctx, location);
         let mut ops = vec![stored.op_ref()];
         if slot != self.answer {
-            let answer = core::UnrealizedConversionCast::operands(stored.result(ctx))
-                .results(self.answer)
-                .build(ctx, location);
-            ops.push(answer.op_ref());
+            ops.push(tribute_rt::convert_value(
+                ctx,
+                location,
+                stored.result(ctx),
+                self.answer,
+            ));
         }
         ops
     }

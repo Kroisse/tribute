@@ -59,8 +59,8 @@ fn format_box(value: Int) -> String {
         .nth(1)
         .expect("format_box function must be lowered");
     let layout_cast = format_box
-        .find("core.unrealized_conversion_cast")
-        .expect("generic constructor field must be converted to its erased layout type");
+        .find("tribute_rt.box_int")
+        .expect("generic constructor field must be boxed to its erased layout type");
     let construct = format_box
         .find("adt.variant_new")
         .expect("generic constructor must construct Box");
@@ -68,8 +68,8 @@ fn format_box(value: Int) -> String {
         .find("callee = @\"std::Int::to_string\"")
         .expect("Box payload must be passed to Int::to_string");
     let payload_recovery = format_box[..int_to_string]
-        .rfind("core.unrealized_conversion_cast")
-        .expect("erased Box payload must be recovered before Int::to_string");
+        .rfind("tribute_rt.unbox_int")
+        .expect("erased Box payload must be unboxed before Int::to_string");
     assert!(
         format_box[layout_cast..construct].contains(": tribute_rt.anyref"),
         "generic Box field must be converted to its erased layout type before construction:\n{format_box}"
@@ -110,8 +110,8 @@ fn ok_int(value: Int) -> Result(Int, String) {
         .find("adt.variant_new")
         .expect("generic Result constructor must construct Ok");
     let cast = ok_int
-        .find("core.unrealized_conversion_cast")
-        .expect("generic Result field must be explicitly converted to its erased layout type");
+        .find("tribute_rt.box_int")
+        .expect("generic Result field must be boxed to its erased layout type");
     assert!(
         ok_int[cast..construct].contains(": tribute_rt.anyref"),
         "generic Result field must be converted to the resolved erased layout type:\n{ok_int}"

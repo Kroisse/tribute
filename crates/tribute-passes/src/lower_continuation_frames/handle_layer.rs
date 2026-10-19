@@ -392,10 +392,8 @@ fn build_exact_handler_token(
     let block = make_block(ctx, location, &[evidence_type, frame_type, input_type]);
     let args = ctx.block_args(block).to_vec();
     let anyref = anyref_type(ctx);
-    let erased_input = core::UnrealizedConversionCast::operands(args[2])
-        .results(anyref)
-        .build(ctx, location);
-    ctx.push_op(block, erased_input.op_ref());
+    let erased_input = tribute_rt::convert_value(ctx, location, args[2], anyref);
+    ctx.push_op(block, erased_input);
     let rebound =
         call_layer_resume_factory(ctx, block, location, layer, values, resume_body, installed);
     emit_cps_tail_call_indirect(
@@ -403,7 +401,7 @@ fn build_exact_handler_token(
         block,
         location,
         rebound,
-        [args[0], args[1], erased_input.result(ctx)],
+        [args[0], args[1], ctx.op_result(erased_input, 0)],
     )?;
     let region = single_block_region(ctx, location, block);
     let token_type = cps_resume_exact_type(ctx, evidence_type, input_type, frame_type);
@@ -643,11 +641,9 @@ fn unpack_handler_payload(
                 .results(anyref)
                 .build(ctx, location);
             ctx.push_op(block, get.op_ref());
-            let recovered = core::UnrealizedConversionCast::operands(get.result(ctx))
-                .results(ty)
-                .build(ctx, location);
-            ctx.push_op(block, recovered.op_ref());
-            recovered.result(ctx)
+            let recovered = tribute_rt::convert_value(ctx, location, get.result(ctx), ty);
+            ctx.push_op(block, recovered);
+            ctx.op_result(recovered, 0)
         })
         .collect()
 }
@@ -691,11 +687,9 @@ fn build_tail_dispatcher(
             .build(ctx, location);
         set_calling_convention(ctx, call.op_ref(), CallingConvention::EvidenceDirect);
         ctx.push_op(case_block, call.op_ref());
-        let erased = core::UnrealizedConversionCast::operands(call.result(ctx))
-            .results(anyref)
-            .build(ctx, location);
-        ctx.push_op(case_block, erased.op_ref());
-        let ret = func::Return::operands([erased.result(ctx)]).build(ctx, location);
+        let erased = tribute_rt::convert_value(ctx, location, call.result(ctx), anyref);
+        ctx.push_op(case_block, erased);
+        let ret = func::Return::operands([ctx.op_result(erased, 0)]).build(ctx, location);
         ctx.push_op(case_block, ret.op_ref());
         let case_region = single_block_region(ctx, location, case_block);
         let case = scf::Case::operands()

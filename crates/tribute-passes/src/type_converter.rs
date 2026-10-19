@@ -45,7 +45,6 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
     let tribute_rt_float = tribute_rt::Float::params().intern(ctx).as_type_ref();
     let tribute_rt_anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let core_i32 = core::I32::type_ref(ctx);
-    let core_i1 = core::I1::type_ref(ctx);
     let core_f64 = core::F64::type_ref(ctx);
 
     let canonical_closure = crate::closure_lower::closure_struct_type_ref(ctx);
@@ -117,96 +116,23 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
 
         // -----------------------------------------------------------------
-        // Boxing: primitive types → tribute_rt.anyref
+        // Boxing and unboxing: scalars ↔ tribute_rt.anyref
         // -----------------------------------------------------------------
-        if to_ty == tribute_rt_anyref {
-            // Int/Nat/I32 → any: use tribute_rt.box_int
-            if from_ty == tribute_rt_int || from_ty == tribute_rt_nat || from_ty == core_i32 {
-                let box_op = tribute_rt::BoxInt::operands(value)
-                    .results(tribute_rt_anyref)
-                    .build(ctx, location);
-                return Some(MaterializeResult {
-                    value: box_op.result(ctx),
-                    ops: vec![box_op.op_ref()],
-                });
-            }
-
-            // Bool/I1 → any: use tribute_rt.box_bool
-            if from_ty == tribute_rt_bool || from_ty == core_i1 {
-                let box_op = tribute_rt::BoxBool::operands(value)
-                    .results(tribute_rt_anyref)
-                    .build(ctx, location);
-                return Some(MaterializeResult {
-                    value: box_op.result(ctx),
-                    ops: vec![box_op.op_ref()],
-                });
-            }
-
-            // Float/F64 → any: use tribute_rt.box_float
-            if from_ty == tribute_rt_float || from_ty == core_f64 {
-                let box_op = tribute_rt::BoxFloat::operands(value)
-                    .results(tribute_rt_anyref)
-                    .build(ctx, location);
-                return Some(MaterializeResult {
-                    value: box_op.result(ctx),
-                    ops: vec![box_op.op_ref()],
-                });
-            }
-
-            // adt.struct/adt.typeref → any: no-op (already a reference type)
-            if is_adt_struct_type(ctx, from_ty) || is_adt_typeref(ctx, from_ty) {
-                return Some(MaterializeResult { value, ops: vec![] });
-            }
+        if let Some(op) = tribute_rt::box_or_unbox(ctx, location, value, to_ty) {
+            return Some(MaterializeResult {
+                value: ctx.op_result(op, 0),
+                ops: vec![op],
+            });
         }
 
-        // -----------------------------------------------------------------
-        // Unboxing: tribute_rt.anyref → primitive types
-        // -----------------------------------------------------------------
+        // adt.struct/adt.typeref → any: no-op (already a reference type)
+        if to_ty == tribute_rt_anyref
+            && (is_adt_struct_type(ctx, from_ty) || is_adt_typeref(ctx, from_ty))
+        {
+            return Some(MaterializeResult { value, ops: vec![] });
+        }
+
         if from_ty == tribute_rt_anyref {
-            // any → Int/I32: use tribute_rt.unbox_int
-            if to_ty == tribute_rt_int || to_ty == core_i32 {
-                let unbox_op = tribute_rt::UnboxInt::operands(value)
-                    .results(to_ty)
-                    .build(ctx, location);
-                return Some(MaterializeResult {
-                    value: unbox_op.result(ctx),
-                    ops: vec![unbox_op.op_ref()],
-                });
-            }
-
-            // any → Nat: use tribute_rt.unbox_nat
-            if to_ty == tribute_rt_nat {
-                let unbox_op = tribute_rt::UnboxNat::operands(value)
-                    .results(to_ty)
-                    .build(ctx, location);
-                return Some(MaterializeResult {
-                    value: unbox_op.result(ctx),
-                    ops: vec![unbox_op.op_ref()],
-                });
-            }
-
-            // any → Bool/I1: use tribute_rt.unbox_bool
-            if to_ty == tribute_rt_bool || to_ty == core_i1 {
-                let unbox_op = tribute_rt::UnboxBool::operands(value)
-                    .results(to_ty)
-                    .build(ctx, location);
-                return Some(MaterializeResult {
-                    value: unbox_op.result(ctx),
-                    ops: vec![unbox_op.op_ref()],
-                });
-            }
-
-            // any → Float/F64: use tribute_rt.unbox_float
-            if to_ty == tribute_rt_float || to_ty == core_f64 {
-                let unbox_op = tribute_rt::UnboxFloat::operands(value)
-                    .results(to_ty)
-                    .build(ctx, location);
-                return Some(MaterializeResult {
-                    value: unbox_op.result(ctx),
-                    ops: vec![unbox_op.op_ref()],
-                });
-            }
-
             // Keep exact canonical closure recovery until target materialization.
             // Erasing it here would pass the original anyref into an exact tail
             // slot, losing the explicit narrowing required by Wasm.
@@ -241,9 +167,7 @@ mod tests {
     use super::*;
     use trunk_ir::OperationDataBuilder;
     use trunk_ir::analysis::AnalysisCache;
-    use trunk_ir::conversion::{
-        ReconcileUnrealizedCasts, UnrealizedCastConversionPattern, materialize_unrealized_casts,
-    };
+    use trunk_ir::conversion::{ReconcileUnrealizedCasts, UnrealizedCastConversionPattern};
     use trunk_ir::dialect::{func, wasm};
     use trunk_ir::location::Span;
     use trunk_ir::ops::DialectOp;
@@ -276,10 +200,6 @@ mod tests {
             );
             let closure = crate::closure_lower::closure_struct_type_ref(&mut ctx);
             assert_eq!(ctx.type_alias_by_text("Closure"), Some(closure));
-            let before = trunk_ir::printer::print_module(&ctx, module.op());
-            let tc = generic_type_converter(&mut ctx);
-            materialize_unrealized_casts(&mut ctx, module, &tc);
-            assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
 
             let lowered =
                 crate::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default());

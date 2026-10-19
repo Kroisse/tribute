@@ -9,8 +9,8 @@ mod logical;
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_ir::dialect::tribute_control;
 use tribute_ir::dialect::tribute_control::{Row, RowBinder, RowUnion};
+use tribute_ir::dialect::{tribute_control, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -191,7 +191,9 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         op.result(self.ir)
     }
 
-    /// Insert an unrealized_conversion_cast if the value's type differs from target_ty.
+    /// Convert `value` to `target_ty` if its type differs: a box or unbox
+    /// where the representation changes, otherwise an
+    /// unrealized_conversion_cast.
     pub fn cast_if_needed(
         &mut self,
         location: Location,
@@ -210,12 +212,9 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
             return value;
         }
 
-        // Insert unrealized_conversion_cast
-        let cast_op = core::UnrealizedConversionCast::operands(value)
-            .results(target_ty)
-            .build(self.ir, location);
-        self.ir.push_op(self.block, cast_op.op_ref());
-        cast_op.result(self.ir)
+        let op = tribute_rt::convert_value(self.ir, location, value, target_ty);
+        self.ir.push_op(self.block, op);
+        self.ir.op_result(op, 0)
     }
 
     /// `value` again as a reference to the same function under the callable

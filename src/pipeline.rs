@@ -61,7 +61,7 @@
 //!     ▼ target evidence lowering ([wasm] evidence_to_wasm, [native] evidence_to_native)
 //!     ▼ bytes intrinsic bridge
 //!     ▼ closure storage layout finalization
-//!     ▼ cleanup (global DCE, canonicalize, DCE, cast materialization)
+//!     ▼ cleanup (global DCE, canonicalize, DCE)
 //!     ▼ boundary exit verification (enforced in every build)
 //! Module (physical contracts verified)  ◄── dump_ir (`--dump-ir`)
 //!     │
@@ -86,12 +86,9 @@ use salsa::Accumulator;
 use tree_sitter::Parser;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::source_file::parse_with_rope;
-use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
 use trunk_ir::analysis::AnalysisCache;
-use trunk_ir::conversion::{
-    ReconcileUnrealizedCasts, UnrealizedCastConversionPattern, materialize_unrealized_casts,
-};
+use trunk_ir::conversion::{ReconcileUnrealizedCasts, UnrealizedCastConversionPattern};
 use trunk_ir::dialect::{core as core_dialect, func as func_dialect};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{PassError, PassManager, PassResult};
@@ -1053,21 +1050,17 @@ fn run_canonicalize_passes(
     pm.run(ctx, core_module, analyses)
 }
 
-/// Run inlining + DCE + cast materialization (shared cleanup after all lowering).
+/// Run global DCE + canonicalization (shared cleanup after all lowering).
 ///
+/// The passes that created conversion casts already emitted their boxing, so
+/// the casts left here only retype values for the target type conversion.
 fn run_cleanup_passes(
     ctx: &mut IrContext,
     m: Module,
     analyses: &mut AnalysisCache,
 ) -> Result<(), PassError> {
     trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, analyses);
-    run_canonicalize_passes(ctx, m, analyses, "cleanup")?;
-    // Target type conversion has not run yet: materialize only the casts that
-    // need real operations and keep the ones that only retype a value, so
-    // every use still sees the type its operation declares.
-    let tc = generic_type_converter(ctx);
-    materialize_unrealized_casts(ctx, m, &tc);
-    Ok(())
+    run_canonicalize_passes(ctx, m, analyses, "cleanup")
 }
 
 /// Run the WASM target pipeline: lowering + cleanup.

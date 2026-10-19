@@ -77,7 +77,109 @@ pub use tribute_rc::HEADER_SIZE as RC_HEADER_SIZE;
 pub use tribute_rc::REFCOUNT_OFFSET;
 pub use tribute_rc::RTTI_IDX_OFFSET;
 
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
+
+// === Representation changes ===
+
+use trunk_ir::dialect::core::{self, F64, I1, I32};
+use trunk_ir::refs::{TypeRef, ValueRef};
+use trunk_ir::types::Location;
+
+/// The scalar families that cross to `tribute_rt.anyref` through a box.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scalar {
+    Int,
+    Nat,
+    Bool,
+    Float,
+}
+
+impl Scalar {
+    fn of(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
+        if Int::matches(ctx, ty) || I32::matches(ctx, ty) {
+            Some(Self::Int)
+        } else if Nat::matches(ctx, ty) {
+            Some(Self::Nat)
+        } else if Bool::matches(ctx, ty) || I1::matches(ctx, ty) {
+            Some(Self::Bool)
+        } else if Float::matches(ctx, ty) || F64::matches(ctx, ty) {
+            Some(Self::Float)
+        } else {
+            None
+        }
+    }
+}
+
+/// The box or unbox that converts `value` to `to`, if the conversion changes
+/// representation: a scalar to `tribute_rt.anyref` or back.
+pub fn box_or_unbox(
+    ctx: &mut IrContext,
+    location: Location,
+    value: ValueRef,
+    to: TypeRef,
+) -> Option<OpRef> {
+    let from = ctx.value_ty(value);
+    let op = if Anyref::matches(ctx, to) {
+        match Scalar::of(ctx, from)? {
+            // Nat shares the int box.
+            Scalar::Int | Scalar::Nat => BoxInt::operands(value)
+                .results(to)
+                .build(ctx, location)
+                .op_ref(),
+            Scalar::Bool => BoxBool::operands(value)
+                .results(to)
+                .build(ctx, location)
+                .op_ref(),
+            Scalar::Float => BoxFloat::operands(value)
+                .results(to)
+                .build(ctx, location)
+                .op_ref(),
+        }
+    } else if Anyref::matches(ctx, from) {
+        match Scalar::of(ctx, to)? {
+            Scalar::Int => UnboxInt::operands(value)
+                .results(to)
+                .build(ctx, location)
+                .op_ref(),
+            Scalar::Nat => UnboxNat::operands(value)
+                .results(to)
+                .build(ctx, location)
+                .op_ref(),
+            Scalar::Bool => UnboxBool::operands(value)
+                .results(to)
+                .build(ctx, location)
+                .op_ref(),
+            Scalar::Float => UnboxFloat::operands(value)
+                .results(to)
+                .build(ctx, location)
+                .op_ref(),
+        }
+    } else {
+        return None;
+    };
+    Some(op)
+}
+
+/// The operation that converts `value` to `to` for a pass that erases or
+/// recovers a value's type.
+///
+/// A representation change is boxed or unboxed here, by the pass that
+/// creates the conversion. Any other pair is a
+/// `core.unrealized_conversion_cast` that only retypes the value until target
+/// type conversion resolves it.
+pub fn convert_value(
+    ctx: &mut IrContext,
+    location: Location,
+    value: ValueRef,
+    to: TypeRef,
+) -> OpRef {
+    box_or_unbox(ctx, location, value, to).unwrap_or_else(|| {
+        core::UnrealizedConversionCast::operands(value)
+            .results(to)
+            .build(ctx, location)
+            .op_ref()
+    })
+}
 
 // === Canonicalization folds ===
 
@@ -240,6 +342,49 @@ mod tests {
         assert!(super::UnboxInt::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Retain::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Release::from_op(&ctx, c.op_ref()).is_err());
+    }
+
+    #[test]
+    fn convert_value_boxes_only_scalars_crossing_anyref() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%i: core.i32, %n: tribute_rt.nat, %b: core.i1, %f: core.f64, %any: tribute_rt.anyref, %p: core.ptr) {
+    func.return
+  }
+}"#,
+        );
+        let function = module.ops(&ctx)[0];
+        let body = ctx.op_region(function, 0).expect("function body");
+        let entry = ctx.region(body).blocks[0];
+        let [i, n, b, f, any, p] = ctx.block_args(entry)[..] else {
+            panic!("six parameters");
+        };
+        let (i32_ty, nat_ty, i1_ty, f64_ty, anyref_ty) = (
+            ctx.value_ty(i),
+            ctx.value_ty(n),
+            ctx.value_ty(b),
+            ctx.value_ty(f),
+            ctx.value_ty(any),
+        );
+        for (value, to, expected) in [
+            (i, anyref_ty, "tribute_rt.box_int"),
+            (n, anyref_ty, "tribute_rt.box_int"),
+            (b, anyref_ty, "tribute_rt.box_bool"),
+            (f, anyref_ty, "tribute_rt.box_float"),
+            (any, i32_ty, "tribute_rt.unbox_int"),
+            (any, nat_ty, "tribute_rt.unbox_nat"),
+            (any, i1_ty, "tribute_rt.unbox_bool"),
+            (any, f64_ty, "tribute_rt.unbox_float"),
+            (p, anyref_ty, "core.unrealized_conversion_cast"),
+            (i, f64_ty, "core.unrealized_conversion_cast"),
+        ] {
+            let op = super::convert_value(&mut ctx, dummy_location(), value, to);
+            assert!(ctx.op(op).name.is(&ctx, expected), "{expected}");
+            assert_eq!(ctx.op_operands(op), [value], "{expected}");
+            assert_eq!(ctx.op_result_types(op), [to], "{expected}");
+        }
     }
 
     mod fold {

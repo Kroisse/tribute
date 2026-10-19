@@ -23,6 +23,4 @@
 
 mod unrealized_casts;
 
-pub use unrealized_casts::{
-    ReconcileUnrealizedCasts, UnrealizedCastConversionPattern, materialize_unrealized_casts,
-};
+pub use unrealized_casts::{ReconcileUnrealizedCasts, UnrealizedCastConversionPattern};

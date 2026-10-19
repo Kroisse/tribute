@@ -19,7 +19,7 @@ core.module @test {
       %7 = scf.if %2 : core.i32 {
           %8 = adt.variant_cast %0 {tag = "Some", type = !Option} : !Option
           %9 = adt.variant_get %8 {field = 0, tag = "Some", type = !Option} : tribute_rt.anyref
-          %10 = core.unrealized_conversion_cast %9 : core.i32
+          %10 = tribute_rt.unbox_int %9 : core.i32
           scf.yield %10
       } {
           %11 = adt.variant_cast %0 {tag = "None", type = !Option} : !Option
