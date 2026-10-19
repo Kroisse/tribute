@@ -521,7 +521,10 @@ fn main() -> Nil {
     );
 }
 
-/// The disagreements the convention-class check finds in `source`.
+/// The disagreements the convention-class check finds in `source`. This
+/// reads the frontend's output, before unreferenced definitions are removed;
+/// the check never requires an unsuffixed base definition, so it agrees with
+/// the pipeline's debug check.
 fn convention_class_disagreements(
     db: &salsa::DatabaseImpl,
     source: &str,

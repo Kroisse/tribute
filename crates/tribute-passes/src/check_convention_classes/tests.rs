@@ -145,3 +145,18 @@ fn a_func_ref_keeps_its_target_convention_under_a_wider_row() {
     );
     assert_eq!(rules(&input), [""; 0]);
 }
+
+#[test]
+fn an_inferred_row_reads_its_tail_only_when_it_is_a_class_variable() {
+    let inferred = |convention: &str| {
+        format!(
+            r#"core.module @m {{
+  tribute_control.func @g['a0](%x: core.i32) -> core.i32 row(| 'a0) inferred convention({convention}) {{
+    tribute_control.return %x
+  }}
+}}"#
+        )
+    };
+    assert_eq!(rules(&inferred("direct")), [""; 0]);
+    assert_eq!(rules(&inferred("cps")), ["own"]);
+}
