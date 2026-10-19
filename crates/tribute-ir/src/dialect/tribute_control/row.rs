@@ -20,6 +20,9 @@ pub const INFERRED_ROW_ATTR: &str = "inferred_row";
 /// Attribute of a reference holding one row for each quantified binder of
 /// its callee.
 pub const ROW_ARGS_ATTR: &str = "row_args";
+/// `tribute_control.lambda` attribute listing the local binders it
+/// quantifies, in instantiation order.
+pub const QUANTIFIED_ROWS_ATTR: &str = "quantified_rows";
 
 const LOGICAL_TUPLE_PREFIX: &str = "__logical_tuple_";
 
@@ -136,15 +139,61 @@ impl Row {
 
     /// This row with its tail replaced by the row argument it names, or
     /// `None` when the tail names no argument.
-    pub fn substitute(&self, args: &[Row]) -> Option<Self> {
+    pub fn substitute<'a>(&self, args: impl Into<RowArgs<'a>>) -> Option<Self> {
         let Some(tail) = self.tail else {
             return Some(self.clone());
         };
-        let arg = args.get(usize::try_from(tail).ok()?)?;
+        let Some(arg) = args.into().get(tail)? else {
+            return Some(self.clone());
+        };
         Some(Self::new(
             self.instances.iter().chain(&arg.instances).cloned(),
             arg.tail,
         ))
+    }
+}
+
+/// The rows a substitution puts in place of row tails.
+#[derive(Clone, Copy, Debug)]
+pub enum RowArgs<'a> {
+    /// One row for each quantified binder of a callee, by binder position.
+    /// Every tail must name one.
+    Positional(&'a [Row]),
+    /// The row for each of the given binders. Other tails stay.
+    Binders(&'a [u32], &'a [Row]),
+}
+
+impl<'a> RowArgs<'a> {
+    /// The row for `tail`: `Some(None)` when the tail stays, `None` when it
+    /// names no argument.
+    fn get(self, tail: u32) -> Option<Option<&'a Row>> {
+        match self {
+            Self::Positional(args) => args.get(usize::try_from(tail).ok()?).map(Some),
+            Self::Binders(binders, args) => Some(
+                binders
+                    .iter()
+                    .position(|binder| *binder == tail)
+                    .and_then(|at| args.get(at)),
+            ),
+        }
+    }
+}
+
+impl<'a> From<&'a [Row]> for RowArgs<'a> {
+    fn from(args: &'a [Row]) -> Self {
+        Self::Positional(args)
+    }
+}
+
+impl<'a> From<&'a Vec<Row>> for RowArgs<'a> {
+    fn from(args: &'a Vec<Row>) -> Self {
+        Self::Positional(args)
+    }
+}
+
+impl<'a, const N: usize> From<&'a [Row; N]> for RowArgs<'a> {
+    fn from(args: &'a [Row; N]) -> Self {
+        Self::Positional(args)
     }
 }
 
@@ -328,6 +377,19 @@ pub fn row_binders(ctx: &IrContext, op: trunk_ir::OpRef) -> Result<Vec<RowBinder
 /// The row tail unions `op` declares, or why they are malformed.
 pub fn row_unions(ctx: &IrContext, op: trunk_ir::OpRef) -> Result<Vec<RowUnion>, String> {
     Ok(read_list(ctx, op, ROW_UNIONS_ATTR, RowUnion::from_attribute)?.unwrap_or_default())
+}
+
+/// The local binders a lambda quantifies, or why they are malformed.
+pub fn quantified_rows(ctx: &IrContext, op: trunk_ir::OpRef) -> Result<Vec<u32>, String> {
+    Ok(
+        read_list(ctx, op, QUANTIFIED_ROWS_ATTR, |_, binder| match binder {
+            Attribute::Int(index) => {
+                u32::try_from(*index).map_err(|_| "quantified rows must be binder indices".into())
+            }
+            _ => Err("quantified rows must be binder indices".into()),
+        })?
+        .unwrap_or_default(),
+    )
 }
 
 /// The row arguments a reference passes, or why they are malformed.
@@ -597,7 +659,7 @@ impl TypeSink for Lookup<'_> {
 
 struct Substitution<'a, S> {
     sink: S,
-    args: &'a [Row],
+    args: RowArgs<'a>,
     done: HashMap<TypeRef, Option<TypeRef>>,
 }
 
@@ -659,14 +721,18 @@ impl<S: TypeSink> Substitution<'_, S> {
     }
 }
 
-/// Replace, in every callable type inside `ty`, a tail that names a
-/// quantified binder of the callee with the row argument for it.
+/// Replace, in every callable type inside `ty`, a tail that `args` names
+/// with the row argument for it.
 ///
 /// Returns `None` when a tail names no argument.
-pub fn substitute_rows(ctx: &mut IrContext, ty: TypeRef, args: &[Row]) -> Option<TypeRef> {
+pub fn substitute_rows<'a>(
+    ctx: &mut IrContext,
+    ty: TypeRef,
+    args: impl Into<RowArgs<'a>>,
+) -> Option<TypeRef> {
     Substitution {
         sink: Intern(ctx),
-        args,
+        args: args.into(),
         done: HashMap::default(),
     }
     .ty(ty)
@@ -674,10 +740,14 @@ pub fn substitute_rows(ctx: &mut IrContext, ty: TypeRef, args: &[Row]) -> Option
 
 /// [`substitute_rows`] without creating types: `None` also when the
 /// substituted type does not exist, which no IR value can then have.
-pub fn find_substituted_rows(ctx: &IrContext, ty: TypeRef, args: &[Row]) -> Option<TypeRef> {
+pub fn find_substituted_rows<'a>(
+    ctx: &IrContext,
+    ty: TypeRef,
+    args: impl Into<RowArgs<'a>>,
+) -> Option<TypeRef> {
     Substitution {
         sink: Lookup(ctx),
-        args,
+        args: args.into(),
         done: HashMap::default(),
     }
     .ty(ty)

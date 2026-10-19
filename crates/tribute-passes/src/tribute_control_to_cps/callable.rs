@@ -78,7 +78,14 @@ impl Converter<'_> {
             .results(physical_ty)
             .regions(body)
             .build(self.ctx, location);
-        self.copy_extra_attrs(source, lambda.op_ref(), &[CALLING_CONVENTION_ATTR]);
+        self.copy_extra_attrs(
+            source,
+            lambda.op_ref(),
+            &[
+                CALLING_CONVENTION_ATTR,
+                tribute_control::QUANTIFIED_ROWS_ATTR,
+            ],
+        );
         set_calling_convention(self.ctx, lambda.op_ref(), convention);
         Ok(lambda.op_ref())
     }
