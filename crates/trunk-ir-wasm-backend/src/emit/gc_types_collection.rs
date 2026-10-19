@@ -814,6 +814,8 @@ mod tests {
         for (field_type, dispatch_type) in [
             ("core.i64", "core.ptr"),
             ("wasm.anyref", "core.ptr"),
+            // A pointer only stands for a reference field.
+            ("core.ptr", "core.ptr"),
             // The dispatch field holds the closure base, not an erased anyref.
             ("core.i32", "wasm.anyref"),
         ] {

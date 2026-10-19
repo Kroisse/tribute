@@ -882,8 +882,8 @@ Marker layout과 evidence runtime ABI는 `tribute-ir`의
 
 WasmGC uses the same field order and shared field identifiers, but its concrete
 GC marker type stores the dispatch closure as a nullable reference to the
-closure base instead of a native `ptr` value, `shadowed` as an `anyref` marker reference, and
-`outer` as an `anyref` evidence reference.
+closure base instead of a native `ptr` value, `shadowed` as an `anyref` marker
+reference, and `outer` as an `anyref` evidence reference.
 Marker construction and field access stay inside the target's helper
 implementations, so effect lowering never builds or reads a marker directly.
 
