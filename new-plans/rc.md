@@ -347,6 +347,20 @@ source마다 하나뿐이다. Source가 선택된 liveness view에서 branch 뒤
 destination만 unit을 받는다. Unit을 받지 못한 destination마다 branch 직전에 새
 unit을 획득한다.
 
+Aggregate field로의 저장(`adt.struct_new`, `adt.variant_new`, `adt.struct_set`의
+값)과 ordinary call의 consumed 매개변수는 독립된 unit을 받는 자리다. 기준 동작은 그
+자리마다 직전에 새 unit을 획득하고 값의 unit은 값에 남긴다. Last-use move 정책을
+켜면 그 operation이 값의 마지막 사용일 때 값의 unit을 그 자리로 옮기고, 획득도 뒤따르는
+final release도 두지 않는다. 마지막 사용은 final release 위치를 정하는 것과 같은
+판정이다: 값은 선택된 liveness view에서 block 끝에 살아 있지 않고, block 안의 뒤
+operation이 값이나 값에서 파생된 borrow를 쓰지 않는다. 옮길 unit이 있어야 하므로
+값은 owned root여야 하며, 파생 borrow와 borrowed 매개변수는 옮기지 않는다. 또한 그
+operation이 값의 root에 닿는 모든 operand가 unit을 받는 자리여야 한다. Indirect
+call의 callee, `adt.struct_set`의 대상, borrowed·retained 매개변수로의 argument,
+값에서 파생된 borrow는 호출이나 저장 동안 caller의 unit에 기대므로, 이런 operand가
+하나라도 있으면 모든 자리가 기준 동작대로 획득한다. 한 operation이 한 값을 여러
+자리에 넘기면 첫 자리만 unit을 받고 나머지는 획득한다.
+
 한 block 안에서 마지막으로 쓰이고 죽는 값은 그 사용 직후에, 사용이 terminator면 그
 직전에 release한다. Predecessor의 끝에서 살아 있지만 successor의 시작에서 살아 있지
 않은 값은 edge에서 죽으며 successor의 시작에서 release한다. 이 위치는 successor의
@@ -489,9 +503,14 @@ into control flow and atomic operations by RC lowering.
   이 최적화를 끈 기준 동작은 모든 managed projection이 projection 직후 자신의 unit을
   획득하는 것이다. Exact typed projection 계약을 만족하지 않는 IR은 borrow로도 기준
   동작으로도 계획하지 않고 ownership planning 오류로 거부한다.
+- **Last-use moves:** Typed planning은 aggregate field로의 저장이나 consumed
+  매개변수로의 ordinary call이 owned 값의 마지막 사용일 때 값의 unit을 그 자리로
+  옮긴다. 조건과 operand 규칙은 [typed ownership plan](#1-typed-ownership-and-rtti-plan)이
+  정한다. Return과 proper tail은 이 정책과 무관하게 항상 unit을 옮긴다.
 - **Constant propagation (planned):** Elide RC for compile-time-known lifetimes
 
-The paired-elimination, borrowed-parameter, and temporary-borrow policies are
+The paired-elimination, borrowed-parameter, temporary-borrow, and last-use-move
+policies are
 selected independently by the native pipeline options, not stored in an IR
 lowering context. Production enables proven optimizations; the baseline profile
 disables them for conformance comparisons.
@@ -537,7 +556,9 @@ integer alone.
 An ordinary call to a retained parameter performs no caller-side RC operation:
 the caller keeps its own unit live across the call while the callee acquires
 its own. An ordinary call to a consumed parameter acquires a new unit with
-`retain` immediately before the call, leaving the caller's existing unit live. A
+`retain` immediately before the call, leaving the caller's existing unit live,
+unless the [last-use move](#1-typed-ownership-and-rtti-plan) transfers the
+caller's unit because the call is the value's last use. A
 non-returning proper-tail call transfers the caller's existing unit without a
 caller-side release. When the caller only borrows the value, it first retains
 once to create the transferred unit. If the same underlying value is supplied

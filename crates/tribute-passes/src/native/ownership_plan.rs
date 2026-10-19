@@ -71,6 +71,7 @@ pub enum EntryOwnership {
 pub struct NativeOwnershipPlanOptions {
     pub elide_proven_borrowed_parameters: bool,
     pub elide_proven_field_borrows: bool,
+    pub move_units_at_last_use: bool,
 }
 
 impl NativeOwnershipPlanOptions {
@@ -78,6 +79,7 @@ impl NativeOwnershipPlanOptions {
         Self {
             elide_proven_borrowed_parameters: true,
             elide_proven_field_borrows: true,
+            move_units_at_last_use: true,
         }
     }
 }
@@ -89,6 +91,8 @@ pub enum ActionKind {
     CallRetain,
     CallAcquire,
     StoreAcquire,
+    CallTransfer,
+    StoreTransfer,
     CopyAcquire,
     BorrowLoad,
     ReleaseReplacedField,
@@ -380,7 +384,7 @@ pub fn build_native_ownership_plan(
             entry_contracts,
             &module_facts,
             &managed_layouts,
-            options.elide_proven_field_borrows,
+            options,
         )?;
         functions.push(FunctionOwnershipPlan {
             symbol: symbol.clone(),

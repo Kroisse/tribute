@@ -6,14 +6,14 @@ use std::fmt::Write as _;
 
 use common::{
     compile_and_run_native, compile_and_run_native_asan,
-    compile_and_run_native_with_borrowed_parameters,
+    compile_and_run_native_with_borrowed_parameters, compile_and_run_native_with_last_use_moves,
     compile_and_run_native_with_paired_rc_elimination,
     compile_and_run_native_with_temporary_borrows,
 };
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::{
-    BorrowedParameterPolicy, NativeOptimizationOptions, NativePipelineStage, OptimizationOptions,
-    PairedRcEliminationPolicy, TemporaryBorrowPolicy, dump_native_ir_at_stage,
+    BorrowedParameterPolicy, LastUseMovePolicy, NativeOptimizationOptions, NativePipelineStage,
+    OptimizationOptions, PairedRcEliminationPolicy, TemporaryBorrowPolicy, dump_native_ir_at_stage,
 };
 use tribute_front::SourceCst;
 
@@ -48,6 +48,7 @@ fn native_optimization_options(
             paired_rc_elimination,
             borrowed_parameters,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
+            last_use_moves: LastUseMovePolicy::Acquire,
         },
     }
 }
@@ -58,6 +59,7 @@ fn temporary_borrow_options(temporary_borrows: TemporaryBorrowPolicy) -> Optimiz
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows,
+            last_use_moves: LastUseMovePolicy::Acquire,
         },
     }
 }
@@ -275,6 +277,73 @@ fn temporary_field_borrows_across_handlers_preserve_native_execution_with_saniti
             assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "150");
         }
     }
+}
+
+#[test]
+fn last_use_moves_preserve_native_execution_with_sanitizer() {
+    let fixtures = [
+        ("state_handlers.trb", STATE_HANDLERS, "10"),
+        ("borrowed_parameters.trb", BORROWED_PARAMETERS, "10"),
+        ("temporary_field_borrows.trb", TEMPORARY_FIELD_BORROWS, "20"),
+        (
+            "temporary_field_borrows_effects.trb",
+            TEMPORARY_FIELD_BORROWS_EFFECTS,
+            "150",
+        ),
+    ];
+    for (name, source, expected) in fixtures {
+        for sanitize_address in [false, true] {
+            for policy in [LastUseMovePolicy::Acquire, LastUseMovePolicy::Move] {
+                let output = compile_and_run_native_with_last_use_moves(
+                    name,
+                    source,
+                    policy,
+                    sanitize_address,
+                );
+                assert!(
+                    output.status.success(),
+                    "{name} {policy:?} failed with sanitize_address={sanitize_address}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    expected,
+                    "{name} {policy:?}"
+                );
+            }
+        }
+    }
+}
+
+#[salsa_test]
+fn last_use_moves_remove_whole_retain_release_pairs(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(db, "state_handlers.trb", STATE_HANDLERS);
+    let dump = |last_use_moves| {
+        let mut options = OptimizationOptions::production();
+        options.native.last_use_moves = last_use_moves;
+        let ir = dump_native_ir_at_stage(
+            db,
+            source,
+            NativePipelineStage::AfterRcOptimization,
+            options,
+        )
+        .expect("RC optimization IR should be available");
+        assert_source_allocation_field_releases(ir);
+        let ops = focused_rc_ops(ir);
+        (
+            ops.matches("tribute_rt.retain").count(),
+            ops.matches("tribute_rt.release").count(),
+        )
+    };
+    let (acquire_retains, acquire_releases) = dump(LastUseMovePolicy::Acquire);
+    let (move_retains, move_releases) = dump(LastUseMovePolicy::Move);
+    // A move drops the acquire at the destination and the final release
+    // of the value together.
+    assert!(move_retains < acquire_retains);
+    assert_eq!(
+        acquire_retains - move_retains,
+        acquire_releases - move_releases
+    );
 }
 
 #[test]

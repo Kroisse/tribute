@@ -137,6 +137,8 @@ fn build_schedule(
                 ActionKind::CallBorrow
                 | ActionKind::CallRetain
                 | ActionKind::BorrowLoad
+                | ActionKind::CallTransfer
+                | ActionKind::StoreTransfer
                 | ActionKind::ReturnTransfer
                 | ActionKind::TailTransfer
                 | ActionKind::IntoRawTransfer => {}
