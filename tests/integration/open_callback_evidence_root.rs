@@ -520,3 +520,88 @@ fn main() -> Nil {
         "{run}"
     );
 }
+
+/// The disagreements the convention-class check finds in `source`.
+fn convention_class_disagreements(
+    db: &salsa::DatabaseImpl,
+    source: &str,
+) -> Vec<(&'static str, String)> {
+    let source = SourceCst::from_source_str(db, "test.trb", source);
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    tribute_passes::check_convention_classes::check(&ctx, module)
+        .into_iter()
+        .map(|disagreement| (disagreement.rule, disagreement.message))
+        .collect()
+}
+
+/// Representative row-polymorphic programs agree with the classes their
+/// rows imply.
+#[salsa_test]
+fn specialized_classes_agree_with_their_rows(db: &salsa::DatabaseImpl) {
+    for source in [
+        SOURCE,
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: Int, f: fn(Int) ->{e} Int) ->{e} Int { f(x) }
+
+fn countdown(n: Int) -> Int {
+    let step = fn(m: Int) -> Int {
+        case m == +0 {
+            True -> m
+            False -> become countdown(m - +1)
+        }
+    }
+    become step(n)
+}
+
+fn main() ->{Io} Nil {
+    let both = fn(x: Int, f: fn(Int) ->{e} Int) app(x, f)
+    let _ = both(+1, fn(n) n + +1)
+    let _ = both(+2, fn(n) { print_line("io") n })
+    let nested = fn() both(+3, fn(n) n)
+    let _ = nested()
+    let _ = countdown(+3)
+    Nil
+}
+"#,
+    ] {
+        assert_eq!(convention_class_disagreements(db, source), []);
+    }
+}
+
+/// A let-bound lambda copied into a class instance reads its body at the
+/// wrong class (Kroisse/tribute#1548). When that is fixed, this test fails
+/// and the check can report disagreements as errors.
+#[salsa_test]
+fn a_let_bound_lambda_copy_reads_its_body_at_the_wrong_class(db: &salsa::DatabaseImpl) {
+    let disagreements = convention_class_disagreements(
+        db,
+        r#"
+fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
+
+fn before() -> String {
+    let call = fn(s: String) after(s)
+    call("order")
+}
+
+fn after(s: String) -> String {
+    let inner = fn(t: String) app(t, fn(u) u <> "!")
+    inner(s)
+}
+
+fn main() -> Nil {
+    let _ = before()
+    Nil
+}
+"#,
+    );
+    let rules: Vec<_> = disagreements.iter().map(|(rule, _)| *rule).collect();
+    assert_eq!(rules, ["reference", "lambda"], "{disagreements:?}");
+    assert!(
+        disagreements
+            .iter()
+            .all(|(_, message)| message.contains("after$9D")),
+        "{disagreements:?}"
+    );
+}
