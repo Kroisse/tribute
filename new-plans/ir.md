@@ -905,7 +905,8 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
   맞춘다. Whole-IR verifier는 body의 외부 SSA reference와 capture 집합이 정확히
   일치하는지, `quantified_rows`의 원소가 둘러싼 `func`의 `local` binder이고 각
   `local` binder를 한 람다만 적는지, 양화하는 람다의 결과를 `instantiate`만 쓰는지
-  검사한다.
+  검사한다. 안쪽 람다의 capture로 넘기는 것은 사용이 아니며, 그 본문의 사용이
+  `instantiate`여야 한다.
 - **Row 속성:** 선택적 [`quantified_rows`](#지역-람다의-양화와-인스턴스화)를 가진다.
 - **소유권과 값 흐름:** capture는 일반 SSA use이며 다른 hidden operand는 없다.
 - **위치:** source lambda 전체 span이다.

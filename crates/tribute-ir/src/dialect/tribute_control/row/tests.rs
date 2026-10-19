@@ -588,3 +588,24 @@ fn a_lambda_quantifies_local_binders_it_alone_owns() {
         "a lambda that quantifies rows is used only through instantiate",
     );
 }
+
+#[test]
+fn a_lambda_captured_by_another_is_instantiated_in_its_body() {
+    let nested = |use_: &str| {
+        locals("{tail = 0}", "!step0").replace(
+            "    %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_control.call_indirect %s, %x : core.i32\n",
+            &format!(
+                "    %h = tribute_control.lambda(%z: core.i32) -> core.i32 row(| 'a0) convention(direct) captures [%g] {{\n{use_}      tribute_control.return %r\n    }}\n    %r = tribute_control.call_indirect %h, %x : core.i32\n"
+            ),
+        )
+    };
+    let (ctx, module) = parse(&nested(
+        "      %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n      %r = tribute_control.call_indirect %s, %z : core.i32\n",
+    ));
+    let result = validate(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+    assert_rejects(
+        &nested("      %r = tribute_control.call_indirect %g, %z : core.i32\n"),
+        "a lambda that quantifies rows is used only through instantiate",
+    );
+}
