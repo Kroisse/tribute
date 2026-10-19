@@ -3,7 +3,7 @@
 //! Each interface is a trait declared with `#[op_interface]`. An operation
 //! implements it with an `impl` and registers it with `#[implements(..)]`
 //! on its `#[dialect]` declaration or with [`register_interfaces!`](crate::register_interfaces).
-//! Properties without behavior are [operation flags](crate::op_flag) instead.
+//! Properties without behavior are [operation flags](mod@crate::op_flag) instead.
 
 use std::fmt;
 

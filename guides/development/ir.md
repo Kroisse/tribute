@@ -287,8 +287,14 @@ let isolated = def.has_flag::<IsolatedFromAbove>();
 
 Only the dialect that defines an operation sets its flags. A property that
 another crate attaches to an operation it does not define is an interface,
-even without methods. A flag is a unit type implementing `OpFlag`, whose
-`DEF` points to a `static` `OpFlagDef` that identifies it by address.
+even without methods. Any crate declares a flag as a unit struct with
+`#[trunk_ir::op_flag]`, which adds the `static` `OpFlagDef` that identifies
+it by address and its `OpFlag` impl:
+
+```rust
+#[op_flag]
+pub struct Pure;
+```
 
 ## Working with IR
 

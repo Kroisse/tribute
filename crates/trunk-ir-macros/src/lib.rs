@@ -8,6 +8,7 @@ use proc_macro::TokenStream as ProcTokenStream;
 
 mod canonicalize;
 mod codegen;
+mod flag;
 mod interface;
 mod parse;
 
@@ -102,6 +103,27 @@ fn dialect_impl(
 #[proc_macro_attribute]
 pub fn op_interface(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match interface::gen_interface(attr.into(), item.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(msg) => quote::quote!(compile_error!(#msg);).into(),
+    }
+}
+
+/// Declare an operation flag: a property without behavior that
+/// `#[flags(..)]` lists on an operation.
+///
+/// ```ignore
+/// #[trunk_ir::op_flag]
+/// pub struct Pure;
+///
+/// let removable = Pure::is_set(ctx, op);
+/// ```
+///
+/// The flag must be a unit struct. The macro adds the `static`
+/// `trunk_ir::op_flag::OpFlagDef` that identifies it by address and the
+/// `trunk_ir::op_flag::OpFlag` impl that points to it.
+#[proc_macro_attribute]
+pub fn op_flag(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
+    match flag::gen_flag(attr.into(), item.into()) {
         Ok(tokens) => tokens.into(),
         Err(msg) => quote::quote!(compile_error!(#msg);).into(),
     }

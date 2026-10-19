@@ -116,8 +116,9 @@ infrastructure가 operation 정의를 통해 찾는 hook은 interface가 아니�
 definition에 속한다.
 
 Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 성질이다
-(`Pure`, `IsolatedFromAbove`). Flag는 구현을 갖지 않고 operation definition에
-직접 들어가므로 registry 없이 조회한다. Interface와 달리 닫혀 있어서, operation을
+(`Pure`, `IsolatedFromAbove`). 어느 crate든 `#[op_flag]`를 붙인 unit struct로 flag를
+선언한다. Flag는 구현을 갖지 않고 operation definition에 직접 들어가므로 registry
+없이 조회한다. Interface와 달리 닫혀 있어서, operation을
 정의한 dialect만 그 operation의 flag를 정할 수 있다. 메서드가 없더라도 다른 crate가
 남의 operation에 붙여야 하는 성질은 flag가 아니라 interface로 정의한다.
 
