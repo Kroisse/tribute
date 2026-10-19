@@ -653,7 +653,7 @@ binder의 종류를 나타내는 문자열이다.
 | ---- | ---- |
 | `param` | 정의의 scheme이 양화한 row 변수 |
 | `ability_arg` | scheme이 양화했고 signature나 본문의 ability 인자 안에 나타나는 row 변수 |
-| `local` | `let`에 묶인 람다의 지역 scheme이 양화한 row 변수 |
+| `local` | `let`에 묶인 람다의 지역 scheme이 양화한 row 변수. 람다의 type이 적는 변수이며, 복사본은 자기 변수를 가진다 |
 | `body` | 어느 scheme도 양화하지 않은 row 변수 |
 
 양화된 binder(`param`, `ability_arg`)가 scheme의 binder 순서로 먼저 오며, 그 위치가
@@ -695,7 +695,9 @@ tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에 넣�
 `local_rows` 속성에 binder별로 모아 적는다. 원소는 `{binder = i, rows = [...]}`이며
 `binder`는 `local` binder의 index, `rows`는 그 binder를 인스턴스화하는 row들을 처음
 쓰인 순서로 중복 없이 담는다. Row의 형식과 tail은 [`row_args`](#row-인자와-치환)와
-같이 정의 자신의 binder를 가리킨다. 인스턴스화되지 않는 `local` binder는 원소가 없다.
+같이 정의 자신의 binder를 가리킨다. 사용처가 row를 정하지 않은 `local` binder, 예를 들어
+람다의 type이 지역 scheme의 row 변수를 모두 적지 않는 경우는 원소가 없으며, 아무 row도
+넘겨받지 않은 것으로 읽는다.
 
 이 row의 tail은 정의의 row 변수를 람다에 넘기므로, `param` binder가
 [class 변수](cps-effects.md#row-변수의-convention-class)인지를 정하는 데 쓰인다.
