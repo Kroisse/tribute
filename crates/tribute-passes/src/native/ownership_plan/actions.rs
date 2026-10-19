@@ -320,12 +320,15 @@ impl<'a> ActionPlanner<'a> {
     }
 
     /// Whether the release of `owner` frees an exact struct layout by a
-    /// static size, rather than through its RTTI entry.
+    /// static size, rather than through its RTTI entry. A closure's size
+    /// depends on its capture layout, so its header RTTI frees it.
     fn has_static_size(&self, owner: ValueRef) -> bool {
         let ty = self.ir.value_ty(owner);
         !tribute_ir::dialect::ability::is_evidence_type_ref(self.ir, ty)
-            && allocation_layout(self.ir, self.managed_layouts, ty)
-                .is_ok_and(|layout| adt::Struct::from_type_ref(self.ir, layout).is_some())
+            && allocation_layout(self.ir, self.managed_layouts, ty).is_ok_and(|layout| {
+                adt::Struct::from_type_ref(self.ir, layout).is_some()
+                    && !crate::closure_lower::is_closure_layout(self.ir, layout)
+            })
     }
 
     /// How many projections in the function read `field` of `owner`.
