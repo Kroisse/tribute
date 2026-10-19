@@ -5,7 +5,7 @@
 
 use crate::context::IrContext;
 use crate::dialect::func;
-use crate::op_interface::PureOps;
+use crate::op_interface::DynPure;
 use crate::pass::{Pass, pass_fn};
 use crate::refs::{BlockRef, OpRef, RegionRef};
 use crate::rewrite::RewriteScope;
@@ -141,7 +141,7 @@ fn sweep_block(ctx: &mut IrContext, block: BlockRef, config: &DceConfig) -> usiz
 /// Check if an operation is dead (pure + all results unused).
 fn is_dead(ctx: &IrContext, op: OpRef) -> bool {
     // Non-pure operations have side effects — must keep
-    if !PureOps::is_pure(ctx, op) {
+    if !DynPure::is_implemented(ctx, op) {
         return false;
     }
 

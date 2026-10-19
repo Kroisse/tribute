@@ -60,6 +60,17 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
     let op_name = &op.name;
     let def = gen_op_def(crate_path, dialect, op);
     let def_static = format_ident!("__{}_DEF", op_name.to_shouty_snake_case());
+    // The span points a missing interface impl at its `#[interfaces]` entry.
+    let interfaces = op.interfaces.iter().map(|interface| {
+        let path = &interface.path;
+        let mut wrapper = sname.clone();
+        wrapper.set_span(interface.span);
+        quote_spanned! {interface.span=>
+            #crate_path::__private::inventory::submit! {
+                <#wrapper as #path>::__TRUNK_IR_INTERFACE
+            }
+        }
+    });
 
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +106,8 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
                 <#sname as #crate_path::ops::DialectOp>::DEF
             )
         }
+
+        #(#interfaces)*
     }
 }
 

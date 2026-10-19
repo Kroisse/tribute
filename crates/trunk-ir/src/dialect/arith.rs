@@ -6,101 +6,133 @@
 //! - Integer comparison: `cmpi` with predicate attribute (eq, ne, slt, sle, sgt, sge, ult, ule, ugt, uge)
 //! - Float comparison: `cmpf` with predicate attribute (oeq, une, olt, ole, ogt, oge)
 
+use crate::op_interface::Pure;
+
 // === Pure operation registrations ===
-crate::register_pure_op!(Const);
+impl Pure for Const {}
 
 // Integer arithmetic
-crate::register_pure_op!(Addi);
-crate::register_pure_op!(Subi);
-crate::register_pure_op!(Muli);
-crate::register_pure_op!(Divsi);
-crate::register_pure_op!(Divui);
-crate::register_pure_op!(Remsi);
-crate::register_pure_op!(Remui);
-crate::register_pure_op!(Negi);
+impl Pure for Addi {}
+impl Pure for Subi {}
+impl Pure for Muli {}
+impl Pure for Divsi {}
+impl Pure for Divui {}
+impl Pure for Remsi {}
+impl Pure for Remui {}
+impl Pure for Negi {}
 
 // Float arithmetic
-crate::register_pure_op!(Addf);
-crate::register_pure_op!(Subf);
-crate::register_pure_op!(Mulf);
-crate::register_pure_op!(Divf);
-crate::register_pure_op!(Negf);
+impl Pure for Addf {}
+impl Pure for Subf {}
+impl Pure for Mulf {}
+impl Pure for Divf {}
+impl Pure for Negf {}
 
 // Comparisons
-crate::register_pure_op!(Cmpi);
-crate::register_pure_op!(Cmpf);
+impl Pure for Cmpi {}
+impl Pure for Cmpf {}
 
 // Bitwise (integer-only, unchanged)
-crate::register_pure_op!(And);
-crate::register_pure_op!(Or);
-crate::register_pure_op!(Xor);
-crate::register_pure_op!(Shl);
-crate::register_pure_op!(Shr);
-crate::register_pure_op!(Shru);
+impl Pure for And {}
+impl Pure for Or {}
+impl Pure for Xor {}
+impl Pure for Shl {}
+impl Pure for Shr {}
+impl Pure for Shru {}
 
 // Conversions
-crate::register_pure_op!(Extsi);
-crate::register_pure_op!(Extui);
-crate::register_pure_op!(Trunci);
-crate::register_pure_op!(Sitofp);
-crate::register_pure_op!(Uitofp);
-crate::register_pure_op!(Extf);
-crate::register_pure_op!(Truncf);
+impl Pure for Extsi {}
+impl Pure for Extui {}
+impl Pure for Trunci {}
+impl Pure for Sitofp {}
+impl Pure for Uitofp {}
+impl Pure for Extf {}
+impl Pure for Truncf {}
+
 // fptosi/fptoui trap on out-of-range values and NaN, so they are not pure.
 
 #[trunk_ir::dialect]
 mod arith {
     #[verify]
+    #[interfaces(Pure)]
     fn r#const(value: Attr<_>) -> Value<impl NumericLike> {}
 
     // Integer arithmetic
+    #[interfaces(Pure)]
     fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn subi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn muli<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn divsi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn divui<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn remsi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn remui<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn negi<T: IntegerLike>(operand: Value<T>) -> Value<T> {}
 
     // Float arithmetic
+    #[interfaces(Pure)]
     fn addf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn subf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn mulf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn divf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn negf<T: FloatLike>(operand: Value<T>) -> Value<T> {}
 
     // Comparisons
+    #[interfaces(Pure)]
     fn cmpi<T: IntegerLike>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     #[verify]
+    #[interfaces(Pure)]
     fn cmpf<T: FloatLike>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     // Bitwise (integer-only)
+    #[interfaces(Pure)]
     fn and<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn or<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn xor<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn shl<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn shr<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
+    #[interfaces(Pure)]
     fn shru<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
 
     // Conversions. Integers are signless; each sign-dependent conversion is
     // an explicit signed/unsigned pair.
     #[verify]
+    #[interfaces(Pure)]
     fn extsi(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
     #[verify]
+    #[interfaces(Pure)]
     fn extui(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
     #[verify]
+    #[interfaces(Pure)]
     fn trunci(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
+    #[interfaces(Pure)]
     fn sitofp(operand: Value<impl IntegerLike>) -> Value<impl FloatLike> {}
+    #[interfaces(Pure)]
     fn uitofp(operand: Value<impl IntegerLike>) -> Value<impl FloatLike> {}
     /// Traps on out-of-range values and NaN.
     fn fptosi(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
     /// Traps on out-of-range values and NaN.
     fn fptoui(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
     #[verify]
+    #[interfaces(Pure)]
     fn extf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
     #[verify]
+    #[interfaces(Pure)]
     fn truncf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
 }
 

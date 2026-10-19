@@ -16,7 +16,10 @@ use itertools::Itertools;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::core;
 use trunk_ir::op_def::OpDef;
-use trunk_ir::op_interface::{DynRegionBranch, RegionBranchPoint, RegionSuccessor};
+use trunk_ir::op_interface::{
+    CallLike, CallableExit, DynRegionBranch, IsolatedFromAbove, Pure, RegionBranchPoint,
+    RegionSuccessor,
+};
 use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
@@ -91,6 +94,7 @@ mod tribute_control {
 
     // FuncSig operations
     #[asm_format]
+    #[interfaces(IsolatedFromAbove)]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
@@ -103,15 +107,18 @@ mod tribute_control {
     }
 
     #[asm_format]
+    #[interfaces(Pure)]
     fn lambda(captures: Variadic<_>) -> Value<impl FuncSig> {
         #[region(body)]
         {}
     }
 
     #[verify]
+    #[interfaces(Pure)]
     fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
     #[verify]
+    #[interfaces(CallLike)]
     fn call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -129,6 +136,7 @@ mod tribute_control {
     }
 
     #[verify]
+    #[interfaces(CallLike, CallableExit)]
     fn tail_call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -138,6 +146,7 @@ mod tribute_control {
     }
 
     #[verify]
+    #[interfaces(CallableExit)]
     fn tail_call_indirect<S: FuncSig>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         callee: Value<S>,
@@ -834,36 +843,18 @@ impl Func {
 
 // Only the named function is isolated. Lambda intentionally remains
 // non-isolated so its exact external-reference/capture set can be validated.
-inventory::submit! {
-    trunk_ir::op_interface::IsolatedFromAboveOps::register::<Func>()
-}
+impl IsolatedFromAbove for Func {}
 
-impl trunk_ir::op_interface::CallLike for Call {}
-inventory::submit! {
-    trunk_ir::op_interface::CallLikeOps::register::<Call>()
-}
-impl trunk_ir::op_interface::CallLike for TailCall {}
-inventory::submit! {
-    trunk_ir::op_interface::CallLikeOps::register::<TailCall>()
-}
+impl CallLike for Call {}
+impl CallLike for TailCall {}
 
 // A source `become` ends its callable: the callee's result is the caller's.
-impl trunk_ir::op_interface::CallableExit for TailCall {}
-impl trunk_ir::op_interface::CallableExit for TailCallIndirect {}
-inventory::submit! {
-    trunk_ir::op_interface::CallableExitOps::register::<TailCall>()
-}
-inventory::submit! {
-    trunk_ir::op_interface::CallableExitOps::register::<TailCallIndirect>()
-}
+impl CallableExit for TailCall {}
+impl CallableExit for TailCallIndirect {}
 
 // These operations only create/refer to values and are safe for DCE.
-inventory::submit! {
-    trunk_ir::op_interface::PureOps::register::<FuncRef>()
-}
-inventory::submit! {
-    trunk_ir::op_interface::PureOps::register::<Lambda>()
-}
+impl Pure for FuncRef {}
+impl Pure for Lambda {}
 
 // === Custom assembly: tribute_control.func ===
 
@@ -6849,19 +6840,15 @@ mod tests {
             call = call.or_else(|| Call::matches(ctx, op).then_some(op));
         });
         let func = func.expect("func");
-        assert!(trunk_ir::op_interface::IsolatedFromAboveOps::is_isolated(
-            ctx, func
-        ));
+        assert!(trunk_ir::op_interface::DynIsolatedFromAbove::is_implemented(ctx, func));
         if let Some(lambda) = lambda {
-            assert!(!trunk_ir::op_interface::IsolatedFromAboveOps::is_isolated(
-                ctx, lambda
-            ));
+            assert!(!trunk_ir::op_interface::DynIsolatedFromAbove::is_implemented(ctx, lambda));
         }
-        assert!(trunk_ir::op_interface::PureOps::is_pure(
+        assert!(trunk_ir::op_interface::DynPure::is_implemented(
             ctx,
             func_ref.expect("func_ref")
         ));
-        assert!(!trunk_ir::op_interface::PureOps::is_pure(
+        assert!(!trunk_ir::op_interface::DynPure::is_implemented(
             ctx,
             call.expect("call")
         ));

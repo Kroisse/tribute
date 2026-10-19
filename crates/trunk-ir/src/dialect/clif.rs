@@ -3,17 +3,18 @@
 use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
 use crate::dialect::core::{I32, IntegerLike};
-use crate::op_interface::{CallLike, CallLikeOps, IndirectCallLike, IndirectCallLikeOps};
+use crate::op_interface::{CallLike, IndirectCallLike, IsolatedFromAbove};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
 
-crate::register_isolated_op!(Func);
+impl IsolatedFromAbove for Func {}
 
 #[trunk_ir::dialect]
 mod clif {
     // Module
+    #[interfaces(IsolatedFromAbove)]
     fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
         {}
@@ -35,10 +36,12 @@ mod clif {
     /// bytes at `offset` of the enclosing `data`. Only a `data` region holds it.
     #[verify]
     fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
+    #[interfaces(CallLike)]
 
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
+    #[interfaces(IndirectCallLike)]
     fn call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
         callee: Value<_>,
@@ -125,8 +128,10 @@ mod clif {
     }
 
     fn trap(code: Attr<String>) {}
+    #[interfaces(CallLike)]
 
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
+    #[interfaces(IndirectCallLike)]
 
     fn return_call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
@@ -504,22 +509,6 @@ impl IndirectCallLike for ReturnCallIndirect {
 
 impl CallLike for Call {}
 impl CallLike for ReturnCall {}
-
-inventory::submit! {
-    CallLikeOps::register::<Call>()
-}
-
-inventory::submit! {
-    CallLikeOps::register::<ReturnCall>()
-}
-
-inventory::submit! {
-    IndirectCallLikeOps::register::<CallIndirect>()
-}
-
-inventory::submit! {
-    IndirectCallLikeOps::register::<ReturnCallIndirect>()
-}
 
 /// Attach the required exact callable contract to a `clif` indirect transfer.
 ///

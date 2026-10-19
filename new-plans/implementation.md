@@ -32,8 +32,8 @@ TrunkIR validation follows the layered model in `new-plans/ir.md`:
 - Whole-IR consistency belongs in pass-manager verifiers. Install these through
   `PassManager::with_verifier` when a pass sequence should report the pass that
   broke a graph-wide invariant such as SSA use-chain consistency.
-- Shared behavior belongs in operation interfaces such as `PureOps` and
-  `IsolatedFromAboveOps`. Add new interfaces only when there is an immediate
+- Shared behavior belongs in operation interfaces such as `Pure` and
+  `IsolatedFromAbove`. Add new interfaces only when there is an immediate
   generic consumer, not as a speculative hierarchy.
 
 The declarative operation schema in `#[dialect]` definitions generates

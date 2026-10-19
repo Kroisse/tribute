@@ -1,5 +1,6 @@
 //! An operation interface declared outside trunk-ir, implemented by a
-//! dialect of this crate and by an operation of trunk-ir.
+//! dialect of this crate, registered with `#[interfaces(..)]`, and by an
+//! operation of trunk-ir, registered with `register_interfaces!`.
 
 use trunk_ir::dialect::arith;
 use trunk_ir::ops::DialectOp;
@@ -10,6 +11,7 @@ use trunk_ir::{IrContext, OpRef, ValueRef};
 mod probe {
     #[trunk_ir::dialect]
     mod probe {
+        #[interfaces(super::Consumes)]
         fn pair(lhs: Value<_>, rhs: Value<_>) {}
 
         fn other() {}
@@ -58,8 +60,7 @@ impl Consumes for arith::Addi {
     }
 }
 
-trunk_ir::__private::inventory::submit! { <probe::Pair as Consumes>::__TRUNK_IR_INTERFACE }
-trunk_ir::__private::inventory::submit! { <arith::Addi as Consumes>::__TRUNK_IR_INTERFACE }
+trunk_ir::register_interfaces!(arith::Addi: Consumes);
 
 fn find(ctx: &IrContext, body: trunk_ir::RegionRef, name: trunk_ir::OpName) -> OpRef {
     let mut found = None;

@@ -3,7 +3,7 @@ use crate::native::evidence::lower_evidence_to_native;
 use crate::native::rc_materialization::materialize;
 use crate::native::type_converter::native_type_converter;
 use trunk_ir::op_interface::{
-    Branch, BranchOps, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
+    Branch, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
 };
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
@@ -28,15 +28,18 @@ fn production_plan(
 // Branch terminators whose interface models are deliberately wrong.
 #[trunk_ir::dialect]
 mod test {
+    #[interfaces(Branch)]
     fn incomplete_branch() {
         #[successor(exit)]
         {}
     }
+    #[interfaces(Branch)]
 
     fn missing_edge_branch() {
         #[successor(exit)]
         {}
     }
+    #[interfaces(Branch)]
 
     fn reversed_branch() {
         #[successor(left)]
@@ -44,6 +47,7 @@ mod test {
         #[successor(right)]
         {}
     }
+    #[interfaces(Branch)]
 
     fn multi_forwarding_branch(value: Value<_>) {
         #[successor(left)]
@@ -85,11 +89,6 @@ impl Branch for MultiForwardingBranch {
         ]))
     }
 }
-
-trunk_ir::inventory::submit! { BranchOps::register::<IncompleteBranch>() }
-trunk_ir::inventory::submit! { BranchOps::register::<MissingEdgeBranch>() }
-trunk_ir::inventory::submit! { BranchOps::register::<ReversedBranch>() }
-trunk_ir::inventory::submit! { BranchOps::register::<MultiForwardingBranch>() }
 
 fn build(ir: &str) -> (IrContext, Module, NativeOwnershipPlan) {
     let mut ctx = IrContext::new();

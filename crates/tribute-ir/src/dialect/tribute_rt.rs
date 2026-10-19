@@ -1,5 +1,7 @@
 //! Tribute runtime dialect — boxing, unboxing, and reference counting.
 
+use trunk_ir::op_interface::Pure;
+
 // === Managed reference registrations ===
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Intref>());
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Anyref>());
@@ -20,14 +22,22 @@ mod tribute_rt {
     struct Bool;
     struct Intref;
     struct Anyref;
+    #[interfaces(Pure)]
 
     fn box_int(value: Value<_>) -> Value<_> {}
+    #[interfaces(Pure)]
     fn unbox_int(value: Value<_>) -> Value<_> {}
+    #[interfaces(Pure)]
     fn box_nat(value: Value<_>) -> Value<_> {}
+    #[interfaces(Pure)]
     fn unbox_nat(value: Value<_>) -> Value<_> {}
+    #[interfaces(Pure)]
     fn box_float(value: Value<_>) -> Value<_> {}
+    #[interfaces(Pure)]
     fn unbox_float(value: Value<_>) -> Value<_> {}
+    #[interfaces(Pure)]
     fn box_bool(value: Value<_>) -> Value<_> {}
+    #[interfaces(Pure)]
     fn unbox_bool(value: Value<_>) -> Value<_> {}
 
     fn retain(ptr: Value<_>) -> Value<_> {}
@@ -56,14 +66,14 @@ use trunk_ir::ops::DialectOp;
 // === Pure operation registrations ===
 // Boxing and unboxing operations are pure (no side effects)
 
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxInt>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxInt>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxNat>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxNat>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxFloat>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxFloat>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxBool>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxBool>() }
+impl Pure for BoxInt {}
+impl Pure for UnboxInt {}
+impl Pure for BoxNat {}
+impl Pure for UnboxNat {}
+impl Pure for BoxFloat {}
+impl Pure for UnboxFloat {}
+impl Pure for BoxBool {}
+impl Pure for UnboxBool {}
 
 // === Canonicalization folds ===
 

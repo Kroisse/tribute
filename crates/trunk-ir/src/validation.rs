@@ -539,7 +539,7 @@ fn enclosing_func_signature(
         if let Some(signature) = crate::op_interface::CallableOwnerOps::signature(ctx, op) {
             return signature;
         }
-        if crate::op_interface::IsolatedFromAboveOps::is_isolated(ctx, op) {
+        if crate::op_interface::DynIsolatedFromAbove::is_implemented(ctx, op) {
             return None;
         }
     }
@@ -984,7 +984,7 @@ fn validate_region_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec
             // operation; it does not impose a terminator kind on every
             // successor region. Some existing resultless structured regions
             // use implicit fallthrough, while explicit terminators are checked
-            // independently through RegionBranchTerminatorOps below.
+            // independently through DynRegionBranchTerminator below.
         }
     }
 }

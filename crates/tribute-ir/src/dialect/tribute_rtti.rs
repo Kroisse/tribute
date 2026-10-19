@@ -10,6 +10,7 @@
 use std::fmt;
 use trunk_ir::attr_kind::Type;
 use trunk_ir::dialect::core::I32;
+use trunk_ir::op_interface::Pure;
 
 use rustc_hash::FxHashMap as HashMap;
 
@@ -22,7 +23,7 @@ use trunk_ir::types::{Attribute, Location, StringRef};
 use crate::dialect::adt;
 use crate::dialect::adt::layout::{get_enum_variants, get_struct_fields};
 
-trunk_ir::register_pure_op!(Descriptor);
+impl Pure for Descriptor {}
 
 #[trunk_ir::dialect]
 mod tribute_rtti {
@@ -43,6 +44,7 @@ mod tribute_rtti {
     /// The runtime type descriptor number of the allocation `ref` points to.
     ///
     /// Reading a null reference is undefined.
+    #[interfaces(Pure)]
     fn descriptor(r#ref: Value<impl ManagedRef>) -> Value<I32> {}
 }
 

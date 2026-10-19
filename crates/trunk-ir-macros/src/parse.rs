@@ -43,6 +43,15 @@ pub struct OperationDef {
     pub verify: Option<proc_macro2::Span>,
     /// `#[asm_format]`: print and parse through the wrapper's `OpAsmFormat` impl. Holds the attribute's span for diagnostics.
     pub asm_format: Option<proc_macro2::Span>,
+    /// `#[interfaces(..)]`: the operation interfaces the wrapper implements.
+    pub interfaces: Vec<InterfaceRef>,
+}
+
+/// One entry of `#[interfaces(..)]`: an operation interface trait's path.
+pub struct InterfaceRef {
+    pub path: proc_macro2::TokenStream,
+    /// The entry's first token, where a missing impl is reported.
+    pub span: proc_macro2::Span,
 }
 
 pub struct TypeDefData {
@@ -201,9 +210,11 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut rest_results = false;
     let mut verify = None;
     let mut asm_format = None;
+    let mut interfaces: Option<Vec<InterfaceRef>> = None;
     let mut docs = Vec::new();
 
     // Collect outer attributes: #[doc = "..."], #[verify], #[asm_format],
+    // #[interfaces(..)],
     // and the legacy #[attr(...)] and #[rest_results], rejected below
     while peek_punct(iter, '#') {
         let attr = parse_outer_attr(iter)?;
@@ -227,6 +238,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                     return Err("duplicate #[asm_format] on the same operation".into());
                 }
                 asm_format = Some(span);
+            }
+            OuterAttr::Interfaces(entries) => {
+                if interfaces.is_some() {
+                    return Err("duplicate #[interfaces] on the same operation".into());
+                }
+                interfaces = Some(entries);
             }
         }
     }
@@ -283,6 +300,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             op.verify = verify;
             op.asm_format = asm_format;
+            op.interfaces = interfaces.unwrap_or_default();
             Ok(DialectItem::Operation(op))
         }
         "struct" => {
@@ -293,6 +311,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             if rest_results {
                 return Err("#[rest_results] is not allowed on struct items".into());
+            }
+            if interfaces.is_some() {
+                return Err(
+                    "#[interfaces] declares operation interfaces and is not allowed on types"
+                        .into(),
+                );
             }
             let mut td = parse_struct_def(iter)?;
             // Each parameter, attribute, and string attribute handle has an
@@ -346,6 +370,7 @@ enum OuterAttr {
     RestResults,
     Verify(proc_macro2::Span),
     AsmFormat(proc_macro2::Span),
+    Interfaces(Vec<InterfaceRef>),
 }
 
 /// Methods every operation wrapper defines itself; an entity accessor must not
@@ -384,7 +409,7 @@ fn entity_names(op: &OperationDef) -> impl Iterator<Item = &str> {
 }
 
 /// Parse `#[...]` — `#[doc = "..."]`, `#[attr(...)]`, `#[rest_results]`,
-/// `#[verify]`, or `#[asm_format]`.
+/// `#[verify]`, `#[asm_format]`, or `#[interfaces(..)]`.
 fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
     expect_punct(iter, '#')?;
     let bracket = expect_group(iter, Delimiter::Bracket)?;
@@ -408,10 +433,47 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             expect_consumed(&inner, "#[asm_format]")?;
             Ok(OuterAttr::AsmFormat(ident.span()))
         }
+        "interfaces" => {
+            let list = expect_group(&mut inner, Delimiter::Parenthesis)
+                .map_err(|_| "expected `#[interfaces(Interface, ..)]`".to_string())?;
+            expect_consumed(&inner, "#[interfaces(..)]")?;
+            Ok(OuterAttr::Interfaces(parse_interface_list(list.stream())?))
+        }
         other => Err(format!(
-            "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, `verify`, or `asm_format`"
+            "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, `verify`, `asm_format`, or `interfaces`"
         )),
     }
+}
+
+/// Parse the comma-separated interface paths of `#[interfaces(..)]`.
+fn parse_interface_list(stream: proc_macro2::TokenStream) -> Result<Vec<InterfaceRef>, String> {
+    let mut entries: Vec<InterfaceRef> = Vec::new();
+    let mut current = Vec::new();
+    let mut tokens = stream.into_iter().peekable();
+    while tokens.peek().is_some() || !current.is_empty() {
+        match tokens.next() {
+            Some(TokenTree::Punct(p)) if p.as_char() == ',' => {}
+            Some(tt) => {
+                current.push(tt);
+                continue;
+            }
+            None => {}
+        }
+        let Some(first) = current.first() else {
+            return Err("empty entry in #[interfaces(..)]".into());
+        };
+        let span = first.span();
+        let path: proc_macro2::TokenStream = current.drain(..).collect();
+        let text = path.to_string();
+        if entries.iter().any(|entry| entry.path.to_string() == text) {
+            return Err(format!("`{text}` is listed twice in #[interfaces(..)]"));
+        }
+        entries.push(InterfaceRef { path, span });
+    }
+    if entries.is_empty() {
+        return Err("#[interfaces(..)] lists no interfaces".into());
+    }
+    Ok(entries)
 }
 
 // ============================================================================
@@ -1442,6 +1504,110 @@ mod tests {
                     }
                 ),
                 "reserves the name `verify`",
+            ),
+        ] {
+            let err = parse_test_module(item).err().expect("should fail");
+            assert!(err.contains(expected), "unexpected error: {err}");
+        }
+    }
+
+    #[test]
+    fn test_interfaces_register_each_entry() {
+        let module = parse_test_module(quote! {
+            mod test {
+                #[interfaces(Pure, crate::op_interface::CallLike,)]
+                fn call() {}
+                fn plain() {}
+            }
+        })
+        .unwrap();
+        let entries: Vec<Vec<String>> = module
+            .items
+            .iter()
+            .map(|item| match item {
+                DialectItem::Operation(op) => op
+                    .interfaces
+                    .iter()
+                    .map(|interface| interface.path.to_string())
+                    .collect(),
+                DialectItem::TypeDef(_) => unreachable!(),
+            })
+            .collect();
+        assert_eq!(
+            entries,
+            [
+                vec![
+                    "Pure".to_string(),
+                    "crate :: op_interface :: CallLike".into()
+                ],
+                vec![],
+            ]
+        );
+
+        let out = crate::codegen::generate(&quote!(::trunk_ir), &module).to_string();
+        for path in ["Pure", "crate :: op_interface :: CallLike"] {
+            let submit = format!(
+                ":: trunk_ir :: __private :: inventory :: submit ! {{ < Call as {path} > :: __TRUNK_IR_INTERFACE }}"
+            );
+            assert!(out.contains(&submit), "missing `{submit}` in: {out}");
+        }
+        assert_eq!(out.matches("__TRUNK_IR_INTERFACE").count(), 2, "got: {out}");
+
+        for (item, expected) in [
+            (
+                quote!(
+                    mod test {
+                        #[interfaces(Pure)]
+                        #[interfaces(CallLike)]
+                        fn op() {}
+                    }
+                ),
+                "duplicate #[interfaces]",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[interfaces(Pure, Pure)]
+                        fn op() {}
+                    }
+                ),
+                "listed twice",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[interfaces()]
+                        fn op() {}
+                    }
+                ),
+                "lists no interfaces",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[interfaces(Pure,, CallLike)]
+                        fn op() {}
+                    }
+                ),
+                "empty entry",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[interfaces]
+                        fn op() {}
+                    }
+                ),
+                "expected `#[interfaces(Interface, ..)]`",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[interfaces(Pure)]
+                        struct Ty;
+                    }
+                ),
+                "not allowed on types",
             ),
         ] {
             let err = parse_test_module(item).err().expect("should fail");

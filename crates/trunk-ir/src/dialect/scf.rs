@@ -2,36 +2,44 @@
 
 #[trunk_ir::dialect]
 mod scf {
+    #[interfaces(RegionBranch)]
     fn r#if(cond: Value<_>) -> Option<Value<_>> {
         #[region(then_region)]
         {}
         #[region(else_region)]
         {}
     }
+    #[interfaces(RegionBranch)]
 
     fn switch(discriminant: Value<_>) {
         #[region(body)]
         {}
     }
+    #[interfaces(RegionBranch)]
 
     fn case(value: Attr<_>) {
         #[region(body)]
         {}
     }
+    #[interfaces(RegionBranch)]
 
     fn default() {
         #[region(body)]
         {}
     }
+    #[interfaces(RegionBranchTerminator)]
 
     fn r#yield(values: Variadic<_>) {}
+    #[interfaces(RegionBranch)]
 
     fn r#loop(init: Variadic<_>) -> Option<Value<_>> {
         #[region(body)]
         {}
     }
+    #[interfaces(RegionBranchTerminator)]
 
     fn r#continue(values: Variadic<_>) {}
+    #[interfaces(RegionBranchTerminator)]
 
     fn r#break(value: Value<_>) {}
 }
@@ -41,8 +49,8 @@ mod scf {
 // =========================================================================
 
 use crate::op_interface::{
-    ControlFlowInterfaceError, ForwardedValues, RegionBranch, RegionBranchOps, RegionBranchPoint,
-    RegionBranchTerminator, RegionBranchTerminatorOps, RegionSuccessor, RegionSuccessors,
+    ControlFlowInterfaceError, ForwardedValues, RegionBranch, RegionBranchPoint,
+    RegionBranchTerminator, RegionSuccessor, RegionSuccessors,
 };
 
 fn op_parent_region(ctx: &IrContext, op: OpRef) -> Option<crate::refs::RegionRef> {
@@ -458,31 +466,6 @@ impl RegionBranchTerminator for Break {
             )),
         }
     }
-}
-
-inventory::submit! {
-    RegionBranchOps::register::<If>()
-}
-inventory::submit! {
-    RegionBranchOps::register::<Switch>()
-}
-inventory::submit! {
-    RegionBranchOps::register::<Case>()
-}
-inventory::submit! {
-    RegionBranchOps::register::<Default>()
-}
-inventory::submit! {
-    RegionBranchOps::register::<Loop>()
-}
-inventory::submit! {
-    RegionBranchTerminatorOps::register::<Yield>()
-}
-inventory::submit! {
-    RegionBranchTerminatorOps::register::<Continue>()
-}
-inventory::submit! {
-    RegionBranchTerminatorOps::register::<Break>()
 }
 
 // =========================================================================

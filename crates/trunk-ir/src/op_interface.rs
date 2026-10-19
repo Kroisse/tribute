@@ -1,120 +1,31 @@
 //! Operation interface system for querying operation properties.
 //!
-//! This module provides an interface system similar to `type_interface.rs` but for operations.
-//! It uses the `inventory` crate to build a registry of operation properties at compile time.
+//! Each interface is a trait declared with `#[op_interface]`. An operation
+//! implements it with an `impl` and registers it with `#[interfaces(..)]`
+//! on its `#[dialect]` declaration or with [`register_interfaces!`](crate::register_interfaces).
 
-use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
-use std::sync::LazyLock;
 
 use smallvec::SmallVec;
 
+use crate::SymbolPath;
 use crate::ops::DialectOp;
 use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
-use crate::{OpName, SymbolPath};
 use trunk_ir_macros::op_interface;
 
-/// Marker trait for pure operations (no side effects, safe to remove if unused).
+/// Marker interface for pure operations (no side effects, safe to remove if unused).
 ///
-/// Operations implementing this trait can be safely eliminated by DCE if their results are unused.
-pub trait Pure {}
-
-/// Registration entry for pure operations.
-///
-/// Use `inventory::submit!` to register pure operations at the dialect definition site.
-pub struct PureOpRegistration {
-    name: OpName,
-}
-
-inventory::collect!(PureOpRegistration);
-
-/// Internal registry built from inventory at first access.
-struct PureOpRegistry {
-    /// Registered pure operations.
-    pure_ops: HashSet<OpName>,
-}
-
-impl PureOpRegistry {
-    fn new() -> Self {
-        Self {
-            pure_ops: HashSet::default(),
-        }
-    }
-
-    fn lookup(&self, name: OpName) -> bool {
-        self.pure_ops.contains(&name)
-    }
-}
-
-/// Global registry, lazily built from inventory on first access.
-static REGISTRY: LazyLock<PureOpRegistry> = LazyLock::new(|| {
-    let mut registry = PureOpRegistry::new();
-
-    for reg in inventory::iter::<PureOpRegistration> {
-        registry.pure_ops.insert(reg.name);
-    }
-
-    registry
-});
-
-/// Interface for querying operation purity.
-pub struct PureOps;
-
-impl PureOps {
-    /// Register a pure operation (internal use by macro).
-    ///
-    /// Use the `register_pure_op!` macro instead:
-    /// ```text
-    /// register_pure_op!(Addi);
-    /// ```
-    #[doc(hidden)]
-    pub const fn register<T: DialectOp>() -> PureOpRegistration {
-        PureOpRegistration { name: T::NAME }
-    }
-
-    /// Check if an arena operation is pure (no side effects, safe to remove if unused).
-    pub fn is_pure(ctx: &IrContext, op: OpRef) -> bool {
-        let data = ctx.op(op);
-        REGISTRY.lookup(data.name)
-    }
-
-    /// Check if an arena operation is pure and eligible for DCE removal.
-    pub fn is_removable(ctx: &IrContext, op: OpRef) -> bool {
-        Self::is_pure(ctx, op)
-    }
-}
-
-/// Register pure operations by their typed wrappers.
-///
-/// # Example
-/// ```text
-/// register_pure_op!(Addi, Subi);
-/// ```
-///
-/// Each wrapper expands to an inventory registration:
-/// ```text
-/// inventory::submit! {
-///     op_interface::PureOps::register::<Addi>()
-/// }
-/// ```
-#[macro_export]
-macro_rules! register_pure_op {
-    ($($op:path),+ $(,)?) => {
-        $(
-            $crate::inventory::submit! {
-                $crate::op_interface::PureOps::register::<$op>()
-            }
-        )+
-    };
-}
+/// DCE may eliminate an operation implementing this interface if its results are unused.
+#[op_interface]
+pub trait Pure: DialectOp {}
 
 // =============================================================================
 // IsolatedFromAbove Trait
 // =============================================================================
 
-/// Marker trait for operations whose regions cannot reference values from above.
+/// Marker interface for operations whose regions cannot reference values from above.
 ///
-/// Operations implementing this trait have regions that are "isolated" from the
+/// Operations implementing this interface have regions that are "isolated" from the
 /// enclosing scope - they cannot directly reference SSA values defined outside
 /// the region. This is important for:
 ///
@@ -129,89 +40,26 @@ macro_rules! register_pure_op {
 /// Examples of non-isolated operations (can capture outer values):
 /// - `scf.if`, `scf.for` - control flow
 /// - `closure.new` - closure creation
-pub trait IsolatedFromAbove {}
+#[op_interface]
+pub trait IsolatedFromAbove: DialectOp {}
 
-/// Registration entry for isolated operations.
+/// Register operation interface implementations of operations that
+/// `#[dialect]` does not declare, or of interfaces declared elsewhere.
 ///
-/// Use `inventory::submit!` to register isolated operations at the dialect definition site.
-pub struct IsolatedFromAboveRegistration {
-    name: OpName,
-}
-
-inventory::collect!(IsolatedFromAboveRegistration);
-
-/// Internal registry built from inventory at first access.
-struct IsolatedFromAboveRegistry {
-    /// Registered isolated operations.
-    isolated_ops: HashSet<OpName>,
-}
-
-impl IsolatedFromAboveRegistry {
-    fn new() -> Self {
-        Self {
-            isolated_ops: HashSet::default(),
-        }
-    }
-
-    fn lookup(&self, name: OpName) -> bool {
-        self.isolated_ops.contains(&name)
-    }
-}
-
-/// Global registry for isolated operations, lazily built from inventory on first access.
-static ISOLATED_REGISTRY: LazyLock<IsolatedFromAboveRegistry> = LazyLock::new(|| {
-    let mut registry = IsolatedFromAboveRegistry::new();
-
-    for reg in inventory::iter::<IsolatedFromAboveRegistration> {
-        registry.isolated_ops.insert(reg.name);
-    }
-
-    registry
-});
-
-/// Interface for querying operation isolation.
-pub struct IsolatedFromAboveOps;
-
-impl IsolatedFromAboveOps {
-    /// Register an isolated operation (internal use by macro).
-    ///
-    /// Use the `register_isolated_op!` macro instead:
-    /// ```text
-    /// register_isolated_op!(Func);
-    /// ```
-    #[doc(hidden)]
-    pub const fn register<T: DialectOp>() -> IsolatedFromAboveRegistration {
-        IsolatedFromAboveRegistration { name: T::NAME }
-    }
-
-    /// Check if an arena operation's regions are isolated from above.
-    pub fn is_isolated(ctx: &IrContext, op: OpRef) -> bool {
-        let data = ctx.op(op);
-        ISOLATED_REGISTRY.lookup(data.name)
-    }
-}
-
-/// Register isolated operations by their typed wrappers.
-///
-/// # Example
 /// ```text
-/// register_isolated_op!(Func);
+/// register_interfaces!(Exit: CallableExit; Br: Branch, Pure);
 /// ```
 ///
-/// Each wrapper expands to an inventory registration:
-/// ```text
-/// inventory::submit! {
-///     op_interface::IsolatedFromAboveOps::register::<Func>()
-/// }
-/// ```
+/// Each entry requires the interface's impl for the operation wrapper,
+/// as `#[interfaces(..)]` on a `#[dialect]` operation does.
 #[macro_export]
-macro_rules! register_isolated_op {
-    ($($op:path),+ $(,)?) => {
-        $(
-            $crate::inventory::submit! {
-                $crate::op_interface::IsolatedFromAboveOps::register::<$op>()
+macro_rules! register_interfaces {
+    ($($op:ty : $($interface:path),+ $(,)?);+ $(;)?) => {
+        $($(
+            $crate::__private::inventory::submit! {
+                <$op as $interface>::__TRUNK_IR_INTERFACE
             }
-        )+
+        )+)+
     };
 }
 
@@ -385,15 +233,10 @@ pub trait CallableOwner: DialectOp {
     fn callable_signature(self, ctx: &IrContext) -> Option<crate::dialect::func::FuncSig>;
 }
 
-/// Static queries and registration entry point for [`CallableOwner`].
+/// Static queries for [`CallableOwner`].
 pub struct CallableOwnerOps;
 
 impl CallableOwnerOps {
-    #[doc(hidden)]
-    pub const fn register<T: CallableOwner>() -> __CallableOwnerVTable {
-        T::__TRUNK_IR_INTERFACE
-    }
-
     /// Outer None means unregistered; Some(None) means a malformed owner.
     pub fn signature(ctx: &IrContext, op: OpRef) -> Option<Option<crate::dialect::func::FuncSig>> {
         DynCallableOwner::get(ctx, op).map(|owner| owner.callable_signature(ctx))
@@ -443,15 +286,10 @@ pub trait CallableExit: DialectOp {
     }
 }
 
-/// Static queries and registration entry point for [`CallableExit`].
+/// Static queries for [`CallableExit`].
 pub struct CallableExitOps;
 
 impl CallableExitOps {
-    #[doc(hidden)]
-    pub const fn register<T: CallableExit>() -> __CallableExitVTable {
-        T::__TRUNK_IR_INTERFACE
-    }
-
     /// Prove that an operation leaves the current callable.
     ///
     /// A missing registration and a failed typed query are both errors so
@@ -480,15 +318,10 @@ pub trait CallLike: DialectOp {
     }
 }
 
-/// Static queries and registration entry point for [`CallLike`].
+/// Static queries for [`CallLike`].
 pub struct CallLikeOps;
 
 impl CallLikeOps {
-    #[doc(hidden)]
-    pub const fn register<T: CallLike>() -> __CallLikeVTable {
-        T::__TRUNK_IR_INTERFACE
-    }
-
     /// The callee of a direct call, or `None` if `op` is not one or is
     /// malformed.
     pub fn callee(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
@@ -518,15 +351,10 @@ pub trait IndirectCallLike: DialectOp {
     fn set_exact_signature(self, ctx: &mut IrContext, signature: TypeRef) -> bool;
 }
 
-/// Static queries and registration entry point for [`IndirectCallLike`].
+/// Static queries for [`IndirectCallLike`].
 pub struct IndirectCallLikeOps;
 
 impl IndirectCallLikeOps {
-    #[doc(hidden)]
-    pub const fn register<T: IndirectCallLike>() -> __IndirectCallLikeVTable {
-        T::__TRUNK_IR_INTERFACE
-    }
-
     /// Read an indirect transfer's exact callable signature, if it has one.
     pub fn exact_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
         DynIndirectCallLike::get(ctx, op).and_then(|call| call.exact_signature(ctx))
@@ -555,16 +383,6 @@ pub trait Branch: DialectOp {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
 }
 
-/// Registration entry point for [`Branch`].
-pub struct BranchOps;
-
-impl BranchOps {
-    #[doc(hidden)]
-    pub const fn register<T: Branch>() -> __BranchVTable {
-        T::__TRUNK_IR_INTERFACE
-    }
-}
-
 /// Control-flow semantics between an operation and nested regions.
 #[op_interface]
 pub trait RegionBranch: DialectOp {
@@ -581,15 +399,10 @@ pub trait RegionBranch: DialectOp {
     ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
 }
 
-/// Transfer helpers and registration entry point for [`RegionBranch`].
+/// Transfer helpers for [`RegionBranch`].
 pub struct RegionBranchOps;
 
 impl RegionBranchOps {
-    #[doc(hidden)]
-    pub const fn register<T: RegionBranch>() -> __RegionBranchVTable {
-        T::__TRUNK_IR_INTERFACE
-    }
-
     /// Build the named value transfer for one already-reported successor.
     pub fn value_transfer(
         ctx: &IrContext,
@@ -639,43 +452,4 @@ pub trait RegionBranchTerminator: DialectOp {
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
-}
-
-/// Registration entry point for [`RegionBranchTerminator`].
-pub struct RegionBranchTerminatorOps;
-
-impl RegionBranchTerminatorOps {
-    #[doc(hidden)]
-    pub const fn register<T: RegionBranchTerminator>() -> __RegionBranchTerminatorVTable {
-        T::__TRUNK_IR_INTERFACE
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_registry_is_populated() {
-        // Just verify the registry can be accessed without panicking
-        let _ = &*REGISTRY;
-    }
-
-    #[test]
-    fn test_unregistered_ops_are_not_pure() {
-        // This test would need a database and operation, so we just verify the struct exists
-        let _ = PureOps;
-    }
-
-    #[test]
-    fn test_isolated_registry_is_populated() {
-        // Just verify the registry can be accessed without panicking
-        let _ = &*ISOLATED_REGISTRY;
-    }
-
-    #[test]
-    fn test_unregistered_ops_are_not_isolated() {
-        // This test would need a database and operation, so we just verify the struct exists
-        let _ = IsolatedFromAboveOps;
-    }
 }

@@ -29,7 +29,7 @@ use derive_more::{Display, Error};
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::dialect::core;
-use crate::op_interface::IsolatedFromAboveOps;
+use crate::op_interface::DynIsolatedFromAbove;
 use crate::ops::DialectOp;
 use crate::refs::OpRef;
 use crate::rewrite::Module;
@@ -329,7 +329,7 @@ fn collect_targets<T: DialectOp>(ctx: &IrContext, root: OpRef) -> Vec<T> {
 }
 
 fn ensure_nested_anchor_is_isolated(ctx: &IrContext, op: OpRef) -> PassResult {
-    if IsolatedFromAboveOps::is_isolated(ctx, op) {
+    if DynIsolatedFromAbove::is_implemented(ctx, op) {
         return Ok(());
     }
 

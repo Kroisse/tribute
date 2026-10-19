@@ -46,6 +46,8 @@ mod parse;
 ///   wrapper's `trunk_ir::ops::Verify` impl for `#[verify]` operations and
 ///   the wrapper's `trunk_ir::asm_format::OpAsmFormat` print/parse hooks for
 ///   `#[asm_format]` operations
+/// - For `#[interfaces(A, path::B)]`, a registration of the wrapper's impl of
+///   each listed operation interface; a missing impl is reported at its entry
 ///
 /// For each type `struct`, a `static` `TypeDef` holding the wrapper's
 /// `trunk_ir::type_verifier::VerifyType` impl for `#[verify]` and its

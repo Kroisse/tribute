@@ -10,6 +10,3 @@ pub mod runtime_layout;
 
 // Re-export common trunk-ir types for convenience
 pub use trunk_ir::{BlockId, ConversionError, IdVec, Span, Symbol, idvec};
-
-// Re-export trunk_ir::register_pure_op for convenience
-pub use trunk_ir::register_pure_op;
