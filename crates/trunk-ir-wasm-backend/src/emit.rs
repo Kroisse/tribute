@@ -270,6 +270,8 @@ struct ModuleInfo {
     elements: Vec<ElementDef>,
     globals: Vec<GlobalDef>,
     gc_types: Vec<GcTypeDef>,
+    /// The supertype index of each GC type, in index order.
+    gc_supertypes: Vec<Option<u32>>,
     type_idx_by_type: HashMap<TypeRef, u32>,
     /// Function type lookup map (wasm.func_sig TypeRef).
     func_types: HashMap<SymbolPath, TypeRef>,
@@ -289,6 +291,29 @@ struct FunctionEmitContext {
     value_locals: HashMap<ValueRef, u32>,
     /// Effective types for values (after unification).
     effective_types: HashMap<ValueRef, TypeRef>,
+}
+
+/// `fields` with each field its supertype also declares taking the
+/// supertype's mutability.
+fn inherit_field_mutability(
+    fields: &[FieldType],
+    supertype: Option<u32>,
+    gc_types: &[GcTypeDef],
+) -> Vec<FieldType> {
+    let inherited = match supertype.and_then(|index| gc_types.get(index as usize)) {
+        Some(GcTypeDef::Struct(inherited)) => inherited.as_slice(),
+        _ => &[],
+    };
+    fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| FieldType {
+            mutable: inherited
+                .get(index)
+                .map_or(field.mutable, |inherited| inherited.mutable),
+            ..*field
+        })
+        .collect()
 }
 
 pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationResult<Vec<u8>> {
@@ -318,23 +343,29 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
     let gc_type_count = module_info.gc_types.len() as u32;
     let mut next_type_index = gc_type_count;
 
-    // All GC types must be in a single rec group for nominal typing. A user
-    // struct that starts with the descriptor field is a subtype of the
-    // builtin `Described` type, which is therefore the only non-final type.
+    // All GC types must be in a single rec group for nominal typing. A
+    // struct's supertype comes only from its declared `supertype`, and a type
+    // that some type names as its supertype is the only kind left non-final.
+    // The fields a subtype shares with its supertype keep the supertype's
+    // mutability.
+    let supertypes = &module_info.gc_supertypes;
     let gc_subtypes: Vec<SubType> = module_info
         .gc_types
         .iter()
         .enumerate()
         .map(|(index, gc_type)| match gc_type {
             GcTypeDef::Struct(fields) => SubType {
-                is_final: index as u32 != gc_types::DESCRIBED_IDX,
-                supertype_idx: (index as u32 >= gc_types::FIRST_USER_TYPE_IDX
-                    && gc_types::is_described_subtype(fields))
-                .then_some(gc_types::DESCRIBED_IDX),
+                is_final: !supertypes.contains(&Some(index as u32)),
+                supertype_idx: supertypes.get(index).copied().flatten(),
                 composite_type: CompositeType {
                     shared: false,
                     inner: CompositeInnerType::Struct(StructType {
-                        fields: fields.clone().into_boxed_slice(),
+                        fields: inherit_field_mutability(
+                            fields,
+                            supertypes.get(index).copied().flatten(),
+                            &module_info.gc_types,
+                        )
+                        .into_boxed_slice(),
                     }),
                     descriptor: None,
                     describes: None,
@@ -662,6 +693,8 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
 
     // Collect GC types
     let (gc_types, mut type_idx_by_type) = collect_gc_types(ctx, module)?;
+    info.gc_supertypes =
+        collect_gc_supertypes(ctx, module, gc_types.len(), &type_idx_by_type)?;
     info.gc_types = gc_types;
 
     // Collect function types from call_indirect operations

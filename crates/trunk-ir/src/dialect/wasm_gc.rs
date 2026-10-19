@@ -10,8 +10,12 @@ use crate::dialect::core::{Array, IntegerLike};
 #[trunk_ir::dialect]
 mod wasm_gc {
     /// A structural GC struct: its field types in order, each a Wasm
-    /// storage representation. Equal field lists are one GC type.
-    struct Struct<#[rest] Fields>;
+    /// storage representation. Equal field lists with the same supertype
+    /// are one GC type. `supertype`, when present, is the GC struct this
+    /// struct is declared a subtype of; its fields are a prefix of these.
+    struct Struct<#[rest] Fields> {
+        supertype: Option<Attr<Type>>,
+    }
 
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
