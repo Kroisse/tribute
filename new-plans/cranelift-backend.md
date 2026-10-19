@@ -397,7 +397,9 @@ Runtime은 address space의 8 byte granule마다 shadow byte 하나를 둔다. �
   폭이 kernel 설정에 따라 다른 platform(Linux aarch64의 48, 42, 39 bit)에서는 넓은
   폭부터 차례로 예약해 처음 받아들여진 길이를 쓴다. 가상 memory 한도나 엄격한
   overcommit 정책이 모든 폭을 거절하면 초기화는 마지막으로 요청한 크기와 `errno`를
-  stderr에 쓰고 process를 abort한다. 예약은 POSIX `mmap`을 쓰며, 그 밖의
+  stderr에 쓰고 process를 abort한다. 위반 보고는 process를 abort하므로, core dump가
+  예약 전체를 훑지 않도록 이를 지원하는 platform에서는 shadow를 core dump에서
+  제외한다. 예약은 POSIX `mmap`을 쓰며, 그 밖의
   platform에서는 지원하지 않는다고 보고하고 abort한다.
 - **표현:** Shadow 0은 granule 전체가 유효하다는 뜻이다. 1부터 7까지는 앞쪽의 그
   수만큼의 byte만 유효하다는 뜻이며, 크기가 8의 배수가 아닌 payload의 마지막

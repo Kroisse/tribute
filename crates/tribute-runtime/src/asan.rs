@@ -150,10 +150,15 @@ fn reserve_shadow(len: usize) -> Result<*mut u8, i32> {
         )
     };
     if mapping == libc::MAP_FAILED {
-        Err(crate::last_errno())
-    } else {
-        Ok(mapping.cast())
+        return Err(crate::last_errno());
     }
+    // A core dump walks every page of a mapping, which takes minutes for one
+    // this large even when it is untouched, and a report aborts the process.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    unsafe {
+        libc::madvise(mapping, len, libc::MADV_DONTDUMP)
+    };
+    Ok(mapping.cast())
 }
 
 #[cfg(not(unix))]
