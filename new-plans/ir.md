@@ -248,7 +248,7 @@ representation을 바꾸는 operation만 만들며, 타입이 다른 값을 그�
 않는다. 표현이 같은 두 타입은 target 타입 변환 뒤 같은
 타입이 되므로 그 사이의 cast는 동일 타입 cast로 남는다.
 
-공용 materialization과 type converter는 subtype 관계를 다루지 않는다. WasmGC처럼
+Pass가 만드는 boxing·unboxing과 type converter는 subtype 관계를 다루지 않는다. WasmGC처럼
 서브타입 참조를 상위 타입 자리에 그대로 받는 target은 target 변환 단계에서
 backend의 물리적 할당 가능성 규칙에 따라 서브타입에서 상위 타입으로 가는 cast를
 지우고 source 값을 그대로 쓴다(upcast elision). 표현이 같다는 사실만으로는
