@@ -9,10 +9,12 @@
 //! - `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
 //! - `arith.{extsi,extui,trunci,sitofp,uitofp,fptosi,fptoui,extf,truncf}` ->
 //!   the wasm conversion with the same signedness
+//! - operations on `core.index` -> the same operations on `core.i32`, the
+//!   Wasm index width, between unrealized casts
 
 use tracing::warn;
 
-use trunk_ir::context::IrContext;
+use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -29,6 +31,7 @@ use trunk_ir::types::Attribute;
 /// their own type conversion rules.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     let applicator = PatternApplicator::new(type_converter)
+        .add_pattern(ArithIndexPattern)
         .add_pattern(ArithConstPattern)
         .add_pattern(NilValuePattern)
         .add_pattern(ArithBinOpPattern)
@@ -37,6 +40,133 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(ArithBitwisePattern)
         .add_pattern(ArithConversionPattern);
     applicator.apply_partial(ctx, module);
+}
+
+/// Pattern for `arith` operations on `core.index`.
+///
+/// A Wasm index is an `i32`. The operation is rebuilt on `core.i32`, with
+/// its index operands and results passed through unrealized casts, and an
+/// index cast becomes the `i32` extension or truncation it denotes. The
+/// rebuilt operations lower like any other.
+struct ArithIndexPattern;
+
+impl RewritePattern for ArithIndexPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if ctx.op(op).name.dialect(ctx) != arith::DIALECT_NAME {
+            return false;
+        }
+        let operands = ctx.op_operands(op).to_vec();
+        let result_types = ctx.op_result_types(op).to_vec();
+        let has_index = operands
+            .iter()
+            .map(|&value| ctx.value_ty(value))
+            .chain(result_types.iter().copied())
+            .any(|ty| core::Index::matches(ctx, ty));
+        if !has_index {
+            return false;
+        }
+        let loc = ctx.op(op).location;
+        let i32_ty = intern_i32_type(ctx);
+        let to_i32 = |ctx: &IrContext, ty| {
+            if core::Index::matches(ctx, ty) {
+                i32_ty
+            } else {
+                ty
+            }
+        };
+        let operands: Vec<_> = operands
+            .into_iter()
+            .map(|value| {
+                if !core::Index::matches(ctx, ctx.value_ty(value)) {
+                    return value;
+                }
+                let cast = core::UnrealizedConversionCast::operands(value)
+                    .results(i32_ty)
+                    .build(ctx, loc);
+                rewriter.insert_op(cast.op_ref());
+                cast.result(ctx)
+            })
+            .collect();
+        let results: Vec<_> = if let Some(signed) = index_cast_signedness(ctx, op) {
+            let [operand] = operands[..] else {
+                return false;
+            };
+            let dst_ty = to_i32(ctx, result_types[0]);
+            let (Some(src), Some(dst)) = (
+                IntegerLike::width(ctx, ctx.value_ty(operand)),
+                IntegerLike::width(ctx, dst_ty),
+            ) else {
+                return false;
+            };
+            let converted = if src == dst {
+                operand
+            } else {
+                let conversion = if dst < src {
+                    arith::Trunci::operands(operand)
+                        .results(dst_ty)
+                        .build(ctx, loc)
+                        .op_ref()
+                } else if signed {
+                    arith::Extsi::operands(operand)
+                        .results(dst_ty)
+                        .build(ctx, loc)
+                        .op_ref()
+                } else {
+                    arith::Extui::operands(operand)
+                        .results(dst_ty)
+                        .build(ctx, loc)
+                        .op_ref()
+                };
+                rewriter.insert_op(conversion);
+                ctx.op_results(conversion)[0]
+            };
+            vec![converted]
+        } else {
+            let result_types: Vec<_> = result_types.iter().map(|&ty| to_i32(ctx, ty)).collect();
+            let mut data = OperationDataBuilder::new(loc, ctx.op(op).name)
+                .operands(operands)
+                .results(result_types)
+                .build(ctx);
+            data.attributes = ctx.op(op).attributes.clone();
+            let rebuilt = ctx.create_op(data);
+            rewriter.insert_op(rebuilt);
+            ctx.op_results(rebuilt).to_vec()
+        };
+        let original_types = ctx.op_result_types(op).to_vec();
+        let values = results
+            .into_iter()
+            .zip(original_types)
+            .map(|(value, ty)| {
+                if ctx.value_ty(value) == ty {
+                    return value;
+                }
+                let cast = core::UnrealizedConversionCast::operands(value)
+                    .results(ty)
+                    .build(ctx, loc);
+                rewriter.insert_op(cast.op_ref());
+                cast.result(ctx)
+            })
+            .collect();
+        rewriter.erase_op(values);
+        true
+    }
+}
+
+/// Whether `op` is `arith.index_castsi` (`true`) or `arith.index_castui`
+/// (`false`).
+fn index_cast_signedness(ctx: &IrContext, op: OpRef) -> Option<bool> {
+    if arith::IndexCastsi::matches(ctx, op) {
+        Some(true)
+    } else if arith::IndexCastui::matches(ctx, op) {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Pattern for `core.nil_value` -> `wasm.nop`
@@ -952,6 +1082,43 @@ mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
+
+    #[test]
+    fn index_operations_lower_on_i32_between_unrealized_casts() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+core.module @test {
+  func.func @f(%n: core.i32, %w: core.i64, %i: core.index) -> core.i64 {
+    %one = arith.const {value = 1} : core.index
+    %a = arith.index_castsi %n : core.index
+    %b = arith.index_castui %w : core.index
+    %sum = arith.addi %a, %b : core.index
+    %next = arith.addi %sum, %one : core.index
+    %lt = arith.cmpi %next, %i {predicate = "ult"} : core.i1
+    %wide = arith.index_castui %next : core.i64
+    func.return %wide
+  }
+}
+"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        assert!(!output.contains("arith."), "{output}");
+        for op in [
+            "wasm.i32_const",
+            "wasm.i32_wrap_i64",
+            "wasm.i32_add",
+            "wasm.i32_lt_u",
+            "wasm.i64_extend_i32_u",
+        ] {
+            assert!(output.contains(op), "missing {op}:\n{output}");
+        }
+        assert!(output.contains(": core.index"), "{output}");
+    }
 
     #[test]
     fn uncategorized_types_are_left_unconverted() {

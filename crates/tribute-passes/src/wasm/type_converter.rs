@@ -11,6 +11,7 @@
 //! | `tribute_rt.nat`    | `core.i32`      | Arbitrary precision -> i32 (Phase 1) |
 //! | `tribute_rt.bool`   | `core.i32`      | Boolean as i32                      |
 //! | `core.i1`           | `core.i32`      | WASM doesn't have i1                |
+//! | `core.index`        | `core.i32`      | WasmGC array index width            |
 //! | `tribute_rt.float`  | `core.f64`      | Float as f64                        |
 //! | `tribute_rt.intref` | `wasm.i31ref`   | Boxed integer reference             |
 //! | `tribute_rt.anyref` | `wasm.anyref`   | Any reference type                  |
@@ -300,6 +301,15 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
+    // Convert core.index -> core.i32 (the WasmGC array index width)
+    tc.add_conversion(move |ctx, ty| {
+        if trunk_ir::dialect::core::Index::matches(ctx, ty) {
+            Some(i32_ty)
+        } else {
+            None
+        }
+    });
+
     // Convert core.i1 -> core.i32 (WASM doesn't have i1, use i32)
     tc.add_conversion(move |ctx, ty| {
         if trunk_ir::dialect::core::I1::matches(ctx, ty) {
@@ -579,6 +589,16 @@ mod tests {
     use super::*;
     use trunk_ir::ops::DialectType;
     use trunk_ir::types::Attribute;
+
+    #[test]
+    fn wasm_type_converter_maps_index_to_the_array_index_width() {
+        let mut ctx = IrContext::new();
+        let type_converter = wasm_type_converter(&mut ctx);
+        let index = trunk_ir::dialect::core::Index::type_ref(&mut ctx);
+        let i32_ty = trunk_ir::dialect::core::I32::type_ref(&mut ctx);
+
+        assert_eq!(type_converter.convert_type(&ctx, index), Some(i32_ty));
+    }
 
     #[test]
     fn runtime_layout_identifiers_match_the_wasm_builtin_layouts() {

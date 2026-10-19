@@ -59,7 +59,7 @@ use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
@@ -554,7 +554,7 @@ impl RewritePattern for ArrayGetPattern {
 
         let loc = ctx.op(op).location;
         let ref_val = array_get.r#ref(ctx);
-        let index = array_get.index(ctx);
+        let index = wasm_index(ctx, rewriter, array_get.index(ctx), loc);
         let result_ty = array_get.result_ty(ctx);
 
         let array_ty = ctx.value_ty(ref_val);
@@ -601,7 +601,7 @@ impl RewritePattern for ArraySetPattern {
 
         let loc = ctx.op(op).location;
         let ref_val = array_set.r#ref(ctx);
-        let index = array_set.index(ctx);
+        let index = wasm_index(ctx, rewriter, array_set.index(ctx), loc);
         let value = array_set.value(ctx);
 
         let array_ty = ctx.value_ty(ref_val);
@@ -630,13 +630,34 @@ impl RewritePattern for ArrayLenPattern {
         let loc = ctx.op(op).location;
         let ref_val = array_len.r#ref(ctx);
         let result_ty = array_len.result_ty(ctx);
+        let i32_ty = core::I32::type_ref(ctx);
 
-        let new_op = wasm_dialect::ArrayLen::operands(ref_val)
+        let len = wasm_dialect::ArrayLen::operands(ref_val)
+            .results(i32_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(len.op_ref());
+        let index = core::UnrealizedConversionCast::operands(len.result(ctx))
             .results(result_ty)
             .build(ctx, loc);
-        rewriter.replace_op(new_op.op_ref());
+        rewriter.replace_op(index.op_ref());
         true
     }
+}
+
+/// `index`, a `core.index`, as the `core.i32` that WasmGC array
+/// instructions take.
+fn wasm_index(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    index: ValueRef,
+    loc: trunk_ir::types::Location,
+) -> ValueRef {
+    let i32_ty = core::I32::type_ref(ctx);
+    let cast = core::UnrealizedConversionCast::operands(index)
+        .results(i32_ty)
+        .build(ctx, loc);
+    rewriter.insert_op(cast.op_ref());
+    cast.result(ctx)
 }
 
 /// Pattern for `adt.ref_null` -> `wasm.ref_null`
@@ -780,9 +801,10 @@ mod tests {
     %default = adt.array_new %one {type = !A} : !A
     %array = adt.array_new %one, %zero {type = !A} : !A
     %invalid = adt.array_new %one, %zero, %one {type = !A} : !A
-    %element = adt.array_get %array, %zero : core.i32
-    adt.array_set %array, %zero, %element
-    %length = adt.array_len %default : core.i32
+    %at = arith.const {value = 0} : core.index
+    %element = adt.array_get %array, %at : core.i32
+    adt.array_set %array, %at, %element
+    %length = adt.array_len %default : core.index
 
     %null = adt.ref_null {type = !S} : !S
     %is_null = adt.ref_is_null %null : core.i32
@@ -914,7 +936,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @read(%bytes: core.array<core.i8>, %words: core.array<core.i32>) -> core.nil {
-    %zero = wasm.i32_const {value = 0} : core.i32
+    %zero = arith.const {value = 0} : core.index
     %byte = adt.array_get %bytes, %zero : core.i8
     %word = adt.array_get %words, %zero : core.i32
     wasm.return
