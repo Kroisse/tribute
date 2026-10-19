@@ -1,6 +1,8 @@
 //! Closure dialect — closures and captures.
 
 use trunk_ir::attr_kind::SymbolRef;
+use trunk_ir::op_flag::Pure;
+use trunk_ir::op_interface::CallableOwner;
 
 // A closure value points to a reference-counted closure object.
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Closure>());
@@ -10,10 +12,13 @@ mod closure {
     // Types
     struct Closure<FuncType>;
 
+    #[flags(Pure)]
     fn new(func_ref: Attr<SymbolRef>, env: Value<_>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn func(closure: Value<_>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn env(closure: Value<_>) -> Value<_> {}
 
     /// High-level lambda: captures + body region → closure value.
@@ -23,19 +28,13 @@ mod closure {
     /// A downstream `lower_closure_lambda` pass extracts the body into a top-level
     /// `func.func` and replaces this op with `closure.new`.
     #[asm_format]
+    #[implements(CallableOwner)]
+    #[flags(Pure)]
     fn lambda(captures: Variadic<_>) -> Value<_> {
         #[region(body)]
         {}
     }
 }
-
-// === Pure operation registrations ===
-// All closure operations are pure
-
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<New>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Func>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Env>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Lambda>() }
 
 // === Custom assembly format for closure.lambda ===
 
@@ -266,8 +265,6 @@ impl trunk_ir::op_interface::CallableOwner for Lambda {
         trunk_ir::dialect::func::FuncSig::from_type_ref(ctx, *function)
     }
 }
-inventory::submit! { trunk_ir::op_interface::CallableOwnerOps::register::<Lambda>() }
-
 #[cfg(test)]
 mod tests {
     use trunk_ir::Span;

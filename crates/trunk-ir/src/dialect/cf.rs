@@ -2,11 +2,13 @@
 
 #[trunk_ir::dialect]
 mod cf {
+    #[implements(Branch)]
     fn br(args: Variadic<_>) {
         #[successor(dest)]
         {}
     }
 
+    #[implements(Branch)]
     fn cond_br(cond: Value<_>) {
         #[successor(then_dest)]
         {}
@@ -21,6 +23,7 @@ mod cf {
     /// matches. A case is a value of the discriminant's type. Successors
     /// receive no arguments.
     #[verify]
+    #[implements(Branch)]
     fn switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerLike>) {
         #[successor(default)]
         {}
@@ -31,9 +34,7 @@ mod cf {
 
 use crate::IrContext;
 use crate::dialect::core::IntegerLike;
-use crate::op_interface::{
-    Branch, BranchOps, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
-};
+use crate::op_interface::{Branch, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError};
 
 impl Branch for Br {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
@@ -62,14 +63,6 @@ impl Branch for CondBr {
             BranchSuccessor::new(self.else_dest(ctx), []),
         ]))
     }
-}
-
-inventory::submit! {
-    BranchOps::register::<Br>()
-}
-
-inventory::submit! {
-    BranchOps::register::<CondBr>()
 }
 
 impl Switch {
@@ -129,8 +122,4 @@ impl Branch for Switch {
                 .map(|block| BranchSuccessor::new(block, [])),
         ))
     }
-}
-
-inventory::submit! {
-    BranchOps::register::<Switch>()
 }

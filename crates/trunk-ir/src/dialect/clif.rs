@@ -3,17 +3,18 @@
 use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
 use crate::dialect::core::{I32, IntegerLike};
-use crate::op_interface::{CallLike, CallLikeOps, IndirectCallLike, IndirectCallLikeOps};
+use crate::op_flag::IsolatedFromAbove;
+use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
+use crate::{IrContext, SymbolPath};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
-
-crate::register_isolated_op!(Func);
 
 #[trunk_ir::dialect]
 mod clif {
     // Module
+    #[flags(IsolatedFromAbove)]
     fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
         {}
@@ -36,9 +37,11 @@ mod clif {
     #[verify]
     fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
 
+    #[implements(CallLike)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
+    #[implements(IndirectCallLike)]
     fn call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
         callee: Value<_>,
@@ -126,8 +129,10 @@ mod clif {
 
     fn trap(code: Attr<String>) {}
 
+    #[implements(CallLike)]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
+    #[implements(IndirectCallLike)]
     fn return_call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
         callee: Value<_>,
@@ -502,23 +507,15 @@ impl IndirectCallLike for ReturnCallIndirect {
     }
 }
 
-impl CallLike for Call {}
-impl CallLike for ReturnCall {}
-
-inventory::submit! {
-    CallLikeOps::register::<Call>()
+impl CallLike for Call {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
 }
-
-inventory::submit! {
-    CallLikeOps::register::<ReturnCall>()
-}
-
-inventory::submit! {
-    IndirectCallLikeOps::register::<CallIndirect>()
-}
-
-inventory::submit! {
-    IndirectCallLikeOps::register::<ReturnCallIndirect>()
+impl CallLike for ReturnCall {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
 }
 
 /// Attach the required exact callable contract to a `clif` indirect transfer.

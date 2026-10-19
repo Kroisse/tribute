@@ -7,6 +7,8 @@
 
 use trunk_ir::attr_kind::{SymbolRef, Type};
 use trunk_ir::dialect::core::I32;
+use trunk_ir::op_flag::Pure;
+use trunk_ir::op_interface::CallableExit;
 
 use super::ability::{CpsClosure, Evidence};
 use crate::continuation_frame::FrameRef;
@@ -25,6 +27,7 @@ mod effect {
     /// - `tr_dispatch_fn`: tail-resumptive dispatch closure, or null.
     /// - `outer`: the evidence the handler is installed on, before the
     ///   installation's selection.
+    #[flags(Pure)]
     fn extend<E: Evidence>(
         ability: Attr<SymbolRef>,
         evidence: Value<E>,
@@ -36,24 +39,30 @@ mod effect {
 
     /// Remove the top handler of one ability from the evidence, exposing the
     /// handler it shadows.
+    #[flags(Pure)]
     fn mask<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// Push a copy of the top handler of one ability onto the evidence.
+    #[flags(Pure)]
     fn dup<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence the top handler of one ability was installed on.
+    #[flags(Pure)]
     fn outer<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence of the row tail `index` of the callable that received
     /// `evidence`, or `evidence` itself when it holds no such row tail.
+    #[flags(Pure)]
     fn tail<E: Evidence>(index: Attr<u32>, evidence: Value<E>) -> Value<E> {}
 
     /// Set the evidence of the row tail `index` that a callee receives with
     /// `evidence`.
+    #[flags(Pure)]
     fn with_tail<E: Evidence>(index: Attr<u32>, evidence: Value<E>, tail: Value<E>) -> Value<E> {}
 
     /// Push the top handler that `source` holds for one ability onto
     /// `evidence`.
+    #[flags(Pure)]
     fn push<E: Evidence>(
         ability: Attr<SymbolRef>,
         evidence: Value<E>,
@@ -79,6 +88,7 @@ mod effect {
     /// types. `payload` is the single packed operation argument value. The
     /// operation is resultless: backend lowering performs the final proper tail
     /// transfer.
+    #[implements(CallableExit)]
     fn dispatch_cps<E: Evidence>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -110,14 +120,6 @@ mod effect {
     }
 }
 
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Extend>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Mask>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Dup>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Outer>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Tail>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<WithTail>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Push>() }
-
 impl trunk_ir::op_interface::CallableExit for DispatchCps {
     fn verify_callable_exit(
         &self,
@@ -137,8 +139,6 @@ impl trunk_ir::op_interface::CallableExit for DispatchCps {
         }
     }
 }
-
-inventory::submit! { trunk_ir::op_interface::CallableExitOps::register::<DispatchCps>() }
 
 #[cfg(test)]
 mod tests {

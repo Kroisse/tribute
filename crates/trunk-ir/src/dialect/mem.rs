@@ -1,13 +1,10 @@
 //! Arena-based mem dialect.
 
-// === Pure operation registrations ===
-crate::register_pure_op!(Data);
-crate::register_pure_op!(Null);
-crate::register_pure_op!(PtrAdd);
 // mem.load is intentionally NOT pure: loads depend on mutable memory and may trap.
 
 use crate::attr_kind::Bytes;
 use crate::dialect::core::{IntegerLike, Ptr, ScalarLike};
+use crate::op_flag::Pure;
 
 #[trunk_ir::dialect]
 mod mem {
@@ -16,10 +13,12 @@ mod mem {
     struct Struct<#[rest] Fields>;
 
     /// The address of immutable data holding `bytes`.
+    #[flags(Pure)]
     fn data(bytes: Attr<Bytes>) -> Value<Ptr> {}
 
     /// The null pointer, the only pointer constant. It has no provenance and
     /// must not be dereferenced.
+    #[flags(Pure)]
     fn null() -> Value<Ptr> {}
 
     /// Load a scalar from `ptr` plus an immediate byte `offset`.
@@ -30,6 +29,7 @@ mod mem {
 
     /// Add a pointer-width integer byte `offset` to `base`, keeping `base`'s
     /// provenance. No element-size scaling is applied.
+    #[flags(Pure)]
     fn ptr_add(base: Value<Ptr>, offset: Value<impl IntegerLike>) -> Value<Ptr> {}
 }
 

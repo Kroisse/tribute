@@ -10,6 +10,6 @@ mod d {
 #[trunk_ir::op_interface]
 pub trait Probed: DialectOp {}
 
-trunk_ir::__private::inventory::submit! { <d::Probe as Probed>::__TRUNK_IR_INTERFACE }
+trunk_ir::register_interfaces!(d::Probe: Probed);
 
 fn main() {}

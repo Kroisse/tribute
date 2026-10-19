@@ -1,25 +1,25 @@
 //! Target-independent operations for the opaque persistent `List` sequence.
 
 use trunk_ir::attr_kind::Type;
+use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
 mod list {
+    #[flags(Pure)]
     fn empty(element_type: Attr<Type>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn prepend<L>(element_type: Attr<Type>, element: Value<_>, tail: Value<L>) -> Value<L> {}
 
+    #[flags(Pure)]
     fn is_empty(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn head<T>(element_type: Attr<TypeOf<T>>, list: Value<_>) -> Value<T> {}
 
+    #[flags(Pure)]
     fn tail<L>(element_type: Attr<Type>, list: Value<L>) -> Value<L> {}
 }
-
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Empty>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Prepend>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<IsEmpty>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Head>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<Tail>() }
 
 #[cfg(test)]
 mod tests {

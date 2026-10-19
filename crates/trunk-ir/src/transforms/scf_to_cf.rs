@@ -720,7 +720,9 @@ fn replace_continue_break(
 #[cfg(test)]
 #[trunk_ir::dialect]
 mod test_exit_dialect {
+    #[implements(crate::op_interface::CallableExit)]
     fn exit() {}
+    #[implements(crate::op_interface::CallableExit)]
     fn malformed_exit() {}
 }
 
@@ -738,12 +740,6 @@ impl crate::op_interface::CallableExit for MalformedExit {
         ))
     }
 }
-
-#[cfg(test)]
-inventory::submit! { crate::op_interface::CallableExitOps::register::<Exit>() }
-
-#[cfg(test)]
-inventory::submit! { crate::op_interface::CallableExitOps::register::<MalformedExit>() }
 
 #[cfg(test)]
 mod tests {

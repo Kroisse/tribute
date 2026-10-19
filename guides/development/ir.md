@@ -206,8 +206,10 @@ assignability rule. The converter-free `ReconcileUnrealizedCasts` pass then fold
 identities and cast chains, and a cast left after that is rejected by the
 target emission boundary.
 Typed accessors do not check the schema; for an optional region or result,
-inspect the operation before calling the accessor. Interface queries that may
-see unverified IR read attributes fallibly instead.
+inspect the operation before calling the accessor. An interface queried on
+unverified IR, such as `Branch` for the validator, reads attributes fallibly
+and reports failure in its result; an interface queried only on IR that
+satisfies its schema, such as `CallLike`, reads through the accessors.
 
 ## Operation Interfaces
 
@@ -219,19 +221,37 @@ declared with `#[trunk_ir::op_interface]`:
 pub trait Branch: DialectOp {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
 }
+```
+
+An operation declares the interfaces it implements in its `#[dialect]`
+declaration, and implements each one next to it:
+
+```rust
+#[trunk_ir::dialect]
+mod cf {
+    #[implements(Branch)]
+    fn br(args: Variadic<_>) {
+        #[successor(dest)]
+        {}
+    }
+}
 
 impl Branch for Br {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> { .. }
 }
-inventory::submit! { BranchOps::register::<Br>() }
 ```
 
 Each method takes `self` or `&self`, then the context (`&IrContext` or
 `&mut IrContext`), and may be generic over lifetimes only; default bodies
-are dispatched like other methods. The `inventory::submit!` registers the
-implementation by the operation's name; registering an operation twice for
-one interface panics when that interface is first queried. The macro
-generates `DynBranch`, a copyable handle to an operation and its
+are dispatched like other methods. `#[implements(..)]` registers the
+implementation by the operation's name, and a missing `impl` is reported at
+its entry. The paths resolve where the `#[dialect]` module is declared.
+Registering an operation twice for one interface panics when that interface
+is first queried. An operation that `#[dialect]` does not declare, or an
+interface added to another crate's operation, is registered with
+`register_interfaces!(Op: InterfaceA, InterfaceB; Other: InterfaceC)`.
+
+The macro generates `DynBranch`, a copyable handle to an operation and its
 implementation:
 
 ```rust
@@ -247,10 +267,34 @@ error, is a function written next to the trait, such as
 Any crate can declare an interface; an implementation follows the orphan
 rule, so it lives with the interface or with the operation.
 
-`Pure` and `IsolatedFromAbove` are marker registrations rather than
-`#[op_interface]` traits: `register_pure_op!(Addi)` and
-`register_isolated_op!(Func)` register an operation, and
-`PureOps::is_pure` and `IsolatedFromAboveOps::is_isolated` query it.
+### Operation Flags
+
+An operation flag is a property without behavior, such as `Pure` and
+`IsolatedFromAbove` in `trunk_ir::op_flag`. An operation lists its flags in
+`#[flags(..)]`; they are stored in its `OpDef`, so a flag has no `impl` and
+no registry:
+
+```rust
+#[trunk_ir::dialect]
+mod arith {
+    #[flags(Pure)]
+    fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+}
+
+let removable = Pure::is_set(ctx, op); // `OpFlag::is_set`
+let isolated = def.has_flag::<IsolatedFromAbove>();
+```
+
+Only the dialect that defines an operation sets its flags. A property that
+another crate attaches to an operation it does not define is an interface,
+even without methods. Any crate declares a flag as a unit struct with
+`#[trunk_ir::op_flag]`, which adds the `static` `OpFlagDef` that identifies
+it by address and its `OpFlag` impl:
+
+```rust
+#[op_flag]
+pub struct Pure;
+```
 
 ## Working with IR
 
@@ -379,9 +423,22 @@ functions (call graph, global DCE, the inliner) are keyed by the defining
 root for diagnostics only; do not look a written reference up by it.
 
 A direct call operation implements the `CallLike`
-[operation interface](#operation-interfaces) so analyses can tell its callee
-from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;
-every other reference an operation holds takes its target's address, which
+[operation interface](#operation-interfaces), declared with
+`#[implements(CallLike)]`, so analyses can tell its callee
+from an address reference. Each implementation names its callee through the
+wrapper's accessor:
+
+```rust
+impl CallLike for Call {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
+}
+
+let callee = DynCallLike::get(ctx, op).map(|call| call.direct_callee(ctx));
+```
+
+Every other reference an operation holds takes its target's address, which
 the call graph records as an escape.
 
 Per-parameter attributes (`param_attrs`, see

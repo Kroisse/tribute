@@ -60,6 +60,17 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
     let op_name = &op.name;
     let def = gen_op_def(crate_path, dialect, op);
     let def_static = format_ident!("__{}_DEF", op_name.to_shouty_snake_case());
+    // The span points a missing interface impl at its `#[implements]` entry.
+    let interfaces = op.implements.iter().map(|interface| {
+        let path = &interface.path;
+        let mut wrapper = sname.clone();
+        wrapper.set_span(interface.span);
+        quote_spanned! {interface.span=>
+            #crate_path::__private::inventory::submit! {
+                <#wrapper as #path>::__TRUNK_IR_INTERFACE
+            }
+        }
+    });
 
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +106,8 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
                 <#sname as #crate_path::ops::DialectOp>::DEF
             )
         }
+
+        #(#interfaces)*
     }
 }
 
@@ -180,6 +193,12 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
         None => quote!(None),
     };
 
+    // The span points a type that is not a flag at its `#[flags]` entry.
+    let flags = op.flags.iter().map(|flag| {
+        let path = &flag.path;
+        quote_spanned!(flag.span=> <#path as #crate_path::op_flag::OpFlag>::DEF)
+    });
+
     let full_name = format!("{dialect}.{op_name}");
     quote! {
         #crate_path::op_def::OpDef {
@@ -198,6 +217,7 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
             },
             verifier: #verifier,
             asm_format: #asm_format,
+            flags: &[#(#flags),*],
         }
     }
 }

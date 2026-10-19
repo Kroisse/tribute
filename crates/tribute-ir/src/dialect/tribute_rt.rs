@@ -10,6 +10,7 @@ inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<
 
 use crate::dialect::tribute_rtti::ManagedRef;
 use trunk_ir::dialect::core::Ptr;
+use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
 mod tribute_rt {
@@ -21,13 +22,21 @@ mod tribute_rt {
     struct Intref;
     struct Anyref;
 
+    #[flags(Pure)]
     fn box_int(value: Value<_>) -> Value<_> {}
+    #[flags(Pure)]
     fn unbox_int(value: Value<_>) -> Value<_> {}
+    #[flags(Pure)]
     fn box_nat(value: Value<_>) -> Value<_> {}
+    #[flags(Pure)]
     fn unbox_nat(value: Value<_>) -> Value<_> {}
+    #[flags(Pure)]
     fn box_float(value: Value<_>) -> Value<_> {}
+    #[flags(Pure)]
     fn unbox_float(value: Value<_>) -> Value<_> {}
+    #[flags(Pure)]
     fn box_bool(value: Value<_>) -> Value<_> {}
+    #[flags(Pure)]
     fn unbox_bool(value: Value<_>) -> Value<_> {}
 
     fn retain(ptr: Value<_>) -> Value<_> {}
@@ -52,18 +61,6 @@ pub use tribute_rc::REFCOUNT_OFFSET;
 pub use tribute_rc::RTTI_IDX_OFFSET;
 
 use trunk_ir::ops::DialectOp;
-
-// === Pure operation registrations ===
-// Boxing and unboxing operations are pure (no side effects)
-
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxInt>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxInt>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxNat>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxNat>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxFloat>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxFloat>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxBool>() }
-inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxBool>() }
 
 // === Canonicalization folds ===
 

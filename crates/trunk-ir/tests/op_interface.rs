@@ -1,7 +1,10 @@
 //! An operation interface declared outside trunk-ir, implemented by a
-//! dialect of this crate and by an operation of trunk-ir.
+//! dialect of this crate, registered with `#[implements(..)]`, and by an
+//! operation of trunk-ir, registered with `register_interfaces!`; and an
+//! operation flag declared outside trunk-ir.
 
 use trunk_ir::dialect::arith;
+use trunk_ir::op_flag::{OpFlag, Pure};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::walk::{WalkAction, walk_region};
@@ -10,11 +13,17 @@ use trunk_ir::{IrContext, OpRef, ValueRef};
 mod probe {
     #[trunk_ir::dialect]
     mod probe {
+        #[implements(super::Consumes)]
         fn pair(lhs: Value<_>, rhs: Value<_>) {}
 
+        #[flags(super::Probed, trunk_ir::op_flag::Pure)]
         fn other() {}
     }
 }
+
+/// A flag declared outside trunk-ir.
+#[trunk_ir::op_flag]
+pub struct Probed;
 
 /// Operands the operation consumes.
 #[trunk_ir::op_interface]
@@ -58,8 +67,7 @@ impl Consumes for arith::Addi {
     }
 }
 
-trunk_ir::__private::inventory::submit! { <probe::Pair as Consumes>::__TRUNK_IR_INTERFACE }
-trunk_ir::__private::inventory::submit! { <arith::Addi as Consumes>::__TRUNK_IR_INTERFACE }
+trunk_ir::register_interfaces!(arith::Addi: Consumes);
 
 fn find(ctx: &IrContext, body: trunk_ir::RegionRef, name: trunk_ir::OpName) -> OpRef {
     let mut found = None;
@@ -121,6 +129,12 @@ fn queries_dispatch_to_each_implementation() {
         .collect();
     implementors.sort();
     assert_eq!(implementors, ["arith.addi", "probe.pair"]);
+
+    assert!(Probed::is_set(&ctx, other));
+    assert!(Pure::is_set(&ctx, other));
+    assert!(!Probed::is_set(&ctx, pair));
+    assert!(!Probed::is_set(&ctx, addi));
+    assert!(Pure::is_set(&ctx, addi));
 
     assert!(pair_interface.forget_last(&mut ctx, 1));
     assert_eq!(ctx.op_operands(pair).len(), 1);

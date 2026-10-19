@@ -24,6 +24,7 @@ use derive_more::{Display, Error};
 use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::op_def::OpDef;
+use super::op_flag::{IsolatedFromAbove, OpFlag};
 use super::op_interface::{
     CallableExitOps, DynBranch, DynRegionBranch, DynRegionBranchTerminator, RegionBranchOps,
     RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
@@ -539,7 +540,7 @@ fn enclosing_func_signature(
         if let Some(signature) = crate::op_interface::CallableOwnerOps::signature(ctx, op) {
             return signature;
         }
-        if crate::op_interface::IsolatedFromAboveOps::is_isolated(ctx, op) {
+        if IsolatedFromAbove::is_set(ctx, op) {
             return None;
         }
     }
@@ -984,7 +985,7 @@ fn validate_region_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec
             // operation; it does not impose a terminator kind on every
             // successor region. Some existing resultless structured regions
             // use implicit fallthrough, while explicit terminators are checked
-            // independently through RegionBranchTerminatorOps below.
+            // independently through DynRegionBranchTerminator below.
         }
     }
 }

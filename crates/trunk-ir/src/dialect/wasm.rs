@@ -3,11 +3,10 @@
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::{Bytes, Type};
 use crate::dialect::core::I32;
-use crate::op_interface::{CallLike, CallLikeOps, IndirectCallLike, IndirectCallLikeOps};
+use crate::op_flag::IsolatedFromAbove;
+use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
-use crate::{Attribute, AttributeMap, IrContext, TypeDataBuilder, TypeRef};
-
-crate::register_isolated_op!(Func);
+use crate::{Attribute, AttributeMap, IrContext, SymbolPath, TypeDataBuilder, TypeRef};
 
 #[trunk_ir::dialect]
 mod wasm {
@@ -47,8 +46,10 @@ mod wasm {
     fn drop(value: Value<_>) {}
 
     // Functions
+    #[implements(CallLike)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
+    #[implements(IndirectCallLike)]
     fn call_indirect(
         type_idx: Attr<u32>,
         table: Attr<u32>,
@@ -57,8 +58,10 @@ mod wasm {
     ) -> Variadic<_> {
     }
 
+    #[implements(CallLike)]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
+    #[implements(IndirectCallLike)]
     fn return_call_indirect(
         type_idx: Attr<u32>,
         table: Attr<u32>,
@@ -71,6 +74,7 @@ mod wasm {
     fn nop() -> Value<_> {}
 
     // Module
+    #[flags(IsolatedFromAbove)]
     fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
         #[region(body?)]
         {}
@@ -737,23 +741,15 @@ impl IndirectCallLike for ReturnCallIndirect {
     }
 }
 
-impl CallLike for Call {}
-impl CallLike for ReturnCall {}
-
-inventory::submit! {
-    CallLikeOps::register::<Call>()
+impl CallLike for Call {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
 }
-
-inventory::submit! {
-    CallLikeOps::register::<ReturnCall>()
-}
-
-inventory::submit! {
-    IndirectCallLikeOps::register::<CallIndirect>()
-}
-
-inventory::submit! {
-    IndirectCallLikeOps::register::<ReturnCallIndirect>()
+impl CallLike for ReturnCall {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
 }
 
 /// Attach an exact callable contract to a `wasm` indirect transfer.

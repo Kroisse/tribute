@@ -14,27 +14,8 @@ inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Struct>()
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Enum>());
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Typeref>());
 
-// === Pure operation registrations ===
-trunk_ir::register_pure_op!(StructNew);
-trunk_ir::register_pure_op!(StructGet);
-
-trunk_ir::register_pure_op!(VariantNew);
-trunk_ir::register_pure_op!(VariantIs);
-trunk_ir::register_pure_op!(VariantCast);
-trunk_ir::register_pure_op!(VariantGet);
-
-trunk_ir::register_pure_op!(ArrayNew);
-trunk_ir::register_pure_op!(ArrayGet);
-trunk_ir::register_pure_op!(ArrayLen);
-
-trunk_ir::register_pure_op!(RefNull);
-trunk_ir::register_pure_op!(RefIsNull);
-trunk_ir::register_pure_op!(RefCast);
-
-trunk_ir::register_pure_op!(StringConst);
-trunk_ir::register_pure_op!(BytesConst);
-
 use trunk_ir::dialect::core::{Array, IntegerLike};
+use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
 mod adt {
@@ -70,18 +51,24 @@ mod adt {
         name: Attr<String>,
     }
 
+    #[flags(Pure)]
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
     fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
+    #[flags(Pure)]
     fn variant_new(r#type: Attr<Type>, tag: Attr<String>, fields: Variadic<_>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn variant_is(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn variant_cast(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn variant_get(
         r#type: Attr<Type>,
         tag: Attr<String>,
@@ -90,8 +77,10 @@ mod adt {
     ) -> Value<_> {
     }
 
+    #[flags(Pure)]
     fn array_new(r#type: Attr<Type>, elements: Variadic<_>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn array_get<A: Array>(r#ref: Value<A>, index: Value<impl IntegerLike>) -> Value<A::Element> {}
 
     fn array_set<A: Array>(
@@ -101,16 +90,22 @@ mod adt {
     ) {
     }
 
+    #[flags(Pure)]
     fn array_len(r#ref: Value<impl Array>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn ref_null(r#type: Attr<Type>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn ref_cast(r#type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn string_const(value: Attr<String>) -> Value<_> {}
 
+    #[flags(Pure)]
     fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
 }
 

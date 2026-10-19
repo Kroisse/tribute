@@ -29,6 +29,7 @@ pub mod attr_kind;
 // === Operation and type utilities ===
 pub mod name;
 pub mod op_def;
+pub mod op_flag;
 pub mod op_schema;
 pub mod ops;
 pub mod type_constraint;
@@ -70,8 +71,8 @@ mod prop;
 // Re-export proc macro for dialect definitions
 pub use trunk_ir_macros::dialect;
 
-// Re-export proc macro for operation interface declarations.
-pub use trunk_ir_macros::op_interface;
+// Re-export proc macros for operation interface and flag declarations.
+pub use trunk_ir_macros::{op_flag, op_interface};
 
 // Re-export proc macro for canonicalize-pass registration. Emits an
 // `inventory::submit!` block alongside the user's function.

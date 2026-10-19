@@ -2,12 +2,12 @@
 
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::Type;
+use crate::op_flag::{IsolatedFromAbove, Pure};
 use crate::op_interface::{
-    self, CallLikeOps, CallableExit, CallableExitOps, ControlFlowInterfaceError, IndirectCallLike,
-    IndirectCallLikeOps,
+    self, CallableExit, CallableOwner, ControlFlowInterfaceError, IndirectCallLike,
 };
 use crate::ops::{DialectOp, DialectType};
-use crate::{Attribute, AttributeMap, IrContext, TypeDataBuilder, TypeRef};
+use crate::{Attribute, AttributeMap, IrContext, SymbolPath, TypeDataBuilder, TypeRef};
 
 /// The exact callable signature retained after a typed indirect callee becomes
 /// a runtime function or table index.
@@ -38,21 +38,21 @@ pub trait TailCallLike: CallLike {
     }
 }
 
-// === Operation registrations ===
-crate::register_pure_op!(Constant);
-crate::register_isolated_op!(Func);
-
 #[trunk_ir::dialect]
 mod func {
     #[asm_format]
+    #[implements(CallableOwner)]
+    #[flags(IsolatedFromAbove)]
     fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
         #[region(body?)]
         {}
     }
 
+    #[implements(op_interface::CallLike)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
+    #[implements(IndirectCallLike)]
     fn call_indirect<S: FuncSig>(
         signature: Attr<TypeOf<S>>,
         callee: Value<_>,
@@ -60,9 +60,11 @@ mod func {
     ) -> Values<S::Results> {
     }
 
+    #[implements(CallableExit, op_interface::CallLike)]
     fn tail_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[verify]
+    #[implements(CallableExit, IndirectCallLike)]
     fn tail_call_indirect<S: FuncSig>(
         signature: Attr<TypeOf<S>>,
         callee: Value<_>,
@@ -70,10 +72,13 @@ mod func {
     ) {
     }
 
+    #[implements(CallableExit)]
     fn r#return(values: Variadic<_>) {}
 
+    #[flags(Pure)]
     fn constant(func_ref: Attr<SymbolRef>) -> Value<_> {}
 
+    #[implements(CallableExit)]
     fn unreachable() {}
 }
 
@@ -621,28 +626,15 @@ impl CallableExit for Unreachable {
     }
 }
 
-inventory::submit! { CallableExitOps::register::<Return>() }
-inventory::submit! { CallableExitOps::register::<TailCall>() }
-inventory::submit! { CallableExitOps::register::<TailCallIndirect>() }
-inventory::submit! { CallableExitOps::register::<Unreachable>() }
-
-impl op_interface::CallLike for Call {}
-impl op_interface::CallLike for TailCall {}
-
-inventory::submit! {
-    CallLikeOps::register::<Call>()
+impl op_interface::CallLike for Call {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
 }
-
-inventory::submit! {
-    CallLikeOps::register::<TailCall>()
-}
-
-inventory::submit! {
-    IndirectCallLikeOps::register::<CallIndirect>()
-}
-
-inventory::submit! {
-    IndirectCallLikeOps::register::<TailCallIndirect>()
+impl op_interface::CallLike for TailCall {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
 }
 
 /// Attach an exact callable contract to a `func` indirect transfer.
@@ -877,8 +869,6 @@ impl crate::op_interface::CallableOwner for Func {
             .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(ctx, ty))
     }
 }
-inventory::submit! { crate::op_interface::CallableOwnerOps::register::<Func>() }
-
 #[cfg(test)]
 mod tests {
     use super::*;

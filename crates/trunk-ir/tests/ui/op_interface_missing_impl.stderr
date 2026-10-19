@@ -1,8 +1,8 @@
 error[E0277]: `Probe` does not implement the `Probed` operation interface
-  --> tests/ui/op_interface_missing_impl.rs:13:44
+  --> tests/ui/op_interface_missing_impl.rs:13:32
    |
-13 | trunk_ir::__private::inventory::submit! { <d::Probe as Probed>::__TRUNK_IR_INTERFACE }
-   |                                            ^^^^^^^^ declared to implement `Probed`
+13 | trunk_ir::register_interfaces!(d::Probe: Probed);
+   |                                ^^^^^^^^ declared to implement `Probed`
    |
 help: the trait `Probed` is not implemented for `Probe`
   --> tests/ui/op_interface_missing_impl.rs:4:5
