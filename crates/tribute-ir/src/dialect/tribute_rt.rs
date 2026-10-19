@@ -24,18 +24,22 @@ mod tribute_rt {
 
     #[flags(Pure)]
     fn box_int(value: Value<_>) -> Value<_> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn unbox_int(value: Value<_>) -> Value<_> {}
     #[flags(Pure)]
     fn box_nat(value: Value<_>) -> Value<_> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn unbox_nat(value: Value<_>) -> Value<_> {}
     #[flags(Pure)]
     fn box_float(value: Value<_>) -> Value<_> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn unbox_float(value: Value<_>) -> Value<_> {}
     #[flags(Pure)]
     fn box_bool(value: Value<_>) -> Value<_> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn unbox_bool(value: Value<_>) -> Value<_> {}
 
@@ -66,7 +70,7 @@ use trunk_ir::ops::DialectOp;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::refs::{OpRef, ValueDef};
-use trunk_ir::transforms::canonicalize::FoldResult;
+use trunk_ir::transforms::canonicalize::{Fold, FoldResult};
 
 /// `unbox_*(box_*(%x))` → `%x` for one box/unbox pair with the same contract,
 /// provided the boxed value already has the unboxed result type.
@@ -82,24 +86,28 @@ fn fold_unbox_of_box<Box: DialectOp>(ctx: &IrContext, op: OpRef) -> Option<FoldR
         .then_some(FoldResult::Forward(inner))
 }
 
-#[trunk_ir::canonicalize_fold(UnboxInt)]
-pub(crate) fn fold_unbox_int(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    fold_unbox_of_box::<BoxInt>(ctx, op)
+impl Fold for UnboxInt {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_unbox_of_box::<BoxInt>(ctx, self.op_ref())
+    }
 }
 
-#[trunk_ir::canonicalize_fold(UnboxNat)]
-pub(crate) fn fold_unbox_nat(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    fold_unbox_of_box::<BoxNat>(ctx, op)
+impl Fold for UnboxNat {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_unbox_of_box::<BoxNat>(ctx, self.op_ref())
+    }
 }
 
-#[trunk_ir::canonicalize_fold(UnboxFloat)]
-pub(crate) fn fold_unbox_float(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    fold_unbox_of_box::<BoxFloat>(ctx, op)
+impl Fold for UnboxFloat {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_unbox_of_box::<BoxFloat>(ctx, self.op_ref())
+    }
 }
 
-#[trunk_ir::canonicalize_fold(UnboxBool)]
-pub(crate) fn fold_unbox_bool(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    fold_unbox_of_box::<BoxBool>(ctx, op)
+impl Fold for UnboxBool {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_unbox_of_box::<BoxBool>(ctx, self.op_ref())
+    }
 }
 
 #[cfg(test)]

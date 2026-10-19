@@ -74,10 +74,6 @@ pub use trunk_ir_macros::dialect;
 // Re-export proc macros for operation interface and flag declarations.
 pub use trunk_ir_macros::{op_flag, op_interface};
 
-// Re-export proc macro for canonicalize-pass registration. Emits an
-// `inventory::submit!` block alongside the user's function.
-pub use trunk_ir_macros::canonicalize_fold;
-
 // Re-export `inventory` so the proc-macro–generated submit blocks
 // resolve `::trunk_ir::inventory::submit!` without requiring consumer
 // crates to declare a direct `inventory` dependency.

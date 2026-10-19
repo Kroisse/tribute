@@ -2,7 +2,7 @@
 
 #[trunk_ir::dialect]
 mod scf {
-    #[implements(RegionBranch)]
+    #[implements(RegionBranch, Fold)]
     fn r#if(cond: Value<_>) -> Option<Value<_>> {
         #[region(then_region)]
         {}
@@ -10,7 +10,7 @@ mod scf {
         {}
     }
 
-    #[implements(RegionBranch)]
+    #[implements(RegionBranch, Fold)]
     fn switch(discriminant: Value<_>) {
         #[region(body)]
         {}
@@ -477,7 +477,7 @@ use crate::dialect::arith::const_int_value;
 use crate::dialect::core::BoolLike;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
-use crate::transforms::canonicalize::FoldResult;
+use crate::transforms::canonicalize::{Fold, FoldResult};
 use crate::types::Attribute;
 
 /// `scf.if(arith.const Int(c) : core.i1)` → splice the chosen region's
@@ -494,49 +494,51 @@ use crate::types::Attribute;
 /// post-`scf_to_cf`, where this pass doesn't run anyway. Bails out on
 /// any structural mismatch (yield arity, non-`i1` const, malformed
 /// regions).
-#[trunk_ir::canonicalize_fold(If)]
-pub(crate) fn fold_if(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let if_op = If::from_op(ctx, op).ok()?;
-    let cond = if_op.cond(ctx);
-    // Guard against malformed IR: only fold when the cond's type is
-    // `core.i1`. Without this, an `arith.const value=2 : core.i32`
-    // wired into the cond slot would be treated as truthy here,
-    // burning the dead branch before the validator gets to reject it.
-    if !BoolLike::matches(ctx, ctx.value_ty(cond)) {
-        return None;
-    }
-    let cond_value = const_int_value(ctx, cond)?;
-    // We've gated on cond's type being `core.i1`; the only valid
-    // payloads are 0 and 1. Reject anything else (e.g.
-    // `arith.const value=2 : core.i1`) so the validator surfaces the
-    // malformed const instead of the fold silently picking a branch.
-    let active_region = match cond_value {
-        0 => if_op.else_region(ctx),
-        1 => if_op.then_region(ctx),
-        _ => return None,
-    };
+impl Fold for If {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let if_op = self;
+        let cond = if_op.cond(ctx);
+        // Guard against malformed IR: only fold when the cond's type is
+        // `core.i1`. Without this, an `arith.const value=2 : core.i32`
+        // wired into the cond slot would be treated as truthy here,
+        // burning the dead branch before the validator gets to reject it.
+        if !BoolLike::matches(ctx, ctx.value_ty(cond)) {
+            return None;
+        }
+        let cond_value = const_int_value(ctx, cond)?;
+        // We've gated on cond's type being `core.i1`; the only valid
+        // payloads are 0 and 1. Reject anything else (e.g.
+        // `arith.const value=2 : core.i1`) so the validator surfaces the
+        // malformed const instead of the fold silently picking a branch.
+        let active_region = match cond_value {
+            0 => if_op.else_region(ctx),
+            1 => if_op.then_region(ctx),
+            _ => return None,
+        };
 
-    // Active region must be a single block whose terminator is `scf.yield`.
-    let blocks = &ctx.region(active_region).blocks;
-    let [active_block] = blocks.as_slice() else {
-        return None;
-    };
-    let region_ops = &ctx.block(*active_block).ops;
-    let (yield_op, body_ops) = region_ops.split_last()?;
-    if !Yield::matches(ctx, *yield_op) {
-        return None;
-    }
+        // Active region must be a single block whose terminator is `scf.yield`.
+        let blocks = &ctx.region(active_region).blocks;
+        let [active_block] = blocks.as_slice() else {
+            return None;
+        };
+        let region_ops = &ctx.block(*active_block).ops;
+        let (yield_op, body_ops) = region_ops.split_last()?;
+        if !Yield::matches(ctx, *yield_op) {
+            return None;
+        }
 
-    // Yield arity must match the if op's result count.
-    let yield_operands: Vec<ValueRef> = ctx.op_operands(*yield_op).to_vec();
-    if yield_operands.len() != ctx.op_results(op).len() {
-        return None;
-    }
+        // Yield arity must match the if op's result count.
+        let yield_operands: Vec<ValueRef> = ctx.op_operands(*yield_op).to_vec();
+        if yield_operands.len() != ctx.op_results(op).len() {
+            return None;
+        }
 
-    Some(FoldResult::Splice {
-        body: body_ops.to_vec(),
-        results: yield_operands,
-    })
+        Some(FoldResult::Splice {
+            body: body_ops.to_vec(),
+            results: yield_operands,
+        })
+    }
 }
 
 /// `scf.switch(arith.const Int(c))` → splice the matching arm's body into
@@ -552,65 +554,67 @@ pub(crate) fn fold_if(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 /// values. Falling back to the default is declined when the selector or any
 /// case value is negative: a sign-extended constant may alias an unsigned
 /// case value at the discriminant's width.
-#[trunk_ir::canonicalize_fold(Switch)]
-pub(crate) fn fold_switch(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let switch = Switch::from_op(ctx, op).ok()?;
-    if !ctx.op_results(op).is_empty() {
-        return None;
-    }
-    let selector = const_int_value(ctx, switch.discriminant(ctx))?;
-    let [body_block] = ctx.region(switch.body(ctx)).blocks.as_slice() else {
-        return None;
-    };
+impl Fold for Switch {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let switch = self;
+        if !ctx.op_results(op).is_empty() {
+            return None;
+        }
+        let selector = const_int_value(ctx, switch.discriminant(ctx))?;
+        let [body_block] = ctx.region(switch.body(ctx)).blocks.as_slice() else {
+            return None;
+        };
 
-    let mut matched = None;
-    let mut default_region = None;
-    let mut any_negative = selector < 0;
-    for &arm in &ctx.block(*body_block).ops {
-        if let Ok(case) = Case::from_op(ctx, arm) {
-            let Attribute::Int(value) = case.value(ctx) else {
+        let mut matched = None;
+        let mut default_region = None;
+        let mut any_negative = selector < 0;
+        for &arm in &ctx.block(*body_block).ops {
+            if let Ok(case) = Case::from_op(ctx, arm) {
+                let Attribute::Int(value) = case.value(ctx) else {
+                    return None;
+                };
+                any_negative |= value < 0;
+                if value == selector && matched.is_none() {
+                    matched = Some(case.body(ctx));
+                }
+            } else if let Ok(default) = Default::from_op(ctx, arm) {
+                if default_region.replace(default.body(ctx)).is_some() {
+                    return None;
+                }
+            } else {
                 return None;
-            };
-            any_negative |= value < 0;
-            if value == selector && matched.is_none() {
-                matched = Some(case.body(ctx));
             }
-        } else if let Ok(default) = Default::from_op(ctx, arm) {
-            if default_region.replace(default.body(ctx)).is_some() {
+        }
+        let active_region = match matched {
+            Some(region) => region,
+            None if any_negative => return None,
+            None => default_region?,
+        };
+
+        let [active_block] = ctx.region(active_region).blocks.as_slice() else {
+            return None;
+        };
+        let arm_ops = &ctx.block(*active_block).ops;
+        let (last, rest) = arm_ops.split_last()?;
+        let body = if let Ok(yield_op) = Yield::from_op(ctx, *last) {
+            if !yield_op.values(ctx).is_empty() {
                 return None;
             }
+            rest.to_vec()
         } else {
-            return None;
-        }
+            let parent = ctx.op(op).parent_block?;
+            if ctx.block(parent).ops.last() != Some(&op) {
+                return None;
+            }
+            arm_ops.to_vec()
+        };
+
+        Some(FoldResult::Splice {
+            body,
+            results: Vec::new(),
+        })
     }
-    let active_region = match matched {
-        Some(region) => region,
-        None if any_negative => return None,
-        None => default_region?,
-    };
-
-    let [active_block] = ctx.region(active_region).blocks.as_slice() else {
-        return None;
-    };
-    let arm_ops = &ctx.block(*active_block).ops;
-    let (last, rest) = arm_ops.split_last()?;
-    let body = if let Ok(yield_op) = Yield::from_op(ctx, *last) {
-        if !yield_op.values(ctx).is_empty() {
-            return None;
-        }
-        rest.to_vec()
-    } else {
-        let parent = ctx.op(op).parent_block?;
-        if ctx.block(parent).ops.last() != Some(&op) {
-            return None;
-        }
-        arm_ops.to_vec()
-    };
-
-    Some(FoldResult::Splice {
-        body,
-        results: Vec::new(),
-    })
 }
 
 // =========================================================================
@@ -624,7 +628,7 @@ mod canonicalize_tests {
     use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
 
-    use crate::transforms::canonicalize::{FoldDispatchPattern, folds_for_dialect};
+    use crate::transforms::canonicalize::{FoldDispatchPattern, fold_ops_for_dialect};
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
@@ -632,7 +636,7 @@ mod canonicalize_tests {
     /// [`FoldDispatchPattern`] — mirrors `arith.rs::run_arith_patterns`
     /// to keep per-dialect tests isolated from other dialects' folds.
     fn run_scf_patterns(ctx: &mut IrContext, module: Module) -> ApplyResult {
-        let dispatcher = FoldDispatchPattern::from_folds(folds_for_dialect("scf"));
+        let dispatcher = FoldDispatchPattern::from_ops(fold_ops_for_dialect("scf"));
         PatternApplicator::new(TypeConverter::new())
             .add_pattern_box(Box::new(dispatcher))
             .apply_partial(ctx, module)
