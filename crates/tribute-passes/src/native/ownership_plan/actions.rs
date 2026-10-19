@@ -17,7 +17,7 @@ pub(super) fn plan_function_actions(
     entry_contracts: &HashMap<OpRef, Vec<EntryOwnership>>,
     module: &NativeOwnershipModuleFacts,
     managed_layouts: &HashSet<TypeRef>,
-    elide_proven_field_borrows: bool,
+    options: NativeOwnershipPlanOptions,
 ) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
     ActionPlanner::new(
         ir,
@@ -26,7 +26,7 @@ pub(super) fn plan_function_actions(
         entry_contracts,
         module,
         managed_layouts,
-        elide_proven_field_borrows,
+        options,
     )
     .plan()
 }
@@ -40,6 +40,7 @@ struct ActionPlanner<'a> {
     managed_layouts: &'a HashSet<TypeRef>,
     borrowed: HashMap<ValueRef, ValueRef>,
     owned: HashSet<ValueRef>,
+    move_units_at_last_use: bool,
     liveness: &'a BlockLiveness,
     /// Position of each value's definition in program order, which orders
     /// actions independently of arena numbering.
@@ -55,12 +56,12 @@ impl<'a> ActionPlanner<'a> {
         entry_contracts: &'a HashMap<OpRef, Vec<EntryOwnership>>,
         module: &'a NativeOwnershipModuleFacts,
         managed_layouts: &'a HashSet<TypeRef>,
-        elide_proven_field_borrows: bool,
+        options: NativeOwnershipPlanOptions,
     ) -> Self {
         let facts = inputs.facts;
         // The temporary-borrow policy selects which policy-neutral projection
         // facts participate; it never changes the facts themselves.
-        let borrowed = if elide_proven_field_borrows {
+        let borrowed = if options.elide_proven_field_borrows {
             facts.borrowable_projection_owners().clone()
         } else {
             HashMap::default()
@@ -95,6 +96,7 @@ impl<'a> ActionPlanner<'a> {
             managed_layouts,
             borrowed,
             owned,
+            move_units_at_last_use: options.move_units_at_last_use,
             liveness: inputs.liveness,
             definition_order,
             actions: Vec::new(),
@@ -133,9 +135,21 @@ impl<'a> ActionPlanner<'a> {
 
     fn plan_block(&mut self, block: BlockRef) -> Result<(), OwnershipPlanError> {
         let ops = &self.ir.block(block).ops;
+        let last_use = self.last_uses(ops);
         let mut transferred = HashSet::default();
-        for &op in ops {
+        for (index, &op) in ops.iter().enumerate() {
+            let first_action = self.actions.len();
             self.plan_operation(block, op, &mut transferred)?;
+            if self.move_units_at_last_use {
+                self.move_last_use_units(
+                    block,
+                    op,
+                    index,
+                    first_action,
+                    &last_use,
+                    &mut transferred,
+                );
+            }
             if let Some(&result) = self.ir.op_results(op).first()
                 && self.borrowed.contains_key(&result)
             {
@@ -159,7 +173,83 @@ impl<'a> ActionPlanner<'a> {
                 });
             }
         }
-        self.plan_final_releases(block, ops, &transferred)
+        self.plan_final_releases(block, ops, &last_use, &transferred)
+    }
+
+    /// Index in `ops` of the last operation that uses each owned root, either
+    /// directly or through a borrow derived from it.
+    fn last_uses(&self, ops: &[OpRef]) -> HashMap<ValueRef, usize> {
+        let mut last_use = HashMap::default();
+        for (index, &op) in ops.iter().enumerate() {
+            for &operand in self.ir.op_operands(op) {
+                let root = root_value(self.facts.aliases(), operand);
+                if self.owned.contains(&root) {
+                    last_use.insert(root, index);
+                }
+                if let Some(owner) = borrowed_owner(&self.borrowed, self.facts.aliases(), root)
+                    && self.owned.contains(&owner)
+                {
+                    last_use.insert(owner, index);
+                }
+            }
+        }
+        last_use
+    }
+
+    /// Turn the acquires planned for `op` into moves of the value's own unit
+    /// when `op` is the last use of an owned root. Every operand of `op` that
+    /// reaches the root must be a destination that acquires: any other use
+    /// relies on the caller's unit for the duration of the operation. Only
+    /// the first destination receives the unit; the rest keep acquiring.
+    fn move_last_use_units(
+        &mut self,
+        block: BlockRef,
+        op: OpRef,
+        index: usize,
+        first_action: usize,
+        last_use: &HashMap<ValueRef, usize>,
+        transferred: &mut HashSet<ValueRef>,
+    ) {
+        let aliases = self.facts.aliases();
+        let mut uses = HashMap::<ValueRef, usize>::default();
+        let mut borrowed_from = HashSet::default();
+        for &operand in self.ir.op_operands(op) {
+            let root = root_value(aliases, operand);
+            *uses.entry(root).or_default() += 1;
+            if let Some(owner) = borrowed_owner(&self.borrowed, aliases, root) {
+                borrowed_from.insert(owner);
+            }
+        }
+        let mut acquires = HashMap::<ValueRef, usize>::default();
+        for action in &self.actions[first_action..] {
+            if matches!(
+                action.kind,
+                ActionKind::StoreAcquire | ActionKind::CallAcquire
+            ) {
+                *acquires
+                    .entry(root_value(aliases, action.value))
+                    .or_default() += 1;
+            }
+        }
+        let live_out = &self.liveness.live_out[&block];
+        for action in &mut self.actions[first_action..] {
+            let moved = match action.kind {
+                ActionKind::StoreAcquire => ActionKind::StoreTransfer,
+                ActionKind::CallAcquire => ActionKind::CallTransfer,
+                _ => continue,
+            };
+            let root = root_value(aliases, action.value);
+            if self.owned.contains(&root)
+                && !self.borrowed.contains_key(&root)
+                && !borrowed_from.contains(&root)
+                && !live_out.contains(&root)
+                && last_use.get(&root) == Some(&index)
+                && uses.get(&root) == acquires.get(&root)
+                && transferred.insert(root)
+            {
+                action.kind = moved;
+            }
+        }
     }
 
     /// Owned values that die on every edge into `block`: live out of each
@@ -740,23 +830,10 @@ impl ActionPlanner<'_> {
         &mut self,
         block: BlockRef,
         ops: &[OpRef],
+        last_use: &HashMap<ValueRef, usize>,
         transferred: &HashSet<ValueRef>,
     ) -> Result<(), OwnershipPlanError> {
         let dying_on_entry = self.values_dying_on_entry(block)?;
-        let mut last_use = HashMap::default();
-        for (index, &op) in ops.iter().enumerate() {
-            for &operand in self.ir.op_operands(op) {
-                let root = root_value(self.facts.aliases(), operand);
-                if self.owned.contains(&root) {
-                    last_use.insert(root, index);
-                }
-                if let Some(owner) = borrowed_owner(&self.borrowed, self.facts.aliases(), root)
-                    && self.owned.contains(&owner)
-                {
-                    last_use.insert(owner, index);
-                }
-            }
-        }
         let mut dying = HashSet::default();
         for value in &self.liveness.live_in[&block] {
             if self.owned.contains(value)
