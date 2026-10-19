@@ -186,7 +186,8 @@ tribute_rt.release_moving(ptr, moved...) // owner를 release하며 field unit을
 owner의 managed field가 가진 unit을 같은 순서의 `moved` operand로 옮긴다. `moved`는 그
 field에서 읽은 값이고, operation 뒤에는 각자 unit 하나를 가진 owned 값이다. Owner가
 유일하게 참조되면 옮기는 field는 release하지 않고 나머지 managed field만 release한 뒤
-owner를 해제한다. 공유되어 있으면 `moved`마다 unit을 획득하고 owner의 count만 줄인다.
+owner를 해제한다. 공유되어 있으면 `moved`마다 unit을 먼저 획득한 뒤 owner의 count만
+줄인다.
 `layout`과 `alloc_size` 속성은 owner의 exact layout과 header를 포함한 할당 크기다.
 이 operation은 [field move](#1-typed-ownership-and-rtti-plan)를 표현하며 typed plan만
 만든다.
@@ -393,8 +394,9 @@ last-use move와 final release 규칙을 그대로 따른다. Field move는 다�
   release 지점을 R이라 하면 P는 R보다 앞설 수 있되, P와 R 사이의 사용은 모두 옮기는
   borrow의 사용이어야 한다. P 뒤의 사용만 unit을 받으므로, 공유된 owner의 경로에서
   unit을 획득하기 전에 그 field를 다른 객체가 가진 채 release되는 구간이 생기지 않는다.
-- Field마다 unit은 하나뿐이다. 같은 field를 읽은 값이 여럿이면 하나만 옮기고, 나머지는
-  P에서 옮긴 값으로부터 새 unit을 획득한다.
+- 옮기는 field는 owner에서 한 번만 읽는다. 같은 field를 두 번 이상 읽으면 owner를
+  옮기지 않는다. Field마다 unit은 하나뿐이고, 같은 field의 여러 값 사이에서 unit의
+  주인을 정하는 규칙을 두지 않는다.
 - 옮길 borrow는 P 뒤에 unit이 필요한 사용이 있는 것만 고른다. 그런 사용이 없는 borrow를
   옮기면 획득 대신 final release 하나가 늘 뿐이다.
 
@@ -683,8 +685,8 @@ unique_block:
     clif.jump(continue_block)
 
 shared_block:
-    clif.store(clif.isub(%rc, clif.iconst(1)), %rc_addr)
     // tribute_rt.retain each moved operand
+    clif.store(clif.isub(%rc, clif.iconst(1)), %rc_addr)
     clif.jump(continue_block)
 ```
 
