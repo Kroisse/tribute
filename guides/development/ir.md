@@ -148,7 +148,8 @@ where
   and `#[asm_format]` requires `trunk_ir::asm_format::TypeAsmFormat`. A
   hand-written `TypeDef` adds the same hooks with `with_verifier` and
   `with_asm_format`. A `#[verify]` type's wrapper accepts only types that
-  pass the verifier, so the macro generates no constructor for it.
+  pass the verifier, so its `params(..)` builder's `intern` runs the verifier
+  and returns a `Result`.
 
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:
