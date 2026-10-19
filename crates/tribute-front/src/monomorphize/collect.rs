@@ -174,15 +174,15 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
         let ResolvedRef::Function { id } = &typed_ref.resolved else {
             return;
         };
-        if !self.schemes.contains_key(id) {
-            return;
-        }
         let Some(instance) = self.function_instances.get(&node_id) else {
             return;
         };
-        if instance.function != *id {
+        if !self.schemes.contains_key(&instance.function)
+            || !self.keys.refers_to(*id, instance.function)
+        {
             return;
         }
+        let id = &instance.function;
         let Some(key) = self.keys.key(instance, enclosing) else {
             return;
         };

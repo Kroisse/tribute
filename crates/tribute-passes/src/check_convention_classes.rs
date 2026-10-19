@@ -7,6 +7,7 @@
 
 use std::ops::ControlFlow;
 
+use itertools::Itertools;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use tribute_ir::dialect::tribute_control::{CallingConvention, FuncSig, Row, RowBinder};
 use tribute_ir::dialect::{ability, tribute_control};
@@ -30,6 +31,40 @@ pub struct Disagreement {
 /// The suffix that names a class instance: `$9` and one letter per class
 /// variable. Type arguments never start with a digit, so it is unambiguous.
 const CLASS_MARKER: &str = "$9";
+
+/// The disagreements a module has, as a pass failure.
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+#[display("convention classes disagree with rows: {}", disagreements.iter().format_with("; ", |d, f| f(&format_args!("({}) {}", d.rule, d.message))))]
+pub struct ConventionClassError {
+    #[error(not(source))]
+    pub disagreements: Vec<Disagreement>,
+}
+
+/// Fails when a convention class the frontend specialized disagrees with
+/// the rows of the module.
+pub struct CheckConventionClasses;
+
+impl trunk_ir::pass::Pass for CheckConventionClasses {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-convention-classes"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        let disagreements = check(ctx, target.into());
+        if disagreements.is_empty() {
+            Ok(())
+        } else {
+            Err(Box::new(ConventionClassError { disagreements }))
+        }
+    }
+}
 
 /// Every disagreement in `module`.
 pub fn check(ctx: &IrContext, module: Module) -> Vec<Disagreement> {
