@@ -121,8 +121,11 @@ pub fn box_or_unbox(
     let from = ctx.value_ty(value);
     let op = if Anyref::matches(ctx, to) {
         match Scalar::of(ctx, from)? {
-            // Nat shares the int box.
-            Scalar::Int | Scalar::Nat => BoxInt::operands(value)
+            Scalar::Int => BoxInt::operands(value)
+                .results(to)
+                .build(ctx, location)
+                .op_ref(),
+            Scalar::Nat => BoxNat::operands(value)
                 .results(to)
                 .build(ctx, location)
                 .op_ref(),
@@ -209,9 +212,7 @@ impl Fold for UnboxInt {
 
 impl Fold for UnboxNat {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
-        // `convert_value` boxes a Nat with the int box.
         fold_unbox_of_box::<BoxNat>(ctx, self.op_ref())
-            .or_else(|| fold_unbox_of_box::<BoxInt>(ctx, self.op_ref()))
     }
 }
 
@@ -372,7 +373,7 @@ mod tests {
         );
         for (value, to, expected) in [
             (i, anyref_ty, "tribute_rt.box_int"),
-            (n, anyref_ty, "tribute_rt.box_int"),
+            (n, anyref_ty, "tribute_rt.box_nat"),
             (b, anyref_ty, "tribute_rt.box_bool"),
             (f, anyref_ty, "tribute_rt.box_float"),
             (any, i32_ty, "tribute_rt.unbox_int"),
@@ -422,19 +423,6 @@ mod tests {
                 assert!(changes >= 1, "{unboxed}");
                 assert!(!text.contains(unboxed), "{unboxed}: {text}");
             }
-        }
-
-        #[test]
-        fn unbox_nat_of_an_int_box_forwards_the_nat() {
-            let (text, changes) = run(r#"core.module @test {
-  func.func @f(%x: tribute_rt.nat) -> tribute_rt.nat {
-    %b = tribute_rt.box_int %x : tribute_rt.anyref
-    %u = tribute_rt.unbox_nat %b : tribute_rt.nat
-    func.return %u
-  }
-}"#);
-            assert!(changes > 0);
-            assert!(!text.contains("unbox_nat"), "{text}");
         }
 
         #[test]
