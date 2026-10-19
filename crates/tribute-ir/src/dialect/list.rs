@@ -37,7 +37,9 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = location();
         let element_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        let list_ty = TypeDataBuilder::new("tribute_rt.anyref").intern(&mut ctx);
+        let list_ty = crate::dialect::tribute_rt::Anyref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         let bool_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
         let element = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(1))

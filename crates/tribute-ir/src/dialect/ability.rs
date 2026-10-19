@@ -512,10 +512,11 @@ mod tests {
     #[test]
     fn evidence_layouts_are_identified_by_layout_not_name() {
         let mut ctx = IrContext::new();
-        let name_attr = ctx.string_attr("_Marker");
-        let named_marker = TypeDataBuilder::new("adt.struct")
-            .attr("name", name_attr)
-            .intern(&mut ctx);
+        let named_marker = crate::dialect::adt::Struct::params([])
+            .name("_Marker")
+            .intern(&mut ctx)
+            .unwrap()
+            .as_type_ref();
         let plain_array = core::Array::params(named_marker)
             .intern(&mut ctx)
             .as_type_ref();
@@ -619,10 +620,11 @@ mod tests {
         let mut ctx = IrContext::new();
 
         // Non-marker struct should return false
-        let name_attr = ctx.string_attr("OtherStruct");
-        let other_struct = TypeDataBuilder::new("adt.struct")
-            .attr("name", name_attr)
-            .intern(&mut ctx);
+        let other_struct = crate::dialect::adt::Struct::params([])
+            .name("OtherStruct")
+            .intern(&mut ctx)
+            .unwrap()
+            .as_type_ref();
         assert!(!is_marker_type_ref(&ctx, other_struct));
 
         // Non-struct type should return false

@@ -106,10 +106,10 @@ mod tests {
     #[test]
     fn result_type_fails_closed_on_unmarked_or_foreign_types() {
         let mut ctx = IrContext::new();
-        let name = ctx.string_attr("ContinuationFrame");
-        let unmarked = TypeDataBuilder::new(crate::dialect::adt::Typeref::NAME)
-            .attr("name", name)
-            .intern(&mut ctx);
+        let unmarked = adt::Typeref::params()
+            .name("ContinuationFrame")
+            .intern(&mut ctx)
+            .as_type_ref();
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let foreign = TypeDataBuilder::new("test.frame")
             .attr(RESULT_ATTR, Attribute::Type(i32_ty))

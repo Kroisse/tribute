@@ -3061,10 +3061,10 @@ fn lower_handler<'db>(
         })
         .collect();
     if kind == OpDeclKind::Op && !is_never {
-        let token = trunk_ir::types::TypeDataBuilder::new("tribute_control.resume_token")
-            .param(operation_result)
-            .param(answer_ty)
-            .intern(ir);
+        let token =
+            tribute_ir::dialect::tribute_control::ResumeToken::params(operation_result, answer_ty)
+                .intern(ir)
+                .as_type_ref();
         block_args.push(BlockArgData {
             ty: token,
             attrs: Default::default(),

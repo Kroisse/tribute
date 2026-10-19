@@ -106,7 +106,7 @@ pub(crate) fn fold_unbox_bool(ctx: &IrContext, op: OpRef) -> Option<FoldResult> 
 mod tests {
     use trunk_ir::Span;
 
-    use trunk_ir::ops::{DialectOp, DialectType};
+    use trunk_ir::ops::DialectOp;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
     use trunk_ir::{Attribute, IrContext, TypeDataBuilder};
@@ -120,7 +120,9 @@ mod tests {
     }
 
     fn make_ptr_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
-        TypeDataBuilder::new("core.ptr").intern(ctx)
+        trunk_ir::dialect::core::Ptr::params()
+            .intern(ctx)
+            .as_type_ref()
     }
 
     #[test]
@@ -131,10 +133,10 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
         let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
         let bool_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
-        let name_attr = ctx.string_attr("Box");
-        let managed_ty = TypeDataBuilder::new(crate::dialect::adt::Typeref::NAME)
-            .attr("name", name_attr)
-            .intern(&mut ctx);
+        let managed_ty = crate::dialect::adt::Typeref::params()
+            .name("Box")
+            .intern(&mut ctx)
+            .as_type_ref();
 
         // Build `op` over a fresh operand of `operand_ty`, then check that
         // `from_op` matches it and that its operand accessor and result type

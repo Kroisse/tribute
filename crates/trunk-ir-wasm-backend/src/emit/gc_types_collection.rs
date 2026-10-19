@@ -13,7 +13,7 @@ use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::Attribute;
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{self, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, MARKER_IDX};
@@ -332,7 +332,7 @@ fn type_to_field_type(
 
 /// Create the physical WasmGC struct supertype `structref`.
 fn intern_wasm_structref(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("wasm.structref").intern(ctx)
+    wasm_dialect::Structref::params().intern(ctx).as_type_ref()
 }
 
 // ============================================================================
@@ -913,7 +913,9 @@ wasm.return
     fn record_struct_field_widens_concrete_to_anyref() {
         let mut ctx = IrContext::new();
         let concrete = intern_wasm_structref(&mut ctx);
-        let anyref = TypeDataBuilder::new("wasm.anyref").intern(&mut ctx);
+        let anyref = wasm_dialect::Anyref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         let mut builder = GcTypeBuilder::new();
 
         record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, concrete)

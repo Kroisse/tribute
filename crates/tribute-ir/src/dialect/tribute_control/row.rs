@@ -508,9 +508,7 @@ pub fn logical_tuple_type(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef 
     let layout = tuple_layout_data(ctx, &name, elements);
     ctx.register_type_alias(Symbol::new(&name), layout);
     let name = ctx.intern_str(&name);
-    trunk_ir::types::TypeDataBuilder::new(crate::dialect::adt::Typeref::NAME)
-        .attr("name", Attribute::String(name))
-        .intern(ctx)
+    adt::Typeref::params().name(name).intern(ctx).as_type_ref()
 }
 
 /// The element types of a compiler-generated tuple layout.

@@ -90,7 +90,7 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         return;
     };
     let loc = ctx.op(module.op()).location;
-    let ptr_ty = TypeDataBuilder::new("core.ptr").intern(ctx);
+    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
     let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
     // Evidence is a managed reference: the runtime borrows evidence arguments
     // and returns a result the caller owns, which includes the dispatch
@@ -225,7 +225,7 @@ fn is_evidence_type(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 fn core_ptr_type(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core.ptr").intern(ctx)
+    core::Ptr::params().intern(ctx).as_type_ref()
 }
 
 fn core_i32_type(ctx: &mut IrContext) -> TypeRef {
