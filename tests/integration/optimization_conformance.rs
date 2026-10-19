@@ -6,14 +6,15 @@ use std::fmt::Write as _;
 
 use common::{
     compile_and_run_native, compile_and_run_native_asan,
-    compile_and_run_native_with_borrowed_parameters, compile_and_run_native_with_last_use_moves,
-    compile_and_run_native_with_paired_rc_elimination,
+    compile_and_run_native_with_borrowed_parameters, compile_and_run_native_with_field_moves,
+    compile_and_run_native_with_last_use_moves, compile_and_run_native_with_paired_rc_elimination,
     compile_and_run_native_with_temporary_borrows,
 };
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::{
-    BorrowedParameterPolicy, LastUseMovePolicy, NativeOptimizationOptions, NativePipelineStage,
-    OptimizationOptions, PairedRcEliminationPolicy, TemporaryBorrowPolicy, dump_native_ir_at_stage,
+    BorrowedParameterPolicy, FieldMovePolicy, LastUseMovePolicy, NativeOptimizationOptions,
+    NativePipelineStage, OptimizationOptions, PairedRcEliminationPolicy, TemporaryBorrowPolicy,
+    dump_native_ir_at_stage,
 };
 use tribute_front::SourceCst;
 
@@ -49,6 +50,7 @@ fn native_optimization_options(
             borrowed_parameters,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
             last_use_moves: LastUseMovePolicy::Acquire,
+            field_moves: FieldMovePolicy::Acquire,
         },
     }
 }
@@ -60,6 +62,7 @@ fn temporary_borrow_options(temporary_borrows: TemporaryBorrowPolicy) -> Optimiz
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows,
             last_use_moves: LastUseMovePolicy::Acquire,
+            field_moves: FieldMovePolicy::Acquire,
         },
     }
 }
@@ -313,6 +316,144 @@ fn last_use_moves_preserve_native_execution_with_sanitizer() {
             }
         }
     }
+}
+
+#[test]
+fn field_moves_preserve_native_execution_with_sanitizer() {
+    let fixtures = [
+        ("state_handlers.trb", STATE_HANDLERS, "10"),
+        ("borrowed_parameters.trb", BORROWED_PARAMETERS, "10"),
+        ("temporary_field_borrows.trb", TEMPORARY_FIELD_BORROWS, "20"),
+        (
+            "temporary_field_borrows_effects.trb",
+            TEMPORARY_FIELD_BORROWS_EFFECTS,
+            "150",
+        ),
+    ];
+    for (name, source, expected) in fixtures {
+        for sanitize_address in [false, true] {
+            for policy in [FieldMovePolicy::Acquire, FieldMovePolicy::Move] {
+                let output =
+                    compile_and_run_native_with_field_moves(name, source, policy, sanitize_address);
+                assert!(
+                    output.status.success(),
+                    "{name} {policy:?} failed with sanitize_address={sanitize_address}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    expected,
+                    "{name} {policy:?}"
+                );
+            }
+        }
+    }
+}
+
+const FIELD_MOVES_FROM_SHARED_AND_UNIQUE_OWNERS: &str = r#"
+use std::io::{Io, print_line}
+
+struct Holder { name: String, count: Int }
+struct Pair { left: Holder, right: Holder }
+
+fn shout(text: String) -> String { text }
+
+// Recursion keeps the pair, and so the holders' other references, opaque.
+fn keep(pair: Pair, n: Int) -> Pair {
+    case n == +0 {
+        True -> pair
+        False -> keep(pair, n - +1)
+    }
+}
+
+fn first(holder: Holder) -> String { shout(holder.name) }
+
+fn main() ->{Io} Nil {
+    print_line(first(Holder { name: "unique", count: +1 }))
+    let holder = Holder { name: "shared", count: +2 }
+    let pair = keep(Pair { left: holder, right: holder }, +3)
+    print_line(first(holder))
+    print_line(pair.left.name)
+    print_line(pair.right.name)
+}
+"#;
+
+#[test]
+fn field_moves_from_shared_and_unique_owners_preserve_native_execution() {
+    for sanitize_address in [false, true] {
+        for policy in [FieldMovePolicy::Acquire, FieldMovePolicy::Move] {
+            let output = compile_and_run_native_with_field_moves(
+                "field_moves_from_shared_and_unique_owners.trb",
+                FIELD_MOVES_FROM_SHARED_AND_UNIQUE_OWNERS,
+                policy,
+                sanitize_address,
+            );
+            assert!(
+                output.status.success(),
+                "{policy:?} failed with sanitize_address={sanitize_address}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "unique\nshared\nshared\nshared\n",
+                "{policy:?}"
+            );
+        }
+    }
+}
+
+#[salsa_test]
+fn field_moves_from_shared_and_unique_owners_use_moving_releases(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "field_moves_from_shared_and_unique_owners.trb",
+        FIELD_MOVES_FROM_SHARED_AND_UNIQUE_OWNERS,
+    );
+    let ir = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterRcOptimization,
+        OptimizationOptions::production(),
+    )
+    .expect("RC optimization IR should be available");
+    // The inlined `first` moves the name out of the shared holder, whose
+    // pair keeps two more references, and `pair.right.name` moves out of
+    // the unique pair and then out of its holder.
+    let (_, main) = ir
+        .split_once("sym_name = \"__tribute_main\"")
+        .expect("main in the module");
+    let main = main.split("clif.func ").next().unwrap();
+    assert!(
+        main.matches("tribute_rt.release_moving").count() >= 3,
+        "{main}"
+    );
+}
+
+#[salsa_test]
+fn field_moves_remove_retains_and_keep_every_release(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(db, "state_handlers.trb", STATE_HANDLERS);
+    let dump = |field_moves| {
+        let mut options = OptimizationOptions::production();
+        options.native.field_moves = field_moves;
+        let ir = dump_native_ir_at_stage(
+            db,
+            source,
+            NativePipelineStage::AfterRcOptimization,
+            options,
+        )
+        .expect("RC optimization IR should be available");
+        assert_source_allocation_field_releases(ir);
+        let ops = focused_rc_ops(ir);
+        (
+            ops.matches("tribute_rt.retain").count(),
+            ir.matches("tribute_rt.release_moving").count(),
+        )
+    };
+    let (acquire_retains, acquire_moving) = dump(FieldMovePolicy::Acquire);
+    let (move_retains, move_moving) = dump(FieldMovePolicy::Move);
+    assert_eq!(acquire_moving, 0);
+    assert!(move_moving > 0);
+    assert!(move_retains < acquire_retains);
 }
 
 #[salsa_test]

@@ -49,19 +49,21 @@
 //!   // remaining ops
 //! ```
 
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
 use trunk_ir::rewrite::helpers::erase_op;
-use trunk_ir::{BlockData, BlockRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::{
+    BlockArgData, BlockData, BlockRef, OpRef, RegionData, RegionRef, TypeRef, ValueRef,
+};
 
 use tribute_ir::dialect::tribute_rt;
 
-use super::rtti::DEEP_RELEASE_FN;
+use super::rtti::{DEALLOC_FN, DEEP_RELEASE_FN};
 use trunk_ir::SymbolPath;
 use trunk_ir::dialect::core;
 
@@ -71,6 +73,7 @@ fn lower_rc(ctx: &mut IrContext, module: Module) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
+    outline_moving_releases(ctx, first_block);
     let module_ops = ctx.block(first_block).ops.clone();
 
     for op in module_ops {
@@ -81,6 +84,115 @@ fn lower_rc(ctx: &mut IrContext, module: Module) {
             }
         }
     }
+}
+
+/// Name prefix for the functions that hold a moving release.
+const RELEASE_MOVING_FN_PREFIX: &str = "__tribute_release_moving_";
+
+/// Replace each `tribute_rt.release_moving` with a call to a function that
+/// performs it, one per allocation size, released offsets and number of
+/// moved values. Expanding both of its paths at every release would grow the
+/// code each owner's death compiles to.
+fn outline_moving_releases(ctx: &mut IrContext, module_block: BlockRef) {
+    let mut releases = Vec::<OpRef>::new();
+    for &op in &ctx.block(module_block).ops {
+        if clif::Func::matches(ctx, op) {
+            for region in ctx.op_regions(op) {
+                for &block in &ctx.region(region).blocks {
+                    releases.extend(
+                        ctx.block(block)
+                            .ops
+                            .iter()
+                            .copied()
+                            .filter(|&op| tribute_rt::ReleaseMoving::matches(ctx, op)),
+                    );
+                }
+            }
+        }
+    }
+    if releases.is_empty() {
+        return;
+    }
+    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
+    let mut functions = HashMap::<(u64, Vec<i32>, usize), SymbolPath>::default();
+    for op in releases {
+        let release =
+            tribute_rt::ReleaseMoving::from_op(ctx, op).expect("collected moving release");
+        let alloc_size = release.alloc_size(ctx);
+        let release_offsets = release.release_offsets(ctx).collect::<Vec<_>>();
+        let operands = std::iter::once(release.ptr(ctx))
+            .chain(release.moved(ctx).iter().copied())
+            .collect::<Vec<_>>();
+        let key = (alloc_size, release_offsets, operands.len() - 1);
+        let callee = match functions.get(&key) {
+            Some(callee) => callee.clone(),
+            None => {
+                let callee =
+                    SymbolPath::new([
+                        format!("{RELEASE_MOVING_FN_PREFIX}{}", functions.len()).as_str()
+                    ]);
+                let location = ctx.op(op).location;
+                let function =
+                    moving_release_function(ctx, &callee, &key, location, ptr_ty, nil_ty);
+                ctx.push_op(module_block, function);
+                functions.insert(key, callee.clone());
+                callee
+            }
+        };
+        let location = ctx.op(op).location;
+        let block = ctx.op(op).parent_block.expect("moving release in a block");
+        let call = clif::Call::operands(operands)
+            .callee(callee)
+            .results([nil_ty])
+            .build(ctx, location);
+        ctx.insert_op_before(block, op, call.op_ref());
+        erase_op(ctx, op);
+    }
+}
+
+/// `fn(owner, moved...)` performing one moving release of `key`'s shape.
+fn moving_release_function(
+    ctx: &mut IrContext,
+    name: &SymbolPath,
+    (alloc_size, release_offsets, moved): &(u64, Vec<i32>, usize),
+    location: trunk_ir::Location,
+    ptr_ty: TypeRef,
+    nil_ty: TypeRef,
+) -> OpRef {
+    let inputs = vec![ptr_ty; moved + 1];
+    let entry = ctx.create_block(BlockData {
+        location,
+        args: inputs
+            .iter()
+            .map(|&ty| BlockArgData {
+                ty,
+                attrs: Default::default(),
+            })
+            .collect(),
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let args = ctx.block_args(entry).to_vec();
+    let release = tribute_rt::ReleaseMoving::operands(args[0], args[1..].to_vec())
+        .alloc_size(*alloc_size)
+        .release_offsets(release_offsets.iter().copied())
+        .build(ctx, location);
+    ctx.push_op(entry, release.op_ref());
+    let ret = clif::Return::operands([]).build(ctx, location);
+    ctx.push_op(entry, ret.op_ref());
+    let body = ctx.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![entry],
+        parent_op: None,
+    });
+    let func_ty = clif::func_sig(ctx, inputs, [nil_ty]).as_type_ref();
+    clif::Func::operands()
+        .sym_name(name.leaf().expect("generated function name").to_string())
+        .r#type(func_ty)
+        .regions(body)
+        .build(ctx, location)
+        .op_ref()
 }
 
 /// Recursively lower RC ops in a region.
@@ -134,6 +246,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
     let has_rc_ops = ops.iter().any(|&op| {
         tribute_rt::Retain::from_op(ctx, op).is_ok()
             || tribute_rt::Release::from_op(ctx, op).is_ok()
+            || tribute_rt::ReleaseMoving::matches(ctx, op)
     });
 
     if !has_rc_ops {
@@ -322,6 +435,141 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
             // Recursively process skip block for remaining RC ops
             lower_rc_in_block(ctx, region, skip_block);
             return;
+        } else if let Ok(release) = tribute_rt::ReleaseMoving::from_op(ctx, op) {
+            let ptr = release.ptr(ctx);
+            let moved = release.moved(ctx).to_vec();
+            let alloc_size = release.alloc_size(ctx);
+            let release_offsets = release.release_offsets(ctx).collect::<Vec<_>>();
+            let new_block = |ctx: &mut IrContext| {
+                ctx.create_block(BlockData {
+                    location: loc,
+                    args: vec![],
+                    ops: Default::default(),
+                    parent_region: None,
+                })
+            };
+            let check_block = new_block(ctx);
+            let unique_block = new_block(ctx);
+            let shared_block = new_block(ctx);
+            let skip_block = new_block(ctx);
+
+            let null_val = clif::Iconst::operands()
+                .value(0)
+                .results(ptr_ty)
+                .build(ctx, loc);
+            ctx.push_op(current_block, null_val.op_ref());
+            let is_null = clif::Icmp::operands(ptr, null_val.result(ctx))
+                .cond("eq")
+                .results(i8_ty)
+                .build(ctx, loc);
+            ctx.push_op(current_block, is_null.op_ref());
+            let brif_op = clif::Brif::operands(is_null.result(ctx))
+                .successors(skip_block, check_block)
+                .build(ctx, loc);
+            ctx.push_op(current_block, brif_op.op_ref());
+
+            // A count of one is the caller's own unit, which no other holder
+            // can change, so a plain load decides uniqueness.
+            let hdr_sz = clif::Iconst::operands()
+                .value(RC_HEADER_SIZE as i64)
+                .results(i64_ty)
+                .build(ctx, loc);
+            ctx.push_op(check_block, hdr_sz.op_ref());
+            let raw_ptr = clif::Isub::operands(ptr, hdr_sz.result(ctx))
+                .results(ptr_ty)
+                .build(ctx, loc);
+            ctx.push_op(check_block, raw_ptr.op_ref());
+            let rc = clif::Load::operands(raw_ptr.result(ctx))
+                .offset(0)
+                .results(i32_ty)
+                .build(ctx, loc);
+            ctx.push_op(check_block, rc.op_ref());
+            let one = clif::Iconst::operands()
+                .value(1)
+                .results(i32_ty)
+                .build(ctx, loc);
+            ctx.push_op(check_block, one.op_ref());
+            let is_unique = clif::Icmp::operands(rc.result(ctx), one.result(ctx))
+                .cond("eq")
+                .results(i8_ty)
+                .build(ctx, loc);
+            ctx.push_op(check_block, is_unique.op_ref());
+            let unique_brif = clif::Brif::operands(is_unique.result(ctx))
+                .successors(unique_block, shared_block)
+                .build(ctx, loc);
+            ctx.push_op(check_block, unique_brif.op_ref());
+
+            // Unique: the moved values keep their fields' units; release the
+            // other managed fields and free the shell.
+            for offset in release_offsets {
+                let field = clif::Load::operands(ptr)
+                    .offset(offset)
+                    .results(ptr_ty)
+                    .build(ctx, loc);
+                ctx.push_op(unique_block, field.op_ref());
+                let field_release = tribute_rt::Release::operands(field.result(ctx))
+                    .alloc_size(0)
+                    .build(ctx, loc);
+                ctx.push_op(unique_block, field_release.op_ref());
+            }
+            let size = clif::Iconst::operands()
+                .value(alloc_size as i64)
+                .results(i64_ty)
+                .build(ctx, loc);
+            ctx.push_op(unique_block, size.op_ref());
+            let dealloc = clif::Call::operands([raw_ptr.result(ctx), size.result(ctx)])
+                .callee(SymbolPath::new([DEALLOC_FN]))
+                .results([nil_ty])
+                .build(ctx, loc);
+            ctx.push_op(unique_block, dealloc.op_ref());
+            let unique_jump = clif::Jump::operands([])
+                .successors(skip_block)
+                .build(ctx, loc);
+            ctx.push_op(unique_block, unique_jump.op_ref());
+
+            // Shared: acquire a unit for each moved value, then release the
+            // owner as usual; another holder may release it concurrently.
+            for value in moved {
+                let ty = ctx.value_ty(value);
+                let retain = tribute_rt::Retain::operands(value)
+                    .results(ty)
+                    .build(ctx, loc);
+                ctx.push_op(shared_block, retain.op_ref());
+            }
+            let owner_release = tribute_rt::Release::operands(ptr)
+                .alloc_size(alloc_size)
+                .build(ctx, loc);
+            ctx.push_op(shared_block, owner_release.op_ref());
+            let shared_jump = clif::Jump::operands([])
+                .successors(skip_block)
+                .build(ctx, loc);
+            ctx.push_op(shared_block, shared_jump.op_ref());
+
+            for &remaining_op in &ops[i + 1..] {
+                ctx.detach_op(remaining_op);
+                ctx.push_op(skip_block, remaining_op);
+            }
+            erase_op(ctx, op);
+
+            let region_blocks = &mut ctx.region_mut(region).blocks;
+            let pos = region_blocks
+                .iter()
+                .position(|&b| b == current_block)
+                .unwrap();
+            for (offset, new) in [check_block, unique_block, shared_block, skip_block]
+                .into_iter()
+                .enumerate()
+            {
+                region_blocks.insert(pos + 1 + offset, new);
+            }
+            for new in [check_block, unique_block, shared_block, skip_block] {
+                ctx.block_mut(new).parent_region = Some(region);
+            }
+
+            lower_rc_in_block(ctx, region, unique_block);
+            lower_rc_in_block(ctx, region, shared_block);
+            lower_rc_in_block(ctx, region, skip_block);
+            return;
         }
 
         i += 1;
@@ -502,6 +750,24 @@ mod tests {
   }
 }"#,
         );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_snapshot_release_moving() {
+        // The unique path releases the unmoved field at offset 8 and frees
+        // the owner; the shared path acquires the moved value and releases
+        // the owner.
+        let result = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.ptr {
+    %1 = clif.load %0 {offset = 0} : core.ptr
+    tribute_rt.release_moving %0, %1 {alloc_size = 24, release_offsets = [8]}
+    clif.return %1
+  }
+}"#,
+        );
+        assert!(!result.contains("tribute_rt."), "{result}");
         insta::assert_snapshot!(result);
     }
 

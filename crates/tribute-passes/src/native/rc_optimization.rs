@@ -63,6 +63,13 @@ fn eliminate_one_pair(ctx: &mut IrContext, block: BlockRef) -> bool {
                 break;
             }
 
+            // A moving release releases its owner and acquires units for its
+            // moved values at once, so it never completes a pair and, like
+            // any release, may release `ptr` through an owning field.
+            if tribute_rt::ReleaseMoving::matches(ctx, op) {
+                break;
+            }
+
             if is_barrier_for(ctx, op, ptr, retained) {
                 break;
             }
@@ -176,6 +183,25 @@ mod tests {
 }"#,
         );
         assert!(!output.contains("tribute_rt."));
+    }
+
+    #[test]
+    fn moving_release_is_a_barrier() {
+        // The moving release of another owner may release `%0` through an
+        // owning field, so the pair around it stays.
+        let output = printed_after_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr, %1: core.ptr) -> core.nil {
+    %2 = tribute_rt.retain %0 : core.ptr
+    %3 = clif.load %1 {offset = 0} : core.ptr
+    tribute_rt.release_moving %1, %3 {alloc_size = 24, release_offsets = [8]}
+    tribute_rt.release %0 {alloc_size = 12}
+    clif.return
+  }
+}"#,
+        );
+        assert!(output.contains("tribute_rt.retain"), "{output}");
+        assert!(output.contains("tribute_rt.release %0"), "{output}");
     }
 
     #[test]

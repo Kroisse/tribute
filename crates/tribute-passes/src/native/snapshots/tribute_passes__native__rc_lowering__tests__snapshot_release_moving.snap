@@ -1,0 +1,86 @@
+---
+source: crates/tribute-passes/src/native/rc_lowering.rs
+expression: result
+---
+core.module @test {
+  clif.func {sym_name = "f", type = clif.func_sig<(core.ptr) -> core.ptr>} {
+    ^bb0(%0: core.ptr):
+      %1 = clif.load %0 {offset = 0} : core.ptr
+      %2 = clif.call %0, %1 {callee = @__tribute_release_moving_0} : core.nil
+      clif.return %1
+  }
+  clif.func {sym_name = "__tribute_release_moving_0", type = clif.func_sig<(core.ptr, core.ptr) -> core.nil>} {
+    ^bb0(%0: core.ptr, %1: core.ptr):
+      %2 = clif.iconst {value = 0} : core.ptr
+      %3 = clif.icmp %0, %2 {cond = "eq"} : core.i8
+      clif.brif %3 [^bb12, ^bb1]
+
+    ^bb1:
+      %4 = clif.iconst {value = 8} : core.i64
+      %5 = clif.isub %0, %4 : core.ptr
+      %6 = clif.load %5 {offset = 0} : core.i32
+      %7 = clif.iconst {value = 1} : core.i32
+      %8 = clif.icmp %6, %7 {cond = "eq"} : core.i8
+      clif.brif %8 [^bb2, ^bb6]
+
+    ^bb2:
+      %9 = clif.load %0 {offset = 8} : core.ptr
+      %10 = clif.iconst {value = 0} : core.ptr
+      %11 = clif.icmp %9, %10 {cond = "eq"} : core.i8
+      clif.brif %11 [^bb5, ^bb3]
+
+    ^bb3:
+      %12 = clif.iconst {value = 8} : core.i64
+      %13 = clif.isub %9, %12 : core.ptr
+      %14 = clif.iconst {value = 1} : core.i32
+      %15 = clif.atomic_rmw %13, %14 {bin_op = "sub", offset = 0} : core.i32
+      %16 = clif.icmp %15, %14 {cond = "eq"} : core.i8
+      clif.brif %16 [^bb4, ^bb5]
+
+    ^bb4:
+      %17 = clif.iconst {value = 0} : core.i64
+      %18 = clif.call %9, %17 {callee = @__tribute_deep_release} : core.nil
+      clif.jump [^bb5]
+
+    ^bb5:
+      %19 = clif.iconst {value = 24} : core.i64
+      %20 = clif.call %5, %19 {callee = @__tribute_dealloc} : core.nil
+      clif.jump [^bb12]
+
+    ^bb6:
+      %21 = clif.iconst {value = 0} : core.ptr
+      %22 = clif.icmp %1, %21 {cond = "eq"} : core.i8
+      clif.brif %22 [^bb8, ^bb7]
+
+    ^bb7:
+      %23 = clif.iconst {value = 8} : core.i64
+      %24 = clif.isub %1, %23 : core.ptr
+      %25 = clif.iconst {value = 1} : core.i32
+      %26 = clif.atomic_rmw %24, %25 {bin_op = "add", offset = 0} : core.i32
+      clif.jump [^bb8]
+
+    ^bb8:
+      %27 = clif.iconst {value = 0} : core.ptr
+      %28 = clif.icmp %0, %27 {cond = "eq"} : core.i8
+      clif.brif %28 [^bb11, ^bb9]
+
+    ^bb9:
+      %29 = clif.iconst {value = 8} : core.i64
+      %30 = clif.isub %0, %29 : core.ptr
+      %31 = clif.iconst {value = 1} : core.i32
+      %32 = clif.atomic_rmw %30, %31 {bin_op = "sub", offset = 0} : core.i32
+      %33 = clif.icmp %32, %31 {cond = "eq"} : core.i8
+      clif.brif %33 [^bb10, ^bb11]
+
+    ^bb10:
+      %34 = clif.iconst {value = 24} : core.i64
+      %35 = clif.call %0, %34 {callee = @__tribute_deep_release} : core.nil
+      clif.jump [^bb11]
+
+    ^bb11:
+      clif.jump [^bb12]
+
+    ^bb12:
+      clif.return
+  }
+}
