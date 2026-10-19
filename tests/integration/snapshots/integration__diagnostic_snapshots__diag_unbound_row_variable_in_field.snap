@@ -1,0 +1,10 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "row variable `e` is not bound in this declaration"
+  span:
+    start: 38
+    end: 39
+  severity: Error
+  phase: TypeChecking

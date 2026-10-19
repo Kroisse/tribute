@@ -1,0 +1,10 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "row variable `e` in the signature of `make` is closed in its body"
+  span:
+    start: 50
+    end: 119
+  severity: Error
+  phase: TypeChecking

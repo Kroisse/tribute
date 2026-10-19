@@ -261,24 +261,19 @@ impl<'db> IrLoweringCtx<'db> {
             .instances(self.db)
             .iter()
             .map(|effect| self.ability_symbol(&effect.ability_id.qualified(self.db), &effect.args));
-        // A module-level type, such as a nominal field's callable, has no
-        // binder to name its tail.
-        let tail = row
-            .rest(self.db)
-            .filter(|_| !self.current_row_binders.is_empty())
-            .map(|variable| {
-                let index = self
-                    .current_row_binders
-                    .iter()
-                    .position(|(bound, _)| *bound == variable)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "row variable {} has no binder in the current definition",
-                            variable.id
-                        )
-                    });
-                u32::try_from(index).expect("row binder index fits u32")
-            });
+        let tail = row.rest(self.db).map(|variable| {
+            let index = self
+                .current_row_binders
+                .iter()
+                .position(|(bound, _)| *bound == variable)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "row variable {} has no binder in the current definition",
+                        variable.id
+                    )
+                });
+            u32::try_from(index).expect("row binder index fits u32")
+        });
         Row::new(instances, tail)
     }
 

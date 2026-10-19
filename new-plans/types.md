@@ -162,6 +162,24 @@ let opt: Option(String) = Some("hello")
 let res: Result(Int, String) = Ok { value: 42 }
 ```
 
+### 선언 안의 함수 타입
+
+타입 선언에는 row를 묶는 매개변수가 없다. 그래서 struct·enum 필드와 ability
+operation의 매개변수·결과에 쓴 함수 타입은 함수 시그니처와 달리 fresh row 변수를
+만들지 않는다:
+
+- Ability annotation을 생략하면 빈 row이다. `fn(a) -> b`는 `fn(a) ->{} b`와 같다.
+- Row 변수를 쓰면 묶이지 않은 변수이므로 컴파일 에러다.
+
+```rust
+struct Handler { run: fn(Int) -> Int }               // fn(Int) ->{} Int
+enum Step { Next(fn() ->{State(Int)} Nil), Done }    // 구체적 ability는 허용
+struct Bad { run: fn(Int) ->{e} Int }                // Error: e가 묶이지 않음
+```
+
+열린 row의 callback은 순수 필드에 담을 수 없다. 함수 시그니처의 생략된 row는
+fresh 변수이므로, 필드에 담을 callback은 시그니처에서 `->{}`로 명시한다.
+
 ---
 
 ## Construction

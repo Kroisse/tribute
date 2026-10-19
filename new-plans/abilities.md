@@ -25,6 +25,9 @@ Ability annotation을 생략하면 fresh한 ability 변수가 생성된다:
 fn(a) -> b       // fn(a) ->{e} b (fresh e)
 ```
 
+타입 선언(struct·enum 필드, ability operation 시그니처) 안의 함수 타입은 예외로,
+생략하면 빈 row이고 row 변수를 쓸 수 없다([선언 안의 함수 타입](types.md#선언-안의-함수-타입)).
+
 함수 선언의 effect는 본문에서 추론하지 않는다. Effect를 생략한 함수의 본문은
 concrete ability를 수행할 수 없으며, ability를 수행하는 함수는 row에 명시한다.
 

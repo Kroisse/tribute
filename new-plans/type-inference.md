@@ -169,6 +169,8 @@ fn length(xs: List(a)) ->{e} Nat
 
 생략된 row는 서로 다른 변수이다. 고차 함수가 전달받은 함수의 effect를
 전파하려면 같은 row 변수를 명시한다([Ability Annotation 규칙](#ability-annotation-규칙)).
+타입 선언 안의 함수 타입은 row 변수를 만들지 않는다. 생략된 row는 빈 row이다
+([선언 안의 함수 타입](types.md#선언-안의-함수-타입)).
 
 ### Row 구성 요소
 

@@ -476,7 +476,7 @@ fn logical_nested_accessor_preserves_qualified_callable_signature(db: &salsa::Da
 pub mod Nested {
     pub struct Holder { callback: fn(Int) -> Int }
 
-    pub fn read(holder: Holder) -> fn(Int) -> Int {
+    pub fn read(holder: Holder) -> fn(Int) ->{} Int {
         holder.callback
     }
 }
@@ -1687,8 +1687,8 @@ fn logical_nominal_callable_fields_use_control_callables(db: &salsa::DatabaseImp
 struct Holder { callback: fn(Int) -> Int }
 enum Choice { Callback(#(fn(Int) -> Int, List(fn(Int) -> Int))), Other }
 
-fn make(callback: fn(Int) -> Int) -> Choice { Callback(#(callback, [callback])) }
-fn inspect(choice: Choice, fallback: fn(Int) ->{e} Int) -> fn(Int) ->{e} Int {
+fn make(callback: fn(Int) ->{} Int) -> Choice { Callback(#(callback, [callback])) }
+fn inspect(choice: Choice, fallback: fn(Int) ->{} Int) -> fn(Int) ->{} Int {
     case choice {
         Callback(#(callback, [nested])) -> nested
         Callback(_) -> fallback

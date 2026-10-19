@@ -363,6 +363,12 @@ impl<'db> TypeChecker<'db> {
             .iter()
             .map(|f| self.annotation_to_type_for_ctor(&f.ty, &type_param_indices))
             .collect();
+        let fields: Vec<(Symbol, Type<'db>)> = s
+            .fields
+            .iter()
+            .zip(&field_types)
+            .filter_map(|(f, ty)| Some((f.name.clone()?, *ty)))
+            .collect();
 
         let ctor_ty = if field_types.is_empty() {
             // Unit struct: constructor type is just the struct type
@@ -382,15 +388,6 @@ impl<'db> TypeChecker<'db> {
         }
 
         // Register struct field information for accessor resolution
-        let fields: Vec<(Symbol, Type<'db>)> = s
-            .fields
-            .iter()
-            .filter_map(|f| {
-                let field_name = f.name.clone()?;
-                let field_ty = self.annotation_to_type_for_ctor(&f.ty, &type_param_indices);
-                Some((field_name, field_ty))
-            })
-            .collect();
         self.env.register_struct_fields(
             crate::ast::TypeDefId::source(self.db(), qualified_name, s.id),
             type_params,
@@ -681,12 +678,32 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.annotation_to_type_for_ctor(p, type_param_indices))
                     .collect();
                 let result_ty = self.annotation_to_type_for_ctor(result, type_param_indices);
+                // A declaration has no parameter to name a row with, so an
+                // omitted row is empty and a named one is unbound.
+                let abilities: Vec<_> = abilities
+                    .iter()
+                    .filter(|ann| match &ann.kind {
+                        TypeAnnotationKind::Infer => false,
+                        TypeAnnotationKind::Named(name) if is_type_variable(name) => {
+                            Diagnostic::new(
+                                format!("row variable `{name}` is not bound in this declaration"),
+                                self.get_span(ann.id),
+                                DiagnosticSeverity::Error,
+                                CompilationPhase::TypeChecking,
+                            )
+                            .accumulate(self.db());
+                            false
+                        }
+                        _ => true,
+                    })
+                    .cloned()
+                    .collect();
                 let effect = crate::ast::abilities_to_ability_row(
                     self.db(),
-                    abilities,
+                    &abilities,
                     self.current_prefix(),
                     &mut |a| self.annotation_to_type_for_ctor(a, type_param_indices),
-                    || RowVar { id: 0 },
+                    || unreachable!("a declaration's row has no tail"),
                 );
                 self.env.func_type(param_types, result_ty, effect)
             }

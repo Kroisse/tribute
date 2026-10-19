@@ -838,3 +838,38 @@ fn test() ->{State(Int, Bool)} Int {
     assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
+
+#[salsa_test]
+fn diag_unbound_row_variable_in_field(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Holder { callback: fn(Int) ->{e} Int }
+
+fn main() -> Nil { Nil }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A field's omitted row is empty, so an open callback cannot fill it.
+#[salsa_test]
+fn diag_open_callback_in_pure_field(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+enum Choice { Callback(fn(Int) -> Int), Other }
+
+fn make(callback: fn(Int) ->{e} Int) -> Choice { Callback(callback) }
+
+fn main() -> Nil { Nil }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
