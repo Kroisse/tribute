@@ -460,12 +460,17 @@ layout들로 이루어진다.
 - Capture layout(`layout = "closure_captures"`)은 사용자 index 범위에서 index를 받고
   [`supertype`](ir.md#물리-supertype)이 가리키는 base의 final subtype으로 선언한다.
   필드는 base의 code 필드 뒤에 capture의 Wasm 저장 표현을 순서대로 둔다. 모든 필드는
-  immutable이다. Capture 타입 목록이 같은 closure는 같은 GC 타입을 쓴다.
+  immutable이다. Capture layout은 같은 `layout` 값을 가진 한 builtin으로 묶지 않고
+  전체 type identity로 등록하므로, capture 타입 목록이 같은 closure끼리만 같은 GC
+  타입을 쓴다. Capture layout은 `wasm_gc.struct`로 바꾸지 않으며, emission은 그
+  필드를 `adt.struct`의 매개변수에서 읽는다.
 - Closure layout은 descriptor 필드를 두지 않으며 `Described`의 subtype이 아니다.
   Backend는 capture layout을 `layout`과 `supertype`으로만 식별하며, 첫 필드 모양으로
-  `Described` subtype 여부나 closure 여부를 추론하지 않는다. 일반적으로 emission의
-  `sub` 선언은 `supertype` 속성에서만 오고, 다른 타입의 supertype인 타입은 final이
-  아니다.
+  `Described` subtype 여부나 closure 여부를 추론하지 않는다. `layout`을 가진
+  `adt.struct`의 subtype 관계는 `supertype` 속성에서만 오고, 사용자 struct와
+  variant의 `wasm_gc.struct`가 `Described`의 subtype이라는 관계는 위 descriptor
+  규칙이 정한다. Descriptor 규칙은 `wasm_gc.struct`에만 적용되므로 closure layout에
+  닿지 않는다. 다른 타입의 supertype인 타입은 final이 아니다.
 - Code 함수는 environment 입력으로 base 참조를 받아 자기 capture layout으로
   `ref.cast`한 뒤 capture를 `struct.get`으로 읽는다. Capture 없는 closure는 base
   객체이며 cast하지 않는다.
