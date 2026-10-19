@@ -266,6 +266,36 @@ mod tests {
     }
 
     #[test]
+    fn generic_materializer_boxes_scalars_and_forwards_references() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !S = adt.struct<S(x: core.i32)>
+  func.func @f(%x: core.i32, %s: !S, %any: tribute_rt.anyref) { func.return }
+}"#,
+        );
+        let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let block = ctx.region(function.body(&ctx)).blocks[0];
+        let [x, s, any]: [ValueRef; 3] = ctx.block_args(block).try_into().unwrap();
+        let (i32_ty, struct_ty, anyref) = (ctx.value_ty(x), ctx.value_ty(s), ctx.value_ty(any));
+        let location: Location = ctx.op(function.op_ref()).location;
+        let tc = generic_type_converter(&mut ctx);
+
+        let boxed = tc
+            .materialize(&mut ctx, location, x, i32_ty, anyref)
+            .expect("an i32 boxes into anyref");
+        assert!(tribute_rt::BoxInt::matches(&ctx, boxed.ops[0]));
+        assert_eq!(boxed.value, ctx.op_result(boxed.ops[0], 0));
+
+        let erased = tc
+            .materialize(&mut ctx, location, s, struct_ty, anyref)
+            .expect("a struct reference erases to anyref");
+        assert!(erased.ops.is_empty());
+        assert_eq!(erased.value, s);
+    }
+
+    #[test]
     fn recovery_exception_uses_complete_canonical_storage_identity() {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(

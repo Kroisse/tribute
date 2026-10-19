@@ -361,9 +361,8 @@ mod tests {
         let function = module.ops(&ctx)[0];
         let body = ctx.op_region(function, 0).expect("function body");
         let entry = ctx.region(body).blocks[0];
-        let [i, n, b, f, any, p] = ctx.block_args(entry)[..] else {
-            panic!("six parameters");
-        };
+        let [i, n, b, f, any, p]: [trunk_ir::refs::ValueRef; 6] =
+            ctx.block_args(entry).try_into().expect("six parameters");
         let (i32_ty, nat_ty, i1_ty, f64_ty, anyref_ty) = (
             ctx.value_ty(i),
             ctx.value_ty(n),
