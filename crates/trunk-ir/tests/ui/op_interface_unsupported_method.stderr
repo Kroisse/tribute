@@ -1,0 +1,15 @@
+error: interface method `convert` can only be generic over lifetimes
+ --> tests/ui/op_interface_unsupported_method.rs:1:1
+  |
+1 | #[trunk_ir::op_interface]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `trunk_ir::op_interface` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: interface method `arity` must take the IR context (`&IrContext` or `&mut IrContext`) after its receiver
+ --> tests/ui/op_interface_unsupported_method.rs:6:1
+  |
+6 | #[trunk_ir::op_interface]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `trunk_ir::op_interface` (in Nightly builds, run with -Z macro-backtrace for more info)

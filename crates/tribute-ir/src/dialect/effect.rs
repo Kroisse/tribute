@@ -118,7 +118,7 @@ inventory::submit! { trunk_ir::op_interface::PureOps::register::<Tail>() }
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<WithTail>() }
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Push>() }
 
-impl trunk_ir::op_interface::CallableExitModel for DispatchCps {
+impl trunk_ir::op_interface::CallableExit for DispatchCps {
     fn verify_callable_exit(
         &self,
         ctx: &trunk_ir::IrContext,

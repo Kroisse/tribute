@@ -41,9 +41,8 @@ mod scf {
 // =========================================================================
 
 use crate::op_interface::{
-    ControlFlowInterfaceError, ForwardedValues, RegionBranchModel, RegionBranchOps,
-    RegionBranchPoint, RegionBranchTerminatorModel, RegionBranchTerminatorOps, RegionSuccessor,
-    RegionSuccessors,
+    ControlFlowInterfaceError, ForwardedValues, RegionBranch, RegionBranchOps, RegionBranchPoint,
+    RegionBranchTerminator, RegionBranchTerminatorOps, RegionSuccessor, RegionSuccessors,
 };
 
 fn op_parent_region(ctx: &IrContext, op: OpRef) -> Option<crate::refs::RegionRef> {
@@ -82,7 +81,7 @@ impl If {
     }
 }
 
-impl RegionBranchModel for If {
+impl RegionBranch for If {
     fn successors(
         self,
         ctx: &IrContext,
@@ -138,7 +137,7 @@ impl Loop {
     }
 }
 
-impl RegionBranchModel for Loop {
+impl RegionBranch for Loop {
     fn successors(
         self,
         ctx: &IrContext,
@@ -237,7 +236,7 @@ impl Switch {
     }
 }
 
-impl RegionBranchModel for Switch {
+impl RegionBranch for Switch {
     fn successors(
         self,
         ctx: &IrContext,
@@ -355,7 +354,7 @@ impl SwitchArmModel for Default {
     }
 }
 
-impl RegionBranchModel for Case {
+impl RegionBranch for Case {
     fn successors(
         self,
         ctx: &IrContext,
@@ -373,7 +372,7 @@ impl RegionBranchModel for Case {
     }
 }
 
-impl RegionBranchModel for Default {
+impl RegionBranch for Default {
     fn successors(
         self,
         ctx: &IrContext,
@@ -391,7 +390,7 @@ impl RegionBranchModel for Default {
     }
 }
 
-impl RegionBranchTerminatorModel for Yield {
+impl RegionBranchTerminator for Yield {
     fn successor_operands(
         self,
         ctx: &IrContext,
@@ -406,7 +405,7 @@ impl RegionBranchTerminatorModel for Yield {
     }
 }
 
-impl RegionBranchTerminatorModel for Continue {
+impl RegionBranchTerminator for Continue {
     fn successor_operands(
         self,
         ctx: &IrContext,
@@ -431,7 +430,7 @@ impl RegionBranchTerminatorModel for Continue {
     }
 }
 
-impl RegionBranchTerminatorModel for Break {
+impl RegionBranchTerminator for Break {
     fn successor_operands(
         self,
         ctx: &IrContext,

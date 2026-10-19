@@ -209,6 +209,49 @@ Typed accessors do not check the schema; for an optional region or result,
 inspect the operation before calling the accessor. Interface queries that may
 see unverified IR read attributes fallibly instead.
 
+## Operation Interfaces
+
+An operation interface is a trait that operation wrappers implement,
+declared with `#[trunk_ir::op_interface]`:
+
+```rust
+#[op_interface]
+pub trait Branch: DialectOp {
+    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
+}
+
+impl Branch for Br {
+    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> { .. }
+}
+inventory::submit! { BranchOps::register::<Br>() }
+```
+
+Each method takes `self` or `&self`, then the context (`&IrContext` or
+`&mut IrContext`), and may be generic over lifetimes only; default bodies
+are dispatched like other methods. The `inventory::submit!` registers the
+implementation by the operation's name; registering an operation twice for
+one interface panics when that interface is first queried. The macro
+generates `DynBranch`, a copyable handle to an operation and its
+implementation:
+
+```rust
+if let Some(branch) = DynBranch::get(ctx, op) {
+    let successors = branch.successors(ctx)?;
+}
+let is_branch = DynBranch::is_implemented(ctx, op);
+```
+
+A query that combines interfaces, or turns a missing implementation into an
+error, is a function written next to the trait, such as
+`RegionBranchOps::value_transfer` and `CallableExitOps::exits_callable`.
+Any crate can declare an interface; an implementation follows the orphan
+rule, so it lives with the interface or with the operation.
+
+`Pure` and `IsolatedFromAbove` are marker registrations rather than
+`#[op_interface]` traits: `register_pure_op!(Addi)` and
+`register_isolated_op!(Func)` register an operation, and
+`PureOps::is_pure` and `IsolatedFromAboveOps::is_isolated` query it.
+
 ## Working with IR
 
 A declared type is built like an operation: start from its parameters in
@@ -335,17 +378,11 @@ functions (call graph, global DCE, the inliner) are keyed by the defining
 `None`. `symbol_table::qualified_name` spells a definition's path from the
 root for diagnostics only; do not look a written reference up by it.
 
-A direct call operation registers `CallLike` so analyses can tell its callee
+A direct call operation implements the `CallLike`
+[operation interface](#operation-interfaces) so analyses can tell its callee
 from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;
 every other reference an operation holds takes its target's address, which
-the call graph records as an escape:
-
-```rust
-impl CallLikeModel for Call {}
-inventory::submit! {
-    CallLikeOps::register::<Call>()
-}
-```
+the call graph records as an escape.
 
 Per-parameter attributes (`param_attrs`, see
 [the type model](../../new-plans/ir.md#타입-매개변수-속성)) are built with the

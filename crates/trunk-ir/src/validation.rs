@@ -25,8 +25,8 @@ use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::op_def::OpDef;
 use super::op_interface::{
-    BranchOps, CallableExitOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps,
-    RegionSuccessor, RegionValueTransfer,
+    CallableExitOps, DynBranch, DynRegionBranch, DynRegionBranchTerminator, RegionBranchOps,
+    RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
 };
 use super::ops::{DialectOp, DialectType};
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
@@ -787,7 +787,7 @@ fn forwarding_comes_from_operands(source: &[ValueRef], forwarded: &[ValueRef]) -
 }
 
 fn validate_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let Some(interface) = BranchOps::get(ctx, op) else {
+    let Some(interface) = DynBranch::get(ctx, op) else {
         return;
     };
     if !ctx.op_results(op).is_empty() {
@@ -805,7 +805,7 @@ fn validate_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
             "Branch operation must be the final operation in its block",
         ));
     }
-    let successors = match interface.successors(ctx, op) {
+    let successors = match interface.successors(ctx) {
         Ok(successors) => successors,
         Err(error) => {
             errors.push(operation_verifier_error(
@@ -943,10 +943,10 @@ fn validate_region_transfer(
 }
 
 fn validate_region_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let Some(interface) = RegionBranchOps::get(ctx, op) else {
+    let Some(interface) = DynRegionBranch::get(ctx, op) else {
         return;
     };
-    let successors = match interface.successors(ctx, op, RegionBranchPoint::Parent) {
+    let successors = match interface.successors(ctx, RegionBranchPoint::Parent) {
         Ok(successors) => successors,
         Err(error) => {
             errors.push(operation_verifier_error(
@@ -994,7 +994,7 @@ fn validate_region_branch_terminator_interface(
     op: OpRef,
     errors: &mut Vec<ValidationError>,
 ) {
-    if RegionBranchTerminatorOps::get(ctx, op).is_none() {
+    if DynRegionBranchTerminator::get(ctx, op).is_none() {
         return;
     }
     if !ctx.op_results(op).is_empty() {
@@ -1033,8 +1033,8 @@ fn validate_region_branch_terminator_interface(
         let Some(owner) = ctx.region(current_region).parent_op else {
             break;
         };
-        if let Some(interface) = RegionBranchOps::get(ctx, owner) {
-            match interface.successors(ctx, owner, point) {
+        if let Some(interface) = DynRegionBranch::get(ctx, owner) {
+            match interface.successors(ctx, point) {
                 Ok(successors) => {
                     if successors.as_slice().is_empty() {
                         errors.push(operation_verifier_error(
@@ -2686,8 +2686,8 @@ mod tests {
         let branches = operations_named(&ctx, module, crate::dialect::cf::Br::NAME);
         assert_eq!(branches.len(), 1);
         let branch = branches[0];
-        let interface = BranchOps::get(&ctx, branch).expect("cf.br must implement Branch");
-        let successors = interface.successors(&ctx, branch).unwrap();
+        let interface = DynBranch::get(&ctx, branch).expect("cf.br must implement Branch");
+        let successors = interface.successors(&ctx).unwrap();
         assert_eq!(successors.as_slice().len(), 1);
         let edge = &successors.as_slice()[0];
         assert_eq!(edge.forwarded.as_slice(), ctx.op_operands(branch));
@@ -2721,9 +2721,9 @@ mod tests {
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
         let branch = operations_named(&ctx, module, crate::dialect::cf::Switch::NAME)[0];
-        let successors = BranchOps::get(&ctx, branch)
+        let successors = DynBranch::get(&ctx, branch)
             .expect("cf.switch must implement Branch")
-            .successors(&ctx, branch)
+            .successors(&ctx)
             .unwrap();
         let blocks: crate::BlockList = ctx.op_successors(branch).collect();
         assert_eq!(blocks.len(), 3);
@@ -2783,9 +2783,9 @@ mod tests {
         let branches = operations_named(&ctx, module, crate::dialect::cf::CondBr::NAME);
         assert_eq!(branches.len(), 1);
         let branch = branches[0];
-        let successors = BranchOps::get(&ctx, branch)
+        let successors = DynBranch::get(&ctx, branch)
             .unwrap()
-            .successors(&ctx, branch)
+            .successors(&ctx)
             .unwrap();
         assert_eq!(successors.as_slice().len(), 2);
         assert!(
@@ -2854,9 +2854,9 @@ mod tests {
         let ifs = operations_named(&ctx, module, crate::dialect::scf::If::NAME);
         assert_eq!(ifs.len(), 2);
         for if_op in ifs {
-            let interface = RegionBranchOps::get(&ctx, if_op).unwrap();
+            let interface = DynRegionBranch::get(&ctx, if_op).unwrap();
             let successors = interface
-                .successors(&ctx, if_op, RegionBranchPoint::Parent)
+                .successors(&ctx, RegionBranchPoint::Parent)
                 .unwrap();
             assert_eq!(successors.as_slice().len(), 2);
             assert!(
@@ -2889,9 +2889,9 @@ mod tests {
         let loops = operations_named(&ctx, module, crate::dialect::scf::Loop::NAME);
         assert_eq!(loops.len(), 1);
         let loop_op = loops[0];
-        let interface = RegionBranchOps::get(&ctx, loop_op).unwrap();
+        let interface = DynRegionBranch::get(&ctx, loop_op).unwrap();
         let entry = interface
-            .successors(&ctx, loop_op, RegionBranchPoint::Parent)
+            .successors(&ctx, RegionBranchPoint::Parent)
             .unwrap();
         assert_eq!(entry.as_slice().len(), 1);
         let RegionSuccessor::Region(body) = entry.as_slice()[0] else {
@@ -2948,9 +2948,9 @@ mod tests {
         let switches = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME);
         assert_eq!(switches.len(), 1);
         let switch = switches[0];
-        let interface = RegionBranchOps::get(&ctx, switch).unwrap();
+        let interface = DynRegionBranch::get(&ctx, switch).unwrap();
         let successors = interface
-            .successors(&ctx, switch, RegionBranchPoint::Parent)
+            .successors(&ctx, RegionBranchPoint::Parent)
             .unwrap();
         assert_eq!(successors.as_slice().len(), 2);
         assert!(
@@ -2967,7 +2967,7 @@ mod tests {
                 crate::dialect::scf::Default::NAME,
             ))
         {
-            assert!(RegionBranchOps::get(&ctx, wrapper).is_some());
+            assert!(DynRegionBranch::get(&ctx, wrapper).is_some());
         }
     }
 
@@ -3031,49 +3031,49 @@ mod tests {
             .find(|&&op| direct_owner(op) == Some(case))
             .unwrap();
 
-        let if_interface = RegionBranchOps::get(&ctx, if_op).unwrap();
+        let if_interface = DynRegionBranch::get(&ctx, if_op).unwrap();
         let error = if_interface
-            .successors(&ctx, if_op, RegionBranchPoint::Terminator(case_yield))
+            .successors(&ctx, RegionBranchPoint::Terminator(case_yield))
             .unwrap_err();
         assert!(error.is_not_applicable());
         assert!(error.to_string().contains("not an scf.if region yield"));
         assert!(
             if_interface
-                .entry_successor_operands(&ctx, if_op, RegionSuccessor::Parent)
+                .entry_successor_operands(&ctx, RegionSuccessor::Parent)
                 .is_err()
         );
 
-        let switch_interface = RegionBranchOps::get(&ctx, switch).unwrap();
+        let switch_interface = DynRegionBranch::get(&ctx, switch).unwrap();
         assert_eq!(
             switch_interface
-                .successors(&ctx, switch, RegionBranchPoint::Terminator(case_yield),)
+                .successors(&ctx, RegionBranchPoint::Terminator(case_yield),)
                 .unwrap()
                 .as_slice(),
             &[RegionSuccessor::Parent]
         );
         assert!(
             switch_interface
-                .successors(&ctx, switch, RegionBranchPoint::Terminator(if_yield),)
+                .successors(&ctx, RegionBranchPoint::Terminator(if_yield),)
                 .unwrap_err()
                 .is_not_applicable()
         );
         assert!(
             switch_interface
-                .entry_successor_operands(&ctx, switch, RegionSuccessor::Parent)
+                .entry_successor_operands(&ctx, RegionSuccessor::Parent)
                 .is_err()
         );
 
         for wrapper in [case, default] {
-            let interface = RegionBranchOps::get(&ctx, wrapper).unwrap();
+            let interface = DynRegionBranch::get(&ctx, wrapper).unwrap();
             assert!(
                 interface
-                    .successors(&ctx, wrapper, RegionBranchPoint::Terminator(if_yield),)
+                    .successors(&ctx, RegionBranchPoint::Terminator(if_yield),)
                     .unwrap_err()
                     .is_not_applicable()
             );
             assert!(
                 interface
-                    .entry_successor_operands(&ctx, wrapper, RegionSuccessor::Parent)
+                    .entry_successor_operands(&ctx, RegionSuccessor::Parent)
                     .is_err()
             );
         }
@@ -3083,20 +3083,20 @@ mod tests {
             .iter()
             .find(|&&op| !ctx.op_results(op).is_empty())
             .unwrap();
-        let result_loop_interface = RegionBranchOps::get(&ctx, result_loop).unwrap();
+        let result_loop_interface = DynRegionBranch::get(&ctx, result_loop).unwrap();
         assert!(
             result_loop_interface
-                .successors(&ctx, result_loop, RegionBranchPoint::Terminator(if_yield),)
+                .successors(&ctx, RegionBranchPoint::Terminator(if_yield),)
                 .unwrap_err()
                 .is_not_applicable()
         );
         assert!(
             result_loop_interface
-                .entry_successor_operands(&ctx, result_loop, RegionSuccessor::Parent)
+                .entry_successor_operands(&ctx, RegionSuccessor::Parent)
                 .is_err()
         );
         let loop_entry = result_loop_interface
-            .successors(&ctx, result_loop, RegionBranchPoint::Parent)
+            .successors(&ctx, RegionBranchPoint::Parent)
             .unwrap();
         assert_eq!(loop_entry.as_slice().len(), 1);
         let RegionSuccessor::Region(loop_body) = loop_entry.as_slice()[0] else {
@@ -3116,30 +3116,30 @@ mod tests {
             })
             .unwrap();
         assert!(
-            RegionBranchTerminatorOps::get(&ctx, continue_op)
+            DynRegionBranchTerminator::get(&ctx, continue_op)
                 .unwrap()
-                .successor_operands(&ctx, continue_op, RegionSuccessor::Parent)
+                .successor_operands(&ctx, RegionSuccessor::Parent)
                 .is_err()
         );
         let unrelated_region = ctx.op_region(case, 0).unwrap();
         assert!(
-            RegionBranchTerminatorOps::get(&ctx, continue_op)
+            DynRegionBranchTerminator::get(&ctx, continue_op)
                 .unwrap()
-                .successor_operands(&ctx, continue_op, RegionSuccessor::Region(unrelated_region),)
+                .successor_operands(&ctx, RegionSuccessor::Region(unrelated_region),)
                 .is_err()
         );
         assert!(
-            RegionBranchTerminatorOps::get(&ctx, stray_continue)
+            DynRegionBranchTerminator::get(&ctx, stray_continue)
                 .unwrap()
-                .successor_operands(&ctx, stray_continue, RegionSuccessor::Region(loop_body),)
+                .successor_operands(&ctx, RegionSuccessor::Region(loop_body),)
                 .unwrap_err()
                 .to_string()
                 .contains("no enclosing scf.loop")
         );
         assert!(
-            RegionBranchTerminatorOps::get(&ctx, case_yield)
+            DynRegionBranchTerminator::get(&ctx, case_yield)
                 .unwrap()
-                .successor_operands(&ctx, case_yield, RegionSuccessor::Region(loop_body))
+                .successor_operands(&ctx, RegionSuccessor::Region(loop_body))
                 .is_err()
         );
 
@@ -3149,9 +3149,9 @@ mod tests {
             .find(|&&op| direct_owner(op) == Some(result_loop))
             .unwrap();
         assert!(
-            RegionBranchTerminatorOps::get(&ctx, result_break)
+            DynRegionBranchTerminator::get(&ctx, result_break)
                 .unwrap()
-                .successor_operands(&ctx, result_break, RegionSuccessor::Region(loop_body))
+                .successor_operands(&ctx, RegionSuccessor::Region(loop_body))
                 .is_err()
         );
         let resultless_break = *breaks
@@ -3163,9 +3163,9 @@ mod tests {
             })
             .unwrap();
         assert!(
-            RegionBranchTerminatorOps::get(&ctx, resultless_break)
+            DynRegionBranchTerminator::get(&ctx, resultless_break)
                 .unwrap()
-                .successor_operands(&ctx, resultless_break, RegionSuccessor::Parent)
+                .successor_operands(&ctx, RegionSuccessor::Parent)
                 .unwrap()
                 .is_empty()
         );
@@ -3177,9 +3177,9 @@ mod tests {
             })
             .unwrap();
         assert!(
-            RegionBranchTerminatorOps::get(&ctx, stray_break)
+            DynRegionBranchTerminator::get(&ctx, stray_break)
                 .unwrap()
-                .successor_operands(&ctx, stray_break, RegionSuccessor::Parent)
+                .successor_operands(&ctx, RegionSuccessor::Parent)
                 .unwrap_err()
                 .to_string()
                 .contains("no enclosing scf.loop")
@@ -3272,89 +3272,60 @@ mod tests {
 
         let branch = operations_named(&ctx, module, crate::dialect::cf::Br::NAME)[0];
         let cond_branch = operations_named(&ctx, module, crate::dialect::cf::CondBr::NAME)[0];
-        let if_op = operations_named(&ctx, module, crate::dialect::scf::If::NAME)[0];
         let switches = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME);
         let loop_op = operations_named(&ctx, module, crate::dialect::scf::Loop::NAME)[0];
         let case = operations_named(&ctx, module, crate::dialect::scf::Case::NAME)[0];
-        let yield_op = operations_named(&ctx, module, crate::dialect::scf::Yield::NAME)[0];
         let break_op = operations_named(&ctx, module, crate::dialect::scf::Break::NAME)[0];
-        let wrong_op = operations_named(&ctx, module, crate::dialect::func::Return::NAME)[0];
-
-        assert!(
-            BranchOps::get(&ctx, branch)
-                .unwrap()
-                .successors(&ctx, wrong_op)
-                .unwrap_err()
-                .to_string()
-                .contains("malformed cf.br")
-        );
-        let region_interface = RegionBranchOps::get(&ctx, if_op).unwrap();
-        assert!(
-            region_interface
-                .successors(&ctx, wrong_op, RegionBranchPoint::Parent)
-                .is_err()
-        );
-        assert!(
-            region_interface
-                .entry_successor_operands(&ctx, wrong_op, RegionSuccessor::Parent)
-                .is_err()
-        );
-        assert!(
-            RegionBranchTerminatorOps::get(&ctx, yield_op)
-                .unwrap()
-                .successor_operands(&ctx, wrong_op, RegionSuccessor::Parent)
-                .is_err()
-        );
 
         ctx.truncate_op_successors(branch, 0);
         assert!(
-            BranchOps::get(&ctx, branch)
+            DynBranch::get(&ctx, branch)
                 .unwrap()
-                .successors(&ctx, branch)
+                .successors(&ctx)
                 .is_err()
         );
         let count = ctx.op_successor_count(cond_branch);
         ctx.truncate_op_successors(cond_branch, count - 1);
         assert!(
-            BranchOps::get(&ctx, cond_branch)
+            DynBranch::get(&ctx, cond_branch)
                 .unwrap()
-                .successors(&ctx, cond_branch)
+                .successors(&ctx)
                 .is_err()
         );
         ctx.clear_op_regions(loop_op);
         assert!(
-            RegionBranchOps::get(&ctx, loop_op)
+            DynRegionBranch::get(&ctx, loop_op)
                 .unwrap()
-                .successors(&ctx, loop_op, RegionBranchPoint::Parent)
+                .successors(&ctx, RegionBranchPoint::Parent)
                 .is_err()
         );
         ctx.remove_op_operand(switches[0], 0);
         assert!(
-            RegionBranchOps::get(&ctx, switches[0])
+            DynRegionBranch::get(&ctx, switches[0])
                 .unwrap()
-                .successors(&ctx, switches[0], RegionBranchPoint::Parent)
+                .successors(&ctx, RegionBranchPoint::Parent)
                 .is_err()
         );
         let second_switch_body = ctx.op_region(switches[1], 0).unwrap();
         ctx.region_mut(second_switch_body).blocks.clear();
         assert!(
-            RegionBranchOps::get(&ctx, switches[1])
+            DynRegionBranch::get(&ctx, switches[1])
                 .unwrap()
-                .successors(&ctx, switches[1], RegionBranchPoint::Parent)
+                .successors(&ctx, RegionBranchPoint::Parent)
                 .is_err()
         );
         ctx.clear_op_regions(case);
         assert!(
-            RegionBranchOps::get(&ctx, case)
+            DynRegionBranch::get(&ctx, case)
                 .unwrap()
-                .successors(&ctx, case, RegionBranchPoint::Parent)
+                .successors(&ctx, RegionBranchPoint::Parent)
                 .is_err()
         );
         ctx.remove_op_operand(break_op, 0);
         assert!(
-            RegionBranchTerminatorOps::get(&ctx, break_op)
+            DynRegionBranchTerminator::get(&ctx, break_op)
                 .unwrap()
-                .successor_operands(&ctx, break_op, RegionSuccessor::Parent)
+                .successor_operands(&ctx, RegionSuccessor::Parent)
                 .is_err()
         );
     }

@@ -3,7 +3,7 @@
 use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
 use crate::dialect::core::{I32, IntegerLike};
-use crate::op_interface::{CallLikeModel, CallLikeOps, IndirectCallLikeModel, IndirectCallLikeOps};
+use crate::op_interface::{CallLike, CallLikeOps, IndirectCallLike, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
 use itertools::Itertools;
@@ -482,7 +482,7 @@ fn exact_indirect_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<
         .filter(|&ty| FuncSig::from_type_ref(ctx, ty).is_some())
 }
 
-impl IndirectCallLikeModel for CallIndirect {
+impl IndirectCallLike for CallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         exact_indirect_signature(ctx, self.op_ref())
     }
@@ -492,7 +492,7 @@ impl IndirectCallLikeModel for CallIndirect {
     }
 }
 
-impl IndirectCallLikeModel for ReturnCallIndirect {
+impl IndirectCallLike for ReturnCallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         exact_indirect_signature(ctx, self.op_ref())
     }
@@ -502,8 +502,8 @@ impl IndirectCallLikeModel for ReturnCallIndirect {
     }
 }
 
-impl CallLikeModel for Call {}
-impl CallLikeModel for ReturnCall {}
+impl CallLike for Call {}
+impl CallLike for ReturnCall {}
 
 inventory::submit! {
     CallLikeOps::register::<Call>()
@@ -547,7 +547,7 @@ pub fn set_indirect_call_signature(
 mod tests {
     use super::*;
     use crate::dialect::func;
-    use crate::op_interface::IndirectCallLikeOps;
+    use crate::op_interface::{DynIndirectCallLike, IndirectCallLikeOps};
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
 
@@ -596,7 +596,7 @@ mod tests {
                 Some(&operands[1..])
             );
         }
-        assert!(IndirectCallLikeOps::get(&ctx, direct).is_none());
+        assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
         assert_eq!(IndirectCallLikeOps::callee(&ctx, direct), None);
         assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct), None);
 

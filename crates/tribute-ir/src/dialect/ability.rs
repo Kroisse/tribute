@@ -240,9 +240,9 @@ pub fn ability_id_const(
 // === Pure operation registrations ===
 
 use trunk_ir::attr_kind::{SymbolRef, Type};
-use trunk_ir::op_interface::{CallableExitModel, CallableExitOps, ControlFlowInterfaceError};
+use trunk_ir::op_interface::{CallableExit, CallableExitOps, ControlFlowInterfaceError};
 
-impl CallableExitModel for Perform {
+impl CallableExit for Perform {
     fn verify_callable_exit(
         &self,
         ctx: &trunk_ir::IrContext,
@@ -262,7 +262,7 @@ impl CallableExitModel for Perform {
     }
 }
 
-impl CallableExitModel for HandleDispatch {
+impl CallableExit for HandleDispatch {
     fn allows_nested_regions(&self, _ctx: &trunk_ir::IrContext) -> bool {
         true
     }
@@ -294,11 +294,11 @@ impl CallableExitModel for HandleDispatch {
     }
 }
 
-impl CallableExitModel for Exit {}
+impl CallableExit for Exit {}
 
-impl CallableExitModel for Abort {}
+impl CallableExit for Abort {}
 
-impl CallableExitModel for Handle {
+impl CallableExit for Handle {
     fn allows_nested_regions(&self, _ctx: &trunk_ir::IrContext) -> bool {
         true
     }

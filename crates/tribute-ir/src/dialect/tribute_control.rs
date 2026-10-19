@@ -16,7 +16,7 @@ use itertools::Itertools;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::core;
 use trunk_ir::op_def::OpDef;
-use trunk_ir::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
+use trunk_ir::op_interface::{DynRegionBranch, RegionBranchPoint, RegionSuccessor};
 use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
@@ -838,18 +838,18 @@ inventory::submit! {
     trunk_ir::op_interface::IsolatedFromAboveOps::register::<Func>()
 }
 
-impl trunk_ir::op_interface::CallLikeModel for Call {}
+impl trunk_ir::op_interface::CallLike for Call {}
 inventory::submit! {
     trunk_ir::op_interface::CallLikeOps::register::<Call>()
 }
-impl trunk_ir::op_interface::CallLikeModel for TailCall {}
+impl trunk_ir::op_interface::CallLike for TailCall {}
 inventory::submit! {
     trunk_ir::op_interface::CallLikeOps::register::<TailCall>()
 }
 
 // A source `become` ends its callable: the callee's result is the caller's.
-impl trunk_ir::op_interface::CallableExitModel for TailCall {}
-impl trunk_ir::op_interface::CallableExitModel for TailCallIndirect {}
+impl trunk_ir::op_interface::CallableExit for TailCall {}
+impl trunk_ir::op_interface::CallableExit for TailCallIndirect {}
 inventory::submit! {
     trunk_ir::op_interface::CallableExitOps::register::<TailCall>()
 }
@@ -4024,8 +4024,8 @@ fn ops_are_mutually_exclusive(ctx: &IrContext, left: OpRef, right: OpRef) -> boo
     while let Some(current) = region {
         let owner = ctx.region(current).parent_op;
         if let Some(owner) = owner
-            && let Some(interface) = RegionBranchOps::get(ctx, owner)
-            && let Ok(successors) = interface.successors(ctx, owner, RegionBranchPoint::Parent)
+            && let Some(interface) = DynRegionBranch::get(ctx, owner)
+            && let Ok(successors) = interface.successors(ctx, RegionBranchPoint::Parent)
         {
             let containing_region = |candidate: OpRef| {
                 successors.as_slice().iter().find_map(|successor| {

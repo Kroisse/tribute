@@ -3,7 +3,7 @@
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::{Bytes, Type};
 use crate::dialect::core::I32;
-use crate::op_interface::{CallLikeModel, CallLikeOps, IndirectCallLikeModel, IndirectCallLikeOps};
+use crate::op_interface::{CallLike, CallLikeOps, IndirectCallLike, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, TypeDataBuilder, TypeRef};
 
@@ -717,7 +717,7 @@ pub fn func_sig_with_attrs(
 
 const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
 
-impl IndirectCallLikeModel for CallIndirect {
+impl IndirectCallLike for CallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         self.signature(ctx)
     }
@@ -727,7 +727,7 @@ impl IndirectCallLikeModel for CallIndirect {
     }
 }
 
-impl IndirectCallLikeModel for ReturnCallIndirect {
+impl IndirectCallLike for ReturnCallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         self.signature(ctx)
     }
@@ -737,8 +737,8 @@ impl IndirectCallLikeModel for ReturnCallIndirect {
     }
 }
 
-impl CallLikeModel for Call {}
-impl CallLikeModel for ReturnCall {}
+impl CallLike for Call {}
+impl CallLike for ReturnCall {}
 
 inventory::submit! {
     CallLikeOps::register::<Call>()
@@ -781,7 +781,7 @@ pub fn set_indirect_call_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::op_interface::IndirectCallLikeOps;
+    use crate::op_interface::{DynIndirectCallLike, IndirectCallLikeOps};
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
 
@@ -818,7 +818,7 @@ mod tests {
         let direct = body_op(3);
 
         assert!(IndirectCallLikeOps::exact_signature(&ctx, ordinary).is_some());
-        assert!(IndirectCallLikeOps::get(&ctx, plain).is_some());
+        assert!(DynIndirectCallLike::get(&ctx, plain).is_some());
         assert_eq!(IndirectCallLikeOps::exact_signature(&ctx, plain), None);
         assert!(IndirectCallLikeOps::exact_signature(&ctx, tail).is_some());
         for op in [ordinary, tail] {
@@ -831,7 +831,7 @@ mod tests {
         }
         assert!(IndirectCallLikeOps::callee(&ctx, plain).is_some());
         assert!(IndirectCallLikeOps::arguments(&ctx, plain).is_some());
-        assert!(IndirectCallLikeOps::get(&ctx, direct).is_none());
+        assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
         assert_eq!(IndirectCallLikeOps::callee(&ctx, direct), None);
         assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct), None);
 
