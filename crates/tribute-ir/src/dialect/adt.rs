@@ -890,6 +890,31 @@ mod tests {
     }
 
     #[test]
+    fn named_types_suggest_their_name_as_alias() {
+        use trunk_ir::TypeDataBuilder;
+        use trunk_ir::asm_format::suggest_type_alias_name;
+
+        let mut ctx = IrContext::new();
+        let i32_ty = trunk_ir::dialect::core::I32::type_ref(&mut ctx);
+        let named = |ctx: &mut IrContext, name: trunk_ir::TypeName, alias: &str| {
+            let alias = ctx.string_attr(alias);
+            TypeDataBuilder::new(name).attr("name", alias).intern(ctx)
+        };
+        let types = [
+            named(&mut ctx, Struct::NAME, "Point"),
+            named(&mut ctx, Enum::NAME, "Option"),
+            named(&mut ctx, Typeref::NAME, "Point"),
+            named(&mut ctx, Variant::NAME, "Some"),
+        ];
+        let names = types.map(|ty| suggest_type_alias_name(&ctx, ty));
+        assert_eq!(
+            names,
+            [Some("Point"), Some("Option"), Some("Point"), Some("Some")]
+        );
+        assert_eq!(suggest_type_alias_name(&ctx, i32_ty), None);
+    }
+
+    #[test]
     fn string_attribute_accessors_return_text_and_handle() {
         use trunk_ir::ops::DialectOp;
 

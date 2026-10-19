@@ -1677,6 +1677,25 @@ mod tests {
                 quote!(
                     mod test {
                         #[alias_hint]
+                        #[alias_hint]
+                        struct Ty;
+                    }
+                ),
+                "duplicate #[alias_hint]",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[alias_hint(x)]
+                        struct Ty;
+                    }
+                ),
+                "#[alias_hint]",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[alias_hint]
                         fn op() {}
                     }
                 ),

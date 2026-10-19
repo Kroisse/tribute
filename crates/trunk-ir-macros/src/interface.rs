@@ -760,6 +760,57 @@ mod tests {
     }
 
     #[test]
+    fn errors_name_the_interface_kind() {
+        let type_err =
+            |attr: TokenStream, item: TokenStream| match gen_interface(Kind::Type, attr, item) {
+                Err(error) => error,
+                Ok(tokens) => panic!("expected an error, got: {tokens}"),
+            };
+        assert!(
+            type_err(quote!(x), quote! { trait X: DialectType {} })
+                .contains("`#[type_interface]` takes no arguments")
+        );
+        assert!(
+            type_err(
+                TokenStream::new(),
+                quote! { unsafe trait X: DialectType {} }
+            )
+            .contains("`#[type_interface]` does not support `unsafe` traits")
+        );
+        assert!(
+            type_err(TokenStream::new(), quote! { struct X; })
+                .contains("`#[type_interface]` applies to a trait")
+        );
+        assert!(
+            type_err(TokenStream::new(), quote! { trait X<T>: DialectType {} })
+                .contains("type interface `X` cannot be generic")
+        );
+        assert!(
+            type_err(
+                TokenStream::new(),
+                quote! { trait X: DialectType where Self: Copy {} }
+            )
+            .contains("type interface `X` cannot have a `where` clause")
+        );
+        assert!(
+            type_err(
+                TokenStream::new(),
+                quote! { trait X: DialectType { type T; } }
+            )
+            .contains("type interface `X` can only declare methods, not `type` items")
+        );
+        assert!(
+            type_err(TokenStream::new(), quote! { trait X: DialectType { x } })
+                .contains("type interface `X` can only declare methods, found `x`")
+        );
+        assert!(
+            expand_err(quote! { trait X: DialectOp { fn op(self, ctx: &IrContext); } })
+                .contains("reserved")
+        );
+        assert!(expand(quote! { trait X: DialectOp {} }).contains("operation interface"),);
+    }
+
+    #[test]
     fn rejects_unsupported_forms() {
         assert!(expand_err(quote! { trait X<T>: DialectOp {} }).contains("cannot be generic"));
         assert!(

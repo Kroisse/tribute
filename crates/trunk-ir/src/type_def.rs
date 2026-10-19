@@ -287,6 +287,56 @@ mod tests {
         let _ = Tagged::params(elem).intern(&mut ctx);
     }
 
+    /// A hand-written definition with every hook.
+    #[derive(Clone, Copy)]
+    struct HandWritten(TypeRef);
+
+    static HAND_WRITTEN_DEF: TypeDef = TypeDef::new("type_hooks_test.hand_written")
+        .with_verifier::<HandWritten>()
+        .with_asm_format::<Custom>()
+        .with_alias_hint::<HandWritten>();
+
+    crate::register_type_def!(&HAND_WRITTEN_DEF);
+
+    impl crate::ops::DialectType for HandWritten {
+        const DEF: &'static TypeDef = &HAND_WRITTEN_DEF;
+
+        fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
+            Self::matches(ctx, ty).then_some(Self(ty))
+        }
+
+        fn as_type_ref(&self) -> TypeRef {
+            self.0
+        }
+    }
+
+    impl crate::type_verifier::VerifyType for HandWritten {
+        fn verify(_ctx: &IrContext, ty: TypeRef) -> Result<Self, VerificationError> {
+            Ok(Self(ty))
+        }
+    }
+
+    impl crate::asm_format::TypeAliasHint for HandWritten {
+        fn alias_hint(_ctx: &IrContext, _ty: TypeRef) -> Option<&str> {
+            Some("handy")
+        }
+    }
+
+    #[test]
+    fn hand_written_definitions_register_their_hooks() {
+        let def = TypeDef::lookup("type_hooks_test.hand_written").unwrap();
+        assert!(std::ptr::eq(def, &HAND_WRITTEN_DEF));
+        assert!(def.verifier.is_some() && def.asm_format.is_some());
+
+        let mut ctx = IrContext::new();
+        let ty = crate::TypeDataBuilder::new("type_hooks_test.hand_written").intern(&mut ctx);
+        assert!(ctx.get_type(ty).name.is_registered());
+        assert_eq!(
+            crate::asm_format::suggest_type_alias_name(&ctx, ty),
+            Some("handy")
+        );
+    }
+
     #[test]
     fn every_registered_type_name_has_one_handle() {
         let mut ctx = IrContext::new();
