@@ -7,8 +7,8 @@ mod cf {
         #[successor(dest)]
         {}
     }
-    #[implements(Branch)]
 
+    #[implements(Branch)]
     fn cond_br(cond: Value<_>) {
         #[successor(then_dest)]
         {}

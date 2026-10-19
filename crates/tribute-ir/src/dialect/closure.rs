@@ -11,14 +11,14 @@ inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Closure>(
 mod closure {
     // Types
     struct Closure<FuncType>;
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn new(func_ref: Attr<SymbolRef>, env: Value<_>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn func(closure: Value<_>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn env(closure: Value<_>) -> Value<_> {}
 
     /// High-level lambda: captures + body region → closure value.

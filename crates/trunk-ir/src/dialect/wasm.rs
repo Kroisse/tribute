@@ -48,8 +48,8 @@ mod wasm {
     // Functions
     #[implements(CallLike)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
-    #[implements(IndirectCallLike)]
 
+    #[implements(IndirectCallLike)]
     fn call_indirect(
         type_idx: Attr<u32>,
         table: Attr<u32>,
@@ -57,11 +57,11 @@ mod wasm {
         args: Variadic<_>,
     ) -> Variadic<_> {
     }
+
     #[implements(CallLike)]
-
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
-    #[implements(IndirectCallLike)]
 
+    #[implements(IndirectCallLike)]
     fn return_call_indirect(
         type_idx: Attr<u32>,
         table: Attr<u32>,

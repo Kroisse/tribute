@@ -9,38 +9,38 @@ mod scf {
         #[region(else_region)]
         {}
     }
-    #[implements(RegionBranch)]
 
+    #[implements(RegionBranch)]
     fn switch(discriminant: Value<_>) {
         #[region(body)]
         {}
     }
-    #[implements(RegionBranch)]
 
+    #[implements(RegionBranch)]
     fn case(value: Attr<_>) {
         #[region(body)]
         {}
     }
-    #[implements(RegionBranch)]
 
+    #[implements(RegionBranch)]
     fn default() {
         #[region(body)]
         {}
     }
+
     #[implements(RegionBranchTerminator)]
-
     fn r#yield(values: Variadic<_>) {}
-    #[implements(RegionBranch)]
 
+    #[implements(RegionBranch)]
     fn r#loop(init: Variadic<_>) -> Option<Value<_>> {
         #[region(body)]
         {}
     }
-    #[implements(RegionBranchTerminator)]
 
+    #[implements(RegionBranchTerminator)]
     fn r#continue(values: Variadic<_>) {}
-    #[implements(RegionBranchTerminator)]
 
+    #[implements(RegionBranchTerminator)]
     fn r#break(value: Value<_>) {}
 }
 

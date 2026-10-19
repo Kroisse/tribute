@@ -33,22 +33,22 @@ mod test {
         #[successor(exit)]
         {}
     }
-    #[implements(Branch)]
 
+    #[implements(Branch)]
     fn missing_edge_branch() {
         #[successor(exit)]
         {}
     }
-    #[implements(Branch)]
 
+    #[implements(Branch)]
     fn reversed_branch() {
         #[successor(left)]
         {}
         #[successor(right)]
         {}
     }
-    #[implements(Branch)]
 
+    #[implements(Branch)]
     fn multi_forwarding_branch(value: Value<_>) {
         #[successor(left)]
         {}

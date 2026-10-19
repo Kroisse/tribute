@@ -35,8 +35,8 @@ mod clif {
     /// bytes at `offset` of the enclosing `data`. Only a `data` region holds it.
     #[verify]
     fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
-    #[implements(CallLike)]
 
+    #[implements(CallLike)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
@@ -127,11 +127,11 @@ mod clif {
     }
 
     fn trap(code: Attr<String>) {}
+
     #[implements(CallLike)]
-
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
-    #[implements(IndirectCallLike)]
 
+    #[implements(IndirectCallLike)]
     fn return_call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
         callee: Value<_>,

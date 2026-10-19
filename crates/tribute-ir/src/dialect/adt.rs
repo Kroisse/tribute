@@ -50,25 +50,25 @@ mod adt {
     struct Variant<#[rest] Fields> {
         name: Attr<String>,
     }
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
     fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn variant_new(r#type: Attr<Type>, tag: Attr<String>, fields: Variadic<_>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn variant_is(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn variant_cast(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn variant_get(
         r#type: Attr<Type>,
         tag: Attr<String>,
@@ -76,11 +76,11 @@ mod adt {
         r#ref: Value<_>,
     ) -> Value<_> {
     }
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn array_new(r#type: Attr<Type>, elements: Variadic<_>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn array_get<A: Array>(r#ref: Value<A>, index: Value<impl IntegerLike>) -> Value<A::Element> {}
 
     fn array_set<A: Array>(
@@ -89,23 +89,23 @@ mod adt {
         value: Value<A::Element>,
     ) {
     }
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn array_len(r#ref: Value<impl Array>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn ref_null(r#type: Attr<Type>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn ref_cast(r#type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn string_const(value: Attr<String>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
 }
 

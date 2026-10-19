@@ -47,8 +47,8 @@ mod func {
         #[region(body?)]
         {}
     }
-    #[implements(op_interface::CallLike)]
 
+    #[implements(op_interface::CallLike)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
@@ -59,8 +59,8 @@ mod func {
         args: Values<S::Inputs>,
     ) -> Values<S::Results> {
     }
-    #[implements(CallableExit, op_interface::CallLike)]
 
+    #[implements(CallableExit, op_interface::CallLike)]
     fn tail_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[verify]
@@ -71,14 +71,14 @@ mod func {
         args: Values<S::Inputs>,
     ) {
     }
-    #[implements(CallableExit)]
 
+    #[implements(CallableExit)]
     fn r#return(values: Variadic<_>) {}
+
     #[flags(Pure)]
-
     fn constant(func_ref: Attr<SymbolRef>) -> Value<_> {}
-    #[implements(CallableExit)]
 
+    #[implements(CallableExit)]
     fn unreachable() {}
 }
 

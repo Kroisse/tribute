@@ -7,17 +7,17 @@ use trunk_ir::op_flag::Pure;
 mod list {
     #[flags(Pure)]
     fn empty(element_type: Attr<Type>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn prepend<L>(element_type: Attr<Type>, element: Value<_>, tail: Value<L>) -> Value<L> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn is_empty(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn head<T>(element_type: Attr<TypeOf<T>>, list: Value<_>) -> Value<T> {}
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn tail<L>(element_type: Attr<Type>, list: Value<L>) -> Value<L> {}
 }
 

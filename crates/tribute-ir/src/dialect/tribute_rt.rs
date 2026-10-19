@@ -21,8 +21,8 @@ mod tribute_rt {
     struct Bool;
     struct Intref;
     struct Anyref;
-    #[flags(Pure)]
 
+    #[flags(Pure)]
     fn box_int(value: Value<_>) -> Value<_> {}
     #[flags(Pure)]
     fn unbox_int(value: Value<_>) -> Value<_> {}
