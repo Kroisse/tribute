@@ -1769,8 +1769,21 @@ representation.
 Dialect 타입의 정의는 그 타입의 type verifier와 전용 textual 문법을 함께
 소유한다. Type verifier가 있는 타입의 typed wrapper와 exact bound는 verifier를
 통과한 타입만 받으므로, wrapper의 accessor는 verifier가 보장하는 invariant에
-기댈 수 있다. 그런 타입에는 선언된 매개변수와 속성만으로 만드는 일반 생성자를
-두지 않으며, 타입을 정의하는 dialect가 invariant를 지키는 생성자를 제공한다.
+기댈 수 있다. 타입을 정의하는 dialect는 invariant를 지키는 생성자를 따로 제공할 수
+있다.
+
+Dialect 타입은 operation과 같은 정의 문법으로 선언한다. IR 타입 매개변수는
+`<..>`에, type 속성은 operation attribute와 같은 종류 표기를 쓰는 필드로 선언한다.
+`struct Ref<Pointee> { nullable: Attr<bool> }`이며, 선택 속성은
+`Option<Attr<K>>`다. 생성된 builder는 매개변수에서 시작해 속성을 이름으로 받고
+타입을 intern한다.
+
+타입과 operation은 검증 시점이 다르다. 타입은 intern된 뒤 바뀌지 않으므로 생성
+시점에 한 번 검증한다. Type verifier가 있는 타입의 builder는 intern한 타입을
+verifier에 넘기고, 거부된 타입에는 wrapper를 주지 않는다. Operation은 생성과
+rewrite 도중 operand, attribute, region이 바뀌므로 생성 시점의 검증이 이후 상태를
+보장하지 못한다. 따라서 operation의 선언적 제약은 verifier checkpoint에서만
+강제한다.
 
 ### 타입 textual form
 

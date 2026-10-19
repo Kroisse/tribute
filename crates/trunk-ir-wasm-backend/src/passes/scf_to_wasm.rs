@@ -385,7 +385,7 @@ impl RewritePattern for ScfSwitchPattern {
             return false;
         };
         let loc = ctx.op(op).location;
-        let nil_ty = core::nil(ctx).as_type_ref();
+        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
         let result_types = if self.0.resultless_switches.contains(&op) {
             vec![]
         } else {

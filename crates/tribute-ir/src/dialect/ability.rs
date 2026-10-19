@@ -183,7 +183,7 @@ pub fn operation_payload_type_ref(
         .into_iter()
         .enumerate()
         .map(|(index, ty)| (format!("arg{index}"), ty));
-    crate::dialect::adt::struct_type(
+    crate::dialect::adt::Struct::from_fields(
         ctx,
         format!("__tribute_ability_payload_{op_idx:08x}"),
         fields,
@@ -346,7 +346,9 @@ impl MarkerFieldType {
     fn type_ref(self, ctx: &mut IrContext) -> TypeRef {
         match self {
             Self::I32 => trunk_ir::dialect::core::I32::type_ref(ctx),
-            Self::Ptr => trunk_ir::dialect::core::ptr(ctx).as_type_ref(),
+            Self::Ptr => trunk_ir::dialect::core::Ptr::params()
+                .intern(ctx)
+                .as_type_ref(),
         }
     }
 }
@@ -464,7 +466,7 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     attrs
         .view_mut(ctx)
         .insert(runtime_layout::LAYOUT_ATTR, layout);
-    crate::dialect::adt::struct_type(ctx, "_Marker", fields, attrs).as_type_ref()
+    crate::dialect::adt::Struct::from_fields(ctx, "_Marker", fields, attrs).as_type_ref()
 }
 
 /// Get the canonical Evidence ADT type — `core.array<Marker>` carrying the
@@ -517,7 +519,9 @@ mod tests {
         let named_marker = TypeDataBuilder::new("adt.struct")
             .attr("name", name_attr)
             .intern(&mut ctx);
-        let plain_array = core::array(&mut ctx, named_marker).as_type_ref();
+        let plain_array = core::Array::params(named_marker)
+            .intern(&mut ctx)
+            .as_type_ref();
         assert!(!is_marker_type_ref(&ctx, named_marker));
         assert!(!is_evidence_type_ref(&ctx, plain_array));
 
@@ -635,7 +639,7 @@ mod tests {
 
         // Array of non-marker should return false
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        let other_array = core::array(&mut ctx, i32_ty).as_type_ref();
+        let other_array = core::Array::params(i32_ty).intern(&mut ctx).as_type_ref();
         assert!(!is_evidence_type_ref(&ctx, other_array));
 
         // Non-array type should return false

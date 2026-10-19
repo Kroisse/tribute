@@ -172,7 +172,7 @@ fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameType
         })
         .collect();
     let evidence = ability::evidence_adt_type_ref(ctx);
-    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let i32_type = TypeDataBuilder::new("core.i32").intern(ctx);
     let mut resolved = HashMap::default();
     let mut layouts = Vec::with_capacity(answers.len());
@@ -194,7 +194,12 @@ fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameType
             done,
             dispatch,
         };
-        layouts.push((ability::frame(ctx, source_answer).as_type_ref(), types));
+        layouts.push((
+            ability::Frame::params(source_answer)
+                .intern(ctx)
+                .as_type_ref(),
+            types,
+        ));
     }
     layouts
 }
@@ -372,7 +377,7 @@ mod tests {
 
     fn frame_of_answer(ctx: &mut IrContext, answer: &'static str) -> TypeRef {
         let answer = TypeDataBuilder::new(answer).intern(ctx);
-        ability::frame(ctx, answer).as_type_ref()
+        ability::Frame::params(answer).intern(ctx).as_type_ref()
     }
 
     fn layout_names(ctx: &IrContext) -> Vec<String> {

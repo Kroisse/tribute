@@ -4548,7 +4548,9 @@ mod tests {
         ctx.push_op(completion_block, completion_yield.op_ref());
         let completion = region(&mut ctx, loc, completion_block);
 
-        let token_ty = resume_token(&mut ctx, i32_ty, i32_ty).as_type_ref();
+        let token_ty = ResumeToken::params(i32_ty, i32_ty)
+            .intern(&mut ctx)
+            .as_type_ref();
         let handler_block = block(&mut ctx, loc, &[i32_ty, token_ty]);
         let operation_arg = ctx.block_arg(handler_block, 0);
         let token = ctx.block_arg(handler_block, 1);
@@ -4856,7 +4858,7 @@ mod tests {
             );
         }
 
-        let token = resume_token(&mut ctx, i32_ty, i32_ty);
+        let token = ResumeToken::params(i32_ty, i32_ty).intern(&mut ctx);
         assert_eq!(token.input(&ctx), i32_ty);
         assert_eq!(token.answer(&ctx), i32_ty);
     }

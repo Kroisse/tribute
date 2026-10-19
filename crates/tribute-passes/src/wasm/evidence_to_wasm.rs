@@ -722,7 +722,7 @@ fn build_helper(
         Helper::Tail => {
             let i32_ty = intern_i32(ctx);
             let anyref_ty = intern_anyref(ctx);
-            let nil_ty = core::nil(ctx).as_type_ref();
+            let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
             let slot = find_marker(ctx);
             let absent = wasm_dialect::RefIsNull::operands(slot)
                 .results(i32_ty)
@@ -802,7 +802,7 @@ fn build_helper(
         Helper::Mask => {
             let i32_ty = intern_i32(ctx);
             let anyref_ty = intern_anyref(ctx);
-            let nil_ty = core::nil(ctx).as_type_ref();
+            let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
             let top = find_marker(ctx);
             let shadowed = marker_field(ctx, top, MarkerField::Shadowed, anyref_ty);
             let unshadowed = wasm_dialect::RefIsNull::operands(shadowed)
@@ -1323,7 +1323,7 @@ fn push_if(
     then: RegionRef,
     otherwise: Option<RegionRef>,
 ) {
-    let nil_ty = core::nil(ctx).as_type_ref();
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
     let otherwise = otherwise.unwrap_or_else(|| {
         let empty = empty_block(ctx, location);
         single_block_region(ctx, location, empty)

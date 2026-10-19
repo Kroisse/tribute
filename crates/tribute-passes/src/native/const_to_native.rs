@@ -168,7 +168,7 @@ fn lower(
         return Ok(());
     }
 
-    let ptr_ty = core::ptr(ctx).as_type_ref();
+    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
     let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
     let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
 
@@ -469,7 +469,7 @@ impl RewritePattern for StringConstNativePattern {
         // adt_rc_header can compute the correct enum layout.
         // The allocation is a `core.ptr`; the `Leaf` field takes the `Bytes`
         // object it points to as an owned managed value.
-        let bytes_ty = core::bytes(ctx).as_type_ref();
+        let bytes_ty = core::Bytes::params().intern(ctx).as_type_ref();
         let bytes = tribute_rt::FromRaw::operands(bytes_payload)
             .results(bytes_ty)
             .build(ctx, loc);
@@ -696,7 +696,7 @@ mod tests {
 
         lower(&mut ctx, module, &analysis).expect("bytes constants should lower");
 
-        let bytes_ty = core::bytes(&mut ctx).as_type_ref();
+        let bytes_ty = core::Bytes::params().intern(&mut ctx).as_type_ref();
         let mut forwarded = Vec::new();
         let body = module.body(&ctx).expect("module body");
         walk_ops_in_region(&ctx, body, &mut |ctx, op| {

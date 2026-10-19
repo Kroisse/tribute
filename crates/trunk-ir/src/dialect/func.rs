@@ -1159,7 +1159,7 @@ mod result_list_tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, "core.module @m {}");
         let loc = ctx.op(module.op()).location;
-        let nil = core::nil(&mut ctx).as_type_ref();
+        let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
         for results in [vec![], vec![nil]] {
             let signature = func_sig(&mut ctx, [], results.clone()).as_type_ref();
             let callee = Constant::operands()

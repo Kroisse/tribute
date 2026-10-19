@@ -71,19 +71,19 @@ impl NativeTypeRefs {
     pub fn new(ctx: &mut IrContext) -> Self {
         use tribute_ir::dialect::ability;
         Self {
-            tribute_rt_int: tribute_rt::int(ctx).as_type_ref(),
-            tribute_rt_nat: tribute_rt::nat(ctx).as_type_ref(),
-            tribute_rt_bool: tribute_rt::bool(ctx).as_type_ref(),
-            tribute_rt_float: tribute_rt::float(ctx).as_type_ref(),
-            tribute_rt_intref: tribute_rt::intref(ctx).as_type_ref(),
-            tribute_rt_anyref: tribute_rt::anyref(ctx).as_type_ref(),
+            tribute_rt_int: tribute_rt::Int::params().intern(ctx).as_type_ref(),
+            tribute_rt_nat: tribute_rt::Nat::params().intern(ctx).as_type_ref(),
+            tribute_rt_bool: tribute_rt::Bool::params().intern(ctx).as_type_ref(),
+            tribute_rt_float: tribute_rt::Float::params().intern(ctx).as_type_ref(),
+            tribute_rt_intref: tribute_rt::Intref::params().intern(ctx).as_type_ref(),
+            tribute_rt_anyref: tribute_rt::Anyref::params().intern(ctx).as_type_ref(),
             core_i1: TypeDataBuilder::new("core.i1").intern(ctx),
 
             core_i32: TypeDataBuilder::new("core.i32").intern(ctx),
             core_i64: TypeDataBuilder::new("core.i64").intern(ctx),
             core_f64: TypeDataBuilder::new("core.f64").intern(ctx),
-            core_ptr: core::ptr(ctx).as_type_ref(),
-            core_nil: core::nil(ctx).as_type_ref(),
+            core_ptr: core::Ptr::params().intern(ctx).as_type_ref(),
+            core_nil: core::Nil::params().intern(ctx).as_type_ref(),
             core_i8: TypeDataBuilder::new("core.i8").intern(ctx),
 
             evidence_ty: ability::evidence_adt_type_ref(ctx),

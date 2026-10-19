@@ -48,7 +48,7 @@ fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     attrs
         .view_mut(ctx)
         .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
-    adt::struct_type(ctx, "_BoxedF64", [("value", f64_ty)], attrs).as_type_ref()
+    adt::Struct::from_fields(ctx, "_BoxedF64", [("value", f64_ty)], attrs).as_type_ref()
 }
 
 /// Create i31 unbox operations (ref_cast to i31ref + i31_get_s/u).
@@ -61,7 +61,7 @@ fn create_i31_unbox(
     value: ValueRef,
     is_signed: bool,
 ) -> (Vec<OpRef>, OpRef) {
-    let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
+    let i31ref_ty = wasm_dialect::I31ref::params().intern(ctx).as_type_ref();
     let i32_ty = i32_type(ctx);
 
     // Cast anyref to i31ref first (abstract type, no type_idx needed)
@@ -121,7 +121,7 @@ impl RewritePattern for BoxIntPattern {
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
 
-        let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
+        let i31ref_ty = wasm_dialect::I31ref::params().intern(ctx).as_type_ref();
 
         // wasm.ref_i31: i32 -> i31ref
         let new_op = wasm_dialect::RefI31::operands(value)
@@ -185,7 +185,7 @@ impl RewritePattern for BoxNatPattern {
 
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
-        let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
+        let i31ref_ty = wasm_dialect::I31ref::params().intern(ctx).as_type_ref();
 
         let new_op = wasm_dialect::RefI31::operands(value)
             .results(i31ref_ty)
@@ -248,7 +248,7 @@ impl RewritePattern for BoxFloatPattern {
 
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
-        let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
+        let anyref_ty = wasm_dialect::Anyref::params().intern(ctx).as_type_ref();
         let boxed_f64_ty = boxed_f64_type(ctx);
 
         // adt.struct_new creates BoxedF64 struct with the f64 value
@@ -330,7 +330,7 @@ impl RewritePattern for BoxBoolPattern {
 
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
-        let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
+        let i31ref_ty = wasm_dialect::I31ref::params().intern(ctx).as_type_ref();
 
         let new_op = wasm_dialect::RefI31::operands(value)
             .results(i31ref_ty)

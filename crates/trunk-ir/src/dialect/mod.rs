@@ -31,7 +31,7 @@ mod tests {
     }
 
     fn make_func_type(ctx: &mut IrContext) -> crate::TypeRef {
-        let nil_ty = super::core::nil(ctx).as_type_ref();
+        let nil_ty = super::core::Nil::params().intern(ctx).as_type_ref();
         super::func::func_sig(ctx, [], [nil_ty]).as_type_ref()
     }
 
@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn test_nil_type_round_trip() {
         let mut ctx = IrContext::new();
-        let nil = super::core::nil(&mut ctx);
+        let nil = super::core::Nil::params().intern(&mut ctx);
 
         // from_type_ref round-trip
         let nil2 =
@@ -439,7 +439,7 @@ mod tests {
     fn test_array_type_with_param() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let arr = super::core::array(&mut ctx, i32_ty);
+        let arr = super::core::Array::params(i32_ty).intern(&mut ctx);
 
         // element accessor
         assert_eq!(arr.element(&ctx), i32_ty);
@@ -454,8 +454,10 @@ mod tests {
     #[test]
     fn test_ref_type_with_attr() {
         let mut ctx = IrContext::new();
-        let ptr_ty = super::core::ptr(&mut ctx);
-        let r = super::core::r#ref(&mut ctx, ptr_ty.as_type_ref(), true);
+        let ptr_ty = super::core::Ptr::params().intern(&mut ctx);
+        let r = super::core::Ref::params(ptr_ty.as_type_ref())
+            .nullable(true)
+            .intern(&mut ctx);
 
         assert_eq!(r.pointee(&ctx), ptr_ty.as_type_ref());
         assert!(r.nullable(&ctx));
@@ -467,7 +469,7 @@ mod tests {
     #[test]
     fn test_type_matches_wrong_type() {
         let mut ctx = IrContext::new();
-        let nil = super::core::nil(&mut ctx);
+        let nil = super::core::Nil::params().intern(&mut ctx);
         // Nil should not match as Array
         assert!(!super::core::Array::matches(&ctx, nil.as_type_ref()));
         assert!(super::core::Array::from_type_ref(&ctx, nil.as_type_ref()).is_none());
@@ -476,7 +478,7 @@ mod tests {
     #[test]
     fn test_type_into_type_ref() {
         let mut ctx = IrContext::new();
-        let nil = super::core::nil(&mut ctx);
+        let nil = super::core::Nil::params().intern(&mut ctx);
         let ty_ref: crate::TypeRef = nil.into();
         assert_eq!(ty_ref, nil.as_type_ref());
     }
@@ -491,7 +493,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let func_ty = make_func_type(&mut ctx);
 
-        let tup = super::core::tuple(&mut ctx, [i32_ty, func_ty]);
+        let tup = super::core::Tuple::params([i32_ty, func_ty]).intern(&mut ctx);
 
         assert!(super::core::Tuple::matches(&ctx, tup.as_type_ref()));
         let elements = tup.elements(&ctx);
@@ -503,7 +505,7 @@ mod tests {
     #[test]
     fn test_tuple_type_empty() {
         let mut ctx = IrContext::new();
-        let tup = super::core::tuple(&mut ctx, []);
+        let tup = super::core::Tuple::params([]).intern(&mut ctx);
         assert_eq!(tup.elements(&ctx).len(), 0);
     }
 
@@ -511,7 +513,7 @@ mod tests {
     fn test_func_type_stores_inputs_and_results() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let nil_ty = super::core::nil(&mut ctx).as_type_ref();
+        let nil_ty = super::core::Nil::params().intern(&mut ctx).as_type_ref();
         let cases: [(&str, &[_], &[_]); 5] = [
             ("(i32, i32) -> i32", &[i32_ty, i32_ty], &[i32_ty]),
             ("(i32) -> i32", &[i32_ty], &[i32_ty]),
@@ -669,7 +671,7 @@ mod tests {
     #[test]
     fn test_func_type_result_lists_are_distinct() {
         let mut ctx = IrContext::new();
-        let nil_ty = super::core::nil(&mut ctx).as_type_ref();
+        let nil_ty = super::core::Nil::params().intern(&mut ctx).as_type_ref();
         let resultless = super::func::func_sig(&mut ctx, [], []);
         let unit = super::func::func_sig(&mut ctx, [], [nil_ty]);
 

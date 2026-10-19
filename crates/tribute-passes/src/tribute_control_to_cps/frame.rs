@@ -13,7 +13,9 @@ impl Converter<'_> {
     /// The opaque `ability.frame<R>` that callables, completions, and
     /// resumptions take in the frame position.
     pub(super) fn frame_type(&mut self, answer: TypeRef) -> TypeRef {
-        ability::frame(self.ctx, answer).as_type_ref()
+        ability::Frame::params(answer)
+            .intern(self.ctx)
+            .as_type_ref()
     }
 
     /// Build the frame a suffix continuation is entered through. `plan` is

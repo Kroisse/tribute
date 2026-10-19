@@ -46,7 +46,8 @@ pub fn layout_type(
     attrs
         .view_mut(ctx)
         .insert(RESULT_ATTR, Attribute::Type(result));
-    adt::struct_type(ctx, name, [("done", done), ("dispatch", dispatch)], attrs).as_type_ref()
+    adt::Struct::from_fields(ctx, name, [("done", done), ("dispatch", dispatch)], attrs)
+        .as_type_ref()
 }
 
 /// A frame reference that carries its result type: the frame of a CPS

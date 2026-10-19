@@ -43,7 +43,7 @@ struct CommonTypes {
 impl CommonTypes {
     fn new(ctx: &mut IrContext) -> Self {
         Self {
-            anyref: tribute_rt::anyref(ctx).as_type_ref(),
+            anyref: tribute_rt::Anyref::params().intern(ctx).as_type_ref(),
         }
     }
 }

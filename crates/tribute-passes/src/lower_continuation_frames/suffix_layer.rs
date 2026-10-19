@@ -151,7 +151,7 @@ pub(super) fn build_suffix_rebound(
     } = layer.clone();
     let LayerFrames { value, boundary } = *frames;
     let evidence_type = ability::evidence_adt_type_ref(ctx);
-    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let block = make_block(ctx, location, &[evidence_type, boundary.reference, anyref]);
     let args = ctx.block_args(block).to_vec();
     let (done_op, done) =
@@ -179,7 +179,7 @@ pub(super) fn finish_rebound(
     block: BlockRef,
 ) -> (OpRef, ValueRef) {
     let evidence_type = ability::evidence_adt_type_ref(ctx);
-    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let region = single_block_region(ctx, location, block);
     let resume_type = cps_resume_type(ctx, evidence_type, boundary.reference, anyref);
     let resume = closure_over(ctx, location, region, resume_type, CallingConvention::Cps);
@@ -197,7 +197,7 @@ pub(super) fn build_dispatch_adapter_factory(
 ) -> Result<OpRef, TributeControlToCpsError> {
     let LayerFrames { value, boundary } = *frames;
     let evidence_type = ability::evidence_adt_type_ref(ctx);
-    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let i32_type = TypeDataBuilder::new("core.i32").intern(ctx);
     let completion_type = cps_completion_type(ctx, evidence_type, value.answer, boundary.reference);
     let factory_type =

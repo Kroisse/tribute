@@ -46,7 +46,7 @@ fn lower(
 ) -> Result<(), ConversionError> {
     let rtti_map = &tribute_ir::dialect::tribute_rtti::Layout::declared_indices(ctx, module);
     // Pre-intern types
-    let ptr_ty = core::ptr(ctx).as_type_ref();
+    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
     let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
     let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
 
@@ -519,7 +519,7 @@ mod tests {
         .expect("typed ownership plan");
         // Model the representation-only signature rewrite that occurs after
         // planning in the production pipeline to isolate ADT lowering here.
-        let ptr_ty = core::ptr(ctx).as_type_ref();
+        let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
         let erased_func_ty =
             func::func_sig(ctx, field_types.iter().copied(), [ptr_ty]).as_type_ref();
         ctx.op_attrs_mut(func_op.op_ref())

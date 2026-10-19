@@ -66,7 +66,7 @@ fn reference_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
         .and_then(|name| ctx.type_alias_by_text(name));
     named
         .and_then(|layout| struct_type(ctx, layout))
-        .unwrap_or_else(|| wasm::structref(ctx).as_type_ref())
+        .unwrap_or_else(|| wasm::Structref::params().intern(ctx).as_type_ref())
 }
 
 /// A struct of the descriptor field followed by `fields` in their Wasm
@@ -77,7 +77,7 @@ fn described_struct(ctx: &mut IrContext, fields: impl IntoIterator<Item = TypeRe
     for field in fields {
         params.push(field_type(ctx, field));
     }
-    wasm_gc::r#struct(ctx, params).as_type_ref()
+    wasm_gc::Struct::params(params).intern(ctx).as_type_ref()
 }
 
 /// The Wasm storage representation of a source field of type `ty`.
@@ -92,10 +92,10 @@ fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
         return core::I32::type_ref(ctx);
     }
     if data.name == tribute_ir::dialect::adt::Typeref::NAME {
-        return wasm::structref(ctx).as_type_ref();
+        return wasm::Structref::params().intern(ctx).as_type_ref();
     }
     if tribute_ir::dialect::adt::Enum::matches(ctx, ty) {
-        return wasm::anyref(ctx).as_type_ref();
+        return wasm::Anyref::params().intern(ctx).as_type_ref();
     }
     struct_type(ctx, ty).unwrap_or(ty)
 }
@@ -164,7 +164,7 @@ mod tests {
         let [i32_ty, i64_ty, structref] = [
             core::I32::type_ref(&mut ctx),
             core::I64::type_ref(&mut ctx),
-            wasm::structref(&mut ctx).as_type_ref(),
+            wasm::Structref::params().intern(&mut ctx).as_type_ref(),
         ];
         assert_eq!(fields(&ctx, ctx.value_ty(pair)), [i32_ty, i64_ty, i64_ty]);
         assert_eq!(ctx.value_ty(shape), structref);
@@ -188,8 +188,8 @@ mod tests {
         let outer = struct_type(&mut ctx, outer).expect("user struct");
         let inner = struct_type(&mut ctx, inner).expect("user struct");
         let i32_ty = core::I32::type_ref(&mut ctx);
-        let structref = wasm::structref(&mut ctx).as_type_ref();
-        let anyref = wasm::anyref(&mut ctx).as_type_ref();
+        let structref = wasm::Structref::params().intern(&mut ctx).as_type_ref();
+        let anyref = wasm::Anyref::params().intern(&mut ctx).as_type_ref();
 
         assert_eq!(
             fields(&ctx, outer),

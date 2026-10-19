@@ -61,14 +61,6 @@ pub struct KindType {
 }
 
 impl KindType {
-    pub(super) fn from_ident(ident: Ident) -> Self {
-        KindType {
-            span: ident.span(),
-            ident: Some(ident.to_string()),
-            tokens: quote!(#ident),
-        }
-    }
-
     pub fn span(&self) -> Span {
         self.span
     }
@@ -546,6 +538,7 @@ pub(super) fn parse_typed_operation(
                     list,
                     optional,
                     binds,
+                    docs: Vec::new(),
                 });
             }
             "Value" | "Variadic" | "Values" if !optional => {
@@ -619,6 +612,69 @@ pub(super) fn parse_typed_operation(
         verify: None,
         asm_format: None,
     })
+}
+
+/// Parse a type's attribute fields: `name: Attr<K>` or
+/// `name: Option<Attr<K>>`, each optionally documented.
+pub(super) fn parse_type_fields(stream: TokenStream) -> Result<Vec<AttrDef>, String> {
+    let mut iter = stream.to_token_iter();
+    let mut attrs = Vec::new();
+    let mut names = HashSet::default();
+    while has_remaining(&iter) {
+        let mut docs = Vec::new();
+        while peek_punct(&iter, '#') {
+            consume_punct(&mut iter)?;
+            let bracket = expect_group(&mut iter, Delimiter::Bracket)?;
+            if !matches!(bracket.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i == "doc")
+            {
+                return Err("a type attribute field takes only doc comments".into());
+            }
+            docs.push(bracket);
+        }
+        if peek_ident(&iter, "pub") {
+            return Err("type attribute fields take no visibility; remove `pub`".into());
+        }
+        let ident = Ident::parser(&mut iter).map_err(|e| format!("expected field name: {e}"))?;
+        let name = ident_str(&ident);
+        if !names.insert(name.clone()) {
+            return Err(format!("duplicate attribute name: `{name}`"));
+        }
+        expect_punct(&mut iter, ':')?;
+        let ty = parse_ty(&mut iter)?;
+        let (wrapper, inner, optional) = unwrap_wrapper(&ty)
+            .map_err(|_| format!("field `{name}` must be `Attr<..>` or `Option<Attr<..>>`"))?;
+        if wrapper != "Attr" {
+            return Err(format!(
+                "field `{name}` must be `Attr<..>` or `Option<Attr<..>>`"
+            ));
+        }
+        let (kind, list) = match inner {
+            Ty::Slice(element) => (parse_list_attr_kind(element, &[])?, true),
+            _ => {
+                match parse_attr_kind(inner, &[]) {
+                    Ok((kind, _)) => (kind, false),
+                    Err(_) if matches!(inner, Ty::Path(path) if path.segments.first().is_some_and(|s| s.ident == "TypeOf")) =>
+                    {
+                        return Err("a type declares no type variables for `TypeOf<..>`; declare `Attr<Type>`".into());
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        };
+        attrs.push(AttrDef {
+            name,
+            raw_ident: ident,
+            kind,
+            list,
+            optional,
+            binds: None,
+            docs,
+        });
+        if has_remaining(&iter) {
+            expect_punct(&mut iter, ',')?;
+        }
+    }
+    Ok(attrs)
 }
 
 /// Parse `<T: A + B, U>`.

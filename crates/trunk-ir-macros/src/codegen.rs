@@ -477,15 +477,18 @@ fn gen_map_attr_accessor(
     let name = &attr.raw_ident;
     let name_str = &attr.name;
     let kind = attr_kind_trait(crate_path, attr);
+    let docs = &attr.docs;
     let accessor = |method: &proc_macro2::Ident, out: TokenStream, read: TokenStream| {
         if attr.optional {
             quote! {
+                #(# #docs)*
                 pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> Option<#out> {
                     #attrs.get(#name_str).map(|attr| #read)
                 }
             }
         } else {
             quote! {
+                #(# #docs)*
                 pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> #out {
                     let attr = #attrs
                         .get(#name_str)
@@ -663,54 +666,15 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
     // into an `Attribute` local; a string attribute is interned there.
     let mut attr_locals = Vec::new();
     for attr in &op.attrs {
-        let name = &attr.raw_ident;
         let name_str = &attr.name;
         let field = format_ident!("attr_{}", attr.name);
         let kind = attr_kind_trait(crate_path, attr);
-        let element = attr_element_kind(crate_path, attr);
-        let element = quote!(<#element as #crate_path::attr_kind::AttrKind>);
         fields.push(quote!(#field: Option<#kind::In>));
         field_inits.push(quote!(#field: None,));
         attr_locals.push(quote! {
             let #field = self.#field.map(|value| #kind::write(ctx, value));
         });
-        // A list is set from its elements. A string takes a handle or text
-        // to intern. An optional attribute is absent unless set.
-        methods.push(match (attr.list, attr.kind.is_string()) {
-            (true, true) => quote! {
-                pub fn #name(
-                    mut self,
-                    values: impl IntoIterator<Item = impl Into<#element::In>>,
-                ) -> Self {
-                    self.#field = Some(values.into_iter().map(Into::into).collect());
-                    self
-                }
-            },
-            (true, false) => quote! {
-                pub fn #name(mut self, values: impl IntoIterator<Item = #element::In>) -> Self {
-                    self.#field = Some(values.into_iter().collect());
-                    self
-                }
-            },
-            (false, true) => quote! {
-                pub fn #name(mut self, value: impl Into<#kind::In>) -> Self {
-                    self.#field = Some(value.into());
-                    self
-                }
-            },
-            (false, false) if attr.optional => quote! {
-                pub fn #name(mut self, value: impl Into<Option<#kind::In>>) -> Self {
-                    self.#field = value.into();
-                    self
-                }
-            },
-            (false, false) => quote! {
-                pub fn #name(mut self, value: #kind::In) -> Self {
-                    self.#field = Some(value);
-                    self
-                }
-            },
-        });
+        methods.push(gen_attr_setter(crate_path, attr));
         if attr.optional {
             build_stmts.push(quote! {
                 if let Some(value) = #field {
@@ -873,6 +837,52 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
     }
 }
 
+/// A builder's setter for one attribute. A list is set from its elements. A
+/// string takes a handle or text to intern. An optional attribute is absent
+/// unless set.
+fn gen_attr_setter(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
+    let name = &attr.raw_ident;
+    let field = format_ident!("attr_{}", attr.name);
+    let kind = attr_kind_trait(crate_path, attr);
+    let element = attr_element_kind(crate_path, attr);
+    let element = quote!(<#element as #crate_path::attr_kind::AttrKind>);
+    match (attr.list, attr.kind.is_string()) {
+        (true, true) => quote! {
+            pub fn #name(
+                mut self,
+                values: impl IntoIterator<Item = impl Into<#element::In>>,
+            ) -> Self {
+                self.#field = Some(values.into_iter().map(Into::into).collect());
+                self
+            }
+        },
+        (true, false) => quote! {
+            pub fn #name(mut self, values: impl IntoIterator<Item = #element::In>) -> Self {
+                self.#field = Some(values.into_iter().collect());
+                self
+            }
+        },
+        (false, true) => quote! {
+            pub fn #name(mut self, value: impl Into<#kind::In>) -> Self {
+                self.#field = Some(value.into());
+                self
+            }
+        },
+        (false, false) if attr.optional => quote! {
+            pub fn #name(mut self, value: impl Into<Option<#kind::In>>) -> Self {
+                self.#field = value.into();
+                self
+            }
+        },
+        (false, false) => quote! {
+            pub fn #name(mut self, value: #kind::In) -> Self {
+                self.#field = Some(value);
+                self
+            }
+        },
+    }
+}
+
 /// Whether a builder can infer every result type: each is a fixed type, a
 /// variable bound by a single operand, a required attribute, or a bound
 /// constraint on such a variable, or a projection of such a variable. Must
@@ -954,18 +964,13 @@ fn gen_type_def(crate_path: &TokenStream, dialect: &str, td: &TypeDefData) -> To
     let ir_type_name = td.name.to_snake_case();
     let struct_and_trait = gen_type_struct_and_trait(crate_path, dialect, &ir_type_name, td);
     let impl_block = gen_type_impl_block(crate_path, td);
-    // A verified type's wrapper accepts only types that pass its verifier,
-    // which a constructor from the declared shape cannot guarantee.
-    let constructor = match td.verify {
-        Some(_) => quote!(),
-        None => gen_type_constructor(crate_path, td),
-    };
+    let builder = gen_type_builder(crate_path, dialect, td);
     let constraint = gen_type_constraint(crate_path, dialect, &ir_type_name, td);
 
     quote! {
         #struct_and_trait
         #impl_block
-        #constructor
+        #builder
         #constraint
     }
 }
@@ -1222,72 +1227,140 @@ fn gen_type_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStre
     gen_map_attr_accessor(crate_path, attr, quote!(ctx.type_attrs(self.0)))
 }
 
-fn gen_type_constructor(crate_path: &TokenStream, td: &TypeDefData) -> TokenStream {
+/// The builder a type wrapper starts with `params`: its parameters in
+/// declaration order, then attributes by name, then `intern`.
+fn gen_type_builder(crate_path: &TokenStream, dialect: &str, td: &TypeDefData) -> TokenStream {
     let sname = struct_name(&td.name);
+    let bname = format_ident!("{}Builder", sname);
+    let full_name = format!("{dialect}.{}", td.name.to_snake_case());
+    let type_ref = quote!(#crate_path::TypeRef);
 
-    // Build parameter list
-    let mut params = Vec::new();
-    let mut body_stmts = Vec::new();
-
-    // Type params become TypeRef parameters
+    let mut entry_params = Vec::new();
+    let mut entry_stmts = Vec::new();
     for param in &td.params {
         let name = format_ident!("r#{}", param.raw_ident.to_string().to_snake_case());
         if param.variadic {
-            params.push(quote!(#name: impl IntoIterator<Item = #crate_path::TypeRef>));
-            body_stmts.push(quote!(__builder = __builder.params(#name);));
+            entry_params.push(quote!(#name: impl IntoIterator<Item = #type_ref>));
+            entry_stmts.push(quote!(__params.extend(#name);));
         } else {
-            params.push(quote!(#name: #crate_path::TypeRef));
-            body_stmts.push(quote!(__builder = __builder.param(#name);));
+            entry_params.push(quote!(#name: #type_ref));
+            entry_stmts.push(quote!(__params.push(#name);));
         }
     }
 
-    // Attrs
+    let mut fields = Vec::new();
+    let mut field_inits = Vec::new();
+    let mut methods = Vec::new();
+    let mut attr_locals = Vec::new();
+    let mut build_stmts = Vec::new();
     for attr in &td.attrs {
-        let name = &attr.raw_ident;
         let name_str = &attr.name;
+        let field = format_ident!("attr_{}", attr.name);
         let kind = attr_kind_trait(crate_path, attr);
-        let rust_ty = quote!(#kind::In);
-        let to_attr_expr = |val: TokenStream| quote!(#kind::write(ctx, #val));
-
+        fields.push(quote!(#field: Option<#kind::In>));
+        field_inits.push(quote!(#field: None,));
+        attr_locals.push(quote! {
+            let #field = self.#field.map(|value| #kind::write(ctx, value));
+        });
+        methods.push(gen_attr_setter(crate_path, attr));
         if attr.optional {
-            params.push(quote!(#name: Option<#rust_ty>));
-            let attr_conv = to_attr_expr(quote!(__attr_val));
-            body_stmts.push(quote! {
-                if let ::core::option::Option::Some(__attr_val) = #name {
-                    __builder = __builder.attr(
-                        #name_str,
-                        #attr_conv,
-                    );
+            build_stmts.push(quote! {
+                if let Some(value) = #field {
+                    __builder = __builder.attr(#name_str, value);
                 }
             });
         } else {
-            params.push(quote!(#name: #rust_ty));
-            let attr_conv = to_attr_expr(quote!(#name));
-            body_stmts.push(quote! {
-                __builder = __builder.attr(
-                    #name_str,
-                    #attr_conv,
-                );
+            let missing = format!("{full_name}: missing attribute `{name_str}`");
+            build_stmts.push(quote! {
+                __builder = __builder.attr(#name_str, #field.expect(#missing));
             });
         }
     }
 
-    // Use snake_case for the constructor function name (e.g., "Nil" -> "nil", "Array" -> "array")
-    // Use raw ident to handle Rust keywords (e.g., "Ref" -> "r#ref")
-    let fn_name_snake = format_ident!("r#{}", td.name.to_snake_case());
+    // A verified type is checked once, when it is interned: an interned type
+    // never changes. A rejected type stays interned, without a wrapper.
+    let (output, finish) = match td.verify {
+        Some(_) => (
+            quote!(Result<#sname, #crate_path::ops::VerificationError>),
+            // Through the definition, so that a missing `VerifyType` impl is
+            // reported once, at `#[verify]`.
+            quote! {
+                <#sname as #crate_path::ops::DialectType>::DEF
+                    .verifier
+                    .map_or(Ok(()), |verify| verify(ctx, __ty))
+                    .map(|()| #sname(__ty))
+            },
+        ),
+        None => (quote!(#sname), quote!(#sname(__ty))),
+    };
+    let intern_doc = match td.verify {
+        Some(_) => "Intern the type and run its verifier on it.",
+        None => "Intern the type.",
+    };
+    let excess = format!("{full_name}: more parameter attributes than parameters");
+    // A type without parameters has no parameter attributes to set.
+    let param_attrs_method = if td.params.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            /// Set the parameters' own attributes, in parameter order; a
+            /// parameter without an entry has none.
+            pub fn param_attrs(
+                mut self,
+                attrs: impl IntoIterator<Item = #crate_path::AttributeMap>,
+            ) -> Self {
+                self.param_attrs = attrs.into_iter().collect();
+                self
+            }
+        }
+    };
+    let builder_doc = format!("Builder for `{full_name}`.");
 
     quote! {
-        #[allow(clippy::too_many_arguments)]
-        pub fn #fn_name_snake(
-            ctx: &mut #crate_path::IrContext,
-            #(#params),*
-        ) -> #sname {
-            #[allow(unused_mut)]
-            let mut __builder = #crate_path::TypeDataBuilder::new(
-                <#sname as #crate_path::ops::DialectType>::NAME,
-            );
-            #(#body_stmts)*
-            #sname(__builder.intern(ctx))
+        impl #sname {
+            /// Start building this type from its parameters in declaration
+            /// order.
+            pub fn params(#(#entry_params),*) -> #bname {
+                #[allow(unused_mut)]
+                let mut __params = ::std::vec::Vec::new();
+                #(#entry_stmts)*
+                #bname {
+                    params: __params,
+                    param_attrs: ::std::vec::Vec::new(),
+                    #(#field_inits)*
+                }
+            }
+        }
+
+        #[doc = #builder_doc]
+        #[must_use]
+        pub struct #bname {
+            params: ::std::vec::Vec<#type_ref>,
+            param_attrs: ::std::vec::Vec<#crate_path::AttributeMap>,
+            #(#fields),*
+        }
+
+        impl #bname {
+            #(#methods)*
+
+            #param_attrs_method
+
+            #[doc = #intern_doc]
+            pub fn intern(self, ctx: &mut #crate_path::IrContext) -> #output {
+                #(#attr_locals)*
+                assert!(self.param_attrs.len() <= self.params.len(), #excess);
+                let mut __param_attrs = self.param_attrs.into_iter();
+                let mut __builder = #crate_path::TypeDataBuilder::new(
+                    <#sname as #crate_path::ops::DialectType>::NAME,
+                );
+                for __param in self.params {
+                    __builder = __builder
+                        .param_with_attrs(__param, __param_attrs.next().unwrap_or_default());
+                }
+                #(#build_stmts)*
+                let __ty = __builder.intern(ctx);
+                #finish
+            }
         }
     }
 }

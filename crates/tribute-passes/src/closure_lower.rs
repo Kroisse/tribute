@@ -50,13 +50,13 @@ use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(runtime_layout::CLOSURE);
     attrs
         .view_mut(ctx)
         .insert(runtime_layout::LAYOUT_ATTR, layout);
-    adt::struct_type(
+    adt::Struct::from_fields(
         ctx,
         "_closure",
         [("func_ptr", i32_ty), ("env", anyref_ty)],
@@ -172,7 +172,7 @@ impl RewritePattern for LowerClosureCallArena {
         let caller_results = ctx.op_result_types(op).to_vec();
 
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
         let Some(convention) = get_calling_convention(ctx, op) else {
             return false;
         };
@@ -256,7 +256,7 @@ impl RewritePattern for LowerClosureTailCallArena {
 
         let location = ctx.op(op).location;
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
         let Some(results) = exact_tail_results(ctx, op, callee, convention) else {
             return false;
         };
@@ -484,7 +484,7 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
         return true;
     }
 
-    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     transfers.into_iter().all(|op| {
         let operands = ctx.op_operands(op).to_vec();
         let Some((&callee, args)) = operands.split_first() else {
@@ -1229,7 +1229,7 @@ mod tests {
         assert_eq!(ctx.op_operands(tail)[1], evidence);
         assert_eq!(
             ctx.value_ty(ctx.op_operands(tail)[2]),
-            tribute_rt::anyref(&mut ctx).as_type_ref()
+            tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref()
         );
         assert_eq!(ctx.op_operands(tail)[3], done);
         assert_eq!(ctx.op_operands(tail)[4], dispatch);

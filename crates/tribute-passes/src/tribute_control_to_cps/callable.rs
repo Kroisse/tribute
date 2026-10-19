@@ -225,7 +225,7 @@ impl Converter<'_> {
         set_calling_convention(self.ctx, adapter.op_ref(), result_convention);
         self.ctx.push_op(self.module_block, adapter.op_ref());
 
-        let empty_env_ty = adt::struct_type::<String>(
+        let empty_env_ty = adt::Struct::from_fields::<String>(
             self.ctx,
             format!("{adapter_symbol}::env"),
             [],

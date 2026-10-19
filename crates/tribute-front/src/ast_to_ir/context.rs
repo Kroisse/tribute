@@ -656,7 +656,7 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Bool => self.bool_type(ir),
             TypeKind::Bytes => self.bytes_type(ir),
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
-            TypeKind::Never => core::never(ir).as_type_ref(),
+            TypeKind::Never => core::Never::params().intern(ir).as_type_ref(),
             TypeKind::BoundVar { .. }
             | TypeKind::LocalBoundVar { .. }
             | TypeKind::UniVar { .. } => self.anyref_type(ir),
@@ -949,7 +949,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.nil` type.
     pub fn nil_type(&self, ir: &mut IrContext) -> TypeRef {
-        core::nil(ir).as_type_ref()
+        core::Nil::params().intern(ir).as_type_ref()
     }
 
     /// Get the `core.i1` (bool) type.
@@ -964,12 +964,12 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.bytes` type.
     pub fn bytes_type(&self, ir: &mut IrContext) -> TypeRef {
-        core::bytes(ir).as_type_ref()
+        core::Bytes::params().intern(ir).as_type_ref()
     }
 
     /// Get the `tribute_rt.anyref` type.
     pub fn anyref_type(&self, ir: &mut IrContext) -> TypeRef {
-        tribute_rt::anyref(ir).as_type_ref()
+        tribute_rt::Anyref::params().intern(ir).as_type_ref()
     }
 
     /// The symbol of the `ability.decl` of one ability instance.
@@ -998,7 +998,7 @@ impl<'db> IrLoweringCtx<'db> {
             .iter()
             .map(|(field, ty)| (ir.intern_symbol_text(field), *ty))
             .collect();
-        adt::struct_type(ir, name, fields, AttributeMap::new()).as_type_ref()
+        adt::Struct::from_fields(ir, name, fields, AttributeMap::new()).as_type_ref()
     }
 
     /// Create an `adt.enum` type with name and variants.
@@ -1037,7 +1037,7 @@ impl<'db> IrLoweringCtx<'db> {
             .iter()
             .map(|(variant, fields)| (ir.intern_symbol_text(variant), fields.iter().copied()))
             .collect();
-        adt::enum_type(ir, name, variants, attrs).as_type_ref()
+        adt::Enum::from_variants(ir, name, variants, attrs).as_type_ref()
     }
 
     /// Create an `adt.typeref` type — a reference to a named type.
@@ -1265,7 +1265,7 @@ mod tests {
         let never = AstType::new(&db, TypeKind::Never);
         assert_eq!(
             ctx.convert_logical_type(&mut ir, never),
-            core::never(&mut ir).as_type_ref()
+            core::Never::params().intern(&mut ir).as_type_ref()
         );
 
         let resume = AstType::new(

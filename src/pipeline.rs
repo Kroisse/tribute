@@ -2313,7 +2313,7 @@ fn main() -> Nil {
 }
 "#,
         );
-        let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
+        let pointer_type = core_dialect::Ptr::params().intern(&mut ctx).as_type_ref();
         let i32_type = ctx
             .types()
             .iter()
@@ -2356,7 +2356,7 @@ fn main() ->{Io} Nil {
 }
 "#,
         );
-        let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
+        let pointer_type = core_dialect::Ptr::params().intern(&mut ctx).as_type_ref();
         let i32_type = ctx
             .types()
             .iter()

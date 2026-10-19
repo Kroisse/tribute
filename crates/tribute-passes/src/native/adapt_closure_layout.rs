@@ -48,13 +48,13 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
 /// The native closure layout: `{ func_ptr: i64, env: ptr }`.
 fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
-    let ptr_ty = core::ptr(ctx).as_type_ref();
+    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(tribute_ir::runtime_layout::CLOSURE);
     attrs
         .view_mut(ctx)
         .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
-    adt::struct_type(
+    adt::Struct::from_fields(
         ctx,
         "_closure",
         [("func_ptr", i64_ty), ("env", ptr_ty)],
@@ -114,7 +114,7 @@ impl RewritePattern for ClosureStructAdaptPattern {
                 .insert("type", Attribute::Type(native_ty));
             let adapted_ty = match field_idx {
                 0 => TypeDataBuilder::new("core.i64").intern(ctx),
-                1 => core::ptr(ctx).as_type_ref(),
+                1 => core::Ptr::params().intern(ctx).as_type_ref(),
                 _ => original_ty,
             };
             ctx.set_op_result_type(new_op, 0, adapted_ty);

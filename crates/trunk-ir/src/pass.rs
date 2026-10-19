@@ -668,7 +668,7 @@ mod tests {
         loc: Location,
         name: &'static str,
     ) -> OpRef {
-        let nil_ty = core::nil(ctx).as_type_ref();
+        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
         let func_ty = func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         let op_data = OperationDataBuilder::new(loc, "func.func")
             .attr("sym_name", Attribute::String(ctx.intern_str(name)))

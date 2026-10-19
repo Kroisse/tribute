@@ -143,7 +143,7 @@ pub(crate) fn replace_call(ctx: &mut IrContext, call: OpRef, ops: &[OpRef], valu
 
 /// The intrinsic's exact signature: `(core.bytes, core.i32) -> core.i32`.
 fn exact_signature(ctx: &mut IrContext) -> TypeRef {
-    let bytes = core::bytes(ctx).as_type_ref();
+    let bytes = core::Bytes::params().intern(ctx).as_type_ref();
     let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
     func::func_sig(ctx, [bytes, i32_ty], [i32_ty]).as_type_ref()
 }

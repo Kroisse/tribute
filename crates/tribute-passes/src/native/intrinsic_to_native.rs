@@ -62,7 +62,7 @@ fn ensure_runtime_declaration(ctx: &mut IrContext, module: Module) {
         return;
     }
     let loc = ctx.op(module.op()).location;
-    let bytes_ty = core::bytes(ctx).as_type_ref();
+    let bytes_ty = core::Bytes::params().intern(ctx).as_type_ref();
     let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
     let declaration =
         super::build_extern_func(ctx, loc, GET_OR_PANIC_FN, &[bytes_ty, i32_ty], i32_ty);

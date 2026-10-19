@@ -1882,7 +1882,9 @@ core.module @test {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let tuple_ty = core::tuple(&mut ctx, [i32_ty, i32_ty]).as_type_ref();
+        let tuple_ty = core::Tuple::params([i32_ty, i32_ty])
+            .intern(&mut ctx)
+            .as_type_ref();
 
         // Register alias
         ctx.register_type_alias(Symbol::new("point"), tuple_ty);

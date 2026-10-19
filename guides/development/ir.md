@@ -56,9 +56,12 @@ stage order is in the top-of-file comment in [src/pipeline.rs](../../src/pipelin
 Operations and types are defined with the `#[trunk_ir::dialect]` attribute
 macro on a `mod`; it takes no arguments.
 
-- `struct` definitions generate typed type wrappers. `#[attr(..)]` declares
-  type attributes, and `#[rest]` marks a variadic last type parameter. A
-  wrapper accepts only types with the declared parameters and attributes.
+- `struct` definitions generate typed type wrappers. IR type parameters are
+  declared in `<..>`, where `#[rest]` marks a variadic last one, and type
+  attributes as fields typed like operation attributes:
+  `struct Ref<Pointee> { nullable: Attr<bool> }`, with optional ones as
+  `Option<Attr<K>>`. A wrapper accepts only types with the declared
+  parameters and attributes.
 - `fn` definitions declare operations. The signature declares each entity and
   its type constraint, following
   [the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema).
@@ -145,7 +148,8 @@ where
   and `#[asm_format]` requires `trunk_ir::asm_format::TypeAsmFormat`. A
   hand-written `TypeDef` adds the same hooks with `with_verifier` and
   `with_asm_format`. A `#[verify]` type's wrapper accepts only types that
-  pass the verifier, so the macro generates no constructor for it.
+  pass the verifier, so its `params(..)` builder's `intern` runs the verifier
+  and returns a `Result`.
 
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:
@@ -207,11 +211,15 @@ see unverified IR read attributes fallibly instead.
 
 ## Working with IR
 
-Types are created via module-level constructors and converted with
-`.as_type_ref()`:
+A declared type is built like an operation: start from its parameters in
+declaration order, set attributes by name, and intern it. `param_attrs` sets
+the parameters' own attributes. A `#[verify]` type is verified when it is
+interned, so its `intern` returns a `Result`; other types return the
+wrapper. Convert a wrapper with `.as_type_ref()`:
 
 ```rust
-let nil_ty = core::nil(ctx).as_type_ref();
+let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
+let ref_ty = core::Ref::params(pointee).nullable(false).intern(ctx);
 let func_ty = func::func_sig(ctx, params, [return_ty]).as_type_ref();
 ```
 

@@ -207,7 +207,7 @@ impl RewritePattern for WritePattern {
 fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     let i32_ty = core::I32::type_ref(ctx);
     let bytes_ty = super::bytes::bytes_struct_type(ctx);
-    let nil_ty = core::nil(ctx).as_type_ref();
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
     let body = ctx.create_block(BlockData {
         location: loc,
         args: vec![block_arg(bytes_ty), block_arg(i32_ty)],
@@ -571,7 +571,7 @@ fn trap_if_less(
         .results(i32_ty)
         .build(ctx, loc);
     ctx.push_op(body, overflow.op_ref());
-    let nil_ty = core::nil(ctx).as_type_ref();
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
     trap_if(ctx, body, loc, overflow.result(ctx), nil_ty);
 }
 

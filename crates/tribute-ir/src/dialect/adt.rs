@@ -44,8 +44,9 @@ mod adt {
     /// `name` attribute, and the struct's name is the type's `name` attribute.
     #[verify]
     #[asm_format]
-    #[attr(name: String)]
-    struct Struct<#[rest] FieldTypes>;
+    struct Struct<#[rest] FieldTypes> {
+        name: Attr<String>,
+    }
 
     /// Validated wrapper for a nominal `adt.enum` layout type.
     ///
@@ -55,16 +56,19 @@ mod adt {
     /// the type's `name` attribute.
     #[verify]
     #[asm_format]
-    #[attr(name: String)]
-    struct Enum<#[rest] VariantTypes>;
+    struct Enum<#[rest] VariantTypes> {
+        name: Attr<String>,
+    }
 
     /// `adt.typeref`: a reference to a nominal layout by its `name`.
-    #[attr(name: String)]
-    struct Typeref;
+    struct Typeref {
+        name: Attr<String>,
+    }
 
     /// `adt.variant`: one variant of an `adt.enum`, named by its `name`.
-    #[attr(name: String)]
-    struct Variant<#[rest] Fields>;
+    struct Variant<#[rest] Fields> {
+        name: Attr<String>,
+    }
 
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
@@ -359,7 +363,7 @@ impl Struct {
     }
 
     /// Each field as an owned `(name, type, attributes)` triple, for rebuilding
-    /// the struct with [`struct_type_with_field_attrs`].
+    /// the struct with [`try_from_fields_with_attrs`](Self::try_from_fields_with_attrs).
     pub fn fields_with_attrs(self, ctx: &IrContext) -> Vec<(StringRef, TypeRef, AttributeMap)> {
         (0..self.field_count(ctx))
             .map(|index| {
@@ -387,61 +391,55 @@ fn field_name(ctx: &IrContext, attrs: &AttributeMap) -> StringRef {
         .expect("validated adt.struct fields must retain their names")
 }
 
-/// Construct an `adt.struct` named `name` with `fields` in declaration order.
-///
-/// `attrs` holds the remaining type attributes, such as `layout`.
-pub fn struct_type<N: Into<StringArg>>(
-    ctx: &mut IrContext,
-    name: impl Into<StringArg>,
-    fields: impl IntoIterator<Item = (N, TypeRef)>,
-    attrs: AttributeMap,
-) -> Struct {
-    struct_type_with_field_attrs(
-        ctx,
-        name,
-        fields
+impl Struct {
+    /// Construct an `adt.struct` named `name` with `fields` in declaration
+    /// order.
+    ///
+    /// `attrs` holds the remaining type attributes, such as `layout`.
+    ///
+    /// # Panics
+    ///
+    /// If the result is not a valid `adt.struct`; see
+    /// [`try_from_fields_with_attrs`](Self::try_from_fields_with_attrs).
+    pub fn from_fields<N: Into<StringArg>>(
+        ctx: &mut IrContext,
+        name: impl Into<StringArg>,
+        fields: impl IntoIterator<Item = (N, TypeRef)>,
+        attrs: AttributeMap,
+    ) -> Self {
+        let fields = fields
             .into_iter()
-            .map(|(field, ty)| (field, ty, AttributeMap::new())),
-        attrs,
-    )
-}
-
-/// Construct an `adt.struct` whose fields carry their own attributes.
-///
-/// # Panics
-///
-/// If the result is not a valid `adt.struct`; see [`try_struct_type`].
-pub fn struct_type_with_field_attrs<N: Into<StringArg>>(
-    ctx: &mut IrContext,
-    name: impl Into<StringArg>,
-    fields: impl IntoIterator<Item = (N, TypeRef, AttributeMap)>,
-    attrs: AttributeMap,
-) -> Struct {
-    try_struct_type(ctx, name, fields, attrs).unwrap_or_else(|error| panic!("adt.struct: {error}"))
-}
-
-/// Construct an `adt.struct`, reporting a duplicate field name or a `fields`
-/// attribute instead of panicking.
-///
-/// A `name` in `attrs` or in a field's attributes is replaced by `name` or the
-/// field's name, so a caller may pass a source struct's attributes unchanged.
-pub fn try_struct_type<N: Into<StringArg>>(
-    ctx: &mut IrContext,
-    name: impl Into<StringArg>,
-    fields: impl IntoIterator<Item = (N, TypeRef, AttributeMap)>,
-    attrs: AttributeMap,
-) -> Result<Struct, StructTypeError> {
-    let mut builder = TypeDataBuilder::new(<Struct as DialectType>::NAME);
-    for (field, ty, mut field_attrs) in fields {
-        let field = ctx.intern_string_arg(field.into());
-        field_attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, field);
-        builder = builder.param_with_attrs(ty, field_attrs);
+            .map(|(field, ty)| (field, ty, AttributeMap::new()));
+        Self::try_from_fields_with_attrs(ctx, name, fields, attrs)
+            .unwrap_or_else(|error| panic!("adt.struct: {error}"))
     }
-    let name = ctx.intern_string_arg(name.into());
-    finish_struct_type(ctx, name, builder, attrs)
+
+    /// Construct an `adt.struct` whose fields carry their own attributes,
+    /// reporting a duplicate field name or a `fields` attribute instead of
+    /// panicking.
+    ///
+    /// A `name` in `attrs` or in a field's attributes is replaced by `name` or
+    /// the field's name, so a caller may pass a source struct's attributes
+    /// unchanged.
+    pub fn try_from_fields_with_attrs<N: Into<StringArg>>(
+        ctx: &mut IrContext,
+        name: impl Into<StringArg>,
+        fields: impl IntoIterator<Item = (N, TypeRef, AttributeMap)>,
+        attrs: AttributeMap,
+    ) -> Result<Self, StructTypeError> {
+        let mut builder = TypeDataBuilder::new(<Struct as DialectType>::NAME);
+        for (field, ty, mut field_attrs) in fields {
+            let field = ctx.intern_string_arg(field.into());
+            field_attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, field);
+            builder = builder.param_with_attrs(ty, field_attrs);
+        }
+        let name = ctx.intern_string_arg(name.into());
+        finish_struct_type(ctx, name, builder, attrs)
+    }
 }
 
-/// The non-generic rest of [`try_struct_type`], once the fields are added.
+/// The non-generic rest of [`Struct::try_from_fields_with_attrs`], once the
+/// fields are added.
 fn finish_struct_type(
     ctx: &mut IrContext,
     name: StringRef,
@@ -665,38 +663,36 @@ fn variant_name(ctx: &IrContext, variant: TypeRef) -> Option<StringRef> {
         .flatten()
 }
 
-/// Construct an `adt.enum` named `name` with `variants` in declaration order,
-/// each a name and its field types.
-///
-/// `attrs` holds the remaining type attributes.
-///
-/// # Panics
-///
-/// If two variants have the same name, or `attrs` has a `variants` or
-/// parameter attribute entry.
-pub fn enum_type<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
-    ctx: &mut IrContext,
-    name: impl Into<StringArg>,
-    variants: impl IntoIterator<Item = (N, F)>,
-    mut attrs: AttributeMap,
-) -> Enum {
-    let mut builder = TypeDataBuilder::new(<Enum as DialectType>::NAME);
-    for (variant, fields) in variants {
-        let variant = ctx.intern_string_arg(variant.into());
-        let variant = TypeDataBuilder::new(Variant::NAME)
-            .params(fields)
-            .attr(STRUCT_NAME_ATTR, variant)
-            .intern(ctx);
-        builder = builder.param(variant);
+impl Enum {
+    /// Construct an `adt.enum` named `name` with `variants` in declaration
+    /// order, each a name and its field types.
+    ///
+    /// `attrs` holds the remaining type attributes.
+    ///
+    /// # Panics
+    ///
+    /// If two variants have the same name, or `attrs` has a `variants` or
+    /// parameter attribute entry.
+    pub fn from_variants<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
+        ctx: &mut IrContext,
+        name: impl Into<StringArg>,
+        variants: impl IntoIterator<Item = (N, F)>,
+        mut attrs: AttributeMap,
+    ) -> Self {
+        let mut builder = TypeDataBuilder::new(<Enum as DialectType>::NAME);
+        for (variant, fields) in variants {
+            let variant = Variant::params(fields).name(variant).intern(ctx);
+            builder = builder.param(variant.as_type_ref());
+        }
+        let name = ctx.intern_string_arg(name.into());
+        attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, name);
+        for (key, value) in attrs {
+            builder = builder.attr(key, value);
+        }
+        let ty = builder.intern(ctx);
+        <Enum as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty)
+            .unwrap_or_else(|error| panic!("adt.enum: {error}"))
     }
-    let name = ctx.intern_string_arg(name.into());
-    attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, name);
-    for (key, value) in attrs {
-        builder = builder.attr(key, value);
-    }
-    let ty = builder.intern(ctx);
-    <Enum as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty)
-        .unwrap_or_else(|error| panic!("adt.enum: {error}"))
 }
 
 // === Textual syntax: `adt.enum<Name { Variant(field: type, ...), ... }, {attrs}>` ===
@@ -983,7 +979,7 @@ mod tests {
 
         // The constructor builds the type the syntax denotes, apart from the
         // field name the syntax adds.
-        let built = enum_type(
+        let built = Enum::from_variants(
             &mut ctx,
             "List",
             [("Empty", vec![]), ("Cons", vec![i32_ty])],
@@ -1116,7 +1112,7 @@ mod tests {
                 "{expected}: {text}"
             );
         }
-        let valid = struct_type(&mut ctx, "Q", [("x", i32_ty)], AttributeMap::new());
+        let valid = Struct::from_fields(&mut ctx, "Q", [("x", i32_ty)], AttributeMap::new());
         assert!(
             ctx.type_attrs(valid.as_type_ref())
                 .contains_key(PARAM_ATTRS_ATTR)
