@@ -126,7 +126,7 @@ const PRIMITIVE_F64_ALLOC_SIZE: u64 = 16;
 pub const RELEASE_FN_PREFIX: &str = "__tribute_release_";
 
 /// Name of the runtime deallocation function.
-const DEALLOC_FN: &str = "__tribute_dealloc";
+pub(super) const DEALLOC_FN: &str = "__tribute_dealloc";
 
 pub use super::descriptor_records::RTTI_TABLE;
 

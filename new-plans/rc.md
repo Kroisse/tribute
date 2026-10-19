@@ -182,15 +182,15 @@ tribute_rt.from_raw(ptr) -> value      // unit 하나를 가진 typed 값을 만
 tribute_rt.release_moving(ptr, moved...) // owner를 release하며 field unit을 moved로 옮긴다
 ```
 
-`tribute_rt.release_moving`은 owner의 unit 하나를 release하면서, `fields` 속성이 가리키는
-owner의 managed field가 가진 unit을 같은 순서의 `moved` operand로 옮긴다. `moved`는 그
-field에서 읽은 값이고, operation 뒤에는 각자 unit 하나를 가진 owned 값이다. Owner가
-유일하게 참조되면 옮기는 field는 release하지 않고 나머지 managed field만 release한 뒤
-owner를 해제한다. 공유되어 있으면 `moved`마다 unit을 먼저 획득한 뒤 owner의 count만
-줄인다.
-`layout`과 `alloc_size` 속성은 owner의 exact layout과 header를 포함한 할당 크기다.
-이 operation은 [field move](#1-typed-ownership-and-rtti-plan)를 표현하며 typed plan만
-만든다.
+`tribute_rt.release_moving`은 owner의 unit 하나를 release하면서, owner의 managed field가
+가진 unit을 그 field에서 읽은 `moved` operand로 옮긴다. Operation 뒤에 `moved`는 각자
+unit 하나를 가진 owned 값이다. Owner가 유일하게 참조되면 옮기는 field는 release하지
+않고, `release_offsets` 속성이 가리키는 나머지 managed field만 release한 뒤 owner를
+`alloc_size`로 해제한다. 공유되어 있으면 `moved`마다 unit을 먼저 획득한 뒤 owner를
+보통의 `tribute_rt.release`처럼 release한다. 다른 소유자가 그사이 release하면 이
+release가 마지막일 수 있기 때문이다. Materialization은 owner의 exact struct layout에서
+`release_offsets`와 header를 포함한 `alloc_size`를 계산한다. 이 operation은
+[field move](#1-typed-ownership-and-rtti-plan)를 표현하며 typed plan만 만든다.
 
 이 연산은 dialect 수준에서 다음 순서로 처리된다.
 
@@ -674,7 +674,7 @@ free_block:
 continue_block:
     // continue execution
 
-tribute_rt.release_moving(ptr, moved...) {layout, fields, alloc_size} ->
+tribute_rt.release_moving(ptr, moved...) {alloc_size, release_offsets} ->
     if ptr == null: jump continue_block
     %rc_addr = clif.iadd(ptr, clif.iconst(-8))
     %rc = clif.load(%rc_addr)
@@ -682,20 +682,23 @@ tribute_rt.release_moving(ptr, moved...) {layout, fields, alloc_size} ->
     clif.brif(%is_unique, then_dest=unique_block, else_dest=shared_block)
 
 unique_block:
-    // release each managed field of `layout` not listed in `fields`
+    // tribute_rt.release each field loaded at `release_offsets`
     %raw_ptr = clif.iadd(ptr, clif.iconst(-8))
     clif.call(@__tribute_dealloc, %raw_ptr, clif.iconst(<alloc_size>))
     clif.jump(continue_block)
 
 shared_block:
-    // tribute_rt.retain each moved operand
-    clif.store(clif.isub(%rc, clif.iconst(1)), %rc_addr)
+    // tribute_rt.retain each moved operand, then tribute_rt.release(ptr)
     clif.jump(continue_block)
 ```
 
-The unique path may be emitted inline or as a generated function per layout and
-moved-field set; generated code size is part of the policy's measured cost. When
-the plan proves the owner unique, only the unique path is emitted.
+A count of one is the releasing unit itself, which no other holder can change,
+so a plain load decides uniqueness. RC lowering emits this expansion once per
+allocation size, released offsets and number of moved values, as a generated
+`__tribute_release_moving_<n>(ptr, moved...)` function, and replaces each
+moving release with a call to it. Expanding both paths at every owner's death
+would grow the code it compiles to more than the moved units save. When the
+plan proves the owner unique, only the unique path is emitted.
 
 **Pipeline position:** After unrealized cast legalization and
 `ReconcileUnrealizedCasts`, before `emit_module_to_native`.

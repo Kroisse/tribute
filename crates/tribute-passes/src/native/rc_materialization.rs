@@ -43,6 +43,13 @@ enum ScheduledAction {
         field_ty: TypeRef,
         alloc_size: u64,
     },
+    ReleaseMoving {
+        placement: Placement,
+        owner: ValueRef,
+        moved: Vec<ValueRef>,
+        alloc_size: u64,
+        release_offsets: Vec<i32>,
+    },
 }
 
 /// Validate every requested insertion before materializing the plan's exact RC
@@ -98,6 +105,17 @@ fn build_schedule(
     plan.validate_against(ctx, module)?;
     let mut schedule = Vec::new();
     for function in plan.functions() {
+        // Owners dying after the same operation share an anchor, so each
+        // moved field is keyed by the owner its projection reads too.
+        let mut field_moves = HashMap::<(ActionAnchor, ValueRef), Vec<(ValueRef, u32)>>::default();
+        for action in function.actions() {
+            if action.kind == ActionKind::FieldMove {
+                field_moves
+                    .entry((action.anchor, projection_owner(ctx, action.value)?))
+                    .or_default()
+                    .push((action.value, action.destination));
+            }
+        }
         for action in function.actions() {
             let placement = placement_for(ctx, action.anchor)?;
             match action.kind {
@@ -130,6 +148,21 @@ fn build_schedule(
                         alloc_size: allocation_size_for_type(ctx, plan, field_ty, type_converter)?,
                     });
                 }
+                ActionKind::ReleaseMoving => {
+                    let moved = field_moves
+                        .remove(&(action.anchor, action.value))
+                        .ok_or_else(|| {
+                            OwnershipPlanError::new("moving release has no moved field")
+                        })?;
+                    schedule.push(release_moving(
+                        ctx,
+                        plan,
+                        placement,
+                        action.value,
+                        moved,
+                        type_converter,
+                    )?);
+                }
                 // These actions are ownership facts used by the planner. They
                 // deliberately have no standalone RC operation to emit. A
                 // retained parameter's callee acquires its own unit at entry,
@@ -141,8 +174,14 @@ fn build_schedule(
                 | ActionKind::StoreTransfer
                 | ActionKind::ReturnTransfer
                 | ActionKind::TailTransfer
-                | ActionKind::IntoRawTransfer => {}
+                | ActionKind::IntoRawTransfer
+                | ActionKind::FieldMove => {}
             }
+        }
+        if !field_moves.is_empty() {
+            return Err(OwnershipPlanError::new(
+                "moved field has no moving release of its owner",
+            ));
         }
     }
     Ok(schedule)
@@ -197,6 +236,89 @@ fn allocation_size_for_type(
         .map(|layout| layout.total_size)
         .ok_or_else(|| OwnershipPlanError::new("planned release layout has no native size"))?;
     Ok(u64::from(payload_size) + RC_HEADER_SIZE)
+}
+
+/// Schedule the release of `owner` that moves the units of the fields its
+/// `moved` projections read. The unique path releases the owner's other
+/// managed fields at their offsets in the exact struct layout.
+fn release_moving(
+    ctx: &IrContext,
+    plan: &NativeOwnershipPlan,
+    placement: Placement,
+    owner: ValueRef,
+    moved: Vec<(ValueRef, u32)>,
+    type_converter: &TypeConverter,
+) -> Result<ScheduledAction, RcMaterializationError> {
+    let owner_ty = ctx.value_ty(owner);
+    let layout = plan.allocation_layout_for_type(ctx, owner_ty)?;
+    let fields = get_struct_fields(ctx, layout)
+        .filter(|_| adt::Struct::from_type_ref(ctx, layout).is_some())
+        .ok_or_else(|| OwnershipPlanError::new("moving release owner is not an exact struct"))?;
+    let offsets = compute_struct_layout(ctx, layout, type_converter)
+        .ok_or_else(|| OwnershipPlanError::new("moving release owner has no native layout"))?
+        .field_offsets;
+    for &(projection, field) in &moved {
+        let trunk_ir::ValueDef::OpResult(op, _) = ctx.value_def(projection) else {
+            return Err(OwnershipPlanError::new("moved field is not a projection"));
+        };
+        let get = adt::StructGet::from_op(ctx, op)
+            .map_err(|_| OwnershipPlanError::new("moved field is not an adt.struct_get"))?;
+        if get.field(ctx) != field || alias_root(ctx, get.r#ref(ctx)) != owner {
+            return Err(OwnershipPlanError::new(
+                "moved field does not read its planned owner and field",
+            ));
+        }
+    }
+    let alloc_size = allocation_size_for_type(ctx, plan, owner_ty, type_converter)?;
+    if alloc_size == 0 {
+        return Err(OwnershipPlanError::new(
+            "moving release owner has no static allocation size",
+        ));
+    }
+    let release_offsets = fields
+        .iter()
+        .zip(&offsets)
+        .enumerate()
+        .filter(|&(index, ((_, ty), _))| {
+            plan.is_managed_type(ctx, *ty)
+                && !moved.iter().any(|&(_, field)| field as usize == index)
+        })
+        .map(|(_, (_, &offset))| offset as i32)
+        .collect();
+    Ok(ScheduledAction::ReleaseMoving {
+        placement,
+        owner,
+        moved: moved
+            .into_iter()
+            .map(|(projection, _)| projection)
+            .collect(),
+        alloc_size,
+        release_offsets,
+    })
+}
+
+/// The owner a moved projection reads, through exact alias casts.
+fn projection_owner(
+    ctx: &IrContext,
+    projection: ValueRef,
+) -> Result<ValueRef, RcMaterializationError> {
+    let trunk_ir::ValueDef::OpResult(op, _) = ctx.value_def(projection) else {
+        return Err(OwnershipPlanError::new("moved field is not a projection"));
+    };
+    let get = adt::StructGet::from_op(ctx, op)
+        .map_err(|_| OwnershipPlanError::new("moved field is not an adt.struct_get"))?;
+    Ok(alias_root(ctx, get.r#ref(ctx)))
+}
+
+/// The value an exact alias cast chain starts from.
+fn alias_root(ctx: &IrContext, mut value: ValueRef) -> ValueRef {
+    while let trunk_ir::ValueDef::OpResult(op, _) = ctx.value_def(value)
+        && (adt::RefCast::matches(ctx, op)
+            || trunk_ir::dialect::core::UnrealizedConversionCast::matches(ctx, op))
+    {
+        value = ctx.op_operands(op)[0];
+    }
+    value
 }
 
 fn placement_for(
@@ -286,6 +408,19 @@ fn build_operations(ctx: &mut IrContext, action: ScheduledAction) -> (Placement,
                 .alloc_size(alloc_size)
                 .build(ctx, location);
             (placement, vec![get.op_ref(), release.op_ref()])
+        }
+        ScheduledAction::ReleaseMoving {
+            placement,
+            owner,
+            moved,
+            alloc_size,
+            release_offsets,
+        } => {
+            let release = tribute_rt::ReleaseMoving::operands(owner, moved)
+                .alloc_size(alloc_size)
+                .release_offsets(release_offsets)
+                .build(ctx, location_for(ctx, placement));
+            (placement, vec![release.op_ref()])
         }
     }
 }

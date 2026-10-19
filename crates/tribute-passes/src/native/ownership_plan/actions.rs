@@ -1,3 +1,4 @@
+use super::allocation_layout;
 use super::facts::{
     NativeOwnershipFunctionFacts, NativeOwnershipModuleFacts, borrowed_owner, is_core_ptr_type,
     is_internal_closure_layout, root_value,
@@ -41,6 +42,10 @@ struct ActionPlanner<'a> {
     borrowed: HashMap<ValueRef, ValueRef>,
     owned: HashSet<ValueRef>,
     move_units_at_last_use: bool,
+    move_fields_from_dying_owners: bool,
+    /// Projections that take the unit of their field from their owner's
+    /// final release, with that owner and the field index.
+    moved_fields: HashMap<ValueRef, (ValueRef, u32)>,
     liveness: &'a BlockLiveness,
     /// Position of each value's definition in program order, which orders
     /// actions independently of arena numbering.
@@ -97,6 +102,8 @@ impl<'a> ActionPlanner<'a> {
             borrowed,
             owned,
             move_units_at_last_use: options.move_units_at_last_use,
+            move_fields_from_dying_owners: options.move_fields_from_dying_owners,
+            moved_fields: HashMap::default(),
             liveness: inputs.liveness,
             definition_order,
             actions: Vec::new(),
@@ -133,7 +140,30 @@ impl<'a> ActionPlanner<'a> {
         }
     }
 
+    /// Plan `block`, then plan it again for each round of field moves it
+    /// admits. A moved projection is an owned root from its owner's release,
+    /// so a projection read from it may move in the next round.
     fn plan_block(&mut self, block: BlockRef) -> Result<(), OwnershipPlanError> {
+        loop {
+            let first_action = self.actions.len();
+            self.plan_block_once(block)?;
+            if !self.move_fields_from_dying_owners {
+                return Ok(());
+            }
+            let moves = self.field_moves(block, first_action);
+            if moves.is_empty() {
+                return Ok(());
+            }
+            self.actions.truncate(first_action);
+            for (projection, owner, field) in moves {
+                self.borrowed.remove(&projection);
+                self.owned.insert(projection);
+                self.moved_fields.insert(projection, (owner, field));
+            }
+        }
+    }
+
+    fn plan_block_once(&mut self, block: BlockRef) -> Result<(), OwnershipPlanError> {
         let ops = &self.ir.block(block).ops;
         let last_use = self.last_uses(ops);
         let mut transferred = HashSet::default();
@@ -161,6 +191,7 @@ impl<'a> ActionPlanner<'a> {
                 });
             } else if let Some(&result) = self.ir.op_results(op).first()
                 && self.facts.projection_owners().contains_key(&result)
+                && !self.moved_fields.contains_key(&result)
             {
                 // Preserving the temporary-borrow policy gives the projected
                 // semantic value its own unit at the exact typed projection.
@@ -174,6 +205,144 @@ impl<'a> ActionPlanner<'a> {
             }
         }
         self.plan_final_releases(block, ops, &last_use, &transferred)
+    }
+
+    /// The projections in `block` whose field unit can move out of their
+    /// owner at the owner's final release, as `(projection, owner, field)`.
+    /// They are chosen from the actions the latest plan of `block` made,
+    /// starting at `first_action`.
+    fn field_moves(&self, block: BlockRef, first_action: usize) -> Vec<(ValueRef, ValueRef, u32)> {
+        let aliases = self.facts.aliases();
+        let actions = &self.actions[first_action..];
+        let dying = actions
+            .iter()
+            .filter(|action| {
+                action.kind == ActionKind::FinalRelease
+                    && !matches!(action.anchor, ActionAnchor::BlockStart(_))
+            })
+            .map(|action| action.value)
+            .collect::<HashSet<_>>();
+        // A borrow needs a unit when it, or a borrow read from it, acquires
+        // one for a use.
+        let mut needs_unit = HashSet::default();
+        for action in actions {
+            if matches!(
+                action.kind,
+                ActionKind::StoreAcquire | ActionKind::CallAcquire | ActionKind::CopyAcquire
+            ) {
+                let mut value = root_value(aliases, action.value);
+                while let Some(&owner) = self.borrowed.get(&value) {
+                    if !needs_unit.insert(value) {
+                        break;
+                    }
+                    value = root_value(aliases, owner);
+                }
+            }
+        }
+        let ops = &self.ir.block(block).ops;
+        let live_out = &self.liveness.live_out[&block];
+        let mut candidates = HashMap::<ValueRef, Vec<(ValueRef, u32)>>::default();
+        for &op in ops {
+            let Ok(get) = adt::StructGet::from_op(self.ir, op) else {
+                continue;
+            };
+            let [projection] = self.ir.op_results(op) else {
+                continue;
+            };
+            let owner = root_value(aliases, get.r#ref(self.ir));
+            let field = get.field(self.ir);
+            if self.borrowed.get(projection) == Some(&owner)
+                && needs_unit.contains(projection)
+                && !live_out.contains(projection)
+                && dying.contains(&owner)
+                && self.owned.contains(&owner)
+                && self.has_static_size(owner)
+                && self.field_reads(owner, field) == 1
+            {
+                candidates
+                    .entry(owner)
+                    .or_default()
+                    .push((*projection, field));
+            }
+        }
+        let first_use = |value: ValueRef| {
+            ops.iter().position(|&op| {
+                self.ir
+                    .op_operands(op)
+                    .iter()
+                    .any(|&operand| self.derives_from(operand, value))
+            })
+        };
+        let mut moves = Vec::new();
+        for (owner, mut moved) in candidates {
+            // The owner's release must follow every use of the owner and of
+            // the borrows that stay, and precede every use of a moved one.
+            loop {
+                let last_owner_use = ops.iter().rposition(|&op| {
+                    self.ir.op_operands(op).iter().any(|&operand| {
+                        self.derives_from(operand, owner)
+                            && !moved
+                                .iter()
+                                .any(|&(projection, _)| self.derives_from(operand, projection))
+                    })
+                });
+                let before = moved.len();
+                moved.retain(|&(projection, _)| first_use(projection) > last_owner_use);
+                if moved.len() == before {
+                    break;
+                }
+            }
+            moves.extend(
+                moved
+                    .into_iter()
+                    .map(|(projection, field)| (projection, owner, field)),
+            );
+        }
+        moves.sort_unstable_by_key(|&(projection, _, _)| self.definition_order[&projection]);
+        moves
+    }
+
+    /// Whether `value` is `ancestor` or a borrow read from it.
+    fn derives_from(&self, value: ValueRef, ancestor: ValueRef) -> bool {
+        let aliases = self.facts.aliases();
+        let mut value = root_value(aliases, value);
+        loop {
+            if value == ancestor {
+                return true;
+            }
+            match self.borrowed.get(&value) {
+                Some(&owner) if root_value(aliases, owner) != value => {
+                    value = root_value(aliases, owner);
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// Whether the release of `owner` frees an exact struct layout by a
+    /// static size, rather than through its RTTI entry.
+    fn has_static_size(&self, owner: ValueRef) -> bool {
+        let ty = self.ir.value_ty(owner);
+        !tribute_ir::dialect::ability::is_evidence_type_ref(self.ir, ty)
+            && allocation_layout(self.ir, self.managed_layouts, ty)
+                .is_ok_and(|layout| adt::Struct::from_type_ref(self.ir, layout).is_some())
+    }
+
+    /// How many projections in the function read `field` of `owner`.
+    fn field_reads(&self, owner: ValueRef, field: u32) -> usize {
+        self.facts
+            .projection_owners()
+            .iter()
+            .filter(|&(&projection, &projection_owner)| {
+                projection_owner == owner
+                    && matches!(
+                        self.ir.value_def(projection),
+                        ValueDef::OpResult(op, _)
+                            if adt::StructGet::from_op(self.ir, op)
+                                .is_ok_and(|get| get.field(self.ir) == field)
+                    )
+            })
+            .count()
     }
 
     /// Index in `ops` of the last operation that uses each owned root, either
@@ -897,12 +1066,39 @@ impl ActionPlanner<'_> {
             } else {
                 ActionAnchor::BlockStart(block)
             };
+            // An owner may die in several blocks; only the projections read
+            // in this one move at this release.
+            let mut moved = self
+                .moved_fields
+                .iter()
+                .filter(|&(&projection, &(owner, _))| {
+                    owner == value
+                        && matches!(
+                            self.ir.value_def(projection),
+                            ValueDef::OpResult(op, _) if self.ir.op(op).parent_block == Some(block)
+                        )
+                })
+                .map(|(&projection, &(_, field))| (projection, field))
+                .collect::<Vec<_>>();
+            moved.sort_unstable_by_key(|&(_, field)| field);
             self.actions.push(OwnershipAction {
-                kind: ActionKind::FinalRelease,
+                kind: if moved.is_empty() {
+                    ActionKind::FinalRelease
+                } else {
+                    ActionKind::ReleaseMoving
+                },
                 value,
                 anchor,
                 destination: destination as u32,
             });
+            for (projection, field) in moved {
+                self.actions.push(OwnershipAction {
+                    kind: ActionKind::FieldMove,
+                    value: projection,
+                    anchor,
+                    destination: field,
+                });
+            }
         }
         Ok(())
     }

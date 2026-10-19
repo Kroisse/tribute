@@ -12,11 +12,13 @@ use trunk_ir::Symbol;
 use super::MonomorphizeMetadata;
 use crate::ast::visit::{Visit, walk_expr, walk_pattern};
 use crate::ast::{
-    AbilityId, CallingConvention, Decl, DeclEntry, DeclTable, Expr, ExprKind, FuncDecl, FuncDefId,
-    NodeId, Pattern, PatternKind, RowClasses, RowVar, Stmt, Type, TypeKind, TypeScheme, TypedRef,
-    calling_convention_for_ability_row_in, collect_row_vars,
+    AbilityId, AbilityRow, CallingConvention, Decl, DeclEntry, DeclTable, Expr, ExprKind, FuncDecl,
+    FuncDefId, NodeId, Pattern, PatternKind, RowClasses, RowVar, Stmt, Type, TypeKind, TypeScheme,
+    TypedRef, calling_convention_for_ability_row_in, collect_row_vars,
 };
-use crate::typeck::{FunctionInstance, FunctionInstanceOrigin};
+use crate::typeck::{
+    FunctionInstance, FunctionInstanceOrigin, LambdaSignature, LocalCallableInstance,
+};
 
 /// The arguments that select one instance of a function definition.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -189,57 +191,23 @@ impl<'db> InstanceKeys<'db> {
             let (Some(name), Decl::Function(function)) = (name, decl) else {
                 return;
             };
-            // The lambda each `let` binds, by its pattern.
-            let mut bound = HashMap::default();
-            function.body.for_each(|expr| {
-                let ExprKind::Block { stmts, .. } = &*expr.kind else {
-                    return;
-                };
-                for stmt in stmts {
-                    if let Stmt::Let { pattern, value, .. } = stmt
-                        && matches!(&*value.kind, ExprKind::Lambda { .. })
-                    {
-                        bound.insert(pattern.id, value.id);
-                    }
-                }
-            });
             let enclosing = self.row_classes.get(name);
             let mut classes = enclosing.cloned().unwrap_or_default();
             let mut locals: Vec<(RowVar, CallingConvention)> = Vec::new();
-            function.body.for_each(|expr| {
-                let Some(instance) = metadata.local_instances.get(&expr.id) else {
-                    return;
-                };
-                let Some(signature) = bound
-                    .get(&instance.binding)
-                    .and_then(|lambda| metadata.lambda_signatures.get(lambda))
-                else {
-                    return;
-                };
-                // The lambda's own type spells the rows its scheme quantifies
-                // with the variables its body uses.
-                let quantified = collect_row_vars(self.db, instance.scheme.body(self.db));
-                let spelled = collect_row_vars(self.db, signature.function_type);
-                if quantified.len() != spelled.len() {
-                    return;
+            let instantiations = local_instantiations(
+                self.db,
+                function,
+                |node| metadata.local_instances.get(node),
+                |node| metadata.lambda_signatures.get(node),
+            );
+            for (variable, row) in instantiations.into_iter().flat_map(|use_| use_.rows) {
+                let class =
+                    calling_convention_for_ability_row_in(self.db, row, &self.abilities, &classes);
+                match locals.iter_mut().find(|(local, _)| *local == variable) {
+                    Some((_, joined)) => *joined = joined.join(class),
+                    None => locals.push((variable, class)),
                 }
-                let variables = instance.scheme.effect_params(self.db);
-                for (variable, row) in variables.iter().zip(&instance.row_arguments) {
-                    let Some(at) = quantified.iter().position(|var| var == variable) else {
-                        continue;
-                    };
-                    let class = calling_convention_for_ability_row_in(
-                        self.db,
-                        *row,
-                        &self.abilities,
-                        &classes,
-                    );
-                    match locals.iter_mut().find(|(local, _)| *local == spelled[at]) {
-                        Some((_, joined)) => *joined = joined.join(class),
-                        None => locals.push((spelled[at], class)),
-                    }
-                }
-            });
+            }
             if locals.is_empty() {
                 return;
             }
@@ -272,6 +240,69 @@ impl<'db> InstanceKeys<'db> {
             .collect();
         self.row_classes.insert(name, classes);
     }
+}
+
+/// One use of a let-bound lambda: the row it passes for each row variable
+/// the lambda's type spells, in the order its scheme quantifies them.
+pub(crate) struct LocalInstantiation<'db> {
+    pub(crate) site: NodeId,
+    pub(crate) binding: NodeId,
+    pub(crate) rows: Vec<(RowVar, AbilityRow<'db>)>,
+}
+
+/// Each use of a let-bound lambda in `function`, in use order. A use whose
+/// lambda does not spell every row its scheme quantifies passes none.
+pub(crate) fn local_instantiations<'a, 'db: 'a>(
+    db: &'db dyn salsa::Database,
+    function: &FuncDecl<TypedRef<'db>>,
+    local_instance: impl Fn(&NodeId) -> Option<&'a LocalCallableInstance<'db>>,
+    lambda_signature: impl Fn(&NodeId) -> Option<&'a LambdaSignature<'db>>,
+) -> Vec<LocalInstantiation<'db>> {
+    // The lambda each `let` binds, by its pattern.
+    let mut bound = HashMap::default();
+    function.body.for_each(|expr| {
+        let ExprKind::Block { stmts, .. } = &*expr.kind else {
+            return;
+        };
+        for stmt in stmts {
+            if let Stmt::Let { pattern, value, .. } = stmt
+                && matches!(&*value.kind, ExprKind::Lambda { .. })
+            {
+                bound.insert(pattern.id, value.id);
+            }
+        }
+    });
+    let mut instantiations = Vec::new();
+    function.body.for_each(|expr| {
+        let Some(instance) = local_instance(&expr.id) else {
+            return;
+        };
+        let Some(signature) = bound.get(&instance.binding).and_then(&lambda_signature) else {
+            return;
+        };
+        // The lambda's own type spells the rows its scheme quantifies with
+        // the variables its body uses.
+        let quantified = collect_row_vars(db, instance.scheme.body(db));
+        let spelled = collect_row_vars(db, signature.function_type);
+        if quantified.len() != spelled.len() {
+            return;
+        }
+        let variables = instance.scheme.effect_params(db);
+        let rows = variables
+            .iter()
+            .zip(&instance.row_arguments)
+            .filter_map(|(variable, row)| {
+                let at = quantified.iter().position(|var| var == variable)?;
+                Some((spelled[at], *row))
+            })
+            .collect();
+        instantiations.push(LocalInstantiation {
+            site: expr.id,
+            binding: instance.binding,
+            rows,
+        });
+    });
+    instantiations
 }
 
 /// Calls `f` on each declaration of `entries`, with the path of a function.

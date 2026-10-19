@@ -72,6 +72,7 @@ pub struct NativeOwnershipPlanOptions {
     pub elide_proven_borrowed_parameters: bool,
     pub elide_proven_field_borrows: bool,
     pub move_units_at_last_use: bool,
+    pub move_fields_from_dying_owners: bool,
 }
 
 impl NativeOwnershipPlanOptions {
@@ -80,6 +81,7 @@ impl NativeOwnershipPlanOptions {
             elide_proven_borrowed_parameters: true,
             elide_proven_field_borrows: true,
             move_units_at_last_use: true,
+            move_fields_from_dying_owners: true,
         }
     }
 }
@@ -97,6 +99,12 @@ pub enum ActionKind {
     BorrowLoad,
     ReleaseReplacedField,
     FinalRelease,
+    /// The final release of an owner that moves field units into the values
+    /// of its `FieldMove` actions at the same anchor.
+    ReleaseMoving,
+    /// A projection that receives the unit of its field from the
+    /// `ReleaseMoving` of its owner; `destination` is the field index.
+    FieldMove,
     ReturnTransfer,
     TailTransfer,
     IntoRawTransfer,
@@ -201,32 +209,7 @@ impl NativeOwnershipPlan {
         ctx: &IrContext,
         ty: TypeRef,
     ) -> Result<TypeRef, OwnershipPlanError> {
-        if self.managed_layouts.contains(&ty) {
-            return Ok(ty);
-        }
-        let data = ctx.get_type(ty);
-        if data.name != tribute_ir::dialect::adt::Typeref::NAME {
-            return Err(OwnershipPlanError::new(format!(
-                "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
-            )));
-        }
-        let name = ctx.type_attrs(ty).get_string_ref("name").ok_or_else(|| {
-            OwnershipPlanError::new("managed release typeref lacks nominal allocation identity")
-        })?;
-        let mut layouts = self
-            .managed_layouts
-            .iter()
-            .copied()
-            .filter(|layout| ctx.type_attrs(*layout).get_string_ref("name") == Some(name));
-        let layout = layouts.next().ok_or_else(|| {
-            OwnershipPlanError::new("managed release typeref has no planned allocation layout")
-        })?;
-        if layouts.next().is_some() {
-            return Err(OwnershipPlanError::new(
-                "managed release typeref has ambiguous planned allocation layouts",
-            ));
-        }
-        Ok(layout)
+        allocation_layout(ctx, &self.managed_layouts, ty)
     }
 
     /// Check that the planned RTTI layouts are exactly the allocation layouts
@@ -640,6 +623,40 @@ fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) 
     // Pointers, code references, and runtime buffers that ownership does not
     // manage are raw: neither released nor followed.
     FieldKind::scalar(ctx, ty).unwrap_or(FieldKind::Raw)
+}
+
+/// Resolve an exact semantic managed reference to the unique aggregate layout
+/// that owns its native allocation, among the planned `managed_layouts`.
+pub(super) fn allocation_layout(
+    ctx: &IrContext,
+    managed_layouts: &HashSet<TypeRef>,
+    ty: TypeRef,
+) -> Result<TypeRef, OwnershipPlanError> {
+    if managed_layouts.contains(&ty) {
+        return Ok(ty);
+    }
+    let data = ctx.get_type(ty);
+    if data.name != tribute_ir::dialect::adt::Typeref::NAME {
+        return Err(OwnershipPlanError::new(format!(
+            "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
+        )));
+    }
+    let name = ctx.type_attrs(ty).get_string_ref("name").ok_or_else(|| {
+        OwnershipPlanError::new("managed release typeref lacks nominal allocation identity")
+    })?;
+    let mut layouts = managed_layouts
+        .iter()
+        .copied()
+        .filter(|layout| ctx.type_attrs(*layout).get_string_ref("name") == Some(name));
+    let layout = layouts.next().ok_or_else(|| {
+        OwnershipPlanError::new("managed release typeref has no planned allocation layout")
+    })?;
+    if layouts.next().is_some() {
+        return Err(OwnershipPlanError::new(
+            "managed release typeref has ambiguous planned allocation layouts",
+        ));
+    }
+    Ok(layout)
 }
 
 fn validate_function_contract(

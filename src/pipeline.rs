@@ -175,6 +175,7 @@ pub struct NativeOptimizationOptions {
     pub borrowed_parameters: BorrowedParameterPolicy,
     pub temporary_borrows: TemporaryBorrowPolicy,
     pub last_use_moves: LastUseMovePolicy,
+    pub field_moves: FieldMovePolicy,
 }
 
 impl NativeOptimizationOptions {
@@ -184,6 +185,7 @@ impl NativeOptimizationOptions {
             borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
             temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
             last_use_moves: LastUseMovePolicy::Move,
+            field_moves: FieldMovePolicy::Move,
         }
     }
 
@@ -193,6 +195,7 @@ impl NativeOptimizationOptions {
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
             last_use_moves: LastUseMovePolicy::Acquire,
+            field_moves: FieldMovePolicy::Acquire,
         }
     }
 }
@@ -222,6 +225,14 @@ pub enum TemporaryBorrowPolicy {
 /// ordinary consumed call that is its last use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LastUseMovePolicy {
+    Acquire,
+    Move,
+}
+
+/// Policy for moving a field's unit out of an owner that dies in the block
+/// where the field is read, instead of acquiring one for the field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FieldMovePolicy {
     Acquire,
     Move,
 }
@@ -1312,6 +1323,7 @@ fn native_ownership_plan_options(
             TemporaryBorrowPolicy::ElideProvenFieldBorrows
         ),
         move_units_at_last_use: matches!(optimizations.last_use_moves, LastUseMovePolicy::Move),
+        move_fields_from_dying_owners: matches!(optimizations.field_moves, FieldMovePolicy::Move),
     };
 
     match stop_after {
@@ -1320,6 +1332,7 @@ fn native_ownership_plan_options(
                 elide_proven_borrowed_parameters: false,
                 elide_proven_field_borrows: false,
                 move_units_at_last_use: false,
+                move_fields_from_dying_owners: false,
             }
         }
         Some(NativePipelineStage::AfterBorrowedParameterOptimization) => {
@@ -1327,11 +1340,13 @@ fn native_ownership_plan_options(
                 elide_proven_borrowed_parameters: configured.elide_proven_borrowed_parameters,
                 elide_proven_field_borrows: false,
                 move_units_at_last_use: false,
+                move_fields_from_dying_owners: false,
             }
         }
         Some(NativePipelineStage::AfterTemporaryBorrowOptimization) => {
             tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
                 move_units_at_last_use: false,
+                move_fields_from_dying_owners: false,
                 ..configured
             }
         }
@@ -1917,18 +1932,43 @@ mod tests {
     }
 
     #[test]
+    fn baseline_options_disable_every_optional_native_optimization() {
+        assert_eq!(
+            OptimizationOptions::baseline().native,
+            NativeOptimizationOptions {
+                paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+                borrowed_parameters: BorrowedParameterPolicy::Preserve,
+                temporary_borrows: TemporaryBorrowPolicy::Preserve,
+                last_use_moves: LastUseMovePolicy::Acquire,
+                field_moves: FieldMovePolicy::Acquire,
+            }
+        );
+        assert_eq!(
+            native_ownership_plan_options(None, OptimizationOptions::baseline().native),
+            tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
+                elide_proven_borrowed_parameters: false,
+                elide_proven_field_borrows: false,
+                move_units_at_last_use: false,
+                move_fields_from_dying_owners: false,
+            }
+        );
+    }
+
+    #[test]
     fn native_ownership_plan_options_follow_stage_policy_table() {
         let parameter_elision_only = NativeOptimizationOptions {
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
             last_use_moves: LastUseMovePolicy::Acquire,
+            field_moves: FieldMovePolicy::Acquire,
         };
         let field_elision_only = NativeOptimizationOptions {
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
             last_use_moves: LastUseMovePolicy::Acquire,
+            field_moves: FieldMovePolicy::Acquire,
         };
         let all_optimizations = NativeOptimizationOptions::production();
 
@@ -1966,13 +2006,16 @@ mod tests {
             (None, all_optimizations, (true, true, true)),
         ];
 
-        for (stage, optimizations, (borrowed_parameters, field_borrows, last_use_moves)) in cases {
+        // The last element selects both unit moves, which only the final
+        // stages make.
+        for (stage, optimizations, (borrowed_parameters, field_borrows, moves)) in cases {
             assert_eq!(
                 native_ownership_plan_options(stage, optimizations),
                 tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
                     elide_proven_borrowed_parameters: borrowed_parameters,
                     elide_proven_field_borrows: field_borrows,
-                    move_units_at_last_use: last_use_moves,
+                    move_units_at_last_use: moves,
+                    move_fields_from_dying_owners: moves,
                 },
                 "unexpected ownership plan options at {stage:?}",
             );

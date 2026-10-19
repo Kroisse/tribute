@@ -2536,10 +2536,11 @@ fn legalization_drops_ability_rows_and_row_metadata() {
 #[test]
 fn instantiate_legalizes_to_its_lambda() {
     let module = |header: &str, use_: &str| {
+        let kind = if header.is_empty() { "body" } else { "local" };
         format!(
             r#"core.module @m {{
   !step0 = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{tail = 0}}, tribute.calling_convention = 0}}>
-  tribute_control.func @f['a0, local 'a1](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {{
+  tribute_control.func @f['a0, {kind} 'a1](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {{
     %g = tribute_control.lambda{header}(%y: core.i32) -> core.i32 row(| 'a1) convention(direct) captures [] {{
       tribute_control.return %y
     }}

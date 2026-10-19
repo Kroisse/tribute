@@ -41,6 +41,18 @@ mod tribute_rt {
 
     fn release(alloc_size: Attr<u64>, ptr: Value<_>) {}
 
+    /// Release one unit of `ptr` and move the units of the fields `moved`
+    /// were read from into `moved`. A unique owner releases only the managed
+    /// fields at `release_offsets` before it is freed; a shared one acquires
+    /// a unit for each moved value before it is released.
+    fn release_moving(
+        alloc_size: Attr<u64>,
+        release_offsets: Attr<[i32]>,
+        ptr: Value<_>,
+        moved: Variadic<_>,
+    ) {
+    }
+
     /// Consume one managed ownership unit while crossing a native raw-pointer
     /// representation boundary. This is deliberately not a pure operation.
     fn into_raw(value: Value<impl ManagedRef>) -> Value<Ptr> {}

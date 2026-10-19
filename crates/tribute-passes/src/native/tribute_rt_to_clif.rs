@@ -184,6 +184,7 @@ fn tribute_rt_to_clif_target() -> ConversionTarget {
         .illegal_dialect(tribute_rt::DIALECT_NAME)
         .legal_op("tribute_rt.retain")
         .legal_op("tribute_rt.release")
+        .legal_op("tribute_rt.release_moving")
 }
 
 // =============================================================================
