@@ -393,8 +393,10 @@ Runtime은 address space의 8 byte granule마다 shadow byte 하나를 둔다. �
 - **예약:** `__asan_init`은 user address space 전체를 덮는 shadow를 익명 mapping
   하나로 예약한다. Mapping은 쓰기 가능하지만 commit은 처음 건드린 page에서만
   일어나며, `base`는 kernel이 돌려준 주소를 global에 둔다. 접근 검사는 runtime
-  호출이므로 생성된 code에는 shadow 상수가 들어가지 않는다. 가상 memory 한도나
-  엄격한 overcommit 정책이 예약을 거절하면 초기화는 요청한 크기와 `errno`를
+  호출이므로 생성된 code에는 shadow 상수가 들어가지 않는다. User address space의
+  폭이 kernel 설정에 따라 다른 platform(Linux aarch64의 48, 42, 39 bit)에서는 넓은
+  폭부터 차례로 예약해 처음 받아들여진 길이를 쓴다. 가상 memory 한도나 엄격한
+  overcommit 정책이 모든 폭을 거절하면 초기화는 마지막으로 요청한 크기와 `errno`를
   stderr에 쓰고 process를 abort한다. 예약은 POSIX `mmap`을 쓰며, 그 밖의
   platform에서는 지원하지 않는다고 보고하고 abort한다.
 - **표현:** Shadow 0은 granule 전체가 유효하다는 뜻이다. 1부터 7까지는 앞쪽의 그

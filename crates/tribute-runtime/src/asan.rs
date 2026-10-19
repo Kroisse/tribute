@@ -67,29 +67,33 @@ const SHADOW_FREED: u8 = 0xFD;
 /// Shadow of the state granule of a quarantined block.
 const SHADOW_FREED_STATE: u8 = 0xFE;
 
-/// Width of the user address space the shadow covers.
+/// Widths of the user address space the shadow may cover, widest first.
+///
+/// Linux on aarch64 configures a 48-, 42- or 39-bit user address space by
+/// kernel build, and refuses a shadow larger than that space, so the
+/// reservation falls back to narrower widths.
 #[cfg(target_pointer_width = "32")]
-const ADDRESS_BITS: u32 = 32;
+const ADDRESS_BITS: &[u32] = &[32];
 #[cfg(all(
     target_pointer_width = "64",
     target_os = "linux",
     target_arch = "aarch64"
 ))]
-const ADDRESS_BITS: u32 = 48;
+const ADDRESS_BITS: &[u32] = &[48, 47, 42, 39];
 #[cfg(all(
     target_pointer_width = "64",
     not(all(target_os = "linux", target_arch = "aarch64"))
 ))]
-const ADDRESS_BITS: u32 = 47;
-
-/// Length of the shadow reservation in bytes.
-const SHADOW_LEN: usize = 1 << (ADDRESS_BITS - GRANULE.trailing_zeros());
+const ADDRESS_BITS: &[u32] = &[47];
 
 /// Global flag: ASan is active.
 static ASAN_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Start of the shadow reservation, or null before `__asan_init`.
 static SHADOW_BASE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
+
+/// Length of the shadow reservation in bytes, stored before `SHADOW_BASE`.
+static SHADOW_LEN: AtomicUsize = AtomicUsize::new(0);
 
 /// Number of blocks allocated and not yet freed.
 static LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -117,7 +121,7 @@ fn shadow(addr: usize, len: usize) -> Option<&'static [AtomicU8]> {
     }
     let first = addr / GRANULE;
     let last = addr.checked_add(len - 1)? / GRANULE;
-    if last >= SHADOW_LEN {
+    if last >= SHADOW_LEN.load(Ordering::Relaxed) {
         return None;
     }
     // Safety: the reservation spans `SHADOW_LEN` bytes and is never unmapped.
@@ -152,20 +156,12 @@ fn reserve_shadow(len: usize) -> Result<*mut u8, i32> {
     }
 }
 
-#[cfg(unix)]
-fn release_shadow(mapping: *mut u8, len: usize) {
-    unsafe { libc::munmap(mapping.cast(), len) };
-}
-
 #[cfg(not(unix))]
 fn reserve_shadow(_len: usize) -> Result<*mut u8, i32> {
     report(format_args!(
         "==ERROR: TributeASan: shadow memory is not supported on this platform\n"
     ))
 }
-
-#[cfg(not(unix))]
-fn release_shadow(_mapping: *mut u8, _len: usize) {}
 
 // =============================================================================
 // Shared state
@@ -437,24 +433,33 @@ unsafe fn check_redzone(ptr: *const u8, len: usize, side: &str) {
 /// A second call keeps the shadow the first one reserved.
 #[unsafe(no_mangle)]
 pub extern "C" fn __asan_init() {
-    if SHADOW_BASE.load(Ordering::Acquire).is_null() {
-        let mapping = reserve_shadow(SHADOW_LEN)
-            .unwrap_or_else(|errno| report_reservation_failure(SHADOW_LEN, errno));
-        if SHADOW_BASE
-            .compare_exchange(
-                ptr::null_mut(),
-                mapping,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_err()
-        {
-            release_shadow(mapping, SHADOW_LEN);
+    with_state(|state| {
+        if SHADOW_BASE.load(Ordering::Acquire).is_null() {
+            let (mapping, len) = reserve_widest_shadow()
+                .unwrap_or_else(|(len, errno)| report_reservation_failure(len, errno));
+            SHADOW_LEN.store(len, Ordering::Relaxed);
+            SHADOW_BASE.store(mapping, Ordering::Release);
+        }
+        // Pre-allocate the quarantine to avoid allocation during dealloc
+        state.quarantine.reserve(64);
+    });
+    ASAN_ENABLED.store(true, Ordering::SeqCst);
+}
+
+/// Reserve the shadow for the widest address space the system accepts.
+///
+/// Returns the mapping and its length, or the length and `errno` of the
+/// narrowest attempt.
+fn reserve_widest_shadow() -> Result<(*mut u8, usize), (usize, i32)> {
+    let mut refused = (0, 0);
+    for &bits in ADDRESS_BITS {
+        let len = 1 << (bits - GRANULE.trailing_zeros());
+        match reserve_shadow(len) {
+            Ok(mapping) => return Ok((mapping, len)),
+            Err(errno) => refused = (len, errno),
         }
     }
-    // Pre-allocate the quarantine to avoid allocation during dealloc
-    with_state(|state| state.quarantine.reserve(64));
-    ASAN_ENABLED.store(true, Ordering::SeqCst);
+    Err(refused)
 }
 
 /// The size of the block that holds a payload of `size` bytes: the payload
