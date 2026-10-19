@@ -1235,6 +1235,78 @@ fn a_dying_owner_moves_its_field_units_through_nested_projections() {
 }
 
 #[test]
+fn a_moved_field_used_twice_acquires_once_and_moves_at_its_last_use() {
+    let (ctx, _module, plan) = build(
+        r#"core.module @test {
+  !Env = adt.struct<Env(value: core.i32)>
+  !EnvRef = adt.typeref<{name = "Env"}>
+  !Pair = adt.struct<Pair(left: !EnvRef, right: !EnvRef)>
+  !PairRef = adt.typeref<{name = "Pair"}>
+  !Wrapper = adt.struct<Wrapper(env: !EnvRef)>
+  !WrapperRef = adt.typeref<{name = "Wrapper"}>
+  func.func @twice(%pair: !PairRef) -> !PairRef attributes {type = func.func_sig<(!PairRef {tribute.ownership = "consumed"}) -> !PairRef>} {
+    %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
+    %first = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+    %second = adt.struct_new %left, %left {type = !Pair} : !PairRef
+    func.return %second
+  }
+}"#,
+    );
+    let twice = plan.function(&SymbolPath::new(["twice"])).unwrap();
+    let left = ctx.op_result(entry_op(&ctx, &plan, "twice", 0), 0);
+    let first = entry_op(&ctx, &plan, "twice", 1);
+    let second = entry_op(&ctx, &plan, "twice", 2);
+    assert!(has_kind(twice, ActionKind::FieldMove, left));
+    assert!(has_action(
+        twice,
+        ActionKind::StoreAcquire,
+        left,
+        ActionAnchor::Before(first)
+    ));
+    assert!(has_action(
+        twice,
+        ActionKind::StoreTransfer,
+        left,
+        ActionAnchor::Before(second)
+    ));
+    assert!(final_releases(twice, left).is_empty());
+}
+
+#[test]
+fn a_replaceable_layout_keeps_its_projection_unit_instead_of_moving() {
+    let (ctx, _module, plan) = build(
+        r#"core.module @test {
+  !Env = adt.struct<Env(value: core.i32)>
+  !EnvRef = adt.typeref<{name = "Env"}>
+  !Pair = adt.struct<Pair(left: !EnvRef, right: !EnvRef)>
+  !PairRef = adt.typeref<{name = "Pair"}>
+  !Wrapper = adt.struct<Wrapper(env: !EnvRef)>
+  !WrapperRef = adt.typeref<{name = "Wrapper"}>
+  func.func @replace(%pair: !PairRef, %env: !EnvRef) -> core.nil {
+    adt.struct_set %pair, %env {field = 0, type = !Pair}
+    func.return
+  }
+  func.func @store_one(%pair: !PairRef) -> !WrapperRef attributes {type = func.func_sig<(!PairRef {tribute.ownership = "consumed"}) -> !WrapperRef>} {
+    %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
+    %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+    func.return %wrapper
+  }
+}"#,
+    );
+    let store_one = plan.function(&SymbolPath::new(["store_one"])).unwrap();
+    let get = entry_op(&ctx, &plan, "store_one", 0);
+    let left = ctx.op_result(get, 0);
+    assert_eq!(count(store_one, ActionKind::ReleaseMoving), 0);
+    assert_eq!(count(store_one, ActionKind::FieldMove), 0);
+    assert!(has_action(
+        store_one,
+        ActionKind::CopyAcquire,
+        left,
+        ActionAnchor::After(get)
+    ));
+}
+
+#[test]
 fn a_field_move_needs_the_owner_to_end_before_the_moved_uses() {
     let (_ctx, _module, plan) = build(FIELD_MOVES);
     // The owner is read after the store, the field is read twice, or the
