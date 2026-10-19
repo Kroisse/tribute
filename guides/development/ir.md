@@ -149,7 +149,15 @@ where
   hand-written `TypeDef` adds the same hooks with `with_verifier` and
   `with_asm_format`. A `#[verify]` type's wrapper accepts only types that
   pass the verifier, so its `params(..)` builder's `intern` runs the verifier
-  and returns a `Result`.
+  and returns a `Result`. `#[alias_hint]` requires
+  `trunk_ir::asm_format::TypeAliasHint`, the alias name the printer gives
+  the type when it generates aliases; a hand-written `TypeDef` adds it with
+  `with_alias_hint`. `#[implements(..)]` on a type registers the wrapper's
+  [type interfaces](#type-interfaces).
+- A hand-written `TypeDef` is a `static` registered with
+  `trunk_ir::register_type_def!(&DEF)`. Dialect crates never use
+  `inventory` directly; registration goes through `#[dialect]` and these
+  macros.
 
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:
@@ -295,6 +303,38 @@ it by address and its `OpFlag` impl:
 #[op_flag]
 pub struct Pure;
 ```
+
+### Type Interfaces
+
+A type interface is the same mechanism for types, declared with
+`#[trunk_ir::type_interface]` on a trait over `DialectType`. A `#[dialect]`
+type lists it in `#[implements(..)]`, and `register_interfaces!` registers
+the impl for a type declared elsewhere:
+
+```rust
+#[type_interface]
+pub trait ManagedRefType: DialectType {}
+
+#[trunk_ir::dialect]
+mod closure {
+    #[implements(ManagedRefType)]
+    struct Closure<FuncType>;
+}
+
+impl ManagedRefType for Closure {}
+impl ManagedRefType for core::Bytes {}
+register_interfaces!(core::Bytes: ManagedRefType);
+
+let managed = DynManagedRefType::is_implemented(ctx, ty);
+```
+
+The registry is keyed by type name, and `DynX::get(ctx, ty)` returns a
+handle whose `ty()` is the queried type. A method is called on the type's
+wrapper, so query a type interface's methods only on types that pass their
+definition's shape and verifier; a marker interface answers by name alone.
+A hook that core infrastructure reaches through the definition, such as a
+verifier, an assembly format, or an alias hint, belongs on `TypeDef`
+instead.
 
 ## Working with IR
 

@@ -1,15 +1,48 @@
-//! `#[op_interface]`: an operation interface declared as a trait that
-//! operation wrappers implement.
+//! `#[op_interface]` and `#[type_interface]`: an interface declared as a
+//! trait that operation or type wrappers implement.
 //!
 //! The trait keeps its items and gains a hidden registration constant. The
 //! macro also generates a vtable with one function pointer per method, its
-//! registry, and the `Dyn<Trait>` handle that queries an operation by name.
+//! registry, and the `Dyn<Trait>` handle that queries an operation or a type
+//! by name.
 
 use heck::ToSnakeCase;
 use proc_macro2::{Delimiter, Ident, Spacing, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 
+/// What an interface's implementors are: operations or types.
+#[derive(Clone, Copy)]
+pub enum Kind {
+    Op,
+    Type,
+}
+
+impl Kind {
+    fn attr(self) -> &'static str {
+        match self {
+            Kind::Op => "#[op_interface]",
+            Kind::Type => "#[type_interface]",
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Kind::Op => "operation",
+            Kind::Type => "type",
+        }
+    }
+
+    /// The handle's accessor for the operation or type it queries.
+    fn subject(self) -> &'static str {
+        match self {
+            Kind::Op => "op",
+            Kind::Type => "ty",
+        }
+    }
+}
+
 struct InterfaceTrait {
+    kind: Kind,
     attrs: Vec<TokenStream>,
     vis: TokenStream,
     name: Ident,
@@ -39,16 +72,21 @@ struct Param {
     ty: TokenStream,
 }
 
-/// Expand `#[op_interface]` on a trait.
-pub fn gen_interface(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
+/// Expand `#[op_interface]` or `#[type_interface]` on a trait.
+pub fn gen_interface(
+    kind: Kind,
+    attr: TokenStream,
+    item: TokenStream,
+) -> Result<TokenStream, String> {
     if !attr.is_empty() {
-        return Err("`#[op_interface]` takes no arguments".into());
+        return Err(format!("`{}` takes no arguments", kind.attr()));
     }
-    let def = parse_trait(item)?;
+    let def = parse_trait(kind, item)?;
     Ok(generate(&def))
 }
 
-fn parse_trait(item: TokenStream) -> Result<InterfaceTrait, String> {
+fn parse_trait(kind: Kind, item: TokenStream) -> Result<InterfaceTrait, String> {
+    let noun = kind.noun();
     let mut iter = item.into_iter().peekable();
     let attrs = parse_outer_attrs(&mut iter)?;
 
@@ -57,10 +95,10 @@ fn parse_trait(item: TokenStream) -> Result<InterfaceTrait, String> {
         match iter.next() {
             Some(TokenTree::Ident(id)) if id == "trait" => break,
             Some(TokenTree::Ident(id)) if id == "unsafe" || id == "auto" => {
-                return Err(format!("`#[op_interface]` does not support `{id}` traits"));
+                return Err(format!("`{}` does not support `{id}` traits", kind.attr()));
             }
             Some(tt) => vis.extend([tt]),
-            None => return Err("`#[op_interface]` applies to a trait".into()),
+            None => return Err(format!("`{}` applies to a trait", kind.attr())),
         }
     }
     let name = match iter.next() {
@@ -73,11 +111,11 @@ fn parse_trait(item: TokenStream) -> Result<InterfaceTrait, String> {
         match iter.next() {
             Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => break g.stream(),
             Some(TokenTree::Punct(p)) if p.as_char() == '<' && supertraits.is_empty() => {
-                return Err(format!("operation interface `{name}` cannot be generic"));
+                return Err(format!("{noun} interface `{name}` cannot be generic"));
             }
             Some(TokenTree::Ident(id)) if id == "where" => {
                 return Err(format!(
-                    "operation interface `{name}` cannot have a `where` clause"
+                    "{noun} interface `{name}` cannot have a `where` clause"
                 ));
             }
             Some(tt) => supertraits.extend([tt]),
@@ -92,12 +130,13 @@ fn parse_trait(item: TokenStream) -> Result<InterfaceTrait, String> {
     let mut methods = Vec::new();
     let mut body = body.into_iter().peekable();
     while body.peek().is_some() {
-        let (item, method) = parse_method(&mut body, &name)?;
+        let (item, method) = parse_method(kind, &mut body, &name)?;
         items.push(item);
         methods.push(method);
     }
 
     Ok(InterfaceTrait {
+        kind,
         attrs,
         vis,
         name,
@@ -109,8 +148,9 @@ fn parse_trait(item: TokenStream) -> Result<InterfaceTrait, String> {
 
 type TokenIter = std::iter::Peekable<proc_macro2::token_stream::IntoIter>;
 
-/// The vtable's `name` field and the handle's generated functions.
-const RESERVED_METHOD_NAMES: &[&str] = &["name", "get", "is_implemented", "implementors", "op"];
+/// The vtable's `name` field and the handle's generated functions, besides
+/// its accessor for the operation or type it queries.
+const RESERVED_METHOD_NAMES: &[&str] = &["name", "get", "is_implemented", "implementors"];
 
 fn parse_outer_attrs(iter: &mut TokenIter) -> Result<Vec<TokenStream>, String> {
     let mut attrs = Vec::new();
@@ -126,7 +166,12 @@ fn parse_outer_attrs(iter: &mut TokenIter) -> Result<Vec<TokenStream>, String> {
 
 /// Parse one trait item, which must be a method. Returns the item's tokens
 /// unchanged with its parsed signature.
-fn parse_method(iter: &mut TokenIter, interface: &Ident) -> Result<(TokenStream, Method), String> {
+fn parse_method(
+    kind: Kind,
+    iter: &mut TokenIter,
+    interface: &Ident,
+) -> Result<(TokenStream, Method), String> {
+    let noun = kind.noun();
     let attrs = parse_outer_attrs(iter)?;
     let docs = attrs
         .iter()
@@ -139,12 +184,12 @@ fn parse_method(iter: &mut TokenIter, interface: &Ident) -> Result<(TokenStream,
         Some(TokenTree::Ident(id)) if id == "fn" => item.extend([TokenTree::Ident(id)]),
         Some(TokenTree::Ident(id)) if id == "const" || id == "type" => {
             return Err(format!(
-                "operation interface `{interface}` can only declare methods, not `{id}` items"
+                "{noun} interface `{interface}` can only declare methods, not `{id}` items"
             ));
         }
         Some(other) => {
             return Err(format!(
-                "operation interface `{interface}` can only declare methods, found `{other}`"
+                "{noun} interface `{interface}` can only declare methods, found `{other}`"
             ));
         }
         None => return Err("expected a method".into()),
@@ -156,9 +201,10 @@ fn parse_method(iter: &mut TokenIter, interface: &Ident) -> Result<(TokenStream,
         }
         _ => return Err("expected a method name".into()),
     };
-    if RESERVED_METHOD_NAMES
-        .iter()
-        .any(|reserved| name == reserved)
+    if name == kind.subject()
+        || RESERVED_METHOD_NAMES
+            .iter()
+            .any(|reserved| name == reserved)
     {
         return Err(format!(
             "interface method name `{name}` is reserved by the generated vtable and handle"
@@ -350,6 +396,7 @@ fn split_top_level(stream: TokenStream, sep: char) -> Vec<Vec<TokenTree>> {
 
 fn generate(def: &InterfaceTrait) -> TokenStream {
     let InterfaceTrait {
+        kind,
         attrs,
         vis,
         name,
@@ -361,9 +408,27 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
     let vtable = format_ident!("__{}VTable", name);
     let handle = format_ident!("Dyn{}", name);
     let name_str = name.to_string();
+    let noun = kind.noun();
+    let subject = format_ident!("{}", kind.subject());
+    let (name_ty, ref_ty, wrapper, from_ref, subject_name) = match kind {
+        Kind::Op => (
+            quote!(#krate::OpName),
+            quote!(#krate::OpRef),
+            quote!(#krate::ops::DialectOp),
+            quote!(from_op),
+            quote!(ctx.op(#subject).name),
+        ),
+        Kind::Type => (
+            quote!(#krate::TypeName),
+            quote!(#krate::TypeRef),
+            quote!(#krate::ops::DialectType),
+            quote!(from_type_ref),
+            quote!(ctx.get_type(#subject).name),
+        ),
+    };
 
     let diagnostic = (!has_on_unimplemented(attrs)).then(|| {
-        let message = format!("`{{Self}}` does not implement the `{name_str}` operation interface");
+        let message = format!("`{{Self}}` does not implement the `{name_str}` {noun} interface");
         let label = format!("declared to implement `{name_str}`");
         let note = format!("add `impl {name_str} for {{Self}}`");
         quote! {
@@ -378,7 +443,7 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         let ret = &m.ret;
         let lifetimes = &m.lifetimes;
         let binder = (!lifetimes.is_empty()).then(|| quote!(for<#lifetimes>));
-        quote! { #field: #binder fn(#ctx_ty, #krate::OpRef #(, #tys)*) #ret }
+        quote! { #field: #binder fn(#ctx_ty, #ref_ty #(, #tys)*) #ret }
     });
 
     let thunk_name = |m: &Method| format_ident!("__{}", m.name.to_string().to_snake_case());
@@ -388,7 +453,12 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         quote! { #field: Self::#thunk::<T> }
     });
 
-    let expect_msg = format!("{name_str} registry entries are keyed by the operation's name");
+    let expect_msg = match kind {
+        Kind::Op => format!("{name_str} registry entries are keyed by the operation's name"),
+        Kind::Type => format!(
+            "{name_str} is queried only on types that pass their definition's shape and verifier"
+        ),
+    };
     let thunks = methods.iter().map(|m| {
         let method = &m.name;
         let thunk = thunk_name(m);
@@ -406,10 +476,10 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         quote! {
             fn #thunk<#lifetimes T: #name>(
                 #ctx: #ctx_ty,
-                __trunk_ir_op: #krate::OpRef
+                __trunk_ir_subject: #ref_ty
                 #(, #args: #tys)*
             ) #ret {
-                let __trunk_ir_this = <T as #krate::ops::DialectOp>::from_op(&*#ctx, __trunk_ir_op).expect(#expect_msg);
+                let __trunk_ir_this = <T as #wrapper>::#from_ref(&*#ctx, __trunk_ir_subject).expect(#expect_msg);
                 <T as #name>::#method(#this, #ctx #(, #args)*)
             }
         }
@@ -428,16 +498,27 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         quote! {
             #(#docs)*
             pub fn #method #generics(self, #ctx: #ctx_ty #(, #args: #tys)*) #ret {
-                (self.vtable.#method)(#ctx, self.op #(, #args)*)
+                (self.vtable.#method)(#ctx, self.#subject #(, #args)*)
             }
         }
     });
 
     let duplicate_msg = format!("duplicate {name_str} registration for {{:?}}");
-    let vtable_doc = format!("Registration of one operation's [`{name_str}`] implementation.");
-    let handle_doc =
-        format!("An operation together with its [`{name_str}`] implementation, found by its name.");
-    let get_doc = format!("The [`{name_str}`] implementation of `op`'s operation, if it has one.");
+    let vtable_doc = format!("Registration of one {noun}'s [`{name_str}`] implementation.");
+    let handle_doc = format!(
+        "{} {noun} together with its [`{name_str}`] implementation, found by its name.",
+        match kind {
+            Kind::Op => "An",
+            Kind::Type => "A",
+        }
+    );
+    let get_doc =
+        format!("The [`{name_str}`] implementation of `{subject}`'s {noun}, if it has one.");
+    let is_implemented_doc = format!("Whether `{subject}`'s {noun} implements this interface.");
+    let implementors_doc = format!(
+        "The names of every {noun} that implements this interface, in no particular order."
+    );
+    let subject_doc = format!("The {noun} this handle queries.");
 
     quote! {
         #(#attrs)*
@@ -452,23 +533,23 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         #[doc = #vtable_doc]
         #[doc(hidden)]
         #vis struct #vtable {
-            name: #krate::OpName,
+            name: #name_ty,
             #(#fields,)*
         }
 
         impl #vtable {
             pub const fn new<T: #name>() -> Self {
                 Self {
-                    name: <T as #krate::ops::DialectOp>::NAME,
+                    name: <T as #wrapper>::NAME,
                     #(#inits,)*
                 }
             }
 
             #(#thunks)*
 
-            fn registry() -> &'static #krate::__private::HashMap<#krate::OpName, &'static Self> {
+            fn registry() -> &'static #krate::__private::HashMap<#name_ty, &'static Self> {
                 static REGISTRY: ::std::sync::LazyLock<
-                    #krate::__private::HashMap<#krate::OpName, &'static #vtable>,
+                    #krate::__private::HashMap<#name_ty, &'static #vtable>,
                 > = ::std::sync::LazyLock::new(|| {
                     let mut registry = #krate::__private::HashMap::default();
                     for entry in #krate::__private::inventory::iter::<#vtable> {
@@ -489,32 +570,31 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         #[doc = #handle_doc]
         #[derive(Clone, Copy)]
         #vis struct #handle {
-            op: #krate::OpRef,
+            #subject: #ref_ty,
             vtable: &'static #vtable,
         }
 
         impl #handle {
             #[doc = #get_doc]
-            pub fn get(ctx: &#krate::IrContext, op: #krate::OpRef) -> Option<Self> {
+            pub fn get(ctx: &#krate::IrContext, #subject: #ref_ty) -> Option<Self> {
                 #vtable::registry()
-                    .get(&ctx.op(op).name)
-                    .map(|vtable| Self { op, vtable })
+                    .get(&#subject_name)
+                    .map(|vtable| Self { #subject, vtable })
             }
 
-            /// Whether `op`'s operation implements this interface.
-            pub fn is_implemented(ctx: &#krate::IrContext, op: #krate::OpRef) -> bool {
-                #vtable::registry().contains_key(&ctx.op(op).name)
+            #[doc = #is_implemented_doc]
+            pub fn is_implemented(ctx: &#krate::IrContext, #subject: #ref_ty) -> bool {
+                #vtable::registry().contains_key(&#subject_name)
             }
 
-            /// The names of every operation that implements this interface,
-            /// in no particular order.
-            pub fn implementors() -> impl Iterator<Item = #krate::OpName> {
+            #[doc = #implementors_doc]
+            pub fn implementors() -> impl Iterator<Item = #name_ty> {
                 #vtable::registry().keys().copied()
             }
 
-            /// The operation this handle queries.
-            pub fn op(self) -> #krate::OpRef {
-                self.op
+            #[doc = #subject_doc]
+            pub fn #subject(self) -> #ref_ty {
+                self.#subject
             }
 
             #(#handle_methods)*
@@ -523,7 +603,7 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         impl ::std::fmt::Debug for #handle {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 f.debug_struct(stringify!(#handle))
-                    .field("op", &self.op)
+                    .field(stringify!(#subject), &self.#subject)
                     .field("name", &self.vtable.name)
                     .finish()
             }
@@ -536,11 +616,13 @@ mod tests {
     use super::*;
 
     fn expand(item: TokenStream) -> String {
-        gen_interface(TokenStream::new(), item).unwrap().to_string()
+        gen_interface(Kind::Op, TokenStream::new(), item)
+            .unwrap()
+            .to_string()
     }
 
     fn expand_err(item: TokenStream) -> String {
-        match gen_interface(TokenStream::new(), item) {
+        match gen_interface(Kind::Op, TokenStream::new(), item) {
             Err(error) => error,
             Ok(tokens) => panic!("expected an error, got: {tokens}"),
         }
@@ -624,6 +706,48 @@ mod tests {
             out.contains("< T as Sig > :: set (__trunk_ir_this , ctx , signature)"),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn type_interface_queries_types_by_name() {
+        let out = gen_interface(
+            Kind::Type,
+            TokenStream::new(),
+            quote! {
+                pub trait Sized: DialectType {
+                    fn size(self, ctx: &IrContext) -> u32;
+                }
+            },
+        )
+        .unwrap()
+        .to_string();
+        assert!(
+            out.contains("pub struct __SizedVTable { name : :: trunk_ir :: TypeName , size : fn (& IrContext , :: trunk_ir :: TypeRef) -> u32 , }"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("< T as :: trunk_ir :: ops :: DialectType > :: from_type_ref (& * ctx , __trunk_ir_subject)"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("pub fn get (ctx : & :: trunk_ir :: IrContext , ty : :: trunk_ir :: TypeRef) -> Option < Self > { __SizedVTable :: registry () . get (& ctx . get_type (ty) . name)"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("pub fn ty (self) -> :: trunk_ir :: TypeRef"),
+            "got: {out}"
+        );
+        assert!(out.contains("type interface"), "got: {out}");
+
+        let error = match gen_interface(
+            Kind::Type,
+            TokenStream::new(),
+            quote! { trait X: DialectType { fn ty(self, ctx: &IrContext); } },
+        ) {
+            Err(error) => error,
+            Ok(tokens) => panic!("expected an error, got: {tokens}"),
+        };
+        assert!(error.contains("reserved"), "got: {error}");
     }
 
     #[test]

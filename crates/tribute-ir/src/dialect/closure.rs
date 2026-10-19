@@ -1,15 +1,14 @@
 //! Closure dialect — closures and captures.
 
+use crate::dialect::tribute_rtti::ManagedRefType;
 use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::op_flag::Pure;
 use trunk_ir::op_interface::CallableOwner;
 
-// A closure value points to a reference-counted closure object.
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Closure>());
-
 #[trunk_ir::dialect]
 mod closure {
     // Types
+    #[implements(ManagedRefType)]
     struct Closure<FuncType>;
 
     #[flags(Pure)]
@@ -35,6 +34,9 @@ mod closure {
         {}
     }
 }
+
+// A closure value points to a reference-counted closure object.
+impl ManagedRefType for Closure {}
 
 // === Custom assembly format for closure.lambda ===
 

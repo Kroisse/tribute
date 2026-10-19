@@ -51,8 +51,10 @@ mod parse;
 /// - For `#[flags(Pure, ..)]`, the listed operation flags in the `OpDef`
 ///
 /// For each type `struct`, a `static` `TypeDef` holding the wrapper's
-/// `trunk_ir::type_verifier::VerifyType` impl for `#[verify]` and its
-/// `trunk_ir::asm_format::TypeAsmFormat` impl for `#[asm_format]`.
+/// `trunk_ir::type_verifier::VerifyType` impl for `#[verify]`, its
+/// `trunk_ir::asm_format::TypeAsmFormat` impl for `#[asm_format]`, and its
+/// `trunk_ir::asm_format::TypeAliasHint` impl for `#[alias_hint]`, plus a
+/// registration of each type interface listed in `#[implements(..)]`.
 #[proc_macro_attribute]
 pub fn dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match dialect_impl(attr.into(), item.into()) {
@@ -101,7 +103,30 @@ fn dialect_impl(
 ///   without the receiver.
 #[proc_macro_attribute]
 pub fn op_interface(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
-    match interface::gen_interface(attr.into(), item.into()) {
+    match interface::gen_interface(interface::Kind::Op, attr.into(), item.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(msg) => quote::quote!(compile_error!(#msg);).into(),
+    }
+}
+
+/// Declare a type interface: a trait that type wrappers implement and that
+/// analyses query for any type by its name.
+///
+/// ```ignore
+/// #[trunk_ir::type_interface]
+/// pub trait ManagedRefType: DialectType {}
+///
+/// let managed = DynManagedRefType::is_implemented(ctx, ty);
+/// ```
+///
+/// The trait and its generated code follow [`op_interface`], with types in
+/// place of operations: the registry is keyed by type name, and
+/// `DynName::get(ctx, ty)` finds a type's implementation. A method is called
+/// on the type's wrapper, so it may be queried only on a type that passes its
+/// definition's shape and verifier.
+#[proc_macro_attribute]
+pub fn type_interface(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
+    match interface::gen_interface(interface::Kind::Type, attr.into(), item.into()) {
         Ok(tokens) => tokens.into(),
         Err(msg) => quote::quote!(compile_error!(#msg);).into(),
     }

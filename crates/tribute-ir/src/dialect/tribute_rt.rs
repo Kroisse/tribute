@@ -1,15 +1,7 @@
 //! Tribute runtime dialect — boxing, unboxing, and reference counting.
 
-// === Managed reference registrations ===
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Intref>());
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Anyref>());
-// A native `Bytes` value points to a reference-counted object.
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<
-    trunk_ir::dialect::core::Bytes,
->());
-
-use crate::dialect::tribute_rtti::ManagedRef;
-use trunk_ir::dialect::core::Ptr;
+use crate::dialect::tribute_rtti::{ManagedRef, ManagedRefType};
+use trunk_ir::dialect::core::{Bytes, Ptr};
 use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
@@ -19,7 +11,9 @@ mod tribute_rt {
     struct Nat;
     struct Float;
     struct Bool;
+    #[implements(ManagedRefType)]
     struct Intref;
+    #[implements(ManagedRefType)]
     struct Anyref;
 
     #[flags(Pure)]
@@ -56,6 +50,13 @@ mod tribute_rt {
     /// pure operation: dropping it would leak the unit.
     fn from_raw(ptr: Value<Ptr>) -> Value<impl ManagedRef> {}
 }
+
+impl ManagedRefType for Intref {}
+impl ManagedRefType for Anyref {}
+
+// A native `Bytes` value points to a reference-counted object.
+impl ManagedRefType for Bytes {}
+trunk_ir::register_interfaces!(Bytes: ManagedRefType);
 
 // === RC Header Layout ===
 // Re-exported from `tribute-rc`. See `tribute_rc::RcBox` for the layout definition.

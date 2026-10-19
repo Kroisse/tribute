@@ -3,7 +3,7 @@
 
 use std::sync::LazyLock;
 
-use crate::asm_format::{TypeAsmFormat, TypeAsmHooks};
+use crate::asm_format::{TypeAliasHint, TypeAliasHook, TypeAsmFormat, TypeAsmHooks};
 use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
 use crate::ops::VerificationError;
 use crate::type_verifier::{VerifyType, erased_verifier};
@@ -16,7 +16,9 @@ pub type TypeName = Name<TypeDef>;
 pub type TypeNameArg = NameArg<TypeDef>;
 
 /// What `#[dialect]` registers for one type: its name and the hooks its
-/// declaration opts into, such as `#[verify]` and `#[asm_format]`.
+/// declaration opts into, such as `#[verify]`, `#[asm_format]`, and
+/// `#[alias_hint]`. A hand-written definition is registered with
+/// [`register_type_def!`](crate::register_type_def).
 ///
 /// `#[dialect]` emits each definition as a `static`, so its address
 /// identifies the type: a [`TypeName`] of a registered type points to it.
@@ -30,6 +32,9 @@ pub struct TypeDef {
     /// Calls the wrapper's [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat)
     /// impl for types with a custom assembly format.
     pub asm_format: Option<TypeAsmHooks>,
+    /// Calls the wrapper's [`TypeAliasHint`](crate::asm_format::TypeAliasHint)
+    /// impl for types that suggest printer alias names.
+    pub alias_hint: Option<TypeAliasHook>,
 }
 
 /// A type verifier, calling the wrapper's [`VerifyType`] impl.
@@ -42,6 +47,7 @@ impl TypeDef {
             name: QualifiedName::new(name),
             verifier: None,
             asm_format: None,
+            alias_hint: None,
         }
     }
 
@@ -58,6 +64,15 @@ impl TypeDef {
     pub const fn with_asm_format<T: TypeAsmFormat>(self) -> Self {
         Self {
             asm_format: Some(TypeAsmHooks::of::<T>()),
+            ..self
+        }
+    }
+
+    /// This definition with `T`'s [`TypeAliasHint`] impl as its alias name
+    /// hint.
+    pub const fn with_alias_hint<T: TypeAliasHint>(self) -> Self {
+        Self {
+            alias_hint: Some(T::alias_hint),
             ..self
         }
     }
@@ -85,8 +100,27 @@ impl Definition for TypeDef {
 
 /// Inventory entry registering a [`TypeDef`].
 ///
-/// Emitted by the `#[dialect]` macro for every declared type.
+/// Emitted by the `#[dialect]` macro for every declared type, and by
+/// [`register_type_def!`](crate::register_type_def) for a hand-written one.
+#[doc(hidden)]
 pub struct TypeDefRegistration(pub &'static TypeDef);
+
+/// Register a hand-written [`TypeDef`], given as a `&'static TypeDef`.
+///
+/// ```text
+/// static FUNC_SIG_DEF: TypeDef = TypeDef::new("func.func_sig").with_verifier::<FuncSig>();
+/// register_type_def!(&FUNC_SIG_DEF);
+/// ```
+///
+/// `#[dialect]` registers the definitions of the types it declares.
+#[macro_export]
+macro_rules! register_type_def {
+    ($def:expr) => {
+        $crate::__private::inventory::submit! {
+            $crate::type_def::TypeDefRegistration($def)
+        }
+    };
+}
 
 inventory::collect!(TypeDefRegistration);
 

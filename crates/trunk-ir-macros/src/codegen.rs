@@ -6,8 +6,8 @@ use quote::{format_ident, quote, quote_spanned};
 
 use crate::parse::{
     AttrDef, AttrKind, BoundPath, DialectItem, DialectModule, ListExpr, Operand, OperationDef,
-    Projection, RegionOrSuccessor, RelationDef, RelationExpr, ResultDef, TypeDefData, TypeExpr,
-    ValueExpr,
+    PathEntry, Projection, RegionOrSuccessor, RelationDef, RelationExpr, ResultDef, TypeDefData,
+    TypeExpr, ValueExpr,
 };
 
 /// Generate all code for a dialect module.
@@ -60,17 +60,7 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
     let op_name = &op.name;
     let def = gen_op_def(crate_path, dialect, op);
     let def_static = format_ident!("__{}_DEF", op_name.to_shouty_snake_case());
-    // The span points a missing interface impl at its `#[implements]` entry.
-    let interfaces = op.implements.iter().map(|interface| {
-        let path = &interface.path;
-        let mut wrapper = sname.clone();
-        wrapper.set_span(interface.span);
-        quote_spanned! {interface.span=>
-            #crate_path::__private::inventory::submit! {
-                <#wrapper as #path>::__TRUNK_IR_INTERFACE
-            }
-        }
-    });
+    let interfaces = gen_interface_registrations(crate_path, &sname, &op.implements);
 
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,14 +91,36 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
             }
         }
 
-        #crate_path::inventory::submit! {
+        #crate_path::__private::inventory::submit! {
             #crate_path::op_def::OpDefRegistration(
                 <#sname as #crate_path::ops::DialectOp>::DEF
             )
         }
 
-        #(#interfaces)*
+        #interfaces
     }
+}
+
+/// Register the wrapper's impl of each interface listed in `#[implements]`.
+fn gen_interface_registrations(
+    crate_path: &TokenStream,
+    sname: &proc_macro2::Ident,
+    implements: &[PathEntry],
+) -> TokenStream {
+    // The span points a missing interface impl at its `#[implements]` entry.
+    implements
+        .iter()
+        .map(|interface| {
+            let path = &interface.path;
+            let mut wrapper = sname.clone();
+            wrapper.set_span(interface.span);
+            quote_spanned! {interface.span=>
+                #crate_path::__private::inventory::submit! {
+                    <#wrapper as #path>::__TRUNK_IR_INTERFACE
+                }
+            }
+        })
+        .collect()
 }
 
 /// Build the static `OpDef` expression for an operation.
@@ -1085,6 +1097,17 @@ fn gen_type_struct_and_trait(
         }
         None => quote!(None),
     };
+    let alias_hint = match td.alias_hint {
+        Some(span) => {
+            let mut sname = sname.clone();
+            sname.set_span(span);
+            quote_spanned!(span=> Some(
+                <#sname as #crate_path::ops::__private::DeclaredTypeAliasHint>::ALIAS_HINT
+            ))
+        }
+        None => quote!(None),
+    };
+    let interfaces = gen_interface_registrations(crate_path, &sname, &td.implements);
 
     let shape_ok = gen_type_shape_check(crate_path, td);
     let docs = &td.docs;
@@ -1099,11 +1122,14 @@ fn gen_type_struct_and_trait(
             name: #crate_path::name::QualifiedName::new(#full_name),
             verifier: #verifier,
             asm_format: #asm_format,
+            alias_hint: #alias_hint,
         };
 
-        #crate_path::inventory::submit! {
+        #crate_path::__private::inventory::submit! {
             #crate_path::type_def::TypeDefRegistration(&#def_static)
         }
+
+        #interfaces
 
         impl #crate_path::ops::DialectType for #sname {
             const DEF: &'static #crate_path::type_def::TypeDef = &#def_static;

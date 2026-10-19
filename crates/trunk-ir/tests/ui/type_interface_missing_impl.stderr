@@ -1,0 +1,18 @@
+error[E0277]: `Probe` does not implement the `Probed` type interface
+ --> tests/ui/type_interface_missing_impl.rs:8:18
+  |
+8 |     #[implements(Probed)]
+  |                  ^^^^^^ declared to implement `Probed`
+  |
+help: the trait `Probed` is not implemented for `Probe`
+ --> tests/ui/type_interface_missing_impl.rs:6:1
+  |
+6 | #[trunk_ir::dialect]
+  | ^^^^^^^^^^^^^^^^^^^^
+  = note: add `impl Probed for Probe`
+help: this trait has no implementations, consider adding one
+ --> tests/ui/type_interface_missing_impl.rs:3:1
+  |
+3 | #[trunk_ir::type_interface]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: this error originates in the attribute macro `trunk_ir::dialect` which comes from the expansion of the attribute macro `trunk_ir::type_interface` (in Nightly builds, run with -Z macro-backtrace for more info)

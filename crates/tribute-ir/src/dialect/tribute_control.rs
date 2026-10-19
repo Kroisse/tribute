@@ -539,9 +539,7 @@ pub struct FuncSig(TypeRef);
 static FUNC_SIG_DEF: trunk_ir::TypeDef =
     trunk_ir::TypeDef::new("tribute_control.func_sig").with_verifier::<FuncSig>();
 
-inventory::submit! {
-    trunk_ir::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
-}
+trunk_ir::register_type_def!(&FUNC_SIG_DEF);
 
 impl DialectType for FuncSig {
     const DEF: &'static trunk_ir::TypeDef = &FUNC_SIG_DEF;

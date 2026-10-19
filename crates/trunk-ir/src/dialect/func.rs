@@ -332,9 +332,7 @@ impl FuncSig {
 static FUNC_SIG_DEF: crate::type_def::TypeDef =
     crate::type_def::TypeDef::new("func.func_sig").with_verifier::<FuncSig>();
 
-inventory::submit! {
-    crate::type_def::TypeDefRegistration(&FUNC_SIG_DEF)
-}
+crate::register_type_def!(&FUNC_SIG_DEF);
 
 impl DialectType for FuncSig {
     const DEF: &'static crate::type_def::TypeDef = &FUNC_SIG_DEF;

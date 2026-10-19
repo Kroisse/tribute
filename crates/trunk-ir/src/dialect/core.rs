@@ -208,9 +208,7 @@ macro_rules! scalar_types {
             }
         }
 
-        inventory::submit! {
-            crate::type_def::TypeDefRegistration($wrapper::DEF)
-        }
+        crate::register_type_def!($wrapper::DEF);
 
         impl crate::type_constraint::TypeConstraint for $wrapper {
             const DESC: &'static crate::type_constraint::ConstraintDesc =

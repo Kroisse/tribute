@@ -71,8 +71,8 @@ mod prop;
 // Re-export proc macro for dialect definitions
 pub use trunk_ir_macros::dialect;
 
-// Re-export proc macros for operation interface and flag declarations.
-pub use trunk_ir_macros::{op_flag, op_interface};
+// Re-export proc macros for interface and flag declarations.
+pub use trunk_ir_macros::{op_flag, op_interface, type_interface};
 
 // Re-export `inventory` so the proc-macro–generated submit blocks
 // resolve `::trunk_ir::inventory::submit!` without requiring consumer

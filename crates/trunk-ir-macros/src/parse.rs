@@ -49,8 +49,8 @@ pub struct OperationDef {
     pub flags: Vec<PathEntry>,
 }
 
-/// One entry of `#[implements(..)]` or `#[flags(..)]`: an operation
-/// interface trait's or an operation flag's path.
+/// One entry of `#[implements(..)]` or `#[flags(..)]`: an interface trait's
+/// or an operation flag's path.
 pub struct PathEntry {
     pub path: proc_macro2::TokenStream,
     /// The entry's first token, where a wrong entry is reported.
@@ -69,6 +69,10 @@ pub struct TypeDefData {
     pub verify: Option<proc_macro2::Span>,
     /// `#[asm_format]`: print and parse through the wrapper's `TypeAsmFormat` impl. Holds the attribute's span for diagnostics.
     pub asm_format: Option<proc_macro2::Span>,
+    /// `#[alias_hint]`: suggest printer alias names through the wrapper's `TypeAliasHint` impl. Holds the attribute's span for diagnostics.
+    pub alias_hint: Option<proc_macro2::Span>,
+    /// `#[implements(..)]`: the type interfaces the wrapper implements.
+    pub implements: Vec<PathEntry>,
     /// Doc comments, forwarded to the wrapper struct.
     pub docs: Vec<proc_macro2::Group>,
 }
@@ -213,12 +217,13 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut rest_results = false;
     let mut verify = None;
     let mut asm_format = None;
+    let mut alias_hint = None;
     let mut implements: Option<Vec<PathEntry>> = None;
     let mut flags: Option<Vec<PathEntry>> = None;
     let mut docs = Vec::new();
 
     // Collect outer attributes: #[doc = "..."], #[verify], #[asm_format],
-    // #[implements(..)], #[flags(..)],
+    // #[alias_hint], #[implements(..)], #[flags(..)],
     // and the legacy #[attr(...)] and #[rest_results], rejected below
     while peek_punct(iter, '#') {
         let attr = parse_outer_attr(iter)?;
@@ -242,6 +247,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                     return Err("duplicate #[asm_format] on the same operation".into());
                 }
                 asm_format = Some(span);
+            }
+            OuterAttr::AliasHint(span) => {
+                if alias_hint.is_some() {
+                    return Err("duplicate #[alias_hint] on the same type".into());
+                }
+                alias_hint = Some(span);
             }
             OuterAttr::Implements(entries) => {
                 if implements.is_some() {
@@ -271,6 +282,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             if rest_results {
                 return Err("`#[rest_results]` is not supported; declare `-> Variadic<_>`".into());
+            }
+            if alias_hint.is_some() {
+                return Err(
+                    "#[alias_hint] suggests type alias names and is not allowed on operations"
+                        .into(),
+                );
             }
             let mut op = parse_operation(iter)?;
             if verify.is_some() && entity_names(&op).any(|name| name == "verify") {
@@ -323,12 +340,6 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             if rest_results {
                 return Err("#[rest_results] is not allowed on struct items".into());
             }
-            if implements.is_some() {
-                return Err(
-                    "#[implements] declares operation interfaces and is not allowed on types"
-                        .into(),
-                );
-            }
             if flags.is_some() {
                 return Err("#[flags] declares operation flags and is not allowed on types".into());
             }
@@ -358,6 +369,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             for (span, attr, names) in [
                 (verify, "#[verify]", &["verify"][..]),
                 (asm_format, "#[asm_format]", &["print", "parse"][..]),
+                (alias_hint, "#[alias_hint]", &["alias_hint"][..]),
             ] {
                 if span.is_some()
                     && let Some(name) = accessors.iter().find(|name| names.contains(&name.as_str()))
@@ -369,6 +381,8 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             td.verify = verify;
             td.asm_format = asm_format;
+            td.alias_hint = alias_hint;
+            td.implements = implements.unwrap_or_default();
             td.docs = docs;
             Ok(DialectItem::TypeDef(td))
         }
@@ -384,6 +398,7 @@ enum OuterAttr {
     RestResults,
     Verify(proc_macro2::Span),
     AsmFormat(proc_macro2::Span),
+    AliasHint(proc_macro2::Span),
     Implements(Vec<PathEntry>),
     Flags(Vec<PathEntry>),
 }
@@ -424,7 +439,8 @@ fn entity_names(op: &OperationDef) -> impl Iterator<Item = &str> {
 }
 
 /// Parse `#[...]` — `#[doc = "..."]`, `#[attr(...)]`, `#[rest_results]`,
-/// `#[verify]`, `#[asm_format]`, `#[implements(..)]`, or `#[flags(..)]`.
+/// `#[verify]`, `#[asm_format]`, `#[alias_hint]`, `#[implements(..)]`, or
+/// `#[flags(..)]`.
 fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
     expect_punct(iter, '#')?;
     let bracket = expect_group(iter, Delimiter::Bracket)?;
@@ -448,6 +464,10 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             expect_consumed(&inner, "#[asm_format]")?;
             Ok(OuterAttr::AsmFormat(ident.span()))
         }
+        "alias_hint" => {
+            expect_consumed(&inner, "#[alias_hint]")?;
+            Ok(OuterAttr::AliasHint(ident.span()))
+        }
         "implements" => Ok(OuterAttr::Implements(parse_path_list(
             &mut inner,
             "implements",
@@ -457,7 +477,7 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             &mut inner, "flags", "Flag",
         )?)),
         other => Err(format!(
-            "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, `verify`, `asm_format`, `implements`, or `flags`"
+            "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, `verify`, `asm_format`, `alias_hint`, `implements`, or `flags`"
         )),
     }
 }
@@ -622,6 +642,8 @@ fn parse_struct_def(iter: &mut TokenIter) -> Result<TypeDefData, String> {
         attrs,
         verify: None,
         asm_format: None,
+        alias_hint: None,
+        implements: Vec::new(),
         docs: Vec::new(),
     })
 }
@@ -1654,11 +1676,22 @@ mod tests {
             (
                 quote!(
                     mod test {
-                        #[implements(Branch)]
-                        struct Ty;
+                        #[alias_hint]
+                        fn op() {}
                     }
                 ),
-                "#[implements] declares operation interfaces and is not allowed on types",
+                "#[alias_hint] suggests type alias names and is not allowed on operations",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[alias_hint]
+                        struct Ty {
+                            alias_hint: Attr<String>,
+                        }
+                    }
+                ),
+                "#[alias_hint] reserves the name `alias_hint`",
             ),
             (
                 quote!(
@@ -1683,19 +1716,47 @@ mod tests {
                 struct Checked;
                 #[asm_format]
                 struct Custom<Elem>;
+                #[alias_hint]
+                #[implements(Managed, crate::Sized)]
+                struct Named;
                 struct Plain;
             }
         })
         .unwrap();
-        let flags: Vec<(bool, bool)> = module
+        let flags: Vec<(bool, bool, bool, usize)> = module
             .items
             .iter()
             .map(|item| match item {
-                DialectItem::TypeDef(td) => (td.verify.is_some(), td.asm_format.is_some()),
+                DialectItem::TypeDef(td) => (
+                    td.verify.is_some(),
+                    td.asm_format.is_some(),
+                    td.alias_hint.is_some(),
+                    td.implements.len(),
+                ),
                 DialectItem::Operation(_) => unreachable!(),
             })
             .collect();
-        assert_eq!(flags, [(true, false), (false, true), (false, false)]);
+        assert_eq!(
+            flags,
+            [
+                (true, false, false, 0),
+                (false, true, false, 0),
+                (false, false, true, 2),
+                (false, false, false, 0),
+            ]
+        );
+
+        let out = crate::codegen::generate(&quote!(::trunk_ir), &module).to_string();
+        for path in ["Managed", "crate :: Sized"] {
+            let submit = format!(
+                ":: trunk_ir :: __private :: inventory :: submit ! {{ < Named as {path} > :: __TRUNK_IR_INTERFACE }}"
+            );
+            assert!(out.contains(&submit), "missing `{submit}` in: {out}");
+        }
+        assert!(
+            out.contains("alias_hint : Some (< Named as :: trunk_ir :: ops :: __private :: DeclaredTypeAliasHint > :: ALIAS_HINT)"),
+            "got: {out}"
+        );
     }
 
     #[test]

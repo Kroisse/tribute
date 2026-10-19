@@ -1639,10 +1639,19 @@ mod tests {
     // Auto alias tests
     // ====================================================================
 
-    inventory::submit!(crate::asm_format::TypeAliasHint {
-        dialect: "alias_test",
-        suggest: |ctx, ty| ctx.type_attrs(ty).get_str("name"),
-    });
+    #[crate::dialect]
+    mod alias_test {
+        #[alias_hint]
+        struct Record<#[rest] Fields> {
+            name: Attr<String>,
+        }
+    }
+
+    impl crate::asm_format::TypeAliasHint for Record {
+        fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str> {
+            ctx.type_attrs(ty).get_str("name")
+        }
+    }
 
     /// Helper: build a named `alias_test.record` type, which suggests its
     /// `name` as an alias, with the given named fields.

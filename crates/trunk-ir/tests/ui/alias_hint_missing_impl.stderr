@@ -1,0 +1,13 @@
+error[E0277]: `Named` is declared with `#[alias_hint]` but does not implement `TypeAliasHint`
+ --> tests/ui/alias_hint_missing_impl.rs:3:7
+  |
+3 |     #[alias_hint]
+  |       ^^^^^^^^^^ `#[alias_hint]` requires this implementation
+  |
+help: the trait `trunk_ir::ops::__private::DeclaredTypeAliasHint` is not implemented for `Named`
+ --> tests/ui/alias_hint_missing_impl.rs:1:1
+  |
+1 | #[trunk_ir::dialect]
+  | ^^^^^^^^^^^^^^^^^^^^
+  = note: add `impl TypeAliasHint for Named { fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str> { .. } }`
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)
