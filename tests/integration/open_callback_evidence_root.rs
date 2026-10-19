@@ -480,3 +480,43 @@ fn main() -> Nil {
         "{run}"
     );
 }
+
+/// A use inside another lambda instantiates the captured lambda in that
+/// lambda's body.
+#[salsa_test]
+fn a_use_inside_another_lambda_instantiates_the_captured_lambda(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn app(x: Int, f: fn(Int) ->{e} Int) ->{e} Int { f(x) }
+
+fn run() -> Int {
+    let both = fn(x: Int, f: fn(Int) ->{e} Int) app(x, f)
+    let wrap = fn(x: Int) both(x, fn(n) n)
+    wrap(+1)
+}
+
+fn main() -> Nil {
+    let _ = run()
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let run = ir
+        .split("tribute_control.func @\"run$9D\"")
+        .nth(1)
+        .or_else(|| ir.split("tribute_control.func @run").nth(1))
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .unwrap_or_else(|| panic!("run in\n{ir}"));
+    let inner = run
+        .split("captures [%0] {")
+        .nth(1)
+        .unwrap_or_else(|| panic!("a lambda capturing `both` in\n{run}"));
+    assert!(
+        inner.contains("tribute_control.instantiate %0 {row_args = ["),
+        "{run}"
+    );
+}
