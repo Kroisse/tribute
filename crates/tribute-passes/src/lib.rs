@@ -11,6 +11,7 @@
 // === TrunkIR passes ===
 pub mod abi_boundary;
 pub mod bytes_intrinsic;
+pub mod check_convention_classes;
 pub mod closure_lower;
 mod collections;
 mod cps_builders;

@@ -921,6 +921,7 @@ fn shared_middle_end(
     if functions == SourceFunctions::Reachable {
         eliminate_unreferenced_source_functions(&mut ctx, m);
     }
+    debug_check_convention_classes(&ctx, m);
     let mut analyses = AnalysisCache::new();
     let mut structural_pm = structural_pass_pipeline(compiler_intrinsics);
     structural_pm.run(&mut ctx, core_module, &mut analyses)?;
@@ -995,6 +996,21 @@ fn report_pass_error(db: &dyn salsa::Database, error: &PassError) {
         CompilationPhase::Lowering,
     )
     .accumulate(db);
+}
+
+/// Debug-only check that the convention classes the frontend specialized
+/// agree with what the rows of source-logical IR imply.
+fn debug_check_convention_classes(ctx: &IrContext, m: Module) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    for disagreement in tribute_passes::check_convention_classes::check(ctx, m) {
+        tracing::warn!(
+            "Convention class disagreement ({}): {}",
+            disagreement.rule,
+            disagreement.message
+        );
+    }
 }
 
 /// Debug-only value-integrity check at a pipeline boundary.
