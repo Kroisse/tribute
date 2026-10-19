@@ -1,8 +1,8 @@
 //! Allocator-level AddressSanitizer for Tribute-compiled programs.
 //!
-//! Provides red zone and quarantine based heap memory error detection.
-//! Activated by `__asan_init()` which is called from the entrypoint when
-//! `--sanitize=address` is passed to the compiler.
+//! Provides red zone, shadow memory and quarantine based heap memory error
+//! detection. Activated by `__asan_init()` which is called from the entrypoint
+//! when `--sanitize=address` is passed to the compiler.
 //!
 //! ## Detection capabilities
 //!
@@ -17,12 +17,20 @@
 //!   returns.
 //! - **Invalid access at the access site**: Compiled code calls
 //!   [`__tribute_asan_load`] or [`__tribute_asan_store`] before each memory
-//!   access; the region table classifies the address range.
+//!   access; the shadow bytes of the address range classify it.
+//!
+//! ## Shadow memory
+//!
+//! One shadow byte describes each 8-byte granule of the address space, at
+//! `base + addr / 8`. `__asan_init` reserves the whole shadow as one lazily
+//! committed anonymous mapping, so memory this allocator never touched reads
+//! as 0, which is valid. An access check reads shadow bytes and takes no lock.
 
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::VecDeque;
 use core::alloc::Layout;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::ptr;
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering};
 
 /// Red zone size in bytes placed before and after each allocation.
 const REDZONE_SIZE: usize = 32;
@@ -39,14 +47,125 @@ const QUARANTINE_MAX: usize = 1 << 20; // 1 MiB
 /// Alignment used for all ASan allocations (matches tribute's 8-byte alignment).
 const ALLOC_ALIGN: usize = 8;
 
+/// Bytes of memory one shadow byte describes.
+const GRANULE: usize = 8;
+
+/// Shadow of a granule whose every byte is addressable. A value from 1 to 7
+/// makes only that many leading bytes addressable.
+const SHADOW_VALID: u8 = 0;
+
+/// Shadow of a red zone granule of a live block.
+const SHADOW_REDZONE: u8 = 0xFA;
+
+/// Shadow of the last left red zone granule of a live block, which holds the
+/// block's state.
+const SHADOW_ALLOCATED: u8 = 0xFC;
+
+/// Shadow of the granules of a quarantined block other than its state granule.
+const SHADOW_FREED: u8 = 0xFD;
+
+/// Shadow of the state granule of a quarantined block.
+const SHADOW_FREED_STATE: u8 = 0xFE;
+
+/// Width of the user address space the shadow covers.
+#[cfg(target_pointer_width = "32")]
+const ADDRESS_BITS: u32 = 32;
+#[cfg(all(
+    target_pointer_width = "64",
+    target_os = "linux",
+    target_arch = "aarch64"
+))]
+const ADDRESS_BITS: u32 = 48;
+#[cfg(all(
+    target_pointer_width = "64",
+    not(all(target_os = "linux", target_arch = "aarch64"))
+))]
+const ADDRESS_BITS: u32 = 47;
+
+/// Length of the shadow reservation in bytes.
+const SHADOW_LEN: usize = 1 << (ADDRESS_BITS - GRANULE.trailing_zeros());
+
 /// Global flag: ASan is active.
 static ASAN_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Start of the shadow reservation, or null before `__asan_init`.
+static SHADOW_BASE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
+
+/// Number of blocks allocated and not yet freed.
+static LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Payload bytes of the blocks counted by `LIVE_COUNT`.
+static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 /// Check whether ASan is currently enabled.
 #[inline]
 pub fn is_enabled() -> bool {
     ASAN_ENABLED.load(Ordering::Relaxed)
 }
+
+// =============================================================================
+// Shadow memory
+// =============================================================================
+
+/// The shadow bytes of the granules that `[addr, addr + len)` touches, or
+/// `None` if the range is empty, the shadow is not reserved, or the range
+/// lies outside the covered address space.
+fn shadow(addr: usize, len: usize) -> Option<&'static [AtomicU8]> {
+    let base = SHADOW_BASE.load(Ordering::Acquire);
+    if base.is_null() || len == 0 {
+        return None;
+    }
+    let first = addr / GRANULE;
+    let last = addr.checked_add(len - 1)? / GRANULE;
+    if last >= SHADOW_LEN {
+        return None;
+    }
+    // Safety: the reservation spans `SHADOW_LEN` bytes and is never unmapped.
+    Some(unsafe {
+        core::slice::from_raw_parts(base.add(first).cast::<AtomicU8>(), last - first + 1)
+    })
+}
+
+/// Set the shadow of the granule aligned range `[addr, addr + len)`.
+fn fill_shadow(addr: usize, len: usize, value: u8) {
+    for byte in shadow(addr, len).unwrap_or_default() {
+        byte.store(value, Ordering::Relaxed);
+    }
+}
+
+#[cfg(unix)]
+fn reserve_shadow(len: usize) -> Result<*mut u8, i32> {
+    let mapping = unsafe {
+        libc::mmap(
+            ptr::null_mut(),
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE,
+            -1,
+            0,
+        )
+    };
+    if mapping == libc::MAP_FAILED {
+        Err(crate::last_errno())
+    } else {
+        Ok(mapping.cast())
+    }
+}
+
+#[cfg(unix)]
+fn release_shadow(mapping: *mut u8, len: usize) {
+    unsafe { libc::munmap(mapping.cast(), len) };
+}
+
+#[cfg(not(unix))]
+fn reserve_shadow(_len: usize) -> Result<*mut u8, i32> {
+    report(format_args!(
+        "==ERROR: TributeASan: shadow memory is not supported on this platform\n"
+    ))
+}
+
+#[cfg(not(unix))]
+fn release_shadow(_mapping: *mut u8, _len: usize) {}
 
 // =============================================================================
 // Shared state
@@ -59,37 +178,19 @@ struct QuarantineEntry {
     total_size: usize,
 }
 
-/// One block this allocator handed out: both red zones and the payload.
-#[derive(Clone, Copy)]
-struct Region {
-    /// Payload size the caller asked for.
-    payload: usize,
-    /// The block was freed and is held in the quarantine.
-    freed: bool,
-}
-
-impl Region {
-    fn total(self) -> usize {
-        REDZONE_SIZE + self.payload + REDZONE_SIZE
-    }
-}
-
-/// Everything the sanitizer records about the heap.
+/// The quarantine of freed blocks.
 struct State {
-    /// Live and quarantined blocks by base address.
-    regions: BTreeMap<usize, Region>,
     /// Freed blocks, oldest first, kept until the budget is exceeded.
     quarantine: VecDeque<QuarantineEntry>,
     /// Total bytes held in `quarantine`.
     quarantine_total: usize,
 }
 
-/// The sanitizer state behind a spin lock.
+/// The quarantine behind a spin lock.
 ///
-/// Compiled code may allocate, free and access memory from several threads,
-/// and a free evicts quarantine entries that the region table also names, so
-/// one lock covers both. The runtime has no `std` in an aborting build, hence
-/// the spin lock; every critical section is a few table operations.
+/// Compiled code may free memory from several threads; only the free path
+/// takes this lock. The runtime has no `std` in an aborting build, hence the
+/// spin lock; every critical section is a few queue operations.
 struct StateLock {
     locked: AtomicBool,
     state: UnsafeCell<State>,
@@ -101,7 +202,6 @@ unsafe impl Sync for StateLock {}
 static STATE: StateLock = StateLock {
     locked: AtomicBool::new(false),
     state: UnsafeCell::new(State {
-        regions: BTreeMap::new(),
         quarantine: VecDeque::new(),
         quarantine_total: 0,
     }),
@@ -143,28 +243,51 @@ impl State {
             let Some(old) = self.quarantine.pop_front() else {
                 break;
             };
-            self.regions.remove(&old.base);
-            if let Ok(layout) = Layout::from_size_align(old.total_size, ALLOC_ALIGN) {
-                unsafe { alloc::alloc::dealloc(old.base as *mut u8, layout) };
-            }
             self.quarantine_total -= old.total_size;
+            release(old);
         }
     }
 }
 
-/// Mark the live block at `base` freed, or name why it cannot be freed.
+/// Return an evicted block to the underlying allocator.
 ///
-/// A block that already left the quarantine has no entry any more, so a second
-/// free of it is reported as a free of memory that is not allocated.
-fn mark_freed(base: usize) -> Result<(), &'static str> {
-    with_state(|state| match state.regions.get_mut(&base) {
-        Some(region) if region.freed => Err("attempting double-free"),
-        Some(region) => {
-            region.freed = true;
-            Ok(())
-        }
-        None => Err("attempting free of memory that is not allocated"),
-    })
+/// The shadow is reset first: once freed, the memory may back a buffer the
+/// runtime allocates itself, which compiled code then reads.
+fn release(entry: QuarantineEntry) {
+    fill_shadow(entry.base, entry.total_size, SHADOW_VALID);
+    if let Ok(layout) = Layout::from_size_align(entry.total_size, ALLOC_ALIGN) {
+        unsafe { alloc::alloc::dealloc(entry.base as *mut u8, layout) };
+    }
+}
+
+/// Mark the live block whose payload starts at `payload` freed, or name why
+/// it cannot be freed.
+///
+/// The state granule just before the payload must say the block is live; the
+/// compare-and-swap lets only one of two concurrent frees pass. A block that
+/// already left the quarantine has shadow 0 again, so a second free of it is
+/// reported as a free of memory that is not allocated.
+fn mark_freed(payload: usize) -> Result<(), &'static str> {
+    const NOT_ALLOCATED: &str = "attempting free of memory that is not allocated";
+    if !payload.is_multiple_of(GRANULE) {
+        return Err(NOT_ALLOCATED);
+    }
+    let Some([state]) = payload
+        .checked_sub(GRANULE)
+        .and_then(|addr| shadow(addr, 1))
+    else {
+        return Err(NOT_ALLOCATED);
+    };
+    match state.compare_exchange(
+        SHADOW_ALLOCATED,
+        SHADOW_FREED_STATE,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => Ok(()),
+        Err(SHADOW_FREED_STATE) => Err("attempting double-free"),
+        Err(_) => Err(NOT_ALLOCATED),
+    }
 }
 
 /// What an access of `size` bytes at `addr` touches.
@@ -178,38 +301,22 @@ pub(crate) enum Access {
     HeapUseAfterFree,
 }
 
-/// Classify an access against the region table.
+/// Classify an access by the shadow of the granules it touches.
 pub(crate) fn classify(addr: usize, size: usize) -> Access {
-    let Some(end) = addr.checked_add(size) else {
+    let Some(shadow) = shadow(addr, size) else {
         return Access::Valid;
     };
-    if size == 0 {
-        return Access::Valid;
+    let end = addr + size;
+    for (granule, byte) in (addr / GRANULE..).zip(shadow) {
+        let start = granule * GRANULE;
+        match byte.load(Ordering::Relaxed) {
+            SHADOW_VALID => {}
+            valid @ 1..8 if end.min(start + GRANULE) - start <= usize::from(valid) => {}
+            SHADOW_FREED | SHADOW_FREED_STATE => return Access::HeapUseAfterFree,
+            _ => return Access::HeapBufferOverflow,
+        }
     }
-    // The last block that starts before the access ends is the only one the
-    // access can overlap, since blocks are disjoint.
-    let found = with_state(|state| {
-        state
-            .regions
-            .range(..end)
-            .next_back()
-            .map(|(&base, &region)| (base, region))
-    });
-    let Some((base, region)) = found else {
-        return Access::Valid;
-    };
-    if base + region.total() <= addr {
-        return Access::Valid;
-    }
-    if region.freed {
-        return Access::HeapUseAfterFree;
-    }
-    let payload = base + REDZONE_SIZE;
-    if payload <= addr && end <= payload + region.payload {
-        Access::Valid
-    } else {
-        Access::HeapBufferOverflow
-    }
+    Access::Valid
 }
 
 // =============================================================================
@@ -296,6 +403,13 @@ fn report_redzone_corruption(side: &str, offset: usize, expected: u8, actual: u8
     ))
 }
 
+/// Report a refused shadow reservation and abort.
+fn report_reservation_failure(len: usize, errno: i32) -> ! {
+    report(format_args!(
+        "==ERROR: TributeASan: cannot reserve {len} bytes of shadow memory (errno {errno})\n  a virtual memory limit or strict overcommit refused the mapping\n"
+    ))
+}
+
 // =============================================================================
 // Red zone checking
 // =============================================================================
@@ -318,18 +432,41 @@ unsafe fn check_redzone(ptr: *const u8, len: usize, side: &str) {
 /// Initialize the ASan subsystem.
 ///
 /// Called from the entrypoint before `__tribute_init()` when `--sanitize=address`
-/// is used. Sets the global flag so that `__tribute_alloc`/`__tribute_dealloc`
-/// route through the ASan allocator.
+/// is used. Reserves the shadow, then sets the global flag so that
+/// `__tribute_alloc`/`__tribute_dealloc` route through the ASan allocator.
+/// A second call keeps the shadow the first one reserved.
 #[unsafe(no_mangle)]
 pub extern "C" fn __asan_init() {
-    ASAN_ENABLED.store(true, Ordering::SeqCst);
+    if SHADOW_BASE.load(Ordering::Acquire).is_null() {
+        let mapping = reserve_shadow(SHADOW_LEN)
+            .unwrap_or_else(|errno| report_reservation_failure(SHADOW_LEN, errno));
+        if SHADOW_BASE
+            .compare_exchange(
+                ptr::null_mut(),
+                mapping,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            release_shadow(mapping, SHADOW_LEN);
+        }
+    }
     // Pre-allocate the quarantine to avoid allocation during dealloc
     with_state(|state| state.quarantine.reserve(64));
+    ASAN_ENABLED.store(true, Ordering::SeqCst);
+}
+
+/// The size of the block that holds a payload of `size` bytes: the payload
+/// rounded up to whole granules, between two red zones.
+fn block_size(size: usize) -> Option<usize> {
+    size.checked_next_multiple_of(GRANULE)?
+        .checked_add(2 * REDZONE_SIZE)
 }
 
 /// ASan-instrumented allocation.
 ///
-/// Layout: `[LEFT_REDZONE(32B)] [payload(size)] [RIGHT_REDZONE(32B)]`
+/// Layout: `[LEFT_REDZONE(32B)] [payload(size)] [RIGHT_REDZONE(32B + padding)]`
 ///
 /// Returns a pointer to the payload region. The caller sees the same pointer
 /// semantics as a normal `__tribute_alloc` call.
@@ -338,10 +475,7 @@ pub extern "C" fn __asan_init() {
 ///
 /// Same preconditions as `__tribute_alloc`.
 pub unsafe fn alloc(size: usize) -> *mut u8 {
-    let Some(total) = REDZONE_SIZE
-        .checked_add(size)
-        .and_then(|s| s.checked_add(REDZONE_SIZE))
-    else {
+    let Some(total) = block_size(size) else {
         crate::oom_abort();
     };
     let Ok(layout) = Layout::from_size_align(total, ALLOC_ALIGN) else {
@@ -351,25 +485,30 @@ pub unsafe fn alloc(size: usize) -> *mut u8 {
     if base.is_null() {
         crate::oom_abort();
     }
-
-    // Fill left red zone
-    unsafe { core::ptr::write_bytes(base, MAGIC_REDZONE, REDZONE_SIZE) };
+    let base_addr = base as usize;
+    if shadow(base_addr, total).is_none() {
+        report(format_args!(
+            "==ERROR: TributeASan: allocation at {base_addr:#x} lies outside the shadow\n"
+        ));
+    }
 
     let payload = unsafe { base.add(REDZONE_SIZE) };
+    let right = total - REDZONE_SIZE - size;
+    unsafe { ptr::write_bytes(base, MAGIC_REDZONE, REDZONE_SIZE) };
+    unsafe { ptr::write_bytes(payload.add(size), MAGIC_REDZONE, right) };
 
-    // Fill right red zone
-    unsafe { core::ptr::write_bytes(payload.add(size), MAGIC_REDZONE, REDZONE_SIZE) };
+    let state = base_addr + REDZONE_SIZE - GRANULE;
+    let tail = base_addr + REDZONE_SIZE + size.next_multiple_of(GRANULE);
+    fill_shadow(base_addr, REDZONE_SIZE - GRANULE, SHADOW_REDZONE);
+    fill_shadow(state, GRANULE, SHADOW_ALLOCATED);
+    fill_shadow(state + GRANULE, size, SHADOW_VALID);
+    if !size.is_multiple_of(GRANULE) {
+        fill_shadow(tail - GRANULE, GRANULE, (size % GRANULE) as u8);
+    }
+    fill_shadow(tail, REDZONE_SIZE, SHADOW_REDZONE);
 
-    with_state(|state| {
-        state.regions.insert(
-            base as usize,
-            Region {
-                payload: size,
-                freed: false,
-            },
-        )
-    });
-
+    LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
+    LIVE_BYTES.fetch_add(size, Ordering::Relaxed);
     payload
 }
 
@@ -382,21 +521,16 @@ pub unsafe fn alloc(size: usize) -> *mut u8 {
 ///
 /// `ptr` must have been returned by `asan::alloc` with the same `size`.
 pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
-    let Some(total) = REDZONE_SIZE
-        .checked_add(size)
-        .and_then(|s| s.checked_add(REDZONE_SIZE))
-    else {
+    let Some(total) = block_size(size) else {
         // Corrupted size — abort rather than silently ignoring
-        write_stderr(b"==ERROR: TributeASan: dealloc called with overflowing size\n");
-        unsafe extern "C" {
-            fn abort() -> !;
-        }
-        unsafe { abort() }
+        report(format_args!(
+            "==ERROR: TributeASan: dealloc called with overflowing size\n"
+        ));
     };
 
-    // `ptr` may not point into a block of this allocator, so its base is
-    // looked up as an integer before any pointer is derived from it.
-    if let Err(error) = mark_freed((ptr as usize).wrapping_sub(REDZONE_SIZE)) {
+    // `ptr` may not point into a block of this allocator, so only its shadow
+    // is read before any header is.
+    if let Err(error) = mark_freed(ptr as usize) {
         report(format_args!(
             "==ERROR: TributeASan: {error} on address {:#x}\n",
             ptr as usize
@@ -406,13 +540,19 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
 
     // Check red zone integrity
     unsafe { check_redzone(base, REDZONE_SIZE, "left") };
-    unsafe { check_redzone(ptr.add(size), REDZONE_SIZE, "right") };
+    unsafe { check_redzone(ptr.add(size), total - REDZONE_SIZE - size, "right") };
 
     // Poison the entire region (red zones + payload) with MAGIC_FREED
-    unsafe { core::ptr::write_bytes(base, MAGIC_FREED, total) };
+    unsafe { ptr::write_bytes(base, MAGIC_FREED, total) };
+    let base_addr = base as usize;
+    fill_shadow(base_addr, REDZONE_SIZE - GRANULE, SHADOW_FREED);
+    fill_shadow(ptr as usize, total - REDZONE_SIZE, SHADOW_FREED);
+
+    LIVE_COUNT.fetch_sub(1, Ordering::Relaxed);
+    LIVE_BYTES.fetch_sub(size, Ordering::Relaxed);
 
     // Move to quarantine instead of immediately freeing
-    with_state(|state| state.quarantine_push(base as usize, total));
+    with_state(|state| state.quarantine_push(base_addr, total));
 }
 
 /// Report the allocations still live when the program returns from `main`.
@@ -421,7 +561,7 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
 /// code makes is reference counted, so one that is still live was leaked.
 #[unsafe(no_mangle)]
 pub extern "C" fn __asan_exit() {
-    let (count, bytes) = with_state(live_allocations);
+    let (count, bytes) = live_allocations();
     if count != 0 {
         report(format_args!(
             "==ERROR: TributeASan: detected memory leaks\n  {bytes} byte(s) in {count} allocation(s)\n"
@@ -430,14 +570,11 @@ pub extern "C" fn __asan_exit() {
 }
 
 /// The number of live blocks and the payload bytes they hold.
-fn live_allocations(state: &mut State) -> (usize, usize) {
-    state
-        .regions
-        .values()
-        .filter(|region| !region.freed)
-        .fold((0, 0), |(count, bytes), region| {
-            (count + 1, bytes + region.payload)
-        })
+fn live_allocations() -> (usize, usize) {
+    (
+        LIVE_COUNT.load(Ordering::Relaxed),
+        LIVE_BYTES.load(Ordering::Relaxed),
+    )
 }
 
 /// Check a read of `size` bytes at `addr` before compiled code performs it.
@@ -462,25 +599,40 @@ mod tests {
 
     /// Mutex to serialize tests that mutate global ASan state.
     ///
-    /// Tests modify `ASAN_ENABLED` and reset the shared sanitizer state, which
-    /// are process-wide globals. Without serialization, one test would observe
+    /// Tests modify `ASAN_ENABLED`, the shadow and the quarantine, which are
+    /// process-wide globals. Without serialization, one test would observe
     /// another's blocks.
     static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Reset quarantine state for test isolation.
-    unsafe fn reset_quarantine() {
+    /// Enable the sanitizer and empty the quarantine for test isolation.
+    fn enable() -> std::sync::MutexGuard<'static, ()> {
+        let lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        __asan_init();
         with_state(|state| {
-            state.regions.clear();
-            state.quarantine.clear();
-            state.quarantine_total = 0;
+            while let Some(entry) = state.quarantine.pop_front() {
+                state.quarantine_total -= entry.total_size;
+                release(entry);
+            }
         });
+        lock
+    }
+
+    fn disable() {
+        ASAN_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    /// Free enough blocks to evict every block the quarantine holds now.
+    unsafe fn flush_quarantine() {
+        for _ in 0..(QUARANTINE_MAX / 1024 + 2) {
+            unsafe { dealloc(alloc(1024), 1024) };
+        }
     }
 
     #[test]
     fn test_asan_alloc_dealloc() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        ASAN_ENABLED.store(true, Ordering::SeqCst);
-        unsafe { reset_quarantine() };
+        let _lock = enable();
 
         unsafe {
             let ptr = alloc(64);
@@ -493,40 +645,35 @@ mod tests {
             dealloc(ptr, 64);
         }
 
-        ASAN_ENABLED.store(false, Ordering::SeqCst);
+        disable();
     }
 
     #[test]
     fn test_asan_counts_the_allocations_still_live() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        ASAN_ENABLED.store(true, Ordering::SeqCst);
-        unsafe { reset_quarantine() };
-        let live = || with_state(live_allocations);
-        let before = live();
+        let _lock = enable();
+        let before = live_allocations();
 
         unsafe {
             let first = alloc(64);
             let second = alloc(8);
-            assert_eq!(live(), (before.0 + 2, before.1 + 72));
+            assert_eq!(live_allocations(), (before.0 + 2, before.1 + 72));
             // A freed block waits in the quarantine but is no longer live.
             dealloc(first, 64);
-            assert_eq!(live(), (before.0 + 1, before.1 + 8));
+            assert_eq!(live_allocations(), (before.0 + 1, before.1 + 8));
             dealloc(second, 8);
         }
-        assert_eq!(live(), before);
+        assert_eq!(live_allocations(), before);
         // With nothing live the exit check returns instead of aborting.
         if before == (0, 0) {
             __asan_exit();
         }
 
-        ASAN_ENABLED.store(false, Ordering::SeqCst);
+        disable();
     }
 
     #[test]
     fn test_asan_redzone_intact() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        ASAN_ENABLED.store(true, Ordering::SeqCst);
-        unsafe { reset_quarantine() };
+        let _lock = enable();
 
         unsafe {
             let ptr = alloc(32);
@@ -546,14 +693,12 @@ mod tests {
             dealloc(ptr, 32);
         }
 
-        ASAN_ENABLED.store(false, Ordering::SeqCst);
+        disable();
     }
 
     #[test]
     fn test_asan_freed_memory_poisoned() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        ASAN_ENABLED.store(true, Ordering::SeqCst);
-        unsafe { reset_quarantine() };
+        let _lock = enable();
 
         unsafe {
             let ptr = alloc(16);
@@ -577,14 +722,12 @@ mod tests {
             }
         }
 
-        ASAN_ENABLED.store(false, Ordering::SeqCst);
+        disable();
     }
 
     #[test]
     fn test_asan_quarantine_eviction() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        ASAN_ENABLED.store(true, Ordering::SeqCst);
-        unsafe { reset_quarantine() };
+        let _lock = enable();
 
         // Allocate and free enough to exceed QUARANTINE_MAX (1 MiB)
         let alloc_size = 1024; // 1 KiB payload
@@ -604,14 +747,44 @@ mod tests {
             );
         }
 
-        ASAN_ENABLED.store(false, Ordering::SeqCst);
+        disable();
+    }
+
+    #[test]
+    fn test_asan_shadow_describes_each_granule_of_a_block() {
+        let _lock = enable();
+
+        unsafe {
+            let ptr = alloc(13);
+            let base = ptr as usize - REDZONE_SIZE;
+            let shadow_bytes = || -> Vec<u8> {
+                shadow(base, block_size(13).unwrap())
+                    .unwrap()
+                    .iter()
+                    .map(|byte| byte.load(Ordering::Relaxed))
+                    .collect()
+            };
+            let rz = SHADOW_REDZONE;
+            assert_eq!(
+                shadow_bytes(),
+                [rz, rz, rz, SHADOW_ALLOCATED, 0, 5, rz, rz, rz, rz]
+            );
+
+            dealloc(ptr, 13);
+            let mut freed = [SHADOW_FREED; 10];
+            freed[3] = SHADOW_FREED_STATE;
+            assert_eq!(shadow_bytes(), freed);
+
+            flush_quarantine();
+            assert_eq!(shadow_bytes(), [SHADOW_VALID; 10]);
+        }
+
+        disable();
     }
 
     #[test]
     fn test_asan_classifies_accesses_by_region() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        ASAN_ENABLED.store(true, Ordering::SeqCst);
-        unsafe { reset_quarantine() };
+        let _lock = enable();
 
         unsafe {
             let live = alloc(16) as usize;
@@ -630,6 +803,9 @@ mod tests {
             // Memory this allocator never handed out is not its concern.
             let local = 0u64;
             assert_eq!(classify(&raw const local as usize, 8), Access::Valid);
+            // Neither is an address the shadow does not cover.
+            assert_eq!(classify(usize::MAX - 3, 4), Access::Valid);
+            assert_eq!(classify(usize::MAX, 2), Access::Valid);
 
             let freed = alloc(24);
             dealloc(freed, 24);
@@ -642,34 +818,86 @@ mod tests {
             assert_eq!(classify(live, 16), Access::HeapUseAfterFree);
         }
 
-        ASAN_ENABLED.store(false, Ordering::SeqCst);
+        disable();
     }
 
     #[test]
-    fn test_asan_forgets_regions_evicted_from_quarantine() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        ASAN_ENABLED.store(true, Ordering::SeqCst);
-        unsafe { reset_quarantine() };
+    fn test_asan_classifies_a_partial_granule_by_its_valid_bytes() {
+        let _lock = enable();
+
+        unsafe {
+            let ptr = alloc(13);
+            let addr = ptr as usize;
+            assert_eq!(classify(addr, 13), Access::Valid);
+            assert_eq!(classify(addr + 8, 5), Access::Valid);
+            assert_eq!(classify(addr + 12, 1), Access::Valid);
+            assert_eq!(classify(addr + 8, 6), Access::HeapBufferOverflow);
+            assert_eq!(classify(addr + 13, 1), Access::HeapBufferOverflow);
+            assert_eq!(classify(addr + 10, 4), Access::HeapBufferOverflow);
+            assert_eq!(classify(addr + 4, 8), Access::Valid);
+            dealloc(ptr, 13);
+        }
+
+        disable();
+    }
+
+    #[test]
+    fn test_asan_memory_evicted_from_quarantine_is_valid_for_its_next_owner() {
+        let _lock = enable();
 
         unsafe {
             let first = alloc(1024);
             dealloc(first, 1024);
-            let base = first as usize - REDZONE_SIZE;
-            assert!(with_state(|state| state.regions.contains_key(&base)));
-            for _ in 0..(QUARANTINE_MAX / 1024 + 2) {
-                dealloc(alloc(1024), 1024);
+            let old = first as usize - REDZONE_SIZE;
+            let old_end = old + block_size(1024).unwrap();
+            assert_eq!(classify(first as usize, 8), Access::HeapUseAfterFree);
+
+            flush_quarantine();
+            // The shadow forgets the block before the memory goes back to the
+            // underlying allocator.
+            assert_eq!(classify(old, old_end - old), Access::Valid);
+
+            // Whoever receives the memory next, a runtime buffer or another
+            // block of a different size, accesses it validly.
+            let layout = Layout::from_size_align(old_end - old, ALLOC_ALIGN).unwrap();
+            let mut buffers = Vec::new();
+            let mut blocks = Vec::new();
+            let mut reused = false;
+            for _ in 0..256 {
+                let buffer = alloc::alloc::alloc(layout);
+                let block = alloc(200);
+                for (addr, len) in [(buffer as usize, layout.size()), (block as usize, 200)] {
+                    if addr < old_end && old < addr + len {
+                        reused = true;
+                        assert_eq!(classify(addr, len), Access::Valid);
+                    }
+                }
+                buffers.push(buffer);
+                blocks.push(block);
+                if reused {
+                    break;
+                }
             }
-            with_state(|state| assert_eq!(state.regions.len(), state.quarantine.len()));
+            for block in blocks {
+                assert_eq!(classify(block as usize, 200), Access::Valid);
+                assert_eq!(
+                    classify(block as usize + 200, 1),
+                    Access::HeapBufferOverflow
+                );
+                dealloc(block, 200);
+            }
+            for buffer in buffers {
+                assert_eq!(classify(buffer as usize, layout.size()), Access::Valid);
+                alloc::alloc::dealloc(buffer, layout);
+            }
         }
 
-        ASAN_ENABLED.store(false, Ordering::SeqCst);
+        disable();
     }
 
     #[test]
     fn test_asan_valid_accesses_return_from_the_checks() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        ASAN_ENABLED.store(true, Ordering::SeqCst);
-        unsafe { reset_quarantine() };
+        let _lock = enable();
 
         unsafe {
             let live = alloc(16);
@@ -678,7 +906,7 @@ mod tests {
             dealloc(live, 16);
         }
 
-        ASAN_ENABLED.store(false, Ordering::SeqCst);
+        disable();
     }
 
     #[test]
@@ -710,23 +938,23 @@ mod tests {
     }
 
     #[test]
+    fn test_asan_a_refused_reservation_yields_its_errno() {
+        assert!(reserve_shadow(usize::MAX & !0xFFFF).is_err_and(|errno| errno != 0));
+    }
+
+    #[test]
     fn test_asan_rejects_a_second_or_unknown_free() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        ASAN_ENABLED.store(true, Ordering::SeqCst);
-        unsafe { reset_quarantine() };
+        let _lock = enable();
 
         unsafe {
             let ptr = alloc(16);
-            let base = ptr as usize - REDZONE_SIZE;
             dealloc(ptr, 16);
-            assert_eq!(mark_freed(base), Err("attempting double-free"));
+            assert_eq!(mark_freed(ptr as usize), Err("attempting double-free"));
 
-            // Once the block leaves the quarantine its entry is gone.
-            for _ in 0..(QUARANTINE_MAX / 1024 + 2) {
-                dealloc(alloc(1024), 1024);
-            }
+            // Once the block leaves the quarantine its shadow is reset.
+            flush_quarantine();
             assert_eq!(
-                mark_freed(base),
+                mark_freed(ptr as usize),
                 Err("attempting free of memory that is not allocated")
             );
             let local = 0u64;
@@ -734,16 +962,26 @@ mod tests {
                 mark_freed(&raw const local as usize),
                 Err("attempting free of memory that is not allocated")
             );
+
+            // Only the start of a live payload is accepted.
+            let live = alloc(32) as usize;
+            for addr in [live + 8, live + 1, live - 8, live + 32, 0, 4] {
+                assert_eq!(
+                    mark_freed(addr),
+                    Err("attempting free of memory that is not allocated"),
+                    "{addr:#x}"
+                );
+            }
+            dealloc(live as *mut u8, 32);
         }
 
-        ASAN_ENABLED.store(false, Ordering::SeqCst);
+        disable();
     }
 
     #[test]
     fn test_asan_state_is_consistent_under_concurrent_use() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        ASAN_ENABLED.store(true, Ordering::SeqCst);
-        unsafe { reset_quarantine() };
+        let _lock = enable();
+        let before = live_allocations();
 
         const THREADS: usize = 8;
         const ROUNDS: usize = 2000;
@@ -766,14 +1004,24 @@ mod tests {
             }
         });
 
-        // Every block was freed, so the table holds exactly the quarantine.
+        // Every block was freed, and the quarantine holds only freed blocks.
+        assert_eq!(live_allocations(), before);
         with_state(|state| {
-            assert!(state.regions.values().all(|region| region.freed));
-            assert_eq!(state.regions.len(), state.quarantine.len());
+            for entry in &state.quarantine {
+                assert!(
+                    shadow(entry.base, entry.total_size)
+                        .unwrap()
+                        .iter()
+                        .all(|byte| matches!(
+                            byte.load(Ordering::Relaxed),
+                            SHADOW_FREED | SHADOW_FREED_STATE
+                        ))
+                );
+            }
             let held: usize = state.quarantine.iter().map(|entry| entry.total_size).sum();
             assert_eq!(held, state.quarantine_total);
         });
 
-        ASAN_ENABLED.store(false, Ordering::SeqCst);
+        disable();
     }
 }

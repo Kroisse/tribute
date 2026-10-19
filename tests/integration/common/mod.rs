@@ -19,6 +19,21 @@ unsafe extern "C" {
     fn close(fd: i32) -> i32;
 }
 
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct RLimit {
+    current: u64,
+    max: u64,
+}
+
+#[cfg(target_os = "linux")]
+const RLIMIT_AS: i32 = 9;
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    fn setrlimit(resource: i32, limit: *const RLimit) -> i32;
+}
+
 /// Compile source to a native object file, panicking with diagnostics on failure.
 #[allow(dead_code)]
 pub fn compile_native_or_panic(db: &dyn salsa::Database, source_file: SourceCst) -> &[u8] {
@@ -273,6 +288,30 @@ impl NativeTestBinary {
     }
     pub fn run_with_stdin(&self, input: &[u8]) -> Output {
         self.run(NativeStdin::Bytes(input))
+    }
+    /// Run the binary with its virtual address space limited to `bytes`.
+    #[cfg(target_os = "linux")]
+    pub fn run_with_address_space_limit(&self, bytes: u64) -> Output {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new(self.temp_dir.path().join("tribute_test_bin"));
+        let limit = RLimit {
+            current: bytes,
+            max: bytes,
+        };
+        unsafe {
+            command.pre_exec(move || {
+                if setrlimit(RLIMIT_AS, &limit) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        command
+            .stdin(Stdio::null())
+            .output()
+            .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}"))
     }
     fn run(&self, stdin: NativeStdin<'_>) -> Output {
         let mut command = Command::new(self.temp_dir.path().join("tribute_test_bin"));

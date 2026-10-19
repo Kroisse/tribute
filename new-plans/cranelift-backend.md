@@ -372,11 +372,9 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 
 - **초기화:** Native entrypoint가 다른 runtime 초기화보다 먼저 `__asan_init`을
   부른다.
-- **Allocator:** `__tribute_alloc`은 payload 앞뒤에 red zone을 두고,
+- **Allocator:** `__tribute_alloc`은 payload 앞뒤에 32 byte red zone을 두고,
   `__tribute_dealloc`은 red zone 훼손을 검사한 뒤 block을 poison해 quarantine에
-  넣는다. Runtime은 살아 있는 할당과 quarantine된 block의 주소 범위를 기록한다.
-  이 기록은 여러 thread가 공유하며, 할당, 해제와 접근 검사는 lock 하나로 이를
-  읽고 쓴다.
+  넣는다. Block의 상태는 아래 shadow memory에 기록한다.
 - **접근 검사:** 생성된 code의 모든 `clif.load`, `clif.store`, `clif.atomic_rmw`
   앞에 runtime 검사 호출을 둔다. 호출은 실제 접근 주소(operand 주소에 `offset`을
   더한 값)와 byte 단위 접근 폭을 넘긴다. Load는 `__tribute_asan_load`를, store와
@@ -387,14 +385,48 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
   누수다. Runtime은 남은 할당의 수와 payload byte 합을 stderr에 쓰고 process를
   abort한다. Runtime이 자기 allocator로 직접 잡은 memory는 세지 않는다.
 
-Runtime은 접근 범위를 다음 순서로 판정한다.
+### Shadow memory
 
-1. 기록된 어느 block과도 겹치지 않으면 유효하다. Stack slot, `clif.data`, runtime이
-   직접 할당한 buffer가 여기에 속한다.
-2. Quarantine된 block과 겹치면 heap use-after-free다.
-3. 살아 있는 할당의 payload 안에 완전히 들어가면 유효하다.
-4. 그 밖에 살아 있는 할당과 겹치는 접근은 red zone을 건드리므로 heap buffer
-   overflow다.
+Runtime은 address space의 8 byte granule마다 shadow byte 하나를 둔다. 주소
+`addr`의 shadow는 `base + addr / 8`이다.
+
+- **예약:** `__asan_init`은 user address space 전체를 덮는 shadow를 익명 mapping
+  하나로 예약한다. Mapping은 쓰기 가능하지만 commit은 처음 건드린 page에서만
+  일어나며, `base`는 kernel이 돌려준 주소를 global에 둔다. 접근 검사는 runtime
+  호출이므로 생성된 code에는 shadow 상수가 들어가지 않는다. 가상 memory 한도나
+  엄격한 overcommit 정책이 예약을 거절하면 초기화는 요청한 크기와 `errno`를
+  stderr에 쓰고 process를 abort한다. 예약은 POSIX `mmap`을 쓰며, 그 밖의
+  platform에서는 지원하지 않는다고 보고하고 abort한다.
+- **표현:** Shadow 0은 granule 전체가 유효하다는 뜻이다. 1부터 7까지는 앞쪽의 그
+  수만큼의 byte만 유효하다는 뜻이며, 크기가 8의 배수가 아닌 payload의 마지막
+  granule이 이 값을 갖는다. 나머지 값은 red zone, 살아 있는 block의 상태 granule,
+  quarantine된 block을 나타낸다. Block은 payload를 granule 단위로 올림한 크기로
+  잡으므로 이웃 block과 granule을 나누지 않는다.
+- **할당:** 양쪽 red zone을 red zone으로, payload를 유효로 표시한다. 왼쪽 red
+  zone의 마지막 granule은 block의 상태 granule이며 할당 상태를 담는다.
+- **해제:** Payload 바로 앞 granule의 shadow가 할당 상태여야 이 allocator의 block으로
+  받아들인다. 이 검사는 block의 어떤 byte보다 먼저 읽으며, 상태는 atomic
+  compare-and-swap으로 할당에서 해제로 바꾼다. 따라서 한 block을 동시에 두 번
+  해제해도 하나만 통과한다. 이미 해제 상태이면 double free로, 그 밖의 값이면
+  할당되지 않은 memory의 해제로 보고한다. 통과한 block은 전체를 해제로 표시하고
+  quarantine에 넣는다.
+- **Quarantine에서 내보냄:** Quarantine이 한도를 넘어 block을 underlying
+  allocator에 돌려줄 때는, 돌려주기 전에 block 전체의 shadow를 0으로 되돌린다.
+  돌려받은 memory는 runtime이 직접 잡는 buffer가 될 수 있고, 생성된 code가 이를
+  읽을 때 남은 해제 표시가 유효한 접근을 위반으로 보고해서는 안 된다.
+
+Quarantine은 lock 하나 뒤에 있으며 해제 경로만 이 lock을 잡는다. 종료 검사는 살아
+있는 할당의 수와 payload byte 합을 atomic counter로 센다.
+
+접근 검사는 접근 범위가 걸치는 granule의 shadow byte를 읽기만 하며 lock을 잡지
+않는다. 판정은 다음과 같다.
+
+1. 모든 granule이 0이거나, 부분 granule이면 접근이 그 유효 byte 안에서 끝나면
+   유효하다. Stack slot, `clif.data`, runtime이 직접 할당한 buffer는 shadow가 0이고,
+   shadow가 덮지 않는 주소도 유효로 본다.
+2. 해제 표시를 만나면 heap use-after-free다.
+3. 그 밖의 표시, 즉 red zone, 상태 granule 또는 부분 granule의 유효하지 않은 byte를
+   만나면 heap buffer overflow다.
 
 위반은 종류, 주소, 접근 폭과 읽기/쓰기 여부를 stderr에 쓰고 그 접근을 실행하기 전에
 process를 abort한다.

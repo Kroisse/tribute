@@ -159,3 +159,20 @@ fn an_allocation_left_live_at_exit_is_reported() {
         "stderr: {stderr}"
     );
 }
+
+/// macOS does not enforce an address space limit on `mmap`, so only Linux can
+/// refuse the shadow reservation this way.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_refused_shadow_reservation_is_reported() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, &program(FREE));
+    let object = emit_module_to_native(&ctx, module).expect("module emits");
+    let output = NativeTestBinary::from_object_bytes(&object).run_with_address_space_limit(4 << 30);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains("cannot reserve") && stderr.contains("bytes of shadow memory"),
+        "stderr: {stderr}"
+    );
+}
