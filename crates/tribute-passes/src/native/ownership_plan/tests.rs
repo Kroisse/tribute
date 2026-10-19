@@ -2629,16 +2629,15 @@ fn closure_release_uses_its_compiler_generated_allocation_layout() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Closure = closure.closure<func.func_sig<(tribute_rt.anyref) -> core.nil>>
-  func.func @target(%environment: tribute_rt.anyref) -> core.nil {
+  !Closure = closure.closure<func.func_sig<() -> core.nil>>
+  func.func @target(%environment: !Closure) -> core.nil {
     func.return
   }
   func.func @consume(%closure: !Closure) -> core.nil {
     func.return
   }
   func.func @main() -> core.nil {
-    %environment = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = closure.new %environment {func_ref = @target} : !Closure
+    %closure = closure.new {func_ref = @target} : !Closure
     func.call %closure {callee = @consume} : core.nil
     func.return
   }

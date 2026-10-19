@@ -161,11 +161,11 @@ impl Converter<'_> {
             .func_type(self.ctx);
         let callable = func::FuncSig::from_type_ref(self.ctx, function)
             .expect("func_ref result lowers to a func.func_sig callable");
-        let env_ty = self.anyref_type();
+        // The adapter's environment is the capture-free closure itself.
         let adapter = callable.rebuild(self.ctx, |inputs, _| {
             inputs.insert(
                 usize::from(result_convention.needs_evidence()),
-                (env_ty, AttributeMap::new()),
+                (closure_ty, AttributeMap::new()),
             );
         });
         let physical_params = adapter.inputs(self.ctx).to_vec();
@@ -232,26 +232,12 @@ impl Converter<'_> {
         set_calling_convention(self.ctx, adapter.op_ref(), result_convention);
         self.ctx.push_op(self.module_block, adapter.op_ref());
 
-        let empty_env_ty = adt::Struct::from_fields::<String>(
-            self.ctx,
-            format!("{adapter_symbol}::env"),
-            [],
-            AttributeMap::new(),
-        )
-        .as_type_ref();
-        let empty_env = adt::StructNew::operands(std::iter::empty::<ValueRef>())
-            .r#type(empty_env_ty)
-            .results(empty_env_ty)
-            .build(self.ctx, location);
-        let closure_new = closure::New::operands(empty_env.result(self.ctx))
+        let closure_new = closure::New::operands(std::iter::empty::<ValueRef>())
             .func_ref(trunk_ir::SymbolPath::new([adapter_symbol]))
             .results(closure_ty)
             .build(self.ctx, location);
         set_calling_convention(self.ctx, closure_new.op_ref(), result_convention);
-        Ok((
-            vec![empty_env.op_ref(), closure_new.op_ref()],
-            closure_new.result(self.ctx),
-        ))
+        Ok((vec![closure_new.op_ref()], closure_new.result(self.ctx)))
     }
 
     pub(super) fn convert_func(

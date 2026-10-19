@@ -12,10 +12,6 @@ impl Converter<'_> {
         ability::evidence_adt_type_ref(self.ctx)
     }
 
-    pub(super) fn anyref_type(&mut self) -> TypeRef {
-        tribute_rt::Anyref::params().intern(self.ctx).as_type_ref()
-    }
-
     pub(super) fn resumption_type(&mut self, input: TypeRef, answer: TypeRef) -> TypeRef {
         let evidence = self.evidence_type();
         let frame = self.frame_type(answer);

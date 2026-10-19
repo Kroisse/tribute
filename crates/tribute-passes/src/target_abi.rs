@@ -19,7 +19,7 @@ use tribute_core::{
     get_physical_closure_convention,
 };
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::{ability, effect, tribute_rt};
+use tribute_ir::dialect::{ability, closure, effect, tribute_rt};
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func};
 use trunk_ir::op_interface::DynIndirectCallLike;
@@ -114,8 +114,7 @@ pub fn lower_cps_signatures_to_physical(
 ) -> Result<(), TargetAbiError> {
     let ops = collect_ops(ctx, module.op());
     let never = core::Never::params().intern(ctx).as_type_ref();
-    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
-    let functions = collect_functions(ctx, &ops, never, anyref)?;
+    let functions = collect_functions(ctx, &ops, never)?;
     validate_transfers(ctx, &ops, &functions, never)?;
     validate_dispatch_contracts(ctx, module)?;
     validate_root_entry(ctx, module, ContractPhase::Logical)?;
@@ -691,9 +690,7 @@ struct TerminalFunctions {
     answer: TypeRef,
     cell_ty: TypeRef,
     done: Symbol,
-    done_ty: TypeRef,
     dispatch: Symbol,
-    dispatch_ty: TypeRef,
     /// The definitions of `done` and `dispatch`, not yet in the module.
     functions: [OpRef; 2],
 }
@@ -726,11 +723,12 @@ impl TerminalFunctions {
     ) -> Result<Self, TargetAbiError> {
         let slot = Self::slot_type(ctx, answer);
         let cell_ty = completion_cell_type(ctx, slot);
-        let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
         let contract = physical_parameter_attrs(ctx, CallingConvention::Cps);
+        // Each function's environment is its own closure; `Done` captures the
+        // cell and `Dispatch` captures nothing.
         let done_ty = func::func_sig_with_param_attrs(
             ctx,
-            [(anyref_ty, contract.clone()), (answer, contract)],
+            [(frame.done, contract.clone()), (answer, contract)],
             [],
             AttributeMap::new(),
         )
@@ -743,7 +741,7 @@ impl TerminalFunctions {
             location,
             args: vec![
                 BlockArgData {
-                    ty: anyref_ty,
+                    ty: frame.done,
                     attrs: environment_name.clone(),
                 },
                 BlockArgData {
@@ -755,11 +753,11 @@ impl TerminalFunctions {
             parent_region: None,
         });
         let done_args = ctx.block_args(done_entry).to_vec();
-        let cell = adt::RefCast::operands(done_args[0])
-            .r#type(cell_ty)
-            .results(cell_ty)
+        let cell = closure::Unpack::operands(done_args[0])
+            .results([cell_ty])
             .build(ctx, location);
         ctx.push_op(done_entry, cell.op_ref());
+        let cell = cell.results(ctx)[0];
         let stored = if slot == answer {
             done_args[1]
         } else {
@@ -769,7 +767,7 @@ impl TerminalFunctions {
             ctx.push_op(done_entry, erased.op_ref());
             erased.result(ctx)
         };
-        let store = adt::StructSet::operands(cell.result(ctx), stored)
+        let store = adt::StructSet::operands(cell, stored)
             .r#type(cell_ty)
             .field(0)
             .build(ctx, location);
@@ -788,7 +786,7 @@ impl TerminalFunctions {
             .build(ctx, location);
         set_root_convention(ctx, done_function.op_ref(), CallingConvention::Cps);
 
-        let dispatch_ty = dispatch_entry_function_type(ctx, frame.dispatch, anyref_ty)?;
+        let dispatch_ty = dispatch_entry_function_type(ctx, frame.dispatch)?;
         let dispatch_entry = ctx.create_block(BlockData {
             location,
             args: func::FuncSig::from_type_ref(ctx, dispatch_ty)
@@ -828,9 +826,7 @@ impl TerminalFunctions {
             answer,
             cell_ty,
             done,
-            done_ty,
             dispatch,
-            dispatch_ty,
             functions: [done_function.op_ref(), dispatch_function.op_ref()],
         })
     }
@@ -854,30 +850,16 @@ impl TerminalFunctions {
             .results(self.cell_ty)
             .build(ctx, location);
         ops.push(cell_new.op_ref());
-        let erased_cell = core::UnrealizedConversionCast::operands(cell_new.result(ctx))
-            .results(anyref_ty)
-            .build(ctx, location);
-        ops.push(erased_cell.op_ref());
-        let closure_struct_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let mut member = |ctx: &mut IrContext, symbol: &Symbol, function_ty, closure_ty| {
-            let constant = func::Constant::operands()
+        let mut member = |ctx: &mut IrContext, symbol: &Symbol, captures: &[ValueRef], ty| {
+            let closure = closure::New::operands(captures.to_vec())
                 .func_ref(SymbolPath::new([symbol.clone()]))
-                .results(function_ty)
-                .build(ctx, location);
-            ops.push(constant.op_ref());
-            let closure = adt::StructNew::operands([constant.result(ctx), erased_cell.result(ctx)])
-                .r#type(closure_struct_ty)
-                .results(closure_struct_ty)
+                .results(ty)
                 .build(ctx, location);
             ops.push(closure.op_ref());
-            let typed = core::UnrealizedConversionCast::operands(closure.result(ctx))
-                .results(closure_ty)
-                .build(ctx, location);
-            ops.push(typed.op_ref());
-            typed.result(ctx)
+            closure.result(ctx)
         };
-        let done = member(ctx, &self.done, self.done_ty, self.frame.done);
-        let dispatch = member(ctx, &self.dispatch, self.dispatch_ty, self.frame.dispatch);
+        let done = member(ctx, &self.done, &[cell_new.result(ctx)], self.frame.done);
+        let dispatch = member(ctx, &self.dispatch, &[], self.frame.dispatch);
         let frame = adt::StructNew::operands([done, dispatch])
             .r#type(self.frame.layout)
             .results(self.frame.reference)
@@ -1200,7 +1182,6 @@ fn dispatch_callable_function_type(
 fn dispatch_entry_function_type(
     ctx: &mut IrContext,
     dispatch: TypeRef,
-    anyref: TypeRef,
 ) -> Result<TypeRef, TargetAbiError> {
     let callable_ty = dispatch_callable_function_type(ctx, dispatch)?;
     let callable = func::FuncSig::from_type_ref(ctx, callable_ty).ok_or_else(|| {
@@ -1209,7 +1190,7 @@ fn dispatch_entry_function_type(
     let environment_attrs = physical_parameter_attrs(ctx, CallingConvention::Cps);
     Ok(callable
         .rebuild(ctx, |inputs, _| {
-            inputs.insert(1, (anyref, environment_attrs));
+            inputs.insert(1, (dispatch, environment_attrs));
         })
         .as_type_ref())
 }
@@ -1268,7 +1249,6 @@ fn collect_functions(
     ctx: &IrContext,
     ops: &[OpRef],
     never: TypeRef,
-    anyref: TypeRef,
 ) -> Result<HashMap<SymbolPath, FunctionIdentity>, TargetAbiError> {
     let mut functions = HashMap::default();
     for &op in ops {
@@ -1292,7 +1272,7 @@ fn collect_functions(
         let identity = FunctionIdentity {
             signature,
             convention,
-            environment_index: environment_index(ctx, op, callable.inputs(ctx), anyref)?,
+            environment_index: environment_index(ctx, op, callable.inputs(ctx))?,
         };
         if functions.insert(key, identity).is_some() {
             return Err(TargetAbiError::new(
@@ -1565,7 +1545,6 @@ fn environment_index(
     ctx: &IrContext,
     function: OpRef,
     params: &[TypeRef],
-    anyref: TypeRef,
 ) -> Result<Option<usize>, TargetAbiError> {
     let attributes = &ctx.op(function).attributes;
     let present = attributes
@@ -1584,7 +1563,7 @@ fn environment_index(
         ));
     }
     if let Some(index) = declared {
-        validate_environment_slot(params, anyref, index)?;
+        validate_environment_slot(ctx, params, index)?;
     }
 
     let Some(region) = ctx.op_region(function, 0) else {
@@ -1616,7 +1595,7 @@ fn environment_index(
         )),
         [] => Ok(None),
         [index] => {
-            validate_environment_slot(params, anyref, *index)?;
+            validate_environment_slot(ctx, params, *index)?;
             if declared.is_some_and(|declared| declared != *index) {
                 return Err(TargetAbiError::new(
                     "target ABI: closure environment index differs from `__env` parameter",
@@ -1630,19 +1609,21 @@ fn environment_index(
     }
 }
 
+/// A code function's environment is its own closure, so the slot must hold
+/// a convention-proven closure type.
 fn validate_environment_slot(
+    ctx: &IrContext,
     params: &[TypeRef],
-    anyref: TypeRef,
     index: usize,
 ) -> Result<(), TargetAbiError> {
-    if index >= params.len() {
+    let Some(&environment) = params.get(index) else {
         return Err(TargetAbiError::new(
             "target ABI: closure environment index is outside function signature",
         ));
-    }
-    if params.get(index) != Some(&anyref) {
+    };
+    if get_physical_closure_convention(ctx, environment).is_none() {
         return Err(TargetAbiError::new(
-            "target ABI: closure environment must have exact tribute_rt.anyref type",
+            "target ABI: closure environment must be a convention-proven closure",
         ));
     }
     Ok(())
@@ -2766,8 +2747,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
-  func.func @defined(%evidence: core.i32, %__env: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1} {
+  !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 1}>
+  func.func @external(%evidence: core.i32, %environment: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
+  func.func @defined(%evidence: core.i32, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
@@ -2782,9 +2764,7 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains(
-                "func.func @external(%arg0: core.i32, %arg1: tribute_rt.anyref, %arg2: core.i32)"
-            ),
+            printed.contains("func.func @external(%arg0: core.i32, %arg1: !Env, %arg2: core.i32)"),
             "{printed}"
         );
         assert!(
@@ -2802,10 +2782,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @generated_zero(%__env: tribute_rt.anyref) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} {
+  !Zero = closure.closure<func.func_sig<() -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+  !One = closure.closure<func.func_sig<(core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+  func.func @generated_zero(%__env: !Zero) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} {
     func.unreachable
   }
-  func.func @generated_one(%__env: tribute_rt.anyref, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} {
+  func.func @generated_one(%__env: !One, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
@@ -2818,13 +2800,13 @@ mod tests {
 
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
 
-        let anyref = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
         for (name, parameter_count) in [("generated_zero", 1), ("generated_one", 2)] {
             let function = function(&ctx, module, name);
             let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
             assert!(signature.results(&ctx).is_empty());
             assert_eq!(signature.inputs(&ctx).len(), parameter_count);
-            assert_eq!(signature.inputs(&ctx)[0], anyref);
+            let environment = signature.inputs(&ctx)[0];
+            assert!(get_physical_closure_convention(&ctx, environment).is_some());
         }
         let printed = print_module(&ctx, module.op());
         assert!(
@@ -2852,14 +2834,14 @@ mod tests {
             ),
             (
                 "func.func @external(%evidence: core.i32, %environment: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1}",
-                "exact tribute_rt.anyref",
+                "convention-proven closure",
             ),
             (
-                "func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1} { func.unreachable }",
+                "func.func @external(%evidence: core.i32, %environment: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1} { func.unreachable }",
                 "no matching `__env`",
             ),
             (
-                "func.func @external(%environment: tribute_rt.anyref, %__env: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} { func.unreachable }",
+                "func.func @external(%environment: !Env, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} { func.unreachable }",
                 "differs from `__env` parameter",
             ),
         ] {
@@ -2868,6 +2850,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
+  !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}>
   {function}
   func.func @holder() -> core.i32 {{
     %function = func.constant {{func_ref = @external}} : func.func_sig<(core.i32, core.i32) -> core.never>
@@ -2889,11 +2872,13 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @external(%__env: tribute_rt.anyref, %environment: tribute_rt.anyref) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} {
+  !Env2 = closure.closure<func.func_sig<() -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+  !Env = closure.closure<func.func_sig<(!Env2) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+  func.func @external(%__env: !Env, %environment: !Env2) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %function = func.constant {func_ref = @external} : func.func_sig<(tribute_rt.anyref) -> core.never>
+    %function = func.constant {func_ref = @external} : func.func_sig<(!Env2) -> core.never>
     func.unreachable
   }
 }"#,
