@@ -13,8 +13,9 @@ help: the trait `OpFlag` is not implemented for `NotAFlag`
 help: the following other types implement trait `OpFlag`
  --> src/op_flag.rs
   |
-  | impl OpFlag for Pure {
-  | ^^^^^^^^^^^^^^^^^^^^ `Pure`
+  | #[op_flag]
+  | ^^^^^^^^^^ `Pure`
 ...
-  | impl OpFlag for IsolatedFromAbove {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `IsolatedFromAbove`
+  | #[op_flag]
+  | ^^^^^^^^^^ `IsolatedFromAbove`
+  = note: this error originates in the attribute macro `op_flag` (in Nightly builds, run with -Z macro-backtrace for more info)

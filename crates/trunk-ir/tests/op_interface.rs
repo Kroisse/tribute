@@ -1,8 +1,10 @@
 //! An operation interface declared outside trunk-ir, implemented by a
 //! dialect of this crate, registered with `#[implements(..)]`, and by an
-//! operation of trunk-ir, registered with `register_interfaces!`.
+//! operation of trunk-ir, registered with `register_interfaces!`; and an
+//! operation flag declared outside trunk-ir.
 
 use trunk_ir::dialect::arith;
+use trunk_ir::op_flag::{OpFlag, Pure};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::walk::{WalkAction, walk_region};
@@ -14,9 +16,14 @@ mod probe {
         #[implements(super::Consumes)]
         fn pair(lhs: Value<_>, rhs: Value<_>) {}
 
+        #[flags(super::Probed, trunk_ir::op_flag::Pure)]
         fn other() {}
     }
 }
+
+/// A flag declared outside trunk-ir.
+#[trunk_ir::op_flag]
+pub struct Probed;
 
 /// Operands the operation consumes.
 #[trunk_ir::op_interface]
@@ -122,6 +129,12 @@ fn queries_dispatch_to_each_implementation() {
         .collect();
     implementors.sort();
     assert_eq!(implementors, ["arith.addi", "probe.pair"]);
+
+    assert!(Probed::is_set(&ctx, other));
+    assert!(Pure::is_set(&ctx, other));
+    assert!(!Probed::is_set(&ctx, pair));
+    assert!(!Probed::is_set(&ctx, addi));
+    assert!(Pure::is_set(&ctx, addi));
 
     assert!(pair_interface.forget_last(&mut ctx, 1));
     assert_eq!(ctx.op_operands(pair).len(), 1);

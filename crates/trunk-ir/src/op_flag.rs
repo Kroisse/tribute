@@ -1,12 +1,14 @@
 //! Operation flags: properties an operation's definition declares, with no
 //! behavior of their own.
 //!
+//! A flag is a unit struct declared with [`#[op_flag]`](macro@crate::op_flag).
 //! An operation declares its flags with `#[flags(..)]` in `#[dialect]`, and
 //! its [`OpDef`] holds them. Unlike an operation interface, a flag has no
 //! implementation and cannot be added to an operation after its definition.
 
 use crate::op_def::OpDef;
 use crate::{IrContext, OpRef};
+use trunk_ir_macros::op_flag;
 
 /// The identity of one operation flag, compared by address.
 #[derive(Debug)]
@@ -15,6 +17,8 @@ pub struct OpFlagDef {
 }
 
 /// A type naming an operation flag, as `#[flags(..)]` lists it.
+///
+/// Implemented by `#[op_flag]`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not an operation flag",
     label = "listed in `#[flags(..)]`",
@@ -32,13 +36,8 @@ pub trait OpFlag {
 /// Pure operations: no side effects, safe to remove if unused.
 ///
 /// DCE may eliminate an operation with this flag if its results are unused.
+#[op_flag]
 pub struct Pure;
-
-static PURE: OpFlagDef = OpFlagDef { name: "Pure" };
-
-impl OpFlag for Pure {
-    const DEF: &'static OpFlagDef = &PURE;
-}
 
 /// Operations whose regions cannot reference values from above.
 ///
@@ -57,12 +56,5 @@ impl OpFlag for Pure {
 /// Examples of non-isolated operations (can capture outer values):
 /// - `scf.if`, `scf.for` - control flow
 /// - `closure.new` - closure creation
+#[op_flag]
 pub struct IsolatedFromAbove;
-
-static ISOLATED_FROM_ABOVE: OpFlagDef = OpFlagDef {
-    name: "IsolatedFromAbove",
-};
-
-impl OpFlag for IsolatedFromAbove {
-    const DEF: &'static OpFlagDef = &ISOLATED_FROM_ABOVE;
-}
