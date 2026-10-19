@@ -743,15 +743,27 @@ fn test_wasm_marker_dispatch_field_holds_the_closure_base() {
     %state = wasm.i32_const {value = 10} : core.i32
     %tag = wasm.i32_const {value = 7} : core.i32
     %slot = wasm.i32_const {value = 30} : core.i32
-    %null = wasm.ref_null {heap_type = "struct", type_idx = 3} : !Closure
+    %nine = wasm.i32_const {value = 9} : core.i32
+    %ten = wasm.i32_const {value = 10} : core.i32
+    %closure = wasm.struct_new %zero {type_idx = 3} : !Closure
     %empty = wasm.array_new_default %zero {type_idx = 5} : !Evidence
-    %extended = wasm.call %empty, %state, %tag, %null, %empty {callee = @__tribute_evidence_extend} : !Evidence
+    %extended = wasm.call %empty, %state, %tag, %closure, %empty {callee = @__tribute_evidence_extend} : !Evidence
     %dup = wasm.call %extended, %state {callee = @__tribute_evidence_dup} : !Evidence
     %pushed = wasm.call %empty, %dup, %state {callee = @__tribute_evidence_push} : !Evidence
     %tailed = wasm.call %pushed, %slot, %extended {callee = @__tribute_evidence_with_tail} : !Evidence
-    %dispatch = wasm.call %tailed, %state {callee = @__tribute_evidence_lookup_tr} : !Closure
-    %absent = wasm.ref_is_null %dispatch : core.i32
-    wasm.return %absent
+    %dup_dispatch = wasm.call %dup, %state {callee = @__tribute_evidence_lookup_tr} : !Closure
+    %dup_absent = wasm.ref_is_null %dup_dispatch : core.i32
+    %pushed_dispatch = wasm.call %tailed, %state {callee = @__tribute_evidence_lookup_tr} : !Closure
+    %pushed_absent = wasm.ref_is_null %pushed_dispatch : core.i32
+    %slot_dispatch = wasm.call %tailed, %slot {callee = @__tribute_evidence_lookup_tr} : !Closure
+    %slot_absent = wasm.ref_is_null %slot_dispatch : core.i32
+    %d0 = wasm.i32_mul %nine, %ten : core.i32
+    %d1 = wasm.i32_add %d0, %dup_absent : core.i32
+    %d2 = wasm.i32_mul %d1, %ten : core.i32
+    %d3 = wasm.i32_add %d2, %pushed_absent : core.i32
+    %d4 = wasm.i32_mul %d3, %ten : core.i32
+    %d5 = wasm.i32_add %d4, %slot_absent : core.i32
+    wasm.return %d5
   }
   wasm.export_func {name = "check", func = @check}
 }"#,
@@ -781,5 +793,7 @@ fn test_wasm_marker_dispatch_field_holds_the_closure_base() {
         "wasmtime failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+    // The handler's closure survives `dup` and `push`; the row tail slot has
+    // no dispatch closure.
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9001");
 }
