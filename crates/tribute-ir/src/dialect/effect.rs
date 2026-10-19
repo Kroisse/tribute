@@ -7,7 +7,8 @@
 
 use trunk_ir::attr_kind::{SymbolRef, Type};
 use trunk_ir::dialect::core::I32;
-use trunk_ir::op_interface::{CallableExit, Pure};
+use trunk_ir::op_flag::Pure;
+use trunk_ir::op_interface::CallableExit;
 
 use super::ability::{CpsClosure, Evidence};
 use crate::continuation_frame::FrameRef;
@@ -26,7 +27,7 @@ mod effect {
     /// - `tr_dispatch_fn`: tail-resumptive dispatch closure, or null.
     /// - `outer`: the evidence the handler is installed on, before the
     ///   installation's selection.
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn extend<E: Evidence>(
         ability: Attr<SymbolRef>,
         evidence: Value<E>,
@@ -38,30 +39,30 @@ mod effect {
 
     /// Remove the top handler of one ability from the evidence, exposing the
     /// handler it shadows.
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn mask<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// Push a copy of the top handler of one ability onto the evidence.
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn dup<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence the top handler of one ability was installed on.
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn outer<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence of the row tail `index` of the callable that received
     /// `evidence`, or `evidence` itself when it holds no such row tail.
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn tail<E: Evidence>(index: Attr<u32>, evidence: Value<E>) -> Value<E> {}
 
     /// Set the evidence of the row tail `index` that a callee receives with
     /// `evidence`.
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn with_tail<E: Evidence>(index: Attr<u32>, evidence: Value<E>, tail: Value<E>) -> Value<E> {}
 
     /// Push the top handler that `source` holds for one ability onto
     /// `evidence`.
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn push<E: Evidence>(
         ability: Attr<SymbolRef>,
         evidence: Value<E>,
@@ -87,7 +88,7 @@ mod effect {
     /// types. `payload` is the single packed operation argument value. The
     /// operation is resultless: backend lowering performs the final proper tail
     /// transfer.
-    #[interfaces(CallableExit)]
+    #[implements(CallableExit)]
     fn dispatch_cps<E: Evidence>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -119,13 +120,6 @@ mod effect {
     }
 }
 
-impl Pure for Extend {}
-impl Pure for Mask {}
-impl Pure for Dup {}
-impl Pure for Outer {}
-impl Pure for Tail {}
-impl Pure for WithTail {}
-impl Pure for Push {}
 impl trunk_ir::op_interface::CallableExit for DispatchCps {
     fn verify_callable_exit(
         &self,

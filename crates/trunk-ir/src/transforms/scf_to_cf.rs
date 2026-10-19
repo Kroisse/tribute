@@ -720,9 +720,9 @@ fn replace_continue_break(
 #[cfg(test)]
 #[trunk_ir::dialect]
 mod test_exit_dialect {
-    #[interfaces(crate::op_interface::CallableExit)]
+    #[implements(crate::op_interface::CallableExit)]
     fn exit() {}
-    #[interfaces(crate::op_interface::CallableExit)]
+    #[implements(crate::op_interface::CallableExit)]
     fn malformed_exit() {}
 }
 

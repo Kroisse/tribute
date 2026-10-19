@@ -10,6 +10,7 @@ use std::fmt;
 use std::ops::ControlFlow;
 use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::attr_kind::Type;
+use trunk_ir::op_flag::{IsolatedFromAbove, Pure};
 
 use crate::dialect::adt;
 use itertools::Itertools;
@@ -17,8 +18,7 @@ use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::core;
 use trunk_ir::op_def::OpDef;
 use trunk_ir::op_interface::{
-    CallLike, CallableExit, DynRegionBranch, IsolatedFromAbove, Pure, RegionBranchPoint,
-    RegionSuccessor,
+    CallLike, CallableExit, DynRegionBranch, RegionBranchPoint, RegionSuccessor,
 };
 use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -93,8 +93,10 @@ mod tribute_control {
     struct ResumeToken<Input, Answer>;
 
     // FuncSig operations
+    // Only the named function is isolated. Lambda intentionally remains
+    // non-isolated so its exact external-reference/capture set can be validated.
     #[asm_format]
-    #[interfaces(IsolatedFromAbove)]
+    #[flags(IsolatedFromAbove)]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
@@ -107,18 +109,18 @@ mod tribute_control {
     }
 
     #[asm_format]
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn lambda(captures: Variadic<_>) -> Value<impl FuncSig> {
         #[region(body)]
         {}
     }
 
     #[verify]
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
     #[verify]
-    #[interfaces(CallLike)]
+    #[implements(CallLike)]
     fn call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -136,7 +138,7 @@ mod tribute_control {
     }
 
     #[verify]
-    #[interfaces(CallLike, CallableExit)]
+    #[implements(CallLike, CallableExit)]
     fn tail_call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -146,7 +148,7 @@ mod tribute_control {
     }
 
     #[verify]
-    #[interfaces(CallableExit)]
+    #[implements(CallableExit)]
     fn tail_call_indirect<S: FuncSig>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         callee: Value<S>,
@@ -841,20 +843,12 @@ impl Func {
     }
 }
 
-// Only the named function is isolated. Lambda intentionally remains
-// non-isolated so its exact external-reference/capture set can be validated.
-impl IsolatedFromAbove for Func {}
-
 impl CallLike for Call {}
 impl CallLike for TailCall {}
 
 // A source `become` ends its callable: the callee's result is the caller's.
 impl CallableExit for TailCall {}
 impl CallableExit for TailCallIndirect {}
-
-// These operations only create/refer to values and are safe for DCE.
-impl Pure for FuncRef {}
-impl Pure for Lambda {}
 
 // === Custom assembly: tribute_control.func ===
 
@@ -4407,6 +4401,7 @@ mod tests {
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
     use trunk_ir::dialect::core;
+    use trunk_ir::op_flag::OpFlag;
     use trunk_ir::parser::parse_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::types::AttributeMap;
@@ -6840,18 +6835,12 @@ mod tests {
             call = call.or_else(|| Call::matches(ctx, op).then_some(op));
         });
         let func = func.expect("func");
-        assert!(trunk_ir::op_interface::DynIsolatedFromAbove::is_implemented(ctx, func));
+        assert!(IsolatedFromAbove::is_set(ctx, func));
         if let Some(lambda) = lambda {
-            assert!(!trunk_ir::op_interface::DynIsolatedFromAbove::is_implemented(ctx, lambda));
+            assert!(!IsolatedFromAbove::is_set(ctx, lambda));
         }
-        assert!(trunk_ir::op_interface::DynPure::is_implemented(
-            ctx,
-            func_ref.expect("func_ref")
-        ));
-        assert!(!trunk_ir::op_interface::DynPure::is_implemented(
-            ctx,
-            call.expect("call")
-        ));
+        assert!(Pure::is_set(ctx, func_ref.expect("func_ref")));
+        assert!(!Pure::is_set(ctx, call.expect("call")));
     }
 
     #[test]

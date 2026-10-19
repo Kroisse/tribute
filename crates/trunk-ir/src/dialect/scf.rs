@@ -2,44 +2,44 @@
 
 #[trunk_ir::dialect]
 mod scf {
-    #[interfaces(RegionBranch)]
+    #[implements(RegionBranch)]
     fn r#if(cond: Value<_>) -> Option<Value<_>> {
         #[region(then_region)]
         {}
         #[region(else_region)]
         {}
     }
-    #[interfaces(RegionBranch)]
+    #[implements(RegionBranch)]
 
     fn switch(discriminant: Value<_>) {
         #[region(body)]
         {}
     }
-    #[interfaces(RegionBranch)]
+    #[implements(RegionBranch)]
 
     fn case(value: Attr<_>) {
         #[region(body)]
         {}
     }
-    #[interfaces(RegionBranch)]
+    #[implements(RegionBranch)]
 
     fn default() {
         #[region(body)]
         {}
     }
-    #[interfaces(RegionBranchTerminator)]
+    #[implements(RegionBranchTerminator)]
 
     fn r#yield(values: Variadic<_>) {}
-    #[interfaces(RegionBranch)]
+    #[implements(RegionBranch)]
 
     fn r#loop(init: Variadic<_>) -> Option<Value<_>> {
         #[region(body)]
         {}
     }
-    #[interfaces(RegionBranchTerminator)]
+    #[implements(RegionBranchTerminator)]
 
     fn r#continue(values: Variadic<_>) {}
-    #[interfaces(RegionBranchTerminator)]
+    #[implements(RegionBranchTerminator)]
 
     fn r#break(value: Value<_>) {}
 }

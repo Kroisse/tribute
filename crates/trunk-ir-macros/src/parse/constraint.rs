@@ -611,7 +611,8 @@ pub(super) fn parse_typed_operation(
         relations,
         verify: None,
         asm_format: None,
-        interfaces: Vec::new(),
+        implements: Vec::new(),
+        flags: Vec::new(),
     })
 }
 

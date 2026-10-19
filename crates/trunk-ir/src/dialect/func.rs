@@ -2,9 +2,9 @@
 
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::Type;
+use crate::op_flag::{IsolatedFromAbove, Pure};
 use crate::op_interface::{
     self, CallableExit, CallableOwner, ControlFlowInterfaceError, IndirectCallLike,
-    IsolatedFromAbove, Pure,
 };
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, TypeDataBuilder, TypeRef};
@@ -38,49 +38,46 @@ pub trait TailCallLike: CallLike {
     }
 }
 
-// === Operation registrations ===
-impl Pure for Constant {}
-impl IsolatedFromAbove for Func {}
-
 #[trunk_ir::dialect]
 mod func {
     #[asm_format]
-    #[interfaces(IsolatedFromAbove, CallableOwner)]
+    #[implements(CallableOwner)]
+    #[flags(IsolatedFromAbove)]
     fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
         #[region(body?)]
         {}
     }
-    #[interfaces(op_interface::CallLike)]
+    #[implements(op_interface::CallLike)]
 
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
-    #[interfaces(IndirectCallLike)]
+    #[implements(IndirectCallLike)]
     fn call_indirect<S: FuncSig>(
         signature: Attr<TypeOf<S>>,
         callee: Value<_>,
         args: Values<S::Inputs>,
     ) -> Values<S::Results> {
     }
-    #[interfaces(CallableExit, op_interface::CallLike)]
+    #[implements(CallableExit, op_interface::CallLike)]
 
     fn tail_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[verify]
-    #[interfaces(CallableExit, IndirectCallLike)]
+    #[implements(CallableExit, IndirectCallLike)]
     fn tail_call_indirect<S: FuncSig>(
         signature: Attr<TypeOf<S>>,
         callee: Value<_>,
         args: Values<S::Inputs>,
     ) {
     }
-    #[interfaces(CallableExit)]
+    #[implements(CallableExit)]
 
     fn r#return(values: Variadic<_>) {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
 
     fn constant(func_ref: Attr<SymbolRef>) -> Value<_> {}
-    #[interfaces(CallableExit)]
+    #[implements(CallableExit)]
 
     fn unreachable() {}
 }

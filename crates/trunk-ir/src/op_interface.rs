@@ -1,8 +1,9 @@
 //! Operation interface system for querying operation properties.
 //!
 //! Each interface is a trait declared with `#[op_interface]`. An operation
-//! implements it with an `impl` and registers it with `#[interfaces(..)]`
+//! implements it with an `impl` and registers it with `#[implements(..)]`
 //! on its `#[dialect]` declaration or with [`register_interfaces!`](crate::register_interfaces).
+//! Properties without behavior are [operation flags](crate::op_flag) instead.
 
 use std::fmt;
 
@@ -13,45 +14,15 @@ use crate::ops::DialectOp;
 use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir_macros::op_interface;
 
-/// Marker interface for pure operations (no side effects, safe to remove if unused).
-///
-/// DCE may eliminate an operation implementing this interface if its results are unused.
-#[op_interface]
-pub trait Pure: DialectOp {}
-
-// =============================================================================
-// IsolatedFromAbove Trait
-// =============================================================================
-
-/// Marker interface for operations whose regions cannot reference values from above.
-///
-/// Operations implementing this interface have regions that are "isolated" from the
-/// enclosing scope - they cannot directly reference SSA values defined outside
-/// the region. This is important for:
-///
-/// 1. **Verification**: Check that isolated regions don't have stale references
-/// 2. **Rewrite passes**: Different handling for isolated vs non-isolated ops
-/// 3. **Code generation**: Isolated regions can be compiled independently
-///
-/// Examples of isolated operations:
-/// - `func.func` - function bodies (must receive values via parameters)
-/// - `core.module` - module bodies
-///
-/// Examples of non-isolated operations (can capture outer values):
-/// - `scf.if`, `scf.for` - control flow
-/// - `closure.new` - closure creation
-#[op_interface]
-pub trait IsolatedFromAbove: DialectOp {}
-
 /// Register operation interface implementations of operations that
 /// `#[dialect]` does not declare, or of interfaces declared elsewhere.
 ///
 /// ```text
-/// register_interfaces!(Exit: CallableExit; Br: Branch, Pure);
+/// register_interfaces!(Exit: CallableExit; Br: Branch);
 /// ```
 ///
 /// Each entry requires the interface's impl for the operation wrapper,
-/// as `#[interfaces(..)]` on a `#[dialect]` operation does.
+/// as `#[implements(..)]` on a `#[dialect]` operation does.
 #[macro_export]
 macro_rules! register_interfaces {
     ($($op:ty : $($interface:path),+ $(,)?);+ $(;)?) => {

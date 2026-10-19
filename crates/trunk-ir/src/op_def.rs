@@ -2,7 +2,8 @@
 //!
 //! An [`OpDef`] bundles everything the dialect macro registers for one
 //! operation: its declarative [`OpSchema`] and the hooks the declaration
-//! opts into, such as `#[verify]` and `#[asm_format]`. Definitions are registered by operation
+//! opts into, such as `#[verify]` and `#[asm_format]`, and the flags it
+//! declares with `#[flags(..)]`. Definitions are registered by operation
 //! name so that verification and other tooling can look them up for any
 //! operation.
 
@@ -10,6 +11,7 @@ use std::sync::LazyLock;
 
 use crate::asm_format::OpAsmHooks;
 use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
+use crate::op_flag::{OpFlag, OpFlagDef};
 use crate::op_schema::{OpSchema, SchemaViolation};
 use crate::ops::VerificationError;
 use crate::{IrContext, OpRef};
@@ -37,12 +39,19 @@ pub struct OpDef {
     /// Calls the wrapper's [`OpAsmFormat`](crate::asm_format::OpAsmFormat) impl
     /// for `#[asm_format]` operations.
     pub asm_format: Option<OpAsmHooks>,
+    /// The flags listed in `#[flags(..)]`.
+    pub flags: &'static [&'static OpFlagDef],
 }
 
 /// An operation-local verifier generated from `#[verify]`.
 pub type OpVerifier = fn(&IrContext, OpRef) -> Result<(), VerificationError>;
 
 impl OpDef {
+    /// Whether the operation declares the flag `F`.
+    pub fn has_flag<F: OpFlag + ?Sized>(&self) -> bool {
+        self.flags.iter().any(|flag| std::ptr::eq(*flag, F::DEF))
+    }
+
     /// Run the declarative schema stages and then the `#[verify]` hook,
     /// stopping after the first stage that reports a violation.
     pub fn verify(&self, ctx: &IrContext, op: OpRef) -> Vec<OpViolation> {
@@ -116,6 +125,20 @@ mod tests {
         assert_eq!((def.schema.dialect, def.schema.name), ("func", "return"));
         assert_eq!(def.schema.operands[0].arity, Arity::Variadic);
         assert!(OpDef::lookup("func.no_such_op").is_none());
+    }
+
+    #[test]
+    fn definitions_carry_their_flags() {
+        use crate::op_flag::{IsolatedFromAbove, Pure};
+
+        let addi = OpDef::lookup("arith.addi").expect("arith.addi should be registered");
+        assert!(addi.has_flag::<Pure>());
+        assert!(!addi.has_flag::<IsolatedFromAbove>());
+        let func = OpDef::lookup("func.func").expect("func.func should be registered");
+        assert!(func.has_flag::<IsolatedFromAbove>());
+        assert!(!func.has_flag::<Pure>());
+        let call = OpDef::lookup("func.call").expect("func.call should be registered");
+        assert!(call.flags.is_empty());
     }
 
     #[test]

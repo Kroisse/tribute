@@ -93,13 +93,13 @@ smallest layer that can state an invariant precisely.
 | Operation verifier | Local invariants of one operation: operand/result/successor counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only supported predicates; an op with regions requires the expected region count and terminator form. |
 | Conversion target | Dialect and type legality at a named lowering boundary. | Immediately after a pass or pass group claims a conversion boundary. Partial conversion rejects explicitly illegal operations; full conversion also rejects unknown operations. | Ability lowering leaves no `ability.perform`; backend-ready native IR contains only `clif.*` plus allowed infrastructure ops. |
 | Pass-manager verifier | Whole-IR consistency after transformations, with the offending pass identified. | After each pass registered in a `PassManager` when a verifier hook is installed. | SSA use-chain consistency, value visibility across isolated regions, or other graph-wide invariants. |
-| Operation interface | Shared behavior queried generically across dialects. | At the consumer that needs dialect-independent behavior. Interfaces should be introduced only for multiple concrete consumers or one generic transform. | `Pure` for DCE removability; `IsolatedFromAbove` for nested pass-manager anchoring. |
+| Operation interface and flag | Shared behavior or property queried generically across dialects. | At the consumer that needs dialect-independent behavior. Interfaces and flags should be introduced only for multiple concrete consumers or one generic transform. | `CallLike` for direct callees; the `Pure` flag for DCE removability; the `IsolatedFromAbove` flag for nested pass-manager anchoring. |
 
 Local operation verifiers must not depend on conversion state or pass ordering.
 Conversion targets must not duplicate local semantic checks. Pass-manager
 verifiers should remain responsible for graph-wide invariants that require
 walking use-def chains, symbol tables, or nested region relationships. Operation
-interfaces describe behavior, not validation phases.
+interfaces and flags describe behavior and properties, not validation phases.
 
 Operation interface는 operation wrapper가 구현하는 trait 하나로 선언한다. 같은
 trait이 interface의 이름이고, typed 구현과 dynamic query가 따로 갈라지지 않는다.
@@ -110,6 +110,12 @@ Interface는 열려 있다. 어느 crate든 새 interface를 정의할 수 있�
 정의한 operation에도 구현을 붙일 수 있다. Verifier와 custom assembly처럼 core
 infrastructure가 operation 정의를 통해 찾는 hook은 interface가 아니라 operation
 definition에 속한다.
+
+Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 성질이다
+(`Pure`, `IsolatedFromAbove`). Flag는 구현을 갖지 않고 operation definition에
+직접 들어가므로 registry 없이 조회한다. Interface와 달리 닫혀 있어서, operation을
+정의한 dialect만 그 operation의 flag를 정할 수 있다. 메서드가 없더라도 다른 crate가
+남의 operation에 붙여야 하는 성질은 flag가 아니라 interface로 정의한다.
 
 ### 선언적 operation schema
 

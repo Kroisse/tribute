@@ -29,6 +29,7 @@ pub mod attr_kind;
 // === Operation and type utilities ===
 pub mod name;
 pub mod op_def;
+pub mod op_flag;
 pub mod op_schema;
 pub mod ops;
 pub mod type_constraint;

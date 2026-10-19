@@ -38,7 +38,7 @@ mod ability {
     /// runtime-unique prompt identity for the delimiter and shares it across
     /// every instance. The body entry block receives the extended evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
-    #[interfaces(CallableExit)]
+    #[implements(CallableExit)]
     fn handle_dispatch(
         abilities: Attr<[SymbolRef]>,
         evidence: Value<_>,
@@ -91,7 +91,7 @@ mod ability {
     }
 
     /// Deliver `value` to the frame's completion.
-    #[interfaces(CallableExit)]
+    #[implements(CallableExit)]
     fn exit<F: Frame>(frame: Value<F>, value: Value<F::Result>) {}
 
     /// Install one layer of a handle around `body`, exiting to `exit`.
@@ -100,7 +100,7 @@ mod ability {
     /// same order. The body receives the extended evidence and the frame of
     /// the installed layer, whose completion is `completion`.
     #[verify]
-    #[interfaces(CallableExit)]
+    #[implements(CallableExit)]
     fn handle<F: Frame>(
         handlers: Attr<[HandlerBinding]>,
         evidence_plan: Option<Attr<[EvidenceStep]>>,
@@ -118,7 +118,7 @@ mod ability {
     /// `resumption` is `(Evidence, frame, operation result) -> core.never`,
     /// the rest of the computation with no one-shot check. Expanding the
     /// operation adds the check.
-    #[interfaces(CallableExit)]
+    #[implements(CallableExit)]
     fn perform<F: Frame, C>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -133,7 +133,7 @@ mod ability {
 
     /// Perform an operation returning `core.never` through the frame's
     /// dispatcher, with no resumption.
-    #[interfaces(CallableExit)]
+    #[implements(CallableExit)]
     fn abort<F: Frame>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -241,8 +241,6 @@ pub fn ability_id_const(
         .results(i32_ty)
         .build(ctx, loc)
 }
-
-// === Pure operation registrations ===
 
 use trunk_ir::attr_kind::{SymbolRef, Type};
 use trunk_ir::op_interface::{CallableExit, ControlFlowInterfaceError};

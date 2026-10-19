@@ -1,7 +1,5 @@
 //! Tribute runtime dialect — boxing, unboxing, and reference counting.
 
-use trunk_ir::op_interface::Pure;
-
 // === Managed reference registrations ===
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Intref>());
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Anyref>());
@@ -12,6 +10,7 @@ inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<
 
 use crate::dialect::tribute_rtti::ManagedRef;
 use trunk_ir::dialect::core::Ptr;
+use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
 mod tribute_rt {
@@ -22,22 +21,22 @@ mod tribute_rt {
     struct Bool;
     struct Intref;
     struct Anyref;
-    #[interfaces(Pure)]
+    #[flags(Pure)]
 
     fn box_int(value: Value<_>) -> Value<_> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn unbox_int(value: Value<_>) -> Value<_> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn box_nat(value: Value<_>) -> Value<_> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn unbox_nat(value: Value<_>) -> Value<_> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn box_float(value: Value<_>) -> Value<_> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn unbox_float(value: Value<_>) -> Value<_> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn box_bool(value: Value<_>) -> Value<_> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn unbox_bool(value: Value<_>) -> Value<_> {}
 
     fn retain(ptr: Value<_>) -> Value<_> {}
@@ -62,18 +61,6 @@ pub use tribute_rc::REFCOUNT_OFFSET;
 pub use tribute_rc::RTTI_IDX_OFFSET;
 
 use trunk_ir::ops::DialectOp;
-
-// === Pure operation registrations ===
-// Boxing and unboxing operations are pure (no side effects)
-
-impl Pure for BoxInt {}
-impl Pure for UnboxInt {}
-impl Pure for BoxNat {}
-impl Pure for UnboxNat {}
-impl Pure for BoxFloat {}
-impl Pure for UnboxFloat {}
-impl Pure for BoxBool {}
-impl Pure for UnboxBool {}
 
 // === Canonicalization folds ===
 

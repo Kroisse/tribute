@@ -1,5 +1,5 @@
 //! An operation interface declared outside trunk-ir, implemented by a
-//! dialect of this crate, registered with `#[interfaces(..)]`, and by an
+//! dialect of this crate, registered with `#[implements(..)]`, and by an
 //! operation of trunk-ir, registered with `register_interfaces!`.
 
 use trunk_ir::dialect::arith;
@@ -11,7 +11,7 @@ use trunk_ir::{IrContext, OpRef, ValueRef};
 mod probe {
     #[trunk_ir::dialect]
     mod probe {
-        #[interfaces(super::Consumes)]
+        #[implements(super::Consumes)]
         fn pair(lhs: Value<_>, rhs: Value<_>) {}
 
         fn other() {}

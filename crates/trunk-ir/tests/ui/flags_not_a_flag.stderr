@@ -1,0 +1,20 @@
+error[E0277]: `NotAFlag` is not an operation flag
+ --> tests/ui/flags_not_a_flag.rs:5:13
+  |
+5 |     #[flags(NotAFlag)]
+  |             ^^^^^^^^ listed in `#[flags(..)]`
+  |
+help: the trait `OpFlag` is not implemented for `NotAFlag`
+ --> tests/ui/flags_not_a_flag.rs:1:1
+  |
+1 | pub struct NotAFlag;
+  | ^^^^^^^^^^^^^^^^^^^
+  = note: an operation interface is listed in `#[implements(..)]`
+help: the following other types implement trait `OpFlag`
+ --> src/op_flag.rs
+  |
+  | impl OpFlag for Pure {
+  | ^^^^^^^^^^^^^^^^^^^^ `Pure`
+...
+  | impl OpFlag for IsolatedFromAbove {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `IsolatedFromAbove`

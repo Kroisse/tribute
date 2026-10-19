@@ -24,6 +24,7 @@ use derive_more::{Display, Error};
 use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::op_def::OpDef;
+use super::op_flag::{IsolatedFromAbove, OpFlag};
 use super::op_interface::{
     CallableExitOps, DynBranch, DynRegionBranch, DynRegionBranchTerminator, RegionBranchOps,
     RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
@@ -539,7 +540,7 @@ fn enclosing_func_signature(
         if let Some(signature) = crate::op_interface::CallableOwnerOps::signature(ctx, op) {
             return signature;
         }
-        if crate::op_interface::DynIsolatedFromAbove::is_implemented(ctx, op) {
+        if IsolatedFromAbove::is_set(ctx, op) {
             return None;
         }
     }

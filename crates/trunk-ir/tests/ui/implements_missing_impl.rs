@@ -5,7 +5,7 @@ pub trait Probed: DialectOp {}
 
 #[trunk_ir::dialect]
 mod d {
-    #[interfaces(Probed)]
+    #[implements(Probed)]
     fn probe() {}
 }
 

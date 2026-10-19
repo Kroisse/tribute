@@ -1,15 +1,11 @@
 //! Arena-based core dialect.
 
 use crate::IrContext;
-use crate::op_interface::{IsolatedFromAbove, Pure};
-
-// === Operation registrations ===
-impl IsolatedFromAbove for Module {}
-impl Pure for NilValue {}
+use crate::op_flag::{IsolatedFromAbove, Pure};
 
 #[trunk_ir::dialect]
 mod core {
-    #[interfaces(IsolatedFromAbove)]
+    #[flags(IsolatedFromAbove)]
     fn module(sym_name: Attr<String>) {
         #[region(body)]
         {}
@@ -18,7 +14,7 @@ mod core {
     fn unrealized_conversion_cast(value: Value<_>) -> Value<_> {}
 
     /// The only value of `core.nil`.
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn nil_value() -> Value<Nil> {}
 
     struct Nil;

@@ -1,7 +1,8 @@
 //! Closure dialect — closures and captures.
 
 use trunk_ir::attr_kind::SymbolRef;
-use trunk_ir::op_interface::{CallableOwner, Pure};
+use trunk_ir::op_flag::Pure;
+use trunk_ir::op_interface::CallableOwner;
 
 // A closure value points to a reference-counted closure object.
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Closure>());
@@ -10,13 +11,13 @@ inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Closure>(
 mod closure {
     // Types
     struct Closure<FuncType>;
-    #[interfaces(Pure)]
+    #[flags(Pure)]
 
     fn new(func_ref: Attr<SymbolRef>, env: Value<_>) -> Value<_> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
 
     fn func(closure: Value<_>) -> Value<_> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
 
     fn env(closure: Value<_>) -> Value<_> {}
 
@@ -27,20 +28,13 @@ mod closure {
     /// A downstream `lower_closure_lambda` pass extracts the body into a top-level
     /// `func.func` and replaces this op with `closure.new`.
     #[asm_format]
-    #[interfaces(Pure, CallableOwner)]
+    #[implements(CallableOwner)]
+    #[flags(Pure)]
     fn lambda(captures: Variadic<_>) -> Value<_> {
         #[region(body)]
         {}
     }
 }
-
-// === Pure operation registrations ===
-// All closure operations are pure
-
-impl Pure for New {}
-impl Pure for Func {}
-impl Pure for Env {}
-impl Pure for Lambda {}
 
 // === Custom assembly format for closure.lambda ===
 

@@ -6,133 +6,88 @@
 //! - Integer comparison: `cmpi` with predicate attribute (eq, ne, slt, sle, sgt, sge, ult, ule, ugt, uge)
 //! - Float comparison: `cmpf` with predicate attribute (oeq, une, olt, ole, ogt, oge)
 
-use crate::op_interface::Pure;
-
-// === Pure operation registrations ===
-impl Pure for Const {}
-
-// Integer arithmetic
-impl Pure for Addi {}
-impl Pure for Subi {}
-impl Pure for Muli {}
-impl Pure for Divsi {}
-impl Pure for Divui {}
-impl Pure for Remsi {}
-impl Pure for Remui {}
-impl Pure for Negi {}
-
-// Float arithmetic
-impl Pure for Addf {}
-impl Pure for Subf {}
-impl Pure for Mulf {}
-impl Pure for Divf {}
-impl Pure for Negf {}
-
-// Comparisons
-impl Pure for Cmpi {}
-impl Pure for Cmpf {}
-
-// Bitwise (integer-only, unchanged)
-impl Pure for And {}
-impl Pure for Or {}
-impl Pure for Xor {}
-impl Pure for Shl {}
-impl Pure for Shr {}
-impl Pure for Shru {}
-
-// Conversions
-impl Pure for Extsi {}
-impl Pure for Extui {}
-impl Pure for Trunci {}
-impl Pure for Sitofp {}
-impl Pure for Uitofp {}
-impl Pure for Extf {}
-impl Pure for Truncf {}
-
-// fptosi/fptoui trap on out-of-range values and NaN, so they are not pure.
-
 #[trunk_ir::dialect]
 mod arith {
     #[verify]
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn r#const(value: Attr<_>) -> Value<impl NumericLike> {}
 
     // Integer arithmetic
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn subi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn muli<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn divsi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn divui<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn remsi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn remui<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn negi<T: IntegerLike>(operand: Value<T>) -> Value<T> {}
 
     // Float arithmetic
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn addf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn subf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn mulf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn divf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn negf<T: FloatLike>(operand: Value<T>) -> Value<T> {}
 
     // Comparisons
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn cmpi<T: IntegerLike>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     #[verify]
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn cmpf<T: FloatLike>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     // Bitwise (integer-only)
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn and<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn or<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn xor<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn shl<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn shr<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn shru<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
 
     // Conversions. Integers are signless; each sign-dependent conversion is
     // an explicit signed/unsigned pair.
     #[verify]
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn extsi(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
     #[verify]
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn extui(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
     #[verify]
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn trunci(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn sitofp(operand: Value<impl IntegerLike>) -> Value<impl FloatLike> {}
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn uitofp(operand: Value<impl IntegerLike>) -> Value<impl FloatLike> {}
     /// Traps on out-of-range values and NaN.
     fn fptosi(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
     /// Traps on out-of-range values and NaN.
     fn fptoui(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
     #[verify]
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn extf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
     #[verify]
-    #[interfaces(Pure)]
+    #[flags(Pure)]
     fn truncf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
 }
 
@@ -147,6 +102,7 @@ mod arith {
 
 use crate::context::IrContext;
 use crate::dialect::core::{FloatLike, I1, IntegerLike, NumericLike};
+use crate::op_flag::Pure;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::transforms::canonicalize::FoldResult;

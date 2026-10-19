@@ -28,18 +28,18 @@ fn production_plan(
 // Branch terminators whose interface models are deliberately wrong.
 #[trunk_ir::dialect]
 mod test {
-    #[interfaces(Branch)]
+    #[implements(Branch)]
     fn incomplete_branch() {
         #[successor(exit)]
         {}
     }
-    #[interfaces(Branch)]
+    #[implements(Branch)]
 
     fn missing_edge_branch() {
         #[successor(exit)]
         {}
     }
-    #[interfaces(Branch)]
+    #[implements(Branch)]
 
     fn reversed_branch() {
         #[successor(left)]
@@ -47,7 +47,7 @@ mod test {
         #[successor(right)]
         {}
     }
-    #[interfaces(Branch)]
+    #[implements(Branch)]
 
     fn multi_forwarding_branch(value: Value<_>) {
         #[successor(left)]

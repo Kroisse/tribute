@@ -3,11 +3,10 @@
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::{Bytes, Type};
 use crate::dialect::core::I32;
-use crate::op_interface::{CallLike, IndirectCallLike, IsolatedFromAbove};
+use crate::op_flag::IsolatedFromAbove;
+use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, TypeDataBuilder, TypeRef};
-
-impl IsolatedFromAbove for Func {}
 
 #[trunk_ir::dialect]
 mod wasm {
@@ -47,9 +46,9 @@ mod wasm {
     fn drop(value: Value<_>) {}
 
     // Functions
-    #[interfaces(CallLike)]
+    #[implements(CallLike)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
-    #[interfaces(IndirectCallLike)]
+    #[implements(IndirectCallLike)]
 
     fn call_indirect(
         type_idx: Attr<u32>,
@@ -58,10 +57,10 @@ mod wasm {
         args: Variadic<_>,
     ) -> Variadic<_> {
     }
-    #[interfaces(CallLike)]
+    #[implements(CallLike)]
 
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
-    #[interfaces(IndirectCallLike)]
+    #[implements(IndirectCallLike)]
 
     fn return_call_indirect(
         type_idx: Attr<u32>,
@@ -75,7 +74,7 @@ mod wasm {
     fn nop() -> Value<_> {}
 
     // Module
-    #[interfaces(IsolatedFromAbove)]
+    #[flags(IsolatedFromAbove)]
     fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
         #[region(body?)]
         {}

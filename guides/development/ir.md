@@ -227,7 +227,7 @@ declaration, and implements each one next to it:
 ```rust
 #[trunk_ir::dialect]
 mod cf {
-    #[interfaces(Branch)]
+    #[implements(Branch)]
     fn br(args: Variadic<_>) {
         #[successor(dest)]
         {}
@@ -241,7 +241,7 @@ impl Branch for Br {
 
 Each method takes `self` or `&self`, then the context (`&IrContext` or
 `&mut IrContext`), and may be generic over lifetimes only; default bodies
-are dispatched like other methods. `#[interfaces(..)]` registers the
+are dispatched like other methods. `#[implements(..)]` registers the
 implementation by the operation's name, and a missing `impl` is reported at
 its entry. The paths resolve where the `#[dialect]` module is declared.
 Registering an operation twice for one interface panics when that interface
@@ -265,10 +265,28 @@ error, is a function written next to the trait, such as
 Any crate can declare an interface; an implementation follows the orphan
 rule, so it lives with the interface or with the operation.
 
-`Pure` and `IsolatedFromAbove` are marker interfaces with no methods. An
-operation implements one with an empty `impl Pure for Addi {}` and lists it
-in `#[interfaces(..)]`; `DynPure::is_implemented(ctx, op)` and
-`DynIsolatedFromAbove::is_implemented(ctx, op)` query it.
+### Operation Flags
+
+An operation flag is a property without behavior, such as `Pure` and
+`IsolatedFromAbove` in `trunk_ir::op_flag`. An operation lists its flags in
+`#[flags(..)]`; they are stored in its `OpDef`, so a flag has no `impl` and
+no registry:
+
+```rust
+#[trunk_ir::dialect]
+mod arith {
+    #[flags(Pure)]
+    fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+}
+
+let removable = Pure::is_set(ctx, op); // `OpFlag::is_set`
+let isolated = def.has_flag::<IsolatedFromAbove>();
+```
+
+Only the dialect that defines an operation sets its flags. A property that
+another crate attaches to an operation it does not define is an interface,
+even without methods. A flag is a unit type implementing `OpFlag`, whose
+`DEF` points to a `static` `OpFlagDef` that identifies it by address.
 
 ## Working with IR
 
@@ -398,7 +416,7 @@ root for diagnostics only; do not look a written reference up by it.
 
 A direct call operation implements the `CallLike`
 [operation interface](#operation-interfaces), declared with
-`#[interfaces(CallLike)]`, so analyses can tell its callee
+`#[implements(CallLike)]`, so analyses can tell its callee
 from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;
 every other reference an operation holds takes its target's address, which
 the call graph records as an escape.

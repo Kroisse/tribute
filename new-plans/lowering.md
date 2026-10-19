@@ -34,7 +34,7 @@ passes should target `func.func` through `PassManager::nest::<func::Func>()`
 when they do not create, erase, or retarget sibling functions and do not need
 module-wide symbol or call-site decisions.
 
-Nested pass-manager anchors must be registered as `IsolatedFromAbove`.
+Nested pass-manager anchors must declare the `IsolatedFromAbove` flag.
 This keeps nested pipelines on operations whose regions can be reasoned about
 without capturing values from the parent scope. `func.func` and `core.module`
 are valid anchors; region-bearing control-flow operations such as `scf.if`

@@ -1,17 +1,17 @@
 error[E0277]: `Probe` does not implement the `Probed` operation interface
- --> tests/ui/interfaces_missing_impl.rs:8:18
+ --> tests/ui/implements_missing_impl.rs:8:18
   |
-8 |     #[interfaces(Probed)]
+8 |     #[implements(Probed)]
   |                  ^^^^^^ declared to implement `Probed`
   |
 help: the trait `Probed` is not implemented for `Probe`
- --> tests/ui/interfaces_missing_impl.rs:6:1
+ --> tests/ui/implements_missing_impl.rs:6:1
   |
 6 | #[trunk_ir::dialect]
   | ^^^^^^^^^^^^^^^^^^^^
   = note: add `impl Probed for Probe`
 help: this trait has no implementations, consider adding one
- --> tests/ui/interfaces_missing_impl.rs:3:1
+ --> tests/ui/implements_missing_impl.rs:3:1
   |
 3 | #[trunk_ir::op_interface]
   | ^^^^^^^^^^^^^^^^^^^^^^^^^

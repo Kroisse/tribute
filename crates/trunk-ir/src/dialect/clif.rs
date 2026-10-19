@@ -3,18 +3,17 @@
 use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
 use crate::dialect::core::{I32, IntegerLike};
-use crate::op_interface::{CallLike, IndirectCallLike, IsolatedFromAbove};
+use crate::op_flag::IsolatedFromAbove;
+use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
 
-impl IsolatedFromAbove for Func {}
-
 #[trunk_ir::dialect]
 mod clif {
     // Module
-    #[interfaces(IsolatedFromAbove)]
+    #[flags(IsolatedFromAbove)]
     fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
         {}
@@ -36,12 +35,12 @@ mod clif {
     /// bytes at `offset` of the enclosing `data`. Only a `data` region holds it.
     #[verify]
     fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
-    #[interfaces(CallLike)]
+    #[implements(CallLike)]
 
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
-    #[interfaces(IndirectCallLike)]
+    #[implements(IndirectCallLike)]
     fn call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
         callee: Value<_>,
@@ -128,10 +127,10 @@ mod clif {
     }
 
     fn trap(code: Attr<String>) {}
-    #[interfaces(CallLike)]
+    #[implements(CallLike)]
 
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
-    #[interfaces(IndirectCallLike)]
+    #[implements(IndirectCallLike)]
 
     fn return_call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
