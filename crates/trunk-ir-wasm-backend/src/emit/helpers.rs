@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::dialect::wasm;
-use trunk_ir::op_interface::IndirectCallLikeOps;
+use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap};
@@ -75,7 +75,8 @@ pub(crate) fn exact_call_indirect_signature(
     ctx: &IrContext,
     op: OpRef,
 ) -> CompilationResult<TypeRef> {
-    let signature = IndirectCallLikeOps::exact_signature(ctx, op)
+    let signature = DynIndirectCallLike::get(ctx, op)
+        .and_then(|call| call.exact_signature(ctx))
         .ok_or_else(|| CompilationError::invalid_module("wasm.call_indirect lacks signature"))?;
     exact_call_indirect_signature_with(ctx, op, signature)
 }
@@ -108,12 +109,17 @@ pub(crate) fn exact_call_indirect_signature_with_results(
     let (params, signature_results) = func_type_parts(ctx, signature).ok_or_else(|| {
         CompilationError::invalid_module("wasm.call_indirect signature must be wasm.func_sig")
     })?;
-    let Some(_table_index) = IndirectCallLikeOps::callee(ctx, op) else {
+    let Some(call) = DynIndirectCallLike::get(ctx, op) else {
+        return Err(CompilationError::invalid_module(
+            "wasm.call_indirect is not an indirect call",
+        ));
+    };
+    let Some(_table_index) = call.indirect_callee(ctx) else {
         return Err(CompilationError::invalid_module(
             "wasm.call_indirect requires a table index operand",
         ));
     };
-    let Some(args) = IndirectCallLikeOps::arguments(ctx, op) else {
+    let Some(args) = call.indirect_arguments(ctx) else {
         return Err(CompilationError::invalid_module(
             "wasm.call_indirect has malformed operands",
         ));
@@ -143,9 +149,11 @@ pub(crate) fn exact_return_call_indirect_signature(
     ctx: &IrContext,
     op: OpRef,
 ) -> CompilationResult<TypeRef> {
-    let signature = IndirectCallLikeOps::exact_signature(ctx, op).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.return_call_indirect lacks signature")
-    })?;
+    let signature = DynIndirectCallLike::get(ctx, op)
+        .and_then(|call| call.exact_signature(ctx))
+        .ok_or_else(|| {
+            CompilationError::invalid_module("wasm.return_call_indirect lacks signature")
+        })?;
     exact_return_call_indirect_signature_with(ctx, op, signature, &|ty| ty)
 }
 
@@ -165,12 +173,17 @@ pub(crate) fn exact_return_call_indirect_signature_with(
             "wasm.return_call_indirect signature must be wasm.func_sig",
         )
     })?;
-    let Some(table_index) = IndirectCallLikeOps::callee(ctx, op) else {
+    let Some(call) = DynIndirectCallLike::get(ctx, op) else {
+        return Err(CompilationError::invalid_module(
+            "wasm.return_call_indirect is not an indirect call",
+        ));
+    };
+    let Some(table_index) = call.indirect_callee(ctx) else {
         return Err(CompilationError::invalid_module(
             "wasm.return_call_indirect requires a table index operand",
         ));
     };
-    let Some(args) = IndirectCallLikeOps::arguments(ctx, op) else {
+    let Some(args) = call.indirect_arguments(ctx) else {
         return Err(CompilationError::invalid_module(
             "wasm.return_call_indirect has malformed operands",
         ));

@@ -777,7 +777,7 @@ pub fn set_indirect_call_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::op_interface::{DynIndirectCallLike, IndirectCallLikeOps};
+    use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
 
@@ -813,23 +813,18 @@ mod tests {
         let tail = body_op(2);
         let direct = body_op(3);
 
-        assert!(IndirectCallLikeOps::exact_signature(&ctx, ordinary).is_some());
-        assert!(DynIndirectCallLike::get(&ctx, plain).is_some());
-        assert_eq!(IndirectCallLikeOps::exact_signature(&ctx, plain), None);
-        assert!(IndirectCallLikeOps::exact_signature(&ctx, tail).is_some());
         for op in [ordinary, tail] {
+            let call = DynIndirectCallLike::get(&ctx, op).expect("indirect call");
             let operands = ctx.op_operands(op);
-            assert_eq!(IndirectCallLikeOps::callee(&ctx, op), Some(operands[0]));
-            assert_eq!(
-                IndirectCallLikeOps::arguments(&ctx, op),
-                Some(&operands[1..])
-            );
+            assert!(call.exact_signature(&ctx).is_some());
+            assert_eq!(call.indirect_callee(&ctx), Some(operands[0]));
+            assert_eq!(call.indirect_arguments(&ctx), Some(&operands[1..]));
         }
-        assert!(IndirectCallLikeOps::callee(&ctx, plain).is_some());
-        assert!(IndirectCallLikeOps::arguments(&ctx, plain).is_some());
+        let plain_call = DynIndirectCallLike::get(&ctx, plain).expect("plain indirect call");
+        assert_eq!(plain_call.exact_signature(&ctx), None);
+        assert!(plain_call.indirect_callee(&ctx).is_some());
+        assert!(plain_call.indirect_arguments(&ctx).is_some());
         assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
-        assert_eq!(IndirectCallLikeOps::callee(&ctx, direct), None);
-        assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct), None);
 
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("wasm.call_indirect"));

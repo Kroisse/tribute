@@ -204,16 +204,6 @@ pub trait CallableOwner: DialectOp {
     fn callable_signature(self, ctx: &IrContext) -> Option<crate::dialect::func::FuncSig>;
 }
 
-/// Static queries for [`CallableOwner`].
-pub struct CallableOwnerOps;
-
-impl CallableOwnerOps {
-    /// Outer None means unregistered; Some(None) means a malformed owner.
-    pub fn signature(ctx: &IrContext, op: OpRef) -> Option<Option<crate::dialect::func::FuncSig>> {
-        DynCallableOwner::get(ctx, op).map(|owner| owner.callable_signature(ctx))
-    }
-}
-
 /// Semantics of operations that leave the current callable.
 ///
 /// Callable exits are distinct from generic structured-region terminators:
@@ -257,15 +247,12 @@ pub trait CallableExit: DialectOp {
     }
 }
 
-/// Static queries for [`CallableExit`].
-pub struct CallableExitOps;
-
-impl CallableExitOps {
+impl DynCallableExit {
     /// Prove that an operation leaves the current callable.
     ///
     /// A missing registration and a failed typed query are both errors so
     /// generic consumers remain conservative.
-    pub fn exits_callable(ctx: &IrContext, op: OpRef) -> Result<(), ControlFlowInterfaceError> {
+    pub fn prove(ctx: &IrContext, op: OpRef) -> Result<(), ControlFlowInterfaceError> {
         DynCallableExit::get(ctx, op)
             .ok_or_else(|| {
                 ControlFlowInterfaceError::new("operation has no CallableExit registration")
@@ -308,32 +295,6 @@ pub trait IndirectCallLike: DialectOp {
     fn set_exact_signature(self, ctx: &mut IrContext, signature: TypeRef) -> bool;
 }
 
-/// Static queries for [`IndirectCallLike`].
-pub struct IndirectCallLikeOps;
-
-impl IndirectCallLikeOps {
-    /// Read an indirect transfer's exact callable signature, if it has one.
-    pub fn exact_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
-        DynIndirectCallLike::get(ctx, op).and_then(|call| call.exact_signature(ctx))
-    }
-
-    /// Set an indirect transfer's exact callable signature.
-    pub fn set_exact_signature(ctx: &mut IrContext, op: OpRef, signature: TypeRef) -> bool {
-        DynIndirectCallLike::get(ctx, op)
-            .is_some_and(|call| call.set_exact_signature(ctx, signature))
-    }
-
-    /// Read an indirect transfer's erased runtime callee or table-index value.
-    pub fn callee(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
-        DynIndirectCallLike::get(ctx, op).and_then(|call| call.indirect_callee(ctx))
-    }
-
-    /// Read arguments supplied to an indirect transfer, excluding its callee.
-    pub fn arguments(ctx: &IrContext, op: OpRef) -> Option<&[ValueRef]> {
-        DynIndirectCallLike::get(ctx, op).and_then(|call| call.indirect_arguments(ctx))
-    }
-}
-
 /// Block branch semantics.
 #[op_interface]
 pub trait Branch: DialectOp {
@@ -356,10 +317,7 @@ pub trait RegionBranch: DialectOp {
     ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
 }
 
-/// Transfer helpers for [`RegionBranch`].
-pub struct RegionBranchOps;
-
-impl RegionBranchOps {
+impl DynRegionBranch {
     /// Build the named value transfer for one already-reported successor.
     pub fn value_transfer(
         ctx: &IrContext,

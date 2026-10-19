@@ -544,7 +544,7 @@ pub fn set_indirect_call_signature(
 mod tests {
     use super::*;
     use crate::dialect::func;
-    use crate::op_interface::{DynIndirectCallLike, IndirectCallLikeOps};
+    use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
 
@@ -575,8 +575,6 @@ mod tests {
         let ordinary = body_op(0);
         let tail = body_op(1);
         let direct = body_op(2);
-        assert!(IndirectCallLikeOps::exact_signature(&ctx, ordinary).is_some());
-        assert!(IndirectCallLikeOps::exact_signature(&ctx, tail).is_some());
         let nil = crate::dialect::core::Nil::params()
             .intern(&mut ctx)
             .as_type_ref();
@@ -586,16 +584,13 @@ mod tests {
             "a shared signature must not replace the target-owned contract"
         );
         for op in [ordinary, tail] {
+            let call = DynIndirectCallLike::get(&ctx, op).expect("indirect call");
             let operands = ctx.op_operands(op);
-            assert_eq!(IndirectCallLikeOps::callee(&ctx, op), Some(operands[0]));
-            assert_eq!(
-                IndirectCallLikeOps::arguments(&ctx, op),
-                Some(&operands[1..])
-            );
+            assert!(call.exact_signature(&ctx).is_some());
+            assert_eq!(call.indirect_callee(&ctx), Some(operands[0]));
+            assert_eq!(call.indirect_arguments(&ctx), Some(&operands[1..]));
         }
         assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
-        assert_eq!(IndirectCallLikeOps::callee(&ctx, direct), None);
-        assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct), None);
 
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("clif.call_indirect"));

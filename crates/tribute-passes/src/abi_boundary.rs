@@ -15,7 +15,7 @@ use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::op_interface::IndirectCallLikeOps;
+use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
@@ -315,10 +315,8 @@ impl<'a> Verifier<'a> {
         }
         let has_exact_signature = if let Ok(function) = func::Func::from_op(ctx, op) {
             Some(func::FuncSig::from_type_ref(ctx, function.r#type(ctx)).is_some())
-        } else if func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op) {
-            Some(IndirectCallLikeOps::exact_signature(ctx, op).is_some())
         } else {
-            None
+            DynIndirectCallLike::get(ctx, op).map(|call| call.exact_signature(ctx).is_some())
         };
         if has_exact_signature == Some(false) {
             self.report(ViolationKind::MissingExactSignature, Some(op), op_name);

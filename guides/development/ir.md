@@ -261,9 +261,18 @@ if let Some(branch) = DynBranch::get(ctx, op) {
 let is_branch = DynBranch::is_implemented(ctx, op);
 ```
 
-A query that combines interfaces, or turns a missing implementation into an
-error, is a function written next to the trait, such as
-`RegionBranchOps::value_transfer` and `CallableExitOps::exits_callable`.
+Every interface query starts from the handle. A query that combines
+interfaces, or turns a missing implementation into an error, is an
+associated function in a hand-written `impl DynFoo` block next to the trait,
+such as `DynRegionBranch::value_transfer(ctx, op, point, successor)` and
+`DynCallableExit::prove(ctx, op)`. Other queries call the handle's methods
+directly, getting the handle once when they ask it several things:
+
+```rust
+let call = DynIndirectCallLike::get(ctx, op)?;
+let (callee, signature) = (call.indirect_callee(ctx)?, call.exact_signature(ctx));
+```
+
 Any crate can declare an interface; an implementation follows the orphan
 rule, so it lives with the interface or with the operation.
 

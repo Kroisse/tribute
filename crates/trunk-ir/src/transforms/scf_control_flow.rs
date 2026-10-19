@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
 use crate::context::IrContext;
 use crate::dialect::scf;
-use crate::op_interface::{CallableExitOps, DynRegionBranch, RegionBranchPoint, RegionSuccessor};
+use crate::op_interface::{DynCallableExit, DynRegionBranch, RegionBranchPoint, RegionSuccessor};
 use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, RegionRef};
 use crate::walk::{WalkAction, walk_op};
@@ -127,7 +127,7 @@ impl StructuredControlAnalysis {
         } else if scf::Switch::matches(ctx, last) {
             self.is_terminal_resultless_switch(last)
         } else {
-            CallableExitOps::exits_callable(ctx, last).is_ok()
+            DynCallableExit::prove(ctx, last).is_ok()
         }
     }
 }

@@ -529,7 +529,7 @@ mod tests {
         assert!(is_evidence_type_ref(&ctx, evidence));
         assert_eq!(ctx.get_type(evidence).params.as_slice(), [marker]);
     }
-    use trunk_ir::op_interface::CallableExitOps;
+    use trunk_ir::op_interface::DynCallableExit;
     use trunk_ir::ops::{DialectOp, DialectType};
 
     #[test]
@@ -677,7 +677,7 @@ mod tests {
                 .expect("function");
             let handle = ctx.block(ctx.region(function.body(&ctx)).blocks[0]).ops[0];
 
-            assert!(CallableExitOps::exits_callable(&ctx, handle).is_err());
+            assert!(DynCallableExit::prove(&ctx, handle).is_err());
         }
     }
 }

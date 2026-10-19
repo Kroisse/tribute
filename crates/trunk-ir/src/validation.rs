@@ -26,7 +26,7 @@ use super::context::IrContext;
 use super::op_def::OpDef;
 use super::op_flag::{IsolatedFromAbove, OpFlag};
 use super::op_interface::{
-    CallableExitOps, DynBranch, DynRegionBranch, DynRegionBranchTerminator, RegionBranchOps,
+    DynBranch, DynCallableExit, DynCallableOwner, DynRegionBranch, DynRegionBranchTerminator,
     RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
 };
 use super::ops::{DialectOp, DialectType};
@@ -537,8 +537,8 @@ fn enclosing_func_signature(
         let block = ctx.op(op).parent_block?;
         let region = ctx.block(block).parent_region?;
         op = ctx.region(region).parent_op?;
-        if let Some(signature) = crate::op_interface::CallableOwnerOps::signature(ctx, op) {
-            return signature;
+        if let Some(owner) = DynCallableOwner::get(ctx, op) {
+            return owner.callable_signature(ctx);
         }
         if IsolatedFromAbove::is_set(ctx, op) {
             return None;
@@ -904,7 +904,7 @@ fn validate_region_transfer(
         ));
         return;
     }
-    let transfer = match RegionBranchOps::value_transfer(ctx, owner, point, successor) {
+    let transfer = match DynRegionBranch::value_transfer(ctx, owner, point, successor) {
         Ok(transfer) => transfer,
         Err(error) => {
             errors.push(operation_verifier_error(
@@ -1132,9 +1132,7 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
             }
             // An arm may leave the callable instead of yielding; the result
             // then comes from the arms that yield.
-            if !ctx.op_results(op).is_empty()
-                && CallableExitOps::exits_callable(ctx, yield_op).is_ok()
-            {
+            if !ctx.op_results(op).is_empty() && DynCallableExit::prove(ctx, yield_op).is_ok() {
                 continue;
             }
             errors.push(operation_verifier_error(
@@ -2901,7 +2899,7 @@ mod tests {
         let continues = operations_named(&ctx, module, crate::dialect::scf::Continue::NAME);
         assert_eq!(continues.len(), 1);
         let continue_op = continues[0];
-        let backedge = RegionBranchOps::value_transfer(
+        let backedge = DynRegionBranch::value_transfer(
             &ctx,
             loop_op,
             RegionBranchPoint::Terminator(continue_op),
@@ -2914,7 +2912,7 @@ mod tests {
         let breaks = operations_named(&ctx, module, crate::dialect::scf::Break::NAME);
         assert_eq!(breaks.len(), 1);
         let break_op = breaks[0];
-        let exit = RegionBranchOps::value_transfer(
+        let exit = DynRegionBranch::value_transfer(
             &ctx,
             loop_op,
             RegionBranchPoint::Terminator(break_op),
@@ -3188,7 +3186,7 @@ mod tests {
 
         let constant = operations_named(&ctx, module, crate::dialect::arith::Const::NAME)[0];
         assert!(
-            RegionBranchOps::value_transfer(
+            DynRegionBranch::value_transfer(
                 &ctx,
                 constant,
                 RegionBranchPoint::Parent,
@@ -3199,7 +3197,7 @@ mod tests {
             .contains("no RegionBranch registration")
         );
         assert!(
-            RegionBranchOps::value_transfer(
+            DynRegionBranch::value_transfer(
                 &ctx,
                 if_op,
                 RegionBranchPoint::Terminator(constant),
