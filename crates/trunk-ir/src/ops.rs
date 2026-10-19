@@ -206,7 +206,7 @@ pub mod __private {
     #[diagnostic::on_unimplemented(
         message = "`{Self}` is declared with `#[alias_hint]` but does not implement `TypeAliasHint`",
         label = "`#[alias_hint]` requires this implementation",
-        note = "add `impl TypeAliasHint for {Self} {{ fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str> {{ .. }} }}`"
+        note = "add `impl TypeAliasHint for {Self} {{ fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {{ .. }} }}`"
     )]
     pub trait DeclaredTypeAliasHint {
         const ALIAS_HINT: TypeAliasHook;

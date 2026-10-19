@@ -9,5 +9,5 @@ help: the trait `trunk_ir::ops::__private::DeclaredTypeAliasHint` is not impleme
   |
 1 | #[trunk_ir::dialect]
   | ^^^^^^^^^^^^^^^^^^^^
-  = note: add `impl TypeAliasHint for Named { fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str> { .. } }`
+  = note: add `impl TypeAliasHint for Named { fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> { .. } }`
   = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

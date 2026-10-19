@@ -1648,7 +1648,7 @@ mod tests {
     }
 
     impl crate::asm_format::TypeAliasHint for Record {
-        fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str> {
+        fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
             ctx.type_attrs(ty).get_str("name")
         }
     }

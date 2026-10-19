@@ -117,25 +117,25 @@ fn alias_from_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 }
 
 impl TypeAliasHint for Struct {
-    fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str> {
+    fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
         alias_from_name(ctx, ty)
     }
 }
 
 impl TypeAliasHint for Enum {
-    fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str> {
+    fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
         alias_from_name(ctx, ty)
     }
 }
 
 impl TypeAliasHint for Typeref {
-    fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str> {
+    fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
         alias_from_name(ctx, ty)
     }
 }
 
 impl TypeAliasHint for Variant {
-    fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str> {
+    fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
         alias_from_name(ctx, ty)
     }
 }

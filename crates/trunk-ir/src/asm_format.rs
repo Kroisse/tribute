@@ -25,13 +25,13 @@ use crate::{IrContext, OpRef, TypeRef};
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is declared with `#[alias_hint]` but does not implement `TypeAliasHint`",
     label = "`#[alias_hint]` requires this implementation",
-    note = "add `impl TypeAliasHint for {Self} {{ fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str> {{ .. }} }}`"
+    note = "add `impl TypeAliasHint for {Self} {{ fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {{ .. }} }}`"
 )]
 pub trait TypeAliasHint: DialectType {
     /// Suggest an alias name for a type of this kind, given by name. Like a
     /// verifier, it takes the raw type, so a malformed type can still
     /// suggest a name.
-    fn alias_hint<'a>(ctx: &'a IrContext, ty: TypeRef) -> Option<&'a str>;
+    fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str>;
 }
 
 /// A type's alias name hint, calling the wrapper's [`TypeAliasHint`] impl.
