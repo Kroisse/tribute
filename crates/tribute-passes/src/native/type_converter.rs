@@ -12,6 +12,7 @@
 //! | `tribute_rt.nat`    | `core.i32`  | Arbitrary precision -> i32 (Ph. 1) |
 //! | `tribute_rt.bool`   | `core.i32`  | Boolean as i32                     |
 //! | `core.i1`           | `core.i32`  | Native uses i32 for booleans       |
+//! | `core.index`        | `core.i64`  | Pointer width                      |
 //! | `tribute_rt.float`  | `core.f64`  | Float as f64                       |
 //! | `tribute_rt.intref` | `core.ptr`  | Boxed integer as heap pointer      |
 //! | `tribute_rt.anyref` | `core.ptr`  | Uniform representation as pointer  |
@@ -60,6 +61,7 @@ pub struct NativeTypeRefs {
     pub core_ptr: TypeRef,
     pub core_nil: TypeRef,
     pub core_i8: TypeRef,
+    pub core_index: TypeRef,
 
     // Special types
     pub evidence_ty: TypeRef,
@@ -85,6 +87,7 @@ impl NativeTypeRefs {
             core_ptr: core::Ptr::params().intern(ctx).as_type_ref(),
             core_nil: core::Nil::params().intern(ctx).as_type_ref(),
             core_i8: TypeDataBuilder::new("core.i8").intern(ctx),
+            core_index: core::Index::type_ref(ctx),
 
             evidence_ty: ability::evidence_adt_type_ref(ctx),
             marker_ty: ability::marker_adt_type_ref(ctx),
@@ -113,6 +116,9 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         }
         if ty == r.core_i1 {
             return Some(r.core_i32);
+        }
+        if ty == r.core_index {
+            return Some(r.core_i64);
         }
         if ty == r.tribute_rt_float {
             return Some(r.core_f64);
@@ -280,6 +286,7 @@ impl NativeTypeRefs {
             core_ptr: self.core_ptr,
             core_nil: self.core_nil,
             core_i8: self.core_i8,
+            core_index: self.core_index,
             evidence_ty: self.evidence_ty,
             marker_ty: self.marker_ty,
         }
@@ -303,6 +310,7 @@ struct NativeTypeRefsCopy {
     core_ptr: TypeRef,
     core_nil: TypeRef,
     core_i8: TypeRef,
+    core_index: TypeRef,
     evidence_ty: TypeRef,
     marker_ty: TypeRef,
 }
@@ -323,6 +331,18 @@ mod tests {
         assert_eq!(
             type_converter.convert_type(&ctx, refs.tribute_rt_anyref),
             Some(refs.core_ptr)
+        );
+    }
+
+    #[test]
+    fn native_type_converter_maps_index_to_pointer_width() {
+        let mut ctx = IrContext::new();
+        let (type_converter, refs) = native_type_converter(&mut ctx);
+        let index = core::Index::type_ref(&mut ctx);
+
+        assert_eq!(
+            type_converter.convert_type(&ctx, index),
+            Some(refs.core_i64)
         );
     }
 

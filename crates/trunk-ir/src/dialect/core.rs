@@ -88,6 +88,72 @@ impl IntegerLike {
     }
 }
 
+/// Fixed-width integers and the address-width `core.index`.
+///
+/// `arith` integer arithmetic, bitwise operations, comparisons, and constants
+/// accept both. Operations that read a width stay on [`IntegerLike`].
+pub struct IntegerOrIndex;
+
+impl crate::type_constraint::TypeConstraint for IntegerOrIndex {
+    const DESC: &'static crate::type_constraint::ConstraintDesc =
+        &crate::type_constraint::ConstraintDesc {
+            name: "IntegerOrIndex",
+            exact: false,
+            projections: &[],
+            matches: Self::matches,
+            project: |_, _, _| None,
+            fixed: None,
+        };
+}
+
+impl IntegerOrIndex {
+    pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+        IntegerLike::matches(ctx, ty) || Index::matches(ctx, ty)
+    }
+}
+
+/// `core.index`: a signless integer as wide as the target's addresses.
+///
+/// The target chooses its width, which is at least 32 bits; it has no
+/// width before target type conversion, so it is not [`IntegerLike`].
+pub struct Index;
+
+impl Index {
+    /// The type's registered definition.
+    pub const DEF: &'static crate::TypeDef = {
+        static DEF: crate::TypeDef = crate::TypeDef::new("core.index");
+        &DEF
+    };
+    /// The type's name, which points to [`DEF`](Self::DEF).
+    pub const NAME: crate::TypeName = crate::TypeName::registered(Self::DEF);
+    /// The narrowest index width of any supported target.
+    pub const MIN_WIDTH: u32 = 32;
+
+    pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+        let data = ctx.get_type(ty);
+        data.name == Self::NAME && data.params.is_empty() && data.attrs.is_empty()
+    }
+
+    /// Intern `core.index`.
+    pub fn type_ref(ctx: &mut IrContext) -> TypeRef {
+        crate::TypeDataBuilder::new(Self::NAME).intern(ctx)
+    }
+}
+
+crate::register_type_def!(Index::DEF);
+
+impl crate::type_constraint::TypeConstraint for Index {
+    const DESC: &'static crate::type_constraint::ConstraintDesc =
+        &crate::type_constraint::ConstraintDesc {
+            name: "core.index",
+            exact: true,
+            projections: &[],
+            matches: Self::matches,
+            project: |_, _, _| None,
+            fixed: Some(Self::type_ref),
+        };
+}
+
 /// The boolean integer type `core.i1`.
 pub struct BoolLike;
 
@@ -135,7 +201,7 @@ impl FloatLike {
     }
 }
 
-/// Numeric types: integers and floats.
+/// Numeric types: integers, `core.index`, and floats.
 pub struct NumericLike;
 
 impl crate::type_constraint::TypeConstraint for NumericLike {
@@ -152,11 +218,11 @@ impl crate::type_constraint::TypeConstraint for NumericLike {
 
 impl NumericLike {
     pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
-        IntegerLike::matches(ctx, ty) || FloatLike::matches(ctx, ty)
+        IntegerOrIndex::matches(ctx, ty) || FloatLike::matches(ctx, ty)
     }
 }
 
-/// Machine scalar types: integers, floats, and `core.ptr`.
+/// Machine scalar types: integers, `core.index`, floats, and `core.ptr`.
 ///
 /// These are the values a single machine load or store moves; aggregates and
 /// managed references are not scalars.
@@ -510,5 +576,50 @@ mod scalar_category_tests {
         let f064 = TypeDataBuilder::new("core.f064").intern(&mut ctx);
         assert!(!FloatLike::matches(&ctx, f064));
         assert!(!FloatLike::matches(&ctx, i1));
+    }
+
+    #[test]
+    fn index_is_an_address_width_integer_without_a_fixed_width() {
+        let mut ctx = IrContext::new();
+        let index = core::Index::type_ref(&mut ctx);
+        let i64 = core::I64::type_ref(&mut ctx);
+        assert_eq!(index, TypeDataBuilder::new("core.index").intern(&mut ctx));
+        assert!(!IntegerLike::matches(&ctx, index));
+        assert!(IntegerOrIndex::matches(&ctx, index));
+        assert!(IntegerOrIndex::matches(&ctx, i64));
+        assert!(NumericLike::matches(&ctx, index));
+        assert!(ScalarLike::matches(&ctx, index));
+        assert!(!core::Index::matches(&ctx, i64));
+        let with_attr = TypeDataBuilder::new("core.index")
+            .attr("x", Attribute::Int(0))
+            .intern(&mut ctx);
+        assert!(!core::Index::matches(&ctx, with_attr));
+    }
+
+    #[test]
+    fn index_round_trips_through_text() {
+        let input = r#"core.module @test {
+  func.func @f(%i: core.index, %n: core.i32) -> core.index {
+    %c = arith.index_castsi %n : core.index
+    %r = arith.addi %i, %c : core.index
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let printed = crate::printer::print_module(&ctx, module.op());
+        assert!(
+            printed.contains("(%0: core.index, %1: core.i32) -> core.index"),
+            "{printed}"
+        );
+        assert!(printed.contains("arith.index_castsi"), "{printed}");
+        let mut reparsed_ctx = IrContext::new();
+        let reparsed = crate::parser::parse_test_module(&mut reparsed_ctx, &printed);
+        assert_eq!(
+            crate::printer::print_module(&reparsed_ctx, reparsed.op()),
+            printed
+        );
+        let index = core::Index::type_ref(&mut ctx);
+        assert_eq!(crate::printer::print_type(&ctx, index), "core.index");
     }
 }

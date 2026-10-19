@@ -128,8 +128,11 @@ pub fn box_or_unbox(
     let from = ctx.value_ty(value);
     let op = if Anyref::matches(ctx, to) {
         match Scalar::of(ctx, from)? {
-            // Nat shares the int box.
-            Scalar::Int | Scalar::Nat => BoxInt::operands(value)
+            Scalar::Int => BoxInt::operands(value)
+                .results(to)
+                .build(ctx, location)
+                .op_ref(),
+            Scalar::Nat => BoxNat::operands(value)
                 .results(to)
                 .build(ctx, location)
                 .op_ref(),
@@ -367,9 +370,8 @@ mod tests {
         let function = module.ops(&ctx)[0];
         let body = ctx.op_region(function, 0).expect("function body");
         let entry = ctx.region(body).blocks[0];
-        let [i, n, b, f, any, p] = ctx.block_args(entry)[..] else {
-            panic!("six parameters");
-        };
+        let [i, n, b, f, any, p]: [trunk_ir::refs::ValueRef; 6] =
+            ctx.block_args(entry).try_into().expect("six parameters");
         let (i32_ty, nat_ty, i1_ty, f64_ty, anyref_ty) = (
             ctx.value_ty(i),
             ctx.value_ty(n),
@@ -379,7 +381,7 @@ mod tests {
         );
         for (value, to, expected) in [
             (i, anyref_ty, "tribute_rt.box_int"),
-            (n, anyref_ty, "tribute_rt.box_int"),
+            (n, anyref_ty, "tribute_rt.box_nat"),
             (b, anyref_ty, "tribute_rt.box_bool"),
             (f, anyref_ty, "tribute_rt.box_float"),
             (any, i32_ty, "tribute_rt.unbox_int"),

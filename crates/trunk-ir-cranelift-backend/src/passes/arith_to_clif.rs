@@ -39,6 +39,7 @@ pub fn lower(
         .add_pattern(ArithNegPattern)
         .add_pattern(ArithBitwisePattern)
         .add_pattern(ArithConversionPattern)
+        .add_pattern(ArithIndexCastPattern)
         .with_target(arith_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "arith-to-clif")?;
     Ok(())
@@ -549,6 +550,67 @@ impl RewritePattern for ArithConversionPattern {
     }
 }
 
+/// `arith.index_castsi` / `arith.index_castui` between the fixed-width
+/// integers that type conversion gave both sides: an extension by the
+/// operation's signedness, a reduction, or nothing when the widths agree.
+struct ArithIndexCastPattern;
+
+impl RewritePattern for ArithIndexCastPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let signed = arith::IndexCastsi::matches(ctx, op);
+        if !signed && !arith::IndexCastui::matches(ctx, op) {
+            return false;
+        }
+        let Some(&operand) = ctx.op_operands(op).first() else {
+            return false;
+        };
+        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
+            return false;
+        };
+        // An index without a target width stays unconverted and fails the
+        // conversion boundary.
+        let (Some(from), Some(to)) = (
+            IntegerLike::width(ctx, ctx.value_ty(operand)),
+            IntegerLike::width(ctx, result_ty),
+        ) else {
+            return false;
+        };
+        // As for `arith.extsi`, a boolean held as an `i8` 0 or 1 has no
+        // sign-extending instruction.
+        if (from == 1 && signed) || to == 1 {
+            return false;
+        }
+        if from == to {
+            rewriter.erase_op(vec![operand]);
+            return true;
+        }
+        let loc = ctx.op(op).location;
+        let new_op = if from > to {
+            clif::Ireduce::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else if signed {
+            clif::Sextend::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else {
+            clif::Uextend::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        };
+        rewriter.replace_op(new_op);
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use trunk_ir::context::IrContext;
@@ -562,6 +624,43 @@ mod tests {
         let type_converter = TypeConverter::new();
         super::lower(&mut ctx, module, type_converter).unwrap();
         print_module(&ctx, module.op())
+    }
+
+    /// Lower `ir` with `core.index` converted to `core.i64`.
+    fn run_pass_with_64_bit_index(ir: &str) -> String {
+        use trunk_ir::dialect::core;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        let i64_ty = core::I64::type_ref(&mut ctx);
+        let mut type_converter = TypeConverter::new();
+        type_converter
+            .add_conversion(move |ctx, ty| core::Index::matches(ctx, ty).then_some(i64_ty));
+        super::lower(&mut ctx, module, type_converter).unwrap();
+        print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn index_casts_lower_to_extensions_and_reductions_at_the_converted_width() {
+        let output = run_pass_with_64_bit_index(
+            r#"core.module @test {
+  func.func @f(%n: core.i32, %w: core.i64) -> core.i64 {
+    %a = arith.index_castsi %n : core.index
+    %b = arith.index_castui %n : core.index
+    %c = arith.index_castsi %w : core.index
+    %sum = arith.addi %a, %b : core.index
+    %d = arith.addi %sum, %c : core.index
+    %narrow = arith.index_castui %d : core.i32
+    %wide = arith.index_castsi %d : core.i64
+    func.return %wide
+  }
+}"#,
+        );
+        assert!(output.contains("clif.sextend"), "{output}");
+        assert!(output.contains("clif.uextend"), "{output}");
+        assert!(output.contains("clif.ireduce"), "{output}");
+        assert!(!output.contains("arith."), "{output}");
+        assert!(!output.contains(": core.index"), "{output}");
+        insta::assert_snapshot!(output);
     }
 
     #[test]

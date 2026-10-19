@@ -1,0 +1,14 @@
+---
+source: crates/trunk-ir-cranelift-backend/src/passes/arith_to_clif.rs
+expression: output
+---
+core.module @test {
+  func.func @f(%0: core.i32, %1: core.i64) -> core.i64 {
+      %2 = clif.sextend %0 : core.i64
+      %3 = clif.uextend %0 : core.i64
+      %4 = clif.iadd %2, %3 : core.i64
+      %5 = clif.iadd %4, %1 : core.i64
+      %6 = clif.ireduce %5 : core.i32
+      func.return %5
+  }
+}

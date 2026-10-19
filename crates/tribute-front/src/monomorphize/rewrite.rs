@@ -71,10 +71,10 @@ fn specialized_callee<'db>(
     let ResolvedRef::Function { id } = &typed_ref.resolved else {
         return None;
     };
-    let entries = rewrite_map.get(id)?;
-    if instance.function != *id {
+    if !keys.refers_to(*id, instance.function) {
         return None;
     }
+    let entries = rewrite_map.get(&instance.function)?;
     let key = keys.key(instance, enclosing)?;
     let (_, mangled) = entries.iter().find(|(entry, _)| *entry == key)?;
     Some(TypedRef::new(
