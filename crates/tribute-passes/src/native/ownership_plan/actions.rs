@@ -456,7 +456,7 @@ impl ActionPlanner<'_> {
             ));
         }
         let root = root_value(self.facts.aliases(), *input);
-        if root != *input {
+        if exact_closure_root(self.ir, *input) != root {
             return Err(OwnershipPlanError::new(
                 "tribute_rt.into_raw requires an exact closure ownership value",
             ));
@@ -541,7 +541,7 @@ pub(super) fn exact_into_raw_transfers(
 ) -> Result<(BlockRef, Vec<OpRef>), OwnershipPlanError> {
     if ctx.value_ty(source) != closure_layout
         || !is_internal_closure_layout(ctx, closure_layout, managed_layouts)
-        || is_closure_alias(ctx, source)
+        || (exact_closure_root(ctx, source) == source && is_closure_alias(ctx, source))
     {
         return Err(OwnershipPlanError::new(
             "tribute_rt.into_raw requires an exact closure ownership value",
@@ -585,6 +585,30 @@ pub(super) fn exact_into_raw_transfers(
         .filter(|op| users.contains(op))
         .collect();
     Ok((block, transfers))
+}
+
+/// The allocation an exact closure ownership value starts from: the value
+/// itself, or the closure allocation it is an upcast of. Each upcast takes a
+/// closure layout to another and is the only use of its input, so the
+/// allocation's unit has one path to `value`.
+fn exact_closure_root(ctx: &IrContext, value: ValueRef) -> ValueRef {
+    let mut current = value;
+    loop {
+        let ValueDef::OpResult(op, _) = ctx.value_def(current) else {
+            return current;
+        };
+        let Ok(cast) = core::UnrealizedConversionCast::from_op(ctx, op) else {
+            return current;
+        };
+        let input = cast.value(ctx);
+        if !crate::closure_lower::is_closure_layout(ctx, ctx.value_ty(input))
+            || !crate::closure_lower::is_closure_layout(ctx, ctx.value_ty(current))
+            || ctx.uses(input).len() != 1
+        {
+            return current;
+        }
+        current = input;
+    }
 }
 
 fn is_closure_alias(ctx: &IrContext, value: ValueRef) -> bool {

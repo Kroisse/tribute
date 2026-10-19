@@ -295,6 +295,8 @@ pub enum StructTypeError {
     DuplicateFieldName(#[error(not(source))] String),
     #[display("`fields` is not an `adt.struct` attribute; fields are type parameters")]
     FieldsAttribute,
+    #[display("closure base fields are not a prefix of the closure capture layout")]
+    ClosureBasePrefix,
 }
 
 impl trunk_ir::type_verifier::VerifyType for Struct {
@@ -323,6 +325,21 @@ impl trunk_ir::type_verifier::VerifyType for Struct {
                 return Err(StructTypeError::DuplicateFieldName(ctx.str(name).to_owned()).into());
             }
             names.push(name);
+        }
+        if let Some(base) = ctx
+            .type_attrs(ty)
+            .get_type(crate::runtime_layout::CLOSURE_BASE_ATTR)
+        {
+            let base_data = ctx.get_type(base);
+            let prefix = base_data.name == data.name
+                && base_data.params.len() <= data.params.len()
+                && (0..base_data.params.len()).all(|index| {
+                    base_data.params[index] == data.params[index]
+                        && base_data.param_attrs(ctx, index) == data.param_attrs(ctx, index)
+                });
+            if !prefix {
+                return Err(StructTypeError::ClosureBasePrefix.into());
+            }
         }
         Ok(Self(ty))
     }

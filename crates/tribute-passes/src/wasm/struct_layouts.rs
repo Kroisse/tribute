@@ -24,10 +24,29 @@ use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm;
 use trunk_ir::ops::DialectType;
 
-/// The `wasm_gc.struct` of the user struct layout `ty`, or `None` when `ty`
-/// is not a user `adt.struct`.
+/// The `wasm_gc.struct` of the user struct or closure capture layout `ty`,
+/// or `None` when `ty` is neither.
 pub fn struct_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
-    if !ctx.get_type(ty).name.is(ctx, "adt.struct") || !has_descriptor_field(ctx, ty) {
+    if !ctx.get_type(ty).name.is(ctx, "adt.struct") {
+        return None;
+    }
+    if let Some(base) = ctx
+        .type_attrs(ty)
+        .get_type(tribute_ir::runtime_layout::CLOSURE_BASE_ATTR)
+    {
+        let fields = get_struct_fields(ctx, ty)?;
+        let params: Vec<_> = fields
+            .into_iter()
+            .map(|(_, field)| field_type(ctx, field))
+            .collect();
+        return Some(
+            wasm_gc::Struct::params(params)
+                .supertype(base)
+                .intern(ctx)
+                .as_type_ref(),
+        );
+    }
+    if !has_descriptor_field(ctx, ty) {
         return None;
     }
     let fields = get_struct_fields(ctx, ty)?;
@@ -186,7 +205,7 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
+  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !Inner = adt.struct<Inner(value: core.i64)>
   !E = adt.enum<E { None() }>
   !Outer = adt.struct<Outer(flag: core.i1, next: adt.typeref<{name = "Outer"}>, e: !E, inner: !Inner, f: !Closure)>

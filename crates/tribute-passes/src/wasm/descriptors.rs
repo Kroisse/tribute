@@ -22,9 +22,9 @@ use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
 use trunk_ir_wasm_backend::passes::wasm_gc_to_wasm::builtin_type_idx;
 
 /// Whether objects of the struct or enum layout `ty` carry a leading
-/// descriptor field. Builtin layouts do not.
+/// descriptor field. Builtin and closure layouts do not.
 pub fn has_descriptor_field(ctx: &IrContext, ty: TypeRef) -> bool {
-    builtin_type_idx(ctx, ty).is_none()
+    builtin_type_idx(ctx, ty).is_none() && !crate::closure_lower::is_closure_layout(ctx, ty)
 }
 
 /// Declare the module's user allocation descriptors in allocation order.
@@ -104,13 +104,13 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !S = adt.struct<S(next: adt.typeref<{name = "S"}>, any: tribute_rt.anyref, n: tribute_rt.nat)>
-  !Closure = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
+  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !E = adt.enum<E { None(), Some(core.f64) }>
   wasm.func @main(%next: adt.typeref<{name = "S"}>, %any: tribute_rt.anyref, %n: tribute_rt.nat, %x: core.f64) -> core.nil {
     %one = wasm.i32_const {value = 1} : core.i32
     %some = adt.variant_new %x {type = !E, tag = "Some"} : !E
     %s = adt.struct_new %next, %any, %n {type = !S} : !S
-    %closure = adt.struct_new %one, %any {type = !Closure} : !Closure
+    %closure = adt.struct_new %one {type = !Closure} : !Closure
     %again = adt.variant_new %x {type = !E, tag = "Some"} : !E
     wasm.return
   }

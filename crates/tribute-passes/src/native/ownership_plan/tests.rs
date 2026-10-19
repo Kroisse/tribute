@@ -415,7 +415,8 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
         r#"core.module @test {
   !Frame = adt.struct<ContinuationFrame(value: core.i32)>
   !FrameRef = adt.typeref<{name = "ContinuationFrame"}>
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: !FrameRef), {layout = "closure"}>
+  !Base = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !_closure = adt.struct<_closure_captures(code: core.i32, _0: !FrameRef), {closure_base = !Base, layout = "closure_captures"}>
   func.func @capture(%frame: !FrameRef) -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %closure = adt.struct_new %code, %frame {type = !_closure} : !_closure
@@ -426,10 +427,10 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
     let plan = acquiring_plan(&ctx, module).expect("typed ownership plan");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
     let materialized = print_module(&ctx, module.op());
-    // Frame: i32 payload (4) + header (8). Closure: i32 plus aligned frame
-    // pointer payload (16) + header (8).
+    // Frame: i32 payload (4) + header (8). The closure's size depends on its
+    // native capture layout, so its header RTTI resolves it at release.
     assert!(materialized.contains("alloc_size = 12"), "{materialized}");
-    assert!(materialized.contains("alloc_size = 24"), "{materialized}");
+    assert!(materialized.contains("alloc_size = 0"), "{materialized}");
 }
 
 #[test]
@@ -438,12 +439,12 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+  !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %closure = adt.struct_new %code {type = !_closure} : !_closure
     %extended = effect.extend %evidence, %prompt, %closure, %evidence {ability = @State} : !Evidence
     func.return
   }
@@ -497,12 +498,12 @@ fn native_evidence_lowers_a_managed_dispatcher_to_into_raw() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+  !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %tr = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %tr = adt.struct_new %code {type = !_closure} : !_closure
     %extended = effect.extend %evidence, %prompt, %tr, %evidence {ability = @State} : !Evidence
     func.return
   }
@@ -524,14 +525,14 @@ fn native_evidence_lowers_a_managed_dispatcher_to_into_raw() {
 fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+  !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   func.func @escape(%value: core.ptr) -> core.nil attributes {abi = "C"} {
     func.unreachable
   }
   func.func @install() -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %closure = adt.struct_new %code {type = !_closure} : !_closure
     %raw = core.unrealized_conversion_cast %closure : core.ptr
     %result = func.call %raw {callee = @escape} : core.nil
     func.return
@@ -545,11 +546,11 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
 fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+  !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   func.func @install() -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %closure = adt.struct_new %code {type = !_closure} : !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return
   }
@@ -580,11 +581,11 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
 fn into_raw_fixture(transfers: &str) -> String {
     [
         r#"core.module @test {
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+  !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   func.func @transfers() -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %closure = adt.struct_new %code {type = !_closure} : !_closure
 "#,
         transfers,
         r#"
@@ -698,12 +699,12 @@ fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfe
 #[test]
 fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
     let ir = r#"core.module @test {
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+  !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !Owner = adt.struct<Owner(closure: !_closure)>
   func.func @transfers() -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %stored = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %stored = adt.struct_new %code {type = !_closure} : !_closure
     %owner = adt.struct_new %stored {type = !Owner} : !Owner
     %closure = adt.struct_get %owner {field = 0, type = !Owner} : !_closure
     %first = tribute_rt.into_raw %closure : core.ptr
@@ -745,11 +746,11 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
 fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+  !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   func.func @later_use() -> !_closure {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %closure = adt.struct_new %code {type = !_closure} : !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return %closure
   }
@@ -758,12 +759,12 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
     );
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+  !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   func.func @cross_block() -> core.nil {
     ^entry:
       %code = arith.const {value = 0} : core.i32
       %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+      %closure = adt.struct_new %code {type = !_closure} : !_closure
       %first = tribute_rt.into_raw %closure : core.ptr
       cf.br [^next]
     ^next:
@@ -2380,9 +2381,9 @@ fn closure_release_uses_its_compiler_generated_allocation_layout() {
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
     let materialized = print_module(&ctx, module.op());
 
-    // The generated closure pair has an i32 function slot and an anyref
-    // environment slot: 16-byte payload plus the 8-byte RC header.
-    assert!(materialized.contains("alloc_size = 24"), "{materialized}");
+    // A closure value's size depends on its capture layout, so its header
+    // RTTI resolves it at release.
+    assert!(materialized.contains("alloc_size = 0"), "{materialized}");
 }
 
 #[test]
@@ -2956,7 +2957,8 @@ fn closure_rtti_declaration_follows_the_native_closure_layout() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+  !Base = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Closure = adt.struct<_closure_captures(code: core.i32, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   func.func @make(%code: core.i32, %env: tribute_rt.anyref) -> !Closure {
     %closure = adt.struct_new %code, %env {type = !Closure} : !Closure
     func.return %closure

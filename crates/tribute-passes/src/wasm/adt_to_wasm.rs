@@ -839,7 +839,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !S = adt.struct<S(value: core.i32)>
-  !Closure = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
+  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !E = adt.enum<E { None(), Some(core.i32) }>
 
   wasm.func @main(%env: wasm.anyref) -> core.nil {
@@ -848,7 +848,7 @@ mod tests {
     %second = adt.struct_new %one {type = !S} : !S
     %field = adt.struct_get %first {type = !S, field = 0} : core.i32
     adt.struct_set %first, %field {type = !S, field = 0}
-    %closure = adt.struct_new %one, %env {type = !Closure} : !Closure
+    %closure = adt.struct_new %one {type = !Closure} : !Closure
     %table = adt.struct_get %closure {type = !Closure, field = 0} : core.i32
     %some = adt.variant_new %one {type = !E, tag = "Some"} : !E
     %none = adt.variant_new {type = !E, tag = "None"} : !E
@@ -884,7 +884,7 @@ mod tests {
         let first_user = FIRST_USER_TYPE_IDX as i32;
         assert_eq!(descriptor_number(news[0]), Some(first_user));
         assert_eq!(descriptor_number(news[1]), Some(first_user));
-        assert_eq!(ctx.op_operands(news[2]).len(), 2, "builtin closure");
+        assert_eq!(ctx.op_operands(news[2]).len(), 1, "builtin closure");
         assert_eq!(descriptor_number(news[3]), Some(first_user + 1));
         assert_eq!(descriptor_number(news[4]), Some(first_user + 2));
         assert_eq!(

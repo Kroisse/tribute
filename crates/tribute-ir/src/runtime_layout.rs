@@ -10,8 +10,15 @@ use trunk_ir::context::IrContext;
 use trunk_ir::refs::TypeRef;
 pub use trunk_ir::types::LAYOUT_ATTR;
 
-/// Closure storage: a function reference and an environment.
+/// The closure base: the code reference alone. Every closure value has this
+/// storage type, and a capture-free closure is allocated with it.
 pub const CLOSURE: &str = "closure";
+/// A closure with captures: the closure base's fields followed by the captures,
+/// with [`CLOSURE_BASE_ATTR`] naming that base.
+pub const CLOSURE_CAPTURES: &str = "closure_captures";
+/// The type attribute naming the closure base of a [`CLOSURE_CAPTURES`] layout,
+/// whose fields are a prefix of the capture layout's fields.
+pub const CLOSURE_BASE_ATTR: &str = "closure_base";
 /// An evidence marker: one handler's ability id, prompt, and dispatch closures.
 pub const EVIDENCE_MARKER: &str = "evidence_marker";
 /// The evidence array: markers sorted by ability id.

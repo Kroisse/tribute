@@ -23,7 +23,7 @@ pub struct NativeOwnershipModuleFacts {
     definitions: HashSet<OpRef>,
     symbols: Arc<SymbolTable>,
     managed_layouts: HashSet<TypeRef>,
-    closure_layout: Option<TypeRef>,
+    closure_layouts: Vec<TypeRef>,
     rtti_types: Vec<RttiTypePlan>,
     written_layouts: HashSet<TypeRef>,
 }
@@ -48,9 +48,10 @@ impl NativeOwnershipModuleFacts {
         &self.managed_layouts
     }
 
-    /// The unique managed layout that semantic closure allocations construct.
-    pub fn closure_layout(&self) -> Option<TypeRef> {
-        self.closure_layout
+    /// The managed closure layouts that semantic closure allocations
+    /// construct, in first-allocation order.
+    pub fn closure_layouts(&self) -> &[TypeRef] {
+        &self.closure_layouts
     }
 
     /// Managed allocation descriptors in first-allocation order.
@@ -217,14 +218,14 @@ fn compute_module_facts(
         functions.push((symbol.clone(), op));
     }
     let managed_layouts = layouts.finish(ctx)?;
-    let closure_layout = unique_closure_layout(closure_allocations, &managed_layouts)?;
+    let closure_layouts = managed_closure_layouts(closure_allocations, &managed_layouts);
     let rtti_types = build_rtti_plan(ctx, descriptors, &managed_layouts)?;
     Ok(NativeOwnershipModuleFacts {
         definitions: functions.iter().map(|&(_, op)| op).collect(),
         functions,
         symbols,
         managed_layouts,
-        closure_layout,
+        closure_layouts,
         rtti_types,
         written_layouts,
     })
@@ -400,31 +401,14 @@ pub(super) fn is_internal_closure_layout(
     ty: TypeRef,
     managed_layouts: &HashSet<TypeRef>,
 ) -> bool {
-    if !managed_layouts.contains(&ty) || !crate::closure_lower::is_closure_struct_type_ref(ctx, ty)
-    {
-        return false;
-    }
-    let Some(fields) = get_struct_fields(ctx, ty) else {
-        return false;
-    };
-    matches!(
-        fields.as_slice(),
-        [(code_name, code_ty), (environment_name, environment_ty)]
-            if ctx.str(*code_name) == "func_ptr"
-                && ctx.str(*environment_name) == "env"
-                && is_core_i32_type(ctx, *code_ty)
-                && is_anyref_type(ctx, *environment_ty)
-    )
+    // Every closure value has the closure base storage type, identified by
+    // its runtime layout attribute alone.
+    managed_layouts.contains(&ty) && crate::closure_lower::is_closure_struct_type_ref(ctx, ty)
 }
 
 pub(super) fn is_core_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
     data.name.is(ctx, "core.ptr")
-}
-
-fn is_core_i32_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.name.is(ctx, "core.i32")
 }
 
 pub(super) fn root_value(aliases: &HashMap<ValueRef, ValueRef>, value: ValueRef) -> ValueRef {

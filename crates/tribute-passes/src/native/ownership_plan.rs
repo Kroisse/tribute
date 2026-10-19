@@ -166,10 +166,10 @@ impl RttiTypePlan {
 pub struct NativeOwnershipPlan {
     module: OpRef,
     managed_layouts: HashSet<TypeRef>,
-    /// The compiler-generated native layout for semantic closure values. This
-    /// exact `TypeRef` is collected before type erasure, never inferred from a
-    /// physical pointer.
-    closure_layout: Option<TypeRef>,
+    /// The compiler-generated layouts that semantic closure allocations
+    /// construct. These exact `TypeRef`s are collected before type erasure,
+    /// never inferred from a physical pointer.
+    closure_layouts: Vec<TypeRef>,
     functions: Vec<FunctionOwnershipPlan>,
     rtti_types: Vec<RttiTypePlan>,
 }
@@ -298,8 +298,8 @@ impl NativeOwnershipPlan {
             ));
         }
         validate_plan(ctx, self)?;
-        let current_closure_layout = collect_closure_layout(ctx, module, &self.managed_layouts)?;
-        if current_closure_layout != self.closure_layout {
+        let current_closure_layouts = collect_closure_layouts(ctx, module, &self.managed_layouts);
+        if current_closure_layouts != self.closure_layouts {
             return Err(OwnershipPlanError::new(
                 "semantic closure allocation layouts differ from the ownership plan",
             ));
@@ -397,7 +397,7 @@ pub fn build_native_ownership_plan(
     let plan = NativeOwnershipPlan {
         module: module.op(),
         managed_layouts,
-        closure_layout: module_facts.closure_layout(),
+        closure_layouts: module_facts.closure_layouts().to_vec(),
         functions,
         rtti_types: module_facts.rtti_types().to_vec(),
     };
@@ -420,40 +420,33 @@ fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, O
 fn closure_allocation_layout(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
     let new = adt::StructNew::from_op(ctx, op).ok()?;
     let layout = new.r#type(ctx);
-    crate::closure_lower::is_closure_struct_type_ref(ctx, layout).then_some(layout)
+    crate::closure_lower::is_closure_layout(ctx, layout).then_some(layout)
 }
 
-fn unique_closure_layout(
+/// The distinct managed closure layouts among `allocations`, in order.
+fn managed_closure_layouts(
     allocations: impl IntoIterator<Item = TypeRef>,
     managed_layouts: &HashSet<TypeRef>,
-) -> Result<Option<TypeRef>, OwnershipPlanError> {
-    let mut closure_layout = None;
+) -> Vec<TypeRef> {
+    let mut layouts = Vec::new();
     for layout in allocations {
-        if !managed_layouts.contains(&layout) {
-            continue;
+        if managed_layouts.contains(&layout) && !layouts.contains(&layout) {
+            layouts.push(layout);
         }
-        // The generated closure layout is an exact compiler ABI identity;
-        // more than one identity is stale plan input.
-        if closure_layout.is_some_and(|existing| existing != layout) {
-            return Err(OwnershipPlanError::new(
-                "semantic closure has ambiguous compiler-owned allocation layouts",
-            ));
-        }
-        closure_layout = Some(layout);
     }
-    Ok(closure_layout)
+    layouts
 }
 
-fn collect_closure_layout(
+fn collect_closure_layouts(
     ctx: &IrContext,
     module: Module,
     managed_layouts: &HashSet<TypeRef>,
-) -> Result<Option<TypeRef>, OwnershipPlanError> {
+) -> Vec<TypeRef> {
     let mut allocations = Vec::new();
     walk_module(ctx, module, |op| {
         allocations.extend(closure_allocation_layout(ctx, op));
     });
-    unique_closure_layout(allocations, managed_layouts)
+    managed_closure_layouts(allocations, managed_layouts)
 }
 
 /// Collects the managed nominal layouts reachable from the operations of a
@@ -742,12 +735,7 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
                 )));
             }
             if action.kind == ActionKind::IntoRawTransfer
-                && !validate_into_raw_transfer_action(
-                    ctx,
-                    action,
-                    plan.closure_layout,
-                    &plan.managed_layouts,
-                )
+                && !validate_into_raw_transfer_action(ctx, action, &plan.managed_layouts)
             {
                 return Err(OwnershipPlanError::new("into_raw transfer action is stale"));
             }
@@ -790,7 +778,6 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
 fn validate_into_raw_transfer_action(
     ctx: &IrContext,
     action: &OwnershipAction,
-    closure_layout: Option<TypeRef>,
     managed_layouts: &HashSet<TypeRef>,
 ) -> bool {
     let ActionAnchor::Before(into_raw) = action.anchor else {
@@ -803,12 +790,9 @@ fn validate_into_raw_transfer_action(
     let ([source], [result]) = (ctx.op_operands(into_raw), ctx.op_results(into_raw)) else {
         return false;
     };
-    let Some(closure_layout) = closure_layout else {
-        return false;
-    };
     let result_ty = ctx.get_type(ctx.value_ty(*result));
     *source == action.value
-        && ctx.value_ty(*source) == closure_layout
+        && facts::is_internal_closure_layout(ctx, ctx.value_ty(*source), managed_layouts)
         && is_managed_value(ctx, *source, managed_layouts)
         && result_ty.name.is(ctx, "core.ptr")
 }
@@ -835,16 +819,8 @@ fn validate_into_raw_transfer_groups(
     }
 
     for source in &sources {
-        let (_, operations) = exact_into_raw_transfers(
-            ctx,
-            *source,
-            plan.closure_layout.ok_or_else(|| {
-                OwnershipPlanError::new(
-                    "tribute_rt.into_raw requires the current compiler closure layout",
-                )
-            })?,
-            &plan.managed_layouts,
-        )?;
+        let (_, operations) =
+            exact_into_raw_transfers(ctx, *source, ctx.value_ty(*source), &plan.managed_layouts)?;
         let transfer_actions = function
             .actions
             .iter()

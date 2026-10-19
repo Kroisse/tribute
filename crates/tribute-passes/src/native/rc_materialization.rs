@@ -185,8 +185,12 @@ fn allocation_size_for_type(
     }
     let layout = plan.allocation_layout_for_type(ctx, ty)?;
     // Each variant of an enum has its own allocation size, so an enum value's
-    // size is also resolved by its header RTTI.
-    if adt::Enum::from_type_ref(ctx, layout).is_some() {
+    // size is also resolved by its header RTTI. So is a closure's: a value of
+    // the closure base may be any capture layout, and the native layouts are
+    // chosen only after this step.
+    if adt::Enum::from_type_ref(ctx, layout).is_some()
+        || crate::closure_lower::is_closure_layout(ctx, layout)
+    {
         return Ok(0);
     }
     let payload_size = compute_struct_layout(ctx, layout, type_converter)
