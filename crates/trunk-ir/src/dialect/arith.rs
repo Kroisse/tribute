@@ -536,11 +536,14 @@ fn index_cast_const(
     signed: bool,
 ) -> Option<i128> {
     if let Some(width) = IntegerLike::width(ctx, from) {
-        return Some(if signed {
+        let extended = if signed {
             wrap_signed_to_width(value, width)
         } else {
             ((value as u128) & width_mask_u128(width)) as i128
-        });
+        };
+        // Index constants hold a value that a 64-bit index represents as
+        // written; a wider one is left to the cast.
+        return i64::try_from(extended).is_ok().then_some(extended);
     }
     let width = IntegerLike::width(ctx, to)?;
     let min = Index::MIN_WIDTH;
@@ -720,6 +723,17 @@ mod canonicalize_tests {
             );
             assert_eq!(value, Some(expected), "{op}");
         }
+        // The zero-extended `u64::MAX` is no 64-bit index constant.
+        let (ctx, module, value) = fold_function(
+            "",
+            "core.index",
+            "    %c = arith.const {value = -1} : core.i64\n    %r = arith.index_castui %c : core.index\n    func.return %r",
+        );
+        assert_eq!(value, None);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::IndexCastui::NAME),
+            1
+        );
     }
 
     #[test]
