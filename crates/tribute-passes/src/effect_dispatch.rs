@@ -2,8 +2,8 @@
 //!
 //! Every target lowers `effect.dispatch_tail` and `effect.dispatch_cps` inside
 //! the representation/ABI boundary with the same shape: an evidence runtime
-//! call selects the handler, the canonical closure is decomposed into its
-//! function and environment, and control transfers through an ordinary
+//! call selects the handler, the canonical closure's function is read and the
+//! closure itself passed as its environment, and control transfers through an ordinary
 //! `func.call_indirect` or a proper-tail `func.tail_call_indirect`. Only how
 //! evidence runtime values are typed differs per target; callers supply those.
 
@@ -55,15 +55,15 @@ fn insert_op_idx(
     constant.result(ctx)
 }
 
-/// Decompose a canonical closure into its function reference and environment.
-fn insert_closure_parts(
+/// Read a canonical closure's function reference. The closure itself is the
+/// function's environment.
+fn insert_closure_function(
     ctx: &mut IrContext,
     loc: Location,
     closure: ValueRef,
     rewriter: &mut PatternRewriter<'_>,
-) -> (ValueRef, ValueRef) {
+) -> ValueRef {
     let i32_ty = i32_type(ctx);
-    let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let function = adt::StructGet::operands(closure)
         .r#type(closure_ty)
@@ -71,13 +71,25 @@ fn insert_closure_parts(
         .results(i32_ty)
         .build(ctx, loc);
     rewriter.insert_op(function.op_ref());
-    let env = adt::StructGet::operands(closure)
-        .r#type(closure_ty)
-        .field(1)
-        .results(anyref_ty)
+    function.result(ctx)
+}
+
+/// `closure` at the canonical closure storage type.
+fn canonical_closure(
+    ctx: &mut IrContext,
+    loc: Location,
+    closure: ValueRef,
+    rewriter: &mut PatternRewriter<'_>,
+) -> ValueRef {
+    if !closure::Closure::matches(ctx, ctx.value_ty(closure)) {
+        return closure;
+    }
+    let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
+    let cast = core::UnrealizedConversionCast::operands(closure)
+        .results(closure_ty)
         .build(ctx, loc);
-    rewriter.insert_op(env.op_ref());
-    (function.result(ctx), env.result(ctx))
+    rewriter.insert_op(cast.op_ref());
+    cast.result(ctx)
 }
 
 /// Whether `op` is a well-formed tail dispatch for a target whose converter
@@ -121,9 +133,9 @@ pub(crate) fn lower_tail_dispatch(
     let payload = dispatch_op.payload(ctx);
     let ability = dispatch_op.ability(ctx).clone();
     let op_idx = insert_op_idx(ctx, loc, &ability, dispatch_op.op_name_ref(ctx), rewriter);
-    let (function, env) = insert_closure_parts(ctx, loc, dispatch_closure, rewriter);
+    let function = insert_closure_function(ctx, loc, dispatch_closure, rewriter);
     let result_ty = ctx.op_result_types(op)[0];
-    let args = [evidence, env, op_idx, payload];
+    let args = [evidence, dispatch_closure, op_idx, payload];
     // The dispatch closure is a module-internal EvidenceDirect callable, so
     // it has the internal `tail` machine convention and parameter contract.
     let contract = physical_parameter_attrs(ctx, CallingConvention::EvidenceDirect);
@@ -154,7 +166,7 @@ pub(crate) fn cps_dispatch_signature(ctx: &mut IrContext) -> TypeRef {
         ctx,
         [
             evidence_ty,
-            anyref_ty,
+            closure_ty,
             closure_ty,
             i32_ty,
             i32_ty,
@@ -212,26 +224,18 @@ pub(crate) fn lower_cps_dispatch(
     let loc = ctx.op(op).location;
     let ability = dispatch_op.ability(ctx).clone();
     let op_idx = insert_op_idx(ctx, loc, &ability, dispatch_op.op_name_ref(ctx), rewriter);
-    let (function, env) = insert_closure_parts(ctx, loc, dispatch_op.dispatch(ctx), rewriter);
-
-    // Closure lowering keeps a packed continuation at its semantic closure
-    // type until storage finalization; retype it to the dispatch slot.
-    let mut resume = dispatch_op.resume(ctx);
-    if closure::Closure::matches(ctx, ctx.value_ty(resume)) {
-        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let cast = core::UnrealizedConversionCast::operands(resume)
-            .results(closure_ty)
-            .build(ctx, loc);
-        rewriter.insert_op(cast.op_ref());
-        resume = cast.result(ctx);
-    }
+    // Closure lowering keeps packed closures at their semantic closure type
+    // until storage finalization; retype them to the dispatch slots.
+    let dispatch = canonical_closure(ctx, loc, dispatch_op.dispatch(ctx), rewriter);
+    let function = insert_closure_function(ctx, loc, dispatch, rewriter);
+    let resume = canonical_closure(ctx, loc, dispatch_op.resume(ctx), rewriter);
 
     let signature = cps_dispatch_signature(ctx);
     let tail = func::TailCallIndirect::operands(
         function,
         [
             dispatch_op.evidence(ctx),
-            env,
+            dispatch,
             resume,
             prompt,
             ability_id,

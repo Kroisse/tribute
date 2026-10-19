@@ -511,11 +511,8 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
         .map(|&arg| ctx.value_ty(arg))
         .collect();
     assert_eq!(entry_types, lifted_signature.inputs(ctx));
-    assert!(
-        ctx.get_type(lifted_signature.inputs(ctx)[environment_index])
-            .name
-            .is(ctx, "tribute_rt.anyref")
-    );
+    // The lifted function's environment is the closure itself.
+    assert_eq!(lifted_signature.inputs(ctx)[environment_index], closure_ty);
     let mut expected = signature.inputs(ctx).to_vec();
     expected.insert(
         environment_index,
@@ -543,10 +540,7 @@ fn test_lambda_identity() {
             .unwrap()
             .unwrap();
         let (closure, lifted) = source_closure(&ctx, module, "compute");
-        assert!(adt::RefNull::matches(
-            &ctx,
-            defining_op(&ctx, closure.env(&ctx))
-        ));
+        assert!(closure.captures(&ctx).is_empty());
         let call = only_indirect_call(&ctx, named_function(&ctx, module, "compute"));
         let boxed = *ctx.op_operands(call).last().unwrap();
         assert!(tribute_ir::dialect::tribute_rt::Anyref::matches(
@@ -577,21 +571,20 @@ fn test_lambda_with_capture() {
         let call = only_indirect_call(&ctx, named_function(&ctx, module, "test_capture"));
         let argument = arith::Const::from_op(&ctx, defining_op(&ctx, *ctx.op_operands(call).last().unwrap())).unwrap();
         assert_eq!(argument.value(&ctx), Attribute::Int(32));
-        let environment = adt::StructNew::from_op(&ctx, defining_op(&ctx, closure.env(&ctx))).expect("capture environment");
-        assert_eq!(environment.fields(&ctx).len(), 1);
-        let capture = arith::Const::from_op(&ctx, defining_op(&ctx, environment.fields(&ctx)[0])).unwrap();
+        let [capture] = closure.captures(&ctx)[..] else { panic!("one capture") };
+        let capture = arith::Const::from_op(&ctx, defining_op(&ctx, capture)).unwrap();
         assert_eq!(capture.value(&ctx), Attribute::Int(10));
         let additions = function_ops::<arith::Addi>(&ctx, lifted);
         assert_eq!(additions.len(), 1);
         let addition = additions[0];
-        let recovered = adt::StructGet::from_op(&ctx, defining_op(&ctx, addition.rhs(&ctx))).expect("captured addend");
-        assert_eq!(recovered.field(&ctx), 0);
-        assert_eq!(recovered.r#type(&ctx), environment.r#type(&ctx));
-        let recovery = adt::RefCast::from_op(&ctx, defining_op(&ctx, recovered.r#ref(&ctx))).unwrap();
+        // The lifted function reads the capture from its own closure.
+        let recovered = closure::Unpack::from_op(&ctx, defining_op(&ctx, addition.rhs(&ctx))).expect("captured addend");
+        assert_eq!(recovered.results(&ctx), [addition.rhs(&ctx)]);
         let closure_ty = ctx.value_ty(closure.result(&ctx));
         let env_index = tribute_core::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty).unwrap();
         let entry = ctx.region(lifted.body(&ctx)).blocks[0];
-        assert_eq!(recovery.r#ref(&ctx), ctx.block_args(entry)[env_index]);
+        assert_eq!(recovered.closure(&ctx), ctx.block_args(entry)[env_index]);
+        assert_eq!(ctx.value_ty(recovered.closure(&ctx)), closure_ty);
         assert_eq!(addition.lhs(&ctx), *ctx.block_args(entry).last().unwrap());
         assert_direct_lifted_return(&ctx, lifted, addition.result(&ctx));
     });
@@ -640,8 +633,9 @@ fn test_higher_order_function_ir() {
     });
 }
 
-/// Closure lowering must project both code and environment from the same callback
-/// and insert that environment according to its retained callable metadata.
+/// Closure lowering must project the code from the callback and pass the
+/// callback itself as the environment, according to its retained callable
+/// metadata.
 #[test]
 fn test_closure_lowering() {
     TributeDatabaseImpl::default().attach(|db| {
@@ -660,19 +654,17 @@ fn test_closure_lowering() {
         let callable = closure::Closure::from_type_ref(&ctx, closure_ty).expect("retained callback contract");
         let env_index = tribute_core::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty).unwrap();
         let operands = &ctx.op_operands(call)[1..];
-        let env = adt::StructGet::from_op(&ctx, defining_op(&ctx, operands[env_index])).expect("projected callback environment");
-        assert_eq!(env.field(&ctx), 1);
-        assert_eq!(env.r#ref(&ctx), callback);
+        assert_eq!(operands[env_index], callback);
         let signature = func::FuncSig::from_type_ref(&ctx, callable.func_type(&ctx)).unwrap();
         let mut expected = signature.inputs(&ctx).to_vec();
-        expected.insert(env_index, ctx.value_ty(env.result(&ctx)));
+        expected.insert(env_index, closure_ty);
         itertools::assert_equal(expected, operands.iter().map(|&value| ctx.value_ty(value)));
         let entry = ctx.region(apply.body(&ctx)).blocks[0];
         assert!(ctx.block_args(entry).contains(&callback));
         assert_eq!(operands.last(), ctx.block_args(entry).last());
         assert!(function_ops::<closure::New>(&ctx, apply).is_empty());
         assert!(function_ops::<closure::Func>(&ctx, apply).is_empty());
-        assert!(function_ops::<closure::Env>(&ctx, apply).is_empty());
+        assert!(function_ops::<closure::Unpack>(&ctx, apply).is_empty());
         let compute = named_function(&ctx, module, "compute");
         let source_call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["apply"]).unwrap();
         let pack = source_call.args(&ctx).iter().find_map(|&value| {

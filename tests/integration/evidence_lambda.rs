@@ -94,9 +94,8 @@ fn function_param_types(ctx: &IrContext, module: &Module, target: &str) -> Vec<t
         .to_vec()
 }
 
-fn is_anyref(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
-    let ty = ctx.get_type(ty);
-    ty.name.is(ctx, "tribute_rt.anyref")
+fn is_closure(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
+    tribute_ir::dialect::closure::Closure::matches(ctx, ty)
 }
 
 fn is_i32(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
@@ -206,7 +205,7 @@ fn main() -> Nil { }
 
         let direct = function_param_types(&ctx, &module, "direct_closure::__clam_0");
         assert_eq!(direct.len(), 2);
-        assert!(is_anyref(&ctx, direct[0]), "{direct:?}");
+        assert!(is_closure(&ctx, direct[0]), "{direct:?}");
         assert!(is_i32(&ctx, direct[1]), "{direct:?}");
 
         let evidence = function_param_types(&ctx, &module, "evidence_direct_closure::__clam_0");
@@ -215,7 +214,7 @@ fn main() -> Nil { }
             tribute_ir::dialect::ability::is_evidence_type_ref(&ctx, evidence[0]),
             "{evidence:?}"
         );
-        assert!(is_anyref(&ctx, evidence[1]), "{evidence:?}");
+        assert!(is_closure(&ctx, evidence[1]), "{evidence:?}");
         assert!(is_i32(&ctx, evidence[2]), "{evidence:?}");
 
         let cps = function_param_types(&ctx, &module, "cps_closure::__clam_0");
@@ -224,7 +223,7 @@ fn main() -> Nil { }
             tribute_ir::dialect::ability::is_evidence_type_ref(&ctx, cps[0]),
             "{cps:?}"
         );
-        assert!(is_anyref(&ctx, cps[1]), "{cps:?}");
+        assert!(is_closure(&ctx, cps[1]), "{cps:?}");
         assert!(is_continuation_frame(&ctx, cps[2]), "{cps:?}");
     });
 }

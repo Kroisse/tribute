@@ -11,14 +11,18 @@ mod closure {
     #[implements(ManagedRefType)]
     struct Closure<FuncType>;
 
+    /// A closure of the code function `func_ref` holding `captures` in order.
+    /// The code function receives the closure itself as its environment.
     #[flags(Pure)]
-    fn new(func_ref: Attr<SymbolRef>, env: Value<_>) -> Value<_> {}
+    fn new(func_ref: Attr<SymbolRef>, captures: Variadic<_>) -> Value<_> {}
 
     #[flags(Pure)]
     fn func(closure: Value<_>) -> Value<_> {}
 
+    /// The captures of `closure`, read by its code function from its
+    /// environment parameter. Its results are the closure's capture types.
     #[flags(Pure)]
-    fn env(closure: Value<_>) -> Value<_> {}
+    fn unpack(closure: Value<_>) -> Variadic<_> {}
 
     /// High-level lambda: captures + body region → closure value.
     ///
@@ -304,7 +308,7 @@ mod tests {
         let env_val = env_op.result(&ctx);
 
         // Create closure.new with func_ref attribute
-        let op = super::New::operands(env_val)
+        let op = super::New::operands([env_val])
             .func_ref(SymbolPath::new(["my_func"]))
             .results(closure_ty)
             .build(&mut ctx, loc);
@@ -334,7 +338,7 @@ mod tests {
             .results(i32_ty)
             .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
-        let closure_op = super::New::operands(env_val)
+        let closure_op = super::New::operands([env_val])
             .func_ref(SymbolPath::new(["f"]))
             .results(closure_ty)
             .build(&mut ctx, loc);
@@ -359,40 +363,35 @@ mod tests {
     }
 
     #[test]
-    fn test_closure_env_round_trip() {
+    fn test_closure_unpack_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
         let closure_ty = make_closure_type(&mut ctx);
 
-        // Create a closure value
-        let env_op = trunk_ir::dialect::arith::Const::operands()
+        let capture_op = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
-        let env_val = env_op.result(&ctx);
-        let closure_op = super::New::operands(env_val)
+        let capture = capture_op.result(&ctx);
+        let closure_op = super::New::operands([capture, capture])
             .func_ref(SymbolPath::new(["f"]))
             .results(closure_ty)
             .build(&mut ctx, loc);
+        assert_eq!(closure_op.captures(&ctx), [capture, capture]);
         let closure_val = closure_op.result(&ctx);
 
-        // Create closure.env
-        let env_result_op = super::Env::operands(closure_val)
-            .results(i32_ty)
+        let unpack_op = super::Unpack::operands(closure_val)
+            .results([i32_ty, i32_ty])
             .build(&mut ctx, loc);
 
-        // Verify from_op round-trip
-        let env_result_op2 =
-            super::Env::from_op(&ctx, env_result_op.op_ref()).expect("should match closure.env");
-        assert_eq!(env_result_op.op_ref(), env_result_op2.op_ref());
-
-        // Verify operand
-        assert_eq!(env_result_op.closure(&ctx), closure_val);
-
-        // Verify result type
-        let result = env_result_op.result(&ctx);
-        assert_eq!(ctx.value_ty(result), i32_ty);
+        let unpack_op2 =
+            super::Unpack::from_op(&ctx, unpack_op.op_ref()).expect("should match closure.unpack");
+        assert_eq!(unpack_op.op_ref(), unpack_op2.op_ref());
+        assert_eq!(unpack_op.closure(&ctx), closure_val);
+        let results = unpack_op.results(&ctx);
+        assert_eq!(results.len(), 2);
+        assert_eq!(ctx.value_ty(results[0]), i32_ty);
     }
 
     #[test]
@@ -478,7 +477,7 @@ mod tests {
             .build(&mut ctx, loc);
         assert!(super::New::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Func::from_op(&ctx, c.op_ref()).is_err());
-        assert!(super::Env::from_op(&ctx, c.op_ref()).is_err());
+        assert!(super::Unpack::from_op(&ctx, c.op_ref()).is_err());
     }
 
     #[test]
@@ -494,14 +493,14 @@ mod tests {
             .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
 
-        let closure_new = super::New::operands(env_val)
+        let closure_new = super::New::operands([env_val])
             .func_ref(SymbolPath::new(["f"]))
             .results(closure_ty)
             .build(&mut ctx, loc);
 
         assert!(super::New::matches(&ctx, closure_new.op_ref()));
         assert!(!super::Func::matches(&ctx, closure_new.op_ref()));
-        assert!(!super::Env::matches(&ctx, closure_new.op_ref()));
+        assert!(!super::Unpack::matches(&ctx, closure_new.op_ref()));
     }
 
     // =================================================================

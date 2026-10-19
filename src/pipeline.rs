@@ -1895,7 +1895,7 @@ mod tests {
                                 signature.params(),
                                 [
                                     concrete(trunk_ir_wasm_backend::gc_types::EVIDENCE_IDX),
-                                    ValType::Ref(RefType::ANYREF),
+                                    concrete(trunk_ir_wasm_backend::gc_types::CLOSURE_STRUCT_IDX),
                                     concrete(trunk_ir_wasm_backend::gc_types::CLOSURE_STRUCT_IDX),
                                     ValType::I32,
                                     ValType::I32,
@@ -2409,15 +2409,8 @@ fn main() ->{Io} Nil {
         };
         assert!(clif::ReturnCallIndirect::matches(&ctx, call));
         assert_eq!(ctx.op_attrs(call).get("tribute.calling_convention"), None);
-        let trunk_ir::refs::ValueDef::OpResult(environment_load, 0) =
-            ctx.value_def(*continuation_environment)
-        else {
-            panic!("the CPS continuation environment must be loaded from its closure");
-        };
-        let environment_load = clif::Load::from_op(&ctx, environment_load)
-            .expect("the CPS continuation environment must come from clif.load");
-        assert_eq!(environment_load.offset(&ctx), 8);
-        let done = ctx.op_operands(environment_load.op_ref())[0];
+        // The Done closure is its own environment.
+        let done = *continuation_environment;
         let trunk_ir::refs::ValueDef::OpResult(done_load, 0) = ctx.value_def(done) else {
             panic!("Done closure must be loaded from its continuation frame");
         };

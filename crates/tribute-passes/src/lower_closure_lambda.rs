@@ -11,16 +11,16 @@
 //! }
 //!
 //! // After (inside func.func @foo):
-//! func.func @foo::__clam_0(%env: anyref, %param: anyref) -> anyref {
-//!   %env_cast = adt.ref_cast %env : env_struct
-//!   %x = adt.struct_get %env_cast, 0
-//!   %y = adt.struct_get %env_cast, 1
+//! func.func @foo::__clam_0(%__env: !k, %param: anyref) -> anyref {
+//!   %x, %y = closure.unpack %__env
 //!   %r = arith.add %x, %param
 //!   func.return %r
 //! }
-//! %env = adt.struct_new(%x, %y)
-//! %k = closure.new @foo::__clam_0, %env
+//! %k = closure.new @foo::__clam_0, %x, %y
 //! ```
+//!
+//! The code function's environment is the closure itself, typed with the
+//! closure's exact type, and it reads its captures with `closure.unpack`.
 
 use crate::collections::HashMap;
 
@@ -30,7 +30,6 @@ use tribute_core::calling_convention::{
 use tribute_core::{
     get_calling_convention, get_physical_closure_convention, set_calling_convention,
 };
-use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -43,7 +42,6 @@ use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, AttributeMap};
 
 use tribute_ir::dialect::closure;
-use tribute_ir::dialect::tribute_rt;
 
 /// Lower all `closure.lambda` ops in the module to `func.func` + `closure.new`.
 pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
@@ -160,7 +158,6 @@ fn lower_single_lambda(
 
     // Convention-proven physical closures define the only legal environment
     // insertion slot. Do not recover hidden operands from a lambda's shape.
-    let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let convention = get_calling_convention(ctx, lambda_ref);
     let environment_index = match (convention, get_physical_closure_convention(ctx, result_ty)) {
         (Some(convention), Some(provenance)) if provenance == convention => {
@@ -188,19 +185,6 @@ fn lower_single_lambda(
     if environment_index > orig_param_count {
         return false;
     }
-    // Build env struct type for captures.
-    let env_struct_ty = if captures.is_empty() {
-        None
-    } else {
-        let fields: Vec<(String, TypeRef)> = capture_types
-            .iter()
-            .enumerate()
-            .map(|(i, &ty)| (format!("_{i}"), ty))
-            .collect();
-        let env_name = format!("{lifted_name}::env");
-        Some(adt::Struct::from_fields(ctx, env_name, fields, AttributeMap::new()).as_type_ref())
-    };
-
     // === Build the lifted function ===
     let func_body_region = build_lifted_body(
         ctx,
@@ -209,16 +193,15 @@ fn lower_single_lambda(
         &LiftBodyParams {
             captures: &captures,
             capture_types: &capture_types,
-            env_struct_ty,
             orig_param_types: &orig_param_types,
             environment_index,
-            anyref_ty,
+            closure_ty: result_ty,
         },
     );
 
     let func_ty = callable
         .rebuild(ctx, |inputs, _| {
-            inputs.insert(environment_index, (anyref_ty, AttributeMap::new()));
+            inputs.insert(environment_index, (result_ty, AttributeMap::new()));
         })
         .as_type_ref();
 
@@ -242,26 +225,8 @@ fn lower_single_lambda(
         .parent_block
         .expect("closure.lambda should be in a block");
 
-    // Pack captures into env struct (or null).
-    let closure_env = if captures.is_empty() {
-        let null_op = adt::RefNull::operands()
-            .r#type(anyref_ty)
-            .results(anyref_ty)
-            .build(ctx, location);
-        ctx.insert_op_before(parent_block, lambda_ref, null_op.op_ref());
-        null_op.result(ctx)
-    } else {
-        let env_ty = env_struct_ty.unwrap();
-        let struct_op = adt::StructNew::operands(captures.clone())
-            .r#type(env_ty)
-            .results(env_ty)
-            .build(ctx, location);
-        ctx.insert_op_before(parent_block, lambda_ref, struct_op.op_ref());
-        struct_op.result(ctx)
-    };
-
-    // Create closure.new replacing the lambda.
-    let closure_new_op = closure::New::operands(closure_env)
+    // Create closure.new holding the captures, replacing the lambda.
+    let closure_new_op = closure::New::operands(captures.clone())
         .func_ref(trunk_ir::SymbolPath::new([lifted_name]))
         .results(result_ty)
         .build(ctx, location);
@@ -290,14 +255,14 @@ fn lower_single_lambda(
 struct LiftBodyParams<'a> {
     captures: &'a [ValueRef],
     capture_types: &'a [TypeRef],
-    env_struct_ty: Option<TypeRef>,
     orig_param_types: &'a [TypeRef],
     environment_index: usize,
-    anyref_ty: TypeRef,
+    /// The exact closure type, which is the environment parameter's type.
+    closure_ty: TypeRef,
 }
 
 /// Build the lifted function body region by cloning the lambda body
-/// with capture values remapped to env struct field extractions.
+/// with capture values remapped to the closure's unpacked captures.
 fn build_lifted_body(
     ctx: &mut IrContext,
     location: trunk_ir::types::Location,
@@ -306,10 +271,8 @@ fn build_lifted_body(
 ) -> trunk_ir::refs::RegionRef {
     let captures = params.captures;
     let capture_types = params.capture_types;
-    let env_struct_ty = params.env_struct_ty;
     let orig_param_types = params.orig_param_types;
     let environment_index = params.environment_index;
-    let anyref_ty = params.anyref_ty;
     let orig_blocks = ctx.region(orig_body).blocks.clone();
     let orig_entry = orig_blocks[0];
     let orig_param_count = orig_param_types.len();
@@ -329,7 +292,7 @@ fn build_lifted_body(
     new_entry_args.insert(
         environment_index,
         BlockArgData {
-            ty: anyref_ty,
+            ty: params.closure_ty,
             attrs: environment_attrs,
         },
     );
@@ -350,25 +313,15 @@ fn build_lifted_body(
         mapping.map_value(old_arg, new_arg);
     }
 
-    // Insert env extraction ops at the start of the new entry block.
-    let raw_env_val = ctx.block_arg(new_entry, environment_index as u32);
-    if let Some(env_ty) = env_struct_ty {
-        let cast_op = adt::RefCast::operands(raw_env_val)
-            .r#type(env_ty)
-            .results(env_ty)
+    // Unpack the captures at the start of the new entry block.
+    let environment = ctx.block_arg(new_entry, environment_index as u32);
+    if !captures.is_empty() {
+        let unpack = closure::Unpack::operands(environment)
+            .results(capture_types.to_vec())
             .build(ctx, location);
-        ctx.push_op(new_entry, cast_op.op_ref());
-        let env_val = cast_op.result(ctx);
-
-        for (i, &cap_val) in captures.iter().enumerate() {
-            let cap_ty = capture_types[i];
-            let get_op = adt::StructGet::operands(env_val)
-                .r#type(env_ty)
-                .field(i as u32)
-                .results(cap_ty)
-                .build(ctx, location);
-            ctx.push_op(new_entry, get_op.op_ref());
-            mapping.map_value(cap_val, get_op.result(ctx));
+        ctx.push_op(new_entry, unpack.op_ref());
+        for (&capture, &unpacked) in captures.iter().zip(unpack.results(ctx)) {
+            mapping.map_value(capture, unpacked);
         }
     }
 
@@ -473,6 +426,7 @@ fn make_bind_name_attrs(ctx: &mut IrContext, name: &str) -> AttributeMap {
 mod tests {
     use super::*;
     use tribute_core::CallingConvention;
+    use tribute_ir::dialect::tribute_rt;
     use trunk_ir::SymbolPath;
     use trunk_ir::context::RegionData;
     use trunk_ir::dialect::{arith, core};
@@ -611,13 +565,13 @@ mod tests {
         let test_fn_entry = ctx.region(test_fn_body).blocks[0];
         let test_fn_ops = &ctx.block(test_fn_entry).ops;
 
-        // Should have: adt.ref_null (env) + closure.new
-        assert!(test_fn_ops.len() >= 2, "expected at least 2 ops in test_fn");
-        let last_op = test_fn_ops[test_fn_ops.len() - 1];
-        assert!(
-            closure::New::matches(&ctx, last_op),
-            "last op should be closure.new"
-        );
+        // A capture-free closure.new is the only operation.
+        let [closure_op] = test_fn_ops[..] else {
+            panic!("expected only closure.new in test_fn");
+        };
+        let closure_new = closure::New::from_op(&ctx, closure_op).expect("closure.new");
+        assert!(closure_new.captures(&ctx).is_empty());
+        let closure_ty = ctx.value_ty(closure_new.result(&ctx));
 
         // The lifted function should exist.
         let lifted = func::Func::from_op(&ctx, ops[1]).unwrap();
@@ -628,10 +582,11 @@ mod tests {
         let lifted_type = func::FuncSig::from_type_ref(&ctx, lifted_ty).unwrap();
         assert_eq!(lifted_type.inputs(&ctx).len(), 2); // environment + x
         assert!(lifted_type.single_result(&ctx).is_some());
-        // The inserted environment has no attributes; `x` keeps its own.
+        // The inserted environment is the closure itself and has no
+        // attributes; `x` keeps its own.
         itertools::assert_equal(
             lifted_type.inputs_with_attrs(&ctx),
-            [(anyref_ty, &AttributeMap::new()), (i32_ty, &marked)],
+            [(closure_ty, &AttributeMap::new()), (i32_ty, &marked)],
         );
     }
 
@@ -808,41 +763,30 @@ mod tests {
         let ops = module.ops(&ctx);
         assert_eq!(ops.len(), 2);
 
-        // Original function should now have: adt.struct_new + closure.new
+        // The original function holds the capture in its closure.new.
         let test_fn = func::Func::from_op(&ctx, ops[0]).unwrap();
         let test_fn_body = test_fn.body(&ctx);
         let test_fn_entry = ctx.region(test_fn_body).blocks[0];
-        let test_fn_ops = &ctx.block(test_fn_entry).ops;
-
-        let has_struct_new = test_fn_ops
+        let closure_new = ctx
+            .block(test_fn_entry)
+            .ops
             .iter()
-            .any(|&op| adt::StructNew::matches(&ctx, op));
-        assert!(has_struct_new, "should have adt.struct_new for env packing");
+            .find_map(|&op| closure::New::from_op(&ctx, op).ok())
+            .expect("should have closure.new");
+        let capture = ctx.block_arg(test_fn_entry, 0);
+        assert_eq!(closure_new.captures(&ctx), [capture]);
+        let closure_ty = ctx.value_ty(closure_new.result(&ctx));
 
-        let has_closure_new = test_fn_ops
-            .iter()
-            .any(|&op| closure::New::matches(&ctx, op));
-        assert!(has_closure_new, "should have closure.new");
-
-        // Lifted function body should reference env extraction, not the original capture.
+        // The lifted function receives the closure itself and unpacks it.
         let lifted = func::Func::from_op(&ctx, ops[1]).unwrap();
         let lifted_body = lifted.body(&ctx);
         let lifted_entry = ctx.region(lifted_body).blocks[0];
-        let lifted_ops = &ctx.block(lifted_entry).ops;
-
-        // Should have: ref_cast + struct_get (env extraction) + add + return
-        assert!(
-            lifted_ops.len() >= 4,
-            "expected at least 4 ops in lifted fn, got {}",
-            lifted_ops.len()
-        );
-        assert!(
-            adt::RefCast::matches(&ctx, lifted_ops[0]),
-            "first op should be adt.ref_cast"
-        );
-        assert!(
-            adt::StructGet::matches(&ctx, lifted_ops[1]),
-            "second op should be adt.struct_get"
-        );
+        let environment = ctx.block_arg(lifted_entry, 0);
+        assert_eq!(ctx.value_ty(environment), closure_ty);
+        let unpack = closure::Unpack::from_op(&ctx, ctx.block(lifted_entry).ops[0])
+            .expect("first op should be closure.unpack");
+        assert_eq!(unpack.closure(&ctx), environment);
+        assert_eq!(unpack.results(&ctx).len(), 1);
+        assert_eq!(ctx.value_ty(unpack.results(&ctx)[0]), i32_ty);
     }
 }
