@@ -487,3 +487,125 @@ fn row_inclusion_counts_instances_and_keeps_the_tail() {
     assert!(!Row::new([a.clone()], None).includes(&Row::new([a.clone(), a], None)));
     assert!(!Row::new([b], None).includes(&Row::new([], Some(1))));
 }
+
+const LOCALS: &str = r#"core.module @test {
+  !step = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 1}, tribute.calling_convention = 0}>
+  !step0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 0}>
+  ability.decl {sym_name = "A"} {
+  }
+  tribute_control.func @f['a0, local 'a1, local 'a2](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {
+    %g = tribute_control.lambda['a1](%y: core.i32) -> core.i32 row(| 'a1) convention(direct) captures [] {
+      tribute_control.return %y
+    }
+    %s = tribute_control.instantiate %g {row_args = [ARGS]} : RESULT
+    %r = tribute_control.call_indirect %s, %x : core.i32
+    tribute_control.return %r
+  }
+}"#;
+
+fn locals(args: &str, result: &str) -> String {
+    LOCALS.replace("ARGS", args).replace("RESULT", result)
+}
+
+#[test]
+fn a_quantifying_lambda_round_trips_and_its_uses_instantiate_it() {
+    let input = locals("{tail = 0}", "!step0");
+    let (ctx, module) = parse(&input);
+    let result = validate(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+    let printed = print_module(&ctx, module.op());
+    assert!(
+        printed.contains(
+            "%1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) convention(direct) captures [] {"
+        ),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("%3 = tribute_control.instantiate %1 {row_args = [{tail = 0}]} : !step0"),
+        "{printed}"
+    );
+    let (reparsed, module) = parse(&printed);
+    assert_eq!(print_module(&reparsed, module.op()), printed);
+}
+
+#[test]
+fn instantiate_substitutes_only_the_quantified_binders() {
+    // The lambda's own binder becomes `@A`; the enclosing `'a0` stays.
+    let input = locals("{instances = [@A]}", "!closed").replace(
+        "  ability.decl",
+        "  !closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A]}, tribute.calling_convention = 0}>\n  ability.decl",
+    );
+    let (ctx, module) = parse(&input);
+    let result = validate(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+}
+
+#[test]
+fn instantiate_checks_its_lambda_arguments_and_result() {
+    assert_rejects(
+        &locals("{tail = 0}", "!step"),
+        "instantiate result is not the lambda's type with its row arguments substituted",
+    );
+    assert_rejects(
+        &locals("{tail = 0}, {}", "!step0"),
+        "instantiate passes 2 row arguments for 1 quantified binders",
+    );
+    assert_rejects(
+        &locals("{tail = 3}", "!step0"),
+        "row tail 3 names no row binder in scope",
+    );
+    assert_rejects(
+        &locals("{tail = 0}", "!step0").replace("lambda['a1]", "lambda"),
+        "instantiate takes a lambda that quantifies rows",
+    );
+    assert_rejects(
+        &locals("{tail = 0}", "!step0").replace(
+            "convention(direct) captures [] {",
+            "convention(evidence_direct) captures [] {",
+        ),
+        "instantiate result is not the lambda's type with its row arguments substituted",
+    );
+}
+
+#[test]
+fn a_lambda_quantifies_local_binders_it_alone_owns() {
+    assert_rejects(
+        &locals("{tail = 0}", "!step0").replace("lambda['a1]", "lambda['a0]"),
+        "lambda quantifies binder 0, which is not local",
+    );
+    assert_rejects(
+        &locals("{tail = 0}", "!step0").replace(
+            "    %s = tribute_control.instantiate",
+            "    %h = tribute_control.lambda['a1](%z: core.i32) -> core.i32 row(| 'a1) convention(direct) captures [] {\n      tribute_control.return %z\n    }\n    %s = tribute_control.instantiate",
+        ),
+        "local binder 1 is quantified by two lambdas",
+    );
+    assert_rejects(
+        &locals("{tail = 0}", "!step0").replace(
+            "tribute_control.call_indirect %s, %x",
+            "tribute_control.call_indirect %g, %x",
+        ),
+        "a lambda that quantifies rows is used only through instantiate",
+    );
+}
+
+#[test]
+fn a_lambda_captured_by_another_is_instantiated_in_its_body() {
+    let nested = |use_: &str| {
+        locals("{tail = 0}", "!step0").replace(
+            "    %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_control.call_indirect %s, %x : core.i32\n",
+            &format!(
+                "    %h = tribute_control.lambda(%z: core.i32) -> core.i32 row(| 'a0) convention(direct) captures [%g] {{\n{use_}      tribute_control.return %r\n    }}\n    %r = tribute_control.call_indirect %h, %x : core.i32\n"
+            ),
+        )
+    };
+    let (ctx, module) = parse(&nested(
+        "      %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n      %r = tribute_control.call_indirect %s, %z : core.i32\n",
+    ));
+    let result = validate(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+    assert_rejects(
+        &nested("      %r = tribute_control.call_indirect %g, %z : core.i32\n"),
+        "a lambda that quantifies rows is used only through instantiate",
+    );
+}

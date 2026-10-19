@@ -301,6 +301,12 @@ impl<'a> Converter<'a> {
                 self.ctx.push_op(block, lambda);
                 mapping.insert(self.ctx.op_result(source, 0), self.ctx.op_result(lambda, 0));
                 index += 1;
+            } else if tribute_control::Instantiate::matches(self.ctx, source) {
+                // Rows leave with legalization, so a use is its lambda.
+                let lambda = self.ctx.op_operands(source)[0];
+                let lambda = mapping.get(&lambda).copied().unwrap_or(lambda);
+                mapping.insert(self.ctx.op_result(source, 0), lambda);
+                index += 1;
             } else if tribute_control::FuncRef::matches(self.ctx, source) {
                 let (ops, value) = self.lower_func_ref(source)?;
                 for op in ops {

@@ -34,10 +34,10 @@ use super::list;
 mod row;
 
 pub use row::{
-    ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR, ROW_UNIONS_ATTR, Row,
-    RowBinder, RowUnion, find_substituted_rows, logical_tuple_elements, logical_tuple_name,
-    logical_tuple_type, quantified_count, row_args, row_binders, row_unions, substitute_rows,
-    visit_rows,
+    ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, QUANTIFIED_ROWS_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR,
+    ROW_UNIONS_ATTR, Row, RowArgs, RowBinder, RowUnion, find_substituted_rows,
+    logical_tuple_elements, logical_tuple_name, logical_tuple_type, quantified_count,
+    quantified_rows, row_args, row_binders, row_unions, substitute_rows, visit_rows,
 };
 
 /// Exact type-attribute key used by logical callable types.
@@ -110,10 +110,14 @@ mod tribute_control {
 
     #[asm_format]
     #[flags(Pure)]
-    fn lambda(captures: Variadic<_>) -> Value<impl FuncSig> {
+    fn lambda(quantified_rows: Option<Attr<[u32]>>, captures: Variadic<_>) -> Value<impl FuncSig> {
         #[region(body)]
         {}
     }
+
+    #[verify]
+    #[flags(Pure)]
+    fn instantiate<S: FuncSig>(row_args: Attr<[Row]>, lambda: Value<S>) -> Value<impl FuncSig> {}
 
     #[verify]
     #[flags(Pure)]
@@ -445,6 +449,12 @@ fn verify_evidence_steps(
 }
 
 impl trunk_ir::ops::Verify for FuncRef {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        Ok(row_args(ctx, self.op_ref()).map(drop)?)
+    }
+}
+
+impl trunk_ir::ops::Verify for Instantiate {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(row_args(ctx, self.op_ref()).map(drop)?)
     }
@@ -1377,9 +1387,15 @@ fn print_lambda(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> 
 
     let result_types = h.ctx().op_result_types(op);
     let callable_ty = result_types.first().copied();
-    if result_types.len() != 1 || !has_concise_func_sig(h.ctx(), callable_ty) {
+    // An empty list written out has no header form.
+    let quantified = quantified_rows(h.ctx(), op).ok().filter(|quantified| {
+        !quantified.is_empty() || !h.ctx().op_attrs(op).contains_key(QUANTIFIED_ROWS_ATTR)
+    });
+    let Some(quantified) = quantified
+        .filter(|_| result_types.len() == 1 && has_concise_func_sig(h.ctx(), callable_ty))
+    else {
         return h.print_generic(op);
-    }
+    };
 
     let result = h.ctx().op_results(op).first().copied();
     let result_name = result.map(|value| h.assign_value_name(value));
@@ -1390,6 +1406,16 @@ fn print_lambda(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> 
         write!(h, "{name} = ")?;
     }
     write!(h, "tribute_control.lambda")?;
+    if !quantified.is_empty() {
+        write!(h, "[")?;
+        for (index, binder) in quantified.iter().enumerate() {
+            if index > 0 {
+                write!(h, ", ")?;
+            }
+            write!(h, "'a{binder}")?;
+        }
+        write!(h, "]")?;
+    }
 
     let param_types = parts
         .as_ref()
@@ -1418,7 +1444,7 @@ fn print_lambda(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> 
         write!(h, "{capture}")?;
     }
     write!(h, "]")?;
-    print_extra_attributes(h, op, &[CALLING_CONVENTION_ATTR])?;
+    print_extra_attributes(h, op, &[CALLING_CONVENTION_ATTR, QUANTIFIED_ROWS_ATTR])?;
 
     match region {
         Some(region) => h.print_body(region),
@@ -1448,7 +1474,7 @@ fn parse_lambda<'a>(
     sym_name: Option<String>,
 ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
     use trunk_ir::parser::raw::*;
-    use winnow::combinator::opt;
+    use winnow::combinator::{opt, separated};
     use winnow::prelude::*;
 
     if results.len() != 1 || sym_name.is_some() {
@@ -1458,18 +1484,45 @@ fn parse_lambda<'a>(
     }
 
     ws.parse_next(input)?;
+    let quantified: Option<Vec<u32>> = opt((
+        '[',
+        separated(
+            1..,
+            (ws, parse_binder_name, ws).map(|(_, binder, _)| binder),
+            ',',
+        ),
+        ']',
+    ))
+    .parse_next(input)?
+    .map(|(_, binders, _)| binders);
+    ws.parse_next(input)?;
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
     let row = parse_row(input)?;
     let convention = parse_convention(input)?;
     let captures = parse_captures(input)?;
-    let attributes = opt((ws, "attributes", ws, raw_attr_dict))
+    let mut attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
         .map(|(_, _, _, attrs)| attrs)
         .unwrap_or_default();
-    if has_duplicate_convention_attr(&attributes) {
+    if has_duplicate_convention_attr(&attributes)
+        || attributes
+            .iter()
+            .any(|(key, _)| key == QUANTIFIED_ROWS_ATTR)
+    {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::new(),
+        ));
+    }
+    if let Some(quantified) = quantified {
+        attributes.push((
+            QUANTIFIED_ROWS_ATTR.into(),
+            RawAttribute::List(
+                quantified
+                    .into_iter()
+                    .map(|binder| RawAttribute::Int(i128::from(binder)))
+                    .collect(),
+            ),
         ));
     }
 
@@ -3456,6 +3509,10 @@ fn callable_has_semantic_provenance(
         }
         ValueDef::OpResult(producer, _) => {
             Lambda::matches(ctx, producer)
+                || (Instantiate::matches(ctx, producer)
+                    && ctx.op_operands(producer).first().is_some_and(|lambda| {
+                        callable_has_semantic_provenance(ctx, *lambda, provenance, visiting)
+                    }))
                 || ((FuncRef::matches(ctx, producer) || Call::matches(ctx, producer))
                     && ctx
                         .op_attrs(producer)
@@ -4153,6 +4210,121 @@ fn check_type_rows(
 
 /// Every row tail inside a definition names one of its binders, and every
 /// row instance is declared. Module-level types have no binders.
+/// A lambda quantifies only `local` binders, no other lambda quantifies the
+/// same one, and every use of it is an `instantiate` whose result is the
+/// lambda's type with its row arguments substituted.
+fn validate_local_quantification(
+    ctx: &IrContext,
+    module: Module,
+    errors: &mut Vec<ValidationError>,
+) {
+    for &func in module.ops(ctx).iter() {
+        if !Func::matches(ctx, func) {
+            continue;
+        }
+        let (Ok(binders), Some(body)) = (row_binders(ctx, func), ctx.op_region(func, 0)) else {
+            continue;
+        };
+        let mut owners = HashSet::default();
+        walk_region_ops(ctx, body, &mut |op| {
+            if Lambda::matches(ctx, op) {
+                let quantified = match quantified_rows(ctx, op) {
+                    Ok(quantified) => quantified,
+                    Err(message) => return push_op_error(ctx, op, errors, message),
+                };
+                for binder in &quantified {
+                    let kind = usize::try_from(*binder)
+                        .ok()
+                        .and_then(|index| binders.get(index));
+                    if kind != Some(&RowBinder::Local) {
+                        push_op_error(
+                            ctx,
+                            op,
+                            errors,
+                            format!("lambda quantifies binder {binder}, which is not local"),
+                        );
+                    } else if !owners.insert(*binder) {
+                        push_op_error(
+                            ctx,
+                            op,
+                            errors,
+                            format!("local binder {binder} is quantified by two lambdas"),
+                        );
+                    }
+                }
+                // A capture only hands the lambda to an inner body, whose
+                // own uses of it are uses too.
+                let result = ctx.op_results(op).first().copied();
+                let direct_use = !quantified.is_empty()
+                    && result.is_some_and(|result| {
+                        ctx.uses(result).iter().any(|used| {
+                            !Instantiate::matches(ctx, used.user)
+                                && !Lambda::matches(ctx, used.user)
+                        })
+                    });
+                if direct_use {
+                    push_op_error(
+                        ctx,
+                        op,
+                        errors,
+                        "a lambda that quantifies rows is used only through instantiate",
+                    );
+                }
+            } else if Instantiate::matches(ctx, op) {
+                validate_instantiate(ctx, op, errors);
+            }
+        });
+    }
+}
+
+fn validate_instantiate(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let lambda = ctx
+        .op_operands(op)
+        .first()
+        .and_then(|&operand| match ctx.value_def(operand) {
+            ValueDef::OpResult(producer, _) if Lambda::matches(ctx, producer) => Some(producer),
+            _ => None,
+        });
+    let quantified = lambda
+        .and_then(|lambda| quantified_rows(ctx, lambda).ok())
+        .filter(|quantified| !quantified.is_empty());
+    let (Some(lambda), Some(quantified)) = (lambda, quantified) else {
+        return push_op_error(
+            ctx,
+            op,
+            errors,
+            "instantiate takes a lambda that quantifies rows",
+        );
+    };
+    let Ok(args) = row_args(ctx, op) else {
+        return;
+    };
+    if args.len() != quantified.len() {
+        return push_op_error(
+            ctx,
+            op,
+            errors,
+            format!(
+                "instantiate passes {} row arguments for {} quantified binders",
+                args.len(),
+                quantified.len()
+            ),
+        );
+    }
+    let expected = ctx
+        .op_result_types(lambda)
+        .first()
+        .and_then(|&ty| find_substituted_rows(ctx, ty, RowArgs::Binders(&quantified, &args)));
+    if expected.is_none() || ctx.op_result_types(op).first().copied() != expected {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "instantiate result is not the lambda's type with its row arguments substituted",
+        );
+    }
+}
+
 fn validate_row_scopes(
     ctx: &IrContext,
     module: Module,
@@ -4354,6 +4526,7 @@ fn whole_ir(
     let declarations = &declared_operations(ctx, module, &mut errors);
     validate_module_symbols(ctx, module, symbols, &mut errors);
     validate_row_scopes(ctx, module, &declared_instances(ctx, module), &mut errors);
+    validate_local_quantification(ctx, module, &mut errors);
     validate_evidence_tails(ctx, body, symbols, &mut errors);
     validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(ctx, declarations, &mut errors);

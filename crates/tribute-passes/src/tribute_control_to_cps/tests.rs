@@ -2530,3 +2530,38 @@ fn legalization_drops_ability_rows_and_row_metadata() {
     };
     assert_eq!(legalize(with_rows), legalize(&without_rows));
 }
+
+/// An instantiated local lambda legalizes to the same callable graph as the
+/// lambda used directly: rows and their instantiation leave with legalization.
+#[test]
+fn instantiate_legalizes_to_its_lambda() {
+    let module = |header: &str, use_: &str| {
+        format!(
+            r#"core.module @m {{
+  !step0 = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{tail = 0}}, tribute.calling_convention = 0}}>
+  tribute_control.func @f['a0, local 'a1](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {{
+    %g = tribute_control.lambda{header}(%y: core.i32) -> core.i32 row(| 'a1) convention(direct) captures [] {{
+      tribute_control.return %y
+    }}
+    {use_}
+    tribute_control.return %r
+  }}
+}}"#
+        )
+    };
+    let legalized = |input: String| {
+        let (mut ctx, module) = parse(&input);
+        run_pre_cps(&mut ctx, module).expect("legalizes");
+        print_module(&ctx, module.op())
+    };
+    let instantiated = legalized(module(
+        "['a1]",
+        "%s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_control.call_indirect %s, %x : core.i32",
+    ));
+    let direct = legalized(module(
+        "",
+        "%r = tribute_control.call_indirect %g, %x : core.i32",
+    ));
+    assert_eq!(instantiated, direct);
+    assert!(!instantiated.contains("quantified_rows"), "{instantiated}");
+}
