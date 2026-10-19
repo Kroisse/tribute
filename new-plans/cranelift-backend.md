@@ -362,6 +362,10 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 
 `Bytes`의 소유 규칙은 [rc.md](rc.md#bytes)를 따른다.
 
+Native 타입 변환은 [`core.index`](ir.md#coreindex-주소-폭-정수)를 pointer 폭인
+`core.i64`로 바꾼다. Array의 length와 원소 index, `mem.ptr_add`의 offset이 이
+폭을 쓴다.
+
 ### RC Object 헤더
 
 ```text

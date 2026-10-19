@@ -2,7 +2,7 @@
 
 use crate::dialect::tribute_rtti::ManagedRefType;
 use trunk_ir::asm_format::TypeAliasHint;
-use trunk_ir::dialect::core::{Array, IntegerLike};
+use trunk_ir::dialect::core::{Array, Index};
 use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
@@ -76,17 +76,12 @@ mod adt {
     fn array_new(r#type: Attr<Type>, elements: Variadic<_>) -> Value<_> {}
 
     #[flags(Pure)]
-    fn array_get<A: Array>(r#ref: Value<A>, index: Value<impl IntegerLike>) -> Value<A::Element> {}
+    fn array_get<A: Array>(r#ref: Value<A>, index: Value<Index>) -> Value<A::Element> {}
 
-    fn array_set<A: Array>(
-        r#ref: Value<A>,
-        index: Value<impl IntegerLike>,
-        value: Value<A::Element>,
-    ) {
-    }
+    fn array_set<A: Array>(r#ref: Value<A>, index: Value<Index>, value: Value<A::Element>) {}
 
     #[flags(Pure)]
-    fn array_len(r#ref: Value<impl Array>) -> Value<_> {}
+    fn array_len(r#ref: Value<impl Array>) -> Value<Index> {}
 
     #[flags(Pure)]
     fn ref_null(r#type: Attr<Type>) -> Value<_> {}

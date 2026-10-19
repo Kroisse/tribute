@@ -3,7 +3,7 @@
 // mem.load is intentionally NOT pure: loads depend on mutable memory and may trap.
 
 use crate::attr_kind::Bytes;
-use crate::dialect::core::{IntegerLike, Ptr, ScalarLike};
+use crate::dialect::core::{Index, Ptr, ScalarLike};
 use crate::op_flag::Pure;
 
 #[trunk_ir::dialect]
@@ -27,10 +27,10 @@ mod mem {
     /// Store a scalar `value` at `ptr` plus an immediate byte `offset`.
     fn store(offset: Attr<u32>, ptr: Value<Ptr>, value: Value<impl ScalarLike>) {}
 
-    /// Add a pointer-width integer byte `offset` to `base`, keeping `base`'s
-    /// provenance. No element-size scaling is applied.
+    /// Add a byte `offset` to `base`, keeping `base`'s provenance. No
+    /// element-size scaling is applied.
     #[flags(Pure)]
-    fn ptr_add(base: Value<Ptr>, offset: Value<impl IntegerLike>) -> Value<Ptr> {}
+    fn ptr_add(base: Value<Ptr>, offset: Value<Index>) -> Value<Ptr> {}
 }
 
 #[cfg(test)]
@@ -44,7 +44,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             &format!(
-                "core.module @test {{\n  func.func @f(%p: core.ptr, %i: core.i64, %n: core.i32, %f: core.f64, %b: core.bytes) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
+                "core.module @test {{\n  func.func @f(%p: core.ptr, %i: core.i64, %n: core.i32, %f: core.f64, %b: core.bytes, %x: core.index) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
             ),
         );
         validate_op_schemas(&ctx, module.op()).is_ok()
@@ -83,12 +83,13 @@ mod tests {
     }
 
     #[test]
-    fn ptr_add_takes_a_pointer_and_an_integer_and_yields_a_pointer() {
-        assert!(schema_ok("%a = mem.ptr_add %p, %i : core.ptr"));
-        assert!(schema_ok("%a = mem.ptr_add %p, %n : core.ptr"));
-        assert!(!schema_ok("%a = mem.ptr_add %i, %i : core.ptr"));
+    fn ptr_add_takes_a_pointer_and_an_index_and_yields_a_pointer() {
+        assert!(schema_ok("%a = mem.ptr_add %p, %x : core.ptr"));
+        assert!(!schema_ok("%a = mem.ptr_add %p, %i : core.ptr"));
+        assert!(!schema_ok("%a = mem.ptr_add %p, %n : core.ptr"));
+        assert!(!schema_ok("%a = mem.ptr_add %x, %x : core.ptr"));
         assert!(!schema_ok("%a = mem.ptr_add %p, %f : core.ptr"));
-        assert!(!schema_ok("%a = mem.ptr_add %p, %i : core.i64"));
+        assert!(!schema_ok("%a = mem.ptr_add %p, %x : core.index"));
     }
 
     #[test]

@@ -166,8 +166,8 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   monomorphization을 뜻하지 않는다.
 - Bound는 교집합이다. Exact bound는 하나의 dialect 타입과 그 wrapper의 내부
   invariant를 요구하며, 한 변수에 서로 다른 exact bound를 둘 수 없다.
-  Category bound는 `IntegerLike`, `BoolLike`, `FloatLike`처럼 타입 범주를
-  요구하며 여러 개를 함께 둘 수 있다. 이 범주들은 `core` 스칼라 타입만 보는
+  Category bound는 `IntegerLike`, `IntegerOrIndex`, `BoolLike`, `FloatLike`처럼
+  타입 범주를 요구하며 여러 개를 함께 둘 수 있다. 이 범주들은 `core` 스칼라 타입만 보는
   닫힌 판별이다. 다른 dialect의 타입까지 포함해야 하는 실제 소비자가 생기기
   전에는 dialect 등록형 범주를 두지 않는다.
 - 결과 위치에 `impl` 없이 직접 쓴 bound는 그 bound가 가리키는 하나의 고정
@@ -1513,6 +1513,11 @@ Dynamic `tribute_rt.anyref`에서 `adt.typeref`로 복원하는 명시적인
 native는 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast`를 생성한다.
 이 규칙은 일반 `adt.struct` 복원이나 nominal provenance 검증을 바꾸지 않는다.
 
+`adt.array_get`과 `adt.array_set`의 index, `adt.array_len`의 결과는
+[`core.index`](#coreindex-주소-폭-정수)다. 배열의 원소 개수와 위치는 target의 주소
+폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_castsi`나
+`arith.index_castui`로 명시적으로 바꾼다.
+
 `list.*` represents the opaque canonical `List(a)` sequence contract. It uses
 `list.empty`, `list.prepend`, `list.is_empty`, `list.head`, and `list.tail`.
 These operations carry element/result types but no variant tags, node field
@@ -1638,6 +1643,22 @@ bit operations, and numeric conversions.
 | 정수 → 부동소수 | `sitofp` / `uitofp` | |
 | 부동소수 → 정수 | `fptosi` / `fptoui` | 범위 밖 값과 NaN은 trap한다 |
 | 부동소수 폭 | `extf` / `truncf` | 넓히기 / 좁히기 |
+| 정수 ↔ index | `index_castsi` / `index_castui` | 한쪽은 `core.index`, 다른 쪽은 고정 폭 정수 |
+
+정수 산술(`addi`, `subi`, `muli`, `divsi`/`divui`, `remsi`/`remui`, `negi`), 비트
+연산, `cmpi`, `arith.const`는 고정 폭 정수와 함께 [`core.index`](#coreindex-주소-폭-정수)도
+받는다(`IntegerOrIndex`). `core.index` 연산의 의미는 target의 index 폭을 가진
+고정 폭 정수의 같은 연산과 같다. 폭을 직접 다루는 연산(`extsi`/`extui`/`trunci`,
+정수와 부동소수 사이의 변환, `cf.switch`)은 고정 폭 정수만 받는다.
+`arith.const`의 `Int` 값은 index 폭으로 자른 값으로 읽는다.
+
+`index_castsi`와 `index_castui`는 고정 폭 정수와 `core.index` 사이를 어느 방향으로든
+바꾼다. 결과가 더 넓으면 각각 부호 확장과 0 확장을 하고, 더 좁으면 자르며, 폭이
+같으면 값을 그대로 둔다. Index 폭에 따라 결과가 달라지는 상수 접기는 하지 않는다.
+상수 피연산자의 cast는 index 폭과 무관하게 같은 값이 나올 때만 상수가 된다.
+고정 폭 `iN`에서 `core.index`를 거쳐 다시 `iN`으로 돌아오는 cast 쌍은 `N`이 index
+폭의 하한(32) 이하일 때만 원래 값으로 접는다. 고정 폭 정수 상수끼리의 산술 접기는
+`core.index`에 적용하지 않으며, `x + 0`처럼 폭과 무관한 항등식만 접는다.
 
 `arith`는 포인터를 다루지 않는다. 정수는 포인터가 되지 않으며, 포인터와 정수 사이의
 변환 operation은 없다. 포인터는 할당, runtime, `mem.data`에서 나오고 `mem.ptr_add`로만
@@ -1652,10 +1673,10 @@ Null은 출처가 없고 역참조할 수 없으므로 출처 추적의 예외�
 읽고 쓴다. Managed reference나 aggregate는 scalar가 아니다. Runtime이 넘겨준 pointer를
 managed reference로 받는 lowering은 `core.ptr`로 읽은 뒤 `tribute_rt.from_raw`로 그
 unit을 받는다. Managed reference를 `core.ptr`로 보고 payload를 제자리에서 읽는 길은 없다.
-주소 계산은 `mem.ptr_add(base: core.ptr, offset: 정수) -> core.ptr` 하나로 표현한다.
-`offset`은 byte 단위다. Schema는 정수 범주만 강제하며, `offset`을 target의 pointer
-폭에 맞추는 것은 생산자의 책임이다. 원소 크기 배율은 적용하지 않으므로, 필요하면 `arith`
-곱셈으로 명시한다. 결과는 `base`의 provenance를 유지한다. `mem.load`와 `mem.store`는
+주소 계산은 `mem.ptr_add(base: core.ptr, offset: core.index) -> core.ptr` 하나로
+표현한다. `offset`은 byte 단위의 [`core.index`](#coreindex-주소-폭-정수)이므로 생산자는
+target의 pointer 폭을 알 필요가 없다. 원소 크기 배율은 적용하지 않으므로, 필요하면
+`core.index`의 `arith` 곱셈으로 명시한다. 결과는 `base`의 provenance를 유지한다. `mem.load`와 `mem.store`는
 즉시값 `offset`만 받고 동적 offset을 받지 않는다. 동적 주소는 `mem.ptr_add`로
 만든다. 구조적 index로 주소를 유도하는 GEP식 연산은 두지 않는다.
 
@@ -1854,12 +1875,12 @@ target dialect lowering에 들어가기 전에 컴파일이 실패한다. 이 �
 
 ## Type Model
 
-Primitive scalar, pointer, reference, bytes, array, tuple, function, and nil
-types are represented in TrunkIR. Library data types such as `Option`, `Result`,
-and `Text` lower through ADT and runtime/library conventions. `List` is an
-opaque nominal builtin whose shared construction and sequence-view observations
-use `list.*`; target-specific passes choose and eliminate its private
-representation.
+Primitive scalar, address-width index, pointer, reference, bytes, array, tuple,
+function, and nil types are represented in TrunkIR. Library data types such as
+`Option`, `Result`, and `Text` lower through ADT and runtime/library
+conventions. `List` is an opaque nominal builtin whose shared construction and
+sequence-view observations use `list.*`; target-specific passes choose and
+eliminate its private representation.
 
 Dialect 타입의 정의는 그 타입의 type verifier, 전용 textual 문법, printer가
 자동 type alias를 만들 때 쓰는 alias 이름 제안을 함께 소유한다. Alias 이름 제안은
@@ -1884,6 +1905,25 @@ verifier에 넘기고, 거부된 타입에는 wrapper를 주지 않는다. Opera
 rewrite 도중 operand, attribute, region이 바뀌므로 생성 시점의 검증이 이후 상태를
 보장하지 못한다. 따라서 operation의 선언적 제약은 verifier checkpoint에서만
 강제한다.
+
+### `core.index` 주소 폭 정수
+
+`core.index`는 target의 주소 폭을 따르는 signless 정수 타입이다. Byte offset, 크기,
+배열 index와 길이처럼 target의 주소 공간에서 세는 값을 나타낸다. 폭은 target이
+정하며 target-independent IR과 변환은 그 폭에 기대지 않는다. 지원하는 모든 target의
+index 폭은 32비트 이상이고, target-independent 상수 접기는 이 하한만 가정한다.
+
+| Target | `core.index` 표현 |
+| --- | --- |
+| Native (Cranelift) | `core.i64`, pointer 폭 |
+| WasmGC | `core.i32`, `array.get`/`array.set`/`array.len`의 index와 길이 폭 |
+| Linear memory wasm32 | `core.i32`, 주소 폭 |
+
+`core.index`는 고정 폭 정수가 아니다. 고정 폭 정수 범주 `IntegerLike`에 속하지 않고,
+`IntegerOrIndex` 범주가 고정 폭 정수와 함께 받는다. Machine scalar 하나이므로
+`NumericLike`와 `ScalarLike`에는 속한다. 고정 폭 정수와의 변환과 산술 규칙은
+[`arith`](#mid-level-dialects)가 정한다. Target 타입 변환이 `core.index`를 위 표의
+고정 폭 정수로 바꾸므로, target lowering 뒤의 IR에는 `core.index`가 남지 않는다.
 
 ### 타입 textual form
 

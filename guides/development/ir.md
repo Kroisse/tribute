@@ -122,9 +122,10 @@ where
   declares the rest of the successor list and must come last; its accessor
   iterates those blocks.
 - Bounds are Rust types implementing `type_constraint::TypeConstraint`:
-  `core` scalar categories (`IntegerLike`, `BoolLike`, `FloatLike`,
-  `NumericLike`, `ScalarLike`), exact `core` scalars (`I1`–`I64`, `F32`,
-  `F64`), macro-defined type wrappers
+  `core` scalar categories (`IntegerLike` for fixed-width integers,
+  `IntegerOrIndex` for those and `core.index`, `BoolLike`, `FloatLike`,
+  `NumericLike`, `ScalarLike`), exact `core` scalars (`I1`–`I64`, `Index`,
+  `F32`, `F64`), macro-defined type wrappers
   (projections are their declared parameters), and the `func`/`clif`/`wasm`
   `FuncSig` wrappers (`Inputs`/`Results`). Unknown, ambiguous, or wrong-kind
   projections and conflicting exact bounds fail to compile.

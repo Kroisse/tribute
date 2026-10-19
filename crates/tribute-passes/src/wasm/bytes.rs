@@ -64,7 +64,8 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicEr
 ///   %data   = adt.struct_get %view {field = 0} : !bytes_data
 ///   %offset = adt.struct_get %view {field = 1} : core.i32
 ///   %at     = arith.addi %offset, %index : core.i32
-///   %byte   = adt.array_get %data, %at : core.i8
+///   %pos    = arith.index_castui %at : core.index
+///   %byte   = adt.array_get %data, %pos : core.i8
 ///   %result = arith.extui %byte : core.i32
 fn lower_call(ctx: &mut IrContext, call: OpRef) {
     let [bytes, index] = ctx.op_operands(call) else {
@@ -93,7 +94,12 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
         .results(i32_ty)
         .build(ctx, loc);
     let at = arith::Addi::operands(offset.result(ctx), index).build(ctx, loc);
-    let byte = adt::ArrayGet::operands(data.result(ctx), at.result(ctx)).build(ctx, loc);
+    // A position inside the bytes is never negative.
+    let index_ty = core::Index::type_ref(ctx);
+    let pos = arith::IndexCastui::operands(at.result(ctx))
+        .results(index_ty)
+        .build(ctx, loc);
+    let byte = adt::ArrayGet::operands(data.result(ctx), pos.result(ctx)).build(ctx, loc);
     // A byte is 0..=255: it widens with zero extension.
     let value = arith::Extui::operands(byte.result(ctx))
         .results(result_ty)
@@ -106,6 +112,7 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
             data.op_ref(),
             offset.op_ref(),
             at.op_ref(),
+            pos.op_ref(),
             byte.op_ref(),
             value.op_ref(),
         ],

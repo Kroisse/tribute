@@ -160,7 +160,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @byte(%base: core.ptr, %index: core.i64) -> core.i8 {
+  func.func @byte(%base: core.ptr, %index: core.index) -> core.i8 {
     %data = mem.load %base {offset = 0} : core.ptr
     %addr = mem.ptr_add %data, %index : core.ptr
     %byte = mem.load %addr {offset = 0} : core.i8
@@ -168,13 +168,19 @@ mod tests {
   }
 }"#,
         );
+        let i64_ty = trunk_ir::dialect::core::I64::type_ref(&mut ctx);
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |ctx, ty| {
+            trunk_ir::dialect::core::Index::matches(ctx, ty).then_some(i64_ty)
+        });
 
-        lower(&mut ctx, module, TypeConverter::new()).expect("mem ops lower to clif");
+        lower(&mut ctx, module, type_converter).expect("mem ops lower to clif");
 
         let printed = print_module(&ctx, module.op());
         assert!(!printed.contains("mem."), "{printed}");
         assert_eq!(printed.matches("clif.load").count(), 2, "{printed}");
         assert!(printed.contains("clif.iadd"), "{printed}");
+        assert!(printed.contains(": core.i64"), "{printed}");
     }
 
     #[test]

@@ -387,6 +387,12 @@ backend에는 `core.bytes`가 나타나지 않는다.
 use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입이 나타나지 않는다.
 `adt.typeref`는 이 첫 단계의 대상이 아니다. `adt` 연산이 nominal layout을 읽는
 동안에는 값과 signature에 남고, Wasm dialect lowering의 마지막 단계가 없앤다.
+
+[`core.index`](ir.md#coreindex-주소-폭-정수)는 WasmGC 배열 명령의 index와 길이
+폭인 `core.i32`가 된다. Linear memory를 쓰는 wasm32에서도 주소 폭이 같으므로 같은
+표현을 쓴다. `arith` lowering은 `core.index` 연산을 `core.i32` 연산으로 바꾸고, ADT
+lowering은 배열 index를 `core.i32`로 넘긴다.
+
 Struct 이름이나 원소 타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
 원소가 `core.i8`인 배열도 `"bytes_data"`가 없으면 bytes 배열이 아니다.
 Closure는 environment를 따로 두지 않고, Marker의 dispatch closure field는

@@ -15,27 +15,27 @@ mod arith {
     // Integer arithmetic
     #[implements(Fold)]
     #[flags(Pure)]
-    fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn addi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
-    fn subi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn subi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
-    fn muli<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn muli<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
-    fn divsi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn divsi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
-    fn divui<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn divui<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
-    fn remsi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn remsi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
-    fn remui<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn remui<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
-    fn negi<T: IntegerLike>(operand: Value<T>) -> Value<T> {}
+    fn negi<T: IntegerOrIndex>(operand: Value<T>) -> Value<T> {}
 
     // Float arithmetic
     #[flags(Pure)]
@@ -51,7 +51,8 @@ mod arith {
 
     // Comparisons
     #[flags(Pure)]
-    fn cmpi<T: IntegerLike>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
+    fn cmpi<T: IntegerOrIndex>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {
+    }
 
     #[verify]
     #[flags(Pure)]
@@ -60,19 +61,19 @@ mod arith {
     // Bitwise (integer-only)
     #[implements(Fold)]
     #[flags(Pure)]
-    fn and<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn and<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
-    fn or<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn or<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
-    fn xor<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn xor<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
-    fn shl<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
+    fn shl<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
     #[flags(Pure)]
-    fn shr<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
+    fn shr<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
     #[flags(Pure)]
-    fn shru<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
+    fn shru<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
 
     // Conversions. Integers are signless; each sign-dependent conversion is
     // an explicit signed/unsigned pair.
@@ -93,6 +94,18 @@ mod arith {
     fn fptosi(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
     /// Traps on out-of-range values and NaN.
     fn fptoui(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
+    /// Convert between a fixed-width integer and `core.index`, in either
+    /// direction, extending the sign when the result is wider.
+    #[verify]
+    #[implements(Fold)]
+    #[flags(Pure)]
+    fn index_castsi(operand: Value<impl IntegerOrIndex>) -> Value<impl IntegerOrIndex> {}
+    /// Convert between a fixed-width integer and `core.index`, in either
+    /// direction, extending with zeros when the result is wider.
+    #[verify]
+    #[implements(Fold)]
+    #[flags(Pure)]
+    fn index_castui(operand: Value<impl IntegerOrIndex>) -> Value<impl IntegerOrIndex> {}
     #[verify]
     #[flags(Pure)]
     fn extf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
@@ -111,7 +124,7 @@ mod arith {
 // =========================================================================
 
 use crate::context::IrContext;
-use crate::dialect::core::{FloatLike, I1, IntegerLike, NumericLike};
+use crate::dialect::core::{FloatLike, I1, Index, IntegerLike, IntegerOrIndex, NumericLike};
 use crate::op_flag::Pure;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
@@ -126,7 +139,7 @@ impl crate::ops::Verify for Const {
     fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         let ty = ctx.value_ty(self.result(ctx));
         let accepted = match self.value(ctx) {
-            Attribute::Int(_) => IntegerLike::matches(ctx, ty),
+            Attribute::Int(_) => IntegerOrIndex::matches(ctx, ty),
             Attribute::Bool(_) => I1::matches(ctx, ty),
             Attribute::FloatBits(_) => FloatLike::matches(ctx, ty),
             _ => false,
@@ -200,6 +213,39 @@ width_verifier!(Extui, IntegerLike::width, true);
 width_verifier!(Trunci, IntegerLike::width, false);
 width_verifier!(Extf, FloatLike::width, true);
 width_verifier!(Truncf, FloatLike::width, false);
+
+/// Check that an index cast converts between `core.index` and a fixed-width
+/// integer.
+fn verify_index_cast(ctx: &IrContext, op: OpRef) -> Result<(), String> {
+    let (Some(&operand), Some(&result)) = (ctx.op_operands(op).first(), ctx.op_results(op).first())
+    else {
+        return Err("index cast requires one operand and one result".into());
+    };
+    let (from, to) = (ctx.value_ty(operand), ctx.value_ty(result));
+    let fixed_to_index = IntegerLike::matches(ctx, from) && Index::matches(ctx, to);
+    let index_to_fixed = Index::matches(ctx, from) && IntegerLike::matches(ctx, to);
+    if fixed_to_index || index_to_fixed {
+        Ok(())
+    } else {
+        Err(format!(
+            "index cast converts between core.index and a fixed-width integer, not {} to {}",
+            crate::printer::print_type(ctx, from),
+            crate::printer::print_type(ctx, to)
+        ))
+    }
+}
+
+impl crate::ops::Verify for IndexCastsi {
+    fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
+        Ok(verify_index_cast(ctx, self.op_ref())?)
+    }
+}
+
+impl crate::ops::Verify for IndexCastui {
+    fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
+        Ok(verify_index_cast(ctx, self.op_ref())?)
+    }
+}
 
 // Folds this dialect contributes to `transforms::canonicalize`. Each
 // operation below declares `#[implements(Fold)]` in the dialect.
@@ -440,6 +486,73 @@ impl Fold for Xor {
     }
 }
 
+impl Fold for IndexCastsi {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_index_cast(ctx, self.op_ref(), true)
+    }
+}
+
+impl Fold for IndexCastui {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_index_cast(ctx, self.op_ref(), false)
+    }
+}
+
+/// Folds of `arith.index_castsi` (`signed`) and `arith.index_castui`
+/// that hold at every index width of at least [`Index::MIN_WIDTH`] bits:
+///
+/// - A constant fixed-width operand becomes the index constant of its
+///   extended value, which every index width truncates or extends alike.
+/// - A constant index operand becomes an `iN` constant when `N` is at most
+///   the minimum index width, or when the value already fits that width.
+/// - `iN → index → iN` forwards the original value when `N` is at most the
+///   minimum index width, so the index held it without truncation.
+fn fold_index_cast(ctx: &IrContext, op: OpRef, signed: bool) -> Option<FoldResult> {
+    let &operand = ctx.op_operands(op).first()?;
+    let result_ty = single_result_type(ctx, op)?;
+    if let Some(value) = const_int_value(ctx, operand) {
+        return index_cast_const(ctx, value, ctx.value_ty(operand), result_ty, signed)
+            .map(|value| FoldResult::ArithConst(Attribute::Int(value)));
+    }
+    let width = IntegerLike::width(ctx, result_ty)?;
+    if let ValueDef::OpResult(producer, _) = ctx.value_def(operand)
+        && (IndexCastsi::matches(ctx, producer) || IndexCastui::matches(ctx, producer))
+        && let Some(&original) = ctx.op_operands(producer).first()
+        && ctx.value_ty(original) == result_ty
+        && width <= Index::MIN_WIDTH
+    {
+        return Some(FoldResult::Forward(original));
+    }
+    None
+}
+
+/// The constant `value` of type `from` cast to `to`, if it does not depend
+/// on the index width.
+fn index_cast_const(
+    ctx: &IrContext,
+    value: i128,
+    from: TypeRef,
+    to: TypeRef,
+    signed: bool,
+) -> Option<i128> {
+    if let Some(width) = IntegerLike::width(ctx, from) {
+        // `Int` values are stored sign-extended to `i128`.
+        return Some(if signed {
+            value
+        } else {
+            ((value as u128) & width_mask_u128(width)) as i128
+        });
+    }
+    let width = IntegerLike::width(ctx, to)?;
+    let min = Index::MIN_WIDTH;
+    let fits = if signed {
+        (-(1i128 << (min - 1))..(1i128 << (min - 1))).contains(&value)
+    } else {
+        (0..(1i128 << min)).contains(&value)
+    };
+    (width <= min || fits).then(|| wrap_signed_to_width(value, width))
+}
+
 // =========================================================================
 // Fold helpers (private to this module)
 // =========================================================================
@@ -581,6 +694,97 @@ mod canonicalize_tests {
             ControlFlow::Continue(WalkAction::Advance)
         });
         found
+    }
+
+    /// Fold `body`, a function returning `ret_ty`, and return the folded
+    /// module and the constant it returns, if any.
+    fn fold_function(params: &str, ret_ty: &str, body: &str) -> (IrContext, Module, Option<i128>) {
+        let input = format!(
+            "core.module @test {{\n  func.func @f({params}) -> {ret_ty} {{\n{body}\n  }}\n}}"
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &input);
+        run_arith_patterns(&mut ctx, module);
+        let value = return_value_int_const(&ctx, module);
+        (ctx, module, value)
+    }
+
+    #[test]
+    fn index_cast_of_a_fixed_width_constant_folds_to_its_extended_value() {
+        for (op, expected) in [("index_castsi", -1), ("index_castui", 0xffff_ffff)] {
+            let (_, _, value) = fold_function(
+                "",
+                "core.index",
+                &format!(
+                    "    %c = arith.const {{value = -1}} : core.i32\n    %r = arith.{op} %c : core.index\n    func.return %r"
+                ),
+            );
+            assert_eq!(value, Some(expected), "{op}");
+        }
+    }
+
+    #[test]
+    fn index_cast_of_an_index_constant_folds_only_when_the_index_width_cannot_matter() {
+        let fold = |op: &str, value: i128, ty: &str| {
+            fold_function(
+                "",
+                ty,
+                &format!(
+                    "    %c = arith.const {{value = {value}}} : core.index\n    %r = arith.{op} %c : {ty}\n    func.return %r"
+                ),
+            )
+            .2
+        };
+        assert_eq!(fold("index_castsi", -5, "core.i64"), Some(-5));
+        assert_eq!(
+            fold("index_castui", 0xffff_ffff, "core.i64"),
+            Some(0xffff_ffff)
+        );
+        // Truncation to at most the minimum index width ignores the higher bits.
+        assert_eq!(fold("index_castsi", 1 << 40, "core.i32"), Some(0));
+        assert_eq!(fold("index_castui", -1, "core.i8"), Some(-1));
+        // A 32-bit index would have dropped these bits before extending.
+        assert_eq!(fold("index_castsi", 1 << 40, "core.i64"), None);
+        assert_eq!(fold("index_castui", -1, "core.i64"), None);
+    }
+
+    #[test]
+    fn index_cast_round_trip_forwards_values_no_wider_than_the_minimum_index_width() {
+        let round_trip = |ty: &str| {
+            let (ctx, module, _) = fold_function(
+                &format!("%x: {ty}"),
+                ty,
+                &format!(
+                    "    %i = arith.index_castui %x : core.index\n    %r = arith.index_castsi %i : {ty}\n    func.return %r"
+                ),
+            );
+            count_ops(&ctx, module, crate::dialect::arith::IndexCastsi::NAME)
+        };
+        assert_eq!(round_trip("core.i32"), 0);
+        assert_eq!(round_trip("core.i64"), 1);
+    }
+
+    #[test]
+    fn index_arithmetic_folds_identities_but_not_width_dependent_constants() {
+        let (ctx, module, _) = fold_function(
+            "%x: core.index",
+            "core.index",
+            "    %z = arith.const {value = 0} : core.index\n    %r = arith.addi %x, %z : core.index\n    func.return %r",
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            0
+        );
+        let (ctx, module, value) = fold_function(
+            "",
+            "core.index",
+            "    %a = arith.const {value = 2147483647} : core.index\n    %b = arith.const {value = 1} : core.index\n    %r = arith.addi %a, %b : core.index\n    func.return %r",
+        );
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
+            1
+        );
+        assert_eq!(value, None);
     }
 
     #[test]
@@ -1296,5 +1500,46 @@ mod schema_tests {
         assert!(!messages.contains("arith.divsi"), "{messages}");
         // `negi` reports both its operand and its result.
         assert_eq!(result.errors.len(), 6, "{messages}");
+    }
+
+    #[test]
+    fn index_takes_integer_arithmetic_and_converts_only_through_index_casts() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%i: core.index, %n: core.i32, %w: core.i64, %x: core.f64) {
+    %ok_const = arith.const {value = 4} : core.index
+    %ok_add = arith.addi %i, %ok_const : core.index
+    %ok_cmp = arith.cmpi %i, %ok_add {predicate = "ult"} : core.i1
+    %ok_si = arith.index_castsi %n : core.index
+    %ok_ui = arith.index_castui %i : core.i64
+    %bad_mixed = arith.addi %i, %n : core.index
+    %bad_extsi = arith.extsi %i : core.i64
+    %bad_float = arith.sitofp %i : core.f64
+    %bad_fixed = arith.index_castsi %n : core.i64
+    %bad_same = arith.index_castui %i : core.index
+    %bad_cast_float = arith.index_castsi %x : core.index
+    func.return
+  }
+}"#,
+        );
+        let result = crate::validation::validate_operation_verifiers(&ctx, module);
+        let messages = result.to_string();
+        for op in [
+            "arith.addi",
+            "arith.extsi",
+            "arith.sitofp",
+            "arith.index_castsi",
+            "arith.index_castui",
+        ] {
+            assert!(messages.contains(op), "missing {op}: {messages}");
+        }
+        assert!(
+            messages.contains("index cast converts between core.index"),
+            "{messages}"
+        );
+        assert!(!messages.contains("arith.cmpi"), "{messages}");
+        assert!(!messages.contains("arith.const"), "{messages}");
     }
 }
