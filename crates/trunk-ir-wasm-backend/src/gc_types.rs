@@ -10,7 +10,7 @@
 //! Index 1: BytesArray - array i8 backing storage for Bytes
 //! Index 2: BytesStruct - struct { data: ref BytesArray, offset: i32, len: i32 }
 //! Index 3: ClosureStruct - struct { i32 } (table index), the closure base
-//! Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref } (evidence)
+//! Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: (ref null ClosureStruct), shadowed: anyref, outer: anyref } (evidence)
 //! Index 5: Evidence - array (ref Marker) (evidence array)
 //! Index 6: Described - struct { descriptor: i32 }, supertype of user structs and variants
 //! Index 7+: User-defined types (structs, arrays, variants, closure capture layouts, etc.)
@@ -36,7 +36,7 @@ pub const BYTES_STRUCT_IDX: u32 = 2;
 /// subtype that adds them after the table index.
 pub const CLOSURE_STRUCT_IDX: u32 = 3;
 
-/// Type index for Marker (struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref }).
+/// Type index for Marker (struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: (ref null ClosureStruct), shadowed: anyref, outer: anyref }).
 /// This is always index 4 in the GC type section.
 /// Used for evidence-based handler dispatch in the ability system.
 pub const MARKER_IDX: u32 = 4;
@@ -176,7 +176,7 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
             element_type: StorageType::Val(ValType::I32),
             mutable: false,
         }]),
-        // Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref }
+        // Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: (ref null ClosureStruct), shadowed: anyref, outer: anyref }
         GcTypeDef::Struct(vec![
             FieldType {
                 element_type: StorageType::Val(ValType::I32),
@@ -187,7 +187,10 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
                 mutable: false,
             },
             FieldType {
-                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                element_type: StorageType::Val(ValType::Ref(RefType {
+                    nullable: true,
+                    heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
+                })),
                 mutable: false,
             },
             FieldType {
@@ -318,10 +321,14 @@ mod tests {
         let i32 = StorageType::Val(ValType::I32);
         let f64 = StorageType::Val(ValType::F64);
         let anyref = StorageType::Val(ValType::Ref(RefType::ANYREF));
+        let closure = StorageType::Val(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
+        }));
         assert_eq!(CLOSURE_FIELD_COUNT, 1, "ClosureStruct field count");
         let cases: [(&str, u32, &[StorageType]); 3] = [
             // { ability_id, prompt_tag, tr_dispatch_fn, shadowed, outer }
-            ("Marker", MARKER_IDX, &[i32, i32, anyref, anyref, anyref]),
+            ("Marker", MARKER_IDX, &[i32, i32, closure, anyref, anyref]),
             // { code: function table index }
             ("ClosureStruct", CLOSURE_STRUCT_IDX, &[i32]),
             ("BoxedF64", BOXED_F64_IDX, &[f64]),
