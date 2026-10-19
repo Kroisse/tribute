@@ -536,9 +536,8 @@ fn index_cast_const(
     signed: bool,
 ) -> Option<i128> {
     if let Some(width) = IntegerLike::width(ctx, from) {
-        // `Int` values are stored sign-extended to `i128`.
         return Some(if signed {
-            value
+            wrap_signed_to_width(value, width)
         } else {
             ((value as u128) & width_mask_u128(width)) as i128
         });
