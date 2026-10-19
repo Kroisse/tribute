@@ -160,3 +160,28 @@ fn an_inferred_row_reads_its_tail_only_when_it_is_a_class_variable() {
     assert_eq!(rules(&inferred("direct")), [""; 0]);
     assert_eq!(rules(&inferred("cps")), ["own"]);
 }
+
+#[test]
+fn the_pass_fails_with_every_disagreement() {
+    use trunk_ir::pass::Pass;
+
+    let run = |input: &str| {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let module =
+            trunk_ir::dialect::core::Module::from_op(&ctx, module.op()).expect("a core.module");
+        CheckConventionClasses
+            .run(
+                &mut ctx,
+                module,
+                &mut trunk_ir::analysis::AnalysisCache::new(),
+            )
+            .map_err(|error| error.to_string())
+    };
+    assert_eq!(run(&calls("0", "direct", "direct", "app$9D")), Ok(()));
+    let error = run(&calls("0", "direct", "direct", "app")).unwrap_err();
+    assert!(
+        error.starts_with("convention classes disagree with rows: (reference) main refers to app,"),
+        "{error}"
+    );
+}
