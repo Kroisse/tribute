@@ -35,19 +35,20 @@ struct TypeCollector {
 }
 
 impl TypeCollector {
-    /// Add `ty`, then every structural struct among its fields and its
-    /// supertype.
+    /// Add `ty` after its supertype, which the type section must define
+    /// first, then every structural struct among its fields.
     fn push_type(&mut self, ctx: &IrContext, ty: TypeRef) {
         if !self.considered.insert(ty) || wasm::is_abstract_heap_type(ctx, ty) {
             return;
         }
+        let gc_struct = wasm_gc::Struct::from_type_ref(ctx, ty);
+        if let Some(supertype) = gc_struct.and_then(|gc_struct| gc_struct.supertype(ctx)) {
+            self.push_structural(ctx, supertype);
+        }
         self.types.push(ty);
-        if let Some(gc_struct) = wasm_gc::Struct::from_type_ref(ctx, ty) {
+        if let Some(gc_struct) = gc_struct {
             for &field in gc_struct.fields(ctx) {
                 self.push_structural(ctx, field);
-            }
-            if let Some(supertype) = gc_struct.supertype(ctx) {
-                self.push_structural(ctx, supertype);
             }
         }
     }

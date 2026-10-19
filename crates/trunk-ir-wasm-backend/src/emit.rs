@@ -51,12 +51,12 @@ use trunk_ir::{OpName, SymbolPath};
 use wasm_encoder::{
     AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
-    Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection, Instruction,
-    MemorySection, MemoryType, Module, RefType, StructType, SubType, TableSection, TableType,
-    TypeSection, ValType,
+    FieldType, Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection,
+    Instruction, MemorySection, MemoryType, Module, RefType, StructType, SubType, TableSection,
+    TableType, TypeSection, ValType,
 };
 
-use crate::gc_types::{self, GcTypeDef};
+use crate::gc_types::GcTypeDef;
 use crate::{CompilationError, CompilationResult};
 
 trunk_ir::symbols! {
@@ -693,8 +693,7 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
 
     // Collect GC types
     let (gc_types, mut type_idx_by_type) = collect_gc_types(ctx, module)?;
-    info.gc_supertypes =
-        collect_gc_supertypes(ctx, module, gc_types.len(), &type_idx_by_type)?;
+    info.gc_supertypes = collect_gc_supertypes(ctx, module, gc_types.len(), &type_idx_by_type)?;
     info.gc_types = gc_types;
 
     // Collect function types from call_indirect operations
@@ -1247,6 +1246,79 @@ mod tests {
   wasm.export_func {name = "caller", func = @caller}
 }"#,
         )
+    }
+
+    #[test]
+    fn struct_supertypes_come_only_from_the_declared_attribute() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Base = wasm_gc.struct<core.i32>
+  !Sub = wasm_gc.struct<core.i32, core.i64, {supertype = !Base}>
+  !Plain = wasm_gc.struct<core.i32, core.i64>
+
+  wasm.func @main() -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %wide = wasm.i64_const {value = 0} : core.i64
+    %sub = wasm_gc.struct_new %zero, %wide {type = !Sub} : !Sub
+    %plain = wasm_gc.struct_new %zero, %wide {type = !Plain} : !Plain
+    %base = wasm_gc.struct_get %sub {type = !Base, field_idx = 0} : core.i32
+    wasm.return
+  }
+}"#,
+        );
+        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("valid subtype module")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("declared subtypes must validate");
+
+        let subtypes: Vec<wasmparser::SubType> = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(|payload| match payload.unwrap() {
+                Payload::TypeSection(types) => Some(types),
+                _ => None,
+            })
+            .flat_map(|types| types.into_iter().map(Result::unwrap))
+            .flat_map(|group| group.into_types().collect::<Vec<_>>())
+            .collect();
+        let user = &subtypes[crate::gc_types::FIRST_USER_TYPE_IDX as usize..];
+        let field_counts: Vec<_> = user
+            .iter()
+            .map(|ty| match &ty.composite_type.inner {
+                wasmparser::CompositeInnerType::Struct(fields) => fields.fields.len(),
+                _ => 0,
+            })
+            .collect();
+        let index_of = |count: usize, has_supertype: bool| {
+            user.iter()
+                .zip(&field_counts)
+                .position(|(ty, &fields)| {
+                    fields == count && ty.supertype_idx.is_some() == has_supertype
+                })
+                .expect("struct type")
+        };
+        let (base, sub, plain) = (index_of(1, false), index_of(2, true), index_of(2, false));
+        assert_ne!(sub, plain, "a supertype distinguishes equal fields");
+        let base_index = crate::gc_types::FIRST_USER_TYPE_IDX + base as u32;
+        assert_eq!(
+            user[sub]
+                .supertype_idx
+                .and_then(|index| index.as_module_index()),
+            Some(base_index)
+        );
+        assert!(!user[base].is_final);
+        assert!(user[sub].is_final);
+        assert!(user[plain].is_final);
+        assert!(
+            subtypes[..crate::gc_types::FIRST_USER_TYPE_IDX as usize]
+                .iter()
+                .all(|ty| ty.is_final),
+            "no builtin is a supertype here"
+        );
     }
 
     #[test]
