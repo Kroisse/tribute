@@ -90,6 +90,23 @@ impl Branch for MultiForwardingBranch {
     }
 }
 
+/// Build the plan with the production policy except last-use moves, so every
+/// owning destination acquires its own unit.
+fn acquiring_plan(
+    ctx: &IrContext,
+    module: Module,
+) -> Result<NativeOwnershipPlan, OwnershipPlanError> {
+    build_native_ownership_plan(
+        ctx,
+        module,
+        NativeOwnershipPlanOptions {
+            move_units_at_last_use: false,
+            ..NativeOwnershipPlanOptions::production()
+        },
+        &mut Default::default(),
+    )
+}
+
 fn build(ir: &str) -> (IrContext, Module, NativeOwnershipPlan) {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
@@ -270,6 +287,7 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
         NativeOwnershipPlanOptions {
             elide_proven_borrowed_parameters: false,
             elide_proven_field_borrows: false,
+            move_units_at_last_use: false,
         },
         &mut Default::default(),
     )
@@ -338,9 +356,12 @@ fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
         function.entries(),
         [EntryOwnership::Retained, EntryOwnership::Plain]
     );
+    // The capture is the frame's last use, so the environment takes the
+    // frame's entry unit.
     assert_eq!(count(function, ActionKind::EntryAcquire), 1);
-    assert_eq!(count(function, ActionKind::StoreAcquire), 1);
-    assert_eq!(count(function, ActionKind::FinalRelease), 2);
+    assert_eq!(count(function, ActionKind::StoreAcquire), 0);
+    assert_eq!(count(function, ActionKind::StoreTransfer), 1);
+    assert_eq!(count(function, ActionKind::FinalRelease), 1);
     assert_eq!(
         plan.rtti_types()[0].fields,
         [FieldKind::Managed, FieldKind::Raw]
@@ -360,7 +381,7 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
 }"#;
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
-    let plan = production_plan(&ctx, module).expect("typed ownership plan");
+    let plan = acquiring_plan(&ctx, module).expect("typed ownership plan");
     let capture = plan.function(&SymbolPath::new(["capture"])).unwrap();
     assert_eq!(
         count(capture, ActionKind::EntryAcquire) + count(capture, ActionKind::StoreAcquire),
@@ -388,7 +409,9 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
 
 #[test]
 fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes() {
-    let (mut ctx, module, plan) = build(
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
         r#"core.module @test {
   !Frame = adt.struct<ContinuationFrame(value: core.i32)>
   !FrameRef = adt.typeref<{name = "ContinuationFrame"}>
@@ -400,6 +423,7 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
   }
 }"#,
     );
+    let plan = acquiring_plan(&ctx, module).expect("typed ownership plan");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
     let materialized = print_module(&ctx, module.op());
     // Frame: i32 payload (4) + header (8). Closure: i32 plus aligned frame
@@ -695,6 +719,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
         NativeOwnershipPlanOptions {
             elide_proven_borrowed_parameters: true,
             elide_proven_field_borrows: false,
+            move_units_at_last_use: false,
         },
         &mut Default::default(),
     )
@@ -849,16 +874,238 @@ fn duplicate_owning_destinations_and_null_are_explicit() {
   }
 }"#,
     );
+    // The value's last use moves its unit into one field; the other field
+    // acquires.
     let duplicate = plan.function(&SymbolPath::new(["duplicate"])).unwrap();
-    assert_eq!(count(duplicate, ActionKind::StoreAcquire), 2);
+    assert_eq!(count(duplicate, ActionKind::StoreTransfer), 1);
+    assert_eq!(count(duplicate, ActionKind::StoreAcquire), 1);
     assert_eq!(count(duplicate, ActionKind::ReturnTransfer), 1);
     let null = plan.function(&SymbolPath::new(["null"])).unwrap();
     assert_eq!(count(null, ActionKind::ReturnTransfer), 1);
     assert_eq!(count(null, ActionKind::EntryAcquire), 0);
     assert_eq!(count(null, ActionKind::FinalRelease), 0);
     let replace = plan.function(&SymbolPath::new(["replace"])).unwrap();
-    assert_eq!(count(replace, ActionKind::StoreAcquire), 1);
+    assert_eq!(count(replace, ActionKind::StoreTransfer), 1);
     assert_eq!(count(replace, ActionKind::ReleaseReplacedField), 1);
+}
+
+const LAST_USE_MOVES: &str = r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  !Outer = adt.struct<Outer(box: !BoxRef)>
+  !OuterRef = adt.typeref<{name = "Outer"}>
+  !NodeRef = adt.typeref<{name = "Node"}>
+  !Node = adt.struct<Node(next: !NodeRef)>
+  func.func @sink(%value: !ChildRef) attributes {type = func.func_sig<(!ChildRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    func.unreachable
+  }
+  func.func @sink_and_keep(%value: !ChildRef, %kept: !ChildRef) attributes {type = func.func_sig<(!ChildRef {tribute.ownership = "consumed"}, !ChildRef) -> ()>} {
+    func.unreachable
+  }
+  func.func @store_last(%child: !ChildRef) -> !BoxRef {
+    %box = adt.struct_new %child {type = !Box} : !BoxRef
+    func.return %box
+  }
+  func.func @store_then_call(%child: !ChildRef) -> !BoxRef {
+    %box = adt.struct_new %child {type = !Box} : !BoxRef
+    func.call %child {callee = @sink}
+    func.return %box
+  }
+  func.func @store_owner_then_read(%child: !ChildRef) -> core.i32 {
+    %owner = adt.struct_new %child {type = !Box} : !BoxRef
+    %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+    %outer = adt.struct_new %owner {type = !Outer} : !OuterRef
+    %value = adt.struct_get %loaded {field = 0, type = !Child} : core.i32
+    func.return %value
+  }
+  func.func @consumed_and_kept(%child: !ChildRef) -> core.nil {
+    func.call %child, %child {callee = @sink_and_keep}
+    func.return
+  }
+  func.func @self_store(%node: !NodeRef) -> core.nil {
+    adt.struct_set %node, %node {field = 0, type = !Node}
+    func.return
+  }
+  func.func @live_across(%condition: core.i1, %child: !ChildRef) -> !BoxRef {
+    ^entry:
+      %box = adt.struct_new %child {type = !Box} : !BoxRef
+      cf.cond_br %condition [^use, ^skip]
+    ^use:
+      func.call %child {callee = @sink}
+      func.return %box
+    ^skip:
+      func.return %box
+  }
+}"#;
+
+/// The `index`th operation of a fixture function's entry block.
+fn entry_op(
+    ctx: &IrContext,
+    plan: &NativeOwnershipPlan,
+    name: &'static str,
+    index: usize,
+) -> OpRef {
+    ctx.block(function_blocks(ctx, plan, name)[0]).ops[index]
+}
+
+fn entry_arg(
+    ctx: &IrContext,
+    plan: &NativeOwnershipPlan,
+    name: &'static str,
+    index: usize,
+) -> ValueRef {
+    ctx.block_args(function_blocks(ctx, plan, name)[0])[index]
+}
+
+#[test]
+fn last_use_store_or_consumed_call_moves_the_value_unit() {
+    let (mut ctx, module, plan) = build(LAST_USE_MOVES);
+    let function = |name: &'static str| plan.function(&SymbolPath::new([name])).unwrap();
+
+    // Storing a value at its last use moves its unit into the field.
+    let child = entry_arg(&ctx, &plan, "store_last", 0);
+    let new = entry_op(&ctx, &plan, "store_last", 0);
+    let store_last = function("store_last");
+    assert!(has_action(
+        store_last,
+        ActionKind::StoreTransfer,
+        child,
+        ActionAnchor::Before(new)
+    ));
+    assert_eq!(count(store_last, ActionKind::StoreAcquire), 0);
+    assert!(final_releases(store_last, child).is_empty());
+
+    // A store before a later use acquires; the later consumed call is the
+    // last use and moves the unit.
+    let child = entry_arg(&ctx, &plan, "store_then_call", 0);
+    let new = entry_op(&ctx, &plan, "store_then_call", 0);
+    let call = entry_op(&ctx, &plan, "store_then_call", 1);
+    let store_then_call = function("store_then_call");
+    assert!(has_action(
+        store_then_call,
+        ActionKind::StoreAcquire,
+        child,
+        ActionAnchor::Before(new)
+    ));
+    assert!(has_action(
+        store_then_call,
+        ActionKind::CallTransfer,
+        child,
+        ActionAnchor::Before(call)
+    ));
+    assert_eq!(count(store_then_call, ActionKind::CallAcquire), 0);
+    assert!(final_releases(store_then_call, child).is_empty());
+
+    // A value stored in one block but used in a successor acquires at the
+    // store. Its last use in the successor moves the unit, and the other
+    // successor releases it on entry.
+    let blocks = function_blocks(&ctx, &plan, "live_across");
+    let [_, used, skip] = blocks.as_slice() else {
+        panic!("three-block fixture")
+    };
+    let child = entry_arg(&ctx, &plan, "live_across", 1);
+    let new = entry_op(&ctx, &plan, "live_across", 0);
+    let call = ctx.block(*used).ops[0];
+    let live_across = function("live_across");
+    assert!(has_action(
+        live_across,
+        ActionKind::StoreAcquire,
+        child,
+        ActionAnchor::Before(new)
+    ));
+    assert!(has_action(
+        live_across,
+        ActionKind::CallTransfer,
+        child,
+        ActionAnchor::Before(call)
+    ));
+    assert_eq!(
+        final_releases(live_across, child),
+        [ActionAnchor::BlockStart(*skip)]
+    );
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+}
+
+#[test]
+fn last_use_moves_need_every_use_at_the_operation_to_take_a_unit() {
+    let (mut ctx, module, plan) = build(LAST_USE_MOVES);
+    let function = |name: &'static str| plan.function(&SymbolPath::new([name])).unwrap();
+
+    // A borrow derived from the owner is used after the owner is stored, so
+    // the owner keeps its unit until then.
+    let owner = ctx.op_result(entry_op(&ctx, &plan, "store_owner_then_read", 0), 0);
+    let outer = entry_op(&ctx, &plan, "store_owner_then_read", 2);
+    let read = entry_op(&ctx, &plan, "store_owner_then_read", 3);
+    let store_owner = function("store_owner_then_read");
+    assert!(has_action(
+        store_owner,
+        ActionKind::StoreAcquire,
+        owner,
+        ActionAnchor::Before(outer)
+    ));
+    assert_eq!(
+        final_releases(store_owner, owner),
+        [ActionAnchor::After(read)]
+    );
+
+    // The callee may release the consumed unit while it still reads the
+    // same value through its other parameter.
+    let child = entry_arg(&ctx, &plan, "consumed_and_kept", 0);
+    let call = entry_op(&ctx, &plan, "consumed_and_kept", 0);
+    let consumed_and_kept = function("consumed_and_kept");
+    assert!(has_action(
+        consumed_and_kept,
+        ActionKind::CallAcquire,
+        child,
+        ActionAnchor::Before(call)
+    ));
+    assert_eq!(count(consumed_and_kept, ActionKind::CallTransfer), 0);
+    assert_eq!(
+        final_releases(consumed_and_kept, child),
+        [ActionAnchor::After(call)]
+    );
+
+    // A store into the value itself uses it as the target as well.
+    let node = entry_arg(&ctx, &plan, "self_store", 0);
+    let set = entry_op(&ctx, &plan, "self_store", 0);
+    let self_store = function("self_store");
+    assert!(has_action(
+        self_store,
+        ActionKind::StoreAcquire,
+        node,
+        ActionAnchor::Before(set)
+    ));
+    assert_eq!(count(self_store, ActionKind::StoreTransfer), 0);
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+}
+
+#[test]
+fn acquiring_policy_keeps_every_owning_destination_acquiring() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, LAST_USE_MOVES);
+    let plan = acquiring_plan(&ctx, module).expect("typed ownership plan");
+    for name in ["store_last", "store_then_call", "live_across"] {
+        let function = plan.function(&SymbolPath::new([name])).unwrap();
+        assert_eq!(count(function, ActionKind::StoreTransfer), 0, "{name}");
+        assert_eq!(count(function, ActionKind::CallTransfer), 0, "{name}");
+    }
+    let store_last = plan.function(&SymbolPath::new(["store_last"])).unwrap();
+    let child = entry_arg(&ctx, &plan, "store_last", 0);
+    let new = entry_op(&ctx, &plan, "store_last", 0);
+    assert!(has_action(
+        store_last,
+        ActionKind::StoreAcquire,
+        child,
+        ActionAnchor::Before(new)
+    ));
+    assert_eq!(
+        final_releases(store_last, child),
+        [ActionAnchor::After(new)]
+    );
 }
 
 #[test]
@@ -1612,7 +1859,9 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
         (function, branch, ctx.op_operands(branch)[0])
     };
     // The source keeps its unit for the later use, or for the projection
-    // borrowed from it, so the block argument gets a unit of its own.
+    // borrowed from it, so the block argument gets a unit of its own. The
+    // later use releases the source's unit or, as the last use of the
+    // source in a consumed call, moves it.
     for name in ["used_after", "projection_used_after"] {
         let (function, branch, source) = branch_source(name);
         assert!(
@@ -1627,7 +1876,12 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
             function
                 .actions()
                 .iter()
-                .filter(|action| action.kind == ActionKind::FinalRelease && action.value == source)
+                .filter(|action| {
+                    matches!(
+                        action.kind,
+                        ActionKind::FinalRelease | ActionKind::CallTransfer
+                    ) && action.value == source
+                })
                 .count(),
             1,
             "{name}"
@@ -1739,7 +1993,7 @@ fn value_dying_on_an_edge_is_released_at_the_successor_start() {
         ctx.op_result(ctx.block(entry).ops[0], 0)
     };
 
-    // One arm consumes the value; the other releases it on entry.
+    // One arm moves the value into the call; the other releases it on entry.
     let blocks = function_blocks(&ctx, &plan, "one_arm");
     let [_, used, skip, join] = blocks.as_slice() else {
         panic!("four-block fixture")
@@ -1748,9 +2002,15 @@ fn value_dying_on_an_edge_is_released_at_the_successor_start() {
     let mut released_on_entry = vec![(*skip, value)];
     let call = ctx.block(*used).ops[0];
     let one_arm = plan.function(&SymbolPath::new(["one_arm"])).unwrap();
+    assert!(has_action(
+        one_arm,
+        ActionKind::CallTransfer,
+        value,
+        ActionAnchor::Before(call)
+    ));
     assert_eq!(
         final_releases(one_arm, value),
-        [ActionAnchor::After(call), ActionAnchor::BlockStart(*skip)]
+        [ActionAnchor::BlockStart(*skip)]
     );
     assert!(
         !one_arm
@@ -1768,10 +2028,15 @@ fn value_dying_on_an_edge_is_released_at_the_successor_start() {
     released_on_entry.extend([(*inner_skip, value), (*outer_skip, value)]);
     let call = ctx.block(*used).ops[0];
     let nested = plan.function(&SymbolPath::new(["nested"])).unwrap();
+    assert!(has_action(
+        nested,
+        ActionKind::CallTransfer,
+        value,
+        ActionAnchor::Before(call)
+    ));
     assert_eq!(
         final_releases(nested, value),
         [
-            ActionAnchor::After(call),
             ActionAnchor::BlockStart(*inner_skip),
             ActionAnchor::BlockStart(*outer_skip)
         ]
@@ -1806,6 +2071,7 @@ fn borrowed_projection_owner_dying_on_an_edge_follows_the_selected_liveness_view
         NativeOwnershipPlanOptions {
             elide_proven_borrowed_parameters: false,
             elide_proven_field_borrows: false,
+            move_units_at_last_use: false,
         },
         &mut Default::default(),
     )
@@ -1993,8 +2259,8 @@ fn bytes_is_a_managed_reference_with_its_own_units() {
 }"#,
     );
 
-    // `from_raw` yields a fresh owned value: the field takes its own unit and
-    // the local one is released.
+    // `from_raw` yields a fresh owned value, and storing it is its last use:
+    // the field takes the value's unit and nothing is released.
     let wrap = plan.function(&SymbolPath::new(["wrap"])).unwrap();
     let [from_raw, new, _] = ctx.block(function_blocks(&ctx, &plan, "wrap")[0]).ops[..] else {
         panic!("three-operation fixture")
@@ -2003,11 +2269,11 @@ fn bytes_is_a_managed_reference_with_its_own_units() {
     assert!(plan.is_managed_type(&ctx, ctx.value_ty(bytes)));
     assert!(has_action(
         wrap,
-        ActionKind::StoreAcquire,
+        ActionKind::StoreTransfer,
         bytes,
         ActionAnchor::Before(new)
     ));
-    assert_eq!(final_releases(wrap, bytes), [ActionAnchor::After(new)]);
+    assert!(final_releases(wrap, bytes).is_empty());
     let leaf = plan
         .rtti_types()
         .iter()

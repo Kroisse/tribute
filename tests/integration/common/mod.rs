@@ -8,8 +8,9 @@ use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute::link::link_native_binary;
 use tribute::pipeline::{
-    BorrowedParameterPolicy, CompilationConfig, NativeOptimizationOptions, OptimizationOptions,
-    PairedRcEliminationPolicy, TemporaryBorrowPolicy, compile_to_native_binary,
+    BorrowedParameterPolicy, CompilationConfig, LastUseMovePolicy, NativeOptimizationOptions,
+    OptimizationOptions, PairedRcEliminationPolicy, TemporaryBorrowPolicy,
+    compile_to_native_binary,
 };
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
@@ -92,6 +93,7 @@ pub fn compile_and_run_native_with_paired_rc_elimination(
             paired_rc_elimination: policy,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
+            last_use_moves: LastUseMovePolicy::Acquire,
         },
         NativeStdin::Null,
     )
@@ -113,6 +115,7 @@ pub fn compile_and_run_native_with_borrowed_parameters(
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: policy,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
+            last_use_moves: LastUseMovePolicy::Acquire,
         },
         NativeStdin::Null,
     )
@@ -134,6 +137,29 @@ pub fn compile_and_run_native_with_temporary_borrows(
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: policy,
+            last_use_moves: LastUseMovePolicy::Acquire,
+        },
+        NativeStdin::Null,
+    )
+}
+
+/// Compile and run with explicit last-use move selection.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_last_use_moves(
+    source_name: &str,
+    source_code: &str,
+    policy: LastUseMovePolicy,
+    sanitize_address: bool,
+) -> Output {
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        sanitize_address,
+        NativeTestOptimizations {
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
+            last_use_moves: policy,
         },
         NativeStdin::Null,
     )
@@ -327,6 +353,7 @@ struct NativeTestOptimizations {
     paired_rc_elimination: PairedRcEliminationPolicy,
     borrowed_parameters: BorrowedParameterPolicy,
     temporary_borrows: TemporaryBorrowPolicy,
+    last_use_moves: LastUseMovePolicy,
 }
 impl NativeTestOptimizations {
     const fn baseline() -> Self {
@@ -334,6 +361,7 @@ impl NativeTestOptimizations {
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
+            last_use_moves: LastUseMovePolicy::Acquire,
         }
     }
 
@@ -342,6 +370,7 @@ impl NativeTestOptimizations {
             paired_rc_elimination: PairedRcEliminationPolicy::Enabled,
             borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
             temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+            last_use_moves: LastUseMovePolicy::Move,
         }
     }
 }
@@ -380,6 +409,7 @@ fn compile_native_test_binary_impl(
                 paired_rc_elimination: test_optimizations.paired_rc_elimination,
                 borrowed_parameters: test_optimizations.borrowed_parameters,
                 temporary_borrows: test_optimizations.temporary_borrows,
+                last_use_moves: test_optimizations.last_use_moves,
             },
         };
         let object_bytes =

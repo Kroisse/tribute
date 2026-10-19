@@ -649,8 +649,8 @@ tribute_control.func_sig<(T) -> R, {tribute.calling_convention = 2,
   row도 인스턴스가 고정한 class에 따라 convention이 다를 수 있다
   ([cps-effects.md](cps-effects.md#row와-호출-규약)).
 - **범위:** row는 source-logical 경계 안에만 있다. CPS legalization은
-  `func.func_sig`를 만들 때 row를 버리며, representation/ABI 경계의 출구는 row와
-  아래 속성들을 거부한다.
+  `func.func_sig`를 만들 때 row를 버리고 [`instantiate`](#tribute_controlinstantiate)를
+  피연산자로 대체하며, representation/ABI 경계의 출구는 row와 아래 속성들을 거부한다.
 
 #### Row binder
 
@@ -661,8 +661,8 @@ binder의 종류를 나타내는 문자열이다.
 | ---- | ---- |
 | `param` | 정의의 scheme이 양화한 row 변수 |
 | `ability_arg` | scheme이 양화했고 signature나 본문의 ability 인자 안에 나타나는 row 변수 |
-| `local` | `let`에 묶인 람다의 지역 scheme이 양화한 row 변수 |
-| `body` | 어느 scheme도 양화하지 않은 row 변수 |
+| `local` | 값이 람다인 `let`의 지역 scheme이 양화한 row 변수. 그 람다의 type이 적는 변수이며 람다가 [소유](#지역-람다의-양화와-인스턴스화)한다 |
+| `body` | 어느 scheme도 양화하지 않은 row 변수, 또는 값이 람다가 아닌 `let`의 지역 scheme이 양화한 row 변수 |
 
 양화된 binder(`param`, `ability_arg`)가 scheme의 binder 순서로 먼저 오며, 그 위치가
 row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 뒤에 온다. 속성이 없으면
@@ -670,9 +670,10 @@ binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 �
 않으므로 따로 표시한다.
 
 Tail의 class는 binder 종류에 따라 읽는다. `param`은 그 인스턴스가 고정한 class,
-`ability_arg`와 `body`는 `Cps`다. `local`의 class는 `let`에 묶인 람다를 생성한
-복사본마다 정해지며, IR에서는 그 복사본의 callable type에 쓰인 convention으로만
-나타난다.
+`ability_arg`와 `body`는 `Cps`다. `local`의 class는 그것을 소유한 람다 복사본이
+고정한 class이며, 그 람다의 callable type에 convention으로 나타난다. 값이 람다가
+아닌 binding은 한 번 계산되어 표현이 하나이므로, 그 지역 scheme의 변수는 class를
+고르지 않는 `body`다.
 
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
 인자, operation 결과, tuple layout의 원소가 모두 같다. Type은 binder를 도입하지
@@ -696,6 +697,21 @@ tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에 넣�
 ([cps-effects.md](cps-effects.md#row와-호출-규약)). 정의의 type이 가진 row는
 그대로다.
 
+#### 지역 람다의 양화와 인스턴스화
+
+값이 람다인 `let`의 지역 scheme이 양화한 row 변수는 그 람다가 소유한다.
+`tribute_control.lambda`는 `quantified_rows` 속성에 자기가 양화하는 `local` binder의
+index를 인스턴스화 순서로 적는다. 이 binder는 둘러싼 `func`의 binder이며 람다가 새
+binder를 만들지는 않는다. 모든 `local` binder는 정확히 한 람다가 소유하고,
+`quantified_rows`의 원소는 모두 `local` binder다. 일반화된 binding을 class마다 복사한
+람다는 복사본마다 자기 binder를 소유한다.
+
+이런 람다의 모든 사용은 [`tribute_control.instantiate`](#tribute_controlinstantiate)를
+거친다. 호출뿐 아니라 인자로 넘기거나 다른 값에 담는 사용도 같다. 다른 지역 람다의
+본문 안에 있는 사용도 그 자리의 `instantiate`이며, row 인자의 tail은 바깥 람다가
+소유한 binder를 가리킬 수 있다. Binder 번호는 정의 하나에서 평평하므로 scope가
+중첩되지 않는다.
+
 #### Row 인자와 치환
 
 Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_args`로 callee의
@@ -712,6 +728,9 @@ type 안의 모든 `func_sig`(자기 자신 포함)에서 tail이 양화된 bind
 만든다([layout 이름](#compiler-generated-tuple-layout)). `call_indirect`와
 `tail_call_indirect`의 callee type은 이미 caller의 binder로 쓰여 있으므로 row 인자가
 없다.
+
+`instantiate`의 `row_args`는 대상 람다의 `quantified_rows` 순서를 따른다. `i`번째
+row 인자가 `quantified_rows`의 `i`번째 binder를 대체하며, 치환 규칙은 위와 같다.
 
 ### 사용자 정의 어셈블리 형식
 
@@ -759,6 +778,19 @@ Row binder는 위치로 이름을 붙여 `'a0`, `'a1`, …로 쓴다. `func`는 
 parser는 `i`번째 binder의 이름이 `'ai`가 아니면 거부한다. 이 표기가
 `row_binders`와 `row_unions` 속성을 대신한다.
 
+`lambda`는 operation 이름 바로 뒤, 매개변수 앞의 `[...]`에 자기가 양화하는 binder를
+인스턴스화 순서로 적는다. `func`의 header와 달리 이것은 둘러싼 `func`의 `local`
+binder 이름을 나열할 뿐이며, 종류나 합집합을 쓰지 않고 위치 이름 검사도 하지
+않는다. 이 표기가 `quantified_rows` 속성을 대신한다.
+
+```text
+%step = tribute_control.lambda['a1](%m: core.i32) -> core.i32 row(| 'a1) convention(direct)
+    captures [] {
+  ...
+}
+%s = tribute_control.instantiate %step {row_args = [{tail = 0}]} : !Step0
+```
+
 Row는 convention 앞에 `row(@A, @B | 'a1)` 형식으로 쓴다. Instance 목록과 `|` 뒤의
 tail binder이며, instance가 없으면 `row(| 'a1)`, tail이 없으면 `row(@A)`다. 닫힌 빈
 row는 쓰지 않는다. [추론된 row](#추론된-row)인 정의는 row와 convention 사이에
@@ -786,8 +818,8 @@ signature에만 쓴다.
 operation이 operation-local override를 만들 수 없다. Alias가 없으면
 generic type-bearing 위치에 attributed `func_sig` 전체를 inline으로 출력한다.
 Operation attribute는 별개의 generic attribute dictionary에 남는다.
-`func_ref`, `call`, `call_indirect`, `return`은 generic assembly가 모든 정보를
-손실 없이 표현하므로 custom format을 만들지 않는다.
+`func_ref`, `instantiate`, `call`, `call_indirect`, `return`은 generic assembly가
+모든 정보를 손실 없이 표현하므로 custom format을 만들지 않는다.
 
 #### `tribute_control.func`
 
@@ -871,9 +903,32 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 - **의미:** source lambda를 만들며 body는 lexical capture와 parameter를 사용한다.
 - **검증:** local verifier는 result signature, block argument, return type을
   맞춘다. Whole-IR verifier는 body의 외부 SSA reference와 capture 집합이 정확히
-  일치하는지 검사한다.
+  일치하는지, `quantified_rows`의 원소가 둘러싼 `func`의 `local` binder이고 각
+  `local` binder를 한 람다만 적는지, 양화하는 람다의 결과를 `instantiate`만 쓰는지
+  검사한다.
+- **Row 속성:** 선택적 [`quantified_rows`](#지역-람다의-양화와-인스턴스화)를 가진다.
 - **소유권과 값 흐름:** capture는 일반 SSA use이며 다른 hidden operand는 없다.
 - **위치:** source lambda 전체 span이다.
+
+#### `tribute_control.instantiate`
+
+```text
+%s = tribute_control.instantiate %lambda {row_args = [{tail = 0}]} : !Callable
+```
+
+- **형상:** 피연산자는 `quantified_rows`를 가진 `tribute_control.lambda`의 결과
+  하나다. 결과는 `tribute_control.func_sig` 하나이고 `row_args`가 필수이며, region이
+  없는 non-terminator다.
+- **의미:** `let`에 묶인 row-polymorphic 람다의 사용 하나다. 지역 scheme이 양화한
+  row 변수마다 이 사용이 넘기는 row를 정한다.
+- **검증:** local verifier는 형상을 검사한다. Whole-IR verifier는 피연산자가
+  `quantified_rows`를 가진 람다의 결과인지, `row_args`의 개수가 그 원소 수와 같은지,
+  결과가 람다의 type에 [`row_args`를 치환](#row-인자와-치환)한 signature와
+  convention까지 같은지 검사한다. Row 인자의 tail과 instance는 다른 row처럼 둘러싼
+  정의의 범위에서 검사한다.
+- **소유권과 값 흐름:** 피연산자와 결과는 같은 callable 값이며 새 값을 만들지
+  않는다. CPS legalization은 결과를 피연산자로 대체한다.
+- **위치:** 일반화된 binding을 참조한 source span이다.
 
 #### `tribute_control.func_ref`
 
