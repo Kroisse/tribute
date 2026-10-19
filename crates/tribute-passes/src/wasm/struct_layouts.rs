@@ -2,9 +2,9 @@
 //!
 //! A user struct or variant is a `wasm_gc.struct` whose parameters are its
 //! physical field types: the `i32` runtime type descriptor field, then each
-//! source field in its Wasm storage representation. Struct and variant
-//! layouts of equal physical fields are therefore one GC type, whatever their
-//! source names. Builtin layouts keep their identifier and reserved index.
+//! source field in its Wasm storage representation, and whose supertype is
+//! the builtin `Described`. Struct and variant layouts of equal physical
+//! fields are therefore one GC type, whatever their source names. Builtin layouts keep their identifier and reserved index.
 //!
 //! `adt_to_wasm` builds variant types here. After every `adt` operation is
 //! lowered, [`convert`] replaces each user `adt.struct` with its
@@ -70,14 +70,18 @@ fn reference_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
 }
 
 /// A struct of the descriptor field followed by `fields` in their Wasm
-/// storage representation.
+/// storage representation, declared a subtype of `Described`.
 fn described_struct(ctx: &mut IrContext, fields: impl IntoIterator<Item = TypeRef>) -> TypeRef {
     let descriptor = core::I32::type_ref(ctx);
     let mut params = vec![descriptor];
     for field in fields {
         params.push(field_type(ctx, field));
     }
-    wasm_gc::Struct::params(params).intern(ctx).as_type_ref()
+    let described = super::type_converter::described_adt_type(ctx);
+    wasm_gc::Struct::params(params)
+        .supertype(described)
+        .intern(ctx)
+        .as_type_ref()
 }
 
 /// The Wasm storage representation of a source field of type `ty`.
@@ -138,6 +142,11 @@ mod tests {
         assert_eq!(point, rect);
         let [i32_ty, f64_ty] = [core::I32::type_ref(&mut ctx), core::F64::type_ref(&mut ctx)];
         assert_eq!(fields(&ctx, point), [i32_ty, f64_ty, f64_ty]);
+        let described = crate::wasm::type_converter::described_adt_type(&mut ctx);
+        let supertype = wasm_gc::Struct::from_type_ref(&ctx, point)
+            .expect("structural struct")
+            .supertype(&ctx);
+        assert_eq!(supertype, Some(described));
     }
 
     #[test]

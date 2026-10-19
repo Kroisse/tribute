@@ -335,6 +335,42 @@ fn intern_wasm_structref(ctx: &mut IrContext) -> TypeRef {
     wasm_dialect::Structref::params().intern(ctx).as_type_ref()
 }
 
+/// The supertype index of each GC type in index order, from the `supertype`
+/// attribute of the structural structs that received user indices. Builtin
+/// types have no supertype. A supertype is a builtin layout or another
+/// indexed GC type; the subtype relation is never inferred from fields.
+pub(crate) fn collect_gc_supertypes(
+    ctx: &IrContext,
+    module: Module,
+    type_count: usize,
+    type_idx_by_type: &HashMap<TypeRef, u32>,
+) -> CompilationResult<Vec<Option<u32>>> {
+    let mut supertypes = vec![None; type_count];
+    let Some(Attribute::List(types)) = ctx.op_attrs(module.op()).get(GC_TYPES_ATTR) else {
+        return Ok(supertypes);
+    };
+    for (offset, attr) in types.iter().enumerate() {
+        let Attribute::Type(ty) = attr else {
+            continue;
+        };
+        let Some(supertype) =
+            wasm_gc::Struct::from_type_ref(ctx, *ty).and_then(|gc_struct| gc_struct.supertype(ctx))
+        else {
+            continue;
+        };
+        let index = helpers::builtin_layout_type_idx(ctx, supertype)
+            .or_else(|| type_idx_by_type.get(&supertype).copied())
+            .ok_or_else(|| {
+                CompilationError::invalid_module("GC struct supertype has no type index")
+            })?;
+        let slot = supertypes
+            .get_mut(FIRST_USER_TYPE_IDX as usize + offset)
+            .ok_or_else(|| CompilationError::invalid_module("GC type table out of range"))?;
+        *slot = Some(index);
+    }
+    Ok(supertypes)
+}
+
 // ============================================================================
 // Main collection function
 // ============================================================================
