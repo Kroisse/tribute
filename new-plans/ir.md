@@ -1415,21 +1415,22 @@ pointer representation.
 `closure.*` represents closure allocation and projection. Convention-proven
 `closure.closure` keeps its exact callable type through shared effect lowering
 and target-ABI validation. Only after that validation may target lowering choose
-the canonical closure storage layout, rewriting every type-bearing surface
-coherently. Until then a lowered storage pack keeps its exact closure type
-through an unrealized cast, which becomes an identity and is removed when the
-storage layout is selected; this is not semantic type equivalence. Closures
-lower differently per backend: Wasm uses function references plus GC
-structures, while native uses function pointers plus heap environments.
+the closure storage layouts, rewriting every type-bearing surface coherently.
+Until then a lowered storage pack keeps its exact closure type through an
+unrealized cast, which becomes an upcast to the closure base layout when the
+storage layout is selected; this is not semantic type equivalence. A closure
+is one object holding its code reference and its captured values; the
+[closure 저장 layout](#closure-저장-layout) section defines the operations,
+layouts, and casts.
 
-Storage finalization 이후 erased `tribute_rt.anyref`에서 정확한 canonical closure
-storage로 복원하는 `core.unrealized_conversion_cast`는 generic cleanup에서
-no-op으로 소거하지 않는다. Compiler가 구성한 canonical storage의 전체 type
-identity로 이 경계를 선택하며, 이름이나 비슷한 필드 모양으로 추론하지 않는다.
-Target은 정확한 cast 결과 타입으로 transfer를 검증한 뒤 emission 전에 복원을
-물리화한다. Wasm은 concrete `ref.cast`를 생성하고 native는 pointer 표현으로
-변환한다. 이 규칙은 다른 struct나 nominal reference의 일반 변환 정책을 바꾸지
-않으며, semantic callable 검증을 대체하지 않는다.
+Storage finalization 이후 closure base layout에서 정확한 capture layout으로, 또는
+erased reference에서 정확한 closure base layout으로 복원하는
+`core.unrealized_conversion_cast`는 generic cleanup에서 no-op으로 소거하지 않는다.
+Compiler가 구성한 closure layout의 전체 type identity로 이 경계를 선택하며, 이름이나
+비슷한 필드 모양으로 추론하지 않는다. Target은 정확한 cast 결과 타입으로 transfer를
+검증한 뒤 emission 전에 복원을 물리화한다. Wasm은 concrete `ref.cast`를 생성하고
+native는 pointer 표현으로 변환한다. 이 규칙은 다른 struct나 nominal reference의
+일반 변환 정책을 바꾸지 않으며, semantic callable 검증을 대체하지 않는다.
 
 `adt.*` represents target-independent product, sum, array, reference, and
 literal operations.
@@ -1942,7 +1943,8 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 
 | `layout` | 붙는 타입 | 뜻 |
 | --- | --- | --- |
-| `"closure"` | canonical closure `adt.struct` | 함수 참조와 environment로 이루어진 closure 저장 |
+| `"closure"` | closure base `adt.struct` | 함수 참조 필드 하나로 이루어진 closure 값의 공통 저장. Capture 없는 closure의 저장이기도 하다 |
+| `"closure_captures"` | closure capture `adt.struct` | closure base의 필드 뒤에 capture를 순서대로 둔 closure 저장. `supertype`이 그 base다 |
 | `"evidence_marker"` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure, 가린 marker |
 | `"evidence"` | evidence `core.array` | ability id 순으로 정렬된 가장 위 marker 배열 |
 | `"bytes"` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
@@ -1954,7 +1956,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
 - 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
   타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
-  `adt.struct<_closure(func_ptr: core.ptr, env: core.ptr), {layout = "closure"}>`.
+  `adt.struct<_closure(code: core.ptr), {layout = "closure"}>`.
 - 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
@@ -1977,7 +1979,10 @@ Struct 이름과 필드 이름은 타입 이름공간의 이름이며 symbol tab
 ```text
 adt.struct<Point(x: core.i32, y: core.i32)>
 adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<{name = "Node"}>)>
-adt.struct<_closure(func_ptr: core.ptr, env: core.ptr), {layout = "closure"}>
+adt.struct<_closure(code: core.ptr), {layout = "closure"}>
+adt.struct<_closure_captures(code: core.ptr, _0: core.i32),
+  {layout = "closure_captures",
+   supertype = adt.struct<_closure(code: core.ptr), {layout = "closure"}>}>
 adt.struct<Empty()>
 ```
 
@@ -1995,6 +2000,30 @@ adt.struct<Empty()>
   필드 수를 유지하는 변환은 필드 이름과 속성을 위치 그대로 둔다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다. `adt.struct`는 자기 자신을
   매개변수로 갖지 않는다.
+
+#### 물리 supertype
+
+Compiler 소유 layout은 예약 type 속성 `supertype`으로 자신의 물리 supertype을
+선언할 수 있다. 이 관계는 저장 표현만 설명하며, Tribute 소스와 의미적 타입 검사에는
+subtyping이 없다.
+
+- 값은 다른 `adt.struct`를 담은 type 속성이다. 두 타입 모두
+  [`layout`](#runtime-layout-식별자)을 가져야 한다. 이 속성도 `layout`처럼 그
+  layout을 만드는 compiler의 canonical 생성자만 붙이며, frontend와 소스에서 온
+  타입은 갖지 않는다.
+- Supertype의 필드는 subtype 필드의 앞부분과 같다. 같은 위치의 필드는 타입, 이름,
+  필드 속성이 모두 같고, subtype은 그 뒤에 필드를 더할 수 있다. Type verifier가
+  이 규칙을 모든 interned `adt.struct`에 적용한다. Supertype의 supertype도 같은
+  규칙을 따르며, interning이 순환을 막는다.
+- 일반 type 속성처럼 interning identity에 참여하고 textual form은 `layout`과 같은
+  type 속성 dictionary에 둔다. 필드 타입을 바꾸는 타입 변환은 `supertype` 안의
+  타입도 같은 변환으로 바꾸므로 prefix 관계가 유지된다.
+- Subtype 값은 변환 없이 supertype 자리에 놓인다(upcast). Supertype 값을 subtype으로
+  보는 일은 정확한 결과 타입을 가진 명시적 cast가 필요하며, target이 그 cast를
+  검증하고 물리화한다. Native에서는 필드 offset이 prefix를 공유하므로 pointer가
+  그대로이고, Wasm에서는 `ref.cast`다.
+- Target은 이 속성으로만 물리 subtype 관계를 정한다. 필드 모양이 prefix처럼
+  보인다는 사실에서 subtype 관계를 추론하지 않는다.
 
 #### Nominal 수준과 structural 수준
 
@@ -2035,6 +2064,73 @@ descriptor로만 구별된다.
   variant의 `mem.struct`를 읽는다. Variant 객체는 자기 필드의 크기로 할당하므로
   enum 타입의 값은 하나의 정적 할당 크기를 갖지 않는다. 그 값의 해제 크기는 값의
   descriptor가 정한다.
+
+### Closure 저장 layout
+
+Closure 값은 code 참조와 capture한 값을 함께 담은 객체 하나다. 별도의
+environment 객체를 두지 않으며, closure를 만드는 일은 할당 하나이고 capture를
+읽는 일은 closure의 필드 접근 하나다. Closure의 의미적 타입은 capture와 무관하게
+`closure.closure<S>` 하나이고, capture마다 다른 layout은 저장 표현에만 있다.
+
+#### Shared IR 표현
+
+- `closure.new @f(%c0, %c1, ...)`는 code 함수 `@f`와 capture 값을 순서대로 받아
+  closure를 만든다. Capture 목록은 비어 있을 수 있다. Environment를 따로 받지
+  않는다.
+- Code 함수의 environment 입력은 그 closure 자신이다. 입력의 타입은
+  `closure.new` 결과의 exact closure 타입이고, 위치는 지금처럼 기록된 environment
+  index가 정한다. 이 입력의 ownership 계약은 다른 물리 입력과 같다
+  ([출구에서 확정되는 물리 계약](#출구에서-확정되는-물리-계약)).
+- Code 함수는 environment 입력에서 capture를 `closure.unpack`으로만 읽는다.
+  `closure.unpack %self`의 결과 타입 목록은 capture 타입 목록이며, code 함수를
+  참조하는 모든 `closure.new`의 operand 타입 목록과 정확히 같아야 한다. Whole-IR
+  검증은 이 일치를 code 함수와 그 참조에서 확인하며 struct 이름이나 필드 모양으로
+  대신하지 않는다. Capture가 없는 code 함수는 `closure.unpack`을 갖지 않는다.
+- `closure.func`는 closure의 code 참조를 읽는다. Closure 호출은 code 참조를 호출하고
+  closure 값 자체를 environment 입력으로 넘긴다. Environment를 따로 꺼내는
+  projection은 없다.
+- Lambda lifting, CPS continuation(`Done`, `Dispatch`, resume), `func_ref` adapter,
+  target 진입 bridge가 만드는 frame closure를 포함한 모든 closure 생성은
+  `closure.new` 하나로 표현한다. 여러 closure가 공유하는 가변 상태는 managed cell
+  참조를 capture해서 표현하며, closure의 필드는 생성 뒤 바뀌지 않는다.
+
+#### Layout
+
+Closure 저장 layout은 두 종류다.
+
+- **Closure base**(`layout = "closure"`)는 code 필드 하나를 가진다. 모든 closure
+  값의 저장 타입이며, closure를 저장하거나 전달하는 위치(signature, block 인자,
+  `ContinuationFrame<R>`의 필드, Marker의 dispatch 필드)는 이 타입을 쓴다. Capture가
+  없는 closure는 이 layout으로 할당한다.
+- **Closure capture layout**(`layout = "closure_captures"`)은 base의 필드 뒤에
+  capture를 `closure.new`의 순서대로 두고 [`supertype`](#물리-supertype)으로 그
+  base를 선언한다. Capture가 하나 이상인 closure는 이 layout으로 할당한다.
+- Capture layout의 identity는 base와 capture 필드 타입 목록이다. Capture 타입 목록이
+  같은 두 code 함수는 같은 layout을 쓴다. 필드 이름과 struct 이름은 canonical
+  생성자가 정하며 의미를 갖지 않는다.
+- Code 필드의 타입은 target이 정하는 함수 참조 표현이다. Base는 closure가 호출자에게
+  보이는 exact signature `S`에서 target이 정하는 함수로 고른다. Target은 모든 `S`를
+  base 하나로 보낼 수도 있고 `S`마다 다른 base를 둘 수도 있다. `S`마다 base를 두고
+  code 필드를 typed 함수 참조로 표현하면, code 함수의 environment 입력이 다시 그
+  base이므로 base와 code 함수 타입은 서로를 가리킨다. 이 재귀는 `adt.typeref`로
+  끊는다.
+- Capture layout의 supertype은 `closure.new` 결과 타입의 `S`에서 고른 base다.
+
+#### Storage 확정
+
+[Representation/ABI 경계](#representationabi-경계)의 closure operation lowering과
+storage 확정은 다음을 함께 한다.
+
+- `closure.new`는 code 참조와 capture를 필드로 가진 할당 하나가 된다. 결과는 capture
+  layout에서 base로의 upcast다.
+- `closure.unpack`은 environment 입력을 base에서 정확한 capture layout으로 바꾸는
+  cast 하나와 capture 필드 읽기가 된다. 이 cast는 `closure.*` dialect 설명의 복원
+  규칙을 따르며, Wasm에서는 `ref.cast`, native에서는 pointer 그대로다.
+- `closure.closure<S>`는 모든 type-bearing surface에서 `S`의 base가 된다.
+- Closure 값이 일반 reference erasure 자리(boxed source value, effect payload 등)를
+  지날 수 있지만, 거기서 closure로 돌아오는 cast는 exact base를 이름으로 가진다.
+  Closure를 저장하는 compiler 소유 layout의 필드는 erased reference가 아니라 base를
+  쓴다.
 
 ### `adt.enum` nominal layout type
 

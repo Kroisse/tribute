@@ -223,8 +223,9 @@ Wasm source handler 지원은 shared/native handler 실행 지원이 아니라 W
 
 ### Tail-resumptive dispatch의 함수 시그니처
 
-`effect.dispatch_tail`의 Wasm lowering은 `(Evidence, env: anyref, op_idx: i32,
-payload: anyref) -> anyref` 시그니처를 명시한다. Evidence와 반환 표현은 정확히
+`effect.dispatch_tail`의 Wasm lowering은
+`(Evidence, env: closure base, op_idx: i32, payload: anyref) -> anyref`
+시그니처를 명시한다. `env`는 dispatch closure 자신이다. Evidence와 반환 표현은 정확히
 일치해야 하며 packed payload는 검증된 GC widening만 허용한다. Lowering은
 operand로 ABI를 재추론하지 않고 이 고정 시그니처를 `wasm.call_indirect`에
 보존한다. Emitter는 최종 모듈 등록 결과에서 함수 타입 인덱스를 얻으며,
@@ -362,11 +363,11 @@ user-defined type은 그 뒤에 배치된다:
 | 0 | `BoxedF64` |
 | 1 | `BytesArray` |
 | 2 | `BytesStruct` |
-| 3 | `_closure { table_idx: i32, env: anyref }` |
-| 4 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref }` |
+| 3 | `_closure { code: i32 }`, 모든 closure 값의 base |
+| 4 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: (ref null 3), shadowed: anyref, outer: anyref }` |
 | 5 | `Evidence` array |
 | 6 | `Described { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
-| 7+ | user-defined structs, arrays, variants, closures |
+| 7+ | user-defined structs, arrays, variants, closure capture layouts |
 
 이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
 verifier는 closure 3, marker 4, evidence 5, described 6, user-defined type 7+를 정확히
@@ -388,8 +389,8 @@ use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입�
 동안에는 값과 signature에 남고, Wasm dialect lowering의 마지막 단계가 없앤다.
 Struct 이름이나 원소 타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
 원소가 `core.i8`인 배열도 `"bytes_data"`가 없으면 bytes 배열이 아니다.
-`_closure` environment와 Marker의 dispatch closure field는 일반 reference
-erasure이므로 계속 `anyref`를 사용할 수 있다.
+Closure는 environment를 따로 두지 않으며, Marker의 dispatch closure field는
+closure base 타입을 쓴다. 두 자리 모두 `anyref`로 지우지 않는다.
 
 ```wasm
 ;; 생성된 type section 예시
@@ -435,6 +436,8 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
 
 - 사용자 struct와 variant의 GC 타입은 descriptor 필드 하나만 가진 `Described` 타입의
   subtype으로 선언한다. `Described`는 final이 아니고, 그 subtype은 final이다.
+  `Described`와 [closure base](#closure-layout과-subtype)처럼 다른 타입의 supertype인
+  타입만 final이 아니다.
   Descriptor 필드의 mutability는 `Described`와 subtype에서 같다. Builtin layout, 배열,
   boxing된 scalar는 `Described`의 subtype이 아니므로 `anyref`에서 `Described`로의
   cast는 실패할 수 있다.
@@ -446,6 +449,37 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   layout을 쓰는 다른 소스 타입의 값도 통과하며, 소스 타입의 구별은 정적 타입 검사와
   descriptor가 맡는다.
 - 위 builtin layout은 예약 index를 쓰고 descriptor 필드를 두지 않는다.
+
+### Closure layout과 subtype
+
+[Closure 저장 layout](ir.md#closure-저장-layout)은 closure base 하나와 capture
+layout들로 이루어진다.
+
+- Closure base(`layout = "closure"`)는 예약 index 3의 `{ code: i32 }`이며 final이
+  아니다. Code 필드는 closure function table의 index다.
+- Capture layout(`layout = "closure_captures"`)은 사용자 index 범위에서 index를 받고
+  [`supertype`](ir.md#물리-supertype)이 가리키는 base의 final subtype으로 선언한다.
+  필드는 base의 code 필드 뒤에 capture의 Wasm 저장 표현을 순서대로 둔다. 모든 필드는
+  immutable이다. Capture 타입 목록이 같은 closure는 같은 GC 타입을 쓴다.
+- Closure layout은 descriptor 필드를 두지 않으며 `Described`의 subtype이 아니다.
+  Backend는 capture layout을 `layout`과 `supertype`으로만 식별하며, 첫 필드 모양으로
+  `Described` subtype 여부나 closure 여부를 추론하지 않는다. 일반적으로 emission의
+  `sub` 선언은 `supertype` 속성에서만 오고, 다른 타입의 supertype인 타입은 final이
+  아니다.
+- Code 함수는 environment 입력으로 base 참조를 받아 자기 capture layout으로
+  `ref.cast`한 뒤 capture를 `struct.get`으로 읽는다. Capture 없는 closure는 base
+  객체이며 cast하지 않는다.
+- Closure 호출은 base에서 code 필드를 읽고 closure 참조 자체를 environment 인자로
+  넘긴다. Ordinary 호출은 `call_indirect`, proper tail transfer는
+  `return_call_indirect`이며 exact `wasm.func_sig`를 명시한다.
+- Code 필드를 typed 함수 참조로 표현하는 target 설정에서는 base를 closure의 exact
+  signature `S`마다 둔다. `$closure_S`는 `{ code: (ref $code_S) }`이고, `$code_S`의
+  environment 입력이 `$closure_S`이므로 두 타입은 서로를 가리킨다. 모든 GC 타입이
+  rec group 하나에 들어 있으므로 이 재귀를 그대로 선언할 수 있다. 호출은
+  `call_ref`, proper tail transfer는 `return_call_ref`가 되고 closure function
+  table은 필요 없다. Handler dispatch는 signature가 하나로 고정되어 있으므로 Marker의
+  dispatch 필드는 그 signature의 base를 쓴다. Capture layout, code 함수의 downcast,
+  storage surface의 규칙은 같다.
 
 ### GC 인덱스 등록의 소유권
 
@@ -497,6 +531,8 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 | --- | --- | --- |
 | builtin 레이아웃 인덱스를 갖는 타입 | 같은 인덱스를 갖는 다른 표기 | 허용 |
 | builtin 레이아웃 인덱스를 갖는 struct (`"bytes"`, closure, marker 등) | `structref`, `anyref` | 허용 |
+| closure capture layout | `supertype`의 closure base, `structref`, `anyref` | 허용 |
+| closure base | closure capture layout | 거부 (downcast) |
 | `wasm_gc.struct` (사용자 struct와 variant) | `structref`, `anyref` | 허용 |
 | builtin 배열 레이아웃 (Bytes backing array, Evidence array) | `arrayref`, `anyref` | 허용 |
 | `core.array` | `arrayref`, `anyref` | 허용 |
@@ -506,8 +542,8 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 | `structref` 또는 등록된 struct | `arrayref` | 거부 |
 
 여기서 "등록"은 backend-ready 경계에서 해당 타입이 concrete GC 인덱스를
-받는지를 뜻한다. 근거가 되는 것은 builtin 레이아웃 인덱스와 사용자 struct와
-variant의 `wasm_gc.struct`뿐이며, 타입 이름이나 레이아웃 모양만으로는 등록을
+받는지를 뜻한다. 근거가 되는 것은 builtin 레이아웃 인덱스, closure capture
+layout, 사용자 struct와 variant의 `wasm_gc.struct`뿐이며, 타입 이름이나 레이아웃 모양만으로는 등록을
 추론하지 않는다. 추상 참조에서 concrete 타입으로
 좁히는 방향은 `wasm.ref_cast`가 필요하므로 검증에서 거부한다.
 

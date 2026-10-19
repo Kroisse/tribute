@@ -434,8 +434,9 @@ physical: (target Evidence, target Frame, target arguments...) -> ()
 
 Direct transfer는 `func.tail_call`, dynamic continuation transfer는
 `func.tail_call_indirect`다. 두 operation은 결과가 없으며 caller/callee의 전체 결과
-목록이 같아야 한다. `anyref`는 boxed source value, effect payload, closure environment
-같은 일반 reference erasure에만 사용한다.
+목록이 같아야 한다. `anyref`는 boxed source value, effect payload 같은 일반
+reference erasure에만 사용한다. Closure는 environment를 따로 두지 않고 closure
+base 타입으로 전달한다.
 
 ---
 
@@ -649,7 +650,7 @@ Target ABI validation부터 boundary exit verification까지가
 
 `tribute_control_to_cps`의 출력은 physical callable/closure 표면과 logical
 `ability.*` 표면이다. `closure.closure`의 exact callable signature는 shared
-ability/evidence pass와 target ABI validation이 먼저 소비한다. `_closure` storage
+ability/evidence pass와 target ABI validation이 먼저 소비한다. Closure storage
 layout과 closure projection은 그 validation 뒤 target pipeline에서만 선택한다.
 
 ---
@@ -690,10 +691,11 @@ managed-field bitmap을 함께 결정한다. Plan 생성은 IR을 변경하지 �
 
 **Continuation과 RC:**
 
-- Continuation closure는 live value를 environment field로 캡처한다.
-- Typed RC materialization은 검증된 capture action만 소비하여 environment와
+- Continuation closure는 live value를 closure 객체의 capture field로 캡처한다.
+- Typed RC materialization은 검증된 capture action만 소비하여 closure와
   captured reference의 ownership을 관리한다.
-- Resume은 environment에서 live value를 복원하고 continuation을 한 번 소비한다.
+- Resume은 자기 closure의 capture에서 live value를 복원하고 continuation을 한 번
+  소비한다.
 
 ---
 
@@ -787,8 +789,8 @@ flowchart TB
 | `resolve_evidence` | explicit handler delimiter | `effect.extend`와 body evidence 사용 치환 |
 | `lower_handle_dispatch` | evidence 사용이 치환된 resultless body | body splice와 delimiter 제거; function-anchored |
 | target ABI conversion | exact shared callable/dispatch/frame contracts | physical CPS signature와 root entry bridge |
-| `lower_closures_in_func` | validated `closure.new`/`func`/`env` | closure storage와 exact indirect calls; function-anchored |
-| `finalize_closure_storage_layout` | remaining closure type surfaces | alias/signature/value/type attribute의 canonical `_closure` layout |
+| `lower_closures_in_func` | validated `closure.new`/`func`/`unpack` | closure capture layout 할당과 exact indirect calls; function-anchored |
+| `finalize_closure_storage_layout` | remaining closure type surfaces | alias/signature/value/type attribute의 closure base layout |
 | target evidence preparation/lowering | `effect.*` | Native extern 또는 Wasm helper와 ordinary/proper-tail dispatch; 공유 value/control dialect 수준 |
 | boundary exit verification | 경계 안의 모든 pass 결과 | [출구 적법성](ir.md#representationabi-경계)을 만족하는 물리 IR; 위반은 pass failure |
 | target dialect lowering | 경계 출구의 물리 IR | `clif.*` 또는 `wasm.*`; backend-ready 검증 뒤 emission |

@@ -40,6 +40,11 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 - Compiler가 할당하는 값마다 하나. Boxing된 `Bool`, `Nat`, `Int`, `Float`, runtime도
   할당하는 `Bytes`, native evidence와 그 marker, compiler 소유 layout(closure 등)이
   여기에 속한다. RC 객체로 할당하지 않는 unmanaged 값은 descriptor를 갖지 않는다.
+- Native closure는 [closure 저장 layout](ir.md#closure-저장-layout)마다 하나다.
+  Capture 타입 목록이 같은 closure는 layout과 descriptor를 공유하고, capture 없는
+  closure는 base layout의 descriptor를 쓴다. 필드 종류는 code 필드가 unmanaged
+  포인터이고 capture는 다른 할당 필드처럼 의미 타입에서 정한다. 필드 이름은 없다.
+  Wasm closure의 descriptor는 [Wasm 배치](#wasm-배치)가 정한다.
 
 이름만 다르고 모양이 같은 두 struct는 같은 layout을 쓰고 서로 다른 descriptor를
 가진다. 같은 소스 타입을 서로 다른 layout으로 표현하는 일은 없다.
@@ -118,10 +123,12 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
 - Builtin layout(bytes, closure, marker, evidence, boxing된 scalar)은 지금처럼
   예약 GC 타입을 쓰며, descriptor 필드를 두지 않는다. 이 값들의 descriptor 번호는
   자기 예약 GC 타입 index다. 사용자 struct와 variant의 번호는 예약 GC 타입 index
-  범위 다음부터 할당 순서대로 정한다. Builtin layout은 layout마다 필드와 해제 동작이 하나로 고정되어
-  있으므로 descriptor도 layout마다 하나다. 예를 들어 모든 closure는 같은 함수 참조
-  필드와 동적 값 environment 필드를 가진다. Capture마다 달라지는 내용은 closure
-  descriptor가 아니라, environment가 가리키는 객체 자신의 descriptor가 설명한다.
+  범위 다음부터 할당 순서대로 정한다. Closure 밖의 builtin layout은 layout마다 필드와
+  해제 동작이 하나로 고정되어 있으므로 descriptor도 layout마다 하나다.
+- Closure는 capture layout마다 GC 타입이 다르지만 모두 closure base의 예약 index를
+  descriptor 번호로 공유하며 descriptor 필드를 두지 않는다. Wasm은 해제 정보가
+  필요 없고 closure의 capture는 runtime 검사 대상이 아니므로, capture layout마다
+  descriptor를 두지 않는다.
 
 ## Variant 판별
 
