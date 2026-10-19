@@ -288,7 +288,7 @@ mod tests {
         assert!(!ir.contains("ability.call"), "{ir}");
         assert!(ir.contains("effect.dispatch_tail"), "{ir}");
         assert!(ir.contains("core.i32"), "{ir}");
-        assert!(ir.contains("core.unrealized_conversion_cast"), "{ir}");
+        assert!(ir.contains("tribute_rt.unbox_int"), "{ir}");
         let mut reparsed = IrContext::new();
         parse_test_module(&mut reparsed, &ir);
     }
