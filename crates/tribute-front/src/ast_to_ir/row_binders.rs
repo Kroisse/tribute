@@ -8,9 +8,7 @@ use crate::SortedMap;
 use crate::ast::visit::Visit;
 use crate::ast::{FuncDecl, NodeId, RowVar, Type, TypeScheme, TypedRef, collect_row_vars};
 use crate::monomorphize::collect_ability_argument_tails;
-use crate::typeck::{
-    InstantiatedHandlerOperation, InstantiatedPerformOperation, LocalCallableInstance,
-};
+use crate::typeck::{InstantiatedHandlerOperation, InstantiatedPerformOperation};
 
 pub(crate) type RowBinders = Vec<(RowVar, RowBinder)>;
 
@@ -19,7 +17,6 @@ pub(super) struct BodyTypes<'a, 'db> {
     pub node_types: &'a SortedMap<NodeId, Type<'db>>,
     pub handler_operations: &'a SortedMap<NodeId, InstantiatedHandlerOperation<'db>>,
     pub perform_operations: &'a SortedMap<NodeId, InstantiatedPerformOperation<'db>>,
-    pub local_instances: &'a SortedMap<NodeId, LocalCallableInstance<'db>>,
 }
 
 /// The binders of a declaration without a body: those its scheme quantifies.
@@ -49,14 +46,14 @@ fn quantified(
 }
 
 /// The binders of a function definition: those its scheme quantifies, then
-/// the other row variables of its body in the order they first occur. A
-/// variable a local scheme quantifies, or one of `local_copies`, is local.
+/// the other row variables of its body in the order they first occur. One
+/// of `local`, the variables let-bound lambdas quantify, is local.
 pub(super) fn of_definition<'db>(
     db: &'db dyn salsa::Database,
     scheme: TypeScheme<'db>,
     function: &FuncDecl<TypedRef<'db>>,
     body: &BodyTypes<'_, 'db>,
-    local_copies: &[RowVar],
+    local: &[RowVar],
 ) -> RowBinders {
     struct Collect<'a, 'b, 'db> {
         db: &'db dyn salsa::Database,
@@ -78,10 +75,6 @@ pub(super) fn of_definition<'db>(
                 self.in_arguments
                     .extend(collect_row_vars(self.db, *argument));
             }
-            if let Some(local) = self.body.local_instances.get(&id) {
-                self.local
-                    .extend(local.scheme.effect_params(self.db).iter().copied());
-            }
             if let Some(ty) = self.body.node_types.get(&id) {
                 collect_ability_argument_tails(self.db, *ty, &mut self.in_arguments);
                 for variable in collect_row_vars(self.db, *ty) {
@@ -96,14 +89,14 @@ pub(super) fn of_definition<'db>(
         db,
         body,
         in_arguments: HashSet::default(),
-        local: local_copies.iter().copied().collect(),
+        local: local.iter().copied().collect(),
         seen: collect_row_vars(db, scheme.body(db)),
     };
     collect.visit_func_decl(function);
     collect_ability_argument_tails(db, scheme.body(db), &mut collect.in_arguments);
 
     let mut binders = quantified(db, scheme, &collect.in_arguments);
-    for &variable in collect.seen.iter().chain(local_copies) {
+    for &variable in collect.seen.iter().chain(local) {
         if binders.iter().any(|(bound, _)| *bound == variable) {
             continue;
         }

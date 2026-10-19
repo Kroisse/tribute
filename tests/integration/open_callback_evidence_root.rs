@@ -340,3 +340,108 @@ fn main() ->{Io} Nil {
         "{each}"
     );
 }
+
+/// A let-bound lambda quantifies the rows its type spells, and each use
+/// instantiates it with the rows it passes, so an argument is lowered at the
+/// instantiated type.
+#[salsa_test]
+fn uses_of_let_bound_lambdas_instantiate_them(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: Int, f: fn(Int) ->{e} Int) ->{e} Int { f(x) }
+
+fn countdown(n: Int) -> Int {
+    let step = fn(m: Int) -> Int {
+        case m == +0 {
+            True -> m
+            False -> become countdown(m - +1)
+        }
+    }
+    become step(n)
+}
+
+fn main() ->{Io} Nil {
+    let both = fn(x: Int, f: fn(Int) ->{e} Int) app(x, f)
+    let _ = both(+1, fn(n) n + +1)
+    let _ = both(+2, fn(n) { print_line("io") n })
+    let _ = countdown(+3)
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let function = |name: &str| {
+        ir.split(&format!("tribute_control.func {name}["))
+            .nth(1)
+            .and_then(|rest| rest.split("\n  }\n").next())
+            .unwrap_or_else(|| panic!("{name} in\n{ir}"))
+    };
+    let countdown = function("@\"countdown$9D\"");
+    assert!(countdown.starts_with("'a0, local 'a1]"), "{countdown}");
+    assert!(
+        countdown.contains("tribute_control.lambda['a1](")
+            && countdown.contains("tribute_control.instantiate %1 {row_args = [{tail = 0}]}"),
+        "{countdown}"
+    );
+    let main = function("@main");
+    assert!(main.starts_with("local 'a0, local 'a1]"), "{main}");
+    assert!(
+        main.contains("%0 = tribute_control.lambda['a0](")
+            && main.contains("%4 = tribute_control.lambda['a1](")
+            && main.contains("tribute_control.instantiate %0 {row_args = [{}]}")
+            && main.contains(
+                "tribute_control.instantiate %4 {row_args = [{instances = [@\"ability_1_11_std::io::Io\"]}]}"
+            ),
+        "{main}"
+    );
+    // The pure callback is lowered at the instantiated, closed row.
+    assert!(
+        main.contains("tribute_control.lambda(%11: core.i32) -> core.i32 convention(direct)"),
+        "{main}"
+    );
+}
+
+/// An alias of a let-bound lambda is a value that is not a lambda: the alias
+/// instantiates the lambda once, and its own rows are body rows.
+#[salsa_test]
+fn an_alias_of_a_let_bound_lambda_instantiates_it_once(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: Int, f: fn(Int) ->{e} Int) ->{e} Int { f(x) }
+
+fn main() ->{Io} Nil {
+    let both = fn(x: Int, f: fn(Int) ->{e} Int) app(x, f)
+    let h = both
+    let _ = h(+1, fn(n) n + +1)
+    let _ = h(+2, fn(n) { print_line("io") n })
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let main = ir
+        .split("tribute_control.func @main[")
+        .nth(1)
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .expect("root main");
+    assert!(main.starts_with("local 'a0, body 'a1]"), "{main}");
+    assert_eq!(
+        main.matches("tribute_control.instantiate").count(),
+        1,
+        "{main}"
+    );
+    assert!(
+        main.contains("tribute_control.instantiate %0 {row_args = [{tail = 1}]}"),
+        "{main}"
+    );
+}
