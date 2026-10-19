@@ -445,3 +445,38 @@ fn main() ->{Io} Nil {
         "{main}"
     );
 }
+
+/// A let-bound lambda lowered once for the type each use needs carries only
+/// instantiated rows, so it quantifies nothing and its rows are body rows.
+#[salsa_test]
+fn a_lambda_materialized_per_use_quantifies_no_rows(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn pure(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
+fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
+fn run() ->{} Int {
+    let action = fn(x: Int) x
+    let first = pure(action, +3)
+    open(action, first)
+}
+fn main() -> Nil {
+    let _ = run()
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let run = ir
+        .split("tribute_control.func @run")
+        .nth(1)
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .expect("run");
+    assert!(run.contains("tribute_control.lambda("), "{run}");
+    assert!(
+        !run.contains("lambda['") && !run.contains("instantiate") && !run.contains("local '"),
+        "{run}"
+    );
+}

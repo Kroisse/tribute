@@ -759,23 +759,6 @@ fn plan_local_callables<'db>(
             scheme.type_params(ctx.db).len(),
         );
         ctx.leave_definition(outer);
-        // A binding materialized at each use's own type is emitted only as
-        // those monomorphic lambdas, so nothing quantifies its rows.
-        let materialized: Vec<_> = local_instantiations(ctx.db, function, declarations)
-            .into_iter()
-            .filter(|use_| plan.materializes(use_.binding))
-            .flat_map(|use_| use_.rows)
-            .map(|(variable, _)| variable)
-            .collect();
-        if !materialized.is_empty() {
-            let mut binders = ctx.row_binders_of(&name);
-            for (variable, kind) in &mut binders {
-                if materialized.contains(variable) && *kind == RowBinder::Local {
-                    *kind = RowBinder::Body;
-                }
-            }
-            ctx.register_row_binders(name, binders);
-        }
         declarations
             .function_local_callables
             .insert(function.id, plan);
@@ -2414,7 +2397,7 @@ fn lower_local_reference<'db>(
         .local_uses
         .iter()
         .find(|use_| use_.site == node)
-        .expect("a use of a quantifying lambda records its rows");
+        .expect("typeck records an instance for every use of a binding or for none");
     let rows: Vec<_> = use_
         .rows
         .iter()

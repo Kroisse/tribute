@@ -13,11 +13,6 @@ pub(super) struct Plan<'db> {
 }
 
 impl<'db> Plan<'db> {
-    /// Whether `binding` is lowered once for each type its uses need.
-    pub(super) fn materializes(&self, binding: NodeId) -> bool {
-        self.requests.contains_key(&binding)
-    }
-
     pub(super) fn collect(
         ctx: &mut IrLoweringCtx<'db>,
         ir: &mut IrContext,

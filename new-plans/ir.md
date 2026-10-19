@@ -662,7 +662,7 @@ binder의 종류를 나타내는 문자열이다.
 | `param` | 정의의 scheme이 양화한 row 변수 |
 | `ability_arg` | scheme이 양화했고 signature나 본문의 ability 인자 안에 나타나는 row 변수 |
 | `local` | 값이 람다인 `let`의 지역 scheme이 양화한 row 변수. 그 람다의 type이 적는 변수이며 람다가 [소유](#지역-람다의-양화와-인스턴스화)한다 |
-| `body` | 어느 scheme도 양화하지 않은 row 변수, 또는 값이 람다가 아닌 `let`의 지역 scheme이 양화한 row 변수 |
+| `body` | 어느 scheme도 양화하지 않은 row 변수, 또는 지역 scheme이 양화했지만 [양화하는 람다가 없는](#지역-람다의-양화와-인스턴스화) row 변수 |
 
 양화된 binder(`param`, `ability_arg`)가 scheme의 binder 순서로 먼저 오며, 그 위치가
 row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 뒤에 온다. 속성이 없으면
