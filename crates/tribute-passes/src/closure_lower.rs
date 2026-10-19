@@ -328,7 +328,8 @@ fn exact_tail_results(
 ) -> Option<Vec<TypeRef>> {
     let closure = physical_closure_type_for_callee(ctx, callee)?;
     let signature = closure::Closure::from_type_ref(ctx, closure)?.func_type(ctx);
-    let exact = trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(ctx, op)?;
+    let exact = trunk_ir::op_interface::DynIndirectCallLike::get(ctx, op)
+        .and_then(|call| call.exact_signature(ctx))?;
     if exact != signature {
         return None;
     }
@@ -1221,8 +1222,9 @@ mod tests {
             .copied()
             .find(|op| func::TailCallIndirect::from_op(&ctx, *op).is_ok())
             .unwrap();
-        let signature =
-            trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, tail).unwrap();
+        let signature = trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, tail)
+            .and_then(|call| call.exact_signature(&ctx))
+            .unwrap();
         let callable = func::FuncSig::from_type_ref(&ctx, signature).unwrap();
         assert_eq!(callable.results(&ctx).is_empty(), physical);
         assert_eq!(ctx.op_operands(tail).len(), 6);

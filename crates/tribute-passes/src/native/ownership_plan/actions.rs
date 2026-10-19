@@ -3,6 +3,7 @@ use super::facts::{
     is_internal_closure_layout, root_value,
 };
 use super::*;
+use trunk_ir::op_interface::DynIndirectCallLike;
 
 pub(super) struct ActionInputs<'a> {
     pub facts: &'a NativeOwnershipFunctionFacts,
@@ -511,19 +512,28 @@ impl ActionPlanner<'_> {
         op: OpRef,
         transferred: &mut HashSet<ValueRef>,
     ) -> Result<(), OwnershipPlanError> {
-        let indirect = func::CallIndirect::matches(self.ir, op)
-            || func::TailCallIndirect::matches(self.ir, op);
+        let indirect = if func::CallIndirect::matches(self.ir, op)
+            || func::TailCallIndirect::matches(self.ir, op)
+        {
+            Some(
+                DynIndirectCallLike::get(self.ir, op)
+                    .ok_or_else(|| OwnershipPlanError::new("indirect call is not registered"))?,
+            )
+        } else {
+            None
+        };
         let tail =
             func::TailCall::matches(self.ir, op) || func::TailCallIndirect::matches(self.ir, op);
         let operands = self.ir.op_operands(op);
-        let args = if indirect {
-            trunk_ir::op_interface::IndirectCallLikeOps::arguments(self.ir, op)
+        let args = if let Some(call) = indirect {
+            call.indirect_arguments(self.ir)
                 .ok_or_else(|| OwnershipPlanError::new("indirect call has malformed operands"))?
         } else {
             operands
         };
-        let entries = if indirect {
-            let signature = trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(self.ir, op)
+        let entries = if let Some(call) = indirect {
+            let signature = call
+                .exact_signature(self.ir)
                 .and_then(|ty| func::FuncSig::from_type_ref(self.ir, ty))
                 .ok_or_else(|| {
                     OwnershipPlanError::new(format!(

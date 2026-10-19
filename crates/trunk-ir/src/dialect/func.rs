@@ -873,7 +873,7 @@ impl crate::op_interface::CallableOwner for Func {
 mod tests {
     use super::*;
     use crate::SymbolPath;
-    use crate::op_interface::{CallableExitOps, DynIndirectCallLike, IndirectCallLikeOps};
+    use crate::op_interface::{DynCallableExit, DynIndirectCallLike};
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
@@ -1013,8 +1013,8 @@ mod tests {
             .block(ctx.region(function.body_if_present(&ctx).unwrap()).blocks[0])
             .ops;
         for &op in ops {
-            assert!(DynIndirectCallLike::get(&ctx, op).is_some());
-            assert_eq!(IndirectCallLikeOps::exact_signature(&ctx, op), None);
+            let call = DynIndirectCallLike::get(&ctx, op).expect("indirect call");
+            assert_eq!(call.exact_signature(&ctx), None);
         }
     }
 
@@ -1051,21 +1051,14 @@ mod tests {
             .block(ctx.region(direct.body_if_present(&ctx).unwrap()).blocks[0])
             .ops[0];
 
-        assert!(DynIndirectCallLike::get(&ctx, ordinary_op).is_some());
-        assert!(DynIndirectCallLike::get(&ctx, tail_op).is_some());
-        assert!(IndirectCallLikeOps::exact_signature(&ctx, ordinary_op).is_some());
-        assert!(IndirectCallLikeOps::exact_signature(&ctx, tail_op).is_some());
         for op in [ordinary_op, tail_op] {
+            let call = DynIndirectCallLike::get(&ctx, op).expect("indirect call");
             let operands = ctx.op_operands(op);
-            assert_eq!(IndirectCallLikeOps::callee(&ctx, op), Some(operands[0]));
-            assert_eq!(
-                IndirectCallLikeOps::arguments(&ctx, op),
-                Some(&operands[1..])
-            );
+            assert!(call.exact_signature(&ctx).is_some());
+            assert_eq!(call.indirect_callee(&ctx), Some(operands[0]));
+            assert_eq!(call.indirect_arguments(&ctx), Some(&operands[1..]));
         }
         assert!(DynIndirectCallLike::get(&ctx, direct_op).is_none());
-        assert_eq!(IndirectCallLikeOps::callee(&ctx, direct_op), None);
-        assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct_op), None);
     }
 
     #[test]
@@ -1084,7 +1077,7 @@ mod tests {
         ctx.op_attrs_mut(tail)
             .insert("signature", Attribute::Int(0));
 
-        assert!(CallableExitOps::exits_callable(&ctx, tail).is_err());
+        assert!(DynCallableExit::prove(&ctx, tail).is_err());
     }
 }
 

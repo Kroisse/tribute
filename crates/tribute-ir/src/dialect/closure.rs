@@ -269,6 +269,7 @@ impl trunk_ir::op_interface::CallableOwner for Lambda {
 mod tests {
     use trunk_ir::Span;
     use trunk_ir::SymbolPath;
+    use trunk_ir::op_interface::DynCallableOwner;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
@@ -536,8 +537,8 @@ mod tests {
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(&mut ctx, &text);
             let lambda = module.ops(&ctx)[0];
-            let signature = trunk_ir::op_interface::CallableOwnerOps::signature(&ctx, lambda)
-                .flatten()
+            let signature = DynCallableOwner::get(&ctx, lambda)
+                .and_then(|owner| owner.callable_signature(&ctx))
                 .expect("lambda signature");
             assert_eq!(signature.results(&ctx).len(), usize::from(result.is_some()));
             if let Some(name) = result {
@@ -638,6 +639,7 @@ mod tests {
 mod malformed_owner_tests {
     use trunk_ir::{
         dialect::{core, func},
+        op_interface::DynCallableOwner,
         ops::DialectOp,
     };
     #[test]
@@ -666,7 +668,7 @@ mod malformed_owner_tests {
             let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
             ctx.set_op_result_type(lambda, 0, nil);
             assert_eq!(
-                trunk_ir::op_interface::CallableOwnerOps::signature(&ctx, lambda),
+                DynCallableOwner::get(&ctx, lambda).map(|owner| owner.callable_signature(&ctx)),
                 Some(None)
             );
             let result = trunk_ir::validation::validate_all(&ctx, module, &mut Default::default());

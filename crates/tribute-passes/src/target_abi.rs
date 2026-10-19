@@ -22,7 +22,7 @@ use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, effect, tribute_rt};
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func};
-use trunk_ir::op_interface::IndirectCallLikeOps;
+use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -191,7 +191,8 @@ pub fn lower_cps_signatures_to_physical(
 
         let original_attributes = converter.ctx.op(op).attributes.clone();
         let mut converted_attributes = original_attributes.clone();
-        let indirect_signature = IndirectCallLikeOps::exact_signature(converter.ctx, op);
+        let indirect = DynIndirectCallLike::get(converter.ctx, op);
+        let indirect_signature = indirect.and_then(|call| call.exact_signature(converter.ctx));
         if let Some(signature) = indirect_signature {
             let convention = exact_convention(converter.ctx, op)?.ok_or_else(|| {
                 TargetAbiError::new(
@@ -217,10 +218,12 @@ pub fn lower_cps_signatures_to_physical(
                 .ctx
                 .op_attrs(op)
                 .contains_key(CALLING_CONVENTION_ATTR)
-            && IndirectCallLikeOps::callee(converter.ctx, op).is_none_or(|callee| {
-                crate::closure_lower::physical_closure_type_for_callee(converter.ctx, callee)
-                    .is_none()
-            })
+            && indirect
+                .and_then(|call| call.indirect_callee(converter.ctx))
+                .is_none_or(|callee| {
+                    crate::closure_lower::physical_closure_type_for_callee(converter.ctx, callee)
+                        .is_none()
+                })
         {
             consumed_attributes.push((op, CALLING_CONVENTION_ATTR));
         }
@@ -293,7 +296,10 @@ pub fn lower_cps_signatures_to_physical(
         ctx.op_attrs_mut(op).remove(name);
     }
     for (op, signature) in indirect_signatures {
-        assert!(IndirectCallLikeOps::set_exact_signature(ctx, op, signature));
+        assert!(
+            DynIndirectCallLike::get(ctx, op)
+                .is_some_and(|call| call.set_exact_signature(ctx, signature))
+        );
     }
     for (block, index, ty) in block_args {
         ctx.set_block_arg_type(block, index, ty);
@@ -1354,7 +1360,10 @@ fn validate_transfers(
         if !func::CallIndirect::matches(ctx, op) && !func::TailCallIndirect::matches(ctx, op) {
             continue;
         }
-        let signature = IndirectCallLikeOps::exact_signature(ctx, op);
+        let call = DynIndirectCallLike::get(ctx, op).ok_or_else(|| {
+            TargetAbiError::new("target ABI: indirect transfer is not registered")
+        })?;
+        let signature = call.exact_signature(ctx);
         let convention = exact_convention(ctx, op)?;
         // An invalid signature attribute is rejected below, not skipped.
         let has_signature = ctx.op_attrs(op).contains_key("signature");
@@ -1371,7 +1380,8 @@ fn validate_transfers(
                 TargetAbiError::new("target ABI: indirect transfer lacks exact callable signature")
             })?;
         let signature = callable.as_type_ref();
-        let callee = IndirectCallLikeOps::callee(ctx, op)
+        let callee = call
+            .indirect_callee(ctx)
             .ok_or_else(|| TargetAbiError::new("target ABI: indirect transfer lacks callee"))?;
         let callee_type = ctx.value_ty(callee);
         if let Some(closure_type) =
@@ -1395,7 +1405,7 @@ fn validate_transfers(
                 "target ABI: indirect signature differs from typed callee",
             ));
         }
-        let args = IndirectCallLikeOps::arguments(ctx, op).ok_or_else(|| {
+        let args = call.indirect_arguments(ctx).ok_or_else(|| {
             TargetAbiError::new("target ABI: indirect transfer has malformed operands")
         })?;
         if !operands_match(ctx, args, callable.inputs(ctx)) {
@@ -2120,7 +2130,9 @@ mod tests {
         for op in collect_ops(&ctx, module.op()) {
             if func::CallIndirect::matches(&ctx, op) {
                 assert!(ctx.op_result_types(op).is_empty());
-                let signature = IndirectCallLikeOps::exact_signature(&ctx, op).unwrap();
+                let signature = DynIndirectCallLike::get(&ctx, op)
+                    .and_then(|call| call.exact_signature(&ctx))
+                    .unwrap();
                 assert!(
                     func::FuncSig::from_type_ref(&ctx, signature)
                         .unwrap()
@@ -2193,7 +2205,9 @@ mod tests {
         let run = function(&ctx, module, "run");
         let body = run.body_if_present(&ctx).unwrap();
         let indirect = ctx.block(ctx.region(body).blocks[0]).ops[0];
-        let signature = IndirectCallLikeOps::exact_signature(&ctx, indirect).unwrap();
+        let signature = DynIndirectCallLike::get(&ctx, indirect)
+            .and_then(|call| call.exact_signature(&ctx))
+            .unwrap();
         ctx.op_attrs_mut(indirect)
             .insert("unrelated_callable_metadata", Attribute::Type(signature));
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);

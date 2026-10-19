@@ -1841,7 +1841,9 @@ mod tests {
         let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
             if wasm::ReturnCallIndirect::matches(&ctx, op) {
                 signatures.push(
-                    trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, op).unwrap(),
+                    trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, op)
+                        .and_then(|call| call.exact_signature(&ctx))
+                        .unwrap(),
                 );
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -2168,7 +2170,7 @@ fn main() -> Nil {
         db: &crate::TributeDatabaseImpl,
         target: tribute_passes::abi_boundary::TargetKind,
     ) {
-        use trunk_ir::op_interface::IndirectCallLikeOps;
+        use trunk_ir::op_interface::DynIndirectCallLike;
         let consumed = |ctx: &IrContext, signature: func_dialect::FuncSig| {
             signature
                 .input_attrs(ctx)
@@ -2188,7 +2190,7 @@ fn main() -> Nil {
                 } else if func_dialect::Constant::matches(&ctx, op) {
                     ctx.op_result_types(op).first().copied()
                 } else {
-                    IndirectCallLikeOps::exact_signature(&ctx, op)
+                    DynIndirectCallLike::get(&ctx, op).and_then(|call| call.exact_signature(&ctx))
                 };
                 if let Some(signature) =
                     signature.and_then(|ty| func_dialect::FuncSig::from_type_ref(&ctx, ty))

@@ -1577,12 +1577,9 @@ mod tests {
                 .build(&mut ctx);
         let malformed_func_exit = ctx.create_op(malformed_func_exit_data);
 
-        assert!(crate::op_interface::CallableExitOps::exits_callable(&ctx, unregistered).is_err());
-        assert!(crate::op_interface::CallableExitOps::exits_callable(&ctx, malformed).is_err());
-        assert!(
-            crate::op_interface::CallableExitOps::exits_callable(&ctx, malformed_func_exit)
-                .is_err()
-        );
+        assert!(crate::op_interface::DynCallableExit::prove(&ctx, unregistered).is_err());
+        assert!(crate::op_interface::DynCallableExit::prove(&ctx, malformed).is_err());
+        assert!(crate::op_interface::DynCallableExit::prove(&ctx, malformed_func_exit).is_err());
     }
 
     #[test]

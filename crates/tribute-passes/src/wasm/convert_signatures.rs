@@ -12,7 +12,7 @@
 use tracing::debug;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
-use trunk_ir::op_interface::IndirectCallLikeOps;
+use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
@@ -54,7 +54,10 @@ impl RewritePattern for IndirectCallSignaturePattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Some(signature_ty) = IndirectCallLikeOps::exact_signature(ctx, op) else {
+        let Some(call) = DynIndirectCallLike::get(ctx, op) else {
+            return false;
+        };
+        let Some(signature_ty) = call.exact_signature(ctx) else {
             return false;
         };
         let Some(signature) = func::FuncSig::from_type_ref(ctx, signature_ty) else {
@@ -62,7 +65,7 @@ impl RewritePattern for IndirectCallSignaturePattern {
         };
         let declared = signature.inputs(ctx).to_vec();
         let results = signature.results(ctx).to_vec();
-        let Some(arguments) = IndirectCallLikeOps::arguments(ctx, op) else {
+        let Some(arguments) = call.indirect_arguments(ctx) else {
             return false;
         };
         let arguments: Vec<_> = arguments.iter().map(|&arg| ctx.value_ty(arg)).collect();
@@ -98,7 +101,8 @@ impl RewritePattern for IndirectCallSignaturePattern {
         let op_data = builder.build(ctx);
         let new_op = ctx.create_op(op_data);
         assert!(
-            IndirectCallLikeOps::set_exact_signature(ctx, new_op, new_signature),
+            DynIndirectCallLike::get(ctx, new_op)
+                .is_some_and(|call| call.set_exact_signature(ctx, new_signature)),
             "a rebuilt indirect call keeps its signature slot"
         );
         rewriter.replace_op(new_op);

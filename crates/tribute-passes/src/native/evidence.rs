@@ -912,7 +912,8 @@ mod tests {
             .find(|&op| func::CallIndirect::matches(&ctx, op))
             .expect("lowered indirect dispatch");
         assert!(
-            trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, inner_call)
+            trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, inner_call)
+                .and_then(|call| call.exact_signature(&ctx))
                 .is_some(),
             "native-generated indirect calls must carry an exact signature"
         );

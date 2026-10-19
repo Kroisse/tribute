@@ -374,11 +374,12 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
 
     for transfer in &transfers {
         let convention = tribute_core::get_calling_convention(&ctx, *transfer).unwrap();
-        let callee = trunk_ir::op_interface::IndirectCallLikeOps::callee(&ctx, *transfer).unwrap();
+        let call = trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, *transfer).unwrap();
+        let callee = call.indirect_callee(&ctx).unwrap();
         let expected = physical_closure_function_type(&ctx, ctx.value_ty(callee), convention)
             .expect("the converted callee retains an exact closure contract");
         assert_eq!(
-            trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, *transfer),
+            call.exact_signature(&ctx),
             Some(expected),
             "{convention:?} transfer must carry its exact callee contract: {}",
             print_module(&ctx, module.op())
@@ -1361,7 +1362,8 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
         "the dispatch adapter and separate handler paths must tail-transfer: {printed}"
     );
     for tail in tails {
-        let signature = trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, tail)
+        let signature = trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, tail)
+            .and_then(|call| call.exact_signature(&ctx))
             .expect("every emitted CPS indirect tail has its exact closure contract");
         let callable = func::FuncSig::from_type_ref(&ctx, signature)
             .expect("the indirect tail signature is a func.func_sig");
@@ -1510,7 +1512,8 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
         "the dispatch adapter and independent CPS exits must both tail-transfer: {printed}"
     );
     for tail in tails {
-        let signature = trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, tail)
+        let signature = trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, tail)
+            .and_then(|call| call.exact_signature(&ctx))
             .expect("every emitted CPS indirect tail has its exact closure contract");
         let callable = func::FuncSig::from_type_ref(&ctx, signature)
             .expect("the indirect tail signature is a func.func_sig");
