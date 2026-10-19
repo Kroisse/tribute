@@ -342,12 +342,12 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   `closure.closure<func.func_sig<...>>`를 만든다. 이 단계의 signature에는
   `CallableAbi` hidden parameter가 있지만 environment는 없으며, 기존 closure
   lowering이 environment를 interpose한다.
-- `tribute_control.func_ref`는 빈 environment의 `closure.new`와 env-bearing
+- `tribute_control.func_ref`는 capture 없는 `closure.new`와 env-bearing
   adapter `func.func`를 만든다. Adapter는 result callable의 같거나 더 강한
   convention을 사용하고 필요한 hidden operand와 source argument를 대상 physical
   worker에 전달하므로 named function도 다른 closure와 같은 `call_indirect` ABI를
-  갖는다. 기존 closure lowering은 이 `closure.new`를 `func.constant`와 physical
-  closure struct로 바꾼다.
+  갖는다. 기존 closure lowering은 이 `closure.new`를 `func.constant`와 closure
+  base 할당으로 바꾼다.
 - `Direct`/`EvidenceDirect`의 `tribute_control.call`과 `call_indirect`는 각각
   physical `func.call`과 `func.call_indirect`가 된다. `Cps` call은 suffix를
   담은 `ContinuationFrame<R>`를 전달하고 named target에는 `func.tail_call`, dynamic target에는
@@ -393,7 +393,8 @@ Environment-bearing `func.func`는 zero-based physical slot을
 `tribute.closure_environment_index`로 기록한다. Bodyless declaration은 이
 function-level provenance가 필수이며, definition은 entry block의 `__env` marker와
 같은 slot이어야 한다. Slot은 outer convention-proven closure type이 기록한 exact
-physical order와 exact `tribute_rt.anyref` type에 일치해야 하며 type이나 arity로
+physical order와 일치하고, slot의 type은 그 closure의 exact closure type이어야
+한다([closure 저장 layout](ir.md#closure-저장-layout)). Type이나 arity로 slot을
 추측하지 않는다. 이 function-level provenance의 마지막 독자는 물리화 검증이다.
 
 생성한 physical definition, lambda, adapter, direct/indirect call에는 logical
@@ -511,7 +512,7 @@ location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가
 추상 frame 표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph의
 lambda를 추출하지만
-`closure.new`, `closure.func`, `closure.env`와 convention-proven closure type은
+`closure.new`, `closure.func`, `closure.unpack`과 convention-proven closure type은
 target ABI validation까지 유지한다. `lower_ability_call`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
 target pipeline의 closure storage finalization과 Native/Wasm evidence pass가
@@ -555,9 +556,9 @@ CPS transfer가 `func.tail_call` 또는 `func.tail_call_indirect`로 끝나는�
 이때 의미적 convention은 이미 소비되어 남아 있지 않다. 출구 이후의 backend-ready 검증은 exact signature,
 `call_conv`, proper-tail operation만으로 같은 성질을 검사한다.
 `Step`, trampoline, CPS control-result 역할의 `anyref`와
-`__tribute_cps_control` private enum은 거부한다. Boxed source value, erased effect
-payload, closure environment와 dispatch closure field에 쓰는 일반 `anyref`는 이
-검사의 대상이 아니다.
+`__tribute_cps_control` private enum은 거부한다. Boxed source value와 erased effect
+payload에 쓰는 일반 `anyref`는 이 검사의 대상이 아니다. Closure와 dispatch closure
+field는 `anyref`가 아니라 closure base 타입을 쓴다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="abstract-continuation-frames"></a>
@@ -683,9 +684,10 @@ convention은 `Cps`, environment 위치는 각각 1과 0이다. 이미 낮춘 cl
    입력과 빈 결과 목록을 갖는다.
    Native는 canonical shared signature에 기존 Native 변환을 적용하여
    `(ptr, ptr, ptr, i32, i32, i32, ptr) -> ()`를 얻는다. Wasm은 대상의 canonical
-   evidence/environment/closure 저장 타입, 세 i32와 payload 타입을 사용한다.
-   Closure 입력은 canonical `_closure` ADT이며 일반 `wasm.structref`로 대체하지
-   않는다. 기존 대상 타입 변환은 정확한 공통 closure 저장 타입을 이 ADT로 변환한다.
+   evidence 저장 타입, closure base 타입, 세 i32와 payload 타입을 사용한다.
+   Environment는 dispatch closure 자신이므로 Environment와 Resume 입력은 모두
+   closure base이며 일반 `wasm.structref`로 대체하지 않는다. 기존 대상 타입 변환은
+   정확한 공통 closure 저장 타입을 이 base로 변환한다.
 
 Evidence 배열 참조와 두 closure 입력은 canonical 타입 동일성을 그대로 요구한다.
 다른 배열 표기는 evidence 배열이 아니며, 일반 `wasm.structref`는 공통 closure
@@ -1051,12 +1053,13 @@ ast_to_ir (tribute_control callable/control + ordinary value IR)
 `ability.handle_dispatch`가 있다. Shared ability/evidence pass와 strict target
 ABI validation은 convention-proven `closure.closure` callable type을 그대로
 소비한다. 그 뒤 경계 안에서 closure operation과 모든 type-bearing storage
-surface를 canonical `_closure` layout으로 함께 바꾸고 target evidence/runtime
+surface를 [closure 저장 layout](ir.md#closure-저장-layout)으로 함께 바꾸고 target evidence/runtime
 lowering이 이를 소비한다. 경계 이후의 proper tail transfer lowering은 이 layout을
 명시적 layout 식별자로 구별하며 이름으로 판별하지 않는다. Closure lowering이
-`closure.new`를 `_closure` pack으로 바꾸면 남은 사용처는
+`closure.new`를 capture layout 할당으로 바꾸면 남은 사용처는
 `core.unrealized_conversion_cast`로 exact closure type을 유지한다. Storage
-finalization이 closure type을 `_closure`로 바꾸면 이 cast는 identity가 되어 제거된다.
+finalization이 closure type을 closure base로 바꾸면 이 cast는 capture layout에서
+base로의 upcast가 된다.
 Pack에 별도 provenance 속성을 붙이지 않으며, 이는 semantic type equivalence를
 만들지 않는다.
 

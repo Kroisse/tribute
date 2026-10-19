@@ -306,7 +306,7 @@ The RC implementation is divided into four stages:
 
 이 단계의 policy-neutral 사실 계산은 같은 경계의 fallible 분석이 소유한다.
 Module 범위 분석이 function 정의, 검증된 managed nominal layout,
-`adt.struct_set`이 쓰는 layout, semantic closure 할당 layout과 할당 순서의
+`adt.struct_set`이 쓰는 layout, closure 할당 layout(base와 capture layout)과 할당 순서의
 RTTI descriptor를, function 범위 분석이 flat CFG, managed 값,
 exact alias root, managed projection-owner 관계, 그중 borrow할 수 있는
 projection과 liveness 입력을 제공한다. 이 사실은 `NativeOwnershipPlanOptions`와
@@ -497,7 +497,7 @@ into control flow and atomic operations by RC lowering.
     교체 가능한 layout에서 읽은 projection은 borrow하지 않고 projection 직후 자신의
     unit을 획득한다. 교체는 이전 field 값의 unit을 release하므로, 이 unit 없이는
     같은 함수의 뒤따르는 쓰기나 호출된 함수의 쓰기가 파생 값을 해제할 수 있다. 쓰는
-    쪽은 cast와 closure environment를 거쳐 같은 객체에 도달할 수 있으므로 판정은
+    쪽은 cast와 closure capture를 거쳐 같은 객체에 도달할 수 있으므로 판정은
     특정 SSA 값이 아니라 layout의 nominal identity로 한다.
 
   이 최적화를 끈 기준 동작은 모든 managed projection이 projection 직후 자신의 unit을
@@ -642,8 +642,9 @@ used only as an explicitly documented intermediate implementation stage; the
 semantic contract requires type-specific release of owned managed fields.
 
 네이티브 evidence ABI에는 명시적인 typed ownership handoff가 있다. 네이티브 lowering은
-runtime 경계를 넘는 compiler-generated managed `_closure`마다 `tribute_rt.into_raw`를
-만든다. Ownership plan은 현재의 정확한 closure layout, managed input, result 하나의
+runtime 경계를 넘는 managed closure 값마다 `tribute_rt.into_raw`를
+만든다. 이 값의 타입은 closure base layout이다. Ownership plan은 그 exact closure base
+타입, managed input, result 하나의
 `core.ptr` 형상과 action anchor를 검증하고, 그 unit을 소비된 transfer로 기록한다.
 이미 raw/null인 dispatch operand는 `into_raw`를 만들지 않으며 계속 unmanaged다.
 같은 exact closure root의 same-block `into_raw`가 N개이면 plan은 첫 transfer 앞에
@@ -682,6 +683,28 @@ tribute_rt.release(ptr) ->
         %release_fn = RTTI_TABLE[%rtti_idx].release_fn
         call %release_fn(ptr)
 ```
+
+### Closure captures
+
+Native closure는 RC header, code pointer, capture를 담은 RC 객체 하나다
+([closure 저장 layout](ir.md#closure-저장-layout),
+[native 배치](cranelift-backend.md#메모리-관리-reference-counting)).
+
+- `closure.new`는 capture layout의 `adt.struct_new`가 되므로 각 capture는 aggregate
+  field로의 저장이다. Capture 자리는 독립된 unit을 받으며, capture가 값의 마지막
+  사용이면 [last-use move](#1-typed-ownership-and-rtti-plan) 규칙을 그대로 따른다.
+  Capture 없는 closure는 base layout 할당이며 unit을 받는 필드가 없다.
+- Code 함수의 environment 입력은 closure 자신이다. 이 입력은 다른 물리 입력과 같은
+  entry 계약을 따르며, closure 호출에서 closure 값을 넘기는 자리도 다른 argument와
+  같은 규칙으로 계획한다.
+- `closure.unpack`은 base에서 capture layout으로의 cast와 capture field projection이
+  된다. Cast는 같은 객체의 alias이고, managed capture의 projection은 일반 managed
+  projection 규칙을 따른다.
+- Base와 각 capture layout은 서로 다른 할당 descriptor다. 이 layout들은
+  `layout`과 `closure_base`로만 식별하며 struct 이름이나 필드 모양으로 판별하지
+  않는다. 각 layout의 release 함수는 code pointer를 unmanaged 필드로 두고 plan이
+  managed로 판정한 capture만 release한 뒤 객체를 해제한다. Marker가 담은 dispatch
+  closure도 runtime이 header의 RTTI index로 같은 release 함수를 찾는다.
 
 ### Continuation ownership
 
@@ -770,7 +793,8 @@ Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다
 예약 범위는 compiler가 생성하는 할당 operation 없이 runtime이나 boxing lowering이
 만드는 값에만 쓴다. 할당 operation으로 만드는 값은 모두 예약 범위 다음 번호를 받는다.
 소스 struct와 variant뿐 아니라 closure layout처럼 compiler가 소유한 layout의 할당도
-여기에 속하며, 그 descriptor는 compiler 소유 이름과 필드 종류를 가진다. RC header
+여기에 속하며, 그 descriptor는 compiler 소유 이름과 필드 종류를 가진다. Closure는
+base와 capture layout마다 descriptor를 하나씩 가진다. RC header
 없이 unmanaged로 다루는 값은 RC 객체가 아니므로 RTTI index와 descriptor를 갖지 않는다.
 
 RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. Table과
