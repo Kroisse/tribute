@@ -115,6 +115,14 @@ Interface는 열려 있다. 어느 crate든 새 interface를 정의할 수 있�
 infrastructure가 operation 정의를 통해 찾는 hook은 interface가 아니라 operation
 definition에 속한다.
 
+Type interface는 같은 방식으로 type wrapper가 구현하는 trait 하나로 선언한다.
+Consumer는 type 이름으로 registry에서 구현을 찾고, 찾은 handle은 그 타입에 묶인다.
+등록과 중복 규칙, 다른 crate의 타입에 구현을 붙일 수 있다는 점도 operation
+interface와 같다. Type interface의 메서드는 그 타입의 wrapper로 호출되므로, 선언된
+모양과 type verifier를 통과한 타입에만 묻는다. 메서드 없는 type interface는 이름만
+보고 답하는 표지이며(managed reference 여부), 다른 crate의 타입에도 붙일 수 있어야
+하므로 type definition의 flag가 아니라 interface로 정의한다.
+
 Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 성질이다
 (`Pure`, `IsolatedFromAbove`). 어느 crate든 `#[op_flag]`를 붙인 unit struct로 flag를
 선언한다. Flag는 구현을 갖지 않고 operation definition에 직접 들어가므로 registry
@@ -1787,10 +1795,15 @@ opaque nominal builtin whose shared construction and sequence-view observations
 use `list.*`; target-specific passes choose and eliminate its private
 representation.
 
-Dialect 타입의 정의는 그 타입의 type verifier와 전용 textual 문법을 함께
-소유한다. Type verifier가 있는 타입의 typed wrapper와 exact bound는 verifier를
-통과한 타입만 받으므로, wrapper의 accessor는 verifier가 보장하는 invariant에
-기댈 수 있다. 타입을 정의하는 dialect는 invariant를 지키는 생성자를 따로 제공할 수
+Dialect 타입의 정의는 그 타입의 type verifier, 전용 textual 문법, printer가
+자동 type alias를 만들 때 쓰는 alias 이름 제안을 함께 소유한다. Alias 이름 제안은
+출력 이름에만 영향을 주며, 전용 문법처럼 선언된 모양과 type verifier를 통과한
+타입만 이름을 제안한다. 제안이 없는 타입은 자주 쓰이고 충분히 복잡할 때 번호
+이름을 받는다. `#[dialect]`가 선언하지 않고 직접 작성한 type definition도
+같은 registry에 등록하므로, 등록된 이름의 handle은 어느 쪽이든 정의를 가리킨다.
+Type verifier가 있는 타입의 typed wrapper와 exact bound는 verifier를 통과한
+타입만 받으므로, wrapper의 accessor는 verifier가 보장하는 invariant에 기댈 수
+있다. 타입을 정의하는 dialect는 invariant를 지키는 생성자를 따로 제공할 수
 있다.
 
 Dialect 타입은 operation과 같은 정의 문법으로 선언한다. IR 타입 매개변수는

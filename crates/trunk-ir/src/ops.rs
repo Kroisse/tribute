@@ -125,7 +125,10 @@ pub trait Verify: DialectOp {
 #[doc(hidden)]
 pub mod __private {
     use super::{IrContext, VerificationError, Verify};
-    use crate::asm_format::{OpAsmFormat, OpAsmHooks, TypeAsmFormat, TypeAsmHooks};
+    use crate::asm_format::{
+        OpAsmFormat, OpAsmHooks, TypeAliasHint, TypeAliasHook, TypeAsmFormat, TypeAsmHooks,
+        erased_alias_hint,
+    };
     use crate::type_def::TypeVerifier;
     use crate::type_verifier::{VerifyType, erased_verifier};
 
@@ -198,6 +201,21 @@ pub mod __private {
     #[diagnostic::do_not_recommend]
     impl<T: TypeAsmFormat> DeclaredTypeAsmFormat for T {
         const ASM_HOOKS: TypeAsmHooks = TypeAsmHooks::of::<T>();
+    }
+
+    /// Entry point for generated type alias name hints.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` is declared with `#[alias_hint]` but does not implement `TypeAliasHint`",
+        label = "`#[alias_hint]` requires this implementation",
+        note = "add `impl TypeAliasHint for {Self} {{ fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {{ .. }} }}`"
+    )]
+    pub trait DeclaredTypeAliasHint {
+        const ALIAS_HINT: TypeAliasHook;
+    }
+
+    #[diagnostic::do_not_recommend]
+    impl<T: TypeAliasHint> DeclaredTypeAliasHint for T {
+        const ALIAS_HINT: TypeAliasHook = erased_alias_hint::<T>;
     }
 }
 

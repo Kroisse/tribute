@@ -49,27 +49,13 @@ mod tribute_rtti {
 /// A managed reference: a value that points to an allocation carrying a
 /// runtime type descriptor. Unmanaged pointers and scalars are not.
 ///
-/// A type is a managed reference when its definition registers a
-/// [`ManagedRefType`].
+/// A type is a managed reference when it implements [`ManagedRefType`].
 pub struct ManagedRef;
 
-/// Marks one type as a managed reference, registered via
-/// `inventory::submit!` at the type's definition site.
-pub struct ManagedRefType(&'static trunk_ir::TypeDef);
-
-impl ManagedRefType {
-    /// Registration for the type wrapped by `T`.
-    pub const fn new<T: trunk_ir::ops::DialectType>() -> Self {
-        Self(T::DEF)
-    }
-
-    /// Registration for the type `def` defines.
-    pub const fn of(def: &'static trunk_ir::TypeDef) -> Self {
-        Self(def)
-    }
-}
-
-inventory::collect!(ManagedRefType);
+/// Marks a type as a managed reference. A `#[dialect]` type registers its
+/// impl with `#[implements(ManagedRefType)]`.
+#[trunk_ir::type_interface]
+pub trait ManagedRefType: trunk_ir::ops::DialectType {}
 
 impl trunk_ir::type_constraint::TypeConstraint for ManagedRef {
     const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =
@@ -85,8 +71,7 @@ impl trunk_ir::type_constraint::TypeConstraint for ManagedRef {
 
 impl ManagedRef {
     pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
-        let data = ctx.get_type(ty);
-        inventory::iter::<ManagedRefType>().any(|registered| data.name == registered.0)
+        DynManagedRefType::is_implemented(ctx, ty)
     }
 }
 

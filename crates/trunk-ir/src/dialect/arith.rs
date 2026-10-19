@@ -540,7 +540,7 @@ mod canonicalize_tests {
     use std::ops::ControlFlow;
 
     /// Run only this dialect's folds on `module` via a single
-    /// [`FoldDispatchPattern`]. Filters the inventory by dialect so
+    /// [`FoldDispatchPattern`]. Filters the folds by dialect so
     /// per-fold tests stay isolated from other dialects' folds even
     /// though the production `canonicalize` pass aggregates everyone.
     fn run_arith_patterns(ctx: &mut IrContext, module: Module) -> ApplyResult {

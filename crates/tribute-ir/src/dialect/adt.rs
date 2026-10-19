@@ -1,19 +1,7 @@
 //! Arena-based adt dialect.
 
-// === Type alias hint registration ===
-inventory::submit!(trunk_ir::asm_format::TypeAliasHint {
-    dialect: DIALECT_NAME,
-    suggest: |ctx, ty| { ctx.type_attrs(ty).get_str("name") },
-});
-
-// === Managed reference registrations ===
-//
-// A value of a nominal layout type, or a reference to one by name, points to
-// an allocation of that layout.
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Struct>());
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Enum>());
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Typeref>());
-
+use crate::dialect::tribute_rtti::ManagedRefType;
+use trunk_ir::asm_format::TypeAliasHint;
 use trunk_ir::dialect::core::{Array, IntegerLike};
 use trunk_ir::op_flag::Pure;
 
@@ -25,6 +13,8 @@ mod adt {
     /// `name` attribute, and the struct's name is the type's `name` attribute.
     #[verify]
     #[asm_format]
+    #[alias_hint]
+    #[implements(ManagedRefType)]
     struct Struct<#[rest] FieldTypes> {
         name: Attr<String>,
     }
@@ -37,16 +27,21 @@ mod adt {
     /// the type's `name` attribute.
     #[verify]
     #[asm_format]
+    #[alias_hint]
+    #[implements(ManagedRefType)]
     struct Enum<#[rest] VariantTypes> {
         name: Attr<String>,
     }
 
     /// `adt.typeref`: a reference to a nominal layout by its `name`.
+    #[alias_hint]
+    #[implements(ManagedRefType)]
     struct Typeref {
         name: Attr<String>,
     }
 
     /// `adt.variant`: one variant of an `adt.enum`, named by its `name`.
+    #[alias_hint]
     struct Variant<#[rest] Fields> {
         name: Attr<String>,
     }
@@ -108,6 +103,37 @@ mod adt {
 
     #[flags(Pure)]
     fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
+}
+
+// A value of a nominal layout type, or a reference to one by name, points to
+// an allocation of that layout.
+impl ManagedRefType for Struct {}
+impl ManagedRefType for Enum {}
+impl ManagedRefType for Typeref {}
+
+// A named ADT type suggests its `name` as its alias.
+impl TypeAliasHint for Struct {
+    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        Some(self.name(ctx))
+    }
+}
+
+impl TypeAliasHint for Enum {
+    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        Some(self.name(ctx))
+    }
+}
+
+impl TypeAliasHint for Typeref {
+    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        Some(self.name(ctx))
+    }
+}
+
+impl TypeAliasHint for Variant {
+    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        Some(self.name(ctx))
+    }
 }
 
 // === Canonicalization folds ===
@@ -857,6 +883,31 @@ mod tests {
         let mut reparsed = IrContext::new();
         let module = parse_module(&mut reparsed, &printed).expect("printed IR must parse");
         assert_eq!(printed, print_module(&reparsed, module));
+    }
+
+    #[test]
+    fn named_types_suggest_their_name_as_alias() {
+        use trunk_ir::TypeDataBuilder;
+        use trunk_ir::asm_format::suggest_type_alias_name;
+
+        let mut ctx = IrContext::new();
+        let i32_ty = trunk_ir::dialect::core::I32::type_ref(&mut ctx);
+        let named = |ctx: &mut IrContext, name: trunk_ir::TypeName, alias: &str| {
+            let alias = ctx.string_attr(alias);
+            TypeDataBuilder::new(name).attr("name", alias).intern(ctx)
+        };
+        let types = [
+            named(&mut ctx, Struct::NAME, "Point"),
+            named(&mut ctx, Enum::NAME, "Option"),
+            named(&mut ctx, Typeref::NAME, "Point"),
+            named(&mut ctx, Variant::NAME, "Some"),
+        ];
+        let names = types.map(|ty| suggest_type_alias_name(&ctx, ty));
+        assert_eq!(
+            names,
+            [Some("Point"), Some("Option"), Some("Point"), Some("Some")]
+        );
+        assert_eq!(suggest_type_alias_name(&ctx, i32_ty), None);
     }
 
     #[test]

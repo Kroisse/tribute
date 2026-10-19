@@ -13,34 +13,38 @@ use crate::printer::{OpPrintHelper, TypePrintHelper};
 use crate::{IrContext, OpRef, TypeRef};
 
 // =============================================================================
-// TypeAliasHint — dialect-provided alias name suggestions for printer
+// TypeAliasHint — alias name suggestions for the printer
 // =============================================================================
 
-/// Dialect-provided hint for suggesting type alias names during printing.
+/// Alias name a type suggests when the printer auto-generates type aliases.
 ///
-/// Each dialect can register a hint that maps its types to suggested alias names.
-/// The printer uses these hints when auto-generating type aliases.
-pub struct TypeAliasHint {
-    /// Dialect name this hint applies to (e.g., "adt").
-    pub dialect: &'static str,
-    /// Given a type belonging to this dialect, suggest an alias name.
-    /// Returns `None` if no name can be suggested.
-    pub suggest: for<'a> fn(&'a IrContext, TypeRef) -> Option<&'a str>,
+/// `#[dialect]` opts in with `#[alias_hint]`, and a hand-written definition
+/// adds it with [`TypeDef::with_alias_hint`](crate::TypeDef::with_alias_hint).
+/// A type without a suggestion is aliased only when it is complex enough, under
+/// a numbered name.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is declared with `#[alias_hint]` but does not implement `TypeAliasHint`",
+    label = "`#[alias_hint]` requires this implementation",
+    note = "add `impl TypeAliasHint for {Self} {{ fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {{ .. }} }}`"
+)]
+pub trait TypeAliasHint: DialectType {
+    /// Suggest an alias name for this type. A type the wrapper does not
+    /// accept, such as a malformed one, suggests none.
+    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str>;
 }
 
-inventory::collect!(TypeAliasHint);
+/// A type's alias name hint, calling the wrapper's [`TypeAliasHint`] impl.
+pub type TypeAliasHook = for<'a> fn(&'a IrContext, TypeRef) -> Option<&'a str>;
 
-/// Query all registered `TypeAliasHint`s to find a suggested name for the given type.
+/// `T`'s alias name hint as a [`TypeDef`](crate::TypeDef) stores it.
+pub(crate) fn erased_alias_hint<T: TypeAliasHint>(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
+    T::from_type_ref(ctx, ty)?.alias_hint(ctx)
+}
+
+/// The alias name `ty`'s definition suggests, if any.
 pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
-    let dialect = ctx.get_type(ty).name.dialect(ctx);
-    for hint in inventory::iter::<TypeAliasHint> {
-        if dialect == hint.dialect
-            && let Some(name) = (hint.suggest)(ctx, ty)
-        {
-            return Some(name);
-        }
-    }
-    None
+    let hint = crate::TypeDef::of(ctx, ty)?.alias_hint?;
+    hint(ctx, ty)
 }
 
 // =============================================================================

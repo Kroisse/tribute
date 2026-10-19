@@ -14,21 +14,22 @@ use crate::ops::DialectOp;
 use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir_macros::op_interface;
 
-/// Register operation interface implementations of operations that
+/// Register interface implementations of operations or types that
 /// `#[dialect]` does not declare, or of interfaces declared elsewhere.
 ///
 /// ```text
 /// register_interfaces!(Exit: CallableExit; Br: Branch);
+/// register_interfaces!(core::Bytes: ManagedRefType);
 /// ```
 ///
-/// Each entry requires the interface's impl for the operation wrapper,
-/// as `#[implements(..)]` on a `#[dialect]` operation does.
+/// Each entry requires the interface's impl for the operation or type
+/// wrapper, as `#[implements(..)]` on a `#[dialect]` declaration does.
 #[macro_export]
 macro_rules! register_interfaces {
-    ($($op:ty : $($interface:path),+ $(,)?);+ $(;)?) => {
+    ($($wrapper:ty : $($interface:path),+ $(,)?);+ $(;)?) => {
         $($(
             $crate::__private::inventory::submit! {
-                <$op as $interface>::__TRUNK_IR_INTERFACE
+                <$wrapper as $interface>::__TRUNK_IR_INTERFACE
             }
         )+)+
     };

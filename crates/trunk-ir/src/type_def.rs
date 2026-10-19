@@ -3,7 +3,9 @@
 
 use std::sync::LazyLock;
 
-use crate::asm_format::{TypeAsmFormat, TypeAsmHooks};
+use crate::asm_format::{
+    TypeAliasHint, TypeAliasHook, TypeAsmFormat, TypeAsmHooks, erased_alias_hint,
+};
 use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
 use crate::ops::VerificationError;
 use crate::type_verifier::{VerifyType, erased_verifier};
@@ -16,7 +18,9 @@ pub type TypeName = Name<TypeDef>;
 pub type TypeNameArg = NameArg<TypeDef>;
 
 /// What `#[dialect]` registers for one type: its name and the hooks its
-/// declaration opts into, such as `#[verify]` and `#[asm_format]`.
+/// declaration opts into, such as `#[verify]`, `#[asm_format]`, and
+/// `#[alias_hint]`. A hand-written definition is registered with
+/// [`register_type_def!`](crate::register_type_def).
 ///
 /// `#[dialect]` emits each definition as a `static`, so its address
 /// identifies the type: a [`TypeName`] of a registered type points to it.
@@ -30,6 +34,9 @@ pub struct TypeDef {
     /// Calls the wrapper's [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat)
     /// impl for types with a custom assembly format.
     pub asm_format: Option<TypeAsmHooks>,
+    /// Calls the wrapper's [`TypeAliasHint`](crate::asm_format::TypeAliasHint)
+    /// impl for types that suggest printer alias names.
+    pub alias_hint: Option<TypeAliasHook>,
 }
 
 /// A type verifier, calling the wrapper's [`VerifyType`] impl.
@@ -42,6 +49,7 @@ impl TypeDef {
             name: QualifiedName::new(name),
             verifier: None,
             asm_format: None,
+            alias_hint: None,
         }
     }
 
@@ -58,6 +66,15 @@ impl TypeDef {
     pub const fn with_asm_format<T: TypeAsmFormat>(self) -> Self {
         Self {
             asm_format: Some(TypeAsmHooks::of::<T>()),
+            ..self
+        }
+    }
+
+    /// This definition with `T`'s [`TypeAliasHint`] impl as its alias name
+    /// hint.
+    pub const fn with_alias_hint<T: TypeAliasHint>(self) -> Self {
+        Self {
+            alias_hint: Some(erased_alias_hint::<T>),
             ..self
         }
     }
@@ -85,8 +102,27 @@ impl Definition for TypeDef {
 
 /// Inventory entry registering a [`TypeDef`].
 ///
-/// Emitted by the `#[dialect]` macro for every declared type.
+/// Emitted by the `#[dialect]` macro for every declared type, and by
+/// [`register_type_def!`](crate::register_type_def) for a hand-written one.
+#[doc(hidden)]
 pub struct TypeDefRegistration(pub &'static TypeDef);
+
+/// Register a hand-written [`TypeDef`], given as a `&'static TypeDef`.
+///
+/// ```text
+/// static FUNC_SIG_DEF: TypeDef = TypeDef::new("func.func_sig").with_verifier::<FuncSig>();
+/// register_type_def!(&FUNC_SIG_DEF);
+/// ```
+///
+/// `#[dialect]` registers the definitions of the types it declares.
+#[macro_export]
+macro_rules! register_type_def {
+    ($def:expr) => {
+        $crate::__private::inventory::submit! {
+            $crate::type_def::TypeDefRegistration($def)
+        }
+    };
+}
 
 inventory::collect!(TypeDefRegistration);
 
@@ -251,6 +287,65 @@ mod tests {
         let mut ctx = IrContext::new();
         let elem = Custom::params().intern(&mut ctx).as_type_ref();
         let _ = Tagged::params(elem).intern(&mut ctx);
+    }
+
+    /// A hand-written definition with every hook.
+    #[derive(Clone, Copy)]
+    struct HandWritten(TypeRef);
+
+    static HAND_WRITTEN_DEF: TypeDef = TypeDef::new("type_hooks_test.hand_written")
+        .with_verifier::<HandWritten>()
+        .with_asm_format::<Custom>()
+        .with_alias_hint::<HandWritten>();
+
+    crate::register_type_def!(&HAND_WRITTEN_DEF);
+
+    impl crate::ops::DialectType for HandWritten {
+        const DEF: &'static TypeDef = &HAND_WRITTEN_DEF;
+
+        fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
+            Self::matches(ctx, ty).then_some(Self(ty))
+        }
+
+        fn as_type_ref(&self) -> TypeRef {
+            self.0
+        }
+    }
+
+    impl crate::type_verifier::VerifyType for HandWritten {
+        fn verify(_ctx: &IrContext, ty: TypeRef) -> Result<Self, VerificationError> {
+            Ok(Self(ty))
+        }
+    }
+
+    impl crate::asm_format::TypeAliasHint for HandWritten {
+        fn alias_hint<'a>(&self, _ctx: &'a IrContext) -> Option<&'a str> {
+            Some("handy")
+        }
+    }
+
+    #[test]
+    fn hand_written_definitions_register_their_hooks() {
+        let def = TypeDef::lookup("type_hooks_test.hand_written").unwrap();
+        assert!(std::ptr::eq(def, &HAND_WRITTEN_DEF));
+        assert!(def.verifier.is_some() && def.asm_format.is_some());
+
+        let mut ctx = IrContext::new();
+        let ty = crate::TypeDataBuilder::new("type_hooks_test.hand_written").intern(&mut ctx);
+        assert!(ctx.get_type(ty).name.is_registered());
+        assert_eq!(
+            crate::asm_format::suggest_type_alias_name(&ctx, ty),
+            Some("handy")
+        );
+        let verifier = def.verifier.unwrap();
+        assert!(verifier(&ctx, ty).is_ok());
+        let wrapper = <HandWritten as crate::ops::DialectType>::from_type_ref(&ctx, ty).unwrap();
+        assert_eq!(crate::ops::DialectType::as_type_ref(&wrapper), ty);
+
+        // The builders also run outside constant evaluation.
+        let built = TypeDef::new("type_hooks_test.unregistered").with_alias_hint::<HandWritten>();
+        assert!(built.verifier.is_none() && built.asm_format.is_none());
+        assert_eq!((built.alias_hint.unwrap())(&ctx, ty), Some("handy"));
     }
 
     #[test]
