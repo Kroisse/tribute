@@ -2019,7 +2019,7 @@ subtyping이 없다.
   type 속성 dictionary에 둔다. 필드 타입을 바꾸는 타입 변환은 `supertype` 안의
   타입도 같은 변환으로 바꾸므로 prefix 관계가 유지된다.
 - Subtype 값은 변환 없이 supertype 자리에 놓인다(upcast). Supertype 값을 subtype으로
-  보는 일은 정확한 결과 타입을 가진 명시적 cast가 필요하며, target이 그 cast를
+  보려면 정확한 결과 타입을 가진 명시적 cast가 필요하며, target이 그 cast를
   검증하고 물리화한다. Native에서는 필드 offset이 prefix를 공유하므로 pointer가
   그대로이고, Wasm에서는 `ref.cast`다.
 - Target은 이 속성으로만 물리 subtype 관계를 정한다. 필드 모양이 prefix처럼
@@ -2078,8 +2078,8 @@ environment 객체를 두지 않으며, closure를 만드는 일은 할당 하�
   closure를 만든다. Capture 목록은 비어 있을 수 있다. Environment를 따로 받지
   않는다.
 - Code 함수의 environment 입력은 그 closure 자신이다. 입력의 타입은
-  `closure.new` 결과의 exact closure 타입이고, 위치는 지금처럼 기록된 environment
-  index가 정한다. 이 입력의 ownership 계약은 다른 물리 입력과 같다
+  `closure.new` 결과의 exact closure 타입이고, 위치는 기록된 environment index가
+  정한다. 이 입력의 ownership 계약은 다른 물리 입력과 같다
   ([출구에서 확정되는 물리 계약](#출구에서-확정되는-물리-계약)).
 - Code 함수는 environment 입력에서 capture를 `closure.unpack`으로만 읽는다.
   `closure.unpack %self`의 결과 타입 목록은 capture 타입 목록이며, code 함수를
@@ -2108,9 +2108,9 @@ Closure 저장 layout은 두 종류다.
 - Capture layout의 identity는 base와 capture 필드 타입 목록이다. Capture 타입 목록이
   같은 두 code 함수는 같은 layout을 쓴다. 필드 이름과 struct 이름은 canonical
   생성자가 정하며 의미를 갖지 않는다.
-- Code 필드의 타입은 target이 정하는 함수 참조 표현이다. Base는 closure가 호출자에게
-  보이는 exact signature `S`에서 target이 정하는 함수로 고른다. Target은 모든 `S`를
-  base 하나로 보낼 수도 있고 `S`마다 다른 base를 둘 수도 있다. `S`마다 base를 두고
+- Code 필드의 타입은 target이 정하는 함수 참조 표현이다. Target은 closure가
+  호출자에게 보이는 exact signature `S`마다 base를 정한다. 모든 `S`에 base 하나를
+  쓸 수도 있고 `S`마다 다른 base를 둘 수도 있다. `S`마다 base를 두고
   code 필드를 typed 함수 참조로 표현하면, code 함수의 environment 입력이 다시 그
   base이므로 base와 code 함수 타입은 서로를 가리킨다. 이 재귀는 `adt.typeref`로
   끊는다.
@@ -2119,7 +2119,7 @@ Closure 저장 layout은 두 종류다.
 #### Storage 확정
 
 [Representation/ABI 경계](#representationabi-경계)의 closure operation lowering과
-storage 확정은 다음을 함께 한다.
+storage 확정은 다음 변환을 함께 적용한다.
 
 - `closure.new`는 code 참조와 capture를 필드로 가진 할당 하나가 된다. 결과는 capture
   layout에서 base로의 upcast다.
@@ -2128,7 +2128,8 @@ storage 확정은 다음을 함께 한다.
   규칙을 따르며, Wasm에서는 `ref.cast`, native에서는 pointer 그대로다.
 - `closure.closure<S>`는 모든 type-bearing surface에서 `S`의 base가 된다.
 - Closure 값이 일반 reference erasure 자리(boxed source value, effect payload 등)를
-  지날 수 있지만, 거기서 closure로 돌아오는 cast는 exact base를 이름으로 가진다.
+  지날 수 있지만, 거기서 closure로 돌아오는 cast는 exact base를 결과 타입으로
+  명시한다.
   Closure를 저장하는 compiler 소유 layout의 필드는 erased reference가 아니라 base를
   쓴다.
 

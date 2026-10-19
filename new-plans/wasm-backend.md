@@ -389,8 +389,8 @@ use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입�
 동안에는 값과 signature에 남고, Wasm dialect lowering의 마지막 단계가 없앤다.
 Struct 이름이나 원소 타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
 원소가 `core.i8`인 배열도 `"bytes_data"`가 없으면 bytes 배열이 아니다.
-Closure는 environment를 따로 두지 않으며, Marker의 dispatch closure field는
-closure base 타입을 쓴다. 두 자리 모두 `anyref`로 지우지 않는다.
+Closure는 environment를 따로 두지 않고, Marker의 dispatch closure field는
+`anyref`가 아니라 closure base 타입을 쓴다.
 
 ```wasm
 ;; 생성된 type section 예시
@@ -422,7 +422,7 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   enum을 가리키거나 이름을 해석할 수 없는 `adt.typeref`는 variant마다 타입이 다르므로
   `wasm.structref`가 된다.
 - Backend에 도달하는 `adt` 타입은 [`layout`](ir.md#runtime-layout-식별자)을 가진
-  builtin layout뿐이다. Backend는 builtin layout을 `layout` 식별자로만 식별하고,
+  compiler 소유 layout뿐이다. Backend는 이 layout을 `layout` 식별자로만 식별하고,
   그 타입의 dialect나 이름을 보지 않는다. 연산이나 값이 가리키지 않는 소스 layout
   선언(alias와 module metadata)은 backend가 해석하지 않는다.
 - 이 단계 전의 backend pass는 아직 변환되지 않은 값의 타입을 직접 판정하지 않는다.
@@ -436,7 +436,7 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
 
 - 사용자 struct와 variant의 GC 타입은 descriptor 필드 하나만 가진 `Described` 타입의
   subtype으로 선언한다. `Described`는 final이 아니고, 그 subtype은 final이다.
-  `Described`와 [closure base](#closure-layout과-subtype)처럼 다른 타입의 supertype인
+  일반적으로 `Described`와 [closure base](#closure-layout과-subtype)처럼 다른 타입의 supertype인
   타입만 final이 아니다.
   Descriptor 필드의 mutability는 `Described`와 subtype에서 같다. Builtin layout, 배열,
   boxing된 scalar는 `Described`의 subtype이 아니므로 `anyref`에서 `Described`로의
@@ -460,7 +460,8 @@ layout들로 이루어진다.
 - Capture layout(`layout = "closure_captures"`)은 사용자 index 범위에서 index를 받고
   [`supertype`](ir.md#물리-supertype)이 가리키는 base의 final subtype으로 선언한다.
   필드는 base의 code 필드 뒤에 capture의 Wasm 저장 표현을 순서대로 둔다. 모든 필드는
-  immutable이다. Capture layout은 같은 `layout` 값을 가진 한 builtin으로 묶지 않고
+  immutable이다. Capture layout은 같은 `layout` 값을 가진 타입들을 builtin 하나로
+  묶지 않고
   전체 type identity로 등록하므로, capture 타입 목록이 같은 closure끼리만 같은 GC
   타입을 쓴다. Capture layout은 `wasm_gc.struct`로 바꾸지 않으며, emission은 그
   필드를 `adt.struct`의 매개변수에서 읽는다.
@@ -469,15 +470,15 @@ layout들로 이루어진다.
   `Described` subtype 여부나 closure 여부를 추론하지 않는다. `layout`을 가진
   `adt.struct`의 subtype 관계는 `supertype` 속성에서만 오고, 사용자 struct와
   variant의 `wasm_gc.struct`가 `Described`의 subtype이라는 관계는 위 descriptor
-  규칙이 정한다. Descriptor 규칙은 `wasm_gc.struct`에만 적용되므로 closure layout에
-  닿지 않는다. 다른 타입의 supertype인 타입은 final이 아니다.
+  규칙이 정한다. Descriptor 규칙은 `wasm_gc.struct`에만 적용되므로 closure layout에는
+  적용되지 않는다. 다른 타입의 supertype인 타입은 final이 아니다.
 - Code 함수는 environment 입력으로 base 참조를 받아 자기 capture layout으로
-  `ref.cast`한 뒤 capture를 `struct.get`으로 읽는다. Capture 없는 closure는 base
-  객체이며 cast하지 않는다.
+  `ref.cast`한 뒤 capture를 `struct.get`으로 읽는다. Capture 없는 closure의 code
+  함수는 base 객체를 그대로 받고 cast하지 않는다.
 - Closure 호출은 base에서 code 필드를 읽고 closure 참조 자체를 environment 인자로
   넘긴다. Ordinary 호출은 `call_indirect`, proper tail transfer는
   `return_call_indirect`이며 exact `wasm.func_sig`를 명시한다.
-- Code 필드를 typed 함수 참조로 표현하는 target 설정에서는 base를 closure의 exact
+- Code 필드를 typed 함수 참조로 표현하는 경우에는 base를 closure의 exact
   signature `S`마다 둔다. `$closure_S`는 `{ code: (ref $code_S) }`이고, `$code_S`의
   environment 입력이 `$closure_S`이므로 두 타입은 서로를 가리킨다. 모든 GC 타입이
   rec group 하나에 들어 있으므로 이 재귀를 그대로 선언할 수 있다. 호출은

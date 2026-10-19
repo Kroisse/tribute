@@ -323,8 +323,8 @@ Plan의 RTTI 배치는 plan을 만든 직후 descriptor(struct layout, 또는 en
 variant 하나)마다 하나의 `tribute_rtti.layout` 선언으로 모듈에 기록한다. 선언이
 담는 내용은 [runtime-types.md](runtime-types.md#ir에서의-표현)를 따른다. index는
 plan의 할당 순서대로 사용자 RTTI index 공간에서 정한다.
-[Closure 저장 layout](ir.md#closure-저장-layout)의 base와 capture layout은 각각
-할당 descriptor이므로 capture layout마다 RTTI 선언과 release 함수를 가진다. Closure
+[Closure 저장 layout](ir.md#closure-저장-layout)의 base와 각 capture layout은
+서로 다른 할당 descriptor이므로 layout마다 RTTI 선언과 release 함수를 가진다. Closure
 layout을 native 표현으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과 그
 layout의 RTTI 선언을 함께 바꾼다. Native closure 객체는 RC header 뒤 payload offset
 0에 code pointer를 두고 그 뒤에 capture를 자연 정렬로 둔다. Code pointer는 해제하지
@@ -346,8 +346,8 @@ Native RC materialization은 같은 type-erasure 전 경계에서 검증된 plan
 소비한다. Evidence runtime에 저장할 managed `_closure`는 이 경계에서만
 `tribute_rt.into_raw`로 ownership unit 하나를 transfer하며, 이후 명시적 conversion이
 이를 unmanaged `core.ptr`로 낮춘다. Runtime은 closure를 RC header로만 retain하고,
-release는 header의 RTTI index로 그 capture layout의 release 함수를 찾으므로 capture
-수나 layout을 알지 않는다. IR을 바꾸기 전에 전체 insertion schedule을 검증하며,
+release는 header의 RTTI index로 그 layout의 release 함수를 찾으므로 capture 수나
+layout을 알 필요가 없다. IR을 바꾸기 전에 전체 insertion schedule을 검증하며,
 `func_to_clif` 뒤에는 ownership, liveness, pointer provenance를 다시 발견하는 pass를
 실행하지 않는다.
 
