@@ -9,5 +9,5 @@ help: the trait `trunk_ir::ops::__private::DeclaredVerify` is not implemented fo
   |
 2 |     #[trunk_ir::dialect]
   |     ^^^^^^^^^^^^^^^^^^^^
-  = note: add `impl Verify for Probe { fn verify(self, ctx: &IrContext) -> Result<(), VerificationError> { .. } }`
+  = note: add `impl Verify for Probe { fn verify(&self, ctx: &IrContext) -> Result<(), VerificationError> { .. } }`
   = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

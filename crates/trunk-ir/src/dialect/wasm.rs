@@ -720,32 +720,32 @@ pub fn func_sig_with_attrs(
 const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
 
 impl IndirectCallLike for CallIndirect {
-    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+    fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         self.signature(ctx)
     }
 
-    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+    fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
         set_indirect_call_signature(ctx, self.op_ref(), signature)
     }
 }
 
 impl IndirectCallLike for ReturnCallIndirect {
-    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+    fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         self.signature(ctx)
     }
 
-    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+    fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
         set_indirect_call_signature(ctx, self.op_ref(), signature)
     }
 }
 
 impl CallLike for Call {
-    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+    fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
     }
 }
 impl CallLike for ReturnCall {
-    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+    fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
     }
 }

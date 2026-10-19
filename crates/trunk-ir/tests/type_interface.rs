@@ -22,7 +22,7 @@ mod probe {
 #[trunk_ir::type_interface]
 pub trait Sized: DialectType {
     /// The size in bytes, given the size of one element.
-    fn size(self, ctx: &IrContext, elem_size: u32) -> u32;
+    fn size(&self, ctx: &IrContext, elem_size: u32) -> u32;
 
     fn is_zero_sized(&self, ctx: &IrContext) -> bool {
         self.size(ctx, 1) == 0
@@ -30,13 +30,13 @@ pub trait Sized: DialectType {
 }
 
 impl Sized for probe::Block {
-    fn size(self, ctx: &IrContext, elem_size: u32) -> u32 {
+    fn size(&self, ctx: &IrContext, elem_size: u32) -> u32 {
         self.count(ctx) * elem_size
     }
 }
 
 impl Sized for core::Nil {
-    fn size(self, _ctx: &IrContext, _elem_size: u32) -> u32 {
+    fn size(&self, _ctx: &IrContext, _elem_size: u32) -> u32 {
         0
     }
 }

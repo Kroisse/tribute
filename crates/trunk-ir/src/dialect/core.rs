@@ -268,7 +268,7 @@ use crate::transforms::canonicalize::{Fold, FoldResult};
 /// `ReconcileUnrealizedCasts` applies the same folds across longer cast
 /// chains after target type conversion.
 impl Fold for UnrealizedConversionCast {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let operands = ctx.op_operands(op);
         let result_types = ctx.op_result_types(op);

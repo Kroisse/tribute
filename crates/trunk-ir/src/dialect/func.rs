@@ -485,17 +485,17 @@ impl CallLike for CallIndirect {
 }
 
 impl IndirectCallLike for CallIndirect {
-    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+    fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         indirect_call_signature(ctx, self.op_ref())
     }
 
-    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+    fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
         set_indirect_call_signature(ctx, self.op_ref(), signature)
     }
 }
 
 impl crate::ops::Verify for CallIndirect {
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
+    fn verify(&self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         Ok(verify_typed_callee(
             ctx,
             self.callee(ctx),
@@ -505,7 +505,7 @@ impl crate::ops::Verify for CallIndirect {
 }
 
 impl crate::ops::Verify for TailCallIndirect {
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
+    fn verify(&self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         Ok(verify_typed_callee(
             ctx,
             self.callee(ctx),
@@ -553,11 +553,11 @@ impl CallLike for TailCallIndirect {
 }
 
 impl IndirectCallLike for TailCallIndirect {
-    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+    fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         indirect_call_signature(ctx, self.op_ref())
     }
 
-    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+    fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
         set_indirect_call_signature(ctx, self.op_ref(), signature)
     }
 }
@@ -625,12 +625,12 @@ impl CallableExit for Unreachable {
 }
 
 impl op_interface::CallLike for Call {
-    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+    fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
     }
 }
 impl op_interface::CallLike for TailCall {
-    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+    fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
     }
 }
@@ -847,7 +847,7 @@ fn parse_func<'a>(
 }
 
 impl crate::asm_format::OpAsmFormat for Func {
-    fn print(self, h: &mut crate::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+    fn print(&self, h: &mut crate::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
         print_func(h, self.op_ref())
     }
 
@@ -861,7 +861,7 @@ impl crate::asm_format::OpAsmFormat for Func {
 }
 
 impl crate::op_interface::CallableOwner for Func {
-    fn callable_signature(self, ctx: &crate::IrContext) -> Option<crate::dialect::func::FuncSig> {
+    fn callable_signature(&self, ctx: &crate::IrContext) -> Option<crate::dialect::func::FuncSig> {
         ctx.op_attrs(self.op_ref())
             .get_type("type")
             .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(ctx, ty))

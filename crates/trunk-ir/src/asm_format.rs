@@ -65,7 +65,7 @@ pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 pub trait OpAsmFormat: DialectOp {
     /// Print the operation. Called instead of generic printing, after the
     /// line's indentation and before its newline.
-    fn print(self, h: &mut OpPrintHelper<'_, '_>) -> fmt::Result;
+    fn print(&self, h: &mut OpPrintHelper<'_, '_>) -> fmt::Result;
 
     /// Parse the operation. Called after `dialect.op` and optional
     /// `@sym_name` are consumed; `results` and `sym_name` are already parsed
@@ -110,7 +110,7 @@ pub trait TypeAsmFormat: DialectType {
     /// Print the whole type, including `dialect.name<` and the closing `>`.
     /// A type the wrapper does not accept, such as a malformed one, is left
     /// to generic printing.
-    fn print(self, h: &mut TypePrintHelper<'_, '_>) -> fmt::Result;
+    fn print(&self, h: &mut TypePrintHelper<'_, '_>) -> fmt::Result;
 
     /// Parse the type after `dialect.name<` is consumed, including the
     /// closing `>`, into its generic raw form, so the parser builds it like

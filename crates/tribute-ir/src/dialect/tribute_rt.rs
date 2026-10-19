@@ -88,25 +88,25 @@ fn fold_unbox_of_box<Box: DialectOp>(ctx: &IrContext, op: OpRef) -> Option<FoldR
 }
 
 impl Fold for UnboxInt {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         fold_unbox_of_box::<BoxInt>(ctx, self.op_ref())
     }
 }
 
 impl Fold for UnboxNat {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         fold_unbox_of_box::<BoxNat>(ctx, self.op_ref())
     }
 }
 
 impl Fold for UnboxFloat {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         fold_unbox_of_box::<BoxFloat>(ctx, self.op_ref())
     }
 }
 
 impl Fold for UnboxBool {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         fold_unbox_of_box::<BoxBool>(ctx, self.op_ref())
     }
 }

@@ -58,7 +58,7 @@ mod test {
 }
 
 impl Branch for IncompleteBranch {
-    fn successors(self, _ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    fn successors(&self, _ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         Err(ControlFlowInterfaceError::new(
             "test branch interface is incomplete",
         ))
@@ -66,13 +66,13 @@ impl Branch for IncompleteBranch {
 }
 
 impl Branch for MissingEdgeBranch {
-    fn successors(self, _ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    fn successors(&self, _ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         Ok(BranchSuccessors::default())
     }
 }
 
 impl Branch for ReversedBranch {
-    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         Ok(BranchSuccessors::new([
             BranchSuccessor::new(self.right(ctx), []),
             BranchSuccessor::new(self.left(ctx), []),
@@ -81,7 +81,7 @@ impl Branch for ReversedBranch {
 }
 
 impl Branch for MultiForwardingBranch {
-    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         let forwarded = self.value(ctx);
         Ok(BranchSuccessors::new([
             BranchSuccessor::new(self.left(ctx), [forwarded]),

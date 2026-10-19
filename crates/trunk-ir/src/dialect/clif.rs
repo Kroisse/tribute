@@ -376,7 +376,7 @@ pub fn func_sig_with_attrs(
 impl crate::ops::Verify for CallIndirect {
     /// Results match the signature's result list, or its projection without
     /// zero-width `core.nil` slots, which the emitter does not materialize.
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
+    fn verify(&self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let signature =
             FuncSig::from_type_ref(ctx, self.sig(ctx)).expect("schema-verified clif.func_sig");
         let expected = signature.results(ctx);
@@ -426,7 +426,7 @@ fn reloc_ops(ctx: &crate::IrContext, op: crate::OpRef) -> impl Iterator<Item = c
 
 impl crate::ops::Verify for Switch {
     /// Every case has one target, and no case value repeats.
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
+    fn verify(&self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let cases = self.cases(ctx).count();
         let targets = self.targets(ctx).count();
         if cases != targets {
@@ -443,7 +443,7 @@ impl crate::ops::Verify for Switch {
 impl crate::ops::Verify for Data {
     /// The relocation region holds only `func_reloc` declarations at distinct
     /// offsets.
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
+    fn verify(&self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let mut offsets = HashSet::default();
         for op in reloc_ops(ctx, self.op_ref()) {
             let Ok(reloc) = FuncReloc::from_op(ctx, op) else {
@@ -464,7 +464,7 @@ impl crate::ops::Verify for Data {
 
 impl crate::ops::Verify for FuncReloc {
     /// A relocation belongs to the region of a `data` object.
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
+    fn verify(&self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
         let owner = ctx
             .op(self.op_ref())
             .parent_block
@@ -486,32 +486,32 @@ fn exact_indirect_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<
 }
 
 impl IndirectCallLike for CallIndirect {
-    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+    fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         exact_indirect_signature(ctx, self.op_ref())
     }
 
-    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+    fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
         set_indirect_call_signature(ctx, self.op_ref(), signature)
     }
 }
 
 impl IndirectCallLike for ReturnCallIndirect {
-    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+    fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         exact_indirect_signature(ctx, self.op_ref())
     }
 
-    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+    fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
         set_indirect_call_signature(ctx, self.op_ref(), signature)
     }
 }
 
 impl CallLike for Call {
-    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+    fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
     }
 }
 impl CallLike for ReturnCall {
-    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+    fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
     }
 }

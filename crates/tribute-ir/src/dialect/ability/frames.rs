@@ -249,7 +249,7 @@ fn frame_result(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
 }
 
 impl trunk_ir::ops::Verify for SuffixFrame {
-    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -259,7 +259,7 @@ impl trunk_ir::ops::Verify for SuffixFrame {
 }
 
 impl trunk_ir::ops::Verify for Handle {
-    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         let op = self.op_ref();
         verify_evidence_plan(ctx, op, EvidencePlanSite::Handle)?;
         let Some(Attribute::List(items)) = ctx.op_attrs(op).get("handlers") else {
@@ -290,7 +290,7 @@ impl trunk_ir::ops::Verify for Handle {
         }
 
         let exit = ctx.value_ty(self.exit(ctx));
-        let body_frame = verify_body(ctx, self)?;
+        let body_frame = verify_body(ctx, *self)?;
         let body_type = frame_result(ctx, body_frame).expect("body frame was checked");
         let rest = cps_closure_rest(ctx, self.completion(ctx), exit, "ability.handle completion")?;
         if rest != [body_type] {
