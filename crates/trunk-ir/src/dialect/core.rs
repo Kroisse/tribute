@@ -11,6 +11,8 @@ mod core {
         {}
     }
 
+    #[implements(Fold)]
+
     fn unrealized_conversion_cast(value: Value<_>) -> Value<_> {}
 
     /// The only value of `core.nil`.
@@ -251,8 +253,8 @@ scalar_types! {
 // =========================================================================
 
 use crate::ops::DialectOp;
-use crate::refs::{OpRef, ValueDef};
-use crate::transforms::canonicalize::FoldResult;
+use crate::refs::ValueDef;
+use crate::transforms::canonicalize::{Fold, FoldResult};
 
 /// `core.unrealized_conversion_cast` folds:
 ///
@@ -267,31 +269,33 @@ use crate::transforms::canonicalize::FoldResult;
 /// the same way (narrower intermediate types lose information).
 /// `ReconcileUnrealizedCasts` applies the same folds across longer cast
 /// chains after target type conversion.
-#[trunk_ir::canonicalize_fold(UnrealizedConversionCast)]
-pub(crate) fn fold_unrealized_conversion_cast(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let operands = ctx.op_operands(op);
-    let result_types = ctx.op_result_types(op);
-    if operands.len() != 1 || result_types.len() != 1 {
-        return None;
-    }
-    let input = operands[0];
-    let result_ty = result_types[0];
+impl Fold for UnrealizedConversionCast {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let operands = ctx.op_operands(op);
+        let result_types = ctx.op_result_types(op);
+        if operands.len() != 1 || result_types.len() != 1 {
+            return None;
+        }
+        let input = operands[0];
+        let result_ty = result_types[0];
 
-    // Identity: T → T
-    if ctx.value_ty(input) == result_ty {
-        return Some(FoldResult::Forward(input));
-    }
+        // Identity: T → T
+        if ctx.value_ty(input) == result_ty {
+            return Some(FoldResult::Forward(input));
+        }
 
-    // Round-trip: A → B → A
-    if let ValueDef::OpResult(producer, _) = ctx.value_def(input)
-        && UnrealizedConversionCast::matches(ctx, producer)
-        && let Some(&inner_input) = ctx.op_operands(producer).first()
-        && ctx.value_ty(inner_input) == result_ty
-    {
-        return Some(FoldResult::Forward(inner_input));
-    }
+        // Round-trip: A → B → A
+        if let ValueDef::OpResult(producer, _) = ctx.value_def(input)
+            && UnrealizedConversionCast::matches(ctx, producer)
+            && let Some(&inner_input) = ctx.op_operands(producer).first()
+            && ctx.value_ty(inner_input) == result_ty
+        {
+            return Some(FoldResult::Forward(inner_input));
+        }
 
-    None
+        None
+    }
 }
 
 // =========================================================================
@@ -310,10 +314,10 @@ mod canonicalize_tests {
     use crate::{Attribute, AttributeMap};
     use std::ops::ControlFlow;
 
-    use crate::transforms::canonicalize::{FoldDispatchPattern, folds_for_dialect};
+    use crate::transforms::canonicalize::{FoldDispatchPattern, fold_ops_for_dialect};
 
     fn run_core_patterns(ctx: &mut IrContext, module: Module) -> ApplyResult {
-        let dispatcher = FoldDispatchPattern::from_folds(folds_for_dialect("core"));
+        let dispatcher = FoldDispatchPattern::from_ops(fold_ops_for_dialect("core"));
         PatternApplicator::new(TypeConverter::new())
             .add_pattern_box(Box::new(dispatcher))
             .apply_partial(ctx, module)

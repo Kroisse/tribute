@@ -99,6 +99,7 @@ mod adt {
     #[flags(Pure)]
     fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
 
+    #[implements(Fold)]
     #[flags(Pure)]
     fn ref_cast(r#type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 
@@ -118,7 +119,7 @@ use trunk_ir::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::transforms::canonicalize::FoldResult;
+use trunk_ir::transforms::canonicalize::{Fold, FoldResult};
 use trunk_ir::walk::{WalkAction, walk_op};
 
 /// `adt.struct_get(adt.struct_new(.., %f, ..))` → `%f`, over the whole module.
@@ -207,15 +208,17 @@ impl ForwardStructGet {
 /// `adt.ref_cast {type = T} (%x : T)` → `%x`.
 ///
 /// The cast is the identity when its operand already has the result type.
-#[trunk_ir::canonicalize_fold(RefCast)]
-pub(crate) fn fold_ref_cast(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let cast = RefCast::from_op(ctx, op).ok()?;
-    let operand = cast.r#ref(ctx);
-    let [result_ty] = ctx.op_result_types(op) else {
-        return None;
-    };
-    (ctx.value_ty(operand) == *result_ty && cast.r#type(ctx) == *result_ty)
-        .then_some(FoldResult::Forward(operand))
+impl Fold for RefCast {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let cast = self;
+        let operand = cast.r#ref(ctx);
+        let [result_ty] = ctx.op_result_types(op) else {
+            return None;
+        };
+        (ctx.value_ty(operand) == *result_ty && cast.r#type(ctx) == *result_ty)
+            .then_some(FoldResult::Forward(operand))
+    }
 }
 
 // === Nominal struct layout type ===

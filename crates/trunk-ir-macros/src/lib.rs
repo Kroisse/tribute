@@ -1,12 +1,11 @@
 //! Proc macros for trunk-ir dialect definitions.
 //!
 //! Provides `#[dialect]` for defining dialect operations with type-safe
-//! wrappers, accessors, and builders, plus `#[canonicalize_fold]` for
-//! registering canonicalize-pass folds next to the function definition.
+//! wrappers, accessors, and builders, plus `#[op_interface]` and `#[op_flag]`
+//! for declaring operation interfaces and flags.
 
 use proc_macro::TokenStream as ProcTokenStream;
 
-mod canonicalize;
 mod codegen;
 mod flag;
 mod interface;
@@ -124,24 +123,6 @@ pub fn op_interface(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenSt
 #[proc_macro_attribute]
 pub fn op_flag(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match flag::gen_flag(attr.into(), item.into()) {
-        Ok(tokens) => tokens.into(),
-        Err(msg) => quote::quote!(compile_error!(#msg);).into(),
-    }
-}
-
-/// Register a per-op fold for the canonicalize pass.
-///
-/// ```ignore
-/// #[trunk_ir::canonicalize_fold(Addi)]
-/// pub(crate) fn fold_addi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> { ... }
-/// ```
-///
-/// The attribute payload is the operation's typed wrapper, so a misspelled
-/// operation fails to compile. The original function item is preserved
-/// unchanged; the macro only emits an adjacent `inventory::submit!` block.
-#[proc_macro_attribute]
-pub fn canonicalize_fold(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
-    match canonicalize::gen_fold(attr.into(), item.into()) {
         Ok(tokens) => tokens.into(),
         Err(msg) => quote::quote!(compile_error!(#msg);).into(),
     }

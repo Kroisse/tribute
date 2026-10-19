@@ -1,15 +1,15 @@
 //! Canonicalization pass for TrunkIR.
 //!
 //! Greedy fixed-point pass that folds operations into a canonical form.
-//! Each dialect contributes per-op `fold` functions registered via the
-//! [`canonicalize_fold`](crate::canonicalize_fold) attribute; the pass
-//! discovers them at startup through `inventory` rather than referencing
-//! each dialect by name. As a result this module knows nothing about
-//! which dialects exist — adding a new dialect's folds requires no edit
-//! here.
+//! Each dialect contributes per-op folds by implementing the [`Fold`]
+//! operation interface; the pass discovers them through the interface's
+//! registry rather than referencing each dialect by name. As a result
+//! this module knows nothing about which dialects exist — adding a new
+//! dialect's folds requires no edit here.
 //!
-//! The driver dispatches each visited op to its fold (if any) by
-//! `(dialect, op_name)` HashMap lookup. A fold returns one of:
+//! The driver dispatches each visited op to its fold (if any) through
+//! [`DynFold`], which looks the op's name up in that registry. A fold
+//! returns one of:
 //!
 //! - [`FoldResult::Forward`] — RAUW the op's result with an existing
 //!   value.
@@ -35,11 +35,13 @@
 //! Float and div/rem folds are deferred until each one's edge cases
 //! (NaN/-0.0, division-by-zero) are pinned down.
 
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
+use trunk_ir_macros::op_interface;
 
 use crate::OpName;
 use crate::context::IrContext;
 use crate::dialect::{arith, func};
+use crate::ops::DialectOp;
 use crate::pass::{Pass, pass_fn};
 use crate::refs::{OpRef, ValueRef};
 use crate::rewrite::{
@@ -90,53 +92,42 @@ pub enum FoldResult {
     },
 }
 
-/// Per-op fold function. `&IrContext` is read-only; mutation happens in
-/// the driver after the fold returns.
-pub type FoldFn = fn(&IrContext, OpRef) -> Option<FoldResult>;
+/// An operation that folds into a canonical form.
+///
+/// The context is read-only; the canonicalize driver applies the returned
+/// [`FoldResult`] after the fold returns.
+#[op_interface]
+pub trait Fold: DialectOp {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult>;
+}
 
-/// One `RewritePattern` that dispatches to per-op fold functions via
-/// hashmap lookup.
+/// One `RewritePattern` that dispatches to per-op folds through
+/// [`DynFold`].
 ///
 /// Replaces N individual self-filtering patterns (one per op kind) with
 /// a single O(1) dispatcher: instead of every pattern testing
-/// whether it is `arith.addi`, the dispatcher does one `HashMap::get(name)`
-/// and calls the fold directly.
-///
-/// The hashmap is built once at pass-construction time. Duplicate
-/// registrations for the same operation panic via `assert!`
-/// in all build profiles — silently overwriting one fold with another
-/// is always a bug.
+/// whether it is `arith.addi`, the dispatcher looks the op's name up in
+/// the [`Fold`] registry and calls the fold directly. Duplicate
+/// registrations for the same operation panic when the registry is first
+/// queried.
 pub struct FoldDispatchPattern {
-    table: HashMap<OpName, FoldFn>,
+    /// The operations whose folds this dispatcher applies; `None` applies
+    /// every registered fold.
+    ops: Option<HashSet<OpName>>,
 }
 
 impl FoldDispatchPattern {
-    /// Build a dispatcher from an iterator of `(operation, fold)` pairs.
-    /// Panics on duplicate keys (in release builds too — see type-level
-    /// docs).
-    pub fn from_folds(folds: impl IntoIterator<Item = (OpName, FoldFn)>) -> Self {
-        let mut table = HashMap::default();
-        for (name, fold) in folds {
-            assert!(
-                table.insert(name, fold).is_none(),
-                "duplicate canonicalize fold for {name:?}",
-            );
+    /// Build a dispatcher that applies only the folds of `ops`.
+    pub fn from_ops(ops: impl IntoIterator<Item = OpName>) -> Self {
+        Self {
+            ops: Some(ops.into_iter().collect()),
         }
-        Self { table }
     }
 
-    /// Build a dispatcher from every fold registered via
-    /// [`crate::register_canonicalize_fold!`] across the workspace.
+    /// Build a dispatcher from every [`Fold`] implementation registered
+    /// across the workspace.
     pub fn from_inventory() -> Self {
-        Self::from_folds(folds_from_inventory())
-    }
-
-    /// Convenience for tests: build a single-entry dispatcher. Lets a
-    /// test compose one specific fold with other patterns in the same
-    /// applicator without pulling in every registered fold.
-    #[cfg(test)]
-    pub(crate) fn single(name: OpName, fold: FoldFn) -> Self {
-        Self::from_folds([(name, fold)])
+        Self { ops: None }
     }
 }
 
@@ -147,10 +138,12 @@ impl RewritePattern for FoldDispatchPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Some(fold) = self.table.get(&ctx.op(op).name).copied() else {
+        if let Some(ops) = &self.ops
+            && !ops.contains(&ctx.op(op).name)
+        {
             return false;
-        };
-        let Some(result) = fold(ctx, op) else {
+        }
+        let Some(result) = DynFold::get(ctx, op).and_then(|fold| fold.fold(ctx)) else {
             return false;
         };
         match result {
@@ -228,58 +221,16 @@ fn apply_splice(
     true
 }
 
-// =========================================================================
-// Inventory registration
-// =========================================================================
-
-/// One inventory entry registering a per-op fold function. Submitted
-/// via the [`canonicalize_fold`](crate::canonicalize_fold) attribute —
-/// never constructed directly from user code.
-pub struct CanonicalizeFold {
-    name: OpName,
-    fold: FoldFn,
-}
-inventory::collect!(CanonicalizeFold);
-
-impl CanonicalizeFold {
-    /// Fold registration for the operation wrapped by `T`.
-    pub const fn new<T: crate::ops::DialectOp>(fold: FoldFn) -> Self {
-        Self {
-            name: T::NAME,
-            fold,
-        }
-    }
-}
-
-/// Iterate every fold registered via inventory, keyed by operation name
-/// for [`FoldDispatchPattern::from_folds`].
-fn folds_from_inventory() -> impl Iterator<Item = (OpName, FoldFn)> {
-    inventory::iter::<CanonicalizeFold>
-        .into_iter()
-        .map(|reg| (reg.name, reg.fold))
-}
-
-/// Iterate inventory folds whose dialect matches `dialect`. Used by
+/// Every operation in `dialect` that implements [`Fold`]. Used by
 /// per-dialect test helpers to keep their assertions isolated from
 /// other dialects' folds (folds dispatch by op key, so cross-dialect
 /// interference is unlikely, but filtering keeps tests honest as more
 /// dialects add folds).
 #[cfg(test)]
-pub(crate) fn folds_for_dialect(dialect: &'static str) -> impl Iterator<Item = (OpName, FoldFn)> {
-    inventory::iter::<CanonicalizeFold>
-        .into_iter()
-        .filter(move |reg| {
-            reg.name
-                .def()
-                .is_some_and(|def| def.name.dialect() == dialect)
-        })
-        .map(|reg| (reg.name, reg.fold))
+pub(crate) fn fold_ops_for_dialect(dialect: &'static str) -> impl Iterator<Item = OpName> {
+    DynFold::implementors()
+        .filter(move |name| name.def().is_some_and(|def| def.name.dialect() == dialect))
 }
-
-// Registration is done via the `#[trunk_ir::canonicalize_fold(...)]`
-// proc-macro attribute (defined in `trunk-ir-macros`). It emits an
-// `inventory::submit!` block adjacent to the attributed function — no
-// separate registration call needed.
 
 // =========================================================================
 // Pass entry
@@ -469,8 +420,8 @@ mod tests {
     #[test]
     fn fold_and_identity_collaborate_to_fixpoint() {
         // `((2 + 3) * x) + 0` should collapse to `5 * x` after one
-        // canonicalize call: `fold_addi` const-folds `2 + 3` to `5`, then
-        // the same fold (on the outer addi) erases `_ + 0`.
+        // canonicalize call: the `arith.addi` fold const-folds `2 + 3` to
+        // `5`, then the same fold (on the outer addi) erases `_ + 0`.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %a = arith.const {value = 2} : core.i32
@@ -503,9 +454,9 @@ mod tests {
         // `scf.if(true) { yield (x + 0) } { yield x }` should collapse to
         // `func.return %x` in one canonicalize call, exercising both the
         // pattern-based escape hatch (`IfConstFold` splices the then
-        // region) and the per-op folds (`fold_addi` erases the `_ + 0`).
-        // The dead else region's `arith.muli` is dropped along with the
-        // erased `scf.if` op.
+        // region) and the per-op folds (the `arith.addi` fold erases the
+        // `_ + 0`). The dead else region's `arith.muli` is dropped along
+        // with the erased `scf.if` op.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %t = arith.const {value = 1} : core.i1

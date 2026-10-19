@@ -13,18 +13,25 @@ mod arith {
     fn r#const(value: Attr<_>) -> Value<impl NumericLike> {}
 
     // Integer arithmetic
+    #[implements(Fold)]
     #[flags(Pure)]
     fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn subi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn muli<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn divsi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn divui<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn remsi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn remui<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
@@ -51,10 +58,13 @@ mod arith {
     fn cmpf<T: FloatLike>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     // Bitwise (integer-only)
+    #[implements(Fold)]
     #[flags(Pure)]
     fn and<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn or<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[implements(Fold)]
     #[flags(Pure)]
     fn xor<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
@@ -105,7 +115,7 @@ use crate::dialect::core::{FloatLike, I1, IntegerLike, NumericLike};
 use crate::op_flag::Pure;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
-use crate::transforms::canonicalize::FoldResult;
+use crate::transforms::canonicalize::{Fold, FoldResult};
 use crate::types::Attribute;
 use itertools::Itertools;
 
@@ -192,66 +202,71 @@ width_verifier!(Extf, FloatLike::width, true);
 width_verifier!(Truncf, FloatLike::width, false);
 
 // Folds this dialect contributes to `transforms::canonicalize`. Each
-// `#[trunk_ir::canonicalize_fold(...)]` attribute below registers the
-// function via `inventory`; the pass discovers them at startup.
+// operation below declares `#[implements(Fold)]` in the dialect.
 
 /// `arith.addi` folds:
 /// - `x + 0` / `0 + x` → `x`
 /// - `const(a) + const(b)` → `const(wrap(a+b))` at the result width
-#[trunk_ir::canonicalize_fold(Addi)]
-pub(crate) fn fold_addi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let (lhs, rhs) = two_operands(ctx, op)?;
-    if const_int_value(ctx, rhs) == Some(0) {
-        return Some(FoldResult::Forward(lhs));
+impl Fold for Addi {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let (lhs, rhs) = two_operands(ctx, op)?;
+        if const_int_value(ctx, rhs) == Some(0) {
+            return Some(FoldResult::Forward(lhs));
+        }
+        if const_int_value(ctx, lhs) == Some(0) {
+            return Some(FoldResult::Forward(rhs));
+        }
+        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
+        Some(FoldResult::ArithConst(Attribute::Int(
+            wrap_signed_to_width(a.wrapping_add(b), width),
+        )))
     }
-    if const_int_value(ctx, lhs) == Some(0) {
-        return Some(FoldResult::Forward(rhs));
-    }
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-    Some(FoldResult::ArithConst(Attribute::Int(
-        wrap_signed_to_width(a.wrapping_add(b), width),
-    )))
 }
 
 /// `arith.subi` folds:
 /// - `x - 0` → `x`. (`0 - x` is the `negi` semantic and is left for a
 ///   separate fold so the rewrite direction stays unambiguous.)
 /// - `const(a) - const(b)` → `const(wrap(a-b))` at the result width.
-#[trunk_ir::canonicalize_fold(Subi)]
-pub(crate) fn fold_subi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let (lhs, rhs) = two_operands(ctx, op)?;
-    if const_int_value(ctx, rhs) == Some(0) {
-        return Some(FoldResult::Forward(lhs));
+impl Fold for Subi {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let (lhs, rhs) = two_operands(ctx, op)?;
+        if const_int_value(ctx, rhs) == Some(0) {
+            return Some(FoldResult::Forward(lhs));
+        }
+        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
+        Some(FoldResult::ArithConst(Attribute::Int(
+            wrap_signed_to_width(a.wrapping_sub(b), width),
+        )))
     }
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-    Some(FoldResult::ArithConst(Attribute::Int(
-        wrap_signed_to_width(a.wrapping_sub(b), width),
-    )))
 }
 
 /// `arith.muli` folds:
 /// - `x * 0` / `0 * x` → `const 0` (checked before x*1 to short-circuit).
 /// - `x * 1` / `1 * x` → `x`.
 /// - `const(a) * const(b)` → `const(wrap(a*b))` at the result width.
-#[trunk_ir::canonicalize_fold(Muli)]
-pub(crate) fn fold_muli(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let (lhs, rhs) = two_operands(ctx, op)?;
-    if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
-        return Some(FoldResult::ArithConst(Attribute::Int(0)));
+impl Fold for Muli {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let (lhs, rhs) = two_operands(ctx, op)?;
+        if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
+            return Some(FoldResult::ArithConst(Attribute::Int(0)));
+        }
+        if const_int_value(ctx, rhs) == Some(1) {
+            return Some(FoldResult::Forward(lhs));
+        }
+        if const_int_value(ctx, lhs) == Some(1) {
+            return Some(FoldResult::Forward(rhs));
+        }
+        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
+        Some(FoldResult::ArithConst(Attribute::Int(
+            wrap_signed_to_width(a.wrapping_mul(b), width),
+        )))
     }
-    if const_int_value(ctx, rhs) == Some(1) {
-        return Some(FoldResult::Forward(lhs));
-    }
-    if const_int_value(ctx, lhs) == Some(1) {
-        return Some(FoldResult::Forward(rhs));
-    }
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-    Some(FoldResult::ArithConst(Attribute::Int(
-        wrap_signed_to_width(a.wrapping_mul(b), width),
-    )))
 }
 
 /// `arith.divsi const(a), const(b)` → `arith.const(a/b)` at the result width.
@@ -264,78 +279,86 @@ pub(crate) fn fold_muli(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 ///   down (`new-plans/types.md` doesn't specify wrap vs trap), so the
 ///   conservative choice is to leave the op alone — that way IR
 ///   semantics match whatever the backend does.
-#[trunk_ir::canonicalize_fold(Divsi)]
-pub(crate) fn fold_divsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let (lhs, rhs) = two_operands(ctx, op)?;
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    if b == 0 {
-        return None;
+impl Fold for Divsi {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let (lhs, rhs) = two_operands(ctx, op)?;
+        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        if b == 0 {
+            return None;
+        }
+        let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
+        if is_signed_overflow_at_width(a, b, width) {
+            return None;
+        }
+        Some(FoldResult::ArithConst(Attribute::Int(
+            wrap_signed_to_width(a.wrapping_div(b), width),
+        )))
     }
-    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-    if is_signed_overflow_at_width(a, b, width) {
-        return None;
-    }
-    Some(FoldResult::ArithConst(Attribute::Int(
-        wrap_signed_to_width(a.wrapping_div(b), width),
-    )))
 }
 
 /// `arith.divui const(a), const(b)` → `arith.const(a/b)` at the result
 /// width, interpreting both operands as unsigned `N`-bit values.
 /// Bails when the unsigned divisor is zero.
-#[trunk_ir::canonicalize_fold(Divui)]
-pub(crate) fn fold_divui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let (lhs, rhs) = two_operands(ctx, op)?;
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-    let mask = width_mask_u128(width);
-    let (a_u, b_u) = ((a as u128) & mask, (b as u128) & mask);
-    if b_u == 0 {
-        return None;
+impl Fold for Divui {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let (lhs, rhs) = two_operands(ctx, op)?;
+        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
+        let mask = width_mask_u128(width);
+        let (a_u, b_u) = ((a as u128) & mask, (b as u128) & mask);
+        if b_u == 0 {
+            return None;
+        }
+        let result = a_u.wrapping_div(b_u);
+        Some(FoldResult::ArithConst(Attribute::Int(
+            wrap_signed_to_width(result as i128, width),
+        )))
     }
-    let result = a_u.wrapping_div(b_u);
-    Some(FoldResult::ArithConst(Attribute::Int(
-        wrap_signed_to_width(result as i128, width),
-    )))
 }
 
 /// `arith.remsi const(a), const(b)` → `arith.const(a%b)` at the result width.
 ///
-/// Mirrors [`fold_divsi`]: bails on `b == 0` and on `INT_MIN % -1` (which
+/// Mirrors the `arith.divsi` fold: bails on `b == 0` and on `INT_MIN % -1` (which
 /// also traps on Cranelift `srem` and WASM `i32.rem_s`).
-#[trunk_ir::canonicalize_fold(Remsi)]
-pub(crate) fn fold_remsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let (lhs, rhs) = two_operands(ctx, op)?;
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    if b == 0 {
-        return None;
+impl Fold for Remsi {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let (lhs, rhs) = two_operands(ctx, op)?;
+        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        if b == 0 {
+            return None;
+        }
+        let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
+        if is_signed_overflow_at_width(a, b, width) {
+            return None;
+        }
+        Some(FoldResult::ArithConst(Attribute::Int(
+            wrap_signed_to_width(a.wrapping_rem(b), width),
+        )))
     }
-    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-    if is_signed_overflow_at_width(a, b, width) {
-        return None;
-    }
-    Some(FoldResult::ArithConst(Attribute::Int(
-        wrap_signed_to_width(a.wrapping_rem(b), width),
-    )))
 }
 
 /// `arith.remui const(a), const(b)` → `arith.const(a%b)` at the result
 /// width, interpreting both operands as unsigned `N`-bit values.
 /// Bails when the unsigned divisor is zero.
-#[trunk_ir::canonicalize_fold(Remui)]
-pub(crate) fn fold_remui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let (lhs, rhs) = two_operands(ctx, op)?;
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-    let mask = width_mask_u128(width);
-    let (a_u, b_u) = ((a as u128) & mask, (b as u128) & mask);
-    if b_u == 0 {
-        return None;
+impl Fold for Remui {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let (lhs, rhs) = two_operands(ctx, op)?;
+        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
+        let mask = width_mask_u128(width);
+        let (a_u, b_u) = ((a as u128) & mask, (b as u128) & mask);
+        if b_u == 0 {
+            return None;
+        }
+        let result = a_u.wrapping_rem(b_u);
+        Some(FoldResult::ArithConst(Attribute::Int(
+            wrap_signed_to_width(result as i128, width),
+        )))
     }
-    let result = a_u.wrapping_rem(b_u);
-    Some(FoldResult::ArithConst(Attribute::Int(
-        wrap_signed_to_width(result as i128, width),
-    )))
 }
 
 /// `arith.and` folds:
@@ -345,23 +368,25 @@ pub(crate) fn fold_remui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 ///   width, since `Attribute::Int` values are stored sign-extended in
 ///   `i128`.
 /// - `const(a) & const(b)` → `const(wrap(a&b))` at the result width.
-#[trunk_ir::canonicalize_fold(And)]
-pub(crate) fn fold_and(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let (lhs, rhs) = two_operands(ctx, op)?;
-    if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
-        return Some(FoldResult::ArithConst(Attribute::Int(0)));
+impl Fold for And {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let (lhs, rhs) = two_operands(ctx, op)?;
+        if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
+            return Some(FoldResult::ArithConst(Attribute::Int(0)));
+        }
+        if const_int_value(ctx, rhs) == Some(-1) {
+            return Some(FoldResult::Forward(lhs));
+        }
+        if const_int_value(ctx, lhs) == Some(-1) {
+            return Some(FoldResult::Forward(rhs));
+        }
+        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
+        Some(FoldResult::ArithConst(Attribute::Int(
+            wrap_signed_to_width(a & b, width),
+        )))
     }
-    if const_int_value(ctx, rhs) == Some(-1) {
-        return Some(FoldResult::Forward(lhs));
-    }
-    if const_int_value(ctx, lhs) == Some(-1) {
-        return Some(FoldResult::Forward(rhs));
-    }
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-    Some(FoldResult::ArithConst(Attribute::Int(
-        wrap_signed_to_width(a & b, width),
-    )))
 }
 
 /// `arith.or` folds:
@@ -369,23 +394,25 @@ pub(crate) fn fold_and(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 /// - `x | -1` / `-1 | x` → `const -1` (all-ones; same value in any
 ///   width when interpreted as a sign-extended `i128`).
 /// - `const(a) | const(b)` → `const(wrap(a|b))` at the result width.
-#[trunk_ir::canonicalize_fold(Or)]
-pub(crate) fn fold_or(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let (lhs, rhs) = two_operands(ctx, op)?;
-    if const_int_value(ctx, rhs) == Some(0) {
-        return Some(FoldResult::Forward(lhs));
+impl Fold for Or {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let (lhs, rhs) = two_operands(ctx, op)?;
+        if const_int_value(ctx, rhs) == Some(0) {
+            return Some(FoldResult::Forward(lhs));
+        }
+        if const_int_value(ctx, lhs) == Some(0) {
+            return Some(FoldResult::Forward(rhs));
+        }
+        if const_int_value(ctx, rhs) == Some(-1) || const_int_value(ctx, lhs) == Some(-1) {
+            return Some(FoldResult::ArithConst(Attribute::Int(-1)));
+        }
+        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
+        Some(FoldResult::ArithConst(Attribute::Int(
+            wrap_signed_to_width(a | b, width),
+        )))
     }
-    if const_int_value(ctx, lhs) == Some(0) {
-        return Some(FoldResult::Forward(rhs));
-    }
-    if const_int_value(ctx, rhs) == Some(-1) || const_int_value(ctx, lhs) == Some(-1) {
-        return Some(FoldResult::ArithConst(Attribute::Int(-1)));
-    }
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-    Some(FoldResult::ArithConst(Attribute::Int(
-        wrap_signed_to_width(a | b, width),
-    )))
 }
 
 /// `arith.xor` folds:
@@ -395,20 +422,22 @@ pub(crate) fn fold_or(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 /// `x ^ x → 0` would require same-operand detection and is left for a
 /// later pass that handles same-operand peepholes uniformly across
 /// the dialect (see `subi`, which doesn't fold `x - x → 0` either).
-#[trunk_ir::canonicalize_fold(Xor)]
-pub(crate) fn fold_xor(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let (lhs, rhs) = two_operands(ctx, op)?;
-    if const_int_value(ctx, rhs) == Some(0) {
-        return Some(FoldResult::Forward(lhs));
+impl Fold for Xor {
+    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+        let op = self.op_ref();
+        let (lhs, rhs) = two_operands(ctx, op)?;
+        if const_int_value(ctx, rhs) == Some(0) {
+            return Some(FoldResult::Forward(lhs));
+        }
+        if const_int_value(ctx, lhs) == Some(0) {
+            return Some(FoldResult::Forward(rhs));
+        }
+        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
+        Some(FoldResult::ArithConst(Attribute::Int(
+            wrap_signed_to_width(a ^ b, width),
+        )))
     }
-    if const_int_value(ctx, lhs) == Some(0) {
-        return Some(FoldResult::Forward(rhs));
-    }
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-    Some(FoldResult::ArithConst(Attribute::Int(
-        wrap_signed_to_width(a ^ b, width),
-    )))
 }
 
 // =========================================================================
@@ -506,7 +535,7 @@ mod canonicalize_tests {
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
-    use crate::transforms::canonicalize::{FoldDispatchPattern, folds_for_dialect};
+    use crate::transforms::canonicalize::{FoldDispatchPattern, fold_ops_for_dialect};
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
@@ -515,7 +544,7 @@ mod canonicalize_tests {
     /// per-fold tests stay isolated from other dialects' folds even
     /// though the production `canonicalize` pass aggregates everyone.
     fn run_arith_patterns(ctx: &mut IrContext, module: Module) -> ApplyResult {
-        let dispatcher = FoldDispatchPattern::from_folds(folds_for_dialect("arith"));
+        let dispatcher = FoldDispatchPattern::from_ops(fold_ops_for_dialect("arith"));
         PatternApplicator::new(TypeConverter::new())
             .add_pattern_box(Box::new(dispatcher))
             .apply_partial(ctx, module)

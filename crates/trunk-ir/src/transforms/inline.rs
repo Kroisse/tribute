@@ -1406,7 +1406,6 @@ mod pass {
     #[test]
     fn composes_with_another_rewrite_pattern_in_same_applicator() {
         use crate::analysis::AnalysisCache;
-        use crate::dialect::arith::fold_addi;
         use crate::rewrite::{PatternApplicator, TypeConverter};
         use crate::transforms::canonicalize::FoldDispatchPattern;
 
@@ -1417,7 +1416,7 @@ mod pass {
         // canonicalize fold dispatcher in the same applicator drives
         // both to a fixed point: inlining exposes `arith.addi %5, %0`
         // inside `main`, the fold dispatcher rewrites it via
-        // `fold_addi`, and the final result contains a single constant
+        // the `arith.addi` fold, and the final result contains a single constant
         // + return.
         let input = r#"core.module @test {
   func.func @helper(%arg: core.i32) -> core.i32 {
@@ -1448,8 +1447,7 @@ mod pass {
         );
 
         let total_changes = {
-            let dispatcher =
-                FoldDispatchPattern::single(crate::dialect::arith::Addi::NAME, fold_addi);
+            let dispatcher = FoldDispatchPattern::from_ops([crate::dialect::arith::Addi::NAME]);
             let applicator = PatternApplicator::new(TypeConverter::new())
                 .add_pattern(inline_pattern)
                 .add_pattern_box(Box::new(dispatcher));
