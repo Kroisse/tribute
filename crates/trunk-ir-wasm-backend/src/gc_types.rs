@@ -48,7 +48,7 @@ pub const EVIDENCE_IDX: u32 = 5;
 /// Type index for Described (struct { descriptor: i32 }). Only user structs and
 /// variants are its subtypes.
 /// This is always index 6 in the GC type section.
-/// Every user struct and variant type is declared as its subtype, so an
+/// Every user struct and variant type declares it as its `supertype`, so an
 /// erased reference can be cast to it to read the runtime type descriptor.
 pub const DESCRIBED_IDX: u32 = 6;
 
@@ -226,12 +226,6 @@ pub fn descriptor_field() -> FieldType {
     }
 }
 
-/// Whether a user struct with these fields is declared as a subtype of
-/// [`DESCRIBED_IDX`]: it starts with the descriptor field.
-pub fn is_described_subtype(fields: &[FieldType]) -> bool {
-    fields.first() == Some(&descriptor_field())
-}
-
 /// Whether the builtin GC type at `index` has struct layout.
 ///
 /// The physical reference relation uses this to tell struct-layout builtins
@@ -291,7 +285,9 @@ mod tests {
         // Evidence (array of Marker refs)
         assert!(matches!(&builtins[5], GcTypeDef::Array(_)));
         // Described (the descriptor field alone)
-        assert!(matches!(&builtins[6], GcTypeDef::Struct(fields) if is_described_subtype(fields)));
+        assert!(
+            matches!(&builtins[6], GcTypeDef::Struct(fields) if fields[..] == [descriptor_field()])
+        );
     }
 
     #[test]
