@@ -335,6 +335,15 @@ mod tests {
             crate::asm_format::suggest_type_alias_name(&ctx, ty),
             Some("handy")
         );
+        let verifier = def.verifier.unwrap();
+        assert!(verifier(&ctx, ty).is_ok());
+        let wrapper = <HandWritten as crate::ops::DialectType>::from_type_ref(&ctx, ty).unwrap();
+        assert_eq!(crate::ops::DialectType::as_type_ref(&wrapper), ty);
+
+        // The builders also run outside constant evaluation.
+        let built = TypeDef::new("type_hooks_test.unregistered").with_alias_hint::<HandWritten>();
+        assert!(built.verifier.is_none() && built.asm_format.is_none());
+        assert_eq!((built.alias_hint.unwrap())(&ctx, ty), Some("handy"));
     }
 
     #[test]
