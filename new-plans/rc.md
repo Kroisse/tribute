@@ -336,7 +336,7 @@ projection의 use를 owner의 use로도 반영한다. `elide_proven_field_borrow
 1. Exact semantic type과 callable contract로 managed value, field와 parameter
    entry mode를 분류한다.
 2. SSA liveness로 entry, call, owning store/copy, borrowed load, final-use,
-   return과 proper-tail action을 정한다.
+   last-use move, return과 proper-tail action을 정한다.
 3. 같은 typed predicate로 aggregate별 RTTI managed-field bitmap을 만든다.
 4. 모든 identity, signature, CFG, action target과 ordering을 검증한 뒤 하나의
    deterministic plan을 반환한다.
