@@ -111,32 +111,28 @@ impl ManagedRefType for Struct {}
 impl ManagedRefType for Enum {}
 impl ManagedRefType for Typeref {}
 
-/// A named ADT type suggests its `name` as its alias.
-fn alias_from_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
-    ctx.type_attrs(ty).get_str("name")
-}
-
+// A named ADT type suggests its `name` as its alias.
 impl TypeAliasHint for Struct {
-    fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
-        alias_from_name(ctx, ty)
+    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        Some(self.name(ctx))
     }
 }
 
 impl TypeAliasHint for Enum {
-    fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
-        alias_from_name(ctx, ty)
+    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        Some(self.name(ctx))
     }
 }
 
 impl TypeAliasHint for Typeref {
-    fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
-        alias_from_name(ctx, ty)
+    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        Some(self.name(ctx))
     }
 }
 
 impl TypeAliasHint for Variant {
-    fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
-        alias_from_name(ctx, ty)
+    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        Some(self.name(ctx))
     }
 }
 

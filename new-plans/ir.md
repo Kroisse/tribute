@@ -1797,8 +1797,9 @@ representation.
 
 Dialect 타입의 정의는 그 타입의 type verifier, 전용 textual 문법, printer가
 자동 type alias를 만들 때 쓰는 alias 이름 제안을 함께 소유한다. Alias 이름 제안은
-출력 이름에만 영향을 주며, 제안이 없는 타입은 자주 쓰이고 충분히 복잡할 때
-번호 이름을 받는다. `#[dialect]`가 선언하지 않고 직접 작성한 type definition도
+출력 이름에만 영향을 주며, 전용 문법처럼 선언된 모양과 type verifier를 통과한
+타입만 이름을 제안한다. 제안이 없는 타입은 자주 쓰이고 충분히 복잡할 때 번호
+이름을 받는다. `#[dialect]`가 선언하지 않고 직접 작성한 type definition도
 같은 registry에 등록하므로, 등록된 이름의 handle은 어느 쪽이든 정의를 가리킨다.
 Type verifier가 있는 타입의 typed wrapper와 exact bound는 verifier를 통과한
 타입만 받으므로, wrapper의 accessor는 verifier가 보장하는 invariant에 기댈 수

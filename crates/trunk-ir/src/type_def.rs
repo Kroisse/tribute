@@ -3,7 +3,9 @@
 
 use std::sync::LazyLock;
 
-use crate::asm_format::{TypeAliasHint, TypeAliasHook, TypeAsmFormat, TypeAsmHooks};
+use crate::asm_format::{
+    TypeAliasHint, TypeAliasHook, TypeAsmFormat, TypeAsmHooks, erased_alias_hint,
+};
 use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
 use crate::ops::VerificationError;
 use crate::type_verifier::{VerifyType, erased_verifier};
@@ -72,7 +74,7 @@ impl TypeDef {
     /// hint.
     pub const fn with_alias_hint<T: TypeAliasHint>(self) -> Self {
         Self {
-            alias_hint: Some(T::alias_hint),
+            alias_hint: Some(erased_alias_hint::<T>),
             ..self
         }
     }
@@ -317,7 +319,7 @@ mod tests {
     }
 
     impl crate::asm_format::TypeAliasHint for HandWritten {
-        fn alias_hint(_ctx: &IrContext, _ty: TypeRef) -> Option<&str> {
+        fn alias_hint<'a>(&self, _ctx: &'a IrContext) -> Option<&'a str> {
             Some("handy")
         }
     }

@@ -25,17 +25,21 @@ use crate::{IrContext, OpRef, TypeRef};
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is declared with `#[alias_hint]` but does not implement `TypeAliasHint`",
     label = "`#[alias_hint]` requires this implementation",
-    note = "add `impl TypeAliasHint for {Self} {{ fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str> {{ .. }} }}`"
+    note = "add `impl TypeAliasHint for {Self} {{ fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {{ .. }} }}`"
 )]
 pub trait TypeAliasHint: DialectType {
-    /// Suggest an alias name for a type of this kind, given by name. Like a
-    /// verifier, it takes the raw type, so a malformed type can still
-    /// suggest a name.
-    fn alias_hint(ctx: &IrContext, ty: TypeRef) -> Option<&str>;
+    /// Suggest an alias name for this type. A type the wrapper does not
+    /// accept, such as a malformed one, suggests none.
+    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str>;
 }
 
 /// A type's alias name hint, calling the wrapper's [`TypeAliasHint`] impl.
 pub type TypeAliasHook = for<'a> fn(&'a IrContext, TypeRef) -> Option<&'a str>;
+
+/// `T`'s alias name hint as a [`TypeDef`](crate::TypeDef) stores it.
+pub(crate) fn erased_alias_hint<T: TypeAliasHint>(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
+    T::from_type_ref(ctx, ty)?.alias_hint(ctx)
+}
 
 /// The alias name `ty`'s definition suggests, if any.
 pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
