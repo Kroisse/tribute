@@ -330,6 +330,7 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
             elide_proven_borrowed_parameters: false,
             elide_proven_field_borrows: false,
             move_units_at_last_use: false,
+            move_fields_from_dying_owners: false,
         },
         &mut cache,
     )
@@ -344,6 +345,7 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
             elide_proven_borrowed_parameters: true,
             elide_proven_field_borrows: false,
             move_units_at_last_use: false,
+            move_fields_from_dying_owners: false,
         },
         &mut cache,
     )
@@ -361,6 +363,7 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
             elide_proven_borrowed_parameters: false,
             elide_proven_field_borrows: true,
             move_units_at_last_use: false,
+            move_fields_from_dying_owners: false,
         },
         &mut cache,
     )

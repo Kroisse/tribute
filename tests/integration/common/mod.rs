@@ -8,9 +8,9 @@ use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute::link::link_native_binary;
 use tribute::pipeline::{
-    BorrowedParameterPolicy, CompilationConfig, LastUseMovePolicy, NativeOptimizationOptions,
-    OptimizationOptions, PairedRcEliminationPolicy, TemporaryBorrowPolicy,
-    compile_to_native_binary,
+    BorrowedParameterPolicy, CompilationConfig, FieldMovePolicy, LastUseMovePolicy,
+    NativeOptimizationOptions, OptimizationOptions, PairedRcEliminationPolicy,
+    TemporaryBorrowPolicy, compile_to_native_binary,
 };
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
@@ -109,6 +109,7 @@ pub fn compile_and_run_native_with_paired_rc_elimination(
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
             last_use_moves: LastUseMovePolicy::Acquire,
+            field_moves: FieldMovePolicy::Acquire,
         },
         NativeStdin::Null,
     )
@@ -131,6 +132,7 @@ pub fn compile_and_run_native_with_borrowed_parameters(
             borrowed_parameters: policy,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
             last_use_moves: LastUseMovePolicy::Acquire,
+            field_moves: FieldMovePolicy::Acquire,
         },
         NativeStdin::Null,
     )
@@ -153,6 +155,7 @@ pub fn compile_and_run_native_with_temporary_borrows(
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: policy,
             last_use_moves: LastUseMovePolicy::Acquire,
+            field_moves: FieldMovePolicy::Acquire,
         },
         NativeStdin::Null,
     )
@@ -175,6 +178,30 @@ pub fn compile_and_run_native_with_last_use_moves(
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
             last_use_moves: policy,
+            field_moves: FieldMovePolicy::Acquire,
+        },
+        NativeStdin::Null,
+    )
+}
+
+/// Compile and run with explicit field move selection.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_field_moves(
+    source_name: &str,
+    source_code: &str,
+    policy: FieldMovePolicy,
+    sanitize_address: bool,
+) -> Output {
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        sanitize_address,
+        NativeTestOptimizations {
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
+            last_use_moves: LastUseMovePolicy::Move,
+            field_moves: policy,
         },
         NativeStdin::Null,
     )
@@ -393,6 +420,7 @@ struct NativeTestOptimizations {
     borrowed_parameters: BorrowedParameterPolicy,
     temporary_borrows: TemporaryBorrowPolicy,
     last_use_moves: LastUseMovePolicy,
+    field_moves: FieldMovePolicy,
 }
 impl NativeTestOptimizations {
     const fn baseline() -> Self {
@@ -401,6 +429,7 @@ impl NativeTestOptimizations {
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
             last_use_moves: LastUseMovePolicy::Acquire,
+            field_moves: FieldMovePolicy::Acquire,
         }
     }
 
@@ -410,6 +439,7 @@ impl NativeTestOptimizations {
             borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
             temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
             last_use_moves: LastUseMovePolicy::Move,
+            field_moves: FieldMovePolicy::Move,
         }
     }
 }
@@ -449,6 +479,7 @@ fn compile_native_test_binary_impl(
                 borrowed_parameters: test_optimizations.borrowed_parameters,
                 temporary_borrows: test_optimizations.temporary_borrows,
                 last_use_moves: test_optimizations.last_use_moves,
+                field_moves: test_optimizations.field_moves,
             },
         };
         let object_bytes =

@@ -66,6 +66,7 @@ fn both_planner_modes_reuse_one_cached_fact_set() {
             elide_proven_borrowed_parameters: false,
             elide_proven_field_borrows: false,
             move_units_at_last_use: false,
+            move_fields_from_dying_owners: false,
         },
         &mut cache,
     )
@@ -131,6 +132,7 @@ fn entry_contract_views_share_one_proof_and_keep_declared_borrows() {
                 elide_proven_borrowed_parameters,
                 elide_proven_field_borrows: false,
                 move_units_at_last_use: false,
+                move_fields_from_dying_owners: false,
             },
             cache,
         )

@@ -101,10 +101,29 @@ fn acquiring_plan(
         module,
         NativeOwnershipPlanOptions {
             move_units_at_last_use: false,
+            move_fields_from_dying_owners: false,
             ..NativeOwnershipPlanOptions::production()
         },
         &mut Default::default(),
     )
+}
+
+/// Build the plan with the production policy except field moves, so a
+/// projection keeps acquiring its unit when its owner dies.
+fn build_without_field_moves(ir: &str) -> (IrContext, Module, NativeOwnershipPlan) {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+    let plan = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions {
+            move_fields_from_dying_owners: false,
+            ..NativeOwnershipPlanOptions::production()
+        },
+        &mut Default::default(),
+    )
+    .expect("typed ownership plan");
+    (ctx, module, plan)
 }
 
 fn build(ir: &str) -> (IrContext, Module, NativeOwnershipPlan) {
@@ -288,6 +307,7 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
             elide_proven_borrowed_parameters: false,
             elide_proven_field_borrows: false,
             move_units_at_last_use: false,
+            move_fields_from_dying_owners: false,
         },
         &mut Default::default(),
     )
@@ -720,6 +740,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
             elide_proven_borrowed_parameters: true,
             elide_proven_field_borrows: false,
             move_units_at_last_use: false,
+            move_fields_from_dying_owners: false,
         },
         &mut Default::default(),
     )
@@ -1108,6 +1129,128 @@ fn acquiring_policy_keeps_every_owning_destination_acquiring() {
     );
 }
 
+const FIELD_MOVES: &str = r#"core.module @test {
+  !Env = adt.struct<Env(value: core.i32)>
+  !EnvRef = adt.typeref<{name = "Env"}>
+  !Inner = adt.struct<Inner(env: !EnvRef)>
+  !InnerRef = adt.typeref<{name = "Inner"}>
+  !Outer = adt.struct<Outer(inner: !InnerRef, count: core.i32)>
+  !OuterRef = adt.typeref<{name = "Outer"}>
+  !Pair = adt.struct<Pair(left: !EnvRef, right: !EnvRef)>
+  !PairRef = adt.typeref<{name = "Pair"}>
+  !Wrapper = adt.struct<Wrapper(env: !EnvRef)>
+  !WrapperRef = adt.typeref<{name = "Wrapper"}>
+  func.func @sink(%env: !EnvRef) attributes {type = func.func_sig<(!EnvRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    func.unreachable
+  }
+  func.func @nested(%outer: !OuterRef) attributes {type = func.func_sig<(!OuterRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    %inner = adt.struct_get %outer {field = 0, type = !Outer} : !InnerRef
+    %env = adt.struct_get %inner {field = 0, type = !Inner} : !EnvRef
+    func.tail_call %env {callee = @sink}
+  }
+  func.func @store_one(%pair: !PairRef) -> !WrapperRef attributes {type = func.func_sig<(!PairRef {tribute.ownership = "consumed"}) -> !WrapperRef>} {
+    %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
+    %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+    func.return %wrapper
+  }
+  func.func @owner_used_after(%outer: !OuterRef) -> core.i32 attributes {type = func.func_sig<(!OuterRef {tribute.ownership = "consumed"}) -> core.i32>} {
+    %inner = adt.struct_get %outer {field = 0, type = !Outer} : !InnerRef
+    %env = adt.struct_get %inner {field = 0, type = !Inner} : !EnvRef
+    %wrapper = adt.struct_new %env {type = !Wrapper} : !WrapperRef
+    %count = adt.struct_get %outer {field = 1, type = !Outer} : core.i32
+    func.return %count
+  }
+  func.func @read_twice(%pair: !PairRef) -> !WrapperRef attributes {type = func.func_sig<(!PairRef {tribute.ownership = "consumed"}) -> !WrapperRef>} {
+    %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
+    %again = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
+    %value = adt.struct_get %again {field = 0, type = !Env} : core.i32
+    %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+    func.return %wrapper
+  }
+  func.func @owner_live_across(%condition: core.i1, %pair: !PairRef) -> !WrapperRef attributes {type = func.func_sig<(core.i1, !PairRef {tribute.ownership = "consumed"}) -> !WrapperRef>} {
+    ^entry:
+      %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
+      %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+      cf.cond_br %condition [^read, ^skip]
+    ^read:
+      %right = adt.struct_get %pair {field = 1, type = !Pair} : !EnvRef
+      %value = adt.struct_get %right {field = 0, type = !Env} : core.i32
+      func.return %wrapper
+    ^skip:
+      func.return %wrapper
+  }
+}"#;
+
+fn has_kind(function: &FunctionOwnershipPlan, kind: ActionKind, value: ValueRef) -> bool {
+    function
+        .actions()
+        .iter()
+        .any(|action| action.kind == kind && action.value == value)
+}
+
+#[test]
+fn a_dying_owner_moves_its_field_units_through_nested_projections() {
+    let (mut ctx, module, plan) = build(FIELD_MOVES);
+
+    // The frame moves the closure out, the closure moves the environment
+    // out, and the environment's unit goes to the tail call: nothing is
+    // acquired or released on its own.
+    let nested = plan.function(&SymbolPath::new(["nested"])).unwrap();
+    let outer = entry_arg(&ctx, &plan, "nested", 0);
+    let inner = ctx.op_result(entry_op(&ctx, &plan, "nested", 0), 0);
+    let env = ctx.op_result(entry_op(&ctx, &plan, "nested", 1), 0);
+    assert!(has_kind(nested, ActionKind::ReleaseMoving, outer));
+    assert!(has_kind(nested, ActionKind::FieldMove, inner));
+    assert!(has_kind(nested, ActionKind::ReleaseMoving, inner));
+    assert!(has_kind(nested, ActionKind::FieldMove, env));
+    assert!(has_kind(nested, ActionKind::TailTransfer, env));
+    assert_eq!(count(nested, ActionKind::CopyAcquire), 0);
+    assert_eq!(count(nested, ActionKind::FinalRelease), 0);
+
+    // A moved field becomes owned at the owner's release and its store is
+    // its last use; the owner's other managed field is released by the
+    // unique path.
+    let store_one = plan.function(&SymbolPath::new(["store_one"])).unwrap();
+    let left = ctx.op_result(entry_op(&ctx, &plan, "store_one", 0), 0);
+    let new = entry_op(&ctx, &plan, "store_one", 1);
+    assert!(has_kind(store_one, ActionKind::FieldMove, left));
+    assert!(has_action(
+        store_one,
+        ActionKind::StoreTransfer,
+        left,
+        ActionAnchor::Before(new)
+    ));
+    assert_eq!(count(store_one, ActionKind::StoreAcquire), 0);
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+    assert!(
+        materialized.contains("release_offsets = [8]"),
+        "{materialized}"
+    );
+    let (moving, _) = materialized
+        .split_once("func.func @owner_used_after")
+        .unwrap();
+    assert_eq!(moving.matches("tribute_rt.retain").count(), 0, "{moving}");
+}
+
+#[test]
+fn a_field_move_needs_the_owner_to_end_before_the_moved_uses() {
+    let (_ctx, _module, plan) = build(FIELD_MOVES);
+    // The owner is read after the store, the field is read twice, or the
+    // owner lives into another block: each keeps the acquire and the
+    // ordinary release.
+    for name in ["owner_used_after", "read_twice", "owner_live_across"] {
+        let function = plan.function(&SymbolPath::new([name])).unwrap();
+        assert_eq!(count(function, ActionKind::ReleaseMoving), 0, "{name}");
+        assert_eq!(count(function, ActionKind::FieldMove), 0, "{name}");
+        assert!(count(function, ActionKind::StoreAcquire) > 0, "{name}");
+    }
+    // Moving the closure out of the frame is still possible in
+    // `owner_used_after`, but the frame is read after the closure's last
+    // use, so neither level moves.
+}
+
 #[test]
 fn borrowed_load_return_acquires_a_transfer_unit() {
     let (_ctx, _module, plan) = build(
@@ -1263,7 +1406,7 @@ fn op_position(ctx: &IrContext, op: OpRef) -> (BlockRef, usize) {
 
 #[test]
 fn borrowed_projection_proper_tail_transfer_acquires_before_the_owner_dies() {
-    let (mut ctx, module, plan) = build(
+    let (mut ctx, module, plan) = build_without_field_moves(
         r#"core.module @test {
   !Child = adt.struct<Child(value: core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
@@ -1344,7 +1487,7 @@ fn borrowed_projection_proper_tail_transfer_acquires_before_the_owner_dies() {
 
 #[test]
 fn borrowed_projection_ordinary_call_to_a_consumed_parameter_acquires_its_unit() {
-    let (mut ctx, module, plan) = build(
+    let (mut ctx, module, plan) = build_without_field_moves(
         r#"core.module @test {
   !Child = adt.struct<Child(value: core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
@@ -1394,7 +1537,7 @@ fn borrowed_projection_ordinary_call_to_a_consumed_parameter_acquires_its_unit()
 
 #[test]
 fn borrowed_projection_stored_in_an_aggregate_acquires_the_field_unit() {
-    let (mut ctx, module, plan) = build(
+    let (mut ctx, module, plan) = build_without_field_moves(
         r#"core.module @test {
   !Child = adt.struct<Child(value: core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
@@ -2072,6 +2215,7 @@ fn borrowed_projection_owner_dying_on_an_edge_follows_the_selected_liveness_view
             elide_proven_borrowed_parameters: false,
             elide_proven_field_borrows: false,
             move_units_at_last_use: false,
+            move_fields_from_dying_owners: false,
         },
         &mut Default::default(),
     )
