@@ -549,7 +549,7 @@ TypeArgs ::= '(' Type (',' Type)* ','? ')'
 FunctionType ::= 'fn' '(' TypeList? ')' ReturnType
 TypeList ::= Type (',' Type)* ','?
 
-ReturnType ::= '->' Type                      // 암묵적 effect polymorphic
+ReturnType ::= '->' Type                      // 암묵적 effect polymorphic (타입 선언 안에서는 빈 row)
              | '->' '{' AbilityRow? '}' Type   // 명시적 effect
 
 AbilityRow ::= EffectItem (',' EffectItem)* EffectTail? ','?
