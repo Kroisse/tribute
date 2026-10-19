@@ -676,14 +676,14 @@ fn test_closure_lowering() {
         let function = func::Constant::from_op(&ctx, defining_op(&ctx, fields[0])).unwrap();
         let lifted = named_function(&ctx, module, &function.func_ref(&ctx).to_string());
         assert_eq!(ctx.value_ty(function.result(&ctx)), lifted.r#type(&ctx), "the reference carries the target's exact signature");
-        let environment = adt::StructNew::from_op(&ctx, defining_op(&ctx, fields[1])).unwrap();
-        assert_eq!(environment.fields(&ctx).len(), 1);
-        assert_eq!(arith::Const::from_op(&ctx, defining_op(&ctx, environment.fields(&ctx)[0])).unwrap().value(&ctx), Attribute::Int(1));
+        // The closure holds its capture directly after the code reference.
+        assert_eq!(fields.len(), 2);
+        assert_eq!(arith::Const::from_op(&ctx, defining_op(&ctx, fields[1])).unwrap().value(&ctx), Attribute::Int(1));
         let additions = function_ops::<arith::Addi>(&ctx, lifted);
         assert_eq!(additions.len(), 1);
         let capture = adt::StructGet::from_op(&ctx, defining_op(&ctx, additions[0].rhs(&ctx))).unwrap();
-        assert_eq!(capture.r#type(&ctx), environment.r#type(&ctx));
-        assert_eq!(capture.field(&ctx), 0);
+        assert_eq!(capture.r#type(&ctx), pack.r#type(&ctx));
+        assert_eq!(capture.field(&ctx), 1);
         let transfer = only_indirect_call(&ctx, lifted);
         assert_indirect_signature(&ctx, lifted, transfer);
         assert_eq!(ctx.op_operands(transfer).last(), Some(&additions[0].result(&ctx)));

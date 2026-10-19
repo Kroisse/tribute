@@ -54,6 +54,19 @@ pub fn is_wasm_physical_argument_assignable(
         return true;
     }
 
+    // A structural struct reaches each supertype it declares without a cast.
+    let mut declared = argument;
+    while let Some(supertype) = trunk_ir::dialect::wasm_gc::Struct::from_type_ref(ctx, declared)
+        .and_then(|gc_struct| gc_struct.supertype(ctx))
+    {
+        if supertype == parameter
+            || builtin(supertype).is_some_and(|index| builtin(parameter) == Some(index))
+        {
+            return true;
+        }
+        declared = supertype;
+    }
+
     // `core.i1` is represented by an i32 in the Wasm value space.
     if trunk_ir::dialect::core::I1::matches(ctx, argument)
         && trunk_ir::dialect::core::I32::matches(ctx, parameter)

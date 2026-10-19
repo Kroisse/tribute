@@ -54,20 +54,7 @@ use trunk_ir::types::{AttributeMap, Location};
 /// type identity for emit lookups.
 pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = core::I32::type_ref(ctx);
-    let anyref_ty = wasm_dialect::Anyref::params().intern(ctx).as_type_ref();
-
-    let mut attrs = AttributeMap::new();
-    let layout = ctx.string_attr(tribute_ir::runtime_layout::CLOSURE);
-    attrs
-        .view_mut(ctx)
-        .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
-    adt::Struct::from_fields(
-        ctx,
-        "_closure",
-        [("table_idx", i32_ty), ("env", anyref_ty)],
-        attrs,
-    )
-    .as_type_ref()
+    crate::closure_lower::closure_base_layout(ctx, i32_ty)
 }
 
 /// Get the `Described` type: the supertype of every user struct and variant,
@@ -644,7 +631,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<_closure(func_ptr: core.i32, env: wasm.anyref), {layout = "closure"}>
+  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
     func.call %erased {callee = @use}
@@ -795,15 +782,12 @@ mod tests {
         assert_eq!(converter.convert_type_or_identity(&ctx, shared), target);
         assert_eq!(converter.convert_type_or_identity(&ctx, near), near);
         assert_eq!(converter.convert_type_or_identity(&ctx, generic), generic);
-        let anyref = wasm_dialect::Anyref::params()
-            .intern(&mut ctx)
-            .as_type_ref();
         let i32_ty = core::I32::type_ref(&mut ctx);
         itertools::assert_equal(
             adt::Struct::from_type_ref(&ctx, target)
                 .unwrap()
                 .fields(&ctx),
-            [("table_idx", i32_ty), ("env", anyref)],
+            [("code", i32_ty)],
         );
     }
 }

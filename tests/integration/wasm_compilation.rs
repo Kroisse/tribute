@@ -605,7 +605,7 @@ fn test_validate_fixed_wasm_dispatch_abis() {
         &mut ctx,
         r#"core.module @test {
         !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
-        !Closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+        !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
         func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
             %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : tribute_rt.anyref
             func.return %result

@@ -384,8 +384,9 @@ last-use move와 final release 규칙을 그대로 따른다. Field move는 다�
 - Owner는 owned root다. Owner 자신이 옮겨진 borrow이면 옮긴 지점부터 owned root다. 이렇게
   nested projection은 단계마다 같은 규칙으로 옮긴다.
 - Owner의 layout은 release가 정적 `alloc_size`로 해제하는 layout이다. 즉 exact struct,
-  closure, continuation frame layout이다. Variant마다 크기가 다른 enum 값과
-  `tribute_rt.anyref`/`intref`는 RTTI로 해제하므로 대상이 아니다. 교체 가능한 layout에서
+  continuation frame layout이다. Variant마다 크기가 다른 enum 값, capture layout마다
+  크기가 다른 closure 값과 `tribute_rt.anyref`/`intref`는 RTTI로 해제하므로 대상이
+  아니다. 교체 가능한 layout에서
   읽은 값은 이미 자신의 unit을 가지므로 옮기지 않는다.
 - Owner의 final release와 옮기는 borrow의 모든 사용이 한 block 안에 있다. Edge에서 죽는
   owner와 block 경계를 넘는 borrow는 옮기지 않는다.
@@ -449,8 +450,10 @@ provenance에서 action을 새로 발견하지 않는다. Duplicate owning desti
 계산한 **payload size + RC header size**를 가진다. Replaced-field release도 field의
 exact declared layout으로 같은 size를 사용한다. `tribute_rt.anyref`와 `intref`처럼
 static nominal layout이 없는 opaque dynamic reference와, variant마다 할당 크기가
-다른 enum 값의 `alloc_size = 0`은 deallocation size가 아니라 RTTI dispatch 전용
-신호다. backend는 header RTTI로 이를
+다른 enum 값, capture layout마다 할당 크기가 다른 closure 값의 `alloc_size = 0`은
+deallocation size가 아니라 RTTI dispatch 전용 신호다. Closure 값은 base 타입으로
+다뤄지고 native layout은 이 계산 뒤에 정해지므로, closure의 크기는 언제나 header
+RTTI가 고른 layout의 release 함수가 정한다. backend는 header RTTI로 이를
 exact release function으로 해소한 뒤에만 deallocate하며, entry가 없으면 zero-size
 deallocation 대신 fail-closed한다. physical def-chain에서 size를 추론하지 않는다.
 
@@ -783,6 +786,9 @@ Native closure는 RC header, code pointer, capture를 담은 RC 객체 하나다
   않는다. 각 layout의 release 함수는 code pointer를 unmanaged 필드로 두고 plan이
   managed로 판정한 capture만 release한 뒤 객체를 해제한다. Marker가 담은 dispatch
   closure도 runtime이 header의 RTTI index로 같은 release 함수를 찾는다.
+- `closure.new`의 결과는 capture layout 할당에서 base로의 upcast다. Upcast가 그
+  입력의 유일한 사용이면 할당의 unit은 경로가 하나이므로, `tribute_rt.into_raw`는
+  이렇게 upcast된 값도 정확한 closure 소유 값으로 받는다.
 
 ### Continuation ownership
 

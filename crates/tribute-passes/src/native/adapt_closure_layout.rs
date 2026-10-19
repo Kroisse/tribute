@@ -1,10 +1,10 @@
 //! Adapt semantic closure allocations to the native closure layout.
 //!
-//! The semantic `_closure` struct stores a table index and a managed
-//! environment. The native backend stores a function pointer and a raw
-//! environment pointer instead. This step rewrites `adt.struct_new` and
-//! `adt.struct_get` on the semantic layout, and the `tribute_rtti.layout`
-//! declaring it, to the native layout.
+//! A semantic closure layout, the base or a capture layout, starts with a
+//! table index. The native backend stores a function pointer there instead and
+//! keeps the captures. This step rewrites `adt.struct_new` and
+//! `adt.struct_get` on the semantic layouts, and the `tribute_rtti.layout`
+//! declarations naming them, to the native layouts.
 //!
 //! It runs after native ownership planning and RC materialization, which
 //! read the semantic layout, and before `func_to_clif`.
@@ -13,24 +13,25 @@ use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rtti;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir_cranelift_backend::passes::cf_to_clif::rebuild_op_as;
 
-use crate::closure_lower::is_closure_struct_type_ref;
+use crate::closure_lower::{
+    closure_base_layout, closure_captures_layout, is_closure_layout, is_closure_struct_type_ref,
+};
 
-/// Rewrite semantic closure allocations and their RTTI declaration to the
-/// native closure layout.
+/// Rewrite semantic closure allocations and their RTTI declarations to the
+/// native closure layouts.
 pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(ClosureStructAdaptPattern)
         .apply_partial(ctx, module);
 
-    let native_ty = native_closure_struct_type(ctx);
     let layouts = module
         .ops(ctx)
         .iter()
@@ -39,31 +40,37 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
         .collect::<Vec<_>>();
     for layout in layouts {
         let ty = layout.r#type(ctx);
-        if ty != native_ty && is_closure_struct_type_ref(ctx, ty) {
-            layout.set_type(ctx, native_ty);
+        if let Some(native) = native_closure_layout(ctx, ty) {
+            layout.set_type(ctx, native);
         }
     }
 }
 
-/// The native closure layout: `{ func_ptr: i64, env: ptr }`.
-fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
+/// The native layout of the semantic closure layout `ty`: the same layout
+/// with a code pointer in place of the table index. `None` when `ty` is not a
+/// semantic closure layout.
+fn native_closure_layout(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
+    if !is_closure_layout(ctx, ty) {
+        return None;
+    }
     let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
-    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
-    let mut attrs = AttributeMap::new();
-    let layout = ctx.string_attr(tribute_ir::runtime_layout::CLOSURE);
-    attrs
-        .view_mut(ctx)
-        .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
-    adt::Struct::from_fields(
-        ctx,
-        "_closure",
-        [("func_ptr", i64_ty), ("env", ptr_ty)],
-        attrs,
-    )
-    .as_type_ref()
+    let fields: Vec<TypeRef> = adt::Struct::from_type_ref(ctx, ty)?
+        .fields(ctx)
+        .map(|(_, field)| field)
+        .collect();
+    let (&code, captures) = fields.split_first()?;
+    if code == i64_ty {
+        return None;
+    }
+    let base = closure_base_layout(ctx, i64_ty);
+    Some(if is_closure_struct_type_ref(ctx, ty) {
+        base
+    } else {
+        closure_captures_layout(ctx, base, captures)
+    })
 }
 
-/// Pattern: adapt `_closure` struct operations to the native layout.
+/// Pattern: adapt closure layout operations to the native layouts.
 struct ClosureStructAdaptPattern;
 
 impl RewritePattern for ClosureStructAdaptPattern {
@@ -73,13 +80,10 @@ impl RewritePattern for ClosureStructAdaptPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let native_ty = native_closure_struct_type(ctx);
-
         if let Ok(struct_new) = adt::StructNew::from_op(ctx, op) {
-            let ty = struct_new.r#type(ctx);
-            if !is_closure_struct_type_ref(ctx, ty) || ty == native_ty {
+            let Some(native_ty) = native_closure_layout(ctx, struct_new.r#type(ctx)) else {
                 return false;
-            }
+            };
             let new_op = rebuild_op_as(ctx, op, "adt.struct_new");
             ctx.op_attrs_mut(new_op)
                 .insert("type", Attribute::Type(native_ty));
@@ -102,37 +106,19 @@ impl RewritePattern for ClosureStructAdaptPattern {
         }
 
         if let Ok(struct_get) = adt::StructGet::from_op(ctx, op) {
-            let ty = struct_get.r#type(ctx);
-            if !is_closure_struct_type_ref(ctx, ty) || ty == native_ty {
+            let Some(native_ty) = native_closure_layout(ctx, struct_get.r#type(ctx)) else {
                 return false;
-            }
-            let field_idx = struct_get.field(ctx);
-            let original_ty = struct_get.result(ctx);
-            let original_ty = ctx.value_ty(original_ty);
+            };
             let new_op = rebuild_op_as(ctx, op, "adt.struct_get");
             ctx.op_attrs_mut(new_op)
                 .insert("type", Attribute::Type(native_ty));
-            let adapted_ty = match field_idx {
-                0 => TypeDataBuilder::new("core.i64").intern(ctx),
-                1 => core::Ptr::params().intern(ctx).as_type_ref(),
-                _ => original_ty,
-            };
-            ctx.set_op_result_type(new_op, 0, adapted_ty);
-            // The function slot is the callee operand, which declares no type.
-            if adapted_ty == original_ty || field_idx == 0 {
-                rewriter.replace_op(new_op);
-                return true;
+            // The code pointer is the callee operand, which declares no type;
+            // captures keep their semantic types.
+            if struct_get.field(ctx) == 0 {
+                let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
+                ctx.set_op_result_type(new_op, 0, i64_ty);
             }
-            // Users still declare the semantic field type, so the retyped
-            // read is cast back to it; type conversion reconciles the cast.
-            let location = ctx.op(op).location;
-            let loaded = ctx.op_result(new_op, 0);
-            let restored = core::UnrealizedConversionCast::operands(loaded)
-                .results(original_ty)
-                .build(ctx, location);
-            rewriter.insert_op(new_op);
-            rewriter.insert_op(restored.op_ref());
-            rewriter.erase_op(vec![restored.result(ctx)]);
+            rewriter.replace_op(new_op);
             return true;
         }
 
@@ -152,47 +138,54 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+  !Base = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Captures = adt.struct<_closure_captures(code: core.i32, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   !Other = adt.struct<Other(value: tribute_rt.anyref)>
-  tribute_rtti.layout {type = !_closure, index = 32, fields = ["u32", "dynamic"]}
-  tribute_rtti.layout {type = !Other, index = 33, fields = ["dynamic"]}
-  func.func @make(%table: core.i32, %env: tribute_rt.anyref) -> !_closure {
-    %closure = adt.struct_new %table, %env {type = !_closure} : !_closure
-    %loaded = adt.struct_get %closure {field = 1, type = !_closure} : tribute_rt.anyref
+  tribute_rtti.layout {type = !Captures, index = 32, fields = ["raw", "dynamic"]}
+  tribute_rtti.layout {type = !Base, index = 33, fields = ["raw"]}
+  tribute_rtti.layout {type = !Other, index = 34, fields = ["dynamic"]}
+  func.func @make(%table: core.i32, %env: tribute_rt.anyref) -> !Captures {
+    %closure = adt.struct_new %table, %env {type = !Captures} : !Captures
+    %loaded = adt.struct_get %closure {field = 1, type = !Captures} : tribute_rt.anyref
     func.return %closure
   }
 }"#,
         );
-        let semantic = ctx
-            .type_aliases()
-            .iter()
-            .find_map(|(name, ty)| (*name == "_closure").then_some(*ty))
-            .expect("closure alias");
+        let alias = |ctx: &IrContext, name: &str| {
+            ctx.type_aliases()
+                .iter()
+                .find_map(|(alias, ty)| (*alias == name).then_some(*ty))
+                .expect("fixture alias")
+        };
+        let [captures, other] = ["Captures", "Other"].map(|name| alias(&ctx, name));
 
         lower(&mut ctx, module);
 
-        let native = native_closure_struct_type(&mut ctx);
-        assert_ne!(native, semantic);
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
+        let anyref = tribute_ir::dialect::tribute_rt::Anyref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
+        let native_base = closure_base_layout(&mut ctx, i64_ty);
+        let native_captures = closure_captures_layout(&mut ctx, native_base, &[anyref]);
+        assert_ne!(native_captures, captures);
         let layouts = module
             .ops(&ctx)
             .iter()
             .copied()
             .filter_map(|op| tribute_rtti::Layout::from_op(&ctx, op).ok())
             .collect::<Vec<_>>();
-        assert_eq!(layouts[0].r#type(&ctx), native);
+        assert_eq!(layouts[0].r#type(&ctx), native_captures);
         assert_eq!(
             layouts[0].field_kinds(&ctx),
             [
-                tribute_rtti::FieldKind::Int {
-                    width: 32,
-                    signed: false
-                },
+                tribute_rtti::FieldKind::Raw,
                 tribute_rtti::FieldKind::Dynamic
             ]
         );
-        assert_ne!(layouts[1].r#type(&ctx), native);
+        assert_eq!(layouts[1].r#type(&ctx), native_base);
+        assert_eq!(layouts[2].r#type(&ctx), other);
         let output = print_module(&ctx, module.op());
-        assert!(!output.contains("type = !_closure}"), "{output}");
+        assert!(!output.contains("type = !Captures}"), "{output}");
     }
 
     /// Adapt closures, then lower functions as the native pipeline does.
@@ -222,12 +215,14 @@ mod tests {
     fn test_closure_struct_adaptation() {
         let result = adapt_then_lower_func(
             r#"core.module @test {
+  !Base = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Captures = adt.struct<_closure_captures(code: core.i32, _0: core.ptr), {closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn() -> core.i32 {
     %0 = func.constant {func_ref = @lifted_fn} : core.i32
     %1 = mem.null : core.ptr
-    %2 = adt.struct_new %0, %1 {type = adt.struct<_closure(table_idx: core.i32, env: core.ptr), {layout = "closure"}>} : adt.struct<_closure(table_idx: core.i32, env: core.ptr), {layout = "closure"}>
-    %3 = adt.struct_get %2 {field = 0, type = adt.struct<_closure(table_idx: core.i32, env: core.ptr), {layout = "closure"}>} : core.i32
-    %4 = adt.struct_get %2 {field = 1, type = adt.struct<_closure(table_idx: core.i32, env: core.ptr), {layout = "closure"}>} : core.ptr
+    %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
+    %3 = adt.struct_get %2 {field = 0, type = !Captures} : core.i32
+    %4 = adt.struct_get %2 {field = 1, type = !Captures} : core.ptr
     %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
     func.return %5
   }
@@ -240,11 +235,13 @@ mod tests {
     fn test_closure_struct_anyref_adaptation() {
         let result = adapt_then_lower_func(
             r#"core.module @test {
+  !Base = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Captures = adt.struct<_closure_captures(code: core.i32, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn(%1: tribute_rt.anyref) -> core.i32 {
     %0 = func.constant {func_ref = @lifted_fn} : core.i32
-    %2 = adt.struct_new %0, %1 {type = adt.struct<_closure(table_idx: core.i32, env: tribute_rt.anyref), {layout = "closure"}>} : adt.struct<_closure(table_idx: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
-    %3 = adt.struct_get %2 {field = 0, type = adt.struct<_closure(table_idx: core.i32, env: tribute_rt.anyref), {layout = "closure"}>} : core.i32
-    %4 = adt.struct_get %2 {field = 1, type = adt.struct<_closure(table_idx: core.i32, env: tribute_rt.anyref), {layout = "closure"}>} : tribute_rt.anyref
+    %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
+    %3 = adt.struct_get %2 {field = 0, type = !Captures} : core.i32
+    %4 = adt.struct_get %2 {field = 1, type = !Captures} : tribute_rt.anyref
     %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
     func.return %5
   }

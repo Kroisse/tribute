@@ -495,7 +495,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
-  !Closure = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
+  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !Frame = adt.struct<Frame()>
   !Env = adt.struct<Env(closure: !Closure, evidence: !Evidence, frame: !Frame)>
   wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {

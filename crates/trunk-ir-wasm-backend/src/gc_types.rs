@@ -9,11 +9,11 @@
 //! Index 0: BoxedF64 - Float wrapper for polymorphic contexts
 //! Index 1: BytesArray - array i8 backing storage for Bytes
 //! Index 2: BytesStruct - struct { data: ref BytesArray, offset: i32, len: i32 }
-//! Index 3: ClosureStruct - struct { i32, anyref } (table index + env)
+//! Index 3: ClosureStruct - struct { i32 } (table index), the closure base
 //! Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref } (evidence)
 //! Index 5: Evidence - array (ref Marker) (evidence array)
 //! Index 6: Described - struct { descriptor: i32 }, supertype of user structs and variants
-//! Index 7+: User-defined types (structs, arrays, variants, closures, etc.)
+//! Index 7+: User-defined types (structs, arrays, variants, closure capture layouts, etc.)
 //! ```
 
 use wasm_encoder::{FieldType, HeapType, RefType, StorageType, ValType};
@@ -30,9 +30,10 @@ pub const BYTES_ARRAY_IDX: u32 = 1;
 /// This is always index 2 in the GC type section.
 pub const BYTES_STRUCT_IDX: u32 = 2;
 
-/// Type index for ClosureStruct (struct { i32, anyref }).
+/// Type index for ClosureStruct (struct { i32 }), the closure base.
 /// This is always index 3 in the GC type section.
-/// All closures share this uniform representation: (table_idx: i32, env: anyref).
+/// Every closure value has this type; a closure with captures is a user-indexed
+/// subtype that adds them after the table index.
 pub const CLOSURE_STRUCT_IDX: u32 = 3;
 
 /// Type index for Marker (struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref }).
@@ -102,9 +103,9 @@ pub fn builtin_layout_idx(layout: &str) -> Option<u32> {
 /// First type index available for user-defined types.
 pub const FIRST_USER_TYPE_IDX: u32 = 7;
 
-/// Closure struct field count.
-/// Closure structs always have 2 fields: (table_idx: i32, env: anyref)
-pub const CLOSURE_FIELD_COUNT: usize = 2;
+/// Closure base field count: the code field (table index) alone. Closure
+/// capture layouts are user-indexed subtypes that add their captures.
+pub const CLOSURE_FIELD_COUNT: usize = 1;
 
 /// Definition of a GC type (struct or array).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,17 +171,11 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
                 mutable: false,
             },
         ]),
-        // Index 3: ClosureStruct - struct { func_idx: i32, env: anyref }
-        GcTypeDef::Struct(vec![
-            FieldType {
-                element_type: StorageType::Val(ValType::I32),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-                mutable: false,
-            },
-        ]),
+        // Index 3: ClosureStruct - struct { code: i32 }, the closure base
+        GcTypeDef::Struct(vec![FieldType {
+            element_type: StorageType::Val(ValType::I32),
+            mutable: false,
+        }]),
         // Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref }
         GcTypeDef::Struct(vec![
             FieldType {
@@ -279,7 +274,7 @@ mod tests {
         // BytesStruct
         assert!(matches!(&builtins[2], GcTypeDef::Struct(fields) if fields.len() == 3));
         // ClosureStruct
-        assert!(matches!(&builtins[3], GcTypeDef::Struct(fields) if fields.len() == 2));
+        assert!(matches!(&builtins[3], GcTypeDef::Struct(fields) if fields.len() == 1));
         // Marker (5 fields: ability_id, prompt_tag, tr_dispatch_fn, shadowed, outer)
         assert!(matches!(&builtins[4], GcTypeDef::Struct(fields) if fields.len() == 5));
         // Evidence (array of Marker refs)
@@ -323,12 +318,12 @@ mod tests {
         let i32 = StorageType::Val(ValType::I32);
         let f64 = StorageType::Val(ValType::F64);
         let anyref = StorageType::Val(ValType::Ref(RefType::ANYREF));
-        assert_eq!(CLOSURE_FIELD_COUNT, 2, "ClosureStruct field count");
+        assert_eq!(CLOSURE_FIELD_COUNT, 1, "ClosureStruct field count");
         let cases: [(&str, u32, &[StorageType]); 3] = [
             // { ability_id, prompt_tag, tr_dispatch_fn, shadowed, outer }
             ("Marker", MARKER_IDX, &[i32, i32, anyref, anyref, anyref]),
-            // { func_idx: function table index, env }
-            ("ClosureStruct", CLOSURE_STRUCT_IDX, &[i32, anyref]),
+            // { code: function table index }
+            ("ClosureStruct", CLOSURE_STRUCT_IDX, &[i32]),
             ("BoxedF64", BOXED_F64_IDX, &[f64]),
         ];
         for (name, index, expected) in cases {

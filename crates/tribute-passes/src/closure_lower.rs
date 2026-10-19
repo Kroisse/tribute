@@ -30,7 +30,6 @@ use tribute_core::{
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::closure;
-use tribute_ir::dialect::tribute_rt;
 use tribute_ir::runtime_layout;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
@@ -47,30 +46,69 @@ use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
-/// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
+/// The closure base: `{ code: i32 }`. Every closure value has this storage
+/// type, and a capture-free closure is allocated with it.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-    let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
+    closure_base_layout(ctx, i32_ty)
+}
+
+/// The closure layout holding `captures` after the base's code field, with
+/// the base as its `closure_base`. Equal capture types give one layout.
+pub fn closure_captures_type_ref(ctx: &mut IrContext, captures: &[TypeRef]) -> TypeRef {
+    let base = closure_struct_type_ref(ctx);
+    closure_captures_layout(ctx, base, captures)
+}
+
+/// The closure base whose code field has the representation `code`.
+pub(crate) fn closure_base_layout(ctx: &mut IrContext, code: TypeRef) -> TypeRef {
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(runtime_layout::CLOSURE);
     attrs
         .view_mut(ctx)
         .insert(runtime_layout::LAYOUT_ATTR, layout);
-    adt::Struct::from_fields(
-        ctx,
-        "_closure",
-        [("func_ptr", i32_ty), ("env", anyref_ty)],
-        attrs,
-    )
-    .as_type_ref()
+    adt::Struct::from_fields(ctx, "_closure", [("code", code)], attrs).as_type_ref()
 }
 
-/// Whether `ty` is a compiler-owned closure storage layout, identified by its
+/// The closure layout of `base` holding `captures` after the base's fields.
+pub(crate) fn closure_captures_layout(
+    ctx: &mut IrContext,
+    base: TypeRef,
+    captures: &[TypeRef],
+) -> TypeRef {
+    let mut fields = adt::Struct::from_type_ref(ctx, base)
+        .expect("closure base is an adt.struct")
+        .fields(ctx)
+        .map(|(name, ty)| (name.to_owned(), ty))
+        .collect::<Vec<_>>();
+    fields.extend(
+        captures
+            .iter()
+            .enumerate()
+            .map(|(index, &ty)| (format!("_{index}"), ty)),
+    );
+    let mut attrs = AttributeMap::new();
+    let layout = ctx.string_attr(runtime_layout::CLOSURE_CAPTURES);
+    let mut view = attrs.view_mut(ctx);
+    view.insert(runtime_layout::LAYOUT_ATTR, layout);
+    view.insert(runtime_layout::CLOSURE_BASE_ATTR, Attribute::Type(base));
+    adt::Struct::from_fields(ctx, "_closure_captures", fields, attrs).as_type_ref()
+}
+
+/// Whether `ty` is the closure base storage layout, identified by its
 /// runtime layout attribute.
 pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
     data.name.is(ctx, "adt.struct")
         && runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::CLOSURE)
+}
+
+/// Whether `ty` is a closure storage layout, the base or a capture layout,
+/// identified by its runtime layout attribute.
+pub(crate) fn is_closure_layout(ctx: &IrContext, ty: TypeRef) -> bool {
+    is_closure_struct_type_ref(ctx, ty)
+        || (ctx.get_type(ty).name.is(ctx, "adt.struct")
+            && runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::CLOSURE_CAPTURES))
 }
 
 // ============================================================================
@@ -119,32 +157,14 @@ impl RewritePattern for LowerClosureNewArena {
         let funcref = ctx.op_result(constant_op.op_ref(), 0);
         rewriter.insert_op(constant_op.op_ref());
 
-        // %env = adt.struct_new(%captures...), or a null environment
-        let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
-        let env = if captures.is_empty() {
-            let null = adt::RefNull::operands()
-                .r#type(anyref_ty)
-                .results(anyref_ty)
-                .build(ctx, loc);
-            rewriter.insert_op(null.op_ref());
-            null.result(ctx)
+        // %pack = adt.struct_new(%funcref, %captures...) : <closure layout>
+        let struct_ty = if captures.is_empty() {
+            closure_struct_type_ref(ctx)
         } else {
             let capture_types: Vec<_> = captures.iter().map(|&v| ctx.value_ty(v)).collect();
-            let Some(code) = func_ref.leaf().map(|leaf| leaf.to_string()) else {
-                return false;
-            };
-            let env_ty = closure_env_struct_type(ctx, &code, &capture_types);
-            let struct_new = adt::StructNew::operands(captures)
-                .r#type(env_ty)
-                .results(env_ty)
-                .build(ctx, loc);
-            rewriter.insert_op(struct_new.op_ref());
-            struct_new.result(ctx)
+            closure_captures_type_ref(ctx, &capture_types)
         };
-
-        // %pack = adt.struct_new(%funcref, %env) : _closure
-        let struct_ty = closure_struct_type_ref(ctx);
-        let struct_new_op = adt::StructNew::operands(vec![funcref, env])
+        let struct_new_op = adt::StructNew::operands(std::iter::once(funcref).chain(captures))
             .r#type(struct_ty)
             .results(struct_ty)
             .build(ctx, loc);
@@ -163,23 +183,13 @@ impl RewritePattern for LowerClosureNewArena {
     }
 }
 
-/// The environment struct holding the captures of closures of the code
-/// function `code`. A closure and its code function's `closure.unpack` name
-/// the same struct, since both derive it from the code function.
-fn closure_env_struct_type(ctx: &mut IrContext, code: &str, capture_types: &[TypeRef]) -> TypeRef {
-    let fields: Vec<(String, TypeRef)> = capture_types
-        .iter()
-        .enumerate()
-        .map(|(i, &ty)| (format!("_{i}"), ty))
-        .collect();
-    adt::Struct::from_fields(ctx, format!("{code}::env"), fields, AttributeMap::new()).as_type_ref()
-}
-
-/// Lower `closure.unpack` in the code function `code` to reads of the
-/// closure's environment struct.
-struct LowerClosureUnpackArena {
-    code: String,
-}
+/// Lower `closure.unpack` to a cast of the closure to its capture layout and
+/// reads of the capture fields after the base's.
+///
+/// The cast keeps the closure's exact type as its source until storage
+/// finalization makes it the base-to-capture-layout downcast that targets
+/// materialize.
+struct LowerClosureUnpackArena;
 
 impl RewritePattern for LowerClosureUnpackArena {
     fn match_and_rewrite(
@@ -192,28 +202,22 @@ impl RewritePattern for LowerClosureUnpackArena {
             return false;
         };
         let loc = ctx.op(op).location;
-        let closure_value = unpack.closure(ctx);
         let capture_types = ctx.op_result_types(op).to_vec();
-        let struct_ty = closure_struct_type_ref(ctx);
-        let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
-        let env_ty = closure_env_struct_type(ctx, &self.code, &capture_types);
+        let layout = closure_captures_type_ref(ctx, &capture_types);
+        let base = closure_struct_type_ref(ctx);
+        let base_fields = adt::Struct::from_type_ref(ctx, base)
+            .expect("closure base is an adt.struct")
+            .field_count(ctx);
 
-        let erased = adt::StructGet::operands(closure_value)
-            .r#type(struct_ty)
-            .field(1)
-            .results(anyref_ty)
+        let cast = core::UnrealizedConversionCast::operands(unpack.closure(ctx))
+            .results(layout)
             .build(ctx, loc);
-        rewriter.insert_op(erased.op_ref());
-        let env = adt::RefCast::operands(erased.result(ctx))
-            .r#type(env_ty)
-            .results(env_ty)
-            .build(ctx, loc);
-        rewriter.insert_op(env.op_ref());
+        rewriter.insert_op(cast.op_ref());
         let mut captures = Vec::with_capacity(capture_types.len());
         for (index, &ty) in capture_types.iter().enumerate() {
-            let get = adt::StructGet::operands(env.result(ctx))
-                .r#type(env_ty)
-                .field(index as u32)
+            let get = adt::StructGet::operands(cast.result(ctx))
+                .r#type(layout)
+                .field((base_fields + index) as u32)
                 .results(ty)
                 .build(ctx, loc);
             rewriter.insert_op(get.op_ref());
@@ -678,7 +682,6 @@ fn rewrite_validated_closures_in_func(
     if !ctx.op_has_regions(func_op.op_ref()) {
         return;
     }
-    let code = func_op.sym_name(ctx).to_string();
     let applicator = PatternApplicator::new(TypeConverter::new())
         .with_target(
             ConversionTarget::new()
@@ -689,7 +692,7 @@ fn rewrite_validated_closures_in_func(
         .add_pattern(LowerClosureTailCallArena)
         .add_pattern(LowerClosureNewArena { functions })
         .add_pattern(LowerClosureFuncArena)
-        .add_pattern(LowerClosureUnpackArena { code });
+        .add_pattern(LowerClosureUnpackArena);
     applicator.apply_partial(ctx, func_op);
 }
 
@@ -1447,6 +1450,70 @@ mod tests {
             get_calling_convention(&ctx, call),
             Some(CallingConvention::Direct)
         );
+    }
+
+    #[test]
+    fn a_capturing_closure_is_one_allocation_read_through_its_capture_layout() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !closure = closure.closure<func.func_sig<(core.i64) -> core.i64>, {tribute.calling_convention = 0, tribute.closure_environment_index = 0}>
+  func.func @code(%env: !closure, %value: core.i64) -> core.i64 {
+    %first, %second = closure.unpack %env : core.i64, core.i32
+    func.return %first
+  }
+  func.func @make(%first: core.i64, %second: core.i32) -> !closure {
+    %created = closure.new %first, %second {func_ref = @code} : !closure
+    func.return %created
+  }
+}"#,
+        );
+        lower_prepared_closures(&mut ctx, module).unwrap();
+        finalize_closure_storage_layout(&mut ctx, module);
+
+        let [i32_ty, i64_ty] = [core::I32::type_ref(&mut ctx), core::I64::type_ref(&mut ctx)];
+        let layout = closure_captures_type_ref(&mut ctx, &[i64_ty, i32_ty]);
+        let base = closure_struct_type_ref(&mut ctx);
+        assert_eq!(
+            layout,
+            closure_captures_type_ref(&mut ctx, &[i64_ty, i32_ty])
+        );
+        assert_eq!(
+            ctx.type_attrs(layout)
+                .get_type(runtime_layout::CLOSURE_BASE_ATTR),
+            Some(base)
+        );
+        itertools::assert_equal(
+            adt::Struct::from_type_ref(&ctx, layout)
+                .unwrap()
+                .fields(&ctx),
+            [("code", i32_ty), ("_0", i64_ty), ("_1", i32_ty)],
+        );
+
+        let make = func_by_name(&ctx, module, "make");
+        let allocations: Vec<_> = collect_ops(&ctx, make.op_ref())
+            .into_iter()
+            .filter_map(|op| adt::StructNew::from_op(&ctx, op).ok())
+            .collect();
+        let [allocation] = allocations[..] else {
+            panic!("one allocation per closure");
+        };
+        assert_eq!(allocation.r#type(&ctx), layout);
+        assert_eq!(allocation.fields(&ctx).len(), 3);
+
+        // The code function downcasts its base environment once, then reads
+        // each capture after the code field.
+        let code = func_by_name(&ctx, module, "code");
+        let entry = ctx.region(code.body(&ctx)).blocks[0];
+        let environment = ctx.block_arg(entry, 0);
+        assert_eq!(ctx.value_ty(environment), base);
+        let reads: Vec<_> = collect_ops(&ctx, code.op_ref())
+            .into_iter()
+            .filter_map(|op| adt::StructGet::from_op(&ctx, op).ok())
+            .map(|get| (get.r#type(&ctx), get.field(&ctx)))
+            .collect();
+        assert_eq!(reads, [(layout, 1), (layout, 2)]);
     }
 
     #[test]
