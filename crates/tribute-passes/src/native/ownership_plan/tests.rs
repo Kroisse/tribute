@@ -2967,15 +2967,11 @@ fn closure_rtti_declaration_follows_the_native_closure_layout() {
     );
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
     let semantic = plan.rtti_types()[0].ty;
+    // The code reference is a raw code pointer on native, not the semantic
+    // table index.
     assert_eq!(
         plan.rtti_types()[0].fields,
-        [
-            FieldKind::Int {
-                width: 32,
-                signed: false
-            },
-            FieldKind::Dynamic
-        ]
+        [FieldKind::Raw, FieldKind::Dynamic]
     );
 
     crate::native::rtti::declare_rtti_layouts(&mut ctx, module, plan.rtti_types());

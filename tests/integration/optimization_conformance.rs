@@ -420,6 +420,7 @@ fn assert_source_allocation_field_releases(ir: &str) {
         ControlFlow::Continue(WalkAction::Advance)
     });
     let mut checked = BTreeSet::new();
+    let mut released_capture = false;
     for &op in &ops {
         let Ok(retain) = tribute_rt::Retain::from_op(&ctx, op) else {
             continue;
@@ -498,11 +499,29 @@ fn assert_source_allocation_field_releases(ir: &str) {
         offsets.sort();
         if kind == "closure" {
             // A closure releases only its captures, after the code pointer at
-            // offset 0; which captures are managed depends on the closure.
-            assert!(
-                !offsets.contains(&0),
-                "closure must not release its code pointer: {offsets:?}"
-            );
+            // offset 0. A capture-free closure is the RC header and the code
+            // pointer alone and releases nothing.
+            let ValueDef::OpResult(alloc, _) = ctx.value_def(allocation) else {
+                panic!("allocation call result");
+            };
+            let ValueDef::OpResult(size, _) = ctx.value_def(ctx.op_operands(alloc)[0]) else {
+                panic!("constant allocation size");
+            };
+            let size = clif::Iconst::from_op(&ctx, size).unwrap().value(&ctx);
+            if size == 16 {
+                assert!(
+                    offsets.is_empty(),
+                    "capture-free closure releases {offsets:?}"
+                );
+            } else {
+                assert!(
+                    offsets
+                        .iter()
+                        .all(|&offset| offset >= 8 && i64::from(offset) < size - 8),
+                    "closure of {size} bytes must release only its captures: {offsets:?}"
+                );
+                released_capture |= !offsets.is_empty();
+            }
         } else {
             assert_eq!(
                 offsets,
@@ -514,6 +533,10 @@ fn assert_source_allocation_field_releases(ir: &str) {
     assert!(
         checked.iter().any(|(kind, _)| *kind == "closure"),
         "fixture must allocate closure storage"
+    );
+    assert!(
+        released_capture,
+        "fixture must release a managed closure capture"
     );
     assert!(
         checked.iter().any(|(kind, _)| *kind == "frame"),

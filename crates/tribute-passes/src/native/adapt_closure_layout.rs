@@ -141,8 +141,8 @@ mod tests {
   !Base = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !Captures = adt.struct<_closure_captures(code: core.i32, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   !Other = adt.struct<Other(value: tribute_rt.anyref)>
-  tribute_rtti.layout {type = !Captures, index = 32, fields = ["u32", "dynamic"]}
-  tribute_rtti.layout {type = !Base, index = 33, fields = ["u32"]}
+  tribute_rtti.layout {type = !Captures, index = 32, fields = ["raw", "dynamic"]}
+  tribute_rtti.layout {type = !Base, index = 33, fields = ["raw"]}
   tribute_rtti.layout {type = !Other, index = 34, fields = ["dynamic"]}
   func.func @make(%table: core.i32, %env: tribute_rt.anyref) -> !Captures {
     %closure = adt.struct_new %table, %env {type = !Captures} : !Captures
@@ -178,10 +178,7 @@ mod tests {
         assert_eq!(
             layouts[0].field_kinds(&ctx),
             [
-                tribute_rtti::FieldKind::Int {
-                    width: 32,
-                    signed: false
-                },
+                tribute_rtti::FieldKind::Raw,
                 tribute_rtti::FieldKind::Dynamic
             ]
         );

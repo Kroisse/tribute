@@ -611,10 +611,18 @@ fn build_field_kinds(
 ) -> Result<Vec<FieldKind>, OwnershipPlanError> {
     let fields = descriptor_field_types(ctx, ty, tag)
         .map_err(|error| OwnershipPlanError::new(format!("RTTI descriptor: {error}")))?;
-    Ok(fields
+    let mut kinds: Vec<_> = fields
         .into_iter()
         .map(|field| field_kind(ctx, field, managed_layouts))
-        .collect())
+        .collect();
+    // A closure's first field is its code reference, which native stores as a
+    // code pointer whatever the semantic layout's table index type.
+    if crate::closure_lower::is_closure_layout(ctx, ty)
+        && let Some(code) = kinds.first_mut()
+    {
+        *code = FieldKind::Raw;
+    }
+    Ok(kinds)
 }
 
 /// How the runtime reads a field of semantic type `ty`. Managed-ness follows
