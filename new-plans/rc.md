@@ -179,7 +179,18 @@ tribute_rt.retain(ptr) -> ptr    // refcount++, return same pointer
 tribute_rt.release(ptr)          // refcount--, free if zero
 tribute_rt.into_raw(value) -> core.ptr // typed ownership unit 하나를 소비
 tribute_rt.from_raw(ptr) -> value      // unit 하나를 가진 typed 값을 만든다
+tribute_rt.release_moving(ptr, moved...) // owner를 release하며 field unit을 moved로 옮긴다
 ```
+
+`tribute_rt.release_moving`은 owner의 unit 하나를 release하면서, `fields` 속성이 가리키는
+owner의 managed field가 가진 unit을 같은 순서의 `moved` operand로 옮긴다. `moved`는 그
+field에서 읽은 값이고, operation 뒤에는 각자 unit 하나를 가진 owned 값이다. Owner가
+유일하게 참조되면 옮기는 field는 release하지 않고 나머지 managed field만 release한 뒤
+owner를 해제한다. 공유되어 있으면 `moved`마다 unit을 먼저 획득한 뒤 owner의 count만
+줄인다.
+`layout`과 `alloc_size` 속성은 owner의 exact layout과 header를 포함한 할당 크기다.
+이 operation은 [field move](#1-typed-ownership-and-rtti-plan)를 표현하며 typed plan만
+만든다.
 
 이 연산은 dialect 수준에서 다음 순서로 처리된다.
 
@@ -336,7 +347,7 @@ projection의 use를 owner의 use로도 반영한다. `elide_proven_field_borrow
 1. Exact semantic type과 callable contract로 managed value, field와 parameter
    entry mode를 분류한다.
 2. SSA liveness로 entry, call, owning store/copy, borrowed load, final-use,
-   last-use move, return과 proper-tail action을 정한다.
+   last-use move, field move, return과 proper-tail action을 정한다.
 3. 같은 typed predicate로 aggregate별 RTTI managed-field bitmap을 만든다.
 4. 모든 identity, signature, CFG, action target과 ordering을 검증한 뒤 하나의
    deterministic plan을 반환한다.
@@ -360,6 +371,41 @@ call의 callee, `adt.struct_set`의 대상, borrowed·retained 매개변수로�
 값에서 파생된 borrow는 호출이나 저장 동안 caller의 unit에 기대므로, 이런 operand가
 하나라도 있으면 모든 자리가 기준 동작대로 획득한다. 한 operation이 한 값을 여러
 자리에 넘기면 첫 자리만 unit을 받고 나머지는 획득한다.
+
+Owner에서 읽은 borrow는 unit이 없으므로, unit이 필요한 사용(저장, consumed 매개변수,
+return, block argument, proper tail)마다 기준 동작대로 새 unit을 획득한다. 그 owner가
+같은 block에서 죽으면 owner의 final release가 같은 field를 다시 release하므로, owner가
+유일하게 참조될 때 이 획득과 field의 release는 서로 상쇄된다. Field move 정책을 켜면
+owner의 final release를 `tribute_rt.release_moving`으로 바꾸어 field의 unit을 그 borrow로
+옮긴다. 옮긴 borrow는 그 지점부터 unit 하나를 가진 owned 값이며, 이후의 사용은 위의
+last-use move와 final release 규칙을 그대로 따른다. Field move는 다음 조건을 모두
+만족할 때만 둔다.
+
+- Owner는 owned root다. Owner 자신이 옮겨진 borrow이면 옮긴 지점부터 owned root다. 이렇게
+  nested projection은 단계마다 같은 규칙으로 옮긴다.
+- Owner의 layout은 release가 정적 `alloc_size`로 해제하는 layout이다. 즉 exact struct,
+  closure, continuation frame layout이다. Variant마다 크기가 다른 enum 값과
+  `tribute_rt.anyref`/`intref`는 RTTI로 해제하므로 대상이 아니다. 교체 가능한 layout에서
+  읽은 값은 이미 자신의 unit을 가지므로 옮기지 않는다.
+- Owner의 final release와 옮기는 borrow의 모든 사용이 한 block 안에 있다. Edge에서 죽는
+  owner와 block 경계를 넘는 borrow는 옮기지 않는다.
+- `release_moving`을 둘 지점 P가 있다. Owner 자신의 모든 사용과, 옮기지 않는 borrow의
+  모든 사용은 P 앞에 있다. 옮기는 borrow의 모든 사용은 P 뒤에 있다. 기준 동작의 final
+  release 지점을 R이라 하면 P는 R보다 앞설 수 있되, P와 R 사이의 사용은 모두 옮기는
+  borrow의 사용이어야 한다. P 뒤의 사용만 unit을 받으므로, 공유된 owner의 경로에서
+  unit을 획득하기 전에 그 field를 다른 객체가 가진 채 release되는 구간이 생기지 않는다.
+- 옮기는 field는 owner에서 한 번만 읽는다. 같은 field를 두 번 이상 읽으면 owner를
+  옮기지 않는다. Field마다 unit은 하나뿐이고, 같은 field의 여러 값 사이에서 unit의
+  주인을 정하는 규칙을 두지 않는다.
+- 옮길 borrow는 P 뒤에 unit이 필요한 사용이 있는 것만 고른다. 그런 사용이 없는 borrow를
+  옮기면 획득 대신 final release 하나가 늘 뿐이다.
+
+조건을 하나라도 만족하지 않으면 기준 동작대로 사용마다 획득하고 owner를 release한다.
+
+Owner가 유일함을 plan이 정적으로 증명하면 lowering은 공유 경로를 생략할 수 있다.
+증명은 다음뿐이다: owner는 같은 block의 할당 결과이고, owner에 대한 action은
+call borrow, projection, final release뿐이다. Store·call·copy 획득, retained 매개변수로의
+call(callee가 unit을 저장할 수 있다)과 branch 전달이 하나라도 있으면 증명이 아니다.
 
 한 block 안에서 마지막으로 쓰이고 죽는 값은 그 사용 직후에, 사용이 terminator면 그
 직전에 release한다. Predecessor의 끝에서 살아 있지만 successor의 시작에서 살아 있지
@@ -432,7 +478,10 @@ into control flow and atomic operations by RC lowering.
   or encountering an alias/cast prevents elimination. If the `retain` result
   is used, its uses are replaced with the original pointer before erasing the
   pair. This optimization does not cross basic-block boundaries or chase
-  aliases.
+  aliases. `tribute_rt.release_moving` releases its owner and acquires a unit
+  for each moved operand at once, so the pass never matches it as an ordinary
+  release and treats it as a barrier for its moved operands: no earlier
+  `retain` of a moved value pairs with it.
 - **Borrowed parameter elision:** Typed planning은 managed 매개변수의 모든 사용이
   호출의 동적 범위 안에 머문다고 증명될 때만 그 매개변수를 borrowed로 분류한다.
   Borrowed 매개변수는 다음 불변식을 따른다: callee가 매개변수를 쓸 수 있는 동안
@@ -507,10 +556,14 @@ into control flow and atomic operations by RC lowering.
   매개변수로의 ordinary call이 owned 값의 마지막 사용일 때 값의 unit을 그 자리로
   옮긴다. 조건과 operand 규칙은 [typed ownership plan](#1-typed-ownership-and-rtti-plan)이
   정한다. Return과 proper tail은 이 정책과 무관하게 항상 unit을 옮긴다.
+- **Field moves:** Typed planning은 같은 block에서 죽는 owner에서 읽은 borrow에 unit이
+  필요한 사용이 남아 있으면 owner의 final release를 `tribute_rt.release_moving`으로
+  바꾸어 field의 unit을 그 borrow로 옮긴다. 조건과 배치는
+  [typed ownership plan](#1-typed-ownership-and-rtti-plan)이 정한다.
 - **Constant propagation (planned):** Elide RC for compile-time-known lifetimes
 
-The paired-elimination, borrowed-parameter, temporary-borrow, and last-use-move
-policies are
+The paired-elimination, borrowed-parameter, temporary-borrow, last-use-move, and
+field-move policies are
 selected independently by the native pipeline options, not stored in an IR
 lowering context. Production enables proven optimizations; the baseline profile
 disables them for conformance comparisons.
@@ -617,7 +670,29 @@ free_block:
 
 continue_block:
     // continue execution
+
+tribute_rt.release_moving(ptr, moved...) {layout, fields, alloc_size} ->
+    if ptr == null: jump continue_block
+    %rc_addr = clif.iadd(ptr, clif.iconst(-8))
+    %rc = clif.load(%rc_addr)
+    %is_unique = clif.icmp(%rc, clif.iconst(1), cond="eq")
+    clif.brif(%is_unique, then_dest=unique_block, else_dest=shared_block)
+
+unique_block:
+    // release each managed field of `layout` not listed in `fields`
+    %raw_ptr = clif.iadd(ptr, clif.iconst(-8))
+    clif.call(@__tribute_dealloc, %raw_ptr, clif.iconst(<alloc_size>))
+    clif.jump(continue_block)
+
+shared_block:
+    // tribute_rt.retain each moved operand
+    clif.store(clif.isub(%rc, clif.iconst(1)), %rc_addr)
+    clif.jump(continue_block)
 ```
+
+The unique path may be emitted inline or as a generated function per layout and
+moved-field set; generated code size is part of the policy's measured cost. When
+the plan proves the owner unique, only the unique path is emitted.
 
 **Pipeline position:** After unrealized cast legalization and
 `ReconcileUnrealizedCasts`, before `emit_module_to_native`.
@@ -713,7 +788,11 @@ ContinuationFrame. Capturing a managed value into that frame creates an
 independent owned reference and therefore materializes a retain. Destroying an
 unresumed one-shot continuation releases every owned frame field through the
 ordinary type-specific destructor. Resuming transfers the frame-owned values
-according to the continuation callable contract.
+according to the continuation callable contract. A resumption reads those
+values from a frame that dies in the same block, so the
+[field move](#1-typed-ownership-and-rtti-plan) applies: when the frame is
+unique, its values keep their units instead of being acquired before the frame
+is released.
 
 Proper-tail lowering emits releases for dying,
 non-transferred values before `func.tail_call` or
