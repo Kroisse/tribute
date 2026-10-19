@@ -110,6 +110,13 @@ impl Scalar {
     }
 }
 
+/// Whether converting `from` to `to` changes representation: a scalar to
+/// `tribute_rt.anyref` or back.
+pub fn changes_representation(ctx: &IrContext, from: TypeRef, to: TypeRef) -> bool {
+    (Anyref::matches(ctx, to) && Scalar::of(ctx, from).is_some())
+        || (Anyref::matches(ctx, from) && Scalar::of(ctx, to).is_some())
+}
+
 /// The box or unbox that converts `value` to `to`, if the conversion changes
 /// representation: a scalar to `tribute_rt.anyref` or back.
 pub fn box_or_unbox(
