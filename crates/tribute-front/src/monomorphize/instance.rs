@@ -73,6 +73,8 @@ pub(crate) struct InstanceKeys<'db> {
     class_variables: HashMap<FuncDefId<'db>, Vec<(usize, RowVar)>>,
     abilities: HashMap<AbilityId<'db>, CallingConvention>,
     pub(crate) row_classes: InstanceRowClasses,
+    /// The definition each instance made so far specializes.
+    origins: HashMap<SymbolPath, FuncDefId<'db>>,
 }
 
 impl<'db> InstanceKeys<'db> {
@@ -125,6 +127,7 @@ impl<'db> InstanceKeys<'db> {
             class_variables,
             abilities: metadata.ability_conventions.clone(),
             row_classes,
+            origins: HashMap::default(),
         }
     }
 
@@ -222,6 +225,13 @@ impl<'db> InstanceKeys<'db> {
         changed
     }
 
+    /// Whether the reference to `callee` is a reference to `function`: the
+    /// definition itself, or an instance made of it, which a clone of an
+    /// already rewritten body names and which its own classes may change.
+    pub(crate) fn refers_to(&self, callee: FuncDefId<'db>, function: FuncDefId<'db>) -> bool {
+        callee == function || self.origins.get(callee.path(self.db)) == Some(&function)
+    }
+
     /// Record the classes of the instance `name` of `function` that `key`
     /// selects.
     pub(crate) fn record(
@@ -230,6 +240,7 @@ impl<'db> InstanceKeys<'db> {
         function: FuncDefId<'db>,
         key: &InstanceKey<'db>,
     ) {
+        self.origins.insert(name.clone(), function);
         let Some(variables) = self.class_variables.get(&function) else {
             return;
         };

@@ -574,12 +574,13 @@ fn main() ->{Io} Nil {
 }
 
 /// A let-bound lambda copied into a class instance reads its body at the
-/// wrong class (Kroisse/tribute#1548). When that is fixed, this test fails
-/// and the check can report disagreements as errors.
+/// copy's class, including a reference its source body already named by a
+/// type instance.
 #[salsa_test]
-fn a_let_bound_lambda_copy_reads_its_body_at_the_wrong_class(db: &salsa::DatabaseImpl) {
-    let disagreements = convention_class_disagreements(
+fn a_let_bound_lambda_copy_reads_its_body_at_its_class(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
         db,
+        "test.trb",
         r#"
 fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
 
@@ -599,12 +600,19 @@ fn main() -> Nil {
 }
 "#,
     );
-    let rules: Vec<_> = disagreements.iter().map(|(rule, _)| *rule).collect();
-    assert_eq!(rules, ["reference", "lambda"], "{disagreements:?}");
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    assert_eq!(
+        tribute_passes::check_convention_classes::check(&ctx, module),
+        []
+    );
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let after = ir
+        .split("tribute_control.func @\"after$9D\"")
+        .nth(1)
+        .and_then(|rest| rest.split("\n  }\n").next())
+        .unwrap_or_else(|| panic!("after$9D in\n{ir}"));
     assert!(
-        disagreements
-            .iter()
-            .all(|(_, message)| message.contains("after$9D")),
-        "{disagreements:?}"
+        after.contains("callee = @\"app$std::String$9D\"") && !after.contains("convention(cps)"),
+        "{after}"
     );
 }
