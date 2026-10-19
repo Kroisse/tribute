@@ -219,9 +219,7 @@ impl Fold for UnboxInt {
 
 impl Fold for UnboxNat {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
-        // `convert_value` boxes a Nat with the int box.
         fold_unbox_of_box::<BoxNat>(ctx, self.op_ref())
-            .or_else(|| fold_unbox_of_box::<BoxInt>(ctx, self.op_ref()))
     }
 }
 
@@ -431,19 +429,6 @@ mod tests {
                 assert!(changes >= 1, "{unboxed}");
                 assert!(!text.contains(unboxed), "{unboxed}: {text}");
             }
-        }
-
-        #[test]
-        fn unbox_nat_of_an_int_box_forwards_the_nat() {
-            let (text, changes) = run(r#"core.module @test {
-  func.func @f(%x: tribute_rt.nat) -> tribute_rt.nat {
-    %b = tribute_rt.box_int %x : tribute_rt.anyref
-    %u = tribute_rt.unbox_nat %b : tribute_rt.nat
-    func.return %u
-  }
-}"#);
-            assert!(changes > 0);
-            assert!(!text.contains("unbox_nat"), "{text}");
         }
 
         #[test]

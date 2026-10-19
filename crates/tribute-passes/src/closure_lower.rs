@@ -30,7 +30,6 @@ use tribute_core::{
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::closure;
-use tribute_ir::dialect::tribute_rt;
 use tribute_ir::runtime_layout;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
@@ -285,9 +284,11 @@ impl RewritePattern for LowerClosureCallArena {
 
         let mut new_args = args;
         for &(index, expected) in &contract.argument_casts {
-            let cast = tribute_rt::convert_value(ctx, loc, new_args[index], expected);
-            rewriter.insert_op(cast);
-            new_args[index] = ctx.op_result(cast, 0);
+            let cast = core::UnrealizedConversionCast::operands(new_args[index])
+                .results(expected)
+                .build(ctx, loc);
+            rewriter.insert_op(cast.op_ref());
+            new_args[index] = cast.result(ctx);
         }
         new_args.insert(contract.environment_index, callee);
         let new_call = func::CallIndirect::operands(table_idx, new_args)
@@ -346,9 +347,11 @@ impl RewritePattern for LowerClosureTailCallArena {
             .build(ctx, location);
         let mut args = args.to_vec();
         for (index, expected) in contract.argument_casts {
-            let cast = tribute_rt::convert_value(ctx, location, args[index], expected);
-            rewriter.insert_op(cast);
-            args[index] = ctx.op_result(cast, 0);
+            let cast = core::UnrealizedConversionCast::operands(args[index])
+                .results(expected)
+                .build(ctx, location);
+            rewriter.insert_op(cast.op_ref());
+            args[index] = cast.result(ctx);
         }
         args.insert(contract.environment_index, callee);
         let tail = func::TailCallIndirect::operands(func_ref.result(ctx), args)
