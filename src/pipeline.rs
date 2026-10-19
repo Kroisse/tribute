@@ -1932,6 +1932,29 @@ mod tests {
     }
 
     #[test]
+    fn baseline_options_disable_every_optional_native_optimization() {
+        assert_eq!(
+            OptimizationOptions::baseline().native,
+            NativeOptimizationOptions {
+                paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+                borrowed_parameters: BorrowedParameterPolicy::Preserve,
+                temporary_borrows: TemporaryBorrowPolicy::Preserve,
+                last_use_moves: LastUseMovePolicy::Acquire,
+                field_moves: FieldMovePolicy::Acquire,
+            }
+        );
+        assert_eq!(
+            native_ownership_plan_options(None, OptimizationOptions::baseline().native),
+            tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
+                elide_proven_borrowed_parameters: false,
+                elide_proven_field_borrows: false,
+                move_units_at_last_use: false,
+                move_fields_from_dying_owners: false,
+            }
+        );
+    }
+
+    #[test]
     fn native_ownership_plan_options_follow_stage_policy_table() {
         let parameter_elision_only = NativeOptimizationOptions {
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
