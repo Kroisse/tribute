@@ -123,7 +123,7 @@ use itertools::Itertools;
 const SUPPORTED_CMPF_PREDICATES: [&str; 6] = ["oeq", "une", "olt", "ole", "ogt", "oge"];
 
 impl crate::ops::Verify for Const {
-    fn verify(self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         let ty = ctx.value_ty(self.result(ctx));
         let accepted = match self.value(ctx) {
             Attribute::Int(_) => IntegerLike::matches(ctx, ty),
@@ -145,7 +145,7 @@ impl crate::ops::Verify for Const {
 }
 
 impl crate::ops::Verify for Cmpf {
-    fn verify(self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         let predicate = self.predicate(ctx);
         if SUPPORTED_CMPF_PREDICATES.contains(&predicate) {
             return Ok(());
@@ -188,7 +188,7 @@ fn verify_width(
 macro_rules! width_verifier {
     ($op:ident, $width:path, $widens:literal) => {
         impl crate::ops::Verify for $op {
-            fn verify(self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
+            fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
                 Ok(verify_width(ctx, self.op_ref(), $width, $widens)?)
             }
         }
@@ -208,7 +208,7 @@ width_verifier!(Truncf, FloatLike::width, false);
 /// - `x + 0` / `0 + x` → `x`
 /// - `const(a) + const(b)` → `const(wrap(a+b))` at the result width
 impl Fold for Addi {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
         if const_int_value(ctx, rhs) == Some(0) {
@@ -230,7 +230,7 @@ impl Fold for Addi {
 ///   separate fold so the rewrite direction stays unambiguous.)
 /// - `const(a) - const(b)` → `const(wrap(a-b))` at the result width.
 impl Fold for Subi {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
         if const_int_value(ctx, rhs) == Some(0) {
@@ -249,7 +249,7 @@ impl Fold for Subi {
 /// - `x * 1` / `1 * x` → `x`.
 /// - `const(a) * const(b)` → `const(wrap(a*b))` at the result width.
 impl Fold for Muli {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
         if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
@@ -280,7 +280,7 @@ impl Fold for Muli {
 ///   conservative choice is to leave the op alone — that way IR
 ///   semantics match whatever the backend does.
 impl Fold for Divsi {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
         let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
@@ -301,7 +301,7 @@ impl Fold for Divsi {
 /// width, interpreting both operands as unsigned `N`-bit values.
 /// Bails when the unsigned divisor is zero.
 impl Fold for Divui {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
         let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
@@ -323,7 +323,7 @@ impl Fold for Divui {
 /// Mirrors the `arith.divsi` fold: bails on `b == 0` and on `INT_MIN % -1` (which
 /// also traps on Cranelift `srem` and WASM `i32.rem_s`).
 impl Fold for Remsi {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
         let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
@@ -344,7 +344,7 @@ impl Fold for Remsi {
 /// width, interpreting both operands as unsigned `N`-bit values.
 /// Bails when the unsigned divisor is zero.
 impl Fold for Remui {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
         let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
@@ -369,7 +369,7 @@ impl Fold for Remui {
 ///   `i128`.
 /// - `const(a) & const(b)` → `const(wrap(a&b))` at the result width.
 impl Fold for And {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
         if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
@@ -395,7 +395,7 @@ impl Fold for And {
 ///   width when interpreted as a sign-extended `i128`).
 /// - `const(a) | const(b)` → `const(wrap(a|b))` at the result width.
 impl Fold for Or {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
         if const_int_value(ctx, rhs) == Some(0) {
@@ -423,7 +423,7 @@ impl Fold for Or {
 /// later pass that handles same-operand peepholes uniformly across
 /// the dialect (see `subi`, which doesn't fold `x - x → 0` either).
 impl Fold for Xor {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
         if const_int_value(ctx, rhs) == Some(0) {

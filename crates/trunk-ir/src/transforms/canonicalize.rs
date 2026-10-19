@@ -98,7 +98,7 @@ pub enum FoldResult {
 /// [`FoldResult`] after the fold returns.
 #[op_interface]
 pub trait Fold: DialectOp {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult>;
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult>;
 }
 
 /// One `RewritePattern` that dispatches to per-op folds through

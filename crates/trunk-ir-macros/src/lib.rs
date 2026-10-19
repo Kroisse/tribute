@@ -78,16 +78,18 @@ fn dialect_impl(
 /// ```ignore
 /// #[trunk_ir::op_interface]
 /// pub trait Branch: DialectOp {
-///     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
+///     fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
 /// }
 ///
 /// let successors = DynBranch::get(ctx, op)?.successors(ctx);
 /// ```
 ///
-/// Every method takes `self` or `&self` followed by the IR context
-/// (`&IrContext` or `&mut IrContext`); methods may be generic over
-/// lifetimes only. Default bodies are kept and dispatched like any other
-/// method.
+/// Every method takes `&self` followed by the IR context (`&IrContext` or
+/// `&mut IrContext`); methods may be generic over lifetimes only. A result
+/// borrowed from the context names the context's lifetime, since elision
+/// would tie it to `&self`:
+/// `fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath`.
+/// Default bodies are kept and dispatched like any other method.
 ///
 /// ## Generated code
 ///

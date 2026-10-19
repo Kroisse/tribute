@@ -55,16 +55,9 @@ struct Method {
     docs: Vec<TokenStream>,
     name: Ident,
     lifetimes: TokenStream,
-    receiver: Receiver,
     ctx: Param,
     params: Vec<Param>,
     ret: TokenStream,
-}
-
-#[derive(Clone, Copy)]
-enum Receiver {
-    Value,
-    Ref,
 }
 
 struct Param {
@@ -280,20 +273,12 @@ fn parse_method(
     }
 
     let mut params = split_top_level(params, ',').into_iter();
-    let receiver = match params.next().as_deref() {
-        Some([TokenTree::Ident(id)]) if id == "self" => Receiver::Value,
-        Some([TokenTree::Ident(m), TokenTree::Ident(id)]) if m == "mut" && id == "self" => {
-            Receiver::Value
-        }
-        Some([TokenTree::Punct(p), TokenTree::Ident(id)]) if p.as_char() == '&' && id == "self" => {
-            Receiver::Ref
-        }
-        _ => {
-            return Err(format!(
-                "interface method `{name}` must take `self` or `&self`"
-            ));
-        }
-    };
+    if !matches!(
+        params.next().as_deref(),
+        Some([TokenTree::Punct(p), TokenTree::Ident(id)]) if p.as_char() == '&' && id == "self"
+    ) {
+        return Err(format!("interface method `{name}` must take `&self`"));
+    }
     let mut params = params
         .enumerate()
         .map(|(index, tokens)| parse_param(&name, index, tokens))
@@ -312,7 +297,6 @@ fn parse_method(
             docs,
             name,
             lifetimes,
-            receiver,
             ctx,
             params,
             ret,
@@ -469,10 +453,6 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         let ret = &m.ret;
         let lifetimes = &m.lifetimes;
         let lifetimes = (!lifetimes.is_empty()).then(|| quote!(#lifetimes,));
-        let this = match m.receiver {
-            Receiver::Value => quote!(__trunk_ir_this),
-            Receiver::Ref => quote!(&__trunk_ir_this),
-        };
         quote! {
             fn #thunk<#lifetimes T: #name>(
                 #ctx: #ctx_ty,
@@ -480,7 +460,7 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
                 #(, #args: #tys)*
             ) #ret {
                 let __trunk_ir_this = <T as #wrapper>::#from_ref(&*#ctx, __trunk_ir_subject).expect(#expect_msg);
-                <T as #name>::#method(#this, #ctx #(, #args)*)
+                <T as #name>::#method(&__trunk_ir_this, #ctx #(, #args)*)
             }
         }
     });
@@ -632,7 +612,7 @@ mod tests {
     fn method_gets_vtable_slot_thunk_and_handle_method() {
         let out = expand(quote! {
             pub trait Branch: DialectOp {
-                fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, Error>;
+                fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, Error>;
             }
         });
         assert!(out.contains("pub struct __BranchVTable"), "got: {out}");
@@ -641,7 +621,7 @@ mod tests {
             "got: {out}"
         );
         assert!(
-            out.contains("< T as Branch > :: successors (__trunk_ir_this , ctx)"),
+            out.contains("< T as Branch > :: successors (& __trunk_ir_this , ctx)"),
             "got: {out}"
         );
         assert!(out.contains("pub struct DynBranch"), "got: {out}");
@@ -671,7 +651,7 @@ mod tests {
     fn lifetimes_become_higher_ranked_slots() {
         let out = expand(quote! {
             pub trait Args: DialectOp {
-                fn arguments<'a>(self, ctx: &'a IrContext) -> Option<&'a [ValueRef]>;
+                fn arguments<'a>(&self, ctx: &'a IrContext) -> Option<&'a [ValueRef]>;
             }
         });
         assert!(
@@ -685,11 +665,11 @@ mod tests {
     }
 
     #[test]
-    fn ref_receiver_mut_context_and_extra_params() {
+    fn mut_context_and_extra_params() {
         let out = expand(quote! {
             pub trait Sig: DialectOp {
                 fn allowed(&self, _ctx: &IrContext) -> bool { false }
-                fn set(self, ctx: &mut IrContext, signature: HashMap<A, B>) -> bool;
+                fn set(&self, ctx: &mut IrContext, signature: HashMap<A, B>) -> bool;
             }
         });
         assert!(
@@ -703,7 +683,7 @@ mod tests {
             "got: {out}"
         );
         assert!(
-            out.contains("< T as Sig > :: set (__trunk_ir_this , ctx , signature)"),
+            out.contains("< T as Sig > :: set (& __trunk_ir_this , ctx , signature)"),
             "got: {out}"
         );
     }
@@ -715,7 +695,7 @@ mod tests {
             TokenStream::new(),
             quote! {
                 pub trait Sized: DialectType {
-                    fn size(self, ctx: &IrContext) -> u32;
+                    fn size(&self, ctx: &IrContext) -> u32;
                 }
             },
         )
@@ -742,7 +722,7 @@ mod tests {
         let error = match gen_interface(
             Kind::Type,
             TokenStream::new(),
-            quote! { trait X: DialectType { fn ty(self, ctx: &IrContext); } },
+            quote! { trait X: DialectType { fn ty(&self, ctx: &IrContext); } },
         ) {
             Err(error) => error,
             Ok(tokens) => panic!("expected an error, got: {tokens}"),
@@ -804,7 +784,7 @@ mod tests {
                 .contains("type interface `X` can only declare methods, found `x`")
         );
         assert!(
-            expand_err(quote! { trait X: DialectOp { fn op(self, ctx: &IrContext); } })
+            expand_err(quote! { trait X: DialectOp { fn op(&self, ctx: &IrContext); } })
                 .contains("reserved")
         );
         assert!(expand(quote! { trait X: DialectOp {} }).contains("operation interface"),);
@@ -818,19 +798,23 @@ mod tests {
                 .contains("only declare methods")
         );
         assert!(
-            expand_err(quote! { trait X: DialectOp { fn f<T>(self, ctx: &IrContext); } })
+            expand_err(quote! { trait X: DialectOp { fn f<T>(&self, ctx: &IrContext); } })
                 .contains("only be generic over lifetimes")
         );
         assert!(
             expand_err(quote! { trait X: DialectOp { fn f(ctx: &IrContext); } })
-                .contains("`self` or `&self`")
+                .contains("must take `&self`")
         );
         assert!(
-            expand_err(quote! { trait X: DialectOp { fn f(self, n: u32); } })
+            expand_err(quote! { trait X: DialectOp { fn f(self, ctx: &IrContext); } })
+                .contains("must take `&self`")
+        );
+        assert!(
+            expand_err(quote! { trait X: DialectOp { fn f(&self, n: u32); } })
                 .contains("IR context")
         );
         assert!(
-            expand_err(quote! { trait X: DialectOp { fn op(self, ctx: &IrContext); } })
+            expand_err(quote! { trait X: DialectOp { fn op(&self, ctx: &IrContext); } })
                 .contains("reserved")
         );
     }

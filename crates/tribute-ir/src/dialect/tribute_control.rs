@@ -445,13 +445,13 @@ fn verify_evidence_steps(
 }
 
 impl trunk_ir::ops::Verify for FuncRef {
-    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(row_args(ctx, self.op_ref()).map(drop)?)
     }
 }
 
 impl trunk_ir::ops::Verify for Call {
-    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         row_args(ctx, self.op_ref())?;
         Ok(verify_evidence_plan(
             ctx,
@@ -462,7 +462,7 @@ impl trunk_ir::ops::Verify for Call {
 }
 
 impl trunk_ir::ops::Verify for CallIndirect {
-    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -472,7 +472,7 @@ impl trunk_ir::ops::Verify for CallIndirect {
 }
 
 impl trunk_ir::ops::Verify for TailCall {
-    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         row_args(ctx, self.op_ref())?;
         Ok(verify_evidence_plan(
             ctx,
@@ -483,7 +483,7 @@ impl trunk_ir::ops::Verify for TailCall {
 }
 
 impl trunk_ir::ops::Verify for TailCallIndirect {
-    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -493,7 +493,7 @@ impl trunk_ir::ops::Verify for TailCallIndirect {
 }
 
 impl trunk_ir::ops::Verify for Resume {
-    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -503,7 +503,7 @@ impl trunk_ir::ops::Verify for Resume {
 }
 
 impl trunk_ir::ops::Verify for Handle {
-    fn verify(self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -842,12 +842,12 @@ impl Func {
 }
 
 impl CallLike for Call {
-    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+    fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
     }
 }
 impl CallLike for TailCall {
-    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+    fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
     }
 }
@@ -1357,7 +1357,7 @@ fn parse_func<'a>(
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Func {
-    fn print(self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
         print_func(h, self.op_ref())
     }
 
@@ -1497,7 +1497,7 @@ fn parse_lambda<'a>(
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {
-    fn print(self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
         print_lambda(h, self.op_ref())
     }
 

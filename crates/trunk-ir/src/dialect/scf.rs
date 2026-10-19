@@ -91,7 +91,7 @@ impl If {
 
 impl RegionBranch for If {
     fn successors(
-        self,
+        &self,
         ctx: &IrContext,
         point: RegionBranchPoint,
     ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
@@ -116,7 +116,7 @@ impl RegionBranch for If {
     }
 
     fn entry_successor_operands(
-        self,
+        &self,
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
@@ -147,7 +147,7 @@ impl Loop {
 
 impl RegionBranch for Loop {
     fn successors(
-        self,
+        &self,
         ctx: &IrContext,
         point: RegionBranchPoint,
     ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
@@ -157,7 +157,7 @@ impl RegionBranch for Loop {
                 self.body(ctx),
             )])),
             RegionBranchPoint::Terminator(terminator)
-                if Self::enclosing(ctx, terminator) == Some(self)
+                if Self::enclosing(ctx, terminator) == Some(*self)
                     && Continue::matches(ctx, terminator) =>
             {
                 Ok(RegionSuccessors::new([RegionSuccessor::Region(
@@ -165,7 +165,7 @@ impl RegionBranch for Loop {
                 )]))
             }
             RegionBranchPoint::Terminator(terminator)
-                if Self::enclosing(ctx, terminator) == Some(self)
+                if Self::enclosing(ctx, terminator) == Some(*self)
                     && Break::matches(ctx, terminator) =>
             {
                 Ok(RegionSuccessors::new([RegionSuccessor::Parent]))
@@ -179,7 +179,7 @@ impl RegionBranch for Loop {
     }
 
     fn entry_successor_operands(
-        self,
+        &self,
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
@@ -246,7 +246,7 @@ impl Switch {
 
 impl RegionBranch for Switch {
     fn successors(
-        self,
+        &self,
         ctx: &IrContext,
         point: RegionBranchPoint,
     ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
@@ -279,7 +279,7 @@ impl RegionBranch for Switch {
     }
 
     fn entry_successor_operands(
-        self,
+        &self,
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
@@ -299,10 +299,10 @@ impl RegionBranch for Switch {
 }
 
 trait SwitchArmModel: DialectOp {
-    fn body_region(self, ctx: &IrContext) -> crate::refs::RegionRef;
+    fn body_region(&self, ctx: &IrContext) -> crate::refs::RegionRef;
 
     fn checked_body(
-        self,
+        &self,
         ctx: &IrContext,
     ) -> Result<crate::refs::RegionRef, ControlFlowInterfaceError> {
         if ctx.op_region_count(self.op_ref()) != 1 {
@@ -314,7 +314,7 @@ trait SwitchArmModel: DialectOp {
     }
 
     fn arm_successors(
-        self,
+        &self,
         ctx: &IrContext,
         point: RegionBranchPoint,
     ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
@@ -351,20 +351,20 @@ trait SwitchArmModel: DialectOp {
 }
 
 impl SwitchArmModel for Case {
-    fn body_region(self, ctx: &IrContext) -> crate::refs::RegionRef {
+    fn body_region(&self, ctx: &IrContext) -> crate::refs::RegionRef {
         self.body(ctx)
     }
 }
 
 impl SwitchArmModel for Default {
-    fn body_region(self, ctx: &IrContext) -> crate::refs::RegionRef {
+    fn body_region(&self, ctx: &IrContext) -> crate::refs::RegionRef {
         self.body(ctx)
     }
 }
 
 impl RegionBranch for Case {
     fn successors(
-        self,
+        &self,
         ctx: &IrContext,
         point: RegionBranchPoint,
     ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
@@ -372,7 +372,7 @@ impl RegionBranch for Case {
     }
 
     fn entry_successor_operands(
-        self,
+        &self,
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
@@ -382,7 +382,7 @@ impl RegionBranch for Case {
 
 impl RegionBranch for Default {
     fn successors(
-        self,
+        &self,
         ctx: &IrContext,
         point: RegionBranchPoint,
     ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
@@ -390,7 +390,7 @@ impl RegionBranch for Default {
     }
 
     fn entry_successor_operands(
-        self,
+        &self,
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
@@ -400,7 +400,7 @@ impl RegionBranch for Default {
 
 impl RegionBranchTerminator for Yield {
     fn successor_operands(
-        self,
+        &self,
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
@@ -415,7 +415,7 @@ impl RegionBranchTerminator for Yield {
 
 impl RegionBranchTerminator for Continue {
     fn successor_operands(
-        self,
+        &self,
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
@@ -440,7 +440,7 @@ impl RegionBranchTerminator for Continue {
 
 impl RegionBranchTerminator for Break {
     fn successor_operands(
-        self,
+        &self,
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
@@ -495,7 +495,7 @@ use crate::types::Attribute;
 /// any structural mismatch (yield arity, non-`i1` const, malformed
 /// regions).
 impl Fold for If {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let if_op = self;
         let cond = if_op.cond(ctx);
@@ -555,7 +555,7 @@ impl Fold for If {
 /// case value is negative: a sign-extended constant may alias an unsigned
 /// case value at the discriminant's width.
 impl Fold for Switch {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let switch = self;
         if !ctx.op_results(op).is_empty() {

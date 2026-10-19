@@ -29,18 +29,18 @@ pub struct Probed;
 #[trunk_ir::op_interface]
 pub trait Consumes: DialectOp {
     /// The operands the operation reads, at most `max` of them.
-    fn consumed<'a>(self, ctx: &'a IrContext, max: &usize) -> &'a [ValueRef];
+    fn consumed<'a>(&self, ctx: &'a IrContext, max: &usize) -> &'a [ValueRef];
 
     fn count(&self, ctx: &IrContext) -> usize {
         ctx.op_operands(self.op_ref()).len()
     }
 
     /// Whether `op` is this operation; `this` is a tag returned on a match.
-    fn same_as(self, _ctx: &IrContext, op: OpRef, this: u32) -> Option<u32> {
+    fn same_as(&self, _ctx: &IrContext, op: OpRef, this: u32) -> Option<u32> {
         (self.op_ref() == op).then_some(this)
     }
 
-    fn forget_last(self, ctx: &mut IrContext, keep: u32) -> bool {
+    fn forget_last(&self, ctx: &mut IrContext, keep: u32) -> bool {
         let op = self.op_ref();
         if ctx.op_operands(op).len() <= keep as usize {
             return false;
@@ -51,14 +51,14 @@ pub trait Consumes: DialectOp {
 }
 
 impl Consumes for probe::Pair {
-    fn consumed<'a>(self, ctx: &'a IrContext, max: &usize) -> &'a [ValueRef] {
+    fn consumed<'a>(&self, ctx: &'a IrContext, max: &usize) -> &'a [ValueRef] {
         let operands = ctx.op_operands(self.op_ref());
         &operands[..operands.len().min(*max)]
     }
 }
 
 impl Consumes for arith::Addi {
-    fn consumed<'a>(self, ctx: &'a IrContext, _max: &usize) -> &'a [ValueRef] {
+    fn consumed<'a>(&self, ctx: &'a IrContext, _max: &usize) -> &'a [ValueRef] {
         &ctx.op_operands(self.op_ref())[..1]
     }
 

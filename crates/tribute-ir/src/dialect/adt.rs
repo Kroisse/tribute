@@ -235,7 +235,7 @@ impl ForwardStructGet {
 ///
 /// The cast is the identity when its operand already has the result type.
 impl Fold for RefCast {
-    fn fold(self, ctx: &IrContext) -> Option<FoldResult> {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let cast = self;
         let operand = cast.r#ref(ctx);
@@ -497,8 +497,8 @@ fn finish_struct_type(
 // Names are bare identifiers, or quoted strings when they are not identifiers.
 
 impl trunk_ir::asm_format::TypeAsmFormat for Struct {
-    fn print(self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        write_struct_type(h, self)
+    fn print(&self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        write_struct_type(h, *self)
     }
 
     fn parse<'a>(
@@ -725,8 +725,8 @@ impl Enum {
 // by the field's other attributes.
 
 impl trunk_ir::asm_format::TypeAsmFormat for Enum {
-    fn print(self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        write_enum_type(h, self)
+    fn print(&self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        write_enum_type(h, *self)
     }
 
     fn parse<'a>(

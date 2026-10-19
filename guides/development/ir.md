@@ -227,7 +227,7 @@ declared with `#[trunk_ir::op_interface]`:
 ```rust
 #[op_interface]
 pub trait Branch: DialectOp {
-    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
+    fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
 }
 ```
 
@@ -245,13 +245,16 @@ mod cf {
 }
 
 impl Branch for Br {
-    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> { .. }
+    fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> { .. }
 }
 ```
 
-Each method takes `self` or `&self`, then the context (`&IrContext` or
+Each method takes `&self`, then the context (`&IrContext` or
 `&mut IrContext`), and may be generic over lifetimes only; default bodies
-are dispatched like other methods. `#[implements(..)]` registers the
+are dispatched like other methods. A result borrowed from the context names
+the context's lifetime, since elision would tie it to `&self`, as
+`direct_callee` does below. The trait hooks a declaration opts into, such as
+`Verify` and `OpAsmFormat`, take `&self` the same way. `#[implements(..)]` registers the
 implementation by the operation's name, and a missing `impl` is reported at
 its entry. The paths resolve where the `#[dialect]` module is declared.
 Registering an operation twice for one interface panics when that interface
@@ -479,7 +482,7 @@ wrapper's accessor:
 
 ```rust
 impl CallLike for Call {
-    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+    fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
     }
 }

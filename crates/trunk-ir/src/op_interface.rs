@@ -202,7 +202,7 @@ pub struct RegionValueTransfer {
 /// A registered owner with an invalid signature is still an ownership boundary.
 #[op_interface]
 pub trait CallableOwner: DialectOp {
-    fn callable_signature(self, ctx: &IrContext) -> Option<crate::dialect::func::FuncSig>;
+    fn callable_signature(&self, ctx: &IrContext) -> Option<crate::dialect::func::FuncSig>;
 }
 
 /// Semantics of operations that leave the current callable.
@@ -227,7 +227,7 @@ pub trait CallableExit: DialectOp {
         Ok(())
     }
 
-    fn exits_callable(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
+    fn exits_callable(&self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
         let op = self.op_ref();
         if !ctx.op_results(op).is_empty() {
             return Err(ControlFlowInterfaceError::new(
@@ -271,7 +271,7 @@ impl DynCallableExit {
 /// reads its callee through the wrapper's generated accessor.
 #[op_interface]
 pub trait CallLike: DialectOp {
-    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath;
+    fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath;
 }
 
 /// Semantic accessors for indirect calls.
@@ -282,37 +282,37 @@ pub trait CallLike: DialectOp {
 #[op_interface]
 pub trait IndirectCallLike: DialectOp {
     /// The erased runtime callee or table-index value.
-    fn indirect_callee(self, ctx: &IrContext) -> Option<ValueRef> {
+    fn indirect_callee(&self, ctx: &IrContext) -> Option<ValueRef> {
         ctx.op_operands(self.op_ref()).first().copied()
     }
 
     /// The arguments supplied to the transfer, excluding its callee.
-    fn indirect_arguments(self, ctx: &IrContext) -> Option<&[ValueRef]> {
+    fn indirect_arguments<'a>(&self, ctx: &'a IrContext) -> Option<&'a [ValueRef]> {
         ctx.op_operands(self.op_ref()).get(1..)
     }
 
-    fn exact_signature(self, ctx: &IrContext) -> Option<TypeRef>;
+    fn exact_signature(&self, ctx: &IrContext) -> Option<TypeRef>;
 
-    fn set_exact_signature(self, ctx: &mut IrContext, signature: TypeRef) -> bool;
+    fn set_exact_signature(&self, ctx: &mut IrContext, signature: TypeRef) -> bool;
 }
 
 /// Block branch semantics.
 #[op_interface]
 pub trait Branch: DialectOp {
-    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
+    fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
 }
 
 /// Control-flow semantics between an operation and nested regions.
 #[op_interface]
 pub trait RegionBranch: DialectOp {
     fn successors(
-        self,
+        &self,
         ctx: &IrContext,
         point: RegionBranchPoint,
     ) -> Result<RegionSuccessors, ControlFlowInterfaceError>;
 
     fn entry_successor_operands(
-        self,
+        &self,
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
@@ -364,7 +364,7 @@ impl DynRegionBranch {
 #[op_interface]
 pub trait RegionBranchTerminator: DialectOp {
     fn successor_operands(
-        self,
+        &self,
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError>;

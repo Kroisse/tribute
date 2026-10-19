@@ -37,7 +37,7 @@ use crate::dialect::core::IntegerLike;
 use crate::op_interface::{Branch, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError};
 
 impl Branch for Br {
-    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         if ctx.op_successor_count(self.op_ref()) != 1 {
             return Err(ControlFlowInterfaceError::new(
                 "cf.br requires exactly one successor",
@@ -51,7 +51,7 @@ impl Branch for Br {
 }
 
 impl Branch for CondBr {
-    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         let op = self.op_ref();
         if ctx.op_operands(op).len() != 1 || ctx.op_successor_count(op) != 2 {
             return Err(ControlFlowInterfaceError::new(
@@ -97,7 +97,7 @@ fn case_pattern(width: u32, case: i64) -> Option<i128> {
 impl crate::ops::Verify for Switch {
     /// Every case has one target and is a distinct value of the
     /// discriminant's type.
-    fn verify(self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
+    fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         let cases: Vec<i64> = self.cases(ctx).collect();
         let targets = self.targets(ctx).count();
         if cases.len() != targets {
@@ -110,7 +110,7 @@ impl crate::ops::Verify for Switch {
 }
 
 impl Branch for Switch {
-    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         let op = self.op_ref();
         if ctx.op_operands(op).len() != 1 || !ctx.op_has_successors(op) {
             return Err(ControlFlowInterfaceError::new(
