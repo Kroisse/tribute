@@ -315,14 +315,8 @@ impl<'a> Verifier<'a> {
         }
         let has_exact_signature = if let Ok(function) = func::Func::from_op(ctx, op) {
             Some(func::FuncSig::from_type_ref(ctx, function.r#type(ctx)).is_some())
-        } else if func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op) {
-            Some(
-                DynIndirectCallLike::get(ctx, op)
-                    .and_then(|call| call.exact_signature(ctx))
-                    .is_some(),
-            )
         } else {
-            None
+            DynIndirectCallLike::get(ctx, op).map(|call| call.exact_signature(ctx).is_some())
         };
         if has_exact_signature == Some(false) {
             self.report(ViolationKind::MissingExactSignature, Some(op), op_name);

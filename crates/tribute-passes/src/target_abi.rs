@@ -1357,12 +1357,9 @@ fn validate_transfers(
             continue;
         }
 
-        if !func::CallIndirect::matches(ctx, op) && !func::TailCallIndirect::matches(ctx, op) {
+        let Some(call) = DynIndirectCallLike::get(ctx, op) else {
             continue;
-        }
-        let call = DynIndirectCallLike::get(ctx, op).ok_or_else(|| {
-            TargetAbiError::new("target ABI: indirect transfer is not registered")
-        })?;
+        };
         let signature = call.exact_signature(ctx);
         let convention = exact_convention(ctx, op)?;
         // An invalid signature attribute is rejected below, not skipped.

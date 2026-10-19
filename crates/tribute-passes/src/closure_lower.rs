@@ -37,6 +37,7 @@ use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
+use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
@@ -328,8 +329,7 @@ fn exact_tail_results(
 ) -> Option<Vec<TypeRef>> {
     let closure = physical_closure_type_for_callee(ctx, callee)?;
     let signature = closure::Closure::from_type_ref(ctx, closure)?.func_type(ctx);
-    let exact = trunk_ir::op_interface::DynIndirectCallLike::get(ctx, op)
-        .and_then(|call| call.exact_signature(ctx))?;
+    let exact = DynIndirectCallLike::get(ctx, op).and_then(|call| call.exact_signature(ctx))?;
     if exact != signature {
         return None;
     }
@@ -476,8 +476,8 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
         if func::Func::matches(ctx, op) {
             return ControlFlow::Continue(WalkAction::Skip);
         }
-        if func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op) {
-            transfers.push(op);
+        if let Some(call) = DynIndirectCallLike::get(ctx, op) {
+            transfers.push(call);
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
@@ -486,9 +486,11 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
     }
 
     let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
-    transfers.into_iter().all(|op| {
-        let operands = ctx.op_operands(op).to_vec();
-        let Some((&callee, args)) = operands.split_first() else {
+    transfers.into_iter().all(|call| {
+        let op = call.op();
+        let callee = call.indirect_callee(ctx);
+        let args = call.indirect_arguments(ctx).map(<[_]>::to_vec);
+        let (Some(callee), Some(args)) = (callee, args) else {
             return false;
         };
         if physical_closure_type_for_callee(ctx, callee).is_none() {
@@ -503,13 +505,13 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
             let results = ctx.op_result_types(op).to_vec();
             let expected = usize::from(convention != CallingConvention::Cps);
             results.len() == expected
-                && exact_physical_call_contract(ctx, callee, convention, args, &results, anyref)
+                && exact_physical_call_contract(ctx, callee, convention, &args, &results, anyref)
                     .is_some()
         } else {
             let Some(results) = exact_tail_results(ctx, op, callee, convention) else {
                 return false;
             };
-            exact_physical_call_contract(ctx, callee, convention, args, &results, anyref).is_some()
+            exact_physical_call_contract(ctx, callee, convention, &args, &results, anyref).is_some()
         }
     })
 }
@@ -1222,7 +1224,7 @@ mod tests {
             .copied()
             .find(|op| func::TailCallIndirect::from_op(&ctx, *op).is_ok())
             .unwrap();
-        let signature = trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, tail)
+        let signature = DynIndirectCallLike::get(&ctx, tail)
             .and_then(|call| call.exact_signature(&ctx))
             .unwrap();
         let callable = func::FuncSig::from_type_ref(&ctx, signature).unwrap();

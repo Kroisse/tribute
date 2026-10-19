@@ -512,16 +512,7 @@ impl ActionPlanner<'_> {
         op: OpRef,
         transferred: &mut HashSet<ValueRef>,
     ) -> Result<(), OwnershipPlanError> {
-        let indirect = if func::CallIndirect::matches(self.ir, op)
-            || func::TailCallIndirect::matches(self.ir, op)
-        {
-            Some(
-                DynIndirectCallLike::get(self.ir, op)
-                    .ok_or_else(|| OwnershipPlanError::new("indirect call is not registered"))?,
-            )
-        } else {
-            None
-        };
+        let indirect = DynIndirectCallLike::get(self.ir, op);
         let tail =
             func::TailCall::matches(self.ir, op) || func::TailCallIndirect::matches(self.ir, op);
         let operands = self.ir.op_operands(op);
