@@ -105,11 +105,13 @@ fn build_schedule(
     plan.validate_against(ctx, module)?;
     let mut schedule = Vec::new();
     for function in plan.functions() {
-        let mut field_moves = HashMap::<ActionAnchor, Vec<(ValueRef, u32)>>::default();
+        // Owners dying after the same operation share an anchor, so each
+        // moved field is keyed by the owner its projection reads too.
+        let mut field_moves = HashMap::<(ActionAnchor, ValueRef), Vec<(ValueRef, u32)>>::default();
         for action in function.actions() {
             if action.kind == ActionKind::FieldMove {
                 field_moves
-                    .entry(action.anchor)
+                    .entry((action.anchor, projection_owner(ctx, action.value)?))
                     .or_default()
                     .push((action.value, action.destination));
             }
@@ -147,9 +149,11 @@ fn build_schedule(
                     });
                 }
                 ActionKind::ReleaseMoving => {
-                    let moved = field_moves.remove(&action.anchor).ok_or_else(|| {
-                        OwnershipPlanError::new("moving release has no moved field")
-                    })?;
+                    let moved = field_moves
+                        .remove(&(action.anchor, action.value))
+                        .ok_or_else(|| {
+                            OwnershipPlanError::new("moving release has no moved field")
+                        })?;
                     schedule.push(release_moving(
                         ctx,
                         plan,
@@ -287,6 +291,19 @@ fn release_moving(
         alloc_size,
         release_offsets,
     })
+}
+
+/// The owner a moved projection reads, through exact alias casts.
+fn projection_owner(
+    ctx: &IrContext,
+    projection: ValueRef,
+) -> Result<ValueRef, RcMaterializationError> {
+    let trunk_ir::ValueDef::OpResult(op, _) = ctx.value_def(projection) else {
+        return Err(OwnershipPlanError::new("moved field is not a projection"));
+    };
+    let get = adt::StructGet::from_op(ctx, op)
+        .map_err(|_| OwnershipPlanError::new("moved field is not an adt.struct_get"))?;
+    Ok(alias_root(ctx, get.r#ref(ctx)))
 }
 
 /// The value an exact alias cast chain starts from.

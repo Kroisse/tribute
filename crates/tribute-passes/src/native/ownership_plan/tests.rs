@@ -1273,6 +1273,60 @@ fn a_moved_field_used_twice_acquires_once_and_moves_at_its_last_use() {
 }
 
 #[test]
+fn owners_released_after_the_same_operation_move_their_own_fields() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !Env = adt.struct<Env(value: core.i32)>
+  !EnvRef = adt.typeref<{name = "Env"}>
+  !Pair = adt.struct<Pair(left: !EnvRef, right: !EnvRef)>
+  !PairRef = adt.typeref<{name = "Pair"}>
+  func.func @peek(%first: !PairRef, %second: !PairRef) -> core.nil {
+    func.return
+  }
+  func.func @both(%first: !PairRef, %second: !PairRef) -> !PairRef attributes {type = func.func_sig<(!PairRef {tribute.ownership = "consumed"}, !PairRef {tribute.ownership = "consumed"}) -> !PairRef>} {
+    %left = adt.struct_get %first {field = 0, type = !Pair} : !EnvRef
+    %right = adt.struct_get %second {field = 1, type = !Pair} : !EnvRef
+    func.call %first, %second {callee = @peek}
+    %pair = adt.struct_new %left, %right {type = !Pair} : !PairRef
+    func.return %pair
+  }
+}"#,
+    );
+    let both = plan.function(&SymbolPath::new(["both"])).unwrap();
+    let call = entry_op(&ctx, &plan, "both", 2);
+    for index in 0..2 {
+        let owner = entry_arg(&ctx, &plan, "both", index);
+        let field = ctx.op_result(entry_op(&ctx, &plan, "both", index), 0);
+        assert!(has_action(
+            both,
+            ActionKind::ReleaseMoving,
+            owner,
+            ActionAnchor::After(call)
+        ));
+        assert!(has_action(
+            both,
+            ActionKind::FieldMove,
+            field,
+            ActionAnchor::After(call)
+        ));
+    }
+
+    // Each moving release takes only the field its owner was read from.
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+    assert!(
+        materialized
+            .contains("tribute_rt.release_moving %0, %2 {alloc_size = 24, release_offsets = [8]}"),
+        "{materialized}"
+    );
+    assert!(
+        materialized
+            .contains("tribute_rt.release_moving %1, %3 {alloc_size = 24, release_offsets = [0]}"),
+        "{materialized}"
+    );
+}
+
+#[test]
 fn a_replaceable_layout_keeps_its_projection_unit_instead_of_moving() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
