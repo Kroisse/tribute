@@ -1,7 +1,7 @@
 pub mod collect;
 mod instance;
 
-pub(crate) use instance::collect_ability_argument_tails;
+pub(crate) use instance::{collect_ability_argument_tails, local_instantiations};
 mod local;
 pub mod mangle;
 mod nominal;

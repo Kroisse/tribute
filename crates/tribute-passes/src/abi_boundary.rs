@@ -40,6 +40,7 @@ const FORBIDDEN_ATTRIBUTES: &[&str] = &[
     tribute_ir::dialect::tribute_control::ROW_BINDERS_ATTR,
     tribute_ir::dialect::tribute_control::ROW_UNIONS_ATTR,
     tribute_ir::dialect::tribute_control::INFERRED_ROW_ATTR,
+    tribute_ir::dialect::tribute_control::LOCAL_ROWS_ATTR,
     tribute_ir::dialect::tribute_control::ROW_ARGS_ATTR,
 ];
 

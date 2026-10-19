@@ -487,3 +487,68 @@ fn row_inclusion_counts_instances_and_keeps_the_tail() {
     assert!(!Row::new([a.clone()], None).includes(&Row::new([a.clone(), a], None)));
     assert!(!Row::new([b], None).includes(&Row::new([], Some(1))));
 }
+
+const LOCALS: &str = r#"core.module @test {
+  ability.decl {sym_name = "A"} {
+  }
+  tribute_control.func @f['a0, local 'a1, local 'a2](%x: core.i32) -> core.i32 row(| 'a0) convention(cps) attributes {local_rows = LOCAL_ROWS} {
+    %g = tribute_control.lambda(%y: core.i32) -> core.i32 row(| 'a1) convention(cps) captures [] {
+      tribute_control.return %y
+    }
+    %r = tribute_control.call_indirect %g, %x : core.i32
+    tribute_control.return %r
+  }
+}"#;
+
+#[test]
+fn local_rows_round_trip_and_name_local_binders() {
+    let (ctx, module) = parse(&LOCALS.replace(
+        "LOCAL_ROWS",
+        "[{binder = 1, rows = [{tail = 0}, {instances = [@A]}]}]",
+    ));
+    let result = validate(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+    let func = module.ops(&ctx)[1];
+    assert_eq!(
+        local_rows(&ctx, func).unwrap(),
+        [LocalRows {
+            binder: 1,
+            rows: vec![
+                Row::new([], Some(0)),
+                Row::new([SymbolPath::new(["A"])], None)
+            ],
+        }]
+    );
+    let printed = print_module(&ctx, module.op());
+    assert!(
+        printed.contains(
+            "attributes {local_rows = [{binder = 1, rows = [{tail = 0}, {instances = [@A]}]}]}"
+        ),
+        "{printed}"
+    );
+    let (reparsed, module) = parse(&printed);
+    assert_eq!(print_module(&reparsed, module.op()), printed);
+}
+
+#[test]
+fn local_rows_are_recorded_once_for_a_local_binder_in_scope() {
+    assert_rejects(
+        &LOCALS.replace("LOCAL_ROWS", "[{binder = 0, rows = [{}]}]"),
+        "local rows name binder 0, which is not local",
+    );
+    assert_rejects(
+        &LOCALS.replace(
+            "LOCAL_ROWS",
+            "[{binder = 1, rows = [{}]}, {binder = 1, rows = [{tail = 0}]}]",
+        ),
+        "local binder 1 has its rows recorded twice",
+    );
+    assert_rejects(
+        &LOCALS.replace("LOCAL_ROWS", "[{binder = 1, rows = [{tail = 3}]}]"),
+        "row tail 3 names no row binder in scope",
+    );
+    assert_rejects(
+        &LOCALS.replace("LOCAL_ROWS", "[{binder = 1, rows = [{instances = [@B]}]}]"),
+        "row instance @B is not an ability.decl",
+    );
+}

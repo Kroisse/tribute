@@ -662,9 +662,9 @@ binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 �
 않으므로 따로 표시한다.
 
 Tail의 class는 binder 종류에 따라 읽는다. `param`은 그 인스턴스가 고정한 class,
-`ability_arg`와 `body`는 `Cps`다. `local`의 class는 `let`에 묶인 람다를 생성한
-복사본마다 정해지며, IR에서는 그 복사본의 callable type에 쓰인 convention으로만
-나타난다.
+`ability_arg`와 `body`는 `Cps`다. `local`의 class는 그 binder를 인스턴스화하는
+[row들](#지역-binder의-인스턴스화)의 class를 합친 것이며, 그 binder를 쓰는 람다
+복사본의 callable type에 convention으로 나타난다.
 
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
 인자, operation 결과, tuple layout의 원소가 모두 같다. Type은 binder를 도입하지
@@ -687,6 +687,18 @@ tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에 넣�
 정의 자신의 convention은 row tail이 그 인스턴스의 class 변수일 때만 tail을 읽는다
 ([cps-effects.md](cps-effects.md#row와-호출-규약)). 정의의 type이 가진 row는
 그대로다.
+
+#### 지역 binder의 인스턴스화
+
+`let`에 묶인 람다를 참조하는 곳은 그 람다의 지역 scheme이 양화한 row 변수마다 row
+하나를 정한다. 참조는 operation이 아니라 값의 사용이므로, 정의가 이 row들을
+`local_rows` 속성에 binder별로 모아 적는다. 원소는 `{binder = i, rows = [...]}`이며
+`binder`는 `local` binder의 index, `rows`는 그 binder를 인스턴스화하는 row들을 처음
+쓰인 순서로 중복 없이 담는다. Row의 형식과 tail은 [`row_args`](#row-인자와-치환)와
+같이 정의 자신의 binder를 가리킨다. 인스턴스화되지 않는 `local` binder는 원소가 없다.
+
+이 row의 tail은 정의의 row 변수를 람다에 넘기므로, `param` binder가
+[class 변수](cps-effects.md#row-변수의-convention-class)인지를 정하는 데 쓰인다.
 
 #### Row 인자와 치환
 
@@ -796,10 +808,11 @@ tribute_control.func {sym_name = "id", type = !Callable} (%x: T) { ... }
   convention을 정의하며 hidden evidence, environment, `ContinuationFrame<R>`를 포함하지 않는다.
 - **검증:** local verifier는 attribute, region, block argument, return type을
   callable type과 맞춘다. Whole-IR verifier는 symbol uniqueness와, 정의 안의 모든
-  tail이 `row_binders` 범위 안인지, `row_unions`의 index가 범위 안인지, row의
-  instance가 `ability.decl`로 해소되는지를 검사한다.
+  tail이 `row_binders` 범위 안인지, `row_unions`의 index가 범위 안인지,
+  `local_rows`가 `local` binder마다 한 번씩만 적혔는지, row의 instance가
+  `ability.decl`로 해소되는지를 검사한다.
 - **Row 속성:** 선택적 [`row_binders`](#row-binder), [`row_unions`](#tail의-합집합),
-  [`inferred_row`](#추론된-row)를 가진다.
+  [`inferred_row`](#추론된-row), [`local_rows`](#지역-binder의-인스턴스화)를 가진다.
 - **소유권과 값 흐름:** body는 isolated-from-above다. Source local과 parameter만
   block argument로 들어온다.
 - **위치:** source function 또는 extern declaration 전체 span이다.

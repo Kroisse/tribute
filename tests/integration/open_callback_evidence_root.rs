@@ -340,3 +340,60 @@ fn main() ->{Io} Nil {
         "{each}"
     );
 }
+
+/// A definition records the rows its uses pass to each let-bound lambda, so
+/// the IR shows which of its rows reach a local binder.
+#[salsa_test]
+fn uses_of_let_bound_lambdas_record_their_rows(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn app(x: Int, f: fn(Int) ->{e} Int) ->{e} Int { f(x) }
+
+fn countdown(n: Int) -> Int {
+    let step = fn(m: Int) -> Int {
+        case m == +0 {
+            True -> m
+            False -> become countdown(m - +1)
+        }
+    }
+    become step(n)
+}
+
+fn main() ->{Io} Nil {
+    let both = fn(x: Int, f: fn(Int) ->{e} Int) app(x, f)
+    let _ = both(+1, fn(n) n + +1)
+    let _ = both(+2, fn(n) { print_line("io") n })
+    let _ = countdown(+3)
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let header = |name: &str| {
+        ir.lines()
+            .find(|line| {
+                line.trim_start()
+                    .starts_with(&format!("tribute_control.func {name}["))
+            })
+            .unwrap_or_else(|| panic!("{name} in\n{ir}"))
+    };
+    let countdown = header("@\"countdown$9D\"");
+    assert!(
+        countdown.contains("['a0, local 'a1]")
+            && countdown.contains("local_rows = [{binder = 1, rows = [{tail = 0}]}]"),
+        "{countdown}"
+    );
+    let main = header("@main");
+    assert!(
+        main.contains("[local 'a0, local 'a1]")
+            && main.contains(
+                "local_rows = [{binder = 0, rows = [{}]}, {binder = 1, rows = [{instances = [@\"ability_1_11_std::io::Io\"]}]}]"
+            ),
+        "{main}"
+    );
+}

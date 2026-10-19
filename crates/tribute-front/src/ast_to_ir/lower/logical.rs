@@ -562,12 +562,25 @@ fn prescan_row_binders<'db>(
             continue;
         };
         let quantified = scheme.effect_params(ctx.db);
-        let local_copies: Vec<_> = ctx
+        // A let-bound lambda spells the rows its scheme quantifies with its
+        // own variables, and a copy of it with renamed ones.
+        let spelled = crate::monomorphize::local_instantiations(
+            ctx.db,
+            function,
+            |node| declarations.local_instances.get(node),
+            |node| declarations.lambda_signatures.get(node),
+        );
+        let mut local_copies: Vec<_> = ctx
             .row_classes_of(&name)
             .iter()
             .map(|(variable, _)| *variable)
             .filter(|variable| !quantified.contains(variable))
             .collect();
+        for (variable, _) in spelled {
+            if !quantified.contains(&variable) && !local_copies.contains(&variable) {
+                local_copies.push(variable);
+            }
+        }
         let body = crate::ast_to_ir::row_binders::BodyTypes {
             node_types: ctx.node_types(),
             handler_operations: &declarations.handler_operations,
@@ -1275,6 +1288,7 @@ fn lower_function<'db>(
     let callable = signature.callable_type(ir);
     let inferred_row = function.effects.is_none()
         || crate::is_root_main(&function.name, ctx.module_path().is_root());
+    let local_rows = local_rows(ctx, &function, declarations);
     let args = function
         .params
         .iter()
@@ -1348,8 +1362,50 @@ fn lower_function<'db>(
         ir.op_attrs_mut(function.op_ref())
             .insert(tribute_control::INFERRED_ROW_ATTR, Attribute::Bool(true));
     }
+    if !local_rows.is_empty() {
+        let local_rows = local_rows
+            .iter()
+            .map(|local| local.to_attribute(ir))
+            .collect();
+        ir.op_attrs_mut(function.op_ref()).insert(
+            tribute_control::LOCAL_ROWS_ATTR,
+            Attribute::List(local_rows),
+        );
+    }
     ir.push_op_region(function.op_ref(), body);
     ir.push_op(top, function.op_ref());
+}
+
+/// The rows the uses of the let-bound lambdas of `function` instantiate
+/// their local binders with.
+fn local_rows<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    function: &FuncDecl<TypedRef<'db>>,
+    declarations: &Declarations<'db>,
+) -> Vec<tribute_control::LocalRows> {
+    let instantiations = crate::monomorphize::local_instantiations(
+        ctx.db,
+        function,
+        |node| declarations.local_instances.get(node),
+        |node| declarations.lambda_signatures.get(node),
+    );
+    let mut recorded: Vec<tribute_control::LocalRows> = Vec::new();
+    for (variable, row) in instantiations {
+        let binder = ctx
+            .ability_row(AbilityRow::open(ctx.db, variable))
+            .tail
+            .expect("an open row has a tail");
+        let row = ctx.ability_row(row);
+        match recorded.iter_mut().find(|local| local.binder == binder) {
+            Some(local) if local.rows.contains(&row) => {}
+            Some(local) => local.rows.push(row),
+            None => recorded.push(tribute_control::LocalRows {
+                binder,
+                rows: vec![row],
+            }),
+        }
+    }
+    recorded
 }
 
 fn lower_extern<'db>(

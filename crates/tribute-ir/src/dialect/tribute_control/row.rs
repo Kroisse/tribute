@@ -20,6 +20,9 @@ pub const INFERRED_ROW_ATTR: &str = "inferred_row";
 /// Attribute of a reference holding one row for each quantified binder of
 /// its callee.
 pub const ROW_ARGS_ATTR: &str = "row_args";
+/// `tribute_control.func` attribute holding the rows its local binders are
+/// instantiated with.
+pub const LOCAL_ROWS_ATTR: &str = "local_rows";
 
 const LOGICAL_TUPLE_PREFIX: &str = "__logical_tuple_";
 
@@ -290,6 +293,66 @@ impl trunk_ir::attr_kind::AttrKind for RowUnion {
     }
 }
 
+/// The rows the uses of a local binding instantiate a local binder with, in
+/// first-use order without repetitions.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LocalRows {
+    pub binder: u32,
+    pub rows: Vec<Row>,
+}
+
+impl LocalRows {
+    pub fn from_attribute(ctx: &IrContext, attr: &Attribute) -> Result<Self, String> {
+        let Attribute::Dict(entries) = attr else {
+            return Err("local rows must be a dictionary".into());
+        };
+        let entries = entries.view(ctx);
+        let binder = match entries.get("binder") {
+            Some(Attribute::Int(index)) => u32::try_from(*index).ok(),
+            _ => None,
+        }
+        .ok_or("local rows need a binder index")?;
+        let rows = match entries.get("rows") {
+            Some(Attribute::List(rows)) => rows
+                .iter()
+                .map(|row| Row::from_attribute(ctx, row))
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => return Err("local rows need a list of rows".into()),
+        };
+        if entries.len() != 2 {
+            return Err("local rows have only binder and rows".into());
+        }
+        Ok(Self { binder, rows })
+    }
+
+    pub fn to_attribute(&self, ctx: &mut IrContext) -> Attribute {
+        let rows = self.rows.iter().map(|row| row.to_attribute(ctx)).collect();
+        Attribute::Dict(AttributeMap::from_entries(
+            ctx,
+            [
+                ("binder", Attribute::Int(i128::from(self.binder))),
+                ("rows", Attribute::List(rows)),
+            ],
+        ))
+    }
+}
+
+impl trunk_ir::attr_kind::AttrKind for LocalRows {
+    const KIND: trunk_ir::op_schema::AttributeKind =
+        trunk_ir::op_schema::AttributeKind::Dict(&trunk_ir::op_schema::AttributeKind::Any);
+    type Out<'ctx> = LocalRows;
+    type In = LocalRows;
+
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> LocalRows {
+        Self::from_attribute(ctx, attr)
+            .unwrap_or_else(|error| panic!("unverified local rows: {error}"))
+    }
+
+    fn write(ctx: &mut IrContext, value: LocalRows) -> Attribute {
+        value.to_attribute(ctx)
+    }
+}
+
 /// Decode a list attribute of `key` on `op`, which is empty when absent.
 fn read_list<T>(
     ctx: &IrContext,
@@ -328,6 +391,11 @@ pub fn row_binders(ctx: &IrContext, op: trunk_ir::OpRef) -> Result<Vec<RowBinder
 /// The row tail unions `op` declares, or why they are malformed.
 pub fn row_unions(ctx: &IrContext, op: trunk_ir::OpRef) -> Result<Vec<RowUnion>, String> {
     Ok(read_list(ctx, op, ROW_UNIONS_ATTR, RowUnion::from_attribute)?.unwrap_or_default())
+}
+
+/// The rows `op` records for its local binders, or why they are malformed.
+pub fn local_rows(ctx: &IrContext, op: trunk_ir::OpRef) -> Result<Vec<LocalRows>, String> {
+    Ok(read_list(ctx, op, LOCAL_ROWS_ATTR, LocalRows::from_attribute)?.unwrap_or_default())
 }
 
 /// The row arguments a reference passes, or why they are malformed.

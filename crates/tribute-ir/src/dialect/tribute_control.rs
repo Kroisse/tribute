@@ -34,10 +34,10 @@ use super::list;
 mod row;
 
 pub use row::{
-    ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR, ROW_UNIONS_ATTR, Row,
-    RowBinder, RowUnion, find_substituted_rows, logical_tuple_elements, logical_tuple_name,
-    logical_tuple_type, quantified_count, row_args, row_binders, row_unions, substitute_rows,
-    visit_rows,
+    ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, LOCAL_ROWS_ATTR, LocalRows, ROW_ARGS_ATTR,
+    ROW_BINDERS_ATTR, ROW_UNIONS_ATTR, Row, RowBinder, RowUnion, find_substituted_rows, local_rows,
+    logical_tuple_elements, logical_tuple_name, logical_tuple_type, quantified_count, row_args,
+    row_binders, row_unions, substitute_rows, visit_rows,
 };
 
 /// Exact type-attribute key used by logical callable types.
@@ -103,6 +103,7 @@ mod tribute_control {
         row_binders: Option<Attr<[RowBinder]>>,
         row_unions: Option<Attr<[RowUnion]>>,
         inferred_row: Option<Attr<bool>>,
+        local_rows: Option<Attr<[LocalRows]>>,
     ) {
         #[region(body?)]
         {}
@@ -2116,6 +2117,34 @@ fn validate_row_declarations(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
                 op,
                 errors,
                 format!("row tail {} is declared as a union twice", union.result),
+            );
+        }
+    }
+    let locals = match local_rows(ctx, op) {
+        Ok(locals) => locals,
+        Err(message) => return push_op_error(ctx, op, errors, message),
+    };
+    let mut recorded = HashSet::default();
+    for local in &locals {
+        let binder = usize::try_from(local.binder)
+            .ok()
+            .and_then(|index| binders.get(index));
+        if binder != Some(&RowBinder::Local) {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!(
+                    "local rows name binder {}, which is not local",
+                    local.binder
+                ),
+            );
+        } else if !recorded.insert(local.binder) {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!("local binder {} has its rows recorded twice", local.binder),
             );
         }
     }
@@ -4207,6 +4236,9 @@ fn validate_row_scopes(
         }
         for ty in types {
             check_type_rows(ctx, op, ty, scope, instances, errors);
+        }
+        for local in local_rows(ctx, op).unwrap_or_default() {
+            rows.extend(local.rows.into_iter().map(|row| (op, row)));
         }
         for (inner, row) in rows {
             check_row(ctx, inner, &row, scope, instances, errors);

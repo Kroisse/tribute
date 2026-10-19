@@ -284,6 +284,7 @@ impl Converter<'_> {
                         | tribute_control::ROW_BINDERS_ATTR
                         | tribute_control::ROW_UNIONS_ATTR
                         | tribute_control::INFERRED_ROW_ATTR
+                        | tribute_control::LOCAL_ROWS_ATTR
                 ) {
                     builder = builder.attr(key, value);
                 }
@@ -363,6 +364,7 @@ impl Converter<'_> {
                 tribute_control::ROW_BINDERS_ATTR,
                 tribute_control::ROW_UNIONS_ATTR,
                 tribute_control::INFERRED_ROW_ATTR,
+                tribute_control::LOCAL_ROWS_ATTR,
             ],
         );
         set_calling_convention(self.ctx, function.op_ref(), info.convention);
