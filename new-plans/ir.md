@@ -1605,7 +1605,9 @@ numeric operations, memory operations, and WasmGC constructs.
 carry heap types as mandatory `TypeRef` attributes and must not infer a type
 from an erased operand such as `anyref`. A user struct or variant is the
 structural `wasm_gc.struct<T...>`, whose parameters are its physical field
-types; equal field lists are one GC type. A module-wide type
+types; equal field lists are one GC type. An optional `supertype` type attribute
+declares the WasmGC supertype of a `wasm_gc.struct`; see
+[the Wasm backend](wasm-backend.md#wasm-gc-subtype). A module-wide type
 layout pass assigns binary type-section indices and fully converts these
 operations to `wasm.*` operations, whose required integer attributes correspond
 to WebAssembly instruction immediates. This pass runs once, after unrealized
@@ -1944,7 +1946,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 | `layout` | 붙는 타입 | 뜻 |
 | --- | --- | --- |
 | `"closure"` | closure base `adt.struct` | 함수 참조 필드 하나로 이루어진 closure 값의 공통 저장. Capture 없는 closure의 저장이기도 하다 |
-| `"closure_captures"` | closure capture `adt.struct` | closure base의 필드 뒤에 capture를 순서대로 둔 closure 저장. `supertype`이 그 base다 |
+| `"closure_captures"` | closure capture `adt.struct` | closure base의 필드 뒤에 capture를 순서대로 둔 closure 저장. `closure_base`가 그 base다 |
 | `"evidence_marker"` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure, 가린 marker |
 | `"evidence"` | evidence `core.array` | ability id 순으로 정렬된 가장 위 marker 배열 |
 | `"bytes"` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
@@ -1982,7 +1984,7 @@ adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<{name = "Node"}>)>
 adt.struct<_closure(code: core.ptr), {layout = "closure"}>
 adt.struct<_closure_captures(code: core.ptr, _0: core.i32),
   {layout = "closure_captures",
-   supertype = adt.struct<_closure(code: core.ptr), {layout = "closure"}>}>
+   closure_base = adt.struct<_closure(code: core.ptr), {layout = "closure"}>}>
 adt.struct<Empty()>
 ```
 
@@ -2000,30 +2002,6 @@ adt.struct<Empty()>
   필드 수를 유지하는 변환은 필드 이름과 속성을 위치 그대로 둔다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다. `adt.struct`는 자기 자신을
   매개변수로 갖지 않는다.
-
-#### 물리 supertype
-
-Compiler 소유 layout은 예약 type 속성 `supertype`으로 자신의 물리 supertype을
-선언할 수 있다. 이 관계는 저장 표현만 설명하며, Tribute 소스와 의미적 타입 검사에는
-subtyping이 없다.
-
-- 값은 다른 `adt.struct`를 담은 type 속성이다. 두 타입 모두
-  [`layout`](#runtime-layout-식별자)을 가져야 한다. 이 속성도 `layout`처럼 그
-  layout을 만드는 compiler의 canonical 생성자만 붙이며, frontend와 소스에서 온
-  타입은 갖지 않는다.
-- Supertype의 필드는 subtype 필드의 앞부분과 같다. 같은 위치의 필드는 타입, 이름,
-  필드 속성이 모두 같고, subtype은 그 뒤에 필드를 더할 수 있다. Type verifier가
-  이 규칙을 모든 interned `adt.struct`에 적용한다. Supertype의 supertype도 같은
-  규칙을 따르며, interning이 순환을 막는다.
-- 일반 type 속성처럼 interning identity에 참여하고 textual form은 `layout`과 같은
-  type 속성 dictionary에 둔다. 필드 타입을 바꾸는 타입 변환은 `supertype` 안의
-  타입도 같은 변환으로 바꾸므로 prefix 관계가 유지된다.
-- Subtype 값은 변환 없이 supertype 자리에 놓인다(upcast). Supertype 값을 subtype으로
-  보려면 정확한 결과 타입을 가진 명시적 cast가 필요하며, target이 그 cast를
-  검증하고 물리화한다. Native에서는 필드 offset이 prefix를 공유하므로 pointer가
-  그대로이고, Wasm에서는 `ref.cast`다.
-- Target은 이 속성으로만 물리 subtype 관계를 정한다. 필드 모양이 prefix처럼
-  보인다는 사실에서 subtype 관계를 추론하지 않는다.
 
 #### Nominal 수준과 structural 수준
 
@@ -2103,8 +2081,19 @@ Closure 저장 layout은 두 종류다.
   `ContinuationFrame<R>`의 필드, Marker의 dispatch 필드)는 이 타입을 쓴다. Capture가
   없는 closure는 이 layout으로 할당한다.
 - **Closure capture layout**(`layout = "closure_captures"`)은 base의 필드 뒤에
-  capture를 `closure.new`의 순서대로 두고 [`supertype`](#물리-supertype)으로 그
-  base를 선언한다. Capture가 하나 이상인 closure는 이 layout으로 할당한다.
+  capture를 `closure.new`의 순서대로 두고, type 속성 `closure_base`로 그 base를
+  가리킨다. Capture가 하나 이상인 closure는 이 layout으로 할당한다.
+- `closure_base`는 closure 저장 계약이 소유하는 속성이다. `layout`처럼 canonical
+  생성자만 붙이고 interning identity에 참여하며, 필드 타입을 바꾸는 타입 변환은
+  이 속성 안의 base도 같은 변환으로 바꾼다. Capture layout의 앞부분 필드는 base의
+  필드와 타입과 이름이 같다. Type verifier가 이 규칙을 `"closure_captures"` layout에
+  적용한다. 이 속성은 저장 표현만 설명하며, Tribute 소스와 의미적 타입 검사에는
+  subtyping이 없다.
+- Capture layout 값은 변환 없이 base 자리에 놓인다(upcast). Base 값을 capture
+  layout으로 보려면 정확한 결과 타입을 가진 명시적 cast가 필요하며, target이 그
+  cast를 검증하고 물리화한다. Target은 base와 capture layout의 관계를
+  `closure_base`로만 정하고, 필드 모양이 prefix처럼 보인다는 사실에서 추론하지
+  않는다.
 - Capture layout의 identity는 base와 capture 필드 타입 목록이다. Capture 타입 목록이
   같은 두 code 함수는 같은 layout을 쓴다. 필드 이름과 struct 이름은 canonical
   생성자가 정하며 의미를 갖지 않는다.
@@ -2114,7 +2103,7 @@ Closure 저장 layout은 두 종류다.
   code 필드를 typed 함수 참조로 표현하면, code 함수의 environment 입력이 다시 그
   base이므로 base와 code 함수 타입은 서로를 가리킨다. 이 재귀는 `adt.typeref`로
   끊는다.
-- Capture layout의 supertype은 `closure.new` 결과 타입의 `S`에서 고른 base다.
+- Capture layout의 `closure_base`는 `closure.new` 결과 타입의 `S`에서 고른 base다.
 
 #### Storage 확정
 
