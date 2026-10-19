@@ -690,10 +690,12 @@ shared_block:
 ```
 
 A count of one is the releasing unit itself, which no other holder can change,
-so a plain load decides uniqueness. The unique path may be emitted inline or as
-a generated function per layout and moved-field set; generated code size is
-part of the policy's measured cost. When the plan proves the owner unique, only
-the unique path is emitted.
+so a plain load decides uniqueness. RC lowering emits this expansion once per
+allocation size, released offsets and number of moved values, as a generated
+`__tribute_release_moving_<n>(ptr, moved...)` function, and replaces each
+moving release with a call to it. Expanding both paths at every owner's death
+would grow the code it compiles to more than the moved units save. When the
+plan proves the owner unique, only the unique path is emitted.
 
 **Pipeline position:** After unrealized cast legalization and
 `ReconcileUnrealizedCasts`, before `emit_module_to_native`.

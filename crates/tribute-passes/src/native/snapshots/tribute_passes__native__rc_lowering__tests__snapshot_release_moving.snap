@@ -6,6 +6,11 @@ core.module @test {
   clif.func {sym_name = "f", type = clif.func_sig<(core.ptr) -> core.ptr>} {
     ^bb0(%0: core.ptr):
       %1 = clif.load %0 {offset = 0} : core.ptr
+      %2 = clif.call %0, %1 {callee = @__tribute_release_moving_0} : core.nil
+      clif.return %1
+  }
+  clif.func {sym_name = "__tribute_release_moving_0", type = clif.func_sig<(core.ptr, core.ptr) -> core.nil>} {
+    ^bb0(%0: core.ptr, %1: core.ptr):
       %2 = clif.iconst {value = 0} : core.ptr
       %3 = clif.icmp %0, %2 {cond = "eq"} : core.i8
       clif.brif %3 [^bb12, ^bb1]
@@ -76,6 +81,6 @@ core.module @test {
       clif.jump [^bb12]
 
     ^bb12:
-      clif.return %1
+      clif.return
   }
 }

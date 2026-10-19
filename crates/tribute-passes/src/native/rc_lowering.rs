@@ -49,15 +49,15 @@
 //!   // remaining ops
 //! ```
 
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
 use trunk_ir::rewrite::helpers::erase_op;
-use trunk_ir::{BlockData, BlockRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::{BlockArgData, BlockData, BlockRef, OpRef, RegionData, RegionRef, TypeRef, ValueRef};
 
 use tribute_ir::dialect::tribute_rt;
 
@@ -71,6 +71,7 @@ fn lower_rc(ctx: &mut IrContext, module: Module) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
+    outline_moving_releases(ctx, first_block);
     let module_ops = ctx.block(first_block).ops.clone();
 
     for op in module_ops {
@@ -81,6 +82,116 @@ fn lower_rc(ctx: &mut IrContext, module: Module) {
             }
         }
     }
+}
+
+/// Name prefix for the functions that hold a moving release.
+const RELEASE_MOVING_FN_PREFIX: &str = "__tribute_release_moving_";
+
+/// Replace each `tribute_rt.release_moving` with a call to a function that
+/// performs it, one per allocation size, released offsets and number of
+/// moved values. Expanding both of its paths at every release would grow the
+/// code each owner's death compiles to.
+fn outline_moving_releases(ctx: &mut IrContext, module_block: BlockRef) {
+    let mut releases = Vec::<OpRef>::new();
+    for &op in &ctx.block(module_block).ops {
+        if clif::Func::matches(ctx, op) {
+            for region in ctx.op_regions(op) {
+                for &block in &ctx.region(region).blocks {
+                    releases.extend(
+                        ctx.block(block)
+                            .ops
+                            .iter()
+                            .copied()
+                            .filter(|&op| tribute_rt::ReleaseMoving::matches(ctx, op)),
+                    );
+                }
+            }
+        }
+    }
+    if releases.is_empty() {
+        return;
+    }
+    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
+    let mut functions = HashMap::<(u64, Vec<i32>, usize), SymbolPath>::default();
+    for op in releases {
+        let release = tribute_rt::ReleaseMoving::from_op(ctx, op)
+            .expect("collected moving release");
+        let alloc_size = release.alloc_size(ctx);
+        let release_offsets = release.release_offsets(ctx).collect::<Vec<_>>();
+        let operands = std::iter::once(release.ptr(ctx))
+            .chain(release.moved(ctx).iter().copied())
+            .collect::<Vec<_>>();
+        let key = (alloc_size, release_offsets, operands.len() - 1);
+        let callee = match functions.get(&key) {
+            Some(callee) => callee.clone(),
+            None => {
+                let callee = SymbolPath::new([format!(
+                    "{RELEASE_MOVING_FN_PREFIX}{}",
+                    functions.len()
+                )
+                .as_str()]);
+                let location = ctx.op(op).location;
+                let function =
+                    moving_release_function(ctx, &callee, &key, location, ptr_ty, nil_ty);
+                ctx.push_op(module_block, function);
+                functions.insert(key, callee.clone());
+                callee
+            }
+        };
+        let location = ctx.op(op).location;
+        let block = ctx.op(op).parent_block.expect("moving release in a block");
+        let call = clif::Call::operands(operands)
+            .callee(callee)
+            .results([nil_ty])
+            .build(ctx, location);
+        ctx.insert_op_before(block, op, call.op_ref());
+        erase_op(ctx, op);
+    }
+}
+
+/// `fn(owner, moved...)` performing one moving release of `key`'s shape.
+fn moving_release_function(
+    ctx: &mut IrContext,
+    name: &SymbolPath,
+    (alloc_size, release_offsets, moved): &(u64, Vec<i32>, usize),
+    location: trunk_ir::Location,
+    ptr_ty: TypeRef,
+    nil_ty: TypeRef,
+) -> OpRef {
+    let inputs = vec![ptr_ty; moved + 1];
+    let entry = ctx.create_block(BlockData {
+        location,
+        args: inputs
+            .iter()
+            .map(|&ty| BlockArgData {
+                ty,
+                attrs: Default::default(),
+            })
+            .collect(),
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let args = ctx.block_args(entry).to_vec();
+    let release = tribute_rt::ReleaseMoving::operands(args[0], args[1..].to_vec())
+        .alloc_size(*alloc_size)
+        .release_offsets(release_offsets.iter().copied())
+        .build(ctx, location);
+    ctx.push_op(entry, release.op_ref());
+    let ret = clif::Return::operands([]).build(ctx, location);
+    ctx.push_op(entry, ret.op_ref());
+    let body = ctx.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![entry],
+        parent_op: None,
+    });
+    let func_ty = clif::func_sig(ctx, inputs, [nil_ty]).as_type_ref();
+    clif::Func::operands()
+        .sym_name(name.leaf().expect("generated function name").to_string())
+        .r#type(func_ty)
+        .regions(body)
+        .build(ctx, location)
+        .op_ref()
 }
 
 /// Recursively lower RC ops in a region.
