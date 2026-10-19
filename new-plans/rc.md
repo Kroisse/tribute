@@ -824,25 +824,33 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
   먼저 만들어진 object만 가리킨다.
 - **Managed field를 덮어쓰는 곳은 compiler가 소유한 completion cell뿐이다.**
   [값 delimiter](cps-effects.md#값-delimiter)의 completion cell은 region의 답을 한 번
-  쓴다. 그 답이 resume token을 담은 closure여도, 재개된 계산은 재개한 지점이 준
-  frame으로 handle 층을 다시 만들고 이미 끝난 delimiter의 frame으로 돌아가지 않는다.
-  따라서 답에서 그 cell이나 cell을 가진 `Done`으로 가는 경로가 없다. Root `main`의
-  delimiter는 `Nil`을 답으로 받으므로 managed 참조를 쓰지 않는다. One-shot resumption이
-  소비 여부를 표시하는 쓰기는 unmanaged flag를 쓴다.
+  쓴다. 답에서 그 cell이나 cell을 가진 `Done`으로 가는 경로가 없다는 근거는 둘이다.
+  - Resume token은 lambda capture로만 옮길 수 있고, token을 담은 closure를 struct나
+    variant에 저장하면 whole-IR 검증이 거부한다. Handle의 답 타입이 그 handle을 재개하는
+    closure를 담으려면 명목 타입을 거쳐야 하므로, 지금은 답이 token을 담지 못한다.
+  - 답이 token을 담더라도 재개된 계산은 재개한 지점이 준 frame으로 handle 층을 다시
+    만들고 이미 끝난 delimiter의 frame으로 돌아가지 않는다. 이 규칙은 token의 저장
+    제한이 풀려도 유지되어야 한다.
+
+  Root `main`의 delimiter는 `Nil`을 답으로 받으므로 managed 참조를 쓰지 않는다.
+  One-shot resumption이 소비 여부를 표시하는 쓰기는 unmanaged flag를 쓴다. 두 cell의
+  layout은 `adt.struct_set`이 쓰는 [교체 가능한 layout](#3-rc-optimization-pass)이므로
+  그 projection은 borrow하지 않는다.
 - **Closure는 자신을 capture하지 않는다.** Code 함수는 closure 자신을 environment
   입력으로 받는다([Closure captures](#closure-captures)). 지역 함수가 자기 자신을
   재귀 호출한다면 그 참조는 environment 입력으로 해결하며 capture로 만들지 않는다.
   서로 호출하는 지역 함수들도 capture만 담은 environment를 공유하고, 형제 closure를
   environment에 저장하지 않는다.
 
-이 계약을 깨는 기능은 순환 대책과 함께 들인다.
+이 계약을 깨는 기능은 아직 없다. 들인다면 다음 순환 대책과 함께 들인다.
 
 - **범위에 묶인 가변 cell.** Handler가 소유하는 상태처럼 dynamic extent가 정해진
-  cell은 저장한 값에서 cell로 돌아오는 경로를 만들 수 있다. 예를 들어 cell을 읽는
-  closure를 cell에 저장하면, closure가 가진 evidence와 marker를 거쳐 cell에 닿을 수
-  있다. 이런 cell은 범위가 끝날 때 내용을 release하고 비운다. 범위 밖에서 cell을 쓰는
-  일은 effect 타입이 막으므로, 비우는 것은 관찰되지 않으며 그 시점에 순환이 끊긴다.
-- **범위 없는 가변 참조.** 소스 언어가 범위 없이 쓰는 가변 참조를 들이면 순환이 남을
+  cell을 들인다면, 저장한 값에서 cell로 돌아오는 경로가 생길 수 있다. 예를 들어 cell을
+  읽는 closure를 cell에 저장하면, closure가 가진 evidence와 marker를 거쳐 cell에 닿을
+  수 있다. 이런 cell은 범위가 끝날 때 내용을 release하고 비운다. 범위 밖에서 cell을
+  쓰는 일은 effect 타입이 막으므로, 비우는 것은 관찰되지 않으며 그 시점에 순환이
+  끊긴다.
+- **범위 없는 가변 참조.** 소스 언어가 범위 없이 쓰는 가변 참조를 들인다면 순환이 남을
   수 있다. 그 회수 수단은 trial deletion 방식의 순환 collector다. 순환에 낄 수 있는
   타입, 곧 가변 참조를 담을 수 있는 타입의 object만 후보로 기록한다. 후보에서 닿는
   object 사이의 내부 참조 수를 refcount에서 빼고, 바깥 참조가 남지 않은 묶음을
