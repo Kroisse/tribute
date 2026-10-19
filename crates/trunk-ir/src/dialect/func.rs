@@ -7,7 +7,7 @@ use crate::op_interface::{
     self, CallableExit, CallableOwner, ControlFlowInterfaceError, IndirectCallLike,
 };
 use crate::ops::{DialectOp, DialectType};
-use crate::{Attribute, AttributeMap, IrContext, TypeDataBuilder, TypeRef};
+use crate::{Attribute, AttributeMap, IrContext, SymbolPath, TypeDataBuilder, TypeRef};
 
 /// The exact callable signature retained after a typed indirect callee becomes
 /// a runtime function or table index.
@@ -626,8 +626,16 @@ impl CallableExit for Unreachable {
     }
 }
 
-impl op_interface::CallLike for Call {}
-impl op_interface::CallLike for TailCall {}
+impl op_interface::CallLike for Call {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
+}
+impl op_interface::CallLike for TailCall {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
+}
 
 /// Attach an exact callable contract to a `func` indirect transfer.
 ///

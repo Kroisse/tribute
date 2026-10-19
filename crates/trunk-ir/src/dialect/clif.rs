@@ -7,6 +7,7 @@ use crate::op_flag::IsolatedFromAbove;
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
+use crate::{IrContext, SymbolPath};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
 
@@ -506,8 +507,16 @@ impl IndirectCallLike for ReturnCallIndirect {
     }
 }
 
-impl CallLike for Call {}
-impl CallLike for ReturnCall {}
+impl CallLike for Call {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
+}
+impl CallLike for ReturnCall {
+    fn direct_callee(self, ctx: &IrContext) -> &SymbolPath {
+        self.callee(ctx)
+    }
+}
 
 /// Attach the required exact callable contract to a `clif` indirect transfer.
 ///
