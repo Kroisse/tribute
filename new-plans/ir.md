@@ -1113,24 +1113,12 @@ pointer, managed 참조 중 하나이며 원소 하나는 machine 값 하나다.
 closure 같은 aggregate는 그 object에 대한 managed 참조로 담고 inline으로 펼치지
 않는다.
 
-배열을 만드는 operation은 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로
-고정되어 있다. Operand 개수나 모양으로 operation의 뜻을 고르지 않는다.
-
-| Operation | 결과 |
-| --- | --- |
-| `adt.array_new(length, initial)` | 모든 원소가 `initial`인 길이 `length`의 배열 |
-| `adt.array_of(elements...)` | operand를 순서대로 담은 배열. 길이는 operand 수이며 0이어도 된다 |
-| `adt.array_splice(source, start, end, elements...)` | `source[0, start)`, `elements`, `source[end, len)`을 이어 담은 새 배열 |
-
-- 세 operation의 결과 타입은 `type` 속성의 `core.array<E>`이고, `initial`과
-  `elements`는 `E` 타입이다. `adt.array_splice`의 `source`는 결과와 같은 타입이다.
-- `adt.array_splice`는 범위 복사로 만드는 배열이다. `source`를 바꾸지 않고 새
-  배열을 결과로 낸다. 원소 하나를 끼우거나(`start = end`), 빼거나(`elements`가
-  없고 `end = start + 1`), 바꾸거나, 앞뒤를 잘라 내는 일을 모두 이 operation으로
-  쓴다.
-- `adt.array_set`은 배열의 원소 하나를 제자리에서 바꾼다. 같은 배열을 가리키는
-  모든 값이 바뀐 원소를 본다. 공유된 배열을 바꾸지 않아야 하는 producer는 원소를
-  바꾼 배열을 `adt.array_splice`로 새로 만든다.
+배열을 만드는 operation은 `adt.array_new`, `adt.array_of`, `adt.array_splice`
+셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로 고정되어 있다. Operand 개수나
+모양으로 operation의 뜻을 고르지 않는다. 각 operation의 결과와 전제는
+[`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다. 세
+operation의 결과 타입은 `type` 속성의 `core.array<E>`이고, `initial`과
+`elements`는 `E` 타입이다. `adt.array_splice`의 `source`는 결과와 같은 타입이다.
 
 `adt`의 배열 operation은 target이 객체를 회수하는 방식을 가정하지 않는다. Native
 RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 제약은
@@ -1142,9 +1130,8 @@ RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 
 폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_castsi`나
 `arith.index_castui`로 명시적으로 바꾼다.
 
-Index는 부호 없는 값으로 해석한다. `adt.array_get`과 `adt.array_set`은
-`index < len`을, `adt.array_splice`는 `start ≤ end ≤ len`을 전제로 한다. Target은
-이 전제를 어긴 실행을 trap으로 끝내며, 범위 밖 원소를 읽거나 쓰거나 다른 값으로
+Index는 부호 없는 값으로 해석한다. Target은 각 operation이 선언한 범위 전제를
+어긴 실행을 trap으로 끝내며, 범위 밖 원소를 읽거나 쓰거나 다른 값으로
 대신하지 않는다. Target이 표현할 수 있는 최대 길이나 할당 크기를 넘는 길이도
 trap이다.
 
