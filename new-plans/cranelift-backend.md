@@ -369,7 +369,8 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 타입의 RTTI index를 기록한 뒤 `len`을 payload offset 0에 쓴다.
 
 - `adt.array_new`는 모든 원소 자리에 `initial`을 쓴다.
-- `adt.array_of`는 operand를 차례로 원소 자리에 쓴다.
+- `adt.array_of`는 operand를 차례로 원소 자리에 쓴다. 각 operand의 unit은 plan이
+  저장 자리에 둔 것(기준 동작의 획득이나 last-use move)이다.
 - `adt.array_splice`는 `source`의 두 범위를 결과의 앞뒤로 복사하고 그 사이에
   `elements`를 쓴다.
 - 원소가 managed 참조이면 `adt.array_new`와 `adt.array_splice`는 채우거나 복사한

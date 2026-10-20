@@ -1521,9 +1521,13 @@ native는 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast`를 �
 
 #### `adt` 배열
 
-`core.array<E>`는 원소 타입 `E`의 값을 순서대로 담는 배열이다. 배열을 만드는
-operation은 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로 고정되어 있다.
-Operand 개수나 모양으로 operation의 뜻을 고르지 않는다.
+`core.array<E>`는 원소 타입 `E`의 값을 순서대로 담는 배열이다. `E`는 scalar,
+pointer, managed 참조 중 하나이며 원소 하나는 machine 값 하나다. Struct, variant,
+closure 같은 aggregate는 그 object에 대한 managed 참조로 담고 inline으로 펼치지
+않는다.
+
+배열을 만드는 operation은 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로
+고정되어 있다. Operand 개수나 모양으로 operation의 뜻을 고르지 않는다.
 
 | Operation | 결과 |
 | --- | --- |
