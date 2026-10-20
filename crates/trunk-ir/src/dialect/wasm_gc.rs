@@ -5,7 +5,7 @@
 //! `wasm` operations before binary emission.
 
 use crate::attr_kind::Type;
-use crate::dialect::core::{Array, IntegerLike};
+use crate::dialect::core::{Array, I32};
 
 #[trunk_ir::dialect]
 mod wasm_gc {
@@ -25,62 +25,58 @@ mod wasm_gc {
 
     fn array_new<A: Array>(
         r#type: Attr<TypeOf<A>>,
-        size: Value<impl IntegerLike>,
+        size: Value<I32>,
         init: Value<A::Element>,
     ) -> Value<A> {
     }
 
-    fn array_new_default<A: Array>(
-        r#type: Attr<TypeOf<A>>,
-        size: Value<impl IntegerLike>,
-    ) -> Value<A> {
-    }
+    fn array_new_default<A: Array>(r#type: Attr<TypeOf<A>>, size: Value<I32>) -> Value<A> {}
 
-    fn array_new_data(
-        r#type: Attr<Type>,
+    fn array_new_data<A: Array>(
+        r#type: Attr<TypeOf<A>>,
         data_idx: Attr<u32>,
-        offset: Value<_>,
-        size: Value<_>,
-    ) -> Value<_> {
+        offset: Value<I32>,
+        size: Value<I32>,
+    ) -> Value<A> {
     }
 
     fn array_get<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
-        index: Value<impl IntegerLike>,
+        index: Value<I32>,
     ) -> Value<A::Element> {
     }
 
     fn array_get_s<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
-        index: Value<impl IntegerLike>,
+        index: Value<I32>,
     ) -> Value<_> {
     }
 
     fn array_get_u<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
-        index: Value<impl IntegerLike>,
+        index: Value<I32>,
     ) -> Value<_> {
     }
 
     fn array_set<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
-        index: Value<impl IntegerLike>,
+        index: Value<I32>,
         value: Value<A::Element>,
     ) {
     }
 
-    fn array_copy(
-        dst_type: Attr<Type>,
-        src_type: Attr<Type>,
-        dst: Value<_>,
-        dst_offset: Value<_>,
-        src: Value<_>,
-        src_offset: Value<_>,
-        len: Value<_>,
+    fn array_copy<D: Array, S: Array>(
+        dst_type: Attr<TypeOf<D>>,
+        src_type: Attr<TypeOf<S>>,
+        dst: Value<D>,
+        dst_offset: Value<I32>,
+        src: Value<S>,
+        src_offset: Value<I32>,
+        len: Value<I32>,
     ) {
     }
 
@@ -89,4 +85,72 @@ mod wasm_gc {
     fn ref_cast(target_type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 
     fn ref_test(target_type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::context::IrContext;
+    use crate::parser::parse_test_module;
+    use crate::validation::validate_op_schemas;
+
+    fn schema_ok(body: &str) -> bool {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                "core.module @test {{\n  !A = core.array<core.i32>\n  !B = core.array<core.i64>\n  func.func @f(%a: !A, %b: !B, %n: core.i32, %w: core.i64, %x: core.index) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
+            ),
+        );
+        validate_op_schemas(&ctx, module.op()).is_ok()
+    }
+
+    #[test]
+    fn array_indices_and_lengths_are_i32() {
+        assert!(schema_ok(
+            "%e = wasm_gc.array_get %a, %n {type = !A} : core.i32"
+        ));
+        assert!(!schema_ok(
+            "%e = wasm_gc.array_get %a, %w {type = !A} : core.i32"
+        ));
+        assert!(!schema_ok(
+            "%e = wasm_gc.array_get %a, %x {type = !A} : core.i32"
+        ));
+        assert!(!schema_ok(
+            "%e = wasm_gc.array_get_u %a, %x {type = !A} : core.i32"
+        ));
+        assert!(!schema_ok("wasm_gc.array_set %a, %x, %n {type = !A}"));
+        assert!(schema_ok(
+            "%v = wasm_gc.array_new_default %n {type = !A} : !A"
+        ));
+        assert!(!schema_ok(
+            "%v = wasm_gc.array_new_default %w {type = !A} : !A"
+        ));
+        assert!(!schema_ok("%v = wasm_gc.array_new %x, %n {type = !A} : !A"));
+        assert!(!schema_ok(
+            "%v = wasm_gc.array_new_data %n, %w {type = !A, data_idx = 0} : !A"
+        ));
+    }
+
+    #[test]
+    fn array_copy_binds_its_array_types() {
+        assert!(schema_ok(
+            "wasm_gc.array_copy %a, %n, %b, %n, %n {dst_type = !A, src_type = !B}"
+        ));
+        assert!(!schema_ok(
+            "wasm_gc.array_copy %a, %n, %b, %n, %n {dst_type = !A, src_type = !A}"
+        ));
+        assert!(!schema_ok(
+            "wasm_gc.array_copy %a, %n, %b, %n, %w {dst_type = !A, src_type = !B}"
+        ));
+    }
+
+    #[test]
+    fn array_new_data_result_is_its_declared_array() {
+        assert!(schema_ok(
+            "%v = wasm_gc.array_new_data %n, %n {type = !A, data_idx = 0} : !A"
+        ));
+        assert!(!schema_ok(
+            "%v = wasm_gc.array_new_data %n, %n {type = !A, data_idx = 0} : !B"
+        ));
+    }
 }

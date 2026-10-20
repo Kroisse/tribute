@@ -630,11 +630,8 @@ impl RewritePattern for ArrayLenPattern {
         let loc = ctx.op(op).location;
         let ref_val = array_len.r#ref(ctx);
         let result_ty = array_len.result_ty(ctx);
-        let i32_ty = core::I32::type_ref(ctx);
 
-        let len = wasm_dialect::ArrayLen::operands(ref_val)
-            .results(i32_ty)
-            .build(ctx, loc);
+        let len = wasm_dialect::ArrayLen::operands(ref_val).build(ctx, loc);
         rewriter.insert_op(len.op_ref());
         let index = core::UnrealizedConversionCast::operands(len.result(ctx))
             .results(result_ty)
