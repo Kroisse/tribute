@@ -1,0 +1,157 @@
+---
+source: crates/tribute-passes/src/native/array_to_clif.rs
+expression: lowered
+---
+  clif.func {sym_name = "build", type = clif.func_sig<(core.ptr, core.ptr, core.i64) -> core.ptr>} {
+    ^bb0(%0: core.ptr, %1: core.ptr, %2: core.i64):
+      %3 = tribute_rt.retain %0 : !NodeRef
+      %4 = tribute_rt.retain %1 : !NodeRef
+      %5 = tribute_rt.retain %0 : !NodeRef
+      %6 = tribute_rt.retain %1 : !NodeRef
+      %7 = core.unrealized_conversion_cast %0 : !NodeRef
+      %8 = core.unrealized_conversion_cast %1 : !NodeRef
+      %9 = clif.iconst {value = 32} : core.i64
+      %10 = clif.call %9 {callee = @__tribute_alloc} : core.ptr
+      %11 = clif.iconst {value = 1} : core.i32
+      clif.store %11, %10 {offset = 0}
+      %12 = clif.iconst {value = 7} : core.i32
+      clif.store %12, %10 {offset = 4}
+      %13 = clif.iconst {value = 8} : core.i64
+      %14 = clif.iadd %10, %13 : core.ptr
+      %15 = clif.iconst {value = 2} : core.i64
+      clif.store %15, %14 {offset = 0}
+      clif.store %7, %14 {offset = 8}
+      clif.store %8, %14 {offset = 16}
+      %16 = core.unrealized_conversion_cast %0 : !NodeRef
+      %17 = core.unrealized_conversion_cast %2 : core.index
+      %18 = clif.call %17, %16 {callee = @__tribute_array_new_7} : core.ptr
+      tribute_rt.release %0 {alloc_size = 12}
+      tribute_rt.release %18 {alloc_size = 0}
+      %19 = core.unrealized_conversion_cast %1 : !NodeRef
+      %20 = core.unrealized_conversion_cast %2 : core.index
+      %21 = clif.call %20, %19 {callee = @__tribute_array_new_7} : core.ptr
+      tribute_rt.release %21 {alloc_size = 0}
+      %22 = core.unrealized_conversion_cast %1 : !NodeRef
+      %23 = core.unrealized_conversion_cast %2 : core.index
+      %24 = core.unrealized_conversion_cast %2 : core.index
+      %25 = clif.iconst {value = 1} : core.i64
+      %26 = clif.call %14, %23, %24, %25 {callee = @__tribute_array_splice_7} : core.ptr
+      %27 = clif.iconst {value = 8} : core.i64
+      %28 = clif.imul %23, %27 : core.i64
+      %29 = clif.iadd %26, %28 : core.ptr
+      clif.store %22, %29 {offset = 8}
+      tribute_rt.release %14 {alloc_size = 0}
+      %30 = core.unrealized_conversion_cast %26 : core.ptr
+      clif.return %30
+  }
+  clif.func {sym_name = "__tribute_array_new_7", type = clif.func_sig<(core.i64, core.ptr) -> core.ptr>} {
+    ^bb0(%0: core.i64, %1: core.ptr):
+      %2 = clif.iconst {value = 1152921504606846973} : core.i64
+      %3 = clif.icmp %0, %2 {cond = "ugt"} : core.i8
+      clif.trapnz %3 {code = "array_size_overflow"}
+      %4 = clif.iconst {value = 8} : core.i64
+      %5 = clif.imul %0, %4 : core.i64
+      %6 = clif.iconst {value = 16} : core.i64
+      %7 = clif.iadd %6, %5 : core.i64
+      %8 = clif.call %7 {callee = @__tribute_alloc} : core.ptr
+      %9 = clif.iconst {value = 1} : core.i32
+      clif.store %9, %8 {offset = 0}
+      %10 = clif.iconst {value = 7} : core.i32
+      clif.store %10, %8 {offset = 4}
+      %11 = clif.iconst {value = 8} : core.i64
+      %12 = clif.iadd %8, %11 : core.ptr
+      clif.store %0, %12 {offset = 0}
+      %13 = clif.iconst {value = 0} : core.i64
+      clif.jump %13 [^bb1]
+
+    ^bb1(%14: core.i64):
+      %15 = clif.icmp %14, %0 {cond = "ult"} : core.i8
+      clif.brif %15 [^bb2, ^bb3]
+
+    ^bb2:
+      %16 = clif.iconst {value = 8} : core.i64
+      %17 = clif.imul %14, %16 : core.i64
+      %18 = clif.iadd %12, %17 : core.ptr
+      clif.store %1, %18 {offset = 8}
+      %19 = tribute_rt.retain %1 : core.ptr
+      %20 = clif.iconst {value = 1} : core.i64
+      %21 = clif.iadd %14, %20 : core.i64
+      clif.jump %21 [^bb1]
+
+    ^bb3:
+      clif.return %12
+  }
+  clif.func {sym_name = "__tribute_array_splice_7", type = clif.func_sig<(core.ptr, core.i64, core.i64, core.i64) -> core.ptr>} {
+    ^bb0(%0: core.ptr, %1: core.i64, %2: core.i64, %3: core.i64):
+      %4 = clif.load %0 {offset = 0} : core.i64
+      %5 = clif.icmp %1, %2 {cond = "ugt"} : core.i8
+      clif.trapnz %5 {code = "array_splice_out_of_bounds"}
+      %6 = clif.icmp %2, %4 {cond = "ugt"} : core.i8
+      clif.trapnz %6 {code = "array_splice_out_of_bounds"}
+      %7 = clif.isub %2, %1 : core.i64
+      %8 = clif.isub %4, %7 : core.i64
+      %9 = clif.iadd %8, %3 : core.i64
+      %10 = clif.icmp %9, %8 {cond = "ult"} : core.i8
+      clif.trapnz %10 {code = "array_size_overflow"}
+      %11 = clif.iconst {value = 1152921504606846973} : core.i64
+      %12 = clif.icmp %9, %11 {cond = "ugt"} : core.i8
+      clif.trapnz %12 {code = "array_size_overflow"}
+      %13 = clif.iconst {value = 8} : core.i64
+      %14 = clif.imul %9, %13 : core.i64
+      %15 = clif.iconst {value = 16} : core.i64
+      %16 = clif.iadd %15, %14 : core.i64
+      %17 = clif.call %16 {callee = @__tribute_alloc} : core.ptr
+      %18 = clif.iconst {value = 1} : core.i32
+      clif.store %18, %17 {offset = 0}
+      %19 = clif.iconst {value = 7} : core.i32
+      clif.store %19, %17 {offset = 4}
+      %20 = clif.iconst {value = 8} : core.i64
+      %21 = clif.iadd %17, %20 : core.ptr
+      clif.store %9, %21 {offset = 0}
+      %22 = clif.iconst {value = 0} : core.i64
+      clif.jump %22 [^bb1]
+
+    ^bb1(%23: core.i64):
+      %24 = clif.icmp %23, %1 {cond = "ult"} : core.i8
+      clif.brif %24 [^bb2, ^bb3]
+
+    ^bb2:
+      %25 = clif.iconst {value = 8} : core.i64
+      %26 = clif.imul %23, %25 : core.i64
+      %27 = clif.iadd %0, %26 : core.ptr
+      %28 = clif.load %27 {offset = 8} : core.ptr
+      %29 = clif.iconst {value = 8} : core.i64
+      %30 = clif.imul %23, %29 : core.i64
+      %31 = clif.iadd %21, %30 : core.ptr
+      clif.store %28, %31 {offset = 8}
+      %32 = tribute_rt.retain %28 : core.ptr
+      %33 = clif.iconst {value = 1} : core.i64
+      %34 = clif.iadd %23, %33 : core.i64
+      clif.jump %34 [^bb1]
+
+    ^bb3:
+      clif.jump %2 [^bb4]
+
+    ^bb4(%35: core.i64):
+      %36 = clif.icmp %35, %4 {cond = "ult"} : core.i8
+      clif.brif %36 [^bb5, ^bb6]
+
+    ^bb5:
+      %37 = clif.isub %35, %7 : core.i64
+      %38 = clif.iadd %37, %3 : core.i64
+      %39 = clif.iconst {value = 8} : core.i64
+      %40 = clif.imul %35, %39 : core.i64
+      %41 = clif.iadd %0, %40 : core.ptr
+      %42 = clif.load %41 {offset = 8} : core.ptr
+      %43 = clif.iconst {value = 8} : core.i64
+      %44 = clif.imul %38, %43 : core.i64
+      %45 = clif.iadd %21, %44 : core.ptr
+      clif.store %42, %45 {offset = 8}
+      %46 = tribute_rt.retain %42 : core.ptr
+      %47 = clif.iconst {value = 1} : core.i64
+      %48 = clif.iadd %35, %47 : core.i64
+      clif.jump %48 [^bb4]
+
+    ^bb6:
+      clif.return %21
+  }

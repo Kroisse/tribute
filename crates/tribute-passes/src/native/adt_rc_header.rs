@@ -5,6 +5,10 @@
 //! 2. Store refcount = 1 and rtti_idx in the RC header
 //! 3. Store field values in the payload area
 //!
+//! The `adt` array operations are lowered in the same applicator, through
+//! `array_to_clif`, because array construction also
+//! reads the declared RTTI layouts.
+//!
 //! This is a Tribute-specific pass that must run before the language-agnostic
 //! `adt_to_clif` pass (which handles field access operations).
 //!
@@ -23,19 +27,19 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::rewriter::PatternRewriter;
 use trunk_ir::rewrite::type_converter::TypeConverter;
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, RewritePattern,
 };
-use trunk_ir::types::StringRef;
-use trunk_ir::types::TypeDataBuilder;
+use trunk_ir::types::{Location, StringRef, TypeDataBuilder};
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
 
-/// Lower `adt.struct_new` and `adt.variant_new` operations with RC headers.
+/// Lower `adt.struct_new` and `adt.variant_new` operations with RC headers,
+/// and the array operations through [`super::array_to_clif`].
 ///
 /// Each header stores the RTTI index its `tribute_rtti.layout` declares. As
 /// the last reader of those declarations, this pass erases them.
@@ -48,25 +52,30 @@ fn lower(
     // Pre-intern types
     let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
     let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
-    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
+    let arrays = super::array_to_clif::prepare(ctx, module, &type_converter);
 
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern {
             rtti_map: rtti_map.clone(),
             ptr_ty,
             i64_ty,
-            i32_ty,
         })
         .add_pattern(VariantNewPattern {
             rtti_map: rtti_map.clone(),
             ptr_ty,
             i64_ty,
-            i32_ty,
-        });
+        })
+        .add_pattern(arrays);
 
     let target = ConversionTarget::new()
         .illegal_op("adt.struct_new")
-        .illegal_op("adt.variant_new");
+        .illegal_op("adt.variant_new")
+        .illegal_op("adt.array_new")
+        .illegal_op("adt.array_of")
+        .illegal_op("adt.array_splice")
+        .illegal_op("adt.array_get")
+        .illegal_op("adt.array_set")
+        .illegal_op("adt.array_len");
     applicator
         .with_target(target)
         .apply_partial_conversion(ctx, module, "adt-rc-header")?;
@@ -74,6 +83,59 @@ fn lower(
         trunk_ir::rewrite::erase_op(ctx, layout.op_ref());
     }
     Ok(())
+}
+
+/// Allocate `size` bytes through `__tribute_alloc` and initialize the RC
+/// header with refcount 1 and `rtti_idx`. Appends the operations to `ops` and
+/// returns the payload pointer, right after the header.
+pub(super) fn rc_allocation(
+    ctx: &mut IrContext,
+    loc: Location,
+    size: ValueRef,
+    rtti_idx: u32,
+    ops: &mut Vec<OpRef>,
+) -> ValueRef {
+    let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+    let i64_ty = core::I64::type_ref(ctx);
+    let i32_ty = core::I32::type_ref(ctx);
+
+    let call_op = clif::Call::operands([size])
+        .callee(SymbolPath::new([ALLOC_FN]))
+        .results([ptr_ty])
+        .build(ctx, loc);
+    let raw_ptr = call_op.results(ctx)[0];
+    ops.push(call_op.op_ref());
+
+    let rc_one = clif::Iconst::operands()
+        .value(1)
+        .results(i32_ty)
+        .build(ctx, loc);
+    ops.push(rc_one.op_ref());
+    let store_rc = clif::Store::operands(rc_one.result(ctx), raw_ptr)
+        .offset(REFCOUNT_OFFSET as i32)
+        .build(ctx, loc);
+    ops.push(store_rc.op_ref());
+
+    let rtti_val = clif::Iconst::operands()
+        .value(i64::from(rtti_idx))
+        .results(i32_ty)
+        .build(ctx, loc);
+    ops.push(rtti_val.op_ref());
+    let store_rtti = clif::Store::operands(rtti_val.result(ctx), raw_ptr)
+        .offset(RTTI_IDX_OFFSET as i32)
+        .build(ctx, loc);
+    ops.push(store_rtti.op_ref());
+
+    let hdr_size = clif::Iconst::operands()
+        .value(RC_HEADER_SIZE as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
+    ops.push(hdr_size.op_ref());
+    let payload_ptr = clif::Iadd::operands(raw_ptr, hdr_size.result(ctx))
+        .results(ptr_ty)
+        .build(ctx, loc);
+    ops.push(payload_ptr.op_ref());
+    payload_ptr.result(ctx)
 }
 
 /// Pattern for `adt.struct_new(fields...)` -> heap allocation + RC header + stores.
@@ -97,7 +159,6 @@ struct StructNewPattern {
     rtti_map: HashMap<(TypeRef, Option<StringRef>), u32>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
-    i32_ty: TypeRef,
 }
 
 impl RewritePattern for StructNewPattern {
@@ -136,27 +197,7 @@ impl RewritePattern for StructNewPattern {
         let size_val = size_op.result(ctx);
         ops.push(size_op.op_ref());
 
-        // 2. Call __tribute_alloc
-        let call_op = clif::Call::operands([size_val])
-            .callee(SymbolPath::new([ALLOC_FN]))
-            .results([self.ptr_ty])
-            .build(ctx, loc);
-        let raw_ptr = call_op.results(ctx)[0];
-        ops.push(call_op.op_ref());
-
-        // 3. Store refcount = 1
-        let rc_one = clif::Iconst::operands()
-            .value(1)
-            .results(self.i32_ty)
-            .build(ctx, loc);
-        let rc_one_val = rc_one.result(ctx);
-        ops.push(rc_one.op_ref());
-        let store_rc = clif::Store::operands(rc_one_val, raw_ptr)
-            .offset(REFCOUNT_OFFSET as i32)
-            .build(ctx, loc);
-        ops.push(store_rc.op_ref());
-
-        // 4. Store rtti_idx at raw_ptr + 4
+        // 2-5. Allocate with the RC header and find the payload
         let rtti_idx = self
             .rtti_map
             .get(&(struct_ty, None))
@@ -168,30 +209,8 @@ impl RewritePattern for StructNewPattern {
                     struct_ty,
                     ctx.get_type(struct_ty)
                 )
-            }) as i64;
-        let rtti_val = clif::Iconst::operands()
-            .value(rtti_idx)
-            .results(self.i32_ty)
-            .build(ctx, loc);
-        let rtti_val_v = rtti_val.result(ctx);
-        ops.push(rtti_val.op_ref());
-        let store_rtti = clif::Store::operands(rtti_val_v, raw_ptr)
-            .offset(RTTI_IDX_OFFSET as i32)
-            .build(ctx, loc);
-        ops.push(store_rtti.op_ref());
-
-        // 5. Compute payload pointer = raw_ptr + 8
-        let hdr_size = clif::Iconst::operands()
-            .value(RC_HEADER_SIZE as i64)
-            .results(self.i64_ty)
-            .build(ctx, loc);
-        let hdr_size_val = hdr_size.result(ctx);
-        ops.push(hdr_size.op_ref());
-        let payload_ptr = clif::Iadd::operands(raw_ptr, hdr_size_val)
-            .results(self.ptr_ty)
-            .build(ctx, loc);
-        let payload_val = payload_ptr.result(ctx);
-        ops.push(payload_ptr.op_ref());
+            });
+        let payload_val = rc_allocation(ctx, loc, size_val, rtti_idx, &mut ops);
 
         // 6. Store each field at its computed offset (relative to payload)
         assert_eq!(
@@ -255,7 +274,6 @@ struct VariantNewPattern {
     rtti_map: HashMap<(TypeRef, Option<StringRef>), u32>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
-    i32_ty: TypeRef,
 }
 
 impl RewritePattern for VariantNewPattern {
@@ -295,27 +313,7 @@ impl RewritePattern for VariantNewPattern {
         let size_val = size_op.result(ctx);
         ops.push(size_op.op_ref());
 
-        // 2. Call __tribute_alloc
-        let call_op = clif::Call::operands([size_val])
-            .callee(SymbolPath::new([ALLOC_FN]))
-            .results([self.ptr_ty])
-            .build(ctx, loc);
-        let raw_ptr = call_op.results(ctx)[0];
-        ops.push(call_op.op_ref());
-
-        // 3. Store refcount = 1
-        let rc_one = clif::Iconst::operands()
-            .value(1)
-            .results(self.i32_ty)
-            .build(ctx, loc);
-        let rc_one_val = rc_one.result(ctx);
-        ops.push(rc_one.op_ref());
-        let store_rc = clif::Store::operands(rc_one_val, raw_ptr)
-            .offset(REFCOUNT_OFFSET as i32)
-            .build(ctx, loc);
-        ops.push(store_rc.op_ref());
-
-        // 4. Store rtti_idx at raw_ptr + 4
+        // 2-5. Allocate with the RC header and find the payload
         let rtti_idx = self
             .rtti_map
             .get(&(enum_ty, Some(tag)))
@@ -326,30 +324,8 @@ impl RewritePattern for VariantNewPattern {
                      ensure its tribute_rtti.layout is declared",
                     enum_ty
                 )
-            }) as i64;
-        let rtti_val = clif::Iconst::operands()
-            .value(rtti_idx)
-            .results(self.i32_ty)
-            .build(ctx, loc);
-        let rtti_val_v = rtti_val.result(ctx);
-        ops.push(rtti_val.op_ref());
-        let store_rtti = clif::Store::operands(rtti_val_v, raw_ptr)
-            .offset(RTTI_IDX_OFFSET as i32)
-            .build(ctx, loc);
-        ops.push(store_rtti.op_ref());
-
-        // 5. Compute payload pointer = raw_ptr + 8
-        let hdr_size = clif::Iconst::operands()
-            .value(RC_HEADER_SIZE as i64)
-            .results(self.i64_ty)
-            .build(ctx, loc);
-        let hdr_size_val = hdr_size.result(ctx);
-        ops.push(hdr_size.op_ref());
-        let payload_ptr = clif::Iadd::operands(raw_ptr, hdr_size_val)
-            .results(self.ptr_ty)
-            .build(ctx, loc);
-        let payload_val = payload_ptr.result(ctx);
-        ops.push(payload_ptr.op_ref());
+            });
+        let payload_val = rc_allocation(ctx, loc, size_val, rtti_idx, &mut ops);
 
         // 6. Store each field at its computed offset from the payload
         assert_eq!(

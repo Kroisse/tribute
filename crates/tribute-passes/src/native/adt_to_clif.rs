@@ -15,11 +15,9 @@
 //!
 //! `adt.struct_new` and `adt.variant_new` are handled by a separate pass,
 //! [`adt_rc_header`](super::adt_rc_header), that initializes RC headers. This pass only handles field access and
-//! reference operations.
-//!
-//! ## Limitations
-//!
-//! - Array ops are left unchanged
+//! reference operations. `adt_rc_header` also lowers the array operations,
+//! through `array_to_clif`, so an array operation
+//! left here is rejected.
 
 use tracing::warn;
 
@@ -40,7 +38,7 @@ use trunk_ir_cranelift_backend::passes::arith_to_clif::finalize_cmp;
 /// Lower ADT operations to clif dialect.
 ///
 /// This is a partial lowering: struct access and reference operations are converted.
-/// Other ADT operations (struct_new, variant, array) pass through unchanged.
+/// Construction operations, which `adt_rc_header` lowers, pass through unchanged.
 ///
 /// The `type_converter` parameter converts result types and determines field
 /// sizes for enum layout computation. Struct field offsets come from the
@@ -70,12 +68,6 @@ fn adt_to_clif_target() -> ConversionTarget {
         .illegal_op("tribute_rtti.descriptor")
         .legal_op("adt.struct_new")
         .legal_op("adt.variant_new")
-        .legal_op("adt.array_new")
-        .legal_op("adt.array_of")
-        .legal_op("adt.array_splice")
-        .legal_op("adt.array_get")
-        .legal_op("adt.array_set")
-        .legal_op("adt.array_len")
         .legal_op("adt.string_const")
         .legal_op("adt.bytes_const")
 }
@@ -487,5 +479,27 @@ mod tests {
 }"#,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn array_operations_left_for_adt_to_clif_are_rejected() {
+        let error = run_pass_result(
+            r#"core.module @test {
+  func.func @test_fn() -> core.index {
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = core.unrealized_conversion_cast %0 : core.array<core.i32>
+    %2 = adt.array_len %1 : core.index
+    func.return %2
+  }
+}"#,
+        )
+        .expect_err("adt_rc_header lowers array operations");
+
+        assert!(
+            error
+                .operations()
+                .iter()
+                .any(|illegal| illegal.name == "adt.array_len")
+        );
     }
 }

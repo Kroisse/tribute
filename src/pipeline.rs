@@ -1163,13 +1163,24 @@ pub fn emit_from_boundary_exit(
 ) -> Result<Vec<u8>, EmitError> {
     match target {
         tribute_passes::abi_boundary::TargetKind::Native => {
-            compile_module_to_native(ctx, m, false, NativeOptimizationOptions::production())
-                .map_err(EmitError::Native)
+            emit_native_from_boundary_exit(ctx, m, false)
         }
         tribute_passes::abi_boundary::TargetKind::Wasm => compile_to_wasm(ctx, m)
             .map(|binary| binary.bytes)
             .map_err(EmitError::Wasm),
     }
+}
+
+/// Lower and emit a native object at the boundary exit with production
+/// optimizations, instrumented by the address sanitizer when `sanitize` is
+/// set.
+pub fn emit_native_from_boundary_exit(
+    ctx: &mut IrContext,
+    m: Module,
+    sanitize: bool,
+) -> Result<Vec<u8>, EmitError> {
+    compile_module_to_native(ctx, m, sanitize, NativeOptimizationOptions::production())
+        .map_err(EmitError::Native)
 }
 
 /// Reject a module whose representation/ABI boundary exit violates the
