@@ -421,3 +421,42 @@ fn an_instantiation_reads_the_class_variables_of_its_instance() {
         ],
     );
 }
+
+/// A reference inside a lambda selects its callee's instance with the
+/// lambda's settled class, here `EvidenceDirect`.
+#[test]
+fn a_reference_in_a_lambda_selects_by_the_local_class() {
+    let printed = specialized(
+        r#"core.module @m {
+  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !ask = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ask]}}>
+  !ga = tribute_control.func_sig<(core.i32, !ask) -> core.i32, {ability_row = {instances = [@Ask]}}>
+  ability.decl {sym_name = "Ask"} {
+    ability.operation {kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
+    %r = tribute_control.call_indirect %f, %x : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 row(@Ask) {
+    %g = tribute_control.lambda['a0](%y: core.i32, %f: !cb) -> core.i32 row(| 'a0) captures [] {
+      %v = tribute_control.call %y, %f {callee = @app, row_args = [{tail = 0}]} : core.i32
+      tribute_control.return %v
+    }
+    %cb = tribute_control.lambda(%z: core.i32) -> core.i32 row(@Ask) captures [] {
+      tribute_control.return %z
+    }
+    %a = tribute_control.instantiate %g {row_args = [{instances = [@Ask]}]} : !ga
+    %r = tribute_control.call_indirect %a, %x, %cb : core.i32
+    tribute_control.return %r
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "tribute_control.func @\"app$9E\"['a0]",
+            "%4 = tribute_control.call %2, %3 {callee = @\"app$9E\", row_args = [{tail = 0}]} : core.i32",
+        ],
+    );
+}

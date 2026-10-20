@@ -8,8 +8,10 @@
 //! each let-bound lambda of an instance once per class vector its
 //! instantiations select, and writes a convention on every source signature.
 //!
-//! Analysis finishes on the unchanged module before anything changes, so every
-//! instance is cloned from its original definition. A definition that ends up
+//! Class variables are selected on the unchanged module. Instances are then
+//! rewritten one at a time, and the instance each reference selects, read
+//! with the local classes of its lambda copy, is cloned from an untouched copy
+//! of its definition when first seen. A definition that ends up
 //! unreferenced stays in place for the removal of unreferenced definitions that
 //! follows the pass.
 
@@ -74,44 +76,67 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
         .filter_map(|&op| Function::read(ctx, op))
         .collect();
     let positions = settle_class_variables(&mut functions);
-    let instances = collect_instances(&functions, &positions, &requirements);
+    let variables = |name: &str| positions.get(name).map_or(&[][..], Vec::as_slice);
+    let by_name: HashMap<&str, &Function> =
+        functions.iter().map(|f| (f.name.as_str(), f)).collect();
+    let names: HashSet<&str> = by_name.keys().copied().collect();
 
-    // Clone every instance from its original before rewriting any of them.
-    let mut rewrites = Vec::new();
+    // Instances are cloned from untouched copies, since a primary instance is
+    // rewritten in place before every reference to its definition is known.
+    let templates: HashMap<&str, OpRef> = functions
+        .iter()
+        .map(|f| (f.name.as_str(), ctx.clone_op(f.op, &mut IrMapping::new())))
+        .collect();
+    let mut known: HashMap<&str, Vec<Vec<CallingConvention>>> = HashMap::default();
+    let mut anchors: HashMap<&str, OpRef> = HashMap::default();
+    let mut queue = VecDeque::new();
     for function in &functions {
-        let vectors = &instances[&function.name];
-        let mut anchor = function.op;
-        for classes in &vectors[1..] {
-            let clone = ctx.clone_op(function.op, &mut IrMapping::new());
-            let name = format!("{}{}", function.name, class_suffix(classes));
-            let name = ctx.intern_str(&name);
-            ctx.op_attrs_mut(clone)
-                .insert("sym_name", Attribute::String(name));
-            insert_after(ctx, anchor, clone);
-            anchor = clone;
-            rewrites.push((clone, function, classes.clone()));
-        }
-        rewrites.push((function.op, function, vectors[0].clone()));
+        let primary = if function.is_root_main() {
+            CallingConvention::Direct
+        } else {
+            CallingConvention::Cps
+        };
+        let classes = vec![primary; variables(&function.name).len()];
+        known.insert(&function.name, vec![classes.clone()]);
+        anchors.insert(&function.name, function.op);
+        queue.push_back((function, function.op, classes));
     }
-    let names: HashSet<&str> = functions.iter().map(|f| f.name.as_str()).collect();
-    for (op, function, classes) in rewrites {
-        let params: HashMap<u32, CallingConvention> = positions
-            .get(&function.base)
-            .into_iter()
-            .flatten()
-            .copied()
-            .zip(classes)
-            .collect();
+    while let Some((function, op, classes)) = queue.pop_front() {
         let mut instance = Instance {
             function,
             requirements: &requirements,
-            params,
+            params: variables(&function.name)
+                .iter()
+                .copied()
+                .zip(classes)
+                .collect(),
             positions: &positions,
             names: &names,
             binders: function.binders.clone(),
             locals: HashMap::default(),
         };
-        instance.rewrite(ctx, op);
+        for (callee, classes) in instance.rewrite(ctx, op) {
+            let callee = by_name[callee.as_str()];
+            let vectors = known.entry(&callee.name).or_default();
+            if vectors.contains(&classes) {
+                continue;
+            }
+            vectors.push(classes.clone());
+            let clone = ctx.clone_op(templates[callee.name.as_str()], &mut IrMapping::new());
+            let name = format!("{}{}", callee.name, class_suffix(&classes));
+            let name = ctx.intern_str(&name);
+            ctx.op_attrs_mut(clone)
+                .insert("sym_name", Attribute::String(name));
+            let anchor = anchors
+                .get_mut(callee.name.as_str())
+                .expect("every definition has an anchor");
+            insert_after(ctx, *anchor, clone);
+            *anchor = clone;
+            queue.push_back((callee, clone, classes));
+        }
+    }
+    for (_, template) in templates {
+        ctx.remove_op(template);
     }
     assign_module_level(ctx, module, &requirements);
     Ok(())
@@ -124,67 +149,6 @@ fn has_source_signatures(ctx: &IrContext, module: Module) -> bool {
         .ops(ctx)
         .iter()
         .any(|&op| tribute_control::Func::matches(ctx, op))
-}
-
-/// The class vectors each definition is instantiated at, its primary instance
-/// first: every class `Cps`, or every class `Direct` for root `main`, which
-/// has no other instance.
-fn collect_instances(
-    functions: &[Function],
-    positions: &HashMap<String, Vec<u32>>,
-    requirements: &HashMap<SymbolPath, CallingConvention>,
-) -> HashMap<String, Vec<Vec<CallingConvention>>> {
-    let by_name: HashMap<&str, &Function> =
-        functions.iter().map(|f| (f.name.as_str(), f)).collect();
-    let variables = |name: &str| positions.get(name).map_or(&[][..], Vec::as_slice);
-    let mut instances: HashMap<String, Vec<Vec<CallingConvention>>> = HashMap::default();
-    let mut queue = VecDeque::new();
-    for function in functions {
-        let primary = if function.is_root_main() {
-            CallingConvention::Direct
-        } else {
-            CallingConvention::Cps
-        };
-        let classes = vec![primary; variables(&function.name).len()];
-        instances.insert(function.name.clone(), vec![classes.clone()]);
-        queue.push_back((function.name.as_str(), classes));
-    }
-    while let Some((name, classes)) = queue.pop_front() {
-        let function = by_name[name];
-        let params: HashMap<u32, CallingConvention> =
-            variables(name).iter().copied().zip(classes).collect();
-        for reference in &function.references {
-            let Some(callee) = by_name.get(reference.callee.as_str()) else {
-                continue;
-            };
-            if callee.is_root_main() {
-                continue;
-            }
-            let selected: Vec<_> = variables(&callee.name)
-                .iter()
-                .map(|&position| {
-                    usize::try_from(position)
-                        .ok()
-                        .and_then(|position| reference.rows.get(position))
-                        .map_or(CallingConvention::Cps, |row| {
-                            row_class(
-                                row,
-                                &function.binders,
-                                requirements,
-                                &params,
-                                &HashMap::default(),
-                            )
-                        })
-                })
-                .collect();
-            let known = instances.entry(callee.name.clone()).or_default();
-            if !known.contains(&selected) {
-                known.push(selected.clone());
-                queue.push_back((callee.name.as_str(), selected));
-            }
-        }
-    }
-    instances
 }
 
 /// Insert `op` right after `anchor`.
@@ -231,7 +195,9 @@ impl Instance<'_> {
         )
     }
 
-    fn rewrite(&mut self, ctx: &mut IrContext, op: OpRef) {
+    /// Rewrite `op` as this instance, and return the instance each of its
+    /// references selects.
+    fn rewrite(&mut self, ctx: &mut IrContext, op: OpRef) -> Vec<(String, Vec<CallingConvention>)> {
         if let Some(body) = ctx.op_region(op, 0) {
             self.split_lambdas(ctx, body);
             if self.binders.len() != self.function.binders.len() {
@@ -261,9 +227,10 @@ impl Instance<'_> {
                 }
             }
         }
-        for &inner in &ops[1..] {
-            self.point_reference(ctx, inner);
-        }
+        let selected: Vec<_> = ops[1..]
+            .iter()
+            .filter_map(|&inner| self.point_reference(ctx, inner))
+            .collect();
         for &inner in &ops {
             self.assign_op(ctx, inner);
         }
@@ -275,6 +242,7 @@ impl Instance<'_> {
             }
         }
         self.assign_own_convention(ctx, op);
+        selected
     }
 
     /// Copy each let-bound lambda once per class vector its instantiations
@@ -401,8 +369,13 @@ impl Instance<'_> {
         copy
     }
 
-    /// Point a reference at the instance its rows select.
-    fn point_reference(&self, ctx: &mut IrContext, op: OpRef) {
+    /// Point a reference at the instance its rows select, and return that
+    /// instance.
+    fn point_reference(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+    ) -> Option<(String, Vec<CallingConvention>)> {
         let key = if tribute_control::FuncRef::matches(ctx, op) {
             "func_ref"
         } else if tribute_control::Call::matches(ctx, op)
@@ -410,7 +383,7 @@ impl Instance<'_> {
         {
             "callee"
         } else {
-            return;
+            return None;
         };
         let callee = ctx
             .op_attrs(op)
@@ -419,7 +392,7 @@ impl Instance<'_> {
             .expect("a reference names a definition")
             .to_string();
         if !self.names.contains(callee.as_str()) || callee == "main" {
-            return;
+            return None;
         }
         let rows = tribute_control::row_args(ctx, op).unwrap_or_default();
         let classes: Vec<_> = self
@@ -435,11 +408,11 @@ impl Instance<'_> {
             })
             .collect();
         let suffix = class_suffix(&classes);
-        if suffix.is_empty() {
-            return;
+        if !suffix.is_empty() {
+            let name = SymbolPath::new([Symbol::new(&format!("{callee}{suffix}"))]);
+            ctx.op_attrs_mut(op).insert(key, Attribute::SymbolRef(name));
         }
-        let name = SymbolPath::new([Symbol::new(&format!("{callee}{suffix}"))]);
-        ctx.op_attrs_mut(op).insert(key, Attribute::SymbolRef(name));
+        Some((callee, classes))
     }
 
     fn assign(&self, ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
