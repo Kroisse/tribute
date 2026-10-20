@@ -488,21 +488,19 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
             }
         }
 
-        // --- adt.array_new with evidence type → func.call @__tribute_evidence_empty ---
-        if tribute_ir::dialect::adt::ArrayNew::matches(ctx, op) {
+        // --- adt.array_of with evidence type → func.call @__tribute_evidence_empty ---
+        if tribute_ir::dialect::adt::ArrayOf::matches(ctx, op) {
             let result_types = ctx.op_result_types(op).to_vec();
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
-                // Evidence array_new must represent an empty evidence vector.
-                // The only operand should be the size hint (arith.const 0).
+                // Only the empty evidence is built as an array.
                 let operand_count = ctx.op_operands(op).len();
-                if operand_count > 1 {
+                if operand_count > 0 {
                     return Err(native_evidence_rewrite_error(
                         op,
                         loc,
                         format!(
-                            "adt.array_new with evidence type has {operand_count} operands; \
-                             expected at most 1 (the size hint). Non-empty evidence arrays \
-                             should not reach this pass."
+                            "adt.array_of with evidence type has {operand_count} elements; \
+                             only the empty evidence is built as an array"
                         ),
                     ));
                 }

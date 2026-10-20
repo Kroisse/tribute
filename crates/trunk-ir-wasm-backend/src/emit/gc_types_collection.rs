@@ -602,12 +602,16 @@ pub(crate) fn collect_gc_types(
             }
         } else if wasm_dialect::ArrayNew::matches(ctx, op)
             || wasm_dialect::ArrayNewDefault::matches(ctx, op)
+            || wasm_dialect::ArrayNewFixed::matches(ctx, op)
         {
             let result_types = ctx.op_result_types(op).to_vec();
             let type_idx = wasm_dialect::ArrayNew::from_op(ctx, op)
                 .map(|op| op.type_idx(ctx))
                 .or_else(|_| {
                     wasm_dialect::ArrayNewDefault::from_op(ctx, op).map(|op| op.type_idx(ctx))
+                })
+                .or_else(|_| {
+                    wasm_dialect::ArrayNewFixed::from_op(ctx, op).map(|op| op.type_idx(ctx))
                 })
                 .expect("matched indexed array.new operation");
             if type_idx == EVIDENCE_IDX
@@ -620,9 +624,15 @@ pub(crate) fn collect_gc_types(
                 if let Some(&result_ty) = result_types.first() {
                     register_type(ctx, &mut type_idx_by_type, type_idx, result_ty);
                 }
-                let operands = ctx.op_operands(op).to_vec();
-                if let Some(&second_operand) = operands.get(1) {
-                    let ty = helpers::value_type(ctx, second_operand);
+                // `array.new` takes its element after the size; `array.new_fixed`
+                // takes only elements.
+                let element_position = if wasm_dialect::ArrayNewFixed::matches(ctx, op) {
+                    0
+                } else {
+                    1
+                };
+                if let Some(&element) = ctx.op_operands(op).get(element_position) {
+                    let ty = helpers::value_type(ctx, element);
                     record_array_elem(type_idx, builder, ty)?;
                 }
             }
