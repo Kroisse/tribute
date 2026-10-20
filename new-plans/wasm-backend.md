@@ -388,10 +388,9 @@ use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입�
 `adt.typeref`는 이 첫 단계의 대상이 아니다. `adt` 연산이 nominal layout을 읽는
 동안에는 값과 signature에 남고, Wasm dialect lowering의 마지막 단계가 없앤다.
 
-[`core.index`](ir.md#coreindex-주소-폭-정수)는 WasmGC 배열 명령의 index와 길이
-폭인 `core.i32`가 된다. Linear memory를 쓰는 wasm32에서도 주소 폭이 같으므로 같은
-표현을 쓴다. `arith` lowering은 `core.index` 연산을 `core.i32` 연산으로 바꾸고, ADT
-lowering은 배열 index를 `core.i32`로 넘긴다.
+[`core.index`](ir.md#coreindex-주소-폭-정수)는 module memory의 index type이 된다.
+32비트 memory에서는 `core.i32`, memory64에서는 `core.i64`다. `arith` lowering은
+`core.index` 연산을 그 폭의 연산으로 바꾼다.
 
 Struct 이름이나 원소 타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
 원소가 `core.i8`인 배열도 `"bytes_data"`가 없으면 bytes 배열이 아니다.
@@ -404,6 +403,18 @@ Closure는 environment를 따로 두지 않고, Marker의 dispatch closure field
   (type $Node (struct (field i32) (field (ref null $Node)))))
 (type $Point (struct (field f64) (field f64)))
 ```
+
+#### GC 배열 index
+
+WasmGC 배열 명령(`array.new`, `array.new_fixed`, `array.get`, `array.set`,
+`array.len`, `array.copy`)의 index와 길이는 memory의 index type과 관계없이 `i32`다.
+ADT lowering은 `adt` 배열 operation의 `core.index`를 이 폭에 맞춘다.
+
+- 32비트 memory에서는 `core.index`가 이미 `i32`이므로 그대로 넘긴다.
+- memory64에서 index, `start`, `end`, 길이는 `i32`의 부호 없는 범위를 넘으면 trap한
+  뒤 `i32`로 좁힌다. GC 배열의 길이는 이 범위 안에 있으므로 좁힐 수 없는 index는
+  어차피 범위 밖이고, trap은 [`adt` 배열](ir.md#adt-배열)의 범위 계약과 같다.
+- `array.len`의 결과는 0 확장으로 `core.index`가 된다.
 
 ### Structural GC 타입과 descriptor 필드
 

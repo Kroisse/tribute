@@ -1554,7 +1554,8 @@ RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 
 Index는 부호 없는 값으로 해석한다. `adt.array_get`과 `adt.array_set`은
 `index < len`을, `adt.array_splice`는 `start ≤ end ≤ len`을 전제로 한다. Target은
 이 전제를 어긴 실행을 trap으로 끝내며, 범위 밖 원소를 읽거나 쓰거나 다른 값으로
-대신하지 않는다. 할당 크기가 target의 주소 폭을 넘는 길이도 trap이다.
+대신하지 않는다. Target이 표현할 수 있는 최대 길이나 할당 크기를 넘는 길이도
+trap이다.
 
 `list.*` represents the opaque canonical `List(a)` sequence contract. It uses
 `list.empty`, `list.prepend`, `list.is_empty`, `list.head`, and `list.tail`.
@@ -1953,16 +1954,21 @@ rewrite 도중 operand, attribute, region이 바뀌므로 생성 시점의 검�
 
 ### `core.index` 주소 폭 정수
 
-`core.index`는 target의 주소 폭을 따르는 signless 정수 타입이다. Byte offset, 크기,
-배열 index와 길이처럼 target의 주소 공간에서 세는 값을 나타낸다. 폭은 target이
-정하며 target-independent IR과 변환은 그 폭에 기대지 않는다. 지원하는 모든 target의
-index 폭은 32비트 이상이고, target-independent 상수 접기는 이 하한만 가정한다.
+`core.index`는 target의 linear memory 주소 폭을 따르는 signless 정수 타입이다. Byte
+offset, 크기, 배열 index와 길이처럼 target의 주소 공간에서 세는 값을 나타낸다. 폭은
+target이 정하며 target-independent IR과 변환은 그 폭에 기대지 않는다. 지원하는 모든
+target의 index 폭은 32비트 이상이고, target-independent 상수 접기는 이 하한만
+가정한다.
 
 | Target | `core.index` 표현 |
 | --- | --- |
 | Native (Cranelift) | `core.i64`, pointer 폭 |
-| WasmGC | `core.i32`, `array.get`/`array.set`/`array.len`의 index와 길이 폭 |
-| Linear memory wasm32 | `core.i32`, 주소 폭 |
+| Wasm, 32비트 memory | `core.i32`, memory의 index type |
+| Wasm, 64비트 memory(memory64) | `core.i64`, memory의 index type |
+
+WasmGC 배열 명령의 index와 길이는 memory의 index type과 관계없이 `i32`다. 이 폭은
+`core.index`가 아니라 target 고유의 제약이며, Wasm lowering이
+[GC 배열 index를 좁히는 규칙](wasm-backend.md#gc-배열-index)으로 맞춘다.
 
 `core.index`는 고정 폭 정수가 아니다. 고정 폭 정수 범주 `IntegerLike`에 속하지 않고,
 `IntegerOrIndex` 범주가 고정 폭 정수와 함께 받는다. Machine scalar 하나이므로
