@@ -108,6 +108,8 @@ fn typed_op_types(ctx: &IrContext, op: OpRef) -> SmallVec<[TypeRef; 2]> {
         types.push(op.r#type(ctx));
     } else if let Ok(op) = wasm_gc::ArrayNewDefault::from_op(ctx, op) {
         types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::ArrayNewFixed::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
     } else if let Ok(op) = wasm_gc::ArrayNewData::from_op(ctx, op) {
         types.push(op.r#type(ctx));
     } else if let Ok(op) = wasm_gc::ArrayGet::from_op(ctx, op) {
@@ -191,6 +193,16 @@ impl RewritePattern for LowerTypedGcPattern {
                 return false;
             };
             let new = wasm::ArrayNewDefault::operands(old.size(ctx))
+                .type_idx(idx)
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::ArrayNewFixed::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let elements = old.elements(ctx).to_vec();
+            let new = wasm::ArrayNewFixed::operands(elements)
                 .type_idx(idx)
                 .results(old.result_ty(ctx))
                 .build(ctx, loc);

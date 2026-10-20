@@ -12,7 +12,9 @@ this directory.
 - [Salsa](../salsa.md): query and incremental computation guidance.
 
 Language and compiler design contracts are authoritative under
-[`new-plans/`](../../new-plans/). These guides explain implementation practices;
+[`new-plans/`](../../new-plans/), except that one IR operation's own contract
+is the doc comment on its `#[dialect]` declaration
+([TrunkIR](ir.md#dialect-macro)). These guides explain implementation practices;
 [`AGENTS.md`](../../AGENTS.md) provides working rules and entry points.
 
 ## Further Reading

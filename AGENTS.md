@@ -6,6 +6,11 @@ The documents under `new-plans/` are authoritative for Tribute's current
 language and compiler design. If code, tests, or older docs conflict with
 `new-plans/`, follow `new-plans/` and align the implementation afterward.
 
+One IR operation's own contract (its shape, meaning, verification, ownership,
+and location) is the doc comment on its `#[dialect]` declaration, which is
+authoritative for that operation. Rules that span operations stay in
+`new-plans/`.
+
 Key design docs:
 
 - `new-plans/design.md`
@@ -25,7 +30,8 @@ Key design docs:
 - Prefer Korean prose in `new-plans/`; retain code identifiers and technical
   terms where useful.
 - When changing language, type, ability, module, IR, or backend rules, update
-  the relevant `new-plans/*.md` file first.
+  the relevant `new-plans/*.md` file first. When changing one operation's
+  contract, update its `#[dialect]` declaration's doc comment first.
 - Design documents under `new-plans/` must stand independently of work progress:
   state durable contracts and compiler-phase ownership, not issue or PR numbers,
   temporary branches or commits, or task sequencing and status. Track
@@ -49,7 +55,8 @@ cargo run -- --log=tribute_front::typeck=trace compile file.trb
 ## Review guidelines
 
 - Flag code that contradicts `new-plans/`, and rule changes that do not update
-  the relevant `new-plans/*.md` file in the same PR.
+  the relevant `new-plans/*.md` file in the same PR. For one operation's
+  contract, the doc comment on its `#[dialect]` declaration plays that role.
 - Flag `new-plans/` text that cites issue or PR numbers, branches, or task
   status.
 - Flag ownership or callable ABI inferred from symbol spelling, body shape, or

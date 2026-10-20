@@ -208,7 +208,7 @@ impl RewritePattern for IsEmptyPattern {
     }
 }
 
-/// Pass form of `lower`.
+/// Lowers `list.*` operations to private native list nodes.
 pub struct ListToNative;
 
 impl trunk_ir::pass::Pass for ListToNative {

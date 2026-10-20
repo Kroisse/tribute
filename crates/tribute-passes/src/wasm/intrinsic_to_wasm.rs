@@ -289,7 +289,10 @@ impl RewritePattern for BytesRangeEqualPattern {
     }
 }
 
-fn empty_region(ctx: &mut IrContext, location: trunk_ir::types::Location) -> trunk_ir::RegionRef {
+pub(super) fn empty_region(
+    ctx: &mut IrContext,
+    location: trunk_ir::types::Location,
+) -> trunk_ir::RegionRef {
     let block = ctx.create_block(BlockData {
         location,
         args: vec![],
@@ -507,7 +510,10 @@ impl RewritePattern for BytesSliceOrPanicPattern {
     }
 }
 
-fn trap_region(ctx: &mut IrContext, location: trunk_ir::types::Location) -> trunk_ir::RegionRef {
+pub(super) fn trap_region(
+    ctx: &mut IrContext,
+    location: trunk_ir::types::Location,
+) -> trunk_ir::RegionRef {
     let region = empty_region(ctx, location);
     let block = ctx.region(region).blocks[0];
     let unreachable = wasm_dialect::Unreachable::operands().build(ctx, location);

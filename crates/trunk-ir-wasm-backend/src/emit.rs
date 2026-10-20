@@ -16,18 +16,18 @@ use definitions::*;
 use gc_types_collection::*;
 use handlers::{
     handle_array_copy, handle_array_get, handle_array_get_s, handle_array_get_u, handle_array_new,
-    handle_array_new_default, handle_array_set, handle_block, handle_br, handle_br_if,
-    handle_bytes_from_data, handle_call, handle_call_indirect, handle_f32_const, handle_f32_load,
-    handle_f32_store, handle_f64_const, handle_f64_load, handle_f64_store, handle_global_get,
-    handle_global_set, handle_i32_const, handle_i32_load, handle_i32_load8_s, handle_i32_load8_u,
-    handle_i32_load16_s, handle_i32_load16_u, handle_i32_store, handle_i32_store8,
-    handle_i32_store16, handle_i64_const, handle_i64_load, handle_i64_load8_s, handle_i64_load8_u,
-    handle_i64_load16_s, handle_i64_load16_u, handle_i64_load32_s, handle_i64_load32_u,
-    handle_i64_store, handle_i64_store8, handle_i64_store16, handle_i64_store32, handle_if,
-    handle_local_get, handle_local_set, handle_local_tee, handle_loop, handle_memory_grow,
-    handle_memory_size, handle_ref_cast, handle_ref_func, handle_ref_null, handle_ref_test,
-    handle_return_call, handle_return_call_indirect, handle_struct_get, handle_struct_new,
-    handle_struct_set,
+    handle_array_new_default, handle_array_new_fixed, handle_array_set, handle_block, handle_br,
+    handle_br_if, handle_bytes_from_data, handle_call, handle_call_indirect, handle_f32_const,
+    handle_f32_load, handle_f32_store, handle_f64_const, handle_f64_load, handle_f64_store,
+    handle_global_get, handle_global_set, handle_i32_const, handle_i32_load, handle_i32_load8_s,
+    handle_i32_load8_u, handle_i32_load16_s, handle_i32_load16_u, handle_i32_store,
+    handle_i32_store8, handle_i32_store16, handle_i64_const, handle_i64_load, handle_i64_load8_s,
+    handle_i64_load8_u, handle_i64_load16_s, handle_i64_load16_u, handle_i64_load32_s,
+    handle_i64_load32_u, handle_i64_store, handle_i64_store8, handle_i64_store16,
+    handle_i64_store32, handle_if, handle_local_get, handle_local_set, handle_local_tee,
+    handle_loop, handle_memory_grow, handle_memory_size, handle_ref_cast, handle_ref_func,
+    handle_ref_null, handle_ref_test, handle_return_call, handle_return_call_indirect,
+    handle_struct_get, handle_struct_new, handle_struct_set,
 };
 use helpers::*;
 use value_emission::*;
@@ -1072,6 +1072,8 @@ fn emit_op_nested(
         handle_array_new(ctx, array_new_op, emit_ctx, module_info, function)
     } else if wasm_dialect::ArrayNewDefault::matches(ctx, op) {
         handle_array_new_default(ctx, op, emit_ctx, module_info, function)
+    } else if let Ok(array_new_fixed) = wasm_dialect::ArrayNewFixed::from_op(ctx, op) {
+        handle_array_new_fixed(ctx, array_new_fixed, emit_ctx, function)
     } else if let Ok(array_get_op) = wasm_dialect::ArrayGet::from_op(ctx, op) {
         handle_array_get(ctx, array_get_op, emit_ctx, module_info, function)
     } else if let Ok(array_get_s_op) = wasm_dialect::ArrayGetS::from_op(ctx, op) {

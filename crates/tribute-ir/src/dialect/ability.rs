@@ -12,15 +12,60 @@ mod ability {
 
     /// One ability instance the module names, and its operations.
     ///
-    /// `sym_name` is the instance key. The `operations` region holds one
-    /// `ability.operation` per operation of the instance.
+    /// ```text
+    /// ability.decl {sym_name = "<instance key>"} {
+    ///   ability.operation {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
+    ///   ability.operation {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
+    /// }
+    /// ```
+    ///
+    /// - **Role:** a symbol definition that declares one ability instance the
+    ///   module uses, with all of its operations. The frontend emits exactly
+    ///   one into the module body for each instance that an operation or
+    ///   evidence plan in the module names. The declaration is part of the
+    ///   module, not a table outside the IR, so textual IR alone carries every
+    ///   fact verification needs.
+    /// - **Unit:** a declaration is per **instance**, not per ability. The
+    ///   operation signatures are logical types instantiated with the
+    ///   instance's type arguments. Logical types do not represent source type
+    ///   variables, so there are no generic declarations.
+    /// - **Name:** `sym_name` is the instance key. It is built from the
+    ///   checked source arguments and distinguishes different source arguments
+    ///   with the same lowered representation. The run-time ability id is
+    ///   computed from the same key.
+    /// - **References:** every place that names an ability instance is a
+    ///   symbol reference to this definition: `perform`, handler arms, the
+    ///   `ability` of `ability.*` and `effect.*` operations, the `abilities`
+    ///   of `ability.handle_dispatch`, and evidence plan elements. No type
+    ///   denotes an instance, and an instance's type arguments do not appear
+    ///   in the IR. Value type conversion cannot change an instance's
+    ///   identity.
+    /// - **Region:** one `operations` region whose block holds only
+    ///   `ability.operation`. An `ability.operation` has no `sym_name`.
+    ///   Different instances declare the same operation names, so operations
+    ///   do not enter the symbol namespace; they are found within the
+    ///   declaration by `op_name`.
+    /// - **Verification:** `op_name` does not repeat within one declaration.
+    ///   The uniqueness of symbol definitions guarantees one declaration per
+    ///   instance. `perform` and handler arms must agree with the kind,
+    ///   parameter types, and result type of the declaration their `ability`
+    ///   and `op_name` name.
+    /// - **Lifetime:** a declaration stays in the module while an operation
+    ///   naming the instance remains. The target's evidence lowering consumes
+    ///   the last reference and removes the declaration. A declaration is not
+    ///   a callable definition, so global DCE does not remove it.
     fn decl(sym_name: Attr<String>) {
         #[region(operations)]
         {}
     }
 
     /// One operation of the enclosing `ability.decl`, with the parameter and
-    /// result types of that instance. `kind` is `fn` or `op`.
+    /// result types of that instance.
+    ///
+    /// Its attributes are `op_name: String`, `kind: String` (`fn` or `op`),
+    /// `param_types: [Type]`, and `result_type: Type`: the parameter types in
+    /// source declaration order and the result type. These types are at
+    /// module level, so they cannot have a row tail.
     fn operation(
         op_name: Attr<String>,
         kind: Attr<String>,
@@ -70,14 +115,27 @@ mod ability {
 
     /// Opaque `ContinuationFrame<Result>`: where a CPS computation delivers
     /// its value and sends the operations it performs.
+    ///
+    /// `ability.frame<R>` is an opaque type whose type parameter `result` is
+    /// the answer type `R`. The frame parameter of a `Cps` callable's
+    /// `CallableAbi`, completions, and resumptions use it. No operation
+    /// extracts its components.
     struct Frame<Result>;
 
     /// Frame that enters `continuation` with a value, wrapping `outer`.
     ///
-    /// `continuation` is `(Evidence, outer frame, value) -> core.never`. When
-    /// the frame is resumed, `evidence_plan` selects the evidence passed to
-    /// the resumed inner computation. The produced frame's type is not
-    /// inferred: it is built from the continuation's value type.
+    /// ```text
+    /// %f = ability.suffix_frame %ev, %outer, %k {evidence_plan = [...]} : !ability.frame<V>
+    /// ```
+    ///
+    /// `evidence` is Evidence, `outer` is an `ability.frame<R>`, and
+    /// `continuation` is a `Completion<V, R>`, the `Cps` closure
+    /// `(Evidence, ability.frame<R>, V) -> core.never`; the result is an
+    /// `ability.frame<V>`. When the frame is resumed, the optional
+    /// `evidence_plan` selects the evidence passed to the resumed inner
+    /// computation, in the syntax of `new-plans/ir.md`, "Evidence 선택 속성".
+    /// A frame for a structured branch has none. The produced frame's type is
+    /// not inferred: it is built from the continuation's value type.
     #[verify]
     fn suffix_frame<F: Frame, C, G: Frame>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
@@ -91,6 +149,14 @@ mod ability {
     }
 
     /// Deliver `value` to the frame's completion.
+    ///
+    /// ```text
+    /// ability.exit %f, %value
+    /// ```
+    ///
+    /// A resultless terminator that takes an `ability.frame<R>` and one value
+    /// of type `R`. It appears only in a `Cps` callable, a completion, or a
+    /// generated continuation body.
     #[implements(CallableExit)]
     fn exit<F: Frame>(frame: Value<F>, value: Value<F::Result>) {}
 
@@ -99,6 +165,36 @@ mod ability {
     /// `arms` holds one handler-arm closure per `handlers` entry, in the
     /// same order. The body receives the extended evidence and the frame of
     /// the installed layer, whose completion is `completion`.
+    ///
+    /// ```text
+    /// ability.handle %outer_ev, %exit, %completion, %arm0, ... {handlers = [...]} {
+    /// ^body(%ev: Evidence, %f: !ability.frame<M>):
+    ///   ...
+    /// }
+    /// ```
+    ///
+    /// A resultless terminator with one region. `evidence` is the Evidence
+    /// where the handle is installed, `exit` is an `ability.frame<R>`, and
+    /// `completion` is a `Completion<M, R>`, the `Cps` closure
+    /// `(Evidence, ability.frame<R>, M) -> core.never`. Each `handlers`
+    /// element is a dictionary with `ability` (SymbolRef), `op_name`
+    /// (String), `kind` (`"fn"` or `"op"`), and `operation_result_type`
+    /// (Type), and one `(ability, op_name)` appears at most once. With `I`
+    /// the `operation_result_type`, a `kind = "op"` arm is the following
+    /// `Cps` closure, where `ResumeExact<I, R>` is
+    /// `(Evidence, ability.frame<R>, I) -> core.never`; the two tokens are
+    /// present only when `I` is not `core.never`:
+    ///
+    /// ```text
+    /// (Evidence, ability.frame<R>, operation arguments..., [ResumeExact<I, R>, ResumeExact<I, R>])
+    ///   -> core.never
+    /// ```
+    ///
+    /// A `kind = "fn"` arm is the `EvidenceDirect` closure
+    /// `(Evidence, operation arguments...) -> I`. The optional
+    /// `evidence_plan` holds only `mask`. The body entry block receives the
+    /// extended Evidence and an `ability.frame<M>`, and every path ends in a
+    /// proper tail transfer or `func.unreachable`.
     #[verify]
     #[implements(CallableExit)]
     fn handle<F: Frame>(
@@ -118,6 +214,14 @@ mod ability {
     /// `resumption` is `(Evidence, frame, operation result) -> core.never`,
     /// the rest of the computation with no one-shot check. Expanding the
     /// operation adds the check.
+    ///
+    /// ```text
+    /// ability.perform %ev, %f, %resumption, %arg0, ... {ability = @State, op_name = "get"}
+    /// ```
+    ///
+    /// A resultless terminator that takes Evidence, an `ability.frame<R>`, a
+    /// raw `ResumeExact<I, R>`, and the operation arguments. `I` is not
+    /// `core.never`.
     #[implements(CallableExit)]
     fn perform<F: Frame, C>(
         ability: Attr<SymbolRef>,
@@ -133,6 +237,13 @@ mod ability {
 
     /// Perform an operation returning `core.never` through the frame's
     /// dispatcher, with no resumption.
+    ///
+    /// ```text
+    /// ability.abort %ev, %f, %arg0, ... {ability = @Fail, op_name = "fail"}
+    /// ```
+    ///
+    /// The shape of `ability.perform` without the resumption, used only for
+    /// source `op -> Never`.
     #[implements(CallableExit)]
     fn abort<F: Frame>(
         ability: Attr<SymbolRef>,
@@ -146,10 +257,17 @@ mod ability {
     /// Run the CPS computation `body` to completion in a flow that is not
     /// Cps, and yield its answer.
     ///
-    /// `body` is `(Evidence, frame) -> core.never` and the result is the
-    /// answer of that frame. `evidence` is the flow's evidence, or
-    /// `effect.initial_evidence` in a `Direct` flow. Frame expansion lowers
-    /// the operation to `effect.delimit`.
+    /// ```text
+    /// %r = ability.delimit %body, %ev : R
+    /// ```
+    ///
+    /// The value delimiter of `new-plans/cps-effects.md`, "값 delimiter".
+    /// `body` is the `Cps` closure `(Evidence, ability.frame<R>) -> core.never`
+    /// and the result is one `R`. `evidence` is the flow's evidence, or the
+    /// result of `effect.initial_evidence` in a `Direct` flow, which takes no
+    /// evidence. It is not a terminator and appears only in a flow that is
+    /// not `Cps`. Frame expansion lowers it to `effect.delimit` with the same
+    /// operands and result.
     fn delimit<C, F: Frame>(body: Value<C>, evidence: Value<Evidence>) -> Value<F::Result>
     where
         C: CpsClosure<Inputs = (Evidence, F)>,

@@ -29,9 +29,11 @@ use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuil
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{IrContext, Symbol, SymbolPath};
 
-use super::list;
-
+mod callable_origin;
 mod row;
+
+use callable_origin::validate_callable_origins;
+pub use callable_origin::{CallableArgumentOrigin, CallableQuery, CallableResultOrigin};
 
 pub use row::{
     ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, QUANTIFIED_ROWS_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR,
@@ -97,6 +99,36 @@ mod tribute_control {
     // non-isolated so its exact external-reference/capture set can be validated.
     /// A named source function. A parameter is a callable origin when its
     /// type is the parameter type `type` declares.
+    ///
+    /// ```text
+    /// tribute_control.func @id(%x: T) -> R convention(direct) {
+    ///   ...
+    ///   tribute_control.return %value
+    /// }
+    /// ```
+    ///
+    /// - **Shape:** no operands or results. `sym_name: String` and
+    ///   `type: tribute_control.func_sig<(Params...) -> Result>` are required.
+    ///   A declaration has no region. A definition has one single-block
+    ///   `body` that takes only the source parameters as block arguments and
+    ///   ends in `tribute_control.return`. Non-control attributes such as a
+    ///   foreign ABI are preserved.
+    /// - **Meaning:** defines the logical signature and row of a source named
+    ///   function, without hidden evidence, environment, or
+    ///   `ContinuationFrame<R>`. Class specialization computes the convention
+    ///   from the row and writes it.
+    /// - **Verification:** the local verifier matches the attributes, region,
+    ///   block arguments, and return type against the callable type.
+    ///   Whole-IR verification checks symbol uniqueness, that every tail in
+    ///   the definition is in the range of `row_binders`, that the indices of
+    ///   `row_unions` are in range, and that each row instance resolves to an
+    ///   `ability.decl`.
+    /// - **Row attributes:** optional `row_binders`, `row_unions`, and
+    ///   `inferred_row` (`new-plans/ir.md`, "Ability row").
+    /// - **Ownership and value flow:** the body is isolated from above. Only
+    ///   source locals and parameters enter as block arguments.
+    /// - **Location:** the whole span of the source function or extern
+    ///   declaration.
     #[asm_format]
     #[flags(IsolatedFromAbove)]
     #[implements(CallableArgumentOrigin)]
@@ -113,6 +145,33 @@ mod tribute_control {
 
     /// A source lambda. Its result is a callable origin, and so is a
     /// parameter whose type is the one its result type declares.
+    ///
+    /// ```text
+    /// %f = tribute_control.lambda(%x: T) -> R convention(direct) captures [%capture0, ...] {
+    ///   ...
+    ///   tribute_control.return %value
+    /// }
+    /// ```
+    ///
+    /// - **Shape:** the operands are the typechecked captures in source
+    ///   order. The result is one `tribute_control.func_sig`, and no
+    ///   attribute is required. The single-block body takes only the source
+    ///   parameters as block arguments and ends in `tribute_control.return`.
+    /// - **Meaning:** creates a source lambda. The body uses the lexical
+    ///   captures and the parameters.
+    /// - **Verification:** the local verifier matches the result signature,
+    ///   block arguments, and return type. Whole-IR verification checks that
+    ///   the body's external SSA references are exactly the captures, that
+    ///   each element of `quantified_rows` is a `local` binder of the
+    ///   enclosing `func` and each `local` binder is listed by one lambda
+    ///   only, and that only `instantiate` uses the result of a quantifying
+    ///   lambda. Passing it as a capture of an inner lambda is not a use; the
+    ///   use in that lambda's body must be an `instantiate`.
+    /// - **Row attributes:** optional `quantified_rows` (`new-plans/ir.md`,
+    ///   "지역 람다의 양화와 인스턴스화").
+    /// - **Ownership and value flow:** the captures are ordinary SSA uses,
+    ///   and there is no other hidden operand.
+    /// - **Location:** the whole span of the source lambda.
     #[asm_format]
     #[flags(Pure)]
     #[implements(CallableResultOrigin, CallableArgumentOrigin)]
@@ -123,6 +182,30 @@ mod tribute_control {
 
     /// One use of a row-polymorphic `let` lambda. Its result is a callable
     /// origin when the lambda is.
+    ///
+    /// ```text
+    /// %s = tribute_control.instantiate %lambda {row_args = [{tail = 0}]} : !Callable
+    /// ```
+    ///
+    /// - **Shape:** the operand is one result of a `tribute_control.lambda`
+    ///   with `quantified_rows`. The result is one `tribute_control.func_sig`,
+    ///   `row_args` is required, and the operation is a non-terminator with no
+    ///   region.
+    /// - **Meaning:** one use of a row-polymorphic lambda bound by `let`. For
+    ///   each row variable the local scheme quantifies, it fixes the row this
+    ///   use passes.
+    /// - **Verification:** the local verifier checks the shape. Whole-IR
+    ///   verification checks that the operand is the result of a lambda with
+    ///   `quantified_rows`, that `row_args` has as many entries as that
+    ///   attribute, and that the result is the lambda's type with `row_args`
+    ///   substituted (`new-plans/ir.md`, "Row 인자와 치환"), convention
+    ///   included. The tails and instances of the row arguments are checked in
+    ///   the scope of the enclosing definition, like any other row.
+    /// - **Ownership and value flow:** the operand and result are the same
+    ///   callable value; no new value is made. CPS legalization replaces the
+    ///   result with the operand.
+    /// - **Location:** the source span that refers to the generalized
+    ///   binding.
     #[verify]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
@@ -130,6 +213,33 @@ mod tribute_control {
 
     /// A named function as a value. Its result is a callable origin when the
     /// function has a body or is a registered compiler intrinsic.
+    ///
+    /// ```text
+    /// %f = tribute_control.func_ref {func_ref = @id} : !Callable
+    /// ```
+    ///
+    /// - **Shape:** no operands or regions, and not a terminator.
+    ///   `func_ref: Symbol` is required, and the result is one
+    ///   `tribute_control.func_sig`.
+    /// - **Meaning:** makes a named function a first-class source value,
+    ///   which source needs because it can use a named function as a
+    ///   higher-order value. The result has the target's source signature;
+    ///   once conventions are assigned, its convention may equal or be
+    ///   stronger than the target worker's. Its outer row may also be a wider
+    ///   row that contains the target's row: this is the subsumption that
+    ///   passes a pure function where a callable with an open row is
+    ///   expected.
+    /// - **Verification:** the local verifier checks the attribute and the
+    ///   result shape. Whole-IR verification checks symbol resolution; that
+    ///   the result equals the target type with `row_args` substituted
+    ///   (`new-plans/ir.md`, "Row 인자와 치환") apart from the outer row and
+    ///   convention; that the outer row holds each instance of the
+    ///   substituted row at least as many times and, if that row has a tail,
+    ///   the same tail; and, once conventions are assigned, that the outer
+    ///   convention is not weaker than the target's.
+    /// - **Ownership and value flow:** the result is an ordinary SSA value.
+    /// - **Location:** the source reference span that uses the named function
+    ///   as a value.
     #[verify]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
@@ -137,6 +247,26 @@ mod tribute_control {
 
     /// A direct call. Its result is a callable origin when the callee has a
     /// body or is a registered compiler intrinsic.
+    ///
+    /// ```text
+    /// %result = tribute_control.call %arg0, ... {callee = @f} : Result
+    /// ```
+    ///
+    /// - **Shape:** the source arguments in declaration order, one
+    ///   source-logical result, `callee: Symbol`, and optional
+    ///   `evidence_plan` (`new-plans/ir.md`, "Evidence 선택 속성") and
+    ///   `row_args` (`new-plans/ir.md`, "Row 인자와 치환"). A non-terminator
+    ///   with no region.
+    /// - **Meaning:** calls a named source callable directly.
+    /// - **Verification:** the local verifier checks the attributes and the
+    ///   resolved operands and result. Whole-IR verification checks that
+    ///   `row_args` has as many entries as the callee's quantified binders,
+    ///   and that the operands and result equal the callee type with
+    ///   `row_args` substituted.
+    /// - **Ownership and value flow:** the arguments and result are ordinary
+    ///   SSA values, and there is no hidden operand.
+    /// - **Location:** the source call span, including the callee and the
+    ///   arguments.
     #[verify]
     #[implements(CallLike, CallableResultOrigin)]
     fn call(
@@ -148,6 +278,28 @@ mod tribute_control {
     }
 
     /// An indirect call. Its result is a callable origin when its callee is.
+    ///
+    /// ```text
+    /// %result = tribute_control.call_indirect %callee, %arg0, ... : Result
+    /// ```
+    ///
+    /// - **Shape:** a `tribute_control.func_sig` callee, the source
+    ///   arguments, the one source-logical result of the callee type, and an
+    ///   optional `evidence_plan` (`new-plans/ir.md`, "Evidence 선택 속성").
+    ///   A non-terminator with no region.
+    /// - **Meaning:** calls a callable obtained from a lambda, a `func_ref`,
+    ///   a parameter, a capture, a call result, a data projection, or an
+    ///   ability operation result.
+    /// - **Verification:** the local verifier matches the callee signature
+    ///   with the argument and result types. Whole-IR verification follows
+    ///   the callee to check that it is a callable origin, a value whose
+    ///   source signature comes from a declaration (`new-plans/ir.md`,
+    ///   "Callable 출처").
+    /// - **Ownership and value flow:** the callee and arguments are ordinary
+    ///   SSA uses. There is no environment, evidence, or
+    ///   `ContinuationFrame<R>`.
+    /// - **Location:** the source indirect-call span, including the callee
+    ///   and the arguments.
     #[verify]
     #[implements(CallableResultOrigin)]
     fn call_indirect<S: FuncSig>(
@@ -157,6 +309,44 @@ mod tribute_control {
     ) -> Value<S::Result> {
     }
 
+    /// A proper tail call of a named source callable, from source `become`.
+    ///
+    /// ```text
+    /// tribute_control.tail_call %arg0, ... {callee = @f}
+    /// ```
+    ///
+    /// - **Shape:** the source arguments in declaration order,
+    ///   `callee: Symbol`, and optional `evidence_plan` (`new-plans/ir.md`,
+    ///   "Evidence 선택 속성") and `row_args` (`new-plans/ir.md`, "Row 인자와
+    ///   치환"). A terminator with no result or region, registered as a
+    ///   `CallableExit`.
+    /// - **Placement:** it may end the body of a `tribute_control.func` or
+    ///   `lambda`, and in place of `scf.yield` it may end an arm of a
+    ///   one-result `scf.if` in tail position. That arm is a terminal region,
+    ///   and only the arms that end in `scf.yield` produce the operation's
+    ///   result. An `scf.if` is in tail position when its result flows
+    ///   directly into the terminator of the enclosing region: the `return`
+    ///   of a callable body, or the `scf.yield` of an outer arm that is
+    ///   itself in tail position. It is invalid inside a
+    ///   `tribute_control.handle` body or handler region.
+    /// - **Meaning:** a proper tail call of a named source callable. When the
+    ///   call finishes, the callee's result becomes the enclosing callable's
+    ///   result, and no caller frame remains.
+    /// - **Verification:** the local verifier checks the attributes, the
+    ///   placement rule, and that the callee result type equals the enclosing
+    ///   callable's result type. Whole-IR verification, as for
+    ///   `tribute_control.call`, matches the callee signature with `row_args`
+    ///   substituted against the operands and the enclosing callable's
+    ///   result, and once conventions are assigned, checks the convention
+    ///   order. Typechecking owns the source diagnostics for tail position and
+    ///   the handler rule; this check confirms that lowering preserved its
+    ///   result.
+    /// - **Ownership and value flow:** the arguments are ordinary SSA uses,
+    ///   and there is no hidden operand. Shared legalization turns it into a
+    ///   proper tail transfer for every combination of conventions
+    ///   (`new-plans/cps-effects.md`, "Source proper tail call의 적법화").
+    /// - **Location:** the source span including the `become` keyword and
+    ///   the call.
     #[verify]
     #[implements(CallLike, CallableExit)]
     fn tail_call(
@@ -167,6 +357,29 @@ mod tribute_control {
     ) {
     }
 
+    /// A proper tail call of a callable value, from source `become`.
+    ///
+    /// ```text
+    /// tribute_control.tail_call_indirect %callee, %arg0, ...
+    /// ```
+    ///
+    /// - **Shape:** a `tribute_control.func_sig` callee, the source
+    ///   arguments, and an optional `evidence_plan` (`new-plans/ir.md`,
+    ///   "Evidence 선택 속성"). A terminator with no result or region,
+    ///   registered as a `CallableExit`.
+    /// - **Placement:** the same as `tribute_control.tail_call`.
+    /// - **Meaning:** a proper tail call of a callable value.
+    /// - **Verification:** the local verifier checks the callee signature and
+    ///   argument types, the placement rule, that the callee result type
+    ///   equals the enclosing callable's result type, and the shape of
+    ///   `evidence_plan`. Once conventions are assigned, the callee type's
+    ///   convention cannot be stronger than the enclosing callable's.
+    ///   Typechecking owns whether the selection matches the ability row.
+    /// - **Ownership and value flow:** as for `tribute_control.call_indirect`,
+    ///   the environment, evidence, and `ContinuationFrame<R>` are not
+    ///   operands.
+    /// - **Location:** the source span including the `become` keyword and
+    ///   the indirect call.
     #[verify]
     #[implements(CallableExit)]
     fn tail_call_indirect<S: FuncSig>(
@@ -176,12 +389,85 @@ mod tribute_control {
     ) {
     }
 
+    /// Return the enclosing callable's logical result.
+    ///
+    /// ```text
+    /// tribute_control.return %value
+    /// ```
+    ///
+    /// - **Shape:** takes one source-logical result and has no results,
+    ///   attributes, or regions. It is the terminator of a
+    ///   `tribute_control.func` or `lambda` body and is invalid anywhere else.
+    /// - **Meaning:** returns the enclosing callable's logical result.
+    /// - **Local verification:** matches the operand type against the
+    ///   enclosing callable's result.
+    /// - **Ownership and value flow:** consumes an ordinary SSA value.
+    /// - **Location:** the span of the source return or of the implicit
+    ///   body-result expression.
     fn r#return(value: Value<_>) {}
 
     // Direct-style control operations
     /// An ability operation. Its result is a callable origin when it claims
     /// the kind of the declaration it names and has that declaration's
     /// result type.
+    ///
+    /// ```text
+    /// %result = tribute_control.perform %arg0, ... {
+    ///   ability = @State,
+    ///   op_name = "get",
+    ///   operation_kind = "op"
+    /// } : ResultType
+    /// ```
+    ///
+    /// - **Operands:** zero or more already evaluated source arguments in
+    ///   declaration order. The values keep their logical types; conversion
+    ///   handles tuple packing and erasure.
+    /// - **Results:** exactly one logical operation result. A source `Never`
+    ///   result is `core.never`, and does not select a physical `Never`
+    ///   control carrier.
+    /// - **Attributes:** `ability: SymbolRef`, `op_name: String`, and
+    ///   `operation_kind: String` are required. `operation_kind` is exactly
+    ///   `fn` or `op`, copied from the typechecked operation declaration. It
+    ///   is source-semantic metadata, not a lowering hint inferred from a body
+    ///   or a use site. Every source ability invocation uses this operation,
+    ///   and shared conversion does not reclassify the kind.
+    /// - **Regions and block arguments:** none.
+    /// - **Terminator:** no. In direct-style IR this operation is not a
+    ///   terminator.
+    /// - **Meaning:** invokes a source operation with its declared kind. With
+    ///   `operation_kind = "fn"`, the selected handler's result automatically
+    ///   resumes direct-style evaluation; shared conversion captures no
+    ///   continuation and uses the existing tail dispatch path. With
+    ///   `operation_kind = "op"`, a matching handler may resume, in which case
+    ///   execution continues after the operation and `%result` is the result.
+    ///   If it does not resume, the selected general handler completes the
+    ///   matching handle, and the visible suffix is not evaluated. A source
+    ///   `op -> Never` cannot resume, so it neither makes a logical
+    ///   resumption nor captures the visible suffix.
+    /// - **Local verification:** requires the three attributes, checks the
+    ///   `operation_kind` domain, and checks that there is exactly one result,
+    ///   no region, and that the operand and result types are resolved rather
+    ///   than inference variables. The symbol-aware frontend conformance check
+    ///   also confirms that the `fn`/`op` kind, parameter types, and result
+    ///   type of the `ability.decl` that `ability` and `op_name` name agree
+    ///   with the attributes, operands, and result. No verifier may infer the
+    ///   kind from control flow, handlers, result type, or calling convention.
+    ///   The `tribute_control.handler` and containing-handle verifiers apply
+    ///   the per-kind shape of the handler contract to handler entries.
+    /// - **Ownership and value flow:** the operands are ordinary SSA uses.
+    ///   This operation makes no source-visible continuation value;
+    ///   continuation construction belongs to shared CPS conversion. A `"fn"`
+    ///   becomes an `ability.call`/tail dispatch without a continuation, and
+    ///   an `"op"` becomes an `ability.perform`/CPS dispatch that takes the
+    ///   suffix continuation. For `op -> Never`, conversion instead supplies
+    ///   the real zero-capture reject continuation that the existing
+    ///   ability/effect ABI requires, whose body is `func.unreachable`. That
+    ///   continuation captures no source suffix. A null, an in-band sentinel,
+    ///   or an arbitrary `anyref` is not a continuation. The full ABI adapter
+    ///   rules are in `new-plans/cps-effects.md`, "Direct-style control
+    ///   boundary".
+    /// - **Location:** the source location of the ability-operation call,
+    ///   including the qualified callee and all arguments where possible.
     #[implements(OperationDeclarationUse, CallableResultOrigin)]
     fn perform(
         ability: Attr<SymbolRef>,
@@ -195,6 +481,64 @@ mod tribute_control {
     /// becomes it is: the completion region's yield and each general (`op`)
     /// handler's yield. The completion argument is one when the body's yield
     /// is.
+    ///
+    /// ```text
+    /// %answer = tribute_control.handle : AnswerType {
+    ///   ...
+    ///   tribute_control.yield %body_value
+    /// } {
+    ///   ^completion(%completed: BodyType):
+    ///     ...
+    ///     tribute_control.yield %answer_value
+    /// } {
+    ///   tribute_control.handler {...} { ... }
+    ///   ...
+    /// }
+    /// ```
+    ///
+    /// - **Operands:** none. Values the executable regions capture use
+    ///   ordinary enclosing SSA visibility.
+    /// - **Results:** exactly one logical handle result.
+    /// - **Attributes:** none required. The optional `evidence_plan`
+    ///   (`new-plans/ir.md`, "Evidence 선택 속성") selects the handlers to
+    ///   mask in the outer evidence before the body evidence is made. Dynamic
+    ///   prompt/owner tags and the physical tail-call representation are
+    ///   legalization contracts, not semantic attributes of this operation.
+    /// - **Regions:** exactly three, in the fixed order `body`, `completion`,
+    ///   `handlers`.
+    /// - **Block arguments:** `body` is one block with no arguments.
+    ///   `completion` is one block with exactly one argument, whose type is
+    ///   the type of the value `body` yields. `handlers` is one block with no
+    ///   arguments that holds only `tribute_control.handler` entries.
+    /// - **Terminators:** `body` and `completion` end in
+    ///   `tribute_control.yield`. The `handlers` block is a declarative table
+    ///   with no terminator.
+    /// - **Meaning:** when `body` completes normally, `completion` is
+    ///   evaluated exactly once and its value is returned. A general handler
+    ///   arm that completes without resuming returns the arm value as the
+    ///   handle result and skips `completion`. A tail-resumptive `fn` arm
+    ///   returns the operation result supplied automatically to the suspended
+    ///   computation.
+    /// - **Local verification:** enforces the fixed region count, the
+    ///   single-block shapes, the block-argument counts, the terminators, and
+    ///   yield type equality. It also checks that every direct child of
+    ///   `handlers` is a `tribute_control.handler` with a unique
+    ///   `(ability, op_name)`. The result type must equal the completion yield
+    ///   type and the answer type of every general handler.
+    /// - **Ownership and value flow:** this operation owns the delimited
+    ///   resumption capability that arises when the body performs a
+    ///   resumptive general operation. That capability is exposed only as the
+    ///   `resume_token` block argument of a resumptive general handler entry.
+    ///   Values leave an executable region only through
+    ///   `tribute_control.yield`.
+    /// - **Location:** the whole source `handle` expression. Region and block
+    ///   locations use the matching body, completion arm, and handler-list
+    ///   spans.
+    ///
+    /// The frontend always materializes the completion region. When the
+    /// source has no `do` arm, the region is the identity on the body result.
+    /// This removes an optional structural case from conversion without
+    /// changing source semantics.
     #[verify]
     #[implements(CallableResultOrigin, CallableArgumentOrigin)]
     fn handle(evidence_plan: Option<Attr<[EvidenceStep]>>) -> Value<_> {
@@ -209,6 +553,60 @@ mod tribute_control {
     /// One handler clause. An argument is a callable origin when the clause
     /// claims the kind of the declaration it names and the argument has the
     /// declaration's parameter type at its position.
+    ///
+    /// ```text
+    /// tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = ResultType} {
+    ///   ^handler(%arg0: Arg0Type, ..., %resume: tribute_control.resume_token<ResultType, AnswerType>):
+    ///     ...
+    ///     tribute_control.yield %answer
+    /// }
+    /// ```
+    ///
+    /// - **Operands and results:** none. It is a declarative entry owned by
+    ///   the surrounding `tribute_control.handle`.
+    /// - **Attributes:** `ability: SymbolRef`, `op_name: String`,
+    ///   `kind: String`, and `operation_result_type: Type` are required.
+    ///   `kind` is exactly `fn` or `op`.
+    /// - **Regions:** exactly one executable `body` region with one block.
+    /// - **Block arguments:** the source operation arguments come first, in
+    ///   declaration order and with their logical types. A resumptive `op`
+    ///   entry has one last argument,
+    ///   `resume_token<operation_result_type, handle-result-type>`. An `op`
+    ///   whose `operation_result_type` is source `Never` has no token, and
+    ///   neither does a `fn` entry.
+    /// - **Terminator:** the body ends in `tribute_control.yield`. For `fn`,
+    ///   the yield type equals `operation_result_type` and resumes
+    ///   automatically. For `op`, the yield type equals the token's `answer`
+    ///   type, and when the arm completes without passing control through
+    ///   `resume`, the yield becomes the enclosing handle result. An `op`
+    ///   whose `operation_result_type` is source `Never` has no token, and its
+    ///   yield type must equal the enclosing `tribute_control.handle` result
+    ///   type.
+    /// - **Local verification:** checks the required attributes and their
+    ///   domains, the single block, the last terminator, the token's position
+    ///   and parameters, and the yield rules above. A general handler whose
+    ///   `operation_result_type` is `Never` must have no token argument and no
+    ///   `tribute_control.resume` anywhere in its body, nested regions
+    ///   included. The containing handle's local verifier checks
+    ///   `ContinuationFrame` placement, uniqueness, and equality with the
+    ///   enclosing handle result, including the `op -> Never` yield; the
+    ///   converter checks the same equality and the absence of `resume` before
+    ///   rewriting and reports a violation as a conversion failure. The
+    ///   symbol-aware frontend conformance check also confirms that the
+    ///   referenced declaration's `kind`, argument types, and
+    ///   `operation_result_type` are the same. No verifier reclassifies a
+    ///   general `op` from the shape of its body.
+    /// - **Ownership and value flow:** the last token argument, when present,
+    ///   is affine. It may go unused, dropping the continuation, or have one
+    ///   static ownership path to a `tribute_control.resume`. When a closure
+    ///   captures it, that static path moves into the closure. A copy, store,
+    ///   return, yield, or any other escape is invalid. Static SSA validation
+    ///   cannot prove that a capturing closure is called at most once
+    ///   dynamically, so the lowered resumption must also enforce one-shot
+    ///   consumption at run time and reject or trap on a second call. A `fn`
+    ///   arm or an `op -> Never` arm has no continuation capability.
+    /// - **Location:** the source handler arm, including the operation
+    ///   header.
     #[implements(OperationDeclarationUse, CallableArgumentOrigin)]
     fn handler(
         ability: Attr<SymbolRef>,
@@ -222,6 +620,36 @@ mod tribute_control {
 
     /// A resumption. It returns the result of the handle its token belongs
     /// to, so its result is a callable origin when that result is.
+    ///
+    /// ```text
+    /// %answer = tribute_control.resume %resume, %value : AnswerType
+    /// ```
+    ///
+    /// - **Operands:** exactly two. `%resume` is a
+    ///   `resume_token<InputType, AnswerType>` and `%value` is an
+    ///   `InputType`.
+    /// - **Results:** exactly one `AnswerType`.
+    /// - **Attributes and regions:** only an optional `evidence_plan`
+    ///   (`new-plans/ir.md`, "Evidence 선택 속성"), and no region.
+    /// - **Terminator:** no. Strict work after `resume` stays explicitly in
+    ///   the enclosing region and runs only after the resumed computation
+    ///   returns.
+    /// - **Meaning:** consumes the one-shot resumption of the lexically
+    ///   nearest enclosing general handler, supplies `%value` to the
+    ///   suspended `perform`, and returns the logical result the resumed
+    ///   computation reaches at the handle boundary. It is invalid in a `fn`
+    ///   or `op -> Never` arm.
+    /// - **Local verification:** enforces the operand and result arity and
+    ///   the three type equalities that
+    ///   `resume_token<InputType, AnswerType>` requires.
+    /// - **Ownership and value flow:** consumes the token. The token may
+    ///   reach this operation through an explicit closure capture, but it
+    ///   must keep a single static use-def path from the handler block
+    ///   argument. Affine-use validation follows captures and nested regions,
+    ///   so it is a whole-IR check. When a capture allows repeated dynamic
+    ///   invocation, the converted continuation's run-time one-shot state is
+    ///   the final enforcement boundary.
+    /// - **Location:** the source `resume` expression.
     #[verify]
     #[implements(CallableResultOrigin)]
     fn resume<T: ResumeToken>(
@@ -231,6 +659,23 @@ mod tribute_control {
     ) -> Value<T::Answer> {
     }
 
+    /// End an executable `tribute_control` region with a logical value.
+    ///
+    /// ```text
+    /// tribute_control.yield %value
+    /// ```
+    ///
+    /// - **Operands:** exactly one logical value.
+    /// - **Results, attributes, and regions:** none.
+    /// - **Terminator:** of a `handle` body, completion region, or handler
+    ///   body. It is invalid anywhere else.
+    /// - **Local verification:** enforces its own shape. The owning operation
+    ///   checks the placement and the yield type.
+    /// - **Ownership and value flow:** passes an ordinary logical value to
+    ///   the owning structured operation. A `resume_token` can never be
+    ///   yielded.
+    /// - **Location:** the source expression that makes the region result. A
+    ///   synthesized identity completion uses the owning `handle` location.
     fn r#yield(value: Value<_>) {}
 }
 
@@ -3519,577 +3964,6 @@ fn compiler_intrinsic_map<'a>(
     map
 }
 
-fn adt_projection_has_exact_callable_type(
-    ctx: &IrContext,
-    producer: OpRef,
-    result_type: TypeRef,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
-) -> bool {
-    if ctx.op_result_types(producer) != [result_type] {
-        return false;
-    }
-    if let Ok(get) = adt::StructGet::from_op(ctx, producer) {
-        let layout = get.r#type(ctx);
-        return projection_source_matches_layout(ctx, get.r#ref(ctx), layout, nominal_layouts)
-            && struct_field_type(ctx, layout, get.field(ctx)) == Some(result_type);
-    }
-    if let Ok(get) = adt::VariantGet::from_op(ctx, producer) {
-        let layout = get.r#type(ctx);
-        return projection_source_matches_layout(ctx, get.r#ref(ctx), layout, nominal_layouts)
-            && variant_field_type(ctx, layout, get.tag_ref(ctx), get.field(ctx))
-                == Some(result_type);
-    }
-    false
-}
-
-fn projection_source_matches_layout(
-    ctx: &IrContext,
-    source: ValueRef,
-    layout: TypeRef,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
-) -> bool {
-    let layout_identity = nominal_identity(ctx, layout);
-    layout_identity.is_some_and(|identity| nominal_layouts.get(&identity) == Some(&layout))
-        && nominal_identity(ctx, ctx.value_ty(source)) == layout_identity
-}
-
-fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: u32) -> Option<TypeRef> {
-    crate::dialect::adt::Struct::from_type_ref(ctx, layout)?
-        .field_type(ctx, usize::try_from(field).ok()?)
-}
-
-fn variant_field_type(
-    ctx: &IrContext,
-    layout: TypeRef,
-    tag: StringRef,
-    field: u32,
-) -> Option<TypeRef> {
-    crate::dialect::adt::Enum::from_type_ref(ctx, layout)?
-        .variant_fields(ctx, tag)?
-        .get(usize::try_from(field).ok()?)
-        .copied()
-}
-
-/// What an indirect callee's provenance is checked against, and the values a
-/// proof has reached.
-pub struct CallableQuery<'a> {
-    functions: &'a SymbolTable,
-    registered: &'a HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration>,
-    declarations: &'a HashMap<(&'a SymbolPath, StringRef), &'a OperationDeclaration>,
-    nominal_layouts: &'a HashMap<StringRef, TypeRef>,
-    reached: HashSet<ValueRef>,
-}
-
-impl CallableQuery<'_> {
-    /// Whether `value` is a callable whose source signature comes from a
-    /// declaration, by the [`CallableResultOrigin`] rule of its producer or the
-    /// [`CallableArgumentOrigin`] rule of the operation that owns its block.
-    ///
-    /// Every rule combines the values it asks about by conjunction, so a
-    /// proof accepts `value` only when it accepts every value reached. A
-    /// value reached again adds no source: a cycle, such as one from a
-    /// handle's handlers back to its result, needs a source outside it, and
-    /// a value already rejected rejects the whole proof.
-    fn accepts(&mut self, ctx: &IrContext, value: ValueRef) -> bool {
-        if !self.reached.insert(value) {
-            return true;
-        }
-        FuncSig::from_type_ref(ctx, ctx.value_ty(value)).is_some()
-            && match ctx.value_def(value) {
-                ValueDef::OpResult(producer, _) => DynCallableResultOrigin::get(ctx, producer)
-                    .is_some_and(|origin| origin.result_is_callable_origin(ctx, value, self)),
-                ValueDef::BlockArg(block, index) => {
-                    let region = ctx.block(block).parent_region;
-                    let owner = region.and_then(|region| ctx.region(region).parent_op);
-                    match (
-                        region,
-                        owner.and_then(|owner| DynCallableArgumentOrigin::get(ctx, owner)),
-                    ) {
-                        (Some(region), Some(origin)) => {
-                            origin.argument_is_callable_origin(ctx, region, index, value, self)
-                        }
-                        _ => false,
-                    }
-                }
-            }
-    }
-
-    /// The declaration `declared` names, when it claims that declaration's kind.
-    fn claimed_declaration(
-        &self,
-        ctx: &IrContext,
-        declared: &impl OperationDeclarationUse,
-    ) -> Option<&OperationDeclaration> {
-        let claim = declared.declaration_use(ctx)?;
-        self.declarations
-            .get(&(claim.ability, claim.op_name))
-            .copied()
-            .filter(|declaration| claim.kind == Some(declaration.kind))
-    }
-
-    /// Whether `symbol`, referenced from `op`, names a defined function or a
-    /// registered intrinsic.
-    fn names_verified_function(&self, ctx: &IrContext, op: OpRef, symbol: &SymbolPath) -> bool {
-        self.functions
-            .resolve(ctx, op, symbol)
-            .filter(|&function| Func::matches(ctx, function))
-            .is_some_and(|function| verified_callable_declaration(ctx, function, self.registered))
-    }
-}
-
-/// An operation whose results can be callables whose source signature comes
-/// from a declaration, and the rule that proves one.
-///
-/// A rule asks about other values only through [`CallableQuery`] and
-/// combines the answers by conjunction. Whole-IR validation also queries
-/// operations the local checks rejected, so a rule reads its operation
-/// fallibly.
-#[trunk_ir::op_interface]
-pub trait CallableResultOrigin: DialectOp {
-    /// Whether `result`, a result of this operation, is such a callable.
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool;
-}
-
-/// An operation whose region arguments can be such callables, under the
-/// same contract as [`CallableResultOrigin`].
-#[trunk_ir::op_interface]
-pub trait CallableArgumentOrigin: DialectOp {
-    /// Whether `argument`, argument `index` of a block in `region` of this
-    /// operation, is such a callable.
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        region: RegionRef,
-        index: u32,
-        argument: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool;
-}
-
-/// A parameter of the callable whose only region is `region`, whose
-/// signature is `signature`.
-fn is_signature_parameter(
-    ctx: &IrContext,
-    op: OpRef,
-    signature: Option<TypeRef>,
-    region: RegionRef,
-    index: u32,
-    argument: ValueRef,
-) -> bool {
-    ctx.op_regions(op).eq([region])
-        && signature
-            .and_then(|ty| func_sig_parts(ctx, ty))
-            .is_some_and(|(_, parameters, _)| {
-                parameters.get(index as usize) == Some(&ctx.value_ty(argument))
-            })
-}
-
-impl CallableArgumentOrigin for Func {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        region: RegionRef,
-        index: u32,
-        argument: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        let signature = ctx.op_attrs(self.op_ref()).get_type("type");
-        is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
-    }
-}
-
-impl CallableResultOrigin for Lambda {
-    fn result_is_callable_origin<'q>(
-        &self,
-        _ctx: &IrContext,
-        _result: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        true
-    }
-}
-
-impl CallableArgumentOrigin for Lambda {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        region: RegionRef,
-        index: u32,
-        argument: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        let signature = ctx.op_result_types(self.op_ref()).first().copied();
-        is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
-    }
-}
-
-impl CallableResultOrigin for Instantiate {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        ctx.op_operands(self.op_ref())
-            .first()
-            .is_some_and(|&lambda| query.accepts(ctx, lambda))
-    }
-}
-
-impl CallableResultOrigin for FuncRef {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        ctx.op_attrs(self.op_ref())
-            .get_symbol_ref("func_ref")
-            .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
-    }
-}
-
-impl CallableResultOrigin for Call {
-    // The callee is read through `CallLike` once the call's structure
-    // satisfies its schema.
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        Self::DEF
-            .schema
-            .verify_structure(ctx, self.op_ref())
-            .is_empty()
-            && query.names_verified_function(ctx, self.op_ref(), self.direct_callee(ctx))
-    }
-}
-
-impl CallableResultOrigin for CallIndirect {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        ctx.op_operands(self.op_ref())
-            .first()
-            .is_some_and(|&callee| query.accepts(ctx, callee))
-    }
-}
-
-impl CallableResultOrigin for Perform {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        let result_type = ctx.value_ty(result);
-        ctx.op_result_types(self.op_ref()) == [result_type]
-            && self.declared_result_type(ctx) == Some(result_type)
-            && query
-                .claimed_declaration(ctx, self)
-                .is_some_and(|declaration| declaration.result_type == result_type)
-    }
-}
-
-impl CallableArgumentOrigin for Handler {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _region: RegionRef,
-        _index: u32,
-        argument: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        self.declared_arguments(ctx)
-            .and_then(|arguments| arguments.iter().position(|&value| value == argument))
-            .zip(query.claimed_declaration(ctx, self))
-            .is_some_and(|(position, declaration)| {
-                declaration.parameter_types.get(position) == Some(&ctx.value_ty(argument))
-            })
-    }
-}
-
-impl CallableResultOrigin for Handle {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        handle_result_sources(ctx, self.op_ref()).is_some_and(|sources| {
-            sources.into_iter().all(|source| {
-                ctx.value_ty(source) == ctx.value_ty(result) && query.accepts(ctx, source)
-            })
-        })
-    }
-}
-
-impl CallableArgumentOrigin for Handle {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        region: RegionRef,
-        index: u32,
-        argument: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        ctx.op_regions(self.op_ref())
-            .collect_tuple()
-            .is_some_and(|(body, completion, _)| {
-                completion == region
-                    && index == 0
-                    && region_yield_value(ctx, body).is_some_and(|value| {
-                        ctx.value_ty(value) == ctx.value_ty(argument) && query.accepts(ctx, value)
-                    })
-            })
-    }
-}
-
-impl CallableResultOrigin for Resume {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        resumed_handle_result(ctx, self.op_ref()).is_some_and(|handled| {
-            ctx.value_ty(handled) == ctx.value_ty(result) && query.accepts(ctx, handled)
-        })
-    }
-}
-
-/// A list's head is a callable origin when the declared element type is
-/// exactly the result's type.
-impl CallableResultOrigin for list::Head {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        let result_type = ctx.value_ty(result);
-        self.element_type(ctx) == result_type && ctx.op_result_types(self.op_ref()) == [result_type]
-    }
-}
-
-/// An ADT field projection is a callable origin when the canonical layout of
-/// its source declares the field with exactly the result's type.
-impl CallableResultOrigin for adt::StructGet {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        adt_projection_has_exact_callable_type(
-            ctx,
-            self.op_ref(),
-            ctx.value_ty(result),
-            query.nominal_layouts,
-        )
-    }
-}
-
-/// A variant field projection, under the rule of [`adt::StructGet`].
-impl CallableResultOrigin for adt::VariantGet {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        adt_projection_has_exact_callable_type(
-            ctx,
-            self.op_ref(),
-            ctx.value_ty(result),
-            query.nominal_layouts,
-        )
-    }
-}
-
-trunk_ir::register_interfaces!(
-    list::Head: CallableResultOrigin;
-    adt::StructGet: CallableResultOrigin;
-    adt::VariantGet: CallableResultOrigin
-);
-
-/// The value a single-block region yields to its parent.
-fn region_yield_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
-    let block = ctx.region(region).blocks.iter().exactly_one().ok()?;
-    let terminator = ctx.block(*block).ops.last().copied()?;
-    let value = ctx.op_operands(terminator).iter().exactly_one().ok()?;
-    Yield::matches(ctx, terminator).then_some(*value)
-}
-
-/// The values that become a `handle`'s result: the completion region's
-/// yield and the yield of each general (`op`) handler. A `fn` handler yields
-/// to its `perform` instead.
-fn handle_result_sources(ctx: &IrContext, handle: OpRef) -> Option<Vec<ValueRef>> {
-    let (_, completion, handlers) = ctx.op_regions(handle).collect_tuple()?;
-    let mut sources = vec![region_yield_value(ctx, completion)?];
-    for &block in &ctx.region(handlers).blocks {
-        for &handler in &ctx.block(block).ops {
-            if Handler::matches(ctx, handler) && ctx.op_attrs(handler).get_str("kind") == Some("op")
-            {
-                sources.push(region_yield_value(ctx, ctx.op_region(handler, 0)?)?);
-            }
-        }
-    }
-    Some(sources)
-}
-
-/// The result of the `handle` whose handler holds the resume token that
-/// `resume` consumes.
-fn resumed_handle_result(ctx: &IrContext, resume: OpRef) -> Option<ValueRef> {
-    let token = *ctx.op_operands(resume).first()?;
-    let ValueDef::BlockArg(block, _) = ctx.value_def(token) else {
-        return None;
-    };
-    let handler = ctx.region(ctx.block(block).parent_region?).parent_op?;
-    let handle = ctx.region(parent_region(ctx, handler)?).parent_op?;
-    if !Handler::matches(ctx, handler) || !Handle::matches(ctx, handle) {
-        return None;
-    }
-    ctx.op_results(handle).first().copied()
-}
-
-fn verified_callable_declaration(
-    ctx: &IrContext,
-    function: OpRef,
-    registered: &HashMap<SymbolPath, &CompilerIntrinsicDeclaration>,
-) -> bool {
-    if ctx.op_has_regions(function) {
-        return true;
-    }
-    let (Some(symbol), Some(identity), Some(func_sig_type)) = (
-        qualified_name(ctx, function),
-        Func::from_op(ctx, function)
-            .ok()
-            .and_then(|function| function.compiler_intrinsic_identity(ctx)),
-        ctx.op_attrs(function).get_type("type"),
-    ) else {
-        return false;
-    };
-    registered.get(&symbol).is_some_and(|declaration| {
-        declaration.identity == identity && declaration.callable_type == func_sig_type
-    })
-}
-
-fn validate_callable_origins(
-    ctx: &IrContext,
-    body: RegionRef,
-    functions: &SymbolTable,
-    declarations: &[CompilerIntrinsicDeclaration],
-    operation_declarations: &HashMap<(&SymbolPath, StringRef), &OperationDeclaration>,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
-    errors: &mut Vec<ValidationError>,
-) {
-    let registered = compiler_intrinsic_map(ctx, declarations, errors);
-    let mut query = CallableQuery {
-        functions,
-        registered: &registered,
-        declarations: operation_declarations,
-        nominal_layouts,
-        reached: HashSet::default(),
-    };
-    let mut seen = HashSet::default();
-    walk_region_ops(ctx, body, &mut |op| {
-        if Func::matches(ctx, op) {
-            let (Some(symbol), Some(func_sig_type)) =
-                (qualified_name(ctx, op), ctx.op_attrs(op).get_type("type"))
-            else {
-                return;
-            };
-            let intrinsic_identity = Func::from_op(ctx, op)
-                .ok()
-                .and_then(|function| function.compiler_intrinsic_identity(ctx));
-            let bodyless = !ctx.op_has_regions(op);
-            if !bodyless && intrinsic_identity.is_some() {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "defined Tribute function cannot claim compiler intrinsic identity",
-                );
-            }
-            if bodyless {
-                let exact_intrinsic = match (registered.get(&symbol), intrinsic_identity) {
-                    (Some(expected), Some(actual))
-                        if expected.identity == actual
-                            && expected.callable_type == func_sig_type =>
-                    {
-                        seen.insert(symbol);
-                        true
-                    }
-                    (Some(_), _) => {
-                        push_op_error(
-                            ctx,
-                            op,
-                            errors,
-                            "compiler intrinsic identity or complete signature does not match the registered declaration",
-                        );
-                        false
-                    }
-                    (None, Some(_)) => {
-                        push_op_error(
-                            ctx,
-                            op,
-                            errors,
-                            "unregistered declaration cannot claim compiler intrinsic identity",
-                        );
-                        false
-                    }
-                    (None, None) => false,
-                };
-                let trusted_c_ffi = ctx.op_attrs(op).get_str("abi") == Some("C");
-                if !exact_intrinsic
-                    && !trusted_c_ffi
-                    && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::default())
-                {
-                    push_op_error(
-                        ctx,
-                        op,
-                        errors,
-                        "unclassified bodyless external declaration cannot use managed adt.typeref",
-                    );
-                }
-            }
-        } else if (CallIndirect::matches(ctx, op) || TailCallIndirect::matches(ctx, op))
-            && let Some(callee) = ctx.op_operands(op).first().copied()
-            && !{
-                query.reached.clear();
-                query.accepts(ctx, callee)
-            }
-        {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                "indirect callee lacks verified source-logical callable provenance",
-            );
-        }
-    });
-    for symbol in registered.keys() {
-        if !seen.contains(symbol) {
-            push_type_error(
-                errors,
-                format!(
-                    "registered compiler intrinsic @{symbol} has no exact bodyless declaration"
-                ),
-            );
-        }
-    }
-}
-
 /// `unrealized_conversion_cast` is representation glue, never a source-callable
 /// adapter. Convention strengthening must be expressed by `func_ref` and
 /// lowered while its declaration provenance is still available. Changing a
@@ -4996,6 +4870,7 @@ pub fn validate(
 
 #[cfg(test)]
 mod tests {
+    use super::callable_origin::indirect_callees;
     use super::*;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
@@ -7453,6 +7328,118 @@ mod tests {
 
         let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn indirect_calls_sharing_a_callee_chain_evaluate_each_value_once() {
+        const CHAIN: usize = 8;
+        const CALLS: usize = 5;
+        let mut text = String::from("core.module @test {\n");
+        text.push_str(
+            "  !F0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>\n",
+        );
+        for depth in 1..=CHAIN {
+            text.push_str(&format!(
+                "  !F{depth} = tribute_control.func_sig<(core.i32) -> !F{}, {{tribute.calling_convention = 0}}>\n",
+                depth - 1
+            ));
+        }
+        text.push_str(&format!(
+            "  tribute_control.func @caller(%v{CHAIN}: !F{CHAIN}, %x: core.i32) -> core.i32 convention(direct) {{\n"
+        ));
+        for depth in (0..CHAIN).rev() {
+            text.push_str(&format!(
+                "    %v{depth} = tribute_control.call_indirect %v{}, %x : !F{depth}\n",
+                depth + 1
+            ));
+        }
+        for call in 0..CALLS {
+            text.push_str(&format!(
+                "    %r{call} = tribute_control.call_indirect %v0, %x : core.i32\n"
+            ));
+        }
+        text.push_str("    tribute_control.return %r0\n  }\n}");
+        let (ctx, module) = parse_fixture(&text);
+        let body = module.body(&ctx).unwrap();
+        let functions = SymbolTable::collect(&ctx, module);
+        let (registered, declarations, layouts) =
+            (HashMap::default(), HashMap::default(), HashMap::default());
+        let mut query = CallableQuery::new(&functions, &registered, &declarations, &layouts);
+
+        let callees = indirect_callees(&ctx, body);
+        for &callee in &callees {
+            query.accepts(&ctx, callee);
+        }
+        query.resolve(&ctx);
+
+        assert_eq!(callees.len(), CHAIN + CALLS);
+        assert!(callees.iter().all(|&callee| query.is_origin(callee)));
+        assert_eq!(query.evaluations, CHAIN + 1);
+    }
+
+    #[test]
+    fn a_withdrawn_origin_withdraws_the_values_that_depend_on_it() {
+        let (ctx, module) = parse_fixture(&handled_callable_module("%bad"));
+        let body = module.body(&ctx).unwrap();
+        let functions = SymbolTable::collect(&ctx, module);
+        let declarations = declared_operations(&ctx, module, &mut Vec::new());
+        let declarations = declaration_map(&ctx, &declarations, &mut Vec::new());
+        let (registered, layouts) = (HashMap::default(), HashMap::default());
+        let mut query = CallableQuery::new(&functions, &registered, &declarations, &layouts);
+
+        let callees = indirect_callees(&ctx, body);
+        for &callee in &callees {
+            query.accepts(&ctx, callee);
+        }
+        query.resolve(&ctx);
+
+        assert!(callees.iter().all(|&callee| !query.is_origin(callee)));
+    }
+
+    #[test]
+    fn a_value_withdrawn_twice_is_not_evaluated_again() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  %f = tribute_control.handle : !F {
+    %body = tribute_control.perform {ability = @Gen, op_name = "next", operation_kind = "op"} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%k: core.i32):
+      %done = core.unrealized_conversion_cast %k : !F
+      tribute_control.yield %done
+  } {
+    tribute_control.handler {ability = @Gen, kind = "op", op_name = "next", operation_result_type = core.i32} {
+      ^next(%token: tribute_control.resume_token<core.i32, !F>):
+        %zero = arith.const {value = 0} : core.i32
+        %bad = core.unrealized_conversion_cast %zero : !F
+        tribute_control.yield %bad
+    }
+  }
+  %one = arith.const {value = 1} : core.i32
+  %result = tribute_control.call_indirect %f, %one : core.i32
+  ability.decl {sym_name = "Gen"} {
+    ability.operation {kind = "op", op_name = "next", param_types = [], result_type = core.i32}
+  }
+}"#,
+        );
+        let body = module.body(&ctx).unwrap();
+        let functions = SymbolTable::collect(&ctx, module);
+        let declarations = declared_operations(&ctx, module, &mut Vec::new());
+        let declarations = declaration_map(&ctx, &declarations, &mut Vec::new());
+        let (registered, layouts) = (HashMap::default(), HashMap::default());
+        let mut query = CallableQuery::new(&functions, &registered, &declarations, &layouts);
+
+        let callees = indirect_callees(&ctx, body);
+        assert_eq!(callees.len(), 1);
+        let callee = callees[0];
+        query.accepts(&ctx, callee);
+        query.resolve(&ctx);
+
+        // The handle result, both yields, then the handle result once more:
+        // the second withdrawal finds it already withdrawn.
+        assert!(!query.is_origin(callee));
+        assert_eq!(query.evaluations, 4);
     }
 
     #[test]

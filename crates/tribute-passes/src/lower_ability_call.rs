@@ -59,7 +59,8 @@ pub(crate) fn lower_ability_call<S: RewriteScope>(ctx: &mut IrContext, scope: S)
     applicator.apply_partial(ctx, scope);
 }
 
-/// PassManager-friendly wrapper for `lower_ability_call`.
+/// Lowers `ability.call` operations to `effect.dispatch_tail` with a packed
+/// operation payload.
 pub struct LowerAbilityCall;
 
 impl Pass for LowerAbilityCall {

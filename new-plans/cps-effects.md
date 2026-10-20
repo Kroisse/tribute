@@ -170,11 +170,13 @@ class로 읽기 때문이다. 이름 붙은 함수를 그대로 돌려주는 정
 같은 callable convention을 보아야 한다. 이런 변수의 class는 항상 `Cps`다.
 
 Compiler가 생성하는 정의도 같은 규칙을 따른다. 필드의 `modify`는 callback의 row
-변수를 class 변수로 가진다.
+변수를 class 변수로 가진다. 본문이 없는 정의, 곧 extern과 intrinsic 선언은 ABI가 하나인 외부 symbol이므로
+class 변수를 갖지 않는다.
 
 **`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수의 class는 사용처마다 row
 인자에서 계산한다. IR에서 그 row 인자는 사용처의
-[`instantiate`](ir.md#tribute_controlinstantiate)가 가진다. 람다는 그것을 묶은
+[`instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)가
+가진다. 람다는 그것을 묶은
 인스턴스 안에서 쓰이는 class 조합마다 한 번 생성하고, 각 사용처는 자기 class의 생성물을 읽는다. 생성물마다 람다 자신의
 convention과 본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 생성물마다
 따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의
@@ -292,8 +294,8 @@ target이 담당하는 물리적인 빈 결과 표현을 변경하지 않는다.
 
 ### Source proper tail call의 적법화
 
-Source `become`인 [`tribute_control.tail_call`](ir.md#tribute_controltail_call)과
-[`tribute_control.tail_call_indirect`](ir.md#tribute_controltail_call_indirect)는
+Source `become`인 [`tribute_control.tail_call`](../crates/tribute-ir/src/dialect/tribute_control.rs)과
+[`tribute_control.tail_call_indirect`](../crates/tribute-ir/src/dialect/tribute_control.rs)는
 `tribute_control_to_cps`가 모든 convention 조합에서 proper tail transfer로 바꾼다.
 Callee convention은 caller convention보다 강할 수 없으므로(`Direct < EvidenceDirect <
 Cps`, callee ability row는 caller row에 포함) 조합은 다음 셋이다:

@@ -31,7 +31,10 @@
 //! - `adt.variant_get` -> `wasm.struct_get` (field access after the descriptor field)
 //!
 //! ## Array Operations
-//! - `adt.array_new` -> `wasm.array_new` or `wasm.array_new_default`
+//! - `adt.array_new` -> `wasm.array_new`
+//! - `adt.array_of` -> `wasm.array_new_fixed`
+//! - `adt.array_splice` -> a range check, `wasm.array_new`, and `wasm.array_copy`
+//!   of the kept ranges around `wasm.array_set` of the new elements
 //! - `adt.array_get` -> `wasm.array_get`
 //! - `adt.array_set` -> `wasm.array_set`
 //! - `adt.array_len` -> `wasm.array_len`
@@ -50,7 +53,6 @@
 //! module-wide pass assigns the explicit indices required by indexed `wasm`
 //! operations before emission.
 
-use tracing::warn;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
 use trunk_ir::StringRef;
@@ -151,6 +153,8 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(VariantCastPattern)
         .add_pattern(VariantGetPattern)
         .add_pattern(ArrayNewPattern)
+        .add_pattern(ArrayOfPattern)
+        .add_pattern(ArraySplicePattern)
         .add_pattern(ArrayGetPattern)
         .add_pattern(ArraySetPattern)
         .add_pattern(ArrayLenPattern)
@@ -491,7 +495,7 @@ impl RewritePattern for VariantGetPattern {
     }
 }
 
-/// Pattern for `adt.array_new` -> `wasm.array_new` or `wasm.array_new_default`
+/// Pattern for `adt.array_new` -> `wasm.array_new`
 struct ArrayNewPattern;
 
 impl RewritePattern for ArrayNewPattern {
@@ -506,35 +510,229 @@ impl RewritePattern for ArrayNewPattern {
         };
 
         let loc = ctx.op(op).location;
-        let array_ty = array_new.r#type(ctx);
-        let operands = array_new.elements(ctx).to_vec();
-
-        match operands.len() {
-            0 => {
-                warn!("adt.array_new with no operands");
-                return false;
-            }
-            1 => {
-                // Only size operand -> array_new_default
-                let new_op = wasm_gc_dialect::ArrayNewDefault::operands(operands[0])
-                    .r#type(array_ty)
-                    .build(ctx, loc);
-                rewriter.replace_op(new_op.op_ref());
-            }
-            2 => {
-                // size + init value -> array_new
-                let new_op = wasm_gc_dialect::ArrayNew::operands(operands[0], operands[1])
-                    .r#type(array_ty)
-                    .build(ctx, loc);
-                rewriter.replace_op(new_op.op_ref());
-            }
-            n => {
-                warn!("adt.array_new with unexpected {n} operands, expected 1 or 2");
-                return false;
-            }
-        }
-
+        let length = wasm_index(ctx, rewriter, array_new.length(ctx), loc);
+        let new_op = wasm_gc_dialect::ArrayNew::operands(length, array_new.initial(ctx))
+            .r#type(array_new.r#type(ctx))
+            .build(ctx, loc);
+        rewriter.replace_op(new_op.op_ref());
         true
+    }
+}
+
+/// Pattern for `adt.array_of` -> `wasm.array_new_fixed`
+struct ArrayOfPattern;
+
+impl RewritePattern for ArrayOfPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(array_of) = adt::ArrayOf::from_op(ctx, op) else {
+            return false;
+        };
+
+        let loc = ctx.op(op).location;
+        let elements = array_of.elements(ctx).to_vec();
+        let new_op = wasm_gc_dialect::ArrayNewFixed::operands(elements)
+            .r#type(array_of.r#type(ctx))
+            .build(ctx, loc);
+        rewriter.replace_op(new_op.op_ref());
+        true
+    }
+}
+
+/// Pattern for `adt.array_splice` -> a new array built from the kept ranges
+///
+/// After trapping unless `start <= end <= len`, the result is filled with a
+/// value of the element type, `source[0, start)` and `source[end, len)` are
+/// copied to its two ends, and the new elements are stored between them. The
+/// fill value is the first new element; without one, the result is either
+/// empty or holds a `source` element, so `source[0]` fills it.
+struct ArraySplicePattern;
+
+impl RewritePattern for ArraySplicePattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(splice) = adt::ArraySplice::from_op(ctx, op) else {
+            return false;
+        };
+
+        let loc = ctx.op(op).location;
+        let array_ty = splice.r#type(ctx);
+        let source = splice.source(ctx);
+        let elements = splice.elements(ctx).to_vec();
+        let start = wasm_index(ctx, rewriter, splice.start(ctx), loc);
+        let end = wasm_index(ctx, rewriter, splice.end(ctx), loc);
+        let i32_ty = core::I32::type_ref(ctx);
+        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
+        let i32_const = |ctx: &mut IrContext, rewriter: &mut PatternRewriter<'_>, value: i32| {
+            let op = wasm_dialect::I32Const::operands()
+                .value(value)
+                .results(i32_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(op.op_ref());
+            op.result(ctx)
+        };
+
+        let len = wasm_dialect::ArrayLen::operands(source).build(ctx, loc);
+        rewriter.insert_op(len.op_ref());
+        let len = len.result(ctx);
+        let reversed = wasm_dialect::I32GtU::operands(start, end)
+            .results(i32_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(reversed.op_ref());
+        let past_len = wasm_dialect::I32GtU::operands(end, len)
+            .results(i32_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(past_len.op_ref());
+        let out_of_range =
+            wasm_dialect::I32Or::operands(reversed.result(ctx), past_len.result(ctx))
+                .results(i32_ty)
+                .build(ctx, loc);
+        rewriter.insert_op(out_of_range.op_ref());
+        let trap = super::intrinsic_to_wasm::trap_region(ctx, loc);
+        let ok = super::intrinsic_to_wasm::empty_region(ctx, loc);
+        let check = wasm_dialect::If::operands(out_of_range.result(ctx))
+            .results([nil_ty])
+            .regions(trap, ok)
+            .build(ctx, loc);
+        rewriter.insert_op(check.op_ref());
+
+        let inserted = i32_const(ctx, rewriter, elements.len() as i32);
+        let tail = wasm_dialect::I32Sub::operands(len, end)
+            .results(i32_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(tail.op_ref());
+        let head_and_inserted = wasm_dialect::I32Add::operands(start, inserted).build(ctx, loc);
+        rewriter.insert_op(head_and_inserted.op_ref());
+        let result_len =
+            wasm_dialect::I32Add::operands(head_and_inserted.result(ctx), tail.result(ctx))
+                .build(ctx, loc);
+        rewriter.insert_op(result_len.op_ref());
+        let result_len = result_len.result(ctx);
+
+        let result = if let Some(&first) = elements.first() {
+            let fresh = wasm_gc_dialect::ArrayNew::operands(result_len, first)
+                .r#type(array_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(fresh.op_ref());
+            fresh.result(ctx)
+        } else {
+            let filled = filled_from_source(ctx, loc, array_ty, source, result_len);
+            let empty = wasm_gc_dialect::ArrayNewFixed::operands([])
+                .r#type(array_ty)
+                .build(ctx, loc);
+            let empty = yielding_region(ctx, loc, [empty.op_ref()]);
+            let fresh = wasm_dialect::If::operands(result_len)
+                .results([array_ty])
+                .regions(filled, empty)
+                .build(ctx, loc);
+            rewriter.insert_op(fresh.op_ref());
+            fresh.results(ctx)[0]
+        };
+
+        let zero = i32_const(ctx, rewriter, 0);
+        let copy_head = wasm_gc_dialect::ArrayCopy::operands(result, zero, source, zero, start)
+            .dst_type(array_ty)
+            .src_type(array_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(copy_head.op_ref());
+        for (offset, &element) in elements.iter().enumerate().skip(1) {
+            let offset = i32_const(ctx, rewriter, offset as i32);
+            let index = wasm_dialect::I32Add::operands(start, offset).build(ctx, loc);
+            rewriter.insert_op(index.op_ref());
+            let store = wasm_gc_dialect::ArraySet::operands(result, index.result(ctx), element)
+                .r#type(array_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(store.op_ref());
+        }
+        let copy_tail = wasm_gc_dialect::ArrayCopy::operands(
+            result,
+            head_and_inserted.result(ctx),
+            source,
+            end,
+            tail.result(ctx),
+        )
+        .dst_type(array_ty)
+        .src_type(array_ty)
+        .build(ctx, loc);
+        rewriter.insert_op(copy_tail.op_ref());
+        rewriter.erase_op(vec![result]);
+        true
+    }
+}
+
+/// A region yielding a `len`-element array filled with `source[0]`.
+fn filled_from_source(
+    ctx: &mut IrContext,
+    loc: trunk_ir::types::Location,
+    array_ty: TypeRef,
+    source: ValueRef,
+    len: ValueRef,
+) -> trunk_ir::RegionRef {
+    let i32_ty = core::I32::type_ref(ctx);
+    let zero = wasm_dialect::I32Const::operands()
+        .value(0)
+        .results(i32_ty)
+        .build(ctx, loc);
+    let first = array_read(ctx, loc, array_ty, source, zero.result(ctx));
+    let first_value = ctx.op_result(first, 0);
+    let fresh = wasm_gc_dialect::ArrayNew::operands(len, first_value)
+        .r#type(array_ty)
+        .build(ctx, loc);
+    yielding_region(ctx, loc, [zero.op_ref(), first, fresh.op_ref()])
+}
+
+/// A region running `ops` and yielding the last one's result.
+fn yielding_region(
+    ctx: &mut IrContext,
+    loc: trunk_ir::types::Location,
+    ops: impl IntoIterator<Item = OpRef>,
+) -> trunk_ir::RegionRef {
+    let region = super::intrinsic_to_wasm::empty_region(ctx, loc);
+    let block = ctx.region(region).blocks[0];
+    let mut last = None;
+    for op in ops {
+        ctx.push_op(block, op);
+        last = Some(op);
+    }
+    let value = ctx.op_result(last.expect("a yielding region has an op"), 0);
+    let yield_value = wasm_dialect::Yield::operands(value).build(ctx, loc);
+    ctx.push_op(block, yield_value.op_ref());
+    region
+}
+
+/// A `wasm_gc` read of `array[index]`, unsigned for packed elements.
+fn array_read(
+    ctx: &mut IrContext,
+    loc: trunk_ir::types::Location,
+    array_ty: TypeRef,
+    array: ValueRef,
+    index: ValueRef,
+) -> OpRef {
+    // A packed element has no Wasm value type of its own. It is read
+    // into an `i32` whose upper bits are unspecified, so the unsigned
+    // read is as good as the signed one; one is fixed here.
+    if has_packed_elements(ctx, array_ty) {
+        let element_ty = core::Array::from_type_ref(ctx, array_ty)
+            .expect("packed elements belong to a core.array")
+            .element(ctx);
+        wasm_gc_dialect::ArrayGetU::operands(array, index)
+            .r#type(array_ty)
+            .results(element_ty)
+            .build(ctx, loc)
+            .op_ref()
+    } else {
+        wasm_gc_dialect::ArrayGet::operands(array, index)
+            .r#type(array_ty)
+            .build(ctx, loc)
+            .op_ref()
     }
 }
 
@@ -555,24 +753,9 @@ impl RewritePattern for ArrayGetPattern {
         let loc = ctx.op(op).location;
         let ref_val = array_get.r#ref(ctx);
         let index = wasm_index(ctx, rewriter, array_get.index(ctx), loc);
-        let result_ty = array_get.result_ty(ctx);
 
         let array_ty = ctx.value_ty(ref_val);
-        // A packed element has no Wasm value type of its own. It is read
-        // into an `i32` whose upper bits are unspecified, so the unsigned
-        // read is as good as the signed one; one is fixed here.
-        let new_op = if has_packed_elements(ctx, array_ty) {
-            wasm_gc_dialect::ArrayGetU::operands(ref_val, index)
-                .r#type(array_ty)
-                .results(result_ty)
-                .build(ctx, loc)
-                .op_ref()
-        } else {
-            wasm_gc_dialect::ArrayGet::operands(ref_val, index)
-                .r#type(array_ty)
-                .build(ctx, loc)
-                .op_ref()
-        };
+        let new_op = array_read(ctx, loc, array_ty, ref_val, index);
         rewriter.replace_op(new_op);
         true
     }
@@ -754,6 +937,110 @@ mod tests {
         super::lower(ctx, module, type_converter);
     }
 
+    /// The lowered `splice` function's body ops and its returned value.
+    fn lower_splice(elements: &str) -> (IrContext, Vec<OpRef>, ValueRef) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  !A = core.array<core.i32>
+  wasm.func @splice(%source: !A, %start: core.index, %end: core.index, %x: core.i32, %y: core.i32) -> !A {{
+    %result = adt.array_splice %source, %start, %end{elements} {{type = !A}} : !A
+    wasm.return %result
+  }}
+}}"#
+            ),
+        );
+        lower(&mut ctx, module, TypeConverter::new());
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op_region(func, 0).unwrap();
+        let block = ctx.region(body).blocks[0];
+        let ops = ctx.block(block).ops.to_vec();
+        let ret = *ops.last().unwrap();
+        let returned = ctx.op_operands(ret)[0];
+        (ctx, ops, returned)
+    }
+
+    fn op_names(ctx: &IrContext, ops: &[OpRef]) -> Vec<String> {
+        ops.iter()
+            .map(|&op| ctx.op(op).name.display(ctx).to_string())
+            .collect()
+    }
+
+    #[test]
+    fn array_splice_fills_with_its_first_element_and_copies_the_kept_ranges() {
+        let (ctx, ops, returned) = lower_splice(", %x, %y");
+
+        assert_eq!(
+            op_names(&ctx, &ops),
+            [
+                "core.unrealized_conversion_cast",
+                "core.unrealized_conversion_cast",
+                "wasm.array_len",
+                "wasm.i32_gt_u",
+                "wasm.i32_gt_u",
+                "wasm.i32_or",
+                "wasm.if",
+                "wasm.i32_const",
+                "wasm.i32_sub",
+                "wasm.i32_add",
+                "wasm.i32_add",
+                "wasm_gc.array_new",
+                "wasm.i32_const",
+                "wasm_gc.array_copy",
+                "wasm.i32_const",
+                "wasm.i32_add",
+                "wasm_gc.array_set",
+                "wasm_gc.array_copy",
+                "wasm.return",
+            ]
+        );
+        let fresh = wasm_gc_dialect::ArrayNew::from_op(&ctx, ops[11]).unwrap();
+        assert_eq!(returned, fresh.result(&ctx));
+        let block_arg = |index| {
+            let func_block = ctx.op(ops[0]).parent_block.unwrap();
+            ctx.block_arg(func_block, index)
+        };
+        assert_eq!(fresh.init(&ctx), block_arg(3));
+        let store = wasm_gc_dialect::ArraySet::from_op(&ctx, ops[16]).unwrap();
+        assert_eq!(store.value(&ctx), block_arg(4));
+        let tail = wasm_gc_dialect::ArrayCopy::from_op(&ctx, ops[17]).unwrap();
+        assert_eq!(tail.src(&ctx), block_arg(0));
+        assert_eq!(tail.dst_offset(&ctx), ctx.op_result(ops[9], 0));
+    }
+
+    #[test]
+    fn array_splice_without_elements_fills_a_nonempty_result_from_its_source() {
+        let (ctx, ops, returned) = lower_splice("");
+
+        // The first `wasm.if` is the range check.
+        let fill = ops
+            .iter()
+            .rev()
+            .find_map(|&op| wasm::If::from_op(&ctx, op).ok())
+            .expect("the result is chosen by its length");
+        assert_eq!(returned, fill.results(&ctx)[0]);
+        let region_ops = |region| {
+            let block = ctx.region(region).blocks[0];
+            op_names(&ctx, &ctx.block(block).ops)
+        };
+        assert_eq!(
+            region_ops(fill.then_region(&ctx)),
+            [
+                "wasm.i32_const",
+                "wasm_gc.array_get",
+                "wasm_gc.array_new",
+                "wasm.yield"
+            ]
+        );
+        assert_eq!(
+            region_ops(fill.else_region(&ctx)),
+            ["wasm_gc.array_new_fixed", "wasm.yield"]
+        );
+        assert!(!op_names(&ctx, &ops).contains(&"wasm_gc.array_set".to_owned()));
+    }
+
     #[test]
     fn canonical_enum_type_requires_an_exact_enum_layout() {
         let mut ctx = IrContext::new();
@@ -794,14 +1081,14 @@ mod tests {
     %cast = adt.variant_cast %variant {type = !E, tag = "Some"} : !ERef
     %payload = adt.variant_get %cast {type = !E, tag = "Some", field = 0} : core.i32
 
-    %empty = adt.array_new {type = !A} : !A
-    %default = adt.array_new %one {type = !A} : !A
-    %array = adt.array_new %one, %zero {type = !A} : !A
-    %invalid = adt.array_new %one, %zero, %one {type = !A} : !A
     %at = arith.const {value = 0} : core.index
+    %count = arith.const {value = 2} : core.index
+    %empty = adt.array_of {type = !A} : !A
+    %filled = adt.array_new %count, %zero {type = !A} : !A
+    %array = adt.array_of %one, %zero {type = !A} : !A
     %element = adt.array_get %array, %at : core.i32
     adt.array_set %array, %at, %element
-    %length = adt.array_len %default : core.index
+    %length = adt.array_len %filled : core.index
 
     %null = adt.ref_null {type = !S} : !S
     %is_null = adt.ref_is_null %null : core.i32
@@ -822,14 +1109,14 @@ mod tests {
             .iter()
             .filter(|&&op| ctx.op(op).name.dialect(&ctx) == adt::DIALECT_NAME)
             .count();
-        assert_eq!(remaining_adt_ops, 2, "only malformed arrays should remain");
+        assert_eq!(remaining_adt_ops, 0);
         assert_eq!(
             ctx.block(block)
                 .ops
                 .iter()
                 .filter(|&&op| ctx.op(op).name.dialect(&ctx) == wasm_gc_dialect::DIALECT_NAME)
                 .count(),
-            14
+            15
         );
         let variant_get = ctx
             .block(block)
