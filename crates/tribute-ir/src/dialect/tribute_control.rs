@@ -35,7 +35,7 @@ mod row;
 
 pub use row::{
     ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, QUANTIFIED_ROWS_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR,
-    ROW_UNIONS_ATTR, Row, RowArgs, RowBinder, RowUnion, find_substituted_rows,
+    ROW_UNIONS_ATTR, Row, RowArgs, RowBinder, RowUnion, assign_conventions, find_substituted_rows,
     logical_tuple_elements, logical_tuple_name, logical_tuple_type, quantified_count,
     quantified_rows, row_args, row_binders, row_unions, substitute_rows, visit_rows,
 };

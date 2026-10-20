@@ -6,8 +6,8 @@ use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::{IrContext, SymbolPath};
 
 use super::super::{
-    CallingConvention, FuncSig, ValidationResult, conventions_assigned, func_sig_with_row,
-    validate_local, validate_whole_ir,
+    CallingConvention, FuncSig, ValidationResult, conventions_assigned, func_sig_convention,
+    func_sig_with_row, validate_local, validate_whole_ir,
 };
 use super::*;
 
@@ -700,4 +700,57 @@ fn a_tuple_layout_names_a_convention_only_once_assigned() {
     assert_ne!(names[0], names[1]);
     assert!(!names[0].contains("direct"), "{}", names[0]);
     assert!(names[1].contains("direct"), "{}", names[1]);
+}
+
+/// A source signature without a convention, as the frontend builds it.
+fn unassigned(ctx: &mut IrContext, inputs: &[TypeRef], result: TypeRef, row: &Row) -> TypeRef {
+    let mut builder = TypeDataBuilder::new("tribute_control.func_sig")
+        .params(inputs.iter().copied())
+        .param(result)
+        .attr(
+            trunk_ir::dialect::func::NUM_INPUTS_ATTR,
+            trunk_ir::types::Attribute::from(inputs.len() as u32),
+        )
+        .attr(
+            trunk_ir::dialect::func::NUM_RESULTS_ATTR,
+            trunk_ir::types::Attribute::from(1_u32),
+        );
+    if !row.is_empty() {
+        let row = row.to_attribute(ctx);
+        builder = builder.attr(ABILITY_ROW_ATTR, row);
+    }
+    builder.intern(ctx)
+}
+
+#[test]
+fn assigning_conventions_reaches_every_callable_and_layout() {
+    let mut ctx = IrContext::new();
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+    let inner = unassigned(&mut ctx, &[i32_ty], i32_ty, &Row::default());
+    let pair = logical_tuple_type(&mut ctx, &[inner, i32_ty]);
+    let outer = unassigned(&mut ctx, &[pair], i32_ty, &Row::new([], Some(0)));
+    let class = |row: &Row| {
+        if row.tail.is_some() {
+            CallingConvention::Cps
+        } else {
+            CallingConvention::Direct
+        }
+    };
+
+    let assigned = assign_conventions(&mut ctx, outer, class);
+    assert_eq!(
+        func_sig_convention(&ctx, assigned),
+        Some(CallingConvention::Cps)
+    );
+    let signature = FuncSig::from_type_ref(&ctx, assigned).unwrap();
+    let elements = logical_tuple_elements(&ctx, signature.inputs(&ctx)[0])
+        .expect("the input is still a tuple layout")
+        .to_vec();
+    assert_eq!(
+        func_sig_convention(&ctx, elements[0]),
+        Some(CallingConvention::Direct)
+    );
+    assert_eq!(elements[1], i32_ty);
+    assert_eq!(signature.row(&ctx), Row::new([], Some(0)));
+    assert_eq!(assign_conventions(&mut ctx, assigned, class), assigned);
 }
