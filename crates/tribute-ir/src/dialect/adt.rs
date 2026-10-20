@@ -81,11 +81,18 @@ mod adt {
     ) -> Value<A> {
     }
 
-    /// An array of `elements` in order.
+    /// An array of `elements` in order. Its length is the number of
+    /// operands, which may be zero.
     #[flags(Pure)]
     fn array_of<A: Array>(r#type: Attr<TypeOf<A>>, elements: Variadic<A::Element>) -> Value<A> {}
 
     /// A new array of `source[0, start)`, `elements`, and `source[end, len)`.
+    ///
+    /// It builds the array by copying ranges and leaves `source` unchanged.
+    /// Inserting one element (`start = end`), removing one (no `elements` and
+    /// `end = start + 1`), replacing elements, and trimming either end are
+    /// all written with this operation. It requires `start ≤ end ≤ len`; the
+    /// target traps an execution that violates it.
     #[flags(Pure)]
     fn array_splice<A: Array>(
         r#type: Attr<TypeOf<A>>,
@@ -96,11 +103,19 @@ mod adt {
     ) -> Value<A> {
     }
 
+    /// The element at `index`. It requires `index < len`; the target traps
+    /// an execution that violates it.
     #[flags(Pure)]
     fn array_get<A: Array>(r#ref: Value<A>, index: Value<Index>) -> Value<A::Element> {}
 
+    /// Replace the element at `index` in place. Every value that refers to
+    /// the same array sees the new element; a producer that must not change
+    /// a shared array builds the changed array with `adt.array_splice`
+    /// instead. It requires `index < len`; the target traps an execution that
+    /// violates it.
     fn array_set<A: Array>(r#ref: Value<A>, index: Value<Index>, value: Value<A::Element>) {}
 
+    /// The number of elements.
     #[flags(Pure)]
     fn array_len(r#ref: Value<impl Array>) -> Value<Index> {}
 

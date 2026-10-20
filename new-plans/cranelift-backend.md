@@ -383,8 +383,8 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
   `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
 
 범위 검사는 모든 `adt.array_get`, `adt.array_set`, `adt.array_splice` 앞에 둔다.
-[`adt` 배열](ir.md#adt-배열)이 정한 전제(`index < len`, `start ≤ end ≤ len`)를
-부호 없는 정수 비교로 검사하고, 어기면 `clif.trap`으로 끝낸다. 할당 크기 계산이
+[`adt` 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한 전제(`index < len`,
+`start ≤ end ≤ len`)를 부호 없는 정수 비교로 검사하고, 어기면 `clif.trap`으로 끝낸다. 할당 크기 계산이
 넘치는 길이도 `clif.trap`이다.
 
 Native 타입 변환은 [`core.index`](ir.md#coreindex-주소-폭-정수)를 pointer 폭인
