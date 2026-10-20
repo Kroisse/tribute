@@ -15,17 +15,20 @@
 use std::collections::VecDeque;
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use tribute_ir::dialect::tribute_control::{self, CallingConvention, FuncSig, Row};
+use tribute_ir::dialect::tribute_control::{
+    self, CallingConvention, FuncSig, Row, RowArgs, RowBinder,
+};
 use trunk_ir::context::IrContext;
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::Attribute;
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::convention_classes::{
-    Function, class_suffix, requirements, row_class, settle_class_variables,
+    Function, class_suffix, instantiation, requirements, row_class, settle_class_variables,
+    settle_locals,
 };
 
 /// Why a module cannot be specialized.
@@ -34,12 +37,6 @@ pub enum ClassSpecializationError {
     /// Some or all source signatures already have a convention.
     #[display("class specialization takes source signatures without calling conventions")]
     ConventionsAssigned,
-    /// A let-bound lambda quantifies rows, which this pass does not copy yet.
-    #[display("class specialization does not copy let-bound lambdas yet (lambda at {location:?})")]
-    QuantifyingLambda {
-        #[error(not(source))]
-        location: trunk_ir::Location,
-    },
 }
 
 /// Specializes convention classes over a module without conventions.
@@ -75,7 +72,6 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
         .iter()
         .filter_map(|&op| Function::read(ctx, op))
         .collect();
-    reject_quantifying_lambdas(ctx, &functions)?;
     let positions = settle_class_variables(&mut functions);
     let instances = collect_instances(&functions, &positions, &requirements);
 
@@ -83,15 +79,15 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
     let mut rewrites = Vec::new();
     for function in &functions {
         let vectors = &instances[&function.name];
-        let mut before = next_op(ctx, function.op);
+        let mut anchor = function.op;
         for classes in &vectors[1..] {
             let clone = ctx.clone_op(function.op, &mut IrMapping::new());
             let name = format!("{}{}", function.name, class_suffix(classes));
             let name = ctx.intern_str(&name);
             ctx.op_attrs_mut(clone)
                 .insert("sym_name", Attribute::String(name));
-            insert_after(ctx, module, function.op, clone, before);
-            before = next_op(ctx, clone);
+            insert_after(ctx, anchor, clone);
+            anchor = clone;
             rewrites.push((clone, function, classes.clone()));
         }
         rewrites.push((function.op, function, vectors[0].clone()));
@@ -105,12 +101,14 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
             .copied()
             .zip(classes)
             .collect();
-        let instance = Instance {
+        let mut instance = Instance {
             function,
             requirements: &requirements,
             params,
             positions: &positions,
             names: &names,
+            binders: function.binders.clone(),
+            locals: HashMap::default(),
         };
         instance.rewrite(ctx, op);
     }
@@ -125,31 +123,6 @@ fn has_source_signatures(ctx: &IrContext, module: Module) -> bool {
         .ops(ctx)
         .iter()
         .any(|&op| tribute_control::Func::matches(ctx, op))
-}
-
-fn reject_quantifying_lambdas(
-    ctx: &IrContext,
-    functions: &[Function],
-) -> Result<(), ClassSpecializationError> {
-    for function in functions {
-        let Some(body) = ctx.op_region(function.op, 0) else {
-            continue;
-        };
-        let mut found = None;
-        let _ = trunk_ir::walk::walk_region::<()>(ctx, body, &mut |op| {
-            if found.is_none()
-                && tribute_control::Lambda::matches(ctx, op)
-                && tribute_control::quantified_rows(ctx, op).is_ok_and(|rows| !rows.is_empty())
-            {
-                found = Some(ctx.op(op).location);
-            }
-            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
-        });
-        if let Some(location) = found {
-            return Err(ClassSpecializationError::QuantifyingLambda { location });
-        }
-    }
-    Ok(())
 }
 
 /// The class vectors each definition is instantiated at, its primary instance
@@ -213,54 +186,63 @@ fn collect_instances(
     instances
 }
 
-/// The op after `op` in the module body, if any.
-fn next_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
-    let block = ctx.op(op).parent_block?;
-    let ops = &ctx.block(block).ops;
-    let at = ops.iter().position(|&candidate| candidate == op)?;
-    ops.get(at + 1).copied()
-}
-
-fn insert_after(
-    ctx: &mut IrContext,
-    module: Module,
-    original: OpRef,
-    clone: OpRef,
-    before: Option<OpRef>,
-) {
+/// Insert `op` right after `anchor`.
+fn insert_after(ctx: &mut IrContext, anchor: OpRef, op: OpRef) {
     let block = ctx
-        .op(original)
+        .op(anchor)
         .parent_block
-        .or_else(|| module.first_block(ctx))
-        .expect("a definition lives in the module body");
-    match before {
-        Some(before) => ctx.insert_op_before(block, before, clone),
-        None => ctx.push_op(block, clone),
+        .expect("an anchor lives in a block");
+    let ops = &ctx.block(block).ops;
+    let next = ops
+        .iter()
+        .position(|&candidate| candidate == anchor)
+        .and_then(|at| ops.get(at + 1).copied());
+    match next {
+        Some(next) => ctx.insert_op_before(block, next, op),
+        None => ctx.push_op(block, op),
     }
 }
 
-/// One instance being rewritten: its definition and the class of each class
-/// variable.
+/// The instantiations of one lambda grouped by the classes they select, in
+/// body order.
+type ClassGroups = Vec<(Vec<CallingConvention>, Vec<OpRef>)>;
+
+/// One instance being rewritten: its definition, the class of each class
+/// variable, and the row binders and local classes its lambda copies leave.
 struct Instance<'a> {
     function: &'a Function,
     requirements: &'a HashMap<SymbolPath, CallingConvention>,
     params: HashMap<u32, CallingConvention>,
     positions: &'a HashMap<String, Vec<u32>>,
     names: &'a HashSet<&'a str>,
+    binders: Vec<RowBinder>,
+    locals: HashMap<u32, CallingConvention>,
 }
 
 impl Instance<'_> {
     fn class(&self, row: &Row) -> CallingConvention {
         row_class(
             row,
-            &self.function.binders,
+            &self.binders,
             self.requirements,
             &self.params,
-            &HashMap::default(),
+            &self.locals,
         )
     }
 
-    fn rewrite(&self, ctx: &mut IrContext, op: OpRef) {
+    fn rewrite(&mut self, ctx: &mut IrContext, op: OpRef) {
+        if let Some(body) = ctx.op_region(op, 0) {
+            self.split_lambdas(ctx, body);
+            if self.binders.len() != self.function.binders.len() {
+                let binders = self
+                    .binders
+                    .iter()
+                    .map(|binder| Attribute::String(ctx.intern_str(binder.keyword())))
+                    .collect();
+                ctx.op_attrs_mut(op)
+                    .insert(tribute_control::ROW_BINDERS_ATTR, Attribute::List(binders));
+            }
+        }
         let mut ops = vec![op];
         let mut blocks = Vec::new();
         if let Some(body) = ctx.op_region(op, 0) {
@@ -292,6 +274,130 @@ impl Instance<'_> {
             }
         }
         self.assign_own_convention(ctx, op);
+    }
+
+    /// Copy each let-bound lambda once per class vector its instantiations
+    /// select, until every lambda has one, and settle the local classes.
+    fn split_lambdas(&mut self, ctx: &mut IrContext, body: RegionRef) {
+        loop {
+            self.locals = settle_locals(ctx, body, &self.binders, self.requirements, &self.params);
+            let mut lambdas: Vec<(OpRef, ClassGroups)> = Vec::new();
+            let _ = trunk_ir::walk::walk_region::<()>(ctx, body, &mut |op| {
+                if let Some((lambda, _, rows)) = instantiation(ctx, op) {
+                    let classes: Vec<_> = rows.iter().map(|row| self.class(row)).collect();
+                    let at = match lambdas.iter().position(|(known, _)| *known == lambda) {
+                        Some(at) => at,
+                        None => {
+                            lambdas.push((lambda, Vec::new()));
+                            lambdas.len() - 1
+                        }
+                    };
+                    let groups = &mut lambdas[at].1;
+                    match groups.iter_mut().find(|(known, _)| *known == classes) {
+                        Some((_, uses)) => uses.push(op),
+                        None => groups.push((classes, vec![op])),
+                    }
+                }
+                std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+            });
+            let mut copied = false;
+            for (lambda, groups) in lambdas {
+                let mut anchor = lambda;
+                for (_, uses) in &groups[1..] {
+                    let copy = self.copy_lambda(ctx, lambda);
+                    insert_after(ctx, anchor, copy);
+                    anchor = copy;
+                    let result = ctx.op_results(copy)[0];
+                    for &instantiate in uses {
+                        ctx.set_op_operand(instantiate, 0, result);
+                    }
+                    copied = true;
+                }
+            }
+            if !copied {
+                return;
+            }
+        }
+    }
+
+    /// A detached copy of `lambda` whose quantifying lambdas, itself
+    /// included, quantify new local binders.
+    fn copy_lambda(&mut self, ctx: &mut IrContext, lambda: OpRef) -> OpRef {
+        let copy = ctx.clone_op(lambda, &mut IrMapping::new());
+        let mut ops = vec![copy];
+        let _ = trunk_ir::walk::walk_op::<()>(ctx, copy, &mut |inner| {
+            if inner != copy {
+                ops.push(inner);
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        let mut old = Vec::new();
+        for &op in &ops {
+            old.extend(tribute_control::quantified_rows(ctx, op).unwrap_or_default());
+        }
+        let new: Vec<u32> = (0..old.len())
+            .map(|offset| u32::try_from(self.binders.len() + offset).expect("binders fit in u32"))
+            .collect();
+        self.binders.extend(old.iter().map(|_| RowBinder::Local));
+        let rows: Vec<Row> = new.iter().map(|&tail| Row::new([], Some(tail))).collect();
+        let renamed = |row: &Row| {
+            row.substitute(RowArgs::Binders(&old, &rows))
+                .expect("a row names binders of its definition")
+        };
+        let rename = |ctx: &mut IrContext, ty| {
+            tribute_control::substitute_rows(ctx, ty, RowArgs::Binders(&old, &rows))
+                .expect("a type names binders of its definition")
+        };
+        for &op in &ops {
+            for index in 0..ctx.op_result_types(op).len() {
+                let ty = rename(ctx, ctx.op_result_types(op)[index]);
+                ctx.set_op_result_type(op, index as u32, ty);
+            }
+            for region in ctx.op_regions(op).collect::<Vec<_>>() {
+                for block in ctx.region(region).blocks.clone() {
+                    for index in 0..ctx.block_args(block).len() {
+                        let ty = rename(ctx, ctx.value_ty(ctx.block_args(block)[index]));
+                        ctx.set_block_arg_type(block, index as u32, ty);
+                    }
+                }
+            }
+            let attributes: Vec<_> = ctx
+                .op(op)
+                .attributes
+                .iter()
+                .map(|(key, value)| (key, value.clone()))
+                .collect();
+            for (key, value) in attributes {
+                let renamed = value.map_types(|ty| rename(ctx, ty));
+                if renamed != value {
+                    ctx.op_attrs_mut(op).insert(key, renamed);
+                }
+            }
+            let quantified = tribute_control::quantified_rows(ctx, op).unwrap_or_default();
+            if !quantified.is_empty() {
+                let quantified = quantified
+                    .iter()
+                    .map(|binder| {
+                        let at = old.iter().position(|known| known == binder);
+                        Attribute::Int(i128::from(at.map_or(*binder, |at| new[at])))
+                    })
+                    .collect();
+                ctx.op_attrs_mut(op).insert(
+                    tribute_control::QUANTIFIED_ROWS_ATTR,
+                    Attribute::List(quantified),
+                );
+            }
+            let args = tribute_control::row_args(ctx, op).unwrap_or_default();
+            if !args.is_empty() {
+                let args = args
+                    .iter()
+                    .map(|row| renamed(row).to_attribute(ctx))
+                    .collect();
+                ctx.op_attrs_mut(op)
+                    .insert(tribute_control::ROW_ARGS_ATTR, Attribute::List(args));
+            }
+        }
+        copy
     }
 
     /// Point a reference at the instance its rows select.

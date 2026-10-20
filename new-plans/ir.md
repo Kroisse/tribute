@@ -683,7 +683,9 @@ binder의 종류를 나타내는 문자열이다.
 | `body` | 어느 scheme도 양화하지 않은 row 변수, 또는 지역 scheme이 양화했지만 [양화하는 람다가 없는](#지역-람다의-양화와-인스턴스화) row 변수 |
 
 양화된 binder(`param`, `ability_arg`)가 scheme의 binder 순서로 먼저 오며, 그 위치가
-row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 뒤에 온다. 속성이 없으면
+row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 뒤에 온다. Class 특수화가
+람다를 복사하면 복사본의 `local` binder는 목록 끝에 붙으므로, 한 정의의 인스턴스들은
+양화된 binder만 공유하고 나머지 binder 목록은 서로 다를 수 있다. 속성이 없으면
 binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 드러내지
 않으므로 따로 표시한다.
 
