@@ -1,0 +1,46 @@
+---
+source: crates/tribute-passes/src/native/rtti.rs
+expression: "format!(\"{}\\n{}\", release_function(RTTI_USER_START),\nrelease_function(RTTI_USER_START + 1))"
+---
+sym_name = "__tribute_release_7", type = !t0} {
+    ^bb0(%0: core.ptr):
+      %1 = clif.load %0 {offset = 0} : core.i64
+      %2 = clif.iconst {value = 0} : core.i64
+      clif.jump %2 [^bb1]
+
+    ^bb1(%3: core.i64):
+      %4 = clif.icmp %3, %1 {cond = "ult"} : core.i8
+      clif.brif %4 [^bb2, ^bb3]
+
+    ^bb2:
+      %5 = clif.iconst {value = 8} : core.i64
+      %6 = clif.imul %3, %5 : core.i64
+      %7 = clif.iadd %0, %6 : core.ptr
+      %8 = clif.load %7 {offset = 8} : core.ptr
+      tribute_rt.release %8 {alloc_size = 0}
+      %9 = clif.iconst {value = 1} : core.i64
+      %10 = clif.iadd %3, %9 : core.i64
+      clif.jump %10 [^bb1]
+
+    ^bb3:
+      %11 = clif.iconst {value = 8} : core.i64
+      %12 = clif.imul %1, %11 : core.i64
+      %13 = clif.iconst {value = 16} : core.i64
+      %14 = clif.iadd %13, %12 : core.i64
+      %15 = clif.iconst {value = 8} : core.i64
+      %16 = clif.isub %0, %15 : core.ptr
+      %17 = clif.call %16, %14 {callee = @__tribute_dealloc} : core.nil
+      clif.return
+  }
+sym_name = "__tribute_release_8", type = !t0} {
+    ^bb0(%0: core.ptr):
+      %1 = clif.iconst {value = 8} : core.i64
+      %2 = clif.isub %0, %1 : core.ptr
+      %3 = clif.iconst {value = 16} : core.i64
+      %4 = clif.load %0 {offset = 0} : core.i64
+      %5 = clif.iconst {value = 2} : core.i64
+      %6 = clif.imul %4, %5 : core.i64
+      %7 = clif.iadd %3, %6 : core.i64
+      %8 = clif.call %2, %7 {callee = @__tribute_dealloc} : core.nil
+      clif.return
+  }

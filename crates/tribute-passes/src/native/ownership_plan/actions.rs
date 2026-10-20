@@ -499,7 +499,7 @@ impl ActionPlanner<'_> {
                 ))
             })?;
             validate_allocation_result(self.ir, op, new.r#type(self.ir), self.managed_layouts)?;
-            return self.plan_owning_operands(op, fields.iter().map(|(_, ty)| *ty));
+            return self.plan_owning_operands(op, 0, fields.iter().map(|(_, ty)| *ty));
         }
         if let Ok(new) = adt::VariantNew::from_op(self.ir, op) {
             let variants = get_enum_variants(self.ir, new.r#type(self.ir))
@@ -510,7 +510,74 @@ impl ActionPlanner<'_> {
                 .map(|(_, fields)| fields.as_slice())
                 .ok_or_else(|| OwnershipPlanError::new("variant_new tag is stale"))?;
             validate_allocation_result(self.ir, op, new.r#type(self.ir), self.managed_layouts)?;
-            return self.plan_owning_operands(op, fields.iter().copied());
+            return self.plan_owning_operands(op, 0, fields.iter().copied());
+        }
+        if let Ok(of) = adt::ArrayOf::from_op(self.ir, op) {
+            let element = array_element(self.ir, of.r#type(self.ir))?;
+            validate_allocation_result(self.ir, op, of.r#type(self.ir), self.managed_layouts)?;
+            let count = self.ir.op_operands(op).len();
+            return self.plan_owning_operands(op, 0, std::iter::repeat_n(element, count));
+        }
+        if let Ok(splice) = adt::ArraySplice::from_op(self.ir, op) {
+            // `source` is borrowed for the operation, which acquires the units
+            // of the elements it copies; only the new elements are stores.
+            let array_ty = splice.r#type(self.ir);
+            let element = array_element(self.ir, array_ty)?;
+            validate_allocation_result(self.ir, op, array_ty, self.managed_layouts)?;
+            if self.ir.value_ty(splice.source(self.ir)) != array_ty {
+                return Err(OwnershipPlanError::new(
+                    "array_splice source differs from its array type",
+                ));
+            }
+            let first = SPLICE_ELEMENTS_OPERAND;
+            let count = self.ir.op_operands(op).len().saturating_sub(first);
+            return self.plan_owning_operands(op, first, std::iter::repeat_n(element, count));
+        }
+        if let Ok(new) = adt::ArrayNew::from_op(self.ir, op) {
+            // `initial` is borrowed for the operation, which acquires a unit
+            // for every element it fills.
+            let array_ty = new.r#type(self.ir);
+            let element = array_element(self.ir, array_ty)?;
+            validate_allocation_result(self.ir, op, array_ty, self.managed_layouts)?;
+            if is_typed_managed_reference(self.ir, element, self.managed_layouts)
+                && !types_compatible(
+                    self.ir,
+                    self.ir.value_ty(new.initial(self.ir)),
+                    element,
+                    self.managed_layouts,
+                )
+            {
+                return Err(OwnershipPlanError::new(
+                    "array_new initial value type is malformed",
+                ));
+            }
+            return Ok(());
+        }
+        if let Ok(set) = adt::ArraySet::from_op(self.ir, op) {
+            let element = array_element(self.ir, self.ir.value_ty(set.r#ref(self.ir)))?;
+            if is_typed_managed_reference(self.ir, element, self.managed_layouts) {
+                if !types_compatible(
+                    self.ir,
+                    self.ir.value_ty(set.value(self.ir)),
+                    element,
+                    self.managed_layouts,
+                ) {
+                    return Err(OwnershipPlanError::new("array_set value type is malformed"));
+                }
+                self.actions.push(OwnershipAction {
+                    kind: ActionKind::StoreAcquire,
+                    value: set.value(self.ir),
+                    anchor: ActionAnchor::Before(op),
+                    destination: 0,
+                });
+                self.actions.push(OwnershipAction {
+                    kind: ActionKind::ReleaseReplacedField,
+                    value: set.r#ref(self.ir),
+                    anchor: ActionAnchor::Before(op),
+                    destination: 0,
+                });
+            }
+            return Ok(());
         }
         if let Ok(set) = adt::StructSet::from_op(self.ir, op) {
             let fields = get_struct_fields(self.ir, set.r#type(self.ir))
@@ -667,20 +734,24 @@ impl ActionPlanner<'_> {
         Ok(())
     }
 
+    /// Plan the stores of the operands of `op` from position `first` on, one
+    /// per entry of `field_types`.
     fn plan_owning_operands(
         &mut self,
         op: OpRef,
+        first: usize,
         field_types: impl IntoIterator<Item = TypeRef>,
     ) -> Result<(), OwnershipPlanError> {
         let field_types = field_types.into_iter().collect::<Vec<_>>();
-        if field_types.len() != self.ir.op_operands(op).len() {
+        let operands = self.ir.op_operands(op);
+        if operands.len() < first || field_types.len() != operands.len() - first {
             return Err(OwnershipPlanError::new(
                 "aggregate constructor arity is malformed",
             ));
         }
-        for (index, (&operand, &field_ty)) in
-            self.ir.op_operands(op).iter().zip(&field_types).enumerate()
-        {
+        for (offset, &field_ty) in field_types.iter().enumerate() {
+            let index = first + offset;
+            let operand = operands[index];
             if is_typed_managed_reference(self.ir, field_ty, self.managed_layouts) {
                 if !types_compatible(
                     self.ir,
@@ -920,6 +991,17 @@ impl ActionPlanner<'_> {
         }
         Ok(())
     }
+}
+
+/// The operand position of the first new element of an `adt.array_splice`,
+/// after `source`, `start`, and `end`.
+const SPLICE_ELEMENTS_OPERAND: usize = 3;
+
+/// The element type of the array type `array_ty`.
+fn array_element(ctx: &IrContext, array_ty: TypeRef) -> Result<TypeRef, OwnershipPlanError> {
+    core::Array::from_type_ref(ctx, array_ty)
+        .map(|array| array.element(ctx))
+        .ok_or_else(|| OwnershipPlanError::new("array operation has a non-array type"))
 }
 
 fn validate_allocation_result(

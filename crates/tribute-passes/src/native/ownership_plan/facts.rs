@@ -59,10 +59,12 @@ impl NativeOwnershipModuleFacts {
         &self.rtti_types
     }
 
-    /// Whether any `adt.struct_set` in the module writes `layout`.
+    /// Whether any `adt.struct_set` or `adt.array_set` in the module writes
+    /// `layout`.
     ///
     /// A writer reaches its struct through casts and closure environments, so
-    /// the layout's nominal identity decides, not a particular value.
+    /// the layout's nominal identity decides, not a particular value. An
+    /// array type has no nominal identity; its exact type decides.
     fn is_written_layout(&self, ctx: &IrContext, layout: TypeRef) -> bool {
         self.written_layouts.contains(&layout)
             || self
@@ -121,8 +123,9 @@ impl NativeOwnershipFunctionFacts {
     }
 
     /// The projections a temporary borrow may elide: those whose layout no
-    /// `adt.struct_set` in the module writes. A write releases the field's
-    /// previous value, so a projection of a written layout keeps its own unit.
+    /// `adt.struct_set` or `adt.array_set` in the module writes. A write
+    /// releases the previous value, so a projection of a written layout keeps
+    /// its own unit.
     pub fn borrowable_projection_owners(&self) -> &HashMap<ValueRef, ValueRef> {
         &self.borrowable_projection_owners
     }
@@ -188,13 +191,15 @@ fn compute_module_facts(
     walk_module(ctx, module, |op| {
         if let Ok(set) = adt::StructSet::from_op(ctx, op) {
             written_layouts.insert(set.r#type(ctx));
+        } else if let Ok(set) = adt::ArraySet::from_op(ctx, op) {
+            written_layouts.insert(ctx.value_ty(set.r#ref(ctx)));
         }
         if func::Func::matches(ctx, op) {
             function_ops.push(op);
         }
         layouts.visit_op(ctx, op);
         closure_allocations.extend(closure_allocation_layout(ctx, op));
-        descriptors.extend(allocation_descriptor(ctx, op));
+        descriptors.extend(native_allocation_descriptor(ctx, op));
     });
     // Reject malformed topology before entry-contract or call-graph analysis.
     for &op in &function_ops {
@@ -446,6 +451,8 @@ fn collect_borrowed_loads(
                 Some(get.r#ref(ctx))
             } else if let Ok(get) = adt::VariantGet::from_op(ctx, op) {
                 Some(get.r#ref(ctx))
+            } else if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
+                Some(get.r#ref(ctx))
             } else {
                 None
             };
@@ -464,8 +471,8 @@ fn collect_borrowed_loads(
     Ok(borrowed)
 }
 
-/// Whether `projection` is an `adt.struct_get` result read from a layout the
-/// module writes. Enum layouts have no write operation.
+/// Whether `projection` is an `adt.struct_get` or `adt.array_get` result read
+/// from a layout the module writes. Enum layouts have no write operation.
 fn reads_written_layout(
     ctx: &IrContext,
     module: &NativeOwnershipModuleFacts,
@@ -474,7 +481,14 @@ fn reads_written_layout(
     let ValueDef::OpResult(op, _) = ctx.value_def(projection) else {
         return false;
     };
-    adt::StructGet::from_op(ctx, op).is_ok_and(|get| module.is_written_layout(ctx, get.r#type(ctx)))
+    let layout = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
+        get.r#type(ctx)
+    } else if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
+        ctx.value_ty(get.r#ref(ctx))
+    } else {
+        return false;
+    };
+    module.is_written_layout(ctx, layout)
 }
 
 fn validate_projection_contract(
@@ -484,7 +498,13 @@ fn validate_projection_contract(
     result: ValueRef,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<(), OwnershipPlanError> {
-    let (layout, field_ty) = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
+    let (layout, field_ty) = if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
+        let array_ty = ctx.value_ty(get.r#ref(ctx));
+        let element = core::Array::from_type_ref(ctx, array_ty)
+            .ok_or_else(|| OwnershipPlanError::new("array_get reads a non-array value"))?
+            .element(ctx);
+        (array_ty, element)
+    } else if let Ok(get) = adt::StructGet::from_op(ctx, op) {
         let fields = get_struct_fields(ctx, get.r#type(ctx))
             .ok_or_else(|| OwnershipPlanError::new("struct_get has invalid layout"))?;
         let (_, field_ty) = fields

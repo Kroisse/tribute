@@ -135,9 +135,10 @@ Array: [len: i64] [element: E...]
 ```
 
 - 원소는 payload offset 8부터 빈틈 없이 놓인다. 원소 하나의 크기(stride)는 `E`의
-  native 표현 크기다. 8비트 정수와 bool은 1, 16비트 정수는 2, 32비트 정수와 `f32`는
-  4, 64비트 정수, `f64`, pointer와 managed 참조는 8이다. 모든 stride가 8 이하의
-  2의 거듭제곱이므로 원소는 자연 정렬된다.
+  native 표현 크기이며 struct field와 같다. 8비트 정수는 1, 16비트 정수는 2, 32비트
+  정수, `f32`, native에서 `i32`로 표현하는 `Bool`은 4, 64비트 정수, `f64`, pointer와
+  managed 참조는 8이다. 모든 stride가 8 이하의 2의 거듭제곱이므로 원소는 자연
+  정렬된다.
 - 할당 크기는 RC header, `len`, 원소를 더한 `16 + len × stride`다. 해제도 같은
   크기를 쓴다.
 - Managed 참조 원소는 owned 참조다. `adt.ref_null`이 만든 null도 원소가 될 수
