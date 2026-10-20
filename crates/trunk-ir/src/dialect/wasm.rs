@@ -218,6 +218,8 @@ mod wasm {
 
     fn array_new_default(type_idx: Attr<u32>, size: Value<I32>) -> Value<_> {}
 
+    fn array_new_fixed(type_idx: Attr<u32>, elements: Variadic<_>) -> Value<_> {}
+
     fn array_new_data(
         type_idx: Attr<u32>,
         data_idx: Attr<u32>,

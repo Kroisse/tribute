@@ -71,6 +71,8 @@ fn adt_to_clif_target() -> ConversionTarget {
         .legal_op("adt.struct_new")
         .legal_op("adt.variant_new")
         .legal_op("adt.array_new")
+        .legal_op("adt.array_of")
+        .legal_op("adt.array_splice")
         .legal_op("adt.array_get")
         .legal_op("adt.array_set")
         .legal_op("adt.array_len")
