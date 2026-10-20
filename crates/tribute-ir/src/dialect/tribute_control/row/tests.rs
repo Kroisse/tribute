@@ -618,6 +618,8 @@ fn a_lambda_captured_by_another_is_instantiated_in_its_body() {
 /// Frontend output before class specialization: rows without conventions.
 const UNASSIGNED: &str = r#"core.module @test {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !pure = tribute_control.func_sig<(core.i32) -> core.i32>
+  !applied = tribute_control.func_sig<(!pure, core.i32) -> core.i32>
   tribute_control.func @apply['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
     %r = tribute_control.call_indirect %f, %x : core.i32
     tribute_control.return %r
@@ -625,11 +627,17 @@ const UNASSIGNED: &str = r#"core.module @test {
   tribute_control.func @forward['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
     tribute_control.tail_call_indirect %f, %x
   }
-  tribute_control.func @main(%x: core.i32) -> core.i32 {
+  tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 inferred {
     %g = tribute_control.lambda(%y: core.i32) -> core.i32 LAMBDA captures [] {
       tribute_control.return %y
     }
-    %r = tribute_control.call %g, %x {callee = @apply, row_args = [{}]} : core.i32
+    %h = tribute_control.lambda['a0](%z: core.i32) -> core.i32 row(| 'a0) captures [] {
+      tribute_control.return %z
+    }
+    %s = tribute_control.instantiate %h {row_args = [{}]} : !pure
+    %a = tribute_control.func_ref {func_ref = @apply, row_args = [{}]} : !applied
+    %v = tribute_control.call_indirect %s, %x : core.i32
+    %r = tribute_control.call_indirect %a, %g, %v : core.i32
     tribute_control.return %r
   }
 }"#;
@@ -644,7 +652,9 @@ fn signatures_may_wait_for_class_specialization_to_assign_conventions() {
     let printed = print_module(&ctx, module.op());
     assert!(
         printed.contains("@apply['a0](%0: !cb, %1: core.i32) -> core.i32 row(| 'a0) {")
-            && printed.contains("tribute_control.lambda(%2: core.i32) -> core.i32 captures [] {"),
+            && printed.contains("@main[local 'a0](%0: core.i32) -> core.i32 inferred {")
+            && printed.contains("tribute_control.lambda['a0](%")
+            && printed.contains("-> core.i32 captures [] {"),
         "{printed}"
     );
     let (reparsed, module) = parse(&printed);
