@@ -97,6 +97,33 @@ mod tribute_control {
     // non-isolated so its exact external-reference/capture set can be validated.
     /// A named source function. A parameter is a callable origin when its
     /// type is the parameter type `type` declares.
+    ///
+    /// ```text
+    /// tribute_control.func {sym_name = "id", type = !Callable} (%x: T) { ... }
+    /// ```
+    ///
+    /// - **Shape:** no operands or results. `sym_name: String` and
+    ///   `type: tribute_control.func_sig<(Params...) -> Result>` are required.
+    ///   A declaration has no region. A definition has one single-block
+    ///   `body` that takes only the source parameters as block arguments and
+    ///   ends in `tribute_control.return`. Non-control attributes such as a
+    ///   foreign ABI are preserved.
+    /// - **Meaning:** defines the logical signature and row of a source named
+    ///   function, without hidden evidence, environment, or
+    ///   `ContinuationFrame<R>`. Class specialization computes the convention
+    ///   from the row and writes it.
+    /// - **Verification:** the local verifier matches the attributes, region,
+    ///   block arguments, and return type against the callable type.
+    ///   Whole-IR verification checks symbol uniqueness, that every tail in
+    ///   the definition is in the range of `row_binders`, that the indices of
+    ///   `row_unions` are in range, and that each row instance resolves to an
+    ///   `ability.decl`.
+    /// - **Row attributes:** optional `row_binders`, `row_unions`, and
+    ///   `inferred_row` (`new-plans/ir.md`, "Ability row").
+    /// - **Ownership and value flow:** the body is isolated from above. Only
+    ///   source locals and parameters enter as block arguments.
+    /// - **Location:** the whole span of the source function or extern
+    ///   declaration.
     #[asm_format]
     #[flags(IsolatedFromAbove)]
     #[implements(CallableArgumentOrigin)]
@@ -113,6 +140,30 @@ mod tribute_control {
 
     /// A source lambda. Its result is a callable origin, and so is a
     /// parameter whose type is the one its result type declares.
+    ///
+    /// ```text
+    /// %f = tribute_control.lambda [%capture0, ...] : !Callable { ... }
+    /// ```
+    ///
+    /// - **Shape:** the operands are the typechecked captures in source
+    ///   order. The result is one `tribute_control.func_sig`, and no
+    ///   attribute is required. The single-block body takes only the source
+    ///   parameters as block arguments and ends in `tribute_control.return`.
+    /// - **Meaning:** creates a source lambda. The body uses the lexical
+    ///   captures and the parameters.
+    /// - **Verification:** the local verifier matches the result signature,
+    ///   block arguments, and return type. Whole-IR verification checks that
+    ///   the body's external SSA references are exactly the captures, that
+    ///   each element of `quantified_rows` is a `local` binder of the
+    ///   enclosing `func` and each `local` binder is listed by one lambda
+    ///   only, and that only `instantiate` uses the result of a quantifying
+    ///   lambda. Passing it as a capture of an inner lambda is not a use; the
+    ///   use in that lambda's body must be an `instantiate`.
+    /// - **Row attributes:** optional `quantified_rows` (`new-plans/ir.md`,
+    ///   "지역 람다의 양화와 인스턴스화").
+    /// - **Ownership and value flow:** the captures are ordinary SSA uses,
+    ///   and there is no other hidden operand.
+    /// - **Location:** the whole span of the source lambda.
     #[asm_format]
     #[flags(Pure)]
     #[implements(CallableResultOrigin, CallableArgumentOrigin)]
@@ -123,6 +174,30 @@ mod tribute_control {
 
     /// One use of a row-polymorphic `let` lambda. Its result is a callable
     /// origin when the lambda is.
+    ///
+    /// ```text
+    /// %s = tribute_control.instantiate %lambda {row_args = [{tail = 0}]} : !Callable
+    /// ```
+    ///
+    /// - **Shape:** the operand is one result of a `tribute_control.lambda`
+    ///   with `quantified_rows`. The result is one `tribute_control.func_sig`,
+    ///   `row_args` is required, and the operation is a non-terminator with no
+    ///   region.
+    /// - **Meaning:** one use of a row-polymorphic lambda bound by `let`. For
+    ///   each row variable the local scheme quantifies, it fixes the row this
+    ///   use passes.
+    /// - **Verification:** the local verifier checks the shape. Whole-IR
+    ///   verification checks that the operand is the result of a lambda with
+    ///   `quantified_rows`, that `row_args` has as many entries as that
+    ///   attribute, and that the result is the lambda's type with `row_args`
+    ///   substituted (`new-plans/ir.md`, "Row 인자와 치환"), convention
+    ///   included. The tails and instances of the row arguments are checked in
+    ///   the scope of the enclosing definition, like any other row.
+    /// - **Ownership and value flow:** the operand and result are the same
+    ///   callable value; no new value is made. CPS legalization replaces the
+    ///   result with the operand.
+    /// - **Location:** the source span that refers to the generalized
+    ///   binding.
     #[verify]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
@@ -130,6 +205,33 @@ mod tribute_control {
 
     /// A named function as a value. Its result is a callable origin when the
     /// function has a body or is a registered compiler intrinsic.
+    ///
+    /// ```text
+    /// %f = tribute_control.func_ref {func_ref = @id} : !Callable
+    /// ```
+    ///
+    /// - **Shape:** no operands or regions, and not a terminator.
+    ///   `func_ref: Symbol` is required, and the result is one
+    ///   `tribute_control.func_sig`.
+    /// - **Meaning:** makes a named function a first-class source value,
+    ///   which source needs because it can use a named function as a
+    ///   higher-order value. The result has the target's source signature;
+    ///   once conventions are assigned, its convention may equal or be
+    ///   stronger than the target worker's. Its outer row may also be a wider
+    ///   row that contains the target's row: this is the subsumption that
+    ///   passes a pure function where a callable with an open row is
+    ///   expected.
+    /// - **Verification:** the local verifier checks the attribute and the
+    ///   result shape. Whole-IR verification checks symbol resolution; that
+    ///   the result equals the target type with `row_args` substituted
+    ///   (`new-plans/ir.md`, "Row 인자와 치환") apart from the outer row and
+    ///   convention; that the outer row holds each instance of the
+    ///   substituted row at least as many times and, if that row has a tail,
+    ///   the same tail; and, once conventions are assigned, that the outer
+    ///   convention is not weaker than the target's.
+    /// - **Ownership and value flow:** the result is an ordinary SSA value.
+    /// - **Location:** the source reference span that uses the named function
+    ///   as a value.
     #[verify]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
@@ -137,6 +239,26 @@ mod tribute_control {
 
     /// A direct call. Its result is a callable origin when the callee has a
     /// body or is a registered compiler intrinsic.
+    ///
+    /// ```text
+    /// %result = tribute_control.call %arg0, ... {callee = @f} : Result
+    /// ```
+    ///
+    /// - **Shape:** the source arguments in declaration order, one
+    ///   source-logical result, `callee: Symbol`, and optional
+    ///   `evidence_plan` (`new-plans/ir.md`, "Evidence 선택 속성") and
+    ///   `row_args` (`new-plans/ir.md`, "Row 인자와 치환"). A non-terminator
+    ///   with no region.
+    /// - **Meaning:** calls a named source callable directly.
+    /// - **Verification:** the local verifier checks the attributes and the
+    ///   resolved operands and result. Whole-IR verification checks that
+    ///   `row_args` has as many entries as the callee's quantified binders,
+    ///   and that the operands and result equal the callee type with
+    ///   `row_args` substituted.
+    /// - **Ownership and value flow:** the arguments and result are ordinary
+    ///   SSA values, and there is no hidden operand.
+    /// - **Location:** the source call span, including the callee and the
+    ///   arguments.
     #[verify]
     #[implements(CallLike, CallableResultOrigin)]
     fn call(
@@ -148,6 +270,28 @@ mod tribute_control {
     }
 
     /// An indirect call. Its result is a callable origin when its callee is.
+    ///
+    /// ```text
+    /// %result = tribute_control.call_indirect %callee, %arg0, ... : Result
+    /// ```
+    ///
+    /// - **Shape:** a `tribute_control.func_sig` callee, the source
+    ///   arguments, the one source-logical result of the callee type, and an
+    ///   optional `evidence_plan` (`new-plans/ir.md`, "Evidence 선택 속성").
+    ///   A non-terminator with no region.
+    /// - **Meaning:** calls a callable obtained from a lambda, a `func_ref`,
+    ///   a parameter, a capture, a call result, a data projection, or an
+    ///   ability operation result.
+    /// - **Verification:** the local verifier matches the callee signature
+    ///   with the argument and result types. Whole-IR verification follows
+    ///   the callee to check that it is a callable origin, a value whose
+    ///   source signature comes from a declaration (`new-plans/ir.md`,
+    ///   "Callable 출처").
+    /// - **Ownership and value flow:** the callee and arguments are ordinary
+    ///   SSA uses. There is no environment, evidence, or
+    ///   `ContinuationFrame<R>`.
+    /// - **Location:** the source indirect-call span, including the callee
+    ///   and the arguments.
     #[verify]
     #[implements(CallableResultOrigin)]
     fn call_indirect<S: FuncSig>(
@@ -157,6 +301,44 @@ mod tribute_control {
     ) -> Value<S::Result> {
     }
 
+    /// A proper tail call of a named source callable, from source `become`.
+    ///
+    /// ```text
+    /// tribute_control.tail_call %arg0, ... {callee = @f}
+    /// ```
+    ///
+    /// - **Shape:** the source arguments in declaration order,
+    ///   `callee: Symbol`, and optional `evidence_plan` (`new-plans/ir.md`,
+    ///   "Evidence 선택 속성") and `row_args` (`new-plans/ir.md`, "Row 인자와
+    ///   치환"). A terminator with no result or region, registered as a
+    ///   `CallableExit`.
+    /// - **Placement:** it may end the body of a `tribute_control.func` or
+    ///   `lambda`, and in place of `scf.yield` it may end an arm of a
+    ///   one-result `scf.if` in tail position. That arm is a terminal region,
+    ///   and only the arms that end in `scf.yield` produce the operation's
+    ///   result. An `scf.if` is in tail position when its result flows
+    ///   directly into the terminator of the enclosing region: the `return`
+    ///   of a callable body, or the `scf.yield` of an outer arm that is
+    ///   itself in tail position. It is invalid inside a
+    ///   `tribute_control.handle` body or handler region.
+    /// - **Meaning:** a proper tail call of a named source callable. When the
+    ///   call finishes, the callee's result becomes the enclosing callable's
+    ///   result, and no caller frame remains.
+    /// - **Verification:** the local verifier checks the attributes, the
+    ///   placement rule, and that the callee result type equals the enclosing
+    ///   callable's result type. Whole-IR verification, as for
+    ///   `tribute_control.call`, matches the callee signature with `row_args`
+    ///   substituted against the operands and the enclosing callable's
+    ///   result, and once conventions are assigned, checks the convention
+    ///   order. Typechecking owns the source diagnostics for tail position and
+    ///   the handler rule; this check confirms that lowering preserved its
+    ///   result.
+    /// - **Ownership and value flow:** the arguments are ordinary SSA uses,
+    ///   and there is no hidden operand. Shared legalization turns it into a
+    ///   proper tail transfer for every combination of conventions
+    ///   (`new-plans/cps-effects.md`, "Source proper tail call의 적법화").
+    /// - **Location:** the source span including the `become` keyword and
+    ///   the call.
     #[verify]
     #[implements(CallLike, CallableExit)]
     fn tail_call(
@@ -167,6 +349,29 @@ mod tribute_control {
     ) {
     }
 
+    /// A proper tail call of a callable value, from source `become`.
+    ///
+    /// ```text
+    /// tribute_control.tail_call_indirect %callee, %arg0, ...
+    /// ```
+    ///
+    /// - **Shape:** a `tribute_control.func_sig` callee, the source
+    ///   arguments, and an optional `evidence_plan` (`new-plans/ir.md`,
+    ///   "Evidence 선택 속성"). A terminator with no result or region,
+    ///   registered as a `CallableExit`.
+    /// - **Placement:** the same as `tribute_control.tail_call`.
+    /// - **Meaning:** a proper tail call of a callable value.
+    /// - **Verification:** the local verifier checks the callee signature and
+    ///   argument types, the placement rule, that the callee result type
+    ///   equals the enclosing callable's result type, and the shape of
+    ///   `evidence_plan`. Once conventions are assigned, the callee type's
+    ///   convention cannot be stronger than the enclosing callable's.
+    ///   Typechecking owns whether the selection matches the ability row.
+    /// - **Ownership and value flow:** as for `tribute_control.call_indirect`,
+    ///   the environment, evidence, and `ContinuationFrame<R>` are not
+    ///   operands.
+    /// - **Location:** the source span including the `become` keyword and
+    ///   the indirect call.
     #[verify]
     #[implements(CallableExit)]
     fn tail_call_indirect<S: FuncSig>(
@@ -176,12 +381,85 @@ mod tribute_control {
     ) {
     }
 
+    /// Return the enclosing callable's logical result.
+    ///
+    /// ```text
+    /// tribute_control.return %value
+    /// ```
+    ///
+    /// - **Shape:** takes one source-logical result and has no results,
+    ///   attributes, or regions. It is the terminator of a
+    ///   `tribute_control.func` or `lambda` body and is invalid anywhere else.
+    /// - **Meaning:** returns the enclosing callable's logical result.
+    /// - **Local verification:** matches the operand type against the
+    ///   enclosing callable's result.
+    /// - **Ownership and value flow:** consumes an ordinary SSA value.
+    /// - **Location:** the span of the source return or of the implicit
+    ///   body-result expression.
     fn r#return(value: Value<_>) {}
 
     // Direct-style control operations
     /// An ability operation. Its result is a callable origin when it claims
     /// the kind of the declaration it names and has that declaration's
     /// result type.
+    ///
+    /// ```text
+    /// %result = tribute_control.perform %arg0, ... {
+    ///   ability = @State,
+    ///   op_name = "get",
+    ///   operation_kind = "op"
+    /// } : ResultType
+    /// ```
+    ///
+    /// - **Operands:** zero or more already evaluated source arguments in
+    ///   declaration order. The values keep their logical types; conversion
+    ///   handles tuple packing and erasure.
+    /// - **Results:** exactly one logical operation result. A source `Never`
+    ///   result is `core.never`, and does not select a physical `Never`
+    ///   control carrier.
+    /// - **Attributes:** `ability: SymbolRef`, `op_name: String`, and
+    ///   `operation_kind: String` are required. `operation_kind` is exactly
+    ///   `fn` or `op`, copied from the typechecked operation declaration. It
+    ///   is source-semantic metadata, not a lowering hint inferred from a body
+    ///   or a use site. Every source ability invocation uses this operation,
+    ///   and shared conversion does not reclassify the kind.
+    /// - **Regions and block arguments:** none.
+    /// - **Terminator:** no. In direct-style IR this operation is not a
+    ///   terminator.
+    /// - **Meaning:** invokes a source operation with its declared kind. With
+    ///   `operation_kind = "fn"`, the selected handler's result automatically
+    ///   resumes direct-style evaluation; shared conversion captures no
+    ///   continuation and uses the existing tail dispatch path. With
+    ///   `operation_kind = "op"`, a matching handler may resume, in which case
+    ///   execution continues after the operation and `%result` is the result.
+    ///   If it does not resume, the selected general handler completes the
+    ///   matching handle, and the visible suffix is not evaluated. A source
+    ///   `op -> Never` cannot resume, so it neither makes a logical
+    ///   resumption nor captures the visible suffix.
+    /// - **Local verification:** requires the three attributes, checks the
+    ///   `operation_kind` domain, and checks that there is exactly one result,
+    ///   no region, and that the operand and result types are resolved rather
+    ///   than inference variables. The symbol-aware frontend conformance check
+    ///   also confirms that the `fn`/`op` kind, parameter types, and result
+    ///   type of the `ability.decl` that `ability` and `op_name` name agree
+    ///   with the attributes, operands, and result. No verifier may infer the
+    ///   kind from control flow, handlers, result type, or calling convention.
+    ///   The `tribute_control.handler` and containing-handle verifiers apply
+    ///   the per-kind shape of the handler contract to handler entries.
+    /// - **Ownership and value flow:** the operands are ordinary SSA uses.
+    ///   This operation makes no source-visible continuation value;
+    ///   continuation construction belongs to shared CPS conversion. A `"fn"`
+    ///   becomes an `ability.call`/tail dispatch without a continuation, and
+    ///   an `"op"` becomes an `ability.perform`/CPS dispatch that takes the
+    ///   suffix continuation. For `op -> Never`, conversion instead supplies
+    ///   the real zero-capture reject continuation that the existing
+    ///   ability/effect ABI requires, whose body is `func.unreachable`. That
+    ///   continuation captures no source suffix. A null, an in-band sentinel,
+    ///   or an arbitrary `anyref` is not a continuation. The full ABI adapter
+    ///   rules are in `new-plans/cps-effects.md`, "Direct-style control
+    ///   boundary".
+    /// - **Location:** the source location of the ability-operation call,
+    ///   including the qualified callee and all arguments where possible.
     #[implements(OperationDeclarationUse, CallableResultOrigin)]
     fn perform(
         ability: Attr<SymbolRef>,
@@ -195,6 +473,66 @@ mod tribute_control {
     /// becomes it is: the completion region's yield and each general (`op`)
     /// handler's yield. The completion argument is one when the body's yield
     /// is.
+    ///
+    /// ```text
+    /// %answer = tribute_control.handle : AnswerType
+    ///   body {
+    ///     ...
+    ///     tribute_control.yield %body_value
+    ///   }
+    ///   completion(%completed: BodyType) {
+    ///     ...
+    ///     tribute_control.yield %answer_value
+    ///   }
+    ///   handlers {
+    ///     tribute_control.handler ... { ... }
+    ///     ...
+    ///   }
+    /// ```
+    ///
+    /// - **Operands:** none. Values the executable regions capture use
+    ///   ordinary enclosing SSA visibility.
+    /// - **Results:** exactly one logical handle result.
+    /// - **Attributes:** none required. The optional `evidence_plan`
+    ///   (`new-plans/ir.md`, "Evidence 선택 속성") selects the handlers to
+    ///   mask in the outer evidence before the body evidence is made. Dynamic
+    ///   prompt/owner tags and the physical tail-call representation are
+    ///   legalization contracts, not semantic attributes of this operation.
+    /// - **Regions:** exactly three, in the fixed order `body`, `completion`,
+    ///   `handlers`.
+    /// - **Block arguments:** `body` is one block with no arguments.
+    ///   `completion` is one block with exactly one argument, whose type is
+    ///   the type of the value `body` yields. `handlers` is one block with no
+    ///   arguments that holds only `tribute_control.handler` entries.
+    /// - **Terminators:** `body` and `completion` end in
+    ///   `tribute_control.yield`. The `handlers` block is a declarative table
+    ///   with no terminator.
+    /// - **Meaning:** when `body` completes normally, `completion` is
+    ///   evaluated exactly once and its value is returned. A general handler
+    ///   arm that completes without resuming returns the arm value as the
+    ///   handle result and skips `completion`. A tail-resumptive `fn` arm
+    ///   returns the operation result supplied automatically to the suspended
+    ///   computation.
+    /// - **Local verification:** enforces the fixed region count, the
+    ///   single-block shapes, the block-argument counts, the terminators, and
+    ///   yield type equality. It also checks that every direct child of
+    ///   `handlers` is a `tribute_control.handler` with a unique
+    ///   `(ability, op_name)`. The result type must equal the completion yield
+    ///   type and the answer type of every general handler.
+    /// - **Ownership and value flow:** this operation owns the delimited
+    ///   resumption capability that arises when the body performs a
+    ///   resumptive general operation. That capability is exposed only as the
+    ///   `resume_token` block argument of a resumptive general handler entry.
+    ///   Values leave an executable region only through
+    ///   `tribute_control.yield`.
+    /// - **Location:** the whole source `handle` expression. Region and block
+    ///   locations use the matching body, completion arm, and handler-list
+    ///   spans.
+    ///
+    /// The frontend always materializes the completion region. When the
+    /// source has no `do` arm, the region is the identity on the body result.
+    /// This removes an optional structural case from conversion without
+    /// changing source semantics.
     #[verify]
     #[implements(CallableResultOrigin, CallableArgumentOrigin)]
     fn handle(evidence_plan: Option<Attr<[EvidenceStep]>>) -> Value<_> {
@@ -209,6 +547,65 @@ mod tribute_control {
     /// One handler clause. An argument is a callable origin when the clause
     /// claims the kind of the declaration it names and the argument has the
     /// declaration's parameter type at its position.
+    ///
+    /// ```text
+    /// tribute_control.handler {
+    ///   ability = @State,
+    ///   op_name = "get",
+    ///   kind = "op",
+    ///   operation_result_type = ResultType
+    /// } (%arg0: Arg0Type, ..., %resume:
+    ///     tribute_control.resume_token<ResultType, AnswerType>) {
+    ///   ...
+    ///   tribute_control.yield %answer
+    /// }
+    /// ```
+    ///
+    /// - **Operands and results:** none. It is a declarative entry owned by
+    ///   the surrounding `tribute_control.handle`.
+    /// - **Attributes:** `ability: SymbolRef`, `op_name: String`,
+    ///   `kind: String`, and `operation_result_type: Type` are required.
+    ///   `kind` is exactly `fn` or `op`.
+    /// - **Regions:** exactly one executable `body` region with one block.
+    /// - **Block arguments:** the source operation arguments come first, in
+    ///   declaration order and with their logical types. A resumptive `op`
+    ///   entry has one last argument,
+    ///   `resume_token<operation_result_type, handle-result-type>`. An `op`
+    ///   whose `operation_result_type` is source `Never` has no token, and
+    ///   neither does a `fn` entry.
+    /// - **Terminator:** the body ends in `tribute_control.yield`. For `fn`,
+    ///   the yield type equals `operation_result_type` and resumes
+    ///   automatically. For `op`, the yield type equals the token's `answer`
+    ///   type, and when the arm completes without passing control through
+    ///   `resume`, the yield becomes the enclosing handle result. An `op`
+    ///   whose `operation_result_type` is source `Never` has no token, and its
+    ///   yield type must equal the enclosing `tribute_control.handle` result
+    ///   type.
+    /// - **Local verification:** checks the required attributes and their
+    ///   domains, the single block, the last terminator, the token's position
+    ///   and parameters, and the yield rules above. A general handler whose
+    ///   `operation_result_type` is `Never` must have no token argument and no
+    ///   `tribute_control.resume` anywhere in its body, nested regions
+    ///   included. The containing handle's local verifier checks
+    ///   `ContinuationFrame` placement, uniqueness, and equality with the
+    ///   enclosing handle result, including the `op -> Never` yield; the
+    ///   converter checks the same equality and the absence of `resume` before
+    ///   rewriting and reports a violation as a conversion failure. The
+    ///   symbol-aware frontend conformance check also confirms that the
+    ///   referenced declaration's `kind`, argument types, and
+    ///   `operation_result_type` are the same. No verifier reclassifies a
+    ///   general `op` from the shape of its body.
+    /// - **Ownership and value flow:** the last token argument, when present,
+    ///   is affine. It may go unused, dropping the continuation, or have one
+    ///   static ownership path to a `tribute_control.resume`. When a closure
+    ///   captures it, that static path moves into the closure. A copy, store,
+    ///   return, yield, or any other escape is invalid. Static SSA validation
+    ///   cannot prove that a capturing closure is called at most once
+    ///   dynamically, so the lowered resumption must also enforce one-shot
+    ///   consumption at run time and reject or trap on a second call. A `fn`
+    ///   arm or an `op -> Never` arm has no continuation capability.
+    /// - **Location:** the source handler arm, including the operation
+    ///   header.
     #[implements(OperationDeclarationUse, CallableArgumentOrigin)]
     fn handler(
         ability: Attr<SymbolRef>,
@@ -222,6 +619,36 @@ mod tribute_control {
 
     /// A resumption. It returns the result of the handle its token belongs
     /// to, so its result is a callable origin when that result is.
+    ///
+    /// ```text
+    /// %answer = tribute_control.resume %resume, %value : AnswerType
+    /// ```
+    ///
+    /// - **Operands:** exactly two. `%resume` is a
+    ///   `resume_token<InputType, AnswerType>` and `%value` is an
+    ///   `InputType`.
+    /// - **Results:** exactly one `AnswerType`.
+    /// - **Attributes and regions:** only an optional `evidence_plan`
+    ///   (`new-plans/ir.md`, "Evidence 선택 속성"), and no region.
+    /// - **Terminator:** no. Strict work after `resume` stays explicitly in
+    ///   the enclosing region and runs only after the resumed computation
+    ///   returns.
+    /// - **Meaning:** consumes the one-shot resumption of the lexically
+    ///   nearest enclosing general handler, supplies `%value` to the
+    ///   suspended `perform`, and returns the logical result the resumed
+    ///   computation reaches at the handle boundary. It is invalid in a `fn`
+    ///   or `op -> Never` arm.
+    /// - **Local verification:** enforces the operand and result arity and
+    ///   the three type equalities that
+    ///   `resume_token<InputType, AnswerType>` requires.
+    /// - **Ownership and value flow:** consumes the token. The token may
+    ///   reach this operation through an explicit closure capture, but it
+    ///   must keep a single static use-def path from the handler block
+    ///   argument. Affine-use validation follows captures and nested regions,
+    ///   so it is a whole-IR check. When a capture allows repeated dynamic
+    ///   invocation, the converted continuation's run-time one-shot state is
+    ///   the final enforcement boundary.
+    /// - **Location:** the source `resume` expression.
     #[verify]
     #[implements(CallableResultOrigin)]
     fn resume<T: ResumeToken>(
@@ -231,6 +658,23 @@ mod tribute_control {
     ) -> Value<T::Answer> {
     }
 
+    /// End an executable `tribute_control` region with a logical value.
+    ///
+    /// ```text
+    /// tribute_control.yield %value
+    /// ```
+    ///
+    /// - **Operands:** exactly one logical value.
+    /// - **Results, attributes, and regions:** none.
+    /// - **Terminator:** of a `handle` body, completion region, or handler
+    ///   body. It is invalid anywhere else.
+    /// - **Local verification:** enforces its own shape. The owning operation
+    ///   checks the placement and the yield type.
+    /// - **Ownership and value flow:** passes an ordinary logical value to
+    ///   the owning structured operation. A `resume_token` can never be
+    ///   yielded.
+    /// - **Location:** the source expression that makes the region result. A
+    ///   synthesized identity completion uses the owning `handle` location.
     fn r#yield(value: Value<_>) {}
 }
 
