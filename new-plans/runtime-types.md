@@ -46,9 +46,10 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
   포인터이고, capture 필드의 종류는 다른 할당 필드처럼 의미 타입에서 정한다. 필드
   이름은 없다.
   Wasm closure의 descriptor는 [Wasm 배치](#wasm-배치)가 정한다.
-- 배열은 `core.array` 타입마다, 곧 원소 타입마다 하나다. 필드 목록 대신 원소의
-  필드 종류 하나를 가지며, 원소 수는 값마다 다르므로 값이 스스로 가진다. Evidence
-  배열은 위의 compiler 할당 값에 속한다.
+- Native 배열은 `core.array` 타입마다, 곧 원소 타입마다 하나다. 필드 목록 대신
+  원소의 필드 종류 하나를 가지며, 원소 수는 값마다 다르므로 값이 스스로 가진다.
+  Evidence 배열은 위의 compiler 할당 값에 속한다. Wasm 배열의 descriptor는
+  [Wasm 배치](#wasm-배치)가 정한다.
 
 이름만 다르고 모양이 같은 두 struct는 같은 layout을 쓰고 서로 다른 descriptor를
 가진다. 같은 소스 타입을 서로 다른 layout으로 표현하는 일은 없다.
