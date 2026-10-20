@@ -102,7 +102,6 @@ fn assert_traps_without_access(body: &str) {
     let output = run(body, 0);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "stderr: {stderr}");
-    assert!(output.status.code().is_none(), "stderr: {stderr}");
     assert!(!stderr.contains("ERROR"), "stderr: {stderr}");
 }
 

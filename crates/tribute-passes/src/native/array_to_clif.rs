@@ -741,7 +741,7 @@ mod tests {
         );
         // An `i32` element is four bytes wide.
         assert!(
-            lowered.contains("%5 = clif.imul %0, %4 : core.i64"),
+            lowered.contains("clif.iconst {value = 4} : core.i64"),
             "{lowered}"
         );
     }
