@@ -333,7 +333,7 @@ impl From<Location> for Attribute {
 #[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct AttributeMap(Vec<(StringRef, Attribute)>);
 
-/// A key accepted by [`AttributeMap::get`]: the key's text, or its pooled
+/// A key accepted by [`AttributeView::get`]: the key's text, or its pooled
 /// handle.
 pub trait AttributeKey {
     fn matches(&self, strings: &StringPool, key: StringRef) -> bool;

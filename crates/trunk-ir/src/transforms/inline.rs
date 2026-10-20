@@ -317,7 +317,7 @@ pub fn inline_functions(
 /// matches option (b) in issue #680.
 ///
 /// Loops until the applicator reports zero changes, with no artificial
-/// cap. Termination is guaranteed by policy: [`should_inline`] never
+/// cap. Termination is guaranteed by policy: the inliner never
 /// targets recursive or escaping callees, so the subgraph being inlined
 /// is a DAG and every iteration strictly consumes at least one call op
 /// from a finite pool of inlineable call-chain depth. A deeply nested

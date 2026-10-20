@@ -72,7 +72,7 @@ pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
     }
 }
 
-/// PassManager-friendly wrapper for [`lower_closure_lambda`].
+/// Converts each `closure.lambda` into a lifted `func.func` and a `closure.new`.
 pub struct LowerClosureLambda;
 
 impl Pass for LowerClosureLambda {

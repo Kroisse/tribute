@@ -492,7 +492,8 @@ impl RewritePattern for StringConstNativePattern {
     }
 }
 
-/// Pass form of [`analyze_consts`] followed by [`lower`].
+/// Lowers string and bytes constants to `clif.data` objects and RC-managed
+/// allocations.
 pub struct ConstToNative;
 
 impl trunk_ir::pass::Pass for ConstToNative {

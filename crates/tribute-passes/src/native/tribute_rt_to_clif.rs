@@ -472,7 +472,8 @@ impl RewritePattern for UnboxFloatPattern {
     }
 }
 
-/// Pass form of [`lower`].
+/// Lowers `tribute_rt` boxing and unboxing to native allocations, loads, and
+/// stores.
 pub struct TributeRtToClif;
 
 impl trunk_ir::pass::Pass for TributeRtToClif {
