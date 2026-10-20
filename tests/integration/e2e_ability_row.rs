@@ -309,8 +309,8 @@ fn main() ->{Io} Nil {
     assert_output_on_both_targets("ability_row_named_effectful_argument.trb", code, "1");
 }
 
-/// A method call deferred until its receiver's type is solved keeps the
-/// callee's effect row (#1337).
+/// A method call or field modifier deferred until its receiver's type is
+/// solved keeps the callee's effect row (#1337).
 #[test]
 fn test_deferred_method_call_keeps_callee_effect() {
     let code = r#"use std::io::{Io, print_line}
@@ -324,10 +324,21 @@ fn shout(n: Name) ->{Io} Name {
     n
 }
 
+struct Counter { value: Int }
+
 fn main() ->{Io} Nil {
     let name = id(Name { text: "io" }).shout()
     print_line(name.text)
+    let counter = id(Counter { value: +41 }).value::modify(fn(n) {
+        print_line("modify")
+        n + +1
+    })
+    print_line(Int::to_string(counter.value))
 }
 "#;
-    assert_output_on_both_targets("ability_row_deferred_method_effect.trb", code, "shout\nio");
+    assert_output_on_both_targets(
+        "ability_row_deferred_method_effect.trb",
+        code,
+        "shout\nio\nmodify\n42",
+    );
 }
