@@ -170,7 +170,8 @@ class로 읽기 때문이다. 이름 붙은 함수를 그대로 돌려주는 정
 같은 callable convention을 보아야 한다. 이런 변수의 class는 항상 `Cps`다.
 
 Compiler가 생성하는 정의도 같은 규칙을 따른다. 필드의 `modify`는 callback의 row
-변수를 class 변수로 가진다.
+변수를 class 변수로 가진다. 본문이 없는 정의, 곧 extern과 intrinsic 선언은 ABI가 하나인 외부 symbol이므로
+class 변수를 갖지 않는다.
 
 **`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수의 class는 사용처마다 row
 인자에서 계산한다. IR에서 그 row 인자는 사용처의

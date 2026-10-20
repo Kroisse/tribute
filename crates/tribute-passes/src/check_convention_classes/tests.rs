@@ -186,3 +186,20 @@ fn the_pass_fails_with_every_disagreement() {
         "{error}"
     );
 }
+
+#[test]
+fn a_definition_without_a_body_has_no_class_variables() {
+    let input = format!(
+        r#"core.module @m {{
+  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{tail = 0}}, tribute.calling_convention = 2}}>
+  !pure = tribute_control.func_sig<(core.i32) -> core.i32, {{tribute.calling_convention = 0}}>
+{CTL}
+  tribute_control.func @external['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) convention(cps)
+  tribute_control.func @main(%x: core.i32, %f: !pure) -> core.i32 convention(direct) {{
+    %r = tribute_control.call %x, %f {{callee = @external, row_args = [{{}}]}} : core.i32
+    tribute_control.return %r
+  }}
+}}"#
+    );
+    assert_eq!(rules(&input), [""; 0]);
+}
