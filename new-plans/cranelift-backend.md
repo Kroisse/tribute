@@ -140,7 +140,7 @@ Cranelift와 1:1 대응하는 저수준 연산. 각 operation은 Cranelift IR의
 `br_table` 명령에, `clif.switch`는 `cranelift_frontend::Switch`에 대응한다.
 Operation의 이름과 의미는 대응하는 대상을 따르며, Cranelift에 대응 대상이 없는
 operation은 이 dialect에 두지 않는다. 전체 연산 목록은
-[ir.md](ir.md#clif-dialect)를 참조.
+[`clif` dialect 선언](../crates/trunk-ir/src/dialect/clif.rs)을 참조.
 
 핵심 차이점 (`wasm.*` 대비):
 
