@@ -319,10 +319,11 @@ type, exact callable contract와 CFG liveness만 사용한다. RTTI deep-release
 entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 이후
 `core.ptr`는 이미 선택된 explicit RC operation의 physical operand일 뿐이다.
 
-Plan의 RTTI 배치는 plan을 만든 직후 descriptor(struct layout, 또는 enum layout의
-variant 하나)마다 하나의 `tribute_rtti.layout` 선언으로 모듈에 기록한다. 선언이
-담는 내용은 [runtime-types.md](runtime-types.md#ir에서의-표현)를 따른다. index는
-plan의 할당 순서대로 사용자 RTTI index 공간에서 정한다.
+Plan의 RTTI 배치는 plan을 만든 직후 descriptor(struct layout, enum layout의
+variant 하나, 또는 evidence가 아닌 `core.array` 타입)마다 하나의
+`tribute_rtti.layout` 선언으로 모듈에 기록한다. 선언이 담는 내용은
+[runtime-types.md](runtime-types.md#ir에서의-표현)를 따른다. index는 plan의
+할당 순서대로 사용자 RTTI index 공간에서 정한다.
 [Closure 저장 layout](ir.md#closure-저장-layout)의 base와 각 capture layout은
 서로 다른 할당 descriptor이므로 layout마다 RTTI 선언과 release 함수를 가진다. Closure
 layout을 native 표현으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과 그
@@ -356,11 +357,32 @@ layout을 알 필요가 없다. IR을 바꾸기 전에 전체 insertion schedule
 ```text
 Struct: [fields in order, naturally aligned]
 Enum:   [the variant's fields in order, naturally aligned], sized per variant
-Array:  [length: i64] [elements...]
+Array:  [length: i64] [elements, stride = element size]
 Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 ```
 
-`Bytes`의 소유 규칙은 [rc.md](rc.md#bytes)를 따른다.
+`Bytes`의 소유 규칙은 [rc.md](rc.md#bytes)를, 배열의 stride, 할당 크기와 소유
+규칙은 [rc.md](rc.md#array)를 따른다.
+
+[`adt` 배열 operation](ir.md#adt-배열)은 RC header lowering 단계에서 struct 할당과
+함께 낮춘다. 할당은 `__tribute_alloc(16 + len × stride)`로 하고 header에 배열 타입의
+RTTI index를 기록한 뒤 `len`을 payload offset 0에 쓴다.
+
+- `adt.array_new`는 operand를 차례로 원소 자리에 쓴다.
+- `adt.array_new_default`는 원소 영역을 0으로 채운다.
+- `adt.array_splice`는 `source`의 두 범위를 결과의 앞뒤로 복사하고 그 사이에
+  `elements`를 쓴다. 원소가 managed 참조이면 복사한 원소를 차례로 retain한다. 이
+  retain은 plan의 action이 아니라 operation의 일부이며, null 원소는 건너뛴다.
+- `adt.array_get`, `adt.array_set`, `adt.array_len`은 `len`과 원소 자리의
+  `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
+
+범위 검사는 모든 `adt.array_get`, `adt.array_set`, `adt.array_splice` 앞에 둔다.
+`index`와 `len`, `start`, `end`를 부호 없는 정수로 비교하고 전제를 어기면
+`clif.trap`으로 끝낸다. 할당 크기 계산이 넘치는 길이도 trap이다.
+
+배열의 release 함수는 원소 타입마다 하나이며 [rc.md](rc.md#type-specific-release)를
+따른다. 해제 크기는 header 뒤의 `len`에서 계산하므로 release action의 `alloc_size`는
+RTTI dispatch 신호인 0이다.
 
 Native 타입 변환은 [`core.index`](ir.md#coreindex-주소-폭-정수)를 pointer 폭인
 `core.i64`로 바꾼다. Array의 length와 원소 index, `mem.ptr_add`의 offset이 이
