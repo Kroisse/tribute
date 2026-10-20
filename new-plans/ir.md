@@ -1525,30 +1525,28 @@ native는 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast`를 �
 operation은 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로 고정되어 있다.
 Operand 개수나 모양으로 operation의 뜻을 고르지 않는다.
 
-| Operation | 결과 | 원소 타입 |
-| --- | --- | --- |
-| `adt.array_new(elements...)` | operand를 순서대로 담은 배열. 길이는 operand 수이며 0이어도 된다 | 모두 |
-| `adt.array_new_default(length)` | 모든 원소가 `E`의 0 값인 길이 `length`의 배열 | managed 참조가 아닌 타입 |
-| `adt.array_splice(source, start, end, elements...)` | `source[0, start)`, `elements`, `source[end, len)`을 이어 담은 새 배열 | 모두 |
+| Operation | 결과 |
+| --- | --- |
+| `adt.array_new(length, initial)` | 모든 원소가 `initial`인 길이 `length`의 배열 |
+| `adt.array_of(elements...)` | operand를 순서대로 담은 배열. 길이는 operand 수이며 0이어도 된다 |
+| `adt.array_splice(source, start, end, elements...)` | `source[0, start)`, `elements`, `source[end, len)`을 이어 담은 새 배열 |
 
-- `adt.array_new`의 결과 타입은 `type` 속성의 `core.array<E>`이고 모든 operand는
-  `E` 타입이다.
-- `adt.array_new_default`의 0 값은 정수와 부동소수의 0, `false`, null pointer다.
-  Managed 참조 원소는 0 값을 갖지 않는다.
+- 세 operation의 결과 타입은 `type` 속성의 `core.array<E>`이고, `initial`과
+  `elements`는 `E` 타입이다. `adt.array_splice`의 `source`는 결과와 같은 타입이다.
 - `adt.array_splice`는 범위 복사로 만드는 배열이다. `source`를 바꾸지 않고 새
   배열을 결과로 낸다. 원소 하나를 끼우거나(`start = end`), 빼거나(`elements`가
   없고 `end = start + 1`), 바꾸거나, 앞뒤를 잘라 내는 일을 모두 이 operation으로
-  쓴다. 결과 타입은 `source`의 타입과 같다.
-- `adt.array_set`은 배열의 원소 하나를 제자리에서 바꾼다. 원소 타입이 managed
-  참조가 아닌 배열에만 쓸 수 있으며, managed 참조를 담는 배열은 만든 뒤 바뀌지
-  않는다. 원소를 바꾼 배열은 `adt.array_splice`로 새로 만든다. 이 제한은
-  [RC object 그래프의 비순환 계약](rc.md#비순환-object-그래프)을 지키며,
-  `adt.array_set`의 verifier가 원소 타입으로 검사한다.
-- Managed 참조 판정은 `tribute_rtti`의 `ManagedRef` 제약을 따른다. `core.array`
-  자체도 managed 참조다.
+  쓴다.
+- `adt.array_set`은 배열의 원소 하나를 제자리에서 바꾼다. 같은 배열을 가리키는
+  모든 값이 바뀐 원소를 본다. 공유된 배열을 바꾸지 않아야 하는 producer는 원소를
+  바꾼 배열을 `adt.array_splice`로 새로 만든다.
+
+`adt`의 배열 operation은 target이 객체를 회수하는 방식을 가정하지 않는다. Native
+RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 제약은
+[rc.md](rc.md#비순환-object-그래프)가 정한다.
 
 `adt.array_get`과 `adt.array_set`의 index, `adt.array_splice`의 `start`와 `end`,
-`adt.array_new_default`의 `length`, `adt.array_len`의 결과는
+`adt.array_new`의 `length`, `adt.array_len`의 결과는
 [`core.index`](#coreindex-주소-폭-정수)다. 배열의 원소 개수와 위치는 target의 주소
 폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_castsi`나
 `arith.index_castui`로 명시적으로 바꾼다.

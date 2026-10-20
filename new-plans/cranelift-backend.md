@@ -368,11 +368,14 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 함께 낮춘다. 할당은 `__tribute_alloc(16 + len × stride)`로 하고 header에 배열 타입의
 RTTI index를 기록한 뒤 `len`을 payload offset 0에 쓴다.
 
-- `adt.array_new`는 operand를 차례로 원소 자리에 쓴다.
-- `adt.array_new_default`는 원소 영역을 0으로 채운다.
+- `adt.array_new`는 모든 원소 자리에 `initial`을 쓴다. 원소가 managed 참조이면
+  원소마다 `initial`을 retain한다.
+- `adt.array_of`는 operand를 차례로 원소 자리에 쓴다.
 - `adt.array_splice`는 `source`의 두 범위를 결과의 앞뒤로 복사하고 그 사이에
-  `elements`를 쓴다. 원소가 managed 참조이면 복사한 원소를 차례로 retain한다. 이
-  retain은 plan의 action이 아니라 operation의 일부이며, null 원소는 건너뛴다.
+  `elements`를 쓴다. 원소가 managed 참조이면 복사한 원소를 차례로 retain한다.
+- 위 retain은 plan의 action이 아니라 operation의 일부이며, null 원소는 건너뛴다.
+- `adt.array_set`이 managed 원소를 바꾸면 이전 원소를 읽어 plan의 replaced-field
+  release를 적용한 뒤 새 원소를 쓴다.
 - `adt.array_get`, `adt.array_set`, `adt.array_len`은 `len`과 원소 자리의
   `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
 

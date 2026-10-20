@@ -142,8 +142,9 @@ Array: [len: i64] [element: E...]
   크기를 쓴다.
 - Managed 참조 원소는 owned 참조다. `adt.ref_null`이 만든 null도 원소가 될 수
   있으며 retain과 release는 null에 대해 아무것도 하지 않는다.
-- Managed 참조를 담는 배열은 만든 뒤 바뀌지 않는다. 그 밖의 배열은 `adt.array_set`으로
-  원소를 제자리에서 바꿀 수 있다([`adt` 배열](ir.md#adt-배열)).
+- [`adt.array_set`](ir.md#adt-배열)은 원소를 제자리에서 바꾼다. Managed 원소를
+  바꾸는 쓰기는 struct field의 교체와 같은 ownership 규칙과
+  [비순환 계약](#비순환-object-그래프)을 따른다.
 - 배열의 release는 원소가 managed 참조이면 원소를 모두 release한 뒤, `len`을 읽어 위
   크기로 자신을 해제한다.
 
@@ -380,8 +381,8 @@ destination만 unit을 받는다. Unit을 받지 못한 destination마다 branch
 unit을 획득한다.
 
 Aggregate field로의 저장(`adt.struct_new`, `adt.variant_new`, `adt.struct_set`의
-값, `adt.array_new`와 `adt.array_splice`의 `elements`)과 ordinary call의 consumed
-매개변수는 독립된 unit을 받는 자리다. 기준 동작은 그
+값, `adt.array_of`와 `adt.array_splice`의 `elements`, `adt.array_set`의 값)과
+ordinary call의 consumed 매개변수는 독립된 unit을 받는 자리다. 기준 동작은 그
 자리마다 직전에 새 unit을 획득하고 값의 unit은 값에 남긴다. Last-use move 정책을
 켜면 그 operation이 값의 마지막 사용일 때 값의 unit을 그 자리로 옮기고, 획득도 뒤따르는
 final release도 두지 않는다. 마지막 사용은 final release 위치를 정하는 것과 같은
@@ -389,18 +390,22 @@ final release도 두지 않는다. 마지막 사용은 final release 위치를 �
 operation이 값이나 값에서 파생된 borrow를 쓰지 않는다. 옮길 unit이 있어야 하므로
 값은 owned root여야 하며, 파생 borrow와 borrowed 매개변수는 옮기지 않는다. 또한 그
 operation이 값의 root에 닿는 모든 operand가 unit을 받는 자리여야 한다. Indirect
-call의 callee, `adt.struct_set`의 대상, borrowed·retained 매개변수로의 argument,
-`adt.array_splice`의 `source`, 값에서 파생된 borrow는 호출이나 저장 동안 caller의
+call의 callee, `adt.struct_set`과 `adt.array_set`의 대상, borrowed·retained
+매개변수로의 argument, `adt.array_new`의 `initial`, `adt.array_splice`의 `source`,
+값에서 파생된 borrow는 호출이나 저장 동안 caller의
 unit에 기대므로, 이런 operand가
 하나라도 있으면 모든 자리가 기준 동작대로 획득한다. 한 operation이 한 값을 여러
 자리에 넘기면 첫 자리만 unit을 받고 나머지는 획득한다.
 
-`adt.array_splice`는 `source`를 operation 동안 빌린다. `source`에서 결과로 복사하는
-managed 원소의 unit은 operation 자신이 원소마다 하나씩 획득한다. 복사하는 원소의
-수는 실행 때 정해지므로 plan은 이 획득을 action으로 갖지 않으며, release 함수가
-field를 release하는 것처럼 operation의 lowering이 소유한다. 결과는 unit 하나를 갖는
-새 owned 값이다. `adt.array_new_default`와 `adt.array_set`은 managed 원소를 다루지
-않으므로 원소에 대한 action이 없고, 배열 operand는 operation 동안 빌린다.
+`adt.array_new`는 `initial`을, `adt.array_splice`는 `source`를 operation 동안
+빌린다. `initial`을 담은 원소마다, 그리고 `source`에서 결과로 복사한 managed 원소마다
+operation 자신이 unit을 하나씩 획득한다. 이 원소의 수는 실행 때 정해지므로 plan은
+이 획득을 action으로 갖지 않으며, release 함수가 field를 release하는 것처럼
+operation의 lowering이 소유한다. 결과는 unit 하나를 갖는 새 owned 값이다.
+
+`adt.array_set`은 `adt.struct_set`과 같다. 대상 배열은 operation 동안 빌리고, 새
+원소는 위의 저장 자리로 unit을 받으며, 바뀌기 전 원소의 unit은 replaced-field
+release로 release한다.
 
 Owner에서 읽은 borrow는 unit이 없으므로, unit이 필요한 사용(저장, consumed 매개변수,
 return, block argument, proper tail)마다 기준 동작대로 새 unit을 획득한다. 그 owner가
@@ -478,8 +483,8 @@ provenance에서 action을 새로 발견하지 않는다. Duplicate owning desti
 둘 수 없다.
 
 각 materialize된 release는 plan action이 가리키는 type-erasure 전 nominal layout에서
-계산한 **payload size + RC header size**를 가진다. Replaced-field release도 field의
-exact declared layout으로 같은 size를 사용한다. `tribute_rt.anyref`와 `intref`처럼
+계산한 **payload size + RC header size**를 가진다. Replaced-field release도 field나
+배열 원소의 exact declared layout으로 같은 size를 사용한다. `tribute_rt.anyref`와 `intref`처럼
 static nominal layout이 없는 opaque dynamic reference와, variant마다 할당 크기가
 다른 enum 값, capture layout마다 할당 크기가 다른 closure 값, 길이마다 할당 크기가
 다른 배열의 `alloc_size = 0`은
@@ -584,8 +589,10 @@ into control flow and atomic operations by RC lowering.
     같은 함수의 뒤따르는 쓰기나 호출된 함수의 쓰기가 파생 값을 해제할 수 있다. 쓰는
     쪽은 cast와 closure capture를 거쳐 같은 객체에 도달할 수 있으므로 판정은
     특정 SSA 값이 아니라 layout의 nominal identity로 한다.
-  - Managed 원소를 담는 배열은 만든 뒤 바뀌지 않으므로 교체 가능한 layout이 아니다.
-    `adt.array_get`이 읽은 managed 원소는 언제나 borrow할 수 있는 projection이다.
+  - 배열도 같다. Module 안의 어떤 `adt.array_set`이든 쓰는 `core.array` 타입은 교체
+    가능한 layout이며, 그 타입에서 `adt.array_get`이 읽은 managed 원소는 projection
+    직후 자신의 unit을 획득한다. 그 밖의 배열 타입에서 읽은 원소는 borrow할 수 있는
+    projection이다.
 
   이 최적화를 끈 기준 동작은 모든 managed projection이 projection 직후 자신의 unit을
   획득하는 것이다. Exact typed projection 계약을 만족하지 않는 IR은 borrow로도 기준
@@ -876,11 +883,12 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
   One-shot resumption이 소비 여부를 표시하는 쓰기는 unmanaged flag를 쓴다. 두 cell의
   layout은 `adt.struct_set`이 쓰는 [교체 가능한 layout](#3-rc-optimization-pass)이므로
   그 projection은 borrow하지 않는다.
-- **Managed 참조를 담는 배열은 만든 뒤 바뀌지 않는다.** `adt.array_new`와
-  `adt.array_splice`는 operand와 `source`의 원소로 새 배열을 채우므로 struct처럼
-  이미 있는 object만 담는다. 원소를 바꾼 배열은 범위 복사로 새로 만들며, 제자리
-  쓰기인 `adt.array_set`은 managed 참조가 아닌 원소만 쓴다. 이 규칙이 없으면 공유된
-  배열에 그 배열을 capture한 closure를 저장해 순환을 닫을 수 있다.
+- **배열도 만든 뒤 managed 원소가 바뀌지 않는다.** `adt.array_new`,
+  `adt.array_of`, `adt.array_splice`는 operand와 `source`의 원소로 새 배열을 채우므로
+  struct처럼 이미 있는 object만 담는다. Managed 원소를 덮어쓰는 `adt.array_set`을
+  내는 producer는 없다. 공유된 배열에 그 배열을 capture한 closure를 저장하면 순환이
+  닫히므로, 그런 쓰기를 들이는 producer는 completion cell처럼 순환이 생기지 않는
+  근거를 이 절에 둔다. 원소를 바꾼 배열이 필요하면 `adt.array_splice`로 새로 만든다.
 - **Closure는 자신을 capture하지 않는다.** Code 함수는 closure 자신을 environment
   입력으로 받는다([Closure captures](#closure-captures)). 지역 함수가 자기 자신을
   재귀 호출한다면 그 참조는 environment 입력으로 해결하며 capture로 만들지 않는다.
