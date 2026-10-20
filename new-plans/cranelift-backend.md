@@ -380,7 +380,8 @@ RTTI index를 기록한 뒤 `len`을 payload offset 0에 쓴다.
   `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
 
 범위 검사는 모든 `adt.array_get`, `adt.array_set`, `adt.array_splice` 앞에 둔다.
-`index`와 `len`, `start`, `end`를 부호 없는 정수로 비교하고 전제를 어기면
+`adt.array_get`과 `adt.array_set`은 `index < len`을, `adt.array_splice`는
+`start ≤ end`와 `end ≤ len`을 부호 없는 정수로 비교하고 전제를 어기면
 `clif.trap`으로 끝낸다. 할당 크기 계산이 넘치는 길이도 trap이다.
 
 배열의 release 함수는 원소 타입마다 하나이며 [rc.md](rc.md#type-specific-release)를

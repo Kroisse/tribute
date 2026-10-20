@@ -82,11 +82,12 @@ Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 o
 
 - Nominal layout을 마지막으로 해석하는 target 경계가 descriptor를 소유한다. 이
   경계는 `(layout 타입, tag)`마다 번호와 필드 종류를 정해 module 수준
-  `tribute_rtti.layout` 선언으로 남긴다. 배열은 `(core.array 타입, tag 없음)`이다.
-  할당 operation(`adt.struct_new`, `adt.variant_new`, 배열을 만드는
+  `tribute_rtti.layout` 선언으로 남긴다. Native 배열의 descriptor는
+  `(core.array 타입, tag 없음)`이고, Wasm 배열은 descriptor를 갖지 않는다.
+  할당 operation(`adt.struct_new`, `adt.variant_new`, native에서 배열을 만드는
   [`adt` 배열 operation](ir.md#adt-배열))을 내리는 pass는 번호를 스스로 정하지
   않고 이 선언에서 읽어 할당에 새긴 뒤 선언을 지운다. Native는 RC header의
-  RTTI index, Wasm은 객체의 첫 필드에 새긴다.
+  RTTI index, Wasm은 사용자 struct와 variant 객체의 첫 필드에 새긴다.
 - 번호와 레코드는 nominal 이름이 지워지기 전에 확정된다. 그 아래의 이름 없는
   [structural struct](ir.md#nominal-수준과-structural-수준)는 번호만 다루고
   descriptor를 layout 타입에서 다시 찾지 않는다.
