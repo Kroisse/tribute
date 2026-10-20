@@ -497,7 +497,8 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
 - A `core.module` owns the top-level region for a compilation unit.
 - `core.unrealized_conversion_cast` is temporary conversion glue and must not
   remain at target emission boundaries. 두 타입이 모두 `tribute_control.func_sig`이면
-  calling convention을 바꿀 수 없으며, pre-CPS whole-IR 검증에서 이를 거부한다.
+  [convention이 정해진 뒤](#convention과-class-특수화) calling convention을 바꿀 수
+  없으며, pre-CPS whole-IR 검증에서 이를 거부한다.
   이 cast는 callable adapter를 생성하지 않는다. Named callable의 convention 강화는
   declaration provenance가 있는 `tribute_control.func_ref`로 표현하고 shared
   legalization에서 실제 adapter를 생성해야 한다.
@@ -584,6 +585,8 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 
 논리 callable type은
 `tribute_control.func_sig<(Params...) -> Result, {tribute.calling_convention = N}>`이다.
+Convention 속성은 [class 특수화](#convention과-class-특수화)가 쓰며, 그 전의 type에는
+없다.
 It uses flat `[inputs..., results...]` storage with mandatory `num_inputs` and
 `num_results` u32 delimiters; its source-owned validated API requires exactly
 one result. `Result`와 `Params`는 source-logical type이며 기존 code `Direct = 0`,
@@ -651,8 +654,9 @@ tribute_control.func_sig<(T) -> R, {tribute.calling_convention = 2,
   row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬한다. 같은
   instance가 두 번 나오면 두 번 둔다. Evidence 선택이 instance의 위치 수를 세기
   때문이다.
-- **정체성:** signature의 정체성은 입력, 결과, row, convention의 조합이다. 같은
-  row도 인스턴스가 고정한 class에 따라 convention이 다를 수 있다
+- **정체성:** signature의 정체성은 입력, 결과, row의 조합이고,
+  [class 특수화](#convention과-class-특수화) 뒤에는 convention도 포함한다. 같은 row도
+  인스턴스가 고정한 class에 따라 convention이 다를 수 있다
   ([cps-effects.md](cps-effects.md#row와-호출-규약)).
 - **범위:** row는 source-logical 경계 안에만 있다. CPS legalization은
   `func.func_sig`를 만들 때 row를 버리고 [`instantiate`](#tribute_controlinstantiate)를
@@ -677,7 +681,8 @@ binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 �
 
 Tail의 class는 binder 종류에 따라 읽는다. `param`은 그 인스턴스가 고정한 class,
 `ability_arg`와 `body`는 `Cps`다. `local`의 class는 그것을 소유한 람다 복사본이
-고정한 class이며, 그 람다의 callable type에 convention으로 나타난다. 값이 람다가
+고정한 class이며, class 특수화 뒤 그 람다의 callable type에 convention으로
+나타난다. 값이 람다가
 아닌 binding은 한 번 계산되어 표현이 하나이므로, 그 지역 scheme의 변수는 class를
 고르지 않는 `body`다.
 
@@ -698,8 +703,9 @@ tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에 넣�
 
 #### 추론된 row
 
-`inferred_row = true`는 effect 주석을 생략한 정의와 root `main`에 붙는다. 이런
-정의 자신의 convention은 row tail이 그 인스턴스의 class 변수일 때만 tail을 읽는다
+`inferred_row = true`는 effect 주석을 생략한 정의와 root `main`에 붙는다. Class
+특수화가 이런 정의 자신의 convention을 정할 때는 row tail이 그 인스턴스의 class
+변수일 때만 tail을 읽는다
 ([cps-effects.md](cps-effects.md#row와-호출-규약)). 정의의 type이 가진 row는
 그대로다.
 
@@ -731,8 +737,8 @@ Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_a
 양화된 binder마다 row 하나를 넘긴다. 각 row는 `ability_row`와 같은 형식이며 tail은
 참조하는 쪽 정의의 binder index다. Callee에 양화된 binder가 없으면 속성을 생략한다.
 
-참조의 callee symbol은 class 인스턴스 하나를 가리키고, 그 convention은 인스턴스
-정의의 것이다. Row 인자의 class가 인스턴스의 class와 맞는지는
+참조의 callee symbol은 class 특수화 전에는 정의를, 뒤에는 class 인스턴스 하나를
+가리키며, 그 convention은 인스턴스 정의의 것이다. Row 인자의 class가 인스턴스의 class와 맞는지는
 [convention class](cps-effects.md#row-변수의-convention-class) 규칙이 정한다.
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
 type 안의 모든 `func_sig`(자기 자신 포함)에서 tail이 양화된 binder `t`인 row
@@ -745,10 +751,36 @@ type 안의 모든 `func_sig`(자기 자신 포함)에서 tail이 양화된 bind
 `instantiate`의 `row_args`는 대상 람다의 `quantified_rows` 순서를 따른다. `i`번째
 row 인자가 `quantified_rows`의 `i`번째 binder를 대체하며, 치환 규칙은 위와 같다.
 
+#### Convention과 class 특수화
+
+Source-logical IR은 convention에 대해 두 상태를 가진다. Frontend가 내보내는 IR에서는
+어떤 `func_sig`도 `tribute.calling_convention`을 갖지 않는다. CPS 전략의
+[class 특수화 pass](cps-effects.md#class-특수화-pass)가 class 인스턴스와 지역 람다
+복사본을 만들고, 정의, 람다, 값과 block 인자의 타입, 참조의 결과, `ability.operation`의
+타입, tuple layout의 원소까지 모든 `func_sig`에 convention을 쓴다. 상태는 module
+전체의 성질이다. Module이 도달하는 `func_sig` 가운데 일부만 convention을 가지면
+invalid이고, convention이 없는 `func_sig`가 하나라도 있으면 convention이 없는 상태다.
+Legalization은 convention을 가진 상태만 받는다.
+
+Convention에 관한 규칙은 convention을 가진 상태에서만 적용한다.
+
+- `func_ref`의 결과 convention은 대상보다 약하지 않다.
+- `core.unrealized_conversion_cast`는 callable의 convention을 바꾸지 않는다.
+- `tail_call`과 `tail_call_indirect`의 callee convention은 감싼 callable보다 강하지
+  않다.
+- 정의와 람다의 convention, signature 안 callable type의 convention은
+  [CPS 전략](cps-effects.md#row와-호출-규약)이 그 row와 인스턴스의 class에서 계산한
+  값이다. 추론된 row인 정의는 [위 규칙](#추론된-row)을 따른다.
+
+Type의 일치를 요구하는 규칙은 두 상태에서 같다. `call_indirect`의 operand와 결과,
+`instantiate`의 결과, `return`의 operand는 convention을 가진 상태에서 convention까지
+일치한다.
+
 ### 사용자 정의 어셈블리 형식
 
 `tribute_control.func`와 `tribute_control.lambda`만 custom parse/print를 요구한다.
-간결한 convention 문법은 `convention(direct)`,
+Convention이 없는 callable type이면 convention 표기를 생략한다. 간결한 convention 문법은
+`convention(direct)`,
 `convention(evidence_direct)`, `convention(cps)`이며 각각 callable type의
 `tribute.calling_convention = 0`, `1`, `2`로 round trip한다. Parser는 signature와
 keyword로 `tribute_control.func_sig`을 만들고 convention을 type에만 저장한다.
@@ -779,7 +811,7 @@ tribute_control.func @decl(%x: T) -> R convention(direct)
 추가 attribute와 선택적 body를 출력한다. Body가 있으면 entry block label을
 생략하고 signature parameter를 entry argument로 복원하며 declaration은 body가
 없다. `lambda` 형식은 `closure.lambda`처럼 SSA result, 분해된 source
-parameter/result, 필수 convention, 명시적 `captures [...]`, 선택적 추가
+parameter/result, convention, 명시적 `captures [...]`, 선택적 추가
 attribute와 body를 출력하고 entry label을 생략한다. `captures [...]`는 capture가
 없어도 `captures []`로 항상 출력하며 canonical 순서는 convention, captures,
 선택적 attributes, body다.
@@ -845,8 +877,9 @@ tribute_control.func {sym_name = "id", type = !Callable} (%x: T) { ... }
   없고 정의는 source parameter만 block argument로 받는 single-block `body`
   하나이며 `tribute_control.return`으로 끝난다. Foreign ABI 같은 비제어
   attribute는 보존한다.
-- **의미:** source named function의 logical signature와 그 row에서 계산한
-  convention을 정의하며 hidden evidence, environment, `ContinuationFrame<R>`를 포함하지 않는다.
+- **의미:** source named function의 logical signature와 row를 정의하며 hidden
+  evidence, environment, `ContinuationFrame<R>`를 포함하지 않는다. Convention은
+  [class 특수화](#convention과-class-특수화)가 row에서 계산해 쓴다.
 - **검증:** local verifier는 attribute, region, block argument, return type을
   callable type과 맞춘다. Whole-IR verifier는 symbol uniqueness와, 정의 안의 모든
   tail이 `row_binders` 범위 안인지, `row_unions`의 index가 범위 안인지, row의
@@ -954,14 +987,15 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
   필수이며 결과는 `tribute_control.func_sig` 하나다.
 - **의미:** named function을 first-class source value로 만든다. Source가 named
   function을 higher-order value로 사용할 수 있으므로 필요하다. Result는 대상과
-  같은 source signature이며 convention은 대상 worker와 같거나 더 강할 수 있다.
+  같은 source signature이며, convention이 정해진 뒤에는 대상 worker와 같거나 더 강할
+  수 있다.
   바깥 row도 대상의 row를 포함하는 더 넓은 row일 수 있다. 순수 함수를 열린 row의
   callable 자리에 넘기는 포섭이 이 경우다.
 - **검증:** local verifier는 attribute와 result 형상을 검사한다. Whole-IR
   verifier는 symbol resolution과, result가 대상 type에 [`row_args`](#row-인자와-치환)를
   치환한 signature와 바깥 row와 convention을 빼고 같은지, 바깥 row가 치환한 row의
-  instance를 같은 횟수 이상 담고 그 tail이 있으면 같은 tail을 가지는지, 바깥
-  convention이 대상보다 약하지 않은지를 검사한다.
+  instance를 같은 횟수 이상 담고 그 tail이 있으면 같은 tail을 가지는지, convention이
+  정해진 뒤에는 바깥 convention이 대상보다 약하지 않은지를 검사한다.
 - **소유권과 값 흐름:** 결과는 일반 SSA value다.
 - **위치:** named function을 값으로 사용한 source reference span이다.
 
@@ -1028,7 +1062,8 @@ tribute_control.tail_call %arg0, ... {callee = @f}
 - **검증:** local verifier는 attribute, 위치 규칙, callee result type과 감싼
   callable result type의 일치를 검사한다. Whole-IR verifier는
   `tribute_control.call`과 같이 `row_args`를 치환한 callee signature와 operand,
-  감싼 callable의 result를 맞추고 convention 순서를 검사한다.
+  감싼 callable의 result를 맞추고, convention이 정해진 뒤에는 convention 순서를
+  검사한다.
   Tail position과 handler 규칙의 소스 진단은 typechecking이 책임지며 이 검사는
   lowering이 그 결과를 보존했는지 확인한다.
 - **소유권과 값 흐름:** argument는 일반 SSA use이고 hidden operand는 없다.
@@ -1049,7 +1084,8 @@ tribute_control.tail_call_indirect %callee, %arg0, ...
 - **의미:** callable value를 proper tail call한다.
 - **검증:** local verifier는 callee signature와 argument type, 위치 규칙, callee
   result type과 감싼 callable result type의 일치, `evidence_plan` 형상을 검사한다.
-  Callee type의 convention은 감싼 callable의 convention보다 강할 수 없다. 선택이
+  Convention이 정해진 뒤에는 callee type의 convention이 감싼 callable의
+  convention보다 강할 수 없다. 선택이
   ability row와 맞는지는 typechecking이 책임진다.
 - **소유권과 값 흐름:** `tribute_control.call_indirect`와 같이 environment,
   evidence, `ContinuationFrame<R>`는 operand가 아니다.
@@ -1580,7 +1616,7 @@ type map이나 type interner에만 존재하는 layout은 게시된 정의가 �
 <a id="compiler-generated-tuple-layout"></a>
 
 Compiler-generated tuple layout의 이름은 원소의 logical type에서 정해지는 함수이며,
-원소가 callable type이면 그 [row](#ability-row)와 convention을 포함한다. 그래서 row만
+원소가 callable type이면 그 [row](#ability-row)와, 있으면 convention을 포함한다. 그래서 row만
 다른 두 tuple은 다른 layout이고, [row 치환](#row-인자와-치환)은 원소를 치환한 layout을
 같은 함수로 다시 만든다. 이 함수는 IR 계층이 소유하며 frontend와 pass가 함께 쓴다.
 

@@ -166,9 +166,10 @@ Private target runtime helper는 source callable origin이 아니며 physical AB
 
 논리 CPS 결과는 `core.never`이고, 최종 물리적 CPS ABI의 결과 목록은 비어 있다.
 Frontend 진입점은 source-logical IR만 생성하며 physical CPS 생성 옵션이나
-별도의 호환 lowering 경로를 제공하지 않는다. 프론트엔드의 worker convention
-계산은 typechecked callable/effect metadata를 소비하며 continuation을 생성하거나
-ability operation kind를 재분류하지 않는다. Continuation 생성과 제어 이전의
+별도의 호환 lowering 경로를 제공하지 않는다. Worker convention은 CPS 전략의
+[class 특수화 pass](cps-effects.md#class-특수화-pass)가 row와 operation kind에서
+계산하며, 이 pass는 continuation을 생성하거나 ability operation kind를 재분류하지
+않는다. Continuation 생성과 제어 이전의
 적법화는 shared CPS conversion만 소유한다.
 모든 CPS 제어 이전은 직접 또는 간접 꼬리 호출로 이루어진다. 최종 backend-ready
 IR의 계약은 CPS 제어 결과로 쓰이는 `anyref`, 비공개 제어 열거형, `Step`,

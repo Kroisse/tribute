@@ -81,9 +81,11 @@ frontend가 각 `tribute_control.perform.operation_kind`에 이를 복사한다.
 `tribute_control_to_cps`는 이를 직접 소비하며 `CallingConvention`, handler-body
 analysis, ability-row bound 중 어느 것도 kind를 재구성하거나 변경하지 않는다.
 
-Typechecking은 convention을 계산하지 않는다. Function type은 ability row만 가지며,
-type 추론과 unification은 convention을 보지 않는다. Convention은 typechecking 뒤의
-특수화와 source-logical lowering이 row와 ability의 operation kind에서 계산한다.
+Typechecking과 frontend는 convention을 계산하지 않는다. Function type은 ability
+row만 가지며, type 추론과 unification은 convention을 보지 않는다. Frontend가
+내보내는 source-logical IR에도 convention이 없다. Convention은 CPS 전략의
+[class 특수화 pass](#class-특수화-pass)가 row와 ability의 operation kind에서
+계산한다.
 
 Ability annotation 생략은 closed-empty 추론이 아니다.
 
@@ -115,8 +117,8 @@ Direct이고, 명시적인 `->{}`도 닫힌 빈 row이므로 Direct다.
 [값 delimiter](#값-delimiter) 안에서 실행한다. 호출자의 convention은
 호출 대상의 본문 때문에 달라지지 않는다.
 
-`let`으로 묶인 람다도 같은 규칙을 따른다. Frontend는 한 람다 식을 쓰이는
-convention마다 한 번씩 생성한다.
+`let`으로 묶인 람다도 같은 규칙을 따른다. Class 특수화 pass가 한 람다를 쓰이는
+class 조합마다 한 번씩 만든다.
 
 여기서 `Cps`는 source result를 직접 반환하지 않고 ContinuationFrame의 `Done<R>`으로
 전달한다는 논리적 convention이다. Lowering은 `core.never`를 empty-result proper tail
@@ -178,7 +180,7 @@ convention과 본문의 참조를 그 class로 읽으므로, 본문이 참조하
 따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의
 class가 정해진 뒤에 계산한다.
 
-**Class 인자.** 참조 지점의 class 인자는 checked instance가 기록한 row 인자에서
+**Class 인자.** 참조 지점의 class 인자는 참조가 넘기는 row 인자(`row_args`)에서
 계산한다. Callable 타입에서 역추론하지 않는다.
 
 ```text
@@ -192,16 +194,17 @@ class(e) = 참조를 포함한 인스턴스가 e에 고정한 class   (e가 그 
 `requirement`는 ability 단위의
 [convention bound](#row와-호출-규약)다.
 
-**인스턴스.** 인스턴스 key는 `(선언, 타입 인자, class 인자)`다. Clone의 NodeId를
-구별하는 값도 타입 인자와 class 인자를 함께 반영한다. Class 인자가 모두 `Cps`인
-인스턴스는 class 특수화가 없는 정의와 같은 convention과 이름을 가진다.
+**인스턴스.** 인스턴스 key는 `(정의, class 인자)`다. 타입 인자는 frontend의 타입
+특수화가 이미 정의 하나로 만들어 두었으므로 key의 정의가 그것을 대신한다. Class
+인자가 모두 `Cps`인 인스턴스는 class 특수화가 없는 정의와 같은 convention과 이름을
+가진다.
 
 Root `main`은 참조 없이 존재하는 인스턴스다. 그 row를 instantiate하는 호출자가
 없으므로 tail은 비어 있고, class 변수는 모두 `Direct`로 고정한다.
 
 **인스턴스 안에서의 규칙.** 인스턴스는 class 변수에서 class로 가는 표를 가진다.
-Lowering이 row의 convention을 계산할 때 tail이 표에 있으면 그 class를 쓰고, 없으면
-열린 row의 규칙대로 `Cps`를 쓴다. 매개변수의 callable 타입, 그 callable의 호출,
+Class 특수화 pass가 row의 convention을 계산할 때 tail이 표에 있으면 그 class를 쓰고,
+없으면 열린 row의 규칙대로 `Cps`를 쓴다. 매개변수의 callable 타입, 그 callable의 호출,
 인스턴스 자신의 worker convention이 모두 이 표를 따른다. 따라서 호출자가 넘긴
 callable의 convention과 인스턴스가 기대하는 convention이 class 인자에서 함께
 정해진다.
@@ -210,8 +213,33 @@ Class 특수화는 row를 스킴이나 metadata에 치환하지 않는다. 호�
 typechecking이 원래 정의에 대해 계산한 것을 그대로 물려받으며 다시 계산하지 않는다.
 Evidence를 받지 않는 convention의 호출에는 선택을 싣지 않는다.
 
-Class 값은 셋뿐이므로 class 변수가 `n`개인 정의의 인스턴스는 타입 인자 조합마다
-최대 `3ⁿ`개다. 재귀가 새 class 인자를 만들어도 이 한도 안에서 고정점에 도달한다.
+Class 값은 셋뿐이므로 class 변수가 `n`개인 정의의 인스턴스는 최대 `3ⁿ`개다. 재귀가
+새 class 인자를 만들어도 이 한도 안에서 고정점에 도달한다.
+
+### Class 특수화 pass
+
+Class 특수화는 CPS 전략의 첫 pass이며 `tribute_control` 적법화 바로 앞에서 실행한다.
+입력은 frontend가 내보낸 class 없는 source-logical IR이다. 타입 인자마다 정의 하나,
+row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
+[`quantified_rows`와 `instantiate`](ir.md#지역-람다의-양화와-인스턴스화)를 가지며
+`func_sig`에 convention이 없다. Pass는 다음을 한다.
+
+- 위 규칙으로 정의마다 class 변수를 정하고, root `main`과 참조의 class 인자에서 필요한
+  인스턴스를 모은다.
+- 정의를 인스턴스마다 복제한다. Class 인자가 모두 `Cps`가 아닌 인스턴스의 이름은 정의
+  이름 뒤에 `$9`와 class 변수마다 `D`(`Direct`), `E`(`EvidenceDirect`), `C`(`Cps`) 한
+  글자를 붙인 것이다. 타입 인자 조각은 숫자로 시작하지 않으므로 이 접미사와 섞이지
+  않는다. 참조는 자기 class 인자의 인스턴스를 가리키도록 바꾼다.
+- 인스턴스 안에서 `let`에 묶인 람다를 그 `instantiate`들이 고르는 class 조합마다
+  복제하고 각 `instantiate`를 자기 조합의 복사본으로 연결한다.
+- 모든 `func_sig`에 convention을 쓴다. 정의, 람다, 값과 block 인자의 타입, 참조의 결과,
+  `ability.operation`의 타입과 tuple layout의 원소가 모두 포함된다.
+  [추론된 row](ir.md#추론된-row)인 정의 자신의 convention은 tail이 class 변수일 때만
+  tail을 읽는다.
+
+참조되지 않게 된 정의는 pass가 지우지 않으며, 뒤따르는 참조되지 않는 정의 제거가
+지운다. Pass의 결과는 convention을 가진 source-logical IR이고, 적법화는 이 상태만
+받는다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="direct-style-control-boundary"></a>
@@ -1027,7 +1055,10 @@ Callable/control과 effect 관련 pass의 순서는 다음과 같다:
 생성은 exact root contract에 따르며, 별도의 호환 closure-lowering 경로는 두지 않는다.
 
 ```text
-ast_to_ir (tribute_control callable/control + ordinary value IR)
+ast_to_ir (tribute_control callable/control + ordinary value IR, convention 없음)
+→ 참조되지 않는 정의 제거
+→ class 특수화
+→ 참조되지 않는 정의 제거
 → tribute_control_to_cps
 → lower_continuation_frames
 → lower_closure_lambda
