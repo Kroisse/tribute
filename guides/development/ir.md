@@ -41,7 +41,11 @@ The frontend emits `tribute_control` callable/control operations with exact
 source signatures and checked operation kinds. Shared `tribute_control_to_cps`
 legalization alone constructs continuations and the `func`/`closure` graph.
 Target ABI lowering validates that graph before physicalizing CPS results and
-selecting closure storage. See [the IR contract](../../new-plans/ir.md) and
+selecting closure storage. Each operation's own contract is the doc comment
+on its declaration in
+[`tribute_control`](../../crates/tribute-ir/src/dialect/tribute_control.rs) and
+[`ability`](../../crates/tribute-ir/src/dialect/ability.rs). See
+[the IR contract](../../new-plans/ir.md) for the rules that span operations, and
 [the shared pipeline](../../new-plans/cps-effects.md#shared-middle-end-pipeline).
 
 The target [representation/ABI boundary](../../new-plans/ir.md#representationabi-경계)
@@ -55,6 +59,14 @@ stage order is in the top-of-file comment in [src/pipeline.rs](../../src/pipelin
 
 Operations and types are defined with the `#[trunk_ir::dialect]` attribute
 macro on a `mod`; it takes no arguments.
+
+The doc comment on an operation or type declaration is copied onto its
+generated wrapper. It states that one entity's contract: its shape, meaning,
+verification, ownership and value flow, and location, with its textual form
+in a `text` code block. It is authoritative for that entity; rules that span
+entities stay in [`new-plans/`](../../new-plans/). Write it in English and
+refer to `new-plans/` sections by file and heading rather than Markdown links,
+which rustdoc cannot resolve.
 
 - `struct` definitions generate typed type wrappers. IR type parameters are
   declared in `<..>`, where `#[rest]` marks a variadic last one, and type
