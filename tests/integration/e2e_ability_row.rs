@@ -7,7 +7,7 @@
 
 use crate::common;
 
-use common::assert_native_output;
+use common::{assert_native_output, assert_output_on_both_targets};
 
 // =============================================================================
 // Ability Row Polymorphism Tests
@@ -273,4 +273,61 @@ fn main() -> Nil {
 "#;
     // each(bump) → 1 + 20, asks() → 1 + 20
     assert_native_output("ability_row_late_method.trb", code, "42");
+}
+
+/// Passing a named effectful function to a callee with a single row tail and
+/// then performing the same ability in the handled body (#1332).
+#[test]
+fn test_named_effectful_function_then_same_ability_in_handled_body() {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn apply(f: fn() ->{e} a) ->{e} a { f() }
+
+fn inc() ->{State(Int)} Nil { State::set(State::get() + +1) }
+
+fn main() ->{Io} Nil {
+    let n = run_state(fn() {
+        apply(inc)
+        State::get()
+    }, +0)
+    print_line(Int::to_string(n))
+}
+"#;
+    assert_output_on_both_targets("ability_row_named_effectful_argument.trb", code, "1");
+}
+
+/// A method call deferred until its receiver's type is solved keeps the
+/// callee's effect row (#1337).
+#[test]
+fn test_deferred_method_call_keeps_callee_effect() {
+    let code = r#"use std::io::{Io, print_line}
+
+struct Name { text: String }
+
+fn id(x: a) -> a { x }
+
+fn shout(n: Name) ->{Io} Name {
+    print_line("shout")
+    n
+}
+
+fn main() ->{Io} Nil {
+    let name = id(Name { text: "io" }).shout()
+    print_line(name.text)
+}
+"#;
+    assert_output_on_both_targets("ability_row_deferred_method_effect.trb", code, "shout\nio");
 }

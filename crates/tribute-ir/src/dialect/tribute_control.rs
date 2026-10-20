@@ -3530,6 +3530,12 @@ fn callable_has_semantic_provenance(
                     && ctx.op_operands(producer).first().is_some_and(|callee| {
                         callable_has_semantic_provenance(ctx, *callee, provenance, visiting)
                     }))
+                || perform_has_declared_callable_result(
+                    ctx,
+                    producer,
+                    ctx.value_ty(value),
+                    provenance,
+                )
                 || list::Head::from_op(ctx, producer).is_ok_and(|head| {
                     head.element_type(ctx) == ctx.value_ty(value)
                         && ctx.op_result_types(producer) == [ctx.value_ty(value)]
@@ -3542,6 +3548,31 @@ fn callable_has_semantic_provenance(
                 )
         }
     }
+}
+
+fn perform_has_declared_callable_result(
+    ctx: &IrContext,
+    producer: OpRef,
+    result_type: TypeRef,
+    provenance: &CallableProvenance<'_>,
+) -> bool {
+    if !Perform::matches(ctx, producer) || ctx.op_result_types(producer) != [result_type] {
+        return false;
+    }
+    let attrs = ctx.op_attrs(producer);
+    let (Some(ability), Some(name), Some(kind)) = (
+        attrs.get_symbol_ref("ability"),
+        attrs.get_string_ref("op_name"),
+        attrs.get_string_ref("operation_kind"),
+    ) else {
+        return false;
+    };
+    provenance
+        .declarations
+        .get(&(ability, name))
+        .is_some_and(|declaration| {
+            declaration.kind == kind && declaration.result_type == result_type
+        })
 }
 
 fn verified_callable_declaration(
@@ -6894,6 +6925,41 @@ mod tests {
             validate(&ctx, module, &[], &mut Default::default())
         };
         assert!(result.is_ok(), "{result}");
+    }
+
+    fn performed_callable_module(declared_result: &str) -> String {
+        format!(
+            r#"core.module @test {{
+  !F = tribute_control.func_sig<(core.i32) -> core.i32, {{tribute.calling_convention = 0}}>
+  tribute_control.func @run(%value: core.i32) -> core.i32 convention(cps) {{
+    %callee = tribute_control.perform {{ability = @Reader, op_name = "read", operation_kind = "fn"}} : !F
+    %result = tribute_control.call_indirect %callee, %value : core.i32
+    tribute_control.return %result
+  }}
+  ability.decl {{sym_name = "Reader"}} {{
+    ability.operation {{kind = "fn", op_name = "read", param_types = [], result_type = {declared_result}}}
+  }}
+}}"#
+        )
+    }
+
+    #[test]
+    fn declared_perform_result_has_callable_provenance() {
+        let (ctx, module) = parse_fixture(&performed_callable_module("!F"));
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn perform_result_needs_the_declared_callable_type() {
+        let (ctx, module) = parse_fixture(&performed_callable_module("core.i32"));
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(
+            messages(&result).contains("callable provenance"),
+            "{result}"
+        );
     }
 
     #[test]

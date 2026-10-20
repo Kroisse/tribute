@@ -313,3 +313,44 @@ mod shapes {
         );
     }
 }
+
+/// A function in a module out of scope is no candidate of a method call, even
+/// when it is the only one the receiver's type fits; the call checks against
+/// the function in scope. Importing the module makes it a candidate.
+#[salsa_test]
+fn methods_out_of_scope_are_not_chosen_by_type(db: &salsa::DatabaseImpl) {
+    let check = |import: &str, receiver: &str| {
+        errors(
+            db,
+            &format!(
+                r#"
+mod outer {{
+    pub mod hidden {{
+        pub fn twice(x: Int) -> Int {{ x * +2 }}
+    }}
+}}
+{import}
+fn twice(x: Nat) -> Nat {{ x + x }}
+
+fn id(x: a) -> a {{ x }}
+
+fn main() -> Nil {{
+    let n = +21
+    let _ = {receiver}.twice()
+}}
+"#
+            ),
+        )
+    };
+    for receiver in ["n", "id(n)"] {
+        let errors = check("", receiver);
+        assert!(
+            errors
+                .iter()
+                .any(|message| message.contains("expected `Nat`, found `Int`")),
+            "{receiver}: {errors:#?}"
+        );
+        let errors = check("use outer::hidden", receiver);
+        assert!(errors.is_empty(), "{receiver}: {errors:#?}");
+    }
+}

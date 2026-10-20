@@ -5,7 +5,10 @@
 
 use crate::common;
 
-use common::{assert_native_output, compile_and_run_native, compile_and_run_native_asan};
+use common::{
+    assert_native_output, assert_output_on_both_targets, compile_and_run_native,
+    compile_and_run_native_asan,
+};
 
 fn cps_control_read_outcome_program() -> &'static str {
     r#"
@@ -1665,4 +1668,44 @@ fn main() ->{Io} Nil {
         assert!(output.status.success(), "stderr: {stderr}");
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42\n8\n210");
     }
+}
+
+/// An ability operation whose declared result is a function returns a callable
+/// value that the performing body can call (#1470).
+#[test]
+fn test_ability_operation_returns_callable_value() {
+    let source = r#"use std::io::{Io, print_line}
+
+ability Reader(r) {
+    fn read() -> r
+}
+
+ability Cell(c) {
+    op get() -> c
+}
+
+fn apply_reader(n: Int) ->{Reader(fn(Int) ->{} Int)} Int {
+    let f = Reader::read()
+    f(n)
+}
+
+fn apply_cell(n: Int) ->{Cell(fn(Int) ->{} Int)} Int {
+    let f = Cell::get()
+    f(n)
+}
+
+fn main() ->{Io} Nil {
+    let read = handle apply_reader(+41) {
+        do result { result }
+        fn Reader::read() { fn(n) n + +1 }
+    }
+    print_line(Int::to_string(read))
+    let got = handle apply_cell(+20) {
+        do result { result }
+        op Cell::get() { resume fn(n) n * +2 }
+    }
+    print_line(Int::to_string(got))
+}
+"#;
+    assert_output_on_both_targets("ability_operation_returns_callable.trb", source, "42\n40");
 }
