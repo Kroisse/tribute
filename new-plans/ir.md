@@ -1858,8 +1858,10 @@ arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의�
 규칙으로 분류한다. 금지 목록뿐 아니라 보존 목록에도 없는 언어 전용
 `tribute.*` 속성은 분류되지 않은 metadata로 보고한다. 새 언어 전용 속성은 금지 또는
 보존 중 하나로 분류된 뒤에만 출구를 넘을 수 있다. 입력과 결과 타입이 같은
-unrealized cast, 대상 함수의 signature와 다른 타입의 `func.constant`도 위반으로
-보고한다. 매개변수 ownership 계약도 검사한다. `call_conv = "tail"`인 signature의
+unrealized cast, scalar(`core.i32`·`core.i1`·`core.f64`, `tribute_rt.int`·`nat`·
+`bool`·`float`)와 `tribute_rt.anyref` 사이의 unrealized cast, 대상 함수의
+signature와 다른 타입의 `func.constant`도 위반으로 보고한다. 매개변수 ownership
+계약도 검사한다. `call_conv = "tail"`인 signature의
 입력에 `tribute.ownership = "consumed"`가 없거나, `tribute.ownership` 값이
 `"consumed"`가 아니면 위반이다. Root `main`이 있으면 그것이 매개변수가 없고 결과가
 `Nil`이며 platform 규약을 따르는 정의인지도 검사한다. 위반이 하나라도 있으면
@@ -1869,6 +1871,10 @@ target dialect lowering에 들어가기 전에 컴파일이 실패한다. 이 �
 
 Boxing과 unboxing은 변환을 만든 pass가 이미 만들었으므로, 출구에 남는
 `core.unrealized_conversion_cast`는 타입만 바꾸며 target type 변환을 기다린다.
+Scalar와 `tribute_rt.anyref` 사이의 cast가 출구에 남았다면 그 cast를 만든 pass가
+boxing·unboxing을 직접 만들지 않은 것이다. 그대로 두면 target type 변환이 native
+ownership/RTTI 계획 뒤에 box를 만들어 그 계획이 보지 못한 managed 값이 생기므로,
+출구 검증이 이를 거부한다.
 이런 cast의 적법성은 target 타입에 따라 정해지므로 target type 변환이 결과
 타입을 변환하고 필요한 representation 변경을 materialize한다. 그 끝에서 converter
 없는 `ReconcileUnrealizedCasts` pass가 cast를 닫으며, 그 뒤 남은 cast는 target emission

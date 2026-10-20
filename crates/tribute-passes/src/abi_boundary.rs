@@ -102,6 +102,10 @@ pub enum ViolationKind {
     /// An unrealized cast whose source already has the declared type.
     #[display("identity unrealized cast")]
     IdentityCast,
+    /// An unrealized cast between a scalar and `tribute_rt.anyref`, which the
+    /// pass that created it must have boxed or unboxed.
+    #[display("unrealized cast between a scalar and tribute_rt.anyref")]
+    RepresentationCast,
     /// A `func.constant` whose type is not its target's exact signature.
     #[display("function reference differs from its target signature")]
     ReferenceSignatureMismatch,
@@ -295,10 +299,14 @@ impl<'a> Verifier<'a> {
                 }
             }
         }
-        if let Ok(cast) = core::UnrealizedConversionCast::from_op(ctx, op)
-            && ctx.value_ty(cast.value(ctx)) == ctx.value_ty(cast.result(ctx))
-        {
-            self.report(ViolationKind::IdentityCast, Some(op), op_name.clone());
+        if let Ok(cast) = core::UnrealizedConversionCast::from_op(ctx, op) {
+            let from = ctx.value_ty(cast.value(ctx));
+            let to = ctx.value_ty(cast.result(ctx));
+            if from == to {
+                self.report(ViolationKind::IdentityCast, Some(op), op_name.clone());
+            } else if tribute_ir::dialect::tribute_rt::changes_representation(ctx, from, to) {
+                self.report(ViolationKind::RepresentationCast, Some(op), op_name.clone());
+            }
         }
         if let Ok(constant) = func::Constant::from_op(ctx, op) {
             let target = constant.func_ref(ctx);
@@ -685,6 +693,50 @@ mod tests {
         assert!(violations.contains(&ViolationKind::NeverCallableResult));
         assert!(violations.contains(&ViolationKind::IdentityCast));
         assert!(violations.contains(&ViolationKind::ReferenceSignatureMismatch));
+    }
+
+    #[test]
+    fn casts_between_scalars_and_anyref_are_reported() {
+        for scalar in [
+            "core.i32",
+            "core.i1",
+            "core.f64",
+            "tribute_rt.int",
+            "tribute_rt.nat",
+            "tribute_rt.bool",
+            "tribute_rt.float",
+        ] {
+            let module = format!(
+                r#"core.module @test {{
+  func.func @run(%value: {scalar}, %erased: tribute_rt.anyref) {{
+    %boxed = core.unrealized_conversion_cast %value : tribute_rt.anyref
+    %unboxed = core.unrealized_conversion_cast %erased : {scalar}
+    func.return
+  }}
+}}"#
+            );
+            assert_eq!(
+                kinds(&module),
+                [
+                    ViolationKind::RepresentationCast,
+                    ViolationKind::RepresentationCast,
+                ],
+                "{scalar}"
+            );
+        }
+        assert_eq!(
+            kinds(
+                r#"core.module @test {
+  func.func @run(%pointer: core.ptr, %erased: tribute_rt.anyref, %value: core.i32) {
+    %retyped = core.unrealized_conversion_cast %pointer : tribute_rt.anyref
+    %restored = core.unrealized_conversion_cast %erased : core.ptr
+    %widened = core.unrealized_conversion_cast %value : core.i64
+    func.return
+  }
+}"#
+            ),
+            []
+        );
     }
 
     #[test]
