@@ -8,6 +8,7 @@ reviews:
     # `@coderabbitai review` when a later push needs one.
     auto_incremental_review: false
     ignore_title_keywords:
+      - "ci:"
       - "ci("
       - "chore(deps"
       - "[skip review]"
