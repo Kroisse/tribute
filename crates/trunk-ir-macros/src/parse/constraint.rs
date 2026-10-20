@@ -613,6 +613,7 @@ pub(super) fn parse_typed_operation(
         asm_format: None,
         implements: Vec::new(),
         flags: Vec::new(),
+        docs: Vec::new(),
     })
 }
 

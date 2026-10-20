@@ -47,6 +47,8 @@ pub struct OperationDef {
     pub implements: Vec<PathEntry>,
     /// `#[flags(..)]`: the operation flags the definition declares.
     pub flags: Vec<PathEntry>,
+    /// Doc comments, forwarded to the wrapper struct.
+    pub docs: Vec<proc_macro2::Group>,
 }
 
 /// One entry of `#[implements(..)]` or `#[flags(..)]`: an interface trait's
@@ -329,6 +331,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             op.asm_format = asm_format;
             op.implements = implements.unwrap_or_default();
             op.flags = flags.unwrap_or_default();
+            op.docs = docs;
             Ok(DialectItem::Operation(op))
         }
         "struct" => {

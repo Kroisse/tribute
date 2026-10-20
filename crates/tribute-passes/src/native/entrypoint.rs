@@ -160,7 +160,7 @@ fn replace_with_exit_code(
     ctx.remove_op(ret);
 }
 
-/// Pass form of [`generate_native_entrypoint`].
+/// Adapts the root wrapper `main` into the native C ABI entrypoint.
 pub struct GenerateNativeEntrypoint {
     /// Whether the entrypoint initializes the sanitizer runtime.
     pub sanitize: bool,

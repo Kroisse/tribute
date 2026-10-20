@@ -61,8 +61,10 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
     let def = gen_op_def(crate_path, dialect, op);
     let def_static = format_ident!("__{}_DEF", op_name.to_shouty_snake_case());
     let interfaces = gen_interface_registrations(crate_path, &sname, &op.implements);
+    let docs = &op.docs;
 
     quote! {
+        #(# #docs)*
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub struct #sname(#crate_path::OpRef);
 

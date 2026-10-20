@@ -2,10 +2,9 @@
 //!
 //! Native ownership planning declares each runtime type descriptor, a struct
 //! allocation layout, one variant of an enum allocation layout, or an array
-//! type, with its
-//! `rtti_idx` and field kinds as a `tribute_rtti.layout` operation
-//! ([`declare_rtti_layouts`]). This pass reads those declarations and
-//! generates per-descriptor release functions that recursively release typed
+//! type, with its `rtti_idx` and field kinds as a `tribute_rtti.layout`
+//! operation. This pass reads those declarations and generates
+//! per-descriptor release functions that recursively release typed
 //! managed-reference fields before deallocating the aggregate itself, and the
 //! descriptor records ([`super::descriptor_records`]) that describe each index.
 //!
@@ -1010,7 +1009,8 @@ pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, Typ
     .as_type_ref()
 }
 
-/// Pass form of [`generate_rtti`].
+/// Generates per-descriptor release functions, the RTTI table, and
+/// `__tribute_deep_release`.
 pub struct GenerateRtti;
 
 impl trunk_ir::pass::Pass for GenerateRtti {

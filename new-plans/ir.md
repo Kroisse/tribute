@@ -618,6 +618,12 @@ resolution을 검사하며 physical `func.func_sig`나 `closure.closure`를 comp
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 
+Operation 하나의 형상, 의미, 검증, 소유권, 위치 계약은 그 operation의
+`#[dialect]` 선언 doc comment가 정한다
+([`tribute_control`](../crates/tribute-ir/src/dialect/tribute_control.rs),
+[`ability`](../crates/tribute-ir/src/dialect/ability.rs)). 이 문서는 여러
+operation에 걸친 규칙만 다룬다.
+
 `func.constant`, `func.unreachable`의 logical 복제는 없다. Named function value는
 `func_ref`가 표현한다. Source [`become`](syntax.md#tail-call-become)은
 `tribute_control.tail_call`/`tail_call_indirect`로 나타나며, 이 두 operation이
@@ -649,7 +655,9 @@ tribute_control.func_sig<(T) -> R, {tribute.calling_convention = 2,
     ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}>
 ```
 
-- **값:** `instances`는 [`ability.decl`](#abilitydecl)에 대한 symbol 참조 목록이고
+- **값:** `instances`는
+  [`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)에 대한 symbol
+  참조 목록이고
   `tail`은 둘러싼 정의의 [row binder](#row-binder) index다. 둘 다 없으면 닫힌 빈
   row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬한다. 같은
   instance가 두 번 나오면 두 번 둔다. Evidence 선택이 instance의 위치 수를 세기
@@ -659,7 +667,7 @@ tribute_control.func_sig<(T) -> R, {tribute.calling_convention = 2,
   인스턴스가 고정한 class에 따라 convention이 다를 수 있다
   ([cps-effects.md](cps-effects.md#row와-호출-규약)).
 - **범위:** row는 source-logical 경계 안에만 있다. CPS legalization은
-  `func.func_sig`를 만들 때 row를 버리고 [`instantiate`](#tribute_controlinstantiate)를
+  `func.func_sig`를 만들 때 row를 버리고 [`instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)를
   피연산자로 대체하며, representation/ABI 경계의 출구는 row와 아래 속성들을 거부한다.
 
 #### Row binder
@@ -688,7 +696,7 @@ Tail의 class는 binder 종류에 따라 읽는다. `param`은 그 인스턴스�
 
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
 인자, operation 결과, tuple layout의 원소가 모두 같다. Type은 binder를 도입하지
-않는다. Module 수준의 type에는 둘러싼 정의가 없으므로 [`ability.operation`](#abilitydecl)의
+않는다. Module 수준의 type에는 둘러싼 정의가 없으므로 [`ability.operation`](../crates/tribute-ir/src/dialect/ability.rs)의
 type은 tail을 가질 수 없다.
 
 #### Tail의 합집합
@@ -718,7 +726,7 @@ binder를 만들지는 않는다. 모든 `local` binder는 정확히 한 람다�
 `quantified_rows`의 원소는 모두 `local` binder다. 일반화된 binding을 class마다 복사한
 람다는 복사본마다 자기 binder를 소유한다.
 
-이런 람다의 모든 사용은 [`tribute_control.instantiate`](#tribute_controlinstantiate)를
+이런 람다의 모든 사용은 [`tribute_control.instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)를
 거친다. 호출뿐 아니라 인자로 넘기거나 다른 값에 담는 사용도 같다. 다른 지역 람다의
 본문 안에 있는 사용도 그 자리의 `instantiate`이며, row 인자의 tail은 바깥 람다가
 소유한 binder를 가리킬 수 있다. Binder 번호는 정의 하나에서 평평하므로 scope가
@@ -866,29 +874,7 @@ Operation attribute는 별개의 generic attribute dictionary에 남는다.
 `func_ref`, `instantiate`, `call`, `call_indirect`, `return`은 generic assembly가
 모든 정보를 손실 없이 표현하므로 custom format을 만들지 않는다.
 
-#### `tribute_control.func`
-
-```text
-tribute_control.func {sym_name = "id", type = !Callable} (%x: T) { ... }
-```
-
-- **형상:** 피연산자와 결과는 없다. `sym_name: String`과
-  `type: tribute_control.func_sig<(Params...) -> Result>`가 필수다. 선언은 region이
-  없고 정의는 source parameter만 block argument로 받는 single-block `body`
-  하나이며 `tribute_control.return`으로 끝난다. Foreign ABI 같은 비제어
-  attribute는 보존한다.
-- **의미:** source named function의 logical signature와 row를 정의하며 hidden
-  evidence, environment, `ContinuationFrame<R>`를 포함하지 않는다. Convention은
-  [class 특수화](#convention과-class-특수화)가 row에서 계산해 쓴다.
-- **검증:** local verifier는 attribute, region, block argument, return type을
-  callable type과 맞춘다. Whole-IR verifier는 symbol uniqueness와, 정의 안의 모든
-  tail이 `row_binders` 범위 안인지, `row_unions`의 index가 범위 안인지, row의
-  instance가 `ability.decl`로 해소되는지를 검사한다.
-- **Row 속성:** 선택적 [`row_binders`](#row-binder), [`row_unions`](#tail의-합집합),
-  [`inferred_row`](#추론된-row)를 가진다.
-- **소유권과 값 흐름:** body는 isolated-from-above다. Source local과 parameter만
-  block argument로 들어온다.
-- **위치:** source function 또는 extern declaration 전체 span이다.
+#### Named callable과 symbol
 
 Named callable의 source definition은 body를 가진 Tribute callable이다.
 `extern "intrinsic"`은 compiler-reserved directive이며, canonical qualified
@@ -937,161 +923,18 @@ Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutat
 callable producer를 요구한다. Return은 enclosing callable의 logical result와 일치해야
 한다. Body가 없는 declaration도 body traversal 없이 같은 검사를 받는다.
 
-#### `tribute_control.lambda`
+#### Callable 출처
 
-```text
-%f = tribute_control.lambda [%capture0, ...] : !Callable { ... }
-```
-
-- **형상:** 피연산자는 typechecking된 capture를 source 순서로 나열한다. 결과는
-  `tribute_control.func_sig` 하나이고 필수 attribute는 없다. Single-block body는
-  source parameter만 block argument로 받으며 `tribute_control.return`으로 끝난다.
-- **의미:** source lambda를 만들며 body는 lexical capture와 parameter를 사용한다.
-- **검증:** local verifier는 result signature, block argument, return type을
-  맞춘다. Whole-IR verifier는 body의 외부 SSA reference와 capture 집합이 정확히
-  일치하는지, `quantified_rows`의 원소가 둘러싼 `func`의 `local` binder이고 각
-  `local` binder를 한 람다만 적는지, 양화하는 람다의 결과를 `instantiate`만 쓰는지
-  검사한다. 안쪽 람다의 capture로 넘기는 것은 사용이 아니며, 그 본문의 사용이
-  `instantiate`여야 한다.
-- **Row 속성:** 선택적 [`quantified_rows`](#지역-람다의-양화와-인스턴스화)를 가진다.
-- **소유권과 값 흐름:** capture는 일반 SSA use이며 다른 hidden operand는 없다.
-- **위치:** source lambda 전체 span이다.
-
-#### `tribute_control.instantiate`
-
-```text
-%s = tribute_control.instantiate %lambda {row_args = [{tail = 0}]} : !Callable
-```
-
-- **형상:** 피연산자는 `quantified_rows`를 가진 `tribute_control.lambda`의 결과
-  하나다. 결과는 `tribute_control.func_sig` 하나이고 `row_args`가 필수이며, region이
-  없는 non-terminator다.
-- **의미:** `let`에 묶인 row-polymorphic 람다의 사용 하나다. 지역 scheme이 양화한
-  row 변수마다 이 사용이 넘기는 row를 정한다.
-- **검증:** local verifier는 형상을 검사한다. Whole-IR verifier는 피연산자가
-  `quantified_rows`를 가진 람다의 결과인지, `row_args`의 개수가 그 원소 수와 같은지,
-  결과가 람다의 type에 [`row_args`를 치환](#row-인자와-치환)한 signature와
-  convention까지 같은지 검사한다. Row 인자의 tail과 instance는 다른 row처럼 둘러싼
-  정의의 범위에서 검사한다.
-- **소유권과 값 흐름:** 피연산자와 결과는 같은 callable 값이며 새 값을 만들지
-  않는다. CPS legalization은 결과를 피연산자로 대체한다.
-- **위치:** 일반화된 binding을 참조한 source span이다.
-
-#### `tribute_control.func_ref`
-
-```text
-%f = tribute_control.func_ref {func_ref = @id} : !Callable
-```
-
-- **형상:** 피연산자와 region은 없고 terminator가 아니다. `func_ref: Symbol`이
-  필수이며 결과는 `tribute_control.func_sig` 하나다.
-- **의미:** named function을 first-class source value로 만든다. Source가 named
-  function을 higher-order value로 사용할 수 있으므로 필요하다. Result는 대상과
-  같은 source signature이며, convention이 정해진 뒤에는 대상 worker와 같거나 더 강할
-  수 있다.
-  바깥 row도 대상의 row를 포함하는 더 넓은 row일 수 있다. 순수 함수를 열린 row의
-  callable 자리에 넘기는 포섭이 이 경우다.
-- **검증:** local verifier는 attribute와 result 형상을 검사한다. Whole-IR
-  verifier는 symbol resolution과, result가 대상 type에 [`row_args`](#row-인자와-치환)를
-  치환한 signature와 바깥 row와 convention을 빼고 같은지, 바깥 row가 치환한 row의
-  instance를 같은 횟수 이상 담고 그 tail이 있으면 같은 tail을 가지는지, convention이
-  정해진 뒤에는 바깥 convention이 대상보다 약하지 않은지를 검사한다.
-- **소유권과 값 흐름:** 결과는 일반 SSA value다.
-- **위치:** named function을 값으로 사용한 source reference span이다.
-
-#### `tribute_control.call`
-
-```text
-%result = tribute_control.call %arg0, ... {callee = @f} : Result
-```
-
-- **형상:** declaration 순서의 source argument, source-logical result 하나,
-  `callee: Symbol`, 선택적 [`evidence_plan`](#evidence-선택-속성)과
-  [`row_args`](#row-인자와-치환)를 가지며 region이 없는 non-terminator다.
-- **의미:** named source callable을 직접 호출한다.
-- **검증:** local verifier는 attribute와 resolved operand/result를 검사한다.
-  Whole-IR verifier는 `row_args`의 개수가 callee의 양화된 binder 수와 같은지, operand와
-  result가 callee type에 `row_args`를 치환한 signature와 같은지 검사한다.
-- **소유권과 값 흐름:** argument/result는 일반 SSA value이고 hidden operand는
-  없다.
-- **위치:** callee와 argument를 포함한 source call span이다.
-
-#### `tribute_control.call_indirect`
-
-```text
-%result = tribute_control.call_indirect %callee, %arg0, ... : Result
-```
-
-- **형상:** `tribute_control.func_sig` callee, source argument, callee type의
-  source-logical result 하나와 선택적 [`evidence_plan`](#evidence-선택-속성)을 가지며
-  region이 없는 non-terminator다.
-- **의미:** lambda, `func_ref`, parameter, capture, 호출 결과, data projection,
-  ability operation 결과로 얻은 callable을 호출한다.
-- **검증:** local verifier는 callee signature와 argument/result type을 맞춘다.
-  Whole-IR verifier는 callee가 source signature를 선언에서 얻은 값인지 따라간다.
-  그 판정 규칙은 값을 만든 operation이, block 인자이면 그 block을 가진 operation이
-  자기 선언에서 정한다. 규칙은 operation 자신의 선언·속성이나 해소된 선언과의
-  일치로 근거를 세우고, 다른 값에 기대는 경우(lambda의 `instantiate`, callee의
-  `call_indirect` 결과, `handle`에 이르는 yield 등)에는 그 값들이 모두 출처를
-  갖추어야 한다. 규칙이 없는 operation의 결과와 block 인자는 출처가 아니다.
-  각 값은 그 값을 만든 operation, block 인자이면 그 block을 가진 operation 하나의
-  규칙으로 판정되므로, 판정은 거쳐 간 모든 값의 conjunction이다.
-  `handle`의 handler에서 그 결과로 되돌아오는 순환은 새 값을 더하지 않으므로
-  순환 밖에서 이르는 값만 출처를 갖추면 된다. 이 출처 규칙은 handler를 구현하는
-  전략과 무관하다.
-- **소유권과 값 흐름:** callee와 argument는 일반 SSA use이고 environment,
-  evidence, `ContinuationFrame<R>`는 없다.
-- **위치:** callee와 argument를 포함한 source indirect-call span이다.
-
-#### `tribute_control.tail_call`
-
-```text
-tribute_control.tail_call %arg0, ... {callee = @f}
-```
-
-- **형상:** declaration 순서의 source argument, `callee: Symbol`, 선택적
-  [`evidence_plan`](#evidence-선택-속성)과 [`row_args`](#row-인자와-치환)를 가진다.
-  결과와 region은 없는 terminator이며 `CallableExit`를 등록한다.
-- **위치 규칙:** `tribute_control.func` 또는 `lambda` body를 끝낼 수 있고, 꼬리
-  위치에 있는 결과 하나인 `scf.if`의 arm을 `scf.yield` 대신 끝낼 수 있다. 그
-  arm은 terminal region이며 operation의 결과는 `scf.yield`로 끝나는 arm만 낸다.
-  꼬리 위치인 `scf.if`는 결과가 감싼 region의 terminator로 곧바로
-  이어지는 operation이다(callable body의 `return`, 또는 다시 꼬리 위치인 바깥
-  arm의 `scf.yield`). `tribute_control.handle` body와 handler region 안에서는
-  invalid다.
-- **의미:** named source callable을 proper tail call한다. 호출이 끝나면 callee의
-  결과가 감싼 callable의 결과가 되며 caller frame은 남지 않는다.
-- **검증:** local verifier는 attribute, 위치 규칙, callee result type과 감싼
-  callable result type의 일치를 검사한다. Whole-IR verifier는
-  `tribute_control.call`과 같이 `row_args`를 치환한 callee signature와 operand,
-  감싼 callable의 result를 맞추고, convention이 정해진 뒤에는 convention 순서를
-  검사한다.
-  Tail position과 handler 규칙의 소스 진단은 typechecking이 책임지며 이 검사는
-  lowering이 그 결과를 보존했는지 확인한다.
-- **소유권과 값 흐름:** argument는 일반 SSA use이고 hidden operand는 없다.
-  Shared legalization이 모든 convention 조합에서 proper tail transfer로 바꾼다
-  ([cps-effects.md](cps-effects.md#source-proper-tail-call의-적법화)).
-- **위치:** `become` keyword와 call을 포함한 source span이다.
-
-#### `tribute_control.tail_call_indirect`
-
-```text
-tribute_control.tail_call_indirect %callee, %arg0, ...
-```
-
-- **형상:** `tribute_control.func_sig` callee, source argument, 선택적
-  [`evidence_plan`](#evidence-선택-속성)을 가진다. 결과와 region은 없는
-  terminator이며 `CallableExit`를 등록한다.
-- **위치 규칙:** `tribute_control.tail_call`과 같다.
-- **의미:** callable value를 proper tail call한다.
-- **검증:** local verifier는 callee signature와 argument type, 위치 규칙, callee
-  result type과 감싼 callable result type의 일치, `evidence_plan` 형상을 검사한다.
-  Convention이 정해진 뒤에는 callee type의 convention이 감싼 callable의
-  convention보다 강할 수 없다. 선택이
-  ability row와 맞는지는 typechecking이 책임진다.
-- **소유권과 값 흐름:** `tribute_control.call_indirect`와 같이 environment,
-  evidence, `ContinuationFrame<R>`는 operand가 아니다.
-- **위치:** `become` keyword와 indirect call을 포함한 source span이다.
+Whole-IR verifier는 `tribute_control.call_indirect`의 callee가 source signature를
+선언에서 얻은 값인지 따라간다. 그 판정 규칙은 값을 만든 operation이, block 인자이면
+그 block을 가진 operation이 자기 선언에서 정한다. 규칙은 operation 자신의
+선언·속성이나 해소된 선언과의 일치로 근거를 세우고, 다른 값에 기대는 경우(lambda의
+`instantiate`, callee의 `call_indirect` 결과, `handle`에 이르는 yield 등)에는 그
+값들이 모두 출처를 갖추어야 한다. 규칙이 없는 operation의 결과와 block 인자는 출처가
+아니다. 각 값은 그 값을 만든 operation, block 인자이면 그 block을 가진 operation
+하나의 규칙으로 판정되므로, 판정은 거쳐 간 모든 값의 conjunction이다. `handle`의
+handler에서 그 결과로 되돌아오는 순환은 새 값을 더하지 않으므로 순환 밖에서 이르는
+값만 출처를 갖추면 된다. 이 출처 규칙은 handler를 구현하는 전략과 무관하다.
 
 #### Evidence 선택 속성
 
@@ -1106,7 +949,8 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
 ```
 
 - 원소는 key 하나짜리 dictionary다. Key `mask` 또는 `dup`이 연산을, 값이 exact
-  ability instance([`ability.decl`](#abilitydecl)의 symbol 참조)를 나타내며 원소는 순서대로 적용한다.
+  ability instance([`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)의
+  symbol 참조)를 나타내며 원소는 순서대로 적용한다.
   한 instance는 한 번만 나온다.
 - Key `outer`는 그 instance의 가장 위 handler를 설치한 지점의 evidence로 바꾼다.
   Source-logical operation은 이 key를 쓰지 않는다. CPS legalization이 arm 본문에
@@ -1141,264 +985,8 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
   `effect.tail`/`effect.push`/`effect.with_tail`로 만든다
   ([cps-effects.md](cps-effects.md#row-directed-evidence)).
 
-#### `tribute_control.return`
-
-```text
-tribute_control.return %value
-```
-
-- **형상:** source-logical result 하나를 받고 결과/attribute/region은 없다.
-  `tribute_control.func` 또는 `lambda` body의 terminator이며 다른 위치에서는
-  invalid이다.
-- **의미:** enclosing callable의 logical result를 반환한다.
-- **지역 검증:** enclosing callable result와 operand type을 맞춘다.
-- **소유권과 값 흐름:** 일반 SSA value를 소비한다.
-- **위치:** source return 또는 implicit body-result expression span이다.
-
 Callable operation의 physical lowering은
 [cps-effects.md](cps-effects.md#pre-cps-callable-shape)에만 정의한다.
-
-#### `ability.decl`
-
-```text
-ability.decl {sym_name = "<instance key>"} {
-  ability.operation {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
-  ability.operation {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
-}
-```
-
-- **역할:** Module이 사용하는 ability instance 하나와 그 operation 전체를 선언하는
-  symbol 정의다. Frontend는 module 안의 operation이나 evidence plan이 이름을 대는
-  instance마다 정확히 하나를 module 본문에 내보낸다. 선언은 IR 밖의 table이 아니라
-  module의 일부이므로 textual IR만으로 검증에 필요한 사실이 모두 전달된다.
-- **단위:** 선언은 ability가 아니라 **instance** 단위다. Operation signature는 그
-  instance의 타입 인자로 instantiate한 logical type이다. Logical type은 source
-  type variable을 표현하지 않으므로 generic 선언을 두지 않는다.
-- **이름:** `sym_name`은 instance key다. Instance key는 checked source 인자에서
-  만들며, 같은 lowered representation을 가진 서로 다른 source 인자를 구별한다.
-  Runtime ability id도 같은 key에서 계산한다.
-- **참조:** Ability instance를 이름으로 대는 모든 자리는 이 정의에 대한 symbol
-  참조다. `perform`, handler arm, `ability.*`와 `effect.*` operation의 `ability`,
-  `ability.handle_dispatch`의 `abilities`, evidence plan의 원소가 여기에 해당한다.
-  Instance를 나타내는 type은 없으며 instance의 타입 인자는 IR에 나타나지 않는다.
-  Value type 변환은 instance identity를 바꿀 수 없다.
-- **영역:** `operations` 영역 하나를 가지며 그 block은 `ability.operation`만
-  담는다. `ability.operation`은 `sym_name`을 갖지 않는다. 서로 다른 instance가 같은
-  operation 이름을 선언하므로 operation은 symbol namespace에 들어가지 않고 선언
-  안에서 `op_name`으로 찾는다.
-- **`ability.operation` 속성:** `op_name: String`, `kind: String`(`fn` 또는 `op`),
-  `param_types: [Type]`, `result_type: Type`. Source declaration 순서의 parameter
-  type과 result type이다. 이 type은 module 수준이므로 [row tail](#row-binder)을 가질 수
-  없다.
-- **검증:** 한 선언 안에서 `op_name`은 중복되지 않는다. Instance마다 선언이
-  하나라는 것은 symbol 정의의 유일성이 보장한다. `perform`과 handler arm은 자신의
-  `ability`와 `op_name`이 가리키는 선언의 kind, parameter type, result type과
-  일치해야 한다.
-- **수명:** 선언은 instance를 이름으로 대는 operation이 남아 있는 동안 module에
-  남는다. Target의 evidence lowering이 마지막 참조를 소비하고 선언을 제거한다.
-  선언은 호출 가능한 정의가 아니므로 global DCE의 제거 대상이 아니다.
-
-#### `tribute_control.perform`
-
-```text
-%result = tribute_control.perform %arg0, ... {
-  ability = @State,
-  op_name = "get",
-  operation_kind = "op"
-} : ResultType
-```
-
-- **피연산자:** declaration 순서로 놓인, 이미 평가된 source argument 0개 이상이다.
-  값은 logical type을 유지하며 tuple packing과 erasure는 conversion이 담당한다.
-- **결과:** logical operation result 하나만 만든다. Source `Never` result는
-  `core.never`이며 physical `Never` control carrier를 선택하지 않는다.
-- **속성:** `ability: SymbolRef`, `op_name: String`,
-  `operation_kind: String`이 필수다. `operation_kind`는 정확히 `fn` 또는 `op`이며
-  typecheck된 operation declaration에서 복사한다. 이는 body나 use site에서
-  추론하는 lowering hint가 아니라 source-semantic metadata다. 모든 source
-  ability invocation이 이 operation을 사용하며 shared conversion은 kind를
-  재분류하지 않는다.
-- **영역과 block argument:** 없다.
-- **종결자:** 아니다. 직접형 IR에서 이 operation은 terminator가 아니다.
-- **의미:** 선언된 kind로 source operation을 호출한다.
-  `operation_kind = "fn"`이면 선택된 handler result가 직접형 평가를 자동으로
-  resume한다. Shared conversion은 continuation을 capture하지 않고 기존 tail
-  dispatch 경로를 사용한다. `operation_kind = "op"`이면 일치하는 handler가
-  resume할 수 있으며, 이 경우 operation 뒤에서 실행을 계속하고 `%result`가
-  결과가 된다. Resume하지 않으면 선택된 general handler가 일치하는 handle을
-  완료하고 겉으로 보이는 suffix는 평가하지 않는다. Source `op -> Never`는
-  resume할 수 없으므로 logical resumption을 만들거나 겉으로 보이는 suffix를
-  capture하지 않는다.
-
-- **지역 검증:** 세 attribute를 요구하고 `operation_kind` domain을
-  검사하며, result가 정확히 하나이고 region은 없으며 operand/result type이
-  inference variable이 아니라 resolve되었는지 확인한다. Symbol-aware frontend
-  적합성 검사는 `ability`와 `op_name`이 가리키는 [`ability.decl`](#abilitydecl)의
-  `fn`/`op` kind, parameter type, result type이 attribute, operand, result와
-  일치하는지도 확인한다. 어떤 verifier도 control flow, handler, result type,
-  calling convention에서 kind를 추론해서는 안 된다.
-  `tribute_control.handler`와 containing-handle verifier는 handler entry에 아래
-  계약의 kind별 형상을 적용한다.
-- **소유권과 값 흐름:** operand는 일반 SSA use다. 이 operation은
-  source-visible continuation value를 만들지 않으며 continuation 구성은 shared
-  CPS conversion이 소유한다. `"fn"`에는 continuation 없는 `ability.call`/tail
-  dispatch를, `"op"`에는 suffix continuation을 받는 `ability.perform`/CPS
-  dispatch를 만든다. `op -> Never`에는 대신 기존 ability/effect ABI가 요구하는
-  실제 zero-capture reject continuation을 공급하며 그 body는
-  `func.unreachable`이다. 이 continuation은 source suffix를 capture하지 않는다.
-  Null, in-band sentinel, 임의의 `anyref`는 continuation이 아니다. ABI adapter의
-  전체 규칙은
-  [cps-effects.md](cps-effects.md#direct-style-control-boundary)를 따른다.
-- **위치:** 가능하면 qualified callee와 argument를 모두 포함하는
-  ability-operation call의 source location이다.
-
-#### `tribute_control.handle`
-
-```text
-%answer = tribute_control.handle : AnswerType
-  body {
-    ...
-    tribute_control.yield %body_value
-  }
-  completion(%completed: BodyType) {
-    ...
-    tribute_control.yield %answer_value
-  }
-  handlers {
-    tribute_control.handler ... { ... }
-    ...
-  }
-```
-
-- **피연산자:** 없다. 실행 가능한 region이 capture하는 값은 일반 enclosing SSA
-  visibility를 사용한다.
-- **결과:** logical handle result 하나만 만든다.
-- **속성:** 필수 attribute는 없다. 선택적 [`evidence_plan`](#evidence-선택-속성)은
-  body evidence를 만들기 전에 바깥 evidence에서 가릴 handler를 정한다. Dynamic
-  prompt/owner tag와 physical tail-call 표현은 이 operation의 의미 attribute가
-  아니라 legalization 계약이다.
-- **영역:** 고정된 `body`, `completion`, `handlers` 순서로 정확히 세 개다.
-- **Block argument:** `body`는 argument가 없는 block 하나다. `completion`은
-  argument가 정확히 하나인 block 하나이며, 그 type은 `body`가 yield한 value의
-  type과 같다. `handlers`는 argument가 없는 block 하나이며
-  `tribute_control.handler` entry만 포함한다.
-- **종결자:** `body`와 `completion`은 `tribute_control.yield`로 끝난다.
-  `handlers` block은 선언적 table이며 terminator가 없다.
-- **의미:** `body`가 정상 완료되면 `completion`을 정확히 한 번 평가하고 그 값을
-  반환한다. Resume하지 않고 완료된 general handler arm은 arm value를 handle
-  result로 반환하고 `completion`을 건너뛴다. Tail-resumptive `fn` arm은 중단된
-  computation에 자동으로 공급되는 operation result를 반환한다.
-- **지역 검증:** 고정된 region 개수, single-block 형상, block-argument
-  개수, terminator, yield type equality를 강제한다. 또한 `handlers`의 모든
-  direct child가 유일한 `(ability, op_name)`
-  `tribute_control.handler`인지 확인한다. Result type은 completion yield type과
-  모든 general handler의 answer type과 같아야 한다.
-- **소유권과 값 흐름:** 이 operation은 body가 resumptive general
-  operation을 수행할 때 생기는 delimited resumption capability를 소유한다.
-  해당 capability는 resumptive general handler entry의 `resume_token` block
-  argument로만 노출된다. 값은 `tribute_control.yield`를 통해서만 실행 가능한
-  region 밖으로 나간다.
-- **위치:** 전체 source `handle` expression이다. Region/block location은 각각
-  대응하는 body, completion arm, handler-list span을 사용한다.
-
-Frontend는 항상 completion region을 materialize한다. Source에 `do` arm이 없으면
-이 region은 body result에 대한 identity operation이다. Source 의미를 바꾸지
-않으면서 conversion의 optional structural case를 없앤다.
-
-#### `tribute_control.handler`
-
-```text
-tribute_control.handler {
-  ability = @State,
-  op_name = "get",
-  kind = "op",
-  operation_result_type = ResultType
-} (%arg0: Arg0Type, ..., %resume:
-    tribute_control.resume_token<ResultType, AnswerType>) {
-  ...
-  tribute_control.yield %answer
-}
-```
-
-- **피연산자와 결과:** 없다. Surrounding `tribute_control.handle`이 소유하는
-  declarative entry다.
-- **속성:** `ability: SymbolRef`, `op_name: String`, `kind: String`,
-  `operation_result_type: Type`이 필수다. `kind`는 정확히 `fn` 또는 `op`이다.
-- **영역:** block 하나를 가진 실행 가능한 `body` region 하나만 있다.
-- **Block argument:** source operation argument가 declaration 순서와 logical
-  type으로 먼저 나온다. Resumptive `op` entry는 마지막에
-  `resume_token<operation_result_type, handle-result-type>` argument 하나를
-  갖는다. `operation_result_type`이 source `Never`인 `op`에는 token이 없고
-  `fn` entry에도 token이 없다.
-- **종결자:** body는 `tribute_control.yield`로 끝난다. `fn`에서는 yield
-  type이 `operation_result_type`과 같고 자동으로 resume한다. `op`에서는 yield
-  type이 token의 `answer` type과 같으며, arm이 `resume`을 통해 control을
-  넘기지 않고 완료되면 enclosing handle result가 된다.
-  `operation_result_type`이 source `Never`인 `op`에는 token이 없고 yield type은
-  enclosing `tribute_control.handle` result type과 같아야 한다.
-- **지역 검증:** 필수 attribute와 domain, block 하나, 마지막
-  terminator, token 위치/parameter, 위 yield 규칙을 확인한다.
-  `operation_result_type`이 `Never`인 general handler는 token argument가 없어야
-  하며 nested region을 포함한 body 어디에도 `tribute_control.resume`이 없어야
-  한다. ContinuationFrame placement, uniqueness와 `op -> Never` yield를 포함한 enclosing
-  handle result와의 equality는 containing handle의 local verifier가 확인하고,
-  converter도 rewrite 전에 같은 equality와 resume 부재를 검사해 위반을
-  conversion failure로 보고한다. Symbol-aware frontend 적합성 검사는 참조된
-  declaration의 `kind`, argument type,
-  `operation_result_type`도 동일한지 확인하며, 어떤 verifier도 body 형상으로
-  general `op`을 재분류하지 않는다.
-- **소유권과 값 흐름:** 마지막 token argument가 있으면 affine이다.
-  사용하지 않아 continuation을 drop하거나, `tribute_control.resume`까지 하나의
-  static ownership path를 가질 수 있다. Closure가 이를 capture하면 그 static
-  path가 closure로 이전된다. Copy, store, return, yield 또는 다른 방식의
-  escape는 invalid이다. Static SSA validation은 capture한 closure가 dynamic하게
-  한 번만 호출되는지 증명할 수 없으므로 lowered resumption은 runtime에서도
-  one-shot consumption을 강제하고 두 번째 호출을 거부하거나 trap해야 한다.
-  `fn` arm과 `op -> Never` arm에는 continuation capability가 없다.
-- **위치:** operation header를 포함한 source handler arm이다.
-
-#### `tribute_control.resume`
-
-```text
-%answer = tribute_control.resume %resume, %value : AnswerType
-```
-
-- **피연산자:** 정확히 두 개다. `%resume`은
-  `resume_token<InputType, AnswerType>`이고 `%value`는 `InputType`이다.
-- **결과:** `AnswerType` 하나만 만든다.
-- **속성과 영역:** 선택적 [`evidence_plan`](#evidence-선택-속성)만 가지며 region은 없다.
-- **종결자:** 아니다. `resume` 뒤의 strict work는 enclosing region에
-  명시적으로 남으며 resumed computation이 반환한 뒤에만 실행된다.
-- **의미:** lexical하게 가장 가까운 enclosing general handler의 one-shot
-  resumption을 소비하고, 중단된 `perform`에 `%value`를 공급하며, resumed
-  computation이 handle boundary에 도달했을 때 얻는 logical result를 반환한다.
-  `fn` 또는 `op -> Never` arm에서는 invalid이다.
-- **지역 검증:** operand/result arity와
-  `resume_token<InputType, AnswerType>`이 요구하는 세 type equality를 강제한다.
-- **소유권과 값 흐름:** token을 소비한다. Explicit closure capture를 통해
-  token이 이 operation에 도달할 수 있지만 handler block argument에서 시작하는
-  single static use-def path를 유지해야 한다. Affine-use validation은 capture와
-  nested region을 따라가므로 whole-IR check다. Capture 때문에 반복적인 dynamic
-  invocation이 가능하면 converted continuation의 runtime one-shot state가 최종
-  enforcement boundary다.
-- **위치:** source `resume` expression이다.
-
-#### `tribute_control.yield`
-
-```text
-tribute_control.yield %value
-```
-
-- **피연산자:** logical value 하나만 받는다.
-- **결과, 속성, 영역:** 없다.
-- **종결자:** `handle` body, completion region, handler body의 terminator다.
-  다른 위치에서는 invalid이다.
-- **지역 검증:** 자체 형상을 강제한다. Owning operation이 placement와
-  yield type을 검사한다.
-- **소유권과 값 흐름:** 일반 logical value를 owning structured
-  operation으로 전달한다. `resume_token`은 절대 yield할 수 없다.
-- **위치:** region result를 만드는 source expression이다. 합성한 identity
-  completion에는 owning `handle` location을 사용한다.
 
 #### 구조화된 continuation 불변 조건
 
@@ -1448,66 +1036,17 @@ convention은 dialect contract에 포함되지 않는다.
 #### `ability` continuation frame 표면
 
 CPS legalization과 frame 펼치기 사이의 계약이다. 펼치기의 의미와 pipeline 위치는
-[cps-effects.md](cps-effects.md#abstract-continuation-frames)를 따른다. 아래에서
-`Completion<X, R>`와 `ResumeExact<I, R>`는 frame 자리에 `ability.frame<R>`를 쓰는
-`Cps` closure `(Evidence, ability.frame<R>, X) -> core.never`와
-`(Evidence, ability.frame<R>, I) -> core.never`다.
+[cps-effects.md](cps-effects.md#abstract-continuation-frames)를 따른다. 표면은
+`ability.frame<R>` type과 `ability.suffix_frame`, `ability.exit`, `ability.handle`,
+`ability.perform`, `ability.abort`, `ability.delimit` operation이며, 각각의 형상은
+[`ability` dialect 선언](../crates/tribute-ir/src/dialect/ability.rs)이 정한다.
 
-```text
-!ability.frame<R>
-%f = ability.suffix_frame %ev, %outer, %k {evidence_plan = [...]} : !ability.frame<V>
-ability.exit %f, %value
-ability.handle %outer_ev, %exit, %completion, %arm0, ... {handlers = [...]} {
-^body(%ev: Evidence, %f: !ability.frame<M>):
-  ...
-}
-ability.perform %ev, %f, %resumption, %arg0, ... {ability = @State, op_name = "get"}
-ability.abort %ev, %f, %arg0, ... {ability = @Fail, op_name = "fail"}
-%r = ability.delimit %body, %ev : R
-```
-
-- **`ability.frame<R>`:** 타입 매개변수 `result`가 답 타입 `R`인 불투명 타입이다.
-  `Cps` callable의 `CallableAbi` frame parameter, completion, resumption이 이 타입을
-  쓴다. 구성 요소를 꺼내는 operation은 없다.
-- **`ability.suffix_frame`:** `ev`는 Evidence, `outer`는 `ability.frame<R>`, `k`는
-  `Completion<V, R>`이고 결과는 `ability.frame<V>`다. 선택적 `evidence_plan`은
-  [evidence 선택 속성](#evidence-선택-속성)의 문법을 따르며 재개된 안쪽 계산에 넘길
-  evidence를 고른다. 구조적 분기의 frame에는 없다.
-- **`ability.exit`:** `ability.frame<R>`와 `R` 타입 값 하나를 받는 결과 없는
-  terminator다. `Cps` callable, completion, 생성된 continuation 본문에만 온다.
-- **`ability.handle`:** 결과 없는 terminator이며 region 하나를 가진다. `outer_ev`는
-  handle을 설치한 지점의 Evidence, `exit`는 `ability.frame<R>`, `completion`은
-  `Completion<M, R>`다. 나머지 operand는 arm closure이고 `handlers`는 같은 순서의
-  arm 표다. 원소는 `ability`(SymbolRef), `op_name`(String), `kind`(`"fn"` 또는
-  `"op"`), `operation_result_type`(Type)을 가진 dictionary이며 한
-  `(ability, op_name)`은 한 번만 나온다. `I`가 `operation_result_type`일 때
-  `kind = "op"` arm은 다음 `Cps` closure이며, token 둘은 `I`가 `core.never`가 아닐
-  때만 있다.
-
-  ```text
-  (Evidence, ability.frame<R>, operation 인자..., [ResumeExact<I, R>, ResumeExact<I, R>])
-    -> core.never
-  ```
-
-  `kind = "fn"` arm은 `EvidenceDirect` closure `(Evidence, operation 인자...) -> I`다.
-  선택적 `evidence_plan`은 `mask`만 담는다. Body entry block은 확장된 Evidence와
-  `ability.frame<M>`를 받으며 모든 경로가 proper tail transfer나 `func.unreachable`로
-  끝난다.
-- **`ability.perform`:** Evidence, `ability.frame<R>`, raw `ResumeExact<I, R>`,
-  operation 인자를 받는 결과 없는 terminator다. `I`는 `core.never`가 아니다.
-  Resumption은 one-shot 검사가 없는 closure이며 그 검사는 펼치기가 더한다.
-- **`ability.abort`:** `ability.perform`에서 resumption을 뺀 형상이며 source
-  `op -> Never`에만 쓴다.
-- **`ability.delimit`:** [값 delimiter](cps-effects.md#값-delimiter)다. `body`는
-  `(Evidence, ability.frame<R>) -> core.never`인 `Cps` closure이고 결과는 `R` 하나다.
-  `ev`는 그 flow의 evidence이고, evidence를 받지 않는 `Direct` flow에서는
-  `effect.initial_evidence`의 결과다.
-  Terminator가 아니며 `Cps`가 아닌 flow에만 온다. Frame 펼치기가 같은 operand와
-  결과를 가진 `effect.delimit`으로 낮추고, target ABI 경계가 그것을 소비한다.
+- **`effect.delimit`:** Frame 펼치기가 `ability.delimit`을 같은 operand와 결과를
+  가진 `effect.delimit`으로 낮추고, target ABI 경계가 그것을 소비한다.
   `effect.delimit`도 같은 관계를 선언하되 body의 frame은 답 타입을 가진 layout
   참조다. 물리화가 그 답 타입과 `core.never` 결과를 지우므로, target ABI 경계는
   물리화 직후 다른 검증 지점 없이 `effect.delimit`을 소비한다.
-- **검증:** Operation verifier는 위 타입 관계, frame과 closure의 `R` 일치, arm 표와
+- **검증:** Operation verifier는 선언의 타입 관계, frame과 closure의 `R` 일치, arm 표와
   arm closure의 일치, closure의 calling convention을 검사한다. Terminator 위치와
   enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다. `ability.delimit`을
   제외한 operation은 `Cps` flow에만 온다.
@@ -1574,24 +1113,12 @@ pointer, managed 참조 중 하나이며 원소 하나는 machine 값 하나다.
 closure 같은 aggregate는 그 object에 대한 managed 참조로 담고 inline으로 펼치지
 않는다.
 
-배열을 만드는 operation은 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로
-고정되어 있다. Operand 개수나 모양으로 operation의 뜻을 고르지 않는다.
-
-| Operation | 결과 |
-| --- | --- |
-| `adt.array_new(length, initial)` | 모든 원소가 `initial`인 길이 `length`의 배열 |
-| `adt.array_of(elements...)` | operand를 순서대로 담은 배열. 길이는 operand 수이며 0이어도 된다 |
-| `adt.array_splice(source, start, end, elements...)` | `source[0, start)`, `elements`, `source[end, len)`을 이어 담은 새 배열 |
-
-- 세 operation의 결과 타입은 `type` 속성의 `core.array<E>`이고, `initial`과
-  `elements`는 `E` 타입이다. `adt.array_splice`의 `source`는 결과와 같은 타입이다.
-- `adt.array_splice`는 범위 복사로 만드는 배열이다. `source`를 바꾸지 않고 새
-  배열을 결과로 낸다. 원소 하나를 끼우거나(`start = end`), 빼거나(`elements`가
-  없고 `end = start + 1`), 바꾸거나, 앞뒤를 잘라 내는 일을 모두 이 operation으로
-  쓴다.
-- `adt.array_set`은 배열의 원소 하나를 제자리에서 바꾼다. 같은 배열을 가리키는
-  모든 값이 바뀐 원소를 본다. 공유된 배열을 바꾸지 않아야 하는 producer는 원소를
-  바꾼 배열을 `adt.array_splice`로 새로 만든다.
+배열을 만드는 operation은 `adt.array_new`, `adt.array_of`, `adt.array_splice`
+셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로 고정되어 있다. Operand 개수나
+모양으로 operation의 뜻을 고르지 않는다. 각 operation의 결과와 전제는
+[`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다. 세
+operation의 결과 타입은 `type` 속성의 `core.array<E>`이고, `initial`과
+`elements`는 `E` 타입이다. `adt.array_splice`의 `source`는 결과와 같은 타입이다.
 
 `adt`의 배열 operation은 target이 객체를 회수하는 방식을 가정하지 않는다. Native
 RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 제약은
@@ -1603,9 +1130,8 @@ RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 
 폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_castsi`나
 `arith.index_castui`로 명시적으로 바꾼다.
 
-Index는 부호 없는 값으로 해석한다. `adt.array_get`과 `adt.array_set`은
-`index < len`을, `adt.array_splice`는 `start ≤ end ≤ len`을 전제로 한다. Target은
-이 전제를 어긴 실행을 trap으로 끝내며, 범위 밖 원소를 읽거나 쓰거나 다른 값으로
+Index는 부호 없는 값으로 해석한다. Target은 각 operation이 선언한 범위 전제를
+어긴 실행을 trap으로 끝내며, 범위 밖 원소를 읽거나 쓰거나 다른 값으로
 대신하지 않는다. Target이 표현할 수 있는 최대 길이나 할당 크기를 넘는 길이도
 trap이다.
 

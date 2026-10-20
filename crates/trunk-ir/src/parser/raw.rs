@@ -131,7 +131,7 @@ pub fn ws(input: &mut &str) -> ModalResult<()> {
         .parse_next(input)
 }
 
-/// Parse an identifier: [a-zA-Z_][a-zA-Z0-9_]*
+/// Parse an identifier: `[a-zA-Z_][a-zA-Z0-9_]*`
 pub fn ident<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     (
         one_of(|c: char| c.is_ascii_alphabetic() || c == '_'),

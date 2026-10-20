@@ -14,6 +14,7 @@ pub mod bytes_intrinsic;
 pub mod check_convention_classes;
 pub mod closure_lower;
 mod collections;
+mod convention_classes;
 mod cps_builders;
 mod effect_dispatch;
 pub mod intrinsic_to_arith;

@@ -3488,3 +3488,63 @@ fn a_written_array_type_is_replaceable() {
         "{materialized}"
     );
 }
+
+#[test]
+fn malformed_array_operations_are_rejected() {
+    let module = |body: &str| {
+        format!(
+            r#"core.module @test {{
+  !Node = adt.struct<Node(value: core.i32)>
+  !NodeRef = adt.typeref<{{name = "Node"}}>
+  !Other = adt.struct<Other(value: core.i32)>
+  !OtherRef = adt.typeref<{{name = "Other"}}>
+  !Nodes = core.array<!NodeRef>
+  !Others = core.array<!OtherRef>
+  func.func @f(%nodes: !Nodes, %others: !Others, %other: !OtherRef, %at: core.index) -> core.nil {{
+    {body}
+    func.return
+  }}
+}}"#
+        )
+    };
+    assert_plan_error_unchanged(
+        &module("%copy = adt.array_splice %others, %at, %at {type = !Nodes} : !Nodes"),
+        "array_splice source differs from its array type",
+    );
+    assert_plan_error_unchanged(
+        &module("%filled = adt.array_new %at, %other {type = !Nodes} : !Nodes"),
+        "array_new initial value type is malformed",
+    );
+    assert_plan_error_unchanged(
+        &module("adt.array_set %nodes, %at, %other"),
+        "array_set value type is malformed",
+    );
+    assert_plan_error_unchanged(
+        &module("%nodes2 = adt.array_of %other {type = !Nodes} : !Nodes"),
+        "aggregate managed field type is stale",
+    );
+}
+
+#[test]
+fn a_stale_replaced_element_release_is_rejected_before_materializing() {
+    let (mut ctx, module, mut stale) = build(
+        r#"core.module @test {
+  !Node = adt.struct<Node(value: core.i32)>
+  !NodeRef = adt.typeref<{name = "Node"}>
+  !Nodes = core.array<!NodeRef>
+  func.func @replace(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> core.nil {
+    adt.array_set %nodes, %at, %node
+    func.return
+  }
+}"#,
+    );
+    let action = stale.functions[0]
+        .actions
+        .iter_mut()
+        .find(|action| action.kind == ActionKind::ReleaseReplacedField)
+        .unwrap();
+    action.destination = 1;
+    assert_unchanged_on_error(&mut ctx, module, |ctx, module| {
+        materialize(ctx, module, &stale)
+    });
+}

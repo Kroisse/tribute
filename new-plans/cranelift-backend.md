@@ -140,7 +140,7 @@ Cranelift와 1:1 대응하는 저수준 연산. 각 operation은 Cranelift IR의
 `br_table` 명령에, `clif.switch`는 `cranelift_frontend::Switch`에 대응한다.
 Operation의 이름과 의미는 대응하는 대상을 따르며, Cranelift에 대응 대상이 없는
 operation은 이 dialect에 두지 않는다. 전체 연산 목록은
-[ir.md](ir.md#clif-dialect)를 참조.
+[`clif` dialect 선언](../crates/trunk-ir/src/dialect/clif.rs)을 참조.
 
 핵심 차이점 (`wasm.*` 대비):
 
@@ -383,8 +383,8 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
   `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
 
 범위 검사는 모든 `adt.array_get`, `adt.array_set`, `adt.array_splice` 앞에 둔다.
-[`adt` 배열](ir.md#adt-배열)이 정한 전제(`index < len`, `start ≤ end ≤ len`)를
-부호 없는 정수 비교로 검사하고, 어기면 `clif.trap`으로 끝낸다. 할당 크기 계산이
+[`adt` 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한 전제(`index < len`,
+`start ≤ end ≤ len`)를 부호 없는 정수 비교로 검사하고, 어기면 `clif.trap`으로 끝낸다. 할당 크기 계산이
 넘치는 길이도 `clif.trap`이다.
 
 Native 타입 변환은 [`core.index`](ir.md#coreindex-주소-폭-정수)를 pointer 폭인

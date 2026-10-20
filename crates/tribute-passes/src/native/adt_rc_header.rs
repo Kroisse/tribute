@@ -389,7 +389,7 @@ impl RewritePattern for VariantNewPattern {
     }
 }
 
-/// Pass form of [`lower`].
+/// Lowers ADT construction to allocations that initialize the RC header.
 pub struct AdtRcHeader;
 
 impl trunk_ir::pass::Pass for AdtRcHeader {
