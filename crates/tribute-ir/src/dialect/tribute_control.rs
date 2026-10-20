@@ -18,7 +18,7 @@ use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::core;
 use trunk_ir::op_def::OpDef;
 use trunk_ir::op_interface::{
-    CallLike, CallableExit, DynCallLike, DynRegionBranch, RegionBranchPoint, RegionSuccessor,
+    CallLike, CallableExit, DynRegionBranch, RegionBranchPoint, RegionSuccessor,
 };
 use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -95,8 +95,11 @@ mod tribute_control {
     // FuncSig operations
     // Only the named function is isolated. Lambda intentionally remains
     // non-isolated so its exact external-reference/capture set can be validated.
+    /// A named source function. A parameter is a callable origin when its
+    /// type is the parameter type `type` declares.
     #[asm_format]
     #[flags(IsolatedFromAbove)]
+    #[implements(CallableArgumentOrigin)]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
@@ -108,23 +111,34 @@ mod tribute_control {
         {}
     }
 
+    /// A source lambda. Its result is a callable origin, and so is a
+    /// parameter whose type is the one its result type declares.
     #[asm_format]
     #[flags(Pure)]
+    #[implements(CallableResultOrigin, CallableArgumentOrigin)]
     fn lambda(quantified_rows: Option<Attr<[u32]>>, captures: Variadic<_>) -> Value<impl FuncSig> {
         #[region(body)]
         {}
     }
 
+    /// One use of a row-polymorphic `let` lambda. Its result is a callable
+    /// origin when the lambda is.
     #[verify]
     #[flags(Pure)]
+    #[implements(CallableResultOrigin)]
     fn instantiate<S: FuncSig>(row_args: Attr<[Row]>, lambda: Value<S>) -> Value<impl FuncSig> {}
 
+    /// A named function as a value. Its result is a callable origin when the
+    /// function has a body or is a registered compiler intrinsic.
     #[verify]
     #[flags(Pure)]
+    #[implements(CallableResultOrigin)]
     fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
+    /// A direct call. Its result is a callable origin when the callee has a
+    /// body or is a registered compiler intrinsic.
     #[verify]
-    #[implements(CallLike)]
+    #[implements(CallLike, CallableResultOrigin)]
     fn call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -133,7 +147,9 @@ mod tribute_control {
     ) -> Value<_> {
     }
 
+    /// An indirect call. Its result is a callable origin when its callee is.
     #[verify]
+    #[implements(CallableResultOrigin)]
     fn call_indirect<S: FuncSig>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         callee: Value<S>,
@@ -163,7 +179,10 @@ mod tribute_control {
     fn r#return(value: Value<_>) {}
 
     // Direct-style control operations
-    #[implements(OperationDeclarationUse)]
+    /// An ability operation. Its result is a callable origin when it claims
+    /// the kind of the declaration it names and has that declaration's
+    /// result type.
+    #[implements(OperationDeclarationUse, CallableResultOrigin)]
     fn perform(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -172,7 +191,12 @@ mod tribute_control {
     ) -> Value<_> {
     }
 
+    /// A handled body. Its result is a callable origin when every value that
+    /// becomes it is: the completion region's yield and each general (`op`)
+    /// handler's yield. The completion argument is one when the body's yield
+    /// is.
     #[verify]
+    #[implements(CallableResultOrigin, CallableArgumentOrigin)]
     fn handle(evidence_plan: Option<Attr<[EvidenceStep]>>) -> Value<_> {
         #[region(body)]
         {}
@@ -182,7 +206,10 @@ mod tribute_control {
         {}
     }
 
-    #[implements(OperationDeclarationUse)]
+    /// One handler clause. An argument is a callable origin when the clause
+    /// claims the kind of the declaration it names and the argument has the
+    /// declaration's parameter type at its position.
+    #[implements(OperationDeclarationUse, CallableArgumentOrigin)]
     fn handler(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -193,7 +220,10 @@ mod tribute_control {
         {}
     }
 
+    /// A resumption. It returns the result of the handle its token belongs
+    /// to, so its result is a callable origin when that result is.
     #[verify]
+    #[implements(CallableResultOrigin)]
     fn resume<T: ResumeToken>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         resume_token: Value<T>,
@@ -3540,19 +3570,55 @@ fn variant_field_type(
         .copied()
 }
 
-struct CallableProvenance<'a> {
+/// What an indirect callee's provenance is checked against, and the values a
+/// proof has reached.
+pub struct CallableQuery<'a> {
     functions: &'a SymbolTable,
     registered: &'a HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration>,
     declarations: &'a HashMap<(&'a SymbolPath, StringRef), &'a OperationDeclaration>,
     nominal_layouts: &'a HashMap<StringRef, TypeRef>,
+    reached: HashSet<ValueRef>,
 }
 
-impl CallableProvenance<'_> {
+impl CallableQuery<'_> {
+    /// Whether `value` is a callable whose source signature comes from a
+    /// declaration, by the [`CallableResultOrigin`] rule of its producer or the
+    /// [`CallableArgumentOrigin`] rule of the operation that owns its block.
+    ///
+    /// Every rule combines the values it asks about by conjunction, so a
+    /// proof accepts `value` only when it accepts every value reached. A
+    /// value reached again adds no source: a cycle, such as one from a
+    /// handle's handlers back to its result, needs a source outside it, and
+    /// a value already rejected rejects the whole proof.
+    fn accepts(&mut self, ctx: &IrContext, value: ValueRef) -> bool {
+        if !self.reached.insert(value) {
+            return true;
+        }
+        FuncSig::from_type_ref(ctx, ctx.value_ty(value)).is_some()
+            && match ctx.value_def(value) {
+                ValueDef::OpResult(producer, _) => DynCallableResultOrigin::get(ctx, producer)
+                    .is_some_and(|origin| origin.result_is_callable_origin(ctx, value, self)),
+                ValueDef::BlockArg(block, index) => {
+                    let region = ctx.block(block).parent_region;
+                    let owner = region.and_then(|region| ctx.region(region).parent_op);
+                    match (
+                        region,
+                        owner.and_then(|owner| DynCallableArgumentOrigin::get(ctx, owner)),
+                    ) {
+                        (Some(region), Some(origin)) => {
+                            origin.argument_is_callable_origin(ctx, region, index, value, self)
+                        }
+                        _ => false,
+                    }
+                }
+            }
+    }
+
     /// The declaration `declared` names, when it claims that declaration's kind.
     fn claimed_declaration(
         &self,
         ctx: &IrContext,
-        declared: DynOperationDeclarationUse,
+        declared: &impl OperationDeclarationUse,
     ) -> Option<&OperationDeclaration> {
         let claim = declared.declaration_use(ctx)?;
         self.declarations
@@ -3560,151 +3626,340 @@ impl CallableProvenance<'_> {
             .copied()
             .filter(|declaration| claim.kind == Some(declaration.kind))
     }
+
+    /// Whether `symbol`, referenced from `op`, names a defined function or a
+    /// registered intrinsic.
+    fn names_verified_function(&self, ctx: &IrContext, op: OpRef, symbol: &SymbolPath) -> bool {
+        self.functions
+            .resolve(ctx, op, symbol)
+            .filter(|&function| Func::matches(ctx, function))
+            .is_some_and(|function| verified_callable_declaration(ctx, function, self.registered))
+    }
 }
 
-fn callable_block_arg_has_source_contract(
+/// An operation whose results can be callables whose source signature comes
+/// from a declaration, and the rule that proves one.
+///
+/// A rule asks about other values only through [`CallableQuery`] and
+/// combines the answers by conjunction. Whole-IR validation also queries
+/// operations the local checks rejected, so a rule reads its operation
+/// fallibly.
+#[trunk_ir::op_interface]
+pub trait CallableResultOrigin: DialectOp {
+    /// Whether `result`, a result of this operation, is such a callable.
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool;
+}
+
+/// An operation whose region arguments can be such callables, under the
+/// same contract as [`CallableResultOrigin`].
+#[trunk_ir::op_interface]
+pub trait CallableArgumentOrigin: DialectOp {
+    /// Whether `argument`, argument `index` of a block in `region` of this
+    /// operation, is such a callable.
+    fn argument_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        region: RegionRef,
+        index: u32,
+        argument: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool;
+}
+
+/// A parameter of the callable whose only region is `region`, whose
+/// signature is `signature`.
+fn is_signature_parameter(
     ctx: &IrContext,
-    block: BlockRef,
+    op: OpRef,
+    signature: Option<TypeRef>,
+    region: RegionRef,
     index: u32,
-    value: ValueRef,
-    provenance: &CallableProvenance<'_>,
-    visiting: &mut HashSet<ValueRef>,
+    argument: ValueRef,
 ) -> bool {
-    let Some(region) = ctx.block(block).parent_region else {
-        return false;
-    };
-    let Some(owner) = ctx.region(region).parent_op else {
-        return false;
-    };
-    let value_type = ctx.value_ty(value);
-
-    let func_sig_type = if Func::matches(ctx, owner) {
-        ctx.op_regions(owner)
-            .eq([region])
-            .then(|| ctx.op_attrs(owner).get_type("type"))
-            .flatten()
-    } else if Lambda::matches(ctx, owner) {
-        ctx.op_regions(owner)
-            .eq([region])
-            .then(|| ctx.op_result_types(owner).first().copied())
-            .flatten()
-    } else {
-        None
-    };
-    if let Some((_, parameters, _)) = func_sig_type.and_then(|ty| func_sig_parts(ctx, ty)) {
-        return parameters.get(index as usize) == Some(&value_type);
-    }
-
-    if let Some(declared) = DynOperationDeclarationUse::get(ctx, owner)
-        && let Some(position) = declared
-            .declared_arguments(ctx)
-            .and_then(|arguments| arguments.iter().position(|&argument| argument == value))
-    {
-        return provenance
-            .claimed_declaration(ctx, declared)
-            .is_some_and(|declaration| {
-                declaration.parameter_types.get(position) == Some(&value_type)
-            });
-    }
-
-    let Some((body_region, completion_region, _)) = ctx.op_regions(owner).collect_tuple() else {
-        return false;
-    };
-    if !Handle::matches(ctx, owner) || completion_region != region || index != 0 {
-        return false;
-    }
-    let [body_block] = ctx.region(body_region).blocks.as_slice() else {
-        return false;
-    };
-    let Some(body_yield) = ctx.block(*body_block).ops.last().copied() else {
-        return false;
-    };
-    let [body_value] = ctx.op_operands(body_yield) else {
-        return false;
-    };
-    Yield::matches(ctx, body_yield)
-        && ctx.value_ty(*body_value) == value_type
-        && callable_has_semantic_provenance(ctx, *body_value, provenance, visiting)
+    ctx.op_regions(op).eq([region])
+        && signature
+            .and_then(|ty| func_sig_parts(ctx, ty))
+            .is_some_and(|(_, parameters, _)| {
+                parameters.get(index as usize) == Some(&ctx.value_ty(argument))
+            })
 }
 
-fn callable_has_semantic_provenance(
-    ctx: &IrContext,
-    value: ValueRef,
-    provenance: &CallableProvenance<'_>,
-    visiting: &mut HashSet<ValueRef>,
-) -> bool {
-    if !visiting.insert(value) || FuncSig::from_type_ref(ctx, ctx.value_ty(value)).is_none() {
-        return false;
+impl CallableArgumentOrigin for Func {
+    fn argument_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        region: RegionRef,
+        index: u32,
+        argument: ValueRef,
+        _query: &mut CallableQuery<'q>,
+    ) -> bool {
+        let signature = ctx.op_attrs(self.op_ref()).get_type("type");
+        is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
     }
-    match ctx.value_def(value) {
-        ValueDef::BlockArg(block, index) => {
-            callable_block_arg_has_source_contract(ctx, block, index, value, provenance, visiting)
-        }
-        ValueDef::OpResult(producer, _) => {
-            Lambda::matches(ctx, producer)
-                || (Instantiate::matches(ctx, producer)
-                    && ctx.op_operands(producer).first().is_some_and(|lambda| {
-                        callable_has_semantic_provenance(ctx, *lambda, provenance, visiting)
-                    }))
-                || named_callable_target(ctx, producer)
-                    .and_then(|symbol| provenance.functions.resolve(ctx, producer, symbol))
-                    .filter(|&function| Func::matches(ctx, function))
-                    .is_some_and(|function| {
-                        verified_callable_declaration(ctx, function, provenance.registered)
+}
+
+impl CallableResultOrigin for Lambda {
+    fn result_is_callable_origin<'q>(
+        &self,
+        _ctx: &IrContext,
+        _result: ValueRef,
+        _query: &mut CallableQuery<'q>,
+    ) -> bool {
+        true
+    }
+}
+
+impl CallableArgumentOrigin for Lambda {
+    fn argument_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        region: RegionRef,
+        index: u32,
+        argument: ValueRef,
+        _query: &mut CallableQuery<'q>,
+    ) -> bool {
+        let signature = ctx.op_result_types(self.op_ref()).first().copied();
+        is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
+    }
+}
+
+impl CallableResultOrigin for Instantiate {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        _result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        ctx.op_operands(self.op_ref())
+            .first()
+            .is_some_and(|&lambda| query.accepts(ctx, lambda))
+    }
+}
+
+impl CallableResultOrigin for FuncRef {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        _result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        ctx.op_attrs(self.op_ref())
+            .get_symbol_ref("func_ref")
+            .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
+    }
+}
+
+impl CallableResultOrigin for Call {
+    // The callee is read through `CallLike` once the call's structure
+    // satisfies its schema.
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        _result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        Self::DEF
+            .schema
+            .verify_structure(ctx, self.op_ref())
+            .is_empty()
+            && query.names_verified_function(ctx, self.op_ref(), self.direct_callee(ctx))
+    }
+}
+
+impl CallableResultOrigin for CallIndirect {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        _result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        ctx.op_operands(self.op_ref())
+            .first()
+            .is_some_and(|&callee| query.accepts(ctx, callee))
+    }
+}
+
+impl CallableResultOrigin for Perform {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        let result_type = ctx.value_ty(result);
+        ctx.op_result_types(self.op_ref()) == [result_type]
+            && self.declared_result_type(ctx) == Some(result_type)
+            && query
+                .claimed_declaration(ctx, self)
+                .is_some_and(|declaration| declaration.result_type == result_type)
+    }
+}
+
+impl CallableArgumentOrigin for Handler {
+    fn argument_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        _region: RegionRef,
+        _index: u32,
+        argument: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        self.declared_arguments(ctx)
+            .and_then(|arguments| arguments.iter().position(|&value| value == argument))
+            .zip(query.claimed_declaration(ctx, self))
+            .is_some_and(|(position, declaration)| {
+                declaration.parameter_types.get(position) == Some(&ctx.value_ty(argument))
+            })
+    }
+}
+
+impl CallableResultOrigin for Handle {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        handle_result_sources(ctx, self.op_ref()).is_some_and(|sources| {
+            sources.into_iter().all(|source| {
+                ctx.value_ty(source) == ctx.value_ty(result) && query.accepts(ctx, source)
+            })
+        })
+    }
+}
+
+impl CallableArgumentOrigin for Handle {
+    fn argument_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        region: RegionRef,
+        index: u32,
+        argument: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        ctx.op_regions(self.op_ref())
+            .collect_tuple()
+            .is_some_and(|(body, completion, _)| {
+                completion == region
+                    && index == 0
+                    && region_yield_value(ctx, body).is_some_and(|value| {
+                        ctx.value_ty(value) == ctx.value_ty(argument) && query.accepts(ctx, value)
                     })
-                || (CallIndirect::matches(ctx, producer)
-                    && ctx.op_operands(producer).first().is_some_and(|callee| {
-                        callable_has_semantic_provenance(ctx, *callee, provenance, visiting)
-                    }))
-                || declared_result_has_callable_provenance(
-                    ctx,
-                    producer,
-                    ctx.value_ty(value),
-                    provenance,
-                )
-                || list::Head::from_op(ctx, producer).is_ok_and(|head| {
-                    head.element_type(ctx) == ctx.value_ty(value)
-                        && ctx.op_result_types(producer) == [ctx.value_ty(value)]
-                })
-                || adt_projection_has_exact_callable_type(
-                    ctx,
-                    producer,
-                    ctx.value_ty(value),
-                    provenance.nominal_layouts,
-                )
+            })
+    }
+}
+
+impl CallableResultOrigin for Resume {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        resumed_handle_result(ctx, self.op_ref()).is_some_and(|handled| {
+            ctx.value_ty(handled) == ctx.value_ty(result) && query.accepts(ctx, handled)
+        })
+    }
+}
+
+/// A list's head is a callable origin when the declared element type is
+/// exactly the result's type.
+impl CallableResultOrigin for list::Head {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        result: ValueRef,
+        _query: &mut CallableQuery<'q>,
+    ) -> bool {
+        let result_type = ctx.value_ty(result);
+        self.element_type(ctx) == result_type && ctx.op_result_types(self.op_ref()) == [result_type]
+    }
+}
+
+/// An ADT field projection is a callable origin when the canonical layout of
+/// its source declares the field with exactly the result's type.
+impl CallableResultOrigin for adt::StructGet {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        adt_projection_has_exact_callable_type(
+            ctx,
+            self.op_ref(),
+            ctx.value_ty(result),
+            query.nominal_layouts,
+        )
+    }
+}
+
+/// A variant field projection, under the rule of [`adt::StructGet`].
+impl CallableResultOrigin for adt::VariantGet {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        adt_projection_has_exact_callable_type(
+            ctx,
+            self.op_ref(),
+            ctx.value_ty(result),
+            query.nominal_layouts,
+        )
+    }
+}
+
+trunk_ir::register_interfaces!(
+    list::Head: CallableResultOrigin;
+    adt::StructGet: CallableResultOrigin;
+    adt::VariantGet: CallableResultOrigin
+);
+
+/// The value a single-block region yields to its parent.
+fn region_yield_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
+    let block = ctx.region(region).blocks.iter().exactly_one().ok()?;
+    let terminator = ctx.block(*block).ops.last().copied()?;
+    let value = ctx.op_operands(terminator).iter().exactly_one().ok()?;
+    Yield::matches(ctx, terminator).then_some(*value)
+}
+
+/// The values that become a `handle`'s result: the completion region's
+/// yield and the yield of each general (`op`) handler. A `fn` handler yields
+/// to its `perform` instead.
+fn handle_result_sources(ctx: &IrContext, handle: OpRef) -> Option<Vec<ValueRef>> {
+    let (_, completion, handlers) = ctx.op_regions(handle).collect_tuple()?;
+    let mut sources = vec![region_yield_value(ctx, completion)?];
+    for &block in &ctx.region(handlers).blocks {
+        for &handler in &ctx.block(block).ops {
+            if Handler::matches(ctx, handler) && ctx.op_attrs(handler).get_str("kind") == Some("op")
+            {
+                sources.push(region_yield_value(ctx, ctx.op_region(handler, 0)?)?);
+            }
         }
     }
+    Some(sources)
 }
 
-fn declared_result_has_callable_provenance(
-    ctx: &IrContext,
-    producer: OpRef,
-    result_type: TypeRef,
-    provenance: &CallableProvenance<'_>,
-) -> bool {
-    let Some(declared) = DynOperationDeclarationUse::get(ctx, producer) else {
-        return false;
+/// The result of the `handle` whose handler holds the resume token that
+/// `resume` consumes.
+fn resumed_handle_result(ctx: &IrContext, resume: OpRef) -> Option<ValueRef> {
+    let token = *ctx.op_operands(resume).first()?;
+    let ValueDef::BlockArg(block, _) = ctx.value_def(token) else {
+        return None;
     };
-    ctx.op_result_types(producer) == [result_type]
-        && declared.declared_result_type(ctx) == Some(result_type)
-        && provenance
-            .claimed_declaration(ctx, declared)
-            .is_some_and(|declaration| declaration.result_type == result_type)
-}
-
-/// The function a `func_ref` names or a direct call calls. A call is read
-/// through `CallLike` only once its structure satisfies its schema, since the
-/// whole-IR walk also visits operations the local checks rejected.
-fn named_callable_target(ctx: &IrContext, producer: OpRef) -> Option<&SymbolPath> {
-    if FuncRef::matches(ctx, producer) {
-        return ctx.op_attrs(producer).get_symbol_ref("func_ref");
+    let handler = ctx.region(ctx.block(block).parent_region?).parent_op?;
+    let handle = ctx.region(parent_region(ctx, handler)?).parent_op?;
+    if !Handler::matches(ctx, handler) || !Handle::matches(ctx, handle) {
+        return None;
     }
-    let call = DynCallLike::get(ctx, producer)?;
-    OpDef::of(ctx, producer)?
-        .schema
-        .verify_structure(ctx, producer)
-        .is_empty()
-        .then(|| call.direct_callee(ctx))
+    ctx.op_results(handle).first().copied()
 }
 
 fn verified_callable_declaration(
@@ -3739,11 +3994,12 @@ fn validate_callable_origins(
     errors: &mut Vec<ValidationError>,
 ) {
     let registered = compiler_intrinsic_map(ctx, declarations, errors);
-    let provenance = CallableProvenance {
+    let mut query = CallableQuery {
         functions,
         registered: &registered,
         declarations: operation_declarations,
         nominal_layouts,
+        reached: HashSet::default(),
     };
     let mut seen = HashSet::default();
     walk_region_ops(ctx, body, &mut |op| {
@@ -3809,7 +4065,10 @@ fn validate_callable_origins(
             }
         } else if (CallIndirect::matches(ctx, op) || TailCallIndirect::matches(ctx, op))
             && let Some(callee) = ctx.op_operands(op).first().copied()
-            && !callable_has_semantic_provenance(ctx, callee, &provenance, &mut HashSet::default())
+            && !{
+                query.reached.clear();
+                query.accepts(ctx, callee)
+            }
         {
             push_op_error(
                 ctx,
@@ -7080,6 +7339,120 @@ mod tests {
             messages(&result).contains("callable provenance"),
             "{result}"
         );
+    }
+
+    fn handled_callable_module(op_yield: &str) -> String {
+        format!(
+            r#"core.module @test {{
+  !F = tribute_control.func_sig<(core.i32) -> core.i32, {{tribute.calling_convention = 0}}>
+  tribute_control.func @inc(%n: core.i32) -> core.i32 convention(direct) {{
+    tribute_control.return %n
+  }}
+  %f = tribute_control.handle : !F {{
+    %body = tribute_control.perform {{ability = @Gen, op_name = "next", operation_kind = "op"}} : core.i32
+    tribute_control.yield %body
+  }} {{
+    ^completion(%k: core.i32):
+      %done = tribute_control.func_ref {{func_ref = @inc}} : !F
+      tribute_control.yield %done
+  }} {{
+    tribute_control.handler {{ability = @Gen, kind = "op", op_name = "next", operation_result_type = core.i32}} {{
+      ^next(%token: tribute_control.resume_token<core.i32, !F>):
+        %resumed_value = arith.const {{value = 40}} : core.i32
+        %g = tribute_control.resume %token, %resumed_value : !F
+        %called = tribute_control.call_indirect %g, %resumed_value : core.i32
+        %zero = arith.const {{value = 0}} : core.i32
+        %bad = core.unrealized_conversion_cast %zero : !F
+        tribute_control.yield {op_yield}
+    }}
+    tribute_control.handler {{ability = @Ask, kind = "fn", op_name = "ask", operation_result_type = core.i32}} {{
+      ^ask:
+        %answer = arith.const {{value = 2}} : core.i32
+        tribute_control.yield %answer
+    }}
+  }}
+  %one = arith.const {{value = 1}} : core.i32
+  %result = tribute_control.call_indirect %f, %one : core.i32
+  ability.decl {{sym_name = "Gen"}} {{
+    ability.operation {{kind = "op", op_name = "next", param_types = [], result_type = core.i32}}
+  }}
+  ability.decl {{sym_name = "Ask"}} {{
+    ability.operation {{kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}}
+  }}
+}}"#
+        )
+    }
+
+    #[test]
+    fn handle_and_resume_results_have_callable_provenance() {
+        let (ctx, module) = parse_fixture(&handled_callable_module("%g"));
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn handle_result_needs_every_yield_to_have_callable_provenance() {
+        let (ctx, module) = parse_fixture(&handled_callable_module("%bad"));
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert_eq!(
+            messages(&result).matches("callable provenance").count(),
+            2,
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn resume_result_needs_a_handler_resume_token() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !Token = tribute_control.resume_token<core.i32, !F>
+  tribute_control.func @caller(%token: !Token, %raw: core.ptr, %value: core.i32) -> core.i32 convention(direct) {
+    %from_parameter = tribute_control.resume %token, %value : !F
+    %first = tribute_control.call_indirect %from_parameter, %value : core.i32
+    %cast_token = core.unrealized_conversion_cast %raw : !Token
+    %from_cast = tribute_control.resume %cast_token, %first : !F
+    %second = tribute_control.call_indirect %from_cast, %first : core.i32
+    tribute_control.return %second
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert_eq!(
+            messages(&result).matches("callable provenance").count(),
+            2,
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn lambda_parameters_indirect_results_and_list_heads_have_callable_provenance() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !G = tribute_control.func_sig<(!F, core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !H = tribute_control.func_sig<(core.i32) -> !F, {tribute.calling_convention = 0}>
+  tribute_control.func @caller(%list: core.ptr, %make: !H, %value: core.i32) -> core.i32 convention(direct) {
+    %apply = tribute_control.lambda : !G {
+      ^bb0(%callback: !F, %argument: core.i32):
+        %applied = tribute_control.call_indirect %callback, %argument : core.i32
+        tribute_control.return %applied
+    }
+    %made = tribute_control.call_indirect %make, %value : !F
+    %first = tribute_control.call_indirect %made, %value : core.i32
+    %head = list.head %list {element_type = !F} : !F
+    %second = tribute_control.call_indirect %head, %first : core.i32
+    %third = tribute_control.call_indirect %apply, %head, %second : core.i32
+    tribute_control.return %third
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(result.is_ok(), "{result}");
     }
 
     #[test]
