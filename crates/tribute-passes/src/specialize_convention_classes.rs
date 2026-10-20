@@ -82,9 +82,7 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
     // Clone every instance from its original before rewriting any of them.
     let mut rewrites = Vec::new();
     for function in &functions {
-        let Some(vectors) = instances.get(&function.name) else {
-            continue;
-        };
+        let vectors = &instances[&function.name];
         let mut before = next_op(ctx, function.op);
         for classes in &vectors[1..] {
             let clone = ctx.clone_op(function.op, &mut IrMapping::new());
@@ -307,14 +305,12 @@ impl Instance<'_> {
         } else {
             return;
         };
-        let Some(callee) = ctx
+        let callee = ctx
             .op_attrs(op)
             .get_symbol_ref(key)
             .and_then(|path| path.leaf())
-            .map(|leaf| leaf.to_string())
-        else {
-            return;
-        };
+            .expect("a reference names a definition")
+            .to_string();
         if !self.names.contains(callee.as_str()) || callee == "main" {
             return;
         }
@@ -370,12 +366,12 @@ impl Instance<'_> {
         if !self.function.inferred {
             return;
         }
-        let Some(ty) = ctx.op_attrs(op).get_type("type") else {
-            return;
-        };
-        let Some(signature) = FuncSig::from_type_ref(ctx, ty) else {
-            return;
-        };
+        let ty = ctx
+            .op_attrs(op)
+            .get_type("type")
+            .expect("a definition has a signature");
+        let signature =
+            FuncSig::from_type_ref(ctx, ty).expect("a definition's signature is a func_sig");
         let mut row = signature.row(ctx);
         if row.tail.is_none_or(|tail| self.params.contains_key(&tail)) {
             return;

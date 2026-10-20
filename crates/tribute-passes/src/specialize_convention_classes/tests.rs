@@ -218,9 +218,21 @@ fn a_module_with_conventions_is_rejected() {
   }
 }"#,
     );
-    let error = specialize(&mut ctx, module).unwrap_err();
+    let module =
+        trunk_ir::dialect::core::Module::from_op(&ctx, module.op()).expect("a core.module");
+    let mut pm = trunk_ir::pass::PassManager::new();
+    pm.add_pass(SpecializeConventionClasses);
+    let error = pm
+        .run(
+            &mut ctx,
+            module,
+            &mut trunk_ir::analysis::AnalysisCache::new(),
+        )
+        .unwrap_err()
+        .to_string();
     assert!(
-        matches!(error, ClassSpecializationError::ConventionsAssigned),
+        error.contains("specialize-convention-classes")
+            && error.contains("takes source signatures without calling conventions"),
         "{error}"
     );
 }
@@ -247,4 +259,48 @@ fn a_quantifying_lambda_is_rejected() {
         matches!(error, ClassSpecializationError::QuantifyingLambda { .. }),
         "{error}"
     );
+}
+
+/// Types outside definitions take the conventions of their abilities, a
+/// bodyless definition has no class variables, a reference to root `main`
+/// stays on it, and an instance of the last definition follows it.
+#[test]
+fn module_level_types_and_references_to_main_keep_their_shape() {
+    let printed = specialized(
+        r#"core.module @m {
+  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !pure = tribute_control.func_sig<(core.i32) -> core.i32>
+  ability.decl {sym_name = "Map"} {
+    ability.operation {kind = "fn", op_name = "map", param_types = [!pure], result_type = core.i32}
+  }
+  tribute_control.func @ext(%x: core.i32) -> core.i32 attributes {abi = "C"}
+  tribute_control.func @main(%x: core.i32) -> core.i32 {
+    %m = tribute_control.func_ref {func_ref = @main} : !pure
+    %f = tribute_control.func_ref {func_ref = @ext} : !pure
+    %r = tribute_control.call %x, %f {callee = @app, row_args = [{}]} : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
+    %r = tribute_control.call_indirect %f, %x : core.i32
+    tribute_control.return %r
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "ability.operation {kind = \"fn\", op_name = \"map\", param_types = [!t0], result_type = core.i32}",
+            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>",
+            "tribute_control.func @ext(%arg0: core.i32) -> core.i32 convention(direct) attributes {abi = \"C\"}",
+            "%1 = tribute_control.func_ref {func_ref = @main} : !t0",
+            "callee = @\"app$9D\"",
+        ],
+    );
+    let base = printed
+        .find("tribute_control.func @app[")
+        .expect("the base stays");
+    let instance = printed
+        .find("tribute_control.func @\"app$9D\"")
+        .expect("the instance");
+    assert!(base < instance, "{printed}");
 }
