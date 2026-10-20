@@ -1,11 +1,21 @@
 comment:
   layout: "header, diff, flags, components"
 
+# Coverage measurements vary slightly between runs even when no source
+# changed, so allow a small project-level decrease.
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0.1%
+
 component_management:
   default_rules:
     statuses:
       - type: project
         target: auto
+        threshold: 0.1%
 
   individual_components:
     # IR framework and Wasm backend
