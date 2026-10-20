@@ -80,7 +80,7 @@ Array:  [length: i64] [elements...]
 ```
 
 Field offsets are computed at compile time by the `adt` dialect's `layout`
-module in `tribute-ir`.
+module in `tribute-ir`. 배열의 layout은 [Array](#array)가 정한다.
 
 ### Boxed Primitives
 
@@ -125,6 +125,26 @@ Byte 하나를 읽는 compiler intrinsic은 native에서 runtime 함수 호출�
 Runtime 함수는 `Bytes` argument를 호출 동안 빌리고, `Bytes` 결과는 호출자가 unit
 하나를 갖는 새 값으로 돌려준다. Runtime이 다른 기록 안에 raw pointer로 담아 돌려준
 `Bytes`도 같은 방식으로 unit 하나를 넘겨준다.
+
+### Array
+
+Evidence가 아닌 `core.array<E>` 값은 compiler가 할당하는 RC object다.
+
+```text
+Array: [len: i64] [element: E...]
+```
+
+- 원소는 payload offset 8부터 빈틈 없이 놓인다. 원소 하나의 크기(stride)는 `E`의
+  native 표현 크기다. 8비트 정수와 bool은 1, 16비트 정수는 2, 32비트 정수와 `f32`는
+  4, 64비트 정수, `f64`, pointer와 managed 참조는 8이다. 모든 stride가 8 이하의
+  2의 거듭제곱이므로 원소는 자연 정렬된다.
+- 할당 크기는 RC header, `len`, 원소를 더한 `16 + len × stride`다. 해제도 같은
+  크기를 쓴다.
+- Managed 참조 원소는 owned 참조다. `adt.ref_null`이 만든 null도 원소가 될 수
+  있으며 retain과 release는 null에 대해 아무것도 하지 않는다.
+- 배열 operation의 ownership 규칙은
+  [typed ownership plan](#1-typed-ownership-and-rtti-plan), 해제는
+  [type-specific release](#type-specific-release)가 정한다.
 
 ### Evidence
 
@@ -359,7 +379,8 @@ destination만 unit을 받는다. Unit을 받지 못한 destination마다 branch
 unit을 획득한다.
 
 Aggregate field로의 저장(`adt.struct_new`, `adt.variant_new`, `adt.struct_set`의
-값)과 ordinary call의 consumed 매개변수는 독립된 unit을 받는 자리다. 기준 동작은 그
+값, `adt.array_of`와 `adt.array_splice`의 `elements`, `adt.array_set`의 값)과
+ordinary call의 consumed 매개변수는 독립된 unit을 받는 자리다. 기준 동작은 그
 자리마다 직전에 새 unit을 획득하고 값의 unit은 값에 남긴다. Last-use move 정책을
 켜면 그 operation이 값의 마지막 사용일 때 값의 unit을 그 자리로 옮기고, 획득도 뒤따르는
 final release도 두지 않는다. 마지막 사용은 final release 위치를 정하는 것과 같은
@@ -367,10 +388,22 @@ final release도 두지 않는다. 마지막 사용은 final release 위치를 �
 operation이 값이나 값에서 파생된 borrow를 쓰지 않는다. 옮길 unit이 있어야 하므로
 값은 owned root여야 하며, 파생 borrow와 borrowed 매개변수는 옮기지 않는다. 또한 그
 operation이 값의 root에 닿는 모든 operand가 unit을 받는 자리여야 한다. Indirect
-call의 callee, `adt.struct_set`의 대상, borrowed·retained 매개변수로의 argument,
-값에서 파생된 borrow는 호출이나 저장 동안 caller의 unit에 기대므로, 이런 operand가
+call의 callee, `adt.struct_set`과 `adt.array_set`의 대상, borrowed·retained
+매개변수로의 argument, `adt.array_new`의 `initial`, `adt.array_splice`의 `source`,
+값에서 파생된 borrow는 호출이나 저장 동안 caller의
+unit에 기대므로, 이런 operand가
 하나라도 있으면 모든 자리가 기준 동작대로 획득한다. 한 operation이 한 값을 여러
 자리에 넘기면 첫 자리만 unit을 받고 나머지는 획득한다.
+
+`adt.array_new`는 `initial`을, `adt.array_splice`는 `source`를 operation 동안
+빌린다. `initial`을 담은 원소마다, 그리고 `source`에서 결과로 복사한 managed 원소마다
+operation 자신이 unit을 하나씩 획득한다. 이 원소의 수는 실행 때 정해지므로 plan은
+이 획득을 action으로 갖지 않으며, release 함수가 field를 release하는 것처럼
+operation의 lowering이 소유한다. 결과는 unit 하나를 갖는 새 owned 값이다.
+
+`adt.array_set`은 `adt.struct_set`과 같다. 대상 배열은 operation 동안 빌리고, 새
+원소는 위의 저장 자리로 unit을 받으며, 바뀌기 전 원소의 unit은 replaced-field
+release로 release한다.
 
 Owner에서 읽은 borrow는 unit이 없으므로, unit이 필요한 사용(저장, consumed 매개변수,
 return, block argument, proper tail)마다 기준 동작대로 새 unit을 획득한다. 그 owner가
@@ -385,8 +418,8 @@ last-use move와 final release 규칙을 그대로 따른다. Field move는 다�
   nested projection은 단계마다 같은 규칙으로 옮긴다.
 - Owner의 layout은 release가 정적 `alloc_size`로 해제하는 layout이다. 즉 exact struct,
   continuation frame layout이다. Variant마다 크기가 다른 enum 값, capture layout마다
-  크기가 다른 closure 값과 `tribute_rt.anyref`/`intref`는 RTTI로 해제하므로 대상이
-  아니다. 교체 가능한 layout에서
+  크기가 다른 closure 값, 길이마다 크기가 다른 배열과 `tribute_rt.anyref`/`intref`는
+  RTTI로 해제하므로 대상이 아니다. 교체 가능한 layout에서
   읽은 값은 이미 자신의 unit을 가지므로 옮기지 않는다.
 - Owner의 final release와 옮기는 borrow의 모든 사용이 한 block 안에 있다. Edge에서 죽는
   owner와 block 경계를 넘는 borrow는 옮기지 않는다.
@@ -421,10 +454,11 @@ block을 만들므로 이런 edge를 만들지 않는다.
 `adt.typeref`는 type 자체로 managed다. Native RC-header allocation을 표현하는
 검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
 contract로 분류한다. `core.bytes`는 [`Bytes`](#bytes) 객체에 대한 managed 참조이고,
-evidence type은 [evidence](#evidence) 객체에 대한 managed 참조다.
-Function/code address, borrowed buffer, `core.ptr`, 그 밖의 `core.array`는
-unmanaged다. 변환 결과가 pointer라는
-사실은 이 분류에 참여하지 않는다.
+evidence type은 [evidence](#evidence) 객체에 대한 managed 참조다. 그 밖의
+`core.array`는 원소 타입과 관계없이 [array](#array) 객체에 대한 managed 참조다.
+Evidence와 일반 배열은 `layout = "evidence"` 식별자로만 가른다.
+Function/code address, borrowed buffer, `core.ptr`는 unmanaged다. 변환 결과가
+pointer라는 사실은 이 분류에 참여하지 않는다.
 
 Residual structured region, stale nominal identity, malformed callable metadata,
 duplicate/conflicting action 또는 SSA remapping ambiguity는 plan 생성 전체를
@@ -447,10 +481,11 @@ provenance에서 action을 새로 발견하지 않는다. Duplicate owning desti
 둘 수 없다.
 
 각 materialize된 release는 plan action이 가리키는 type-erasure 전 nominal layout에서
-계산한 **payload size + RC header size**를 가진다. Replaced-field release도 field의
-exact declared layout으로 같은 size를 사용한다. `tribute_rt.anyref`와 `intref`처럼
+계산한 **payload size + RC header size**를 가진다. Replaced-field release도 field나
+배열 원소의 exact declared layout으로 같은 size를 사용한다. `tribute_rt.anyref`와 `intref`처럼
 static nominal layout이 없는 opaque dynamic reference와, variant마다 할당 크기가
-다른 enum 값, capture layout마다 할당 크기가 다른 closure 값의 `alloc_size = 0`은
+다른 enum 값, capture layout마다 할당 크기가 다른 closure 값, 길이마다 할당 크기가
+다른 배열의 `alloc_size = 0`은
 deallocation size가 아니라 RTTI dispatch 전용 신호다. Closure 값은 base 타입으로
 다뤄지고 native layout은 이 계산 뒤에 정해지므로, closure의 크기는 언제나 header
 RTTI가 고른 layout의 release 함수가 정한다. backend는 header RTTI로 이를
@@ -527,10 +562,11 @@ into control flow and atomic operations by RC lowering.
   and every parameter `release`; this keeps acquisition and release decisions
   under one ownership proof instead of matching generated releases afterward.
 - **Temporary field borrows:** Typed planning은 `adt.struct_get` 또는
-  `adt.variant_get`이 읽은 exact declared managed field를 그 projection의 owner에서
-  파생된 temporary borrow로 분류할 수 있다. Owner는 projection operand의 typed alias
-  root이다. 변환된 `clif.load` result type, address provenance, `core.ptr` operand는
-  ownership evidence가 아니다.
+  `adt.variant_get`이 읽은 exact declared managed field와 `adt.array_get`이 읽은
+  managed 원소를 그 projection의 owner에서 파생된 temporary borrow로 분류할 수
+  있다. Owner는 projection operand의 typed alias root이다. 변환된 `clif.load`
+  result type, address provenance, `core.ptr` operand는 ownership evidence가
+  아니다.
 
   파생 borrow는 자신의 ownership unit을 갖지 않는다. 대신 다음 불변식이 성립해야
   한다: 파생 값의 모든 사용이 끝날 때까지 그 값에 도달하는 owned root가 살아 있고,
@@ -551,6 +587,10 @@ into control flow and atomic operations by RC lowering.
     같은 함수의 뒤따르는 쓰기나 호출된 함수의 쓰기가 파생 값을 해제할 수 있다. 쓰는
     쪽은 cast와 closure capture를 거쳐 같은 객체에 도달할 수 있으므로 판정은
     특정 SSA 값이 아니라 layout의 nominal identity로 한다.
+  - 배열도 같다. Module 안의 어떤 `adt.array_set`이든 쓰는 `core.array` 타입은 교체
+    가능한 layout이며, 그 타입에서 `adt.array_get`이 읽은 managed 원소는 projection
+    직후 자신의 unit을 획득한다. 그 밖의 배열 타입에서 읽은 원소는 borrow할 수 있는
+    projection이다.
 
   이 최적화를 끈 기준 동작은 모든 managed projection이 projection 직후 자신의 unit을
   획득하는 것이다. Exact typed projection 계약을 만족하지 않는 IR은 borrow로도 기준
@@ -752,6 +792,11 @@ __tribute_release_Point(ptr):
     call @__tribute_dealloc(%raw, clif.iconst(16))
 ```
 
+배열의 release 함수는 원소 타입마다 하나다. 원소가 managed 참조이면 `len`개의
+원소를 차례로 release하고, null 원소는 release가 건너뛴다. 그 뒤 `len`을 읽어
+[할당 크기](#array)로 해제한다. 원소가 managed 참조가 아니면 원소를 읽지 않고 같은
+크기로 해제한다.
+
 **RTTI dispatch:**
 
 ```text
@@ -836,6 +881,12 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
   One-shot resumption이 소비 여부를 표시하는 쓰기는 unmanaged flag를 쓴다. 두 cell의
   layout은 `adt.struct_set`이 쓰는 [교체 가능한 layout](#3-rc-optimization-pass)이므로
   그 projection은 borrow하지 않는다.
+- **배열도 만든 뒤 managed 원소가 바뀌지 않는다.** `adt.array_new`,
+  `adt.array_of`, `adt.array_splice`는 operand와 `source`의 원소로 새 배열을 채우므로
+  struct처럼 이미 있는 object만 담는다. Managed 원소를 덮어쓰는 `adt.array_set`을
+  내는 producer는 없다. 공유된 배열에 그 배열을 capture한 closure를 저장하면 순환이
+  닫히므로, 그런 쓰기를 들이는 producer는 completion cell처럼 순환이 생기지 않는
+  근거를 이 절에 둔다. 원소를 바꾼 배열이 필요하면 `adt.array_splice`로 새로 만든다.
 - **Closure는 자신을 capture하지 않는다.** Code 함수는 closure 자신을 environment
   입력으로 받는다([Closure captures](#closure-captures)). 지역 함수가 자기 자신을
   재귀 호출한다면 그 참조는 environment 입력으로 해결하며 capture로 만들지 않는다.
@@ -900,6 +951,7 @@ field:   u32 name | u32 name_len | u32 field_kind
 | `1` | variant. `enum_record`가 소속 enum 레코드, `tag_index`가 선언 순서의 variant 번호 |
 | `2` | enum. Index를 받지 않으며, 소속 variant 레코드의 `enum_record`가 이 레코드를 가리킨다 |
 | `3` | compiler 소유 builtin 값(예약 index) |
+| `4` | [배열](#array). `field_count`는 1이고 그 필드가 원소의 종류다. 원소 수는 값의 `len`이다 |
 
 정수 칸은 target의 native byte order를 따른다. `field_kind`의 하위 8비트는 분류,
 그다음 8비트는 scalar의 bit 폭이다. 분류는 ownership 계획이 의미 타입으로 정한다.
@@ -930,13 +982,14 @@ Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다
 | `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`. 고정 크기 release |
 | `5` | [Evidence](#evidence). Marker를 모두 release한 뒤 `len`을 읽어 해제 |
 | `6` | Evidence의 marker. 참조 필드를 release한 뒤 고정 크기로 해제 |
-| 예약 범위 다음 | ownership planning이 할당 순서대로 정한 struct와 variant의 descriptor |
+| 예약 범위 다음 | ownership planning이 할당 순서대로 정한 struct, variant, 배열의 descriptor |
 
 예약 범위는 compiler가 생성하는 할당 operation 없이 runtime이나 boxing lowering이
 만드는 값에만 쓴다. 할당 operation으로 만드는 값은 모두 예약 범위 다음 번호를 받는다.
 소스 struct와 variant뿐 아니라 closure layout처럼 compiler가 소유한 layout의 할당도
 여기에 속하며, 그 descriptor는 compiler 소유 이름과 필드 종류를 가진다. Closure는
-base와 capture layout마다 descriptor를 하나씩 가진다. RC header
+base와 capture layout마다 descriptor를 하나씩 가지며, 배열의 descriptor 단위는
+[runtime-types.md](runtime-types.md#descriptor-단위)가 정한다. RC header
 없이 unmanaged로 다루는 값은 RC 객체가 아니므로 RTTI index와 descriptor를 갖지 않는다.
 
 RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. Table과

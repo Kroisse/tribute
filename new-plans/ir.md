@@ -1565,10 +1565,47 @@ Dynamic `tribute_rt.anyref`에서 `adt.typeref`로 복원하는 명시적인
 native는 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast`를 생성한다.
 이 규칙은 일반 `adt.struct` 복원이나 nominal provenance 검증을 바꾸지 않는다.
 
-`adt.array_get`과 `adt.array_set`의 index, `adt.array_len`의 결과는
+#### `adt` 배열
+
+`core.array<E>`는 원소 타입 `E`의 값을 순서대로 담는 배열이다. `E`는 scalar,
+pointer, managed 참조 중 하나이며 원소 하나는 machine 값 하나다. Struct, variant,
+closure 같은 aggregate는 그 object에 대한 managed 참조로 담고 inline으로 펼치지
+않는다.
+
+배열을 만드는 operation은 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로
+고정되어 있다. Operand 개수나 모양으로 operation의 뜻을 고르지 않는다.
+
+| Operation | 결과 |
+| --- | --- |
+| `adt.array_new(length, initial)` | 모든 원소가 `initial`인 길이 `length`의 배열 |
+| `adt.array_of(elements...)` | operand를 순서대로 담은 배열. 길이는 operand 수이며 0이어도 된다 |
+| `adt.array_splice(source, start, end, elements...)` | `source[0, start)`, `elements`, `source[end, len)`을 이어 담은 새 배열 |
+
+- 세 operation의 결과 타입은 `type` 속성의 `core.array<E>`이고, `initial`과
+  `elements`는 `E` 타입이다. `adt.array_splice`의 `source`는 결과와 같은 타입이다.
+- `adt.array_splice`는 범위 복사로 만드는 배열이다. `source`를 바꾸지 않고 새
+  배열을 결과로 낸다. 원소 하나를 끼우거나(`start = end`), 빼거나(`elements`가
+  없고 `end = start + 1`), 바꾸거나, 앞뒤를 잘라 내는 일을 모두 이 operation으로
+  쓴다.
+- `adt.array_set`은 배열의 원소 하나를 제자리에서 바꾼다. 같은 배열을 가리키는
+  모든 값이 바뀐 원소를 본다. 공유된 배열을 바꾸지 않아야 하는 producer는 원소를
+  바꾼 배열을 `adt.array_splice`로 새로 만든다.
+
+`adt`의 배열 operation은 target이 객체를 회수하는 방식을 가정하지 않는다. Native
+RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 제약은
+[rc.md](rc.md#비순환-object-그래프)가 정한다.
+
+`adt.array_get`과 `adt.array_set`의 index, `adt.array_splice`의 `start`와 `end`,
+`adt.array_new`의 `length`, `adt.array_len`의 결과는
 [`core.index`](#coreindex-주소-폭-정수)다. 배열의 원소 개수와 위치는 target의 주소
 폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_castsi`나
 `arith.index_castui`로 명시적으로 바꾼다.
+
+Index는 부호 없는 값으로 해석한다. `adt.array_get`과 `adt.array_set`은
+`index < len`을, `adt.array_splice`는 `start ≤ end ≤ len`을 전제로 한다. Target은
+이 전제를 어긴 실행을 trap으로 끝내며, 범위 밖 원소를 읽거나 쓰거나 다른 값으로
+대신하지 않는다. Target이 표현할 수 있는 최대 길이나 할당 크기를 넘는 길이도
+trap이다.
 
 `list.*` represents the opaque canonical `List(a)` sequence contract. It uses
 `list.empty`, `list.prepend`, `list.is_empty`, `list.head`, and `list.tail`.
@@ -1967,16 +2004,21 @@ rewrite 도중 operand, attribute, region이 바뀌므로 생성 시점의 검�
 
 ### `core.index` 주소 폭 정수
 
-`core.index`는 target의 주소 폭을 따르는 signless 정수 타입이다. Byte offset, 크기,
-배열 index와 길이처럼 target의 주소 공간에서 세는 값을 나타낸다. 폭은 target이
-정하며 target-independent IR과 변환은 그 폭에 기대지 않는다. 지원하는 모든 target의
-index 폭은 32비트 이상이고, target-independent 상수 접기는 이 하한만 가정한다.
+`core.index`는 target의 linear memory 주소 폭을 따르는 signless 정수 타입이다. Byte
+offset, 크기, 배열 index와 길이처럼 target의 주소 공간에서 세는 값을 나타낸다. 폭은
+target이 정하며 target-independent IR과 변환은 그 폭에 기대지 않는다. 지원하는 모든
+target의 index 폭은 32비트 이상이고, target-independent 상수 접기는 이 하한만
+가정한다.
 
 | Target | `core.index` 표현 |
 | --- | --- |
 | Native (Cranelift) | `core.i64`, pointer 폭 |
-| WasmGC | `core.i32`, `array.get`/`array.set`/`array.len`의 index와 길이 폭 |
-| Linear memory wasm32 | `core.i32`, 주소 폭 |
+| Wasm, 32비트 memory | `core.i32`, memory의 index type |
+| Wasm, 64비트 memory(memory64) | `core.i64`, memory의 index type |
+
+WasmGC 배열 명령의 index와 길이는 memory의 index type과 관계없이 `i32`다. 이 폭은
+`core.index`가 아니라 target 고유의 제약이며, Wasm lowering이
+[GC 배열 index를 좁히는 규칙](wasm-backend.md#gc-배열-index)으로 맞춘다.
 
 `core.index`는 고정 폭 정수가 아니다. 고정 폭 정수 범주 `IntegerLike`에 속하지 않고,
 `IntegerOrIndex` 범주가 고정 폭 정수와 함께 받는다. Machine scalar 하나이므로
