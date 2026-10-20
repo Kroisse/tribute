@@ -72,8 +72,29 @@ mod adt {
     ) -> Value<_> {
     }
 
+    /// A `length`-element array whose every element is `initial`.
     #[flags(Pure)]
-    fn array_new(r#type: Attr<Type>, elements: Variadic<_>) -> Value<_> {}
+    fn array_new<A: Array>(
+        r#type: Attr<TypeOf<A>>,
+        length: Value<Index>,
+        initial: Value<A::Element>,
+    ) -> Value<A> {
+    }
+
+    /// An array of `elements` in order.
+    #[flags(Pure)]
+    fn array_of<A: Array>(r#type: Attr<TypeOf<A>>, elements: Variadic<A::Element>) -> Value<A> {}
+
+    /// A new array of `source[0, start)`, `elements`, and `source[end, len)`.
+    #[flags(Pure)]
+    fn array_splice<A: Array>(
+        r#type: Attr<TypeOf<A>>,
+        source: Value<A>,
+        start: Value<Index>,
+        end: Value<Index>,
+        elements: Variadic<A::Element>,
+    ) -> Value<A> {
+    }
 
     #[flags(Pure)]
     fn array_get<A: Array>(r#ref: Value<A>, index: Value<Index>) -> Value<A::Element> {}
@@ -895,6 +916,53 @@ mod tests {
         let mut reparsed = IrContext::new();
         let module = parse_module(&mut reparsed, &printed).expect("printed IR must parse");
         assert_eq!(printed, print_module(&reparsed, module));
+    }
+
+    fn array_schema_ok(body: &str) -> bool {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                "core.module @test {{\n  !A = core.array<core.i32>\n  !B = core.array<core.i64>\n  func.func @f(%a: !A, %i: core.index, %n: core.i32, %w: core.i64) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
+            ),
+        );
+        trunk_ir::validation::validate_op_schemas(&ctx, module.op()).is_ok()
+    }
+
+    #[test]
+    fn array_construction_binds_the_element_type_and_index_operands() {
+        assert!(array_schema_ok(
+            "%v = adt.array_new %i, %n {type = !A} : !A"
+        ));
+        assert!(!array_schema_ok(
+            "%v = adt.array_new %n, %n {type = !A} : !A"
+        ));
+        assert!(!array_schema_ok(
+            "%v = adt.array_new %i, %w {type = !A} : !A"
+        ));
+        assert!(!array_schema_ok(
+            "%v = adt.array_new %i, %n {type = !A} : !B"
+        ));
+        assert!(array_schema_ok("%v = adt.array_of {type = !A} : !A"));
+        assert!(array_schema_ok("%v = adt.array_of %n, %n {type = !A} : !A"));
+        assert!(!array_schema_ok(
+            "%v = adt.array_of %n, %w {type = !A} : !A"
+        ));
+        assert!(array_schema_ok(
+            "%v = adt.array_splice %a, %i, %i, %n {type = !A} : !A"
+        ));
+        assert!(array_schema_ok(
+            "%v = adt.array_splice %a, %i, %i {type = !A} : !A"
+        ));
+        assert!(!array_schema_ok(
+            "%v = adt.array_splice %a, %n, %i {type = !A} : !A"
+        ));
+        assert!(!array_schema_ok(
+            "%v = adt.array_splice %a, %i, %i, %w {type = !A} : !A"
+        ));
+        assert!(!array_schema_ok(
+            "%v = adt.array_splice %a, %i, %i {type = !B} : !B"
+        ));
     }
 
     #[test]
