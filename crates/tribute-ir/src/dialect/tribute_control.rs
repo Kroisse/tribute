@@ -29,9 +29,11 @@ use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuil
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{IrContext, Symbol, SymbolPath};
 
-use super::list;
-
+mod callable_origin;
 mod row;
+
+use callable_origin::validate_callable_origins;
+pub use callable_origin::{CallableArgumentOrigin, CallableQuery, CallableResultOrigin};
 
 pub use row::{
     ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, QUANTIFIED_ROWS_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR,
@@ -3519,577 +3521,6 @@ fn compiler_intrinsic_map<'a>(
     map
 }
 
-fn adt_projection_has_exact_callable_type(
-    ctx: &IrContext,
-    producer: OpRef,
-    result_type: TypeRef,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
-) -> bool {
-    if ctx.op_result_types(producer) != [result_type] {
-        return false;
-    }
-    if let Ok(get) = adt::StructGet::from_op(ctx, producer) {
-        let layout = get.r#type(ctx);
-        return projection_source_matches_layout(ctx, get.r#ref(ctx), layout, nominal_layouts)
-            && struct_field_type(ctx, layout, get.field(ctx)) == Some(result_type);
-    }
-    if let Ok(get) = adt::VariantGet::from_op(ctx, producer) {
-        let layout = get.r#type(ctx);
-        return projection_source_matches_layout(ctx, get.r#ref(ctx), layout, nominal_layouts)
-            && variant_field_type(ctx, layout, get.tag_ref(ctx), get.field(ctx))
-                == Some(result_type);
-    }
-    false
-}
-
-fn projection_source_matches_layout(
-    ctx: &IrContext,
-    source: ValueRef,
-    layout: TypeRef,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
-) -> bool {
-    let layout_identity = nominal_identity(ctx, layout);
-    layout_identity.is_some_and(|identity| nominal_layouts.get(&identity) == Some(&layout))
-        && nominal_identity(ctx, ctx.value_ty(source)) == layout_identity
-}
-
-fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: u32) -> Option<TypeRef> {
-    crate::dialect::adt::Struct::from_type_ref(ctx, layout)?
-        .field_type(ctx, usize::try_from(field).ok()?)
-}
-
-fn variant_field_type(
-    ctx: &IrContext,
-    layout: TypeRef,
-    tag: StringRef,
-    field: u32,
-) -> Option<TypeRef> {
-    crate::dialect::adt::Enum::from_type_ref(ctx, layout)?
-        .variant_fields(ctx, tag)?
-        .get(usize::try_from(field).ok()?)
-        .copied()
-}
-
-/// What an indirect callee's provenance is checked against, and the values a
-/// proof has reached.
-pub struct CallableQuery<'a> {
-    functions: &'a SymbolTable,
-    registered: &'a HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration>,
-    declarations: &'a HashMap<(&'a SymbolPath, StringRef), &'a OperationDeclaration>,
-    nominal_layouts: &'a HashMap<StringRef, TypeRef>,
-    reached: HashSet<ValueRef>,
-}
-
-impl CallableQuery<'_> {
-    /// Whether `value` is a callable whose source signature comes from a
-    /// declaration, by the [`CallableResultOrigin`] rule of its producer or the
-    /// [`CallableArgumentOrigin`] rule of the operation that owns its block.
-    ///
-    /// Every rule combines the values it asks about by conjunction, so a
-    /// proof accepts `value` only when it accepts every value reached. A
-    /// value reached again adds no source: a cycle, such as one from a
-    /// handle's handlers back to its result, needs a source outside it, and
-    /// a value already rejected rejects the whole proof.
-    fn accepts(&mut self, ctx: &IrContext, value: ValueRef) -> bool {
-        if !self.reached.insert(value) {
-            return true;
-        }
-        FuncSig::from_type_ref(ctx, ctx.value_ty(value)).is_some()
-            && match ctx.value_def(value) {
-                ValueDef::OpResult(producer, _) => DynCallableResultOrigin::get(ctx, producer)
-                    .is_some_and(|origin| origin.result_is_callable_origin(ctx, value, self)),
-                ValueDef::BlockArg(block, index) => {
-                    let region = ctx.block(block).parent_region;
-                    let owner = region.and_then(|region| ctx.region(region).parent_op);
-                    match (
-                        region,
-                        owner.and_then(|owner| DynCallableArgumentOrigin::get(ctx, owner)),
-                    ) {
-                        (Some(region), Some(origin)) => {
-                            origin.argument_is_callable_origin(ctx, region, index, value, self)
-                        }
-                        _ => false,
-                    }
-                }
-            }
-    }
-
-    /// The declaration `declared` names, when it claims that declaration's kind.
-    fn claimed_declaration(
-        &self,
-        ctx: &IrContext,
-        declared: &impl OperationDeclarationUse,
-    ) -> Option<&OperationDeclaration> {
-        let claim = declared.declaration_use(ctx)?;
-        self.declarations
-            .get(&(claim.ability, claim.op_name))
-            .copied()
-            .filter(|declaration| claim.kind == Some(declaration.kind))
-    }
-
-    /// Whether `symbol`, referenced from `op`, names a defined function or a
-    /// registered intrinsic.
-    fn names_verified_function(&self, ctx: &IrContext, op: OpRef, symbol: &SymbolPath) -> bool {
-        self.functions
-            .resolve(ctx, op, symbol)
-            .filter(|&function| Func::matches(ctx, function))
-            .is_some_and(|function| verified_callable_declaration(ctx, function, self.registered))
-    }
-}
-
-/// An operation whose results can be callables whose source signature comes
-/// from a declaration, and the rule that proves one.
-///
-/// A rule asks about other values only through [`CallableQuery`] and
-/// combines the answers by conjunction. Whole-IR validation also queries
-/// operations the local checks rejected, so a rule reads its operation
-/// fallibly.
-#[trunk_ir::op_interface]
-pub trait CallableResultOrigin: DialectOp {
-    /// Whether `result`, a result of this operation, is such a callable.
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool;
-}
-
-/// An operation whose region arguments can be such callables, under the
-/// same contract as [`CallableResultOrigin`].
-#[trunk_ir::op_interface]
-pub trait CallableArgumentOrigin: DialectOp {
-    /// Whether `argument`, argument `index` of a block in `region` of this
-    /// operation, is such a callable.
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        region: RegionRef,
-        index: u32,
-        argument: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool;
-}
-
-/// A parameter of the callable whose only region is `region`, whose
-/// signature is `signature`.
-fn is_signature_parameter(
-    ctx: &IrContext,
-    op: OpRef,
-    signature: Option<TypeRef>,
-    region: RegionRef,
-    index: u32,
-    argument: ValueRef,
-) -> bool {
-    ctx.op_regions(op).eq([region])
-        && signature
-            .and_then(|ty| func_sig_parts(ctx, ty))
-            .is_some_and(|(_, parameters, _)| {
-                parameters.get(index as usize) == Some(&ctx.value_ty(argument))
-            })
-}
-
-impl CallableArgumentOrigin for Func {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        region: RegionRef,
-        index: u32,
-        argument: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        let signature = ctx.op_attrs(self.op_ref()).get_type("type");
-        is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
-    }
-}
-
-impl CallableResultOrigin for Lambda {
-    fn result_is_callable_origin<'q>(
-        &self,
-        _ctx: &IrContext,
-        _result: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        true
-    }
-}
-
-impl CallableArgumentOrigin for Lambda {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        region: RegionRef,
-        index: u32,
-        argument: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        let signature = ctx.op_result_types(self.op_ref()).first().copied();
-        is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
-    }
-}
-
-impl CallableResultOrigin for Instantiate {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        ctx.op_operands(self.op_ref())
-            .first()
-            .is_some_and(|&lambda| query.accepts(ctx, lambda))
-    }
-}
-
-impl CallableResultOrigin for FuncRef {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        ctx.op_attrs(self.op_ref())
-            .get_symbol_ref("func_ref")
-            .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
-    }
-}
-
-impl CallableResultOrigin for Call {
-    // The callee is read through `CallLike` once the call's structure
-    // satisfies its schema.
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        Self::DEF
-            .schema
-            .verify_structure(ctx, self.op_ref())
-            .is_empty()
-            && query.names_verified_function(ctx, self.op_ref(), self.direct_callee(ctx))
-    }
-}
-
-impl CallableResultOrigin for CallIndirect {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        ctx.op_operands(self.op_ref())
-            .first()
-            .is_some_and(|&callee| query.accepts(ctx, callee))
-    }
-}
-
-impl CallableResultOrigin for Perform {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        let result_type = ctx.value_ty(result);
-        ctx.op_result_types(self.op_ref()) == [result_type]
-            && self.declared_result_type(ctx) == Some(result_type)
-            && query
-                .claimed_declaration(ctx, self)
-                .is_some_and(|declaration| declaration.result_type == result_type)
-    }
-}
-
-impl CallableArgumentOrigin for Handler {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _region: RegionRef,
-        _index: u32,
-        argument: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        self.declared_arguments(ctx)
-            .and_then(|arguments| arguments.iter().position(|&value| value == argument))
-            .zip(query.claimed_declaration(ctx, self))
-            .is_some_and(|(position, declaration)| {
-                declaration.parameter_types.get(position) == Some(&ctx.value_ty(argument))
-            })
-    }
-}
-
-impl CallableResultOrigin for Handle {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        handle_result_sources(ctx, self.op_ref()).is_some_and(|sources| {
-            sources.into_iter().all(|source| {
-                ctx.value_ty(source) == ctx.value_ty(result) && query.accepts(ctx, source)
-            })
-        })
-    }
-}
-
-impl CallableArgumentOrigin for Handle {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        region: RegionRef,
-        index: u32,
-        argument: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        ctx.op_regions(self.op_ref())
-            .collect_tuple()
-            .is_some_and(|(body, completion, _)| {
-                completion == region
-                    && index == 0
-                    && region_yield_value(ctx, body).is_some_and(|value| {
-                        ctx.value_ty(value) == ctx.value_ty(argument) && query.accepts(ctx, value)
-                    })
-            })
-    }
-}
-
-impl CallableResultOrigin for Resume {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        resumed_handle_result(ctx, self.op_ref()).is_some_and(|handled| {
-            ctx.value_ty(handled) == ctx.value_ty(result) && query.accepts(ctx, handled)
-        })
-    }
-}
-
-/// A list's head is a callable origin when the declared element type is
-/// exactly the result's type.
-impl CallableResultOrigin for list::Head {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        let result_type = ctx.value_ty(result);
-        self.element_type(ctx) == result_type && ctx.op_result_types(self.op_ref()) == [result_type]
-    }
-}
-
-/// An ADT field projection is a callable origin when the canonical layout of
-/// its source declares the field with exactly the result's type.
-impl CallableResultOrigin for adt::StructGet {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        adt_projection_has_exact_callable_type(
-            ctx,
-            self.op_ref(),
-            ctx.value_ty(result),
-            query.nominal_layouts,
-        )
-    }
-}
-
-/// A variant field projection, under the rule of [`adt::StructGet`].
-impl CallableResultOrigin for adt::VariantGet {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        adt_projection_has_exact_callable_type(
-            ctx,
-            self.op_ref(),
-            ctx.value_ty(result),
-            query.nominal_layouts,
-        )
-    }
-}
-
-trunk_ir::register_interfaces!(
-    list::Head: CallableResultOrigin;
-    adt::StructGet: CallableResultOrigin;
-    adt::VariantGet: CallableResultOrigin
-);
-
-/// The value a single-block region yields to its parent.
-fn region_yield_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
-    let block = ctx.region(region).blocks.iter().exactly_one().ok()?;
-    let terminator = ctx.block(*block).ops.last().copied()?;
-    let value = ctx.op_operands(terminator).iter().exactly_one().ok()?;
-    Yield::matches(ctx, terminator).then_some(*value)
-}
-
-/// The values that become a `handle`'s result: the completion region's
-/// yield and the yield of each general (`op`) handler. A `fn` handler yields
-/// to its `perform` instead.
-fn handle_result_sources(ctx: &IrContext, handle: OpRef) -> Option<Vec<ValueRef>> {
-    let (_, completion, handlers) = ctx.op_regions(handle).collect_tuple()?;
-    let mut sources = vec![region_yield_value(ctx, completion)?];
-    for &block in &ctx.region(handlers).blocks {
-        for &handler in &ctx.block(block).ops {
-            if Handler::matches(ctx, handler) && ctx.op_attrs(handler).get_str("kind") == Some("op")
-            {
-                sources.push(region_yield_value(ctx, ctx.op_region(handler, 0)?)?);
-            }
-        }
-    }
-    Some(sources)
-}
-
-/// The result of the `handle` whose handler holds the resume token that
-/// `resume` consumes.
-fn resumed_handle_result(ctx: &IrContext, resume: OpRef) -> Option<ValueRef> {
-    let token = *ctx.op_operands(resume).first()?;
-    let ValueDef::BlockArg(block, _) = ctx.value_def(token) else {
-        return None;
-    };
-    let handler = ctx.region(ctx.block(block).parent_region?).parent_op?;
-    let handle = ctx.region(parent_region(ctx, handler)?).parent_op?;
-    if !Handler::matches(ctx, handler) || !Handle::matches(ctx, handle) {
-        return None;
-    }
-    ctx.op_results(handle).first().copied()
-}
-
-fn verified_callable_declaration(
-    ctx: &IrContext,
-    function: OpRef,
-    registered: &HashMap<SymbolPath, &CompilerIntrinsicDeclaration>,
-) -> bool {
-    if ctx.op_has_regions(function) {
-        return true;
-    }
-    let (Some(symbol), Some(identity), Some(func_sig_type)) = (
-        qualified_name(ctx, function),
-        Func::from_op(ctx, function)
-            .ok()
-            .and_then(|function| function.compiler_intrinsic_identity(ctx)),
-        ctx.op_attrs(function).get_type("type"),
-    ) else {
-        return false;
-    };
-    registered.get(&symbol).is_some_and(|declaration| {
-        declaration.identity == identity && declaration.callable_type == func_sig_type
-    })
-}
-
-fn validate_callable_origins(
-    ctx: &IrContext,
-    body: RegionRef,
-    functions: &SymbolTable,
-    declarations: &[CompilerIntrinsicDeclaration],
-    operation_declarations: &HashMap<(&SymbolPath, StringRef), &OperationDeclaration>,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
-    errors: &mut Vec<ValidationError>,
-) {
-    let registered = compiler_intrinsic_map(ctx, declarations, errors);
-    let mut query = CallableQuery {
-        functions,
-        registered: &registered,
-        declarations: operation_declarations,
-        nominal_layouts,
-        reached: HashSet::default(),
-    };
-    let mut seen = HashSet::default();
-    walk_region_ops(ctx, body, &mut |op| {
-        if Func::matches(ctx, op) {
-            let (Some(symbol), Some(func_sig_type)) =
-                (qualified_name(ctx, op), ctx.op_attrs(op).get_type("type"))
-            else {
-                return;
-            };
-            let intrinsic_identity = Func::from_op(ctx, op)
-                .ok()
-                .and_then(|function| function.compiler_intrinsic_identity(ctx));
-            let bodyless = !ctx.op_has_regions(op);
-            if !bodyless && intrinsic_identity.is_some() {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "defined Tribute function cannot claim compiler intrinsic identity",
-                );
-            }
-            if bodyless {
-                let exact_intrinsic = match (registered.get(&symbol), intrinsic_identity) {
-                    (Some(expected), Some(actual))
-                        if expected.identity == actual
-                            && expected.callable_type == func_sig_type =>
-                    {
-                        seen.insert(symbol);
-                        true
-                    }
-                    (Some(_), _) => {
-                        push_op_error(
-                            ctx,
-                            op,
-                            errors,
-                            "compiler intrinsic identity or complete signature does not match the registered declaration",
-                        );
-                        false
-                    }
-                    (None, Some(_)) => {
-                        push_op_error(
-                            ctx,
-                            op,
-                            errors,
-                            "unregistered declaration cannot claim compiler intrinsic identity",
-                        );
-                        false
-                    }
-                    (None, None) => false,
-                };
-                let trusted_c_ffi = ctx.op_attrs(op).get_str("abi") == Some("C");
-                if !exact_intrinsic
-                    && !trusted_c_ffi
-                    && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::default())
-                {
-                    push_op_error(
-                        ctx,
-                        op,
-                        errors,
-                        "unclassified bodyless external declaration cannot use managed adt.typeref",
-                    );
-                }
-            }
-        } else if (CallIndirect::matches(ctx, op) || TailCallIndirect::matches(ctx, op))
-            && let Some(callee) = ctx.op_operands(op).first().copied()
-            && !{
-                query.reached.clear();
-                query.accepts(ctx, callee)
-            }
-        {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                "indirect callee lacks verified source-logical callable provenance",
-            );
-        }
-    });
-    for symbol in registered.keys() {
-        if !seen.contains(symbol) {
-            push_type_error(
-                errors,
-                format!(
-                    "registered compiler intrinsic @{symbol} has no exact bodyless declaration"
-                ),
-            );
-        }
-    }
-}
-
 /// `unrealized_conversion_cast` is representation glue, never a source-callable
 /// adapter. Convention strengthening must be expressed by `func_ref` and
 /// lowered while its declaration provenance is still available. Changing a
@@ -4996,6 +4427,7 @@ pub fn validate(
 
 #[cfg(test)]
 mod tests {
+    use super::callable_origin::indirect_callees;
     use super::*;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
@@ -7453,6 +6885,118 @@ mod tests {
 
         let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn indirect_calls_sharing_a_callee_chain_evaluate_each_value_once() {
+        const CHAIN: usize = 8;
+        const CALLS: usize = 5;
+        let mut text = String::from("core.module @test {\n");
+        text.push_str(
+            "  !F0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>\n",
+        );
+        for depth in 1..=CHAIN {
+            text.push_str(&format!(
+                "  !F{depth} = tribute_control.func_sig<(core.i32) -> !F{}, {{tribute.calling_convention = 0}}>\n",
+                depth - 1
+            ));
+        }
+        text.push_str(&format!(
+            "  tribute_control.func @caller(%v{CHAIN}: !F{CHAIN}, %x: core.i32) -> core.i32 convention(direct) {{\n"
+        ));
+        for depth in (0..CHAIN).rev() {
+            text.push_str(&format!(
+                "    %v{depth} = tribute_control.call_indirect %v{}, %x : !F{depth}\n",
+                depth + 1
+            ));
+        }
+        for call in 0..CALLS {
+            text.push_str(&format!(
+                "    %r{call} = tribute_control.call_indirect %v0, %x : core.i32\n"
+            ));
+        }
+        text.push_str("    tribute_control.return %r0\n  }\n}");
+        let (ctx, module) = parse_fixture(&text);
+        let body = module.body(&ctx).unwrap();
+        let functions = SymbolTable::collect(&ctx, module);
+        let (registered, declarations, layouts) =
+            (HashMap::default(), HashMap::default(), HashMap::default());
+        let mut query = CallableQuery::new(&functions, &registered, &declarations, &layouts);
+
+        let callees = indirect_callees(&ctx, body);
+        for &callee in &callees {
+            query.accepts(&ctx, callee);
+        }
+        query.resolve(&ctx);
+
+        assert_eq!(callees.len(), CHAIN + CALLS);
+        assert!(callees.iter().all(|&callee| query.is_origin(callee)));
+        assert_eq!(query.evaluations, CHAIN + 1);
+    }
+
+    #[test]
+    fn a_withdrawn_origin_withdraws_the_values_that_depend_on_it() {
+        let (ctx, module) = parse_fixture(&handled_callable_module("%bad"));
+        let body = module.body(&ctx).unwrap();
+        let functions = SymbolTable::collect(&ctx, module);
+        let declarations = declared_operations(&ctx, module, &mut Vec::new());
+        let declarations = declaration_map(&ctx, &declarations, &mut Vec::new());
+        let (registered, layouts) = (HashMap::default(), HashMap::default());
+        let mut query = CallableQuery::new(&functions, &registered, &declarations, &layouts);
+
+        let callees = indirect_callees(&ctx, body);
+        for &callee in &callees {
+            query.accepts(&ctx, callee);
+        }
+        query.resolve(&ctx);
+
+        assert!(callees.iter().all(|&callee| !query.is_origin(callee)));
+    }
+
+    #[test]
+    fn a_value_withdrawn_twice_is_not_evaluated_again() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  %f = tribute_control.handle : !F {
+    %body = tribute_control.perform {ability = @Gen, op_name = "next", operation_kind = "op"} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%k: core.i32):
+      %done = core.unrealized_conversion_cast %k : !F
+      tribute_control.yield %done
+  } {
+    tribute_control.handler {ability = @Gen, kind = "op", op_name = "next", operation_result_type = core.i32} {
+      ^next(%token: tribute_control.resume_token<core.i32, !F>):
+        %zero = arith.const {value = 0} : core.i32
+        %bad = core.unrealized_conversion_cast %zero : !F
+        tribute_control.yield %bad
+    }
+  }
+  %one = arith.const {value = 1} : core.i32
+  %result = tribute_control.call_indirect %f, %one : core.i32
+  ability.decl {sym_name = "Gen"} {
+    ability.operation {kind = "op", op_name = "next", param_types = [], result_type = core.i32}
+  }
+}"#,
+        );
+        let body = module.body(&ctx).unwrap();
+        let functions = SymbolTable::collect(&ctx, module);
+        let declarations = declared_operations(&ctx, module, &mut Vec::new());
+        let declarations = declaration_map(&ctx, &declarations, &mut Vec::new());
+        let (registered, layouts) = (HashMap::default(), HashMap::default());
+        let mut query = CallableQuery::new(&functions, &registered, &declarations, &layouts);
+
+        let callees = indirect_callees(&ctx, body);
+        assert_eq!(callees.len(), 1);
+        let callee = callees[0];
+        query.accepts(&ctx, callee);
+        query.resolve(&ctx);
+
+        // The handle result, both yields, then the handle result once more:
+        // the second withdrawal finds it already withdrawn.
+        assert!(!query.is_origin(callee));
+        assert_eq!(query.evaluations, 4);
     }
 
     #[test]
