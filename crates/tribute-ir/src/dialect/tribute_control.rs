@@ -3570,29 +3570,99 @@ fn variant_field_type(
         .copied()
 }
 
-/// What an indirect callee's provenance is checked against, and the values a
-/// proof has reached.
+/// What an indirect callee's provenance is checked against, and the origin
+/// of every value a rule has asked about.
 pub struct CallableQuery<'a> {
     functions: &'a SymbolTable,
     registered: &'a HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration>,
     declarations: &'a HashMap<(&'a SymbolPath, StringRef), &'a OperationDeclaration>,
     nominal_layouts: &'a HashMap<StringRef, TypeRef>,
-    reached: HashSet<ValueRef>,
+    /// Whether each value reached so far is still taken to be an origin.
+    origins: HashMap<ValueRef, bool>,
+    /// The values whose rules asked about each value.
+    dependents: HashMap<ValueRef, Vec<ValueRef>>,
+    /// Values whose rule is to be evaluated against the current table.
+    pending: Vec<ValueRef>,
+    /// The value whose rule is being evaluated.
+    evaluating: Option<ValueRef>,
+    #[cfg(test)]
+    evaluations: usize,
+}
+
+impl<'a> CallableQuery<'a> {
+    fn new(
+        functions: &'a SymbolTable,
+        registered: &'a HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration>,
+        declarations: &'a HashMap<(&'a SymbolPath, StringRef), &'a OperationDeclaration>,
+        nominal_layouts: &'a HashMap<StringRef, TypeRef>,
+    ) -> Self {
+        Self {
+            functions,
+            registered,
+            declarations,
+            nominal_layouts,
+            origins: HashMap::default(),
+            dependents: HashMap::default(),
+            pending: Vec::new(),
+            evaluating: None,
+            #[cfg(test)]
+            evaluations: 0,
+        }
+    }
 }
 
 impl CallableQuery<'_> {
-    /// Whether `value` is a callable whose source signature comes from a
-    /// declaration, by the [`CallableResultOrigin`] rule of its producer or the
-    /// [`CallableArgumentOrigin`] rule of the operation that owns its block.
+    /// Whether `value` is taken to be a callable whose source signature comes
+    /// from a declaration. A rule asks this about the values it depends on.
     ///
-    /// Every rule combines the values it asks about by conjunction, so a
-    /// proof accepts `value` only when it accepts every value reached. A
-    /// value reached again adds no source: a cycle, such as one from a
-    /// handle's handlers back to its result, needs a source outside it, and
-    /// a value already rejected rejects the whole proof.
-    fn accepts(&mut self, ctx: &IrContext, value: ValueRef) -> bool {
-        if !self.reached.insert(value) {
-            return true;
+    /// A value not yet evaluated is taken to be one until its rule is, so a
+    /// rule may read an answer that [`Self::resolve`] later withdraws; the
+    /// rule is then evaluated again.
+    fn accepts(&mut self, _ctx: &IrContext, value: ValueRef) -> bool {
+        if let Some(dependent) = self.evaluating {
+            let dependents = self.dependents.entry(value).or_default();
+            if !dependents.contains(&dependent) {
+                dependents.push(dependent);
+            }
+        }
+        *self.origins.entry(value).or_insert_with(|| {
+            self.pending.push(value);
+            true
+        })
+    }
+
+    /// Settle the origin of every value asked about, evaluating each rule
+    /// until no answer changes.
+    ///
+    /// Every rule combines the values it asks about by conjunction, so the
+    /// origins are the greatest fixed point: a value is an origin when its
+    /// rule holds and every value it reaches is one. A cycle, such as one
+    /// from a handle's handlers back to its result, adds no source of its
+    /// own. A rule is evaluated once, and again only when a value it depends
+    /// on is withdrawn, which happens at most once per value.
+    fn resolve(&mut self, ctx: &IrContext) {
+        while let Some(value) = self.pending.pop() {
+            if self.origins.get(&value) == Some(&false) {
+                continue;
+            }
+            self.evaluating = Some(value);
+            let holds = self.evaluate(ctx, value);
+            self.evaluating = None;
+            if !holds {
+                self.origins.insert(value, false);
+                let dependents = self.dependents.remove(&value).unwrap_or_default();
+                self.pending.extend(dependents);
+            }
+        }
+    }
+
+    /// The [`CallableResultOrigin`] rule of `value`'s producer, or the
+    /// [`CallableArgumentOrigin`] rule of the operation that owns its block,
+    /// against the current answers.
+    fn evaluate(&mut self, ctx: &IrContext, value: ValueRef) -> bool {
+        #[cfg(test)]
+        {
+            self.evaluations += 1;
         }
         FuncSig::from_type_ref(ctx, ctx.value_ty(value)).is_some()
             && match ctx.value_def(value) {
@@ -3612,6 +3682,11 @@ impl CallableQuery<'_> {
                     }
                 }
             }
+    }
+
+    /// Whether `value`, settled by [`Self::resolve`], is an origin.
+    fn is_origin(&self, value: ValueRef) -> bool {
+        self.origins.get(&value) == Some(&true)
     }
 
     /// The declaration `declared` names, when it claims that declaration's kind.
@@ -3984,6 +4059,22 @@ fn verified_callable_declaration(
     })
 }
 
+/// The callee of `op` when it is a source-logical indirect call.
+fn indirect_callee(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
+    (CallIndirect::matches(ctx, op) || TailCallIndirect::matches(ctx, op))
+        .then(|| ctx.op_operands(op).first().copied())
+        .flatten()
+}
+
+/// Every indirect callee in `body`.
+fn indirect_callees(ctx: &IrContext, body: RegionRef) -> Vec<ValueRef> {
+    let mut callees = Vec::new();
+    walk_region_ops(ctx, body, &mut |op| {
+        callees.extend(indirect_callee(ctx, op))
+    });
+    callees
+}
+
 fn validate_callable_origins(
     ctx: &IrContext,
     body: RegionRef,
@@ -3994,13 +4085,16 @@ fn validate_callable_origins(
     errors: &mut Vec<ValidationError>,
 ) {
     let registered = compiler_intrinsic_map(ctx, declarations, errors);
-    let mut query = CallableQuery {
+    let mut query = CallableQuery::new(
         functions,
-        registered: &registered,
-        declarations: operation_declarations,
+        &registered,
+        operation_declarations,
         nominal_layouts,
-        reached: HashSet::default(),
-    };
+    );
+    for callee in indirect_callees(ctx, body) {
+        query.accepts(ctx, callee);
+    }
+    query.resolve(ctx);
     let mut seen = HashSet::default();
     walk_region_ops(ctx, body, &mut |op| {
         if Func::matches(ctx, op) {
@@ -4063,12 +4157,8 @@ fn validate_callable_origins(
                     );
                 }
             }
-        } else if (CallIndirect::matches(ctx, op) || TailCallIndirect::matches(ctx, op))
-            && let Some(callee) = ctx.op_operands(op).first().copied()
-            && !{
-                query.reached.clear();
-                query.accepts(ctx, callee)
-            }
+        } else if let Some(callee) = indirect_callee(ctx, op)
+            && !query.is_origin(callee)
         {
             push_op_error(
                 ctx,
@@ -7453,6 +7543,118 @@ mod tests {
 
         let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn indirect_calls_sharing_a_callee_chain_evaluate_each_value_once() {
+        const CHAIN: usize = 8;
+        const CALLS: usize = 5;
+        let mut text = String::from("core.module @test {\n");
+        text.push_str(
+            "  !F0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>\n",
+        );
+        for depth in 1..=CHAIN {
+            text.push_str(&format!(
+                "  !F{depth} = tribute_control.func_sig<(core.i32) -> !F{}, {{tribute.calling_convention = 0}}>\n",
+                depth - 1
+            ));
+        }
+        text.push_str(&format!(
+            "  tribute_control.func @caller(%v{CHAIN}: !F{CHAIN}, %x: core.i32) -> core.i32 convention(direct) {{\n"
+        ));
+        for depth in (0..CHAIN).rev() {
+            text.push_str(&format!(
+                "    %v{depth} = tribute_control.call_indirect %v{}, %x : !F{depth}\n",
+                depth + 1
+            ));
+        }
+        for call in 0..CALLS {
+            text.push_str(&format!(
+                "    %r{call} = tribute_control.call_indirect %v0, %x : core.i32\n"
+            ));
+        }
+        text.push_str("    tribute_control.return %r0\n  }\n}");
+        let (ctx, module) = parse_fixture(&text);
+        let body = module.body(&ctx).unwrap();
+        let functions = SymbolTable::collect(&ctx, module);
+        let (registered, declarations, layouts) =
+            (HashMap::default(), HashMap::default(), HashMap::default());
+        let mut query = CallableQuery::new(&functions, &registered, &declarations, &layouts);
+
+        let callees = indirect_callees(&ctx, body);
+        for &callee in &callees {
+            query.accepts(&ctx, callee);
+        }
+        query.resolve(&ctx);
+
+        assert_eq!(callees.len(), CHAIN + CALLS);
+        assert!(callees.iter().all(|&callee| query.is_origin(callee)));
+        assert_eq!(query.evaluations, CHAIN + 1);
+    }
+
+    #[test]
+    fn a_withdrawn_origin_withdraws_the_values_that_depend_on_it() {
+        let (ctx, module) = parse_fixture(&handled_callable_module("%bad"));
+        let body = module.body(&ctx).unwrap();
+        let functions = SymbolTable::collect(&ctx, module);
+        let declarations = declared_operations(&ctx, module, &mut Vec::new());
+        let declarations = declaration_map(&ctx, &declarations, &mut Vec::new());
+        let (registered, layouts) = (HashMap::default(), HashMap::default());
+        let mut query = CallableQuery::new(&functions, &registered, &declarations, &layouts);
+
+        let callees = indirect_callees(&ctx, body);
+        for &callee in &callees {
+            query.accepts(&ctx, callee);
+        }
+        query.resolve(&ctx);
+
+        assert!(callees.iter().all(|&callee| !query.is_origin(callee)));
+    }
+
+    #[test]
+    fn a_value_withdrawn_twice_is_not_evaluated_again() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  %f = tribute_control.handle : !F {
+    %body = tribute_control.perform {ability = @Gen, op_name = "next", operation_kind = "op"} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%k: core.i32):
+      %done = core.unrealized_conversion_cast %k : !F
+      tribute_control.yield %done
+  } {
+    tribute_control.handler {ability = @Gen, kind = "op", op_name = "next", operation_result_type = core.i32} {
+      ^next(%token: tribute_control.resume_token<core.i32, !F>):
+        %zero = arith.const {value = 0} : core.i32
+        %bad = core.unrealized_conversion_cast %zero : !F
+        tribute_control.yield %bad
+    }
+  }
+  %one = arith.const {value = 1} : core.i32
+  %result = tribute_control.call_indirect %f, %one : core.i32
+  ability.decl {sym_name = "Gen"} {
+    ability.operation {kind = "op", op_name = "next", param_types = [], result_type = core.i32}
+  }
+}"#,
+        );
+        let body = module.body(&ctx).unwrap();
+        let functions = SymbolTable::collect(&ctx, module);
+        let declarations = declared_operations(&ctx, module, &mut Vec::new());
+        let declarations = declaration_map(&ctx, &declarations, &mut Vec::new());
+        let (registered, layouts) = (HashMap::default(), HashMap::default());
+        let mut query = CallableQuery::new(&functions, &registered, &declarations, &layouts);
+
+        let callees = indirect_callees(&ctx, body);
+        assert_eq!(callees.len(), 1);
+        let callee = callees[0];
+        query.accepts(&ctx, callee);
+        query.resolve(&ctx);
+
+        // The handle result, both yields, then the handle result once more:
+        // the second withdrawal finds it already withdrawn.
+        assert!(!query.is_origin(callee));
+        assert_eq!(query.evaluations, 4);
     }
 
     #[test]
