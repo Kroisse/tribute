@@ -600,10 +600,10 @@ trait TypeSink {
     fn ctx(&self) -> &IrContext;
     fn make(&mut self, data: TypeData) -> Option<TypeRef>;
     fn tuple(&mut self, elements: &[TypeRef]) -> Option<TypeRef>;
-    /// The key `ability_row` and `row` encoded as its value.
-    fn row(&mut self, row: &Row) -> Option<(trunk_ir::types::StringRef, Attribute)>;
-    /// The key of a callable's convention.
-    fn convention_key(&mut self) -> Option<trunk_ir::types::StringRef>;
+    /// The attribute key `text`.
+    fn key(&mut self, text: &str) -> Option<trunk_ir::types::StringRef>;
+    /// `row` encoded as an attribute value.
+    fn row(&mut self, row: &Row) -> Option<Attribute>;
 }
 
 struct Intern<'a>(&'a mut IrContext);
@@ -621,14 +621,12 @@ impl TypeSink for Intern<'_> {
         Some(logical_tuple_type(self.0, elements))
     }
 
-    fn row(&mut self, row: &Row) -> Option<(trunk_ir::types::StringRef, Attribute)> {
-        Some((
-            self.0.intern_str(ABILITY_ROW_ATTR),
-            row.to_attribute(self.0),
-        ))
+    fn key(&mut self, text: &str) -> Option<trunk_ir::types::StringRef> {
+        Some(self.0.intern_str(text))
     }
-    fn convention_key(&mut self) -> Option<trunk_ir::types::StringRef> {
-        Some(self.0.intern_str(super::CALLING_CONVENTION_ATTR))
+
+    fn row(&mut self, row: &Row) -> Option<Attribute> {
+        Some(row.to_attribute(self.0))
     }
 }
 
@@ -659,14 +657,12 @@ impl TypeSink for Lookup<'_> {
         (logical_tuple_elements(self.0, ty)? == elements).then_some(ty)
     }
 
-    fn row(&mut self, row: &Row) -> Option<(trunk_ir::types::StringRef, Attribute)> {
-        Some((
-            self.0.lookup_str(ABILITY_ROW_ATTR)?,
-            row.find_attribute(self.0)?,
-        ))
+    fn key(&mut self, text: &str) -> Option<trunk_ir::types::StringRef> {
+        self.0.lookup_str(text)
     }
-    fn convention_key(&mut self) -> Option<trunk_ir::types::StringRef> {
-        self.0.lookup_str(super::CALLING_CONVENTION_ATTR)
+
+    fn row(&mut self, row: &Row) -> Option<Attribute> {
+        row.find_attribute(self.0)
     }
 }
 
@@ -747,7 +743,8 @@ impl<S: TypeSink, R: CallableRewrite> Substitution<S, R> {
             let substituted = self.rewrite.row(&row)?;
             if substituted != row {
                 changed = true;
-                let (key, value) = self.sink.row(&substituted)?;
+                let key = self.sink.key(ABILITY_ROW_ATTR)?;
+                let value = self.sink.row(&substituted)?;
                 let entries: Vec<_> = data
                     .attrs
                     .iter()
@@ -759,7 +756,7 @@ impl<S: TypeSink, R: CallableRewrite> Substitution<S, R> {
             }
             if let Some(convention) = self.rewrite.convention(&substituted) {
                 let value = Attribute::Int(convention as i128);
-                let key = self.sink.convention_key()?;
+                let key = self.sink.key(super::CALLING_CONVENTION_ATTR)?;
                 if data.attrs.view(self.sink.ctx()).get(key) != Some(&value) {
                     changed = true;
                     let entries: Vec<_> = data
