@@ -3587,20 +3587,19 @@ fn callable_has_semantic_provenance(
     provenance: &CallableProvenance<'_>,
     visiting: &mut HashSet<ValueRef>,
 ) -> bool {
-    if FuncSig::from_type_ref(ctx, ctx.value_ty(value)).is_none() {
-        return false;
-    }
-    if !visiting.insert(value) {
+    let first_visit = visiting.insert(value);
+    if !first_visit || FuncSig::from_type_ref(ctx, ctx.value_ty(value)).is_none() {
         // Each value has one producer, so a query accepts a value only when
         // it accepts everything that value was reached through. A cycle
         // through a handle's handlers back to its result, directly or
         // through a resumption, adds no source; a value already rejected
         // rejects the whole query.
-        return matches!(
-            ctx.value_def(value),
-            ValueDef::OpResult(producer, _)
-                if Handle::matches(ctx, producer) || Resume::matches(ctx, producer)
-        );
+        return !first_visit
+            && matches!(
+                ctx.value_def(value),
+                ValueDef::OpResult(producer, _)
+                    if Handle::matches(ctx, producer) || Resume::matches(ctx, producer)
+            );
     }
     match ctx.value_def(value) {
         ValueDef::BlockArg(block, index) => {
@@ -3657,13 +3656,9 @@ fn callable_has_semantic_provenance(
 
 /// The value a single-block region yields to its parent.
 fn region_yield_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
-    let [block] = ctx.region(region).blocks.as_slice() else {
-        return None;
-    };
+    let block = ctx.region(region).blocks.iter().exactly_one().ok()?;
     let terminator = ctx.block(*block).ops.last().copied()?;
-    let [value] = ctx.op_operands(terminator) else {
-        return None;
-    };
+    let value = ctx.op_operands(terminator).iter().exactly_one().ok()?;
     Yield::matches(ctx, terminator).then_some(*value)
 }
 
@@ -7126,11 +7121,19 @@ mod tests {
         %bad = core.unrealized_conversion_cast %zero : !F
         tribute_control.yield {op_yield}
     }}
+    tribute_control.handler {{ability = @Ask, kind = "fn", op_name = "ask", operation_result_type = core.i32}} {{
+      ^ask:
+        %answer = arith.const {{value = 2}} : core.i32
+        tribute_control.yield %answer
+    }}
   }}
   %one = arith.const {{value = 1}} : core.i32
   %result = tribute_control.call_indirect %f, %one : core.i32
   ability.decl {{sym_name = "Gen"}} {{
     ability.operation {{kind = "op", op_name = "next", param_types = [], result_type = core.i32}}
+  }}
+  ability.decl {{sym_name = "Ask"}} {{
+    ability.operation {{kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}}
   }}
 }}"#
         )
@@ -7147,6 +7150,31 @@ mod tests {
     #[test]
     fn handle_result_needs_every_yield_to_have_callable_provenance() {
         let (ctx, module) = parse_fixture(&handled_callable_module("%bad"));
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert_eq!(
+            messages(&result).matches("callable provenance").count(),
+            2,
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn resume_result_needs_a_handler_resume_token() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !Token = tribute_control.resume_token<core.i32, !F>
+  tribute_control.func @caller(%token: !Token, %raw: core.ptr, %value: core.i32) -> core.i32 convention(direct) {
+    %from_parameter = tribute_control.resume %token, %value : !F
+    %first = tribute_control.call_indirect %from_parameter, %value : core.i32
+    %cast_token = core.unrealized_conversion_cast %raw : !Token
+    %from_cast = tribute_control.resume %cast_token, %first : !F
+    %second = tribute_control.call_indirect %from_cast, %first : core.i32
+    tribute_control.return %second
+  }
+}"#,
+        );
 
         let result = validate(&ctx, module, &[], &mut Default::default());
         assert_eq!(
