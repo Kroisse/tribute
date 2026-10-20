@@ -492,7 +492,7 @@ impl RewritePattern for StringConstNativePattern {
     }
 }
 
-/// Pass form of [`analyze_consts`] followed by [`lower`].
+/// Pass form of `analyze_consts` followed by `lower`.
 pub struct ConstToNative;
 
 impl trunk_ir::pass::Pass for ConstToNative {

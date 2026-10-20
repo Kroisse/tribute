@@ -472,7 +472,7 @@ impl RewritePattern for UnboxFloatPattern {
     }
 }
 
-/// Pass form of [`lower`].
+/// Pass form of `lower`.
 pub struct TributeRtToClif;
 
 impl trunk_ir::pass::Pass for TributeRtToClif {

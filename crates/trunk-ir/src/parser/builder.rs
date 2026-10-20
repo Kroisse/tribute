@@ -1,6 +1,6 @@
 //! Arena IR text format parser.
 //!
-//! Parses the textual IR format produced by [`super::printer`] into
+//! Parses the textual IR format produced by [`crate::printer`] into
 //! arena-based IR structures. Uses shared winnow combinators from
 //! [`crate::parser::raw`].
 //!

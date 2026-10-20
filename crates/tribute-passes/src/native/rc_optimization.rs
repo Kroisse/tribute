@@ -110,7 +110,7 @@ fn is_proven_non_escaping_use(ctx: &IrContext, op: OpRef, operand_index: usize) 
     false
 }
 
-/// Pass form of [`eliminate_paired_rc`].
+/// Pass form of `eliminate_paired_rc`.
 pub struct EliminatePairedRc;
 
 impl trunk_ir::pass::Pass for EliminatePairedRc {

@@ -389,7 +389,7 @@ impl RewritePattern for VariantNewPattern {
     }
 }
 
-/// Pass form of [`lower`].
+/// Pass form of `lower`.
 pub struct AdtRcHeader;
 
 impl trunk_ir::pass::Pass for AdtRcHeader {

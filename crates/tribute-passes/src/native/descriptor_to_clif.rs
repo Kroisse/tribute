@@ -18,7 +18,7 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
-/// PassManager-friendly [`lower`].
+/// PassManager-friendly `lower`.
 pub struct DescriptorToClif;
 
 impl Pass for DescriptorToClif {

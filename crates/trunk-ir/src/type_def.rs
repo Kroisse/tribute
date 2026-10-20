@@ -28,13 +28,13 @@ pub type TypeNameArg = NameArg<TypeDef>;
 pub struct TypeDef {
     /// The type's `dialect.name`.
     pub name: QualifiedName,
-    /// Calls the wrapper's [`VerifyType`](crate::type_verifier::VerifyType)
+    /// Calls the wrapper's [`VerifyType`]
     /// impl for types with a verifier.
     pub verifier: Option<TypeVerifier>,
-    /// Calls the wrapper's [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat)
+    /// Calls the wrapper's [`TypeAsmFormat`]
     /// impl for types with a custom assembly format.
     pub asm_format: Option<TypeAsmHooks>,
-    /// Calls the wrapper's [`TypeAliasHint`](crate::asm_format::TypeAliasHint)
+    /// Calls the wrapper's [`TypeAliasHint`]
     /// impl for types that suggest printer alias names.
     pub alias_hint: Option<TypeAliasHook>,
 }

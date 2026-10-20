@@ -208,7 +208,7 @@ impl RewritePattern for IsEmptyPattern {
     }
 }
 
-/// Pass form of [`lower`].
+/// Pass form of `lower`.
 pub struct ListToNative;
 
 impl trunk_ir::pass::Pass for ListToNative {

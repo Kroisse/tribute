@@ -691,7 +691,7 @@ fn gen_deep_release_call(
     ctx.push_op(block, jump.op_ref());
 }
 
-/// Pass form of [`lower_rc`].
+/// Pass form of `lower_rc`.
 pub struct RcLowering;
 
 impl trunk_ir::pass::Pass for RcLowering {

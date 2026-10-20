@@ -1189,12 +1189,12 @@ impl IrContext {
     ///
     /// - Operands are remapped via `mapping.lookup_value_or_default()`.
     /// - Successors are remapped via `mapping.lookup_block_or_default()`.
-    /// - Nested regions are recursively deep-cloned via [`clone_region`].
+    /// - Nested regions are recursively deep-cloned via [`clone_region`](Self::clone_region).
     /// - Result values are automatically registered in the mapping
     ///   (old results → new results).
     ///
     /// The cloned operation is **not** attached to any block. Use
-    /// [`push_op`] or [`clone_op_into_block`] to insert it.
+    /// [`push_op`](Self::push_op) or [`clone_op_into_block`](Self::clone_op_into_block) to insert it.
     pub fn clone_op(&mut self, src_op: OpRef, mapping: &mut IrMapping) -> OpRef {
         // Copy all data from src_op into locals to avoid borrow conflicts.
         let data = &self.ops[src_op];
@@ -1245,7 +1245,7 @@ impl IrContext {
     /// Uses a 2-pass approach to handle forward block references:
     /// 1. Create all block headers (with arguments), register block/arg
     ///    mappings.
-    /// 2. Clone operations in each block using [`clone_op`].
+    /// 2. Clone operations in each block using [`clone_op`](Self::clone_op).
     ///
     /// Values not in the mapping (external references) pass through
     /// unchanged.
@@ -1307,7 +1307,7 @@ impl IrContext {
 
     /// Clone an operation and append it to a destination block.
     ///
-    /// Convenience wrapper around [`clone_op`] + [`push_op`].
+    /// Convenience wrapper around [`clone_op`](Self::clone_op) + [`push_op`](Self::push_op).
     pub fn clone_op_into_block(
         &mut self,
         dest: BlockRef,

@@ -436,7 +436,7 @@ pub(crate) fn resolve_evidence_dispatch(
     Ok(())
 }
 
-/// PassManager-friendly wrapper for [`resolve_evidence_dispatch`].
+/// PassManager-friendly wrapper for `resolve_evidence_dispatch`.
 pub struct ResolveEvidenceDispatch;
 
 impl Pass for ResolveEvidenceDispatch {

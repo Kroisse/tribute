@@ -283,7 +283,7 @@ impl RewritePattern for RefIsNullPattern {
     }
 }
 
-/// Pass form of [`lower`].
+/// Pass form of `lower`.
 pub struct AdtToClif;
 
 impl trunk_ir::pass::Pass for AdtToClif {

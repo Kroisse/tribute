@@ -43,7 +43,7 @@ pub(crate) fn lower_handle_dispatch(
     Ok(())
 }
 
-/// PassManager-friendly wrapper for [`lower_handle_dispatch`].
+/// PassManager-friendly wrapper for `lower_handle_dispatch`.
 pub struct LowerHandleDispatch;
 
 impl Pass for LowerHandleDispatch {

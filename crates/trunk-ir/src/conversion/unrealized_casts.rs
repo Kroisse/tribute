@@ -33,7 +33,7 @@ use crate::walk::{WalkAction, walk_op};
 /// differs from that type, the cast is replaced by the operations the
 /// converter materializes. A materialization without operations, or none at
 /// all, keeps the cast: forwarding the source would give its uses a value of
-/// another type. Identities are left to [`reconcile_unrealized_casts`], and a
+/// another type. Identities are left to `reconcile_unrealized_casts`, and a
 /// cast that stays is rejected by the target's emission boundary unless a
 /// target pass erases it (such as a WasmGC reference upcast).
 pub struct UnrealizedCastConversionPattern;

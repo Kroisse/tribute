@@ -2,7 +2,7 @@
 //!
 //! Operations and types declare these hooks with `#[asm_format]`, and their
 //! definitions hold them, to control how they are spelled in textual IR. They
-//! affect only the printer and the parser: unlike [operation interfaces](crate::op_interface), they carry no meaning
+//! affect only the printer and the parser: unlike [operation interfaces](mod@crate::op_interface), they carry no meaning
 //! that passes or analyses consult.
 
 use std::fmt;

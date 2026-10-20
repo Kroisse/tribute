@@ -285,7 +285,7 @@ fn op_region(ctx: &mut IrContext, loc: Location, op: OpRef, result: ValueRef) ->
     })
 }
 
-/// Pass form of [`lower`].
+/// Pass form of `lower`.
 pub struct IoToNative;
 
 impl trunk_ir::pass::Pass for IoToNative {
