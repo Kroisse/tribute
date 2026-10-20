@@ -46,6 +46,24 @@ cargo run -- --log=debug compile file.trb
 cargo run -- --log=tribute_front::typeck=trace compile file.trb
 ```
 
+## Review guidelines
+
+- Flag code that contradicts `new-plans/`, and rule changes that do not update
+  the relevant `new-plans/*.md` file in the same PR.
+- Flag `new-plans/` text that cites issue or PR numbers, branches, or task
+  status.
+- Flag ownership or callable ABI inferred from symbol spelling, body shape, or
+  an erased pointer type. Typed wrappers, interfaces, and declared signatures
+  carry that information (`guides/development/conventions.md`).
+- For native RC changes, check that every acquire has a matching release or
+  transfer on each path, and that the change keeps the acyclic object graph
+  contract in `new-plans/rc.md`. Ask for a sanitizer test when ownership
+  changes.
+- Flag language rules special-cased for the prelude instead of written in the
+  prelude source.
+- Prefer textual IR fixtures over programmatic IR construction in tests.
+- Do not comment on formatting or lint findings; `.ci/lint.sh` checks them.
+
 ## Tree-sitter
 
 The tree-sitter grammar source of truth is maintained separately:
