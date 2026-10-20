@@ -189,17 +189,27 @@ fn the_pass_fails_with_every_disagreement() {
 
 #[test]
 fn a_definition_without_a_body_has_no_class_variables() {
+    // With a class variable, the closed row would select `external$9D`.
     let input = format!(
         r#"core.module @m {{
   !cb = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{tail = 0}}, tribute.calling_convention = 2}}>
-  !pure = tribute_control.func_sig<(core.i32) -> core.i32, {{tribute.calling_convention = 0}}>
+  !closed = tribute_control.func_sig<(core.i32) -> core.i32, {{tribute.calling_convention = 2}}>
 {CTL}
   tribute_control.func @external['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) convention(cps)
-  tribute_control.func @main(%x: core.i32, %f: !pure) -> core.i32 convention(direct) {{
+  tribute_control.func @pure(%y: core.i32) -> core.i32 convention(direct) {{
+    tribute_control.return %y
+  }}
+  tribute_control.func @main(%x: core.i32) -> core.i32 convention(direct) {{
+    %f = tribute_control.func_ref {{func_ref = @pure}} : !closed
     %r = tribute_control.call %x, %f {{callee = @external, row_args = [{{}}]}} : core.i32
     tribute_control.return %r
   }}
 }}"#
     );
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, &input);
+    let validation =
+        tribute_ir::dialect::tribute_control::validate(&ctx, module, &[], &mut Default::default());
+    assert!(validation.is_ok(), "{validation}");
     assert_eq!(rules(&input), [""; 0]);
 }
