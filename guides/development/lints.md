@@ -7,8 +7,8 @@ Run the shared lint entry point from the repository root:
 ```
 
 Codex and Claude Stop hooks use this entry point. The Git pre-commit hook uses
-`.ci/lint.sh --quick`, which skips Clippy. CI runs the same checks in separate
-jobs.
+`.ci/lint.sh --quick`, which skips Clippy and rustdoc. CI runs the same checks
+in separate jobs.
 
 Project-specific checks:
 
@@ -20,4 +20,11 @@ To run Clippy alone:
 
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Rustdoc warnings, such as broken intra-doc links or public docs linking to
+private items, fail the full lint and the CI lint job. To run the check alone:
+
+```bash
+RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps
 ```

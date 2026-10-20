@@ -41,6 +41,13 @@ if [ "$QUICK" = false ]; then
         echo "Run 'cargo clippy --workspace --all-targets' to see all issues." >&2
         exit 2
     fi
+
+    echo "Running rustdoc..."
+    if ! RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps; then
+        echo "" >&2
+        echo "Rustdoc failed with warnings/errors. Fix the issues above and try again." >&2
+        exit 2
+    fi
 fi
 
 echo "Running ast-grep..."
