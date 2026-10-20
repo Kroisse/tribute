@@ -853,6 +853,20 @@ fn build_func_sig(
     FuncSig::from_type_ref(ctx, ty).expect("source func_sig constructor must produce a valid type")
 }
 
+/// The source signature `ty` with its own convention set to `convention`.
+/// Callable types inside it keep theirs.
+pub fn func_sig_with_convention(
+    ctx: &mut IrContext,
+    ty: TypeRef,
+    convention: CallingConvention,
+) -> TypeRef {
+    let mut data = ctx.get_type(ty).clone();
+    data.attrs
+        .view_mut(ctx)
+        .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
+    ctx.intern_type(data)
+}
+
 /// Read convention only through a validated source signature; `None` for
 /// another type and before class specialization assigns one.
 pub fn func_sig_convention(ctx: &IrContext, ty: TypeRef) -> Option<CallingConvention> {

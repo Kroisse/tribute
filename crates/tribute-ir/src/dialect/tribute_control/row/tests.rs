@@ -7,7 +7,7 @@ use trunk_ir::{IrContext, SymbolPath};
 
 use super::super::{
     CallingConvention, FuncSig, ValidationResult, conventions_assigned, func_sig_convention,
-    func_sig_with_row, validate_local, validate_whole_ir,
+    func_sig_with_convention, func_sig_with_row, validate_local, validate_whole_ir,
 };
 use super::*;
 
@@ -753,4 +753,20 @@ fn assigning_conventions_reaches_every_callable_and_layout() {
     assert_eq!(elements[1], i32_ty);
     assert_eq!(signature.row(&ctx), Row::new([], Some(0)));
     assert_eq!(assign_conventions(&mut ctx, assigned, class), assigned);
+}
+
+#[test]
+fn setting_a_signature_convention_leaves_inner_callables_alone() {
+    let mut ctx = IrContext::new();
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+    let inner = unassigned(&mut ctx, &[i32_ty], i32_ty, &Row::default());
+    let outer = unassigned(&mut ctx, &[inner], i32_ty, &Row::default());
+    let set = func_sig_with_convention(&mut ctx, outer, CallingConvention::EvidenceDirect);
+    assert_eq!(
+        func_sig_convention(&ctx, set),
+        Some(CallingConvention::EvidenceDirect)
+    );
+    let signature = FuncSig::from_type_ref(&ctx, set).unwrap();
+    assert_eq!(signature.inputs(&ctx), [inner]);
+    assert_eq!(func_sig_convention(&ctx, inner), None);
 }
