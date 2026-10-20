@@ -18,7 +18,7 @@ use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::core;
 use trunk_ir::op_def::OpDef;
 use trunk_ir::op_interface::{
-    CallLike, CallableExit, DynRegionBranch, RegionBranchPoint, RegionSuccessor,
+    CallLike, CallableExit, DynCallLike, DynRegionBranch, RegionBranchPoint, RegionSuccessor,
 };
 use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -163,6 +163,7 @@ mod tribute_control {
     fn r#return(value: Value<_>) {}
 
     // Direct-style control operations
+    #[implements(OperationDeclarationUse)]
     fn perform(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -181,6 +182,7 @@ mod tribute_control {
         {}
     }
 
+    #[implements(OperationDeclarationUse)]
     fn handler(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -859,6 +861,81 @@ impl CallLike for Call {
 impl CallLike for TailCall {
     fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
+    }
+}
+
+/// The ability operation declaration an operation names, and the kind it
+/// claims through the attribute `kind_attr`.
+pub struct DeclarationUse<'a> {
+    pub ability: &'a SymbolPath,
+    pub op_name: StringRef,
+    pub kind: Option<StringRef>,
+    pub kind_attr: &'static str,
+}
+
+/// An operation that names one ability operation declaration, whose
+/// parameter and result types fix the types of values the operation supplies.
+///
+/// Whole-IR validation queries it on operations whose schema may not hold,
+/// so implementations read attributes and regions fallibly.
+#[trunk_ir::op_interface]
+pub trait OperationDeclarationUse: DialectOp {
+    /// The declaration this operation names; `None` without its ability or
+    /// operation name.
+    fn declaration_use<'a>(&self, ctx: &'a IrContext) -> Option<DeclarationUse<'a>>;
+
+    /// The values that take the declaration's parameter types, in order.
+    fn declared_arguments<'a>(&self, ctx: &'a IrContext) -> Option<&'a [ValueRef]>;
+
+    /// The type that the declaration's result type must equal.
+    fn declared_result_type(&self, ctx: &IrContext) -> Option<TypeRef>;
+}
+
+impl OperationDeclarationUse for Perform {
+    fn declaration_use<'a>(&self, ctx: &'a IrContext) -> Option<DeclarationUse<'a>> {
+        let attrs = ctx.op_attrs(self.op_ref());
+        Some(DeclarationUse {
+            ability: attrs.get_symbol_ref("ability")?,
+            op_name: attrs.get_string_ref("op_name")?,
+            kind: attrs.get_string_ref("operation_kind"),
+            kind_attr: "operation_kind",
+        })
+    }
+
+    fn declared_arguments<'a>(&self, ctx: &'a IrContext) -> Option<&'a [ValueRef]> {
+        Some(ctx.op_operands(self.op_ref()))
+    }
+
+    fn declared_result_type(&self, ctx: &IrContext) -> Option<TypeRef> {
+        ctx.op_result_types(self.op_ref()).first().copied()
+    }
+}
+
+impl OperationDeclarationUse for Handler {
+    fn declaration_use<'a>(&self, ctx: &'a IrContext) -> Option<DeclarationUse<'a>> {
+        let attrs = ctx.op_attrs(self.op_ref());
+        Some(DeclarationUse {
+            ability: attrs.get_symbol_ref("ability")?,
+            op_name: attrs.get_string_ref("op_name")?,
+            kind: attrs.get_string_ref("kind"),
+            kind_attr: "kind",
+        })
+    }
+
+    /// The clause's block arguments without its trailing resume token.
+    fn declared_arguments<'a>(&self, ctx: &'a IrContext) -> Option<&'a [ValueRef]> {
+        let region = ctx.op_region(self.op_ref(), 0)?;
+        let &block = ctx.region(region).blocks.first()?;
+        let args = ctx.block_args(block);
+        Some(match args.split_last() {
+            Some((token, rest)) if ResumeToken::matches(ctx, ctx.value_ty(*token)) => rest,
+            _ => args,
+        })
+    }
+
+    fn declared_result_type(&self, ctx: &IrContext) -> Option<TypeRef> {
+        ctx.op_attrs(self.op_ref())
+            .get_type("operation_result_type")
     }
 }
 
@@ -3424,6 +3501,21 @@ struct CallableProvenance<'a> {
     nominal_layouts: &'a HashMap<StringRef, TypeRef>,
 }
 
+impl CallableProvenance<'_> {
+    /// The declaration `declared` names, when it claims that declaration's kind.
+    fn claimed_declaration(
+        &self,
+        ctx: &IrContext,
+        declared: DynOperationDeclarationUse,
+    ) -> Option<&OperationDeclaration> {
+        let claim = declared.declaration_use(ctx)?;
+        self.declarations
+            .get(&(claim.ability, claim.op_name))
+            .copied()
+            .filter(|declaration| claim.kind == Some(declaration.kind))
+    }
+}
+
 fn callable_block_arg_has_source_contract(
     ctx: &IrContext,
     block: BlockRef,
@@ -3457,21 +3549,16 @@ fn callable_block_arg_has_source_contract(
         return parameters.get(index as usize) == Some(&value_type);
     }
 
-    if Handler::matches(ctx, owner) && ctx.op_regions(owner).eq([region]) {
-        let attrs = ctx.op_attrs(owner);
-        if let (Some(ability), Some(name), Some(kind)) = (
-            attrs.get_symbol_ref("ability"),
-            attrs.get_string_ref("op_name"),
-            attrs.get_string_ref("kind"),
-        ) {
-            return provenance
-                .declarations
-                .get(&(ability, name))
-                .is_some_and(|declaration| {
-                    declaration.kind == kind
-                        && declaration.parameter_types.get(index as usize) == Some(&value_type)
-                });
-        }
+    if let Some(declared) = DynOperationDeclarationUse::get(ctx, owner)
+        && let Some(position) = declared
+            .declared_arguments(ctx)
+            .and_then(|arguments| arguments.iter().position(|&argument| argument == value))
+    {
+        return provenance
+            .claimed_declaration(ctx, declared)
+            .is_some_and(|declaration| {
+                declaration.parameter_types.get(position) == Some(&value_type)
+            });
     }
 
     let Some((body_region, completion_region, _)) = ctx.op_regions(owner).collect_tuple() else {
@@ -3513,23 +3600,22 @@ fn callable_has_semantic_provenance(
                     && ctx.op_operands(producer).first().is_some_and(|lambda| {
                         callable_has_semantic_provenance(ctx, *lambda, provenance, visiting)
                     }))
-                || ((FuncRef::matches(ctx, producer) || Call::matches(ctx, producer))
-                    && ctx
-                        .op_attrs(producer)
-                        .get_symbol_ref(if FuncRef::matches(ctx, producer) {
-                            "func_ref"
-                        } else {
-                            "callee"
-                        })
-                        .and_then(|symbol| provenance.functions.resolve(ctx, producer, symbol))
-                        .filter(|&function| Func::matches(ctx, function))
-                        .is_some_and(|function| {
-                            verified_callable_declaration(ctx, function, provenance.registered)
-                        }))
+                || named_callable_target(ctx, producer)
+                    .and_then(|symbol| provenance.functions.resolve(ctx, producer, symbol))
+                    .filter(|&function| Func::matches(ctx, function))
+                    .is_some_and(|function| {
+                        verified_callable_declaration(ctx, function, provenance.registered)
+                    })
                 || (CallIndirect::matches(ctx, producer)
                     && ctx.op_operands(producer).first().is_some_and(|callee| {
                         callable_has_semantic_provenance(ctx, *callee, provenance, visiting)
                     }))
+                || declared_result_has_callable_provenance(
+                    ctx,
+                    producer,
+                    ctx.value_ty(value),
+                    provenance,
+                )
                 || list::Head::from_op(ctx, producer).is_ok_and(|head| {
                     head.element_type(ctx) == ctx.value_ty(value)
                         && ctx.op_result_types(producer) == [ctx.value_ty(value)]
@@ -3542,6 +3628,37 @@ fn callable_has_semantic_provenance(
                 )
         }
     }
+}
+
+fn declared_result_has_callable_provenance(
+    ctx: &IrContext,
+    producer: OpRef,
+    result_type: TypeRef,
+    provenance: &CallableProvenance<'_>,
+) -> bool {
+    let Some(declared) = DynOperationDeclarationUse::get(ctx, producer) else {
+        return false;
+    };
+    ctx.op_result_types(producer) == [result_type]
+        && declared.declared_result_type(ctx) == Some(result_type)
+        && provenance
+            .claimed_declaration(ctx, declared)
+            .is_some_and(|declaration| declaration.result_type == result_type)
+}
+
+/// The function a `func_ref` names or a direct call calls. A call is read
+/// through `CallLike` only once its structure satisfies its schema, since the
+/// whole-IR walk also visits operations the local checks rejected.
+fn named_callable_target(ctx: &IrContext, producer: OpRef) -> Option<&SymbolPath> {
+    if FuncRef::matches(ctx, producer) {
+        return ctx.op_attrs(producer).get_symbol_ref("func_ref");
+    }
+    let call = DynCallLike::get(ctx, producer)?;
+    OpDef::of(ctx, producer)?
+        .schema
+        .verify_structure(ctx, producer)
+        .is_empty()
+        .then(|| call.direct_callee(ctx))
 }
 
 fn verified_callable_declaration(
@@ -3751,55 +3868,37 @@ fn validate_declaration_uses(
     errors: &mut Vec<ValidationError>,
 ) {
     walk_region_ops(ctx, body, &mut |op| {
-        let attrs = ctx.op_attrs(op);
-        let (kind_attr, args, result_ty) = if Perform::matches(ctx, op) {
-            (
-                "operation_kind",
-                ctx.op_operands(op),
-                ctx.op_result_types(op).first().copied(),
-            )
-        } else if Handler::matches(ctx, op) {
-            let Some(region) = ctx.op_region(op, 0) else {
-                return;
-            };
-            let Some(&block) = ctx.region(region).blocks.first() else {
-                return;
-            };
-            let mut args = ctx.block_args(block);
-            if args
-                .last()
-                .is_some_and(|value| ResumeToken::matches(ctx, ctx.value_ty(*value)))
-            {
-                args = &args[..args.len() - 1];
-            }
-            ("kind", args, attrs.get_type("operation_result_type"))
-        } else {
+        let Some(declared) = DynOperationDeclarationUse::get(ctx, op) else {
             return;
         };
-        let (Some(ability), Some(name)) = (
-            attrs.get_symbol_ref("ability"),
-            attrs.get_string_ref("op_name"),
+        let (Some(claim), Some(args)) = (
+            declared.declaration_use(ctx),
+            declared.declared_arguments(ctx),
         ) else {
             return;
         };
-        let Some(declaration) = declarations.get(&(ability, name)) else {
+        let Some(declaration) = declarations.get(&(claim.ability, claim.op_name)) else {
             push_op_error(
                 ctx,
                 op,
                 errors,
                 format!(
-                    "no resolved operation declaration for {ability}::{}",
-                    ctx.str(name)
+                    "no resolved operation declaration for {}::{}",
+                    claim.ability,
+                    ctx.str(claim.op_name)
                 ),
             );
             return;
         };
-        if attrs.get_string_ref(kind_attr) != Some(declaration.kind) {
+        if claim.kind != Some(declaration.kind) {
             push_op_error(
                 ctx,
                 op,
                 errors,
-                format!("{kind_attr} does not match the resolved declaration"),
+                format!(
+                    "{} does not match the resolved declaration",
+                    claim.kind_attr
+                ),
             );
         }
         check_types_equal(
@@ -3810,7 +3909,7 @@ fn validate_declaration_uses(
             "operation argument",
             errors,
         );
-        if result_ty != Some(declaration.result_type) {
+        if declared.declared_result_type(ctx) != Some(declaration.result_type) {
             push_op_error(
                 ctx,
                 op,
@@ -6894,6 +6993,41 @@ mod tests {
             validate(&ctx, module, &[], &mut Default::default())
         };
         assert!(result.is_ok(), "{result}");
+    }
+
+    fn performed_callable_module(declared_result: &str) -> String {
+        format!(
+            r#"core.module @test {{
+  !F = tribute_control.func_sig<(core.i32) -> core.i32, {{tribute.calling_convention = 0}}>
+  tribute_control.func @run(%value: core.i32) -> core.i32 convention(cps) {{
+    %callee = tribute_control.perform {{ability = @Reader, op_name = "read", operation_kind = "fn"}} : !F
+    %result = tribute_control.call_indirect %callee, %value : core.i32
+    tribute_control.return %result
+  }}
+  ability.decl {{sym_name = "Reader"}} {{
+    ability.operation {{kind = "fn", op_name = "read", param_types = [], result_type = {declared_result}}}
+  }}
+}}"#
+        )
+    }
+
+    #[test]
+    fn declared_perform_result_has_callable_provenance() {
+        let (ctx, module) = parse_fixture(&performed_callable_module("!F"));
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn perform_result_needs_the_declared_callable_type() {
+        let (ctx, module) = parse_fixture(&performed_callable_module("core.i32"));
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(
+            messages(&result).contains("callable provenance"),
+            "{result}"
+        );
     }
 
     #[test]

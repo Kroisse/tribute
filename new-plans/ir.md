@@ -991,8 +991,18 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 - **형상:** `tribute_control.func_sig` callee, source argument, callee type의
   source-logical result 하나와 선택적 [`evidence_plan`](#evidence-선택-속성)을 가지며
   region이 없는 non-terminator다.
-- **의미:** lambda, `func_ref`, parameter 또는 capture로 얻은 callable을 호출한다.
+- **의미:** lambda, `func_ref`, parameter, capture, 호출 결과, data projection,
+  ability operation 결과로 얻은 callable을 호출한다.
 - **검증:** local verifier는 callee signature와 argument/result type을 맞춘다.
+  Whole-IR verifier는 callee가 source signature를 선언에서 얻은 값인지 따라간다.
+  받아들이는 출처는 `lambda`와 그 `instantiate`, 정의가 있거나 등록된 intrinsic인
+  함수의 `func_ref`와 `call` 결과, 받아들인 callee의 `call_indirect` 결과, 원소나
+  field의 선언 type이 callable type과 정확히 같은 list/ADT projection,
+  `func`/`lambda`의 parameter, 해소된 operation 선언의 parameter type과 같은
+  handler 인자, body 결과가 받아들여진 `handle`의 completion 인자, 그리고 해소된
+  operation 선언의 kind와 result type이 결과와 같은 `perform`의 결과다. Handler
+  인자와 `perform` 결과의 callable type은 ability 선언의 instance가 정하므로
+  함수 parameter와 같은 근거를 가진다. 이 출처 규칙은 handler를 구현하는 전략과 무관하다.
 - **소유권과 값 흐름:** callee와 argument는 일반 SSA use이고 environment,
   evidence, `ContinuationFrame<R>`는 없다.
 - **위치:** callee와 argument를 포함한 source indirect-call span이다.
