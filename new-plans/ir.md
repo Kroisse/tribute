@@ -1029,19 +1029,15 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
   ability operation 결과로 얻은 callable을 호출한다.
 - **검증:** local verifier는 callee signature와 argument/result type을 맞춘다.
   Whole-IR verifier는 callee가 source signature를 선언에서 얻은 값인지 따라간다.
-  받아들이는 출처는 `lambda`와 그 `instantiate`, 정의가 있거나 등록된 intrinsic인
-  함수의 `func_ref`와 `call` 결과, 받아들인 callee의 `call_indirect` 결과, 원소나
-  field의 선언 type이 callable type과 정확히 같은 list/ADT projection,
-  `func`/`lambda`의 parameter, 해소된 operation 선언의 parameter type과 같은
-  handler 인자, body 결과가 받아들여진 `handle`의 completion 인자, 해소된
-  operation 선언의 kind와 result type이 결과와 같은 `perform`의 결과, completion
-  region과 각 `op` handler가 yield하는 값이 모두 받아들여진 `handle`의 결과, 그리고
-  그 `handle`의 결과가 받아들여진 `resume`의 결과다. Handler 인자와 `perform` 결과의
-  callable type은 ability 선언의 instance가 정하므로 함수 parameter와 같은 근거를
-  가진다. `resume`의 결과는 resume token이 속한 `handle`의 결과이므로 그 결과와 같은
-  출처를 가진다. `handle`의 결과에 이르는 값이 다시 그 결과에서 오는 순환은 새 값을
-  더하지 않으므로, 순환 밖에서 그 결과에 이르는 값만 출처를 갖추면 된다. 이 출처
-  규칙은 handler를 구현하는 전략과 무관하다.
+  그 판정 규칙은 값을 만든 operation이, block 인자이면 그 block을 가진 operation이
+  자기 선언에서 정한다. 규칙은 operation 자신의 선언·속성이나 해소된 선언과의
+  일치로 근거를 세우고, 다른 값에 기대는 경우(lambda의 `instantiate`, callee의
+  `call_indirect` 결과, `handle`에 이르는 yield 등)에는 그 값들이 모두 출처를
+  갖추어야 한다. 규칙이 없는 operation의 결과와 block 인자는 출처가 아니다.
+  값마다 만든 operation이 하나이므로 판정은 거쳐 간 모든 값의 conjunction이다.
+  `handle`의 handler에서 그 결과로 되돌아오는 순환은 새 값을 더하지 않으므로
+  순환 밖에서 이르는 값만 출처를 갖추면 된다. 이 출처 규칙은 handler를 구현하는
+  전략과 무관하다.
 - **소유권과 값 흐름:** callee와 argument는 일반 SSA use이고 environment,
   evidence, `ContinuationFrame<R>`는 없다.
 - **위치:** callee와 argument를 포함한 source indirect-call span이다.
