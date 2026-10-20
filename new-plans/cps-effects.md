@@ -174,7 +174,8 @@ Compiler가 생성하는 정의도 같은 규칙을 따른다. 필드의 `modify
 
 **`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수의 class는 사용처마다 row
 인자에서 계산한다. IR에서 그 row 인자는 사용처의
-[`instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)가 가진다. 람다는 그것을 묶은
+[`instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)가
+가진다. 람다는 그것을 묶은
 인스턴스 안에서 쓰이는 class 조합마다 한 번 생성하고, 각 사용처는 자기 class의 생성물을 읽는다. 생성물마다 람다 자신의
 convention과 본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 생성물마다
 따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의

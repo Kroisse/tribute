@@ -655,7 +655,9 @@ tribute_control.func_sig<(T) -> R, {tribute.calling_convention = 2,
     ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}>
 ```
 
-- **값:** `instances`는 [`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)에 대한 symbol 참조 목록이고
+- **값:** `instances`는
+  [`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)에 대한 symbol
+  참조 목록이고
   `tail`은 둘러싼 정의의 [row binder](#row-binder) index다. 둘 다 없으면 닫힌 빈
   row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬한다. 같은
   instance가 두 번 나오면 두 번 둔다. Evidence 선택이 instance의 위치 수를 세기
@@ -947,7 +949,8 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
 ```
 
 - 원소는 key 하나짜리 dictionary다. Key `mask` 또는 `dup`이 연산을, 값이 exact
-  ability instance([`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)의 symbol 참조)를 나타내며 원소는 순서대로 적용한다.
+  ability instance([`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)의
+  symbol 참조)를 나타내며 원소는 순서대로 적용한다.
   한 instance는 한 번만 나온다.
 - Key `outer`는 그 instance의 가장 위 handler를 설치한 지점의 evidence로 바꾼다.
   Source-logical operation은 이 key를 쓰지 않는다. CPS legalization이 arm 본문에
