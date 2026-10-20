@@ -1709,3 +1709,49 @@ fn main() ->{Io} Nil {
 "#;
     assert_output_on_both_targets("ability_operation_returns_callable.trb", source, "42\n40");
 }
+
+/// A function value that a `handle` expression or a resumption returns can
+/// be called (#1565).
+#[test]
+fn test_handle_and_resume_return_callable_values() {
+    let source = r#"use std::io::{Io, print_line}
+
+ability Ask {
+    fn ask() -> Int
+}
+
+ability Gen {
+    op next() -> Int
+}
+
+fn asks() ->{Ask} Int { Ask::ask() }
+
+fn nexts() ->{Gen} Int { Gen::next() }
+
+fn handled() -> Int {
+    let f = handle asks() {
+        do k { fn(n: Int) n + k }
+        fn Ask::ask() { +40 }
+    }
+    f(+2)
+}
+
+fn resumed() -> Int {
+    let f = handle nexts() {
+        do k { fn(n: Int) n + k }
+        op Gen::next() {
+            let g = resume +40
+            let h = fn(n: Int) g(n) + +1
+            h
+        }
+    }
+    f(+1)
+}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(handled()))
+    print_line(Int::to_string(resumed()))
+}
+"#;
+    assert_output_on_both_targets("handle_resume_return_callable.trb", source, "42\n42");
+}

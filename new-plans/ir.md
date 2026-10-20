@@ -1033,10 +1033,15 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
   함수의 `func_ref`와 `call` 결과, 받아들인 callee의 `call_indirect` 결과, 원소나
   field의 선언 type이 callable type과 정확히 같은 list/ADT projection,
   `func`/`lambda`의 parameter, 해소된 operation 선언의 parameter type과 같은
-  handler 인자, body 결과가 받아들여진 `handle`의 completion 인자, 그리고 해소된
-  operation 선언의 kind와 result type이 결과와 같은 `perform`의 결과다. Handler
-  인자와 `perform` 결과의 callable type은 ability 선언의 instance가 정하므로
-  함수 parameter와 같은 근거를 가진다. 이 출처 규칙은 handler를 구현하는 전략과 무관하다.
+  handler 인자, body 결과가 받아들여진 `handle`의 completion 인자, 해소된
+  operation 선언의 kind와 result type이 결과와 같은 `perform`의 결과, completion
+  region과 각 `op` handler가 yield하는 값이 모두 받아들여진 `handle`의 결과, 그리고
+  그 `handle`의 결과가 받아들여진 `resume`의 결과다. Handler 인자와 `perform` 결과의
+  callable type은 ability 선언의 instance가 정하므로 함수 parameter와 같은 근거를
+  가진다. `resume`의 결과는 resume token이 속한 `handle`의 결과이므로 그 결과와 같은
+  출처를 가진다. `handle`의 결과에 이르는 값이 다시 그 결과에서 오는 순환은 새 값을
+  더하지 않으므로, 순환 밖에서 그 결과에 이르는 값만 출처를 갖추면 된다. 이 출처
+  규칙은 handler를 구현하는 전략과 무관하다.
 - **소유권과 값 흐름:** callee와 argument는 일반 SSA use이고 environment,
   evidence, `ContinuationFrame<R>`는 없다.
 - **위치:** callee와 argument를 포함한 source indirect-call span이다.

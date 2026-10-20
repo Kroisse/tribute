@@ -3587,8 +3587,20 @@ fn callable_has_semantic_provenance(
     provenance: &CallableProvenance<'_>,
     visiting: &mut HashSet<ValueRef>,
 ) -> bool {
-    if !visiting.insert(value) || FuncSig::from_type_ref(ctx, ctx.value_ty(value)).is_none() {
+    if FuncSig::from_type_ref(ctx, ctx.value_ty(value)).is_none() {
         return false;
+    }
+    if !visiting.insert(value) {
+        // Each value has one producer, so a query accepts a value only when
+        // it accepts everything that value was reached through. A cycle
+        // through a handle's handlers back to its result, directly or
+        // through a resumption, adds no source; a value already rejected
+        // rejects the whole query.
+        return matches!(
+            ctx.value_def(value),
+            ValueDef::OpResult(producer, _)
+                if Handle::matches(ctx, producer) || Resume::matches(ctx, producer)
+        );
     }
     match ctx.value_def(value) {
         ValueDef::BlockArg(block, index) => {
@@ -3596,6 +3608,19 @@ fn callable_has_semantic_provenance(
         }
         ValueDef::OpResult(producer, _) => {
             Lambda::matches(ctx, producer)
+                || (Handle::matches(ctx, producer)
+                    && handle_result_sources(ctx, producer).is_some_and(|sources| {
+                        sources.into_iter().all(|source| {
+                            ctx.value_ty(source) == ctx.value_ty(value)
+                                && callable_has_semantic_provenance(
+                                    ctx, source, provenance, visiting,
+                                )
+                        })
+                    }))
+                || resumed_handle_result(ctx, producer).is_some_and(|result| {
+                    ctx.value_ty(result) == ctx.value_ty(value)
+                        && callable_has_semantic_provenance(ctx, result, provenance, visiting)
+                })
                 || (Instantiate::matches(ctx, producer)
                     && ctx.op_operands(producer).first().is_some_and(|lambda| {
                         callable_has_semantic_provenance(ctx, *lambda, provenance, visiting)
@@ -3628,6 +3653,53 @@ fn callable_has_semantic_provenance(
                 )
         }
     }
+}
+
+/// The value a single-block region yields to its parent.
+fn region_yield_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
+    let [block] = ctx.region(region).blocks.as_slice() else {
+        return None;
+    };
+    let terminator = ctx.block(*block).ops.last().copied()?;
+    let [value] = ctx.op_operands(terminator) else {
+        return None;
+    };
+    Yield::matches(ctx, terminator).then_some(*value)
+}
+
+/// The values that become a `handle`'s result: the completion region's
+/// yield and the yield of each general (`op`) handler. A `fn` handler yields
+/// to its `perform` instead.
+fn handle_result_sources(ctx: &IrContext, handle: OpRef) -> Option<Vec<ValueRef>> {
+    let (_, completion, handlers) = ctx.op_regions(handle).collect_tuple()?;
+    let mut sources = vec![region_yield_value(ctx, completion)?];
+    for &block in &ctx.region(handlers).blocks {
+        for &handler in &ctx.block(block).ops {
+            if Handler::matches(ctx, handler) && ctx.op_attrs(handler).get_str("kind") == Some("op")
+            {
+                sources.push(region_yield_value(ctx, ctx.op_region(handler, 0)?)?);
+            }
+        }
+    }
+    Some(sources)
+}
+
+/// The result of the `handle` whose handler holds the resume token that
+/// `producer`, a `resume`, consumes. A resumption returns that result.
+fn resumed_handle_result(ctx: &IrContext, producer: OpRef) -> Option<ValueRef> {
+    if !Resume::matches(ctx, producer) {
+        return None;
+    }
+    let token = *ctx.op_operands(producer).first()?;
+    let ValueDef::BlockArg(block, _) = ctx.value_def(token) else {
+        return None;
+    };
+    let handler = ctx.region(ctx.block(block).parent_region?).parent_op?;
+    let handle = ctx.region(parent_region(ctx, handler)?).parent_op?;
+    if !Handler::matches(ctx, handler) || !Handle::matches(ctx, handle) {
+        return None;
+    }
+    ctx.op_results(handle).first().copied()
 }
 
 fn declared_result_has_callable_provenance(
@@ -7026,6 +7098,60 @@ mod tests {
         let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(
             messages(&result).contains("callable provenance"),
+            "{result}"
+        );
+    }
+
+    fn handled_callable_module(op_yield: &str) -> String {
+        format!(
+            r#"core.module @test {{
+  !F = tribute_control.func_sig<(core.i32) -> core.i32, {{tribute.calling_convention = 0}}>
+  tribute_control.func @inc(%n: core.i32) -> core.i32 convention(direct) {{
+    tribute_control.return %n
+  }}
+  %f = tribute_control.handle : !F {{
+    %body = tribute_control.perform {{ability = @Gen, op_name = "next", operation_kind = "op"}} : core.i32
+    tribute_control.yield %body
+  }} {{
+    ^completion(%k: core.i32):
+      %done = tribute_control.func_ref {{func_ref = @inc}} : !F
+      tribute_control.yield %done
+  }} {{
+    tribute_control.handler {{ability = @Gen, kind = "op", op_name = "next", operation_result_type = core.i32}} {{
+      ^next(%token: tribute_control.resume_token<core.i32, !F>):
+        %resumed_value = arith.const {{value = 40}} : core.i32
+        %g = tribute_control.resume %token, %resumed_value : !F
+        %called = tribute_control.call_indirect %g, %resumed_value : core.i32
+        %zero = arith.const {{value = 0}} : core.i32
+        %bad = core.unrealized_conversion_cast %zero : !F
+        tribute_control.yield {op_yield}
+    }}
+  }}
+  %one = arith.const {{value = 1}} : core.i32
+  %result = tribute_control.call_indirect %f, %one : core.i32
+  ability.decl {{sym_name = "Gen"}} {{
+    ability.operation {{kind = "op", op_name = "next", param_types = [], result_type = core.i32}}
+  }}
+}}"#
+        )
+    }
+
+    #[test]
+    fn handle_and_resume_results_have_callable_provenance() {
+        let (ctx, module) = parse_fixture(&handled_callable_module("%g"));
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn handle_result_needs_every_yield_to_have_callable_provenance() {
+        let (ctx, module) = parse_fixture(&handled_callable_module("%bad"));
+
+        let result = validate(&ctx, module, &[], &mut Default::default());
+        assert_eq!(
+            messages(&result).matches("callable provenance").count(),
+            2,
             "{result}"
         );
     }
