@@ -1,0 +1,321 @@
+//! Convention classes as source-logical IR determines them: the class
+//! variables of each definition, the class a row requires inside an
+//! instance, and the instance names that record the classes.
+//!
+//! The rules are those of `new-plans/cps-effects.md` ("Row 변수의 convention
+//! class"), read from the IR alone: row binders, `row_args` of references and
+//! instantiations, and the operations each ability instance declares.
+
+use std::ops::ControlFlow;
+
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use tribute_ir::dialect::tribute_control::{CallingConvention, FuncSig, Row, RowBinder};
+use tribute_ir::dialect::{ability, tribute_control};
+use trunk_ir::context::IrContext;
+use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
+use trunk_ir::rewrite::Module;
+use trunk_ir::types::Attribute;
+use trunk_ir::walk::{WalkAction, walk_region};
+use trunk_ir::{Symbol, SymbolPath};
+
+/// The suffix that names a class instance: `$9` and one letter per class
+/// variable. Type arguments never start with a digit, so it is unambiguous.
+pub(crate) const CLASS_MARKER: &str = "$9";
+
+/// The convention each declared ability instance requires: `Cps` when it
+/// declares an `op` operation, `EvidenceDirect` otherwise.
+pub(crate) fn requirements(
+    ctx: &IrContext,
+    module: Module,
+) -> HashMap<SymbolPath, CallingConvention> {
+    let mut requirements = HashMap::default();
+    for &op in module.ops(ctx).iter() {
+        let Ok(decl) = ability::Decl::from_op(ctx, op) else {
+            continue;
+        };
+        let mut convention = CallingConvention::EvidenceDirect;
+        let _ = walk_region::<()>(ctx, decl.operations(ctx), &mut |operation| {
+            if ability::Operation::from_op(ctx, operation)
+                .is_ok_and(|operation| operation.kind(ctx) == "op")
+            {
+                convention = CallingConvention::Cps;
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        requirements.insert(
+            SymbolPath::new([Symbol::new(decl.sym_name(ctx))]),
+            convention,
+        );
+    }
+    requirements
+}
+
+/// The base definition a function instance belongs to, and the classes its
+/// name claims for the class variables.
+pub(crate) fn split_name(name: &str) -> (&str, Option<Vec<CallingConvention>>) {
+    let Some((base, letters)) = name.rsplit_once(CLASS_MARKER) else {
+        return (name, None);
+    };
+    let classes: Option<Vec<_>> = letters
+        .chars()
+        .map(|letter| match letter {
+            'D' => Some(CallingConvention::Direct),
+            'E' => Some(CallingConvention::EvidenceDirect),
+            'C' => Some(CallingConvention::Cps),
+            _ => None,
+        })
+        .collect();
+    match classes {
+        Some(classes) if !classes.is_empty() => (base, Some(classes)),
+        _ => (name, None),
+    }
+}
+
+pub(crate) fn class_suffix(classes: &[CallingConvention]) -> String {
+    if classes.iter().all(|class| *class == CallingConvention::Cps) {
+        return String::new();
+    }
+    let letters: String = classes
+        .iter()
+        .map(|class| match class {
+            CallingConvention::Direct => 'D',
+            CallingConvention::EvidenceDirect => 'E',
+            CallingConvention::Cps => 'C',
+        })
+        .collect();
+    format!("{CLASS_MARKER}{letters}")
+}
+
+/// A reference to a named definition and the rows it passes.
+pub(crate) struct Reference {
+    pub(crate) op: OpRef,
+    pub(crate) callee: String,
+    pub(crate) rows: Vec<Row>,
+}
+
+/// What one function definition tells about its class variables.
+pub(crate) struct Function {
+    pub(crate) op: OpRef,
+    pub(crate) name: String,
+    pub(crate) base: String,
+    pub(crate) claimed: Option<Vec<CallingConvention>>,
+    pub(crate) binders: Vec<RowBinder>,
+    pub(crate) ty: TypeRef,
+    pub(crate) inferred: bool,
+    /// Tails that select a class variable without looking at callees.
+    pub(crate) selecting: HashSet<u32>,
+    pub(crate) references: Vec<Reference>,
+    /// The selected class variables, by binder index.
+    pub(crate) selected: Vec<u32>,
+}
+
+impl Function {
+    pub(crate) fn read(ctx: &IrContext, op: OpRef) -> Option<Self> {
+        let function = tribute_control::Func::from_op(ctx, op).ok()?;
+        let name = function.sym_name(ctx).to_owned();
+        let (base, claimed) = split_name(&name);
+        let base = base.to_owned();
+        let ty = function.r#type(ctx);
+        let signature = FuncSig::from_type_ref(ctx, ty)?;
+        let binders = tribute_control::row_binders(ctx, op).ok()?;
+        let inferred = matches!(
+            ctx.op_attrs(op).get(tribute_control::INFERRED_ROW_ATTR),
+            Some(Attribute::Bool(true))
+        );
+        let mut selecting = HashSet::default();
+        let mut tail_of = |ty: TypeRef| {
+            tribute_control::visit_rows(ctx, ty, &mut |row| {
+                if let Ok(Row {
+                    tail: Some(tail), ..
+                }) = row
+                {
+                    selecting.insert(tail);
+                }
+            });
+        };
+        let mut references = Vec::new();
+        // A definition without a body is one external symbol with one ABI,
+        // so it has no class variables.
+        if let Some(body) = ctx.op_region(op, 0) {
+            for &ty in signature.inputs(ctx).iter().chain(signature.results(ctx)) {
+                tail_of(ty);
+            }
+            for ty in body_value_types(ctx, body) {
+                tail_of(ty);
+            }
+            let _ = walk_region::<()>(ctx, body, &mut |inner| {
+                let rows = tribute_control::row_args(ctx, inner).unwrap_or_default();
+                if tribute_control::Instantiate::matches(ctx, inner) {
+                    selecting.extend(rows.iter().filter_map(|row| row.tail));
+                } else if let Some(callee) = reference_callee(ctx, inner) {
+                    references.push(Reference {
+                        op: inner,
+                        callee,
+                        rows,
+                    });
+                }
+                ControlFlow::Continue(WalkAction::Advance)
+            });
+        }
+        Some(Self {
+            op,
+            name,
+            base,
+            claimed,
+            binders,
+            ty,
+            inferred,
+            selecting,
+            references,
+            selected: Vec::new(),
+        })
+    }
+
+    /// Whether binder `index` may be a class variable.
+    pub(crate) fn is_candidate(&self, index: u32) -> bool {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.binders.get(index))
+            == Some(&RowBinder::Param)
+    }
+
+    pub(crate) fn is_root_main(&self) -> bool {
+        self.name == "main"
+    }
+}
+
+/// The name a `call`, `tail_call`, or `func_ref` refers to.
+pub(crate) fn reference_callee(ctx: &IrContext, op: OpRef) -> Option<String> {
+    let key = if tribute_control::FuncRef::matches(ctx, op) {
+        "func_ref"
+    } else if tribute_control::Call::matches(ctx, op) || tribute_control::TailCall::matches(ctx, op)
+    {
+        "callee"
+    } else {
+        return None;
+    };
+    let path = ctx.op_attrs(op).get_symbol_ref(key)?;
+    Some(path.leaf()?.to_string())
+}
+
+/// The types of every value a body defines: operation results and block
+/// arguments, nested regions included.
+pub(crate) fn body_value_types(ctx: &IrContext, body: RegionRef) -> Vec<TypeRef> {
+    let mut types = Vec::new();
+    let mut regions = vec![body];
+    while let Some(region) = regions.pop() {
+        for &block in &ctx.region(region).blocks {
+            types.extend(
+                ctx.block_args(block)
+                    .iter()
+                    .map(|&value| ctx.value_ty(value)),
+            );
+            for &op in &ctx.block(block).ops {
+                types.extend(ctx.op_result_types(op).iter().copied());
+                regions.extend(ctx.op_regions(op));
+            }
+        }
+    }
+    types
+}
+
+/// Select the class variables of every definition: a `param` binder that is
+/// the tail of a callable type in its signature or body, of a row it
+/// instantiates a let-bound lambda with, or of a row it passes for a class
+/// variable of a definition it references. Returns the class variable
+/// positions of each base definition.
+pub(crate) fn settle_class_variables(functions: &mut [Function]) -> HashMap<String, Vec<u32>> {
+    for function in functions.iter_mut() {
+        let mut selected: Vec<u32> = function
+            .selecting
+            .iter()
+            .copied()
+            .filter(|tail| function.is_candidate(*tail))
+            .collect();
+        selected.sort_unstable();
+        function.selected = selected;
+    }
+    loop {
+        let positions = class_positions(functions);
+        let mut changed = false;
+        for function in functions.iter_mut() {
+            let mut added = Vec::new();
+            for reference in &function.references {
+                let (callee, _) = split_name(&reference.callee);
+                for &position in positions.get(callee).into_iter().flatten() {
+                    let tail = usize::try_from(position)
+                        .ok()
+                        .and_then(|position| reference.rows.get(position))
+                        .and_then(|row| row.tail);
+                    if let Some(tail) = tail
+                        && function.is_candidate(tail)
+                        && !function.selected.contains(&tail)
+                    {
+                        added.push(tail);
+                    }
+                }
+            }
+            if !added.is_empty() {
+                function.selected.extend(added);
+                function.selected.sort_unstable();
+                function.selected.dedup();
+                changed = true;
+            }
+        }
+        if !changed {
+            return class_positions(functions);
+        }
+    }
+}
+
+/// The class variable positions of each base definition, over all its
+/// instances.
+pub(crate) fn class_positions(functions: &[Function]) -> HashMap<String, Vec<u32>> {
+    let mut positions: HashMap<String, Vec<u32>> = HashMap::default();
+    for function in functions {
+        let entry = positions.entry(function.base.clone()).or_default();
+        entry.extend(&function.selected);
+        entry.sort_unstable();
+        entry.dedup();
+    }
+    positions
+}
+
+/// The class `row` requires inside an instance whose class variables have
+/// `params` and whose local binders have `locals`. A local binder not yet
+/// settled reads as `Direct`, the start of their least fixed point.
+pub(crate) fn row_class(
+    row: &Row,
+    binders: &[RowBinder],
+    requirements: &HashMap<SymbolPath, CallingConvention>,
+    params: &HashMap<u32, CallingConvention>,
+    locals: &HashMap<u32, CallingConvention>,
+) -> CallingConvention {
+    let instances = row
+        .instances
+        .iter()
+        .fold(CallingConvention::Direct, |class, instance| {
+            class.max(
+                requirements
+                    .get(instance)
+                    .copied()
+                    .unwrap_or(CallingConvention::Cps),
+            )
+        });
+    let Some(tail) = row.tail else {
+        return instances;
+    };
+    let kind = usize::try_from(tail)
+        .ok()
+        .and_then(|index| binders.get(index));
+    let tail = match kind {
+        Some(RowBinder::Param) => params.get(&tail).copied().unwrap_or(CallingConvention::Cps),
+        Some(RowBinder::Local) => locals
+            .get(&tail)
+            .copied()
+            .unwrap_or(CallingConvention::Direct),
+        _ => CallingConvention::Cps,
+    };
+    instances.max(tail)
+}
