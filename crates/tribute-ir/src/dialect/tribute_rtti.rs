@@ -2,21 +2,22 @@
 //!
 //! The target boundary that last reads nominal layouts declares, for each
 //! runtime type descriptor, its number and how the runtime reads each of its
-//! fields. A descriptor is a struct allocation layout, or one variant of an
-//! enum allocation layout. The pass that lowers allocations reads these
+//! fields. A descriptor is a struct allocation layout, one variant of an
+//! enum allocation layout, or on native an array type. The pass that lowers
+//! allocations reads these
 //! module-level declarations and erases them, so none reaches the
 //! backend-ready boundary.
 
 use std::fmt;
 use trunk_ir::attr_kind::Type;
-use trunk_ir::dialect::core::I32;
+use trunk_ir::dialect::core::{Array, I32};
 use trunk_ir::op_flag::Pure;
 
 use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::TypeRef;
 use trunk_ir::context::IrContext;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{Attribute, Location, StringRef};
 
@@ -29,7 +30,8 @@ mod tribute_rtti {
     ///
     /// For an `adt.struct` layout, `tag` is absent and `fields` lists one
     /// kind per field. For an `adt.enum` layout, `tag` names the variant and
-    /// `fields` lists one kind per field of that variant.
+    /// `fields` lists one kind per field of that variant. For a `core.array`,
+    /// `tag` is absent and `fields` is the kind of its element.
     #[verify]
     fn layout(
         r#type: Attr<Type>,
@@ -229,13 +231,38 @@ pub fn allocation_descriptor(
     Some((new.r#type(ctx), Some(new.tag_ref(ctx))))
 }
 
-/// The field types of the descriptor `(ty, tag)`: the struct's fields, or
-/// the fields of the enum variant `tag`.
+/// The runtime type descriptor a native allocation operation creates: an
+/// [`allocation_descriptor`], or the array type an array construction
+/// allocates. An evidence array has its reserved descriptor instead.
+pub fn native_allocation_descriptor(
+    ctx: &IrContext,
+    op: trunk_ir::OpRef,
+) -> Option<(TypeRef, Option<StringRef>)> {
+    let array_ty = if let Ok(new) = adt::ArrayNew::from_op(ctx, op) {
+        new.r#type(ctx)
+    } else if let Ok(of) = adt::ArrayOf::from_op(ctx, op) {
+        of.r#type(ctx)
+    } else if let Ok(splice) = adt::ArraySplice::from_op(ctx, op) {
+        splice.r#type(ctx)
+    } else {
+        return allocation_descriptor(ctx, op);
+    };
+    (!crate::dialect::ability::is_evidence_type_ref(ctx, array_ty)).then_some((array_ty, None))
+}
+
+/// The field types of the descriptor `(ty, tag)`: the struct's fields, the
+/// fields of the enum variant `tag`, or an array's element.
 pub fn descriptor_field_types(
     ctx: &IrContext,
     ty: TypeRef,
     tag: Option<StringRef>,
 ) -> Result<Vec<TypeRef>, String> {
+    if let Some(array) = Array::from_type_ref(ctx, ty) {
+        return match tag {
+            None => Ok(vec![array.element(ctx)]),
+            Some(_) => Err("an array descriptor has no tag".into()),
+        };
+    }
     match tag {
         None => get_struct_fields(ctx, ty)
             .map(|fields| fields.into_iter().map(|(_, ty)| ty).collect())

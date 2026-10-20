@@ -2495,15 +2495,13 @@ fn enum_rtti_uses_the_same_nested_managed_predicate() {
 fn unmanaged_physical_and_buffer_types_never_receive_actions() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Marker = adt.struct<EvidenceMarker(code: core.ptr)>
-  !Evidence = core.array<!Marker>
-  func.func @raw(%raw: core.ptr, %array: core.array<core.i32>, %evidence: !Evidence, %code: func.func_sig<() -> core.nil>) -> core.ptr {
+  func.func @raw(%raw: core.ptr, %code: func.func_sig<() -> core.nil>) -> core.ptr {
     func.return %raw
   }
 }"#,
     );
     let function = plan.function(&SymbolPath::new(["raw"])).unwrap();
-    assert_eq!(function.entries(), [EntryOwnership::Plain; 4]);
+    assert_eq!(function.entries(), [EntryOwnership::Plain; 2]);
     assert!(function.actions().is_empty());
     for ty in ctx
         .op_attrs(function.operation())
@@ -3358,4 +3356,195 @@ fn nested_callers_use_the_contract_of_the_callee_their_module_names() {
         .unwrap();
     assert_eq!(count(caller, ActionKind::CallBorrow), 0);
     assert_eq!(count(caller, ActionKind::CallRetain), 1);
+}
+
+const ARRAYS: &str = r#"core.module @test {
+  !Node = adt.struct<Node(value: core.i32)>
+  !NodeRef = adt.typeref<{name = "Node"}>
+  !Nodes = core.array<!NodeRef>
+  !Ints = core.array<core.i32>
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  func.func @pair(%a: !NodeRef, %b: !NodeRef) -> !Nodes {
+    %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
+    func.return %pair
+  }
+  func.func @first(%nodes: !Nodes) -> core.i32 {
+    %at = arith.const {value = 0} : core.index
+    %node = adt.array_get %nodes, %at : !NodeRef
+    %value = adt.struct_get %node {field = 0, type = !Node} : core.i32
+    func.return %value
+  }
+  func.func @insert(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> !Nodes {
+    %inserted = adt.array_splice %nodes, %at, %at, %node {type = !Nodes} : !Nodes
+    func.return %inserted
+  }
+  func.func @fill(%node: !NodeRef, %count: core.index) -> !Nodes {
+    %filled = adt.array_new %count, %node {type = !Nodes} : !Nodes
+    func.return %filled
+  }
+  func.func @ints(%value: core.i32) -> !Ints {
+    %ints = adt.array_of %value {type = !Ints} : !Ints
+    func.return %ints
+  }
+  func.func @no_evidence() -> !Evidence {
+    %empty = adt.array_of {type = !Evidence} : !Evidence
+    func.return %empty
+  }
+}"#;
+
+fn stores(function: &FunctionOwnershipPlan) -> usize {
+    count(function, ActionKind::StoreAcquire) + count(function, ActionKind::StoreTransfer)
+}
+
+#[test]
+fn array_constructions_store_their_new_elements_and_borrow_the_rest() {
+    let (_ctx, _module, plan) = build(ARRAYS);
+    let function = |name| plan.function(&SymbolPath::new([name])).unwrap();
+
+    assert_eq!(stores(function("pair")), 2);
+    // `source` and `initial` are borrowed; the operation acquires the units
+    // of the elements it copies or fills.
+    assert_eq!(stores(function("insert")), 1);
+    assert_eq!(stores(function("fill")), 0);
+    assert_eq!(stores(function("ints")), 0);
+    // An element read from an array no operation writes is a borrow.
+    let first = function("first");
+    assert_eq!(count(first, ActionKind::BorrowLoad), 1);
+    assert_eq!(count(first, ActionKind::CopyAcquire), 0);
+}
+
+#[test]
+fn each_array_type_is_one_descriptor_except_evidence() {
+    let (ctx, _module, plan) = build(ARRAYS);
+    let alias = |name: &str| {
+        ctx.type_aliases()
+            .iter()
+            .find_map(|(alias, ty)| (*alias == name).then_some(*ty))
+            .unwrap()
+    };
+    let i32_ty = core::Array::from_type_ref(&ctx, alias("Ints"))
+        .unwrap()
+        .element(&ctx);
+
+    assert_eq!(
+        plan.rtti_types(),
+        [
+            RttiTypePlan {
+                ty: alias("Nodes"),
+                tag: None,
+                fields: vec![FieldKind::Managed],
+            },
+            RttiTypePlan {
+                ty: alias("Ints"),
+                tag: None,
+                fields: vec![FieldKind::scalar(&ctx, i32_ty).unwrap()],
+            },
+        ]
+    );
+    assert!(plan.is_managed_type(&ctx, alias("Nodes")));
+    assert!(plan.is_managed_type(&ctx, alias("Ints")));
+}
+
+#[test]
+fn a_written_array_type_is_replaceable() {
+    let ir = r#"core.module @test {
+  !Node = adt.struct<Node(value: core.i32)>
+  !NodeRef = adt.typeref<{name = "Node"}>
+  !Nodes = core.array<!NodeRef>
+  func.func @first(%nodes: !Nodes) -> core.i32 {
+    %at = arith.const {value = 0} : core.index
+    %node = adt.array_get %nodes, %at : !NodeRef
+    %value = adt.struct_get %node {field = 0, type = !Node} : core.i32
+    func.return %value
+  }
+  func.func @replace(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> core.nil {
+    adt.array_set %nodes, %at, %node
+    func.return
+  }
+}"#;
+    let (mut ctx, module, plan) = build(ir);
+    let function = |name| plan.function(&SymbolPath::new([name])).unwrap();
+
+    // A read of an array type some operation writes keeps its own unit.
+    let first = function("first");
+    assert_eq!(count(first, ActionKind::BorrowLoad), 0);
+    assert_eq!(count(first, ActionKind::CopyAcquire), 1);
+    let replace = function("replace");
+    assert_eq!(stores(replace), 1);
+    assert_eq!(count(replace, ActionKind::ReleaseReplacedField), 1);
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+    let set = materialized.find("adt.array_set").unwrap();
+    let replaced = materialized[..set].rfind("adt.array_get").unwrap();
+    let release = materialized[replaced..set]
+        .find("tribute_rt.release")
+        .map(|offset| replaced + offset)
+        .unwrap();
+    assert!(replaced < release && release < set, "{materialized}");
+    // The replaced element's descriptor frees it by its exact layout.
+    assert!(
+        materialized[release..set].contains("alloc_size = 12"),
+        "{materialized}"
+    );
+}
+
+#[test]
+fn malformed_array_operations_are_rejected() {
+    let module = |body: &str| {
+        format!(
+            r#"core.module @test {{
+  !Node = adt.struct<Node(value: core.i32)>
+  !NodeRef = adt.typeref<{{name = "Node"}}>
+  !Other = adt.struct<Other(value: core.i32)>
+  !OtherRef = adt.typeref<{{name = "Other"}}>
+  !Nodes = core.array<!NodeRef>
+  !Others = core.array<!OtherRef>
+  func.func @f(%nodes: !Nodes, %others: !Others, %other: !OtherRef, %at: core.index) -> core.nil {{
+    {body}
+    func.return
+  }}
+}}"#
+        )
+    };
+    assert_plan_error_unchanged(
+        &module("%copy = adt.array_splice %others, %at, %at {type = !Nodes} : !Nodes"),
+        "array_splice source differs from its array type",
+    );
+    assert_plan_error_unchanged(
+        &module("%filled = adt.array_new %at, %other {type = !Nodes} : !Nodes"),
+        "array_new initial value type is malformed",
+    );
+    assert_plan_error_unchanged(
+        &module("adt.array_set %nodes, %at, %other"),
+        "array_set value type is malformed",
+    );
+    assert_plan_error_unchanged(
+        &module("%nodes2 = adt.array_of %other {type = !Nodes} : !Nodes"),
+        "aggregate managed field type is stale",
+    );
+}
+
+#[test]
+fn a_stale_replaced_element_release_is_rejected_before_materializing() {
+    let (mut ctx, module, mut stale) = build(
+        r#"core.module @test {
+  !Node = adt.struct<Node(value: core.i32)>
+  !NodeRef = adt.typeref<{name = "Node"}>
+  !Nodes = core.array<!NodeRef>
+  func.func @replace(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> core.nil {
+    adt.array_set %nodes, %at, %node
+    func.return
+  }
+}"#,
+    );
+    let action = stale.functions[0]
+        .actions
+        .iter_mut()
+        .find(|action| action.kind == ActionKind::ReleaseReplacedField)
+        .unwrap();
+    action.destination = 1;
+    assert_unchanged_on_error(&mut ctx, module, |ctx, module| {
+        materialize(ctx, module, &stale)
+    });
 }

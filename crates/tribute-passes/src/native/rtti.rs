@@ -1,12 +1,12 @@
 //! RTTI (Runtime Type Information) pass for the native backend.
 //!
 //! Native ownership planning declares each runtime type descriptor, a struct
-//! allocation layout or one variant of an enum allocation layout, with its
-//! `rtti_idx` and field kinds as a `tribute_rtti.layout` operation. This pass
-//! reads those declarations and generates per-descriptor release functions
-//! that recursively release typed managed-reference fields before
-//! deallocating the aggregate itself, and the descriptor records
-//! ([`super::descriptor_records`]) that describe each index.
+//! allocation layout, one variant of an enum allocation layout, or an array
+//! type, with its `rtti_idx` and field kinds as a `tribute_rtti.layout`
+//! operation. This pass reads those declarations and generates
+//! per-descriptor release functions that recursively release typed
+//! managed-reference fields before deallocating the aggregate itself, and the
+//! descriptor records ([`super::descriptor_records`]) that describe each index.
 //!
 //! ## RTTI Index Layout
 //!
@@ -19,7 +19,7 @@
 //! | 4 | Float | fixed 16-byte release |
 //! | 5 | evidence | releases its markers, frees the fixed part plus them |
 //! | 6 | evidence marker | releases its three references, fixed release |
-//! | 7+ | declared struct and variant descriptors | per-descriptor deep release |
+//! | 7+ | declared struct, variant, and array descriptors | per-descriptor deep release |
 //!
 //! Indices are private to one compiled program: the table and
 //! `__tribute_deep_release` interpret them within the module. Only the indices
@@ -50,6 +50,7 @@ use trunk_ir::{BlockRef, OpRef, RegionRef, StringRef, TypeRef, ValueRef};
 
 use tribute_ir::dialect::{tribute_rt, tribute_rtti};
 
+use super::array_layout;
 use super::descriptor_records::{self, DescriptorRecord};
 use super::ownership_plan::RttiTypePlan;
 use trunk_ir::walk::{WalkAction, walk_region};
@@ -113,10 +114,12 @@ const BYTES_CAP_OFFSET: i32 = 24;
 #[derive(Clone, Copy)]
 enum AllocSize {
     Fixed(u64),
-    /// `fixed` plus the `i64` count the payload holds at `count_offset`.
+    /// `fixed` plus `stride` bytes for each of the `i64` count the payload
+    /// holds at `count_offset`.
     Trailing {
         fixed: u64,
         count_offset: i32,
+        stride: u64,
     },
 }
 const PRIMITIVE_I32_ALLOC_SIZE: u64 = 12;
@@ -193,7 +196,7 @@ fn validate_declarations(
     let mut allocated = HashSet::default();
     if let Some(body) = module.body(ctx) {
         let _ = walk_region::<()>(ctx, body, &mut |op| {
-            if let Some(descriptor) = tribute_rtti::allocation_descriptor(ctx, op) {
+            if let Some(descriptor) = tribute_rtti::native_allocation_descriptor(ctx, op) {
                 allocated.insert(descriptor);
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -239,6 +242,7 @@ pub(crate) fn generate_rtti(
         AllocSize::Trailing {
             fixed: BYTES_FIXED_ALLOC_SIZE,
             count_offset: BYTES_CAP_OFFSET,
+            stride: 1,
         },
         loc,
     );
@@ -278,14 +282,25 @@ pub(crate) fn generate_rtti(
         let rtti_idx = layout.index(ctx);
         let fields = layout.field_kinds(ctx);
         release_fns.insert(rtti_idx, release_fn_symbol(rtti_idx));
-        let release = descriptor_release(ctx, ty, tag, &fields, type_converter);
-        let func_op = generate_release_function(
-            ctx,
-            rtti_idx,
-            &release.managed_offsets,
-            AllocSize::Fixed(release.alloc_size),
-            loc,
-        );
+        let func_op = if let Some(array) = trunk_ir::dialect::core::Array::from_type_ref(ctx, ty) {
+            array_release_function(
+                ctx,
+                rtti_idx,
+                array.element(ctx),
+                &fields,
+                type_converter,
+                loc,
+            )
+        } else {
+            let release = descriptor_release(ctx, ty, tag, &fields, type_converter);
+            generate_release_function(
+                ctx,
+                rtti_idx,
+                &release.managed_offsets,
+                AllocSize::Fixed(release.alloc_size),
+                loc,
+            )
+        };
         ctx.push_op(module_block, func_op);
         records.push((rtti_idx, DescriptorRecord::of_layout(ctx, ty, tag, fields)));
     }
@@ -578,6 +593,42 @@ fn descriptor_release(
             .collect(),
         alloc_size: u64::from(total_size) + RC_HEADER_SIZE,
     }
+}
+
+/// The release function of an array descriptor whose element is `element`
+/// with the field kind `fields[0]`: release every element when it is
+/// released, then free the array by its length.
+fn array_release_function(
+    ctx: &mut IrContext,
+    rtti_idx: u32,
+    element: TypeRef,
+    fields: &[FieldKind],
+    type_converter: &TypeConverter,
+    loc: Location,
+) -> OpRef {
+    let [kind] = fields else {
+        panic!("an array descriptor declares the kind of its element");
+    };
+    if kind.is_released() {
+        return generate_reference_array_release_function(
+            ctx,
+            rtti_idx,
+            array_layout::FIXED_ALLOC_SIZE,
+            loc,
+        );
+    }
+    let stride = array_layout::element_stride(ctx, element, false, type_converter);
+    generate_release_function(
+        ctx,
+        rtti_idx,
+        &[],
+        AllocSize::Trailing {
+            fixed: array_layout::FIXED_ALLOC_SIZE,
+            count_offset: array_layout::LEN_OFFSET,
+            stride: u64::from(stride),
+        },
+        loc,
+    )
 }
 
 /// Generate the release function of one descriptor: release each managed
@@ -904,13 +955,31 @@ fn gen_dealloc_and_return_with_size(
         .build(ctx, loc);
     ctx.push_op(block, fixed_op.op_ref());
     let mut size = fixed_op.result(ctx);
-    if let AllocSize::Trailing { count_offset, .. } = alloc_size {
+    if let AllocSize::Trailing {
+        count_offset,
+        stride,
+        ..
+    } = alloc_size
+    {
         let count = clif::Load::operands(payload_ptr)
             .offset(count_offset)
             .results(i64_ty)
             .build(ctx, loc);
         ctx.push_op(block, count.op_ref());
-        let total = clif::Iadd::operands(size, count.result(ctx))
+        let mut trailing = count.result(ctx);
+        if stride != 1 {
+            let stride = clif::Iconst::operands()
+                .value(stride as i64)
+                .results(i64_ty)
+                .build(ctx, loc);
+            ctx.push_op(block, stride.op_ref());
+            let bytes = clif::Imul::operands(trailing, stride.result(ctx))
+                .results(i64_ty)
+                .build(ctx, loc);
+            ctx.push_op(block, bytes.op_ref());
+            trailing = bytes.result(ctx);
+        }
+        let total = clif::Iadd::operands(size, trailing)
             .results(i64_ty)
             .build(ctx, loc);
         ctx.push_op(block, total.op_ref());
@@ -1233,6 +1302,50 @@ mod tests {
             summary(indices[&(choice, Some(pair))]),
             (vec![pair_field as i32], vec![alloc_size(&pair_layout)])
         );
+    }
+
+    #[test]
+    fn arrays_release_their_elements_and_free_by_their_length() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Node = adt.struct<Node(value: core.i32)>
+  !NodeRef = adt.typeref<{name = "Node"}>
+  !Nodes = core.array<!NodeRef>
+  !Shorts = core.array<core.i16>
+  func.func @nodes(%node: !NodeRef) -> !Nodes {
+    %nodes = adt.array_of %node {type = !Nodes} : !Nodes
+    func.return %nodes
+  }
+  func.func @shorts(%short: core.i16) -> !Shorts {
+    %shorts = adt.array_of %short {type = !Shorts} : !Shorts
+    func.return %shorts
+  }
+}"#,
+        );
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
+        declare_planned_layouts(&mut ctx, module);
+        generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
+
+        let output = print_module(&ctx, module.op());
+        let release_function = |index: u32| {
+            let start = output
+                .find(&format!("sym_name = \"{RELEASE_FN_PREFIX}{index}\""))
+                .unwrap_or_else(|| panic!("no release function {index}"));
+            let rest = &output[start + 1..];
+            let end = ["clif.func ", "clif.data "]
+                .iter()
+                .filter_map(|next| rest.find(next))
+                .min()
+                .map_or(output.len(), |offset| start + 1 + offset);
+            output[start..end].trim_end().to_owned()
+        };
+        insta::assert_snapshot!(format!(
+            "{}\n{}",
+            release_function(RTTI_USER_START),
+            release_function(RTTI_USER_START + 1)
+        ));
     }
 
     #[test]

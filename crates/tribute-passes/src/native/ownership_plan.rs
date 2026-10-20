@@ -153,7 +153,7 @@ impl FunctionOwnershipPlan {
 }
 
 pub use tribute_ir::dialect::tribute_rtti::FieldKind;
-use tribute_ir::dialect::tribute_rtti::{allocation_descriptor, descriptor_field_types};
+use tribute_ir::dialect::tribute_rtti::{descriptor_field_types, native_allocation_descriptor};
 
 /// One runtime type descriptor: a struct layout, or one variant of an enum
 /// layout, with how the runtime reads each of its fields.
@@ -232,7 +232,7 @@ impl NativeOwnershipPlan {
 
         let mut current = HashSet::default();
         walk_module(ctx, module, |op| {
-            if let Some(descriptor) = allocation_descriptor(ctx, op) {
+            if let Some(descriptor) = native_allocation_descriptor(ctx, op) {
                 current.insert(descriptor);
             }
         });
@@ -525,8 +525,12 @@ impl ManagedLayoutCollector {
         }
         let data = ctx.get_type(ty);
         self.index_nominal_layout(ctx, ty);
+        // An array other than an evidence is an RC object of its own
+        // descriptor, identified by its exact `core.array` type.
         if tribute_ir::dialect::adt::Struct::matches(ctx, ty)
             || tribute_ir::dialect::adt::Enum::matches(ctx, ty)
+            || (core::Array::matches(ctx, ty)
+                && !tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty))
         {
             self.layouts.insert(ty);
         }

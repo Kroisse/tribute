@@ -42,6 +42,8 @@ pub enum RecordKind {
     Variant = 1,
     Enum = 2,
     Builtin = 3,
+    /// An array; its one field is the kind of every element.
+    Array = 4,
 }
 
 /// The contents of one descriptor record.
@@ -62,6 +64,14 @@ impl DescriptorRecord {
         tag: Option<StringRef>,
         fields: Vec<FieldKind>,
     ) -> Self {
+        if trunk_ir::dialect::core::Array::matches(ctx, ty) {
+            return Self {
+                kind: RecordKind::Array,
+                name: "Array".to_owned(),
+                owner: None,
+                fields: positional(fields),
+            };
+        }
         match tag {
             None => {
                 let layout = adt::Struct::from_type_ref(ctx, ty)
@@ -325,6 +335,26 @@ mod tests {
     use super::*;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
+
+    #[test]
+    fn array_records_describe_their_element() {
+        let mut ctx = IrContext::new();
+        parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Shorts = core.array<core.i16>
+}"#,
+        );
+        let shorts = ctx.type_alias_by_text("Shorts").expect("Shorts alias");
+        let element = FieldKind::Int {
+            width: 16,
+            signed: false,
+        };
+        let record = DescriptorRecord::of_layout(&ctx, shorts, None, vec![element]);
+        assert_eq!(record.kind, RecordKind::Array);
+        assert_eq!(record.owner, None);
+        assert_eq!(record.fields, [("0".to_owned(), element)]);
+    }
 
     #[test]
     fn variant_records_point_at_their_enum_record() {

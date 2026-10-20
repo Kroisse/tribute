@@ -43,6 +43,14 @@ enum ScheduledAction {
         field_ty: TypeRef,
         alloc_size: u64,
     },
+    /// Release the element of `array` at `index` that an `adt.array_set`
+    /// replaces.
+    ReleaseReplacedElement {
+        placement: Placement,
+        array: ValueRef,
+        index: ValueRef,
+        alloc_size: u64,
+    },
     ReleaseMoving {
         placement: Placement,
         owner: ValueRef,
@@ -131,6 +139,24 @@ fn build_schedule(
                     value: action.value,
                     alloc_size: allocation_size_for_value(ctx, plan, action.value, type_converter)?,
                 }),
+                ActionKind::ReleaseReplacedField
+                    if let ActionAnchor::Before(op) = action.anchor
+                        && adt::ArraySet::matches(ctx, op) =>
+                {
+                    let (array, index, element_ty) =
+                        validate_replaced_element(ctx, op, action.value, action.destination, plan)?;
+                    schedule.push(ScheduledAction::ReleaseReplacedElement {
+                        placement,
+                        array,
+                        index,
+                        alloc_size: allocation_size_for_type(
+                            ctx,
+                            plan,
+                            element_ty,
+                            type_converter,
+                        )?,
+                    });
+                }
                 ActionKind::ReleaseReplacedField => {
                     let (object, layout, field, field_ty) = validate_replaced_field(
                         ctx,
@@ -216,9 +242,10 @@ fn allocation_size_for_type(
         return Ok(0);
     }
     // A `Bytes` object and an evidence are released by their reserved RTTI
-    // entries.
+    // entries, and an array's size depends on its length.
     if (data.name.is(ctx, "core.bytes"))
         || tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
+        || trunk_ir::dialect::core::Array::matches(ctx, ty)
     {
         return Ok(0);
     }
@@ -371,6 +398,31 @@ fn validate_replaced_field(
     Ok((object, set.r#type(ctx), field, *field_ty))
 }
 
+fn validate_replaced_element(
+    ctx: &IrContext,
+    set: OpRef,
+    array: ValueRef,
+    destination: u32,
+    plan: &NativeOwnershipPlan,
+) -> Result<(ValueRef, ValueRef, TypeRef), RcMaterializationError> {
+    let set = adt::ArraySet::from_op(ctx, set)
+        .map_err(|_| OwnershipPlanError::new("replaced-element release anchor is stale"))?;
+    if set.r#ref(ctx) != array || destination != 0 {
+        return Err(OwnershipPlanError::new(
+            "replaced-element release does not match its planned array",
+        ));
+    }
+    let element_ty = trunk_ir::dialect::core::Array::from_type_ref(ctx, ctx.value_ty(array))
+        .ok_or_else(|| OwnershipPlanError::new("replaced-element array type is stale"))?
+        .element(ctx);
+    if !plan.is_managed_type(ctx, element_ty) {
+        return Err(OwnershipPlanError::new(
+            "replaced-element release targets an unmanaged element",
+        ));
+    }
+    Ok((array, set.index(ctx), element_ty))
+}
+
 fn build_operations(ctx: &mut IrContext, action: ScheduledAction) -> (Placement, Vec<OpRef>) {
     match action {
         ScheduledAction::Retain { placement, value } => {
@@ -404,6 +456,19 @@ fn build_operations(ctx: &mut IrContext, action: ScheduledAction) -> (Placement,
                 .field(field)
                 .results(field_ty)
                 .build(ctx, location);
+            let release = tribute_rt::Release::operands(get.result(ctx))
+                .alloc_size(alloc_size)
+                .build(ctx, location);
+            (placement, vec![get.op_ref(), release.op_ref()])
+        }
+        ScheduledAction::ReleaseReplacedElement {
+            placement,
+            array,
+            index,
+            alloc_size,
+        } => {
+            let location = location_for(ctx, placement);
+            let get = adt::ArrayGet::operands(array, index).build(ctx, location);
             let release = tribute_rt::Release::operands(get.result(ctx))
                 .alloc_size(alloc_size)
                 .build(ctx, location);

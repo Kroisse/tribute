@@ -18,6 +18,7 @@
 pub mod adapt_closure_layout;
 pub mod adt_rc_header;
 pub mod adt_to_clif;
+mod array_layout;
 pub mod cast_legalization;
 pub mod clif_lowering;
 pub mod const_to_native;
