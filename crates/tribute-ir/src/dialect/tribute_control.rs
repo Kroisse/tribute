@@ -35,7 +35,7 @@ mod row;
 
 pub use row::{
     ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, QUANTIFIED_ROWS_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR,
-    ROW_UNIONS_ATTR, Row, RowArgs, RowBinder, RowUnion, find_substituted_rows,
+    ROW_UNIONS_ATTR, Row, RowArgs, RowBinder, RowUnion, assign_conventions, find_substituted_rows,
     logical_tuple_elements, logical_tuple_name, logical_tuple_type, quantified_count,
     quantified_rows, row_args, row_binders, row_unions, substitute_rows, visit_rows,
 };
@@ -619,12 +619,13 @@ impl trunk_ir::type_verifier::VerifyType for FuncSig {
         if usize::try_from(total).ok() != Some(data.params.len()) {
             return Err(FuncSigTypeError::LengthMismatch.into());
         }
-        CallingConvention::try_from(
-            ctx.type_attrs(ty)
-                .get_i128(CALLING_CONVENTION_ATTR)
-                .ok_or(FuncSigTypeError::Convention)?,
-        )
-        .map_err(|_| FuncSigTypeError::Convention)?;
+        // Absent before class specialization assigns it.
+        if let Some(convention) = data.attrs.view(ctx).get(CALLING_CONVENTION_ATTR) {
+            let Attribute::Int(code) = convention else {
+                return Err(FuncSigTypeError::Convention.into());
+            };
+            CallingConvention::try_from(*code).map_err(|_| FuncSigTypeError::Convention)?;
+        }
         if let Some(row) = data.attrs.view(ctx).get(ABILITY_ROW_ATTR)
             && Row::from_attribute(ctx, row).is_ok_and(|row| row.is_empty())
         {
@@ -677,13 +678,23 @@ impl FuncSig {
         (data.params[index], data.param_attrs(ctx, index))
     }
 
+    /// The convention class specialization assigned.
+    ///
+    /// # Panics
+    ///
+    /// If the signature has no convention yet.
     pub fn convention(self, ctx: &IrContext) -> CallingConvention {
-        CallingConvention::try_from(
-            ctx.type_attrs(self.0)
-                .get_i128(CALLING_CONVENTION_ATTR)
-                .expect("validated source func_sig retains convention"),
+        self.assigned_convention(ctx)
+            .expect("source func_sig has a convention after class specialization")
+    }
+
+    /// The convention, or `None` before class specialization assigns it.
+    pub fn assigned_convention(self, ctx: &IrContext) -> Option<CallingConvention> {
+        let code = ctx.type_attrs(self.0).get_i128(CALLING_CONVENTION_ATTR)?;
+        Some(
+            CallingConvention::try_from(code)
+                .expect("validated source func_sig retains convention domain"),
         )
-        .expect("validated source func_sig retains convention domain")
     }
 
     /// The callable's ability row; closed and empty when the type omits it.
@@ -812,9 +823,10 @@ fn build_func_sig(
     FuncSig::from_type_ref(ctx, ty).expect("source func_sig constructor must produce a valid type")
 }
 
-/// Read convention only through a validated source signature.
+/// Read convention only through a validated source signature; `None` for
+/// another type and before class specialization assigns one.
 pub fn func_sig_convention(ctx: &IrContext, ty: TypeRef) -> Option<CallingConvention> {
-    FuncSig::from_type_ref(ctx, ty).map(|signature| signature.convention(ctx))
+    FuncSig::from_type_ref(ctx, ty).and_then(|signature| signature.assigned_convention(ctx))
 }
 
 /// Read the exact input and answer types carried by a resume token.
@@ -1138,12 +1150,12 @@ fn parse_inferred(input: &mut &str) -> winnow::ModalResult<bool> {
 fn func_sig_parts(
     ctx: &IrContext,
     ty: TypeRef,
-) -> Option<(TypeRef, Vec<TypeRef>, CallingConvention)> {
+) -> Option<(TypeRef, Vec<TypeRef>, Option<CallingConvention>)> {
     let signature = FuncSig::from_type_ref(ctx, ty)?;
     Some((
         signature.result(ctx),
         signature.inputs(ctx).to_vec(),
-        signature.convention(ctx),
+        signature.assigned_convention(ctx),
     ))
 }
 
@@ -1253,7 +1265,9 @@ fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fm
         if header.inferred {
             write!(h, " inferred")?;
         }
-        write!(h, " convention({})", convention.keyword())?;
+        if let Some(convention) = convention {
+            write!(h, " convention({})", convention.keyword())?;
+        }
     }
     print_extra_attributes(
         h,
@@ -1274,12 +1288,18 @@ fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fm
     }
 }
 
-fn parse_convention(input: &mut &str) -> winnow::ModalResult<CallingConvention> {
+/// The concise ` convention(...)`; `None` when the signature has none yet.
+fn parse_convention(input: &mut &str) -> winnow::ModalResult<Option<CallingConvention>> {
     use trunk_ir::parser::raw::{ident, ws};
+    use winnow::combinator::opt;
     use winnow::prelude::*;
 
+    let checkpoint = *input;
     ws.parse_next(input)?;
-    "convention".parse_next(input)?;
+    if opt("convention").parse_next(input)?.is_none() {
+        *input = checkpoint;
+        return Ok(None);
+    }
     ws.parse_next(input)?;
     '('.parse_next(input)?;
     ws.parse_next(input)?;
@@ -1291,7 +1311,7 @@ fn parse_convention(input: &mut &str) -> winnow::ModalResult<CallingConvention> 
     };
     ws.parse_next(input)?;
     ')'.parse_next(input)?;
-    Ok(convention)
+    Ok(Some(convention))
 }
 
 /// The concise row of a source signature, `row(@A, @B | 'a1)`, as the raw
@@ -1339,13 +1359,18 @@ fn func_sig_raw_type<'a>(
     result: trunk_ir::parser::raw::RawType<'a>,
     params: &[(&'a str, trunk_ir::parser::raw::RawType<'a>)],
     row: Option<trunk_ir::parser::raw::RawAttribute<'a>>,
-    convention: CallingConvention,
+    convention: Option<CallingConvention>,
 ) -> trunk_ir::parser::raw::RawType<'a> {
     use trunk_ir::parser::raw::{RawAttribute, RawType};
-    let mut attrs = vec![(
-        CALLING_CONVENTION_ATTR.into(),
-        RawAttribute::Int(convention as i128),
-    )];
+    let mut attrs: Vec<_> = convention
+        .map(|convention| {
+            (
+                CALLING_CONVENTION_ATTR.into(),
+                RawAttribute::Int(convention as i128),
+            )
+        })
+        .into_iter()
+        .collect();
     if let Some(row) = row {
         attrs.push((ABILITY_ROW_ATTR.into(), row));
     }
@@ -1505,7 +1530,9 @@ fn print_lambda(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> 
         if let Some(ty) = callable_ty {
             print_row(h, &FuncSig(ty).row(h.ctx()))?;
         }
-        write!(h, " convention({})", convention.keyword())?;
+        if let Some(convention) = convention {
+            write!(h, " convention({})", convention.keyword())?;
+        }
     }
     write!(h, " captures [")?;
     let captures: Vec<String> = h
@@ -3251,6 +3278,23 @@ fn collect_reachable_type(ctx: &IrContext, ty: TypeRef, types: &mut HashSet<Type
 /// argument, or type-bearing attribute must not affect validation of this
 /// module. A reachable `adt.typeref` may resolve one unique layout alias; an
 /// ambiguous nominal name remains invalid.
+/// Whether class specialization has assigned calling conventions in
+/// `module`: `Some(true)` when every source signature the module reaches has
+/// one, `Some(false)` when none has, and `None` when only some have.
+pub fn conventions_assigned(ctx: &IrContext, module: Module) -> Option<bool> {
+    let mut assigned = None;
+    for ty in collect_reachable_ir_types(ctx, module.op()) {
+        let Some(signature) = FuncSig::from_type_ref(ctx, ty) else {
+            continue;
+        };
+        let has = signature.assigned_convention(ctx).is_some();
+        if *assigned.get_or_insert(has) != has {
+            return None;
+        }
+    }
+    Some(assigned.unwrap_or(true))
+}
+
 fn collect_reachable_ir_types(ctx: &IrContext, module: OpRef) -> HashSet<TypeRef> {
     fn collect_op_types(ctx: &IrContext, op: OpRef, types: &mut HashSet<TypeRef>) {
         for value in ctx.op_operands(op).iter().chain(ctx.op_results(op).iter()) {
@@ -3418,7 +3462,9 @@ fn compiler_intrinsic_map<'a>(
             );
         }
         previous = Some(key);
-        if func_sig_convention(ctx, declaration.callable_type) != Some(CallingConvention::Direct) {
+        if func_sig_convention(ctx, declaration.callable_type)
+            .is_some_and(|convention| convention != CallingConvention::Direct)
+        {
             push_type_error(
                 errors,
                 format!(
@@ -4706,6 +4752,12 @@ fn whole_ir(
     validate_evidence_tails(ctx, body, symbols, &mut errors);
     validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(ctx, declarations, &mut errors);
+    if conventions_assigned(ctx, module).is_none() {
+        push_type_error(
+            &mut errors,
+            "only some source signatures have a calling convention; class specialization assigns one to all of them",
+        );
+    }
     let reachable_types = collect_reachable_ir_types(ctx, module.op());
     let nominal_layouts = canonical_nominal_layouts(ctx, &reachable_types, &mut errors);
     validate_managed_reference_boundaries(

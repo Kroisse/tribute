@@ -511,7 +511,12 @@ fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
                 .iter()
                 .chain([&signature.result(ctx)])
                 .map(|ty| type_key(ctx, *ty))
-                .chain([signature.convention(ctx).keyword().to_owned(), row])
+                .chain(
+                    signature
+                        .assigned_convention(ctx)
+                        .map(|convention| convention.keyword().to_owned()),
+                )
+                .chain([row])
                 .chain(attributes(&super::RESERVED_ATTRS)),
         );
     }
@@ -595,8 +600,10 @@ trait TypeSink {
     fn ctx(&self) -> &IrContext;
     fn make(&mut self, data: TypeData) -> Option<TypeRef>;
     fn tuple(&mut self, elements: &[TypeRef]) -> Option<TypeRef>;
-    /// The key `ability_row` and `row` encoded as its value.
-    fn row(&mut self, row: &Row) -> Option<(trunk_ir::types::StringRef, Attribute)>;
+    /// The attribute key `text`.
+    fn key(&mut self, text: &str) -> Option<trunk_ir::types::StringRef>;
+    /// `row` encoded as an attribute value.
+    fn row(&mut self, row: &Row) -> Option<Attribute>;
 }
 
 struct Intern<'a>(&'a mut IrContext);
@@ -614,11 +621,12 @@ impl TypeSink for Intern<'_> {
         Some(logical_tuple_type(self.0, elements))
     }
 
-    fn row(&mut self, row: &Row) -> Option<(trunk_ir::types::StringRef, Attribute)> {
-        Some((
-            self.0.intern_str(ABILITY_ROW_ATTR),
-            row.to_attribute(self.0),
-        ))
+    fn key(&mut self, text: &str) -> Option<trunk_ir::types::StringRef> {
+        Some(self.0.intern_str(text))
+    }
+
+    fn row(&mut self, row: &Row) -> Option<Attribute> {
+        Some(row.to_attribute(self.0))
     }
 }
 
@@ -649,21 +657,54 @@ impl TypeSink for Lookup<'_> {
         (logical_tuple_elements(self.0, ty)? == elements).then_some(ty)
     }
 
-    fn row(&mut self, row: &Row) -> Option<(trunk_ir::types::StringRef, Attribute)> {
-        Some((
-            self.0.lookup_str(ABILITY_ROW_ATTR)?,
-            row.find_attribute(self.0)?,
-        ))
+    fn key(&mut self, text: &str) -> Option<trunk_ir::types::StringRef> {
+        self.0.lookup_str(text)
+    }
+
+    fn row(&mut self, row: &Row) -> Option<Attribute> {
+        row.find_attribute(self.0)
     }
 }
 
-struct Substitution<'a, S> {
+/// What a rewrite does to the row and convention of each callable type.
+trait CallableRewrite {
+    /// The row to write in place of `row`; `None` fails the rewrite.
+    fn row(&mut self, row: &Row) -> Option<Row>;
+    /// The convention to write for a callable whose row is now `row`;
+    /// `None` keeps the one it has.
+    fn convention(&mut self, _row: &Row) -> Option<super::CallingConvention> {
+        None
+    }
+}
+
+impl CallableRewrite for RowArgs<'_> {
+    fn row(&mut self, row: &Row) -> Option<Row> {
+        row.substitute(*self)
+    }
+}
+
+/// Assigns each callable the convention its row selects.
+struct Assign<F>(F);
+
+impl<F: FnMut(&Row) -> super::CallingConvention> CallableRewrite for Assign<F> {
+    fn row(&mut self, row: &Row) -> Option<Row> {
+        Some(row.clone())
+    }
+
+    fn convention(&mut self, row: &Row) -> Option<super::CallingConvention> {
+        Some((self.0)(row))
+    }
+}
+
+/// Rewrites every callable type inside a type, rebuilding the types and
+/// tuple layouts that hold it.
+struct Substitution<S, R> {
     sink: S,
-    args: RowArgs<'a>,
+    rewrite: R,
     done: HashMap<TypeRef, Option<TypeRef>>,
 }
 
-impl<S: TypeSink> Substitution<'_, S> {
+impl<S: TypeSink, R: CallableRewrite> Substitution<S, R> {
     fn ty(&mut self, ty: TypeRef) -> Option<TypeRef> {
         if let Some(&done) = self.done.get(&ty) {
             return done;
@@ -699,10 +740,11 @@ impl<S: TypeSink> Substitution<'_, S> {
             *param = substituted;
         }
         if let Some(row) = row {
-            let substituted = row.substitute(self.args)?;
+            let substituted = self.rewrite.row(&row)?;
             if substituted != row {
                 changed = true;
-                let (key, value) = self.sink.row(&substituted)?;
+                let key = self.sink.key(ABILITY_ROW_ATTR)?;
+                let value = self.sink.row(&substituted)?;
                 let entries: Vec<_> = data
                     .attrs
                     .iter()
@@ -711,6 +753,21 @@ impl<S: TypeSink> Substitution<'_, S> {
                     .chain((!substituted.is_empty()).then_some((key, value)))
                     .collect();
                 data.attrs = AttributeMap::from_refs(self.sink.ctx(), entries);
+            }
+            if let Some(convention) = self.rewrite.convention(&substituted) {
+                let value = Attribute::Int(convention as i128);
+                let key = self.sink.key(super::CALLING_CONVENTION_ATTR)?;
+                if data.attrs.view(self.sink.ctx()).get(key) != Some(&value) {
+                    changed = true;
+                    let entries: Vec<_> = data
+                        .attrs
+                        .iter()
+                        .filter(|(existing, _)| *existing != key)
+                        .map(|(existing, attr)| (existing, attr.clone()))
+                        .chain([(key, value)])
+                        .collect();
+                    data.attrs = AttributeMap::from_refs(self.sink.ctx(), entries);
+                }
             }
         }
         if changed {
@@ -732,10 +789,26 @@ pub fn substitute_rows<'a>(
 ) -> Option<TypeRef> {
     Substitution {
         sink: Intern(ctx),
-        args: args.into(),
+        rewrite: args.into(),
         done: HashMap::default(),
     }
     .ty(ty)
+}
+
+/// Write on every callable type inside `ty` the convention `class` selects
+/// for its row, rebuilding the types and tuple layouts that hold it.
+pub fn assign_conventions(
+    ctx: &mut IrContext,
+    ty: TypeRef,
+    class: impl FnMut(&Row) -> super::CallingConvention,
+) -> TypeRef {
+    Substitution {
+        sink: Intern(ctx),
+        rewrite: Assign(class),
+        done: HashMap::default(),
+    }
+    .ty(ty)
+    .expect("assigning conventions keeps every row")
 }
 
 /// [`substitute_rows`] without creating types: `None` also when the
@@ -747,7 +820,7 @@ pub fn find_substituted_rows<'a>(
 ) -> Option<TypeRef> {
     Substitution {
         sink: Lookup(ctx),
-        args: args.into(),
+        rewrite: args.into(),
         done: HashMap::default(),
     }
     .ty(ty)
