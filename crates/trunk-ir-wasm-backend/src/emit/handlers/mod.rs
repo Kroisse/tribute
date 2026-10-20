@@ -14,7 +14,7 @@ mod struct_handlers;
 
 pub(super) use array_handlers::{
     handle_array_copy, handle_array_get, handle_array_get_s, handle_array_get_u, handle_array_new,
-    handle_array_new_default, handle_array_set,
+    handle_array_new_default, handle_array_new_fixed, handle_array_set,
 };
 pub(super) use call_handlers::{
     handle_call, handle_call_indirect, handle_return_call, handle_return_call_indirect,

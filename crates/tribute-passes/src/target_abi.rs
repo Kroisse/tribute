@@ -21,14 +21,14 @@ use tribute_core::{
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, closure, effect, tribute_rt};
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{arith, core, func};
+use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::symbol_table::qualified_name;
-use trunk_ir::types::{Attribute, AttributeMap, Location, TypeData, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, Location, TypeData};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{Symbol, SymbolPath};
 
@@ -899,15 +899,8 @@ fn build_initial_evidence(
     location: Location,
     evidence_ty: TypeRef,
 ) -> ValueRef {
-    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-    let zero = arith::Const::operands()
-        .value(Attribute::Int(0))
-        .results(i32_ty)
-        .build(ctx, location);
-    ctx.push_op(block, zero.op_ref());
-    let empty = adt::ArrayNew::operands([zero.result(ctx)])
+    let empty = adt::ArrayOf::operands([])
         .r#type(evidence_ty)
-        .results(evidence_ty)
         .build(ctx, location);
     ctx.push_op(block, empty.op_ref());
     empty.result(ctx)
@@ -1872,6 +1865,7 @@ mod tests {
     use crate::test_support::assert_unchanged_on_error;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
+    use trunk_ir::types::TypeDataBuilder;
 
     fn function(ctx: &IrContext, module: Module, name: &str) -> func::Func {
         module
@@ -2329,7 +2323,7 @@ mod tests {
         assert!(
             wrapper_ops
                 .iter()
-                .any(|op| adt::ArrayNew::from_op(&ctx, *op).is_ok())
+                .any(|op| adt::ArrayOf::from_op(&ctx, *op).is_ok())
         );
         assert!(
             wrapper_ops
@@ -2361,7 +2355,7 @@ mod tests {
         let evidence = ops
             .iter()
             .copied()
-            .find_map(|op| adt::ArrayNew::from_op(&ctx, op).ok())
+            .find_map(|op| adt::ArrayOf::from_op(&ctx, op).ok())
             .expect("wrapper must build initial evidence");
         let call = ops
             .into_iter()
@@ -2400,7 +2394,7 @@ mod tests {
         let empty = ops
             .iter()
             .copied()
-            .find_map(|op| adt::ArrayNew::from_op(ctx, op).ok())
+            .find_map(|op| adt::ArrayOf::from_op(ctx, op).ok())
             .expect("entry bridge must build initial evidence");
         let call = ops
             .iter()
@@ -2473,7 +2467,7 @@ mod tests {
         assert!(ctx.op_operands(call.op_ref()).is_empty());
         assert!(
             !ops.iter()
-                .any(|op| adt::ArrayNew::from_op(&ctx, *op).is_ok())
+                .any(|op| adt::ArrayOf::from_op(&ctx, *op).is_ok())
         );
         let caller = function(&ctx, module, "caller");
         let caller_call = collect_ops(&ctx, caller.op_ref())

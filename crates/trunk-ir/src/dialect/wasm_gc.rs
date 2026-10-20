@@ -32,6 +32,12 @@ mod wasm_gc {
 
     fn array_new_default<A: Array>(r#type: Attr<TypeOf<A>>, size: Value<I32>) -> Value<A> {}
 
+    fn array_new_fixed<A: Array>(
+        r#type: Attr<TypeOf<A>>,
+        elements: Variadic<A::Element>,
+    ) -> Value<A> {
+    }
+
     fn array_new_data<A: Array>(
         r#type: Attr<TypeOf<A>>,
         data_idx: Attr<u32>,
@@ -128,6 +134,20 @@ mod tests {
         assert!(!schema_ok("%v = wasm_gc.array_new %x, %n {type = !A} : !A"));
         assert!(!schema_ok(
             "%v = wasm_gc.array_new_data %n, %w {type = !A, data_idx = 0} : !A"
+        ));
+    }
+
+    #[test]
+    fn array_new_fixed_elements_are_its_element_type() {
+        assert!(schema_ok("%v = wasm_gc.array_new_fixed {type = !A} : !A"));
+        assert!(schema_ok(
+            "%v = wasm_gc.array_new_fixed %n, %n {type = !A} : !A"
+        ));
+        assert!(!schema_ok(
+            "%v = wasm_gc.array_new_fixed %w {type = !A} : !A"
+        ));
+        assert!(!schema_ok(
+            "%v = wasm_gc.array_new_fixed %n {type = !A} : !B"
         ));
     }
 

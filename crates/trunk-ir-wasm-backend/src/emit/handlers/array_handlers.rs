@@ -48,6 +48,27 @@ pub(crate) fn handle_array_new_default(
     Ok(())
 }
 
+/// Handle array.new_fixed operation
+pub(crate) fn handle_array_new_fixed(
+    ctx: &IrContext,
+    array_new_fixed: wasm_dialect::ArrayNewFixed,
+    emit_ctx: &FunctionEmitContext,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    let op = array_new_fixed.op_ref();
+    let operands = ctx.op_operands(op);
+    emit_operands(ctx, operands, emit_ctx, function)?;
+
+    let array_size =
+        u32::try_from(operands.len()).expect("array.new_fixed has at most u32::MAX elements");
+    function.instruction(&Instruction::ArrayNewFixed {
+        array_type_index: array_new_fixed.type_idx(ctx),
+        array_size,
+    });
+    set_result_local(ctx, op, emit_ctx, function)?;
+    Ok(())
+}
+
 /// Handle array.get operation
 pub(crate) fn handle_array_get(
     ctx: &IrContext,
