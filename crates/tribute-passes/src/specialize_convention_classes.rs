@@ -120,7 +120,8 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
     Ok(())
 }
 
-/// Whether `module` reaches a source signature at all.
+/// Whether `module` reaches a source signature at all. A module without
+/// definitions has no conventions to assign, so it is already specialized.
 fn has_source_signatures(ctx: &IrContext, module: Module) -> bool {
     module
         .ops(ctx)
