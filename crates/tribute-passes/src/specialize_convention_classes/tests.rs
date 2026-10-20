@@ -460,3 +460,48 @@ fn a_reference_in_a_lambda_selects_by_the_local_class() {
         ],
     );
 }
+
+/// A lambda whose classes depend on an enclosing lambda's binder waits for
+/// that lambda to be copied, so each copy of the outer lambda holds one inner
+/// lambda per class it uses.
+#[test]
+fn a_lambda_is_copied_after_the_lambdas_its_classes_depend_on() {
+    let printed = specialized(
+        r#"core.module @m {
+  !pure = tribute_control.func_sig<(core.i32) -> core.i32>
+  !in0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !ctl = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  ability.decl {sym_name = "Ctl"} {
+    ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @f[local 'a0, local 'a1](%x: core.i32) -> core.i32 row(@Ctl) {
+    %o = tribute_control.lambda['a0](%y: core.i32) -> core.i32 row(| 'a0) captures [] {
+      %n = tribute_control.lambda['a1](%z: core.i32) -> core.i32 row(| 'a1) captures [] {
+        tribute_control.return %z
+      }
+      %d = tribute_control.instantiate %n {row_args = [{}]} : !pure
+      %u = tribute_control.instantiate %n {row_args = [{tail = 0}]} : !in0
+      %v = tribute_control.call_indirect %d, %y : core.i32
+      %w = tribute_control.call_indirect %u, %v : core.i32
+      tribute_control.return %w
+    }
+    %p = tribute_control.instantiate %o {row_args = [{}]} : !pure
+    %q = tribute_control.instantiate %o {row_args = [{instances = [@Ctl]}]} : !ctl
+    %r1 = tribute_control.call_indirect %p, %x : core.i32
+    %r2 = tribute_control.call_indirect %q, %r1 : core.i32
+    tribute_control.return %r2
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "tribute_control.func @f[local 'a0, local 'a1, local 'a2, local 'a3, local 'a4](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
+            "%3 = tribute_control.lambda['a1](%4: core.i32) -> core.i32 row(| 'a1) convention(direct) captures [] {",
+            "%6 = tribute_control.instantiate %3 {row_args = [{tail = 0}]}",
+            "%11 = tribute_control.lambda['a3](%12: core.i32) -> core.i32 row(| 'a3) convention(direct) captures [] {",
+            "%13 = tribute_control.lambda['a4](%14: core.i32) -> core.i32 row(| 'a4) convention(cps) captures [] {",
+            "%16 = tribute_control.instantiate %13 {row_args = [{tail = 2}]}",
+        ],
+    );
+}

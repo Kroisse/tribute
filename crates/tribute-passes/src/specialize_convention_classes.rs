@@ -168,9 +168,13 @@ fn insert_after(ctx: &mut IrContext, anchor: OpRef, op: OpRef) {
     }
 }
 
-/// The instantiations of one lambda grouped by the classes they select, in
-/// body order.
-type ClassGroups = Vec<(Vec<CallingConvention>, Vec<OpRef>)>;
+/// A let-bound lambda in one round of copying: its instantiations grouped by
+/// the classes they select, in body order, and the tails of their rows.
+struct Lambda {
+    op: OpRef,
+    groups: Vec<(Vec<CallingConvention>, Vec<OpRef>)>,
+    tails: Vec<u32>,
+}
 
 /// One instance being rewritten: its definition, the class of each class
 /// variable, and the row binders and local classes its lambda copies leave.
@@ -247,44 +251,75 @@ impl Instance<'_> {
 
     /// Copy each let-bound lambda once per class vector its instantiations
     /// select, until every lambda has one, and settle the local classes.
+    ///
+    /// A lambda's classes can depend on the local binders of other lambdas,
+    /// so each round copies one lambda whose dependencies already have one
+    /// class vector each; its classes are then final, and copying it never
+    /// leaves two copies at one vector.
     fn split_lambdas(&mut self, ctx: &mut IrContext, body: RegionRef) {
         loop {
             self.locals = settle_locals(ctx, body, &self.binders, self.requirements, &self.params);
-            let mut lambdas: Vec<(OpRef, ClassGroups)> = Vec::new();
+            let mut owners: HashMap<u32, OpRef> = HashMap::default();
+            let mut lambdas: Vec<Lambda> = Vec::new();
             let _ = trunk_ir::walk::walk_region::<()>(ctx, body, &mut |op| {
+                for binder in tribute_control::quantified_rows(ctx, op).unwrap_or_default() {
+                    owners.insert(binder, op);
+                }
                 if let Some((lambda, _, rows)) = instantiation(ctx, op) {
                     let classes: Vec<_> = rows.iter().map(|row| self.class(row)).collect();
-                    let at = match lambdas.iter().position(|(known, _)| *known == lambda) {
+                    let at = match lambdas.iter().position(|known| known.op == lambda) {
                         Some(at) => at,
                         None => {
-                            lambdas.push((lambda, Vec::new()));
+                            lambdas.push(Lambda {
+                                op: lambda,
+                                groups: Vec::new(),
+                                tails: Vec::new(),
+                            });
                             lambdas.len() - 1
                         }
                     };
-                    let groups = &mut lambdas[at].1;
-                    match groups.iter_mut().find(|(known, _)| *known == classes) {
+                    let known = &mut lambdas[at];
+                    known.tails.extend(rows.iter().filter_map(|row| row.tail));
+                    match known.groups.iter_mut().find(|(known, _)| *known == classes) {
                         Some((_, uses)) => uses.push(op),
-                        None => groups.push((classes, vec![op])),
+                        None => known.groups.push((classes, vec![op])),
                     }
                 }
                 std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
             });
-            let mut copied = false;
-            for (lambda, groups) in lambdas {
-                let mut anchor = lambda;
-                for (_, uses) in &groups[1..] {
-                    let copy = self.copy_lambda(ctx, lambda);
-                    insert_after(ctx, anchor, copy);
-                    anchor = copy;
-                    let result = ctx.op_results(copy)[0];
-                    for &instantiate in uses {
-                        ctx.set_op_operand(instantiate, 0, result);
+            let by_op: HashMap<OpRef, &Lambda> = lambdas.iter().map(|l| (l.op, l)).collect();
+            let waits = |lambda: &Lambda| {
+                let mut seen = HashSet::default();
+                let mut stack = vec![lambda];
+                while let Some(lambda) = stack.pop() {
+                    for owner in lambda.tails.iter().filter_map(|tail| owners.get(tail)) {
+                        if let Some(&dependency) = by_op.get(owner)
+                            && seen.insert(dependency.op)
+                        {
+                            if dependency.groups.len() > 1 {
+                                return true;
+                            }
+                            stack.push(dependency);
+                        }
                     }
-                    copied = true;
                 }
-            }
-            if !copied {
+                false
+            };
+            let Some(lambda) = lambdas
+                .iter()
+                .find(|lambda| lambda.groups.len() > 1 && !waits(lambda))
+            else {
                 return;
+            };
+            let mut anchor = lambda.op;
+            for (_, uses) in &lambda.groups[1..] {
+                let copy = self.copy_lambda(ctx, lambda.op);
+                insert_after(ctx, anchor, copy);
+                anchor = copy;
+                let result = ctx.op_results(copy)[0];
+                for &instantiate in uses {
+                    ctx.set_op_operand(instantiate, 0, result);
+                }
             }
         }
     }
