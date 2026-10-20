@@ -110,7 +110,8 @@ fn is_proven_non_escaping_use(ctx: &IrContext, op: OpRef, operand_index: usize) 
     false
 }
 
-/// Pass form of `eliminate_paired_rc`.
+/// Removes retain/release pairs on one value in one block when no use between
+/// them lets the value escape.
 pub struct EliminatePairedRc;
 
 impl trunk_ir::pass::Pass for EliminatePairedRc {

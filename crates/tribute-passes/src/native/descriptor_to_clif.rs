@@ -18,7 +18,7 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
-/// PassManager-friendly `lower`.
+/// Lowers `tribute_rtti.descriptor` to a read of the RC header's RTTI index.
 pub struct DescriptorToClif;
 
 impl Pass for DescriptorToClif {

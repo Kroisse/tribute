@@ -283,7 +283,7 @@ impl RewritePattern for RefIsNullPattern {
     }
 }
 
-/// Pass form of `lower`.
+/// Lowers ADT field access and reference operations to `clif` operations.
 pub struct AdtToClif;
 
 impl trunk_ir::pass::Pass for AdtToClif {

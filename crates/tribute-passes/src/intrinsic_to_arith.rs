@@ -107,7 +107,8 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     }
 }
 
-/// PassManager-friendly wrapper for `lower_intrinsic_to_arith`.
+/// Lowers intrinsic arithmetic and comparison calls to `arith` operations and
+/// gives intrinsic declarations a body.
 pub struct LowerIntrinsicToArith;
 
 impl Pass for LowerIntrinsicToArith {

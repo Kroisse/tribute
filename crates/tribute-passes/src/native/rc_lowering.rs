@@ -691,7 +691,8 @@ fn gen_deep_release_call(
     ctx.push_op(block, jump.op_ref());
 }
 
-/// Pass form of `lower_rc`.
+/// Lowers `tribute_rt.retain` and `tribute_rt.release` to inline `clif`
+/// operations.
 pub struct RcLowering;
 
 impl trunk_ir::pass::Pass for RcLowering {

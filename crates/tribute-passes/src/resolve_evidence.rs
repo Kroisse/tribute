@@ -436,7 +436,8 @@ pub(crate) fn resolve_evidence_dispatch(
     Ok(())
 }
 
-/// PassManager-friendly wrapper for `resolve_evidence_dispatch`.
+/// Resolves handler prompt identities and turns evidence plans into explicit
+/// `effect.*` evidence operations.
 pub struct ResolveEvidenceDispatch;
 
 impl Pass for ResolveEvidenceDispatch {

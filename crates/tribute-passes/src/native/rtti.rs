@@ -940,7 +940,8 @@ pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, Typ
     .as_type_ref()
 }
 
-/// Pass form of `generate_rtti`.
+/// Generates per-descriptor release functions, the RTTI table, and
+/// `__tribute_deep_release`.
 pub struct GenerateRtti;
 
 impl trunk_ir::pass::Pass for GenerateRtti {

@@ -43,7 +43,8 @@ pub(crate) fn lower_handle_dispatch(
     Ok(())
 }
 
-/// PassManager-friendly wrapper for `lower_handle_dispatch`.
+/// Splices resultless `ability.handle_dispatch` delimiters and establishes the
+/// `ability-lowered` boundary.
 pub struct LowerHandleDispatch;
 
 impl Pass for LowerHandleDispatch {
