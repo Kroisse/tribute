@@ -2,11 +2,11 @@
 //!
 //! Native ownership planning declares each runtime type descriptor, a struct
 //! allocation layout or one variant of an enum allocation layout, with its
-//! `rtti_idx` and field kinds as a `tribute_rtti.layout` operation
-//! (`declare_rtti_layouts`). This pass reads those declarations and
-//! generates per-descriptor release functions that recursively release typed
-//! managed-reference fields before deallocating the aggregate itself, and the
-//! descriptor records ([`super::descriptor_records`]) that describe each index.
+//! `rtti_idx` and field kinds as a `tribute_rtti.layout` operation. This pass
+//! reads those declarations and generates per-descriptor release functions
+//! that recursively release typed managed-reference fields before
+//! deallocating the aggregate itself, and the descriptor records
+//! ([`super::descriptor_records`]) that describe each index.
 //!
 //! ## RTTI Index Layout
 //!
