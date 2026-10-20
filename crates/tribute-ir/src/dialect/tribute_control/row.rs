@@ -511,7 +511,12 @@ fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
                 .iter()
                 .chain([&signature.result(ctx)])
                 .map(|ty| type_key(ctx, *ty))
-                .chain([signature.convention(ctx).keyword().to_owned(), row])
+                .chain(
+                    signature
+                        .assigned_convention(ctx)
+                        .map(|convention| convention.keyword().to_owned()),
+                )
+                .chain([row])
                 .chain(attributes(&super::RESERVED_ATTRS)),
         );
     }

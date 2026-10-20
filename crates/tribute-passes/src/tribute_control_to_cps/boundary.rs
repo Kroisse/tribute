@@ -565,6 +565,13 @@ pub fn verify_tribute_control_pre_cps(
     analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
     let mut failures = Vec::new();
+    if tribute_control::conventions_assigned(ctx, module) == Some(false) {
+        failures.push(BoundaryFailure {
+            op: None,
+            location: None,
+            message: "source signatures have no calling convention; class specialization must run before legalization".into(),
+        });
+    }
     let validation = tribute_control::validate(ctx, module, compiler_intrinsics, analyses);
     failures.extend(validation.errors.into_iter().map(|error| BoundaryFailure {
         op: error.op,

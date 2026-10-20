@@ -2566,3 +2566,23 @@ fn instantiate_legalizes_to_its_lambda() {
     assert_eq!(instantiated, direct);
     assert!(!instantiated.contains("quantified_rows"), "{instantiated}");
 }
+
+/// Legalization reads conventions, so it takes only a module whose
+/// signatures class specialization has assigned them.
+#[test]
+fn legalization_requires_assigned_conventions() {
+    let (mut ctx, module) = parse(
+        r#"core.module @m {
+  tribute_control.func @f(%x: core.i32) -> core.i32 {
+    tribute_control.return %x
+  }
+}"#,
+    );
+    let error = run_pre_cps(&mut ctx, module).expect_err("no conventions yet");
+    assert!(
+        error
+            .to_string()
+            .contains("class specialization must run before legalization"),
+        "{error}"
+    );
+}
