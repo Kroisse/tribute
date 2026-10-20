@@ -214,38 +214,38 @@ mod wasm {
     fn struct_set(type_idx: Attr<u32>, field_idx: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
     // GC arrays
-    fn array_new(type_idx: Attr<u32>, size: Value<_>, init: Value<_>) -> Value<_> {}
+    fn array_new(type_idx: Attr<u32>, size: Value<I32>, init: Value<_>) -> Value<_> {}
 
-    fn array_new_default(type_idx: Attr<u32>, size: Value<_>) -> Value<_> {}
+    fn array_new_default(type_idx: Attr<u32>, size: Value<I32>) -> Value<_> {}
 
     fn array_new_data(
         type_idx: Attr<u32>,
         data_idx: Attr<u32>,
-        offset: Value<_>,
-        size: Value<_>,
+        offset: Value<I32>,
+        size: Value<I32>,
     ) -> Value<_> {
     }
 
     fn bytes_from_data(data_idx: Attr<u32>, offset: Attr<u32>, len: Attr<u32>) -> Value<_> {}
 
-    fn array_get(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
+    fn array_get(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<I32>) -> Value<_> {}
 
-    fn array_get_s(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
+    fn array_get_s(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<I32>) -> Value<_> {}
 
-    fn array_get_u(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
+    fn array_get_u(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<I32>) -> Value<_> {}
 
-    fn array_set(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<_>, value: Value<_>) {}
+    fn array_set(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<I32>, value: Value<_>) {}
 
-    fn array_len(r#ref: Value<_>) -> Value<_> {}
+    fn array_len(r#ref: Value<_>) -> Value<I32> {}
 
     fn array_copy(
         dst_type_idx: Attr<u32>,
         src_type_idx: Attr<u32>,
         dst: Value<_>,
-        dst_offset: Value<_>,
+        dst_offset: Value<I32>,
         src: Value<_>,
-        src_offset: Value<_>,
-        len: Value<_>,
+        src_offset: Value<I32>,
+        len: Value<I32>,
     ) {
     }
 
@@ -778,6 +778,31 @@ mod tests {
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
+
+    #[test]
+    fn gc_array_indices_and_lengths_are_i32() {
+        let schema_ok = |body: &str| {
+            let mut ctx = crate::IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{\n  func.func @f(%a: wasm.arrayref, %n: core.i32, %w: core.i64) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
+                ),
+            );
+            crate::validation::validate_op_schemas(&ctx, module.op()).is_ok()
+        };
+        assert!(schema_ok(
+            "%e = wasm.array_get %a, %n {type_idx = 0} : core.i32"
+        ));
+        assert!(!schema_ok(
+            "%e = wasm.array_get %a, %w {type_idx = 0} : core.i32"
+        ));
+        assert!(schema_ok("%l = wasm.array_len %a : core.i32"));
+        assert!(!schema_ok("%l = wasm.array_len %a : core.i64"));
+        assert!(!schema_ok(
+            "wasm.array_copy %a, %n, %a, %n, %w {dst_type_idx = 0, src_type_idx = 0}"
+        ));
+    }
 
     #[test]
     fn indirect_call_interface_uses_wasm_owned_signature() {

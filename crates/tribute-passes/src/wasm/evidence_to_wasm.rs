@@ -1161,10 +1161,7 @@ fn evidence_len(
     block: BlockRef,
     ev: ValueRef,
 ) -> ValueRef {
-    let i32_ty = intern_i32(ctx);
-    let op = wasm_dialect::ArrayLen::operands(ev)
-        .results(i32_ty)
-        .build(ctx, location);
+    let op = wasm_dialect::ArrayLen::operands(ev).build(ctx, location);
     ctx.push_op(block, op.op_ref());
     op.result(ctx)
 }
