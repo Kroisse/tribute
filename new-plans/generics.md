@@ -140,8 +140,9 @@ apply + [fn(Int) -> Bool]     → apply$6$0$Int$1$Bool
 swap + [(Int, Bool)]          → swap$7$0$Int$Bool$1
 ```
 
-[Convention class](#row-변수의-convention-class) 목록은 타입 인자 뒤에 `$9`와 class
-변수 순서대로 한 글자씩(`D`, `E`, `C`) 쓴다. 모든 class가 `Cps`이면 쓰지 않는다.
+[Convention class](#row-변수의-convention-class) 목록은 CPS 전략의
+[class 특수화 pass](cps-effects.md#class-특수화-pass)가 타입 인자 뒤에 `$9`와 class
+변수 순서대로 한 글자씩(`D`, `E`, `C`) 붙인다. 모든 class가 `Cps`이면 쓰지 않는다.
 
 ```text
 map + [Int, Bool] + [Direct]          → map$Int$Bool$9D
@@ -310,8 +311,9 @@ ast_to_ir: IR lowering
 변환한다. 생성된 clone 내부의 참조가 새 인스턴스를 드러내면 같은 인스턴스 키를
 재사용하며 고정점까지 수집한다. 확장 한도를 넘으면 구조적 진단을 반환한다.
 
-타입 인자나 [class 변수](#row-변수의-convention-class)를 갖는 함수를 이 과정으로
-특수화한다. 둘 다 없는 함수는 정의 하나를 그대로 쓴다. 도달하지 않는 generic
+타입 인자를 갖는 함수를 이 과정으로 특수화한다. 타입 인자가 없는 함수는 정의 하나를
+그대로 쓴다. [Class 변수](#row-변수의-convention-class)에 따른 특수화는 이 과정이 아니라
+source-logical IR의 pass가 맡는다. 도달하지 않는 generic
 template은 허용하되, 도달하는 함수 인스턴스나 ability 인자가 미해결이면 타입 erasure
 전에 거부한다.
 
@@ -320,8 +322,9 @@ template은 허용하되, 도달하는 함수 인스턴스나 ability 인자가 
 Ability row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실행 중 evidence로
 전달한다. 실행 전략은 row 변수가 요구하는 calling convention마다 정의를 따로 만들 수
 있으며, CPS 전략에서 이를 그 변수의
-[convention class](cps-effects.md#row-변수의-convention-class)라 한다. 인스턴스
-key와 이름은 이 class를 함께 반영한다.
+[convention class](cps-effects.md#row-변수의-convention-class)라 한다. Class마다
+인스턴스를 만드는 일은 frontend의 특수화가 아니라 CPS 전략의
+[class 특수화 pass](cps-effects.md#class-특수화-pass)가 source-logical IR에서 한다.
 
 ### Nominal 타입 수집과 재작성
 
@@ -402,8 +405,10 @@ establish declaration identity. Prelude merging, deferred
 method desugaring, and specialized AST cloning preserve the record. Clones
 substitute their enclosing type arguments into nested instance records.
 Effect-only type arguments participate in ordinary type specialization; open
-residual rows continue to use evidence passing, and the recorded row arguments
-select each instance's [convention classes](#row-변수의-convention-class).
+residual rows continue to use evidence passing. The recorded row arguments
+become the `row_args` of references in source-logical IR, from which the class
+specialization pass selects each instance's
+[convention classes](#row-변수의-convention-class).
 Unused generic templates are permitted, but incomplete reached instances fail
 before logical lowering.
 
