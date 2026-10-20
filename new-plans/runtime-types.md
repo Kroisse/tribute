@@ -83,11 +83,11 @@ Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 o
 - Nominal layout을 마지막으로 해석하는 target 경계가 descriptor를 소유한다. 이
   경계는 `(layout 타입, tag)`마다 번호와 필드 종류를 정해 module 수준
   `tribute_rtti.layout` 선언으로 남긴다. Native 배열의 descriptor는
-  `(core.array 타입, tag 없음)`이고, Wasm 배열은 descriptor를 갖지 않는다.
-  할당 operation(`adt.struct_new`, `adt.variant_new`, native에서 배열을 만드는
-  [`adt` 배열 operation](ir.md#adt-배열))을 내리는 pass는 번호를 스스로 정하지
-  않고 이 선언에서 읽어 할당에 새긴 뒤 선언을 지운다. Native는 RC header의
-  RTTI index, Wasm은 사용자 struct와 variant 객체의 첫 필드에 새긴다.
+  `(core.array 타입, tag 없음)`이다. 할당 operation(`adt.struct_new`,
+  `adt.variant_new`, native에서 배열을 만드는 [`adt` 배열 operation](ir.md#adt-배열))을
+  내리는 pass는 번호를 스스로 정하지 않고 이 선언에서 읽어 할당에 새긴 뒤 선언을
+  지운다. Native는 RC header의 RTTI index, Wasm은 사용자 struct와 variant 객체의
+  첫 필드에 새긴다.
 - 번호와 레코드는 nominal 이름이 지워지기 전에 확정된다. 그 아래의 이름 없는
   [structural struct](ir.md#nominal-수준과-structural-수준)는 번호만 다루고
   descriptor를 layout 타입에서 다시 찾지 않는다.
@@ -135,8 +135,9 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
   capture는 runtime 검사 대상이 아니므로, capture layout마다 descriptor를 두지 않고
   모든 closure layout이 closure base의 예약 index를 descriptor 번호로 공유한다.
   Closure 객체에는 descriptor 필드가 없다.
-- 배열은 GC array 타입이며 descriptor 필드를 두지 않는다. Wasm은 해제 정보가 필요
-  없고 배열은 variant 판별 대상이 아니므로 배열에 descriptor 번호를 정하지 않는다.
+- Builtin layout이 아닌 배열은 GC array 타입이며 descriptor 필드도 descriptor
+  번호도 갖지 않는다. 소스 언어에 배열 타입이 없으므로 이 배열은 소스 값으로
+  출력되거나 variant 판별을 받지 않고, Wasm은 해제 정보도 필요 없다.
 
 ## Variant 판별
 
@@ -156,9 +157,7 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
 
 - Runtime에 할당되는 모든 값은 descriptor를 가진다. Native에서는 RC header를 가진
   모든 객체, Wasm에서는 모든 사용자 struct와 variant 객체와 builtin layout 값이다.
-  예외는 builtin layout이 아닌 Wasm 배열 하나다. 소스 언어에 배열 타입이 없으므로
-  이 배열은 소스 값으로 출력되거나 variant 판별을 받지 않으며, Wasm은 해제 정보도
-  필요 없다. 그래서 descriptor를 읽는 runtime 동작의 대상이 아니다.
+  예외는 [Wasm 배치](#wasm-배치)가 정한 builtin layout이 아닌 Wasm 배열 하나다.
 - Descriptor의 필드 종류와 layout 필드의 물리 표현은 일치한다. Managed 참조
   필드는 managed 참조 표현을, scalar 필드는 해당 폭의 scalar 표현을 쓴다.
 - Descriptor 번호는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. 따로

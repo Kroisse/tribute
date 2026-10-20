@@ -142,11 +142,9 @@ Array: [len: i64] [element: E...]
   크기를 쓴다.
 - Managed 참조 원소는 owned 참조다. `adt.ref_null`이 만든 null도 원소가 될 수
   있으며 retain과 release는 null에 대해 아무것도 하지 않는다.
-- [`adt.array_set`](ir.md#adt-배열)은 원소를 제자리에서 바꾼다. Managed 원소를
-  바꾸는 쓰기는 struct field의 교체와 같은 ownership 규칙과
-  [비순환 계약](#비순환-object-그래프)을 따른다.
-- 배열의 release는 원소가 managed 참조이면 원소를 모두 release한 뒤, `len`을 읽어 위
-  크기로 자신을 해제한다.
+- 배열 operation의 ownership 규칙은
+  [typed ownership plan](#1-typed-ownership-and-rtti-plan), 해제는
+  [type-specific release](#type-specific-release)가 정한다.
 
 ### Evidence
 
@@ -990,9 +988,8 @@ Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다
 만드는 값에만 쓴다. 할당 operation으로 만드는 값은 모두 예약 범위 다음 번호를 받는다.
 소스 struct와 variant뿐 아니라 closure layout처럼 compiler가 소유한 layout의 할당도
 여기에 속하며, 그 descriptor는 compiler 소유 이름과 필드 종류를 가진다. Closure는
-base와 capture layout마다 descriptor를 하나씩 가진다. 배열은 evidence를 빼고
-`core.array<E>` 타입마다, 곧 원소 타입마다 descriptor를 하나씩 가지며 그 이름은
-compiler 소유 이름이다. RC header
+base와 capture layout마다 descriptor를 하나씩 가지며, 배열의 descriptor 단위는
+[runtime-types.md](runtime-types.md#descriptor-단위)가 정한다. RC header
 없이 unmanaged로 다루는 값은 RC 객체가 아니므로 RTTI index와 descriptor를 갖지 않는다.
 
 RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. Table과

@@ -365,15 +365,15 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 규칙은 [rc.md](rc.md#array)를 따른다.
 
 [`adt` 배열 operation](ir.md#adt-배열)은 RC header lowering 단계에서 struct 할당과
-함께 낮춘다. 할당은 `__tribute_alloc(16 + len × stride)`로 하고 header에 배열 타입의
-RTTI index를 기록한 뒤 `len`을 payload offset 0에 쓴다.
+함께 낮춘다. [할당 크기](rc.md#array)로 `__tribute_alloc`을 부르고 header에 배열
+타입의 RTTI index를 기록한 뒤 `len`을 payload offset 0에 쓴다.
 
-- `adt.array_new`는 모든 원소 자리에 `initial`을 쓴다. 원소가 managed 참조이면
-  원소마다 `initial`을 retain한다.
+- `adt.array_new`는 모든 원소 자리에 `initial`을 쓴다.
 - `adt.array_of`는 operand를 차례로 원소 자리에 쓴다.
 - `adt.array_splice`는 `source`의 두 범위를 결과의 앞뒤로 복사하고 그 사이에
-  `elements`를 쓴다. 원소가 managed 참조이면 복사한 원소를 차례로 retain한다.
-- 위 retain은 plan의 action이 아니라 operation의 일부이며, null 원소는 건너뛴다.
+  `elements`를 쓴다.
+- 원소가 managed 참조이면 `adt.array_new`와 `adt.array_splice`는 채우거나 복사한
+  원소마다 retain한다. 이 획득은 [operation이 소유한다](rc.md#1-typed-ownership-and-rtti-plan).
 - `adt.array_set`이 managed 원소를 바꾸면 plan이 새 원소의 저장 자리에 둔 unit을
   먼저 확보한 뒤(기준 동작의 획득이나 last-use move), 이전 원소를 읽어 plan의
   replaced-field release를 적용하고 새 원소를 쓴다. 새 원소가 이전 원소와 같은
@@ -382,13 +382,9 @@ RTTI index를 기록한 뒤 `len`을 payload offset 0에 쓴다.
   `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
 
 범위 검사는 모든 `adt.array_get`, `adt.array_set`, `adt.array_splice` 앞에 둔다.
-`adt.array_get`과 `adt.array_set`은 `index < len`을, `adt.array_splice`는
-`start ≤ end`와 `end ≤ len`을 부호 없는 정수로 비교하고 전제를 어기면
-`clif.trap`으로 끝낸다. 할당 크기 계산이 넘치는 길이도 trap이다.
-
-배열의 release 함수는 원소 타입마다 하나이며 [rc.md](rc.md#type-specific-release)를
-따른다. 해제 크기는 header 뒤의 `len`에서 계산하므로 release action의 `alloc_size`는
-RTTI dispatch 신호인 0이다.
+[`adt` 배열](ir.md#adt-배열)이 정한 전제(`index < len`, `start ≤ end ≤ len`)를
+부호 없는 정수 비교로 검사하고, 어기면 `clif.trap`으로 끝낸다. 할당 크기 계산이
+넘치는 길이도 `clif.trap`이다.
 
 Native 타입 변환은 [`core.index`](ir.md#coreindex-주소-폭-정수)를 pointer 폭인
 `core.i64`로 바꾼다. Array의 length와 원소 index, `mem.ptr_add`의 offset이 이
