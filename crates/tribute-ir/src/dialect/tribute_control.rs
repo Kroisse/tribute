@@ -99,7 +99,10 @@ mod tribute_control {
     /// type is the parameter type `type` declares.
     ///
     /// ```text
-    /// tribute_control.func {sym_name = "id", type = !Callable} (%x: T) { ... }
+    /// tribute_control.func @id(%x: T) -> R convention(direct) {
+    ///   ...
+    ///   tribute_control.return %value
+    /// }
     /// ```
     ///
     /// - **Shape:** no operands or results. `sym_name: String` and
@@ -142,7 +145,10 @@ mod tribute_control {
     /// parameter whose type is the one its result type declares.
     ///
     /// ```text
-    /// %f = tribute_control.lambda [%capture0, ...] : !Callable { ... }
+    /// %f = tribute_control.lambda(%x: T) -> R convention(direct) captures [%capture0, ...] {
+    ///   ...
+    ///   tribute_control.return %value
+    /// }
     /// ```
     ///
     /// - **Shape:** the operands are the typechecked captures in source
@@ -475,19 +481,17 @@ mod tribute_control {
     /// is.
     ///
     /// ```text
-    /// %answer = tribute_control.handle : AnswerType
-    ///   body {
-    ///     ...
-    ///     tribute_control.yield %body_value
-    ///   }
-    ///   completion(%completed: BodyType) {
+    /// %answer = tribute_control.handle : AnswerType {
+    ///   ...
+    ///   tribute_control.yield %body_value
+    /// } {
+    ///   ^completion(%completed: BodyType):
     ///     ...
     ///     tribute_control.yield %answer_value
-    ///   }
-    ///   handlers {
-    ///     tribute_control.handler ... { ... }
-    ///     ...
-    ///   }
+    /// } {
+    ///   tribute_control.handler {...} { ... }
+    ///   ...
+    /// }
     /// ```
     ///
     /// - **Operands:** none. Values the executable regions capture use
@@ -549,15 +553,10 @@ mod tribute_control {
     /// declaration's parameter type at its position.
     ///
     /// ```text
-    /// tribute_control.handler {
-    ///   ability = @State,
-    ///   op_name = "get",
-    ///   kind = "op",
-    ///   operation_result_type = ResultType
-    /// } (%arg0: Arg0Type, ..., %resume:
-    ///     tribute_control.resume_token<ResultType, AnswerType>) {
-    ///   ...
-    ///   tribute_control.yield %answer
+    /// tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = ResultType} {
+    ///   ^handler(%arg0: Arg0Type, ..., %resume: tribute_control.resume_token<ResultType, AnswerType>):
+    ///     ...
+    ///     tribute_control.yield %answer
     /// }
     /// ```
     ///
