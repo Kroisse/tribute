@@ -631,8 +631,16 @@ pub(crate) fn collect_gc_types(
                 } else {
                     1
                 };
-                if let Some(&element) = ctx.op_operands(op).get(element_position) {
-                    let ty = helpers::value_type(ctx, element);
+                // Without an element operand (`array.new_default`, an empty
+                // `array.new_fixed`), the result type declares the element.
+                let element_ty = match ctx.op_operands(op).get(element_position) {
+                    Some(&element) => Some(helpers::value_type(ctx, element)),
+                    None => result_types
+                        .first()
+                        .and_then(|&ty| trunk_ir::dialect::core::Array::from_type_ref(ctx, ty))
+                        .map(|array| array.element(ctx)),
+                };
+                if let Some(ty) = element_ty {
                     record_array_elem(type_idx, builder, ty)?;
                 }
             }
@@ -817,6 +825,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn empty_fixed_array_takes_its_element_from_the_result_type() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+                    wasm.func @empty() {{
+                        %array = wasm.array_new_fixed {{type_idx = {FIRST_USER_TYPE_IDX}}} : core.array<core.i64>
+                        wasm.return
+                    }}
+                }}"#
+            ),
+        );
+        let (types, _) = collect_gc_types(&mut ctx, module).unwrap();
+        let GcTypeDef::Array(element) = &types[FIRST_USER_TYPE_IDX as usize] else {
+            panic!("the fixed array's type is an array");
+        };
+        assert_eq!(element.element_type, StorageType::Val(ValType::I64));
     }
 
     #[test]
