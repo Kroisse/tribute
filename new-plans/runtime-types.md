@@ -156,6 +156,9 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
 
 - Runtime에 할당되는 모든 값은 descriptor를 가진다. Native에서는 RC header를 가진
   모든 객체, Wasm에서는 모든 사용자 struct와 variant 객체와 builtin layout 값이다.
+  예외는 builtin layout이 아닌 Wasm 배열 하나다. 소스 언어에 배열 타입이 없으므로
+  이 배열은 소스 값으로 출력되거나 variant 판별을 받지 않으며, Wasm은 해제 정보도
+  필요 없다. 그래서 descriptor를 읽는 runtime 동작의 대상이 아니다.
 - Descriptor의 필드 종류와 layout 필드의 물리 표현은 일치한다. Managed 참조
   필드는 managed 참조 표현을, scalar 필드는 해당 폭의 scalar 표현을 쓴다.
 - Descriptor 번호는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. 따로
