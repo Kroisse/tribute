@@ -6,8 +6,8 @@ use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::{IrContext, SymbolPath};
 
 use super::super::{
-    CallingConvention, FuncSig, ValidationResult, func_sig_with_row, validate_local,
-    validate_whole_ir,
+    CallingConvention, FuncSig, ValidationResult, conventions_assigned, func_sig_with_row,
+    validate_local, validate_whole_ir,
 };
 use super::*;
 
@@ -613,4 +613,91 @@ fn a_lambda_captured_by_another_is_instantiated_in_its_body() {
         &nested("      %r = tribute_control.call_indirect %g, %z : core.i32\n"),
         "a lambda that quantifies rows is used only through instantiate",
     );
+}
+
+/// Frontend output before class specialization: rows without conventions.
+const UNASSIGNED: &str = r#"core.module @test {
+  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !pure = tribute_control.func_sig<(core.i32) -> core.i32>
+  !applied = tribute_control.func_sig<(!pure, core.i32) -> core.i32>
+  tribute_control.func @apply['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
+    %r = tribute_control.call_indirect %f, %x : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @forward['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
+    tribute_control.tail_call_indirect %f, %x
+  }
+  tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 inferred {
+    %g = tribute_control.lambda(%y: core.i32) -> core.i32 LAMBDA captures [] {
+      tribute_control.return %y
+    }
+    %h = tribute_control.lambda['a0](%z: core.i32) -> core.i32 row(| 'a0) captures [] {
+      tribute_control.return %z
+    }
+    %s = tribute_control.instantiate %h {row_args = [{}]} : !pure
+    %a = tribute_control.func_ref {func_ref = @apply, row_args = [{}]} : !applied
+    %v = tribute_control.call_indirect %s, %x : core.i32
+    %r = tribute_control.call_indirect %a, %g, %v : core.i32
+    tribute_control.return %r
+  }
+}"#;
+
+#[test]
+fn signatures_may_wait_for_class_specialization_to_assign_conventions() {
+    let input = UNASSIGNED.replace(" LAMBDA", "");
+    let (ctx, module) = parse(&input);
+    let result = validate(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+    assert_eq!(conventions_assigned(&ctx, module), Some(false));
+    let printed = print_module(&ctx, module.op());
+    assert!(
+        printed.contains("@apply['a0](%0: !cb, %1: core.i32) -> core.i32 row(| 'a0) {")
+            && printed.contains("@main[local 'a0](%0: core.i32) -> core.i32 inferred {")
+            && printed.contains("tribute_control.lambda['a0](%")
+            && printed.contains("-> core.i32 captures [] {"),
+        "{printed}"
+    );
+    let (reparsed, module) = parse(&printed);
+    assert_eq!(print_module(&reparsed, module.op()), printed);
+}
+
+#[test]
+fn a_module_assigns_conventions_to_every_signature_or_to_none() {
+    let input = UNASSIGNED.replace(" LAMBDA", " convention(direct)");
+    let (ctx, module) = parse(&input);
+    assert_eq!(conventions_assigned(&ctx, module), None);
+    assert_rejects(
+        &input,
+        "only some source signatures have a calling convention",
+    );
+}
+
+#[test]
+fn a_tuple_layout_names_a_convention_only_once_assigned() {
+    let mut ctx = IrContext::new();
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+    let unassigned = TypeDataBuilder::new("tribute_control.func_sig")
+        .params([i32_ty, i32_ty])
+        .attr(
+            trunk_ir::dialect::func::NUM_INPUTS_ATTR,
+            trunk_ir::types::Attribute::from(1_u32),
+        )
+        .attr(
+            trunk_ir::dialect::func::NUM_RESULTS_ATTR,
+            trunk_ir::types::Attribute::from(1_u32),
+        )
+        .intern(&mut ctx);
+    assert!(FuncSig::from_type_ref(&ctx, unassigned).is_some());
+    let assigned = func_sig_with_row(
+        &mut ctx,
+        i32_ty,
+        [i32_ty],
+        &Row::default(),
+        CallingConvention::Direct,
+    )
+    .as_type_ref();
+    let names = [unassigned, assigned].map(|callable| logical_tuple_name(&ctx, &[callable]));
+    assert_ne!(names[0], names[1]);
+    assert!(!names[0].contains("direct"), "{}", names[0]);
+    assert!(names[1].contains("direct"), "{}", names[1]);
 }
