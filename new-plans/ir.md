@@ -1034,7 +1034,8 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
   일치로 근거를 세우고, 다른 값에 기대는 경우(lambda의 `instantiate`, callee의
   `call_indirect` 결과, `handle`에 이르는 yield 등)에는 그 값들이 모두 출처를
   갖추어야 한다. 규칙이 없는 operation의 결과와 block 인자는 출처가 아니다.
-  값마다 만든 operation이 하나이므로 판정은 거쳐 간 모든 값의 conjunction이다.
+  각 값은 그 값을 만든 operation, block 인자이면 그 block을 가진 operation 하나의
+  규칙으로 판정되므로, 판정은 거쳐 간 모든 값의 conjunction이다.
   `handle`의 handler에서 그 결과로 되돌아오는 순환은 새 값을 더하지 않으므로
   순환 밖에서 이르는 값만 출처를 갖추면 된다. 이 출처 규칙은 handler를 구현하는
   전략과 무관하다.
