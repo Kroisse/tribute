@@ -3,3 +3,15 @@ language: "en-US"
 early_access: true
 reviews:
   request_changes_workflow: true
+  auto_review:
+    # Review each PR once when it opens. Request a re-review with
+    # `@coderabbitai review` when a later push needs one.
+    auto_incremental_review: false
+    ignore_title_keywords:
+      - "ci("
+      - "chore(deps"
+      - "[skip review]"
+    labels:
+      - "!no-review"
+  path_filters:
+    - "!Cargo.lock"
