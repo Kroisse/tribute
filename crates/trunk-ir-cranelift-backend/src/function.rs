@@ -607,6 +607,11 @@ impl<'a> FunctionTranslator<'a> {
             self.builder.ins().trap(TrapCode::unwrap_user(1));
             return Ok(());
         }
+        if let Ok(trapnz) = clif::Trapnz::from_op(ctx, op) {
+            let cond = self.lookup(trapnz.cond(ctx))?;
+            self.builder.ins().trapnz(cond, TrapCode::unwrap_user(1));
+            return Ok(());
+        }
 
         // === Return Call (tail call) ===
         if let Ok(rc) = clif::ReturnCall::from_op(ctx, op) {

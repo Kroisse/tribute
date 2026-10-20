@@ -382,10 +382,15 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 - `adt.array_get`, `adt.array_set`, `adt.array_len`은 `len`과 원소 자리의
   `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
 
+`adt.array_new`와 `adt.array_splice`가 원소를 채우거나 복사하는 반복은 배열
+descriptor마다 한 번 만드는 helper `clif.func`가 맡는다. `adt.array_splice`의
+`elements`는 helper가 남겨 둔 자리에 호출한 쪽이 쓴다.
+
 범위 검사는 모든 `adt.array_get`, `adt.array_set`, `adt.array_splice` 앞에 둔다.
 [`adt` 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한 전제(`index < len`,
-`start ≤ end ≤ len`)를 부호 없는 정수 비교로 검사하고, 어기면 `clif.trap`으로 끝낸다. 할당 크기 계산이
-넘치는 길이도 `clif.trap`이다.
+`start ≤ end ≤ len`)를 부호 없는 정수 비교로 검사하고, 어기면 `clif.trapnz`로
+끝낸다. 할당 크기 계산이 넘치는 길이도 `clif.trapnz`다. `clif.trapnz`는 terminator가
+아니므로 검사가 block을 나누지 않는다.
 
 Native 타입 변환은 [`core.index`](ir.md#coreindex-주소-폭-정수)를 pointer 폭인
 `core.i64`로 바꾼다. Array의 length와 원소 index, `mem.ptr_add`의 offset이 이

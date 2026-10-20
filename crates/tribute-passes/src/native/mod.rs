@@ -8,6 +8,7 @@
 //! - `entrypoint`: Generate C ABI `main` wrapper for native binaries
 //! - `type_converter`: Native type converter for IR-level type transformations
 //! - `adt_rc_header`: Lower `adt.struct_new` to clif alloc + RC header init + field stores
+//! - `array_to_clif`: Lower the `adt` array operations, from `adt_rc_header`
 //! - `struct_to_mem`: Lower the `adt.struct` layout of field accesses to `mem.struct`
 //! - `descriptor_to_clif`: Lower `tribute_rtti.descriptor` to a read of the RC header
 //! - `tribute_rt_to_clif`: Lower `tribute_rt.box_*`/`unbox_*` to clif alloc + load/store
@@ -19,6 +20,7 @@ pub mod adapt_closure_layout;
 pub mod adt_rc_header;
 pub mod adt_to_clif;
 mod array_layout;
+mod array_to_clif;
 pub mod cast_legalization;
 pub mod clif_lowering;
 pub mod const_to_native;

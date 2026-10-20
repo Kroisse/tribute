@@ -129,6 +129,12 @@ mod clif {
 
     fn trap(code: Attr<String>) {}
 
+    /// Traps when `cond` is non-zero and otherwise continues with the next
+    /// operation, like Cranelift's `trapnz`. It is not a terminator, so a
+    /// lowering can guard an access without splitting its block. `code`
+    /// names the failed check, as `trap`'s does.
+    fn trapnz(code: Attr<String>, cond: Value<impl IntegerLike>) {}
+
     #[implements(CallLike)]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
