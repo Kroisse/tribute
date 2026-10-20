@@ -75,6 +75,7 @@ expect_commands() {
 
 FMT='cargo fmt --all --check'
 CLIPPY='cargo clippy --workspace --all-targets --message-format=short -- -D warnings'
+DOC='cargo doc --workspace --no-deps'
 AST_TEST='ast-grep test --skip-snapshot-tests'
 AST_SCAN='ast-grep scan src tests crates'
 MARKDOWN='npx markdownlint-cli2 **/*.md #node_modules'
@@ -104,30 +105,33 @@ expect_status 2 "$SCRIPT_DIR/lint.sh" --quick extra
 expect_commands
 
 expect_status 0 env LINT_TEST_CLIPPY_STATUS=0 "$SCRIPT_DIR/lint.sh"
-expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
+expect_commands "$FMT" "$CLIPPY" "$DOC" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
+
+expect_status 2 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_DOC_STATUS=1 "$SCRIPT_DIR/lint.sh"
+expect_commands "$FMT" "$CLIPPY" "$DOC"
 
 # Full validation runs tests only after every lint check passes.
 expect_status 0 env LINT_TEST_CLIPPY_STATUS=0 "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME" "$TESTS"
+expect_commands "$FMT" "$CLIPPY" "$DOC" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME" "$TESTS"
 
 expect_status 2 "$SCRIPT_DIR/check.sh"
 expect_commands "$FMT" "$CLIPPY"
 
 expect_status 2 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_NPX_STATUS=1 \
     "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
+expect_commands "$FMT" "$CLIPPY" "$DOC" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
 
 expect_status 2 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_AST_GREP_SCAN_STATUS=1 \
     "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN"
+expect_commands "$FMT" "$CLIPPY" "$DOC" "$AST_TEST" "$AST_SCAN"
 
 expect_status 7 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_NEXTEST_STATUS=7 \
     "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME" "$TESTS"
+expect_commands "$FMT" "$CLIPPY" "$DOC" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME" "$TESTS"
 
 expect_status 5 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_XTASK_STATUS=5 \
     "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME"
+expect_commands "$FMT" "$CLIPPY" "$DOC" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RUNTIME"
 
 # Exercise real commits without touching the caller's index or hooks.
 (

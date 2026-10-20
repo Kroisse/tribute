@@ -19,6 +19,9 @@ case "$1" in
         echo "CLIPPY_FAILURE_MARKER"
         exit 1
         ;;
+    doc)
+        exit "${LINT_TEST_DOC_STATUS:-0}"
+        ;;
     xtask)
         exit "${LINT_TEST_XTASK_STATUS:-0}"
         ;;
