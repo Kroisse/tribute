@@ -4,8 +4,9 @@
 //! The frontend's source-logical IR has rows but no calling conventions. This
 //! pass selects the class variables of every definition, collects the class
 //! instances root `main` and the references' `row_args` need, clones each
-//! definition per instance, points every reference at its instance, and writes
-//! a convention on every source signature.
+//! definition per instance, points every reference at its instance, copies
+//! each let-bound lambda of an instance once per class vector its
+//! instantiations select, and writes a convention on every source signature.
 //!
 //! Analysis finishes on the unchanged module before anything changes, so every
 //! instance is cloned from its original definition. A definition that ends up
