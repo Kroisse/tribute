@@ -232,6 +232,14 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
   이름 뒤에 `$9`와 class 변수마다 `D`(`Direct`), `E`(`EvidenceDirect`), `C`(`Cps`) 한
   글자를 붙인 것이다. 타입 인자 조각은 숫자로 시작하지 않으므로 이 접미사와 섞이지
   않는다. 참조는 자기 class 인자의 인스턴스를 가리키도록 바꾼다.
+
+  ```text
+  map$Int$Bool + [Direct]          → map$Int$Bool$9D
+  map$Int$Bool + [EvidenceDirect]  → map$Int$Bool$9E
+  map$Int$Bool + [Cps]             → map$Int$Bool
+  apply_twice + [Direct]           → apply_twice$9D
+  ```
+
 - 인스턴스 안에서 `let`에 묶인 람다를 그 `instantiate`들이 고르는 class 조합마다
   복제하고 각 `instantiate`를 자기 조합의 복사본으로 연결한다. 본문 순서로 처음
   나오는 `instantiate`의 조합이 원래 람다를 갖고, 다른 조합의 복사본은 원래 람다

@@ -98,8 +98,8 @@ fn main() ->{Io} Nil {
 }
 ```
 
-Native와 Wasm entrypoint는 target에 맞는 initial evidence를 만들어
-`EvidenceDirect` main에 전달한다. 현재 representation에서는 empty evidence로
+Native와 Wasm entrypoint는 target에 맞는 initial evidence를 만들어 `main`에
+전달한다. 현재 representation에서는 empty evidence로
 충분하지만 이를 source-level ABI로 고정하지 않는다. 처리되지 않은 `Throw(Error)`나
 사용자 ability가 남아 있으면 frontend가 backend lowering 전에 거부한다.
 
@@ -210,8 +210,8 @@ source-level `Io` 계약과 target-independent boundary는 어느 표현을 선�
 ## Validation
 
 - `Io`가 일반 함수 호출을 통해 전파된다.
-- `{Io}` 함수와 호출은 `EvidenceDirect` ABI를 사용한다.
-- `{Io, Throw(Error)}`는 CPS ABI로 승격된다.
+- `{Io}` 함수는 evidence를 받지만 중단되지 않는다.
+- `{Io, Throw(Error)}` 함수는 중단될 수 있다.
 - `main ->{Io} Nil`은 허용되고 다른 residual ability는 거부된다.
 - 사용자가 정의한 같은 이름의 ability는 ambient로 취급되지 않는다.
 - `print`는 개행을 추가하지 않고 `print_line`은 정확히 하나 추가한다.

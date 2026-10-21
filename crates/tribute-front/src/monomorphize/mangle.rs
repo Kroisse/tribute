@@ -15,9 +15,8 @@ use crate::ast::{AbilityOrigin, AbilityRow, BuiltinAbility, RowVar, Type, TypeDe
 /// `$6` starts a function type, `$7` a tuple, `$8$n` the `n`th bound type
 /// variable, and `$5` a compiler-owned nominal type or ability. Before its
 /// result, a function type writes its ability row between `$2` and `$1`, or
-/// `$3$n` for the `n`th row variable of an open row, and a calling-convention
-/// floor above `Direct` after `$4`. Distinct type argument lists get distinct
-/// names:
+/// `$3$n` for the `n`th row variable of an open row. Distinct type argument
+/// lists get distinct names:
 ///
 /// - `identity + [Int]`              → `identity$Int`
 /// - `first + [Int, Text]`           → `first$Int$Text`
