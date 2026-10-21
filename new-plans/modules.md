@@ -758,12 +758,14 @@ struct의 가시성을 따른다. Ability의 operation은 ability의 가시성�
 
 **`use`와 re-export.** `use`의 대상은 `use`를 선언한 모듈에서 보여야 한다. 가져온
 이름은 그 `use`의 가시성을 가진다. `pub use`처럼 대상보다 넓은 가시성으로 다시 내보낼
-수는 없으며, 이는 이름 해석 오류다.
+수는 없으며, 이는 이름 해석 오류다. 대상의 가시성에는 대상을 둘러싼 모듈의 가시성도
+포함되므로, private 모듈의 `pub` 항목을 바깥에 `pub use`로 공개하는 facade 방식은 쓸 수
+없다. 공개할 항목은 공개 모듈에 둔다.
 
 ### Re-export
 
 ```rust
-// 내부 모듈의 타입을 공개 API로 노출
+// 공개 모듈 internal의 타입을 루트 경로로도 노출
 pub use pkg::internal::PublicType
 pub use pkg::internal::{TypeA, TypeB}
 
@@ -775,7 +777,7 @@ pub use pkg::internal::LongTypeName as Short
 
 ```rust
 // src/lib.trb
-mod internal           // private 모듈
+pub mod internal       // public 모듈 (re-export 대상을 담는다)
 pub mod api            // public 모듈
 
 // 주요 타입들을 루트에서 re-export
