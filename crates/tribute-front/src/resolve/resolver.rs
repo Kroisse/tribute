@@ -11,11 +11,11 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    Arm, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit,
-    FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen, Module, ModuleItem,
-    ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt,
-    TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName, UseDecl,
-    Visibility,
+    AbilityOrigin, Arm, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS,
+    FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen,
+    Module, ModuleItem, ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef,
+    SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeOrigin, TypeParamDecl,
+    UnresolvedName, UseDecl, Visibility,
 };
 
 use super::env::{Binding, ModuleEnv, Restriction};
@@ -206,8 +206,10 @@ impl<'db> Resolver<'db> {
             }
         } else {
             // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
-            match self.lookup_qualified_name(name) {
-                Ok(Some(binding)) => return self.visible_ref(binding, name),
+            match self.qualified_entry(name) {
+                Ok(Some((namespace, binding))) => {
+                    return self.visible_entry_ref(&namespace, binding, name);
+                }
                 Ok(None) => {}
                 Err(error) => {
                     self.report_path_keyword(name.id, error);
@@ -229,6 +231,60 @@ impl<'db> Resolver<'db> {
             return ResolvedRef::local(LocalId::UNRESOLVED, name.name());
         }
         self.binding_to_ref(binding, name.name())
+    }
+
+    /// The reference `name` makes to `binding`, the entry of `namespace` it
+    /// names, or an unresolved one if the current module does not see that
+    /// entry.
+    fn visible_entry_ref(
+        &self,
+        namespace: &[Symbol],
+        binding: &Binding<'db>,
+        name: &UnresolvedName,
+    ) -> ResolvedRef<'db> {
+        if let Some(restriction) = self.hidden_entry(namespace, &name.name(), binding) {
+            self.report_hidden(name.id, name, restriction);
+            return ResolvedRef::local(LocalId::UNRESOLVED, name.name());
+        }
+        self.binding_to_ref(binding, name.name())
+    }
+
+    /// The restriction of the entry `name` of `namespace`, which holds
+    /// `binding`: a re-export's own, or else the binding's.
+    fn entry_restriction(
+        &self,
+        namespace: &[Symbol],
+        name: &Symbol,
+        binding: &Binding<'db>,
+    ) -> Option<&Restriction> {
+        self.env
+            .entry_restriction(namespace, name)
+            .or_else(|| self.env.restriction(binding))
+    }
+
+    /// The restriction that hides the entry `name` of `namespace` from the
+    /// current module.
+    fn hidden_entry(
+        &self,
+        namespace: &[Symbol],
+        name: &Symbol,
+        binding: &Binding<'db>,
+    ) -> Option<&Restriction> {
+        self.entry_restriction(namespace, name, binding)
+            .filter(|restriction| !restriction.is_visible_from(&self.module_path))
+    }
+
+    /// Whether the current module sees the re-export, if any, that the entry
+    /// `name` of `namespace` is. A function it does not see is no method
+    /// candidate; one it sees is checked by its binding.
+    fn visible_through_entry(
+        &self,
+        namespace: &[Symbol],
+        name: &Symbol,
+        binding: &Binding<'db>,
+    ) -> bool {
+        self.env.entry_restriction(namespace, name).is_none()
+            || self.hidden_entry(namespace, name, binding).is_none()
     }
 
     /// The restriction that hides `binding` from the current module.
@@ -253,9 +309,13 @@ impl<'db> Resolver<'db> {
         } else {
             path.len()
         };
+        let own = item.and_then(|binding| {
+            let (name, namespace) = path.split_last()?;
+            self.entry_restriction(namespace, name, binding)
+        });
         (1..=modules)
             .filter_map(|end| self.env.module_restriction(&path[..end]))
-            .chain(item.and_then(|b| self.env.restriction(b)))
+            .chain(own)
             .max_by_key(|restriction| {
                 restriction
                     .within
@@ -314,29 +374,32 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// The binding a qualified path names from the current scope.
+    /// The package-root namespace and the binding a qualified path names
+    /// from the current scope.
     ///
     /// A path keyword names a package-root path, read from nowhere else. A
     /// first segment the enclosing module imports names only the imported
     /// path; it does not fall back to the package root.
-    fn lookup_qualified_name(
+    fn qualified_entry(
         &self,
         name: &UnresolvedName,
-    ) -> Result<Option<&Binding<'db>>, PathKeywordError> {
+    ) -> Result<Option<(SymbolPath, &Binding<'db>)>, PathKeywordError> {
         let sym = name.name();
         let Some(namespace) = name.namespace() else {
             return Ok(None);
         };
         if let Some(path) = absolute_path(self.package_depth, &self.module_path, &namespace)? {
-            return Ok(if path.is_empty() {
+            let binding = if path.is_empty() {
                 self.env.lookup(&sym)
             } else {
                 self.env.lookup_qualified(&path, &sym)
-            });
+            };
+            return Ok(binding.map(|binding| (SymbolPath::new(path), binding)));
         }
-        Ok(self
-            .namespace_in_scope(namespace)
-            .and_then(|namespace| self.env.lookup_qualified(&namespace, &sym)))
+        Ok(self.namespace_in_scope(namespace).and_then(|namespace| {
+            let binding = self.env.lookup_qualified(&namespace, &sym)?;
+            Some((namespace, binding))
+        }))
     }
 
     /// The functions an unqualified `name` imports when several `use`s give
@@ -383,12 +446,16 @@ impl<'db> Resolver<'db> {
     /// that shares it.
     fn method_candidates(&self, path: &UnresolvedName) -> MethodCandidates<'db> {
         let mut functions: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
-        match self.lookup_qualified_name(path) {
-            Ok(Some(Binding::Function { id })) => functions.push(*id),
+        match self.qualified_entry(path) {
+            Ok(Some((namespace, binding @ Binding::Function { id })))
+                if self.visible_through_entry(&namespace, &path.name(), binding) =>
+            {
+                functions.push(*id)
+            }
             // A constructor or an ability operation takes the receiver as
             // its first argument without a choice by type.
-            Ok(Some(binding)) => {
-                return MethodCandidates::Callee(self.visible_ref(binding, path));
+            Ok(Some((namespace, binding))) => {
+                return MethodCandidates::Callee(self.visible_entry_ref(&namespace, binding, path));
             }
             Ok(None) => {}
             Err(error) => {
@@ -401,7 +468,9 @@ impl<'db> Resolver<'db> {
                 SymbolPath::new(std::iter::once(&module).chain(path.path.iter()).cloned()),
                 path.id,
             );
-            if let Ok(Some(Binding::Function { id })) = self.lookup_qualified_name(&nested)
+            if let Ok(Some((namespace, binding @ Binding::Function { id }))) =
+                self.qualified_entry(&nested)
+                && self.visible_through_entry(&namespace, &nested.name(), binding)
                 && !functions.contains(id)
             {
                 functions.push(*id);
@@ -464,7 +533,9 @@ impl<'db> Resolver<'db> {
             };
         for module in self.names_in_scope() {
             let nested = UnresolvedName::new(SymbolPath::new([module, method.clone()]), node);
-            if let Ok(Some(Binding::Function { id })) = self.lookup_qualified_name(&nested)
+            if let Ok(Some((namespace, binding @ Binding::Function { id }))) =
+                self.qualified_entry(&nested)
+                && self.visible_through_entry(&namespace, &nested.name(), binding)
                 && !functions.contains(id)
             {
                 functions.push(*id);
@@ -591,12 +662,31 @@ impl<'db> Resolver<'db> {
     /// the module, an import, or a prelude namespace.
     fn resolve_annotation_paths(&self, ann: &mut TypeAnnotation) {
         self.resolve_annotation_names(ann);
-        if let TypeAnnotationKind::Path(path) = &ann.kind
-            && let Some(restriction) = self.hidden_path(path)
-        {
-            self.report_hidden(ann.id, path.iter().format("::"), restriction);
-            ann.kind = TypeAnnotationKind::Error;
+        if let TypeAnnotationKind::Path(path) = &mut ann.kind {
+            if let Some(restriction) = self.hidden_path(path) {
+                self.report_hidden(ann.id, path.iter().format("::"), restriction);
+                ann.kind = TypeAnnotationKind::Error;
+            } else if let Some(declared) = self.declared_path(path) {
+                // A re-export names its target's identity.
+                *path = declared;
+            }
         }
+    }
+
+    /// The path a source type or ability that the package-root path `path`
+    /// names is declared at, when `path` names it through a re-export.
+    fn declared_path(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
+        let declared = match self.lookup_path(path)? {
+            Binding::TypeDef { id } if matches!(id.origin(self.db), TypeOrigin::Source(_)) => {
+                id.path(self.db)
+            }
+            Binding::Constructor { id, tag: None, .. } => id.path(self.db),
+            Binding::Ability { id } if id.origin(self.db) == AbilityOrigin::Source => {
+                id.path(self.db)
+            }
+            _ => return None,
+        };
+        (declared[..] != *path).then(|| declared.to_vec())
     }
 
     /// Rewrite the name at the top of `ann` to the package-root path it

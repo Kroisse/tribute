@@ -306,6 +306,49 @@ fn main() -> Nil {}
     );
 }
 
+#[salsa_test]
+fn a_re_export_joins_its_module_namespace(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod source {
+    pub fn f() -> Nat { 1 }
+    pub struct P { n: Nat }
+    pub ability Tick {
+        op tick() -> Nat
+    }
+}
+
+pub mod facade {
+    pub use pkg::source::f
+    pub use super::source::P as Point
+    pub use pkg::source::Tick
+    pub(pkg) use pkg::source::f as internal
+}
+
+pub mod outer {
+    mod hidden {
+        pub use pkg::source::f
+    }
+}
+
+use facade::Point
+
+fn count() ->{facade::Tick} Nat { facade::Tick::tick() }
+
+fn read(p: facade::Point) -> Nat { p.n }
+
+fn main() -> Nil {
+    let _ = facade::f() + facade::internal() + read(Point { n: 1 }) + outer::hidden::f()
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["`outer::hidden::f` is not visible here: `outer::hidden` is private"]
+    );
+}
+
 /// The prelude is the root of package `std`, so a user package sees only its
 /// `pub` items, on every resolution path.
 #[salsa_test]

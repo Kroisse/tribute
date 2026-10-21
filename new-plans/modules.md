@@ -764,7 +764,11 @@ struct의 가시성을 따른다. Ability의 operation은 ability의 가시성�
 공개하려면 `pub mod`로 선언한다.
 
 **`use`와 re-export.** `use`의 대상은 `use`를 선언한 모듈에서 보여야 한다. 가져온
-이름은 그 `use`의 가시성을 가진다. `pub use`처럼 대상보다 넓은 가시성으로 다시 내보낼
+이름은 그 `use`의 가시성을 가진다. 비공개가 아닌 `use`는 가져온 이름을 선언한 모듈의 이름
+공간에 더한다. 그래서 `pub mod facade { pub use pkg::source::f }`의 `facade::f`는
+경로로 가리킬 수 있고, 패키지 루트의 `pub use`는 패키지 밖에서도 보인다. 이 경로의
+가시성은 대상이 아니라 그 `use`가 정한다. Re-export는 대상의 식별을 바꾸지 않으므로,
+re-export한 경로로 쓴 타입과 ability annotation도 대상 선언을 가리킨다. `pub use`처럼 대상보다 넓은 가시성으로 다시 내보낼
 수는 없으며, 이는 이름 해석 오류다. 대상의 가시성에는 대상을 둘러싼 모듈의 가시성도
 포함되므로, private 모듈의 `pub` 항목을 바깥에 `pub use`로 공개하는 facade 방식은 쓸 수
 없다. 공개할 항목은 공개 모듈에 둔다.

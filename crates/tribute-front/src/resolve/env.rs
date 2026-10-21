@@ -115,6 +115,20 @@ impl Restriction {
     }
 }
 
+/// A `use` that re-exports a name from an inline module, to be added to
+/// that module's namespace once its target resolves.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct Export {
+    /// The package-root path of the module that declares the `use`.
+    pub module: SymbolPath,
+    /// The name it exports.
+    pub name: Symbol,
+    /// The path it imports, as written.
+    pub path: Vec<Symbol>,
+    /// Where the exported name is visible, if not everywhere.
+    pub restriction: Option<Restriction>,
+}
+
 /// Module environment for name resolution.
 ///
 /// Tracks all names visible in the current module.
@@ -148,6 +162,12 @@ pub struct ModuleEnv<'db> {
     restrictions: HashMap<Binding<'db>, Restriction>,
     /// The modules that are not public, by package-root path.
     module_restrictions: HashMap<SymbolPath, Restriction>,
+    /// The re-exports that inline modules declare.
+    exports: Vec<Export>,
+    /// The namespace entries re-exports add that are not public, by
+    /// namespace and name. Such an entry is visible where its `use` makes
+    /// it, not where its binding is.
+    entry_restrictions: HashMap<(SymbolPath, Symbol), Restriction>,
 }
 
 impl<'db> ModuleEnv<'db> {
@@ -311,6 +331,35 @@ impl<'db> ModuleEnv<'db> {
         self.module_restrictions.get(module)
     }
 
+    /// Record a re-export, to resolve with
+    /// [`crate::resolve::resolve_exports`].
+    pub fn add_export(&mut self, export: Export) {
+        self.exports.push(export);
+    }
+
+    /// Take the re-exports recorded so far.
+    pub fn take_exports(&mut self) -> Vec<Export> {
+        std::mem::take(&mut self.exports)
+    }
+
+    /// Restrict where the entry `name` of `namespace` is visible.
+    pub fn restrict_entry(
+        &mut self,
+        namespace: SymbolPath,
+        name: Symbol,
+        restriction: Restriction,
+    ) {
+        self.entry_restrictions
+            .insert((namespace, name), restriction);
+    }
+
+    /// Where the entry `name` of `namespace` is visible, if a re-export
+    /// added it and it is not public.
+    pub fn entry_restriction(&self, namespace: &[Symbol], name: &Symbol) -> Option<&Restriction> {
+        self.entry_restrictions
+            .get(&(SymbolPath::new(namespace.iter().cloned()), name.clone()))
+    }
+
     /// Take the restrictions of `other`, an environment of the same
     /// package.
     pub fn absorb_restrictions(&mut self, other: &ModuleEnv<'db>) {
@@ -326,6 +375,7 @@ impl<'db> ModuleEnv<'db> {
                 .iter()
                 .map(|(path, restriction)| (path.clone(), restriction.clone())),
         );
+        self.exports.extend(other.exports.iter().cloned());
     }
 
     /// Add a qualified name to a namespace only if it doesn't already exist.
@@ -461,7 +511,19 @@ impl<'db> ModuleEnv<'db> {
                 .entry(module.clone())
                 .or_insert_with(|| foreign(restriction));
         }
+        for (entry, restriction) in &other.entry_restrictions {
+            self.entry_restrictions
+                .entry(entry.clone())
+                .or_insert_with(|| foreign(restriction));
+        }
         for (name, binding) in other.iter_namespace(std::slice::from_ref(package)) {
+            // A re-export the package restricts is no name of another one.
+            if other
+                .entry_restriction(std::slice::from_ref(package), &name)
+                .is_some()
+            {
+                continue;
+            }
             self.add_library(name.clone(), binding.clone(), vec![package.clone(), name]);
         }
 

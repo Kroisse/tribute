@@ -18,7 +18,7 @@ mod env;
 mod path;
 mod resolver;
 
-pub use env::{Binding, ModuleEnv, Restriction};
+pub use env::{Binding, Export, ModuleEnv, Restriction};
 pub use resolver::Resolver;
 
 use trunk_ir::Symbol;
@@ -192,8 +192,80 @@ fn build_package_env<'db>(
     // Resolve imports of declarations already present in this module. Imports
     // from another module are resolved again after its environment is merged.
     resolve_use_imports(&mut env);
+    resolve_exports(&mut env, package_depth);
 
     env
+}
+
+/// Add each re-export whose target resolves to the namespace of the module
+/// that declares it, until no more resolve; keep the others to try again
+/// after another environment is merged.
+///
+/// A re-export's path starts with a path keyword, from the declaring module,
+/// or from a library namespace.
+pub fn resolve_exports(env: &mut ModuleEnv<'_>, package_depth: usize) {
+    let mut pending = env.take_exports();
+    loop {
+        let before = pending.len();
+        pending.retain(|export| !add_export(env, package_depth, export));
+        if pending.len() == before {
+            break;
+        }
+    }
+    for export in pending {
+        env.add_export(export);
+    }
+}
+
+/// Add `export` to its module's namespace if its target resolves.
+fn add_export(env: &mut ModuleEnv<'_>, package_depth: usize, export: &Export) -> bool {
+    let candidates: Vec<Vec<Symbol>> =
+        match path::absolute_path(package_depth, &export.module, &export.path) {
+            Ok(Some(target)) => vec![target],
+            Err(_) => return false,
+            Ok(None) => {
+                let mut candidates =
+                    vec![export.module.iter().chain(&export.path).cloned().collect()];
+                if let Some((first, rest)) = export.path.split_first()
+                    && let Some(library) = env.library_namespace(first)
+                {
+                    candidates.push(library.iter().chain(rest).cloned().collect());
+                }
+                candidates
+            }
+        };
+    let Some((target, binding)) = candidates.into_iter().find_map(|target| {
+        let (last, namespace) = target.split_last()?;
+        let binding = if namespace.is_empty() {
+            env.lookup(last).cloned()
+        } else {
+            env.lookup_qualified(namespace, last).cloned()
+        };
+        let binding = binding
+            .filter(|b| !matches!(b, Binding::Module { .. }))
+            .or_else(|| {
+                env.has_namespace(&target).then(|| Binding::Module {
+                    path: target.clone(),
+                })
+            })?;
+        Some((target, binding))
+    }) else {
+        return false;
+    };
+    // The exported name's own namespace, e.g. `facade::Abort::abort`.
+    let own = export.module.child(export.name.clone());
+    for (name, entry) in env.collect_namespace(&target) {
+        env.add_to_namespace_if_absent(own.clone(), name, entry);
+    }
+    env.add_to_namespace_if_absent(export.module.clone(), export.name.clone(), binding);
+    if let Some(restriction) = &export.restriction {
+        env.restrict_entry(
+            export.module.clone(),
+            export.name.clone(),
+            restriction.clone(),
+        );
+    }
+    true
 }
 
 /// What a declaration's visibility is relative to while its environment is
@@ -270,6 +342,7 @@ pub fn library_package_module(module: &Module<UnresolvedName>) -> Module<Unresol
 pub fn merge_library<'db>(env: &mut ModuleEnv<'db>, library: &ModuleEnv<'db>) {
     env.merge(library, &Symbol::new(LIBRARY_PACKAGE));
     resolve_use_imports(env);
+    resolve_exports(env, 0);
 }
 
 /// Resolve a library package module from [`library_package_module`], whose
@@ -491,6 +564,18 @@ fn collect_definition<'db>(
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| u.path.clone());
+                // An inline module's re-export joins its namespace; the
+                // package root's imports are already seen package-wide.
+                if u.visibility != Visibility::Private && !prefix.is_root() {
+                    let restriction =
+                        scope.restriction(prefix, prefix.child(import_name.clone()), &u.visibility);
+                    env.add_export(Export {
+                        module: prefix.clone(),
+                        name: import_name.clone(),
+                        path: u.path.clone(),
+                        restriction,
+                    });
+                }
                 env.add_use(import_name, path);
             }
         }
