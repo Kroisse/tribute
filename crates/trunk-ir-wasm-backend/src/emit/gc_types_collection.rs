@@ -238,6 +238,7 @@ fn types_equivalent_for_gc(ctx: &mut IrContext, ty1: TypeRef, ty2: TypeRef) -> b
             || trunk_ir::dialect::wasm::Arrayref::matches(ctx, other)
             || trunk_ir::dialect::wasm::Eqref::matches(ctx, other)
             || trunk_ir::dialect::wasm::I31ref::matches(ctx, other)
+            || trunk_ir::dialect::wasm_gc::Array::matches(ctx, other)
         {
             return true;
         }
@@ -1124,6 +1125,24 @@ wasm.return
 
         assert!(types_equivalent_for_gc(&mut ctx, structural, structref));
         assert_eq!(normalize_type_for_gc(&mut ctx, structural), structural);
+    }
+
+    #[test]
+    fn concrete_arrays_compare_as_arrayref_and_anyref() {
+        let mut ctx = IrContext::new();
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let array = wasm_gc::Array::params(i32_ty)
+            .intern(&mut ctx)
+            .as_type_ref();
+        let arrayref = trunk_ir::dialect::wasm::Arrayref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
+        let anyref = trunk_ir::dialect::wasm::Anyref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
+
+        assert!(types_equivalent_for_gc(&mut ctx, array, arrayref));
+        assert!(types_equivalent_for_gc(&mut ctx, anyref, array));
     }
 
     #[test]

@@ -93,5 +93,9 @@ fn a_missing_ability_traps() {
         let output = run(call);
         assert!(!output.status.success(), "{call}: {output:?}");
         assert!(output.stdout.is_empty(), "{call}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("wasm trap"),
+            "{call}: {output:?}"
+        );
     }
 }

@@ -595,9 +595,9 @@ WasmGC는 native와 같은 shared middle-end의 tail-call CPS / effect ABI 결�
 입력으로 받는다.
 
 [Representation/ABI 경계](ir.md#representationabi-경계) 안의 Wasm evidence
-lowering은 `effect.extend`, `effect.dispatch_tail`, `effect.dispatch_cps`를 evidence
-helper 호출, closure unpacking, `func.call_indirect` 또는 `func.tail_call`/
-`func.tail_call_indirect`로 낮춘다. 그 뒤 Wasm dialect lowering이 이를
+lowering은 `effect.*`를 `std::runtime::evidence` runtime 항목 호출, closure
+unpacking, `func.call_indirect` 또는 `func.tail_call`/`func.tail_call_indirect`로
+낮춘다. 그 뒤 Wasm dialect lowering이 이를
 `wasm.call_indirect`, `wasm.return_call`, `wasm.return_call_indirect`로 바꾼다.
 
 Ownership planning과 target emission은 [공통 callable 본문 구조](ir.md#callable-본문-구조)를
