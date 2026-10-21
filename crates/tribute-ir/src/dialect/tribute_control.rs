@@ -2171,23 +2171,19 @@ pub struct OperationDeclaration {
 
 /// One exact compiler-intrinsic declaration supplied by the typed frontend.
 ///
-/// This metadata is deliberately kept outside textual TrunkIR.  The symbol and
-/// operation attribute are accepted only when they match this declaration's
-/// registered identity and complete logical callable type.
+/// This metadata is deliberately kept outside textual TrunkIR. A bodyless
+/// declaration's operation attribute is accepted only when it matches the
+/// identity registered for its symbol. Its signature is the declaration's own;
+/// the frontend checks it against the identity before lowering.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilerIntrinsicDeclaration {
     pub symbol: SymbolPath,
     pub identity: Symbol,
-    pub callable_type: TypeRef,
 }
 
 impl CompilerIntrinsicDeclaration {
-    pub fn new(symbol: SymbolPath, identity: Symbol, callable_type: TypeRef) -> Self {
-        Self {
-            symbol,
-            identity,
-            callable_type,
-        }
+    pub fn new(symbol: SymbolPath, identity: Symbol) -> Self {
+        Self { symbol, identity }
     }
 }
 
@@ -3936,7 +3932,6 @@ fn validate_managed_reference_boundaries(
 }
 
 fn compiler_intrinsic_map<'a>(
-    ctx: &IrContext,
     declarations: &'a [CompilerIntrinsicDeclaration],
     errors: &mut Vec<ValidationError>,
 ) -> HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration> {
@@ -3951,17 +3946,6 @@ fn compiler_intrinsic_map<'a>(
             );
         }
         previous = Some(key);
-        if func_sig_convention(ctx, declaration.callable_type)
-            .is_some_and(|convention| convention != CallingConvention::Direct)
-        {
-            push_type_error(
-                errors,
-                format!(
-                    "registered compiler intrinsic @{} must use Direct calling convention",
-                    declaration.symbol
-                ),
-            );
-        }
         if map
             .insert(declaration.symbol.clone(), declaration)
             .is_some()
@@ -6806,20 +6790,15 @@ mod tests {
     }
 
     #[test]
-    fn exact_registered_intrinsic_is_accepted_but_spelling_and_abi_are_not() {
+    fn a_registered_intrinsic_is_accepted_only_at_its_identity() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Nat::+"}
 }"#,
         );
-        let function = control_op(&ctx, module, Func::NAME);
-        let func_sig_type = ctx.op_attrs(function).get_type("type").unwrap();
-        let exact = CompilerIntrinsicDeclaration::new(
-            SymbolPath::new(["Nat::+"]),
-            Symbol::new("Nat::+"),
-            func_sig_type,
-        );
+        let exact =
+            CompilerIntrinsicDeclaration::new(SymbolPath::new(["Nat::+"]), Symbol::new("Nat::+"));
         assert!(
             validate(
                 &ctx,
@@ -6830,13 +6809,12 @@ mod tests {
             .is_ok()
         );
 
-        let wrong_signature = CompilerIntrinsicDeclaration::new(
-            exact.symbol,
-            exact.identity,
-            ctx.get_type(func_sig_type).params[0],
+        let another = CompilerIntrinsicDeclaration::new(exact.symbol, Symbol::new("Int::+"));
+        let result = validate(&ctx, module, &[another], &mut Default::default());
+        assert!(
+            messages(&result).contains("identity does not match"),
+            "{result}"
         );
-        let result = validate(&ctx, module, &[wrong_signature], &mut Default::default());
-        assert!(messages(&result).contains("complete signature"), "{result}");
 
         let result = validate(&ctx, module, &[], &mut Default::default());
         assert!(
@@ -6853,13 +6831,8 @@ mod tests {
     attributes {tribute.compiler_intrinsic = "read"}
 }"#,
         );
-        let function = control_op(&ctx, module, Func::NAME);
-        let func_sig_type = ctx.op_attrs(function).get_type("type").unwrap();
-        let declaration = CompilerIntrinsicDeclaration::new(
-            SymbolPath::new(["read"]),
-            Symbol::new("read"),
-            func_sig_type,
-        );
+        let declaration =
+            CompilerIntrinsicDeclaration::new(SymbolPath::new(["read"]), Symbol::new("read"));
 
         let result = validate(&ctx, module, &[declaration], &mut Default::default());
         assert!(
@@ -6882,16 +6855,8 @@ mod tests {
   }
 }"#,
         );
-        let intrinsic = control_ops(&ctx, module, Func::NAME)
-            .into_iter()
-            .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("Nat::+"))
-            .unwrap();
-        let func_sig_type = ctx.op_attrs(intrinsic).get_type("type").unwrap();
-        let declaration = CompilerIntrinsicDeclaration::new(
-            SymbolPath::new(["Nat::+"]),
-            Symbol::new("Nat::+"),
-            func_sig_type,
-        );
+        let declaration =
+            CompilerIntrinsicDeclaration::new(SymbolPath::new(["Nat::+"]), Symbol::new("Nat::+"));
 
         let result = validate(&ctx, module, &[declaration], &mut Default::default());
         assert!(result.is_ok(), "{result}");
@@ -6909,18 +6874,8 @@ mod tests {
   }
 }"#,
         );
-        let functions = control_ops(&ctx, module, Func::NAME);
         let declaration = |symbol: Symbol| {
-            let function = functions
-                .iter()
-                .copied()
-                .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some(symbol.as_str()))
-                .unwrap();
-            CompilerIntrinsicDeclaration::new(
-                SymbolPath::new([symbol.clone()]),
-                symbol,
-                ctx.op_attrs(function).get_type("type").unwrap(),
-            )
+            CompilerIntrinsicDeclaration::new(SymbolPath::new([symbol.clone()]), symbol)
         };
         let nat = declaration(Symbol::new("Nat::+"));
         let int = declaration(Symbol::new("Int::+"));

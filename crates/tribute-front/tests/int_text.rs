@@ -257,6 +257,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             ability_conventions: tribute_front::monomorphize::ability_conventions(
                 checked.ability_definitions(db),
             ),
+            convention_classes: Default::default(),
             compiler_intrinsics: HashMap::default(),
         },
     )
@@ -278,6 +279,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         ability_conventions: tribute_front::monomorphize::ability_conventions(
             checked.ability_definitions(db),
         ),
+        convention_classes: Default::default(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
@@ -365,6 +367,7 @@ fn lower_specialized_source(
             ability_conventions: tribute_front::monomorphize::ability_conventions(
                 checked.ability_definitions(db),
             ),
+            convention_classes: Default::default(),
             compiler_intrinsics: HashMap::default(),
         },
     )
@@ -386,6 +389,7 @@ fn lower_specialized_source(
         ability_conventions: tribute_front::monomorphize::ability_conventions(
             checked.ability_definitions(db),
         ),
+        convention_classes: Default::default(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
@@ -465,6 +469,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         ability_conventions: tribute_front::monomorphize::ability_conventions(
             checked.ability_definitions(db),
         ),
+        convention_classes: Default::default(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),

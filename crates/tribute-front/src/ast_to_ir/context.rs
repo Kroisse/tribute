@@ -44,6 +44,18 @@ where
     key
 }
 
+/// The IR convention of a frontend convention.
+pub(crate) fn control_convention(
+    convention: CallingConvention,
+) -> tribute_ir::dialect::tribute_control::CallingConvention {
+    use tribute_ir::dialect::tribute_control::CallingConvention as Control;
+    match convention {
+        CallingConvention::Direct => Control::Direct,
+        CallingConvention::EvidenceDirect => Control::EvidenceDirect,
+        CallingConvention::Cps => Control::Cps,
+    }
+}
+
 fn logical_convention_key(convention: CallingConvention) -> String {
     match convention {
         CallingConvention::Direct => "direct".into(),
@@ -61,7 +73,7 @@ pub(crate) struct LogicalGeneratedSignature {
     pub return_type: TypeRef,
     pub row: Row,
     pub binders: Vec<RowBinder>,
-    pub convention: CallingConvention,
+    pub convention: Option<CallingConvention>,
 }
 
 /// The definition scope [`IrLoweringCtx::enter_definition`] replaced.
@@ -98,6 +110,9 @@ pub struct IrLoweringCtx<'db> {
     logical_emitted_externs: HashSet<SymbolPath>,
     /// Ability-level calling-convention requirements.
     ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
+    /// Whether lowering writes conventions, or leaves them to the class
+    /// specialization pass.
+    assigns_conventions: bool,
     /// Physical worker conventions for named function definitions.
     ///
     /// These are intentionally separate from semantic function-type
@@ -175,6 +190,7 @@ impl<'db> IrLoweringCtx<'db> {
             function_ref_paths: HashMap::default(),
             logical_emitted_externs: HashSet::default(),
             ability_conventions,
+            assigns_conventions: true,
             definition_conventions: HashMap::default(),
             module_path: SymbolPath::root(),
             module_block: None,
@@ -199,6 +215,30 @@ impl<'db> IrLoweringCtx<'db> {
     ) -> Self {
         self.compiler_intrinsics = compiler_intrinsics;
         self
+    }
+
+    /// Whether lowering writes conventions, or leaves every one to the class
+    /// specialization pass.
+    pub(crate) fn with_conventions(mut self, assigns: bool) -> Self {
+        self.assigns_conventions = assigns;
+        self
+    }
+
+    /// Whether lowering writes conventions.
+    pub(crate) fn assigns_conventions(&self) -> bool {
+        self.assigns_conventions
+    }
+
+    /// The convention lowering writes for the function type `ty`, or `None`
+    /// when the class specialization pass assigns it.
+    pub(crate) fn written_convention(
+        &self,
+        ty: crate::ast::Type<'db>,
+    ) -> Option<CallingConvention> {
+        self.assigns_conventions.then(|| {
+            self.calling_convention_for_type(ty)
+                .unwrap_or(CallingConvention::Cps)
+        })
     }
 
     pub(crate) fn with_row_classes(
@@ -674,24 +714,13 @@ impl<'db> IrLoweringCtx<'db> {
                     .map(|param| self.convert_logical_type(ir, *param))
                     .collect::<Vec<_>>();
                 let result = self.convert_logical_type(ir, *result);
-                let convention = self
-                    .calling_convention_for_type(ty)
-                    .unwrap_or(crate::ast::CallingConvention::Cps);
-                tribute_ir::dialect::tribute_control::FuncSig::params(params, result)
-                    .row(self.ability_row(*effect))
-                    .convention(match convention {
-                        crate::ast::CallingConvention::Direct => {
-                            tribute_ir::dialect::tribute_control::CallingConvention::Direct
-                        }
-                        crate::ast::CallingConvention::EvidenceDirect => {
-                            tribute_ir::dialect::tribute_control::CallingConvention::EvidenceDirect
-                        }
-                        crate::ast::CallingConvention::Cps => {
-                            tribute_ir::dialect::tribute_control::CallingConvention::Cps
-                        }
-                    })
-                    .intern(ir)
-                    .as_type_ref()
+                let mut signature =
+                    tribute_ir::dialect::tribute_control::FuncSig::params(params, result)
+                        .row(self.ability_row(*effect));
+                if let Some(convention) = self.written_convention(ty) {
+                    signature = signature.convention(control_convention(convention));
+                }
+                signature.intern(ir).as_type_ref()
             }
             TypeKind::Tuple(elements) => {
                 let elements = elements
@@ -736,10 +765,7 @@ impl<'db> IrLoweringCtx<'db> {
                 let mut parts = vec![params.len().to_string()];
                 parts.extend(params.iter().map(|param| self.logical_type_key(*param)));
                 parts.push(self.logical_type_key(*result));
-                parts.push(logical_convention_key(
-                    self.calling_convention_for_type(ty)
-                        .unwrap_or(crate::ast::CallingConvention::Cps),
-                ));
+                parts.extend(self.written_convention(ty).map(logical_convention_key));
                 logical_key("callable", parts)
             }
             TypeKind::Tuple(elements) => {
@@ -808,10 +834,7 @@ impl<'db> IrLoweringCtx<'db> {
                 );
                 parts.push(self.source_type_key(*result, row_vars));
                 parts.push(self.source_row_key(*effect, row_vars));
-                parts.push(logical_convention_key(
-                    self.calling_convention_for_type(ty)
-                        .unwrap_or(crate::ast::CallingConvention::Cps),
-                ));
+                parts.extend(self.written_convention(ty).map(logical_convention_key));
                 logical_key("callable", parts)
             }
             TypeKind::Tuple(elements) => {
@@ -1348,7 +1371,7 @@ mod tests {
                 return_type: i32_ty,
                 row: Row::default(),
                 binders: vec![],
-                convention: CallingConvention::Direct,
+                convention: Some(CallingConvention::Direct),
             },
         );
         // Re-registering the exact semantic signature is a deterministic
@@ -1361,7 +1384,7 @@ mod tests {
                 return_type: i32_ty,
                 row: Row::default(),
                 binders: vec![],
-                convention: CallingConvention::Direct,
+                convention: Some(CallingConvention::Direct),
             },
         );
         let generated_signature = ctx
@@ -1369,7 +1392,10 @@ mod tests {
             .expect("generated logical signature must be retained");
         assert_eq!(generated_signature.param_types, vec![i32_ty]);
         assert_eq!(generated_signature.return_type, i32_ty);
-        assert_eq!(generated_signature.convention, CallingConvention::Direct);
+        assert_eq!(
+            generated_signature.convention,
+            Some(CallingConvention::Direct)
+        );
 
         let source_function = SymbolPath::new(["Forward", "run"]);
         ctx.register_logical_source_function(source_function.clone());

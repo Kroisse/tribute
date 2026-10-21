@@ -166,8 +166,7 @@ impl<'db> Plan<'db> {
             };
             if wanted.inputs(ir) != actual.inputs(ir)
                 || wanted.result(ir) != actual.result(ir)
-                || tribute_control::func_sig_convention(ir, required)
-                    < tribute_control::func_sig_convention(ir, selected)
+                || !wanted.row(ir).includes(&actual.row(ir))
             {
                 unsupported.insert(binding);
                 continue;

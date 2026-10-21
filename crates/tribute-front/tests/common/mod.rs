@@ -118,6 +118,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         local_instances: result.local_instances,
         function_instances: result.function_instances,
         ability_conventions,
+        convention_classes: Default::default(),
         ability_definitions,
         handler_operations: result.handler_operations,
         perform_operations: result.perform_operations,
