@@ -4,6 +4,7 @@ use std::num::NonZero;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use smallvec::SmallVec;
 
 use crate::ast::{
     AbilityRow, ExprKind, FuncDecl, NodeId, RowVar, Stmt, Type, TypeKind, TypedRef,
@@ -14,20 +15,22 @@ use crate::typeck::{FunctionInstance, LambdaSignature, LocalCallableInstance};
 /// The arguments that select one instance of a function definition.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct InstanceKey<'db> {
-    pub(crate) type_args: Vec<Type<'db>>,
+    pub(crate) type_args: SmallVec<[Type<'db>; 2]>,
 }
 
 impl<'db> InstanceKey<'db> {
     #[cfg(test)]
     pub(crate) fn of_types(type_args: Vec<Type<'db>>) -> Self {
-        Self { type_args }
+        Self {
+            type_args: type_args.into(),
+        }
     }
 
     /// The key of the reference `instance`, or `None` when it selects the
     /// definition itself.
     pub(crate) fn of(instance: &FunctionInstance<'db>) -> Option<Self> {
         (!instance.type_arguments.is_empty()).then(|| Self {
-            type_args: instance.type_arguments.clone(),
+            type_args: SmallVec::from_slice(&instance.type_arguments),
         })
     }
 
