@@ -34,7 +34,8 @@ Gleam도 glob import를 지원하지 않으며, Rust/Haskell 커뮤니티에서�
 ### Compiler-owned builtin bindings
 
 파일 기반 module tree가 구성되기 전에도 compiler-owned binding은 resolver namespace에
-virtual export로 주입할 수 있다. 현재 `std::io::Io`가 이 경로를 사용한다. 사용자에게는
+virtual export로 주입할 수 있다. 현재 `std::io::Io`와 runtime 전용 타입
+`std::runtime::Slots`가 이 경로를 사용한다. 사용자에게는
 `use std::io::Io`로 보이지만 사용자 AST나 prelude AST에 synthetic declaration을
 추가하지 않으며, semantic identity는 source declaration과 구분된다.
 

@@ -21,6 +21,7 @@ pub use tribute_front::{ParsedCst, parse_cst};
 pub mod database;
 pub mod link;
 pub mod pipeline;
+pub mod prelude;
 
 pub use link::{LinkError, link_native_binary};
 pub use pipeline::{

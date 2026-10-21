@@ -711,6 +711,15 @@ impl<'db> IrLoweringCtx<'db> {
             | TypeKind::LocalBoundVar { .. }
             | TypeKind::UniVar { .. } => self.anyref_type(ir),
             TypeKind::Named { id, .. } if id.is_builtin_list(self.db) => self.anyref_type(ir),
+            TypeKind::Named { id, args, .. } if id.is_builtin_slots(self.db) => {
+                let [element] = args.as_slice() else {
+                    panic!("Slots has one type argument, found {}", args.len());
+                };
+                let element = self.convert_logical_type(ir, *element);
+                tribute_ir::dialect::adt::Array::params(element)
+                    .intern(ir)
+                    .as_type_ref()
+            }
             TypeKind::Named { id, .. }
                 if self.get_type(&id.qualified(self.db)).is_some()
                     || self
@@ -890,6 +899,7 @@ impl<'db> IrLoweringCtx<'db> {
         let origin = match id.origin(self.db) {
             crate::ast::TypeOrigin::Source(_) => "source",
             crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list",
+            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => "builtin_slots",
             crate::ast::TypeOrigin::Synthetic => "synthetic",
         };
         logical_key(
@@ -945,6 +955,9 @@ impl<'db> IrLoweringCtx<'db> {
         let origin = match id.origin(self.db) {
             crate::ast::TypeOrigin::Source(_) => "source".into(),
             crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list".into(),
+            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => {
+                "builtin_slots".into()
+            }
             crate::ast::TypeOrigin::Synthetic => "synthetic".into(),
         };
         logical_key("nominal", [origin, name.with_str(str::to_owned)])

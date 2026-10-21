@@ -303,6 +303,11 @@ fn record_struct_field(
     Ok(())
 }
 
+/// The element type `ty` declares, if it is a `wasm_gc.array`.
+fn declared_array_element(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
+    trunk_ir::dialect::wasm_gc::Array::from_type_ref(ctx, ty).map(|array| array.element(ctx))
+}
+
 /// Record array element type
 fn record_array_elem(
     type_idx: u32,
@@ -631,15 +636,17 @@ pub(crate) fn collect_gc_types(
                 } else {
                     1
                 };
-                // Without an element operand (`array.new_default`, an empty
-                // `array.new_fixed`), the result type declares the element.
-                let element_ty = match ctx.op_operands(op).get(element_position) {
-                    Some(&element) => Some(helpers::value_type(ctx, element)),
-                    None => result_types
-                        .first()
-                        .and_then(|&ty| trunk_ir::dialect::wasm_gc::Array::from_type_ref(ctx, ty))
-                        .map(|array| array.element(ctx)),
-                };
+                // A declared result type names the element; an element operand
+                // may be a subtype of it. Otherwise the operand's type is the
+                // element.
+                let element_ty = result_types
+                    .first()
+                    .and_then(|&ty| declared_array_element(ctx, ty))
+                    .or_else(|| {
+                        ctx.op_operands(op)
+                            .get(element_position)
+                            .map(|&element| helpers::value_type(ctx, element))
+                    });
                 if let Some(ty) = element_ty {
                     record_array_elem(type_idx, builder, ty)?;
                 }
@@ -678,8 +685,16 @@ pub(crate) fn collect_gc_types(
                     let ty = helpers::value_type(ctx, first_operand);
                     register_type(ctx, &mut type_idx_by_type, type_idx, ty);
                 }
-                if let Some(&third_operand) = operands.get(2) {
-                    let ty = helpers::value_type(ctx, third_operand);
+                // The stored value may be a subtype of the declared element.
+                let element_ty = operands
+                    .first()
+                    .and_then(|&array| declared_array_element(ctx, helpers::value_type(ctx, array)))
+                    .or_else(|| {
+                        operands
+                            .get(2)
+                            .map(|&value| helpers::value_type(ctx, value))
+                    });
+                if let Some(ty) = element_ty {
                     record_array_elem(type_idx, builder, ty)?;
                 }
             }
@@ -825,6 +840,82 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn array_of_a_supertype_takes_its_element_from_the_result_type() {
+        let mut ctx = IrContext::new();
+        let first = FIRST_USER_TYPE_IDX;
+        let array = FIRST_USER_TYPE_IDX + 1;
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+                    !A = wasm_gc.struct<core.i32>
+                    wasm.func @fill() {{
+                        %x = wasm.i32_const {{value = 0}} : core.i32
+                        %a = wasm.struct_new %x {{type_idx = {first}}} : !A
+                        %n = wasm.i32_const {{value = 2}} : core.i32
+                        %array = wasm.array_new %n, %a {{type_idx = {array}}} : wasm_gc.array<wasm.structref>
+                        %i = wasm.i32_const {{value = 1}} : core.i32
+                        wasm.array_set %array, %i, %a {{type_idx = {array}}}
+                        wasm.return
+                    }}
+                }}"#
+            ),
+        );
+        let (types, _) = collect_gc_types(&mut ctx, module).unwrap();
+        assert!(
+            matches!(
+                &types[array as usize],
+                GcTypeDef::Array(element) if matches!(
+                    element.element_type,
+                    StorageType::Val(ValType::Ref(wasm_encoder::RefType {
+                        heap_type: wasm_encoder::HeapType::Abstract {
+                            ty: wasm_encoder::AbstractHeapType::Struct,
+                            ..
+                        },
+                        ..
+                    }))
+                )
+            ),
+            "{:?}",
+            types[array as usize]
+        );
+        let binary = crate::emit_module_to_wasm(&mut ctx, module).unwrap();
+        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+            .validate_all(&binary.bytes)
+            .unwrap();
+    }
+
+    #[test]
+    fn an_array_without_a_declared_type_takes_its_element_from_the_value() {
+        let mut ctx = IrContext::new();
+        let array = FIRST_USER_TYPE_IDX;
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+                    wasm.func @fill() {{
+                        %n = wasm.i32_const {{value = 2}} : core.i32
+                        %x = wasm.i64_const {{value = 7}} : core.i64
+                        %array = wasm.array_new %n, %x {{type_idx = {array}}} : wasm.arrayref
+                        %i = wasm.i32_const {{value = 1}} : core.i32
+                        wasm.array_set %array, %i, %x {{type_idx = {array}}}
+                        wasm.return
+                    }}
+                }}"#
+            ),
+        );
+        let (types, _) = collect_gc_types(&mut ctx, module).unwrap();
+        assert!(
+            matches!(
+                &types[array as usize],
+                GcTypeDef::Array(element) if element.element_type == StorageType::Val(ValType::I64)
+            ),
+            "{:?}",
+            types[array as usize]
+        );
     }
 
     #[test]

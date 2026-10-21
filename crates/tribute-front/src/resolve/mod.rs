@@ -189,6 +189,9 @@ fn build_package_env<'db>(
     }
 
     inject_builtin_bindings(db, &mut env);
+    if package_depth > 0 {
+        inject_runtime_bindings(db, &mut env, package_depth);
+    }
     // Resolve imports of declarations already present in this module. Imports
     // from another module are resolved again after its environment is merged.
     resolve_use_imports(&mut env);
@@ -417,6 +420,35 @@ fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEn
             id: AbilityId::builtin_io(db),
         },
     );
+}
+
+/// Export the compiler-owned runtime types into `std::runtime`, as
+/// `pub(pkg)` items of the library package (`new-plans/modules.md`,
+/// "Compiler 소유 runtime 모듈"). A package that merges the library sees
+/// them as another package's restricted items, so it cannot name them.
+fn inject_runtime_bindings<'db>(
+    db: &'db dyn salsa::Database,
+    env: &mut ModuleEnv<'db>,
+    package_depth: usize,
+) {
+    let runtime = SymbolPath::new([LIBRARY_PACKAGE, "runtime"]);
+    let slots = TypeDefId::builtin_slots(db);
+    let name = slots.name(db);
+    let pkg = vec![Symbol::new("pkg")];
+    let restriction = Restriction {
+        within: restriction_module(package_depth, &runtime, &pkg),
+        declaration: slots.path(db).clone(),
+        visibility: Visibility::Restricted(pkg),
+    };
+    let binding = Binding::TypeDef { id: slots };
+    env.restrict(binding.clone(), restriction);
+    // The intrinsics' module `Slots` keeps its namespace; the name is the type.
+    if matches!(
+        env.lookup_qualified(&runtime, &name),
+        None | Some(Binding::Module { .. })
+    ) {
+        env.add_to_namespace(runtime, name, binding);
+    }
 }
 
 /// Collect the definitions of a module item into the environment.

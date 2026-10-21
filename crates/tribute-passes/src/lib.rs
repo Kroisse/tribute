@@ -26,6 +26,7 @@ pub mod lower_continuation_frames;
 pub mod lower_handle_dispatch;
 pub mod native;
 pub mod resolve_evidence;
+pub mod slots_intrinsics;
 pub mod specialize_convention_classes;
 pub mod target_abi;
 #[cfg(test)]

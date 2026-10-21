@@ -39,6 +39,17 @@ pub enum RuntimeItemKind {
 /// The runtime items lowering uses.
 pub const RUNTIME_ITEMS: &[RuntimeItem] = &[];
 
+/// The compiler intrinsic identities of the runtime array `Slots(a)`
+/// (`new-plans/types.md`, "Slots").
+pub const SLOTS_INTRINSICS: [&str; 6] = [
+    "std::runtime::Slots::empty",
+    "std::runtime::Slots::len",
+    "std::runtime::Slots::get",
+    "std::runtime::Slots::insert",
+    "std::runtime::Slots::remove",
+    "std::runtime::Slots::replace",
+];
+
 /// The IR symbol of the root-module definition at `path`.
 ///
 /// This is the one place that turns a runtime item's path into a symbol.
