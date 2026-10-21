@@ -18,6 +18,11 @@ pub(crate) struct InstanceKey<'db> {
 }
 
 impl<'db> InstanceKey<'db> {
+    #[cfg(test)]
+    pub(crate) fn of_types(type_args: Vec<Type<'db>>) -> Self {
+        Self { type_args }
+    }
+
     /// The key of the reference `instance`, or `None` when it selects the
     /// definition itself.
     pub(crate) fn of(instance: &FunctionInstance<'db>) -> Option<Self> {

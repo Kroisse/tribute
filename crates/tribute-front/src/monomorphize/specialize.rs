@@ -768,13 +768,7 @@ mod tests {
             bv0,
         );
         let mut result = Expr::new(node_id(1), ExprKind::Var(tr));
-        Substitute::new(
-            &db,
-            &InstanceKey {
-                type_args: vec![int],
-            },
-        )
-        .visit_expr_mut(&mut result);
+        Substitute::new(&db, &InstanceKey::of_types(vec![int])).visit_expr_mut(&mut result);
 
         // NodeId should have the variant applied
         assert!(result.id.variant().is_some());
@@ -818,14 +812,8 @@ mod tests {
         };
 
         let mangled = mangle_name(&db, &Symbol::new("identity"), &[int]);
-        let specialized = specialize_func_decl(
-            &db,
-            &func,
-            &InstanceKey {
-                type_args: vec![int],
-            },
-            mangled,
-        );
+        let specialized =
+            specialize_func_decl(&db, &func, &InstanceKey::of_types(vec![int]), mangled);
 
         assert_eq!(specialized.name.to_string(), "identity$Int");
         assert!(specialized.type_params.is_empty());
@@ -906,12 +894,8 @@ mod tests {
         let function_types = vec![(SymbolPath::new([func_name]), scheme)];
 
         let mut type_arg_sets = HashSet::default();
-        type_arg_sets.insert(InstanceKey {
-            type_args: vec![int],
-        });
-        type_arg_sets.insert(InstanceKey {
-            type_args: vec![float],
-        });
+        type_arg_sets.insert(InstanceKey::of_types(vec![int]));
+        type_arg_sets.insert(InstanceKey::of_types(vec![float]));
         let mut instantiations = HashMap::default();
         instantiations.insert(func_id, type_arg_sets);
 
