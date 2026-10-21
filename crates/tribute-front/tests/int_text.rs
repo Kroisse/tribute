@@ -290,6 +290,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: HashMap::default(),
+        runtime_types: Default::default(),
         row_classes: mono.row_classes,
         merged_sources: Vec::new(),
     }
@@ -400,6 +401,7 @@ fn lower_specialized_source(
         evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: HashMap::default(),
+        runtime_types: Default::default(),
         row_classes: mono.row_classes,
         merged_sources: Vec::new(),
     }
@@ -485,6 +487,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .collect(),
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: HashMap::default(),
+        runtime_types: Default::default(),
         row_classes: HashMap::default(),
         merged_sources: Vec::new(),
     }

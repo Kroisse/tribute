@@ -500,6 +500,13 @@ functions (call graph, global DCE, the inliner) are keyed by the defining
 `None`. `symbol_table::qualified_name` spells a definition's path from the
 root for diagnostics only; do not look a written reference up by it.
 
+A compiler-owned runtime item is identified by its canonical path under
+`std::runtime`: lowering reads a runtime function with
+`tribute_ir::runtime_items::RuntimeFunction::lookup` and a runtime type with
+`runtime_items::runtime_type`, which reads the root module's `tribute.types`
+dictionary through `tribute_ir::metadata`. See
+[the runtime module](../../new-plans/modules.md#compiler-소유-runtime-모듈).
+
 A direct call operation implements the `CallLike`
 [operation interface](#operation-interfaces), declared with
 `#[implements(CallLike)]`, so analyses can tell its callee

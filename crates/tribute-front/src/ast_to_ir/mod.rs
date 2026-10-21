@@ -27,6 +27,7 @@
 mod context;
 mod lower;
 mod row_binders;
+pub mod runtime_items;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -169,6 +170,8 @@ pub struct TypedModule<'db> {
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
     /// Exact intrinsic-directive declaration IDs and canonical identities.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
+    /// The runtime structs to publish as prelude types.
+    pub runtime_types: runtime_items::RuntimeTypes,
     /// Convention classes of the class variables of each function instance.
     pub row_classes: HashMap<SymbolPath, Vec<(crate::ast::RowVar, CallingConvention)>>,
     /// URIs of the other sources whose declarations were merged into `ast`.
