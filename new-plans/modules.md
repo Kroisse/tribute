@@ -87,33 +87,51 @@ Source로 표현할 수 없는 runtime 전용 타입(`Slots(a)`, `Dispatch`)은
 가시성을 따르므로 패키지 `std` 밖에서는 보이지 않는다.
 
 **Runtime 항목.** Lowering이 부르는 runtime 함수와 lowering이 만드는 runtime
-타입은 compiler의 runtime 항목 registry에 역할 이름으로 등록한다. 각 항목은 역할
-(`evidence.extend`, `evidence.marker` 등)과 그 항목을 정의하는 prelude 경로의
-쌍이다.
+타입을 runtime 항목이라 한다. Runtime 항목의 정체성은 그 선언의 canonical 경로다
+(`std::runtime::evidence::extend`). 별도의 역할 이름이나 source 표시는 없으며,
+`std::runtime` 안에 있다는 것이 compiler 소유 code라는 표시다. Compiler는
+lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
 
-- Frontend는 등록된 경로마다 선언이 있고 registry가 기대하는 signature나 타입
-  모양과 맞는지 검사한다. 선언이 없거나 맞지 않으면 compiler 오류다. 등록되지 않은
-  경로의 선언은 역할을 갖지 않는다.
-- 등록된 함수의 IR 정의는 `tribute.runtime_item` 속성에 역할 이름을 가진다.
-  등록된 타입은 well-known type처럼 root `core.module`의 `TypeRef` 속성
-  `tribute.type.<역할>`로 게시한다.
-- Lowering은 역할로 정의와 타입을 찾는다. Symbol 철자, 선언 이름, 타입 모양으로
-  runtime 항목을 다시 찾지 않는다.
+- Frontend는 집합의 경로마다 선언이 있고 그 종류(본문이 있는 함수, struct)가
+  맞는지 검사한다. 선언이 없거나 종류가 다르면 compiler 오류다. Signature와
+  field는 source 선언이 유일한 정의이며, compiler는 이를 따로 적어 두지 않는다.
+  항목을 쓰는 lowering이 IR에서 자신이 의존하는 타입을 확인하고, 맞지 않으면
+  compiler 오류로 보고한다.
+- `std::runtime` 안의 다른 선언은 runtime 항목이 아니다. Runtime 항목이 부르는
+  helper일 수 있다.
+- Virtual export한 compiler 소유 타입(`Slots(a)`, `Dispatch`)과
+  `std::runtime::Slots`의 compiler intrinsic은 runtime 항목이 아니다. 그 IR
+  형태는 compiler가 정하므로 `tribute.types`로 게시하지 않으며, intrinsic은
+  아래 `extern "intrinsic"` directive 규칙을 따른다.
+- Lowering은 runtime 함수를 canonical 경로에서 만든 IR symbol로 찾는다. 패키지
+  `std`의 선언 식별자는 사용자 패키지의 선언과 섞이지 않으므로(위
+  [Prelude와 패키지 `std`](#prelude와-패키지-std)) 이 symbol은 prelude의 정의만
+  가리킨다. 경로에서 symbol을 만드는 일은 한 곳에서 하며, 찾은 정의가 본문이 있는
+  함수가 아니면 compiler 오류다. 이 조회는 `std::runtime`의 runtime 항목에만
+  허용된다. 다른 선언의 의미, ownership, 호출 규약을 symbol 철자로 추측하지
+  않는다는 규칙은 그대로다.
+- Runtime 타입의 IR 표현은 pass를 거치며 바뀌므로 이름으로 찾지 않는다.
+  Frontend는 prelude `String`처럼 root `core.module`의 dictionary 속성
+  `tribute.types`([IR 계약](ir.md)에 정의)에 canonical 경로를 key로 그
+  `TypeRef`를 게시하고, lowering은 이 항목을 읽는다.
 
-**제약.** Runtime 항목 함수는 다음을 지킨다. Frontend가 registry를 만들 때
-검사한다.
+**제약.** `std::runtime`과 하위 모듈에서 본문이 있는 source 함수는 runtime
+항목이든 helper든 다음을 지킨다. 본문이 없는 compiler intrinsic 선언에는 적용하지
+않는다. Frontend가 검사한다.
 
-- Ability row가 비어 있어 `Direct` convention을 가진다. Handler를 설치하거나
-  operation을 수행하지 않으므로 `effect.*`를 만들지 않으며, 그 함수를 부르는
-  lowering이 그 함수 자신을 다시 lowering 대상으로 삼지 않는다.
+- Ability row가 비어 있어 `Direct` convention을 가진다. 빈 row는 `->{}`로
+  명시한다. Row를 생략한 함수는 row 변수로 일반화되므로 거부한다. Handler를
+  설치하거나 operation을 수행하지 않으므로 `effect.*`를 만들지 않으며, 그 함수를
+  부르는 lowering이 그 함수 자신을 다시 lowering 대상으로 삼지 않는다.
 - 단형(monomorphic)이다. Type parameter를 갖지 않는다.
 - 반복은 tail position의 재귀로만 쓴다. `Direct` route의 proper tail call은
   stack을 늘리지 않는다.
 - Closure 값은 저장하고 돌려줄 수 있지만 부르지 않는다.
 
-**생존 범위.** 등록된 함수는 아직 아무도 부르지 않아도 그 역할을 쓰는 lowering
-단계가 끝날 때까지 dead function 제거의 root다. 그 단계 뒤에는 일반 함수처럼
-참조되지 않으면 제거된다.
+**생존 범위.** Runtime 함수 항목은 아직 아무도 부르지 않아도 그 항목을 쓰는
+lowering 단계가 끝날 때까지 dead function 제거의 root다. 그 단계 뒤에는 일반
+함수처럼 참조되지 않으면 제거된다. `tribute.types`의 runtime 타입 항목은 타입
+식별 metadata로 representation/ABI 경계 출구 뒤에도 남는다.
 
 ---
 

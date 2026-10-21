@@ -918,11 +918,12 @@ Row가 여러 tail의 합집합인 callable이 받는 tail별 evidence도 같은
 없다.
 
 Marker의 source 선언이 필드 순서와 타입의 유일한 정의다. Marker는 runtime 항목
-`evidence.marker`로 등록되며 root module의 `tribute.type.evidence.marker` 속성이
-그 IR 타입을 게시한다. Hidden evidence parameter나 frame field처럼 evidence 타입이
-필요한 shared pass는 이 속성의 marker 타입으로 `adt.array`를 만든다. Marker를
-만들고 필드를 읽는 code는 runtime 모듈 안에만 있으며, effect lowering과 그 밖의
-pass는 marker를 직접 만들거나 읽지 않는다.
+`std::runtime::evidence::Marker`이며 root module의 `tribute.types` 속성에서 이
+경로의 항목이 그 IR 타입을 게시한다.
+Hidden evidence parameter나 frame field처럼 evidence 타입이 필요한 shared pass는
+이 속성의 marker 타입으로 `adt.array`를 만든다. Marker를 만들고 필드를 읽는
+code는 runtime 모듈 안에만 있으며, effect lowering과 그 밖의 pass는 marker를 직접
+만들거나 읽지 않는다.
 
 빈 evidence는 evidence 타입의 원소 없는 `adt.array_of`다. Root 진입 bridge가 이것으로
 처음 evidence를 만든다.
@@ -1010,26 +1011,26 @@ handle은 marker를 설치하지 않는다. 재개된 계산의 label은 lambda 
 `EvidenceDirect` 호출은 frame을 만들지 않으므로 선택을 호출 지점에서만 적용한다.
 
 두 target의 effect lowering은 `std::runtime::evidence`의 같은 runtime 항목 함수를
-부른다. 각 함수의 역할 이름은 `evidence.`와 함수 이름을 이은 것이다
-(`evidence.extend` 등). Lowering은 `effect.extend`의 dispatch closure를
-`Option(Dispatch)`로 감싸 넘기며, null이면 `None`을 넘긴다.
+그 canonical 경로(`std::runtime::evidence::extend` 등)로 찾아 부른다. Lowering은
+`effect.extend`의 dispatch closure를 `Option(Dispatch)`로 감싸 넘기며, null이면
+`None`을 넘긴다.
 
 ```rust
-fn lookup(ev: Evidence, ability_id: Int) -> Int
-fn lookup_tr(ev: Evidence, ability_id: Int) -> Dispatch
+fn lookup(ev: Evidence, ability_id: Int) ->{} Int
+fn lookup_tr(ev: Evidence, ability_id: Int) ->{} Dispatch
 fn extend(
     ev: Evidence,
     ability_id: Int,
     prompt_tag: Int,
     tr_dispatch_fn: Option(Dispatch),
     outer: Evidence,
-) -> Evidence
-fn mask(ev: Evidence, ability_id: Int) -> Evidence
-fn dup(ev: Evidence, ability_id: Int) -> Evidence
-fn outer(ev: Evidence, ability_id: Int) -> Evidence
-fn tail(ev: Evidence, slot: Int) -> Evidence
-fn with_tail(ev: Evidence, slot: Int, tail: Evidence) -> Evidence
-fn push(ev: Evidence, source: Evidence, ability_id: Int) -> Evidence
+) ->{} Evidence
+fn mask(ev: Evidence, ability_id: Int) ->{} Evidence
+fn dup(ev: Evidence, ability_id: Int) ->{} Evidence
+fn outer(ev: Evidence, ability_id: Int) ->{} Evidence
+fn tail(ev: Evidence, slot: Int) ->{} Evidence
+fn with_tail(ev: Evidence, slot: Int, tail: Evidence) ->{} Evidence
+fn push(ev: Evidence, source: Evidence, ability_id: Int) ->{} Evidence
 ```
 
 `lookup`은 가장 위 marker의 `prompt_tag`를, `lookup_tr`은 그 marker의 dispatch
