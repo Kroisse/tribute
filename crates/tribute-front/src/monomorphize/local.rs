@@ -29,6 +29,9 @@ pub(super) fn settle_local_lambdas<'db>(
     metadata: &mut MonomorphizeMetadata<'db>,
     keys: &mut InstanceKeys<'db>,
 ) {
+    if metadata.convention_classes == super::ConventionClasses::Pass {
+        return;
+    }
     loop {
         while keys.settle_local_classes(decls, metadata) {}
         if !split_local_lambdas(db, decls, metadata, keys) {

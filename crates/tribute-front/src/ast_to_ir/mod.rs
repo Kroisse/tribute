@@ -155,6 +155,8 @@ pub struct TypedModule<'db> {
     /// The instance each reference to a generic function selects.
     pub function_instances: SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
+    /// Who specializes convention classes.
+    pub convention_classes: crate::monomorphize::ConventionClasses,
     pub ability_definitions: HashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
     pub handler_operations: SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     pub perform_operations: SortedMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,

@@ -28,7 +28,7 @@ use crate::ast::{
     Stmt, TypeKind, TypedRef,
 };
 
-use super::super::context::{IrLoweringCtx, LogicalGeneratedSignature};
+use super::super::context::{IrLoweringCtx, LogicalGeneratedSignature, control_convention};
 use super::super::{FrontendIrModule, TypedModule};
 use super::{FuncSignature, IrBuilder};
 
@@ -193,28 +193,18 @@ fn result(ir: &IrContext, op: OpRef) -> ValueRef {
     ir.op_result(op, 0)
 }
 
-pub(super) fn control_convention(
-    convention: CallingConvention,
-) -> tribute_control::CallingConvention {
-    match convention {
-        CallingConvention::Direct => tribute_control::CallingConvention::Direct,
-        CallingConvention::EvidenceDirect => tribute_control::CallingConvention::EvidenceDirect,
-        CallingConvention::Cps => tribute_control::CallingConvention::Cps,
-    }
-}
-
 fn func_sig_type(
     ir: &mut IrContext,
     result: TypeRef,
     params: impl IntoIterator<Item = TypeRef>,
     row: &Row,
-    convention: CallingConvention,
+    convention: Option<CallingConvention>,
 ) -> TypeRef {
-    tribute_control::FuncSig::params(params, result)
-        .row(row.clone())
-        .convention(control_convention(convention))
-        .intern(ir)
-        .as_type_ref()
+    let mut signature = tribute_control::FuncSig::params(params, result).row(row.clone());
+    if let Some(convention) = convention {
+        signature = signature.convention(control_convention(convention));
+    }
+    signature.intern(ir).as_type_ref()
 }
 
 /// Lower a named function value at its exact source-logical callable contract.
@@ -233,10 +223,12 @@ fn lower_function_ref<'db>(
 ) -> ValueRef {
     let mut signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
         .unwrap_or_else(|| panic!("missing logical signature for function reference {name}"));
-    signature.convention = builder
-        .ctx
-        .function_calling_convention(&name)
-        .unwrap_or(signature.convention);
+    if builder.ctx.assigns_conventions() {
+        signature.convention = builder
+            .ctx
+            .function_calling_convention(&name)
+            .or(signature.convention);
+    }
     ensure_prelude_declaration(builder, location, &name, &signature);
     let args = reference.rows(builder.ctx, declarations, &name, &signature);
     let worker_ty = signature
@@ -253,7 +245,6 @@ fn lower_function_ref<'db>(
             expected.result(builder.ir) == worker.result(builder.ir)
                 && expected.inputs(builder.ir) == worker.inputs(builder.ir)
                 && expected.row(builder.ir).includes(&worker.row(builder.ir))
-                && expected.convention(builder.ir) >= worker.convention(builder.ir)
         })
         .unwrap_or(worker_ty);
     let symbol = builder.ctx.function_symbol(&name);
@@ -404,6 +395,7 @@ pub(super) fn lower_module<'db>(
         local_instances,
         function_instances,
         ability_conventions,
+        convention_classes,
         ability_definitions,
         handler_operations,
         perform_operations,
@@ -421,6 +413,8 @@ pub(super) fn lower_module<'db>(
         .collect();
     let location = Location::new(path, span_map.get_or_default(ast.id));
     let module_name = ast.name.unwrap_or_else(|| Symbol::new("main"));
+    let assigns_conventions =
+        convention_classes == crate::monomorphize::ConventionClasses::Frontend;
     let mut ctx = IrLoweringCtx::new(
         db,
         path,
@@ -429,6 +423,7 @@ pub(super) fn lower_module<'db>(
         ability_conventions,
         node_types,
     )
+    .with_conventions(assigns_conventions)
     .with_compiler_intrinsics(compiler_intrinsics)
     .with_row_classes(row_classes)
     .with_source_paths(source_paths)
@@ -465,7 +460,9 @@ pub(super) fn lower_module<'db>(
     };
     prescan_row_binders(&mut ctx, &ast.entries, &declarations);
     let row_effects = row_effects(&ctx, &ast.entries, &declarations);
-    prescan_definition_conventions(&mut ctx, &ast.entries);
+    if assigns_conventions {
+        prescan_definition_conventions(&mut ctx, &ast.entries);
+    }
     let mut well_known_type_prescan = super::decl::WellKnownTypePrescan::new(well_known_types);
     collect_logical_nominal_identities(&mut ctx, &ast.entries);
     prescan_logical_nominal_layouts(
@@ -726,7 +723,9 @@ fn prescan_definition_conventions<'db>(
                     let getter = owner.child(field.clone());
                     let [_, modifier] = field_update_names(&getter);
                     for (modifier, class) in modifier_instances(ctx, modifier) {
-                        ctx.register_definition_convention(modifier, class);
+                        if let Some(class) = class {
+                            ctx.register_definition_convention(modifier, class);
+                        }
                     }
                 }
             }
@@ -970,19 +969,24 @@ fn field_update_names(getter: &SymbolPath) -> [SymbolPath; 2] {
 
 /// The modifier `modifier` and its instances for the weaker convention
 /// classes of its callback that the module refers to, each with that class.
+/// Without conventions, the modifier alone, which class specialization
+/// instantiates.
 fn modifier_instances(
     ctx: &IrLoweringCtx<'_>,
     modifier: SymbolPath,
-) -> Vec<(SymbolPath, CallingConvention)> {
+) -> Vec<(SymbolPath, Option<CallingConvention>)> {
+    if !ctx.assigns_conventions() {
+        return vec![(modifier, None)];
+    }
     let mut instances: Vec<_> = [CallingConvention::Direct, CallingConvention::EvidenceDirect]
         .into_iter()
         .map(|class| {
             let name = crate::monomorphize::mangle::class_instance_path(&modifier, &[class]);
-            (name, class)
+            (name, Some(class))
         })
         .filter(|(name, _)| !ctx.row_classes_of(name).is_empty())
         .collect();
-    instances.push((modifier, CallingConvention::Cps));
+    instances.push((modifier, Some(CallingConvention::Cps)));
     instances
 }
 
@@ -1014,12 +1018,15 @@ fn prescan_struct_accessor_signatures<'db>(
                 .get(index)
                 .map(|(_, ty)| *ty)
                 .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
+            let direct = ctx
+                .assigns_conventions()
+                .then_some(CallingConvention::Direct);
             let closed = |param_types, return_type| LogicalGeneratedSignature {
                 param_types,
                 return_type,
                 row: Row::default(),
                 binders: vec![],
-                convention: CallingConvention::Direct,
+                convention: direct,
             };
             ctx.register_logical_generated_signature(
                 &getter_name,
@@ -1125,7 +1132,8 @@ fn lower_struct_accessors<'db>(
             field_type,
             [struct_type],
             &Row::default(),
-            CallingConvention::Direct,
+            ctx.assigns_conventions()
+                .then_some(CallingConvention::Direct),
         );
         let getter =
             tribute_control::func_declaration(ir, location, &getter_name.to_symbol(), callable);
@@ -1142,7 +1150,10 @@ fn lower_struct_accessors<'db>(
                 .map(|(_, ty)| *ty)
                 .collect();
         let [setter_name, modifier_name] = field_update_names(&getter_name);
-        let mut functions = vec![(setter_name, field_type, CallingConvention::Direct, false)];
+        let direct = ctx
+            .assigns_conventions()
+            .then_some(CallingConvention::Direct);
+        let mut functions = vec![(setter_name, field_type, direct, false)];
         let callback_row = Row::new([], Some(0));
         for (name, class) in modifier_instances(ctx, modifier_name) {
             let callback = func_sig_type(ir, field_type, [field_type], &callback_row, class);
@@ -1270,9 +1281,11 @@ fn function_signature<'db>(
                 function.name
             )
         });
-    signature.convention = ctx
-        .function_calling_convention(&qualified)
-        .unwrap_or(signature.convention);
+    if ctx.assigns_conventions() {
+        signature.convention = ctx
+            .function_calling_convention(&qualified)
+            .or(signature.convention);
+    }
     signature
 }
 
@@ -2851,30 +2864,40 @@ fn lower_lambda<'db>(
     let result_type = builder
         .ctx
         .convert_logical_type(builder.ir, *signature_result);
-    let row_convention = builder
-        .ctx
-        .calling_convention_for_type(signature.function_type)
-        .expect("solved logical lambda signature is a function type");
+    let own_convention = builder.ctx.written_convention(signature.function_type);
+    // The lambda takes the expected callable type when that type's row
+    // requires at least the class of its own: the row includes its own, or
+    // its tail is a binder whose class is always `Cps`.
     let (row, convention) = expected_ty
         .and_then(|expected_ty| {
             let expected = tribute_control::FuncSig::from_type_ref(builder.ir, expected_ty)?;
-            let expected_convention = expected.convention(builder.ir);
+            let row = expected.row(builder.ir);
+            let always_cps = row.tail.is_some_and(|tail| {
+                usize::try_from(tail)
+                    .ok()
+                    .and_then(|tail| builder.ctx.current_row_binders().get(tail))
+                    .is_some_and(|(_, binder)| {
+                        matches!(binder, RowBinder::Body | RowBinder::AbilityArg)
+                    })
+            });
             (expected.result(builder.ir) == result_type
                 && expected.inputs(builder.ir) == param_types
-                && expected_convention >= control_convention(row_convention))
-            .then(|| (expected.row(builder.ir), expected_convention))
+                && (always_cps || row.includes(&own_row)))
+            .then(|| {
+                let convention =
+                    expected
+                        .assigned_convention(builder.ir)
+                        .map(|convention| match convention {
+                            tribute_control::CallingConvention::Direct => CallingConvention::Direct,
+                            tribute_control::CallingConvention::EvidenceDirect => {
+                                CallingConvention::EvidenceDirect
+                            }
+                            tribute_control::CallingConvention::Cps => CallingConvention::Cps,
+                        });
+                (row, convention)
+            })
         })
-        .map(|(row, convention)| {
-            let convention = match convention {
-                tribute_control::CallingConvention::Direct => CallingConvention::Direct,
-                tribute_control::CallingConvention::EvidenceDirect => {
-                    CallingConvention::EvidenceDirect
-                }
-                tribute_control::CallingConvention::Cps => CallingConvention::Cps,
-            };
-            (row, convention)
-        })
-        .unwrap_or((own_row, row_convention));
+        .unwrap_or((own_row, own_convention));
     let entry = builder.ir.create_block(BlockData {
         location,
         args: param_types

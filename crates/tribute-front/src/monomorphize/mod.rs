@@ -45,10 +45,23 @@ pub struct MonomorphizeMetadata<'db> {
     pub exhaustive_cases: HashSet<NodeId>,
     /// The convention each ability requires of a callable that performs it.
     pub ability_conventions: HashMap<crate::ast::AbilityId<'db>, crate::ast::CallingConvention>,
+    /// Who specializes convention classes.
+    pub convention_classes: ConventionClasses,
     /// Exact base identities transported to generated generic extern declarations.
     ///
     /// This is specialization metadata, not source-provenance or ownership data.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
+}
+
+/// Who specializes convention classes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ConventionClasses {
+    /// The frontend: it names class instances and writes every convention.
+    #[default]
+    Frontend,
+    /// The class specialization pass after the frontend, which leaves every
+    /// convention unassigned.
+    Pass,
 }
 
 /// Result of monomorphization: updated module + function types.
@@ -755,6 +768,7 @@ mod tests {
             .collect::<HashMap<_, _>>(),
             exhaustive_cases: [origin].into_iter().collect::<HashSet<_>>(),
             ability_conventions: HashMap::default(),
+            convention_classes: ConventionClasses::Frontend,
             compiler_intrinsics: HashMap::default(),
         };
         let key = InstanceKey::of_types(vec![int]);

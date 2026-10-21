@@ -84,6 +84,15 @@ impl<'db> InstanceKeys<'db> {
         function_types: &[(SymbolPath, TypeScheme<'db>)],
         metadata: &MonomorphizeMetadata<'db>,
     ) -> Self {
+        if metadata.convention_classes == super::ConventionClasses::Pass {
+            return Self {
+                db,
+                class_variables: HashMap::default(),
+                abilities: HashMap::default(),
+                row_classes: HashMap::default(),
+                origins: HashMap::default(),
+            };
+        }
         let schemes: HashMap<&SymbolPath, TypeScheme<'db>> = function_types
             .iter()
             .map(|(name, scheme)| (name, *scheme))

@@ -38,6 +38,10 @@
 //!     │
 //!     ▼ global DCE (artifact compiles only: unreachable source-logical
 //!     │             functions skip CPS legalization)
+//!     ▼ specialize_convention_classes (when the frontend leaves classes to
+//!     │   it), then global DCE again (artifact compiles only); the registered
+//!     │   compiler intrinsics' signatures are read again from the specialized
+//!     │   declarations
 //!     ▼ tribute_control_to_cps → lower_continuation_frames →
 //!       lower_closure_lambda → intrinsic/list/io lowering
 //! Module (CPS callable contracts, explicit evidence, and general
@@ -552,6 +556,7 @@ fn prepare_frontend_details<'db>(
                 .chain(typed.exhaustive_cases(db).iter().copied())
                 .collect(),
             ability_conventions: merged_ability_conventions,
+            convention_classes: CONVENTION_CLASSES,
             compiler_intrinsics,
         },
     );
@@ -655,6 +660,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             ability_conventions: tribute_front::monomorphize::ability_conventions(
                 typed.ability_definitions(db),
             ),
+            convention_classes: CONVENTION_CLASSES,
             ability_definitions: ast_typeck::ability_definitions_from_schemas(
                 typed.ability_definitions(db),
             ),
@@ -803,12 +809,13 @@ pub fn run_through_cps_lowering(
     let Some(FrontendCompilation {
         context,
         module: m,
-        compiler_intrinsics,
+        mut compiler_intrinsics,
     }) = compile_frontend_for_shared_route(db, source)
     else {
         return Ok(None);
     };
     let mut ctx = context;
+    specialize_convention_classes(&mut ctx, m, &mut compiler_intrinsics, SourceFunctions::All)?;
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = structural_pass_pipeline(compiler_intrinsics);
@@ -833,6 +840,43 @@ fn eliminate_unreferenced_source_functions(ctx: &mut IrContext, m: Module) {
     trunk_ir::transforms::eliminate_dead_definitions(ctx, m, |ctx, op| {
         tribute_ir::dialect::tribute_control::Func::matches(ctx, op) && ctx.op_has_regions(op)
     });
+}
+
+/// Who specializes convention classes: the frontend, or the class
+/// specialization pass at the head of the structural pipeline.
+const CONVENTION_CLASSES: tribute_front::monomorphize::ConventionClasses =
+    tribute_front::monomorphize::ConventionClasses::Frontend;
+
+/// Specialize convention classes when the frontend left them to the pass,
+/// remove the definitions that leaves unreferenced if `functions` asks, and
+/// read the registered compiler intrinsics' signatures again from their
+/// specialized declarations.
+fn specialize_convention_classes(
+    ctx: &mut IrContext,
+    m: Module,
+    compiler_intrinsics: &mut [tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration],
+    functions: SourceFunctions,
+) -> PassResult<()> {
+    if CONVENTION_CLASSES != tribute_front::monomorphize::ConventionClasses::Pass {
+        return Ok(());
+    }
+    let core_module =
+        core_dialect::Module::from_op(ctx, m.op()).expect("frontend output must be a core.module");
+    let mut pm = PassManager::new();
+    pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
+    pm.run(ctx, core_module, &mut AnalysisCache::new())?;
+    if functions == SourceFunctions::Reachable {
+        eliminate_unreferenced_source_functions(ctx, m);
+    }
+    let table = trunk_ir::symbol_table::SymbolTable::collect(ctx, m);
+    for declaration in compiler_intrinsics {
+        if let Some(function) = table.resolve_in(ctx, m.op(), &declaration.symbol)
+            && let Ok(function) = tribute_ir::dialect::tribute_control::Func::from_op(ctx, function)
+        {
+            declaration.callable_type = function.r#type(ctx);
+        }
+    }
+    Ok(())
 }
 
 /// Build the shared structural pass pipeline that legalizes source-logical
@@ -908,7 +952,7 @@ fn shared_middle_end(
     let FrontendCompilation {
         context,
         module: m,
-        compiler_intrinsics,
+        mut compiler_intrinsics,
     } = frontend;
     let mut ctx = context;
 
@@ -921,6 +965,7 @@ fn shared_middle_end(
     if functions == SourceFunctions::Reachable {
         eliminate_unreferenced_source_functions(&mut ctx, m);
     }
+    specialize_convention_classes(&mut ctx, m, &mut compiler_intrinsics, functions)?;
     let mut analyses = AnalysisCache::new();
     let mut structural_pm = structural_pass_pipeline(compiler_intrinsics);
     structural_pm.run(&mut ctx, core_module, &mut analyses)?;
