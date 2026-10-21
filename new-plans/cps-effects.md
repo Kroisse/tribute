@@ -1016,21 +1016,21 @@ handle은 marker를 설치하지 않는다. 재개된 계산의 label은 lambda 
 `None`을 넘긴다.
 
 ```rust
-fn lookup(ev: Evidence, ability_id: Int) -> Int
-fn lookup_tr(ev: Evidence, ability_id: Int) -> Dispatch
+fn lookup(ev: Evidence, ability_id: Int) ->{} Int
+fn lookup_tr(ev: Evidence, ability_id: Int) ->{} Dispatch
 fn extend(
     ev: Evidence,
     ability_id: Int,
     prompt_tag: Int,
     tr_dispatch_fn: Option(Dispatch),
     outer: Evidence,
-) -> Evidence
-fn mask(ev: Evidence, ability_id: Int) -> Evidence
-fn dup(ev: Evidence, ability_id: Int) -> Evidence
-fn outer(ev: Evidence, ability_id: Int) -> Evidence
-fn tail(ev: Evidence, slot: Int) -> Evidence
-fn with_tail(ev: Evidence, slot: Int, tail: Evidence) -> Evidence
-fn push(ev: Evidence, source: Evidence, ability_id: Int) -> Evidence
+) ->{} Evidence
+fn mask(ev: Evidence, ability_id: Int) ->{} Evidence
+fn dup(ev: Evidence, ability_id: Int) ->{} Evidence
+fn outer(ev: Evidence, ability_id: Int) ->{} Evidence
+fn tail(ev: Evidence, slot: Int) ->{} Evidence
+fn with_tail(ev: Evidence, slot: Int, tail: Evidence) ->{} Evidence
+fn push(ev: Evidence, source: Evidence, ability_id: Int) ->{} Evidence
 ```
 
 `lookup`은 가장 위 marker의 `prompt_tag`를, `lookup_tr`은 그 marker의 dispatch

@@ -99,6 +99,10 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
   compiler 오류로 보고한다.
 - `std::runtime` 안의 다른 선언은 runtime 항목이 아니다. Runtime 항목이 부르는
   helper일 수 있다.
+- Virtual export한 compiler 소유 타입(`Slots(a)`, `Dispatch`)과
+  `std::runtime::Slots`의 compiler intrinsic은 runtime 항목이 아니다. 그 IR
+  형태는 compiler가 정하므로 `tribute.types`로 게시하지 않으며, intrinsic은
+  아래 `extern "intrinsic"` directive 규칙을 따른다.
 - Lowering은 runtime 함수를 canonical 경로에서 만든 IR symbol로 찾는다. 패키지
   `std`의 선언 식별자는 사용자 패키지의 선언과 섞이지 않으므로(위
   [Prelude와 패키지 `std`](#prelude와-패키지-std)) 이 symbol은 prelude의 정의만
@@ -111,8 +115,9 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
   `tribute.types`([IR 계약](ir.md)에 정의)에 canonical 경로를 key로 그
   `TypeRef`를 게시하고, lowering은 이 항목을 읽는다.
 
-**제약.** `std::runtime`과 하위 모듈의 함수는 runtime 항목이든 helper든 다음을
-지킨다. Frontend가 검사한다.
+**제약.** `std::runtime`과 하위 모듈에서 본문이 있는 source 함수는 runtime
+항목이든 helper든 다음을 지킨다. 본문이 없는 compiler intrinsic 선언에는 적용하지
+않는다. Frontend가 검사한다.
 
 - Ability row가 비어 있어 `Direct` convention을 가진다. 빈 row는 `->{}`로
   명시한다. Row를 생략한 함수는 row 변수로 일반화되므로 거부한다. Handler를
