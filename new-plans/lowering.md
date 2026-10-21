@@ -77,10 +77,9 @@ lowering may produce `effect.extend`, `effect.dispatch_tail`, and
 `effect.dispatch_cps`; backend-specific lowering must eliminate them before a
 backend-ready full conversion target. Shared passes must not lower these
 operations by inspecting concrete Marker fields or backend closure layouts.
-Native lowering maps the ABI to runtime evidence calls and native closure
-pointers. WasmGC lowering uses the same shared ability IDs and marker field
-order, but stores dispatch closures as nullable references to the closure base
-and lowers dispatch to evidence lookup and closure unpacking. Ordinary source-result
+Both targets map the ABI to calls to the evidence runtime items of
+[`std::runtime::evidence`](cps-effects.md#handle-evidence-extension--handler-closures)
+and lower dispatch to evidence lookup and closure unpacking. Ordinary source-result
 calls use `wasm.call_indirect`; CPS transfers use `wasm.return_call_indirect`.
 
 ## Legality Precedence

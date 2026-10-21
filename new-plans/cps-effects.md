@@ -877,18 +877,32 @@ CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 
   { ability = @State }
 ```
 
-Concrete Marker layout은 backend가 소유한다. Native는
-`__tribute_evidence_extend` ABI를 사용한다.
+Marker와 Evidence는
+[compiler 소유 runtime 모듈](modules.md#compiler-소유-runtime-모듈)
+`std::runtime::evidence`에 선언한 source 타입이며 두 target이 같은 선언을 쓴다.
 
-```text
-struct Marker {
-    ability_id: i32,
-    prompt_tag: i32,
-    tr_dispatch_fn: ptr,
-    shadowed: ptr,
-    outer: ptr,
+```rust
+pub(pkg) struct Marker {
+    ability_id: Int,
+    prompt_tag: Int,
+    tr_dispatch_fn: Option(Dispatch),
+    shadowed: Option(Marker),
+    outer: Slots(Marker),
 }
 ```
+
+Evidence는 [`Slots(Marker)`](types.md#slots)다. 아래에서 `Evidence`는
+`Slots(Marker)`를 줄여 쓴 것이다. 필드의 뜻은 다음과 같다.
+
+- `ability_id`: 정렬된 evidence를 찾는 key
+- `prompt_tag`: 그 handler를 설치할 때 만든 prompt
+- `tr_dispatch_fn`: tail-resumptive `fn` handler의 dispatch closure. 없으면 `None`
+- `shadowed`: 이 marker가 가린 같은 ability의 marker. 없으면 `None`
+- `outer`: 그 handler를 설치한 지점의 evidence
+
+`Dispatch`는 runtime 모듈 전용 compiler 소유 타입이며 IR에서
+[closure base](ir.md#closure-저장-layout) 타입이다. 위의 `tr_dispatch_fn` signature를 가진
+closure를 담는다. Runtime code는 이 값을 저장하고 돌려주기만 하며 부르지 않는다.
 
 Evidence는 ability id 기준으로 정렬된 marker 배열이다. 각 칸은 그 ability의 가장
 위 marker이며, marker는 자신이 가린 같은 ability의 marker를 `shadowed`로 가리킨다.
@@ -903,29 +917,15 @@ Row가 여러 tail의 합집합인 callable이 받는 tail별 evidence도 같은
 그 evidence에서 파생된 값에 그대로 남는다. Tail 칸이 없는 evidence에는 추가 비용이
 없다.
 
-Marker layout과 evidence runtime ABI는 `tribute-ir`의
-`ability::MarkerField`와 `ability::evidence_abi`가 컴파일러 내부의 단일
-정의다. 필드 순서는 다음과 같고 모든 shared pass와 backend lowering은 이
-순서를 직접 숫자로 복제하지 않는다.
+Marker의 source 선언이 필드 순서와 타입의 유일한 정의다. Marker는 runtime 항목
+`evidence.marker`로 등록되며 root module의 `tribute.type.evidence.marker` 속성이
+그 IR 타입을 게시한다. Hidden evidence parameter나 frame field처럼 evidence 타입이
+필요한 shared pass는 이 속성의 marker 타입으로 `core.array`를 만든다. Marker를
+만들고 필드를 읽는 code는 runtime 모듈 안에만 있으며, effect lowering과 그 밖의
+pass는 marker를 직접 만들거나 읽지 않는다.
 
-| Field | Index | Type | Meaning |
-| --- | ---: | --- | --- |
-| `ability_id` | 0 | `i32` | stable ability key for sorted evidence lookup |
-| `prompt_tag` | 1 | `i32` | prompt installed for the active handler |
-| `tr_dispatch_fn` | 2 | `ptr` | tail-resumptive dispatch closure or null |
-| `shadowed` | 3 | `ptr` | marker of the same ability this one shadows, or null |
-| `outer` | 4 | `ptr` | evidence the handler was installed on |
-
-WasmGC uses the same field order and shared field identifiers, but its concrete
-GC marker type stores the dispatch closure as a nullable reference to the
-closure base instead of a native `ptr` value, `shadowed` as an `anyref` marker
-reference, and `outer` as an `anyref` evidence reference.
-Marker construction and field access stay inside the target's helper
-implementations, so effect lowering never builds or reads a marker directly.
-
-Empty evidence is represented in high-level IR as an empty `core.array<Marker>`
-or null evidence placeholder, and backend lowering turns that into the target
-runtime representation. Native lowering maps it to `__tribute_evidence_empty()`.
+빈 evidence는 evidence 타입의 원소 없는 `adt.array_of`다. Root 진입 bridge가 이것으로
+처음 evidence를 만든다.
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="evidence-lookup"></a>
 같은 `ability_id`의 handler를 다시 설치하면 새 marker가 기존 marker를 가린다
@@ -1009,38 +1009,43 @@ handle은 marker를 설치하지 않는다. 재개된 계산의 label은 lambda 
 
 `EvidenceDirect` 호출은 frame을 만들지 않으므로 선택을 호출 지점에서만 적용한다.
 
-두 target의 effect lowering은 같은 evidence runtime helper ABI를 호출한다.
-아래는 native 표기이며, Wasm은 `ptr` evidence 대신 GC evidence 배열 참조를,
-dispatch closure `ptr` 대신 canonical closure 참조를 쓴다.
+두 target의 effect lowering은 `std::runtime::evidence`의 같은 runtime 항목 함수를
+부른다. 각 함수의 역할 이름은 `evidence.`와 함수 이름을 이은 것이다
+(`evidence.extend` 등). Lowering은 `effect.extend`의 dispatch closure를
+`Option(Dispatch)`로 감싸 넘기며, null이면 `None`을 넘긴다.
 
-```text
-__tribute_evidence_empty() -> ptr
-__tribute_evidence_lookup(ev: ptr, ability_id: i32) -> i32
-__tribute_evidence_extend(
-    ev: ptr,
-    ability_id: i32,
-    prompt_tag: i32,
-    tr_dispatch_fn: ptr,
-    outer: ptr,
-) -> ptr
-__tribute_evidence_mask(ev: ptr, ability_id: i32) -> ptr
-__tribute_evidence_dup(ev: ptr, ability_id: i32) -> ptr
-__tribute_evidence_outer(ev: ptr, ability_id: i32) -> ptr
-__tribute_evidence_lookup_tr(ev: ptr, ability_id: i32) -> ptr
-__tribute_evidence_tail(ev: ptr, slot: i32) -> ptr
-__tribute_evidence_with_tail(ev: ptr, slot: i32, tail: ptr) -> ptr
-__tribute_evidence_push(ev: ptr, source: ptr, ability_id: i32) -> ptr
+```rust
+fn lookup(ev: Evidence, ability_id: Int) -> Int
+fn lookup_tr(ev: Evidence, ability_id: Int) -> Dispatch
+fn extend(
+    ev: Evidence,
+    ability_id: Int,
+    prompt_tag: Int,
+    tr_dispatch_fn: Option(Dispatch),
+    outer: Evidence,
+) -> Evidence
+fn mask(ev: Evidence, ability_id: Int) -> Evidence
+fn dup(ev: Evidence, ability_id: Int) -> Evidence
+fn outer(ev: Evidence, ability_id: Int) -> Evidence
+fn tail(ev: Evidence, slot: Int) -> Evidence
+fn with_tail(ev: Evidence, slot: Int, tail: Evidence) -> Evidence
+fn push(ev: Evidence, source: Evidence, ability_id: Int) -> Evidence
 ```
 
-`extend`는 같은 ability의 기존 marker를 새 marker의 `shadowed`로 두고 `outer`
-인자를 marker에 기록한다. `mask`는 그 칸을 `shadowed`로 바꾸고, `shadowed`가
-null이면 칸을 지운다. `dup`은 가장 위 marker의 복사본이 원본을 가리게 하며 복사본은
-원본의 `outer`를 그대로 가진다. `outer`는 가장 위 marker가 기록한 evidence를
-돌려준다. `with_tail`은 `slot` 칸에 `outer`가 `tail`인 marker를 두고, `tail`은 그
-칸의 `outer`를, 칸이 없으면 `ev` 자신을 돌려준다. `push`는 `source`의 가장 위
-marker를 복사해 `ev`의 같은 ability 위에 얹으며 복사본은 원본의 `outer`를 가진다.
-없는 ability를 `mask`, `dup`, `outer`, `push`하는 것은 compiler bug이며 runtime은
-이를 검사하지 않는다.
+`lookup`은 가장 위 marker의 `prompt_tag`를, `lookup_tr`은 그 marker의 dispatch
+closure를 돌려준다. `extend`는 같은 ability의 기존 marker를 새 marker의
+`shadowed`로 두고 `outer` 인자를 marker에 기록한다. `mask`는 그 칸을 `shadowed`로
+바꾸고, `shadowed`가 `None`이면 칸을 지운다. `dup`은 가장 위 marker의 복사본이
+원본을 가리게 하며 복사본은 원본의 `outer`를 그대로 가진다. `outer`는 가장 위
+marker가 기록한 evidence를 돌려준다. `with_tail`은 `slot` 칸에 `outer`가 `tail`인
+marker를 두고, `tail`은 그 칸의 `outer`를, 칸이 없으면 `ev` 자신을 돌려준다.
+`push`는 `source`의 가장 위 marker를 복사해 `ev`의 같은 ability 위에 얹으며 복사본은
+원본의 `outer`를 가진다.
+
+칸은 `ability_id`에 대한 이진 탐색으로 찾으며, 탐색은 tail position의 재귀다.
+없는 ability를 `lookup`, `lookup_tr`, `mask`, `dup`, `outer`, `push`하거나 dispatch
+closure가 없는 marker에 `lookup_tr`하는 것은 compiler bug이며, runtime code는 그
+실행을 trap으로 끝낸다.
 
 ### `ability.handle_dispatch`
 
@@ -1145,22 +1150,19 @@ Rules:
 
 ### Native
 
-Evidence runtime은 `tribute-runtime`의
-`__tribute_evidence_*` C ABI 함수로 제공되고, native effect ABI lowering은
-`effect.*`를 marker lookup helper, runtime evidence extension, closure
-decomposition, and indirect calls로 변환한다. Native evidence는 RC object이며 그
-ownership 규칙은 [rc.md](rc.md#evidence)를 따른다.
+Native effect ABI lowering은 `effect.*`를 evidence runtime 항목 호출, closure
+decomposition, indirect call로 변환한다. Evidence는 일반 managed 배열이고 marker는
+일반 struct이므로 그 ownership은 다른 값과 같이 [typed ownership plan](rc.md#evidence)이
+정한다.
 
 ### WasmGC
 
 WasmGC도 같은 shared middle-end를 사용한다. `wasm/evidence_to_wasm`은
 representation/ABI 경계 안에서 native와 같은 구조로 `effect.*`를 낮춘다.
 `effect.extend`, `effect.mask`, `effect.dup`, `effect.outer`, `effect.tail`,
-`effect.with_tail`, `effect.push`는 각각 같은 이름의 `__tribute_evidence_*` 호출이
-되고,
-`effect.dispatch_tail` / `effect.dispatch_cps`는
-`__tribute_evidence_lookup_tr` / `__tribute_evidence_lookup`, closure field 접근,
-`func.call_indirect` 또는 proper-tail `func.tail_call_indirect`가 된다.
+`effect.with_tail`, `effect.push`는 각각 같은 이름의 runtime 항목 호출이 되고,
+`effect.dispatch_tail` / `effect.dispatch_cps`는 `lookup_tr` / `lookup` 호출, closure
+field 접근, `func.call_indirect` 또는 proper-tail `func.tail_call_indirect`가 된다.
 Wasm dialect lowering이 이를 `wasm.call_indirect` /
-`wasm.return_call_indirect`로 바꾼다. Helper 구현은 target runtime으로서 출구 뒤에
-GC 배열 위의 `wasm.func`로 바인딩된다.
+`wasm.return_call_indirect`로 바꾼다. Runtime 항목은 다른 source 함수처럼 GC 배열과
+struct 위의 `wasm.func`로 compile된다.

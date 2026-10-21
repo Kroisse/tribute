@@ -298,7 +298,7 @@ WASM 백엔드와 동일한 구조를 유지한다:
 
 ```text
 tribute-passes/src/native/       Tribute 전용 native lowering
-  evidence runtime adaptation, boxing(RC)
+  effect ABI lowering, boxing(RC)
   + func/arith/scf/adt/mem → clif.* dialect 변환
 
 trunk-ir-cranelift-backend/      언어 독립적 Cranelift codegen
@@ -317,7 +317,7 @@ Shared CPS legalization이 continuation을 typed closure로 명시화한다. Nat
 - `fn` operation: `tribute_control.perform` → `ability.call` → `effect.dispatch_tail`
 - `op` operation: `tribute_control.perform` → `ability.perform` → `effect.dispatch_cps`
 - `handle` boundary: shared 단계가 prompt tag와 `effect.extend`를 구성하고,
-  target 단계가 handler marker와 evidence 저장소를 구체화한다.
+  target 단계가 evidence runtime 항목 호출로 낮춘다.
 
 ### 메모리 관리: Reference Counting
 

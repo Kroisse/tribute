@@ -73,6 +73,48 @@ component 하나의 이름에 `::`가 들어 있어도 그 이름은 component �
 
 진단은 타입을 식별 경로로 표시한다. prelude 타입은 `std::Option(Int)`처럼 보인다.
 
+### Compiler 소유 runtime 모듈
+
+Compiler가 생성한 code가 부르는 runtime 함수 중 target에 묶이지 않는 것은 Tribute
+source로 쓴다. 이 code는 prelude의 `pub(pkg)` 모듈 `std::runtime`과 그 하위 모듈에
+둔다. 예를 들어 evidence runtime은 `std::runtime::evidence`다.
+[가시성](#가시성-visibility) 규칙에 따라 패키지 `std` 밖에서는 이 모듈과 그 항목을
+이름으로 가리킬 수 없다. 사용자 프로그램은 이 code를 부르지 않는다.
+
+Source로 표현할 수 없는 runtime 전용 타입(`Slots(a)`, `Dispatch`)은
+[compiler-owned builtin binding](#compiler-owned-builtin-bindings)으로
+`std::runtime` 안에만 virtual export한다. Virtual export도 export된 모듈의
+가시성을 따르므로 패키지 `std` 밖에서는 보이지 않는다.
+
+**Runtime 항목.** Lowering이 부르는 runtime 함수와 lowering이 만드는 runtime
+타입은 compiler의 runtime 항목 registry에 역할 이름으로 등록한다. 각 항목은 역할
+(`evidence.extend`, `evidence.marker` 등)과 그 항목을 정의하는 prelude 경로의
+쌍이다.
+
+- Frontend는 등록된 경로마다 선언이 있고 registry가 기대하는 signature나 타입
+  모양과 맞는지 검사한다. 선언이 없거나 맞지 않으면 compiler 오류다. 등록되지 않은
+  경로의 선언은 역할을 갖지 않는다.
+- 등록된 함수의 IR 정의는 `tribute.runtime_item` 속성에 역할 이름을 가진다.
+  등록된 타입은 well-known type처럼 root `core.module`의 `TypeRef` 속성
+  `tribute.type.<역할>`로 게시한다.
+- Lowering은 역할로 정의와 타입을 찾는다. Symbol 철자, 선언 이름, 타입 모양으로
+  runtime 항목을 다시 찾지 않는다.
+
+**제약.** Runtime 항목 함수는 다음을 지킨다. Frontend가 registry를 만들 때
+검사한다.
+
+- Ability row가 비어 있어 `Direct` convention을 가진다. Handler를 설치하거나
+  operation을 수행하지 않으므로 `effect.*`를 만들지 않으며, 그 함수를 부르는
+  lowering이 그 함수 자신을 다시 lowering 대상으로 삼지 않는다.
+- 단형(monomorphic)이다. Type parameter를 갖지 않는다.
+- 반복은 tail position의 재귀로만 쓴다. `Direct` route의 proper tail call은
+  stack을 늘리지 않는다.
+- Closure 값은 저장하고 돌려줄 수 있지만 부르지 않는다.
+
+**생존 범위.** 등록된 함수는 아직 아무도 부르지 않아도 그 역할을 쓰는 lowering
+단계가 끝날 때까지 dead function 제거의 root다. 그 단계 뒤에는 일반 함수처럼
+참조되지 않으면 제거된다.
+
 ---
 
 ## Module Syntax
@@ -689,6 +731,9 @@ pub(pkg) fn package_internal() -> Int { 42 } // 이 패키지 내에서
 
 pub fn public_api() -> Int { 42 }            // 어디서든
 ```
+
+Prelude도 패키지 `std`의 루트 모듈이므로 같은 규칙을 따른다. 사용자 패키지는
+prelude의 `pub` 항목만 본다.
 
 ### Re-export
 

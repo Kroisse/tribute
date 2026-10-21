@@ -1325,7 +1325,7 @@ wasm.struct_get { type_idx = 9, field_idx = 1 }
 ```
 
 Builtin layouts follow the same rule. Lowering refers to canonical semantic
-types such as `core.bytes` or the marker/evidence ADT types; the layout pass
+types such as `core.bytes` or the closure base; the layout pass
 maps those identities to reserved indices. The Wasm emitter accepts no residual
 `wasm_gc.*` operations and does not infer missing indices. Function-signature
 indices used by `call_indirect` are a separate concern and are not GC heap-type
@@ -1681,8 +1681,6 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 | --- | --- | --- |
 | `"closure"` | closure base `adt.struct` | 함수 참조 필드 하나로 이루어진 closure 값의 공통 저장. Capture 없는 closure의 저장이기도 하다 |
 | `"closure_captures"` | closure capture `adt.struct` | closure base의 필드 뒤에 capture를 순서대로 둔 closure 저장. `closure_base`가 그 base다 |
-| `"evidence_marker"` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure, 가린 marker |
-| `"evidence"` | evidence `core.array` | ability id 순으로 정렬된 가장 위 marker 배열 |
 | `"bytes"` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
 | `"bytes_data"` | Wasm bytes backing `core.array<core.i8>` | `Bytes`가 가리키는 byte 배열 |
 | `"boxed_f64"` | Wasm boxed float `adt.struct` | uniform 참조 자리에 놓이는 `f64` 필드 하나짜리 `Float` 저장 |
@@ -1812,7 +1810,7 @@ Closure 저장 layout은 두 종류다.
 
 - **Closure base**(`layout = "closure"`)는 code 필드 하나를 가진다. 모든 closure
   값의 저장 타입이며, closure를 저장하거나 전달하는 위치(signature, block 인자,
-  `ContinuationFrame<R>`의 필드, Marker의 dispatch 필드)는 이 타입을 쓴다. Capture가
+  `ContinuationFrame<R>`의 필드, evidence runtime의 `Dispatch`)는 이 타입을 쓴다. Capture가
   없는 closure는 이 layout으로 할당한다.
 - **Closure capture layout**(`layout = "closure_captures"`)은 base의 필드 뒤에
   capture를 `closure.new`의 순서대로 두고, type 속성 `closure_base`로 그 base를
