@@ -79,8 +79,11 @@ backend-ready full conversion target. Shared passes must not lower these
 operations by inspecting concrete Marker fields or backend closure layouts.
 Both targets map the ABI to calls to the evidence runtime items of
 [`std::runtime::evidence`](cps-effects.md#handle-evidence-extension--handler-closures)
-and lower dispatch to evidence lookup and closure unpacking. Ordinary source-result
-calls use `wasm.call_indirect`; CPS transfers use `wasm.return_call_indirect`.
+and lower dispatch to evidence lookup and closure unpacking. Ordinary
+source-result calls become `func.call_indirect` and CPS transfers become proper-tail
+`func.tail_call_indirect`. Native dialect lowering turns them into
+`clif.call_indirect` and `clif.return_call_indirect`, and Wasm dialect lowering
+into `wasm.call_indirect` and `wasm.return_call_indirect`.
 
 ## Legality Precedence
 
