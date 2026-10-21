@@ -427,112 +427,12 @@ impl CallableExit for Handle {
 
 // === ADT Type Functions ===
 
-use crate::runtime_layout;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
-use trunk_ir::types::{Attribute, Location, StringRef, TypeDataBuilder};
-
-/// Canonical field identifiers for the `_Marker` ADT used by ability evidence.
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MarkerField {
-    AbilityId = 0,
-    PromptTag = 1,
-    TrDispatchFn = 2,
-    Shadowed = 3,
-    Outer = 4,
-}
-
-impl MarkerField {
-    pub const fn index(self) -> u32 {
-        self as u32
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MarkerFieldType {
-    I32,
-    Ptr,
-}
-
-impl MarkerFieldType {
-    fn type_ref(self, ctx: &mut IrContext) -> TypeRef {
-        match self {
-            Self::I32 => trunk_ir::dialect::core::I32::type_ref(ctx),
-            Self::Ptr => trunk_ir::dialect::core::Ptr::params()
-                .intern(ctx)
-                .as_type_ref(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MarkerFieldSpec {
-    pub field: MarkerField,
-    pub symbol_name: &'static str,
-    pub field_type: MarkerFieldType,
-}
-
-/// Canonical field layout for the `_Marker` ADT.
-pub const MARKER_FIELDS: [MarkerFieldSpec; 5] = [
-    MarkerFieldSpec {
-        field: MarkerField::AbilityId,
-        symbol_name: "ability_id",
-        field_type: MarkerFieldType::I32,
-    },
-    MarkerFieldSpec {
-        field: MarkerField::PromptTag,
-        symbol_name: "prompt_tag",
-        field_type: MarkerFieldType::I32,
-    },
-    MarkerFieldSpec {
-        field: MarkerField::TrDispatchFn,
-        symbol_name: "tr_dispatch_fn",
-        field_type: MarkerFieldType::Ptr,
-    },
-    MarkerFieldSpec {
-        field: MarkerField::Shadowed,
-        symbol_name: "shadowed",
-        field_type: MarkerFieldType::Ptr,
-    },
-    MarkerFieldSpec {
-        field: MarkerField::Outer,
-        symbol_name: "outer",
-        field_type: MarkerFieldType::Ptr,
-    },
-];
-
-impl MarkerFieldSpec {
-    fn type_ref(self, ctx: &mut IrContext) -> TypeRef {
-        self.field_type.type_ref(ctx)
-    }
-}
-
-impl MarkerField {
-    pub fn spec(self) -> &'static MarkerFieldSpec {
-        &MARKER_FIELDS[self.index() as usize]
-    }
-
-    pub fn symbol_name(self) -> &'static str {
-        self.spec().symbol_name
-    }
-
-    pub fn field_type(self) -> MarkerFieldType {
-        self.spec().field_type
-    }
-}
-
-pub const MARKER_FIELD_COUNT: usize = MARKER_FIELDS.len();
-
-const _: () = {
-    let mut idx = 0;
-    while idx < MARKER_FIELDS.len() {
-        assert!(MARKER_FIELDS[idx].field.index() as usize == idx);
-        idx += 1;
-    }
-};
+use trunk_ir::types::{Attribute, Location, StringRef};
 
 /// Runtime ABI symbols used by native and WASM evidence lowering.
 pub mod evidence_abi {
@@ -553,61 +453,47 @@ pub mod evidence_abi {
     ];
 }
 
-/// Get the canonical Marker ADT type for evidence-based dispatch.
-///
-/// Layout:
-/// ```text
-/// struct _Marker {
-///     ability_id: i32,
-///     prompt_tag: i32,
-///     tr_dispatch_fn: ptr,
-///     shadowed: ptr,
-///     outer: ptr,
-/// }
-/// ```
-///
-/// `shadowed` is the marker of the same ability this one shadows, or null.
-/// `outer` is the evidence the handler was installed on.
-/// `tr_dispatch_fn` stores an erased closure reference whose tail-resumptive
-/// operations return their source result. General operations read only the
-/// prompt and dispatch through the continuation frame.
+/// The evidence marker: a nominal reference to the prelude's
+/// `std::runtime::evidence::Marker`, whose layout the root module publishes
+/// in `tribute.types` (`new-plans/cps-effects.md`).
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let fields: Vec<_> = MARKER_FIELDS
-        .into_iter()
-        .map(|spec| (spec.symbol_name, spec.type_ref(ctx)))
-        .collect();
-    let mut attrs = trunk_ir::types::AttributeMap::new();
-    let layout = ctx.string_attr(runtime_layout::EVIDENCE_MARKER);
-    attrs
-        .view_mut(ctx)
-        .insert(runtime_layout::LAYOUT_ATTR, layout);
-    crate::dialect::adt::Struct::from_fields(ctx, "_Marker", fields, attrs).as_type_ref()
+    let name = crate::runtime_items::runtime_symbol(crate::runtime_items::evidence::MARKER);
+    let name = ctx.intern_symbol_text(&name);
+    crate::dialect::adt::Typeref::params()
+        .name(name)
+        .intern(ctx)
+        .as_type_ref()
 }
 
-/// Get the canonical Evidence ADT type — `adt.array<Marker>` carrying the
-/// evidence runtime layout identifier.
+/// The evidence type: `Slots(Marker)`, an `adt.array` of markers.
 pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let marker_ty = marker_adt_type_ref(ctx);
-    let layout = ctx.string_attr(runtime_layout::EVIDENCE);
-    TypeDataBuilder::new(<crate::dialect::adt::Array as trunk_ir::ops::DialectType>::NAME)
-        .param(marker_ty)
-        .attr(runtime_layout::LAYOUT_ATTR, layout)
+    crate::dialect::adt::Array::params(marker_ty)
         .intern(ctx)
+        .as_type_ref()
 }
 
-/// Whether a type is the evidence marker layout, identified by its runtime
-/// layout attribute.
+/// Whether a type is the evidence marker: a reference to, or the layout
+/// of, the declaration `std::runtime::evidence::Marker`.
 pub fn is_marker_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::EVIDENCE_MARKER)
+    let is_nominal = crate::dialect::adt::Typeref::matches(ctx, ty)
+        || crate::dialect::adt::Struct::matches(ctx, ty);
+    is_nominal
+        && ctx.type_attrs(ty).get_str("name").is_some_and(|name| {
+            itertools::equal(
+                name.split("::"),
+                crate::runtime_items::evidence::MARKER.iter().copied(),
+            )
+        })
 }
 
-/// Whether a type is the evidence array layout, identified by its runtime
-/// layout attribute.
+/// Whether a type is the evidence type: an `adt.array` of markers.
 pub fn is_evidence_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::EVIDENCE)
+    crate::dialect::adt::Array::from_type_ref(ctx, ty)
+        .is_some_and(|array| is_marker_type_ref(ctx, array.element(ctx)))
 }
 
-/// The evidence type, identified by its runtime layout.
+/// The evidence type, identified by its marker declaration.
 pub struct Evidence;
 
 impl trunk_ir::type_constraint::TypeConstraint for Evidence {
@@ -627,154 +513,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn evidence_layouts_are_identified_by_layout_not_name() {
+    fn evidence_is_identified_by_its_marker_declaration() {
         let mut ctx = IrContext::new();
-        let named_marker = crate::dialect::adt::Struct::params([])
-            .name("_Marker")
-            .intern(&mut ctx)
-            .unwrap()
-            .as_type_ref();
-        let plain_array = crate::dialect::adt::Array::params(named_marker)
-            .intern(&mut ctx)
-            .as_type_ref();
-        assert!(!is_marker_type_ref(&ctx, named_marker));
-        assert!(!is_evidence_type_ref(&ctx, plain_array));
-
         let marker = marker_adt_type_ref(&mut ctx);
         let evidence = evidence_adt_type_ref(&mut ctx);
         assert!(is_marker_type_ref(&ctx, marker));
         assert!(is_evidence_type_ref(&ctx, evidence));
-        assert_eq!(ctx.get_type(evidence).params.as_slice(), [marker]);
-    }
-    use trunk_ir::op_interface::DynCallableExit;
-    use trunk_ir::ops::{DialectOp, DialectType};
+        assert_eq!(evidence, evidence_adt_type_ref(&mut ctx));
 
-    #[test]
-    fn test_marker_adt_type_ref() {
-        let mut ctx = IrContext::new();
-        let marker_ty = marker_adt_type_ref(&mut ctx);
-
-        assert!(is_marker_type_ref(&ctx, marker_ty));
-
-        // Should be an adt.struct
-        let data = ctx.get_type(marker_ty);
-        assert!(data.name.is(&ctx, "adt.struct"));
-
-        // Should have name "_Marker"
-        assert_eq!(ctx.type_attrs(marker_ty).get_str("name"), Some("_Marker"));
-
-        // Should have the canonical field layout.
-        let marker = crate::dialect::adt::Struct::from_type_ref(&ctx, marker_ty).unwrap();
-        assert_eq!(marker.field_count(&ctx), MARKER_FIELD_COUNT);
-        for (idx, spec) in MARKER_FIELDS.into_iter().enumerate() {
-            assert_eq!(spec.field.index() as usize, idx);
-            assert_eq!(marker.field_name(&ctx, idx), Some(spec.symbol_name));
-        }
-    }
-
-    #[test]
-    fn test_marker_field_indices_are_canonical() {
-        assert_eq!(MarkerField::AbilityId.index(), 0);
-        assert_eq!(MarkerField::PromptTag.index(), 1);
-        assert_eq!(MarkerField::TrDispatchFn.index(), 2);
-        assert_eq!(MarkerField::Shadowed.index(), 3);
-        assert_eq!(MarkerField::Outer.index(), 4);
-    }
-
-    #[test]
-    fn test_marker_field_specs_are_canonical() {
-        assert_eq!(MARKER_FIELDS.len(), 5);
-        assert_eq!(
-            MARKER_FIELDS,
-            [
-                MarkerFieldSpec {
-                    field: MarkerField::AbilityId,
-                    symbol_name: "ability_id",
-                    field_type: MarkerFieldType::I32,
-                },
-                MarkerFieldSpec {
-                    field: MarkerField::PromptTag,
-                    symbol_name: "prompt_tag",
-                    field_type: MarkerFieldType::I32,
-                },
-                MarkerFieldSpec {
-                    field: MarkerField::TrDispatchFn,
-                    symbol_name: "tr_dispatch_fn",
-                    field_type: MarkerFieldType::Ptr,
-                },
-                MarkerFieldSpec {
-                    field: MarkerField::Shadowed,
-                    symbol_name: "shadowed",
-                    field_type: MarkerFieldType::Ptr,
-                },
-                MarkerFieldSpec {
-                    field: MarkerField::Outer,
-                    symbol_name: "outer",
-                    field_type: MarkerFieldType::Ptr,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn test_evidence_adt_type_ref() {
-        let mut ctx = IrContext::new();
-        let evidence_ty = evidence_adt_type_ref(&mut ctx);
-
-        assert!(is_evidence_type_ref(&ctx, evidence_ty));
-
-        // Should be an adt.array type
-        let data = ctx.get_type(evidence_ty);
-        assert_eq!(data.name, crate::dialect::adt::Array::NAME);
-        assert_eq!(data.params.len(), 1);
-
-        // Element type should be the Marker ADT
-        assert!(is_marker_type_ref(&ctx, data.params[0]));
-    }
-
-    #[test]
-    fn test_is_marker_type_ref_negative() {
-        let mut ctx = IrContext::new();
-
-        // Non-marker struct should return false
-        let other_struct = crate::dialect::adt::Struct::params([])
-            .name("OtherStruct")
+        let layout = crate::dialect::adt::Struct::params([])
+            .name("std::runtime::evidence::Marker")
             .intern(&mut ctx)
             .unwrap()
             .as_type_ref();
-        assert!(!is_marker_type_ref(&ctx, other_struct));
+        assert!(is_marker_type_ref(&ctx, layout));
 
-        // Non-struct type should return false
-        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        assert!(!is_marker_type_ref(&ctx, i32_ty));
-    }
-
-    #[test]
-    fn test_is_evidence_type_ref_negative() {
-        let mut ctx = IrContext::new();
-
-        // Array of non-marker should return false
-        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        let other_array = crate::dialect::adt::Array::params(i32_ty)
+        let lookalike = crate::dialect::adt::Struct::params([])
+            .name("_Marker")
+            .intern(&mut ctx)
+            .unwrap()
+            .as_type_ref();
+        let lookalike_array = crate::dialect::adt::Array::params(lookalike)
             .intern(&mut ctx)
             .as_type_ref();
-        assert!(!is_evidence_type_ref(&ctx, other_array));
-
-        // Non-array type should return false
-        assert!(!is_evidence_type_ref(&ctx, i32_ty));
+        assert!(!is_marker_type_ref(&ctx, lookalike));
+        assert!(!is_evidence_type_ref(&ctx, lookalike_array));
+        assert!(!is_evidence_type_ref(&ctx, marker));
     }
 
-    #[test]
-    fn test_type_deduplication() {
-        let mut ctx = IrContext::new();
-        let marker1 = marker_adt_type_ref(&mut ctx);
-        let marker2 = marker_adt_type_ref(&mut ctx);
-        assert_eq!(marker1, marker2, "marker types should be deduplicated");
-
-        let ev1 = evidence_adt_type_ref(&mut ctx);
-        let ev2 = evidence_adt_type_ref(&mut ctx);
-        assert_eq!(ev1, ev2, "evidence types should be deduplicated");
-    }
+    use trunk_ir::op_interface::DynCallableExit;
+    use trunk_ir::ops::DialectOp;
 
     #[test]
     fn callable_exit_rejects_malformed_abilities_attribute() {

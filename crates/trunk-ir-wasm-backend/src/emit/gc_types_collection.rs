@@ -242,6 +242,16 @@ fn types_equivalent_for_gc(ctx: &mut IrContext, ty1: TypeRef, ty2: TypeRef) -> b
             return true;
         }
     }
+    // arrayref is the supertype of every array type, so a concrete array
+    // stored in or read from an arrayref field is compatible with it.
+    let is_arrayref_1 = trunk_ir::dialect::wasm::Arrayref::matches(ctx, ty1_norm);
+    let is_arrayref_2 = trunk_ir::dialect::wasm::Arrayref::matches(ctx, ty2_norm);
+    if is_arrayref_1 || is_arrayref_2 {
+        let other = if is_arrayref_1 { ty2_norm } else { ty1_norm };
+        if trunk_ir::dialect::wasm_gc::Array::matches(ctx, other) {
+            return true;
+        }
+    }
     false
 }
 

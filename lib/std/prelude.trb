@@ -723,4 +723,150 @@ pub(pkg) mod runtime {
         pub(pkg) extern "intrinsic" fn remove(slots: Slots(a), at: Nat) -> Slots(a)
         pub(pkg) extern "intrinsic" fn replace(slots: Slots(a), at: Nat, value: a) -> Slots(a)
     }
+
+    // The evidence runtime both targets call by canonical path
+    // (`new-plans/cps-effects.md`). Evidence is `Slots(Marker)` sorted by
+    // `ability_id`, one slot per ability holding its top marker. Every
+    // operation builds a new evidence and leaves its arguments as they were.
+    // A missing ability is a compiler bug; reading it ends the execution with
+    // the trap of a `Slots` position past the end.
+    pub(pkg) mod evidence {
+        use pkg::{Int, Nat, Option, None, Some}
+        use super::{Slots, Dispatch}
+
+        pub(pkg) struct Marker {
+            ability_id: Int,
+            prompt_tag: Int,
+            tr_dispatch_fn: Option(Dispatch),
+            shadowed: Option(Marker),
+            outer: Slots(Marker),
+        }
+
+        // The first position in `[low, high)` whose marker's ability is not
+        // below `ability_id`.
+        fn search(ev: Slots(Marker), ability_id: Int, low: Nat, high: Nat) ->{} Nat {
+            case low < high {
+                True -> {
+                    let half = high - low
+                    let middle = low + half / 2
+                    case Slots::get(ev, middle).ability_id < ability_id {
+                        True -> search(ev, ability_id, middle + 1, high)
+                        False -> search(ev, ability_id, low, middle)
+                    }
+                }
+                False -> low
+            }
+        }
+
+        // The slot of `ability_id`: where its marker is, or would be inserted.
+        fn find(ev: Slots(Marker), ability_id: Int) ->{} Nat {
+            search(ev, ability_id, 0, Slots::len(ev))
+        }
+
+        fn holds(ev: Slots(Marker), at: Nat, ability_id: Int) ->{} Bool {
+            case at < Slots::len(ev) {
+                True -> Slots::get(ev, at).ability_id == ability_id
+                False -> False
+            }
+        }
+
+        fn missing(ev: Slots(Marker)) ->{} Marker {
+            Slots::get(ev, Slots::len(ev))
+        }
+
+        // The top marker of `ability_id`.
+        fn top(ev: Slots(Marker), ability_id: Int) ->{} Marker {
+            let at = find(ev, ability_id)
+            case holds(ev, at, ability_id) {
+                True -> Slots::get(ev, at)
+                False -> missing(ev)
+            }
+        }
+
+        // `ev` with a new marker on top of the slot of `ability_id`, which
+        // shadows the marker it replaces.
+        fn install(
+            ev: Slots(Marker),
+            ability_id: Int,
+            prompt_tag: Int,
+            tr_dispatch_fn: Option(Dispatch),
+            outer: Slots(Marker),
+        ) ->{} Slots(Marker) {
+            let at = find(ev, ability_id)
+            case holds(ev, at, ability_id) {
+                True -> Slots::replace(ev, at, Marker {
+                    ability_id: ability_id,
+                    prompt_tag: prompt_tag,
+                    tr_dispatch_fn: tr_dispatch_fn,
+                    shadowed: Some(Slots::get(ev, at)),
+                    outer: outer,
+                })
+                False -> Slots::insert(ev, at, Marker {
+                    ability_id: ability_id,
+                    prompt_tag: prompt_tag,
+                    tr_dispatch_fn: tr_dispatch_fn,
+                    shadowed: None,
+                    outer: outer,
+                })
+            }
+        }
+
+        pub(pkg) fn lookup(ev: Slots(Marker), ability_id: Int) ->{} Int {
+            top(ev, ability_id).prompt_tag
+        }
+
+        pub(pkg) fn lookup_tr(ev: Slots(Marker), ability_id: Int) ->{} Dispatch {
+            case top(ev, ability_id).tr_dispatch_fn {
+                Some(dispatch) -> dispatch
+                None -> lookup_tr(Slots::remove(ev, Slots::len(ev)), ability_id)
+            }
+        }
+
+        pub(pkg) fn extend(
+            ev: Slots(Marker),
+            ability_id: Int,
+            prompt_tag: Int,
+            tr_dispatch_fn: Option(Dispatch),
+            outer: Slots(Marker),
+        ) ->{} Slots(Marker) {
+            install(ev, ability_id, prompt_tag, tr_dispatch_fn, outer)
+        }
+
+        pub(pkg) fn mask(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
+            let at = find(ev, ability_id)
+            case holds(ev, at, ability_id) {
+                True -> case Slots::get(ev, at).shadowed {
+                    Some(below) -> Slots::replace(ev, at, below)
+                    None -> Slots::remove(ev, at)
+                }
+                False -> Slots::replace(ev, at, missing(ev))
+            }
+        }
+
+        pub(pkg) fn dup(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
+            let marker = top(ev, ability_id)
+            install(ev, ability_id, marker.prompt_tag, marker.tr_dispatch_fn, marker.outer)
+        }
+
+        pub(pkg) fn outer(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
+            top(ev, ability_id).outer
+        }
+
+        pub(pkg) fn tail(ev: Slots(Marker), slot: Int) ->{} Slots(Marker) {
+            let at = find(ev, slot)
+            case holds(ev, at, slot) {
+                True -> Slots::get(ev, at).outer
+                False -> ev
+            }
+        }
+
+        pub(pkg) fn with_tail(ev: Slots(Marker), slot: Int, tail: Slots(Marker)) ->{} Slots(Marker) {
+            install(ev, slot, +0, None, tail)
+        }
+
+        pub(pkg) fn push(ev: Slots(Marker), source: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
+            let marker = top(source, ability_id)
+            install(ev, ability_id, marker.prompt_tag, marker.tr_dispatch_fn, marker.outer)
+        }
+    }
 }

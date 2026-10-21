@@ -22,6 +22,7 @@ mod e2e_local_callables;
 mod e2e_native;
 mod evidence_lambda;
 mod evidence_plan_ir;
+mod evidence_runtime;
 mod frontend_instances;
 mod frontend_type_roots;
 mod lang_examples;

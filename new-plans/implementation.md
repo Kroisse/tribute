@@ -615,7 +615,7 @@ Effect handling은 tail-call CPS로 구현한다.
 `lower_handle_dispatch`는 evidence 인자의 모든 사용이 치환된 resultless body를
 바깥 block에 옮기고 delimiter를 제거한다. 정상 완료와 resume하지 않는 handler exit의
 transfer는 shared CPS legalization이 구성한다. Backend-specific lowering이 이후 `effect.*`를
-native runtime call 또는 Wasm evidence helper와 indirect call로 제거한다.
+evidence runtime 항목 호출과 indirect call로 제거한다.
 
 내부 ContinuationFrame dispatcher와 resultless `effect.dispatch_cps`, target handler
 tail ABI의 구분과 순서는 [cps-effects.md](cps-effects.md#dispatch-layers)를 따른다.

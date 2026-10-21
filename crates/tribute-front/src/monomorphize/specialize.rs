@@ -89,6 +89,9 @@ pub(super) fn generate_specializations<'db>(
     let mut extern_function_types = Vec::new();
     let mut specialized_extern_declarations = Vec::new();
     let mut compiler_intrinsic_specializations = Vec::new();
+    // Keys that differ only in how a type is spelled, such as a nominal type
+    // named by its short or its qualified name, mangle to one instance.
+    let mut generated = HashSet::default();
 
     for (func_id, keys) in instantiations {
         let path = func_id.path(db);
@@ -106,6 +109,9 @@ pub(super) fn generate_specializations<'db>(
         for key in keys {
             let type_args = key.type_args.as_slice();
             let mangled_path = mangle_instance_path(db, path, key);
+            if !generated.insert(mangled_path.clone()) {
+                continue;
+            }
             let mangled = mangled_path.to_symbol();
             let placement = Placement::at(mangled_path.clone());
             let specialized_scheme = scheme

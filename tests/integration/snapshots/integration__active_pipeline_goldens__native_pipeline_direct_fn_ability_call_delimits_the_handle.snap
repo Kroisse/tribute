@@ -4,7 +4,7 @@ expression: "pipeline_contract_summary(ir_text, true)"
 ---
 __tribute_delimit_done_0: (adt.struct<_closure>, core.i32) -> ()
   func.return operands=0 results=0: 1
-__tribute_delimit_unhandled_0: (adt.array<adt.struct<_Marker>>, adt.struct<_closure>, adt.struct<_closure>, core.i32, core.i32, core.i32, tribute_rt.anyref) -> ()
+__tribute_delimit_unhandled_0: (adt.array<adt.typeref<std::runtime::evidence::Marker>>, adt.struct<_closure>, adt.struct<_closure>, core.i32, core.i32, core.i32, tribute_rt.anyref) -> ()
   func.unreachable operands=0 results=0: 1
 __tribute_main: () -> (core.nil)
   func.call operands=0 results=1: 1
