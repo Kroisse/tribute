@@ -87,16 +87,19 @@ pub fn eliminate_dead_definitions(
     module: Module,
     is_function: FunctionDefinition,
 ) -> GlobalDceResult {
+    eliminate_dead_definitions_with_config(ctx, module, GlobalDceConfig::default(), is_function)
+}
+
+/// [`eliminate_dead_definitions`] with custom configuration.
+pub fn eliminate_dead_definitions_with_config(
+    ctx: &mut IrContext,
+    module: Module,
+    config: GlobalDceConfig,
+    is_function: FunctionDefinition,
+) -> GlobalDceResult {
     let symbols = SymbolTable::collect(ctx, module);
     let graph = call_graph_over(ctx, module.op(), &symbols, is_function);
-    run(
-        ctx,
-        module,
-        &GlobalDceConfig::default(),
-        &symbols,
-        &graph,
-        is_function,
-    )
+    run(ctx, module, &config, &symbols, &graph, is_function)
 }
 
 /// Eliminate the functions of `module` not reachable from its roots.
