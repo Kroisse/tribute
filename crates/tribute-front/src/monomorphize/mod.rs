@@ -669,7 +669,7 @@ mod tests {
             exhaustive_cases: [origin].into_iter().collect::<HashSet<_>>(),
             compiler_intrinsics: HashMap::default(),
         };
-        let key = InstanceKey::of_types(vec![int]);
+        let key = InstanceKey::of_types([int]);
         let origins = [origin].into_iter().collect::<HashSet<_>>();
 
         specialize_metadata(&db, &mut metadata, &key, &origins);

@@ -20,9 +20,9 @@ pub(crate) struct InstanceKey<'db> {
 
 impl<'db> InstanceKey<'db> {
     #[cfg(test)]
-    pub(crate) fn of_types(type_args: Vec<Type<'db>>) -> Self {
+    pub(crate) fn of_types(type_args: impl IntoIterator<Item = Type<'db>>) -> Self {
         Self {
-            type_args: type_args.into(),
+            type_args: type_args.into_iter().collect(),
         }
     }
 
