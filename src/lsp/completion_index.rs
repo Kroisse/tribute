@@ -204,14 +204,21 @@ pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> 
     path
 }
 
-/// The items of `items` the body of `module` names.
+/// The items of `items` the body of `module` names. A declaration of the
+/// module hides a library item of its name.
 pub fn completions_in<'a>(
     items: &'a [AstCompletionItem],
     module: &'a SymbolPath,
 ) -> impl Iterator<Item = &'a AstCompletionItem> {
-    items
-        .iter()
-        .filter(move |item| item.module.as_ref().is_none_or(|own| own == module))
+    let declares = move |name: &Symbol| {
+        items
+            .iter()
+            .any(|item| item.module.as_ref() == Some(module) && item.name == *name)
+    };
+    items.iter().filter(move |item| match &item.module {
+        Some(own) => own == module,
+        None => !declares(&item.name),
+    })
 }
 
 /// Filter completion items by prefix.
@@ -569,6 +576,19 @@ mod tests {
             assert!(names.iter().any(|name| name == "List"));
             assert!(!names.iter().any(|name| name == "__tribute_bytes_len"));
         }
+    }
+
+    #[test]
+    fn test_completions_hide_shadowed_library_names() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "enum Option { Some, Empty }\nfn main() -> Nil {}\n");
+        let items = completion_items(&db, source);
+        let root = SymbolPath::root();
+        let named: Vec<_> = completions_in(items, &root)
+            .filter(|item| item.name == "Option" || item.name == "Some")
+            .collect();
+        assert_eq!(named.len(), 2, "{named:#?}");
+        assert!(named.iter().all(|item| item.module.is_some()));
     }
 
     #[test]
