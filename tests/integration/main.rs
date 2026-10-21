@@ -29,6 +29,7 @@ mod native_arrays;
 mod native_multiway_branch;
 mod open_callback_evidence_root;
 mod optimization_conformance;
+mod package_identity;
 mod row_var_collision;
 mod salsa_integration;
 mod sanitizer_access_checks;
