@@ -193,18 +193,6 @@ fn result(ir: &IrContext, op: OpRef) -> ValueRef {
     ir.op_result(op, 0)
 }
 
-fn func_sig_type(
-    ir: &mut IrContext,
-    result: TypeRef,
-    params: impl IntoIterator<Item = TypeRef>,
-    row: &Row,
-) -> TypeRef {
-    tribute_control::FuncSig::params(params, result)
-        .row(row.clone())
-        .intern(ir)
-        .as_type_ref()
-}
-
 /// Lower a named function value at its exact source-logical callable contract.
 ///
 /// A `func_ref` may take a callable type whose row includes its target's, but
@@ -943,7 +931,10 @@ fn prescan_struct_accessor_signatures<'db>(
             );
             // The modifier performs whatever its callback performs.
             let row = Row::new([], Some(0));
-            let callback = func_sig_type(ir, field_type, [field_type], &row);
+            let callback = tribute_control::FuncSig::params([field_type], field_type)
+                .row(row.clone())
+                .intern(ir)
+                .as_type_ref();
             ctx.register_logical_generated_signature(
                 &modifier_name,
                 LogicalGeneratedSignature {
@@ -1025,7 +1016,9 @@ fn lower_struct_accessors<'db>(
             blocks: trunk_ir::smallvec::smallvec![entry],
             parent_op: None,
         });
-        let callable = func_sig_type(ir, field_type, [struct_type], &Row::default());
+        let callable = tribute_control::FuncSig::params([struct_type], field_type)
+            .intern(ir)
+            .as_type_ref();
         let getter =
             tribute_control::func_declaration(ir, location, &getter_name.to_symbol(), callable);
         ir.push_op_region(getter.op_ref(), body);
@@ -1042,7 +1035,10 @@ fn lower_struct_accessors<'db>(
                 .collect();
         let [setter_name, modifier_name] = field_update_names(&getter_name);
         let callback_row = Row::new([], Some(0));
-        let callback = func_sig_type(ir, field_type, [field_type], &callback_row);
+        let callback = tribute_control::FuncSig::params([field_type], field_type)
+            .row(callback_row.clone())
+            .intern(ir)
+            .as_type_ref();
         for (name, argument_ty, modifies) in [
             (setter_name, field_type, false),
             (modifier_name, callback, true),
@@ -1124,7 +1120,11 @@ fn lower_struct_accessors<'db>(
             } else {
                 Row::default()
             };
-            let callable = func_sig_type(ir, struct_type, [struct_type, argument_ty], &row);
+            let callable =
+                tribute_control::FuncSig::params([struct_type, argument_ty], struct_type)
+                    .row(row)
+                    .intern(ir)
+                    .as_type_ref();
             let function =
                 tribute_control::func_declaration(ir, location, &name.to_symbol(), callable);
             if modifies {
@@ -2808,7 +2808,10 @@ fn lower_lambda<'db>(
         parent_op: None,
     });
     let captures = local_callables::captures(builder.ctx, builder.ir, region);
-    let callable = func_sig_type(builder.ir, result_type, param_types, &row);
+    let callable = tribute_control::FuncSig::params(param_types, result_type)
+        .row(row)
+        .intern(builder.ir)
+        .as_type_ref();
     let lambda = op(
         builder.ir,
         builder.block,
