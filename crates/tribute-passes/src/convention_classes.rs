@@ -319,3 +319,54 @@ pub(crate) fn row_class(
     };
     instances.max(tail)
 }
+
+/// The lambda `op` instantiates, the binders it quantifies, and the rows `op`
+/// passes for them.
+pub(crate) fn instantiation(ctx: &IrContext, op: OpRef) -> Option<(OpRef, Vec<u32>, Vec<Row>)> {
+    if !tribute_control::Instantiate::matches(ctx, op) {
+        return None;
+    }
+    let operand = *ctx.op_operands(op).first()?;
+    let trunk_ir::refs::ValueDef::OpResult(lambda, _) = ctx.value_def(operand) else {
+        return None;
+    };
+    let binders = tribute_control::quantified_rows(ctx, lambda).ok()?;
+    let rows = tribute_control::row_args(ctx, op).ok()?;
+    Some((lambda, binders, rows))
+}
+
+/// The class of each local binder of `body`: the join of the classes its
+/// instantiations pass for it, which may name other local binders.
+pub(crate) fn settle_locals(
+    ctx: &IrContext,
+    body: RegionRef,
+    binders: &[RowBinder],
+    requirements: &HashMap<SymbolPath, CallingConvention>,
+    params: &HashMap<u32, CallingConvention>,
+) -> HashMap<u32, CallingConvention> {
+    let mut instantiations = Vec::new();
+    let _ = walk_region::<()>(ctx, body, &mut |op| {
+        if let Some((_, quantified, rows)) = instantiation(ctx, op) {
+            instantiations.push((quantified, rows));
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    let mut locals = HashMap::default();
+    loop {
+        let mut changed = false;
+        for (quantified, rows) in &instantiations {
+            for (binder, row) in quantified.iter().zip(rows) {
+                let class = row_class(row, binders, requirements, params, &locals);
+                let joined = locals
+                    .get(binder)
+                    .map_or(class, |known: &CallingConvention| (*known).max(class));
+                if locals.insert(*binder, joined) != Some(joined) {
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return locals;
+        }
+    }
+}

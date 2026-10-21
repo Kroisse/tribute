@@ -233,7 +233,13 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
   글자를 붙인 것이다. 타입 인자 조각은 숫자로 시작하지 않으므로 이 접미사와 섞이지
   않는다. 참조는 자기 class 인자의 인스턴스를 가리키도록 바꾼다.
 - 인스턴스 안에서 `let`에 묶인 람다를 그 `instantiate`들이 고르는 class 조합마다
-  복제하고 각 `instantiate`를 자기 조합의 복사본으로 연결한다.
+  복제하고 각 `instantiate`를 자기 조합의 복사본으로 연결한다. 본문 순서로 처음
+  나오는 `instantiate`의 조합이 원래 람다를 갖고, 다른 조합의 복사본은 원래 람다
+  바로 뒤에 놓인다. 복사본과 그 안에서 row를 양화하는 람다는 정의의 binder 목록
+  끝에 새 `local` binder를 받는다. 복사본 안의 `instantiate`가 바깥 람다에 새 조합을
+  넘길 수 있으므로, 복제할 람다가 없을 때까지 지역 class를 다시 정하고 복제한다.
+  `instantiate`의 row가 다른 람다의 binder를 가리키면 그 람다들이 모두 조합 하나씩만
+  가진 뒤에 복제하므로, 한 람다가 같은 조합의 복사본을 둘 갖지 않는다.
 - 모든 `func_sig`에 convention을 쓴다. 정의, 람다, 값과 block 인자의 타입, 참조의 결과,
   `ability.operation`의 타입과 tuple layout의 원소가 모두 포함된다.
   [추론된 row](ir.md#추론된-row)인 정의 자신의 convention은 tail이 class 변수일 때만

@@ -19,7 +19,8 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Function, class_suffix, requirements, row_class, settle_class_variables, split_name,
+    Function, class_suffix, instantiation, requirements, row_class, settle_class_variables,
+    settle_locals, split_name,
 };
 
 /// A place where the IR's rows imply another class than the frontend chose.
@@ -149,51 +150,22 @@ impl<'a> Instance<'a> {
         instance
     }
 
-    /// The class of each local binder: the join of the classes its
-    /// instantiations pass for it, which may name other local binders.
+    /// The class of each local binder.
     fn settle_locals(&mut self) {
-        let Some(body) = self.ctx.op_region(self.function.op, 0) else {
-            return;
-        };
-        let mut instantiations = Vec::new();
-        let _ = walk_region::<()>(self.ctx, body, &mut |op| {
-            if let Some((_, binders, rows)) = self.instantiation(op) {
-                instantiations.push((binders, rows));
-            }
-            ControlFlow::Continue(WalkAction::Advance)
-        });
-        loop {
-            let mut changed = false;
-            for (binders, rows) in &instantiations {
-                for (binder, row) in binders.iter().zip(rows) {
-                    let class = self.class(row);
-                    let joined = self
-                        .locals
-                        .get(binder)
-                        .map_or(class, |known| (*known).max(class));
-                    if self.locals.insert(*binder, joined) != Some(joined) {
-                        changed = true;
-                    }
-                }
-            }
-            if !changed {
-                return;
-            }
+        if let Some(body) = self.ctx.op_region(self.function.op, 0) {
+            self.locals = settle_locals(
+                self.ctx,
+                body,
+                &self.function.binders,
+                self.requirements,
+                &self.classes,
+            );
         }
     }
 
     /// The lambda `op` instantiates, its quantified binders, and the rows.
     fn instantiation(&self, op: OpRef) -> Option<(OpRef, Vec<u32>, Vec<Row>)> {
-        if !tribute_control::Instantiate::matches(self.ctx, op) {
-            return None;
-        }
-        let operand = *self.ctx.op_operands(op).first()?;
-        let trunk_ir::refs::ValueDef::OpResult(lambda, _) = self.ctx.value_def(operand) else {
-            return None;
-        };
-        let binders = tribute_control::quantified_rows(self.ctx, lambda).ok()?;
-        let rows = tribute_control::row_args(self.ctx, op).ok()?;
-        Some((lambda, binders, rows))
+        instantiation(self.ctx, op)
     }
 
     /// The class a row requires inside this instance.
