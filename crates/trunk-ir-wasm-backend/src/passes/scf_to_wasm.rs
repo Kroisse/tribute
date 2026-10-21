@@ -1142,8 +1142,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @select(%cond: core.i1, %value: core.array<core.i32>) -> core.array<core.i32> {
-    %result = scf.if %cond : core.array<core.i32> {
+  func.func @select(%cond: core.i1, %value: wasm_gc.array<core.i32>) -> wasm_gc.array<core.i32> {
+    %result = scf.if %cond : wasm_gc.array<core.i32> {
       scf.yield %value
     } {
       scf.yield %value
@@ -1173,9 +1173,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @carry(%init: core.array<core.i32>) -> core.nil {
+  func.func @carry(%init: wasm_gc.array<core.i32>) -> core.nil {
     scf.loop %init : core.nil {
-      ^header(%iter: core.array<core.i32>):
+      ^header(%iter: wasm_gc.array<core.i32>):
         scf.continue %iter
     }
     func.return
@@ -1196,7 +1196,7 @@ mod tests {
             "the created wasm.loop body argument must declare the converted type: {output}"
         );
         assert!(
-            output.contains("core.array<core.i32>"),
+            output.contains("wasm_gc.array<core.i32>"),
             "operand types must keep their producer spelling: {output}"
         );
     }
@@ -1475,14 +1475,14 @@ mod tests {
         }
     }
 
-    /// Convert `core.array` to the abstract `wasm.arrayref` type.
+    /// Convert `wasm_gc.array` to the abstract `wasm.arrayref` type.
     fn array_to_arrayref_converter(ctx: &mut IrContext) -> TypeConverter {
         let arrayref_ty = wasm_dialect::Arrayref::params().intern(ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.get_type(ty)
                 .name
-                .is(ctx, "core.array")
+                .is(ctx, "wasm_gc.array")
                 .then_some(arrayref_ty)
         });
         type_converter

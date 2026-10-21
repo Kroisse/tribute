@@ -723,7 +723,7 @@ fn array_read(
     // into an `i32` whose upper bits are unspecified, so the unsigned
     // read is as good as the signed one; one is fixed here.
     if has_packed_elements(ctx, array_ty) {
-        let element_ty = core::Array::from_type_ref(ctx, array_ty)
+        let element_ty = trunk_ir::dialect::wasm_gc::Array::from_type_ref(ctx, array_ty)
             .expect("packed elements belong to a GC array")
             .element(ctx);
         wasm_gc_dialect::ArrayGetU::operands(array, index)
@@ -767,7 +767,7 @@ impl RewritePattern for ArrayGetPattern {
 /// Whether `array_ty`, a GC array, holds 8- or 16-bit integers, which
 /// WasmGC stores packed.
 fn has_packed_elements(ctx: &IrContext, array_ty: TypeRef) -> bool {
-    core::Array::from_type_ref(ctx, array_ty)
+    trunk_ir::dialect::wasm_gc::Array::from_type_ref(ctx, array_ty)
         .is_some_and(|array| matches!(IntegerLike::width(ctx, array.element(ctx)), Some(8 | 16)))
 }
 

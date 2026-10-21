@@ -434,6 +434,12 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   없앤다. Struct를 가리키는 `adt.typeref`는 그 struct의 `wasm_gc.struct`가 되고,
   enum을 가리키거나 이름을 해석할 수 없는 `adt.typeref`는 variant마다 타입이 다르므로
   `wasm.structref`가 된다.
+- 배열 연산의 GC 타입은 `wasm_gc.array<E>`다. `adt_to_wasm`은 `adt.array<E>`를
+  같은 매개변수와 속성의 `wasm_gc.array`로 바꿔 `wasm_gc` 배열 연산에 쓰고, 원소
+  타입이 같은 배열은 같은 GC 타입이다. `layout`을 가진 builtin 배열(Bytes backing
+  배열)은 그 식별자로 예약 index를 받는다. Builtin이 아닌 배열은 값과 signature에서
+  erased `wasm.arrayref`가 된다. Wasm backend는 unmanaged `core.array`를 GC 배열로
+  다루지 않는다.
 - Backend에 도달하는 `adt` 타입은 [`layout`](ir.md#runtime-layout-식별자)을 가진
   builtin layout뿐이다. Backend는 builtin layout을 `layout` 식별자로만 식별하고,
   그 타입의 dialect나 이름을 보지 않는다. 연산이나 값이 가리키지 않는 소스 layout
@@ -562,7 +568,7 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 | supertype | 그 subtype | 거부 (downcast) |
 | `wasm_gc.struct` (사용자 struct, variant, closure capture layout) | `structref`, `anyref` | 허용 |
 | builtin 배열 레이아웃 (Bytes backing array) | `arrayref`, `anyref` | 허용 |
-| `adt.array` | `arrayref`, `anyref` | 허용 |
+| `wasm_gc.array` | `arrayref`, `anyref` | 허용 |
 | 등록 근거가 없는 타입 표기 | `structref`, `anyref` | 거부 |
 | `anyref` | `structref` | 거부 (downcast) |
 | `arrayref`, `funcref`, `externref`, `i31ref` | `structref` | 거부 |

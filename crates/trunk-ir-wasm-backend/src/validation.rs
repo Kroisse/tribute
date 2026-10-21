@@ -169,7 +169,7 @@ fn result_list_matches(ctx: &IrContext, produced: &[TypeRef], received: &[TypeRe
         })
 }
 
-/// `core.array` is emitted as the same abstract array reference as
+/// `wasm_gc.array` is emitted as the same abstract array reference as
 /// `wasm.arrayref`; accepting that physical equivalence here does not permit
 /// a reference downcast such as `wasm.anyref -> wasm.structref`. An array with
 /// a runtime layout identifier is a concrete builtin reference, so an erased
@@ -182,7 +182,7 @@ fn is_wasm_physical_result_assignable(
     let produced_data = ctx.get_type(produced);
     let received_data = ctx.get_type(received);
     (produced_data.name.is(ctx, "wasm.arrayref")
-        && received_data.name.is(ctx, "core.array")
+        && received_data.name.is(ctx, "wasm_gc.array")
         && crate::emit::helpers::builtin_layout_type_idx(ctx, received).is_none())
         || (produced_data.name.is(ctx, "core.i32") && received_data.name.is(ctx, "core.i1"))
         || crate::assignability::is_wasm_physical_argument_assignable(ctx, produced, received)
@@ -486,7 +486,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Array = core.array<core.i32>
+  !Array = wasm_gc.array<core.i32>
   !Struct = wasm_gc.struct<core.i32>
   wasm.func @structref(%table_index: core.i32, %value: wasm.structref) -> core.nil {
     wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.anyref) -> core.nil>, table = 0, type_idx = 0}
@@ -542,8 +542,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Marker = test.layout<{layout = "evidence_marker"}>
-  !Evidence = core.array<!Marker, {layout = "evidence"}>
-  !Plain = core.array<!Marker>
+  !Evidence = wasm_gc.array<!Marker, {layout = "evidence"}>
+  !Plain = wasm_gc.array<!Marker>
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| ctx.type_alias_by_text(name).unwrap();
@@ -568,8 +568,8 @@ mod tests {
   !Leaf = wasm_gc.struct<core.i32>
   !Closure = test.layout<{layout = "closure"}>
   !Marker = test.layout<{layout = "evidence_marker"}>
-  !Evidence = core.array<!Marker, {layout = "evidence"}>
-  !Data = core.array<core.i8, {layout = "bytes_data"}>
+  !Evidence = wasm_gc.array<!Marker, {layout = "evidence"}>
+  !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
   wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
@@ -595,9 +595,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Marker = test.layout<{layout = "evidence_marker"}>
-  !Evidence = core.array<!Marker, {layout = "evidence"}>
-  !Array = core.array<core.i32>
-  !Data = core.array<core.i8, {layout = "bytes_data"}>
+  !Evidence = wasm_gc.array<!Marker, {layout = "evidence"}>
+  !Array = wasm_gc.array<core.i32>
+  !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
   wasm.func @caller(%bytes: !Bytes, %evidence: !Evidence, %array: !Array, %structural: wasm_gc.struct<core.i32>) -> core.nil {
@@ -660,7 +660,7 @@ mod tests {
                     r#"core.module @test {{
   !Leaf = wasm_gc.struct<core.i32>
   !Unregistered = test.opaque<core.i32>
-  !Data = core.array<core.i8, {{layout = "bytes_data"}}>
+  !Data = wasm_gc.array<core.i8, {{layout = "bytes_data"}}>
   !Bytes = test.layout<!Data, core.i32, core.i32, {{layout = "bytes"}}>
   wasm.func @callee(%value: {parameter_ty}) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{

@@ -637,7 +637,7 @@ pub(crate) fn collect_gc_types(
                     Some(&element) => Some(helpers::value_type(ctx, element)),
                     None => result_types
                         .first()
-                        .and_then(|&ty| trunk_ir::dialect::core::Array::from_type_ref(ctx, ty))
+                        .and_then(|&ty| trunk_ir::dialect::wasm_gc::Array::from_type_ref(ctx, ty))
                         .map(|array| array.element(ctx)),
                 };
                 if let Some(ty) = element_ty {
@@ -835,7 +835,7 @@ mod tests {
             &format!(
                 r#"core.module @test {{
                     wasm.func @empty() {{
-                        %array = wasm.array_new_fixed {{type_idx = {FIRST_USER_TYPE_IDX}}} : core.array<core.i64>
+                        %array = wasm.array_new_fixed {{type_idx = {FIRST_USER_TYPE_IDX}}} : wasm_gc.array<core.i64>
                         wasm.return
                     }}
                 }}"#
@@ -862,7 +862,7 @@ mod tests {
                 let mut ctx = IrContext::new();
                 let producer = if evidence {
                     format!(
-                        "%size = wasm.i32_const {{value = 0}} : core.i32\n%value = wasm.array_new_default %size {{type_idx = {EVIDENCE_IDX}}} : core.array<!Marker, {{layout = \"evidence\"}}>"
+                        "%size = wasm.i32_const {{value = 0}} : core.i32\n%value = wasm.array_new_default %size {{type_idx = {EVIDENCE_IDX}}} : wasm_gc.array<!Marker, {{layout = \"evidence\"}}>"
                     )
                 } else {
                     format!(

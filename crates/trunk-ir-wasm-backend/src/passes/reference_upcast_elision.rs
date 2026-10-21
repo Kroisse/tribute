@@ -92,7 +92,7 @@ mod tests {
             r#"core.module @test {
   !Closure = test.layout<core.i32, wasm.anyref, {layout = "closure"}>
   !Ref = wasm_gc.struct<core.i32>
-  func.func @f(%c: !Closure, %r: !Ref, %s: wasm.structref, %a: core.array<core.i32>) {
+  func.func @f(%c: !Closure, %r: !Ref, %s: wasm.structref, %a: wasm_gc.array<core.i32>) {
     %c_struct = core.unrealized_conversion_cast %c : wasm.structref
     %c_any = core.unrealized_conversion_cast %c : wasm.anyref
     %r_struct = core.unrealized_conversion_cast %r : wasm.structref
@@ -112,7 +112,7 @@ mod tests {
             r#"core.module @test {
   !Closure = test.layout<core.i32, wasm.anyref, {layout = "closure"}>
   !Ref = wasm_gc.struct<core.i32>
-  func.func @f(%c: !Closure, %r: !Ref, %s: wasm.structref, %a: core.array<core.i32>) {
+  func.func @f(%c: !Closure, %r: !Ref, %s: wasm.structref, %a: wasm_gc.array<core.i32>) {
     func.call %c, %c, %r, %s, %a {callee = @use}
     func.return
   }

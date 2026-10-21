@@ -73,7 +73,7 @@ pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
 /// Get the Evidence type of the WASM representation.
 ///
 /// Evidence keeps its runtime layout identifier through Wasm lowering: it is
-/// the canonical `core.array<Marker>` evidence layout, which emission maps to
+/// the canonical `wasm_gc.array<Marker>` evidence layout, which emission maps to
 /// the builtin evidence array, and never an erased `wasm.arrayref`.
 pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
     let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
@@ -81,15 +81,24 @@ pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 /// The GC array type that Wasm operations use for `ty`: an `adt.array`
-/// becomes the `core.array` with the same parameters and attributes, and any
+/// becomes the `wasm_gc.array` of the same element, keeping its runtime
+/// [`layout`](tribute_ir::runtime_layout::LAYOUT_ATTR) identifier, and any
 /// other type is returned unchanged.
 pub fn gc_array_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
-    if !tribute_ir::dialect::adt::Array::matches(ctx, ty) {
+    use tribute_ir::runtime_layout::LAYOUT_ATTR;
+
+    let Some(array) = tribute_ir::dialect::adt::Array::from_type_ref(ctx, ty) else {
         return ty;
+    };
+    let element = array.element(ctx);
+    let layout = ctx.type_attrs(ty).get_string_ref(LAYOUT_ATTR);
+    let mut builder =
+        trunk_ir::types::TypeDataBuilder::new(trunk_ir::dialect::wasm_gc::Array::NAME)
+            .param(element);
+    if let Some(layout) = layout {
+        builder = builder.attr(LAYOUT_ATTR, trunk_ir::types::Attribute::String(layout));
     }
-    let mut data = ctx.get_type(ty).clone();
-    data.name = <trunk_ir::dialect::core::Array as DialectType>::NAME;
-    ctx.intern_type(data)
+    builder.intern(ctx)
 }
 
 // =============================================================================
@@ -401,7 +410,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Convert any other array -> wasm.arrayref
     tc.add_conversion(move |ctx, ty| {
         if tribute_ir::dialect::adt::Array::matches(ctx, ty)
-            || trunk_ir::dialect::core::Array::matches(ctx, ty)
+            || trunk_ir::dialect::wasm_gc::Array::matches(ctx, ty)
         {
             Some(arrayref_ty)
         } else {

@@ -378,7 +378,7 @@ mod tests {
   !Inner = wasm_gc.struct<core.i32, core.f64>
   !Outer = wasm_gc.struct<core.i32, !Inner>
   !Param = wasm_gc.struct<core.i32, core.i64>
-  !A = core.array<core.i32>
+  !A = wasm_gc.array<core.i32>
 
   wasm.func @main(%param: !Param) -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
@@ -410,7 +410,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !data = core.array<core.i8, {layout = "bytes_data"}>
+  !data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
@@ -440,9 +440,9 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !data = core.array<core.i8, {layout = "bytes_data"}>
-  !plain = core.array<core.i8>
-  !plain_ref = core.ref<core.array<core.i8>>
+  !data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
+  !plain = wasm_gc.array<core.i8>
+  !plain_ref = core.ref<wasm_gc.array<core.i8>>
   !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
   !lookalike = test.layout<!plain, core.i32, core.i32>
 }"#,
@@ -526,8 +526,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !S = test.nominal<core.i32, {name = "S"}>
-  !A = core.array<core.i32>
-  !B = core.array<core.i32>
+  !A = wasm_gc.array<core.i32>
+  !B = wasm_gc.array<core.i32>
 
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
