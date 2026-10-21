@@ -210,7 +210,10 @@ fn func_sig_type(
     row: &Row,
     convention: CallingConvention,
 ) -> TypeRef {
-    tribute_control::func_sig_with_row(ir, result, params, row, control_convention(convention))
+    tribute_control::FuncSig::params(params, result)
+        .row(row.clone())
+        .convention(control_convention(convention))
+        .intern(ir)
         .as_type_ref()
 }
 

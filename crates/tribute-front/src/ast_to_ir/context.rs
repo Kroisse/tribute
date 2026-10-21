@@ -677,12 +677,9 @@ impl<'db> IrLoweringCtx<'db> {
                 let convention = self
                     .calling_convention_for_type(ty)
                     .unwrap_or(crate::ast::CallingConvention::Cps);
-                tribute_ir::dialect::tribute_control::func_sig_with_row(
-                    ir,
-                    result,
-                    params,
-                    &self.ability_row(*effect),
-                    match convention {
+                tribute_ir::dialect::tribute_control::FuncSig::params(params, result)
+                    .row(self.ability_row(*effect))
+                    .convention(match convention {
                         crate::ast::CallingConvention::Direct => {
                             tribute_ir::dialect::tribute_control::CallingConvention::Direct
                         }
@@ -692,9 +689,9 @@ impl<'db> IrLoweringCtx<'db> {
                         crate::ast::CallingConvention::Cps => {
                             tribute_ir::dialect::tribute_control::CallingConvention::Cps
                         }
-                    },
-                )
-                .as_type_ref()
+                    })
+                    .intern(ir)
+                    .as_type_ref()
             }
             TypeKind::Tuple(elements) => {
                 let elements = elements

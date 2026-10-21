@@ -1221,95 +1221,95 @@ fn read_count(
     }
 }
 
-/// Build a verified-shape logical source signature.
-pub fn func_sig(
-    ctx: &mut IrContext,
-    result: TypeRef,
-    inputs: impl IntoIterator<Item = TypeRef>,
-    convention: CallingConvention,
-) -> FuncSig {
-    func_sig_with_attrs(ctx, result, inputs, convention, AttributeMap::new())
-}
-
-/// Build a logical source signature with ability row `row`.
-pub fn func_sig_with_row(
-    ctx: &mut IrContext,
-    result: TypeRef,
-    inputs: impl IntoIterator<Item = TypeRef>,
-    row: &Row,
-    convention: CallingConvention,
-) -> FuncSig {
-    let mut attrs = AttributeMap::new();
-    if !row.is_empty() {
-        let row = row.to_attribute(ctx);
-        attrs.view_mut(ctx).insert(ABILITY_ROW_ATTR, row);
+impl FuncSig {
+    /// Start a source signature with `inputs` and `result`: no row, no
+    /// convention, and no other attributes until the builder sets them.
+    pub fn params(inputs: impl IntoIterator<Item = TypeRef>, result: TypeRef) -> FuncSigBuilder {
+        FuncSigBuilder {
+            inputs: inputs.into_iter().collect(),
+            result,
+            row: Row::default(),
+            convention: None,
+            attrs: AttributeMap::new(),
+        }
     }
-    build_func_sig(ctx, result, inputs, convention, attrs)
-}
 
-/// Construct a source signature while preserving only non-reserved metadata.
-pub fn func_sig_with_attrs(
-    ctx: &mut IrContext,
-    result: TypeRef,
-    inputs: impl IntoIterator<Item = TypeRef>,
-    convention: CallingConvention,
-    attrs: AttributeMap,
-) -> FuncSig {
-    assert!(
-        !attrs
-            .view(ctx)
-            .contains_key(trunk_ir::dialect::func::NUM_INPUTS_ATTR)
-            && !attrs
-                .view(ctx)
-                .contains_key(trunk_ir::dialect::func::NUM_RESULTS_ATTR)
-            && !attrs.view(ctx).contains_key(CALLING_CONVENTION_ATTR)
-            && !attrs.view(ctx).contains_key(ABILITY_ROW_ATTR),
-        "source func_sig reserves delimiters, convention, and row metadata"
-    );
-    build_func_sig(ctx, result, inputs, convention, attrs)
-}
-
-fn build_func_sig(
-    ctx: &mut IrContext,
-    result: TypeRef,
-    inputs: impl IntoIterator<Item = TypeRef>,
-    convention: CallingConvention,
-    attrs: AttributeMap,
-) -> FuncSig {
-    let inputs: Vec<_> = inputs.into_iter().collect();
-    let count = u32::try_from(inputs.len()).expect("source func_sig input count exceeds u32");
-    let mut builder = TypeDataBuilder::new("tribute_control.func_sig")
-        .params(inputs)
-        .param(result);
-    for (key, value) in attrs {
-        builder = builder.attr(key, value);
+    /// This signature with its own convention set to `convention`. Callable
+    /// types inside it keep theirs.
+    pub fn with_convention(self, ctx: &mut IrContext, convention: CallingConvention) -> Self {
+        let mut data = ctx.get_type(self.0).clone();
+        data.attrs
+            .view_mut(ctx)
+            .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
+        let ty = ctx.intern_type(data);
+        Self::from_type_ref(ctx, ty).expect("setting a convention keeps a source signature")
     }
-    let ty = builder
-        .attr(
-            trunk_ir::dialect::func::NUM_INPUTS_ATTR,
-            Attribute::from(count),
-        )
-        .attr(
-            trunk_ir::dialect::func::NUM_RESULTS_ATTR,
-            Attribute::from(1_u32),
-        )
-        .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
-        .intern(ctx);
-    FuncSig::from_type_ref(ctx, ty).expect("source func_sig constructor must produce a valid type")
 }
 
-/// The source signature `ty` with its own convention set to `convention`.
-/// Callable types inside it keep theirs.
-pub fn func_sig_with_convention(
-    ctx: &mut IrContext,
-    ty: TypeRef,
-    convention: CallingConvention,
-) -> TypeRef {
-    let mut data = ctx.get_type(ty).clone();
-    data.attrs
-        .view_mut(ctx)
-        .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
-    ctx.intern_type(data)
+/// Builds a [`FuncSig`]; start one with [`FuncSig::params`].
+#[must_use]
+pub struct FuncSigBuilder {
+    inputs: Vec<TypeRef>,
+    result: TypeRef,
+    row: Row,
+    convention: Option<CallingConvention>,
+    attrs: AttributeMap,
+}
+
+impl FuncSigBuilder {
+    /// The ability row; an empty row is the closed pure row and is not stored.
+    pub fn row(mut self, row: Row) -> Self {
+        self.row = row;
+        self
+    }
+
+    /// The convention, which class specialization assigns.
+    pub fn convention(mut self, convention: CallingConvention) -> Self {
+        self.convention = Some(convention);
+        self
+    }
+
+    /// Metadata other than the reserved delimiters, row, and convention.
+    pub fn attrs(mut self, attrs: AttributeMap) -> Self {
+        self.attrs = attrs;
+        self
+    }
+
+    pub fn intern(self, ctx: &mut IrContext) -> FuncSig {
+        assert!(
+            self.attrs
+                .iter()
+                .all(|(key, _)| !RESERVED_ATTRS.contains(&ctx.str(key))),
+            "source func_sig reserves delimiters, convention, and row metadata"
+        );
+        let count =
+            u32::try_from(self.inputs.len()).expect("source func_sig input count exceeds u32");
+        let mut builder = TypeDataBuilder::new("tribute_control.func_sig")
+            .params(self.inputs)
+            .param(self.result);
+        for (key, value) in self.attrs {
+            builder = builder.attr(key, value);
+        }
+        builder = builder
+            .attr(
+                trunk_ir::dialect::func::NUM_INPUTS_ATTR,
+                Attribute::from(count),
+            )
+            .attr(
+                trunk_ir::dialect::func::NUM_RESULTS_ATTR,
+                Attribute::from(1_u32),
+            );
+        if !self.row.is_empty() {
+            let row = self.row.to_attribute(ctx);
+            builder = builder.attr(ABILITY_ROW_ATTR, row);
+        }
+        if let Some(convention) = self.convention {
+            builder = builder.attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
+        }
+        let ty = builder.intern(ctx);
+        FuncSig::from_type_ref(ctx, ty)
+            .expect("source func_sig constructor must produce a valid type")
+    }
 }
 
 /// Read convention only through a validated source signature; `None` for
@@ -4971,7 +4971,10 @@ mod tests {
         let loc = location(&mut ctx);
         let i32_ty = core::I32::type_ref(&mut ctx);
         let ability = ability_type(&mut ctx, "State");
-        let direct = func_sig(&mut ctx, i32_ty, [i32_ty], CallingConvention::Direct).as_type_ref();
+        let direct = FuncSig::params([i32_ty], i32_ty)
+            .convention(CallingConvention::Direct)
+            .intern(&mut ctx)
+            .as_type_ref();
 
         let id = identity_func(&mut ctx, loc, "id", direct, i32_ty);
 
@@ -4992,7 +4995,10 @@ mod tests {
         let indirect_call = CallIndirect::operands(function_ref_value, [x]).build(&mut ctx, loc);
         ctx.push_op(entry, indirect_call.op_ref());
 
-        let lambda_ty = func_sig(&mut ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
+        let lambda_ty = FuncSig::params([], i32_ty)
+            .convention(CallingConvention::Direct)
+            .intern(&mut ctx)
+            .as_type_ref();
         let lambda_block = block(&mut ctx, loc, &[]);
         let lambda_return = Return::operands(x).build(&mut ctx, loc);
         ctx.push_op(lambda_block, lambda_return.op_ref());
@@ -5318,7 +5324,9 @@ mod tests {
             (CallingConvention::EvidenceDirect, 1),
             (CallingConvention::Cps, 2),
         ] {
-            let ty = func_sig(&mut ctx, i32_ty, [i32_ty], convention);
+            let ty = FuncSig::params([i32_ty], i32_ty)
+                .convention(convention)
+                .intern(&mut ctx);
             assert_eq!(ty.result(&ctx), i32_ty);
             assert_eq!(ty.inputs(&ctx), &[i32_ty]);
             assert_eq!(

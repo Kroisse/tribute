@@ -493,7 +493,7 @@ impl Instance<'_> {
         }
         row.tail = None;
         let convention = self.class(&row);
-        let ty = tribute_control::func_sig_with_convention(ctx, ty, convention);
+        let ty = signature.with_convention(ctx, convention).as_type_ref();
         ctx.op_attrs_mut(op).insert("type", Attribute::Type(ty));
     }
 }
