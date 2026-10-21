@@ -865,26 +865,57 @@ mod tests {
             ),
         );
         let (types, _) = collect_gc_types(&mut ctx, module).unwrap();
-        let GcTypeDef::Array(element) = &types[array as usize] else {
-            panic!("the filled array's type is an array");
-        };
-        let StorageType::Val(ValType::Ref(reference)) = element.element_type else {
-            panic!("the element is a reference: {:?}", element.element_type);
-        };
         assert!(
             matches!(
-                reference.heap_type,
-                wasm_encoder::HeapType::Abstract {
-                    ty: wasm_encoder::AbstractHeapType::Struct,
-                    ..
-                }
+                &types[array as usize],
+                GcTypeDef::Array(element) if matches!(
+                    element.element_type,
+                    StorageType::Val(ValType::Ref(wasm_encoder::RefType {
+                        heap_type: wasm_encoder::HeapType::Abstract {
+                            ty: wasm_encoder::AbstractHeapType::Struct,
+                            ..
+                        },
+                        ..
+                    }))
+                )
             ),
-            "{reference:?}"
+            "{:?}",
+            types[array as usize]
         );
         let binary = crate::emit_module_to_wasm(&mut ctx, module).unwrap();
         wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
             .validate_all(&binary.bytes)
             .unwrap();
+    }
+
+    #[test]
+    fn an_array_without_a_declared_type_takes_its_element_from_the_value() {
+        let mut ctx = IrContext::new();
+        let array = FIRST_USER_TYPE_IDX;
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+                    wasm.func @fill() {{
+                        %n = wasm.i32_const {{value = 2}} : core.i32
+                        %x = wasm.i64_const {{value = 7}} : core.i64
+                        %array = wasm.array_new %n, %x {{type_idx = {array}}} : wasm.arrayref
+                        %i = wasm.i32_const {{value = 1}} : core.i32
+                        wasm.array_set %array, %i, %x {{type_idx = {array}}}
+                        wasm.return
+                    }}
+                }}"#
+            ),
+        );
+        let (types, _) = collect_gc_types(&mut ctx, module).unwrap();
+        assert!(
+            matches!(
+                &types[array as usize],
+                GcTypeDef::Array(element) if element.element_type == StorageType::Val(ValType::I64)
+            ),
+            "{:?}",
+            types[array as usize]
+        );
     }
 
     #[test]

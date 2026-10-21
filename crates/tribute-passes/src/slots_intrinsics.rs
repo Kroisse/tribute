@@ -304,6 +304,25 @@ mod tests {
         for identity in tribute_ir::runtime_items::SLOTS_INTRINSICS {
             assert!(SlotsOp::from_identity(identity).is_some(), "{identity}");
         }
+        assert_eq!(SlotsOp::from_identity("std::runtime::Slots::set"), None);
+        assert_eq!(SlotsOp::from_identity("std::Int::+"), None);
+        assert_eq!(LowerSlotsIntrinsics.name(), "lower-slots-intrinsics");
+    }
+
+    #[test]
+    fn leaves_a_call_of_another_shape_untouched() {
+        let output = lower(
+            r#"core.module @test {
+  func.func @"std::runtime::Slots::len$Nat"(%s: adt.array<core.i32>) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::len"}
+  func.func @run(%s: adt.array<core.i32>, %n: core.i32) -> core.i32 {
+    %0 = func.call %s, %n {callee = @"std::runtime::Slots::len$Nat"} : core.i32
+    func.call %s {callee = @"std::runtime::Slots::len$Nat"}
+    func.return %0
+  }
+}"#,
+        );
+        assert_eq!(output.matches("func.call").count(), 2, "{output}");
+        assert!(!output.contains("adt.array_len"), "{output}");
     }
 
     #[test]
