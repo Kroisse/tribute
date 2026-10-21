@@ -128,7 +128,7 @@ Runtime 함수는 `Bytes` argument를 호출 동안 빌리고, `Bytes` 결과는
 
 ### Array
 
-Evidence가 아닌 `core.array<E>` 값은 compiler가 할당하는 RC object다.
+[`adt.array<E>`](ir.md#adt-배열) 값은 compiler가 할당하는 RC object다.
 
 ```text
 Array: [len: i64] [element: E...]
@@ -149,33 +149,21 @@ Array: [len: i64] [element: E...]
 
 ### Evidence
 
-Native evidence와 그 marker는 runtime이 할당하는 RC object다.
+Evidence와 marker는
+[compiler 소유 runtime 모듈](modules.md#compiler-소유-runtime-모듈)에 선언한
+[source 타입](cps-effects.md#handle-evidence-extension--handler-closures)이다.
+Evidence는 marker의 일반 [배열](#array)이고 marker는 일반 struct다. 다른 배열과
+struct처럼 [typed ownership plan](#1-typed-ownership-and-rtti-plan)이 ownership을
+계획하고, 할당 descriptor를 받으며, 예약 RTTI index나 별도의 release 함수를 갖지
+않는다.
 
-```text
-Evidence: [len: u64] [marker: Marker...]
-Marker:   [ability_id: i32] [prompt_tag: i32] [dispatch: closure 또는 null]
-          [shadowed: Marker 또는 null] [outer: Evidence 또는 null]
-```
+두 object는 만들어진 뒤 바뀌지 않는다. Evidence runtime은 `Slots`의 복사 연산으로
+새 evidence를 만들 뿐 원소를 덮어쓰지 않는다. 참조는 먼저 만들어진 object만
+가리키므로 순환하지 않는다.
 
-Evidence는 `ability_id` 순으로 정렬된 marker 참조의 배열이다. 두 object는 만들어진 뒤
-바뀌지 않으며, 모든 참조 필드는 owned 참조다. 다른 object의 안쪽을 가리키는 주소는
-없다. 참조는 먼저 만들어진 object만 가리키므로 순환하지 않는다.
-
-- Marker의 `dispatch`는 handler를 설치할 때 `tribute_rt.into_raw`로 넘겨받은 closure의
-  unit이다. `shadowed`는 같은 ability에서 이 marker가 가린 marker이고, `outer`는
-  handler를 설치하기 전의 evidence다.
-- Evidence를 새로 만드는 연산(extend, mask, dup, push, with_tail)은 그대로 넘겨받는
-  marker를 marker마다 한 번 retain한다. 새 marker를 만드는 연산은 그 marker가 가리키는
-  closure, marker, evidence를 각각 retain한다.
-- 이미 있는 evidence를 돌려주는 연산(outer, tail)은 그 evidence를 retain해 돌려준다.
-- Evidence의 release는 marker를 모두 release한 뒤 자신을 해제하고, marker의 release는
-  세 참조 필드를 release한 뒤 자신을 해제한다.
-
-Runtime 함수는 evidence와 closure argument를 호출 동안 빌리고, 결과는 호출자가 unit
-하나를 갖는 새 값으로 돌려준다. Marker의 dispatch closure를 찾아 주는 함수도 그
-closure를 retain해 돌려주므로, 호출자는 evidence가 release된 뒤에도 그 closure를 부를
-수 있다. Handler를 설치하는 함수만 예외로, `into_raw`가 넘긴 closure의 unit을 새
-marker가 갖는다.
+Marker의 dispatch closure는 `Option(Dispatch)` 필드에 담긴 managed closure 값이다.
+Handler를 설치하는 lowering은 그 closure를 다른 managed argument처럼 runtime 항목
+호출에 넘기며 `core.ptr`로 바꾸지 않는다.
 
 Evidence parameter는 다른 physical input과 같은 ownership contract를 따른다.
 
@@ -455,9 +443,8 @@ block을 만들므로 이런 edge를 만들지 않는다.
 `adt.typeref`는 type 자체로 managed다. Native RC-header allocation을 표현하는
 검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
 contract로 분류한다. `core.bytes`는 [`Bytes`](#bytes) 객체에 대한 managed 참조이고,
-evidence type은 [evidence](#evidence) 객체에 대한 managed 참조다. 그 밖의
-`core.array`는 원소 타입과 관계없이 [array](#array) 객체에 대한 managed 참조다.
-Evidence와 일반 배열은 `layout = "evidence"` 식별자로만 가른다.
+`adt.array`는 원소 타입과 관계없이 [array](#array) 객체에 대한 managed 참조다.
+Unmanaged linear array인 `core.array`는 RC 객체가 아니다.
 Function/code address, borrowed buffer, `core.ptr`는 unmanaged다. 변환 결과가
 pointer라는 사실은 이 분류에 참여하지 않는다.
 
@@ -588,7 +575,7 @@ into control flow and atomic operations by RC lowering.
     같은 함수의 뒤따르는 쓰기나 호출된 함수의 쓰기가 파생 값을 해제할 수 있다. 쓰는
     쪽은 cast와 closure capture를 거쳐 같은 객체에 도달할 수 있으므로 판정은
     특정 SSA 값이 아니라 layout의 nominal identity로 한다.
-  - 배열도 같다. Module 안의 어떤 `adt.array_set`이든 쓰는 `core.array` 타입은 교체
+  - 배열도 같다. Module 안의 어떤 `adt.array_set`이든 쓰는 `adt.array` 타입은 교체
     가능한 layout이며, 그 타입에서 `adt.array_get`이 읽은 managed 원소는 projection
     직후 자신의 unit을 획득한다. 그 밖의 배열 타입에서 읽은 원소는 borrow할 수 있는
     projection이다.
@@ -753,7 +740,7 @@ RC lowering follows a semantic-to-physical order:
 1. Validate callable origins and managed-reference boundaries on typed IR.
 2. Compute ownership actions and RTTI field information while `adt.typeref`
    identity is still available.
-3. Evidence lowering이 이미 만든 `tribute_rt.into_raw` consuming transfer를 plan이
+3. Native lowering이 이미 만든 `tribute_rt.into_raw` consuming transfer를 plan이
    검증·기록하고, `tribute_rt.retain`과 `tribute_rt.release`만 materialize한다.
 4. Erase managed references to `core.ptr` and lower the explicit RC operations
    to physical refcount updates and type-specific destruction.
@@ -762,16 +749,6 @@ No later pass may reconstruct managedness from a raw pointer, symbol spelling,
 ABI marker, operand position, or erased provenance. A shallow release may be
 used only as an explicitly documented intermediate implementation stage; the
 semantic contract requires type-specific release of owned managed fields.
-
-네이티브 evidence ABI에는 명시적인 typed ownership handoff가 있다. 네이티브 lowering은
-runtime 경계를 넘는 managed closure 값마다 `tribute_rt.into_raw`를
-만든다. 이 값의 타입은 closure base layout이다. Ownership plan은 그 exact closure base
-타입, managed input, result 하나의
-`core.ptr` 형상과 action anchor를 검증하고, 그 unit을 소비된 transfer로 기록한다.
-이미 raw/null인 dispatch operand는 `into_raw`를 만들지 않으며 계속 unmanaged다.
-같은 exact closure root의 same-block `into_raw`가 N개이면 plan은 첫 transfer 앞에
-N-1 copy-acquire를 둔다. 그 밖의 live use, alias, cross-block group과
-malformed/stale `into_raw`는 typed planning 경계에서 fail-closed한다.
 
 ### Type-specific release
 
@@ -830,8 +807,7 @@ Native closure는 RC header, code pointer, capture를 담은 RC 객체 하나다
 - Base와 각 capture layout은 서로 다른 할당 descriptor다. 이 layout들은
   `layout`과 `closure_base`로만 식별하며 struct 이름이나 필드 모양으로 판별하지
   않는다. 각 layout의 release 함수는 code pointer를 unmanaged 필드로 두고 plan이
-  managed로 판정한 capture만 release한 뒤 객체를 해제한다. Marker가 담은 dispatch
-  closure도 runtime이 header의 RTTI index로 같은 release 함수를 찾는다.
+  managed로 판정한 capture만 release한 뒤 객체를 해제한다.
 - `closure.new`의 결과는 capture layout 할당에서 base로의 upcast다. Upcast가 그
   입력의 유일한 사용이면 할당의 unit은 경로가 하나이므로, `tribute_rt.into_raw`는
   이렇게 upcast된 값도 정확한 closure 소유 값으로 받는다.
@@ -981,8 +957,6 @@ Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다
 | ---- | ---- |
 | `0` | [`Bytes`](#bytes). `owner`를 release한 뒤 `cap`을 읽어 해제 |
 | `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`. 고정 크기 release |
-| `5` | [Evidence](#evidence). Marker를 모두 release한 뒤 `len`을 읽어 해제 |
-| `6` | Evidence의 marker. 참조 필드를 release한 뒤 고정 크기로 해제 |
 | 예약 범위 다음 | ownership planning이 할당 순서대로 정한 struct, variant, 배열의 descriptor |
 
 예약 범위는 compiler가 생성하는 할당 operation 없이 runtime이나 boxing lowering이
@@ -995,7 +969,7 @@ base와 capture layout마다 descriptor를 하나씩 가지며, 배열의 descri
 
 RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. Table과
 `__tribute_deep_release`는 그 프로그램의 모듈 안에서만 index를 해석한다. Runtime과
-공유하는 번호는 runtime이 직접 할당하는 `Bytes`의 `0`, evidence의 `5`, marker의 `6`뿐이며
+공유하는 번호는 runtime이 직접 할당하는 `Bytes`의 `0`뿐이며
 고정이다. 그 밖의 예약 범위를 늘릴 때는 호환 단계가 필요 없고, 사용자 layout index는
 예약 범위 바로 다음부터 시작한다. 따로 컴파일한 단위 사이에서 객체가
 오가게 되면 이 전제가 깨지므로, 그때는 번호 대신 header나 descriptor가 스스로 layout을

@@ -89,7 +89,7 @@ flowchart TB
 
     subgraph native_passes["tribute-passes/src/native/"]
         abi["target ABI validation + physicalization\nroot bridge + closure lowering"]
-        effect["effect ABI lowering\nnative evidence runtime + proper-tail calls"]
+        effect["effect ABI lowering\nevidence runtime 항목 호출 + proper-tail calls"]
         bytes["bytes intrinsic lowering\nverified identity → runtime 호출"]
         storage["finalize_closure_storage_layout"]
         list_lower["opaque List lowering\nnative::list::lower\nlist.* → private RC nodes"]
@@ -320,7 +320,7 @@ entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 
 `core.ptr`는 이미 선택된 explicit RC operation의 physical operand일 뿐이다.
 
 Plan의 RTTI 배치는 plan을 만든 직후 descriptor(struct layout, enum layout의
-variant 하나, 또는 evidence가 아닌 `core.array` 타입)마다 하나의
+variant 하나, 또는 `adt.array` 타입)마다 하나의
 `tribute_rtti.layout` 선언으로 모듈에 기록한다. 선언이 담는 내용은
 [runtime-types.md](runtime-types.md#ir에서의-표현)를 따른다. index는 plan의
 할당 순서대로 사용자 RTTI index 공간에서 정한다.
@@ -344,11 +344,7 @@ cast는 pointer를 바꾸지 않는다. RTTI 생성은 선언이 모든 할당 d
 header에 기록하고 선언을 지운다. Backend는 RTTI 이름 규칙을 알지 않는다.
 
 Native RC materialization은 같은 type-erasure 전 경계에서 검증된 plan을 즉시
-소비한다. Evidence runtime에 저장할 managed `_closure`는 이 경계에서만
-`tribute_rt.into_raw`로 ownership unit 하나를 transfer하며, 이후 명시적 conversion이
-이를 unmanaged `core.ptr`로 낮춘다. Runtime은 closure를 RC header로만 retain하고,
-release는 header의 RTTI index로 그 layout의 release 함수를 찾으므로 capture 수나
-layout을 알 필요가 없다. IR을 바꾸기 전에 전체 insertion schedule을 검증하며,
+소비한다. IR을 바꾸기 전에 전체 insertion schedule을 검증하며,
 `func_to_clif` 뒤에는 ownership, liveness, pointer provenance를 다시 발견하는 pass를
 실행하지 않는다.
 

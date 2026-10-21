@@ -377,9 +377,9 @@ Evidence는 ability identity를 key로 하는 불변 Marker 배열이며 같은 
 가려진 marker를 연결로 유지한다. Shared effect ABI는 명시적 evidence operand와
 `effect.extend`, `effect.mask`, `effect.dup`, `effect.dispatch_tail`,
 `effect.dispatch_cps`만 사용하며 concrete marker field나 runtime layout을 선택하지
-않는다. Native는 runtime pointer를, WasmGC는 GC array/struct reference를 사용한다.
-Target별 field layout, runtime 함수와 dispatch signature는
-[cps-effects.md](cps-effects.md#handle-evidence-extension--handler-closures)가 정의한다.
+않는다. Marker와 evidence 표현, runtime 함수와 dispatch signature는 두 target이
+공유하며 [cps-effects.md](cps-effects.md#handle-evidence-extension--handler-closures)가
+정의한다.
 
 Handler 설치는 새 evidence 값을 만든다. 같은 ability instance의 nested handler는
 기존 marker를 가리며, lookup은 가장 위의 marker를 선택한다. 각 handler
@@ -914,15 +914,13 @@ query는 모듈 결과에서 해당 함수를 선택한다. 함수 이름으로 
 
 ### Logical representation
 
-Shared IR의 Evidence는 `Array(Marker)`이고 Marker의 field identity는
-`ability::MarkerField`가 정의한다. Typechecked ability row는 실행에 필요한 ability
+Shared IR의 Evidence는 runtime 모듈의 marker struct를 원소로 하는 `adt.array`이고
+marker의 필드는 그 source 선언이 정의한다. Typechecked ability row는 실행에 필요한 ability
 instance를 결정한다. Evidence 배열 자체에 source ability-row parameter를 붙이지
 않으며 exact target callable contract로 전달한다.
 
-Native와 Wasm의 concrete array/marker 표현 및 lookup helper 반환형은 서로 다르다.
-Shared pass는 `effect.*`를 사용하고 [target evidence ABI](cps-effects.md)를 직접
-구성하지 않는다. Native lookup은 runtime pointer와 marker index/helper를, Wasm
-lookup은 GC Evidence reference와 concrete Marker reference를 사용한다.
+Shared pass는 `effect.*`를 사용하고 [evidence runtime 항목](cps-effects.md)을 직접
+부르지 않는다. 두 target의 effect lowering이 같은 runtime 항목을 부른다.
 
 ### Runtime identity와 ordering
 

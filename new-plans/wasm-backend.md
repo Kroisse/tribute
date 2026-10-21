@@ -82,7 +82,6 @@ trunk-ir (Mid-level)
 ├── wasm.return_call      # direct proper tail transfer
 ├── wasm.return_call_indirect
 │                         # indirect proper tail transfer
-├── wasm.func             # evidence runtime helper 구현
 │
 ▼ trunk-ir-wasm-backend
 │   (gc_types_collection: wasm.* ops에서 타입 수집)
@@ -96,15 +95,15 @@ Effect lowering은 target별로 수행한다. Shared ability lowering은 `effect
 `wasm/evidence_to_wasm`은 [representation/ABI 경계](ir.md#representationabi-경계)
 안에서 `effect.*`를 공유 value/control dialect로 낮춘다. Evidence 조회와 확장은
 native와 같은
-[evidence runtime ABI](cps-effects.md#handle-evidence-extension--handler-closures)의
-몸체 없는 helper 선언을 `func.call`로 호출한다. Canonical closure layout은 `adt.struct_get`으로
+[evidence runtime 항목](cps-effects.md#handle-evidence-extension--handler-closures)을
+`func.call`로 호출한다. Canonical closure layout은 `adt.struct_get`으로
 풀고, semantic role에 맞게 `func.call_indirect` 또는 `call_conv = "tail"`
 signature의 proper-tail `func.tail_call_indirect`를 만든다. 이 lowering은 `wasm.*`
 operation을 만들지 않고 `tribute.calling_convention`을 읽거나 쓰지 않는다.
 
-Helper 구현은 target이 제공하는 runtime이다. 출구 뒤 Wasm lowering은 참조된
-몸체 없는 helper 선언을 GC 배열 위의 이진 탐색 구현으로 바꾼다. Marker 생성과
-field 접근은 이 구현 안에만 있다. Wasm dialect lowering은 `effect.*`를 보지 않는다.
+Runtime 항목은 다른 source 함수처럼 compile되며, marker와 evidence는 일반 GC
+struct와 배열이다. Marker 생성과 field 접근은 runtime 항목 안에만 있다. Wasm
+dialect lowering은 `effect.*`를 보지 않는다.
 
 ### Wasm 결과 슬롯
 
@@ -168,7 +167,7 @@ Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 �
 
 Wasm 경계를 넘어 새로 생성되는 모든 `wasm.*` operation의 result type과 block
 argument type은 Wasm target `TypeConverter`가 만든 값이어야 한다. Shared IR
-spelling을 그대로 복사하면 `adt.typeref`나 logical `core.array`가 backend-ready
+spelling을 그대로 복사하면 `adt.typeref`나 logical `adt.array`가 backend-ready
 경계까지 남아, physical assignability와 GC layout 검증이 정상 producer를
 거부한다. 이것은 구현 편의가 아니라 [ir.md](ir.md)의 backend-ready 소거
 요구를 Wasm 쪽에서 만족시키는 조건이다.
@@ -364,16 +363,14 @@ user-defined type은 그 뒤에 배치된다:
 | 1 | `BytesArray` |
 | 2 | `BytesStruct` |
 | 3 | `_closure { code: i32 }`, 모든 closure 값의 base |
-| 4 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: (ref null 3), shadowed: anyref, outer: anyref }` |
-| 5 | `Evidence` array |
-| 6 | `Described { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
-| 7+ | user-defined structs, arrays, variants, closure capture layouts |
+| 4 | `Described { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
+| 5+ | user-defined structs, arrays, variants, closure capture layouts |
 
 이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
-verifier는 closure 3, marker 4, evidence 5, described 6, user-defined type 7+를 정확히
+verifier는 closure 3, described 4, user-defined type 5+를 정확히
 사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
 Index 0은 `"boxed_f64"`, index 1은 `"bytes_data"`, index 2는 `"bytes"`,
-index 3-6은 `"closure"`, `"evidence_marker"`, `"evidence"`, `"described"`
+index 3과 4는 `"closure"`, `"described"`
 [runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. 경계 출구의
 명목 타입 `core.bytes`는 Wasm lowering의 첫 단계에서 `"bytes"` layout struct로
 바뀐다. 이 변환은 alias, 연산 속성, 결과와 block 인자뿐 아니라 ADT field, variant
@@ -394,8 +391,7 @@ use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입�
 
 Struct 이름이나 원소 타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
 원소가 `core.i8`인 배열도 `"bytes_data"`가 없으면 bytes 배열이 아니다.
-Closure는 environment를 따로 두지 않고, Marker의 dispatch closure field는
-`anyref`가 아니라 closure base 타입을 쓴다.
+Closure는 environment를 따로 두지 않는다.
 
 ```wasm
 ;; 생성된 type section 예시
@@ -510,9 +506,9 @@ layout들로 이루어진다.
   environment 입력이 `$closure_S`이므로 두 타입은 서로를 가리킨다. 모든 GC 타입이
   rec group 하나에 들어 있으므로 이 재귀를 그대로 선언할 수 있다. 호출은
   `call_ref`, proper tail transfer는 `return_call_ref`가 되고 closure function
-  table은 필요 없다. Handler dispatch는 signature가 하나로 고정되어 있으므로 Marker의
-  dispatch 필드는 그 signature의 base를 쓴다. Capture layout, code 함수의 downcast,
-  storage surface의 규칙은 같다.
+  table은 필요 없다. Handler dispatch는 signature가 하나로 고정되어 있으므로
+  evidence runtime의 `Dispatch`는 그 signature의 base다. Capture layout, code 함수의
+  downcast, storage surface의 규칙은 같다.
 
 ### GC 인덱스 등록의 소유권
 
@@ -521,8 +517,6 @@ GC 연산의 concrete `type_idx`는 해당 연산이 접근하는 레이아웃�
 전역 등록하지 않는다. `structref`·`anyref` 인자와 필드는 다른 함수의
 projection, 생성 또는 참조 연산의 등장 순서와 무관하게 추상 타입을 유지한다.
 Concrete nominal 타입의 등록과 연산별 narrowing cast는 그대로 유지한다.
-Evidence 배열은 type 변환 뒤에도 `layout = "evidence"`를 가진 타입으로 emission까지
-남고, 그 식별자로 index 5를 받는다. Erased `arrayref`는 evidence로 간주하지 않는다.
 
 ### GC struct 필드의 scalar 표현
 
@@ -547,7 +541,7 @@ Wasm에는 `i8`과 `i16` 값 타입이 없다. `core.i8`과 `core.i16` 값은 `i
 - 상위 비트가 결과에 영향을 주는 연산(`cmpi`, `divsi`/`divui`, `remsi`/`remui`,
   `shr`/`shru`, `sitofp`/`uitofp`)은 좁은 정수에서 낮추지 않는다. 이 연산은
   target 변환 경계에서 거부된다.
-- Packed 배열(`core.array<core.i8>`, `core.array<core.i16>`)의 원소 읽기는
+- Packed 배열(`adt.array<core.i8>`, `adt.array<core.i16>`)의 원소 읽기는
   `array.get_u`로 낮춘다. 상위 비트를 정하지 않으므로 `array.get_s`도 맞지만 하나로
   고정한다. 쓰기는 `array.set`이 하위 비트만 저장한다.
 
@@ -563,12 +557,12 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 | 값 타입 | 슬롯 | 판정 |
 | --- | --- | --- |
 | builtin 레이아웃 인덱스를 갖는 타입 | 같은 인덱스를 갖는 다른 표기 | 허용 |
-| builtin 레이아웃 인덱스를 갖는 struct (`"bytes"`, closure, marker 등) | `structref`, `anyref` | 허용 |
+| builtin 레이아웃 인덱스를 갖는 struct (`"bytes"`, closure 등) | `structref`, `anyref` | 허용 |
 | `supertype`을 가진 `wasm_gc.struct` | 그 supertype과 그 위의 supertype | 허용 |
 | supertype | 그 subtype | 거부 (downcast) |
 | `wasm_gc.struct` (사용자 struct, variant, closure capture layout) | `structref`, `anyref` | 허용 |
-| builtin 배열 레이아웃 (Bytes backing array, Evidence array) | `arrayref`, `anyref` | 허용 |
-| `core.array` | `arrayref`, `anyref` | 허용 |
+| builtin 배열 레이아웃 (Bytes backing array) | `arrayref`, `anyref` | 허용 |
+| `adt.array` | `arrayref`, `anyref` | 허용 |
 | 등록 근거가 없는 타입 표기 | `structref`, `anyref` | 거부 |
 | `anyref` | `structref` | 거부 (downcast) |
 | `arrayref`, `funcref`, `externref`, `i31ref` | `structref` | 거부 |

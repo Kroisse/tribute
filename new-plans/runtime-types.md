@@ -38,17 +38,17 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 - 소스 enum의 각 variant마다 하나. 같은 enum의 variant descriptor는 같은 enum
   descriptor를 가리킨다.
 - Compiler가 할당하는 값마다 하나. Boxing된 `Bool`, `Nat`, `Int`, `Float`, runtime도
-  할당하는 `Bytes`, native evidence와 그 marker, compiler 소유 layout(closure 등)이
-  여기에 속한다. RC 객체로 할당하지 않는 unmanaged 값은 descriptor를 갖지 않는다.
+  할당하는 `Bytes`, compiler 소유 layout(closure 등)이 여기에 속한다. RC 객체로
+  할당하지 않는 unmanaged 값은 descriptor를 갖지 않는다.
 - Native closure는 [closure 저장 layout](ir.md#closure-저장-layout)마다 하나다.
   Capture 타입 목록이 같은 closure는 layout과 descriptor를 공유하고, capture 없는
   closure는 base layout의 descriptor를 쓴다. Code 필드의 종류는 unmanaged
   포인터이고, capture 필드의 종류는 다른 할당 필드처럼 의미 타입에서 정한다. 필드
   이름은 없다.
   Wasm closure의 descriptor는 [Wasm 배치](#wasm-배치)가 정한다.
-- Native 배열은 `core.array` 타입마다, 곧 원소 타입마다 하나다. 필드 목록 대신
+- Native 배열은 `adt.array` 타입마다, 곧 원소 타입마다 하나다. 필드 목록 대신
   원소의 필드 종류 하나를 가지며, 원소 수는 값마다 다르므로 값이 스스로 가진다.
-  Evidence 배열은 위의 compiler 할당 값에 속한다. Wasm 배열의 descriptor는
+  Wasm 배열의 descriptor는
   [Wasm 배치](#wasm-배치)가 정한다.
 
 이름만 다르고 모양이 같은 두 struct는 같은 layout을 쓰고 서로 다른 descriptor를
@@ -84,7 +84,7 @@ Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 o
 - Nominal layout을 마지막으로 해석하는 target 경계가 descriptor를 소유한다. 이
   경계는 `(layout 타입, tag)`마다 번호와 필드 종류를 정해 module 수준
   `tribute_rtti.layout` 선언으로 남긴다. Native 배열의 descriptor는
-  `(core.array 타입, tag 없음)`이다. 할당 operation(`adt.struct_new`,
+  `(adt.array 타입, tag 없음)`이다. 할당 operation(`adt.struct_new`,
   `adt.variant_new`, native에서 배열을 만드는 [`adt` 배열 operation](ir.md#adt-배열))을
   내리는 pass는 번호를 스스로 정하지 않고 이 선언에서 읽어 할당에 새긴 뒤 선언을
   지운다. Native는 RC header의 RTTI index, Wasm은 사용자 struct와 variant 객체의
@@ -127,7 +127,7 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
 - GC 타입은 structural로 합친다. 필드 표현이 같은 struct와 variant는 같은 GC
   타입이며, runtime identity는 descriptor 필드가 맡는다. 그래서 variant마다 별개의
   GC 타입 index를 둘 필요가 없다.
-- Builtin layout(bytes, closure, marker, evidence, boxing된 scalar)은 지금처럼
+- Builtin layout(bytes, closure, boxing된 scalar)은 지금처럼
   예약 GC 타입을 쓰며, descriptor 필드를 두지 않는다. 이 값들의 descriptor 번호는
   자기 예약 GC 타입 index다. 사용자 struct와 variant의 번호는 예약 GC 타입 index
   범위 다음부터 할당 순서대로 정한다. Closure를 제외한 builtin layout은 layout마다 필드와
