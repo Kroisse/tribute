@@ -220,9 +220,8 @@ impl Scope {
             Visibility::Private => module.clone(),
             // The resolver reports a path that names no module around the
             // declaration, which is then private.
-            Visibility::Restricted(scope) => {
-                restriction_module(self.package_depth, module, scope).unwrap_or_else(|| module.clone())
-            }
+            Visibility::Restricted(scope) => restriction_module(self.package_depth, module, scope)
+                .unwrap_or_else(|| module.clone()),
         };
         let own = Restriction {
             within: Some(within),
@@ -242,9 +241,7 @@ pub(crate) fn restriction_module(
     scope: &[Symbol],
 ) -> Option<SymbolPath> {
     let named = path::absolute_path(package_depth, module, scope).ok()??;
-    module
-        .starts_with(&named)
-        .then(|| SymbolPath::new(named))
+    module.starts_with(&named).then(|| SymbolPath::new(named))
 }
 
 /// The package the prelude is the root of. Its declarations' identities and

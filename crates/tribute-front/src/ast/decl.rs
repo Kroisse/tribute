@@ -104,7 +104,11 @@ impl std::fmt::Display for Visibility {
         match self {
             Visibility::Private => f.write_str("private"),
             Visibility::Restricted(path) => {
-                write!(f, "pub({})", itertools::Itertools::format(path.iter(), "::"))
+                write!(
+                    f,
+                    "pub({})",
+                    itertools::Itertools::format(path.iter(), "::")
+                )
             }
             Visibility::Public => f.write_str("pub"),
         }
