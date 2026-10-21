@@ -241,7 +241,8 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
   `instantiate`의 row가 다른 람다의 binder를 가리키면 그 람다들이 모두 조합 하나씩만
   가진 뒤에 복제하므로, 한 람다가 같은 조합의 복사본을 둘 갖지 않는다.
 - 모든 `func_sig`에 convention을 쓴다. 정의, 람다, 값과 block 인자의 타입, 참조의 결과,
-  `ability.operation`의 타입과 tuple layout의 원소가 모두 포함된다.
+  `ability.operation`의 타입, tuple layout의 원소, 그리고 operation이 이름을 쓰지 않아도
+  context가 type alias로 게시하는 nominal layout의 필드가 모두 포함된다.
   [추론된 row](ir.md#추론된-row)인 정의 자신의 convention은 tail이 class 변수일 때만
   tail을 읽는다.
 
