@@ -171,7 +171,8 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
     items
 }
 
-/// The module whose body contains the byte offset `offset` of `source`.
+/// The identity path of the module whose body contains the byte offset
+/// `offset` of `source`, as the module's declarations record it.
 pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> SymbolPath {
     fn descend(
         items: &[ModuleItem<UnresolvedName>],
@@ -201,7 +202,7 @@ pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> 
             &mut path,
         );
     }
-    path
+    tribute_front::resolve::identity_path(0, &path)
 }
 
 /// The items of `items` the body of `module` names. A declaration of the
@@ -589,6 +590,16 @@ mod tests {
             .collect();
         assert_eq!(named.len(), 2, "{named:#?}");
         assert!(named.iter().all(|item| item.module.is_some()));
+    }
+
+    #[test]
+    fn test_completions_inside_a_user_std_module() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "mod std {\n    fn local() -> Nat { 1 }\n}\nfn main() -> Nil {}\n";
+        let source = make_source(&db, text);
+        let items = completion_items(&db, source);
+        let module = module_at(&db, source, text.find("fn local").unwrap());
+        assert!(completions_in(items, &module).any(|item| item.name == "local"));
     }
 
     #[test]

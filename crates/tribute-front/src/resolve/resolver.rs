@@ -1138,7 +1138,7 @@ impl<'db> Resolver<'db> {
                 ModuleItem::Decl(decl) => {
                     let decl = self.resolve_decl(decl);
                     entries.push(DeclEntry {
-                        module: SymbolPath::new(self.module_path.iter().cloned()),
+                        module: super::identity_path(self.package_depth, &self.module_path),
                         decl,
                     });
                 }

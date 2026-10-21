@@ -65,6 +65,15 @@ prelude는 패키지 `std`의 루트 모듈이다. 선언의 식별자는 그 �
 한정된 참조는 표기한 텍스트를 `::`로 다시 나누지 않고 component 단위로 해석하며,
 component 하나의 이름에 `::`가 들어 있어도 그 이름은 component 하나다.
 
+컴파일하는 패키지(사용자 패키지)의 식별 경로와 IR symbol은 자기 패키지 component를
+생략하고 모듈 경로로 시작한다(`main`, `geometry::area`). 생략한 경로의 첫
+component가 의존하는 패키지의 이름이면 생략하지 않고 `pkg`로 시작한다. 그래서 사용자
+패키지의 `mod std { pub fn f() … }`의 `f`는 `pkg::std::f`이고, 패키지 `std`의
+선언과 식별자나 symbol을 공유하지 않는다. `pkg`는 경로 키워드이므로 어떤 모듈의
+이름도 될 수 없어 이 경로는 다른 선언과 겹치지 않는다. 패키지를 별도 build 단위로
+다루기 전까지 이것이 식별 경로 규칙이다. 소스에서 이 모듈은 여전히 `std::f`나
+`pkg::std::f`로 쓰며, 사용자의 `std` 선언이 패키지 `std`를 가린다.
+
 모든 모듈은 prelude 루트 항목을 짧은 이름으로 본다. 값과 타입(`Option`, `Some`,
 `String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
 (`Option::map`, `Int::to_string`, `abilities::Throw`). 사용자 선언이 같은 이름을 가지면

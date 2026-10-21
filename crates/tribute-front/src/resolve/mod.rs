@@ -341,6 +341,24 @@ pub(crate) fn restriction_module(
     module.starts_with(&named).then(|| SymbolPath::new(named))
 }
 
+/// The identity path of the module at the package-root path `module`, in
+/// a package whose root is the module at its first `package_depth`
+/// segments.
+///
+/// A library package's paths start with its name. The package being
+/// compiled omits its own, unless the path would then start with a library
+/// package's name: such a path starts with `pkg`, which names no module.
+pub fn identity_path(package_depth: usize, module: &[Symbol]) -> SymbolPath {
+    let qualified =
+        package_depth == 0 && module.first().is_some_and(|first| first == LIBRARY_PACKAGE);
+    SymbolPath::new(
+        qualified
+            .then(|| Symbol::new("pkg"))
+            .into_iter()
+            .chain(module.iter().cloned()),
+    )
+}
+
 /// The package the prelude is the root of. Its declarations' identities and
 /// symbols start with this path; every module sees its root items under
 /// their short names.
@@ -473,6 +491,8 @@ fn collect_definition<'db>(
     prefix: &mut SymbolPath,
     scope: &Scope,
 ) {
+    // The identity path of the module, which the declarations' ids extend.
+    let mut ids = identity_path(scope.package_depth, prefix);
     // Every binding of a declaration, its members' included, has the
     // declaration's visibility.
     let restriction = match decl {
@@ -483,9 +503,7 @@ fn collect_definition<'db>(
         Decl::Ability(a) => Some((&a.name, &a.visibility)),
         Decl::Use(_) => None,
     }
-    .and_then(|(name, visibility)| {
-        scope.restriction(prefix, prefix.child(name.clone()), visibility)
-    });
+    .and_then(|(name, visibility)| scope.restriction(prefix, ids.child(name.clone()), visibility));
     let restrict = |env: &mut ModuleEnv<'db>, binding: Binding<'db>| {
         if let Some(restriction) = &restriction {
             env.restrict(binding, restriction.clone());
@@ -493,14 +511,14 @@ fn collect_definition<'db>(
     };
     match decl {
         Decl::Function(func) => {
-            let qualified = prefix.child(func.name.clone());
+            let qualified = ids.child(func.name.clone());
             let id = FuncDefId::new(db, qualified);
             env.add_function(func.name.clone(), id);
             restrict(env, Binding::Function { id });
         }
 
         Decl::ExternFunction(func) => {
-            let qualified = prefix.child(func.name.clone());
+            let qualified = ids.child(func.name.clone());
             let id = FuncDefId::new(db, qualified);
             env.add_function(func.name.clone(), id);
             restrict(env, Binding::Function { id });
@@ -508,7 +526,7 @@ fn collect_definition<'db>(
 
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
-            let qualified = prefix.child(s.name.clone());
+            let qualified = ids.child(s.name.clone());
             let type_def_id = TypeDefId::source(db, qualified.clone(), s.id);
             let ctor_id = CtorId::new(db, qualified);
             env.add_type(s.name.clone(), type_def_id);
@@ -525,10 +543,10 @@ fn collect_definition<'db>(
 
             // Register field accessors in struct's namespace
             // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
-            prefix.push(s.name.clone());
+            ids.push(s.name.clone());
             for field in &s.fields {
                 if let Some(field_name) = field.name.clone() {
-                    let field_qualified = prefix.child(field_name.clone());
+                    let field_qualified = ids.child(field_name.clone());
                     let func_id = FuncDefId::new(db, field_qualified);
                     let binding = Binding::Function { id: func_id };
                     restrict(env, binding.clone());
@@ -541,29 +559,29 @@ fn collect_definition<'db>(
 
                     // The field's setter and modifier, e.g. Point::x::set
                     let namespace = SymbolPath::new([s.name.clone(), field_name.clone()]);
-                    prefix.push(field_name.clone());
+                    ids.push(field_name.clone());
                     for name in FIELD_LENS_FUNCTIONS {
                         let name = Symbol::new(name);
-                        let id = FuncDefId::new(db, prefix.child(name.clone()));
+                        let id = FuncDefId::new(db, ids.child(name.clone()));
                         restrict(env, Binding::Function { id });
                         env.add_to_namespace(namespace.clone(), name, Binding::Function { id });
                     }
-                    prefix.pop();
+                    ids.pop();
                 }
             }
-            prefix.pop();
+            ids.pop();
         }
 
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
-            let qualified = prefix.child(e.name.clone());
+            let qualified = ids.child(e.name.clone());
             let type_def_id = TypeDefId::source(db, qualified, e.id);
             env.add_type(e.name.clone(), type_def_id);
             restrict(env, Binding::TypeDef { id: type_def_id });
 
             // Add each variant as a constructor in the enum's namespace
             for variant in &e.variants {
-                let variant_qualified = prefix.child(variant.name.clone());
+                let variant_qualified = ids.child(variant.name.clone());
                 let variant_id = CtorId::new(db, variant_qualified);
                 let binding = Binding::Constructor {
                     id: variant_id,
@@ -589,7 +607,7 @@ fn collect_definition<'db>(
 
         Decl::Ability(a) => {
             // Create AbilityId for this ability
-            let qualified = prefix.child(a.name.clone());
+            let qualified = ids.child(a.name.clone());
             let ability_id = AbilityId::source(db, qualified);
 
             // Register the ability itself (for handler pattern resolution)
@@ -625,7 +643,7 @@ fn collect_definition<'db>(
                 }
                 if u.visibility != Visibility::Private && !prefix.is_root() {
                     let restriction =
-                        scope.restriction(prefix, prefix.child(import_name.clone()), &u.visibility);
+                        scope.restriction(prefix, ids.child(import_name.clone()), &u.visibility);
                     env.add_export(Export {
                         module: prefix.clone(),
                         name: import_name.clone(),
@@ -652,7 +670,8 @@ fn collect_module<'db>(
     // then register them under the module's namespace
     if let Some(body) = &m.body {
         let path = prefix.child(m.name.clone());
-        let restriction = scope.restriction(prefix, path.clone(), &m.visibility);
+        let identity = identity_path(scope.package_depth, &path);
+        let restriction = scope.restriction(prefix, identity, &m.visibility);
         if let Some(restriction) = &restriction {
             env.restrict_module(path, restriction.clone());
         }
