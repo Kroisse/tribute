@@ -1,33 +1,48 @@
 # Basic I/O
 
-> 이 문서는 Tribute의 builtin ambient `Io` ability와 기본 표준 입출력 API를
-> 정의한다.
+> 이 문서는 표준 입출력 host ability `std::io::Io`, 그 위의 일반 ability
+> `std::io::Console`, 기본 표준 입출력 API를 정의한다.
 
 ## Goals
 
 - 외부 입출력을 ability row에서 추적한다.
 - `print`, `print_line`, `read_line`을 일반 함수 API로 제공한다.
-- 런타임 경계인 `Io`와 사용자가 처리할 수 있는 algebraic ability를 구분한다.
-- Native와 Wasm이 같은 source API와 target-independent I/O boundary를 사용한다.
+- 입출력도 다른 ability와 같은 규칙을 따른다. Compiler가 특별히 아는 ambient
+  ability는 없으며, `Io`와 `Console`은 모두 prelude source에 선언한 ability다.
+- 일반 코드는 handle 없는 `Console`을 요구하고, host 권한인 `Io`는 handler를
+  설치하는 곳에만 나타난다.
+- Native와 Wasm이 같은 source API와 같은 host 경계를 사용한다.
 
-사용자가 정의한 ability로 host 기능을 여는 일반 모델은
-[host-interface.md](host-interface.md)가 정한다.
-
-표준 라이브러리는 별도의 `Console` ability를 제공하지 않는다. 테스트 가능한
-추상화가 필요한 프로그램은 `Logger`, `Terminal` 같은 application-specific
-ability를 정의하고 handler에서 `std::io` 함수를 호출할 수 있다.
+두 층의 구성 원칙은 [std-host-abilities.md](std-host-abilities.md)가, host
+ability의 일반 규칙은 [host-abilities.md](host-abilities.md)가 정한다.
 
 ## Public API
 
 The `std::io` module exports:
 
 ```rust
-// Io is a virtual, compiler-owned builtin export.
-// No source `ability` declaration or synthetic AST node exists.
+// host ability (표시 문법은 host-abilities.md의 미정 사항)
+pub ability Io {
+    fn stdout() -> Option(OutStream)
+    fn stderr() -> Option(OutStream)
+    fn stdin() -> Option(InStream)
+    fn write(out: OutStream, bytes: Bytes) -> Result(Nil, StreamError)
+    fn read(input: InStream, max: Nat) -> Result(Bytes, StreamError)
+}
+
+pub ability Console {
+    fn write(bytes: Bytes) -> Nil
+    fn read_line() -> Result(String, Error)
+}
 
 pub struct SystemError {
     code: Int
     message: String
+}
+
+pub enum StreamError {
+    Closed
+    System(SystemError)
 }
 
 pub enum Error {
@@ -36,190 +51,133 @@ pub enum Error {
     System(SystemError)
 }
 
-pub fn print(message: String) ->{Io} Nil
-pub fn print_line(message: String) ->{Io} Nil
-pub fn read_line() ->{Io, Throw(Error)} String
+pub fn console(app: fn() ->{e, Console} a) ->{e, Io} a
+
+pub fn print(message: String) ->{Console} Nil
+pub fn print_line(message: String) ->{Console} Nil
+pub fn read_line() ->{Console, Throw(Error)} String
 ```
 
-사용자는 resolver가 제공하는 `std::io::Io`를 `use std::io::Io` 또는 qualified
-ability annotation으로 참조한다. `Io`를 사용하기 위해 별도의 ability를 선언하지 않는다.
+`OutStream`과 `InStream`은 host resource 타입이다
+([Host Resource](std-host-abilities.md#host-resource)). Tribute source는 이 값을
+만들 수 없고 `Io`의 operation 결과로만 얻는다.
+
+`Io`와 `Console`은 일반 module export다. 사용자가 정의한 다른 module의
+`ability Io {}`는 이름이 같아도 별개의 ability다.
 
 API 이름은 Tribute의 일반 함수 naming을 따른다. 개행을 추가하는 함수는
 `println`이 아니라 기존 이름인 `print_line`을 사용한다.
 
-## `Io`: Builtin Ambient Ability
+## `Io` Host Ability
 
-`std::io::Io`는 operation이 없는 compiler-owned builtin ability다. 타입
-시스템은 일반 effect label처럼 전파하고 ability annotation과 diagnostic에
-표시한다.
+`Io`는 표준 stream을 얻고 stream을 읽고 쓰는 host ability다. Host가 처리하며,
+Tribute handler로 가로챌 수도 있다([Host Ability](host-abilities.md#host-ability)).
 
-```rust
-fn greet(name: String) ->{Io} Nil {
-    print("Hello, ")
-    print_line(name)
-}
-```
+- `stdout`, `stderr`, `stdin`은 host가 준 표준 stream을 돌려준다. Host가 그 stream을
+  제공하지 않으면 `None`이다.
+- `write`는 `bytes`를 모두 쓰거나 실패한다. 일부만 쓴 결과는 돌려주지 않는다.
+- `read`는 1바이트 이상 `max`바이트 이하를 돌려준다. 더 읽을 것이 없으면
+  `Err(StreamError::Closed)`다. `max`가 0이면 빈 `Bytes`를 돌려준다.
+- 그 밖의 host 실패는 `StreamError::System`이다.
 
-`Io`의 ambient 성질은 다음과 같다.
+이후 파일처럼 다른 host ability가 돌려주는 stream도 같은 `write`와 `read`로
+다룬다.
 
-- 사용자는 `Io`를 handler로 제거할 수 없다.
-- `main`에 처리되지 않은 채 남을 수 있는 terminal effect다.
-- `Io`를 요구하는 함수는 runtime/host I/O boundary를 호출할 수 있다.
-- ambient ability를 선언하는 사용자 문법은 제공하지 않는다.
-- 사용자가 정의한 `ability Io {}`는 별개의 일반 ability이며 ambient가 아니다.
+## `Console`과 `console` Handler
 
-Compiler는 이름 문자열만 비교하지 않고 canonical builtin identity
-`std::io::Io`를 등록하여 이 성질을 판정한다.
+`Console`은 handle이 없는 표준 입출력 ability다. `print`, `print_line`, `read_line`은
+`Console`만 요구하므로, 이를 쓰는 코드는 host 권한을 갖지 않는다.
 
-`Io`의 semantic identity는 source ability identity와 구분되는 compiler-owned
-builtin discriminator를 가진다. Resolver는 `std::io::Io`를 virtual builtin binding으로
-노출하므로 `use std::io::Io`와 qualified ability annotation은 일반 module export처럼
-동작하지만, 사용자 AST에 synthetic `ability` declaration을 삽입하지 않는다. 따라서
-사용자가 선언한 `ability Io {}`는 이름이 같아도 builtin metadata를 얻지 않는다.
+- `print`는 message를 UTF-8 `Bytes`로 바꿔 `Console::write`를 호출한다.
+  `print_line`은 끝에 `\n` 하나를 붙여 한 번 호출한다.
+- `read_line`은 `Console::read_line`의 `Err`를 `Throw(Error)`로 바꾼다.
 
-이 virtual binding은 아직 file-based module loader를 요구하지 않는다. 이후 기본 I/O
-함수와 오류 타입은 embedded standard-library source의 `std::io` module로 제공하지만,
-`Io`의 ambient 성질은 source declaration이 아니라 builtin identity에 연결한다. Source
-module export와 virtual `Io` binding은 resolver의 동일한 `std::io` namespace에서
-결합된다. Builtin identity는 frontend 판정용이며 runtime ability ID나 Evidence marker를
-암시하지 않는다.
+`console`은 `Console`을 `Io`로 구현하는 표준 handler다. 설치할 때 표준 stream을
+한 번 얻어 두고, `Console::write`는 stdout에, `Console::read_line`은 stdin에서 읽은
+한 줄로 처리한다.
+
+테스트나 다른 출력 대상이 필요한 코드는 `Console`을 처리하는 handler를 직접
+씌운다. `Console`의 handler는 `Io`를 요구하지 않아도 된다.
 
 ## Calling Convention
 
-`Io`를 요구하는 함수와 `read_line`처럼 실패할 수 있는 operation을 수행하는 함수가
-어떤 호출 규약을 쓰는지는 [CPS 전략](cps-effects.md#호출-규약)이 정한다. 언어
-수준에서 `Io`는 handler 없이 수행할 수 있는 ambient ability라는 점만 정한다.
+`Io`와 `Console`은 `fn` operation만 가지므로, 둘 중 하나만 요구하는 함수는
+`EvidenceDirect` 규약을 쓴다. `read_line`처럼 `Throw(Error)`를 함께 요구하면 더
+강한 CPS 규약을 쓴다. 규약은 [CPS 전략](cps-effects.md#호출-규약)이 정한다.
 
 ## Entrypoint
 
-`main`은 command 형태의 host가 부르는 [entrypoint](host-interface.md#entrypoint)이며
-`Nil`을 반환해야 한다. 모든 residual effect는 오류이지만 builtin `std::io::Io`와
-[host가 처리하는 ability](host-interface.md#host가-처리하는-ability)는 예외적으로 허용한다.
+`main`은 `Nil`을 반환해야 한다. `main`의 residual row에는
+[host ability](host-abilities.md#host-ability)만 남을 수 있다. 처리되지 않은
+`Throw(Error)`나 host ability가 아닌 ability가 남으면 frontend가 backend lowering
+전에 거부한다.
 
 ```rust
 fn main() ->{Io} Nil {
+    with console
     print_line("Hello")
 }
 ```
 
+`Console`은 host ability가 아니므로 `main`이 처리하지 않고 남기면 거부한다.
+`main`은 `console` 같은 handler로 `Console`을 처리하고 `Io`를 host interface로
+남긴다.
+
 Native와 Wasm entrypoint는 target에 맞는 initial evidence를 만들어
 `EvidenceDirect` main에 전달한다. 현재 representation에서는 empty evidence로
-충분하지만 이를 source-level ABI로 고정하지 않는다. 처리되지 않은 `Throw(Error)`나
-host가 처리할 수 없는 사용자 ability가 남아 있으면 frontend가 backend lowering 전에
-거부한다.
+충분하지만 이를 source-level ABI로 고정하지 않는다.
 
 ## `read_line` Contract
 
 ```rust
-fn read_line() ->{Io, Throw(std::io::Error)} String
+fn read_line() ->{Console, Throw(std::io::Error)} String
 ```
+
+`Console::read_line`을 처리하는 handler는 다음 계약을 지킨다. `console` handler도
+마찬가지다.
 
 - 반환하는 문자열에서 line ending (`\n` 또는 `\r\n`)을 제거한다.
 - 빈 줄은 빈 `String`을 정상 반환한다.
 - EOF 전에 일부 문자를 읽었다면 line ending이 없어도 마지막 줄로 반환한다.
-- 아무 문자도 읽지 못한 상태에서 EOF에 도달하면 `Error::EndOfFile`을 throw한다.
-- 입력이 유효한 UTF-8이 아니면 `Error::InvalidEncoding`을 throw한다.
-- OS 또는 host I/O 실패는 `Error::System`으로 변환한다.
+- 아무 문자도 읽지 못한 상태에서 EOF에 도달하면 `Error::EndOfFile`이다.
+- 입력이 유효한 UTF-8이 아니면 `Error::InvalidEncoding`이다.
+- OS 또는 host I/O 실패는 `Error::System`이다.
 
-EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 반환 타입을
-`Option(String)`으로 만들지 않는다. `Abort`는 EOF를 나타내지 않는다.
+EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 `read_line`의 반환
+타입을 `Option(String)`으로 만들지 않는다. `Abort`는 EOF를 나타내지 않는다.
 
-## Runtime Boundary
+## Host Boundary
 
-Public API는 `extern "C"`, WASI import, `__print_line` 같은 target detail을
-노출하지 않는다. Shared lowering은 동적 `Bytes`를 읽고 쓸 수 있는
-target-independent I/O boundary를 생성한다.
+`Io`는 [host 경계](host-abilities.md#host-경계)를 따라 target에 내려간다. Public
+API는 `extern "C"`, WASI import, runtime symbol 같은 target detail을 노출하지
+않는다.
 
-```text
-tribute_io.write(bytes: Bytes, newline: Bool) -> Nil
-tribute_io.read_line() -> ReadLineResult
-
-ReadLineResult =
-    Line(valid_utf8: Bytes)
-  | EndOfFile
-  | InvalidEncoding
-  | System(code: Int, message_utf8: Bytes)
-```
-
-Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 `write`를
-호출한다. `read_line`의 `Line` payload와 `System` message는 boundary가 유효한 UTF-8임을
-보장하므로 source wrapper가 `String::from_bytes`로 감싼다. 나머지 status는
-`std::io::Error`로 변환하여 `Throw(Error)` operation을 호출한다.
-
-`tribute_io.*`는 shared IR operation이며 public source symbol이 아니다. Embedded source가
-사용하는 private runtime bridge stub은 frontend lowering에서 이 operation으로 즉시 바뀌고,
-target pipeline 이전에는 제거된다. Shared contract는 target ABI를 포함하지 않으며,
-지원하는 native와 Wasm operation만 각 target boundary에서 완전히 소비된다. Wasm
-`read_line`은 해당 lowering이 구현되기 전까지 지원하지 않으며 검증에서 거부한다.
-
-- Native lowering은 `tribute-runtime`의 stdin/stdout ABI로 변환한다.
-- Wasm lowering은 현재 backend가 지원하는 WASI 또는 custom host import로 변환한다.
-- WASI preview2/component model 전환은 이 source API와 독립적인 후속 backend
-  작업이다.
-
-### Wasm Runtime Boundary
-
-현재 Wasm backend의 `Bytes`는 WasmGC `array i8`와 slice offset/length를 가진
-struct다. WASI preview1 `fd_write`의 iovec은 linear memory에 있어야 하므로 GC array
-reference를 직접 전달할 수 없다. 첫 구현은 instance-local linear scratch buffer를
-사용한다.
-
-- 출력할 `Bytes` slice를 GC array에서 scratch buffer로 복사한다.
-- `print_line`은 payload 끝에 `\n` 하나를 붙여 하나의 연속 구간으로 쓴다.
-- iovec과 `nwritten` cell도 compiler가 예약한 linear memory에 둔다.
-- payload가 현재 scratch capacity보다 크면 checked arithmetic으로 필요한 page 수를
-  계산해 memory를 grow한다. 실패는 현재 trap으로 처리한다.
-- `fd_write`가 partial write를 반환하면 iovec의 pointer/length를 갱신하여 남은 구간을
-  다시 쓴다. interrupt는 재시도하고 다른 host failure는 source-level `Throw`로
-  노출하지 않는다.
-- scratch pointer는 동기 host call 동안만 유효하며 host가 보관해서는 안 된다.
-- buffer는 instance 안에서 재사용한다. 현재 실행 모델은 single-threaded이며 threads나
-  reentrant host callback은 별도 정책이 필요하다.
-
-이 선택은 `tribute_io.write`의 target lowering 내부에만 존재한다. 이후 WASI
-preview2/component model이나 custom host import로 교체해도 source API와 shared IR
-boundary는 바뀌지 않는다. Wasm의 public I/O 지원은 동적 출력에 한정하며 `read_line`은
-지원하지 않는다.
-
-### Native Runtime ABI
-
-Native lowering은 다음 private C ABI를 사용한다. 이 ABI는 source API가 아니며
-`tribute-runtime`과 native compiler pipeline 사이에서만 공유된다.
-
-```text
-__tribute_io_write(bytes: *const TributeBytes, newline: u32) -> void
-__tribute_io_read_line() -> *mut NativeReadLineResult
-__tribute_io_read_line_result_dealloc(result: *mut NativeReadLineResult) -> void
-
-NativeReadLineResult = repr(C) {
-    tag: u32,                  // 0 Line, 1 EOF, 2 InvalidEncoding, 3 System
-    code: i32,                // System에서만 사용
-    bytes: *mut TributeBytes, // Line에서만 사용
-    message: *mut TributeBytes, // System에서만 사용, valid UTF-8
-}
-```
-
-Runtime은 Tribute enum이나 RTTI layout을 직접 생성하지 않는다. Native lowering이
-descriptor의 필드를 읽어 `std::io::ReadLineResult` ADT를 만들고 descriptor를 즉시
-해제한다. `bytes`와 `message`는 RC-managed `Bytes` payload이며 해당 variant로 소유권이
-이전된다. 사용하지 않는 pointer field는 null이다.
-
-`newline`은 native ABI에서 `u32` 0/1로 전달한다. Runtime은 `bytes`를 먼저 모두 쓰고,
-값이 1일 때만 `\n` 하나를 추가한다.
-
-`String` 출력은 rope를 `Bytes` chunk로 순회하거나 flatten하여 처리할 수 있지만,
-source-level `Io` 계약과 target-independent boundary는 어느 표현을 선택하든
-동일해야 한다. Wasm도 문자열 literal뿐 아니라 동적으로 만든 `String`을 출력할
-수 있어야 한다.
+- `Io`의 operation은 다른 host ability와 같은 방식으로 WIT interface의 함수가 되고,
+  `OutStream`과 `InStream`은 그 interface의 resource가 된다.
+- `Io`는 WASI interface를 그대로 옮긴 것이 아니라 Tribute가 정한 계약이다. Wasm
+  host는 이 interface를 WASI의 표준 stream 위에 구현할 수 있다.
+- Native에서는 `tribute-runtime`이 같은 interface를 C ABI 위에서 구현한다.
 
 ## Validation
 
-- `Io`가 일반 함수 호출을 통해 전파된다.
-- `{Io}` 함수와 호출은 `EvidenceDirect` ABI를 사용한다.
-- `{Io, Throw(Error)}`는 CPS ABI로 승격된다.
-- `main ->{Io} Nil`은 허용되고 다른 residual ability는 거부된다.
-- 사용자가 정의한 같은 이름의 ability는 ambient로 취급되지 않는다.
+- `Io`와 `Console`이 일반 함수 호출을 통해 전파된다.
+- `{Console}`만 요구하는 함수와 호출은 `EvidenceDirect` ABI를 사용한다.
+- `{Console, Throw(Error)}`는 CPS ABI로 승격된다.
+- `main ->{Io} Nil`은 허용되고, `Console`이나 다른 non-host ability가 남은 `main`은
+  거부된다.
+- 사용자가 정의한 같은 이름의 ability는 `std::io`의 ability와 구별된다.
+- `Console`을 처리하는 Tribute handler 아래에서 `print_line`은 host에 닿지 않는다.
 - `print`는 개행을 추가하지 않고 `print_line`은 정확히 하나 추가한다.
 - `read_line`은 빈 줄, 마지막 unterminated line, EOF, invalid UTF-8, system error를
   구분한다.
 - Native와 Wasm 모두 동적 `String` I/O를 처리한다.
+
+## 미정 사항
+
+- **표준 stream이 없거나 쓰기가 실패할 때.** `Io::stdout()`이 `None`이거나
+  `Io::write`가 실패했을 때 `console` handler가 출력을 버릴지, trap할지 정해야 한다.
+  `Console::write`는 실패를 돌려주지 않으므로 이 선택은 handler에 있다.
+- **표준 오류 출력.** `Console`에 stderr로 쓰는 operation을 둘지 정해야 한다.
+- **줄 단위 입력의 구현.** `console` handler는 `Io::read`의 byte 단위 결과에서 줄을
+  나눠야 한다. 호출 사이에 남은 byte를 보관할 handler 상태를 둘지, `Io`에 줄 단위
+  operation을 둘지 정해야 한다.

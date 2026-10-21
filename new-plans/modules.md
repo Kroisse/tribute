@@ -34,15 +34,15 @@ Gleam도 glob import를 지원하지 않으며, Rust/Haskell 커뮤니티에서�
 ### Compiler-owned builtin bindings
 
 파일 기반 module tree가 구성되기 전에도 compiler-owned binding은 resolver namespace에
-virtual export로 주입할 수 있다. 현재 `std::io::Io`와 runtime 전용 타입
-`std::runtime::Slots`가 이 경로를 사용한다. 사용자에게는
-`use std::io::Io`로 보이지만 사용자 AST나 prelude AST에 synthetic declaration을
-추가하지 않으며, semantic identity는 source declaration과 구분된다.
+virtual export로 주입할 수 있다. 현재 runtime 전용 타입 `std::runtime::Slots`가
+이 경로를 사용한다. 사용자 AST나 prelude AST에 synthetic declaration을 추가하지
+않으며, semantic identity는 source declaration과 구분된다. Ability는 이 경로를 쓰지
+않는다. 표준 입출력 ability도 prelude source에 선언한다([io.md](io.md)).
 
 이 경로는 일반 standard-library module loading을 대신하지 않는다. Source로 구현할 수
 있는 표준 타입과 함수는 장기적으로 file-based module system을 사용한다. 다만 source
 syntax와 backend-independent lowering이 canonical identity를 요구하는 opaque `List`와
-ambient/intrinsic 성질처럼 compiler가 보장해야 하는 metadata는 builtin registry에 둔다.
+intrinsic 성질처럼 compiler가 보장해야 하는 metadata는 builtin registry에 둔다.
 
 LSP는 import된 compiler-owned binding을 completion과 hover에 노출한다. 다만 이동할
 source declaration이 없으므로 go-to-definition과 rename target은 제공하지 않는다.
@@ -568,7 +568,7 @@ fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(
 // app/main.trb
 
 use std::collections::{List, Option}
-use std::io::{Io, print_line}
+use std::io::{Io, Console, console, print_line}
 
 struct User {
     name: String
@@ -576,6 +576,7 @@ struct User {
 }
 
 fn main() ->{Io} Nil {
+    with console
     let numbers = List::of(1, 2, 3, 4, 5)
 
     let result = numbers
@@ -593,7 +594,7 @@ fn main() ->{Io} Nil {
 }
 
 // 명시적 함수 전달 예시
-fn sort_and_print(items: List(String)) ->{Io} Nil {
+fn sort_and_print(items: List(String)) ->{Console} Nil {
     let sorted = List::sort(items, String::compare)
     sorted.each(fn(item) {
         print_line(item)

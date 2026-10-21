@@ -147,9 +147,9 @@ fn pure(x: a) ->{} a
 fn length(xs: List(a)) -> Nat
 ```
 
-`std::io::Io`도 ability row의 concrete label로 전파된다. 다만 compiler-owned
-ambient ability이므로 handler로 제거할 수 없고 `main`에 terminal effect로 남을
-수 있다. 표준 API는 [io.md](io.md)를, calling convention은
+Host ability도 ability row의 concrete label로 전파되며 handler로 처리할 수 있다.
+`main`에는 host ability만 남을 수 있다([host-abilities.md](host-abilities.md)).
+표준 입출력 API는 [io.md](io.md)를, calling convention은
 [cps-effects.md](cps-effects.md#호출-규약)를 따른다.
 
 `List(a)`도 compiler-owned nominal identity를 갖는다. List literal과 list pattern은
@@ -279,8 +279,8 @@ Label을 명시한 열린 row `{A | u}`를 닫힌 row나 label을 명시한 row�
 ```rust
 fn apply(x: a, f: fn(a) ->{eff} b) ->{eff} b { f(x) }
 
-// eff = {Io}; 본문 row {Io | eff}는 선언된 {Io}와 같다
-fn main() ->{Io} Nil { apply("io", print_line) }
+// eff = {Console}; 본문 row {Console | eff}는 선언된 {Console}과 같다
+fn shout() ->{Console} Nil { apply("io", print_line) }
 ```
 
 ### 지연된 호출의 effect
@@ -412,8 +412,8 @@ callee 선언 row의 명시 `L`과, callee의 tail 인스턴스가 명시한 `L`
 병합한 row가 아니라 인스턴스화에서 계산한다. `k = 0`이 가리기가 되는 것은 callee의
 tail 인스턴스가 caller의 tail로 이어질 때뿐이다. Tail이 닫혔거나 풀이 뒤에도 제약이
 없는 row 변수로 남으면(제약 없는 변수는 빈 row로 인스턴스화한 것과 같다) callee가
-caller tail의 handler에 닿는 자리가 없으므로 그대로 전달한다. Caller row가 명시하지 않은 label과
-handler marker가 없는 ambient `Io`는 그대로 전달한다. 이 결과는 typechecking이
+caller tail의 handler에 닿는 자리가 없으므로 그대로 전달한다. Caller row가 명시하지 않은 label은
+그대로 전달한다. 이 결과는 typechecking이
 각 호출에 확정하는 metadata이며 이후 단계는 signature나 본문 형상에서 다시
 계산하지 않는다. 표현과 lowering은
 [cps-effects.md](cps-effects.md#row-directed-evidence)를 따른다.
@@ -860,13 +860,13 @@ fn add(x: Int, y: Int) -> Int {
 ### Effect 전파
 
 ```rust
-fn fetch_and_print(url: String) ->{Http, Io} Nil {
+fn fetch_and_print(url: String) ->{Http, Console} Nil {
     let response = Http::get(url)
     print_line(response.body)
 }
 // Http::get : fn(String) ->{Http} Response
-// print_line : fn(String) ->{Io} Nil
-// 합집합: {Http, Io}
+// print_line : fn(String) ->{Console} Nil
+// 합집합: {Http, Console}
 ```
 
 ### Handler
@@ -876,7 +876,7 @@ fn with_state(comp: fn() ->{e, State(Int)} a) ->{e} a {
     run_state(comp, 0)
 }
 
-fn example() ->{Io} Int {
+fn example() ->{Console} Int {
     with_state(fn() {
         let n = State::get()
         State::set(n + 1)
@@ -884,8 +884,8 @@ fn example() ->{Io} Int {
         State::get()
     })
 }
-// comp의 effect: {Io, State(Int)}
-// State(Int) 소비 후: {Io}
+// comp의 effect: {Console, State(Int)}
+// State(Int) 소비 후: {Console}
 ```
 
 ### 고차 함수
@@ -909,10 +909,10 @@ fn compose(f: fn(a) ->{e1} b, g: fn(b) ->{e2} c) -> fn(a) ->{e1, e2} c {
 }
 
 let h = compose(
-    fn(x) { print_line(x); x },             // ->{Io}
+    fn(x) { print_line(x); x },             // ->{Console}
     fn(x) { Http::get(x) }                  // ->{Http}
 )
-// h : fn(String) ->{Io, Http} Response
+// h : fn(String) ->{Console, Http} Response
 ```
 
 ---

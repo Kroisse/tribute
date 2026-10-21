@@ -71,38 +71,28 @@ fn(String) ->{Http} Response             // Http만
 fn(String) ->{Http, Async} Response      // Http와 Async
 ```
 
-### Builtin Ambient Ability
+### Host Ability
 
-`std::io::Io`는 컴파일러가 소유하는 builtin ambient ability다. 외부 세계와의
-입출력을 ability row에서 추적하지만 사용자가 handler를 설치해 제거할 수는 없다.
+Program 밖의 기능은 host ability로 연다. Host ability는 program 안에서 처리되지
+않으면 host가 처리하는 일반 ability이며, 규칙은
+[host-abilities.md](host-abilities.md)가 정한다. Compiler가 특별히 아는 ambient
+ability는 없다. 표준 입출력도 prelude source에 선언한 host ability `std::io::Io`와
+그 위의 일반 ability `std::io::Console`로 제공한다([io.md](io.md)).
 
 ```rust
 use std::abilities::Throw
-use std::io::{Io, Error, print, print_line, read_line}
+use std::io::{Console, Error, print, print_line, read_line}
 
-fn greet(name: String) ->{Io} Nil {
+fn greet(name: String) ->{Console} Nil {
     print("Hello, ")
     print_line(name)
 }
 
-fn prompt() ->{Io, Throw(Error)} String {
+fn prompt() ->{Console, Throw(Error)} String {
     print("Name: ")
     read_line()
 }
 ```
-
-`Io`에는 operation이 없다. `print`, `print_line`, `read_line`은 runtime이
-제공하는 일반 함수이며 `Io`를 ability annotation으로 요구한다. 사용자는
-`ambient ability`나 `builtin ability`를 선언하는 문법을 사용할 수 없다.
-오직 canonical builtin identity인 `std::io::Io`만 ambient로 취급된다.
-Compiler는 builtin/source origin을 포함한 identity로 이를 구분하고,
-`std::io::Io`를 resolver namespace에 virtual export로 주입한다. 사용자 AST에
-synthetic ability declaration을 추가하지 않는다.
-
-Ambient는 "CPS를 사용하지 않는다"는 뜻이 아니다. 현재 ABI에서 `Io`만
-요구하는 함수는 evidence를 전달받되 continuation을 받지 않는
-`EvidenceDirect` 호출 규약을 사용한다. `Io`와 `Throw(Error)`처럼 general
-operation effect가 함께 있으면 더 강한 CPS 호출 규약을 사용한다.
 
 ## 함수 정의 문법
 
@@ -268,7 +258,7 @@ ability Stream(a) {
 
 // ❌ 불가: 다른 ability를 참조
 ability Reporter {
-    fn report(message: String) ->{Reporter, Io} Nil
+    fn report(message: String) ->{Reporter, Console} Nil
 }
 ```
 
@@ -280,8 +270,8 @@ ability Reporter {
     fn report(message: String) -> Nil
 }
 
-// handler가 Io effect를 사용하여 구현
-fn run_reporter(comp: fn() ->{e, Reporter} a) ->{e, Io} a {
+// handler가 Console effect를 사용하여 구현
+fn run_reporter(comp: fn() ->{e, Reporter} a) ->{e, Console} a {
     handle comp() {
         do result { result }
         fn Reporter::report(message) { print_line(message) }
@@ -355,7 +345,7 @@ ability Logger {
 }
 
 // handler (구현)
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
     handle comp() {
         do result { result }
         fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
@@ -452,7 +442,7 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 중첩하거나 하나의 handler에서 여러 ability를 처리할 수 있다:
 
 ```rust
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
     handle comp() {
         do result { result }
         fn Logger::log(msg) { print_line(msg) }
@@ -463,7 +453,7 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
 ## 전체 예시
 
 ```rust
-use std::io::{Io, print_line}
+use std::io::{Io, Console, console, print_line}
 
 ability Logger {
     fn log(msg: String) -> Nil
@@ -488,7 +478,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     }
 }
 
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
     handle comp() {
         do result { result }
         fn Logger::log(msg) { print_line(msg) }
@@ -496,6 +486,7 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
 }
 
 fn main() ->{Io} Nil {
+    with console
     fn() {
         fn() {
             counter()

@@ -92,6 +92,9 @@ Host operation의 parameter와 result는 WIT 타입으로 옮길 수 있는 타�
 - 위 타입으로 만든 `Option`, struct, enum은 WIT의 `option`, `record`, `variant`로
   옮기고 경계에서 값으로 펼친다. 제네릭 타입은 경계에서 인스턴스마다 구체 타입이
   되며, 인스턴스마다 WIT 타입 하나가 생긴다.
+- Host resource 값은 host가 만든 handle로 넘는다. Tribute source는 host resource
+  값을 만들 수 없으므로, 경계를 넘는 handle은 모두 host가 이전에 돌려준 것이다
+  ([Host Resource](std-host-abilities.md#host-resource)).
 - 실패는 operation의 결과 타입으로 돌려준다. 경계를 넘는 예외는 없다.
 
 다음은 경계를 넘지 못한다.
@@ -105,10 +108,11 @@ counting이나 [비순환 object 그래프](rc.md#비순환-object-그래프) �
 
 ## 표준 입출력과의 관계
 
-[`std::io::Io`](io.md)는 compiler가 정한 target I/O boundary에 고정된 builtin
-ambient ability다. Host interface는 같은 생각을 사용자가 정의한 ability로 일반화한다.
-`Io`를 host interface에 두는 일반 ability로 다시 정의할지는 미정이다. 그 전까지 `Io`는
-[io.md](io.md)의 규칙을 따른다. 특히 `Io`는 handler로 제거할 수 없다.
+표준 입출력도 host ability다. [`std::io::Io`](io.md#io-host-ability)는 prelude
+source에 선언한 host ability이며, 다른 host ability와 같은 규칙을 따른다. 특히
+Tribute handler로 가로챌 수 있다. Compiler가 특별히 아는 ambient ability는 없다.
+표준 host ability의 구성과 그 위의 일반 ability 층은
+[std-host-abilities.md](std-host-abilities.md)가 정한다.
 
 ## 미정 사항
 
@@ -124,9 +128,11 @@ ambient ability다. Host interface는 같은 생각을 사용자가 정의한 ab
 - **정수의 경계 표현.** WIT 정수는 고정 폭이다. 임의 정밀도 정수를 어느 폭으로
   넘길지, 범위를 넘는 값을 trap할지, 경계 전용 고정 폭 정수 타입을 따로 둘지 정해야
   한다.
-- **Host가 잡는 resource.** 파일이나 소켓처럼 host가 소유한 object를 Tribute가
-  가리키는 불투명 handle 타입이다. WIT의 `resource`로 옮긴다. Tribute 쪽 handle은
-  RC로 관리하고, 마지막 참조가 사라지면 resource의 drop을 호출하는 방식을 검토한다.
+- **Host resource의 선언과 수명.** Host resource는 host만 만든다
+  ([Host Resource](std-host-abilities.md#host-resource)). 남은 것은 resource 타입을
+  선언하는 문법, WIT `resource`의 own/borrow로 옮기는 규칙, 수명과 해제다. Tribute
+  쪽 handle은 RC로 관리하고, 마지막 참조가 사라지면 resource의 drop을 호출하는
+  방식과 명시적 close를 검토한다.
 - **Callback.** Host가 Tribute 함수를 다시 부르는 경로다. WIT에 함수 값이 없으므로
   Tribute가 export하는 resource로 감싼다. 이것도 entrypoint의 한 종류다. 그 함수가
   수행할 수 있는 effect와, 한 entrypoint가 실행 중일 때 host가 다른 entrypoint를 부르는
@@ -136,4 +142,3 @@ ambient ability다. Host interface는 같은 생각을 사용자가 정의한 ab
   구조다. CPS로 continuation을 heap에 두는 Tribute는 이 구조에 맞는다. Tribute 쪽
   scheduler handler가 continuation을 보관하고, 완료 이벤트에서 재개하는 방식을
   검토한다. Host operation 자체는 계속 `fn`이다.
-- **`Io`의 위치.** 위 [표준 입출력과의 관계](#표준-입출력과의-관계)를 참고한다.

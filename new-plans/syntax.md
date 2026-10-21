@@ -21,7 +21,7 @@ A?          선택적 (0개 또는 1개)
 ### Keywords
 
 ```text
-fn op do let const struct enum ability mod pub use extern case handle resume become as
+fn op do let const struct enum ability mod pub use extern case handle resume become as with
 True False Nil
 pkg super self
 ```
@@ -64,7 +64,7 @@ type where in
 &&  ||
 
 // 기타
-=  ->  ::  .  ,  ;  :  |  <>
+=  ->  <-  ::  .  ,  ;  :  |  <>
 
 // 괄호류
 (  )  {  }  [  ]
@@ -685,7 +685,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     }
 }
 
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
     handle comp() {
         do result { result }
         fn Logger::log(msg) { print_line(msg) }
@@ -733,7 +733,7 @@ fn fetch(url: String) ->{Http} Response {
     Http::get(url)
 }
 
-fn example() ->{State(Int), Io} Nil {
+fn example() ->{State(Int), Console} Nil {
     let n = State::get()
     print_line(Int::to_string(n))
 }
@@ -801,9 +801,11 @@ Runtime value를 기존 tail 앞에 붙이는 최소 public API는
 Block ::= '{' Statement* Expression? '}'
 
 Statement ::= LetStatement
+            | WithStatement
             | Expression ';'?
 
 LetStatement ::= 'let' Pattern (':' Type)? '=' Expression
+WithStatement ::= 'with' (ParamList '<-')? Expression
 ```
 
 **예시:**
@@ -823,6 +825,48 @@ x * { y + z }           // x * (y + z) 와 동일
 
 **Note:** `(expr)` 형태의 괄호 표현식은 지원하지 않음. 우선순위 조정에는
 `{ expr }` 사용. `(...)` 는 연산자-함수 `(+)`, `(<>)` 전용.
+
+### With Statement
+
+`with`는 block에서 그 뒤에 오는 나머지를 람다로 감싸 함수의 마지막 인자로 넘기는
+문법이다. 타입 규칙을 새로 두지 않으며, parser가 아래처럼 바꾼 식을 일반 식으로
+검사한다.
+
+| 형태 | 바뀐 식 |
+| --- | --- |
+| `with f(a, b)` | `f(a, b, fn() { 나머지 })` |
+| `with x <- f(a, b)` | `f(a, b, fn(x) { 나머지 })` |
+| `with x, y <- f(a)` | `f(a, fn(x, y) { 나머지 })` |
+| `with e` (`e`가 호출이 아닌 식) | `e(fn() { 나머지 })` |
+
+- **나머지**는 같은 block에서 `with` 뒤에 오는 문장과 마지막 식이다. 나머지가
+  비어 있으면 람다의 본문은 `Nil`이다. 람다의 결과가 block의 값이 된다.
+- `with`가 감싸는 범위는 그 block 끝까지다. 바깥 block의 뒤쪽 문장은 포함하지
+  않는다.
+- `with`를 여러 번 쓰면 앞의 것이 바깥이 된다. `with a` 다음 `with b`는
+  `a(fn() { b(fn() { 나머지 }) })`이다.
+- 호출은 `CallExpr`이나 `UFCSExpr` 형태의 식을 말한다. UFCS 호출 `with x.f(a)`는
+  `x.f(a, fn() { 나머지 })`, 즉 `f(x, a, fn() { 나머지 })`가 된다.
+- `<-`는 토큰 하나다. 비교 연산자 뒤에 음수 리터럴을 붙여 쓰는 `a<-1`은
+  `a <- 1`로 읽히므로 `a < -1`처럼 띄어 쓴다.
+
+**예시:**
+
+```rust
+fn main() ->{Io} Nil {
+    with console
+    print_line("Hello")
+}
+// console(fn() { print_line("Hello") })
+
+fn report(xs: List(Int)) ->{Console} Nil {
+    with x <- xs.each
+    print_line(Int::to_string(x))
+}
+// xs.each(fn(x) { print_line(Int::to_string(x)) })
+```
+
+Handler 설치처럼 계산 전체를 감싸는 함수를 들여쓰기 없이 쓰는 데 주로 쓴다.
 
 ### Record Expression
 
@@ -1289,7 +1333,7 @@ let x = 1; let y = 2; x + y
 
 ```rust
 use std::collections::{List, Option}
-use std::io::{Io, print_line}
+use std::io::{Io, Console, console, print_line}
 
 struct User {
     name: String
@@ -1305,7 +1349,7 @@ ability Logger {
     fn log(msg: String) -> Nil
 }
 
-pub fn greet(user: User) ->{Io} Nil {
+pub fn greet(user: User) ->{Console} Nil {
     let greeting = "Hello, " <> user.name <> "!"
     print_line(greeting)
 }
@@ -1319,7 +1363,7 @@ fn process(users: List(User)) ->{Logger} List(String) {
         })
 }
 
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
     handle comp() {
         do result { result }
         fn Logger::log(msg) { print_line("[LOG] " <> msg) }
@@ -1327,6 +1371,7 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
 }
 
 fn main() ->{Io} Nil {
+    with console
     let users = [
         User { name: "Alice", age: 30 },
         User { name: "Bob", age: 17 },
