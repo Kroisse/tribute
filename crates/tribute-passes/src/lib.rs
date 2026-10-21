@@ -32,6 +32,7 @@ pub mod target_abi;
 mod test_support;
 pub mod tribute_control_to_cps;
 pub mod type_converter;
+pub mod unreferenced_source_functions;
 pub mod wasm;
 
 // Re-exports

@@ -36,12 +36,11 @@
 //!     ▼ ast_to_ir
 //! Module (source-logical callable/control IR)
 //!     │
-//!     ▼ global DCE (artifact compiles only: unreachable source-logical
-//!     │             functions skip CPS legalization)
+//!     ▼ eliminate_unreferenced_source_functions (artifact compiles only:
+//!     │   unreachable source-logical functions skip CPS legalization)
 //!     ▼ specialize_convention_classes (when the frontend leaves classes to
-//!     │   it), then global DCE again (artifact compiles only); the registered
-//!     │   compiler intrinsics' signatures are read again from the specialized
-//!     │   declarations
+//!     │   it), then eliminate_unreferenced_source_functions again
+//!     │   (artifact compiles only)
 //!     ▼ tribute_control_to_cps → lower_continuation_frames →
 //!       lower_closure_lambda → intrinsic/list/io lowering
 //! Module (CPS callable contracts, explicit evidence, and general
@@ -809,16 +808,15 @@ pub fn run_through_cps_lowering(
     let Some(FrontendCompilation {
         context,
         module: m,
-        mut compiler_intrinsics,
+        compiler_intrinsics,
     }) = compile_frontend_for_shared_route(db, source)
     else {
         return Ok(None);
     };
     let mut ctx = context;
-    specialize_convention_classes(&mut ctx, m, &mut compiler_intrinsics, SourceFunctions::All)?;
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
-    let mut pm = structural_pass_pipeline(compiler_intrinsics);
+    let mut pm = structural_pass_pipeline(compiler_intrinsics, SourceFunctions::All);
     pm.run(&mut ctx, core_module, &mut Default::default())?;
     Ok(Some((ctx, m)))
 }
@@ -827,64 +825,31 @@ pub fn run_through_cps_lowering(
 // Full Pipeline (Orchestration)
 // =============================================================================
 
-/// Drop the source-logical functions nothing reachable from the roots
-/// references, before CPS legalization.
-///
-/// The prelude and every struct's field functions are lowered whole; most
-/// programs use little of either. Removing the rest here keeps every later
-/// pass from converting functions the target pipeline would discard anyway.
-///
-/// Bodyless declarations stay: CPS legalization checks the registered
-/// compiler intrinsics against them, and they cost no lowering.
-fn eliminate_unreferenced_source_functions(ctx: &mut IrContext, m: Module) {
-    trunk_ir::transforms::eliminate_dead_definitions(ctx, m, |ctx, op| {
-        tribute_ir::dialect::tribute_control::Func::matches(ctx, op) && ctx.op_has_regions(op)
-    });
-}
-
 /// Who specializes convention classes: the frontend, or the class
 /// specialization pass at the head of the structural pipeline.
 const CONVENTION_CLASSES: tribute_front::monomorphize::ConventionClasses =
     tribute_front::monomorphize::ConventionClasses::Frontend;
 
-/// Specialize convention classes when the frontend left them to the pass,
-/// remove the definitions that leaves unreferenced if `functions` asks, and
-/// read the registered compiler intrinsics' signatures again from their
-/// specialized declarations.
-fn specialize_convention_classes(
-    ctx: &mut IrContext,
-    m: Module,
-    compiler_intrinsics: &mut [tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration],
-    functions: SourceFunctions,
-) -> PassResult<()> {
-    if CONVENTION_CLASSES != tribute_front::monomorphize::ConventionClasses::Pass {
-        return Ok(());
-    }
-    let core_module =
-        core_dialect::Module::from_op(ctx, m.op()).expect("frontend output must be a core.module");
-    let mut pm = PassManager::new();
-    pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
-    pm.run(ctx, core_module, &mut AnalysisCache::new())?;
-    if functions == SourceFunctions::Reachable {
-        eliminate_unreferenced_source_functions(ctx, m);
-    }
-    let table = trunk_ir::symbol_table::SymbolTable::collect(ctx, m);
-    for declaration in compiler_intrinsics {
-        if let Some(function) = table.resolve_in(ctx, m.op(), &declaration.symbol)
-            && let Ok(function) = tribute_ir::dialect::tribute_control::Func::from_op(ctx, function)
-        {
-            declaration.callable_type = function.r#type(ctx);
-        }
-    }
-    Ok(())
-}
-
 /// Build the shared structural pass pipeline that legalizes source-logical
-/// callable/control IR into CPS with explicit evidence.
+/// callable/control IR into CPS with explicit evidence. For
+/// [`SourceFunctions::Reachable`], it first removes the functions nothing
+/// reachable references, and again after class specialization.
 fn structural_pass_pipeline(
     compiler_intrinsics: Vec<tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration>,
+    functions: SourceFunctions,
 ) -> PassManager {
+    use tribute_passes::unreferenced_source_functions::EliminateUnreferencedSourceFunctions;
+
     let mut pm = PassManager::new();
+    if functions == SourceFunctions::Reachable {
+        pm.add_pass(EliminateUnreferencedSourceFunctions);
+    }
+    if CONVENTION_CLASSES == tribute_front::monomorphize::ConventionClasses::Pass {
+        pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
+        if functions == SourceFunctions::Reachable {
+            pm.add_pass(EliminateUnreferencedSourceFunctions);
+        }
+    }
     if cfg!(debug_assertions) {
         pm.add_pass(tribute_passes::check_convention_classes::CheckConventionClasses);
     }
@@ -952,7 +917,7 @@ fn shared_middle_end(
     let FrontendCompilation {
         context,
         module: m,
-        mut compiler_intrinsics,
+        compiler_intrinsics,
     } = frontend;
     let mut ctx = context;
 
@@ -962,12 +927,8 @@ fn shared_middle_end(
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     // One cache for the phase: every pass and boundary check reuses analyses
     // of unchanged IR, and any IR change discards them.
-    if functions == SourceFunctions::Reachable {
-        eliminate_unreferenced_source_functions(&mut ctx, m);
-    }
-    specialize_convention_classes(&mut ctx, m, &mut compiler_intrinsics, functions)?;
     let mut analyses = AnalysisCache::new();
-    let mut structural_pm = structural_pass_pipeline(compiler_intrinsics);
+    let mut structural_pm = structural_pass_pipeline(compiler_intrinsics, functions);
     structural_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     // CPS effect handling, function-local phase: lower_ability_call produces

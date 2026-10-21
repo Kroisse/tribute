@@ -12,11 +12,11 @@ use trunk_ir::types::StringRef;
 use trunk_ir::{IrContext, SymbolPath};
 
 use super::{
-    Call, CallIndirect, CompilerIntrinsicDeclaration, Func, FuncRef, FuncSig, Handle, Handler,
-    Instantiate, Lambda, OperationDeclaration, OperationDeclarationUse, Perform, Resume,
-    TailCallIndirect, ValidationError, Yield, compiler_intrinsic_map, contains_adt_typeref,
-    func_sig_parts, nominal_identity, parent_region, push_op_error, push_type_error,
-    walk_region_ops,
+    Call, CallIndirect, CallingConvention, CompilerIntrinsicDeclaration, Func, FuncRef, FuncSig,
+    Handle, Handler, Instantiate, Lambda, OperationDeclaration, OperationDeclarationUse, Perform,
+    Resume, TailCallIndirect, ValidationError, Yield, compiler_intrinsic_map, contains_adt_typeref,
+    func_sig_convention, func_sig_parts, nominal_identity, parent_region, push_op_error,
+    push_type_error, walk_region_ops,
 };
 use crate::dialect::{adt, list};
 
@@ -545,18 +545,17 @@ fn verified_callable_declaration(
     if ctx.op_has_regions(function) {
         return true;
     }
-    let (Some(symbol), Some(identity), Some(func_sig_type)) = (
+    let (Some(symbol), Some(identity)) = (
         qualified_name(ctx, function),
         Func::from_op(ctx, function)
             .ok()
             .and_then(|function| function.compiler_intrinsic_identity(ctx)),
-        ctx.op_attrs(function).get_type("type"),
     ) else {
         return false;
     };
-    registered.get(&symbol).is_some_and(|declaration| {
-        declaration.identity == identity && declaration.callable_type == func_sig_type
-    })
+    registered
+        .get(&symbol)
+        .is_some_and(|declaration| declaration.identity == identity)
 }
 
 /// The callee of `op` when it is a source-logical indirect call.
@@ -584,7 +583,7 @@ pub(super) fn validate_callable_origins(
     nominal_layouts: &HashMap<StringRef, TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) {
-    let registered = compiler_intrinsic_map(ctx, declarations, errors);
+    let registered = compiler_intrinsic_map(declarations, errors);
     let mut query = CallableQuery::new(
         functions,
         &registered,
@@ -617,10 +616,19 @@ pub(super) fn validate_callable_origins(
             }
             if bodyless {
                 let exact_intrinsic = match (registered.get(&symbol), intrinsic_identity) {
-                    (Some(expected), Some(actual))
-                        if expected.identity == actual
-                            && expected.callable_type == func_sig_type =>
-                    {
+                    (Some(expected), Some(actual)) if expected.identity == actual => {
+                        if func_sig_convention(ctx, func_sig_type)
+                            .is_some_and(|convention| convention != CallingConvention::Direct)
+                        {
+                            push_op_error(
+                                ctx,
+                                op,
+                                errors,
+                                format!(
+                                    "registered compiler intrinsic @{symbol} must use Direct calling convention"
+                                ),
+                            );
+                        }
                         seen.insert(symbol);
                         true
                     }
@@ -629,7 +637,7 @@ pub(super) fn validate_callable_origins(
                             ctx,
                             op,
                             errors,
-                            "compiler intrinsic identity or complete signature does not match the registered declaration",
+                            "compiler intrinsic identity does not match the registered declaration",
                         );
                         false
                     }

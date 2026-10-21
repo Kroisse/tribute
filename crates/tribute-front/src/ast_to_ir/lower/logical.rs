@@ -1420,7 +1420,6 @@ fn lower_extern<'db>(
             .push(CompilerIntrinsicDeclaration::new(
                 SymbolPath::new([name]),
                 identity,
-                callable,
             ));
         declarations
             .compiler_intrinsics
