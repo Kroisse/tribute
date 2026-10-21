@@ -22,8 +22,9 @@ pub(crate) fn handle_array_new(
     function: &mut Function,
 ) -> CompilationResult<()> {
     let op = array_new_op.op_ref();
-    let operands = ctx.op_operands(op);
-    emit_operands(ctx, operands, emit_ctx, function)?;
+    // The instruction takes the initial element before the length.
+    let operands = [array_new_op.init(ctx), array_new_op.size(ctx)];
+    emit_operands(ctx, &operands, emit_ctx, function)?;
 
     function.instruction(&Instruction::ArrayNew(array_new_op.type_idx(ctx)));
     set_result_local(ctx, op, emit_ctx, function)?;

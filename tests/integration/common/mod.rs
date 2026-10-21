@@ -319,6 +319,7 @@ pub fn compile_native_test_binary(
         source_code,
         sanitize_address,
         test_optimizations,
+        None,
     )
 }
 pub struct NativeTestBinary {
@@ -455,6 +456,7 @@ fn compile_and_run_native_impl(
         source_code,
         sanitize_address,
         test_optimizations,
+        None,
     );
     binary.run(stdin)
 }
@@ -464,12 +466,13 @@ fn compile_native_test_binary_impl(
     source_code: &str,
     sanitize_address: bool,
     test_optimizations: NativeTestOptimizations,
+    prelude_extension: Option<&str>,
 ) -> NativeTestBinary {
     use tribute::database::parse_with_thread_local;
 
     let source_rope = Rope::from_str(source_code);
 
-    TributeDatabaseImpl::default().attach(|db| {
+    database(prelude_extension).attach(|db| {
         let tree = parse_with_thread_local(&source_rope, None);
         let source_file = SourceCst::from_path(db, source_name, source_rope.clone(), tree);
 
@@ -522,7 +525,15 @@ fn print_nat(n: Nat) ->{std::io::Io} Nil {
 /// Panics if compilation fails or the module is not valid Wasm.
 #[allow(dead_code)]
 pub fn compile_and_run_wasm(source_name: &str, source_code: &str) -> Output {
-    let binary = TributeDatabaseImpl::default().attach(|db| {
+    compile_and_run_wasm_impl(source_name, source_code, None)
+}
+
+fn compile_and_run_wasm_impl(
+    source_name: &str,
+    source_code: &str,
+    prelude_extension: Option<&str>,
+) -> Output {
+    let binary = database(prelude_extension).attach(|db| {
         let source = SourceCst::from_source_str(db, source_name, source_code);
         tribute::pipeline::compile_to_wasm_binary(db, source)
             .unwrap_or_else(|diagnostics| panic!("Wasm compilation failed: {diagnostics:?}"))
@@ -606,6 +617,56 @@ pub fn assert_output_on_both_targets_with_native_asan(
         compile_and_run_native_asan(source_name, source_code),
         compile_and_run_wasm(source_name, source_code),
     );
+}
+
+/// Like [`assert_output_on_both_targets_with_native_asan`], with
+/// `prelude_extension` compiled as part of package `std`, so that it can
+/// use package-internal items such as `std::runtime` and expose them to
+/// `source_code`. The native run must not leak.
+#[allow(dead_code)]
+pub fn assert_output_in_std_on_both_targets_with_native_asan(
+    source_name: &str,
+    prelude_extension: &str,
+    source_code: &str,
+    expected_stdout: &str,
+) {
+    let (native, wasm) =
+        run_in_std_on_both_targets_with_native_asan(source_name, prelude_extension, source_code);
+    let stderr = String::from_utf8_lossy(&native.stderr);
+    assert!(
+        !stderr.contains("detected memory leaks"),
+        "native leaks for {source_name}: {stderr}"
+    );
+    assert_target_outputs(source_name, expected_stdout, native, wasm);
+}
+
+/// Run `source_code` on the native target under AddressSanitizer and on the
+/// Wasm target, with `prelude_extension` compiled as part of package `std`.
+#[allow(dead_code)]
+pub fn run_in_std_on_both_targets_with_native_asan(
+    source_name: &str,
+    prelude_extension: &str,
+    source_code: &str,
+) -> (Output, Output) {
+    let native = compile_native_test_binary_impl(
+        source_name,
+        source_code,
+        true,
+        NativeTestOptimizations::production(),
+        Some(prelude_extension),
+    )
+    .run(NativeStdin::Null);
+    let wasm = compile_and_run_wasm_impl(source_name, source_code, Some(prelude_extension));
+    (native, wasm)
+}
+
+/// A database whose prelude has `prelude_extension` appended.
+fn database(prelude_extension: Option<&str>) -> TributeDatabaseImpl {
+    let db = TributeDatabaseImpl::default();
+    if let Some(extension) = prelude_extension {
+        tribute::pipeline::PreludeExtension::new(&db, extension.to_owned());
+    }
+    db
 }
 
 fn assert_target_outputs(source_name: &str, expected_stdout: &str, native: Output, wasm: Output) {

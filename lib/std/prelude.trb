@@ -702,3 +702,25 @@ pub mod io {
         }
     }
 }
+
+// =============================================================================
+// Compiler-owned Runtime
+// =============================================================================
+
+// Runtime code the compiler's lowering relies on (`new-plans/modules.md`).
+// Programs outside the package `std` cannot name it.
+pub(pkg) mod runtime {
+    // The operations of the compiler-owned fixed-size array `Slots(a)`.
+    // `Slots` is immutable: `insert`, `remove`, and `replace` return a new
+    // array and leave their argument as it was.
+    pub(pkg) mod Slots {
+        use super::Slots
+
+        pub(pkg) extern "intrinsic" fn empty() -> Slots(a)
+        pub(pkg) extern "intrinsic" fn len(slots: Slots(a)) -> Nat
+        pub(pkg) extern "intrinsic" fn get(slots: Slots(a), at: Nat) -> a
+        pub(pkg) extern "intrinsic" fn insert(slots: Slots(a), at: Nat, value: a) -> Slots(a)
+        pub(pkg) extern "intrinsic" fn remove(slots: Slots(a), at: Nat) -> Slots(a)
+        pub(pkg) extern "intrinsic" fn replace(slots: Slots(a), at: Nat, value: a) -> Slots(a)
+    }
+}

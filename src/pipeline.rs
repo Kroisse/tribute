@@ -284,6 +284,16 @@ const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 /// The URI the prelude source is registered under.
 const PRELUDE_URI: &str = "prelude:///std/prelude";
 
+/// Source appended to the prelude and compiled as part of package `std`.
+///
+/// Tests use it to exercise package-internal items, such as the
+/// compiler-owned runtime under `std::runtime`, that user packages cannot
+/// name. Create it before the first compilation in a database.
+#[salsa::input(singleton)]
+pub struct PreludeExtension {
+    pub text: String,
+}
+
 /// Parse the prelude source.
 ///
 /// This is the first stage of prelude processing, shared by all prelude-related functions.
@@ -350,7 +360,10 @@ fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutpu
 /// Create a SourceCst for the prelude.
 fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
     let uri = fluent_uri::Uri::parse_from(PRELUDE_URI.to_owned()).expect("valid prelude URI");
-    let text: Rope = PRELUDE_SOURCE.into();
+    let text: Rope = match PreludeExtension::try_get(db) {
+        Some(extension) => format!("{PRELUDE_SOURCE}\n{}", extension.text(db)).into(),
+        None => PRELUDE_SOURCE.into(),
+    };
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_tribute::LANGUAGE.into())
@@ -926,6 +939,7 @@ fn structural_pass_pipeline(
     .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
     .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
     .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
+    .add_pass(tribute_passes::slots_intrinsics::LowerSlotsIntrinsics)
     .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics);
     pm.with_debug_verifier();
     pm

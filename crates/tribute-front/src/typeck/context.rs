@@ -173,9 +173,25 @@ impl<'db> ModuleTypeEnv<'db> {
             Vec::new(),
             list_ty,
         );
+        let slots_id = TypeDefId::builtin_slots(db);
+        let slots_ty = Type::new(
+            db,
+            TypeKind::Named {
+                id: slots_id,
+                name: Symbol::new("Slots"),
+                args: vec![list_arg],
+            },
+        );
+        let slots_scheme = TypeScheme::new(
+            db,
+            vec![TypeParam::named(Symbol::new("a"))],
+            Vec::new(),
+            slots_ty,
+        );
         let mut type_defs = HashMap::default();
         type_defs.insert(SymbolPath::new([list_name]), list_scheme);
         type_defs.insert(SymbolPath::new(["std", "collections", "List"]), list_scheme);
+        type_defs.insert(slots_id.path(db).clone(), slots_scheme);
 
         Self {
             db,
@@ -974,12 +990,13 @@ mod tests {
         let exported = env.export_type_defs();
 
         // Should be sorted alphabetically by name
-        let expected: [&[&str]; 5] = [
+        let expected: [&[&str]; 6] = [
             &["Alpha"],
             &["List"],
             &["Middle"],
             &["Zebra"],
             &["std", "collections", "List"],
+            &["std", "runtime", "Slots"],
         ];
         itertools::assert_equal(exported.iter().map(|(path, _)| path), expected);
     }

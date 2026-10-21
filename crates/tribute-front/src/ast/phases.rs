@@ -139,6 +139,8 @@ fn definition_name(path: &SymbolPath) -> Symbol {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuiltinType {
     List,
+    /// The runtime module's fixed-size immutable array `Slots(a)`.
+    Slots,
 }
 
 /// The origin of a nominal type definition.
@@ -184,6 +186,14 @@ impl<'db> TypeDefId<'db> {
         )
     }
 
+    pub fn builtin_slots(db: &'db dyn salsa::Database) -> Self {
+        Self::new(
+            db,
+            TypeOrigin::Builtin(BuiltinType::Slots),
+            SymbolPath::new(["std", "runtime", "Slots"]),
+        )
+    }
+
     /// The type of the same origin at `path`.
     pub fn with_path(self, db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
         Self::new(db, self.origin(db), path)
@@ -196,6 +206,10 @@ impl<'db> TypeDefId<'db> {
 
     pub fn is_builtin_list(self, db: &'db dyn salsa::Database) -> bool {
         self.origin(db) == TypeOrigin::Builtin(BuiltinType::List)
+    }
+
+    pub fn is_builtin_slots(self, db: &'db dyn salsa::Database) -> bool {
+        self.origin(db) == TypeOrigin::Builtin(BuiltinType::Slots)
     }
 
     /// Returns the unqualified type name (last segment).

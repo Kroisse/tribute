@@ -718,6 +718,10 @@ frontend 경계까지 전달한다. AST-to-IR은 declaration identity로 exact T
 복구하지 않는다. Textual IR에서 attribute가 유실되면 string constant lowering은
 실패한다.
 
+Prelude source는 compilation 입력이다. 테스트는 그 뒤에 덧붙인 source를 패키지
+`std`의 일부로 compile해, 사용자 패키지가 가리킬 수 없는 패키지 내부 항목
+(`std::runtime`)을 사용자 프로그램이 부를 수 있는 함수로 감싸 시험한다.
+
 ### 파이프라인 구조
 
 직접형 callable/control부터 backend-ready 검증까지의 topology는 다음과 같다:
