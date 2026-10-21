@@ -6,7 +6,7 @@ use trunk_ir::Symbol;
 use crate::ast::{
     AbilityDecl, Decl, EnumDecl, FieldDecl, FuncDecl, Module, ModuleDecl, ModuleItem, OpDecl,
     OpDeclKind, ParamDecl, StructDecl, TypeAnnotation, TypeAnnotationKind, TypeParamDecl,
-    UnresolvedName, UseDecl, VariantDecl,
+    UnresolvedName, UseDecl, VariantDecl, Visibility,
 };
 
 use super::context::AstLoweringCtx;
@@ -138,7 +138,7 @@ fn lower_function(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<Decl<Unres
 
         return Some(Decl::ExternFunction(crate::ast::ExternFuncDecl {
             id,
-            is_pub: false, // TODO: parse visibility
+            visibility: lower_visibility(ctx, func_node),
             name,
             abi,
             params,
@@ -150,7 +150,7 @@ fn lower_function(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<Decl<Unres
 
     Some(Decl::Function(FuncDecl {
         id,
-        is_pub: false, // TODO: parse visibility
+        visibility: lower_visibility(ctx, func_node),
         name,
         type_params: Vec::new(), // TODO: parse type params
         params,
@@ -490,7 +490,7 @@ fn lower_struct(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<StructDecl> 
 
     Some(StructDecl {
         id,
-        is_pub: false, // TODO: parse visibility
+        visibility: lower_visibility(ctx, node),
         name,
         type_params,
         fields,
@@ -543,7 +543,7 @@ fn lower_struct_field(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<FieldD
     Some(FieldDecl {
         id,
         name_id,
-        is_pub: false, // TODO: parse visibility
+        is_pub: false,
         name,
         ty,
     })
@@ -566,7 +566,7 @@ fn lower_enum(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<EnumDecl> {
 
     Some(EnumDecl {
         id,
-        is_pub: false, // TODO: parse visibility
+        visibility: lower_visibility(ctx, node),
         name,
         type_params,
         variants,
@@ -679,7 +679,7 @@ fn lower_ability(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<AbilityDecl
 
     Some(AbilityDecl {
         id,
-        is_pub: false, // TODO: parse visibility
+        visibility: lower_visibility(ctx, node),
         name,
         type_params,
         operations,
@@ -752,9 +752,7 @@ fn lower_use(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<UseDecl> {
         return Vec::new();
     };
 
-    let is_pub = node
-        .named_children(&mut node.walk())
-        .any(|child| child.kind() == "visibility_marker");
+    let visibility = lower_visibility(ctx, node);
 
     // Expand the use tree into multiple (path, alias) pairs
     let expanded = expand_use_tree(ctx, tree_node, &[]);
@@ -763,7 +761,7 @@ fn lower_use(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<UseDecl> {
         .into_iter()
         .map(|(path, alias)| UseDecl {
             id: ctx.fresh_id_with_span(&node),
-            is_pub,
+            visibility: visibility.clone(),
             path,
             alias,
             target: None,
@@ -840,9 +838,7 @@ fn lower_mod(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<ModuleDecl<Unre
 
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
-    let is_pub = node
-        .named_children(&mut node.walk())
-        .any(|child| child.kind() == "visibility_marker");
+    let visibility = lower_visibility(ctx, node);
 
     // Check for inline module body
     let body = if let Some(body_node) = node.child_by_field_name("body") {
@@ -863,9 +859,26 @@ fn lower_mod(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<ModuleDecl<Unre
     Some(ModuleDecl {
         id,
         name,
-        is_pub,
+        visibility,
         body,
     })
+}
+
+/// The visibility a declaration's `visibility_marker` child gives it.
+fn lower_visibility(ctx: &AstLoweringCtx<'_>, node: Node) -> Visibility {
+    let Some(marker) = find_child_by_kind(node, "visibility_marker") else {
+        return Visibility::Private;
+    };
+    let Some(scope) = marker.child_by_field_name("scope") else {
+        return Visibility::Public;
+    };
+    let mut cursor = scope.walk();
+    let path = scope
+        .named_children(&mut cursor)
+        .filter(|segment| matches!(segment.kind(), "path_keyword" | "path_segment"))
+        .map(|segment| ctx.node_symbol(&segment))
+        .collect();
+    Visibility::Restricted(path)
 }
 
 /// Find a child node by kind.

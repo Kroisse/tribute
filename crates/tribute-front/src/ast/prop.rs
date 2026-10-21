@@ -518,7 +518,7 @@ fn single_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
         .prop_map(|(module_id, func_id, body)| {
             let main_fn = FuncDecl {
                 id: func_id,
-                is_pub: false,
+                visibility: crate::ast::Visibility::Private,
                 name: Symbol::new("main"),
                 type_params: vec![],
                 params: vec![],
@@ -553,7 +553,7 @@ fn two_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
             )| {
                 let helper = FuncDecl {
                     id: helper_fid,
-                    is_pub: false,
+                    visibility: crate::ast::Visibility::Private,
                     name: Symbol::new(FUNC_NAMES[0]),
                     type_params: vec![],
                     params: vec![ParamDecl {
@@ -578,7 +578,7 @@ fn two_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                 );
                 let main_fn = FuncDecl {
                     id: main_fid,
-                    is_pub: false,
+                    visibility: crate::ast::Visibility::Private,
                     name: Symbol::new("main"),
                     type_params: vec![],
                     params: vec![],
@@ -627,7 +627,7 @@ fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
             )| {
                 let alpha_fn = FuncDecl {
                     id: alpha_fid,
-                    is_pub: false,
+                    visibility: crate::ast::Visibility::Private,
                     name: Symbol::new(FUNC_NAMES[0]),
                     type_params: vec![],
                     params: vec![ParamDecl {
@@ -642,7 +642,7 @@ fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                 };
                 let beta_fn = FuncDecl {
                     id: beta_fid,
-                    is_pub: false,
+                    visibility: crate::ast::Visibility::Private,
                     name: Symbol::new(FUNC_NAMES[1]),
                     type_params: vec![],
                     params: vec![ParamDecl {
@@ -688,7 +688,7 @@ fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                 );
                 let main_fn = FuncDecl {
                     id: main_fid,
-                    is_pub: false,
+                    visibility: crate::ast::Visibility::Private,
                     name: Symbol::new("main"),
                     type_params: vec![],
                     params: vec![],

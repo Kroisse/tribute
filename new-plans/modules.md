@@ -733,8 +733,9 @@ prelude도 같은 규칙을 따른다. prelude의 모듈은 다른 prelude 항�
 
 | 수식자 | 범위 |
 | ------ | ---- |
-| (없음) | 현재 모듈 내부만 |
-| `pub(super)` | 부모 모듈까지 |
+| (없음), `pub(self)` | 선언한 모듈과 그 하위 모듈 |
+| `pub(super)` | 부모 모듈과 그 하위 모듈 |
+| `pub(pkg::a::b)` 등 모듈 경로 | 그 모듈과 그 하위 모듈 |
 | `pub(pkg)` | 패키지 내부 전체 |
 | `pub` | 공개 (외부 패키지에서도 접근 가능) |
 
@@ -745,6 +746,8 @@ fn private_helper() -> Int { 42 }           // 이 모듈에서만
 
 pub(super) fn parent_visible() -> Int { 42 } // internal/ 및 하위에서
 
+pub(pkg::internal) fn internal_only() -> Int { 42 } // internal/ 및 하위에서
+
 pub(pkg) fn package_internal() -> Int { 42 } // 이 패키지 내에서
 
 pub fn public_api() -> Int { 42 }            // 어디서든
@@ -753,10 +756,46 @@ pub fn public_api() -> Int { 42 }            // 어디서든
 Prelude도 패키지 `std`의 루트 모듈이므로 같은 규칙을 따른다. 사용자 패키지는
 prelude의 `pub` 항목만 본다.
 
+가시성 수식자는 함수, extern 함수, `struct`, `enum`, `ability`, `mod`, `use`에 붙는다.
+
+**제한된 가시성의 경로.** `pub(…)`의 괄호 안은 모듈 경로이며, 그 모듈과 그 하위 모듈에서
+항목이 보인다. 경로는 [경로 키워드](#경로-키워드)로 시작하고 `use` 경로와 같이 해석한다.
+`pub(pkg)`, `pub(super)`, `pub(self)`는 segment가 하나인 경우다. 경로는 선언한 모듈
+자신이거나 그 조상 모듈이어야 한다. 그렇지 않은 모듈, 모듈이 아닌 이름, 존재하지 않는
+경로는 이름 해석 오류다. 패키지 루트에서 쓴 `pub(super)`도 루트 위를 가리키므로 오류다.
+
+**경로의 모든 모듈.** 항목은 그 항목 자신과 그 항목을 둘러싼 모든 모듈이 참조하는
+모듈에서 보일 때만 보인다. 그래서 `pub(pkg) mod runtime` 안의 `pub fn`은 패키지 밖에서
+보이지 않는다. 이 규칙은 이름 해석의 모든 경로에 똑같이 적용한다. `use` 경로, 값
+경로(호출, 생성자, 패턴, handler arm의 ability), 타입과 ability annotation, UFCS 후보가
+모두 그렇다. 보이지 않는 함수는 UFCS 후보가 되지 않는다. 보이지 않는 항목을 이름으로
+가리키면 이름 해석 오류이며, 진단은 그 항목이나 그 항목을 가린 모듈의 식별 경로와
+선언된 가시성을 표시한다.
+
+**타입의 구성원.** 가시성 수식자는 선언 단위로 붙는다. Enum의 variant는 enum의
+가시성을 따르고, struct의 field와 field 함수(`T::f`, `T::f::set`, `T::f::modify`)는
+struct의 가시성을 따른다. Ability의 operation은 ability의 가시성을 따른다.
+
+**Companion 모듈.** 타입과 같은 이름의 companion 모듈은 별개의 선언이며 자기 가시성을
+가진다. `T::f`처럼 경로가 companion 모듈을 지나면 그 모듈의 가시성이 적용되고, 타입의
+가시성은 타입과 생성자에만 적용된다. 그래서 공개 타입의 companion 모듈도 함수를
+공개하려면 `pub mod`로 선언한다.
+
+**`use`와 re-export.** `use`의 대상은 `use`를 선언한 모듈에서 보여야 한다. 가져온
+이름은 그 `use`의 가시성을 가진다. 비공개가 아닌 `use`는 가져온 이름을 선언한 모듈의 이름
+공간에 더한다. 그래서 `pub mod facade { pub use pkg::source::f }`의 `facade::f`는
+경로로 가리킬 수 있고, 패키지 루트의 `pub use`는 패키지 밖에서도 보인다. 이 경로의
+가시성은 대상이 아니라 그 `use`가 정한다. Re-export는 대상의 식별을 바꾸지 않으므로,
+re-export한 경로로 쓴 타입과 ability annotation도 대상 선언을 가리킨다.
+`pub use`처럼 대상보다 넓은 가시성으로 다시 내보낼 수는 없으며, 이는 이름 해석
+오류다. 대상의 가시성에는 대상을 둘러싼 모듈의 가시성도
+포함되므로, private 모듈의 `pub` 항목을 바깥에 `pub use`로 공개하는 facade 방식은 쓸 수
+없다. 공개할 항목은 공개 모듈에 둔다.
+
 ### Re-export
 
 ```rust
-// 내부 모듈의 타입을 공개 API로 노출
+// 공개 모듈 internal의 타입을 루트 경로로도 노출
 pub use pkg::internal::PublicType
 pub use pkg::internal::{TypeA, TypeB}
 
@@ -768,7 +807,7 @@ pub use pkg::internal::LongTypeName as Short
 
 ```rust
 // src/lib.trb
-mod internal           // private 모듈
+pub mod internal       // public 모듈 (re-export 대상을 담는다)
 pub mod api            // public 모듈
 
 // 주요 타입들을 루트에서 re-export
@@ -777,7 +816,7 @@ pub use pkg::api::{Request, Response}
 
 
 // src/internal/mod.trb (또는 src/internal.trb)
-pub(pkg) struct Config {
+pub struct Config {
     debug: Bool
     timeout: Int
 }

@@ -279,7 +279,7 @@ fn specialize_struct_decl<'db>(
 
     StructDecl {
         id: decl.id.with_variant(variant),
-        is_pub: false,
+        visibility: crate::ast::Visibility::Private,
         name: mangled_name,
         type_params: vec![],
         fields: decl
@@ -307,7 +307,7 @@ fn specialize_enum_decl<'db>(
 
     EnumDecl {
         id: decl.id.with_variant(variant),
-        is_pub: false,
+        visibility: crate::ast::Visibility::Private,
         name: mangled_name,
         type_params: vec![],
         variants: decl
@@ -512,7 +512,7 @@ fn specialize_extern_decl(
 ) -> ExternFuncDecl {
     ExternFuncDecl {
         id: declaration.id.with_variant(key.variant()),
-        is_pub: false,
+        visibility: crate::ast::Visibility::Private,
         name: mangled_name,
         abi: declaration.abi.clone(),
         params: declaration.params.clone(),
@@ -539,7 +539,7 @@ fn specialize_func_decl<'db>(
     mangled_name: Symbol,
 ) -> FuncDecl<TypedRef<'db>> {
     let mut specialized = FuncDecl {
-        is_pub: false,
+        visibility: crate::ast::Visibility::Private,
         name: mangled_name,
         type_params: vec![],
         ..func.clone()
@@ -724,7 +724,7 @@ mod tests {
         );
         let function = FuncDecl {
             id: node_id(1),
-            is_pub: false,
+            visibility: crate::ast::Visibility::Private,
             name: Symbol::new("patterns"),
             type_params: vec![],
             params: vec![],
@@ -798,7 +798,7 @@ mod tests {
 
         let func = FuncDecl {
             id: node_id(1),
-            is_pub: true,
+            visibility: crate::ast::Visibility::Public,
             name: Symbol::new("identity"),
             type_params: vec![crate::ast::TypeParamDecl {
                 id: node_id(2),
@@ -817,7 +817,7 @@ mod tests {
 
         assert_eq!(specialized.name.to_string(), "identity$Int");
         assert!(specialized.type_params.is_empty());
-        assert!(!specialized.is_pub);
+        assert_eq!(specialized.visibility, crate::ast::Visibility::Private);
 
         // Body should have Int instead of BoundVar(0)
         match specialized.body.kind.as_ref() {
@@ -847,7 +847,7 @@ mod tests {
         let body = Expr::new(node_id(10), ExprKind::Var(body_ref));
         let func = FuncDecl {
             id: node_id(1),
-            is_pub: true,
+            visibility: crate::ast::Visibility::Public,
             name: func_name.clone(),
             type_params: vec![crate::ast::TypeParamDecl {
                 id: node_id(2),
@@ -1108,7 +1108,7 @@ mod tests {
         // struct Pair(a, b) { first: a, second: b }
         let decl = StructDecl {
             id: node_id(1),
-            is_pub: true,
+            visibility: crate::ast::Visibility::Public,
             name: Symbol::new("Pair"),
             type_params: vec![
                 crate::ast::TypeParamDecl {
@@ -1177,7 +1177,7 @@ mod tests {
         // enum Option(a) { Some(a), None }
         let decl = EnumDecl {
             id: node_id(1),
-            is_pub: true,
+            visibility: crate::ast::Visibility::Public,
             name: Symbol::new("Option"),
             type_params: vec![crate::ast::TypeParamDecl {
                 id: node_id(2),

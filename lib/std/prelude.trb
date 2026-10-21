@@ -5,7 +5,7 @@ use collections::List
 
 /// A type that represents an optional value.
 /// Either contains `Some(value)` or `None`.
-enum Option(a) {
+pub enum Option(a) {
     None,
     Some(a),
 }
@@ -56,7 +56,7 @@ pub mod Option {
 
 /// A type that represents either success (`Ok`) or failure (`Error`).
 /// Used for operations that may fail.
-enum Result(a, e) {
+pub enum Result(a, e) {
     Ok(a),
     Error(e),
 }
@@ -129,17 +129,17 @@ pub mod Int {
         OutOfRange,
     }
 
-    extern "intrinsic" fn (+)(left: Int, right: Int) -> Int
-    extern "intrinsic" fn (-)(left: Int, right: Int) -> Int
-    extern "intrinsic" fn (*)(left: Int, right: Int) -> Int
-    extern "intrinsic" fn (/)(left: Int, right: Int) -> Int
-    extern "intrinsic" fn (%)(left: Int, right: Int) -> Int
-    extern "intrinsic" fn (==)(left: Int, right: Int) -> Bool
-    extern "intrinsic" fn (!=)(left: Int, right: Int) -> Bool
-    extern "intrinsic" fn (<)(left: Int, right: Int) -> Bool
-    extern "intrinsic" fn (<=)(left: Int, right: Int) -> Bool
-    extern "intrinsic" fn (>)(left: Int, right: Int) -> Bool
-    extern "intrinsic" fn (>=)(left: Int, right: Int) -> Bool
+    pub extern "intrinsic" fn (+)(left: Int, right: Int) -> Int
+    pub extern "intrinsic" fn (-)(left: Int, right: Int) -> Int
+    pub extern "intrinsic" fn (*)(left: Int, right: Int) -> Int
+    pub extern "intrinsic" fn (/)(left: Int, right: Int) -> Int
+    pub extern "intrinsic" fn (%)(left: Int, right: Int) -> Int
+    pub extern "intrinsic" fn (==)(left: Int, right: Int) -> Bool
+    pub extern "intrinsic" fn (!=)(left: Int, right: Int) -> Bool
+    pub extern "intrinsic" fn (<)(left: Int, right: Int) -> Bool
+    pub extern "intrinsic" fn (<=)(left: Int, right: Int) -> Bool
+    pub extern "intrinsic" fn (>)(left: Int, right: Int) -> Bool
+    pub extern "intrinsic" fn (>=)(left: Int, right: Int) -> Bool
 
     fn decimal_digit_or_invalid(byte: Nat) -> Int {
         case byte {
@@ -291,30 +291,30 @@ pub mod Int {
 }
 
 pub mod Nat {
-    extern "intrinsic" fn (+)(left: Nat, right: Nat) -> Nat
-    extern "intrinsic" fn (-)(left: Nat, right: Nat) -> Nat
-    extern "intrinsic" fn (*)(left: Nat, right: Nat) -> Nat
-    extern "intrinsic" fn (/)(left: Nat, right: Nat) -> Nat
-    extern "intrinsic" fn (%)(left: Nat, right: Nat) -> Nat
-    extern "intrinsic" fn (==)(left: Nat, right: Nat) -> Bool
-    extern "intrinsic" fn (!=)(left: Nat, right: Nat) -> Bool
-    extern "intrinsic" fn (<)(left: Nat, right: Nat) -> Bool
-    extern "intrinsic" fn (<=)(left: Nat, right: Nat) -> Bool
-    extern "intrinsic" fn (>)(left: Nat, right: Nat) -> Bool
-    extern "intrinsic" fn (>=)(left: Nat, right: Nat) -> Bool
+    pub extern "intrinsic" fn (+)(left: Nat, right: Nat) -> Nat
+    pub extern "intrinsic" fn (-)(left: Nat, right: Nat) -> Nat
+    pub extern "intrinsic" fn (*)(left: Nat, right: Nat) -> Nat
+    pub extern "intrinsic" fn (/)(left: Nat, right: Nat) -> Nat
+    pub extern "intrinsic" fn (%)(left: Nat, right: Nat) -> Nat
+    pub extern "intrinsic" fn (==)(left: Nat, right: Nat) -> Bool
+    pub extern "intrinsic" fn (!=)(left: Nat, right: Nat) -> Bool
+    pub extern "intrinsic" fn (<)(left: Nat, right: Nat) -> Bool
+    pub extern "intrinsic" fn (<=)(left: Nat, right: Nat) -> Bool
+    pub extern "intrinsic" fn (>)(left: Nat, right: Nat) -> Bool
+    pub extern "intrinsic" fn (>=)(left: Nat, right: Nat) -> Bool
 }
 
 pub mod Float {
-    extern "intrinsic" fn (+)(left: Float, right: Float) -> Float
-    extern "intrinsic" fn (-)(left: Float, right: Float) -> Float
-    extern "intrinsic" fn (*)(left: Float, right: Float) -> Float
-    extern "intrinsic" fn (/)(left: Float, right: Float) -> Float
-    extern "intrinsic" fn (==)(left: Float, right: Float) -> Bool
-    extern "intrinsic" fn (!=)(left: Float, right: Float) -> Bool
-    extern "intrinsic" fn (<)(left: Float, right: Float) -> Bool
-    extern "intrinsic" fn (<=)(left: Float, right: Float) -> Bool
-    extern "intrinsic" fn (>)(left: Float, right: Float) -> Bool
-    extern "intrinsic" fn (>=)(left: Float, right: Float) -> Bool
+    pub extern "intrinsic" fn (+)(left: Float, right: Float) -> Float
+    pub extern "intrinsic" fn (-)(left: Float, right: Float) -> Float
+    pub extern "intrinsic" fn (*)(left: Float, right: Float) -> Float
+    pub extern "intrinsic" fn (/)(left: Float, right: Float) -> Float
+    pub extern "intrinsic" fn (==)(left: Float, right: Float) -> Bool
+    pub extern "intrinsic" fn (!=)(left: Float, right: Float) -> Bool
+    pub extern "intrinsic" fn (<)(left: Float, right: Float) -> Bool
+    pub extern "intrinsic" fn (<=)(left: Float, right: Float) -> Bool
+    pub extern "intrinsic" fn (>)(left: Float, right: Float) -> Bool
+    pub extern "intrinsic" fn (>=)(left: Float, right: Float) -> Bool
 }
 
 // =============================================================================
@@ -323,7 +323,7 @@ pub mod Float {
 
 /// A Unicode text type using a rope data structure for efficient concatenation.
 /// String literals `"..."` produce `Leaf(bytes)` values.
-enum String {
+pub enum String {
     Leaf(Bytes),
     Branch(String, String, Nat),
 }

@@ -3,13 +3,15 @@
 //! Provides completion candidates, document outline, and function
 //! signature information for LSP features.
 
-use trunk_ir::{Span, Symbol};
+use trunk_ir::{Span, Symbol, SymbolPath};
 
 use tribute_front::SourceCst;
 use tribute_front::ast::{
-    AbilityId, Decl, DeclTable, ModuleItem, TypeAnnotation, TypeAnnotationKind, TypedRef,
+    AbilityId, Decl, DeclTable, ModuleItem, SpanMap, TypeAnnotation, TypeAnnotationKind, TypedRef,
+    UnresolvedName,
 };
 use tribute_front::query as ast_query;
+use tribute_front::resolve::Binding;
 
 // =============================================================================
 // Completion
@@ -52,6 +54,9 @@ pub struct AstCompletionItem {
     pub kind: CompletionKind,
     /// Brief documentation or type hint.
     pub detail: Option<String>,
+    /// The module whose body names the item, or `None` for an item every
+    /// module names.
+    pub module: Option<SymbolPath>,
 }
 
 /// Keywords offered as completions.
@@ -68,6 +73,7 @@ pub fn complete_keywords(prefix: &str) -> Vec<AstCompletionItem> {
             name: Symbol::new(kw),
             kind: CompletionKind::Keyword,
             detail: None,
+            module: None,
         })
         .collect()
 }
@@ -83,7 +89,9 @@ fn root_decls<'a, 'db>(
         .map(|entry| &entry.decl)
 }
 
-/// Build completion items from a typed module.
+/// Build completion items from a typed module: the declarations of each of
+/// its modules, which that module's body names, then the prelude's public
+/// root items, which every module of the package names.
 #[salsa::tracked(returns(deref))]
 pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstCompletionItem> {
     let Some(output) = tribute::parse_and_lower_ast(db, source) else {
@@ -93,70 +101,124 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
 
     let mut items = Vec::new();
 
-    for decl in root_decls(module) {
-        match decl {
-            Decl::Function(func) => {
-                items.push(AstCompletionItem {
-                    name: func.name.clone(),
-                    kind: CompletionKind::Function,
-                    detail: None,
-                });
-            }
-            Decl::Struct(s) => {
-                items.push(AstCompletionItem {
-                    name: s.name.clone(),
-                    kind: CompletionKind::Struct,
-                    detail: None,
-                });
-            }
+    for entry in &module.entries {
+        let item = |name: &Symbol, kind, detail| AstCompletionItem {
+            name: name.clone(),
+            kind,
+            detail,
+            module: Some(entry.module.clone()),
+        };
+        match &entry.decl {
+            Decl::Function(func) => items.push(item(&func.name, CompletionKind::Function, None)),
+            Decl::Struct(s) => items.push(item(&s.name, CompletionKind::Struct, None)),
             Decl::Enum(e) => {
-                items.push(AstCompletionItem {
-                    name: e.name.clone(),
-                    kind: CompletionKind::Enum,
-                    detail: None,
-                });
+                items.push(item(&e.name, CompletionKind::Enum, None));
                 // Add variant constructors
                 for variant in &e.variants {
-                    items.push(AstCompletionItem {
-                        name: variant.name.clone(),
-                        kind: CompletionKind::Constructor,
-                        detail: Some(format!("{}::{}", e.name, variant.name)),
-                    });
+                    items.push(item(
+                        &variant.name,
+                        CompletionKind::Constructor,
+                        Some(format!("{}::{}", e.name, variant.name)),
+                    ));
                 }
             }
             Decl::ExternFunction(func) => {
-                items.push(AstCompletionItem {
-                    name: func.name.clone(),
-                    kind: CompletionKind::Function,
-                    detail: None,
-                });
+                items.push(item(&func.name, CompletionKind::Function, None));
             }
-            Decl::Ability(a) => {
-                items.push(AstCompletionItem {
-                    name: a.name.clone(),
-                    kind: CompletionKind::Ability,
-                    detail: None,
-                });
-            }
+            Decl::Ability(a) => items.push(item(&a.name, CompletionKind::Ability, None)),
             Decl::Use(use_decl) => {
                 if let Some(ability) = AbilityId::builtin_from_path(db, &use_decl.path) {
                     let name = use_decl.alias.clone().unwrap_or_else(|| ability.name(db));
-                    if !items.iter().any(|item| item.name == name) {
-                        items.push(AstCompletionItem {
-                            name,
-                            kind: CompletionKind::Ability,
-                            detail: Some(format!(
+                    if !items.iter().any(|item| {
+                        item.name == name && item.module.as_ref() == Some(&entry.module)
+                    }) {
+                        items.push(item(
+                            &name,
+                            CompletionKind::Ability,
+                            Some(format!(
                                 "compiler-owned ambient ability ({})",
                                 ability.qualified(db)
                             )),
-                        });
+                        ));
                     }
                 }
             }
         }
     }
 
+    let mut library = tribute::library_names(db);
+    library.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (name, binding) in library {
+        let kind = match binding {
+            Binding::Function { .. } => CompletionKind::Function,
+            Binding::Constructor { tag: Some(_), .. } => CompletionKind::Constructor,
+            Binding::Constructor { tag: None, .. } => CompletionKind::Struct,
+            Binding::TypeDef { .. } => CompletionKind::Enum,
+            Binding::Ability { .. } => CompletionKind::Ability,
+            Binding::Module { .. } | Binding::AbilityOp { .. } => continue,
+        };
+        items.push(AstCompletionItem {
+            detail: Some(format!(
+                "{}::{name}",
+                tribute_front::resolve::LIBRARY_PACKAGE
+            )),
+            name,
+            kind,
+            module: None,
+        });
+    }
+
     items
+}
+
+/// The module whose body contains the byte offset `offset` of `source`.
+pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> SymbolPath {
+    fn descend(
+        items: &[ModuleItem<UnresolvedName>],
+        span_map: &SpanMap,
+        offset: usize,
+        path: &mut SymbolPath,
+    ) {
+        for item in items {
+            let ModuleItem::Module(module) = item else {
+                continue;
+            };
+            let Some(body) = &module.body else { continue };
+            let span = span_map.get_or_default(module.id);
+            if span.start <= offset && offset < span.end {
+                path.push(module.name.clone());
+                return descend(body, span_map, offset, path);
+            }
+        }
+    }
+
+    let mut path = SymbolPath::root();
+    if let Some(parsed) = ast_query::parsed_ast(db, source) {
+        descend(
+            &parsed.module(db).decls,
+            &parsed.span_map(db),
+            offset,
+            &mut path,
+        );
+    }
+    path
+}
+
+/// The items of `items` the body of `module` names. A declaration of the
+/// module hides a library item of its name.
+pub fn completions_in<'a>(
+    items: &'a [AstCompletionItem],
+    module: &'a SymbolPath,
+) -> impl Iterator<Item = &'a AstCompletionItem> {
+    let declares = move |name: &Symbol| {
+        items
+            .iter()
+            .any(|item| item.module.as_ref() == Some(module) && item.name == *name)
+    };
+    items.iter().filter(move |item| match &item.module {
+        Some(own) => own == module,
+        None => !declares(&item.name),
+    })
 }
 
 /// Filter completion items by prefix.
@@ -454,16 +516,19 @@ mod tests {
                 name: trunk_ir::Symbol::new("foo"),
                 kind: CompletionKind::Function,
                 detail: None,
+                module: None,
             },
             AstCompletionItem {
                 name: trunk_ir::Symbol::new("bar"),
                 kind: CompletionKind::Function,
                 detail: None,
+                module: None,
             },
             AstCompletionItem {
                 name: trunk_ir::Symbol::new("foobar"),
                 kind: CompletionKind::Function,
                 detail: None,
+                module: None,
             },
         ];
 
@@ -482,6 +547,48 @@ mod tests {
         let hello_item = items.iter().find(|i| i.name == "hello");
         assert!(hello_item.is_some());
         assert_eq!(hello_item.unwrap().kind, CompletionKind::Function);
+    }
+
+    #[test]
+    fn test_completions_offer_what_the_module_sees() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "fn top() -> Nat { 1 }\nmod inner {\n    fn local() -> Nat { 2 }\n}\n";
+        let source = make_source(&db, text);
+        let items = completion_items(&db, source);
+        let names_at = |offset| -> Vec<Symbol> {
+            let module = module_at(&db, source, offset);
+            completions_in(items, &module)
+                .map(|item| item.name.clone())
+                .collect()
+        };
+
+        let root = names_at(0);
+        assert!(root.iter().any(|name| name == "top"));
+        assert!(!root.iter().any(|name| name == "local"));
+        let inner = names_at(text.find("fn local").unwrap());
+        assert!(inner.iter().any(|name| name == "local"));
+        assert!(!inner.iter().any(|name| name == "top"));
+
+        // The prelude's public items, and not its private ones.
+        for names in [&root, &inner] {
+            assert!(names.iter().any(|name| name == "Some"));
+            assert!(names.iter().any(|name| name == "Option"));
+            assert!(names.iter().any(|name| name == "List"));
+            assert!(!names.iter().any(|name| name == "__tribute_bytes_len"));
+        }
+    }
+
+    #[test]
+    fn test_completions_hide_shadowed_library_names() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "enum Option { Some, Empty }\nfn main() -> Nil {}\n");
+        let items = completion_items(&db, source);
+        let root = SymbolPath::root();
+        let named: Vec<_> = completions_in(items, &root)
+            .filter(|item| item.name == "Option" || item.name == "Some")
+            .collect();
+        assert_eq!(named.len(), 2, "{named:#?}");
+        assert!(named.iter().all(|item| item.module.is_some()));
     }
 
     #[test]

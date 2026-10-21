@@ -81,6 +81,40 @@ pub enum Decl<V> {
     Use(UseDecl),
 }
 
+/// Where a declaration is visible, from its visibility marker.
+///
+/// A declaration is visible in a module and that module's descendants: the
+/// module that declares it, a module around that one that its marker names,
+/// or, when public, every module of every package.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Visibility {
+    /// No marker: the declaring module.
+    #[default]
+    Private,
+    /// `pub(path)`: the module `path` names, as written. The path starts
+    /// with a path keyword, as in `pub(pkg)`, `pub(super)`, `pub(self)`, and
+    /// `pub(pkg::a::b)`.
+    Restricted(Vec<Symbol>),
+    /// `pub`: every package.
+    Public,
+}
+
+impl std::fmt::Display for Visibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Visibility::Private => f.write_str("private"),
+            Visibility::Restricted(path) => {
+                write!(
+                    f,
+                    "pub({})",
+                    itertools::Itertools::format(path.iter(), "::")
+                )
+            }
+            Visibility::Public => f.write_str("pub"),
+        }
+    }
+}
+
 /// Extern function declaration: `extern "abi" fn name(params) -> ReturnType`
 ///
 /// Unlike `FuncDecl`, this has no body — the implementation is provided externally.
@@ -88,8 +122,8 @@ pub enum Decl<V> {
 pub struct ExternFuncDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
-    /// Whether this function is public.
-    pub is_pub: bool,
+    /// Where the declaration is visible.
+    pub visibility: Visibility,
     /// Function name.
     pub name: Symbol,
     /// ABI identifier (e.g., `intrinsic`). Defaults to `C`.
@@ -105,8 +139,8 @@ pub struct ExternFuncDecl {
 pub struct FuncDecl<V> {
     /// Node ID for span lookup.
     pub id: NodeId,
-    /// Whether this function is public.
-    pub is_pub: bool,
+    /// Where the declaration is visible.
+    pub visibility: Visibility,
     /// Function name.
     pub name: Symbol,
     /// Type parameters for generic functions.
@@ -150,8 +184,8 @@ pub struct ParamDecl {
 pub struct StructDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
-    /// Whether this struct is public.
-    pub is_pub: bool,
+    /// Where the declaration is visible.
+    pub visibility: Visibility,
     /// Struct name.
     pub name: Symbol,
     /// Type parameters.
@@ -184,8 +218,8 @@ pub struct FieldDecl {
 pub struct EnumDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
-    /// Whether this enum is public.
-    pub is_pub: bool,
+    /// Where the declaration is visible.
+    pub visibility: Visibility,
     /// Enum name.
     pub name: Symbol,
     /// Type parameters.
@@ -210,8 +244,8 @@ pub struct VariantDecl {
 pub struct AbilityDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
-    /// Whether this ability is public.
-    pub is_pub: bool,
+    /// Where the declaration is visible.
+    pub visibility: Visibility,
     /// Ability name.
     pub name: Symbol,
     /// Type parameters.
@@ -251,8 +285,8 @@ pub enum OpDeclKind {
 pub struct UseDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
-    /// Whether this import is public (re-export).
-    pub is_pub: bool,
+    /// Where the imported name is visible; wider than private re-exports it.
+    pub visibility: Visibility,
     /// The import path as written.
     pub path: Vec<Symbol>,
     /// Optional alias.
@@ -272,8 +306,8 @@ pub struct ModuleDecl<V> {
     pub id: NodeId,
     /// Module name.
     pub name: Symbol,
-    /// Whether this module is public.
-    pub is_pub: bool,
+    /// Where the declaration is visible.
+    pub visibility: Visibility,
     /// Module body (declarations). None for external modules (file-based).
     // Inline modules own their nested declarations; V is the only phase-dependent value.
     #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
@@ -390,7 +424,7 @@ mod tests {
     fn structure(id: usize, name: &str) -> ModuleItem<u32> {
         Decl::Struct(StructDecl {
             id: NodeId::from_raw(id),
-            is_pub: false,
+            visibility: Visibility::Private,
             name: Symbol::new(name),
             type_params: vec![],
             fields: vec![],
@@ -402,7 +436,7 @@ mod tests {
         ModuleDecl {
             id: NodeId::from_raw(id),
             name: Symbol::new(name),
-            is_pub: false,
+            visibility: Visibility::Private,
             body,
         }
         .into()

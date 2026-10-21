@@ -207,7 +207,7 @@ fn each_tail_of_a_union_takes_its_own_selection(db: &salsa::DatabaseImpl) {
     let source = format!(
         "{STATE}{}",
         r#"
-pub mod Nat { extern "intrinsic" fn (+)(left: Nat, right: Nat) -> Nat }
+pub mod Nat { pub extern "intrinsic" fn (+)(left: Nat, right: Nat) -> Nat }
 fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
     f()
     g()

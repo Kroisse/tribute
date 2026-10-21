@@ -20,7 +20,7 @@ mod basic {
     pub fn add(a: Nat, b: Nat) -> Nat { a + b }
 }
 mod outer {
-    mod inner {
+    pub mod inner {
         pub fn one() -> Nat { 1 }
     }
     use inner::one
@@ -147,7 +147,7 @@ fn relative_type_imports_keep_the_resolved_type(db: &salsa::DatabaseImpl) {
             &format!(
                 r#"
 mod outer {{
-    mod a {{
+    pub mod a {{
         pub struct P {{ x: Nat }}
     }}
     {import}
@@ -178,7 +178,7 @@ mod a {
     pub struct P { root: Nat }
 }
 mod outer {
-    mod a {
+    pub mod a {
         pub struct P { nested: Nat }
     }
     use a::P
