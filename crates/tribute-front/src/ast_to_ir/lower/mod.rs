@@ -119,14 +119,11 @@ impl FuncSignature {
 
     /// The logical callable type of this signature.
     pub fn callable_type(&self, ir: &mut IrContext) -> TypeRef {
-        tribute_control::func_sig_with_row(
-            ir,
-            self.return_type,
-            self.param_types.iter().copied(),
-            &self.row,
-            logical::control_convention(self.convention),
-        )
-        .as_type_ref()
+        tribute_control::FuncSig::params(self.param_types.iter().copied(), self.return_type)
+            .row(self.row.clone())
+            .convention(logical::control_convention(self.convention))
+            .intern(ir)
+            .as_type_ref()
     }
 
     /// Mark `function`, a declaration or definition of this signature, with

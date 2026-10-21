@@ -27,13 +27,10 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
     let (mut ctx, module) = parse("core.module @m { func.func @placeholder() { func.return } }");
     let block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
     let i32_ty = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(&mut ctx);
-    let source_callable = tribute_control::func_sig(
-        &mut ctx,
-        i32_ty,
-        vec![i32_ty],
-        tribute_control::CallingConvention::Direct,
-    )
-    .as_type_ref();
+    let source_callable = tribute_control::FuncSig::params([i32_ty], i32_ty)
+        .convention(tribute_control::CallingConvention::Direct)
+        .intern(&mut ctx)
+        .as_type_ref();
     for results in [vec![], vec![source_callable]] {
         let attrs =
             AttributeMap::from_entries(&mut ctx, [("nested", Attribute::Type(source_callable))]);

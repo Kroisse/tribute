@@ -7,7 +7,7 @@ use trunk_ir::{IrContext, SymbolPath};
 
 use super::super::{
     CallingConvention, FuncSig, ValidationResult, conventions_assigned, func_sig_convention,
-    func_sig_with_convention, func_sig_with_row, validate_local, validate_whole_ir,
+    validate_local, validate_whole_ir,
 };
 use super::*;
 
@@ -266,14 +266,11 @@ fn substitution_rebuilds_callables_and_tuple_layouts() {
     let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     let a = SymbolPath::new(["A"]);
     let b = SymbolPath::new(["B"]);
-    let open = func_sig_with_row(
-        &mut ctx,
-        i32_ty,
-        [i32_ty],
-        &Row::new([b.clone()], Some(0)),
-        CallingConvention::Cps,
-    )
-    .as_type_ref();
+    let open = FuncSig::params([i32_ty], i32_ty)
+        .row(Row::new([b.clone()], Some(0)))
+        .convention(CallingConvention::Cps)
+        .intern(&mut ctx)
+        .as_type_ref();
     let tuple = logical_tuple_type(&mut ctx, &[open, i32_ty]);
     let args = [Row::new([a.clone()], Some(3))];
 
@@ -295,14 +292,11 @@ fn substitution_rebuilds_callables_and_tuple_layouts() {
 fn finding_a_substituted_row_needs_only_the_keys_it_holds() {
     let mut ctx = IrContext::new();
     let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-    let open = func_sig_with_row(
-        &mut ctx,
-        i32_ty,
-        [i32_ty],
-        &Row::new([], Some(0)),
-        CallingConvention::Cps,
-    )
-    .as_type_ref();
+    let open = FuncSig::params([i32_ty], i32_ty)
+        .row(Row::new([], Some(0)))
+        .convention(CallingConvention::Cps)
+        .intern(&mut ctx)
+        .as_type_ref();
     let args = [Row::new([], Some(1))];
     let substituted = substitute_rows(&mut ctx, open, &args).unwrap();
     assert_eq!(ctx.lookup_str("instances"), None);
@@ -315,17 +309,16 @@ fn tuple_names_tell_callables_apart_by_their_attributes() {
     let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     let noted = |ctx: &mut IrContext, value| {
         let attrs = trunk_ir::types::AttributeMap::from_entries(ctx, [("note", value)]);
-        super::super::func_sig_with_attrs(ctx, i32_ty, [i32_ty], CallingConvention::Direct, attrs)
+        FuncSig::params([i32_ty], i32_ty)
+            .convention(CallingConvention::Direct)
+            .attrs(attrs)
+            .intern(ctx)
             .as_type_ref()
     };
-    let plain = func_sig_with_row(
-        &mut ctx,
-        i32_ty,
-        [i32_ty],
-        &Row::default(),
-        CallingConvention::Direct,
-    )
-    .as_type_ref();
+    let plain = FuncSig::params([i32_ty], i32_ty)
+        .convention(CallingConvention::Direct)
+        .intern(&mut ctx)
+        .as_type_ref();
     let int = noted(&mut ctx, trunk_ir::types::Attribute::Int(1));
     let one = ctx.string_attr("1");
     let string = noted(&mut ctx, one);
@@ -340,7 +333,10 @@ fn tuple_names_keep_attribute_names_and_text_apart() {
     let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     let with = |ctx: &mut IrContext, name: &'static str, value| {
         let attrs = trunk_ir::types::AttributeMap::from_entries(ctx, [(name, value)]);
-        super::super::func_sig_with_attrs(ctx, i32_ty, [i32_ty], CallingConvention::Direct, attrs)
+        FuncSig::params([i32_ty], i32_ty)
+            .convention(CallingConvention::Direct)
+            .attrs(attrs)
+            .intern(ctx)
             .as_type_ref()
     };
     use trunk_ir::types::Attribute;
@@ -364,14 +360,11 @@ fn tuple_names_keep_symbol_path_components_apart() {
     let mut ctx = IrContext::new();
     let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     let names = [SymbolPath::new(["a::b"]), SymbolPath::new(["a", "b"])].map(|instance| {
-        let callable = func_sig_with_row(
-            &mut ctx,
-            i32_ty,
-            [i32_ty],
-            &Row::new([instance], None),
-            CallingConvention::Cps,
-        )
-        .as_type_ref();
+        let callable = FuncSig::params([i32_ty], i32_ty)
+            .row(Row::new([instance], None))
+            .convention(CallingConvention::Cps)
+            .intern(&mut ctx)
+            .as_type_ref();
         logical_tuple_name(&ctx, &[callable])
     });
     assert_ne!(names[0], names[1]);
@@ -688,14 +681,10 @@ fn a_tuple_layout_names_a_convention_only_once_assigned() {
         )
         .intern(&mut ctx);
     assert!(FuncSig::from_type_ref(&ctx, unassigned).is_some());
-    let assigned = func_sig_with_row(
-        &mut ctx,
-        i32_ty,
-        [i32_ty],
-        &Row::default(),
-        CallingConvention::Direct,
-    )
-    .as_type_ref();
+    let assigned = FuncSig::params([i32_ty], i32_ty)
+        .convention(CallingConvention::Direct)
+        .intern(&mut ctx)
+        .as_type_ref();
     let names = [unassigned, assigned].map(|callable| logical_tuple_name(&ctx, &[callable]));
     assert_ne!(names[0], names[1]);
     assert!(!names[0].contains("direct"), "{}", names[0]);
@@ -761,7 +750,10 @@ fn setting_a_signature_convention_leaves_inner_callables_alone() {
     let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     let inner = unassigned(&mut ctx, &[i32_ty], i32_ty, &Row::default());
     let outer = unassigned(&mut ctx, &[inner], i32_ty, &Row::default());
-    let set = func_sig_with_convention(&mut ctx, outer, CallingConvention::EvidenceDirect);
+    let set = FuncSig::from_type_ref(&ctx, outer)
+        .unwrap()
+        .with_convention(&mut ctx, CallingConvention::EvidenceDirect)
+        .as_type_ref();
     assert_eq!(
         func_sig_convention(&ctx, set),
         Some(CallingConvention::EvidenceDirect)
