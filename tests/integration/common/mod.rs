@@ -664,7 +664,7 @@ pub fn run_in_std_on_both_targets_with_native_asan(
 fn database(prelude_extension: Option<&str>) -> TributeDatabaseImpl {
     let db = TributeDatabaseImpl::default();
     if let Some(extension) = prelude_extension {
-        tribute::pipeline::PreludeExtension::new(&db, extension.to_owned());
+        tribute::prelude::PreludeExtension::new(&db, extension.to_owned());
     }
     db
 }

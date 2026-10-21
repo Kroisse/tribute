@@ -85,12 +85,9 @@
 
 use crate::SourceCst;
 use itertools::Itertools;
-use ropey::Rope;
 use rustc_hash::FxHashMap as HashMap;
 use salsa::Accumulator;
-use tree_sitter::Parser;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_front::source_file::parse_with_rope;
 use trunk_ir::Span;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::conversion::{ReconcileUnrealizedCasts, UnrealizedCastConversionPattern};
@@ -278,31 +275,13 @@ use trunk_ir_wasm_backend::{
 // Standard Library Prelude
 // =============================================================================
 
-/// The prelude source code, embedded at compile time.
-const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
-
-/// The URI the prelude source is registered under.
-const PRELUDE_URI: &str = "prelude:///std/prelude";
-
-/// Source appended to the prelude and compiled as part of package `std`.
-///
-/// Tests use it to exercise package-internal items, such as the
-/// compiler-owned runtime under `std::runtime`, that user packages cannot
-/// name. Create it before the first query on a database: an absent input
-/// records no dependency, so creating it later recompiles nothing. Its
-/// declarations are prelude declarations and can shadow the prelude's own.
-#[salsa::input(singleton)]
-pub struct PreludeExtension {
-    pub text: String,
-}
-
 /// Parse the prelude source.
 ///
 /// This is the first stage of prelude processing, shared by all prelude-related functions.
 /// Returns both the parsed AST and the SourceCst to avoid redundant creation.
 #[salsa::tracked(returns(copy))]
 fn parse_prelude<'db>(db: &'db dyn salsa::Database) -> Option<(ParsedAst<'db>, crate::SourceCst)> {
-    let prelude_source = create_prelude_source(db)?;
+    let prelude_source = crate::prelude::prelude_source(db)?;
     let parsed = ast_query::parsed_ast_with_module_path(
         db,
         prelude_source,
@@ -357,21 +336,6 @@ fn checked_prelude<'db>(
 /// lowering to TrunkIR. The caller is responsible for `ast_to_ir`.
 fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutput<'_>> {
     checked_prelude(db).map(|(typed, _)| typed)
-}
-
-/// Create a SourceCst for the prelude.
-fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
-    let uri = fluent_uri::Uri::parse_from(PRELUDE_URI.to_owned()).expect("valid prelude URI");
-    let text: Rope = match PreludeExtension::try_get(db) {
-        Some(extension) => format!("{PRELUDE_SOURCE}\n{}", extension.text(db)).into(),
-        None => PRELUDE_SOURCE.into(),
-    };
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_tribute::LANGUAGE.into())
-        .expect("Failed to set language");
-    let tree = parse_with_rope(&mut parser, &text, None)?;
-    Some(crate::SourceCst::new(db, uri, text, Some(tree)))
 }
 
 /// Get prelude's ModuleEnv for name resolution.
@@ -736,7 +700,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             compiler_intrinsics,
             runtime_types,
             row_classes,
-            merged_sources: vec![PRELUDE_URI.to_owned()],
+            merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
         },
         db,
         &mut ir,
@@ -4291,7 +4255,10 @@ fn main() -> String { "hello" }
         else {
             panic!("String IR type records its definition location");
         };
-        assert_eq!(ctx.paths().get(definition.path), PRELUDE_URI);
+        assert_eq!(
+            ctx.paths().get(definition.path),
+            crate::prelude::PRELUDE_URI
+        );
         assert_eq!(
             (definition.span.start, definition.span.end),
             (canonical.definition.start, canonical.definition.end)
