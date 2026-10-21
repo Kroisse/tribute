@@ -33,8 +33,8 @@ use tree_sitter::{InputEdit, Point};
 
 use super::builtin_index::{builtin_at, builtin_symbols};
 use super::completion_index::{
-    self, complete_keywords, completion_items, filter_completions, find_callee_signature,
-    function_signatures,
+    self, complete_keywords, completion_items, completions_in, filter_completions,
+    find_callee_signature, function_signatures, module_at,
 };
 use super::definition_index::{definition_index, validate_identifier};
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
@@ -453,9 +453,11 @@ impl LspServer {
 
         let items = self.db.attach(|db| {
             let all_items = completion_items(db, source_cst);
+            let module = module_at(db, source_cst, offset);
 
-            // Filter by prefix
-            let mut completions: Vec<_> = filter_completions(all_items, &prefix).cloned().collect();
+            // Offer what the cursor's module names, filtered by prefix
+            let in_scope: Vec<_> = completions_in(all_items, &module).cloned().collect();
+            let mut completions: Vec<_> = filter_completions(&in_scope, &prefix).cloned().collect();
 
             // Add keyword completions
             completions.extend(complete_keywords(&prefix));

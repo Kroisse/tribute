@@ -306,7 +306,7 @@ fn checked_prelude<'db>(
     let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = &ast_resolve::library_package_module(parsed.module(db));
     let span_map = parsed.span_map(db);
-    let prelude_env = ast_resolve::build_env(db, prelude_ast);
+    let prelude_env = ast_resolve::build_library_env(db, prelude_ast);
     let resolved =
         ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env, span_map.clone());
 
@@ -362,7 +362,21 @@ fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
 fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
     let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = ast_resolve::library_package_module(parsed.module(db));
-    Some(ast_resolve::build_env(db, &prelude_ast))
+    Some(ast_resolve::build_library_env(db, &prelude_ast))
+}
+
+/// The names the prelude's package root gives another package: its public
+/// root items, which every module of a user package sees by name.
+pub fn library_names<'db>(
+    db: &'db dyn salsa::Database,
+) -> Vec<(trunk_ir::Symbol, ast_resolve::Binding<'db>)> {
+    let Some(env) = prelude_env(db) else {
+        return Vec::new();
+    };
+    env.iter_namespace(&[trunk_ir::Symbol::new(ast_resolve::LIBRARY_PACKAGE)])
+        .filter(|(_, binding)| env.restriction(binding).is_none())
+        .map(|(name, binding)| (name, binding.clone()))
+        .collect()
 }
 
 /// The prelude's type exports (TypeSchemes only, no UniVars), injected into

@@ -785,7 +785,7 @@ fn unwrap(value: Box(a)) ->{} a { value.value }
 mod Nested {
     struct Box(a) { value: a }
     fn unwrap(value: Box(a)) ->{} a { value.value }
-    fn use_nested() ->{} Int { unwrap(Box { value: +41 }) }
+    pub fn use_nested() ->{} Int { unwrap(Box { value: +41 }) }
 }
 
 fn main() -> Nil {

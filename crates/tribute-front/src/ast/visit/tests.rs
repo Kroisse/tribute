@@ -223,7 +223,7 @@ fn sample() -> Module<u32> {
     );
     let func = FuncDecl {
         id: id(1),
-        is_pub: false,
+        visibility: crate::ast::Visibility::Private,
         name: Symbol::new("f"),
         type_params: vec![],
         params: vec![],
@@ -237,7 +237,7 @@ fn sample() -> Module<u32> {
         vec![ModuleItem::Module(ModuleDecl {
             id: id(98),
             name: Symbol::new("inner"),
-            is_pub: false,
+            visibility: crate::ast::Visibility::Private,
             body: Some(vec![ModuleItem::Decl(Decl::Function(func))]),
         })],
     )

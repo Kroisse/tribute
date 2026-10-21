@@ -66,7 +66,7 @@ pub(super) fn validate<'db>(
         .iter()
         .filter(|(id, func)| {
             id.path(db) == ["main"]
-                || (func.is_pub
+                || (func.visibility == crate::ast::Visibility::Public
                     && schemes
                         .get(id.path(db))
                         .is_some_and(|scheme| scheme.type_params(db).is_empty()))

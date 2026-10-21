@@ -715,8 +715,8 @@ prelude도 같은 규칙을 따른다. prelude의 모듈은 다른 prelude 항�
 
 | 수식자 | 범위 |
 | ------ | ---- |
-| (없음) | 현재 모듈 내부만 |
-| `pub(super)` | 부모 모듈까지 |
+| (없음) | 선언한 모듈과 그 하위 모듈 |
+| `pub(super)` | 부모 모듈과 그 하위 모듈 |
 | `pub(pkg)` | 패키지 내부 전체 |
 | `pub` | 공개 (외부 패키지에서도 접근 가능) |
 
@@ -734,6 +734,31 @@ pub fn public_api() -> Int { 42 }            // 어디서든
 
 Prelude도 패키지 `std`의 루트 모듈이므로 같은 규칙을 따른다. 사용자 패키지는
 prelude의 `pub` 항목만 본다.
+
+가시성 수식자는 함수, extern 함수, `struct`, `enum`, `ability`, `mod`, `use`에 붙는다.
+패키지 루트의 선언에는 부모 모듈이 없으므로 `pub(super)`를 쓸 수 없다. 이는 이름 해석
+오류다.
+
+**경로의 모든 모듈.** 항목은 그 항목 자신과 그 항목을 둘러싼 모든 모듈이 참조하는
+모듈에서 보일 때만 보인다. 그래서 `pub(pkg) mod runtime` 안의 `pub fn`은 패키지 밖에서
+보이지 않는다. 이 규칙은 이름 해석의 모든 경로에 똑같이 적용한다. `use` 경로, 값
+경로(호출, 생성자, 패턴, handler arm의 ability), 타입과 ability annotation, UFCS 후보가
+모두 그렇다. 보이지 않는 함수는 UFCS 후보가 되지 않는다. 보이지 않는 항목을 이름으로
+가리키면 이름 해석 오류이며, 진단은 그 항목이나 그 항목을 가린 모듈의 식별 경로와
+선언된 가시성을 표시한다.
+
+**타입의 구성원.** 가시성 수식자는 선언 단위로 붙는다. Enum의 variant는 enum의
+가시성을 따르고, struct의 field와 field 함수(`T::f`, `T::f::set`, `T::f::modify`)는
+struct의 가시성을 따른다. Ability의 operation은 ability의 가시성을 따른다.
+
+**Companion 모듈.** 타입과 같은 이름의 companion 모듈은 별개의 선언이며 자기 가시성을
+가진다. `T::f`처럼 경로가 companion 모듈을 지나면 그 모듈의 가시성이 적용되고, 타입의
+가시성은 타입과 생성자에만 적용된다. 그래서 공개 타입의 companion 모듈도 함수를
+공개하려면 `pub mod`로 선언한다.
+
+**`use`와 re-export.** `use`의 대상은 `use`를 선언한 모듈에서 보여야 한다. 가져온
+이름은 그 `use`의 가시성을 가진다. `pub use`처럼 대상보다 넓은 가시성으로 다시 내보낼
+수는 없으며, 이는 이름 해석 오류다.
 
 ### Re-export
 
@@ -759,7 +784,7 @@ pub use pkg::api::{Request, Response}
 
 
 // src/internal/mod.trb (또는 src/internal.trb)
-pub(pkg) struct Config {
+pub struct Config {
     debug: Bool
     timeout: Int
 }

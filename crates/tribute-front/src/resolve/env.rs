@@ -8,7 +8,7 @@ use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::{Symbol, SymbolPath};
 
-use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId};
+use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId, Visibility};
 
 /// Information about a resolved name binding.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -63,6 +63,58 @@ pub enum Binding<'db> {
     },
 }
 
+/// Where a binding or module that is not public is visible.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct Restriction {
+    /// The module whose descendants, itself included, see it. `None` when it
+    /// is visible only in another package.
+    pub within: Option<SymbolPath>,
+    /// The declaration whose visibility restricts it: its own, or that of a
+    /// module around it.
+    pub declaration: SymbolPath,
+    /// That declaration's visibility.
+    pub visibility: Visibility,
+}
+
+/// Names the declaration and its visibility, as in "`m::f` is private".
+impl std::fmt::Display for Restriction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "`{}` is ",
+            itertools::Itertools::format(self.declaration.iter(), "::")
+        )?;
+        match self.visibility {
+            Visibility::Private => f.write_str("private"),
+            visibility => write!(f, "declared `{visibility}`"),
+        }
+    }
+}
+
+impl Restriction {
+    /// Whether `module`, a module of this package, sees it.
+    pub fn is_visible_from(&self, module: &[Symbol]) -> bool {
+        self.within
+            .as_ref()
+            .is_some_and(|within| module.starts_with(within))
+    }
+
+    /// The narrower of `self` and `outer`, the restriction of a module
+    /// around it. Both are visible within modules around the same
+    /// declaration, so the longer path is the narrower one.
+    pub fn within_module(self, outer: Option<&Restriction>) -> Restriction {
+        match outer {
+            Some(outer)
+                if outer.within.as_ref().map(|path| path.len())
+                    > self.within.as_ref().map(|path| path.len()) =>
+            {
+                outer.clone()
+            }
+            _ => self,
+        }
+    }
+}
+
 /// Module environment for name resolution.
 ///
 /// Tracks all names visible in the current module.
@@ -92,6 +144,10 @@ pub struct ModuleEnv<'db> {
     /// Library namespaces under their short first segment, e.g. `Option` →
     /// `std::Option` and `List` → `std::collections::List`.
     library_namespaces: HashMap<Symbol, SymbolPath>,
+    /// The bindings that are not public, each with the modules that see it.
+    restrictions: HashMap<Binding<'db>, Restriction>,
+    /// The modules that are not public, by package-root path.
+    module_restrictions: HashMap<SymbolPath, Restriction>,
 }
 
 impl<'db> ModuleEnv<'db> {
@@ -233,6 +289,45 @@ impl<'db> ModuleEnv<'db> {
         self.library_roots.contains(root)
     }
 
+    /// Restrict where `binding` is visible.
+    pub fn restrict(&mut self, binding: Binding<'db>, restriction: Restriction) {
+        self.restrictions.insert(binding, restriction);
+    }
+
+    /// Restrict where the module at the package-root path `module` is
+    /// visible.
+    pub fn restrict_module(&mut self, module: SymbolPath, restriction: Restriction) {
+        self.module_restrictions.insert(module, restriction);
+    }
+
+    /// Where `binding` is visible, if it is not public.
+    pub fn restriction(&self, binding: &Binding<'db>) -> Option<&Restriction> {
+        self.restrictions.get(binding)
+    }
+
+    /// Where the module at the package-root path `module` is visible, if it
+    /// is not public.
+    pub fn module_restriction(&self, module: &[Symbol]) -> Option<&Restriction> {
+        self.module_restrictions.get(module)
+    }
+
+    /// Take the restrictions of `other`, an environment of the same
+    /// package.
+    pub fn absorb_restrictions(&mut self, other: &ModuleEnv<'db>) {
+        self.restrictions.extend(
+            other
+                .restrictions
+                .iter()
+                .map(|(binding, restriction)| (binding.clone(), restriction.clone())),
+        );
+        self.module_restrictions.extend(
+            other
+                .module_restrictions
+                .iter()
+                .map(|(path, restriction)| (path.clone(), restriction.clone())),
+        );
+    }
+
     /// Add a qualified name to a namespace only if it doesn't already exist.
     pub fn add_to_namespace_if_absent(
         &mut self,
@@ -351,6 +446,21 @@ impl<'db> ModuleEnv<'db> {
     /// module sees under their short names, and whose namespaces a path may
     /// enter by their first segment below the package root.
     pub fn merge(&mut self, other: &ModuleEnv<'db>, package: &Symbol) {
+        // What another package restricts, this one never sees.
+        let foreign = |restriction: &Restriction| Restriction {
+            within: None,
+            ..restriction.clone()
+        };
+        for (binding, restriction) in &other.restrictions {
+            self.restrictions
+                .entry(binding.clone())
+                .or_insert_with(|| foreign(restriction));
+        }
+        for (module, restriction) in &other.module_restrictions {
+            self.module_restrictions
+                .entry(module.clone())
+                .or_insert_with(|| foreign(restriction));
+        }
         for (name, binding) in other.iter_namespace(std::slice::from_ref(package)) {
             self.add_library(name.clone(), binding.clone(), vec![package.clone(), name]);
         }

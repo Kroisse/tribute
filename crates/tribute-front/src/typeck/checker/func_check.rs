@@ -569,7 +569,7 @@ impl<'db> TypeChecker<'db> {
         }
         let decl = FuncDecl {
             id: func.id,
-            is_pub: func.is_pub,
+            visibility: func.visibility,
             name: func.name.clone(),
             type_params: func.type_params.clone(),
             params: func.params.clone(),

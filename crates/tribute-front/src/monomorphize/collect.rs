@@ -601,7 +601,7 @@ mod tests {
             .map(|(i, (name, arity))| {
                 ModuleItem::Decl(Decl::Struct(crate::ast::StructDecl {
                     id: NodeId::from_raw(i + 1),
-                    is_pub: false,
+                    visibility: crate::ast::Visibility::Private,
                     name: Symbol::new(name),
                     type_params: (0..arity)
                         .map(|p| crate::ast::TypeParamDecl {

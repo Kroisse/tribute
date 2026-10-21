@@ -330,7 +330,7 @@ fn deferred_ufcs_call_keeps_its_actual_never_result(db: &salsa::DatabaseImpl) {
 struct Bomb {}
 
 pub mod Bomb {
-    extern "intrinsic" fn explode(value: Bomb) -> Never
+    pub extern "intrinsic" fn explode(value: Bomb) -> Never
 }
 
 fn after(bomb: Bomb) -> Nat { bomb.explode() }
@@ -381,7 +381,7 @@ fn generic_join() -> #(Nat, Bool) {
 }
 
 struct Bomb {}
-pub mod Bomb { extern "intrinsic" fn explode(value: Bomb) -> Never }
+pub mod Bomb { pub extern "intrinsic" fn explode(value: Bomb) -> Never }
 
 fn partial_generalization() -> #(Nat, Bool) {
     let #(explode, identity) = #(fn(bomb) bomb.explode(), fn(value) value)
@@ -654,7 +654,7 @@ fn deferred_join_rejects_a_late_inhabited_mismatch(db: &salsa::DatabaseImpl) {
         "late_mismatch.trb",
         r#"
 struct Probe {}
-pub mod Probe { fn answer(value: Probe) -> Bool { True } }
+pub mod Probe { pub fn answer(value: Probe) -> Bool { True } }
 fn bad() -> Nat {
     let choose = fn(probe) {
         case True {
@@ -792,10 +792,10 @@ fn deferred_method_contextualizes_literal_callback_results(db: &salsa::DatabaseI
         "deferred_literal_callback.trb",
         r#"
 struct Bomb {}
-pub mod Bomb { extern "intrinsic" fn explode(value: Bomb) -> Never }
+pub mod Bomb { pub extern "intrinsic" fn explode(value: Bomb) -> Never }
 struct Runner {}
 pub mod Runner {
-    fn run(receiver: Runner, callback: fn() ->{e} Nat) ->{e} Nat { callback() }
+    pub fn run(receiver: Runner, callback: fn() ->{e} Nat) ->{e} Nat { callback() }
 }
 fn late_method() -> Nat {
     let invoke = fn(receiver) {
@@ -845,7 +845,7 @@ fn deferred_callback_context_does_not_relax_function_value_equality(db: &salsa::
                 r#"
 struct Runner {{}}
 pub mod Runner {{
-    fn run(receiver: Runner, callback: {callback_type}) -> Nat {{ 0 }}
+    pub fn run(receiver: Runner, callback: {callback_type}) -> Nat {{ 0 }}
 }}
 fn late_method({parameter}) -> Nat {{
     let invoke = fn(receiver) {{ receiver.run({argument}) }}
@@ -870,10 +870,10 @@ fn deferred_method_context_reaches_nested_literal_results(db: &salsa::DatabaseIm
         "nested_deferred_callback.trb",
         r#"
 struct Bomb {}
-pub mod Bomb { extern "intrinsic" fn explode(value: Bomb) -> Never }
+pub mod Bomb { pub extern "intrinsic" fn explode(value: Bomb) -> Never }
 struct Runner {}
 pub mod Runner {
-    fn run(receiver: Runner, callback: fn() ->{e} fn() ->{e} Nat) ->{e} Nat {
+    pub fn run(receiver: Runner, callback: fn() ->{e} fn() ->{e} Nat) ->{e} Nat {
         let f = callback()
         f()
     }

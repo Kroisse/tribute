@@ -18,7 +18,7 @@ mod env;
 mod path;
 mod resolver;
 
-pub use env::{Binding, ModuleEnv};
+pub use env::{Binding, ModuleEnv, Restriction};
 pub use resolver::Resolver;
 
 use trunk_ir::Symbol;
@@ -26,7 +26,7 @@ use trunk_ir::SymbolPath;
 
 use crate::ast::{
     AbilityId, CtorId, Decl, DeclTable, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ModuleDecl,
-    ModuleItem, ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
+    ModuleItem, ResolvedRef, SpanMap, TypeDefId, UnresolvedName, Visibility,
 };
 
 /// Resolve names in a module.
@@ -152,6 +152,25 @@ pub fn build_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
 ) -> ModuleEnv<'db> {
+    build_package_env(db, module, 0)
+}
+
+/// Build the environment of a library package module from
+/// [`library_package_module`], whose root is its one package module.
+pub fn build_library_env<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<UnresolvedName>,
+) -> ModuleEnv<'db> {
+    build_package_env(db, module, 1)
+}
+
+/// Build the environment of a package whose root is the module at the
+/// first `package_depth` segments of every module path.
+fn build_package_env<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<UnresolvedName>,
+    package_depth: usize,
+) -> ModuleEnv<'db> {
     let mut env = ModuleEnv::new();
 
     // Note: We don't use module.name as the initial prefix because
@@ -160,9 +179,13 @@ pub fn build_env<'db>(
     // The file-derived name is for external references, not internal ones.
     // Only nested `mod foo { ... }` declarations extend the module path.
     let mut prefix = SymbolPath::root();
+    let scope = Scope {
+        package_depth,
+        outer: None,
+    };
 
     for item in &module.decls {
-        collect_item(db, &mut env, item, &mut prefix);
+        collect_item(db, &mut env, item, &mut prefix, &scope);
     }
 
     inject_builtin_bindings(db, &mut env);
@@ -171,6 +194,51 @@ pub fn build_env<'db>(
     resolve_use_imports(&mut env);
 
     env
+}
+
+/// What a declaration's visibility is relative to while its environment is
+/// collected.
+struct Scope {
+    /// How many leading segments of a module path are the package root.
+    package_depth: usize,
+    /// The restriction of the modules around the declaration, if any of them
+    /// is not public.
+    outer: Option<Restriction>,
+}
+
+impl Scope {
+    /// The restriction of the declaration at `path` with `visibility`, in
+    /// the module `module`, or `None` if it is public.
+    fn restriction(
+        &self,
+        module: &SymbolPath,
+        path: SymbolPath,
+        visibility: Visibility,
+    ) -> Option<Restriction> {
+        let package = || {
+            SymbolPath::new(
+                module[..self.package_depth.min(module.len())]
+                    .iter()
+                    .cloned(),
+            )
+        };
+        let within = match visibility {
+            Visibility::Public => return self.outer.clone(),
+            Visibility::Private => module.clone(),
+            // The resolver reports `pub(super)` at the package root.
+            Visibility::Super if module.len() <= self.package_depth => package(),
+            Visibility::Super => module
+                .parent()
+                .expect("a module below the root has a parent"),
+            Visibility::Package => package(),
+        };
+        let own = Restriction {
+            within: Some(within),
+            declaration: path,
+            visibility,
+        };
+        Some(own.within_module(self.outer.as_ref()))
+    }
 }
 
 /// The package the prelude is the root of. Its declarations' identities and
@@ -187,7 +255,7 @@ pub fn library_package_module(module: &Module<UnresolvedName>) -> Module<Unresol
         decls: vec![ModuleItem::Module(ModuleDecl {
             id: module.id,
             name: Symbol::new(LIBRARY_PACKAGE),
-            is_pub: true,
+            visibility: Visibility::Public,
             body: Some(module.decls.clone()),
         })],
     }
@@ -259,10 +327,11 @@ fn collect_item<'db>(
     env: &mut ModuleEnv<'db>,
     item: &ModuleItem<UnresolvedName>,
     prefix: &mut SymbolPath,
+    scope: &Scope,
 ) {
     match item {
-        ModuleItem::Decl(decl) => collect_definition(db, env, decl, prefix),
-        ModuleItem::Module(module) => collect_module(db, env, module, prefix),
+        ModuleItem::Decl(decl) => collect_definition(db, env, decl, prefix, scope),
+        ModuleItem::Module(module) => collect_module(db, env, module, prefix, scope),
     }
 }
 
@@ -272,18 +341,39 @@ fn collect_definition<'db>(
     env: &mut ModuleEnv<'db>,
     decl: &Decl<UnresolvedName>,
     prefix: &mut SymbolPath,
+    scope: &Scope,
 ) {
+    // Every binding of a declaration, its members' included, has the
+    // declaration's visibility.
+    let restriction = match decl {
+        Decl::Function(func) => Some((&func.name, func.visibility)),
+        Decl::ExternFunction(func) => Some((&func.name, func.visibility)),
+        Decl::Struct(s) => Some((&s.name, s.visibility)),
+        Decl::Enum(e) => Some((&e.name, e.visibility)),
+        Decl::Ability(a) => Some((&a.name, a.visibility)),
+        Decl::Use(_) => None,
+    }
+    .and_then(|(name, visibility)| {
+        scope.restriction(prefix, prefix.child(name.clone()), visibility)
+    });
+    let restrict = |env: &mut ModuleEnv<'db>, binding: Binding<'db>| {
+        if let Some(restriction) = &restriction {
+            env.restrict(binding, restriction.clone());
+        }
+    };
     match decl {
         Decl::Function(func) => {
             let qualified = prefix.child(func.name.clone());
             let id = FuncDefId::new(db, qualified);
             env.add_function(func.name.clone(), id);
+            restrict(env, Binding::Function { id });
         }
 
         Decl::ExternFunction(func) => {
             let qualified = prefix.child(func.name.clone());
             let id = FuncDefId::new(db, qualified);
             env.add_function(func.name.clone(), id);
+            restrict(env, Binding::Function { id });
         }
 
         Decl::Struct(s) => {
@@ -293,6 +383,15 @@ fn collect_definition<'db>(
             let ctor_id = CtorId::new(db, qualified);
             env.add_type(s.name.clone(), type_def_id);
             env.add_constructor(s.name.clone(), ctor_id, None, s.fields.len());
+            restrict(env, Binding::TypeDef { id: type_def_id });
+            restrict(
+                env,
+                Binding::Constructor {
+                    id: ctor_id,
+                    tag: None,
+                    arity: s.fields.len(),
+                },
+            );
 
             // Register field accessors in struct's namespace
             // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
@@ -302,6 +401,7 @@ fn collect_definition<'db>(
                     let field_qualified = prefix.child(field_name.clone());
                     let func_id = FuncDefId::new(db, field_qualified);
                     let binding = Binding::Function { id: func_id };
+                    restrict(env, binding.clone());
                     // Add to namespace (e.g., Point::x)
                     env.add_to_namespace(
                         SymbolPath::new([s.name.clone()]),
@@ -315,6 +415,7 @@ fn collect_definition<'db>(
                     for name in FIELD_LENS_FUNCTIONS {
                         let name = Symbol::new(name);
                         let id = FuncDefId::new(db, prefix.child(name.clone()));
+                        restrict(env, Binding::Function { id });
                         env.add_to_namespace(namespace.clone(), name, Binding::Function { id });
                     }
                     prefix.pop();
@@ -328,6 +429,7 @@ fn collect_definition<'db>(
             let qualified = prefix.child(e.name.clone());
             let type_def_id = TypeDefId::source(db, qualified, e.id);
             env.add_type(e.name.clone(), type_def_id);
+            restrict(env, Binding::TypeDef { id: type_def_id });
 
             // Add each variant as a constructor in the enum's namespace
             for variant in &e.variants {
@@ -338,6 +440,7 @@ fn collect_definition<'db>(
                     tag: Some(variant.name.clone()),
                     arity: variant.fields.len(),
                 };
+                restrict(env, binding.clone());
                 // Add to namespace (e.g., Option::Some)
                 env.add_to_namespace(
                     SymbolPath::new([e.name.clone()]),
@@ -361,6 +464,7 @@ fn collect_definition<'db>(
 
             // Register the ability itself (for handler pattern resolution)
             env.add_ability(a.name.clone(), ability_id);
+            restrict(env, Binding::Ability { id: ability_id });
 
             // Ability operations are added to the ability's namespace
             for op in &a.operations {
@@ -369,6 +473,7 @@ fn collect_definition<'db>(
                     op: op.name.clone(),
                     kind: op.kind,
                 };
+                restrict(env, binding.clone());
                 env.add_to_namespace(SymbolPath::new([a.name.clone()]), op.name.clone(), binding);
             }
         }
@@ -396,20 +501,32 @@ fn collect_module<'db>(
     env: &mut ModuleEnv<'db>,
     m: &ModuleDecl<UnresolvedName>,
     prefix: &mut SymbolPath,
+    scope: &Scope,
 ) {
     // For inline modules, collect bindings into a temporary environment
     // then register them under the module's namespace
     if let Some(body) = &m.body {
+        let path = prefix.child(m.name.clone());
+        let restriction = scope.restriction(prefix, path.clone(), m.visibility);
+        if let Some(restriction) = &restriction {
+            env.restrict_module(path, restriction.clone());
+        }
+        let inner_scope = Scope {
+            package_depth: scope.package_depth,
+            outer: restriction,
+        };
+
         // Build nested module path by appending current module name
         prefix.push(m.name.clone());
 
         // Collect inner declarations into a temporary environment
         let mut inner_env = ModuleEnv::new();
         for inner in body {
-            collect_item(db, &mut inner_env, inner, prefix);
+            collect_item(db, &mut inner_env, inner, prefix, &inner_scope);
         }
 
         prefix.pop();
+        env.absorb_restrictions(&inner_env);
 
         // Register each inner definition under the module's namespace
         // e.g., `mod Foo { fn bar() {} }` makes `Foo::bar` available
@@ -640,7 +757,7 @@ mod tests {
     fn simple_func(name: &str) -> FuncDecl<UnresolvedName> {
         FuncDecl {
             id: fresh_node_id(),
-            is_pub: false,
+            visibility: Visibility::Private,
             name: Symbol::new(name),
             type_params: vec![],
             params: vec![],
@@ -657,7 +774,7 @@ mod tests {
     fn simple_struct(name: &str) -> StructDecl {
         StructDecl {
             id: fresh_node_id(),
-            is_pub: false,
+            visibility: Visibility::Private,
             name: Symbol::new(name),
             type_params: vec![],
             fields: vec![FieldDecl {
@@ -677,7 +794,7 @@ mod tests {
     fn simple_enum(name: &str, variants: &[&str]) -> EnumDecl {
         EnumDecl {
             id: fresh_node_id(),
-            is_pub: false,
+            visibility: Visibility::Private,
             name: Symbol::new(name),
             type_params: vec![],
             variants: variants
@@ -699,7 +816,7 @@ mod tests {
         ModuleDecl {
             id: fresh_node_id(),
             name: Symbol::new(name),
-            is_pub: false,
+            visibility: Visibility::Private,
             body: Some(items),
         }
     }
@@ -895,7 +1012,7 @@ mod tests {
             Some(Symbol::new("test")),
             vec![Decl::ExternFunction(ExternFuncDecl {
                 id: fresh_node_id(),
-                is_pub: false,
+                visibility: Visibility::Private,
                 name: Symbol::new("__bytes_len"),
                 abi: Symbol::new("intrinsic"),
                 params: vec![ParamDecl {
@@ -955,7 +1072,7 @@ mod tests {
             Some(Symbol::new("test")),
             vec![Decl::Struct(StructDecl {
                 id: fresh_node_id(),
-                is_pub: false,
+                visibility: Visibility::Private,
                 name: Symbol::new("Point"),
                 type_params: vec![],
                 fields: vec![
