@@ -93,7 +93,8 @@ module export와 virtual `Io` binding은 resolver의 동일한 `std::io` namespa
 ## Entrypoint
 
 `main`은 `Nil`을 반환해야 한다. 모든 residual effect는 오류이지만 builtin
-`std::io::Io`만 예외적으로 허용한다.
+`std::io::Io`만 예외적으로 허용한다. 사용자가 정의한 host ability가 residual row에
+남는 규칙은 [host-abilities.md](host-abilities.md#host-ability)가 정한다.
 
 ```rust
 fn main() ->{Io} Nil {

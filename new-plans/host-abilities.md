@@ -42,7 +42,7 @@ Ability를 host ability로 표시하는 선언 문법은 아래 [미정 사항](
   ability를 쓰는 코드는 host 없이도 handler를 씌워 실행하고 테스트할 수 있다.
 - **`main`의 residual row에 남을 수 있다.** `main`에 처리되지 않은 채 남은 host
   ability들이 그 프로그램이 host에 요구하는 기능의 전부다. Host ability가 아닌
-  residual effect는 지금처럼 frontend가 거부한다.
+  residual effect는 frontend가 거부한다.
 
 ## Host 경계
 

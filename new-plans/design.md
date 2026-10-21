@@ -27,7 +27,8 @@ Tribute는 도구와 AI가 코드를 쓰고 사람이 그 코드를 검토하는
 
 - **Ability row가 곧 권한이다.** 바깥 세계는 host가 handler를 공급하는
   [host ability](host-abilities.md)로만 닿는다. 함수 시그니처의 ability row가 그 함수가
-  닿을 수 있는 host 기능을 보여 준다. 별도의 FFI는 두지 않는다.
+  닿을 수 있는 host 기능을 보여 준다. 소스 언어에는 별도의 FFI가 없다. Compiler 내부의
+  extern과 intrinsic 선언은 이 경계를 구현하는 수단이다.
 - **같은 경계로 여러 host에 들어간다.** 브라우저, plugin host, 단독 실행 launcher는
   모두 Tribute module에 host ability를 공급하는 host다. Embedding과 단독 실행은 같은
   모델의 두 경우다.
@@ -294,15 +295,16 @@ closure 저장소를 물리화한다. 구체적인 pass 순서와 검증 경계�
   Wasm module을 runtime과 함께 미리 컴파일해 묶거나 C로 번역해 빌드한다. 어느 쪽이든
   실행 파일은 host ability를 구현한 launcher와 Tribute module의 조합이다.
 - **Native 타겟의 역할.** Native 타겟은 개발, 테스트, 성능 측정의 기준이자 단독 실행
-  경로의 하나다. 유지할지는 linear memory Wasm이 갖춰진 뒤 세 경로(native 타겟, 미리
-  컴파일한 Wasm, C로 번역한 Wasm)의 실행 성능과 산출물 크기를 비교해 정한다. Wasm
-  경로가 충분히 가까우면 native 타겟 없이도 단독 실행은 유지된다.
+  경로의 하나다. Native 타겟을 유지할지는 linear memory Wasm을 기준으로 세 경로(native
+  타겟, 미리 컴파일한 Wasm, C로 번역한 Wasm)의 실행 성능과 산출물 크기를 비교해
+  정한다. Wasm 경로가 충분히 가까우면 native 타겟 없이도 단독 실행은 유지된다.
 
-## Target: WasmGC
+## Target: Wasm
 
 ### 장점
 
-- **네이티브 GC**: 자체 GC 구현 불필요
+- **WasmGC 표현**: 현재 표현은 WasmGC layout을 쓰므로 자체 GC가 필요 없다. 메모리 모델의
+  방향은 [Target 전략](#target-전략)이 정한다.
 - **Tail calls**: WASM 3.0에서 표준화
 - **크로스 플랫폼**: 브라우저 + WASI 런타임
 
