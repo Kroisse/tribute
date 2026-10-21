@@ -93,13 +93,6 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
     let function_types_map: HashMap<_, _> = result.function_types.into_iter().collect();
     let constructor_types: HashMap<_, _> = result.constructor_types.into_iter().collect();
     let ability_definitions: HashMap<_, _> = result.ability_definitions.into_iter().collect();
-    let ability_conventions =
-        tribute_front::ast::ability_conventions(ability_definitions.iter().map(|(id, info)| {
-            (
-                *id,
-                info.operations.values().map(|operation| operation.kind),
-            )
-        }));
     let compiler_intrinsics = prelude
         .as_ref()
         .map(|prelude| {
@@ -117,8 +110,6 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
         node_types: result.node_types,
         local_instances: result.local_instances,
         function_instances: result.function_instances,
-        ability_conventions,
-        convention_classes: Default::default(),
         ability_definitions,
         handler_operations: result.handler_operations,
         perform_operations: result.perform_operations,
@@ -128,7 +119,6 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
         well_known_types: result.well_known_types,
         compiler_intrinsics,
         runtime_types: Default::default(),
-        row_classes: HashMap::default(),
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());

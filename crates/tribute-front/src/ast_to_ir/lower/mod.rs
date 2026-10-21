@@ -18,9 +18,9 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::Location;
 
-use super::context::{IrLoweringCtx, control_convention};
+use super::context::IrLoweringCtx;
 
-use crate::ast::{CallingConvention, CtorId, NodeId, ResolvedRef, TypeKind};
+use crate::ast::{CtorId, NodeId, ResolvedRef, TypeKind};
 
 /// IR-level function signature extracted from a TypeScheme.
 #[derive(Clone)]
@@ -31,9 +31,6 @@ pub(super) struct FuncSignature {
     pub row: Row,
     pub binders: Vec<RowBinder>,
     pub unions: Vec<RowUnion>,
-    /// The convention lowering writes, or `None` when the class
-    /// specialization pass assigns it.
-    pub convention: Option<CallingConvention>,
 }
 
 impl FuncSignature {
@@ -60,7 +57,6 @@ impl FuncSignature {
                 row: signature.row.clone(),
                 binders: signature.binders.clone(),
                 unions: vec![],
-                convention: signature.convention,
             });
         }
         let scheme = *ctx.lookup_function_type(name)?;
@@ -83,7 +79,6 @@ impl FuncSignature {
                     .map(|(_, binder)| *binder)
                     .collect(),
                 unions: ctx.row_unions(scheme),
-                convention: ctx.written_convention(body),
             }),
             _ => None,
         }
@@ -105,7 +100,6 @@ impl FuncSignature {
                 .expect("a signature's row tail names a quantified binder"),
             binders: vec![],
             unions: vec![],
-            convention: self.convention,
         }
     }
 
@@ -121,13 +115,10 @@ impl FuncSignature {
 
     /// The logical callable type of this signature.
     pub fn callable_type(&self, ir: &mut IrContext) -> TypeRef {
-        let mut signature =
-            tribute_control::FuncSig::params(self.param_types.iter().copied(), self.return_type)
-                .row(self.row.clone());
-        if let Some(convention) = self.convention {
-            signature = signature.convention(control_convention(convention));
-        }
-        signature.intern(ir).as_type_ref()
+        tribute_control::FuncSig::params(self.param_types.iter().copied(), self.return_type)
+            .row(self.row.clone())
+            .intern(ir)
+            .as_type_ref()
     }
 
     /// Mark `function`, a declaration or definition of this signature, with
