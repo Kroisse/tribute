@@ -168,10 +168,10 @@ fn a_layout_takes_the_convention_of_its_callable_field() {
     assert_contains(
         &printed,
         &[
-            "!Holder_1 = adt.struct<Holder(callback: !t0)>",
+            "!Holder = adt.struct<Holder(callback: tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>)>",
             "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>",
-            "%1 = adt.struct_get %0 {field = 0, type = !Holder_1} : !t0",
-            "%3 = adt.struct_new %1 {type = !Holder_1} : !HolderRef",
+            "%1 = adt.struct_get %0 {field = 0, type = !Holder} : !t0",
+            "%3 = adt.struct_new %1 {type = !Holder} : !HolderRef",
         ],
     );
 }
@@ -503,5 +503,31 @@ fn a_lambda_is_copied_after_the_lambdas_its_classes_depend_on() {
             "%13 = tribute_control.lambda['a4](%14: core.i32) -> core.i32 row(| 'a4) convention(cps) captures [] {",
             "%16 = tribute_control.instantiate %13 {row_args = [{tail = 2}]}",
         ],
+    );
+}
+
+/// A layout published as a type alias takes the conventions of its callable
+/// fields even where no operation names it.
+#[test]
+fn a_published_layout_takes_the_conventions_of_its_fields() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        r#"core.module @m {
+  !cb = tribute_control.func_sig<(core.i32) -> core.i32>
+  !Holder = adt.struct<Holder(callback: !cb)>
+  tribute_control.func @main(%x: core.i32) -> core.i32 {
+    tribute_control.return %x
+  }
+}"#,
+    );
+    specialize(&mut ctx, module).expect("specializes");
+    let holder = ctx
+        .type_alias_by_name(&trunk_ir::Symbol::new("Holder"))
+        .expect("published layout");
+    let field = ctx.get_type(holder).params[0];
+    assert_eq!(
+        tribute_control::func_sig_convention(&ctx, field),
+        Some(CallingConvention::Direct)
     );
 }

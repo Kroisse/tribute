@@ -4,7 +4,7 @@
 use crate::common;
 
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::{compile_frontend, compile_to_wasm_binary};
+use tribute::pipeline::{compile_specialized_frontend, compile_to_wasm_binary};
 use tribute_front::SourceCst;
 use tribute_ir::dialect::tribute_control;
 use trunk_ir::ops::DialectOp;
@@ -25,7 +25,9 @@ fn main() ->{std::io::Io} Nil {
 #[salsa_test]
 fn generic_callback_selects_a_direct_instance_and_executes_wasm(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "test.trb", SOURCE);
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let convention = |named: &dyn Fn(&str) -> bool| {
         module.ops(&ctx).iter().copied().find_map(|op| {
             let function = tribute_control::Func::from_op(&ctx, op).ok()?;
@@ -70,7 +72,9 @@ fn main() -> Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let instances: Vec<_> = module
         .ops(&ctx)
         .iter()
@@ -110,7 +114,9 @@ fn main() ->{Io} Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let mut functions: Vec<_> = module
         .ops(&ctx)
         .iter()
@@ -157,7 +163,9 @@ fn main() -> Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
         .split("tribute_control.func @main")
@@ -201,7 +209,9 @@ fn main() ->{Io} Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
         .split("tribute_control.func @main")
@@ -253,7 +263,9 @@ fn main() -> Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     assert!(ir.contains("callee = @\"countdown$9D\""), "{ir}");
     let instance = ir
@@ -318,7 +330,9 @@ fn main() ->{Io} Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let function = |name: &str| {
         ir.split(&format!("tribute_control.func @\"{name}\""))
@@ -373,7 +387,9 @@ fn main() ->{Io} Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let function = |name: &str| {
         ir.split(&format!("tribute_control.func {name}["))
@@ -427,7 +443,9 @@ fn main() ->{Io} Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
         .split("tribute_control.func @main[")
@@ -467,7 +485,9 @@ fn main() -> Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let run = ir
         .split("tribute_control.func @run")
@@ -503,7 +523,9 @@ fn main() -> Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let run = ir
         .split("tribute_control.func @\"run$9D\"")
@@ -530,7 +552,9 @@ fn convention_class_disagreements(
     source: &str,
 ) -> Vec<(&'static str, String)> {
     let source = SourceCst::from_source_str(db, "test.trb", source);
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     tribute_passes::check_convention_classes::check(&ctx, module)
         .into_iter()
         .map(|disagreement| (disagreement.rule, disagreement.message))
@@ -600,7 +624,9 @@ fn main() -> Nil {
 }
 "#,
     );
-    let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
     assert_eq!(
         tribute_passes::check_convention_classes::check(&ctx, module),
         []

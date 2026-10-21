@@ -8,7 +8,9 @@
 
 mod common;
 
-use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
+use self::common::{
+    ast_pipeline_error_messages, run_ast_pipeline_with_ir, run_ast_pipeline_with_specialized_ir,
+};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
@@ -389,7 +391,7 @@ fn main() -> Nat {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
     assert_eq!(
         ir_text
             .match_indices(

@@ -57,10 +57,10 @@ pub struct MonomorphizeMetadata<'db> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ConventionClasses {
     /// The frontend: it names class instances and writes every convention.
-    #[default]
     Frontend,
     /// The class specialization pass after the frontend, which leaves every
     /// convention unassigned.
+    #[default]
     Pass,
 }
 

@@ -63,7 +63,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
 /// Diagnostics emitted during the pipeline are accumulated as Salsa
 /// accumulators and can be collected by the caller.
 #[salsa::tracked(returns(clone))]
-fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String {
+fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specialize: bool) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
 
@@ -142,6 +142,22 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         validation.is_ok(),
         "logical frontend output must validate: {validation}"
     );
+    if specialize {
+        tribute_passes::specialize_convention_classes::specialize(&mut ir, module.module)
+            .expect("class specialization accepts frontend output");
+        let validation = tribute_ir::dialect::tribute_control::validate(
+            &ir,
+            module.module,
+            &module.compiler_intrinsics,
+            &mut Default::default(),
+        );
+        assert!(
+            validation.is_ok(),
+            "specialized output must validate: {validation}"
+        );
+        let disagreements = tribute_passes::check_convention_classes::check(&ir, module.module);
+        assert!(disagreements.is_empty(), "{disagreements:?}");
+    }
     print_module(&ir, module.module.op())
 }
 
@@ -362,7 +378,14 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
             .join("\n")
     );
 
-    run_ast_pipeline_inner(db, source)
+    run_ast_pipeline_inner(db, source, false)
+}
+
+/// [`run_ast_pipeline_with_ir`], then class specialization: the IR with the
+/// class instances and conventions legalization reads.
+pub fn run_ast_pipeline_with_specialized_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
+    let _ = run_ast_pipeline_with_ir(db, source);
+    run_ast_pipeline_inner(db, source, true)
 }
 
 /// Run the full AST pipeline without returning IR text.

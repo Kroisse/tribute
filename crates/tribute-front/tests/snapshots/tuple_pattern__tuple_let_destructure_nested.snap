@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-front/tests/tuple_pattern.rs
+assertion_line: 116
 expression: ir_text
 ---
 core.module @test {
@@ -8,8 +9,8 @@ core.module @test {
   !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1 = adt.typeref<{name = "__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32"}>
   !__logical_tuple_tuple_2_10_coreZ2ei32_35_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1 = adt.typeref<{name = "__logical_tuple_tuple_2_10_coreZ2ei32_35_tuple_2_10_coreZ2ei32_10_coreZ2ei32"}>
 
-  tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
-  tribute_control.func @test['a0]() -> core.i32 row(| 'a0) inferred convention(direct) {
+  tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
+  tribute_control.func @test['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = arith.const {value = 1} : core.i32
       %1 = arith.const {value = 2} : core.i32
       %2 = arith.const {value = 3} : core.i32

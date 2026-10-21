@@ -498,9 +498,10 @@ impl Instance<'_> {
     }
 }
 
-/// Assign conventions to the types of module-level operations outside
-/// definitions, such as the signatures of ability operations. They have no
-/// row binders, so only their abilities decide.
+/// Assign conventions to the types outside definitions: those of the module
+/// and its other operations, such as the signatures of ability operations,
+/// and the nominal layouts the context publishes as type aliases. They have no row
+/// binders, so only their abilities decide.
 fn assign_module_level(
     ctx: &mut IrContext,
     module: Module,
@@ -515,7 +516,7 @@ fn assign_module_level(
             &HashMap::default(),
         )
     };
-    let mut ops = Vec::new();
+    let mut ops = vec![module.op()];
     for &op in module.ops(ctx).iter() {
         if tribute_control::Func::matches(ctx, op) {
             continue;
@@ -541,6 +542,18 @@ fn assign_module_level(
             if assigned != value {
                 ctx.op_attrs_mut(op).insert(key, assigned);
             }
+        }
+    }
+    for (name, ty) in ctx.type_aliases().to_vec() {
+        let name_of = ctx.get_type(ty).name;
+        if name_of != tribute_ir::dialect::adt::Struct::NAME
+            && name_of != tribute_ir::dialect::adt::Enum::NAME
+        {
+            continue;
+        }
+        let assigned = tribute_control::assign_conventions(ctx, ty, class);
+        if assigned != ty {
+            ctx.register_type_alias(name, assigned);
         }
     }
 }

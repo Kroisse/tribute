@@ -1,19 +1,20 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
+assertion_line: 132
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.func_sig<() -> core.i32, {ability_row = {instances = [@ability_2_5_State_3_int]}, tribute.calling_convention = 2}>
+  !t0 = tribute_control.func_sig<() -> core.i32, {ability_row = {instances = [@ability_2_5_State_3_int]}}>
 
-  tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
-  tribute_control.func @counter() -> core.i32 row(@ability_2_5_State_3_int) convention(cps) {
+  tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
+  tribute_control.func @counter() -> core.i32 row(@ability_2_5_State_3_int) {
       %0 = tribute_control.perform {ability = @ability_2_5_State_3_int, op_name = "get", operation_kind = "op"} : core.i32
       %1 = arith.const {value = 1} : core.i32
       %2 = tribute_control.call %0, %1 {callee = @"std::Int::+"} : core.i32
       %3 = tribute_control.perform %2 {ability = @ability_2_5_State_3_int, op_name = "set", operation_kind = "op"} : core.nil
       tribute_control.return %0
   }
-  tribute_control.func @run_with_state['a0](%0: !t0) -> core.i32 row(| 'a0) inferred convention(direct) {
+  tribute_control.func @run_with_state['a0](%0: !t0) -> core.i32 row(| 'a0) inferred {
       %1 = tribute_control.handle : core.i32 {
           %2 = tribute_control.call_indirect %0 : core.i32
           tribute_control.yield %2
@@ -36,8 +37,8 @@ core.module @test {
       }
       tribute_control.return %1
   }
-  tribute_control.func @main['a0]() -> core.i32 row(| 'a0) inferred convention(direct) {
-      %0 = tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_int) convention(cps) captures [] {
+  tribute_control.func @main['a0]() -> core.i32 row(| 'a0) inferred {
+      %0 = tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_int) captures [] {
           %1 = tribute_control.call {callee = @counter} : core.i32
           tribute_control.return %1
       }

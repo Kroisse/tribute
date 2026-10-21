@@ -752,6 +752,36 @@ pub fn compile_frontend(
     Some((compilation.context, compilation.module))
 }
 
+/// Run the frontend and class specialization, and remove the definitions
+/// nothing reachable references: the source-logical IR CPS legalization
+/// receives.
+///
+/// Returns `None` if parsing fails or the frontend reports an error.
+pub fn compile_specialized_frontend(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> PassResult<Option<(IrContext, Module)>> {
+    use tribute_passes::unreferenced_source_functions::EliminateUnreferencedSourceFunctions;
+
+    let Some(FrontendCompilation {
+        context, module: m, ..
+    }) = compile_frontend_for_shared_route(db, source)
+    else {
+        return Ok(None);
+    };
+    let mut ctx = context;
+    let core_module =
+        core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
+    let mut pm = PassManager::new();
+    pm.add_pass(EliminateUnreferencedSourceFunctions::new());
+    if CONVENTION_CLASSES == tribute_front::monomorphize::ConventionClasses::Pass {
+        pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses)
+            .add_pass(EliminateUnreferencedSourceFunctions::new());
+    }
+    pm.run(&mut ctx, core_module, &mut AnalysisCache::new())?;
+    Ok(Some((ctx, m)))
+}
+
 /// Run the frontend for the shared middle-end.
 ///
 /// Returns `None` if parsing fails or the frontend reports an error.
@@ -893,7 +923,7 @@ fn runtime_items_kept_alive(
 /// Who specializes convention classes: the frontend, or the class
 /// specialization pass at the head of the structural pipeline.
 const CONVENTION_CLASSES: tribute_front::monomorphize::ConventionClasses =
-    tribute_front::monomorphize::ConventionClasses::Frontend;
+    tribute_front::monomorphize::ConventionClasses::Pass;
 
 /// Build the shared structural pass pipeline that legalizes source-logical
 /// callable/control IR into CPS with explicit evidence. For
@@ -3552,6 +3582,8 @@ fn main() -> Nil {}
             });
         for after_cps in [false, true] {
             if after_cps {
+                tribute_passes::specialize_convention_classes::specialize(&mut ir, logical.module)
+                    .expect("class specialization accepts frontend output");
                 tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
                     &mut ir,
                     logical.module,
@@ -3684,6 +3716,8 @@ fn main() -> Nil {}
         let mut source_tuple = None;
         for after_cps in [false, true] {
             if after_cps {
+                tribute_passes::specialize_convention_classes::specialize(&mut ir, logical.module)
+                    .expect("class specialization accepts frontend output");
                 tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
                     &mut ir,
                     logical.module,
@@ -3821,8 +3855,7 @@ fn main() -> Nil {
             );
             let (_, monomorphized) =
                 merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
-            // Root `main` selects the instance for an empty row tail.
-            let specialized = SymbolPath::new(["run_state$Nat$Nat$9D"]);
+            let specialized = SymbolPath::new(["run_state$Nat$Nat"]);
             let scheme = monomorphized
                 .function_types
                 .get(&specialized)

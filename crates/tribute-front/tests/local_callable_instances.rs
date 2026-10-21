@@ -32,14 +32,14 @@ fn main() -> Nil {{
         let source = SourceCst::from_source_str(db, "named_operator.trb", &code);
         let errors = common::ast_pipeline_error_messages(db, source);
         assert!(errors.is_empty(), "{argument}: {errors:?}");
-        let text = common::run_ast_pipeline_with_ir(db, source);
+        let text = common::run_ast_pipeline_with_specialized_ir(db, source);
         assert!(!text.contains("unrealized_conversion_cast"), "{text}");
         let mut ir = IrContext::new();
         let module = parse_test_module(&mut ir, &text);
         let mut conventions = Vec::new();
         let _ = walk_op::<()>(&ir, module.op(), &mut |op| {
             if let Ok(call) = tribute_control::Call::from_op(&ir, op)
-                && ["pure", "open"]
+                && ["pure", "open$9D"]
                     .iter()
                     .any(|name| call.callee(&ir) == [*name])
             {
@@ -60,7 +60,7 @@ fn main() -> Nil {{
             conventions,
             [
                 Some(CallingConvention::Direct),
-                Some(CallingConvention::Cps)
+                Some(CallingConvention::Direct)
             ],
             "{argument}: {text}"
         );
@@ -80,7 +80,7 @@ fn main() ->{} Int {
 }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     assert!(ir.contains("tribute_control.lambda"));
     assert!(
         ir.lines().any(|line| {
@@ -101,7 +101,7 @@ fn make() -> fn(Int) -> Int { fn(x) x }
 fn main() -> Nil {}
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     assert!(
         ir.lines().any(|line| {
             line.contains("tribute_control.lambda(") && line.contains("convention(cps)")
@@ -120,7 +120,7 @@ fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 fn main() -> Nil { open(fn(x) x, +3) }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     assert!(
         ir.lines().any(|line| {
             line.contains("tribute_control.lambda(") && line.contains("convention(cps)")
@@ -149,7 +149,7 @@ fn run(f: fn() ->{State(Int)} Int) -> Int {
 fn main() -> Int { run(fn() State::get()) }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     assert!(
         ir.contains(
             "tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_int) convention(cps)"
@@ -173,13 +173,13 @@ fn captured(k: Int) ->{} Int {
 fn main() ->{} Int { captured(+9) }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     assert!(ir.contains("tribute_control.lambda"));
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }
 
 #[salsa_test]
-fn fixed_local_has_separate_pure_and_open_worker_surfaces(db: &salsa::DatabaseImpl) {
+fn fixed_local_serves_pure_and_open_with_one_surface(db: &salsa::DatabaseImpl) {
     for calls in [
         "let a = pure(action, +3)\nopen(action, a)",
         "let a = open(action, +3)\npure(action, a)",
@@ -195,8 +195,10 @@ fn main() ->{{}} Int {{
 "#
         );
         let source = SourceCst::from_source_str(db, "multi_surface.trb", &code);
-        let ir = common::run_ast_pipeline_with_ir(db, source);
-        assert_eq!(ir.matches("tribute_control.lambda").count(), 2, "{ir}");
+        let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
+        // Root `main` calls the `Direct` instance of `open`, whose callback
+        // type is the one `pure` takes.
+        assert_eq!(ir.matches("tribute_control.lambda").count(), 1, "{ir}");
         assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
     }
 }
@@ -216,7 +218,7 @@ fn main() ->{} Int {
 }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     assert_eq!(ir.matches("tribute_control.lambda").count(), 1, "{ir}");
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }
@@ -237,15 +239,15 @@ fn main() ->{} Int {
 }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     assert!(ir.contains("captures []"), "{ir}");
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }
 
 #[salsa_test]
 fn caller_of_a_cps_worker_keeps_the_convention_of_its_row(db: &salsa::DatabaseImpl) {
-    // `g` has an open row, so it is Cps. `main` calls it at a pure row and
-    // keeps the convention of its own row.
+    // `g` quantifies its row, and `main` instantiates it only at the pure
+    // row, so `g` and the callback it passes to `app$9D` are Direct.
     let source = SourceCst::from_source_str(
         db,
         "original_cps_lambda.trb",
@@ -257,7 +259,7 @@ fn main() ->{} Int {
 }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     let conventions: Vec<_> = ir
         .lines()
         .filter(|line| {
@@ -265,7 +267,7 @@ fn main() ->{} Int {
         })
         .map(|line| line.contains("convention(cps)"))
         .collect();
-    assert_eq!(conventions, [false, true, true], "{ir}");
+    assert_eq!(conventions, [false, false, false], "{ir}");
 }
 
 #[salsa_test]
@@ -283,7 +285,7 @@ fn call(consumer: fn(fn(Int) ->{e} Int, Int) ->{e} Int) ->{e} Int {
 fn main() -> Nil {}
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }
 
@@ -302,7 +304,7 @@ fn main() ->{} Int {
 }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     assert_eq!(ir.matches("tribute_control.lambda").count(), 2, "{ir}");
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }
@@ -347,6 +349,6 @@ fn main() ->{} Int {
 }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }

@@ -7,7 +7,9 @@
 
 mod common;
 
-use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
+use self::common::{
+    ast_pipeline_error_messages, run_ast_pipeline_with_ir, run_ast_pipeline_with_specialized_ir,
+};
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
@@ -328,7 +330,7 @@ fn run() -> Int {
 #[salsa_test]
 fn logical_root_main_preserves_pure_and_io_conventions(db: &salsa::DatabaseImpl) {
     let pure = SourceCst::from_source_str(db, "pure.trb", "fn main() -> Nil { }");
-    let pure_ir = run_ast_pipeline_with_ir(db, pure);
+    let pure_ir = run_ast_pipeline_with_specialized_ir(db, pure);
     assert!(
         pure_ir.contains(
             "tribute_control.func @main['a0]() -> core.nil row(| 'a0) inferred convention(direct)"
@@ -336,7 +338,7 @@ fn logical_root_main_preserves_pure_and_io_conventions(db: &salsa::DatabaseImpl)
         "pure root main must be direct:\n{pure_ir}"
     );
     let io = SourceCst::from_source_str(db, "io.trb", "fn main() ->{std::io::Io} Nil { Nil }");
-    let io_ir = run_ast_pipeline_with_ir(db, io);
+    let io_ir = run_ast_pipeline_with_specialized_ir(db, io);
     assert!(
         io_ir.contains("tribute_control.func @main() -> core.nil row(@\"ability_1_11_std::io::Io\") inferred convention(evidence_direct)"),
         "Io root main must preserve EvidenceDirect:\n{io_ir}"
@@ -360,7 +362,7 @@ mod Nested {
 fn main() -> Nil { }
 "#,
     );
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
     assert!(
         ir_text.contains(
             "tribute_control.func @\"Nested::main\"() -> core.i32 row(@ability_1_5_State) convention(cps)"
@@ -389,7 +391,7 @@ mod Native {
 "#,
     );
 
-    let ir = run_ast_pipeline_with_ir(db, source);
+    let ir = run_ast_pipeline_with_specialized_ir(db, source);
     assert_logical_boundary(&ir);
     assert!(
         ir.contains(
@@ -483,7 +485,7 @@ pub mod Nested {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
     let accessor = checked_logical_function(&ir_text, "Nested::Holder::callback");
     assert!(
         accessor.contains("tribute_control.func @\"Nested::Holder::callback\"")
@@ -796,7 +798,7 @@ fn main() -> Nil {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
     for name in ["forward_open", "apply_open"] {
         let header = ir_text
             .lines()
@@ -842,8 +844,8 @@ fn main() -> Nil {
         "root main must contain the direct worker call:\n{main}"
     );
     assert!(
-        main.contains("callee = @forward_open"),
-        "root main must call the forward_open worker:\n{main}"
+        main.contains("callee = @\"forward_open$9D\""),
+        "root main must call the Direct instance of the forward_open worker:\n{main}"
     );
     assert!(
         !ir_text.contains("Nested::Nested::"),
@@ -882,7 +884,7 @@ fn main() ->{std::io::Io} Nil {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
     let main_header = ir_text
         .lines()
         .find(|line| is_function_header(line, "main"))
@@ -922,8 +924,9 @@ fn main() -> Nil { }
     );
 }
 
-/// A nested `main` that calls an open-callback worker is an ordinary function
-/// with the convention of its own row.
+/// A nested `main` that calls an open-callback worker is an ordinary function:
+/// its row's tail is a class variable, so the definition itself is the
+/// instance whose classes are all `Cps`, unlike root `main`.
 #[salsa_test]
 fn test_nested_open_callback_main_keeps_its_convention(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -944,14 +947,14 @@ fn main() -> Nil { }
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
     let nested_main = ir_text
         .lines()
         .find(|line| is_function_header(line, "Nested::main"))
         .expect("missing lowered Nested::main worker");
     assert!(
-        nested_main.contains("convention(direct)"),
-        "nested open-callback main keeps the convention of its row:\n{nested_main}"
+        nested_main.contains("convention(cps)"),
+        "nested open-callback main is not a root main:\n{nested_main}"
     );
 }
 
@@ -1697,7 +1700,7 @@ fn inspect(choice: Choice, fallback: fn(Int) ->{} Int) -> fn(Int) ->{} Int {
 }
 "#,
     );
-    let ir = run_ast_pipeline_with_ir(db, source);
+    let ir = run_ast_pipeline_with_specialized_ir(db, source);
     assert_logical_boundary(&ir);
     let accessor = checked_logical_function(&ir, "Holder::callback");
     assert!(
