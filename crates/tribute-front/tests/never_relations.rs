@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
+use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_specialized_ir};
 use salsa_test_macros::salsa_test;
 use tribute_front::{
     SourceCst,
@@ -417,7 +417,7 @@ fn main() -> Nil {
 
     let errors = ast_pipeline_error_messages(db, source);
     assert!(errors.is_empty(), "{errors:#?}");
-    let ir = run_ast_pipeline_with_ir(db, source);
+    let ir = run_ast_pipeline_with_specialized_ir(db, source);
     let main = ir
         .lines()
         .find(|line| line.contains("func @main(") || line.contains("func @main["))

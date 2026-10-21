@@ -569,3 +569,36 @@ fn main() -> Nil {
         ]
     );
 }
+
+/// A struct and an enum whose fields are callables: their published layouts
+/// take the conventions of those fields.
+#[test]
+fn test_callable_fields_on_both_targets() {
+    assert_output_on_both_targets(
+        "callable_fields.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct Holder { callback: fn(Int) -> Int }
+enum Choice { Callback(fn(Int) -> Int), Other }
+
+fn read(holder: Holder) -> fn(Int) ->{} Int { holder.callback }
+fn pick(choice: Choice, fallback: fn(Int) ->{} Int) -> fn(Int) ->{} Int {
+    case choice {
+        Callback(f) -> f
+        Other -> fallback
+    }
+}
+
+fn main() ->{Io} Nil {
+    let holder = Holder { callback: fn(x) x + +1 }
+    let f = read(holder)
+    let g = pick(Callback(f), f)
+    let h = pick(Other, fn(x) x * +2)
+    print_line(Int::to_string(g(+1)))
+    print_line(Int::to_string(h(+5)))
+}
+"#,
+        "2\n10",
+    );
+}

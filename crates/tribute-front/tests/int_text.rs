@@ -406,6 +406,8 @@ fn lower_specialized_source(
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
+    tribute_passes::specialize_convention_classes::specialize(&mut ir, output.module)
+        .expect("class specialization accepts frontend output");
     (ir, output)
 }
 

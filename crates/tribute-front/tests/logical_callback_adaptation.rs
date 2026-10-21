@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::run_ast_pipeline_with_ir;
+use self::common::run_ast_pipeline_with_specialized_ir;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
@@ -86,7 +86,7 @@ fn main() -> Nil { apply(double, 21) }
 "#,
     );
 
-    let ir = run_ast_pipeline_with_ir(db, source);
+    let ir = run_ast_pipeline_with_specialized_ir(db, source);
     let refs = named_ref_lines(&ir, "double");
     assert_eq!(
         refs.len(),
@@ -121,7 +121,7 @@ fn main() -> Nil { apply_open(double, apply_direct(double, 21)) }
 "#,
     );
 
-    let ir = run_ast_pipeline_with_ir(db, source);
+    let ir = run_ast_pipeline_with_specialized_ir(db, source);
     let refs = named_ref_lines(&ir, "double");
     assert_eq!(
         refs.len(),
@@ -152,7 +152,7 @@ fn main() -> Nil { apply(fn(value) { value + value }, 21) }
 "#,
     );
 
-    let ir = run_ast_pipeline_with_ir(db, source);
+    let ir = run_ast_pipeline_with_specialized_ir(db, source);
     let lambda = ir
         .lines()
         .find(|line| line.contains("tribute_control.lambda"))
