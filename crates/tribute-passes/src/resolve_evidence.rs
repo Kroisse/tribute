@@ -485,7 +485,7 @@ mod tests {
         format!(
             r#"core.module @test {{
   !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>
-  !evidence = core.array<!marker, {{layout = "evidence"}}>
+  !evidence = adt.array<!marker, {{layout = "evidence"}}>
   func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %tr2: core.ptr) -> core.never {{
     {operation}
   }}
@@ -832,7 +832,7 @@ mod tests {
     fn bodyless_declarations_are_preserved_during_evidence_resolution() {
         let input = r#"core.module @test {
   !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !evidence = core.array<!marker, {layout = "evidence"}>
+  !evidence = adt.array<!marker, {layout = "evidence"}>
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
   func.func @body(%ev: !evidence, %prompt: core.i32) -> core.never {

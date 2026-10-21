@@ -217,7 +217,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     let bytes = ctx.block_arg(body, 0);
     let newline = ctx.block_arg(body, 1);
 
-    let array_ref_ty = super::bytes::bytes_data_type(ctx);
+    let array_ref_ty = super::bytes::bytes_data_gc_type(ctx);
     let data = wasm_dialect::StructGet::operands(bytes)
         .type_idx(BYTES_STRUCT_IDX)
         .field_idx(BYTES_DATA_FIELD)

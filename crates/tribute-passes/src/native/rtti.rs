@@ -282,7 +282,7 @@ pub(crate) fn generate_rtti(
         let rtti_idx = layout.index(ctx);
         let fields = layout.field_kinds(ctx);
         release_fns.insert(rtti_idx, release_fn_symbol(rtti_idx));
-        let func_op = if let Some(array) = trunk_ir::dialect::core::Array::from_type_ref(ctx, ty) {
+        let func_op = if let Some(array) = tribute_ir::dialect::adt::Array::from_type_ref(ctx, ty) {
             array_release_function(
                 ctx,
                 rtti_idx,
@@ -1312,8 +1312,8 @@ mod tests {
             r#"core.module @test {
   !Node = adt.struct<Node(value: core.i32)>
   !NodeRef = adt.typeref<{name = "Node"}>
-  !Nodes = core.array<!NodeRef>
-  !Shorts = core.array<core.i16>
+  !Nodes = adt.array<!NodeRef>
+  !Shorts = adt.array<core.i16>
   func.func @nodes(%node: !NodeRef) -> !Nodes {
     %nodes = adt.array_of %node {type = !Nodes} : !Nodes
     func.return %nodes

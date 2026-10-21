@@ -604,7 +604,7 @@ fn test_validate_fixed_wasm_dispatch_abis() {
     let module = trunk_ir::parser::parse_test_module(
         &mut ctx,
         r#"core.module @test {
-        !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+        !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
         !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
         func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
             %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : tribute_rt.anyref
@@ -650,7 +650,7 @@ fn test_execute_wasm_evidence_marker_stacks() {
     let module = trunk_ir::parser::parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @__tribute_evidence_extend(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !Closure, %outer: !Evidence) -> !Evidence attributes {abi = "C"}
@@ -731,7 +731,7 @@ fn test_wasm_marker_dispatch_field_holds_the_closure_base() {
     let module = trunk_ir::parser::parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   func.func @__tribute_evidence_lookup_tr(%ev: !Evidence, %id: core.i32) -> !Closure attributes {abi = "C"}
   func.func @__tribute_evidence_extend(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !Closure, %outer: !Evidence) -> !Evidence attributes {abi = "C"}

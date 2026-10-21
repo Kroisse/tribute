@@ -245,7 +245,7 @@ fn allocation_size_for_type(
     // entries, and an array's size depends on its length.
     if (data.name.is(ctx, "core.bytes"))
         || tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
-        || trunk_ir::dialect::core::Array::matches(ctx, ty)
+        || tribute_ir::dialect::adt::Array::matches(ctx, ty)
     {
         return Ok(0);
     }
@@ -412,7 +412,7 @@ fn validate_replaced_element(
             "replaced-element release does not match its planned array",
         ));
     }
-    let element_ty = trunk_ir::dialect::core::Array::from_type_ref(ctx, ctx.value_ty(array))
+    let element_ty = tribute_ir::dialect::adt::Array::from_type_ref(ctx, ctx.value_ty(array))
         .ok_or_else(|| OwnershipPlanError::new("replaced-element array type is stale"))?
         .element(ctx);
     if !plan.is_managed_type(ctx, element_ty) {

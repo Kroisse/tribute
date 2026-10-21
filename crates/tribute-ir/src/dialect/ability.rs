@@ -584,12 +584,12 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     crate::dialect::adt::Struct::from_fields(ctx, "_Marker", fields, attrs).as_type_ref()
 }
 
-/// Get the canonical Evidence ADT type — `core.array<Marker>` carrying the
+/// Get the canonical Evidence ADT type — `adt.array<Marker>` carrying the
 /// evidence runtime layout identifier.
 pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let marker_ty = marker_adt_type_ref(ctx);
     let layout = ctx.string_attr(runtime_layout::EVIDENCE);
-    TypeDataBuilder::new("core.array")
+    TypeDataBuilder::new(<crate::dialect::adt::Array as trunk_ir::ops::DialectType>::NAME)
         .param(marker_ty)
         .attr(runtime_layout::LAYOUT_ATTR, layout)
         .intern(ctx)
@@ -625,7 +625,6 @@ impl trunk_ir::type_constraint::TypeConstraint for Evidence {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::dialect::core;
 
     #[test]
     fn evidence_layouts_are_identified_by_layout_not_name() {
@@ -635,7 +634,7 @@ mod tests {
             .intern(&mut ctx)
             .unwrap()
             .as_type_ref();
-        let plain_array = core::Array::params(named_marker)
+        let plain_array = crate::dialect::adt::Array::params(named_marker)
             .intern(&mut ctx)
             .as_type_ref();
         assert!(!is_marker_type_ref(&ctx, named_marker));
@@ -724,9 +723,9 @@ mod tests {
 
         assert!(is_evidence_type_ref(&ctx, evidence_ty));
 
-        // Should be a core.array type
+        // Should be an adt.array type
         let data = ctx.get_type(evidence_ty);
-        assert!(data.name.is(&ctx, "core.array"));
+        assert_eq!(data.name, crate::dialect::adt::Array::NAME);
         assert_eq!(data.params.len(), 1);
 
         // Element type should be the Marker ADT
@@ -756,7 +755,9 @@ mod tests {
 
         // Array of non-marker should return false
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        let other_array = core::Array::params(i32_ty).intern(&mut ctx).as_type_ref();
+        let other_array = crate::dialect::adt::Array::params(i32_ty)
+            .intern(&mut ctx)
+            .as_type_ref();
         assert!(!is_evidence_type_ref(&ctx, other_array));
 
         // Non-array type should return false

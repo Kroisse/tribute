@@ -2,7 +2,7 @@
 
 use crate::dialect::tribute_rtti::ManagedRefType;
 use trunk_ir::asm_format::TypeAliasHint;
-use trunk_ir::dialect::core::{Array, Index};
+use trunk_ir::dialect::core::Index;
 use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
@@ -39,6 +39,13 @@ mod adt {
     struct Typeref {
         name: Attr<String>,
     }
+
+    /// `adt.array`: a managed reference to an array object whose elements
+    /// are `Element` values in order. An element is a scalar, a pointer, or a
+    /// managed reference; see `new-plans/ir.md` § "`adt` 배열". The unmanaged
+    /// linear array is `core.array`, which no `adt` array operation accepts.
+    #[implements(ManagedRefType)]
+    struct Array<Element>;
 
     /// `adt.variant`: one variant of an `adt.enum`, named by its `name`.
     #[alias_hint]
@@ -141,6 +148,7 @@ mod adt {
 impl ManagedRefType for Struct {}
 impl ManagedRefType for Enum {}
 impl ManagedRefType for Typeref {}
+impl ManagedRefType for Array {}
 
 // A named ADT type suggests its `name` as its alias.
 impl TypeAliasHint for Struct {
@@ -938,10 +946,22 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             &format!(
-                "core.module @test {{\n  !A = core.array<core.i32>\n  !B = core.array<core.i64>\n  func.func @f(%a: !A, %i: core.index, %n: core.i32, %w: core.i64) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
+                "core.module @test {{\n  !A = adt.array<core.i32>\n  !B = adt.array<core.i64>\n  func.func @f(%a: !A, %i: core.index, %n: core.i32, %w: core.i64) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
             ),
         );
         trunk_ir::validation::validate_op_schemas(&ctx, module.op()).is_ok()
+    }
+
+    #[test]
+    fn array_operations_reject_the_unmanaged_core_array() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @test {\n  !L = core.array<core.i32>\n  func.func @f(%l: !L, %i: core.index, %n: core.i32) -> core.nil {\n    %len = adt.array_len %l : core.index\n    %v = adt.array_new %i, %n {type = !L} : !L\n    func.return\n  }\n}",
+        );
+        let result = trunk_ir::validation::validate_op_schemas(&ctx, module.op());
+        // `array_len` rejects its operand; `array_new` its type and result.
+        assert_eq!(result.errors.len(), 3, "{result}");
     }
 
     #[test]

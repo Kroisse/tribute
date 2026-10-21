@@ -460,7 +460,7 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
         &mut ctx,
         r#"core.module @test {
   !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -519,7 +519,7 @@ fn native_evidence_lowers_a_managed_dispatcher_to_into_raw() {
         &mut ctx,
         r#"core.module @test {
   !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -2597,7 +2597,7 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
 fn evidence_is_a_managed_reference_the_runtime_returns_owned() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @__tribute_evidence_mask(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
   func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @derive(%ev: !Evidence, %id: core.i32) -> core.i32 {
@@ -3361,9 +3361,9 @@ fn nested_callers_use_the_contract_of_the_callee_their_module_names() {
 const ARRAYS: &str = r#"core.module @test {
   !Node = adt.struct<Node(value: core.i32)>
   !NodeRef = adt.typeref<{name = "Node"}>
-  !Nodes = core.array<!NodeRef>
-  !Ints = core.array<core.i32>
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Nodes = adt.array<!NodeRef>
+  !Ints = adt.array<core.i32>
+  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @pair(%a: !NodeRef, %b: !NodeRef) -> !Nodes {
     %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
     func.return %pair
@@ -3422,7 +3422,7 @@ fn each_array_type_is_one_descriptor_except_evidence() {
             .find_map(|(alias, ty)| (*alias == name).then_some(*ty))
             .unwrap()
     };
-    let i32_ty = core::Array::from_type_ref(&ctx, alias("Ints"))
+    let i32_ty = tribute_ir::dialect::adt::Array::from_type_ref(&ctx, alias("Ints"))
         .unwrap()
         .element(&ctx);
 
@@ -3450,7 +3450,7 @@ fn a_written_array_type_is_replaceable() {
     let ir = r#"core.module @test {
   !Node = adt.struct<Node(value: core.i32)>
   !NodeRef = adt.typeref<{name = "Node"}>
-  !Nodes = core.array<!NodeRef>
+  !Nodes = adt.array<!NodeRef>
   func.func @first(%nodes: !Nodes) -> core.i32 {
     %at = arith.const {value = 0} : core.index
     %node = adt.array_get %nodes, %at : !NodeRef
@@ -3498,8 +3498,8 @@ fn malformed_array_operations_are_rejected() {
   !NodeRef = adt.typeref<{{name = "Node"}}>
   !Other = adt.struct<Other(value: core.i32)>
   !OtherRef = adt.typeref<{{name = "Other"}}>
-  !Nodes = core.array<!NodeRef>
-  !Others = core.array<!OtherRef>
+  !Nodes = adt.array<!NodeRef>
+  !Others = adt.array<!OtherRef>
   func.func @f(%nodes: !Nodes, %others: !Others, %other: !OtherRef, %at: core.index) -> core.nil {{
     {body}
     func.return
@@ -3531,7 +3531,7 @@ fn a_stale_replaced_element_release_is_rejected_before_materializing() {
         r#"core.module @test {
   !Node = adt.struct<Node(value: core.i32)>
   !NodeRef = adt.typeref<{name = "Node"}>
-  !Nodes = core.array<!NodeRef>
+  !Nodes = adt.array<!NodeRef>
   func.func @replace(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> core.nil {
     adt.array_set %nodes, %at, %node
     func.return

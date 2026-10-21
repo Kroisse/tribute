@@ -526,10 +526,10 @@ impl ManagedLayoutCollector {
         let data = ctx.get_type(ty);
         self.index_nominal_layout(ctx, ty);
         // An array other than an evidence is an RC object of its own
-        // descriptor, identified by its exact `core.array` type.
+        // descriptor, identified by its exact `adt.array` type.
         if tribute_ir::dialect::adt::Struct::matches(ctx, ty)
             || tribute_ir::dialect::adt::Enum::matches(ctx, ty)
-            || (core::Array::matches(ctx, ty)
+            || (tribute_ir::dialect::adt::Array::matches(ctx, ty)
                 && !tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty))
         {
             self.layouts.insert(ty);

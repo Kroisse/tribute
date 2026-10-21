@@ -53,6 +53,7 @@
 //! module-wide pass assigns the explicit indices required by indexed `wasm`
 //! operations before emission.
 
+use super::type_converter::gc_array_type;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
 use trunk_ir::StringRef;
@@ -511,8 +512,9 @@ impl RewritePattern for ArrayNewPattern {
 
         let loc = ctx.op(op).location;
         let length = wasm_index(ctx, rewriter, array_new.length(ctx), loc);
+        let array_ty = gc_array_type(ctx, array_new.r#type(ctx));
         let new_op = wasm_gc_dialect::ArrayNew::operands(length, array_new.initial(ctx))
-            .r#type(array_new.r#type(ctx))
+            .r#type(array_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
@@ -535,8 +537,9 @@ impl RewritePattern for ArrayOfPattern {
 
         let loc = ctx.op(op).location;
         let elements = array_of.elements(ctx).to_vec();
+        let array_ty = gc_array_type(ctx, array_of.r#type(ctx));
         let new_op = wasm_gc_dialect::ArrayNewFixed::operands(elements)
-            .r#type(array_of.r#type(ctx))
+            .r#type(array_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
@@ -564,7 +567,7 @@ impl RewritePattern for ArraySplicePattern {
         };
 
         let loc = ctx.op(op).location;
-        let array_ty = splice.r#type(ctx);
+        let array_ty = gc_array_type(ctx, splice.r#type(ctx));
         let source = splice.source(ctx);
         let elements = splice.elements(ctx).to_vec();
         let start = wasm_index(ctx, rewriter, splice.start(ctx), loc);
@@ -721,7 +724,7 @@ fn array_read(
     // read is as good as the signed one; one is fixed here.
     if has_packed_elements(ctx, array_ty) {
         let element_ty = core::Array::from_type_ref(ctx, array_ty)
-            .expect("packed elements belong to a core.array")
+            .expect("packed elements belong to a GC array")
             .element(ctx);
         wasm_gc_dialect::ArrayGetU::operands(array, index)
             .r#type(array_ty)
@@ -754,14 +757,14 @@ impl RewritePattern for ArrayGetPattern {
         let ref_val = array_get.r#ref(ctx);
         let index = wasm_index(ctx, rewriter, array_get.index(ctx), loc);
 
-        let array_ty = ctx.value_ty(ref_val);
+        let array_ty = gc_array_type(ctx, ctx.value_ty(ref_val));
         let new_op = array_read(ctx, loc, array_ty, ref_val, index);
         rewriter.replace_op(new_op);
         true
     }
 }
 
-/// Whether `array_ty` is a `core.array` of 8- or 16-bit integers, which
+/// Whether `array_ty`, a GC array, holds 8- or 16-bit integers, which
 /// WasmGC stores packed.
 fn has_packed_elements(ctx: &IrContext, array_ty: TypeRef) -> bool {
     core::Array::from_type_ref(ctx, array_ty)
@@ -787,7 +790,7 @@ impl RewritePattern for ArraySetPattern {
         let index = wasm_index(ctx, rewriter, array_set.index(ctx), loc);
         let value = array_set.value(ctx);
 
-        let array_ty = ctx.value_ty(ref_val);
+        let array_ty = gc_array_type(ctx, ctx.value_ty(ref_val));
         let new_op = wasm_gc_dialect::ArraySet::operands(ref_val, index, value)
             .r#type(array_ty)
             .build(ctx, loc);
@@ -944,7 +947,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !A = core.array<core.i32>
+  !A = adt.array<core.i32>
   wasm.func @splice(%source: !A, %start: core.index, %end: core.index, %x: core.i32, %y: core.i32) -> !A {{
     %result = adt.array_splice %source, %start, %end{elements} {{type = !A}} : !A
     wasm.return %result
@@ -1067,7 +1070,7 @@ mod tests {
   !S = adt.struct<S(value: core.i32)>
   !E = adt.enum<E { Some(core.i32) }>
   !ERef = adt.typeref<{name = "E"}>
-  !A = core.array<core.i32>
+  !A = adt.array<core.i32>
 
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
@@ -1219,7 +1222,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.func @read(%bytes: core.array<core.i8>, %words: core.array<core.i32>) -> core.nil {
+  wasm.func @read(%bytes: adt.array<core.i8>, %words: adt.array<core.i32>) -> core.nil {
     %zero = arith.const {value = 0} : core.index
     %byte = adt.array_get %bytes, %zero : core.i8
     %word = adt.array_get %words, %zero : core.i32
@@ -1474,7 +1477,7 @@ mod tests {
   !E = adt.enum<E { Some(core.i32) }>
   !Box = adt.enum<Box { Next(!NodeRef) }>
   !Node = adt.enum<Node { Node() }>
-  !Data = core.array<core.i8, {layout = "bytes_data"}>
+  !Data = adt.array<core.i8, {layout = "bytes_data"}>
   !Bytes = adt.struct<_Bytes(data: !Data, offset: core.i32, len: core.i32), {layout = "bytes"}>
   !String = adt.enum<String { Leaf(!Bytes) }>
 

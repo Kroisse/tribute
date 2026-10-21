@@ -19,8 +19,8 @@ fn program(body: &str, expected: i32) -> String {
         r#"core.module @arrays {{
   !Node = adt.struct<Node(value: core.i32)>
   !NodeRef = adt.typeref<{{name = "Node"}}>
-  !Nodes = core.array<!NodeRef>
-  !Ints = core.array<core.i32>
+  !Nodes = adt.array<!NodeRef>
+  !Ints = adt.array<core.i32>
   func.func @main() -> core.nil {{
     ^entry:
       %i0 = arith.const {{value = 0}} : core.index

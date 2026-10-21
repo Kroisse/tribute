@@ -216,7 +216,7 @@ mod tests {
             let text = format!(
                 r#"core.module @test {{
   !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>
-  !ev = core.array<!marker, {{layout = "evidence"}}>
+  !ev = adt.array<!marker, {{layout = "evidence"}}>
   !frame = adt.typeref<{{name = "frame_i32", tribute.cps_continuation_frame_result = core.i32}}>
   !body = closure.closure<func.func_sig<{body_type} -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
   func.func @run(%ev: !ev, %body: !body) -> {result} {{
