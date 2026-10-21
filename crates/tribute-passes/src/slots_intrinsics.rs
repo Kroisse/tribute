@@ -6,9 +6,12 @@
 //! fit `Nat` is truncated, as `Nat` bounds every array the runtime builds. A call is selected through
 //! the declaration its callee names and that declaration's verified compiler
 //! intrinsic identity, never by the callee's spelling. The declarations,
-//! generic and specialized, are removed afterwards.
+//! generic and specialized, are removed afterwards, so a declaration used
+//! other than as the callee of a call of its shape, such as a function
+//! value, is rejected before anything is rewritten.
 
 use rustc_hash::FxHashMap as HashMap;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use tribute_ir::dialect::adt;
@@ -23,7 +26,16 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, Location};
+use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{Symbol, SymbolPath};
+
+/// A `Slots` intrinsic used other than as the callee of a call of its shape.
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+#[display("the Slots intrinsic `{intrinsic}` is used by {user}, which is not a call of its shape")]
+pub struct SlotsIntrinsicError {
+    pub intrinsic: String,
+    pub user: String,
+}
 
 /// One `Slots` operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +102,7 @@ impl Pass for LowerSlotsIntrinsics {
         if declarations.is_empty() {
             return Ok(());
         }
+        reject_other_references(ctx, module, &declarations)?;
         let declarations = Rc::new(declarations);
         PatternApplicator::new(TypeConverter::new())
             .add_pattern(SlotsCallPattern {
@@ -99,6 +112,37 @@ impl Pass for LowerSlotsIntrinsics {
             .apply_partial(ctx, module);
         Ok(())
     }
+}
+
+/// Fail if an operation other than a call of the intrinsic's shape refers
+/// to a declaration, which erasing it would leave dangling.
+fn reject_other_references(
+    ctx: &IrContext,
+    module: Module,
+    declarations: &HashMap<SymbolPath, SlotsOp>,
+) -> Result<(), SlotsIntrinsicError> {
+    let mut found = None;
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        let lowered_callee = func::Call::from_op(ctx, op).ok().and_then(|call| {
+            let callee = call.callee(ctx);
+            let slots_op = declarations.get(callee)?;
+            (ctx.op_operands(op).len() == slots_op.arity() && ctx.op_results(op).len() == 1)
+                .then(|| callee.clone())
+        });
+        ctx.op(op).attributes.visit_symbol_refs(&mut |path| {
+            if found.is_none()
+                && declarations.contains_key(path)
+                && lowered_callee.as_ref() != Some(path)
+            {
+                found = Some(SlotsIntrinsicError {
+                    intrinsic: path.to_string(),
+                    user: ctx.op(op).name.display(ctx).to_string(),
+                });
+            }
+        });
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    found.map_or(Ok(()), Err)
 }
 
 struct SlotsCallPattern {
@@ -118,13 +162,9 @@ impl RewritePattern for SlotsCallPattern {
         let Some(&slots_op) = self.declarations.get(call.callee(ctx)) else {
             return false;
         };
+        // `reject_other_references` checked the call's shape.
         let args = ctx.op_operands(op).to_vec();
-        let &[result_ty] = ctx.op_result_types(op) else {
-            return false;
-        };
-        if args.len() != slots_op.arity() {
-            return false;
-        }
+        let result_ty = ctx.op_result_types(op)[0];
         let location = ctx.op(op).location;
         let mut lower = Lowering {
             ctx,
@@ -310,19 +350,49 @@ mod tests {
     }
 
     #[test]
-    fn leaves_a_call_of_another_shape_untouched() {
-        let output = lower(
+    fn rejects_a_function_value_before_rewriting() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
             r#"core.module @test {
   func.func @"std::runtime::Slots::len$Nat"(%s: adt.array<core.i32>) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::len"}
-  func.func @run(%s: adt.array<core.i32>, %n: core.i32) -> core.i32 {
-    %0 = func.call %s, %n {callee = @"std::runtime::Slots::len$Nat"} : core.i32
-    func.call %s {callee = @"std::runtime::Slots::len$Nat"}
+  func.func @run(%s: adt.array<core.i32>) -> core.i32 {
+    %0 = func.call %s {callee = @"std::runtime::Slots::len$Nat"} : core.i32
+    %f = func.constant {func_ref = @"std::runtime::Slots::len$Nat"} : func.func_sig<(adt.array<core.i32>) -> core.i32>
     func.return %0
   }
 }"#,
         );
-        assert_eq!(output.matches("func.call").count(), 2, "{output}");
-        assert!(!output.contains("adt.array_len"), "{output}");
+        let before = print_module(&ctx, module.op());
+        let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        let error = LowerSlotsIntrinsics
+            .run(&mut ctx, core, &mut Default::default())
+            .expect_err("a function value is rejected");
+        assert!(error.to_string().contains("func.constant"), "{error}");
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn rejects_a_call_of_another_shape_before_rewriting() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @"std::runtime::Slots::len$Nat"(%s: adt.array<core.i32>) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::len"}
+  func.func @run(%s: adt.array<core.i32>, %n: core.i32) -> core.i32 {
+    %0 = func.call %s {callee = @"std::runtime::Slots::len$Nat"} : core.i32
+    %1 = func.call %s, %n {callee = @"std::runtime::Slots::len$Nat"} : core.i32
+    func.return %0
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+        let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        let error = LowerSlotsIntrinsics
+            .run(&mut ctx, core, &mut Default::default())
+            .expect_err("a call of another shape is rejected");
+        assert!(error.to_string().contains("func.call"), "{error}");
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
