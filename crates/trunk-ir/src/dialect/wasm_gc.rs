@@ -5,7 +5,7 @@
 //! `wasm` operations before binary emission.
 
 use crate::attr_kind::Type;
-use crate::dialect::core::{Array, I32};
+use crate::dialect::core::I32;
 
 #[trunk_ir::dialect]
 mod wasm_gc {
@@ -16,6 +16,12 @@ mod wasm_gc {
     struct Struct<#[rest] Fields> {
         supertype: Option<Attr<Type>>,
     }
+
+    /// A structural GC array of `Element` values, each a Wasm storage
+    /// representation. Equal element types are one GC type unless a `layout`
+    /// attribute names a builtin array. Unlike the unmanaged linear
+    /// `core.array`, a value of this type is a GC reference.
+    struct Array<Element>;
 
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
@@ -104,7 +110,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             &format!(
-                "core.module @test {{\n  !A = core.array<core.i32>\n  !B = core.array<core.i64>\n  func.func @f(%a: !A, %b: !B, %n: core.i32, %w: core.i64, %x: core.index) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
+                "core.module @test {{\n  !A = wasm_gc.array<core.i32>\n  !B = wasm_gc.array<core.i64>\n  func.func @f(%a: !A, %b: !B, %n: core.i32, %w: core.i64, %x: core.index) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
             ),
         );
         validate_op_schemas(&ctx, module.op()).is_ok()

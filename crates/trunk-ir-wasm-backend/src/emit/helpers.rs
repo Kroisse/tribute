@@ -285,7 +285,7 @@ pub(crate) fn type_to_valtype(
                 ctx.get_type(ty).name.display(ctx)
             )))
         }
-    } else if trunk_ir::dialect::core::Array::matches(ctx, ty) {
+    } else if trunk_ir::dialect::wasm_gc::Array::matches(ctx, ty) {
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Abstract {
@@ -463,12 +463,13 @@ mod tests {
     fn core_array_uses_nullable_abstract_array_value_type() {
         let mut ctx = IrContext::new();
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        let array_ty = trunk_ir::dialect::core::Array::params(i32_ty)
+        let array_ty = trunk_ir::dialect::wasm_gc::Array::params(i32_ty)
             .intern(&mut ctx)
             .as_type_ref();
 
         assert_eq!(
-            type_to_valtype(&ctx, array_ty, &HashMap::default()).expect("core.array is supported"),
+            type_to_valtype(&ctx, array_ty, &HashMap::default())
+                .expect("wasm_gc.array is supported"),
             ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {

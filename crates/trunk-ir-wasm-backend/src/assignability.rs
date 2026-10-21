@@ -26,7 +26,7 @@ fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
 /// Whether this IR type is registered by the backend as a concrete WasmGC array
 /// reference, and is therefore assignable to the abstract `wasm.arrayref`
 /// without a runtime cast. Only builtin array layouts (Bytes backing arrays and
-/// the Evidence array) qualify; `core.array` spellings are handled by the
+/// the Evidence array) qualify; `wasm_gc.array` spellings are handled by the
 /// abstract array rule and never acquire a concrete index on their own.
 fn is_registered_gc_array_reference(ctx: &IrContext, ty: TypeRef) -> bool {
     crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty)
@@ -90,17 +90,17 @@ pub fn is_wasm_physical_argument_assignable(
     }
     // Every registered reference denotes a struct or array, and `anyref` is their
     // common supertype, so the same registration evidence satisfies an `anyref`
-    // slot. `core.array` spellings are emitted as the abstract array reference.
+    // slot. `wasm_gc.array` spellings are emitted as the abstract array reference.
     if parameter_is_anyref
         && (is_registered_gc_struct_reference(ctx, argument)
             || is_registered_gc_array_reference(ctx, argument)
-            || trunk_ir::dialect::core::Array::matches(ctx, argument))
+            || trunk_ir::dialect::wasm_gc::Array::matches(ctx, argument))
     {
         return true;
     }
 
-    let argument_is_core_array = trunk_ir::dialect::core::Array::matches(ctx, argument);
-    if argument_is_core_array && parameter_is_arrayref {
+    let argument_is_gc_array = trunk_ir::dialect::wasm_gc::Array::matches(ctx, argument);
+    if argument_is_gc_array && parameter_is_arrayref {
         return true;
     }
 
@@ -123,11 +123,11 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !data = core.array<core.i8, {layout = "bytes_data"}>
+  !data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
   !closure = test.layout<core.i32, wasm.anyref, {layout = "closure"}>
   !view = test.view<!data, core.i32, core.i32, {layout = "bytes"}>
-  !plain = core.array<core.i8>
+  !plain = wasm_gc.array<core.i8>
 }"#,
         );
         let alias = |name: &'static str| ctx.type_alias_by_text(name).expect("fixture alias");

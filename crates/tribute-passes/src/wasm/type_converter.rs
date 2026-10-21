@@ -73,7 +73,7 @@ pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
 /// Get the Evidence type of the WASM representation.
 ///
 /// Evidence keeps its runtime layout identifier through Wasm lowering: it is
-/// the canonical `core.array<Marker>` evidence layout, which emission maps to
+/// the canonical `wasm_gc.array<Marker>` evidence layout, which emission maps to
 /// the builtin evidence array, and never an erased `wasm.arrayref`.
 pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
     let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
@@ -81,14 +81,14 @@ pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 /// The GC array type that Wasm operations use for `ty`: an `adt.array`
-/// becomes the `core.array` with the same parameters and attributes, and any
+/// becomes the `wasm_gc.array` with the same parameters and attributes, and any
 /// other type is returned unchanged.
 pub fn gc_array_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     if !tribute_ir::dialect::adt::Array::matches(ctx, ty) {
         return ty;
     }
     let mut data = ctx.get_type(ty).clone();
-    data.name = <trunk_ir::dialect::core::Array as DialectType>::NAME;
+    data.name = <trunk_ir::dialect::wasm_gc::Array as DialectType>::NAME;
     ctx.intern_type(data)
 }
 
@@ -401,7 +401,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Convert any other array -> wasm.arrayref
     tc.add_conversion(move |ctx, ty| {
         if tribute_ir::dialect::adt::Array::matches(ctx, ty)
-            || trunk_ir::dialect::core::Array::matches(ctx, ty)
+            || trunk_ir::dialect::wasm_gc::Array::matches(ctx, ty)
         {
             Some(arrayref_ty)
         } else {
