@@ -320,7 +320,7 @@ entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 
 `core.ptr`는 이미 선택된 explicit RC operation의 physical operand일 뿐이다.
 
 Plan의 RTTI 배치는 plan을 만든 직후 descriptor(struct layout, enum layout의
-variant 하나, 또는 evidence가 아닌 `core.array` 타입)마다 하나의
+variant 하나, 또는 `adt.array` 타입)마다 하나의
 `tribute_rtti.layout` 선언으로 모듈에 기록한다. 선언이 담는 내용은
 [runtime-types.md](runtime-types.md#ir에서의-표현)를 따른다. index는 plan의
 할당 순서대로 사용자 RTTI index 공간에서 정한다.

@@ -128,7 +128,7 @@ Runtime 함수는 `Bytes` argument를 호출 동안 빌리고, `Bytes` 결과는
 
 ### Array
 
-`core.array<E>` 값은 compiler가 할당하는 RC object다.
+[`adt.array<E>`](ir.md#adt-배열) 값은 compiler가 할당하는 RC object다.
 
 ```text
 Array: [len: i64] [element: E...]
@@ -443,7 +443,8 @@ block을 만들므로 이런 edge를 만들지 않는다.
 `adt.typeref`는 type 자체로 managed다. Native RC-header allocation을 표현하는
 검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
 contract로 분류한다. `core.bytes`는 [`Bytes`](#bytes) 객체에 대한 managed 참조이고,
-`core.array`는 원소 타입과 관계없이 [array](#array) 객체에 대한 managed 참조다.
+`adt.array`는 원소 타입과 관계없이 [array](#array) 객체에 대한 managed 참조다.
+Unmanaged linear array인 `core.array`는 RC 객체가 아니다.
 Function/code address, borrowed buffer, `core.ptr`는 unmanaged다. 변환 결과가
 pointer라는 사실은 이 분류에 참여하지 않는다.
 
@@ -574,7 +575,7 @@ into control flow and atomic operations by RC lowering.
     같은 함수의 뒤따르는 쓰기나 호출된 함수의 쓰기가 파생 값을 해제할 수 있다. 쓰는
     쪽은 cast와 closure capture를 거쳐 같은 객체에 도달할 수 있으므로 판정은
     특정 SSA 값이 아니라 layout의 nominal identity로 한다.
-  - 배열도 같다. Module 안의 어떤 `adt.array_set`이든 쓰는 `core.array` 타입은 교체
+  - 배열도 같다. Module 안의 어떤 `adt.array_set`이든 쓰는 `adt.array` 타입은 교체
     가능한 layout이며, 그 타입에서 `adt.array_get`이 읽은 managed 원소는 projection
     직후 자신의 unit을 획득한다. 그 밖의 배열 타입에서 읽은 원소는 borrow할 수 있는
     projection이다.

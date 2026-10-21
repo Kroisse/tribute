@@ -167,7 +167,7 @@ Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 �
 
 Wasm 경계를 넘어 새로 생성되는 모든 `wasm.*` operation의 result type과 block
 argument type은 Wasm target `TypeConverter`가 만든 값이어야 한다. Shared IR
-spelling을 그대로 복사하면 `adt.typeref`나 logical `core.array`가 backend-ready
+spelling을 그대로 복사하면 `adt.typeref`나 logical `adt.array`가 backend-ready
 경계까지 남아, physical assignability와 GC layout 검증이 정상 producer를
 거부한다. 이것은 구현 편의가 아니라 [ir.md](ir.md)의 backend-ready 소거
 요구를 Wasm 쪽에서 만족시키는 조건이다.
@@ -541,7 +541,7 @@ Wasm에는 `i8`과 `i16` 값 타입이 없다. `core.i8`과 `core.i16` 값은 `i
 - 상위 비트가 결과에 영향을 주는 연산(`cmpi`, `divsi`/`divui`, `remsi`/`remui`,
   `shr`/`shru`, `sitofp`/`uitofp`)은 좁은 정수에서 낮추지 않는다. 이 연산은
   target 변환 경계에서 거부된다.
-- Packed 배열(`core.array<core.i8>`, `core.array<core.i16>`)의 원소 읽기는
+- Packed 배열(`adt.array<core.i8>`, `adt.array<core.i16>`)의 원소 읽기는
   `array.get_u`로 낮춘다. 상위 비트를 정하지 않으므로 `array.get_s`도 맞지만 하나로
   고정한다. 쓰기는 `array.set`이 하위 비트만 저장한다.
 
@@ -562,7 +562,7 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 | supertype | 그 subtype | 거부 (downcast) |
 | `wasm_gc.struct` (사용자 struct, variant, closure capture layout) | `structref`, `anyref` | 허용 |
 | builtin 배열 레이아웃 (Bytes backing array) | `arrayref`, `anyref` | 허용 |
-| `core.array` | `arrayref`, `anyref` | 허용 |
+| `adt.array` | `arrayref`, `anyref` | 허용 |
 | 등록 근거가 없는 타입 표기 | `structref`, `anyref` | 거부 |
 | `anyref` | `structref` | 거부 (downcast) |
 | `arrayref`, `funcref`, `externref`, `i31ref` | `structref` | 거부 |

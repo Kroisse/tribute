@@ -729,7 +729,7 @@ Evidence 배열 참조와 두 closure 입력은 canonical 타입 동일성을 �
 다른 배열 표기는 evidence 배열이 아니며, 일반 `wasm.structref`는 공통 closure
 layout이 아니다. Payload 슬롯만 [물리적 참조 할당 가능성](wasm-backend.md)을
 받아들인다. Payload packing의 `anyref` upcast가 no-op이면 concrete 참조가 남으므로,
-등록된 struct·array 참조, `core.array` 표기, 소거된 ADT 표기가 `anyref` 슬롯을
+등록된 struct·array 참조, `adt.array` 표기, 소거된 ADT 표기가 `anyref` 슬롯을
 만족한다. 고정 ABI의 입력 개수와 순서, 그리고 `answer_type`에서 독립적으로
 구성되는 signature는 이 완화와 무관하게 유지한다.
 
@@ -920,7 +920,7 @@ Row가 여러 tail의 합집합인 callable이 받는 tail별 evidence도 같은
 Marker의 source 선언이 필드 순서와 타입의 유일한 정의다. Marker는 runtime 항목
 `evidence.marker`로 등록되며 root module의 `tribute.type.evidence.marker` 속성이
 그 IR 타입을 게시한다. Hidden evidence parameter나 frame field처럼 evidence 타입이
-필요한 shared pass는 이 속성의 marker 타입으로 `core.array`를 만든다. Marker를
+필요한 shared pass는 이 속성의 marker 타입으로 `adt.array`를 만든다. Marker를
 만들고 필드를 읽는 code는 runtime 모듈 안에만 있으며, effect lowering과 그 밖의
 pass는 marker를 직접 만들거나 읽지 않는다.
 

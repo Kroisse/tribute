@@ -914,7 +914,7 @@ query는 모듈 결과에서 해당 함수를 선택한다. 함수 이름으로 
 
 ### Logical representation
 
-Shared IR의 Evidence는 runtime 모듈의 marker struct를 원소로 하는 `core.array`이고
+Shared IR의 Evidence는 runtime 모듈의 marker struct를 원소로 하는 `adt.array`이고
 marker의 필드는 그 source 선언이 정의한다. Typechecked ability row는 실행에 필요한 ability
 instance를 결정한다. Evidence 배열 자체에 source ability-row parameter를 붙이지
 않으며 exact target callable contract로 전달한다.

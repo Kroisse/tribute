@@ -1110,16 +1110,21 @@ native는 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast`를 �
 
 #### `adt` 배열
 
-`core.array<E>`는 원소 타입 `E`의 값을 순서대로 담는 배열이다. `E`는 scalar,
-pointer, managed 참조 중 하나이며 원소 하나는 machine 값 하나다. Struct, variant,
-closure 같은 aggregate는 그 object에 대한 managed 참조로 담고 inline으로 펼치지
-않는다.
+`adt.array<E>`는 원소 타입 `E`의 값을 순서대로 담는 배열 object에 대한 managed
+참조다. `E`는 scalar, pointer, managed 참조 중 하나이며 원소 하나는 machine 값
+하나다. Struct, variant, closure 같은 aggregate는 그 object에 대한 managed 참조로
+담고 inline으로 펼치지 않는다.
+
+`core.array<E>`는 이와 다른 unmanaged linear array다. 연속된 memory에 놓인 `E`
+값의 나열일 뿐 object가 아니며, 소유권이나 회수 방식을 갖지 않는다. `adt` 배열
+operation은 `core.array`를 받지 않으며, 어느 target도 `core.array`를 managed 참조로
+다루지 않는다.
 
 배열을 만드는 operation은 `adt.array_new`, `adt.array_of`, `adt.array_splice`
 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로 고정되어 있다. Operand 개수나
 모양으로 operation의 뜻을 고르지 않는다. 각 operation의 결과와 전제는
 [`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다. 세
-operation의 결과 타입은 `type` 속성의 `core.array<E>`이고, `initial`과
+operation의 결과 타입은 `type` 속성의 `adt.array<E>`이고, `initial`과
 `elements`는 `E` 타입이다. `adt.array_splice`의 `source`는 결과와 같은 타입이다.
 
 `adt`의 배열 operation은 target이 객체를 회수하는 방식을 가정하지 않는다. Native
@@ -1682,7 +1687,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 | `"closure"` | closure base `adt.struct` | 함수 참조 필드 하나로 이루어진 closure 값의 공통 저장. Capture 없는 closure의 저장이기도 하다 |
 | `"closure_captures"` | closure capture `adt.struct` | closure base의 필드 뒤에 capture를 순서대로 둔 closure 저장. `closure_base`가 그 base다 |
 | `"bytes"` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
-| `"bytes_data"` | Wasm bytes backing `core.array<core.i8>` | `Bytes`가 가리키는 byte 배열 |
+| `"bytes_data"` | Wasm bytes backing `adt.array<core.i8>` | `Bytes`가 가리키는 byte 배열 |
 | `"boxed_f64"` | Wasm boxed float `adt.struct` | uniform 참조 자리에 놓이는 `f64` 필드 하나짜리 `Float` 저장 |
 | `"described"` | Wasm `Described` `adt.struct` | descriptor 필드 하나로 이루어진 사용자 struct와 variant의 공통 supertype |
 
