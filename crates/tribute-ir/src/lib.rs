@@ -6,6 +6,7 @@
 pub mod continuation_frame;
 pub mod dialect;
 pub mod metadata;
+pub mod runtime_items;
 pub mod runtime_layout;
 
 // Re-export common trunk-ir types for convenience

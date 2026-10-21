@@ -52,7 +52,7 @@ const LANGUAGE_ATTRIBUTE_PREFIX: &str = "tribute.";
 /// new key must be classified explicitly.
 const PRESERVED_ATTRIBUTES: &[&str] = &[
     "tribute.definition",
-    "tribute.type.string",
+    tribute_ir::metadata::PRELUDE_TYPES_ATTR,
     crate::target_abi::OWNERSHIP_ATTR,
 ];
 
@@ -530,12 +530,24 @@ mod tests {
     fn physical_module_has_no_violations() {
         let violations = kinds(
             r#"core.module @test {
-  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>, tribute.type.string = @here} {
+  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>, tribute.types = {"std::String" = core.i32}} {
     func.return
   }
   func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
     func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>}
+  }
+}"#,
+        );
+        assert_eq!(violations, []);
+    }
+
+    #[test]
+    fn prelude_types_cross_the_boundary() {
+        let violations = kinds(
+            r#"core.module @test {tribute.types = {"std::String" = core.i32, "std::runtime::evidence::Marker" = core.i64}} {
+  func.func @helper() {
+    func.return
   }
 }"#,
         );

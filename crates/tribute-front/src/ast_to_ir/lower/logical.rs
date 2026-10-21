@@ -404,6 +404,7 @@ pub(super) fn lower_module<'db>(
         evidence_plans,
         well_known_types,
         compiler_intrinsics,
+        runtime_types,
         row_classes,
         merged_sources,
     } = typed;
@@ -425,6 +426,7 @@ pub(super) fn lower_module<'db>(
     )
     .with_conventions(assigns_conventions)
     .with_compiler_intrinsics(compiler_intrinsics)
+    .with_runtime_types(runtime_types)
     .with_row_classes(row_classes)
     .with_source_paths(source_paths)
     .with_literal_equalities(crate::ast_to_ir::context::LiteralEqualities {
@@ -464,12 +466,14 @@ pub(super) fn lower_module<'db>(
         prescan_definition_conventions(&mut ctx, &ast.entries);
     }
     let mut well_known_type_prescan = super::decl::WellKnownTypePrescan::new(well_known_types);
+    let mut published_runtime_types = Vec::new();
     collect_logical_nominal_identities(&mut ctx, &ast.entries);
     prescan_logical_nominal_layouts(
         &mut ctx,
         ir,
         &ast.entries,
         &mut well_known_type_prescan,
+        &mut published_runtime_types,
         &constructor_types,
         &specialized_enum_variants,
     );
@@ -496,6 +500,9 @@ pub(super) fn lower_module<'db>(
         .regions(region)
         .build(ir, location);
     well_known_types.attach(ir, module.op_ref());
+    for (path, layout) in published_runtime_types {
+        tribute_ir::metadata::publish_prelude_type(ir, module.op_ref(), &path.to_string(), layout);
+    }
     let module = IrModule::new(ir, module.op_ref()).expect("valid core.module operation");
     let operations = instance_operations(&ctx, ir, &declarations);
     tribute_control::declare_abilities(
@@ -810,6 +817,7 @@ fn prescan_logical_nominal_layouts<'db>(
     ir: &mut IrContext,
     entries: &[DeclEntry<TypedRef<'db>>],
     well_known_types: &mut super::decl::WellKnownTypePrescan,
+    runtime_types: &mut Vec<(SymbolPath, TypeRef)>,
     constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
     specialized_enum_variants: &SortedMap<crate::ast::NodeId, crate::ast::TypeScheme<'db>>,
 ) {
@@ -836,6 +844,9 @@ fn prescan_logical_nominal_layouts<'db>(
                 let layout = ctx.adt_struct_type(ir, &name, &fields);
                 ctx.register_type(name.clone(), layout);
                 ir.register_type_alias(name, layout);
+                if let Some(path) = ctx.runtime_type_path(structure.id) {
+                    runtime_types.push((path.clone(), layout));
+                }
             }
             Decl::Enum(enumeration) => {
                 let qualified = prefix.child(enumeration.name.clone());

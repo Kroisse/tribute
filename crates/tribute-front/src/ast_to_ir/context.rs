@@ -139,6 +139,8 @@ pub struct IrLoweringCtx<'db> {
     logical_nominal_declarations: HashSet<Symbol>,
     /// Exact intrinsic-directive declaration ID to canonical identity.
     compiler_intrinsics: HashMap<NodeId, Symbol>,
+    /// The runtime structs to publish as prelude types.
+    runtime_types: super::runtime_items::RuntimeTypes,
     /// Convention classes of the class variables of each function instance.
     row_classes: HashMap<SymbolPath, Vec<(RowVar, CallingConvention)>>,
     /// The classes of the definition whose types are being read.
@@ -199,6 +201,7 @@ impl<'db> IrLoweringCtx<'db> {
             type_map: HashMap::default(),
             logical_nominal_declarations: HashSet::default(),
             compiler_intrinsics: HashMap::default(),
+            runtime_types: Default::default(),
             row_classes: HashMap::default(),
             current_row_classes: Vec::new(),
             row_binders: HashMap::default(),
@@ -214,6 +217,14 @@ impl<'db> IrLoweringCtx<'db> {
         compiler_intrinsics: HashMap<NodeId, Symbol>,
     ) -> Self {
         self.compiler_intrinsics = compiler_intrinsics;
+        self
+    }
+
+    pub(crate) fn with_runtime_types(
+        mut self,
+        runtime_types: super::runtime_items::RuntimeTypes,
+    ) -> Self {
+        self.runtime_types = runtime_types;
         self
     }
 
@@ -352,6 +363,11 @@ impl<'db> IrLoweringCtx<'db> {
 
     pub(crate) fn compiler_intrinsic(&self, declaration: NodeId) -> Option<Symbol> {
         self.compiler_intrinsics.get(&declaration).cloned()
+    }
+
+    /// The canonical path a runtime struct declaration is published under.
+    pub(crate) fn runtime_type_path(&self, declaration: NodeId) -> Option<&SymbolPath> {
+        self.runtime_types.0.get(&declaration)
     }
 
     pub(crate) fn with_literal_equalities(mut self, literal_equalities: LiteralEqualities) -> Self {

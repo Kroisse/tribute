@@ -127,6 +127,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         evidence_plans: result.evidence_plans,
         well_known_types: result.well_known_types,
         compiler_intrinsics,
+        runtime_types: Default::default(),
         row_classes: HashMap::default(),
         merged_sources: Vec::new(),
     }

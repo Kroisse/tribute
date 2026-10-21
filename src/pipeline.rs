@@ -37,7 +37,8 @@
 //! Module (source-logical callable/control IR)
 //!     │
 //!     ▼ eliminate_unreferenced_source_functions (artifact compiles only:
-//!     │   unreachable source-logical functions skip CPS legalization)
+//!     │   unreachable source-logical functions skip CPS legalization;
+//!     │   runtime functions stay)
 //!     ▼ specialize_convention_classes (when the frontend leaves classes to
 //!     │   it), then eliminate_unreferenced_source_functions again
 //!     │   (artifact compiles only)
@@ -56,7 +57,8 @@
 //! Module (ability.handle_dispatch lowered)
 //!     │
 //!     ├─── Representation/ABI Boundary (run_target_to_boundary_exit) ──┤
-//!     ▼ global DCE (unreachable functions skip target lowering)
+//!     ▼ global DCE (unreachable functions skip target lowering; runtime
+//!     │             items stay until target evidence lowering calls them)
 //!     ▼ inline_functions → canonicalize, DCE
 //!     ▼ target ABI validation → CPS signature physicalization
 //!     ▼ root entry bridge
@@ -64,7 +66,7 @@
 //!     ▼ target evidence lowering ([wasm] evidence_to_wasm, [native] evidence_to_native)
 //!     ▼ bytes intrinsic bridge
 //!     ▼ closure storage layout finalization
-//!     ▼ cleanup (global DCE, canonicalize, DCE)
+//!     ▼ cleanup (global DCE removes uncalled runtime items, canonicalize, DCE)
 //!     ▼ boundary exit verification (enforced in every build)
 //! Module (physical contracts verified)  ◄── dump_ir (`--dump-ir`)
 //!     │
@@ -403,6 +405,7 @@ fn merge_and_lower_to_ir<'db>(
 struct PreparedFrontend<'db> {
     typed: ast_typeck::TypeCheckOutput<'db>,
     compiler_intrinsics: HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
+    runtime_types: ast_to_ir::runtime_items::RuntimeTypes,
     row_classes: tribute_front::monomorphize::InstanceRowClasses,
 }
 
@@ -482,6 +485,26 @@ fn prepare_frontend_details<'db>(
                     CompilationPhase::Lowering,
                 )
                 .accumulate(db);
+            }
+            return None;
+        }
+    };
+    // Without a prelude there are no runtime declarations to check.
+    let runtime_items =
+        prelude_module(db).map_or(&[][..], |_| tribute_ir::runtime_items::RUNTIME_ITEMS);
+    let runtime_types = match ast_to_ir::runtime_items::check_runtime(
+        db,
+        &ast_to_ir::runtime_items::RuntimeInputs {
+            module: &merged_module,
+            function_types: &merged_fn_types,
+        },
+        tribute_ir::runtime_items::RUNTIME_MODULE,
+        runtime_items,
+    ) {
+        Ok(types) => types,
+        Err(errors) => {
+            for error in errors {
+                error.diagnostic(&merged_span_map).accumulate(db);
             }
             return None;
         }
@@ -622,6 +645,7 @@ fn prepare_frontend_details<'db>(
     Some(PreparedFrontend {
         typed,
         compiler_intrinsics,
+        runtime_types,
         row_classes,
     })
 }
@@ -636,6 +660,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
         .expect("frontend instances must be checked before lowering");
     let typed = prepared.typed;
     let compiler_intrinsics = prepared.compiler_intrinsics.clone();
+    let runtime_types = prepared.runtime_types.clone();
     let row_classes = prepared.row_classes.clone();
     let mut ir = IrContext::new();
     let module = lower(
@@ -670,6 +695,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             evidence_plans: typed.expression_types(db).evidence_plans.clone(),
             well_known_types: *typed.well_known_types(db),
             compiler_intrinsics,
+            runtime_types,
             row_classes,
             merged_sources: vec![PRELUDE_URI.to_owned()],
         },
@@ -825,6 +851,21 @@ pub fn run_through_cps_lowering(
 // Full Pipeline (Orchestration)
 // =============================================================================
 
+/// Global DCE configuration that roots every function of `runtime`.
+///
+/// A runtime function is a root until the target lowering stages that call
+/// it have run (`new-plans/modules.md`, "생존 범위"). Every runtime function
+/// is called by target evidence lowering or earlier; the cleanup DCE after
+/// it removes the ones nothing calls.
+fn runtime_items_kept_alive(
+    runtime: &[tribute_ir::runtime_items::RuntimeItem],
+) -> trunk_ir::transforms::GlobalDceConfig {
+    trunk_ir::transforms::GlobalDceConfig {
+        extra_entry_points: tribute_ir::runtime_items::function_entry_points(runtime),
+        ..Default::default()
+    }
+}
+
 /// Who specializes convention classes: the frontend, or the class
 /// specialization pass at the head of the structural pipeline.
 const CONVENTION_CLASSES: tribute_front::monomorphize::ConventionClasses =
@@ -842,12 +883,12 @@ fn structural_pass_pipeline(
 
     let mut pm = PassManager::new();
     if functions == SourceFunctions::Reachable {
-        pm.add_pass(EliminateUnreferencedSourceFunctions);
+        pm.add_pass(EliminateUnreferencedSourceFunctions::new());
     }
     if CONVENTION_CLASSES == tribute_front::monomorphize::ConventionClasses::Pass {
         pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
         if functions == SourceFunctions::Reachable {
-            pm.add_pass(EliminateUnreferencedSourceFunctions);
+            pm.add_pass(EliminateUnreferencedSourceFunctions::new());
         }
     }
     if cfg!(debug_assertions) {
@@ -1058,23 +1099,83 @@ fn run_cleanup_passes(
 
 /// Run the WASM target pipeline: lowering + cleanup.
 fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
-    debug_validate_value_integrity(ctx, m, "before Wasm target lowering");
-
     let mut analyses = AnalysisCache::new();
+    enter_target_lowering(
+        ctx,
+        m,
+        &mut analyses,
+        "Wasm",
+        tribute_ir::runtime_items::RUNTIME_ITEMS,
+    )?;
+    lower_wasm_runtime_calls(ctx, m, &mut analyses)?;
+    finish_target_lowering(
+        ctx,
+        m,
+        &mut analyses,
+        tribute_passes::abi_boundary::TargetKind::Wasm,
+    )
+}
+
+/// Run the native target pipeline: lowering + evidence_to_native + cleanup.
+fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
+    let mut analyses = AnalysisCache::new();
+    enter_target_lowering(
+        ctx,
+        m,
+        &mut analyses,
+        "native",
+        tribute_ir::runtime_items::RUNTIME_ITEMS,
+    )?;
+    lower_native_runtime_calls(ctx, m, &mut analyses)?;
+    finish_target_lowering(
+        ctx,
+        m,
+        &mut analyses,
+        tribute_passes::abi_boundary::TargetKind::Native,
+    )
+}
+
+/// The target-independent start of the representation/ABI boundary, up to
+/// the target lowering that calls runtime functions.
+fn enter_target_lowering(
+    ctx: &mut IrContext,
+    m: Module,
+    analyses: &mut AnalysisCache,
+    target: &str,
+    runtime: &[tribute_ir::runtime_items::RuntimeItem],
+) -> Result<(), DumpIrError> {
+    debug_validate_value_integrity(ctx, m, &format!("before {target} target lowering"));
 
     // Drop unreachable functions first, so that no later pass lowers them.
-    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, &mut analyses);
+    // Runtime functions stay until the target lowering has called them.
+    trunk_ir::transforms::global_dce::eliminate_dead_functions_with_config(
+        ctx,
+        m,
+        runtime_items_kept_alive(runtime),
+        analyses,
+    );
 
-    // General function inlining. The pass is single-block-only and cf-free,
-    // so its output stays within dialects WASM lowering already handles.
-    trunk_ir::transforms::inline::inline_functions(ctx, m, &mut analyses);
+    // General function inlining. Single-block-only (no `cf` dialect
+    // dependency), so it preserves the caller's block structure. That
+    // keeps `evidence_to_native`'s per-block producer/consumer correlation
+    // assumptions intact, keeps WASM lowering within the dialects it
+    // handles, and lets the same pass work on both backend paths.
+    trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     // Fold what inlining exposed (struct reads of known constructions, box
     // round trips, constant selectors) before closure storage and evidence
     // lowering see the IR.
-    run_canonicalize_passes(ctx, m, &mut analyses, "post-inline canonicalization")?;
+    run_canonicalize_passes(ctx, m, analyses, "post-inline canonicalization")?;
 
-    enter_target_closure_storage_boundary(ctx, m, &mut analyses)?;
+    enter_target_closure_storage_boundary(ctx, m, analyses)
+}
 
+/// Wasm evidence lowering and the bytes intrinsic bridge: the stages that
+/// call runtime items.
+fn lower_wasm_runtime_calls(
+    ctx: &mut IrContext,
+    m: Module,
+    analyses: &mut AnalysisCache,
+) -> Result<(), DumpIrError> {
     let core_module = core_dialect::Module::from_op(ctx, m.op())
         .expect("Wasm evidence lowering requires a core.module");
     tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, m);
@@ -1082,46 +1183,28 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
     pm.nest::<func_dialect::Func>()
         .add_pass(tribute_passes::wasm::evidence_to_wasm::LowerEvidenceToWasm);
     pm.with_debug_verifier();
-    pm.run(ctx, core_module, &mut analyses)?;
+    pm.run(ctx, core_module, analyses)?;
     tribute_ir::dialect::ability::remove_declarations(ctx, m);
     // Complete the supported bytes intrinsic bridge inside the boundary; the
     // lowering consumes its verified compiler intrinsic identity.
     tribute_passes::wasm::bytes::lower(ctx, m)?;
-    tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
-    debug_validate_value_integrity(ctx, m, "after evidence_to_wasm");
-
-    run_cleanup_passes(ctx, m, &mut analyses)?;
-    enforce_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Wasm)
+    Ok(())
 }
 
-/// Run the native target pipeline: lowering + evidence_to_native + cleanup.
-fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
-    debug_validate_value_integrity(ctx, m, "before native target lowering");
-
-    let mut analyses = AnalysisCache::new();
-
-    // Drop unreachable functions first, so that no later pass lowers them.
-    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, &mut analyses);
-
-    // General function inlining. Single-block-only (no `cf` dialect
-    // dependency), so it preserves the caller's block structure. That
-    // keeps `evidence_to_native`'s per-block producer/consumer correlation
-    // assumptions intact, and lets the same pass work on both backend paths.
-    trunk_ir::transforms::inline::inline_functions(ctx, m, &mut analyses);
-    // Fold what inlining exposed (struct reads of known constructions, box
-    // round trips, constant selectors) before closure storage and evidence
-    // lowering see the IR.
-    run_canonicalize_passes(ctx, m, &mut analyses, "post-inline canonicalization")?;
-
-    enter_target_closure_storage_boundary(ctx, m, &mut analyses)?;
-
+/// Native evidence lowering and the bytes intrinsic bridge: the stages that
+/// call runtime items.
+fn lower_native_runtime_calls(
+    ctx: &mut IrContext,
+    m: Module,
+    analyses: &mut AnalysisCache,
+) -> Result<(), DumpIrError> {
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
         tribute_passes::native::evidence::prepare_native_evidence_runtime(ctx, m);
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
             .add_pass(tribute_passes::native::evidence::LowerEvidenceToNative);
         pm.with_debug_verifier();
-        pm.run(ctx, core_module, &mut analyses)?;
+        pm.run(ctx, core_module, analyses)?;
         tribute_ir::dialect::ability::remove_declarations(ctx, m);
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
@@ -1129,11 +1212,23 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     // Complete the supported bytes intrinsic bridge inside the boundary; the
     // lowering consumes its verified compiler intrinsic identity.
     tribute_passes::native::intrinsic_to_native::lower(ctx, m)?;
-    tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
-    debug_validate_value_integrity(ctx, m, "after evidence_to_native");
+    Ok(())
+}
 
-    run_cleanup_passes(ctx, m, &mut analyses)?;
-    enforce_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Native)
+/// The end of the representation/ABI boundary, after every stage that calls
+/// runtime items: closure storage layout, the cleanup that removes the
+/// runtime functions nothing calls, and the boundary exit verification.
+fn finish_target_lowering(
+    ctx: &mut IrContext,
+    m: Module,
+    analyses: &mut AnalysisCache,
+    target: tribute_passes::abi_boundary::TargetKind,
+) -> Result<(), DumpIrError> {
+    tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
+    debug_validate_value_integrity(ctx, m, "after target evidence lowering");
+
+    run_cleanup_passes(ctx, m, analyses)?;
+    enforce_boundary_exit(ctx, m, target)
 }
 
 /// Run `target`'s pipeline from the shared middle-end output to the
@@ -1719,6 +1814,9 @@ pub fn compare_diagnostics(left: &Diagnostic, right: &Diagnostic) -> std::cmp::O
         .then_with(|| left.inner.span.cmp(&right.inner.span))
         .then_with(|| left.inner.message.cmp(&right.inner.message))
 }
+
+#[cfg(test)]
+mod runtime_item_tests;
 
 #[cfg(test)]
 mod tests {
