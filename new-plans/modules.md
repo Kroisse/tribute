@@ -38,9 +38,11 @@ virtual export로 주입할 수 있다. 현재 `std::io::Io`와 runtime 전용 �
 `std::runtime::Slots`가 이 경로를 사용한다. 사용자에게는
 `use std::io::Io`로 보이지만 사용자 AST나 표준 라이브러리 AST에 synthetic
 declaration을 추가하지 않으며, semantic identity는 source declaration과 구분된다.
-Virtual export는 그 binding을 내보내는 패키지(`std`)의 이름공간에 속한다. 다른
-패키지는 일반 항목과 같이 [의존 패키지](#prelude와-패키지-std) 경로나 prelude
-짧은 이름으로 본다.
+Virtual export는 그 binding을 내보내는 패키지(`std`)의 이름공간에 속하며, 일반
+항목과 같은 [가시성](#가시성-visibility) 규칙을 따른다. 다른 패키지는 `pub`인 virtual
+export(`std::io::Io`)만 [의존 패키지](#prelude와-패키지-std) 경로나 prelude 짧은
+이름으로 본다. `std::runtime`의 virtual export(`Slots(a)`, `Dispatch`)는 그 모듈이
+`pub(pkg)`이므로 패키지 `std` 밖에서 보이지 않는다.
 
 이 경로는 일반 standard-library module loading을 대신하지 않는다. Source로 구현할 수
 있는 표준 타입과 함수는 장기적으로 file-based module system을 사용한다. 다만 source
@@ -75,7 +77,9 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
 - 의존 패키지의 선언은 패키지 이름으로 시작한다. 패키지 `std`의 선언은
   `std::Option`, `std::Option::map`, `std::Int::+`다.
 - 컴파일하는 패키지의 선언은 자기 패키지 component를 생략하고 모듈 경로로
-  시작한다(`main`, `geometry::area`).
+  시작한다(`main`, `geometry::area`). 이 생략은 컴파일하는 패키지에만 적용한다.
+  패키지 `std`는 언제나 의존 패키지로 해석하므로, `std` 선언의 식별 경로와 IR
+  symbol, runtime 항목 경로, `tribute.types` key는 언제나 `std::…`다.
 - 생략한 경로의 첫 component가 의존 패키지의 이름이면 생략하지 않고 `pkg`로
   시작한다. 사용자 패키지의 `mod std { pub fn f() … }`의 `f`는 `pkg::std::f`이고,
   패키지 `std`의 선언과 식별자나 symbol을 공유하지 않는다. `pkg`는 경로 키워드이므로
@@ -744,7 +748,7 @@ segment가 아닌 위치의 키워드는 이름 해석 오류다.
 경로의 첫 segment도 같은 범위에서 찾는다. 그 모듈의 하위 모듈이나 선언, 그 모듈이
 `use`로 가져온 이름, prelude가 제공하는 namespace(`Option` 등), 의존 패키지
 이름(`std`)이 대상이다. `use` 경로도 같다. 패키지 루트는 자신의 선언과 `use`,
-prelude를 본다.
+prelude, 의존 패키지 이름을 본다.
 
 예외로, 같은 이름의 타입이나 ability 옆에 선언된 companion 모듈은 그 이름으로 자기
 타입을 본다. 경로에는 예외가 없다. 모듈 안에서 모듈 자신의 이름은 경로를 시작하지
