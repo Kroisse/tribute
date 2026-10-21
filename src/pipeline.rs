@@ -373,10 +373,20 @@ pub fn library_names<'db>(
     let Some(env) = prelude_env(db) else {
         return Vec::new();
     };
-    env.iter_namespace(&[trunk_ir::Symbol::new(ast_resolve::LIBRARY_PACKAGE)])
+    // The compiler-owned names, such as `List`, come with the prelude's.
+    let mut names: Vec<_> = env
+        .iter_namespace(&[trunk_ir::Symbol::new(ast_resolve::LIBRARY_PACKAGE)])
         .filter(|(_, binding)| env.restriction(binding).is_none())
         .map(|(name, binding)| (name, binding.clone()))
-        .collect()
+        .collect();
+    for name in env.iter_library_names() {
+        if !names.iter().any(|(known, _)| *known == name)
+            && let Some(binding) = env.lookup_library(&name)
+        {
+            names.push((name, binding.clone()));
+        }
+    }
+    names
 }
 
 /// The prelude's type exports (TypeSchemes only, no UniVars), injected into

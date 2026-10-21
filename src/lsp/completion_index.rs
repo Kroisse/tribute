@@ -566,6 +566,7 @@ mod tests {
         for names in [&root, &inner] {
             assert!(names.iter().any(|name| name == "Some"));
             assert!(names.iter().any(|name| name == "Option"));
+            assert!(names.iter().any(|name| name == "List"));
             assert!(!names.iter().any(|name| name == "__tribute_bytes_len"));
         }
     }
