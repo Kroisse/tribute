@@ -288,7 +288,9 @@ const PRELUDE_URI: &str = "prelude:///std/prelude";
 ///
 /// Tests use it to exercise package-internal items, such as the
 /// compiler-owned runtime under `std::runtime`, that user packages cannot
-/// name. Create it before the first compilation in a database.
+/// name. Create it before the first query on a database: an absent input
+/// records no dependency, so creating it later recompiles nothing. Its
+/// declarations are prelude declarations and can shadow the prelude's own.
 #[salsa::input(singleton)]
 pub struct PreludeExtension {
     pub text: String,

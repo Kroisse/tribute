@@ -163,17 +163,22 @@ fn errors(source: &str) -> Vec<String> {
 
 #[test]
 fn user_packages_cannot_name_slots_or_its_intrinsics() {
-    for source in [
-        "use std::runtime::Slots\nfn main() -> Nil { }\n",
-        "fn make() -> std::runtime::Slots(Nat) { std::runtime::Slots::empty() }\nfn main() -> Nil { }\n",
-        "fn main() -> Nil {\n    let _ = std::runtime::Slots::len(std::runtime::Slots::empty())\n}\n",
+    let hidden =
+        |name: &str| format!("`{name}` is not visible here: `{name}` is declared `pub(pkg)`");
+    for (source, name) in [
+        (
+            "use std::runtime::Slots\nfn main() -> Nil { }\n",
+            "std::runtime::Slots",
+        ),
+        (
+            "fn keep(slots: std::runtime::Slots(Nat)) -> Nil { }\nfn main() -> Nil { }\n",
+            "std::runtime::Slots",
+        ),
+        (
+            "fn main() -> Nil {\n    let _ = std::runtime::Slots::empty()\n}\n",
+            "std::runtime::Slots::empty",
+        ),
     ] {
-        let errors = errors(source);
-        assert!(
-            errors
-                .iter()
-                .any(|message| message.contains("is not visible here")),
-            "{source}: {errors:?}"
-        );
+        assert_eq!(errors(source), [hidden(name)], "{source}");
     }
 }

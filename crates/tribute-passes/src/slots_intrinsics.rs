@@ -2,7 +2,8 @@
 //!
 //! Each intrinsic is one `adt.array_*` operation (`new-plans/types.md`,
 //! "Slots"). Positions and lengths are `Nat` at the call and `core.index` at
-//! the array, converted with `arith.index_castui`. A call is selected through
+//! the array, converted with `arith.index_castui`; a length that does not
+//! fit `Nat` is truncated, as `Nat` bounds every array the runtime builds. A call is selected through
 //! the declaration its callee names and that declaration's verified compiler
 //! intrinsic identity, never by the callee's spelling. The declarations,
 //! generic and specialized, are removed afterwards.
@@ -296,6 +297,13 @@ mod tests {
         }
         assert_eq!(output.matches("adt.array_splice").count(), 3, "{output}");
         assert_eq!(output.matches("arith.addi").count(), 2, "{output}");
+    }
+
+    #[test]
+    fn handles_every_registered_identity() {
+        for identity in tribute_ir::runtime_items::SLOTS_INTRINSICS {
+            assert!(SlotsOp::from_identity(identity).is_some(), "{identity}");
+        }
     }
 
     #[test]
