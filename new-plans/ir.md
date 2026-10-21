@@ -1206,20 +1206,24 @@ Native ownership 검사는 게시된 정의와 IR에서 도달하는 layout만 �
 누락되거나 모호한 layout은 거부하고, interner 전체 검색이나 이름의 일부를
 맞추는 방식으로 layout을 추정하지 않는다.
 
-The root `core.module` carries Tribute-specific well-known type identities as
-`TypeRef` attributes. In particular, `tribute.type.string` is the exact
-`adt.enum` type produced from the prelude `String` declaration. String-literal
-lowering must consume this identity directly; it must not rediscover `String`
+The root `core.module` carries the prelude type identities the compiler relies
+on in one dictionary attribute, `tribute.types`. Each key is the canonical
+declaration path of a prelude type, and each value is the exact `TypeRef`
+produced from that declaration. The entry `std::String` is the `adt.enum` type
+of the prelude `String`; runtime types such as `std::runtime::evidence::Marker`
+(`new-plans/modules.md`, "Compiler 소유 runtime 모듈") are entries of the same
+dictionary. Lowering consumes an entry directly; it must not rediscover a type
 by type name, variant names, or field layout. This metadata is semantic compiler
-state rather than a nominal-layout convention. The frontend preserves the
+state rather than a nominal-layout convention. The frontend preserves each
 prelude declaration's stable identity through type checking and compares that
-identity, not its name, when materializing this `TypeRef`.
+identity, not its name, when materializing an entry. Type conversion converts
+the entries like any other type-bearing attribute.
 
 The current specialized textual printer for `core.module` does not serialize
 arbitrary module attributes. Consequently, parsing printed IR conservatively
-drops well-known type metadata. A backend may still process byte constants, but
-must reject `adt.string_const` when `tribute.type.string` is absent rather
-than scanning types for a plausible replacement.
+drops `tribute.types`. A backend may still process byte constants, but must
+reject `adt.string_const` when the `std::String` entry is absent rather than
+scanning types for a plausible replacement.
 
 ## Mid-Level Dialects
 
@@ -1463,8 +1467,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 
 - 기계 호출 규약, exact signature, 외부 바인딩(`abi`)
 - Typed managed layout, 명시적 layout 식별자, ownership/RTTI 입력(매개변수 속성
-  `tribute.ownership` 포함)과 `tribute.type.string`, runtime 타입의
-  `tribute.type.<canonical 경로>` 같은 타입 식별 metadata
+  `tribute.ownership` 포함)과 `tribute.types` 같은 타입 식별 metadata
 - Location과 선언 위치 속성 `tribute.definition` 같은 실행에 관여하지 않는
   source/debug 정보
 

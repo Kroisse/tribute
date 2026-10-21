@@ -918,8 +918,8 @@ Row가 여러 tail의 합집합인 callable이 받는 tail별 evidence도 같은
 없다.
 
 Marker의 source 선언이 필드 순서와 타입의 유일한 정의다. Marker는 runtime 항목
-`std::runtime::evidence::Marker`이며 root module의
-`tribute.type.std::runtime::evidence::Marker` 속성이 그 IR 타입을 게시한다.
+`std::runtime::evidence::Marker`이며 root module의 `tribute.types` 속성에서 이
+경로의 항목이 그 IR 타입을 게시한다.
 Hidden evidence parameter나 frame field처럼 evidence 타입이 필요한 shared pass는
 이 속성의 marker 타입으로 `adt.array`를 만든다. Marker를 만들고 필드를 읽는
 code는 runtime 모듈 안에만 있으며, effect lowering과 그 밖의 pass는 marker를 직접

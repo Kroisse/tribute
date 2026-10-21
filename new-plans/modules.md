@@ -107,10 +107,9 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
   허용된다. 다른 선언의 의미, ownership, 호출 규약을 symbol 철자로 추측하지
   않는다는 규칙은 그대로다.
 - Runtime 타입의 IR 표현은 pass를 거치며 바뀌므로 이름으로 찾지 않는다.
-  Frontend가 well-known type처럼 root `core.module`의 `TypeRef` 속성
-  `tribute.type.<canonical 경로>`로 게시하고
-  (`tribute.type.std::runtime::evidence::Marker`), 타입 변환은 이 속성을 다른
-  타입 속성처럼 함께 변환한다. Lowering은 이 속성을 읽는다.
+  Frontend는 prelude `String`처럼 root `core.module`의 dictionary 속성
+  `tribute.types`([IR 계약](ir.md)에 정의)에 canonical 경로를 key로 그
+  `TypeRef`를 게시하고, lowering은 이 항목을 읽는다.
 
 **제약.** `std::runtime`과 하위 모듈의 함수는 runtime 항목이든 helper든 다음을
 지킨다. Frontend가 검사한다.
@@ -126,8 +125,8 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
 
 **생존 범위.** Runtime 함수 항목은 아직 아무도 부르지 않아도 그 항목을 쓰는
 lowering 단계가 끝날 때까지 dead function 제거의 root다. 그 단계 뒤에는 일반
-함수처럼 참조되지 않으면 제거된다. Runtime 타입의 `tribute.type.<canonical 경로>`
-속성은 타입 식별 metadata로 representation/ABI 경계 출구 뒤에도 남는다.
+함수처럼 참조되지 않으면 제거된다. `tribute.types`의 runtime 타입 항목은 타입
+식별 metadata로 representation/ABI 경계 출구 뒤에도 남는다.
 
 ---
 

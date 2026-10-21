@@ -713,8 +713,8 @@ typecheck는 source와 선언 환경을 입력으로 하는 모듈 단위 query�
 Prelude의 well-known type은 typechecking 결과의 별도 metadata로 보존한다.
 `WellKnownTypes`는 prelude `String`의 semantic type과 stable declaration identity를
 frontend 경계까지 전달한다. AST-to-IR은 declaration identity로 exact TrunkIR
-`TypeRef`를 구해 root module의 `tribute.type.string` attribute에 기록한다.
-Native/Wasm constant lowering은 이 attribute만 사용하며 이름이나 layout으로
+`TypeRef`를 구해 root module의 `tribute.types` attribute에 `std::String` 항목으로
+기록한다. Native/Wasm constant lowering은 이 항목만 사용하며 이름이나 layout으로
 복구하지 않는다. Textual IR에서 attribute가 유실되면 string constant lowering은
 실패한다.
 
