@@ -99,6 +99,9 @@ fn frontend_publishes_runtime_types_with_the_prelude_types() {
     let (ctx, frontend) = salsa::Database::attach(&db, |db| {
         let source = source(db, PROGRAM);
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        // The prepared metadata is checked against the compiler's own item
+        // set under `std::runtime`, which has no `rt` items; check the test
+        // set here instead.
         merge_and_lower_to_ir_with(db, &typed, source, |mut typed, db, ir, uri| {
             typed.runtime_types = check_runtime(
                 db,
