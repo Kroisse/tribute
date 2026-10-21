@@ -83,30 +83,31 @@ pub enum Decl<V> {
 
 /// Where a declaration is visible, from its visibility marker.
 ///
-/// Each one is visible in the module that declares it and that module's
-/// descendants; a wider one adds the modules below its parent, the whole
-/// package, or every package.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A declaration is visible in a module and that module's descendants: the
+/// module that declares it, a module around that one that its marker names,
+/// or, when public, every module of every package.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Visibility {
     /// No marker: the declaring module.
     #[default]
     Private,
-    /// `pub(super)`: the parent of the declaring module.
-    Super,
-    /// `pub(pkg)`: the package.
-    Package,
+    /// `pub(path)`: the module `path` names, as written. The path starts
+    /// with a path keyword, as in `pub(pkg)`, `pub(super)`, `pub(self)`, and
+    /// `pub(pkg::a::b)`.
+    Restricted(Vec<Symbol>),
     /// `pub`: every package.
     Public,
 }
 
 impl std::fmt::Display for Visibility {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Visibility::Private => "private",
-            Visibility::Super => "pub(super)",
-            Visibility::Package => "pub(pkg)",
-            Visibility::Public => "pub",
-        })
+        match self {
+            Visibility::Private => f.write_str("private"),
+            Visibility::Restricted(path) => {
+                write!(f, "pub({})", itertools::Itertools::format(path.iter(), "::"))
+            }
+            Visibility::Public => f.write_str("pub"),
+        }
     }
 }
 

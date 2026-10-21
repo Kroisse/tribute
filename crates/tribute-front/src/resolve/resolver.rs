@@ -1029,7 +1029,7 @@ impl<'db> Resolver<'db> {
         entries: &mut Vec<DeclEntry<ResolvedRef<'db>>>,
     ) {
         for item in items {
-            self.report_root_super(item);
+            self.report_visibility_path(item);
             match item {
                 ModuleItem::Decl(Decl::Function(function))
                     if self.redefinitions.contains(&function.id) => {}
@@ -1047,30 +1047,42 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Report `pub(super)` on an item of the package root, which has no
-    /// parent module.
-    fn report_root_super(&self, item: &ModuleItem<UnresolvedName>) {
-        if self.module_path.len() > self.package_depth {
-            return;
-        }
+    /// Report a `pub(path)` marker on `item` whose path names neither the
+    /// current module nor a module around it.
+    fn report_visibility_path(&self, item: &ModuleItem<UnresolvedName>) {
         let (id, visibility) = match item {
-            ModuleItem::Decl(Decl::Function(f)) => (f.id, f.visibility),
-            ModuleItem::Decl(Decl::ExternFunction(f)) => (f.id, f.visibility),
-            ModuleItem::Decl(Decl::Struct(s)) => (s.id, s.visibility),
-            ModuleItem::Decl(Decl::Enum(e)) => (e.id, e.visibility),
-            ModuleItem::Decl(Decl::Ability(a)) => (a.id, a.visibility),
-            ModuleItem::Decl(Decl::Use(u)) => (u.id, u.visibility),
-            ModuleItem::Module(m) => (m.id, m.visibility),
+            ModuleItem::Decl(Decl::Function(f)) => (f.id, &f.visibility),
+            ModuleItem::Decl(Decl::ExternFunction(f)) => (f.id, &f.visibility),
+            ModuleItem::Decl(Decl::Struct(s)) => (s.id, &s.visibility),
+            ModuleItem::Decl(Decl::Enum(e)) => (e.id, &e.visibility),
+            ModuleItem::Decl(Decl::Ability(a)) => (a.id, &a.visibility),
+            ModuleItem::Decl(Decl::Use(u)) => (u.id, &u.visibility),
+            ModuleItem::Module(m) => (m.id, &m.visibility),
         };
-        if visibility == Visibility::Super {
-            Diagnostic::new(
-                "`pub(super)` on an item of the package root, which has no parent module",
-                self.span_map.get_or_default(id),
-                DiagnosticSeverity::Error,
-                CompilationPhase::NameResolution,
-            )
-            .accumulate(self.db);
-        }
+        let Visibility::Restricted(scope) = visibility else {
+            return;
+        };
+        let message = match absolute_path(self.package_depth, &self.module_path, scope) {
+            Err(error) => format!("`{visibility}`: {error}"),
+            Ok(_) if self.restriction_module(scope).is_some() => return,
+            Ok(_) => format!(
+                "`{visibility}` names no module around this declaration: \
+                 a restricted visibility names the declaring module or a module around it"
+            ),
+        };
+        Diagnostic::new(
+            message,
+            self.span_map.get_or_default(id),
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(self.db);
+    }
+
+    /// The module the path of a `pub(scope)` marker in the current module
+    /// names, if it is that module or a module around it.
+    fn restriction_module(&self, scope: &[Symbol]) -> Option<SymbolPath> {
+        super::restriction_module(self.package_depth, &self.module_path, scope)
     }
 
     /// Resolve a function declaration.
@@ -1125,7 +1137,7 @@ impl<'db> Resolver<'db> {
 
         FuncDecl {
             id: func.id,
-            visibility: func.visibility,
+            visibility: func.visibility.clone(),
             name: func.name.clone(),
             type_params,
             params,
@@ -1254,18 +1266,16 @@ impl<'db> Resolver<'db> {
             self.report_hidden(u.id, written, restriction);
             return;
         }
-        let package = &self.module_path[..self.package_depth.min(self.module_path.len())];
-        let exported: Option<&[Symbol]> = match u.visibility {
+        let exported = match &u.visibility {
             Visibility::Private => return,
-            Visibility::Super => Some(
-                self.module_path
-                    .split_last()
-                    .map_or(package, |(_, parent)| parent),
-            ),
-            Visibility::Package => Some(package),
+            // An invalid path is reported with the declaration.
+            Visibility::Restricted(scope) => match self.restriction_module(scope) {
+                Some(module) => Some(module),
+                None => return,
+            },
             Visibility::Public => None,
         };
-        let wider = match (exported, &restriction.within) {
+        let wider = match (&exported, &restriction.within) {
             (Some(exported), Some(within)) => exported.len() < within.len(),
             _ => true,
         };

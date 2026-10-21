@@ -715,8 +715,9 @@ prelude도 같은 규칙을 따른다. prelude의 모듈은 다른 prelude 항�
 
 | 수식자 | 범위 |
 | ------ | ---- |
-| (없음) | 선언한 모듈과 그 하위 모듈 |
+| (없음), `pub(self)` | 선언한 모듈과 그 하위 모듈 |
 | `pub(super)` | 부모 모듈과 그 하위 모듈 |
+| `pub(pkg::a::b)` 등 모듈 경로 | 그 모듈과 그 하위 모듈 |
 | `pub(pkg)` | 패키지 내부 전체 |
 | `pub` | 공개 (외부 패키지에서도 접근 가능) |
 
@@ -727,6 +728,8 @@ fn private_helper() -> Int { 42 }           // 이 모듈에서만
 
 pub(super) fn parent_visible() -> Int { 42 } // internal/ 및 하위에서
 
+pub(pkg::internal) fn internal_only() -> Int { 42 } // internal/ 및 하위에서
+
 pub(pkg) fn package_internal() -> Int { 42 } // 이 패키지 내에서
 
 pub fn public_api() -> Int { 42 }            // 어디서든
@@ -736,8 +739,12 @@ Prelude도 패키지 `std`의 루트 모듈이므로 같은 규칙을 따른다.
 prelude의 `pub` 항목만 본다.
 
 가시성 수식자는 함수, extern 함수, `struct`, `enum`, `ability`, `mod`, `use`에 붙는다.
-패키지 루트의 선언에는 부모 모듈이 없으므로 `pub(super)`를 쓸 수 없다. 이는 이름 해석
-오류다.
+
+**제한된 가시성의 경로.** `pub(…)`의 괄호 안은 모듈 경로이며, 그 모듈과 그 하위 모듈에서
+항목이 보인다. 경로는 [경로 키워드](#경로-키워드)로 시작하고 `use` 경로와 같이 해석한다.
+`pub(pkg)`, `pub(super)`, `pub(self)`는 segment가 하나인 경우다. 경로는 선언한 모듈
+자신이거나 그 조상 모듈이어야 한다. 그렇지 않은 모듈, 모듈이 아닌 이름, 존재하지 않는
+경로는 이름 해석 오류다. 패키지 루트에서 쓴 `pub(super)`도 루트 위를 가리키므로 오류다.
 
 **경로의 모든 모듈.** 항목은 그 항목 자신과 그 항목을 둘러싼 모든 모듈이 참조하는
 모듈에서 보일 때만 보인다. 그래서 `pub(pkg) mod runtime` 안의 `pub fn`은 패키지 밖에서

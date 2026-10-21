@@ -84,7 +84,7 @@ impl std::fmt::Display for Restriction {
             "`{}` is ",
             itertools::Itertools::format(self.declaration.iter(), "::")
         )?;
-        match self.visibility {
+        match &self.visibility {
             Visibility::Private => f.write_str("private"),
             visibility => write!(f, "declared `{visibility}`"),
         }

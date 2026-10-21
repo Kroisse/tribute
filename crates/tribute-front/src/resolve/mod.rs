@@ -213,32 +213,38 @@ impl Scope {
         &self,
         module: &SymbolPath,
         path: SymbolPath,
-        visibility: Visibility,
+        visibility: &Visibility,
     ) -> Option<Restriction> {
-        let package = || {
-            SymbolPath::new(
-                module[..self.package_depth.min(module.len())]
-                    .iter()
-                    .cloned(),
-            )
-        };
         let within = match visibility {
             Visibility::Public => return self.outer.clone(),
             Visibility::Private => module.clone(),
-            // The resolver reports `pub(super)` at the package root.
-            Visibility::Super if module.len() <= self.package_depth => package(),
-            Visibility::Super => module
-                .parent()
-                .expect("a module below the root has a parent"),
-            Visibility::Package => package(),
+            // The resolver reports a path that names no module around the
+            // declaration, which is then private.
+            Visibility::Restricted(scope) => {
+                restriction_module(self.package_depth, module, scope).unwrap_or_else(|| module.clone())
+            }
         };
         let own = Restriction {
             within: Some(within),
             declaration: path,
-            visibility,
+            visibility: visibility.clone(),
         };
         Some(own.within_module(self.outer.as_ref()))
     }
+}
+
+/// The module `scope`, the path of a `pub(scope)` marker, names from the
+/// module `module` that declares it, if that is `module` or a module
+/// around it.
+pub(crate) fn restriction_module(
+    package_depth: usize,
+    module: &[Symbol],
+    scope: &[Symbol],
+) -> Option<SymbolPath> {
+    let named = path::absolute_path(package_depth, module, scope).ok()??;
+    module
+        .starts_with(&named)
+        .then(|| SymbolPath::new(named))
 }
 
 /// The package the prelude is the root of. Its declarations' identities and
@@ -346,11 +352,11 @@ fn collect_definition<'db>(
     // Every binding of a declaration, its members' included, has the
     // declaration's visibility.
     let restriction = match decl {
-        Decl::Function(func) => Some((&func.name, func.visibility)),
-        Decl::ExternFunction(func) => Some((&func.name, func.visibility)),
-        Decl::Struct(s) => Some((&s.name, s.visibility)),
-        Decl::Enum(e) => Some((&e.name, e.visibility)),
-        Decl::Ability(a) => Some((&a.name, a.visibility)),
+        Decl::Function(func) => Some((&func.name, &func.visibility)),
+        Decl::ExternFunction(func) => Some((&func.name, &func.visibility)),
+        Decl::Struct(s) => Some((&s.name, &s.visibility)),
+        Decl::Enum(e) => Some((&e.name, &e.visibility)),
+        Decl::Ability(a) => Some((&a.name, &a.visibility)),
         Decl::Use(_) => None,
     }
     .and_then(|(name, visibility)| {
@@ -507,7 +513,7 @@ fn collect_module<'db>(
     // then register them under the module's namespace
     if let Some(body) = &m.body {
         let path = prefix.child(m.name.clone());
-        let restriction = scope.restriction(prefix, path.clone(), m.visibility);
+        let restriction = scope.restriction(prefix, path.clone(), &m.visibility);
         if let Some(restriction) = &restriction {
             env.restrict_module(path, restriction.clone());
         }

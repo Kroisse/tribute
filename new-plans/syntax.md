@@ -401,7 +401,7 @@ use std::io::Error as IoError
 ### Module Declaration
 
 ```ebnf
-ModDecl ::= 'pub'? 'mod' TypeId '{' Item* '}'
+ModDecl ::= Visibility 'mod' TypeId '{' Item* '}'
 ```
 
 **예시:**
@@ -442,7 +442,7 @@ std::io::print_line("hello")
 ## Constant Declaration
 
 ```ebnf
-ConstDecl ::= 'pub'? 'const' Identifier (':' Type)? '=' ConstExpr
+ConstDecl ::= Visibility 'const' Identifier (':' Type)? '=' ConstExpr
 
 ConstExpr ::= Literal                        // -1은 Int 리터럴로 처리
             | ValuePath                      // 다른 상수 참조
@@ -471,7 +471,7 @@ pub const VERSION = "0.1.0"
 ### Struct (Product Type)
 
 ```ebnf
-StructDecl ::= 'pub'? 'struct' TypeId TypeParams? StructBody
+StructDecl ::= Visibility 'struct' TypeId TypeParams? StructBody
 
 TypeParams ::= '(' TypeParam (',' TypeParam)* ','? ')'
 TypeParam  ::= LowerIdentifier
@@ -501,7 +501,7 @@ struct Point { x: Int, y: Int }
 ### Enum (Sum Type)
 
 ```ebnf
-EnumDecl ::= 'pub'? 'enum' TypeId TypeParams? EnumBody
+EnumDecl ::= Visibility 'enum' TypeId TypeParams? EnumBody
 
 EnumBody ::= '{' EnumVariants '}'
 EnumVariants ::= EnumVariant (FieldSep EnumVariant)* FieldSep?
@@ -707,7 +707,7 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 ### Function Definition
 
 ```ebnf
-FunctionDef ::= 'pub'? 'fn' Identifier '(' TypedParamList? ')' ReturnType Block
+FunctionDef ::= Visibility 'fn' Identifier '(' TypedParamList? ')' ReturnType Block
 
 TypedParamList ::= TypedParam (',' TypedParam)* ','?
 TypedParam ::= Identifier ':' Type
@@ -1230,10 +1230,13 @@ user
 ## Visibility
 
 ```ebnf
-Visibility ::= 'pub'?
+Visibility ::= ('pub' ('(' VisibilityPath ')')?)?
+VisibilityPath ::= PathKeyword ('::' PathSegment)*
 ```
 
-`pub` 키워드가 붙으면 모듈 외부에서 접근 가능.
+`pub`은 모든 패키지에 공개하고, `pub(path)`는 경로가 가리키는 조상 모듈과 그 하위
+모듈로 제한한다(`pub(pkg)`, `pub(super)`, `pub(self)`, `pub(pkg::a::b)`). 수식자가 없으면
+선언한 모듈과 그 하위 모듈에서만 보인다. 규칙은 modules.md의 가시성 절을 따른다.
 
 **적용 대상:**
 

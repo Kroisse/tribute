@@ -144,11 +144,58 @@ fn main() -> Nil {
 }
 
 #[salsa_test]
-fn pub_super_at_the_package_root_is_reported(db: &salsa::DatabaseImpl) {
-    let errors = errors(db, "pub(super) fn f() -> Nat { 1 }\nfn main() -> Nil {}\n");
+fn a_module_path_restricts_to_a_module_around_the_declaration(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod outer {
+    pub mod inner {
+        pub(pkg::outer) fn in_outer() -> Nat { 1 }
+        pub(self) fn in_inner() -> Nat { 2 }
+        pub fn both() -> Nat { in_outer() + in_inner() }
+    }
+
+    pub fn run() -> Nat { inner::in_outer() + inner::both() }
+}
+
+fn main() -> Nil {
+    let _ = outer::run() + outer::inner::in_outer() + outer::inner::in_inner()
+}
+"#,
+    );
     assert_eq!(
         errors,
-        ["`pub(super)` on an item of the package root, which has no parent module"]
+        [
+            "`outer::inner::in_outer` is not visible here: `outer::inner::in_outer` is declared `pub(pkg::outer)`",
+            "`outer::inner::in_inner` is not visible here: `outer::inner::in_inner` is declared `pub(self)`",
+        ]
+    );
+}
+
+#[salsa_test]
+fn a_visibility_path_must_name_a_module_around_the_declaration(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub(super) fn f() -> Nat { 1 }
+
+pub mod a {
+    pub(super::b) fn g() -> Nat { 2 }
+    pub(pkg::nowhere) fn h() -> Nat { 3 }
+}
+
+pub mod b {}
+
+fn main() -> Nil {}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`pub(super)`: `super` at the package root has no parent module",
+            "`pub(super::b)` names no module around this declaration: a restricted visibility names the declaring module or a module around it",
+            "`pub(pkg::nowhere)` names no module around this declaration: a restricted visibility names the declaring module or a module around it",
+        ]
     );
 }
 
