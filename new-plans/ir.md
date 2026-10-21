@@ -1221,9 +1221,12 @@ the entries like any other type-bearing attribute.
 
 The current specialized textual printer for `core.module` does not serialize
 arbitrary module attributes. Consequently, parsing printed IR conservatively
-drops `tribute.types`. A backend may still process byte constants, but must
-reject `adt.string_const` when the `std::String` entry is absent rather than
-scanning types for a plausible replacement.
+drops `tribute.types`. Every lowering that needs an entry fails closed: when
+the entry is absent it reports a compiler error and never reconstructs the type
+from type names or layout. A backend may still process byte constants, but must
+reject `adt.string_const` when the `std::String` entry is absent, and a pass
+that builds evidence types or lowers `effect.*` must reject the module when the
+`std::runtime::evidence::Marker` entry is absent.
 
 ## Mid-Level Dialects
 
