@@ -39,9 +39,8 @@
 //!     ▼ eliminate_unreferenced_source_functions (artifact compiles only:
 //!     │   unreachable source-logical functions skip CPS legalization;
 //!     │   runtime functions stay)
-//!     ▼ specialize_convention_classes (when the frontend leaves classes to
-//!     │   it), then eliminate_unreferenced_source_functions again
-//!     │   (artifact compiles only)
+//!     ▼ specialize_convention_classes, then
+//!     │   eliminate_unreferenced_source_functions again (artifact compiles only)
 //!     ▼ tribute_control_to_cps → lower_continuation_frames →
 //!       lower_closure_lambda → intrinsic/list/io lowering
 //! Module (CPS callable contracts, explicit evidence, and general
@@ -409,7 +408,6 @@ struct PreparedFrontend<'db> {
     typed: ast_typeck::TypeCheckOutput<'db>,
     compiler_intrinsics: HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
     runtime_types: ast_to_ir::runtime_items::RuntimeTypes,
-    row_classes: tribute_front::monomorphize::InstanceRowClasses,
 }
 
 /// Merge and specialize inside a tracked query so specialization failures
@@ -437,8 +435,6 @@ fn prepare_frontend_details<'db>(
     let user_span_map = typed.span_map(db);
 
     // Merge prelude at AST level
-    let merged_ability_conventions =
-        tribute_front::monomorphize::ability_conventions(typed.ability_definitions(db));
     let (merged_module, merged_fn_types, merged_node_types, merged_span_map) =
         if let Some(prelude) = prelude_module(db) {
             let prelude_module_ast = prelude.module(db);
@@ -580,8 +576,6 @@ fn prepare_frontend_details<'db>(
                 .flat_map(|prelude| prelude.exhaustive_cases(db).iter().copied())
                 .chain(typed.exhaustive_cases(db).iter().copied())
                 .collect(),
-            ability_conventions: merged_ability_conventions,
-            convention_classes: CONVENTION_CLASSES,
             compiler_intrinsics,
         },
     );
@@ -606,7 +600,6 @@ fn prepare_frontend_details<'db>(
     let mut exhaustive_cases: Vec<_> = mono_result.metadata.exhaustive_cases.into_iter().collect();
     exhaustive_cases.sort();
     let compiler_intrinsics = mono_result.metadata.compiler_intrinsics;
-    let row_classes = mono_result.row_classes;
     let typed = ast_typeck::TypeCheckOutput::new(
         db,
         mono_result.module,
@@ -649,7 +642,6 @@ fn prepare_frontend_details<'db>(
         typed,
         compiler_intrinsics,
         runtime_types,
-        row_classes,
     })
 }
 
@@ -664,7 +656,6 @@ fn merge_and_lower_to_ir_with<'db, M>(
     let typed = prepared.typed;
     let compiler_intrinsics = prepared.compiler_intrinsics.clone();
     let runtime_types = prepared.runtime_types.clone();
-    let row_classes = prepared.row_classes.clone();
     let mut ir = IrContext::new();
     let module = lower(
         ast_to_ir::TypedModule {
@@ -684,10 +675,6 @@ fn merge_and_lower_to_ir_with<'db, M>(
                 .specialized_enum_variants
                 .clone(),
             node_types: typed.expression_types(db).node_types.clone(),
-            ability_conventions: tribute_front::monomorphize::ability_conventions(
-                typed.ability_definitions(db),
-            ),
-            convention_classes: CONVENTION_CLASSES,
             ability_definitions: ast_typeck::ability_definitions_from_schemas(
                 typed.ability_definitions(db),
             ),
@@ -699,7 +686,6 @@ fn merge_and_lower_to_ir_with<'db, M>(
             well_known_types: *typed.well_known_types(db),
             compiler_intrinsics,
             runtime_types,
-            row_classes,
             merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
         },
         db,
@@ -752,11 +738,9 @@ pub fn compile_specialized_frontend(
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = PassManager::new();
-    pm.add_pass(EliminateUnreferencedSourceFunctions::new());
-    if CONVENTION_CLASSES == tribute_front::monomorphize::ConventionClasses::Pass {
-        pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses)
-            .add_pass(EliminateUnreferencedSourceFunctions::new());
-    }
+    pm.add_pass(EliminateUnreferencedSourceFunctions::new())
+        .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses)
+        .add_pass(EliminateUnreferencedSourceFunctions::new());
     pm.run(&mut ctx, core_module, &mut AnalysisCache::new())?;
     Ok(Some((ctx, m)))
 }
@@ -899,11 +883,6 @@ fn runtime_items_kept_alive(
     }
 }
 
-/// Who specializes convention classes: the frontend, or the class
-/// specialization pass at the head of the structural pipeline.
-const CONVENTION_CLASSES: tribute_front::monomorphize::ConventionClasses =
-    tribute_front::monomorphize::ConventionClasses::Pass;
-
 /// Build the shared structural pass pipeline that legalizes source-logical
 /// callable/control IR into CPS with explicit evidence. For
 /// [`SourceFunctions::Reachable`], it first removes the functions nothing
@@ -918,11 +897,9 @@ fn structural_pass_pipeline(
     if functions == SourceFunctions::Reachable {
         pm.add_pass(EliminateUnreferencedSourceFunctions::new());
     }
-    if CONVENTION_CLASSES == tribute_front::monomorphize::ConventionClasses::Pass {
-        pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
-        if functions == SourceFunctions::Reachable {
-            pm.add_pass(EliminateUnreferencedSourceFunctions::new());
-        }
+    pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
+    if functions == SourceFunctions::Reachable {
+        pm.add_pass(EliminateUnreferencedSourceFunctions::new());
     }
     if cfg!(debug_assertions) {
         pm.add_pass(tribute_passes::check_convention_classes::CheckConventionClasses);
