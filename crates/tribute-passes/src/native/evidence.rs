@@ -668,7 +668,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !evidence = core.array<!marker, {layout = "evidence"}>
+  !evidence = adt.array<!marker, {layout = "evidence"}>
   func.func @external(%ev: !evidence) -> !marker
   func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
     %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : core.ptr
@@ -705,7 +705,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !evidence = core.array<!marker, {layout = "evidence"}>
+  !evidence = adt.array<!marker, {layout = "evidence"}>
   func.func @select(%ev: !evidence) -> !evidence {
     %masked = effect.mask %ev {ability = @State} : !evidence
     %dup = effect.dup %masked {ability = @State} : !evidence
@@ -757,7 +757,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !evidence = core.array<!marker, {layout = "evidence"}>
+  !evidence = adt.array<!marker, {layout = "evidence"}>
   func.func @select(%ev: !evidence) -> !evidence {
     %tail = effect.tail %ev {index = 1} : !evidence
     %pushed = effect.push %tail, %ev {ability = @State} : !evidence

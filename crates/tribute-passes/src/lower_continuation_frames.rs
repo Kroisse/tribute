@@ -465,7 +465,7 @@ mod tests {
     }
 
     const TYPES: &str = r#"  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !ev = core.array<!marker, {layout = "evidence"}>
+  !ev = adt.array<!marker, {layout = "evidence"}>
   !frame = ability.frame<core.i32>
   !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
   !nested = ability.frame<!resume>"#;

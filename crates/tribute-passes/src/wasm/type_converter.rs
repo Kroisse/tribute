@@ -76,7 +76,20 @@ pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
 /// the canonical `core.array<Marker>` evidence layout, which emission maps to
 /// the builtin evidence array, and never an erased `wasm.arrayref`.
 pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
-    tribute_ir::dialect::ability::evidence_adt_type_ref(ctx)
+    let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
+    gc_array_type(ctx, evidence)
+}
+
+/// The GC array type that Wasm operations use for `ty`: an `adt.array`
+/// becomes the `core.array` with the same parameters and attributes, and any
+/// other type is returned unchanged.
+pub fn gc_array_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
+    if !tribute_ir::dialect::adt::Array::matches(ctx, ty) {
+        return ty;
+    }
+    let mut data = ctx.get_type(ty).clone();
+    data.name = <trunk_ir::dialect::core::Array as DialectType>::NAME;
+    ctx.intern_type(data)
 }
 
 // =============================================================================
@@ -267,6 +280,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     let evidence_ty = evidence_wasm_type(ctx);
     let marker_ty = marker_adt_type_ref(ctx);
     let bytes_data_ty = super::bytes::bytes_data_type(ctx);
+    let bytes_data_gc_ty = super::bytes::bytes_data_gc_type(ctx);
 
     let mut tc = TypeConverter::new();
 
@@ -369,7 +383,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
-    // Convert evidence ADT type (core.array<Marker>) -> wasm.arrayref
+    // Convert the evidence ADT type (`adt.array<Marker>`) -> its GC array
     tc.add_conversion(move |ctx, ty| {
         if is_evidence_type_ref(ctx, ty) {
             Some(evidence_ty)
@@ -380,12 +394,15 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
     // The bytes backing array keeps its layout identifier rather than
     // becoming an erased `wasm.arrayref`.
-    tc.add_conversion(move |_, ty| (ty == bytes_data_ty).then_some(bytes_data_ty));
+    tc.add_conversion(move |_, ty| {
+        (ty == bytes_data_ty || ty == bytes_data_gc_ty).then_some(bytes_data_gc_ty)
+    });
 
-    // Convert generic core.array -> wasm.arrayref
-    // This handles array types that are not evidence types (e.g., user arrays)
+    // Convert any other array -> wasm.arrayref
     tc.add_conversion(move |ctx, ty| {
-        if trunk_ir::dialect::core::Array::matches(ctx, ty) {
+        if tribute_ir::dialect::adt::Array::matches(ctx, ty)
+            || trunk_ir::dialect::core::Array::matches(ctx, ty)
+        {
             Some(arrayref_ty)
         } else {
             None

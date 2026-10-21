@@ -140,7 +140,7 @@ fn wasm_lowering_passes() -> PassManager {
         trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, m.into(), tc);
         Ok(())
     }))
-    // Convert wasm.func signature types (e.g., core.array<Marker> →
+    // Convert wasm.func signature types (e.g., adt.array<Marker> →
     // wasm.arrayref). Runs after func_to_wasm creates the wasm.func operations
     // and before emission reads their type attributes.
     .add_pass(pass_fn(
@@ -494,7 +494,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !Frame = adt.struct<Frame()>
   !Env = adt.struct<Env(closure: !Closure, evidence: !Evidence, frame: !Frame)>
@@ -527,7 +527,7 @@ mod tests {
             .find_map(|&op| wasm_gc::StructGet::from_op(&ctx, op).ok())
             .expect("environment read should lower to wasm_gc.struct_get");
         // Evidence keeps its layout identifier instead of erasing to arrayref.
-        let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let evidence = crate::wasm::type_converter::evidence_wasm_type(&mut ctx);
 
         // The descriptor field precedes the source fields.
         assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[2]), evidence);
@@ -971,7 +971,7 @@ mod tests {
     fn lower_to_wasm_binds_evidence_runtime_declarations() {
         let output = lower_text(
             r#"core.module @test {
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @prompt(%ev: !Evidence) -> core.i32 {
     %id = arith.const {value = 7} : core.i32

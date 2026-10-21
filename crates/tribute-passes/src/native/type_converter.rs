@@ -20,7 +20,7 @@
 //! | `adt.variant_inst`  | `core.ptr`  | Variant instance as heap pointer   |
 //! | `adt.typeref<T>`    | `core.ptr`  | Struct reference as pointer        |
 //! | `closure.closure`   | `core.ptr`  | Closure as pointer                 |
-//! | `core.array<T>`     | `core.ptr`  | Array as heap pointer              |
+//! | `adt.array<T>`      | `core.ptr`  | Array as heap pointer              |
 //!
 //! ## Materializations
 //!
@@ -146,7 +146,7 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if is_func_type(ctx, ty) {
             return Some(r.core_ptr);
         }
-        // core.array (non-evidence) → ptr
+        // adt.array (non-evidence) and the unmanaged core.array → ptr
         if is_array_type(ctx, ty) && ty != r.evidence_ty {
             return Some(r.core_ptr);
         }
@@ -256,10 +256,11 @@ fn is_func_type(ctx: &IrContext, ty: TypeRef) -> bool {
     data.name.is(ctx, "func.func_sig")
 }
 
-/// Helper: Check if a type is core.array.
+/// Helper: Check if a type is an `adt.array` or a `core.array`.
 fn is_array_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.name.is(ctx, "core.array")
+    use trunk_ir::ops::DialectType;
+    tribute_ir::dialect::adt::Array::matches(ctx, ty)
+        || trunk_ir::dialect::core::Array::matches(ctx, ty)
 }
 
 /// Helper: Check if a type is core.bytes.

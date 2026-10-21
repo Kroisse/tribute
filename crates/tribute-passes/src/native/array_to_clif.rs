@@ -82,7 +82,7 @@ impl ElementLayout {
     /// The layout of `array_ty`'s elements. A released element converts to
     /// a pointer, so its native size is the released stride as well.
     fn of(ctx: &IrContext, array_ty: TypeRef, type_converter: &TypeConverter) -> Option<Self> {
-        let element = core::Array::from_type_ref(ctx, array_ty)?.element(ctx);
+        let element = adt::Array::from_type_ref(ctx, array_ty)?.element(ctx);
         Some(Self {
             element: type_converter.convert_type_or_identity(ctx, element),
             stride: element_stride(ctx, element, false, type_converter),
@@ -111,7 +111,7 @@ pub(super) fn prepare(
     let mut descriptors = HashMap::default();
     for layout in tribute_rtti::Layout::declared(ctx, module) {
         let ty = layout.r#type(ctx);
-        let Some(array) = core::Array::from_type_ref(ctx, ty) else {
+        let Some(array) = adt::Array::from_type_ref(ctx, ty) else {
             continue;
         };
         let [kind] = layout.field_kinds(ctx)[..] else {
@@ -152,7 +152,7 @@ pub(super) fn prepare(
             if let Some(array) = array {
                 let array_ty = ctx.value_ty(array);
                 let layout = ElementLayout::of(ctx, array_ty, type_converter)
-                    .expect("an array access reads a core.array operand");
+                    .expect("an array access reads an adt.array operand");
                 accesses.insert(op, layout);
             }
             let helper = if let Ok(new) = adt::ArrayNew::from_op(ctx, op) {
@@ -701,7 +701,7 @@ mod tests {
             r#"core.module @test {
   !Node = adt.struct<Node(value: core.i32)>
   !NodeRef = adt.typeref<{name = "Node"}>
-  !Nodes = core.array<!NodeRef>
+  !Nodes = adt.array<!NodeRef>
   func.func @build(%a: !NodeRef, %b: !NodeRef, %at: core.index) -> !Nodes {
     %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
     %filled = adt.array_new %at, %a {type = !Nodes} : !Nodes
@@ -724,7 +724,7 @@ mod tests {
     fn scalar_array_helpers_copy_without_retaining() {
         let lowered = lower(
             r#"core.module @test {
-  !Ints = core.array<core.i32>
+  !Ints = adt.array<core.i32>
   func.func @build(%value: core.i32, %count: core.index) -> !Ints {
     %filled = adt.array_new %count, %value {type = !Ints} : !Ints
     %zero = arith.const {value = 0} : core.index
@@ -750,7 +750,7 @@ mod tests {
     fn element_accesses_check_the_index_against_the_length() {
         let lowered = lower(
             r#"core.module @test {
-  !Ints = core.array<core.i32>
+  !Ints = adt.array<core.i32>
   func.func @access(%ints: !Ints, %at: core.index, %value: core.i32) -> core.i32 {
     adt.array_set %ints, %at, %value
     %read = adt.array_get %ints, %at : core.i32

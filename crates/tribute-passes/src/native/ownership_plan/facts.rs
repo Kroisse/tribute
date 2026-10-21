@@ -500,7 +500,7 @@ fn validate_projection_contract(
 ) -> Result<(), OwnershipPlanError> {
     let (layout, field_ty) = if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
         let array_ty = ctx.value_ty(get.r#ref(ctx));
-        let element = core::Array::from_type_ref(ctx, array_ty)
+        let element = tribute_ir::dialect::adt::Array::from_type_ref(ctx, array_ty)
             .ok_or_else(|| OwnershipPlanError::new("array_get reads a non-array value"))?
             .element(ctx);
         (array_ty, element)

@@ -8,9 +8,10 @@
 //! module-level declarations and erases them, so none reaches the
 //! backend-ready boundary.
 
+use crate::dialect::adt::Array;
 use std::fmt;
 use trunk_ir::attr_kind::Type;
-use trunk_ir::dialect::core::{Array, I32};
+use trunk_ir::dialect::core::I32;
 use trunk_ir::op_flag::Pure;
 
 use rustc_hash::FxHashMap as HashMap;
@@ -30,7 +31,7 @@ mod tribute_rtti {
     ///
     /// For an `adt.struct` layout, `tag` is absent and `fields` lists one
     /// kind per field. For an `adt.enum` layout, `tag` names the variant and
-    /// `fields` lists one kind per field of that variant. For a `core.array`,
+    /// `fields` lists one kind per field of that variant. For an `adt.array`,
     /// `tag` is absent and `fields` is the kind of its element.
     #[verify]
     fn layout(
@@ -377,7 +378,8 @@ mod tests {
   !int = tribute_rt.int
   !bytes = core.bytes
   !callable = closure.closure<func.func_sig<() -> core.nil>>
-  !array = core.array<core.i32>
+  !array = adt.array<core.i32>
+  !linear = core.array<core.i32>
 }"#,
         );
         let alias = |name| ctx.type_alias_by_text(name).expect("fixture alias");
@@ -390,10 +392,11 @@ mod tests {
             "small",
             "bytes",
             "callable",
+            "array",
         ] {
             assert!(ManagedRef::matches(&ctx, alias(name)), "{name}");
         }
-        for name in ["raw", "int", "array"] {
+        for name in ["raw", "int", "linear"] {
             assert!(!ManagedRef::matches(&ctx, alias(name)), "{name}");
         }
     }

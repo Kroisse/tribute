@@ -487,7 +487,7 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.index {
     %0 = clif.iconst {value = 42} : core.ptr
-    %1 = core.unrealized_conversion_cast %0 : core.array<core.i32>
+    %1 = core.unrealized_conversion_cast %0 : adt.array<core.i32>
     %2 = adt.array_len %1 : core.index
     func.return %2
   }

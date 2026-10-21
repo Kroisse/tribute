@@ -999,7 +999,7 @@ const SPLICE_ELEMENTS_OPERAND: usize = 3;
 
 /// The element type of the array type `array_ty`.
 fn array_element(ctx: &IrContext, array_ty: TypeRef) -> Result<TypeRef, OwnershipPlanError> {
-    core::Array::from_type_ref(ctx, array_ty)
+    tribute_ir::dialect::adt::Array::from_type_ref(ctx, array_ty)
         .map(|array| array.element(ctx))
         .ok_or_else(|| OwnershipPlanError::new("array operation has a non-array type"))
 }

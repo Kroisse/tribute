@@ -1382,7 +1382,7 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
-    const TYPES: &str = r#"  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+    const TYPES: &str = r#"  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>"#;
 
     fn module_text(body: &str) -> String {

@@ -64,7 +64,7 @@ impl DescriptorRecord {
         tag: Option<StringRef>,
         fields: Vec<FieldKind>,
     ) -> Self {
-        if trunk_ir::dialect::core::Array::matches(ctx, ty) {
+        if tribute_ir::dialect::adt::Array::matches(ctx, ty) {
             return Self {
                 kind: RecordKind::Array,
                 name: "Array".to_owned(),
@@ -342,7 +342,7 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Shorts = core.array<core.i16>
+  !Shorts = adt.array<core.i16>
 }"#,
         );
         let shorts = ctx.type_alias_by_text("Shorts").expect("Shorts alias");

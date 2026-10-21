@@ -43,7 +43,7 @@ fn extract_bytes_fields(
     bytes_value: ValueRef,
 ) -> (BytesFields, Vec<OpRef>) {
     let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-    let array_ref_ty = super::bytes::bytes_data_type(ctx);
+    let array_ref_ty = super::bytes::bytes_data_gc_type(ctx);
 
     let get_data = wasm_dialect::StructGet::operands(bytes_value)
         .type_idx(BYTES_STRUCT_IDX)
@@ -358,7 +358,7 @@ impl RewritePattern for BytesConcatPattern {
         let location = ctx.op(op).location;
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
-        let array_ref_ty = super::bytes::bytes_data_type(ctx);
+        let array_ref_ty = super::bytes::bytes_data_gc_type(ctx);
 
         // Extract fields from left and right Bytes structs
         let (left_fields, left_ops) = extract_bytes_fields(ctx, location, left);

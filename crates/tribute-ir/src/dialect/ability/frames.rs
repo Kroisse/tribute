@@ -406,7 +406,7 @@ mod tests {
     use trunk_ir::validation::validate_operation_verifiers;
 
     const TYPES: &str = r#"  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !ev = core.array<!marker, {layout = "evidence"}>
+  !ev = adt.array<!marker, {layout = "evidence"}>
   !frame_i32 = ability.frame<core.i32>
   !frame_nil = ability.frame<core.nil>
   !completion = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>

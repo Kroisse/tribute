@@ -24,14 +24,20 @@ pub const OFFSET_FIELD: u32 = 1;
 /// Field index of the length in the bytes struct.
 pub const LEN_FIELD: u32 = 2;
 
-/// The bytes backing array: `core.array<core.i8, {layout = "bytes_data"}>`.
+/// The bytes backing array: `adt.array<core.i8, {layout = "bytes_data"}>`.
 pub fn bytes_data_type(ctx: &mut IrContext) -> TypeRef {
     let i8_ty = TypeDataBuilder::new("core.i8").intern(ctx);
     let layout = ctx.string_attr(BYTES_DATA);
-    TypeDataBuilder::new("core.array")
+    TypeDataBuilder::new(<adt::Array as trunk_ir::ops::DialectType>::NAME)
         .param(i8_ty)
         .attr(LAYOUT_ATTR, layout)
         .intern(ctx)
+}
+
+/// The GC array type of [`bytes_data_type`] that Wasm operations use.
+pub fn bytes_data_gc_type(ctx: &mut IrContext) -> TypeRef {
+    let data_ty = bytes_data_type(ctx);
+    super::type_converter::gc_array_type(ctx, data_ty)
 }
 
 /// The bytes struct: backing array, start offset, and length, with
