@@ -38,7 +38,8 @@
 //!     │
 //!     ▼ eliminate_unreferenced_source_functions (artifact compiles only:
 //!     │   unreachable source-logical functions skip CPS legalization;
-//!     │   runtime functions stay)
+//!     │   runtime functions stay where a reachable perform, handle, or
+//!     │   evidence plan can make target lowering call them)
 //!     ▼ specialize_convention_classes, then
 //!     │   eliminate_unreferenced_source_functions again (artifact compiles only)
 //!     ▼ tribute_control_to_cps → lower_continuation_frames →

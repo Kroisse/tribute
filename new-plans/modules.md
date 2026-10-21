@@ -140,8 +140,12 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
 
 **생존 범위.** Runtime 함수 항목은 아직 아무도 부르지 않아도 그 항목을 쓰는
 lowering 단계가 끝날 때까지 dead function 제거의 root다. 그 단계 뒤에는 일반
-함수처럼 참조되지 않으면 제거된다. `tribute.types`의 runtime 타입 항목은 타입
-식별 metadata로 representation/ABI 경계 출구 뒤에도 남는다.
+함수처럼 참조되지 않으면 제거된다. 단, 그 호출을 만들 연산이 생길 수 없는
+module에서는 처음부터 root가 아니다. Evidence runtime 함수를 부르는 `effect`
+연산은 도달 가능한 `perform`, `handle`, `evidence_plan`에서만 생기므로, 이것이
+없는 module은 shared lowering 전에 evidence runtime 함수를 제거한다.
+`tribute.types`의 runtime 타입 항목은 타입 식별 metadata로 representation/ABI
+경계 출구 뒤에도 남는다.
 
 ---
 
