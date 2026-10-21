@@ -199,6 +199,35 @@ fn main() -> Nil {}
     );
 }
 
+/// A type's own visibility decides where it is visible, even when its
+/// companion module is less visible.
+#[salsa_test]
+fn a_hidden_companion_does_not_hide_its_type(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod api {
+    pub struct T { n: Nat }
+    mod T {
+        pub fn hidden(t: T) -> Nat { t.n }
+    }
+}
+
+use api::T
+
+fn read(t: api::T) -> T { t }
+
+fn main() -> Nil {
+    let _ = api::T::hidden(api::T { n: 1 })
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["`api::T::hidden` is not visible here: `api::T` is private"]
+    );
+}
+
 #[salsa_test]
 fn a_hidden_ability_is_hidden_in_annotations_and_handler_arms(db: &salsa::DatabaseImpl) {
     let errors = errors(

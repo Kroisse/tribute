@@ -243,9 +243,19 @@ impl<'db> Resolver<'db> {
     /// is visible within a module around that binding, so the narrowest one
     /// decides where it is visible.
     fn path_restriction(&self, path: &[Symbol]) -> Option<&Restriction> {
-        (1..=path.len())
+        // A path that names an item does not pass through the companion
+        // module of the item's name, whose visibility is its own.
+        let item = self
+            .lookup_path(path)
+            .filter(|binding| !matches!(binding, Binding::Module { .. }));
+        let modules = if item.is_some() {
+            path.len().saturating_sub(1)
+        } else {
+            path.len()
+        };
+        (1..=modules)
             .filter_map(|end| self.env.module_restriction(&path[..end]))
-            .chain(self.lookup_path(path).and_then(|b| self.env.restriction(b)))
+            .chain(item.and_then(|b| self.env.restriction(b)))
             .max_by_key(|restriction| {
                 restriction
                     .within
