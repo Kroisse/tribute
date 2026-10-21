@@ -49,25 +49,40 @@ Ability를 host ability로 표시하는 선언 문법은 아래 [미정 사항](
 `main`의 residual row가 프로그램의 host interface다. Host는 그 row에 있는 host
 ability의 operation을 모두 구현해야 한다.
 
-- **Wasm:** operation마다 module import 하나를 둔다. Import 이름은 ability의
-  qualified path와 operation 이름에서 정한다. Host가 import를 채우지 못하면
-  실행 중이 아니라 instantiation에서 실패한다.
-- **Native:** operation마다 extern symbol 하나를 둔다. Launcher나 embedder가 그
-  symbol을 제공하며, 빠진 symbol은 link에서 실패한다.
+경계 계약은 WebAssembly Component Model의 interface 언어인 WIT로 표현한다. Host
+ability 선언 하나가 WIT interface 하나가 되고, operation은 그 interface의 함수가 된다.
+Host ability의 의미는 이 문서가 정하고, WIT는 그 의미를 target에 실어 나르는 표현이다.
+경계를 넘을 수 있는 것은 WIT로 표현할 수 있는 것으로 한정한다.
+
+- **Wasm:** 프로그램을 component로 내보내고, host interface를 component의 import로
+  둔다. Host가 import를 채우지 못하면 실행 중이 아니라 instantiation에서 실패한다.
+- **Native:** 같은 WIT interface를 C ABI 위에서 쓴다. 값의 배치는 Component Model의
+  canonical ABI를 그대로 따르므로, 경계용으로 값을 펼치고 읽는 lowering을 두 타겟이
+  공유한다. Launcher나 embedder는 WIT에서 생성한 binding을 구현하며, 빠진 함수는
+  link에서 실패한다.
 
 Entrypoint는 root evidence에 host handler를 둔다. Host handler의 각 arm은 대응하는
-import나 extern을 호출한다. 그 사이에 Tribute handler가 없다고 증명된 호출은 evidence
-lookup 없이 import를 직접 호출해도 된다. 이 최적화는 dispatch 결과를 바꾸지 않는다.
+import를 호출한다. 그 사이에 Tribute handler가 없다고 증명된 호출은 evidence lookup
+없이 import를 직접 호출해도 된다. 이 최적화는 dispatch 결과를 바꾸지 않는다.
 
 ## 경계를 넘는 값
 
-Host operation의 parameter와 result는 경계 타입으로 제한한다.
+Host operation의 parameter와 result는 WIT 타입으로 옮길 수 있는 타입으로 제한한다.
 
-- `Bool`, `Float`, 정수(`Int`, `Nat`): 정수의 경계 표현은
-  [미정 사항](#미정-사항)에 둔다.
+- `Bool`, `Float`, 정수(`Int`, `Nat`): 임의 정밀도 정수와 WIT의 고정 폭 정수 사이의
+  변환은 [미정 사항](#미정-사항)에 둔다.
 - `Bytes`, `String`: 경계에서 복사한다. Host는 호출이 끝난 뒤 Tribute 쪽 object를
   참조하지 않고, Tribute도 host가 넘긴 버퍼를 호출 뒤에 참조하지 않는다.
-- 위 타입으로 만든 `Option`과 struct·enum은 경계에서 값으로 펼친다.
+- 위 타입으로 만든 `Option`, struct, enum은 WIT의 `option`, `record`, `variant`로
+  옮기고 경계에서 값으로 펼친다. 제네릭 타입은 경계에서 인스턴스마다 구체 타입이
+  되며, 인스턴스마다 WIT 타입 하나가 생긴다.
+- 실패는 operation의 결과 타입으로 돌려준다. 경계를 넘는 예외는 없다.
+
+다음은 경계를 넘지 못한다.
+
+- **재귀 타입.** WIT에는 재귀 타입이 없다. 트리 같은 재귀 데이터는 펼친 인코딩이나
+  host resource를 거쳐 넘긴다.
+- **함수와 closure.** WIT에는 함수 값이 없다.
 
 Managed 참조의 소유권은 경계를 넘지 않는다. 그래서 host는 Tribute의 reference
 counting이나 [비순환 object 그래프](rc.md#비순환-object-그래프) 계약에 참여하지 않는다.
@@ -83,17 +98,21 @@ ambient ability다. Host ability는 같은 생각을 사용자가 정의한 abil
 
 - **선언 문법.** Ability를 host ability로 표시하는 방법이다. 예를 들어 attribute,
   keyword, 또는 module 단위 표시가 있다.
-- **Import 이름 규칙.** Qualified path를 Wasm import의 module과 field 이름으로 나누는
-  방식과 native symbol mangling이다.
-- **정수의 경계 표현.** 임의 정밀도 정수를 고정 폭으로 넘길지, 범위를 넘는 값을
-  trap할지, 경계 타입으로 고정 폭 정수 타입을 따로 둘지 정해야 한다.
+- **WIT 생성 규칙.** Host ability와 그 module path에서 WIT package, interface, 함수
+  이름을 만드는 방식이다. 구체 타입이 된 제네릭 인스턴스의 WIT 타입 이름도 정해야
+  한다.
+- **정수의 경계 표현.** WIT 정수는 고정 폭이다. 임의 정밀도 정수를 어느 폭으로
+  넘길지, 범위를 넘는 값을 trap할지, 경계 전용 고정 폭 정수 타입을 따로 둘지 정해야
+  한다.
 - **Host가 잡는 resource.** 파일이나 소켓처럼 host가 소유한 object를 Tribute가
-  가리키는 불투명 handle 타입이다. 수명은 host가 관리하고, Tribute 쪽은 handle 값만
-  RC로 관리하는 방식을 검토한다.
-- **Callback.** Host가 Tribute 함수를 다시 부르는 경로다. 그 함수가 수행할 수 있는
-  effect와 경계 안에서의 재진입 규칙을 정해야 한다.
-- **비동기 host 호출.** Host가 promise로 답하는 operation이다. Wasm에서는 JS Promise
-  Integration처럼 host가 Wasm 실행 전체를 멈추는 장치로 구현할 수 있지만, 그 경우에도
-  operation은 Tribute 쪽에서 `fn`으로 보인다. 프로그램 중간의 handler로 제어를
-  옮기는 일반 effect를 대신하지는 않는다.
+  가리키는 불투명 handle 타입이다. WIT의 `resource`로 옮긴다. Tribute 쪽 handle은
+  RC로 관리하고, 마지막 참조가 사라지면 resource의 drop을 호출하는 방식을 검토한다.
+- **Callback.** Host가 Tribute 함수를 다시 부르는 경로다. WIT에 함수 값이 없으므로
+  Tribute가 export하는 resource로 감싼다. 그 함수가 수행할 수 있는 effect와 경계
+  안에서의 재진입 규칙을 정해야 한다.
+- **비동기 host 호출.** Host가 나중에 답하는 operation이다. Component Model의
+  stackless async lift는 export가 event loop로 돌아갔다가 이벤트마다 다시 불리는
+  구조다. CPS로 continuation을 heap에 두는 Tribute는 이 구조에 맞는다. Tribute 쪽
+  scheduler handler가 continuation을 보관하고, 완료 이벤트에서 재개하는 방식을
+  검토한다. Host operation 자체는 계속 `fn`이다.
 - **`Io`의 위치.** 위 [표준 입출력과의 관계](#표준-입출력과의-관계)를 참고한다.
