@@ -164,6 +164,9 @@ pub struct ModuleEnv<'db> {
     module_restrictions: HashMap<SymbolPath, Restriction>,
     /// The re-exports that inline modules declare.
     exports: Vec<Export>,
+    /// The `use`s of each inline module: the imported name and the path as
+    /// written.
+    module_uses: HashMap<(SymbolPath, Symbol), Vec<Symbol>>,
     /// The namespace entries re-exports add that are not public, by
     /// namespace and name. Such an entry is visible where its `use` makes
     /// it, not where its binding is.
@@ -337,6 +340,23 @@ impl<'db> ModuleEnv<'db> {
         self.exports.push(export);
     }
 
+    /// Record that the inline module `module` imports `path` as `name`.
+    pub fn add_module_use(&mut self, module: SymbolPath, name: Symbol, path: Vec<Symbol>) {
+        self.module_uses.entry((module, name)).or_insert(path);
+    }
+
+    /// The path, as written, the inline module `module` imports as `name`.
+    pub fn module_use(&self, module: &SymbolPath, name: &Symbol) -> Option<&[Symbol]> {
+        self.module_uses
+            .get(&(module.clone(), name.clone()))
+            .map(Vec::as_slice)
+    }
+
+    /// How many `use`s the inline modules declare.
+    pub fn module_use_count(&self) -> usize {
+        self.module_uses.len()
+    }
+
     /// Take the re-exports recorded so far.
     pub fn take_exports(&mut self) -> Vec<Export> {
         std::mem::take(&mut self.exports)
@@ -376,6 +396,12 @@ impl<'db> ModuleEnv<'db> {
                 .map(|(path, restriction)| (path.clone(), restriction.clone())),
         );
         self.exports.extend(other.exports.iter().cloned());
+        self.module_uses.extend(
+            other
+                .module_uses
+                .iter()
+                .map(|(key, path)| (key.clone(), path.clone())),
+        );
     }
 
     /// Add a qualified name to a namespace only if it doesn't already exist.

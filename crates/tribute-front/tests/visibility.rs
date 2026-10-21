@@ -324,6 +324,8 @@ pub mod facade {
     pub use super::source::P as Point
     pub use pkg::source::Tick
     pub(pkg) use pkg::source::f as internal
+    use pkg::source as origin
+    pub use origin::f as again
 }
 
 pub mod outer {
@@ -339,7 +341,7 @@ fn count() ->{facade::Tick} Nat { facade::Tick::tick() }
 fn read(p: facade::Point) -> Nat { p.n }
 
 fn main() -> Nil {
-    let _ = facade::f() + facade::internal() + read(Point { n: 1 }) + outer::hidden::f()
+    let _ = facade::f() + facade::internal() + facade::again() + read(Point { n: 1 }) + outer::hidden::f()
 }
 "#,
     );

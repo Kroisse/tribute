@@ -201,8 +201,9 @@ fn build_package_env<'db>(
 /// that declares it, until no more resolve; keep the others to try again
 /// after another environment is merged.
 ///
-/// A re-export's path starts with a path keyword, from the declaring module,
-/// or from a library namespace.
+/// A re-export's path starts with a path keyword, from an import of the
+/// declaring module, from the module itself, or from a library namespace.
+/// The resolver reports a `use` whose target names nothing.
 pub fn resolve_exports(env: &mut ModuleEnv<'_>, package_depth: usize) {
     let mut pending = env.take_exports();
     loop {
@@ -217,23 +218,44 @@ pub fn resolve_exports(env: &mut ModuleEnv<'_>, package_depth: usize) {
     }
 }
 
+/// The package-root paths a `use` of `path` in the inline module `module`
+/// may name, in order. A first segment the module imports continues only
+/// from what that import names; `hops` counts the imports followed.
+fn use_candidates(
+    env: &ModuleEnv<'_>,
+    package_depth: usize,
+    module: &SymbolPath,
+    path: &[Symbol],
+    hops: usize,
+) -> Vec<Vec<Symbol>> {
+    match path::absolute_path(package_depth, module, path) {
+        Ok(Some(target)) => return vec![target],
+        Err(_) => return Vec::new(),
+        Ok(None) => {}
+    }
+    let Some((first, rest)) = path.split_first() else {
+        return Vec::new();
+    };
+    if let Some(imported) = env.module_use(module, first) {
+        // A cycle of imports names nothing.
+        if hops > env.module_use_count() {
+            return Vec::new();
+        }
+        return use_candidates(env, package_depth, module, imported, hops + 1)
+            .into_iter()
+            .map(|target| target.into_iter().chain(rest.iter().cloned()).collect())
+            .collect();
+    }
+    let mut candidates = vec![module.iter().chain(path).cloned().collect()];
+    if let Some(library) = env.library_namespace(first) {
+        candidates.push(library.iter().chain(rest).cloned().collect());
+    }
+    candidates
+}
+
 /// Add `export` to its module's namespace if its target resolves.
 fn add_export(env: &mut ModuleEnv<'_>, package_depth: usize, export: &Export) -> bool {
-    let candidates: Vec<Vec<Symbol>> =
-        match path::absolute_path(package_depth, &export.module, &export.path) {
-            Ok(Some(target)) => vec![target],
-            Err(_) => return false,
-            Ok(None) => {
-                let mut candidates =
-                    vec![export.module.iter().chain(&export.path).cloned().collect()];
-                if let Some((first, rest)) = export.path.split_first()
-                    && let Some(library) = env.library_namespace(first)
-                {
-                    candidates.push(library.iter().chain(rest).cloned().collect());
-                }
-                candidates
-            }
-        };
+    let candidates = use_candidates(env, package_depth, &export.module, &export.path, 0);
     let Some((target, binding)) = candidates.into_iter().find_map(|target| {
         let (last, namespace) = target.split_last()?;
         let binding = if namespace.is_empty() {
@@ -566,6 +588,9 @@ fn collect_definition<'db>(
                     .unwrap_or_else(|| u.path.clone());
                 // An inline module's re-export joins its namespace; the
                 // package root's imports are already seen package-wide.
+                if !prefix.is_root() {
+                    env.add_module_use(prefix.clone(), import_name.clone(), u.path.clone());
+                }
                 if u.visibility != Visibility::Private && !prefix.is_root() {
                     let restriction =
                         scope.restriction(prefix, prefix.child(import_name.clone()), &u.visibility);
