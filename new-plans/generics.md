@@ -140,7 +140,8 @@ apply + [fn(Int) -> Bool]     → apply$6$0$Int$1$Bool
 swap + [(Int, Bool)]          → swap$7$0$Int$Bool$1
 ```
 
-CPS 전략이 row 변수의 class마다 만드는 인스턴스는 이 이름 뒤에 접미사를 붙인다
+CPS 전략이 row 변수의 class마다 만드는 인스턴스는, class가 모두 `Cps`이면 이
+이름을 그대로 쓰고 아니면 뒤에 접미사를 붙인다
 ([class 특수화 pass](cps-effects.md#class-특수화-pass)).
 
 ### 알고리즘
