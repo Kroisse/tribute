@@ -16,7 +16,27 @@ support claim.
 - **기존 언어와 친숙한 외관**: 정적 타입 함수형 언어지만, C/Rust/TypeScript 개발자에게 낯설지 않은 문법
 - **정적 타입 시스템**: 타입 추론 + ability 추론
 - **Algebraic Effects (Abilities)**: Unison 스타일의 ability 시스템
-- **다중 컴파일 타겟**: Cranelift (네이티브) + WasmGC
+- **다중 컴파일 타겟**: Wasm을 주된 산출물로 두고, Cranelift 네이티브 타겟을 함께 둔다
+  ([Target 전략](#target-전략))
+
+### 지향점
+
+Tribute는 도구와 AI가 코드를 쓰고 사람이 그 코드를 검토하는 상황을 주로 상정한다.
+이 상황에서 가장 중요한 질문은 "이 코드가 무엇을 건드리는가"이다. Tribute는 그 답을
+타입에 둔다.
+
+- **Ability row가 곧 권한이다.** 바깥 세계는 host가 handler를 공급하는
+  [host ability](host-abilities.md)로만 닿는다. 함수 시그니처의 ability row가 그 함수가
+  닿을 수 있는 host 기능을 보여 준다. 별도의 FFI는 두지 않는다.
+- **같은 경계로 여러 host에 들어간다.** 브라우저, plugin host, 단독 실행 launcher는
+  모두 Tribute module에 host ability를 공급하는 host다. Embedding과 단독 실행은 같은
+  모델의 두 경우다.
+- **적당히 쓰면 적당히 빠르다.** 최대 성능보다 예측 가능한 성능을 목표로 한다.
+  Effect가 없는 코드는 CPS를 거치지 않고, tail-resumptive operation은 continuation을
+  잡지 않는다.
+- **숨은 동작보다 명시를 택한다.** 코드를 쓰는 쪽에게 타이핑은 싸고, compiler가
+  무엇을 채웠는지 보이지 않는 것은 비싸다. 아래 Non-Goals의 typeclass 대신 명시적
+  함수 전달을 쓰는 것도 같은 이유다.
 
 ### Non-Goals
 
@@ -256,6 +276,27 @@ closure 저장소를 물리화한다. 구체적인 pass 순서와 검증 경계�
 [implementation.md](implementation.md)와 [cps-effects.md](cps-effects.md)를 따른다.
 
 ---
+
+## Target 전략
+
+[지향점](#지향점)에 따라 **Wasm module이 Tribute의 주된 산출물**이다. Wasm은 sandbox가
+기본이고 host가 import를 정의하므로, host ability 모델이 그대로 들어맞는다.
+
+- **Wasm 메모리 모델의 방향.** Wasm 타겟은 WasmGC에서 linear memory로 옮겨, native와
+  같은 reference counting을 쓰는 방향을 택한다. 그러면 ownership 계획을 structured IR
+  위에서 한 번만 세워 두 타겟이 공유하고, 두 타겟은 마지막 코드 생성에서만 갈라진다.
+  GC 지원 수준이 runtime마다 다른 WasmGC와 달리, linear memory module은 어느 Wasm
+  runtime에서나 같게 동작한다.
+- **Effect 전략은 두 타겟이 같다.** Stack switching이 없는 Wasm에서도 동작하도록
+  shared middle-end의 tail-call CPS를 쓴다. CPS 비용은 continuation을 실제로 잡는
+  `op` operation에만 든다.
+- **단독 실행 파일은 두 경로로 만들 수 있다.** Native 타겟으로 직접 컴파일하거나,
+  Wasm module을 runtime과 함께 미리 컴파일해 묶거나 C로 번역해 빌드한다. 어느 쪽이든
+  실행 파일은 host ability를 구현한 launcher와 Tribute module의 조합이다.
+- **Native 타겟의 역할.** Native 타겟은 개발, 테스트, 성능 측정의 기준이자 단독 실행
+  경로의 하나다. 유지할지는 linear memory Wasm이 갖춰진 뒤 세 경로(native 타겟, 미리
+  컴파일한 Wasm, C로 번역한 Wasm)의 실행 성능과 산출물 크기를 비교해 정한다. Wasm
+  경로가 충분히 가까우면 native 타겟 없이도 단독 실행은 유지된다.
 
 ## Target: WasmGC
 

@@ -10,6 +10,9 @@
 - 런타임 경계인 `Io`와 사용자가 처리할 수 있는 algebraic ability를 구분한다.
 - Native와 Wasm이 같은 source API와 target-independent I/O boundary를 사용한다.
 
+사용자가 정의한 ability로 host 기능을 여는 일반 모델은
+[host-abilities.md](host-abilities.md)가 정한다.
+
 표준 라이브러리는 별도의 `Console` ability를 제공하지 않는다. 테스트 가능한
 추상화가 필요한 프로그램은 `Logger`, `Terminal` 같은 application-specific
 ability를 정의하고 handler에서 `std::io` 함수를 호출할 수 있다.
