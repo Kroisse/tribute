@@ -93,8 +93,8 @@ module export와 virtual `Io` binding은 resolver의 동일한 `std::io` namespa
 ## Entrypoint
 
 `main`은 `Nil`을 반환해야 한다. 모든 residual effect는 오류이지만 builtin
-`std::io::Io`만 예외적으로 허용한다. 사용자가 정의한 host ability가 residual row에
-남는 규칙은 [host-abilities.md](host-abilities.md#host-ability)가 정한다.
+`std::io::Io`와 [host ability](host-abilities.md#host-ability)는 예외적으로
+허용한다.
 
 ```rust
 fn main() ->{Io} Nil {
@@ -105,7 +105,8 @@ fn main() ->{Io} Nil {
 Native와 Wasm entrypoint는 target에 맞는 initial evidence를 만들어
 `EvidenceDirect` main에 전달한다. 현재 representation에서는 empty evidence로
 충분하지만 이를 source-level ABI로 고정하지 않는다. 처리되지 않은 `Throw(Error)`나
-사용자 ability가 남아 있으면 frontend가 backend lowering 전에 거부한다.
+host ability가 아닌 사용자 ability가 남아 있으면 frontend가 backend lowering 전에
+거부한다.
 
 ## `read_line` Contract
 

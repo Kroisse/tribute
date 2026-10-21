@@ -286,12 +286,12 @@ closure 저장소를 물리화한다. 구체적인 pass 순서와 검증 경계�
 - **Wasm 메모리 모델의 방향.** Wasm 타겟은 WasmGC에서 linear memory로 옮겨, native와
   같은 reference counting을 쓰는 방향을 택한다. 그러면 ownership 계획을 structured IR
   위에서 한 번만 세워 두 타겟이 공유하고, 두 타겟은 마지막 코드 생성에서만 갈라진다.
-  GC 지원 수준이 runtime마다 다른 WasmGC와 달리, linear memory module은 어느 Wasm
-  runtime에서나 같게 동작한다.
+  Linear memory module은 WasmGC 지원에 기대지 않으므로, module이 요구하는 Wasm 기능과
+  host import를 갖춘 runtime이면 GC 지원 수준과 상관없이 같게 동작한다.
 - **Effect 전략은 두 타겟이 같다.** Stack switching이 없는 Wasm에서도 동작하도록
   shared middle-end의 tail-call CPS를 쓴다. CPS 비용은 continuation을 실제로 잡는
   `op` operation에만 든다.
-- **단독 실행 파일은 두 경로로 만들 수 있다.** Native 타겟으로 직접 컴파일하거나,
+- **단독 실행 파일은 세 경로로 만들 수 있다.** Native 타겟으로 직접 컴파일하거나,
   Wasm module을 runtime과 함께 미리 컴파일해 묶거나 C로 번역해 빌드한다. 어느 쪽이든
   실행 파일은 host ability를 구현한 launcher와 Tribute module의 조합이다.
 - **Native 타겟의 역할.** Native 타겟은 개발, 테스트, 성능 측정의 기준이자 단독 실행
