@@ -472,8 +472,9 @@ impl<'db> Resolver<'db> {
     /// name, ranked by how its first segment comes into scope: `a::b` as the
     /// call's scope resolves it, unless `a` is a prelude name, then
     /// `m::a::b` for each name `m` in that scope, then `a::b` and `p::a::b`
-    /// through the prelude names `p`. A declaration's name counts as the
-    /// module that shares it.
+    /// through the prelude names `p`. A path that starts with a keyword or a
+    /// dependency package names its one function only. A declaration's name
+    /// counts as the module that shares it.
     fn method_candidates(&self, path: &UnresolvedName) -> MethodCandidates<'db> {
         let mut direct: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
         match self.qualified_entry(path) {
@@ -495,11 +496,15 @@ impl<'db> Resolver<'db> {
                 return MethodCandidates::Unresolved;
             }
         }
-        let functions = Candidates::new(
-            direct,
-            self.scope_namespace_functions(path),
-            self.library_method_functions(&path.path),
-        );
+        let functions = if self.names_one_path(path) {
+            Candidates::new(direct, Vec::new(), Vec::new())
+        } else {
+            Candidates::new(
+                direct,
+                self.scope_namespace_functions(path),
+                self.library_method_functions(&path.path),
+            )
+        };
         let Some(functions) = self.visible_functions(functions, path.id, path) else {
             return MethodCandidates::Unresolved;
         };
@@ -521,6 +526,20 @@ impl<'db> Resolver<'db> {
             let nested: Vec<Symbol> = self.module_path.iter().chain([first]).cloned().collect();
             !self.env.has_namespace(&nested) && !self.defined_in_module(first)
         }
+    }
+
+    /// Whether a qualified `path` starts with a path keyword or a dependency
+    /// package the scope does not shadow, and so names one path only.
+    fn names_one_path(&self, path: &UnresolvedName) -> bool {
+        let Some(first) = path.path.first() else {
+            return false;
+        };
+        matches!(
+            absolute_path(self.package_depth, &self.module_path, &path.path),
+            Ok(Some(_))
+        ) || (self.env.is_library_root(first)
+            && self.module_import(first).is_none()
+            && self.lookup_direct(first).is_none())
     }
 
     /// The functions `m::path` names for each name `m` in the scope.

@@ -169,3 +169,40 @@ fn unknown() -> Nil {{
     let errors = ast_pipeline_error_messages(db, source);
     assert!(errors.is_empty(), "{errors:#?}");
 }
+
+/// A path that starts with a dependency package names its one function: a
+/// same path through a module name in scope is no candidate, even when only
+/// it fits the receiver.
+#[salsa_test]
+fn dependency_path_names_one_function(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "dependency_path.trb",
+        r#"
+mod tools {
+    pub mod std {
+        pub mod String {
+            pub fn len(x: Int) -> Nat { 1 }
+        }
+    }
+}
+use tools
+
+fn test(n: Int) -> Nat {
+    n.std::String::len()
+}
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, source, "test"),
+        selected(&["std::String::len"])
+    );
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `std::String`, found `Int`")),
+        "{errors:#?}"
+    );
+}
