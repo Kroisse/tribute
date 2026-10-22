@@ -460,7 +460,8 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
         &mut ctx,
         r#"core.module @test {
   !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
-  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
+  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -519,7 +520,8 @@ fn native_evidence_lowers_a_managed_dispatcher_to_into_raw() {
         &mut ctx,
         r#"core.module @test {
   !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
-  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
+  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> core.nil {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -2597,7 +2599,8 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
 fn evidence_is_a_managed_reference_the_runtime_returns_owned() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
+  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   func.func @__tribute_evidence_mask(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
   func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @derive(%ev: !Evidence, %id: core.i32) -> core.i32 {
@@ -3363,7 +3366,8 @@ const ARRAYS: &str = r#"core.module @test {
   !NodeRef = adt.typeref<{name = "Node"}>
   !Nodes = adt.array<!NodeRef>
   !Ints = adt.array<core.i32>
-  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
+  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   func.func @pair(%a: !NodeRef, %b: !NodeRef) -> !Nodes {
     %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
     func.return %pair

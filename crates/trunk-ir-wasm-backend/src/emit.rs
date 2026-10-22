@@ -1251,6 +1251,34 @@ mod tests {
     }
 
     #[test]
+    fn arrayref_struct_field_holds_and_recovers_a_concrete_array() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Items = wasm_gc.array<core.i32>
+  !Holder = wasm_gc.struct<wasm.arrayref>
+
+  wasm.func @main() -> core.i32 {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %items = wasm_gc.array_new_default %zero {type = !Items} : !Items
+    %holder = wasm_gc.struct_new %items {type = !Holder} : !Holder
+    %field = wasm_gc.struct_get %holder {type = !Holder, field_idx = 0} : !Items
+    %len = wasm.array_len %field : core.i32
+    wasm.return %len
+  }
+}"#,
+        );
+        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("an arrayref field must accept and recover a concrete array")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("the read must cast the arrayref field to the concrete array");
+    }
+
+    #[test]
     fn struct_supertypes_come_only_from_the_declared_attribute() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(

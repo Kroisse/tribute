@@ -49,8 +49,7 @@ use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 /// The closure base: `{ code: i32 }`. Every closure value has this storage
 /// type, and a capture-free closure is allocated with it.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-    closure_base_layout(ctx, i32_ty)
+    runtime_layout::closure_base(ctx)
 }
 
 /// The closure layout holding `captures` after the base's code field, with
@@ -62,12 +61,7 @@ pub fn closure_captures_type_ref(ctx: &mut IrContext, captures: &[TypeRef]) -> T
 
 /// The closure base whose code field has the representation `code`.
 pub(crate) fn closure_base_layout(ctx: &mut IrContext, code: TypeRef) -> TypeRef {
-    let mut attrs = AttributeMap::new();
-    let layout = ctx.string_attr(runtime_layout::CLOSURE);
-    attrs
-        .view_mut(ctx)
-        .insert(runtime_layout::LAYOUT_ATTR, layout);
-    adt::Struct::from_fields(ctx, "_closure", [("code", code)], attrs).as_type_ref()
+    runtime_layout::closure_base_layout(ctx, code)
 }
 
 /// The closure layout of `base` holding `captures` after the base's fields.
@@ -963,7 +957,7 @@ mod tests {
     }
 
     fn evidence_type_str() -> &'static str {
-        "adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
+        "adt.array<adt.typeref<{name = \"std::runtime::evidence::Marker\"}>>"
     }
 
     fn closure_test_module(ctx: &mut IrContext) -> Module {

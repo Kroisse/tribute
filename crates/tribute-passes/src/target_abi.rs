@@ -1890,7 +1890,7 @@ mod tests {
             &format!(
                 r#"core.module @test {{
             !Answer = core.{answer_name}
-            !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>, {{layout = "evidence"}}>
+            !Evidence = adt.array<adt.typeref<{{name = "std::runtime::evidence::Marker"}}>>
             !Frame = adt.typeref<{{name = "{frame_name}", tribute.cps_continuation_frame_result = !Answer}}>
             !Done = closure.closure<func.func_sig<(!Answer) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
@@ -1898,6 +1898,9 @@ mod tests {
             !{frame_name} = adt.struct<{frame_name}(done: !Done, dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = 2}} {{
                 effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability = @State, op_name = "get", answer_type = !Answer}}
+            }}
+            func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {{
+                func.return %id
             }}
         }}"#
             ),
@@ -1914,11 +1917,14 @@ mod tests {
         let (mut ctx, module, _) = dispatch_fixture("i32", "frame");
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
-        crate::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(&mut ctx, module);
+        let runtime =
+            crate::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(&ctx, module).unwrap();
         for op in module.ops_snapshot(&ctx) {
             if let Ok(function) = func::Func::from_op(&ctx, op) {
-                crate::wasm::evidence_to_wasm::lower_evidence_to_wasm_func(&mut ctx, function)
-                    .unwrap();
+                crate::wasm::evidence_to_wasm::lower_evidence_to_wasm_func(
+                    &mut ctx, function, &runtime,
+                )
+                .unwrap();
             }
         }
         crate::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
@@ -2037,7 +2043,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+            !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
             !direct_closure = closure.closure<func.func_sig<() -> ()>, {tribute.calling_convention = 0}>
             !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>, {tribute.calling_convention = 1}>
             func.func @direct() attributes {tribute.calling_convention = 0} { func.return }
@@ -2409,7 +2415,7 @@ mod tests {
     }
 
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
-  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = 1} {
     %nil = core.nil_value : core.nil
     func.return %nil

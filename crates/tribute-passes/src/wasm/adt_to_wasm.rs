@@ -513,7 +513,8 @@ impl RewritePattern for ArrayNewPattern {
         let loc = ctx.op(op).location;
         let length = wasm_index(ctx, rewriter, array_new.length(ctx), loc);
         let array_ty = gc_array_type(ctx, array_new.r#type(ctx));
-        let new_op = wasm_gc_dialect::ArrayNew::operands(length, array_new.initial(ctx))
+        let initial = gc_element_operand(ctx, rewriter, array_ty, array_new.initial(ctx), loc);
+        let new_op = wasm_gc_dialect::ArrayNew::operands(length, initial)
             .r#type(array_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -536,8 +537,11 @@ impl RewritePattern for ArrayOfPattern {
         };
 
         let loc = ctx.op(op).location;
-        let elements = array_of.elements(ctx).to_vec();
         let array_ty = gc_array_type(ctx, array_of.r#type(ctx));
+        let mut elements = array_of.elements(ctx).to_vec();
+        for element in &mut elements {
+            *element = gc_element_operand(ctx, rewriter, array_ty, *element, loc);
+        }
         let new_op = wasm_gc_dialect::ArrayNewFixed::operands(elements)
             .r#type(array_ty)
             .build(ctx, loc);
@@ -568,8 +572,11 @@ impl RewritePattern for ArraySplicePattern {
 
         let loc = ctx.op(op).location;
         let array_ty = gc_array_type(ctx, splice.r#type(ctx));
-        let source = splice.source(ctx);
-        let elements = splice.elements(ctx).to_vec();
+        let source = gc_array_operand(ctx, rewriter, splice.source(ctx), loc);
+        let mut elements = splice.elements(ctx).to_vec();
+        for element in &mut elements {
+            *element = gc_element_operand(ctx, rewriter, array_ty, *element, loc);
+        }
         let start = wasm_index(ctx, rewriter, splice.start(ctx), loc);
         let end = wasm_index(ctx, rewriter, splice.end(ctx), loc);
         let i32_ty = core::I32::type_ref(ctx);
@@ -754,7 +761,7 @@ impl RewritePattern for ArrayGetPattern {
         };
 
         let loc = ctx.op(op).location;
-        let ref_val = array_get.r#ref(ctx);
+        let ref_val = gc_array_operand(ctx, rewriter, array_get.r#ref(ctx), loc);
         let index = wasm_index(ctx, rewriter, array_get.index(ctx), loc);
 
         let array_ty = gc_array_type(ctx, ctx.value_ty(ref_val));
@@ -769,6 +776,51 @@ impl RewritePattern for ArrayGetPattern {
 fn has_packed_elements(ctx: &IrContext, array_ty: TypeRef) -> bool {
     trunk_ir::dialect::wasm_gc::Array::from_type_ref(ctx, array_ty)
         .is_some_and(|array| matches!(IntegerLike::width(ctx, array.element(ctx)), Some(8 | 16)))
+}
+
+/// `array` as its GC array type. A value still of its `adt.array` type, such
+/// as a parameter that signature conversion cast back for this operation, is
+/// cast to the GC array; cast reconciliation folds the round trip.
+fn gc_array_operand(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    array: ValueRef,
+    loc: trunk_ir::types::Location,
+) -> ValueRef {
+    let ty = ctx.value_ty(array);
+    if !adt::Array::matches(ctx, ty) {
+        return array;
+    }
+    let gc_ty = gc_array_type(ctx, ty);
+    let cast = core::UnrealizedConversionCast::operands(array)
+        .results(gc_ty)
+        .build(ctx, loc);
+    rewriter.insert_op(cast.op_ref());
+    cast.result(ctx)
+}
+
+/// `element` as the element type of the GC array `array_ty`. An element of
+/// another type, such as a marker stored into evidence's `structref`
+/// elements, is cast to it; the cast is an upcast once the element converts.
+fn gc_element_operand(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    array_ty: TypeRef,
+    element: ValueRef,
+    loc: trunk_ir::types::Location,
+) -> ValueRef {
+    let Some(array) = trunk_ir::dialect::wasm_gc::Array::from_type_ref(ctx, array_ty) else {
+        return element;
+    };
+    let element_ty = array.element(ctx);
+    if ctx.value_ty(element) == element_ty {
+        return element;
+    }
+    let cast = core::UnrealizedConversionCast::operands(element)
+        .results(element_ty)
+        .build(ctx, loc);
+    rewriter.insert_op(cast.op_ref());
+    cast.result(ctx)
 }
 
 /// Pattern for `adt.array_set` -> `wasm.array_set`
@@ -786,11 +838,10 @@ impl RewritePattern for ArraySetPattern {
         };
 
         let loc = ctx.op(op).location;
-        let ref_val = array_set.r#ref(ctx);
+        let ref_val = gc_array_operand(ctx, rewriter, array_set.r#ref(ctx), loc);
         let index = wasm_index(ctx, rewriter, array_set.index(ctx), loc);
-        let value = array_set.value(ctx);
-
         let array_ty = gc_array_type(ctx, ctx.value_ty(ref_val));
+        let value = gc_element_operand(ctx, rewriter, array_ty, array_set.value(ctx), loc);
         let new_op = wasm_gc_dialect::ArraySet::operands(ref_val, index, value)
             .r#type(array_ty)
             .build(ctx, loc);
@@ -814,7 +865,7 @@ impl RewritePattern for ArrayLenPattern {
         };
 
         let loc = ctx.op(op).location;
-        let ref_val = array_len.r#ref(ctx);
+        let ref_val = gc_array_operand(ctx, rewriter, array_len.r#ref(ctx), loc);
         let result_ty = array_len.result_ty(ctx);
 
         let len = wasm_dialect::ArrayLen::operands(ref_val).build(ctx, loc);
@@ -980,6 +1031,7 @@ mod tests {
             [
                 "core.unrealized_conversion_cast",
                 "core.unrealized_conversion_cast",
+                "core.unrealized_conversion_cast",
                 "wasm.array_len",
                 "wasm.i32_gt_u",
                 "wasm.i32_gt_u",
@@ -999,18 +1051,21 @@ mod tests {
                 "wasm.return",
             ]
         );
-        let fresh = wasm_gc_dialect::ArrayNew::from_op(&ctx, ops[11]).unwrap();
+        let fresh = wasm_gc_dialect::ArrayNew::from_op(&ctx, ops[12]).unwrap();
         assert_eq!(returned, fresh.result(&ctx));
         let block_arg = |index| {
             let func_block = ctx.op(ops[0]).parent_block.unwrap();
             ctx.block_arg(func_block, index)
         };
         assert_eq!(fresh.init(&ctx), block_arg(3));
-        let store = wasm_gc_dialect::ArraySet::from_op(&ctx, ops[16]).unwrap();
+        let store = wasm_gc_dialect::ArraySet::from_op(&ctx, ops[17]).unwrap();
         assert_eq!(store.value(&ctx), block_arg(4));
-        let tail = wasm_gc_dialect::ArrayCopy::from_op(&ctx, ops[17]).unwrap();
-        assert_eq!(tail.src(&ctx), block_arg(0));
-        assert_eq!(tail.dst_offset(&ctx), ctx.op_result(ops[9], 0));
+        // The source, still of its `adt.array` type here, is cast to its GC
+        // array.
+        let tail = wasm_gc_dialect::ArrayCopy::from_op(&ctx, ops[18]).unwrap();
+        assert_eq!(ctx.op_operands(ops[0])[0], block_arg(0));
+        assert_eq!(tail.src(&ctx), ctx.op_result(ops[0], 0));
+        assert_eq!(tail.dst_offset(&ctx), ctx.op_result(ops[10], 0));
     }
 
     #[test]

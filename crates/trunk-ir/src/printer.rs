@@ -468,7 +468,9 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
             self.state.assign_block_label(block);
         }
 
-        let is_single_block = blocks.len() == 1;
+        // An empty block keeps its label, or the region would read back
+        // without a block.
+        let is_single_block = blocks.len() == 1 && !ctx.block(blocks[0]).ops.is_empty();
 
         for (i, &block) in blocks.iter().enumerate() {
             if i == 0 && is_single_block {
@@ -1007,7 +1009,11 @@ fn print_region(
         state.assign_block_label(block);
     }
 
-    let can_elide_label = blocks.len() == 1 && state.ctx.block_args(blocks[0]).is_empty();
+    // An empty block keeps its label, or the region would read back without
+    // a block.
+    let can_elide_label = blocks.len() == 1
+        && state.ctx.block_args(blocks[0]).is_empty()
+        && !ctx.block(blocks[0]).ops.is_empty();
 
     for (i, &block) in blocks.iter().enumerate() {
         if !can_elide_label {
@@ -1938,6 +1944,40 @@ core.module @test {
         let root = crate::parser::parse_module(&mut ctx, input).expect("parse failed");
         let output = print_module(&ctx, root);
         insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn an_empty_block_survives_a_round_trip() {
+        let input = r#"core.module @m {
+  test.op {
+  ^bb0:
+  } {
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let root = crate::parser::parse_module(&mut ctx, input).expect("parse failed");
+        let op = ctx
+            .block(ctx.region(ctx.op_region(root, 0).unwrap()).blocks[0])
+            .ops[0];
+        let counts = |ctx: &IrContext| {
+            ctx.op_regions(op)
+                .map(|region| ctx.region(region).blocks.len())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(counts(&ctx), [1, 0]);
+
+        let printed = print_module(&ctx, root);
+        let mut reparsed = IrContext::new();
+        let root = crate::parser::parse_module(&mut reparsed, &printed).expect("parse failed");
+        let op = reparsed
+            .block(reparsed.region(reparsed.op_region(root, 0).unwrap()).blocks[0])
+            .ops[0];
+        let regions: Vec<_> = reparsed
+            .op_regions(op)
+            .map(|region| reparsed.region(region).blocks.len())
+            .collect();
+        assert_eq!(regions, [1, 0], "{printed}");
     }
 
     #[test]

@@ -150,6 +150,39 @@ fn source_dce_keeps_runtime_functions() {
 }
 
 #[test]
+fn source_dce_keeps_the_evidence_runtime_only_where_effects_lower_to_it() {
+    const HANDLED: &str = r#"
+ability Ask {
+    fn ask() -> Nat
+}
+
+fn use_ask() ->{Ask} Nat {
+    Ask::ask()
+}
+
+fn main() -> Nil {
+    let _ = handle use_ask() {
+        do result { result }
+        fn Ask::ask() { 42 }
+    }
+}
+"#;
+    for (program, kept) in [(PROGRAM, false), (HANDLED, true)] {
+        let db = salsa::DatabaseImpl::default();
+        let (ctx, m) = salsa::Database::attach(&db, |db| {
+            let frontend = compile_frontend_for_shared_route(db, source(db, program))
+                .expect("frontend output");
+            run_shared_middle_end(frontend).expect("shared middle-end")
+        });
+        assert_eq!(
+            definition(&ctx, m, tribute_ir::runtime_items::evidence::LOOKUP).is_some(),
+            kept,
+            "{program}"
+        );
+    }
+}
+
+#[test]
 fn unused_runtime_functions_do_not_reach_the_boundary_exit() {
     for target in [TargetKind::Native, TargetKind::Wasm] {
         let db = salsa::DatabaseImpl::default();

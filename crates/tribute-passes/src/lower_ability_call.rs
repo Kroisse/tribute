@@ -197,7 +197,7 @@ mod tests {
 
     /// Build the canonical evidence type string for use in test IR.
     fn evidence_type_str() -> &'static str {
-        "adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
+        "adt.array<adt.typeref<{name = \"std::runtime::evidence::Marker\"}>>"
     }
 
     #[test]

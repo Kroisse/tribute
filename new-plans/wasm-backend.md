@@ -102,7 +102,9 @@ signature의 proper-tail `func.tail_call_indirect`를 만든다. 이 lowering은
 operation을 만들지 않고 `tribute.calling_convention`을 읽거나 쓰지 않는다.
 
 Runtime 항목은 다른 source 함수처럼 compile되며, marker와 evidence는 일반 GC
-struct와 배열이다. Marker 생성과 field 접근은 runtime 항목 안에만 있다. Wasm
+struct와 배열이다. 재귀 marker 타입을 위한 저장 형식은
+[WasmGC evidence](cps-effects.md#wasmgc)를 따른다. Marker 생성과 field 접근은
+runtime 항목 안에만 있다. Wasm
 dialect lowering은 `effect.*`를 보지 않는다.
 
 ### Wasm 결과 슬롯

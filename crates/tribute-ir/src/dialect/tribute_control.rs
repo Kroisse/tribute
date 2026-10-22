@@ -5766,6 +5766,27 @@ mod tests {
     }
 
     #[test]
+    fn a_handle_without_handler_clauses_survives_a_round_trip() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    ^handlers:
+  }
+}"#,
+        );
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let (reparsed, module) = parse_fixture(&printed);
+        let result = validate_local(&reparsed, module);
+        assert!(result.is_ok(), "{result}\n{printed}");
+    }
+
+    #[test]
     fn validator_rejects_handlers_table_block_arguments() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {

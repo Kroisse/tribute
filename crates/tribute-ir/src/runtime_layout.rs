@@ -35,6 +35,21 @@ pub const BOXED_F64: &str = "boxed_f64";
 /// its subtypes.
 pub const DESCRIBED: &str = "described";
 
+/// The closure base whose code field has the representation `code`.
+pub fn closure_base_layout(ctx: &mut IrContext, code: TypeRef) -> TypeRef {
+    let mut attrs = trunk_ir::types::AttributeMap::new();
+    let layout = ctx.string_attr(CLOSURE);
+    attrs.view_mut(ctx).insert(LAYOUT_ATTR, layout);
+    crate::dialect::adt::Struct::from_fields(ctx, "_closure", [("code", code)], attrs).as_type_ref()
+}
+
+/// The closure base of the source-logical and target-neutral IR, whose code
+/// field is a function table index.
+pub fn closure_base(ctx: &mut IrContext) -> TypeRef {
+    let code = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(ctx);
+    closure_base_layout(ctx, code)
+}
+
 /// Whether `ty` carries the runtime layout identifier `layout`.
 pub fn has_runtime_layout(ctx: &IrContext, ty: TypeRef, layout: &str) -> bool {
     ctx.type_attrs(ty).get_str(LAYOUT_ATTR) == Some(layout)
