@@ -20,6 +20,7 @@ mod e2e_float;
 mod e2e_int_text;
 mod e2e_local_callables;
 mod e2e_native;
+mod e2e_records;
 mod evidence_lambda;
 mod evidence_plan_ir;
 mod frontend_instances;

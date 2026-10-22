@@ -353,7 +353,8 @@ fn lower_field_initializer(
     node: Node,
 ) -> Option<FieldInit<UnresolvedName>> {
     let name_node = node.child_by_field_name("name")?;
-    let value_node = node.child_by_field_name("value")?;
+    // Shorthand `Name { field }` reads the variable named `field`.
+    let value_node = node.child_by_field_name("value").unwrap_or(name_node);
 
     let name = ctx.node_symbol(&name_node);
     let id = ctx.fresh_id_with_span(&name_node);
