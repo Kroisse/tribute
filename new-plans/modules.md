@@ -36,8 +36,13 @@ Gleam도 glob import를 지원하지 않으며, Rust/Haskell 커뮤니티에서�
 파일 기반 module tree가 구성되기 전에도 compiler-owned binding은 resolver namespace에
 virtual export로 주입할 수 있다. 현재 `std::io::Io`와 runtime 전용 타입
 `std::runtime::Slots`가 이 경로를 사용한다. 사용자에게는
-`use std::io::Io`로 보이지만 사용자 AST나 prelude AST에 synthetic declaration을
-추가하지 않으며, semantic identity는 source declaration과 구분된다.
+`use std::io::Io`로 보이지만 사용자 AST나 표준 라이브러리 AST에 synthetic
+declaration을 추가하지 않으며, semantic identity는 source declaration과 구분된다.
+Virtual export는 그 binding을 내보내는 패키지(`std`)의 이름공간에 속하며, 일반
+항목과 같은 [가시성](#가시성-visibility) 규칙을 따른다. 다른 패키지는 `pub`인 virtual
+export(`std::io::Io`)만 [의존 패키지](#prelude와-패키지-std) 경로나 prelude 짧은
+이름으로 본다. `std::runtime`의 virtual export(`Slots(a)`, `Dispatch`)는 그 모듈이
+`pub(pkg)`이므로 패키지 `std` 밖에서 보이지 않는다.
 
 이 경로는 일반 standard-library module loading을 대신하지 않는다. Source로 구현할 수
 있는 표준 타입과 함수는 장기적으로 file-based module system을 사용한다. 다만 source
@@ -54,39 +59,72 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
 
 ### Prelude와 패키지 `std`
 
-prelude는 패키지 `std`의 루트 모듈이다. 선언의 식별자는 그 선언이 속한 패키지와
-모듈 경로다. 그래서 prelude 선언의 식별자와 IR symbol은 `std::Option`,
-`std::Option::map`, `std::Int::+`처럼 `std`로 시작하고, 사용자 패키지의 같은 경로
-선언과 섞이지 않는다. prelude 안에서 `pkg`는 `std`를 가리킨다.
+**패키지의 루트.** 각 패키지는 자기 루트 모듈에서 해석한다. 모듈 경로는 그 패키지의
+루트를 기준으로 하며, `pkg`는 언제나 경로가 쓰인 패키지의 루트다. 패키지 `std`의 루트
+모듈은 표준 라이브러리 source이고, 그 안에서 `pkg`는 `std`의 루트를 가리킨다. 패키지
+루트의 이름 범위와 경로 규칙은 모든 패키지에 같다.
 
-선언의 식별자는 텍스트 하나가 아니라 component의 path다. 둘러싼 모듈의 이름들이
-바깥쪽부터 차례로 오고 선언의 이름이 마지막에 온다. `std::Int::+`는 component
-`std`, `Int`, `+`의 path다. Component가 없는 path는 루트 모듈을 가리킨다.
-한정된 참조는 표기한 텍스트를 `::`로 다시 나누지 않고 component 단위로 해석하며,
-component 하나의 이름에 `::`가 들어 있어도 그 이름은 component 하나다.
+**선언의 식별자.** 선언의 식별자는 그 선언이 속한 패키지와 모듈 경로다. 식별 경로는
+이 둘로부터 한 곳에서 만든다. 식별자는 텍스트 하나가 아니라 component의 path다.
+둘러싼 모듈의 이름들이 바깥쪽부터 차례로 오고 선언의 이름이 마지막에 온다.
+`std::Int::+`는 component `std`, `Int`, `+`의 path다. Component가 없는 path는 루트
+모듈을 가리킨다. 한정된 참조는 표기한 텍스트를 `::`로 다시 나누지 않고 component
+단위로 해석하며, component 하나의 이름에 `::`가 들어 있어도 그 이름은 component
+하나다.
 
-컴파일하는 패키지(사용자 패키지)의 식별 경로와 IR symbol은 자기 패키지 component를
-생략하고 모듈 경로로 시작한다(`main`, `geometry::area`). 생략한 경로의 첫
-component가 의존하는 패키지의 이름이면 생략하지 않고 `pkg`로 시작한다. 그래서 사용자
-패키지의 `mod std { pub fn f() … }`의 `f`는 `pkg::std::f`이고, 패키지 `std`의
-선언과 식별자나 symbol을 공유하지 않는다. `pkg`는 경로 키워드이므로 어떤 모듈의
-이름도 될 수 없어 이 경로는 다른 선언과 겹치지 않는다. 패키지를 별도 build 단위로
-다루기 전까지 이것이 식별 경로 규칙이다. 소스에서 이 모듈은 여전히 `std::f`나
-`pkg::std::f`로 쓰며, 사용자의 `std` 선언이 패키지 `std`를 가린다.
+식별 경로와 IR symbol의 철자는 다음과 같다.
 
-모든 모듈은 prelude 루트 항목을 짧은 이름으로 본다. 값과 타입(`Option`, `Some`,
-`String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
-(`Option::map`, `Int::to_string`, `abilities::Throw`). 사용자 선언이 같은 이름을 가지면
-그 선언이 우선하고, prelude 항목은 `std::Option`처럼 패키지 경로로 가리킨다. UFCS도
-스코프의 이름으로 후보를 찾으므로, 가려진 prelude 타입의 method는
-`x.std::Option::map(f)`처럼 경로로 부른다.
+- 의존 패키지의 선언은 패키지 이름으로 시작한다. 패키지 `std`의 선언은
+  `std::Option`, `std::Option::map`, `std::Int::+`다.
+- 컴파일하는 패키지의 선언은 자기 패키지 component를 생략하고 모듈 경로로
+  시작한다(`main`, `geometry::area`). 이 생략은 컴파일하는 패키지에만 적용한다.
+  패키지 `std`는 언제나 의존 패키지로 해석하므로, `std` 선언의 식별 경로와 IR
+  symbol, runtime 항목 경로, `tribute.types` key는 언제나 `std::…`다.
+- 생략한 경로의 첫 component가 의존 패키지의 이름이면 생략하지 않고 `pkg`로
+  시작한다. 사용자 패키지의 `mod std { pub fn f() … }`의 `f`는 `pkg::std::f`이고,
+  패키지 `std`의 선언과 식별자나 symbol을 공유하지 않는다. `pkg`는 경로 키워드이므로
+  어떤 모듈의 이름도 될 수 없어 이 경로는 다른 선언과 겹치지 않는다.
 
-진단은 타입을 식별 경로로 표시한다. prelude 타입은 `std::Option(Int)`처럼 보인다.
+**의존 패키지.** 패키지는 의존하는 패키지를 의존성 표로 안다. 모든 패키지는 `std`에
+의존한다. 의존 패키지의 이름은 모든 모듈에서 경로의 첫 segment가 될 수 있고, 그 경로는
+의존 패키지의 루트에서 이어서 해석한다(`std::io::print_line`). 의존 패키지의 항목은
+그 패키지의 가시성 규칙을 따르므로 `pub` 항목만 보인다.
+
+- 값 경로와 타입·ability annotation에서는 모듈 안의 이름(그 모듈의 선언과 `use`)이
+  의존 패키지 이름보다 우선한다. 사용자의 `mod std`가 있으면 `std::f`는 그 모듈의
+  `f`다.
+- `use` 경로의 첫 segment가 모듈 안의 이름과 의존 패키지 이름 둘 다에 해당하면 이름
+  해석 오류다. 모듈 쪽은 `self::std`나 `pkg::std`로, 패키지 쪽은 `::std`로 쓴다.
+- 선행 `::`로 시작하는 경로(`::std::Option`)는 의존 패키지만 가리킨다. 모듈 안의
+  이름이 패키지 이름을 가려도 이 경로로 패키지에 닿는다. 의존성 표에 없는 이름이면
+  이름 해석 오류다.
+
+**Prelude.** prelude는 패키지 `std`의 모듈 `std::prelude::v0`다. 모든 패키지의 모든
+모듈은 패키지 `std` 자신의 모듈을 포함해 `std::prelude::v0`의 `pub` 항목을 짧은
+이름으로 본다. 그 항목은 대개 표준 라이브러리 선언의 re-export다. 값과 타입(`Option`,
+`Some`, `String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
+(`Option::map`, `Int::to_string`, `abilities::Throw`). Re-export는 대상의 namespace를
+함께 가져오기 때문이다.
+
+- 모듈 안의 이름이 prelude 짧은 이름보다 우선한다. 가려진 prelude 항목은
+  `std::Option`이나 `::std::Option`처럼 패키지 경로로 가리킨다.
+- 가려진 prelude 함수와 prelude 타입의 method는 호출의 마지막 순위 후보로
+  남는다([후보의 순위](#후보의-순위)). 사용자의 `Option`이 있어도 `std::Option`
+  값의 `x.map(f)`는 타입이 맞는 `std::Option::map`을 고른다. 경로로 지정하려면
+  `x.std::Option::map(f)`로 쓴다.
+- `std::prelude::v0`의 `use`는 prelude 짧은 이름으로 시작하지 않고 경로 키워드로
+  쓴다(`pub use pkg::Option`). Prelude가 자기 자신에 기대지 않게 하기 위해서다.
+- Prelude에 둘 이름은 사용자 코드가 짧은 이름으로 쓰는 표준 타입, 생성자, namespace다.
+  Compiler 소유 `List`의 짧은 이름도 prelude의 re-export다. 같은 선언을 가리키므로
+  식별 경로는 바뀌지 않는다.
+
+진단은 타입을 식별 경로로 표시한다. 패키지 `std`의 타입은 `std::Option(Int)`처럼
+보인다.
 
 ### Compiler 소유 runtime 모듈
 
 Compiler가 생성한 code가 부르는 runtime 함수 중 target에 묶이지 않는 것은 Tribute
-source로 쓴다. 이 code는 prelude의 `pub(pkg)` 모듈 `std::runtime`과 그 하위 모듈에
+source로 쓴다. 이 code는 패키지 `std`의 `pub(pkg)` 모듈 `std::runtime`과 그 하위 모듈에
 둔다. 예를 들어 evidence runtime은 `std::runtime::evidence`다.
 [가시성](#가시성-visibility) 규칙에 따라 패키지 `std` 밖에서는 이 모듈과 그 항목을
 이름으로 가리킬 수 없다. 사용자 프로그램은 이 code를 부르지 않는다.
@@ -115,13 +153,13 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
   아래 `extern "intrinsic"` directive 규칙을 따른다.
 - Lowering은 runtime 함수를 canonical 경로에서 만든 IR symbol로 찾는다. 패키지
   `std`의 선언 식별자는 사용자 패키지의 선언과 섞이지 않으므로(위
-  [Prelude와 패키지 `std`](#prelude와-패키지-std)) 이 symbol은 prelude의 정의만
+  [Prelude와 패키지 `std`](#prelude와-패키지-std)) 이 symbol은 패키지 `std`의 정의만
   가리킨다. 경로에서 symbol을 만드는 일은 한 곳에서 하며, 찾은 정의가 본문이 있는
   함수가 아니면 compiler 오류다. 이 조회는 `std::runtime`의 runtime 항목에만
   허용된다. 다른 선언의 의미, ownership, 호출 규약을 symbol 철자로 추측하지
   않는다는 규칙은 그대로다.
 - Runtime 타입의 IR 표현은 pass를 거치며 바뀌므로 이름으로 찾지 않는다.
-  Frontend는 prelude `String`처럼 root `core.module`의 dictionary 속성
+  Frontend는 `std::String`처럼 root `core.module`의 dictionary 속성
   `tribute.types`([IR 계약](ir.md)에 정의)에 canonical 경로를 key로 그
   `TypeRef`를 게시하고, lowering은 이 항목을 읽는다.
 
@@ -129,7 +167,7 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
 항목이든 helper든 다음을 지킨다. 본문이 없는 compiler intrinsic 선언에는 적용하지
 않는다. Frontend가 검사한다.
 
-- Ability row가 비어 있어 `Direct` convention을 가진다. 빈 row는 `->{}`로
+- Ability row가 비어 있어 evidence를 받지 않고 중단되지 않는다. 빈 row는 `->{}`로
   명시한다. Row를 생략한 함수는 row 변수로 일반화되므로 거부한다. Handler를
   설치하거나 operation을 수행하지 않으므로 `effect.*`를 만들지 않으며, 그 함수를
   부르는 lowering이 그 함수 자신을 다시 lowering 대상으로 삼지 않는다.
@@ -163,7 +201,7 @@ Compiler-owned List 타입도 같은 조회 경로에서 사용할 수 있지만
 
 Canonical declaration path와 scope 안의 조회 이름은 구분한다. 사용자 `mod List`는
 짧은 prelude binding을 shadow할 수 있지만 표준 선언의 canonical path나 이미
-해석된 prelude 내부 참조를 바꾸지 않는다. Import alias는 참조하는 선언의
+해석된 패키지 `std` 내부 참조를 바꾸지 않는다. Import alias는 참조하는 선언의
 identity를 바꾸지 않으며, 이후 단계는 이름 해석이 선택한 선언을 보존한다.
 
 ```rust
@@ -177,7 +215,7 @@ pub mod List {
 ```
 
 현재 List public surface는 literal, sequence-view pattern,
-`List::prepend(value, tail) -> List(a)`로 제한된다. Prelude의 public wrapper는
+`List::prepend(value, tail) -> List(a)`로 제한된다. 패키지 `std`의 public wrapper는
 registry-verified private compiler intrinsic을 호출하고, shared pipeline은 그
 private call만 `list.prepend`로 lower한다. 같은 source-visible 조회 경로를 가진 일반
 source function은 intrinsic이 아니다. Private intrinsic declaration은 별도 source
@@ -187,7 +225,7 @@ Compiler lowering에 필요한 `list.empty`, `list.prepend`, `list.is_empty`,
 operation들은 sequence 의미만 갖고 target layout이나 variant tag를 노출하지
 않는다. Native와 Wasm은 각자 private layout으로 lower한다.
 
-`extern "intrinsic"`은 compiler-reserved directive다. Prelude와 사용자 선언 모두
+`extern "intrinsic"`은 compiler-reserved directive다. 패키지 `std`와 사용자 선언 모두
 선언의 패키지 경로를 intrinsic identity로 요청하며(`std::Int::+`), 사용자 패키지의
 선언은 `std`가 가진 identity를 요청할 수 없다. 병합한 AST 전체에서
 monomorphization 전에 지원되는 identity인지 검사한다. 미지원 directive는 미사용
@@ -363,7 +401,8 @@ fn example(xs: List(Int), opt: Option(String)) {
 비한정 이름이 고를 후보는 그 이름으로 `use`한 함수들이다. 한 스코프의 여러
 `use`가 같은 이름에 서로 다른 함수를 주면 그 이름은 그 함수들을 모두 가리킨다.
 `f(x, y)`와 `x.f(y)`는 후보를 모으는 범위만 다르다. 그중 하나를 고르는 방식과,
-고른 뒤 인자를 검사하고 인자 수와 타입의 오류를 보고하는 방식은 같다.
+고른 뒤 인자를 검사하고 인자 수와 타입의 오류를 보고하는 방식은 같다. 후보는 가져온
+방식에 따라 [순위](#후보의-순위)를 가진다.
 
 UFCS의 후보는 호출 위치의 스코프에서만 찾는다. `x.f(y)`의 후보는 스코프가
 가리키는 함수 `f`(여러 `use`가 준 함수 전부)와, 스코프 안의 이름 `m`마다 `m::f`이다.
@@ -391,6 +430,29 @@ mod b {
 
 스코프에 없는 모듈의 선언은 호출의 후보를 바꾸지 않는다.
 
+### 후보의 순위
+
+호출의 후보는 그 함수를 가져온 방식에 따라 순위를 가진다. 순위는 `use` 선언의
+순서와 상관없다.
+
+1. **직접 가리키는 함수**: 호출 위치의 스코프가 그 이름으로 가리키는 함수. 그 스코프의
+   선언과, 그 이름으로 `use`한 함수다.
+2. **스코프 안 이름의 namespace**: 스코프 안의 이름 `m`마다 `m::f`. UFCS에만 있는
+   순위다. 모듈의 함수, 타입 `T`의 companion namespace의 함수, struct field의
+   getter가 여기에 든다.
+3. **Prelude**: prelude의 짧은 이름이 가리키는 함수와, UFCS에서 prelude 이름 `p`의
+   `p::f`. 스코프의 선언이나 `use`가 그 짧은 이름을 가려도 이 순위의 후보로 남는다.
+
+호출은 가장 높은 순위부터 [후보 선택](#후보-선택) 규칙을 적용한다. 그 순위에 맞는
+후보가 있으면 그 순위 안에서 고르며, 맞는 후보가 여럿이면 그 순위 안의 모호성이다.
+그 순위에 맞는 후보가 하나도 없을 때만 다음 순위로 내려간다. 아직 정해지지 않은
+타입은 후보를 배제하지 않으므로, 높은 순위의 후보가 타입으로 배제될 때까지 낮은
+순위로 내려가지 않는다. 비한정 호출 `f(x)`에서 지역 변수로 묶은 이름은 함수 후보를
+찾지 않고 그 변수를 가리킨다.
+
+높은 순위의 후보는 타입이 맞는 낮은 순위의 후보를 가린다. 예를 들어 직접 `use`한
+함수는 같은 이름의 getter보다 먼저 고른다. 이 둘을 구분하려면 경로로 쓴다.
+
 ### 후보 선택
 
 호출은 후보 중에서 자신의 타입에 맞는 함수를 고른다. 후보가 맞으려면:
@@ -404,12 +466,14 @@ mod b {
 않은 인자나 결과의 타입은 어느 후보도 배제하지 않는다. Ability row는 선택에 쓰지
 않는다.
 
-후보가 하나뿐이면 고를 것이 없다. 호출은 그 함수로 검사하고, 맞지 않는 인자는
-보통의 타입 오류다. 후보가 여럿이고 맞는 후보가 정확히 하나이면 그 함수를 고른다. 그 뒤의 검사는 고른 함수의
+모든 순위를 합쳐 후보가 하나뿐이면 고를 것이 없다. 호출은 그 함수로 검사하고, 맞지
+않는 인자는 보통의 타입 오류다. 그렇지 않으면 [순위](#후보의-순위)마다 고른다. 한
+순위에서 맞는 후보가 정확히 하나이면 그 함수를 고른다. 그 뒤의 검사는 고른 함수의
 선언으로 하므로, 맞는다고 본 타입의 세부(generic 인자, 함수의 매개변수)가 다르면
 보통의 타입 오류가 된다. 맞는 후보가 여럿이면 타입이 더 정해질 때까지 기다리고,
-함수 본문을 다 푼 뒤에도 여럿이면 오류다. 맞는 후보가 없어도 오류다. 다만 인자의
-타입은 맞고 수만 다른 후보가 하나이면 그 함수의 인자 수 오류로 보고한다.
+함수 본문을 다 푼 뒤에도 여럿이면 오류다. 어느 순위에도 맞는 후보가 없으면 오류다.
+다만 모든 순위를 통틀어 인자의 타입은 맞고 수만 다른 후보가 하나이면 그 함수의 인자
+수 오류로 보고한다.
 
 Receiver는 첫 번째 인자이며 다른 인자와 다르지 않다. Receiver의 타입이 정해지지
 않았어도 나머지 인자와 결과가 후보를 하나로 좁히면 그 함수를 고르고, receiver의
@@ -424,8 +488,9 @@ Getter `T::f`는 `T`의 네임스페이스에 선언된 함수다. 한 네임스
 한 함수이므로, `T`의 companion 모듈은 필드와 같은 이름의 함수를 매개변수와 상관없이
 선언할 수 없다. 다른 모듈은 같은 이름의 함수를 선언할 수 있다. 그 함수가 `T`를
 첫 번째 인자로 받고 `x.f`의 스코프에서 후보가 되면 후보는 getter와 그 함수 둘이고,
-다른 호출과 같은 규칙으로 고른다. 둘 다 맞으면 모호하며 `x.T::f`처럼 경로로
-구분한다:
+다른 호출과 같은 규칙으로 고른다. 모듈 이름을 통해 후보가 된 함수는 getter와 같은
+순위이므로, 둘 다 맞으면 모호하며 `x.T::f`처럼 경로로 구분한다. 그 함수를 직접
+`use`했다면 더 높은 순위이므로 getter보다 먼저 고른다:
 
 ```rust
 struct Name { text: String }
@@ -439,9 +504,17 @@ mod audit {
 }
 
 fn show(name: Name) -> String {
-    name.text           // Error: 스코프의 Name::text와 audit::text 모두 맞음
+    name.text           // Error: 같은 순위의 Name::text와 audit::text 모두 맞음
     name.Name::text     // OK
     name.audit::text    // OK
+}
+
+mod report {
+    use super::{Name, audit::text}
+
+    fn show(name: Name) -> String {
+        name.text       // audit::text: 직접 use한 함수가 getter보다 먼저다
+    }
 }
 ```
 
@@ -456,8 +529,9 @@ fn(x) { x.pair("two") }     // b::pair: x는 A로 추론된다
 ```
 
 그 스코프가 같은 이름을 선언하거나 지역 변수로 묶으면 이름은 그 선언이나 변수를
-가리키며, `use`한 함수들은 후보가 아니다. 같은 함수를 여러 번 `use`하면 후보는
-하나다.
+가리키며, `use`한 함수들은 후보가 아니다. 지역 변수가 아니라면 prelude의 같은 이름
+함수는 [마지막 순위](#후보의-순위)의 후보로 남는다. 같은 함수를 여러 번 `use`하면
+후보는 하나다.
 
 ### 모호성 처리
 
@@ -688,6 +762,7 @@ pub mod api
 | `pkg` | 현재 패키지 루트 | `use pkg::utils::math` |
 | `super` | 부모 모듈 | `use super::sibling` |
 | `self` | 현재 모듈 | `use self::internal` |
+| 선행 `::` | 의존 패키지의 루트 | `use ::std::io::print_line` |
 
 ```rust
 // src/utils/math.trb
@@ -713,8 +788,9 @@ segment가 아닌 위치의 키워드는 이름 해석 오류다.
 파일로 옮겨도 이름의 뜻이 바뀌지 않는다.
 
 경로의 첫 segment도 같은 범위에서 찾는다. 그 모듈의 하위 모듈이나 선언, 그 모듈이
-`use`로 가져온 이름, prelude가 제공하는 namespace(`Option`, `std` 등)가 대상이다.
-`use` 경로도 같다. 패키지 루트는 자신의 선언과 `use`, prelude를 본다.
+`use`로 가져온 이름, prelude가 제공하는 namespace(`Option` 등), 의존 패키지
+이름(`std`)이 대상이다. `use` 경로도 같다. 패키지 루트는 자신의 선언과 `use`,
+prelude, 의존 패키지 이름을 본다.
 
 예외로, 같은 이름의 타입이나 ability 옆에 선언된 companion 모듈은 그 이름으로 자기
 타입을 본다. 경로에는 예외가 없다. 모듈 안에서 모듈 자신의 이름은 경로를 시작하지
@@ -740,8 +816,8 @@ mod counter {
 }
 ```
 
-prelude도 같은 규칙을 따른다. prelude의 모듈은 다른 prelude 항목을 `use super::…`나
-`pkg::…`로 가져온다.
+패키지 `std`도 같은 규칙을 따른다. `std`의 모듈은 다른 `std` 항목을 prelude 짧은
+이름으로 쓰거나 `use super::…`나 `pkg::…`로 가져온다.
 
 ### 가시성 (Visibility)
 
@@ -767,8 +843,9 @@ pub(pkg) fn package_internal() -> Int { 42 } // 이 패키지 내에서
 pub fn public_api() -> Int { 42 }            // 어디서든
 ```
 
-Prelude도 패키지 `std`의 루트 모듈이므로 같은 규칙을 따른다. 사용자 패키지는
-prelude의 `pub` 항목만 본다.
+패키지 `std`도 같은 규칙을 따른다. 항목과 참조하는 모듈이 같은 패키지인지는 경로의
+철자가 아니라 선언이 속한 패키지로 정한다. 다른 패키지에서는 `pub` 항목만 보이므로,
+사용자 패키지는 `std`의 `pub` 항목만 보고 `pub(pkg)`인 `std::runtime`은 보지 못한다.
 
 가시성 수식자는 함수, extern 함수, `struct`, `enum`, `ability`, `mod`, `use`에 붙는다.
 
@@ -859,7 +936,7 @@ pub fn handle(req: Request) -> Response {
 
 ## Open Questions
 
-1. **Prelude**: 자동 use되는 기본 타입/함수 범위
+1. **Prelude 버전**: `std::prelude::v0` 다음 버전을 언제, 어떻게 고르는지
 2. **조건부 컴파일**: `#[cfg(...)] mod foo` 문법 및 지원 범위
 3. **매니페스트**: `Tribute.toml` 형식 및 필수 여부
 4. **lang-examples 구조**: 각 예제를 개별 폴더의 `main.trb`로 재구성

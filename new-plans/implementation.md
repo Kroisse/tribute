@@ -183,7 +183,7 @@ zero-capture `func.unreachable` adapter를 포함한 conversion 세부는
 
 ## Nominal Type Identity
 
-Prelude 병합은 해석된 선언의 canonical path와 참조를 보존한다. Prelude의
+패키지 `std` 병합은 해석된 선언의 canonical path와 참조를 보존한다. Prelude의
 짧은 이름은 선언을 가리키는 binding이며, AST 병합이나 metadata 조회를 위해
 canonical path를 다시 짧은 이름으로 바꾸지 않는다. 함수 스킴, 특수화 대상,
 생성된 정의와 호출은 동일한 해석 결과를 사용한다.
@@ -210,11 +210,11 @@ Specialization mangle은 type argument의 identity에 대해 단사(injective)�
 다른 type argument 목록은 서로 다른 이름을 얻는다. 함수 타입, 튜플, bound type
 variable, compiler-owned nominal 타입처럼 소스 선언이 이름 짓지 않는 타입은 숫자
 태그로 시작하므로, 같은 철자의 소스 타입 이름과 구분된다. 함수 타입은 parameter와 result
-외에 ability row와 calling-convention 하한을 함께 인코딩한다. Ability row는 각
+외에 ability row를 함께 인코딩한다. Ability row는 각
 ability의 origin과 qualified identity, ability argument를 row에 저장된 순서대로 쓰고,
 열린 row의 row variable은 한 mangle 안에서 처음 나타난 순서로 번호를 매겨 추론
-번호에 의존하지 않는다. Closed 빈 row와 `Direct` 하한을 가진 함수 타입의 mangle은
-parameter와 result만으로 이루어진다.
+번호에 의존하지 않는다. Closed 빈 row를 가진 함수 타입의 mangle은 parameter와
+result만으로 이루어진다.
 
 ---
 
@@ -249,7 +249,7 @@ violates that precondition; they never synthesize a fallback element or tail.
 Source-logical frontend의 원소 타입 선택과 생성자 메타데이터 구분은
 [List IR 계약](ir.md)을 따른다.
 
-The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
+Package `std` declares `List::prepend(value, tail)` as the minimal public dynamic
 construction API. Its source wrapper delegates to a private compiler intrinsic,
 and the shared pipeline replaces only that registry-verified private call with
 `list.prepend`. An ordinary source function with the same public qualified name
@@ -450,36 +450,12 @@ Row에서 callable의 호출 규약을 정하는 규칙은
 [CPS 전략](cps-effects.md#row와-호출-규약)에 있다. Typechecking은 규약을 계산하지
 않는다.
 
-### 변환 범위
+### 변환 범위와 ability polymorphism
 
-모든 함수를 Cps convention으로 바꾸지는 않는다. `Cps` callable 호출과
-typechecked `operation_kind = "op"` 지점은 남은 계산을 continuation으로 전달한다:
-
-```text
-생략 annotation의 semantic type       → open row, indirect call은 Cps
-concrete residual effect 없는 worker  → Direct
-명시적 빈 effect (fn(a) ->{} b)      → Direct
-Ambient/fn effect                    → EvidenceDirect
-General op/Throw effect              → Cps, effect point만 continuation 처리
-Cps가 아닌 정의 안의 handle          → 값 delimiter, 정의의 convention은 그대로
-```
-
-### Ability Polymorphism 처리
-
-```rust
-fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
-```
-
-`f`가 순수인지 effectful인지 컴파일 타임에 모를 수 있다. 전략:
-
-1. **Class 특수화**: `e`는 매개변수의 함수 타입에 나타나므로 class 변수다. 호출
-   지점의 row 인자가 정한 class마다 인스턴스를 만들고, `f`의 convention과 `map`의
-   worker convention을 그 class에서 정한다.
-2. **열린 row는 Cps**: class가 정해지지 않은 row 변수는 더 강한 convention을 요구할
-   가능성을 배제할 수 없으므로 `ContinuationFrame<R>`를 포함하는 ABI를 사용한다
-3. **Evidence 전달**: effectful polymorphic 호출은 동일한 evidence를 전달한다.
-4. **Operation kind 보존**: 구체적인 `fn` operation call-site는 continuation을
-   capture하지 않고 `ability.call`을 사용한다.
+어떤 callable이 continuation을 받는지, 열린 row와 class 변수를 어떻게 다루는지, `Cps`가
+아닌 정의 안의 CPS 제어를 어떻게 감싸는지는 [CPS 전략](cps-effects.md)이 정한다.
+어느 경우든 effectful polymorphic 호출은 같은 evidence를 전달하고, 구체적인 `fn`
+operation 호출 지점은 continuation을 capture하지 않는다.
 
 ### Operation kind와 dispatch
 
@@ -710,16 +686,19 @@ typecheck는 source와 선언 환경을 입력으로 하는 모듈 단위 query�
 소유하고 각 pass는 자신이 선언한 입력·출력 invariant를 검증한다. 변환 전에 검증하는
 계약과 실패 시 mutation 보장도 pass 경계에 명시한다.
 
-Prelude의 well-known type은 typechecking 결과의 별도 metadata로 보존한다.
-`WellKnownTypes`는 prelude `String`의 semantic type과 stable declaration identity를
+패키지 `std`의 well-known type은 typechecking 결과의 별도 metadata로 보존한다.
+`WellKnownTypes`는 `std::String`의 semantic type과 stable declaration identity를
 frontend 경계까지 전달한다. AST-to-IR은 declaration identity로 exact TrunkIR
 `TypeRef`를 구해 root module의 `tribute.types` attribute에 `std::String` 항목으로
 기록한다. Native/Wasm constant lowering은 이 항목만 사용하며 이름이나 layout으로
 복구하지 않는다. Textual IR에서 attribute가 유실되면 string constant lowering은
 실패한다.
 
-Prelude source는 compilation 입력이다. 테스트는 그 뒤에 덧붙인 source를 패키지
-`std`의 일부로 compile해, 사용자 패키지가 가리킬 수 없는 패키지 내부 항목
+표준 라이브러리 source(패키지 `std`의 루트 모듈)는 compilation 입력이다. 이름
+해석은 패키지마다 자기 루트에서 하며, 사용자 패키지의 해석은 의존 패키지 `std`의
+해석 결과를 의존성 표로 참조한다. `std`의 해석과 타입 검사 결과는 사용자 source에
+의존하지 않으므로, 사용자 source를 고쳐도 다시 계산하지 않는다. 테스트는 표준
+라이브러리 source 뒤에 덧붙인 source를 패키지 `std`의 일부로 compile해, 사용자 패키지가 가리킬 수 없는 패키지 내부 항목
 (`std::runtime`)을 사용자 프로그램이 부를 수 있는 함수로 감싸 시험한다.
 
 ### 파이프라인 구조
@@ -899,7 +878,7 @@ row 관계도 포함한다.
 변수를 downstream 의미 정보로 내보내지 않는다.
 
 CLI, LSP와 테스트는 같은 분석 의미를 사용하며 source와 외부 선언 환경을
-명시적으로 전달한다. Prelude 로딩과 타깃·공유 패스 조합은 root crate의
+명시적으로 전달한다. 패키지 `std` 로딩과 타깃·공유 패스 조합은 root crate의
 책임이다. 오류가 있는 분석 결과를 조회하는 것과 IR 생성을 허용하는 것은
 구분한다. LSP는 부분 결과를 사용할 수 있지만 컴파일 경로는 frontend 오류가
 있으면 lowering을 시작하지 않는다.

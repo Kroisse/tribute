@@ -882,7 +882,7 @@ Named callable의 source definition은 body를 가진 Tribute callable이다.
 `extern "intrinsic"`은 compiler-reserved directive이며, canonical qualified
 source name이 intrinsic identity가 된다. 지원되는 identity와 완전한 logical signature는
 mutation 전에 검증하며, unknown directive나 signature mismatch는 lowering input error다.
-Compiler intrinsic identity는 prelude와 사용자 선언을 병합한 AST 전체에서
+Compiler intrinsic identity는 패키지 `std`와 사용자 선언을 병합한 AST 전체에서
 monomorphization 전에 검증한다. 미사용 generic 선언과 중첩 모듈의 선언도 포함하며, 지원하지 않는 모든
 directive를 각 선언의 source span에서 진단한다. 등록된 compiler
 intrinsic의 logical callable convention은 항상 `Direct`이다. Intrinsic lowering은
@@ -1154,11 +1154,12 @@ non-empty input precondition. Compiler-generated uses must establish
 non-emptiness before executing either operation. A backend must trap if the
 precondition is violated; it must not return a type-default head, a null tail,
 or any other fallback value.
-The public `List::prepend(value, tail)` prelude wrapper delegates to a private
-registry-verified compiler intrinsic, whose calls lower to the same
+The public `List::prepend(value, tail)` wrapper of package `std` delegates to a
+private registry-verified compiler intrinsic, whose calls lower to the same
 `list.prepend` operation. A source-defined function merely spelled
 `List::prepend` remains an ordinary call. The private intrinsic declaration is a
-compiler/prelude boundary, not an additional public symbol or a layout contract.
+compiler/standard-library boundary, not an additional public symbol or a layout
+contract.
 
 List patterns lower to sequence observations. Exact-length patterns require an
 empty remainder; prefix-rest patterns return the remainder as the same canonical
@@ -1206,16 +1207,16 @@ Native ownership 검사는 게시된 정의와 IR에서 도달하는 layout만 �
 누락되거나 모호한 layout은 거부하고, interner 전체 검색이나 이름의 일부를
 맞추는 방식으로 layout을 추정하지 않는다.
 
-The root `core.module` carries the prelude type identities the compiler relies
+The root `core.module` carries the package `std` type identities the compiler relies
 on in one dictionary attribute, `tribute.types`. Each key is the canonical
-declaration path of a prelude type, and each value is the exact `TypeRef`
+declaration path of a type of package `std`, and each value is the exact `TypeRef`
 produced from that declaration. The entry `std::String` is the `adt.enum` type
-of the prelude `String`; runtime types such as `std::runtime::evidence::Marker`
+of `std::String`; runtime types such as `std::runtime::evidence::Marker`
 (`new-plans/modules.md`, "Compiler 소유 runtime 모듈") are entries of the same
 dictionary. Lowering consumes an entry directly; it must not rediscover a type
 by type name, variant names, or field layout. This metadata is semantic compiler
 state rather than a nominal-layout convention. The frontend preserves each
-prelude declaration's stable identity through type checking and compares that
+declaration's stable identity through type checking and compares that
 identity, not its name, when materializing an entry. Type conversion converts
 the entries like any other type-bearing attribute.
 

@@ -99,10 +99,10 @@ Compiler는 builtin/source origin을 포함한 identity로 이를 구분하고,
 `std::io::Io`를 resolver namespace에 virtual export로 주입한다. 사용자 AST에
 synthetic ability declaration을 추가하지 않는다.
 
-Ambient는 "CPS를 사용하지 않는다"는 뜻이 아니다. 현재 ABI에서 `Io`만
-요구하는 함수는 evidence를 전달받되 continuation을 받지 않는
-`EvidenceDirect` 호출 규약을 사용한다. `Io`와 `Throw(Error)`처럼 general
-operation effect가 함께 있으면 더 강한 CPS 호출 규약을 사용한다.
+Ambient는 evidence가 필요 없다는 뜻이 아니다. `Io`만 요구하는 함수도 evidence를
+받지만, `Io`에는 `op` operation이 없으므로 중단되지 않는다. `Io`와 `Throw(Error)`처럼
+`op` operation을 가진 ability가 함께 있으면 중단될 수 있다. 각 경우의 호출 규약은
+[CPS 전략](cps-effects.md#호출-규약)이 정한다.
 
 ## 함수 정의 문법
 
