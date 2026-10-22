@@ -425,6 +425,35 @@ mod tests {
     }
 
     #[test]
+    fn module_pass_sweeps_every_function() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @first() -> core.nil {
+    %dead = arith.const {value = 1} : core.i32
+    func.return
+  }
+  func.func @second() -> core.nil {
+    %dead = arith.const {value = 2} : core.i32
+    func.return
+  }
+}"#,
+        );
+        let core_module = crate::dialect::core::Module::from_op(&ctx, module.op()).unwrap();
+        let mut pm = crate::pass::PassManager::new();
+        pm.add_pass(EliminateDeadCode::<crate::dialect::core::Module>::default());
+        pm.run(&mut ctx, core_module, &mut AnalysisCache::new())
+            .unwrap();
+
+        for &op in module.ops(&ctx) {
+            let func = func::Func::from_op(&ctx, op).unwrap();
+            let block = ctx.region(func.body(&ctx)).blocks[0];
+            assert_eq!(ctx.block(block).ops.len(), 1);
+        }
+    }
+
+    #[test]
     fn empty_module() {
         let (mut ctx, loc) = test_ctx();
         let module = build_module(&mut ctx, loc, vec![]);
