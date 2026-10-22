@@ -133,6 +133,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
         "logical frontend output must validate: {validation}"
     );
     if specialize {
+        trunk_ir::transforms::eliminate_dead_code(&mut ir, module.module, Default::default());
         tribute_passes::specialize_convention_classes::specialize(&mut ir, module.module)
             .expect("class specialization accepts frontend output");
         let validation = tribute_ir::dialect::tribute_control::validate(

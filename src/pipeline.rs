@@ -39,6 +39,7 @@
 //!     ▼ eliminate_unreferenced_source_functions (artifact compiles only:
 //!     │   unreachable source-logical functions skip CPS legalization;
 //!     │   runtime functions stay)
+//!     ▼ dce (unused pure operations, such as dead function references)
 //!     ▼ specialize_convention_classes, then
 //!     │   eliminate_unreferenced_source_functions again (artifact compiles only)
 //!     ▼ tribute_control_to_cps → lower_continuation_frames →
@@ -739,6 +740,9 @@ pub fn compile_specialized_frontend(
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = PassManager::new();
     pm.add_pass(EliminateUnreferencedSourceFunctions::new())
+        .add_pass(trunk_ir::transforms::dce_pass::<core_dialect::Module>(
+            Default::default(),
+        ))
         .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses)
         .add_pass(EliminateUnreferencedSourceFunctions::new());
     pm.run(&mut ctx, core_module, &mut AnalysisCache::new())?;
@@ -897,7 +901,10 @@ fn structural_pass_pipeline(
     if functions == SourceFunctions::Reachable {
         pm.add_pass(EliminateUnreferencedSourceFunctions::new());
     }
-    pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
+    pm.add_pass(trunk_ir::transforms::dce_pass::<core_dialect::Module>(
+        Default::default(),
+    ))
+    .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
     if functions == SourceFunctions::Reachable {
         pm.add_pass(EliminateUnreferencedSourceFunctions::new());
     }

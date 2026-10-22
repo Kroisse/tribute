@@ -227,7 +227,8 @@ Class 특수화는 CPS 전략의 첫 pass이며 `tribute_control` 적법화 바�
 입력은 frontend가 내보낸 class 없는 source-logical IR이다. 타입 인자마다 정의 하나,
 row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
 [`quantified_rows`와 `instantiate`](ir.md#지역-람다의-양화와-인스턴스화)를 가지며
-`func_sig`에 convention이 없다. Pass는 다음을 한다.
+`func_sig`에 convention이 없다. 그 앞에서 결과를 아무도 쓰지 않는 순수 operation을
+지우므로, 쓰이지 않는 함수 참조는 인스턴스를 요구하지 않는다. Pass는 다음을 한다.
 
 - 위 규칙으로 정의마다 class 변수를 정하고, root `main`과 참조의 class 인자에서 필요한
   인스턴스를 모은다.
@@ -1083,6 +1084,7 @@ Callable/control과 effect 관련 pass의 순서는 다음과 같다:
 ```text
 ast_to_ir (tribute_control callable/control + ordinary value IR, convention 없음)
 → 참조되지 않는 정의 제거
+→ 쓰이지 않는 순수 operation 제거
 → class 특수화
 → 참조되지 않는 정의 제거
 → tribute_control_to_cps

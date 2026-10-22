@@ -4,8 +4,8 @@
 //! Uses the arena's built-in use-chains to detect unused results.
 
 use crate::context::IrContext;
-use crate::dialect::func;
 use crate::op_flag::{OpFlag, Pure};
+use crate::ops::DialectOp;
 use crate::pass::{Pass, pass_fn};
 use crate::refs::{BlockRef, OpRef, RegionRef};
 use crate::rewrite::RewriteScope;
@@ -73,13 +73,13 @@ pub fn eliminate_dead_code<S: RewriteScope>(
     }
 }
 
-/// Build a function-anchored DCE pass.
-pub fn dce_pass(config: DceConfig) -> impl Pass<Target = func::Func> {
-    pass_fn("dce-func", move |ctx, target, _analyses| {
+/// Build a DCE pass anchored on `T`, such as a function or a module.
+pub fn dce_pass<T: DialectOp + RewriteScope>(config: DceConfig) -> impl Pass<Target = T> {
+    pass_fn("dce", move |ctx, target, _analyses| {
         let result = eliminate_dead_code(ctx, target, config.clone());
         if !result.reached_fixpoint {
             tracing::warn!(
-                "dce-func did not reach a fixed point: {} iterations, {} removed",
+                "dce did not reach a fixed point: {} iterations, {} removed",
                 result.iterations,
                 result.removed_count
             );
