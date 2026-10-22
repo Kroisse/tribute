@@ -915,6 +915,34 @@ fn counted(comp: fn() ->{e, Counter} Int) ->{e, Mixed} Int {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// Without a `do` arm the handle completes with the body's result, so an
+/// `op` arm that returns another type is a type error.
+#[salsa_test]
+fn diag_handle_without_do_arm_op_arm_type_mismatch(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Stop {
+    op stop() -> Never
+}
+
+fn halt() ->{Stop} Int {
+    Stop::stop()
+}
+
+fn test() -> Int {
+    handle halt() {
+        op Stop::stop() { "stopped" }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
