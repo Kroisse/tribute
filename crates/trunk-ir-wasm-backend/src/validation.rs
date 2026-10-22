@@ -541,22 +541,19 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Marker = test.layout<{layout = "evidence_marker"}>
-  !Evidence = wasm_gc.array<!Marker, {layout = "evidence"}>
-  !Plain = wasm_gc.array<!Marker>
+  !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
+  !Plain = wasm_gc.array<core.i8>
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| ctx.type_alias_by_text(name).unwrap();
-        let evidence = alias(&ctx, "Evidence");
+        let data = alias(&ctx, "Data");
         let plain = alias(&ctx, "Plain");
         let arrayref = wasm_dialect::Arrayref::params()
             .intern(&mut ctx)
             .as_type_ref();
 
         assert!(is_wasm_physical_result_assignable(&ctx, arrayref, plain));
-        assert!(!is_wasm_physical_result_assignable(
-            &ctx, arrayref, evidence
-        ));
+        assert!(!is_wasm_physical_result_assignable(&ctx, arrayref, data));
     }
 
     #[test]
@@ -567,18 +564,15 @@ mod tests {
             r#"core.module @test {
   !Leaf = wasm_gc.struct<core.i32>
   !Closure = test.layout<{layout = "closure"}>
-  !Marker = test.layout<{layout = "evidence_marker"}>
-  !Evidence = wasm_gc.array<!Marker, {layout = "evidence"}>
   !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
   wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
-  wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %closure: !Closure, %marker: !Marker, %evidence: !Evidence) -> core.nil {
+  wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %closure: !Closure, %data: !Data) -> core.nil {
     wasm.call %leaf {callee = @byRef}
     wasm.call %bytes {callee = @byRef}
     wasm.call %closure {callee = @byRef}
-    wasm.call %marker {callee = @byRef}
-    wasm.call %evidence {callee = @byArray}
+    wasm.call %data {callee = @byArray}
     wasm.return
   }
 }"#,
@@ -594,15 +588,13 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Marker = test.layout<{layout = "evidence_marker"}>
-  !Evidence = wasm_gc.array<!Marker, {layout = "evidence"}>
   !Array = wasm_gc.array<core.i32>
   !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
-  wasm.func @caller(%bytes: !Bytes, %evidence: !Evidence, %array: !Array, %structural: wasm_gc.struct<core.i32>) -> core.nil {
+  wasm.func @caller(%bytes: !Bytes, %data: !Data, %array: !Array, %structural: wasm_gc.struct<core.i32>) -> core.nil {
     wasm.call %bytes {callee = @byAny}
-    wasm.call %evidence {callee = @byAny}
+    wasm.call %data {callee = @byAny}
     wasm.call %array {callee = @byAny}
     wasm.call %structural {callee = @byAny}
     wasm.return

@@ -49,7 +49,7 @@ pub mod evidence {
     pub const WITH_TAIL: &[&str] = &["std", "runtime", "evidence", "with_tail"];
     pub const PUSH: &[&str] = &["std", "runtime", "evidence", "push"];
 
-    /// The evidence functions, in the order of `ability::evidence_abi`.
+    /// The evidence functions.
     pub const FUNCTIONS: [&[&str]; 9] = [
         LOOKUP, LOOKUP_TR, EXTEND, MASK, DUP, OUTER, TAIL, WITH_TAIL, PUSH,
     ];
