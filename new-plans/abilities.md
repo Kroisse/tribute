@@ -334,6 +334,7 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 
 **`do` arm 생략:**
 
+- `handle`의 `do` arm은 없거나 하나다. 둘 이상이면 typechecking 단계의 컴파일 에러다.
 - `do` arm이 없는 `handle`의 결과 타입은 body의 결과 타입이다. 따라서 값을 내는
   `op` arm, 곧 `resume`하지 않고 끝나는 arm의 결과도 body의 결과 타입이어야 한다.
   `resume`의 결과도 같은 타입이다.
@@ -354,6 +355,8 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
   typechecking 단계의 컴파일 에러이며, 진단은 ability와 빠진 operation을 모두
   나열한다. Parametrized ability(`State(s)`)는 ability 선언 단위로 판단하고,
   이름이 같아도 다른 module의 ability는 서로 다른 ability로 판단한다.
+- 한 `handle`은 operation마다 arm을 최대 하나 가진다. 같은 operation의 arm이 둘
+  이상이면 typechecking 단계의 컴파일 에러다.
 - 빠진 arm은 암묵적으로 바깥 handler로 전달(forward)되거나 계산을 중단(abort)하거나
   trap하지 않는다. 일부 operation만 처리하는 handler는 허용되지 않는다.
 - Arm이 하나도 없는 ability는 그 `handle`이 처리하지 않는다. 그 label은 결과
