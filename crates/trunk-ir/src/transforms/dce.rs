@@ -3,12 +3,14 @@
 //! Removes operations whose results are never used and which have no side effects.
 //! Uses the arena's built-in use-chains to detect unused results.
 
+use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
-use crate::dialect::func;
 use crate::op_flag::{OpFlag, Pure};
-use crate::pass::{Pass, pass_fn};
+use crate::ops::DialectOp;
+use crate::pass::{Pass, PassRunResult};
 use crate::refs::{BlockRef, OpRef, RegionRef};
 use crate::rewrite::RewriteScope;
+use std::marker::PhantomData;
 
 /// Configuration for dead code elimination.
 #[derive(Debug, Clone)]
@@ -73,19 +75,49 @@ pub fn eliminate_dead_code<S: RewriteScope>(
     }
 }
 
-/// Build a function-anchored DCE pass.
-pub fn dce_pass(config: DceConfig) -> impl Pass<Target = func::Func> {
-    pass_fn("dce-func", move |ctx, target, _analyses| {
-        let result = eliminate_dead_code(ctx, target, config.clone());
+/// Dead code elimination anchored on `T`, such as a function or a module.
+pub struct EliminateDeadCode<T> {
+    config: DceConfig,
+    _target: PhantomData<fn(T)>,
+}
+
+impl<T> EliminateDeadCode<T> {
+    pub fn new() -> Self {
+        Self::with_config(DceConfig::default())
+    }
+
+    pub fn with_config(config: DceConfig) -> Self {
+        Self {
+            config,
+            _target: PhantomData,
+        }
+    }
+}
+
+impl<T> Default for EliminateDeadCode<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: DialectOp + RewriteScope> Pass for EliminateDeadCode<T> {
+    type Target = T;
+
+    fn name(&self) -> &'static str {
+        "dce"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: T, _: &mut AnalysisCache) -> PassRunResult {
+        let result = eliminate_dead_code(ctx, target, self.config.clone());
         if !result.reached_fixpoint {
             tracing::warn!(
-                "dce-func did not reach a fixed point: {} iterations, {} removed",
+                "dce did not reach a fixed point: {} iterations, {} removed",
                 result.iterations,
                 result.removed_count
             );
         }
         Ok(())
-    })
+    }
 }
 
 /// Sweep all regions in a rewrite scope, removing dead ops.
@@ -390,6 +422,63 @@ mod tests {
         assert_eq!(ctx.block(selected_block).ops.len(), 1);
         assert_eq!(ctx.block(untouched_block).ops.len(), 2);
         insta::assert_snapshot!(print_module(&ctx, module.op()));
+    }
+
+    #[test]
+    fn module_pass_sweeps_every_function() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @first() -> core.nil {
+    %dead = arith.const {value = 1} : core.i32
+    func.return
+  }
+  func.func @second() -> core.nil {
+    %dead = arith.const {value = 2} : core.i32
+    func.return
+  }
+}"#,
+        );
+        let core_module = crate::dialect::core::Module::from_op(&ctx, module.op()).unwrap();
+        let mut pm = crate::pass::PassManager::new();
+        pm.add_pass(EliminateDeadCode::<crate::dialect::core::Module>::default());
+        pm.run(&mut ctx, core_module, &mut AnalysisCache::new())
+            .unwrap();
+
+        for &op in module.ops(&ctx) {
+            let func = func::Func::from_op(&ctx, op).unwrap();
+            let block = ctx.region(func.body(&ctx)).blocks[0];
+            assert_eq!(ctx.block(block).ops.len(), 1);
+        }
+    }
+
+    #[test]
+    fn pass_stops_at_its_iteration_limit() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() -> core.nil {
+    %dead = arith.const {value = 1} : core.i32
+    func.return
+  }
+}"#,
+        );
+        let core_module = crate::dialect::core::Module::from_op(&ctx, module.op()).unwrap();
+        let mut pm = crate::pass::PassManager::new();
+        pm.add_pass(
+            EliminateDeadCode::<crate::dialect::core::Module>::with_config(DceConfig {
+                max_iterations: 1,
+                ..DceConfig::default()
+            }),
+        );
+        pm.run(&mut ctx, core_module, &mut AnalysisCache::new())
+            .unwrap();
+
+        let func = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let block = ctx.region(func.body(&ctx)).blocks[0];
+        assert_eq!(ctx.block(block).ops.len(), 1);
     }
 
     #[test]

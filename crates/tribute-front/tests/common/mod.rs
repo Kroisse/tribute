@@ -5,7 +5,11 @@ use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::PassManager;
 use trunk_ir::printer::print_module;
 
 /// Prelude source, loaded at compile time relative to this file.
@@ -133,7 +137,12 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
         "logical frontend output must validate: {validation}"
     );
     if specialize {
-        tribute_passes::specialize_convention_classes::specialize(&mut ir, module.module)
+        let core_module = core::Module::from_op(&ir, module.module.op())
+            .expect("frontend output must be a core.module");
+        let mut pm = PassManager::new();
+        pm.add_pass(trunk_ir::transforms::EliminateDeadCode::<core::Module>::new())
+            .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
+        pm.run(&mut ir, core_module, &mut AnalysisCache::new())
             .expect("class specialization accepts frontend output");
         let validation = tribute_ir::dialect::tribute_control::validate(
             &ir,
