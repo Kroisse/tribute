@@ -613,10 +613,10 @@ exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 �
       → CPS signature physicalization
       → value delimiter and root entry bridge composition
 
-WASM:   → lower_closures_in_func → evidence_to_wasm
+WASM:   → lower_closures_in_func → evidence_lowering
         → finalize_closure_storage_layout → boundary exit verification
         → lower_to_wasm → backend-ready verification → emit_wasm
-Native: → lower_closures_in_func → evidence_to_native
+Native: → lower_closures_in_func → evidence_lowering
         → finalize_closure_storage_layout → boundary exit verification
         → lower_to_clif → backend-ready verification → emit_native
 ```

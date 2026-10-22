@@ -1,5 +1,4 @@
 use super::*;
-use crate::native::evidence::lower_evidence_to_native;
 use crate::native::rc_materialization::materialize;
 use crate::native::type_converter::native_type_converter;
 use trunk_ir::op_interface::{
@@ -454,7 +453,7 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
 }
 
 #[test]
-fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
+fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
@@ -462,85 +461,39 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
   !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
   !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  func.func @install(%evidence: !Evidence, %prompt: core.i32) -> core.nil {
+  !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch" { None(), Some(!_closure) }>
+  !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
+  func.func @"std::runtime::evidence::extend"(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !OptionRef, %outer: !Evidence) -> !Evidence {
+    func.return %ev
+  }
+  func.func @install(%evidence: !Evidence, %prompt: core.i32) -> !Evidence {
     %code = arith.const {value = 0} : core.i32
-    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
     %extended = effect.extend %evidence, %prompt, %closure, %evidence {ability = @State} : !Evidence
-    func.return
+    func.return %extended
   }
 }"#,
     );
-    lower_evidence_to_native(&mut ctx, module);
-    let mut plan = production_plan(&ctx, module).expect("typed ownership plan");
-    let install = plan.function(&SymbolPath::new(["install"])).unwrap();
-    let transfer = install
-        .actions()
+    let runtime = crate::evidence_lowering::prepare_evidence_runtime(&ctx, module).unwrap();
+    let install = module
+        .ops(&ctx)
         .iter()
-        .find(|action| action.kind == ActionKind::IntoRawTransfer)
-        .expect("into_raw transfer");
-    let ActionAnchor::Before(into_raw) = transfer.anchor else {
-        panic!("into_raw transfer must anchor the into_raw operation");
-    };
-    assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
+        .find_map(|&op| {
+            func::Func::from_op(&ctx, op)
+                .ok()
+                .filter(|f| f.sym_name(&ctx) == "install")
+        })
+        .unwrap();
+    let converter = native_type_converter(&mut ctx).0;
+    crate::evidence_lowering::lower_evidence_func(&mut ctx, install, &runtime, converter).unwrap();
+
     let lowered = print_module(&ctx, module.op());
-    assert!(!lowered.contains("native_evidence_closure_transfer_destinations"));
-    assert_eq!(
-        lowered.matches("tribute_rt.into_raw").count(),
-        1,
-        "{lowered}"
-    );
-    assert!(
-        !install.actions().iter().any(|action| {
-            action.kind == ActionKind::FinalRelease
-                && action.anchor == ActionAnchor::After(into_raw)
-        }),
-        "into_raw consumes this exact closure ownership unit"
-    );
-
-    let transfer = plan
-        .functions
-        .iter_mut()
-        .find(|function| function.symbol == ["install"])
-        .expect("install ownership plan")
-        .actions
-        .iter_mut()
-        .find(|action| action.kind == ActionKind::IntoRawTransfer)
-        .expect("into_raw transfer");
-    transfer.destination = 1;
-    assert_unchanged_on_error(&mut ctx, module, |ctx, module| {
-        materialize(ctx, module, &plan)
-    });
-}
-
-#[test]
-fn native_evidence_lowers_a_managed_dispatcher_to_into_raw() {
-    let mut ctx = IrContext::new();
-    let module = parse_test_module(
-        &mut ctx,
-        r#"core.module @test {
-  !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
-  !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
-  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  func.func @install(%evidence: !Evidence, %prompt: core.i32) -> core.nil {
-    %code = arith.const {value = 0} : core.i32
-    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %tr = adt.struct_new %code {type = !_closure} : !_closure
-    %extended = effect.extend %evidence, %prompt, %tr, %evidence {ability = @State} : !Evidence
-    func.return
-  }
-}"#,
-    );
-    lower_evidence_to_native(&mut ctx, module);
+    assert!(!lowered.contains("tribute_rt.into_raw"), "{lowered}");
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
     let install = plan.function(&SymbolPath::new(["install"])).unwrap();
-    assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
-    let lowered = print_module(&ctx, module.op());
-    assert_eq!(
-        lowered.matches("tribute_rt.into_raw").count(),
-        1,
-        "{lowered}"
-    );
+    assert_eq!(count(install, ActionKind::IntoRawTransfer), 0);
+    // The closure's unit moves into the `Some` it is stored in.
+    assert_eq!(count(install, ActionKind::StoreTransfer), 1, "{lowered}");
 }
 
 #[test]
@@ -2596,36 +2549,6 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
 }
 
 #[test]
-fn evidence_is_a_managed_reference_the_runtime_returns_owned() {
-    let (ctx, _module, plan) = build(
-        r#"core.module @test {
-  !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
-  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  func.func @__tribute_evidence_mask(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
-  func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
-  func.func @derive(%ev: !Evidence, %id: core.i32) -> core.i32 {
-    %masked = func.call %ev, %id {callee = @__tribute_evidence_mask} : !Evidence
-    %tag = func.call %masked, %id {callee = @__tribute_evidence_lookup} : core.i32
-    func.return %tag
-  }
-}"#,
-    );
-    let derive = plan.function(&SymbolPath::new(["derive"])).unwrap();
-    let [mask, lookup, _] = ctx.block(function_blocks(&ctx, &plan, "derive")[0]).ops[..] else {
-        panic!("three-operation fixture")
-    };
-    // The runtime borrows its evidence argument and returns a unit the caller
-    // owns, which is released after the last use.
-    let masked = ctx.op_result(mask, 0);
-    assert!(plan.is_managed_type(&ctx, ctx.value_ty(masked)));
-    assert_eq!(count(derive, ActionKind::CallAcquire), 0);
-    assert_eq!(
-        final_releases(derive, masked),
-        [ActionAnchor::After(lookup)]
-    );
-}
-
-#[test]
 fn closure_release_uses_its_compiler_generated_allocation_layout() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
@@ -3366,8 +3289,6 @@ const ARRAYS: &str = r#"core.module @test {
   !NodeRef = adt.typeref<{name = "Node"}>
   !Nodes = adt.array<!NodeRef>
   !Ints = adt.array<core.i32>
-  !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
-  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   func.func @pair(%a: !NodeRef, %b: !NodeRef) -> !Nodes {
     %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
     func.return %pair
@@ -3389,10 +3310,6 @@ const ARRAYS: &str = r#"core.module @test {
   func.func @ints(%value: core.i32) -> !Ints {
     %ints = adt.array_of %value {type = !Ints} : !Ints
     func.return %ints
-  }
-  func.func @no_evidence() -> !Evidence {
-    %empty = adt.array_of {type = !Evidence} : !Evidence
-    func.return %empty
   }
 }"#;
 
@@ -3418,7 +3335,7 @@ fn array_constructions_store_their_new_elements_and_borrow_the_rest() {
 }
 
 #[test]
-fn each_array_type_is_one_descriptor_except_evidence() {
+fn each_array_type_is_one_descriptor() {
     let (ctx, _module, plan) = build(ARRAYS);
     let alias = |name: &str| {
         ctx.type_aliases()

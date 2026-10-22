@@ -21,9 +21,7 @@ use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
 use trunk_ir::{BlockRef, OpRef, StringRef, SymbolPath, TypeRef};
 
-use super::rtti::{
-    RTTI_BOOL, RTTI_EVIDENCE, RTTI_FLOAT, RTTI_INT, RTTI_MARKER, RTTI_NAT, RTTI_NIL,
-};
+use super::rtti::{RTTI_BOOL, RTTI_FLOAT, RTTI_INT, RTTI_NAT, RTTI_NIL};
 
 /// Name of the RTTI table: one record per RTTI index.
 pub const RTTI_TABLE: &str = "__tribute_rtti";
@@ -117,7 +115,7 @@ fn positional(fields: Vec<FieldKind>) -> Vec<(String, FieldKind)> {
 }
 
 /// The records of the reserved RTTI indices.
-fn reserved_records() -> [(u32, DescriptorRecord); 7] {
+fn reserved_records() -> [(u32, DescriptorRecord); 5] {
     [
         (RTTI_NIL, DescriptorRecord::builtin("Bytes", vec![])),
         (
@@ -148,8 +146,6 @@ fn reserved_records() -> [(u32, DescriptorRecord); 7] {
             RTTI_FLOAT,
             DescriptorRecord::builtin("Float", vec![FieldKind::Float { width: 64 }]),
         ),
-        (RTTI_EVIDENCE, DescriptorRecord::builtin("Evidence", vec![])),
-        (RTTI_MARKER, DescriptorRecord::builtin("Marker", vec![])),
     ]
 }
 
@@ -379,12 +375,12 @@ mod tests {
 
         let block = module.first_block(&ctx).unwrap();
         let loc = ctx.op(module.op()).location;
-        let release = SymbolPath::new(["__tribute_release_7"]);
+        let release = SymbolPath::new(["__tribute_release_5"]);
         generate(
             &mut ctx,
             block,
-            vec![(7, record)],
-            &[(7, release.clone())]
+            vec![(5, record)],
+            &[(5, release.clone())]
                 .into_iter()
                 .collect::<HashMap<_, _>>(),
             loc,
@@ -398,7 +394,7 @@ mod tests {
         assert_eq!(table.sym_name(&ctx), RTTI_TABLE);
         assert_eq!(
             table.relocations(&ctx),
-            [((7 * RECORD_SIZE + RELEASE_FN_OFFSET) as u32, release)],
+            [((5 * RECORD_SIZE + RELEASE_FN_OFFSET) as u32, release)],
             "only the release function is relocated"
         );
         let bytes = table.bytes(&ctx).to_vec();
@@ -408,7 +404,7 @@ mod tests {
             std::str::from_utf8(&bytes[offset..offset + len]).unwrap()
         };
 
-        let variant = 7 * RECORD_SIZE;
+        let variant = 5 * RECORD_SIZE;
         assert_eq!(word(variant + 8), RecordKind::Variant as u32);
         assert_eq!(word(variant + 12), 1);
         assert_eq!(text(variant + 16), "Some");
@@ -416,7 +412,7 @@ mod tests {
         let owner = word(variant + 28) as usize;
         assert_eq!(
             owner,
-            8 * RECORD_SIZE,
+            6 * RECORD_SIZE,
             "the enum record follows the index records"
         );
         assert_eq!(word(owner + 8), RecordKind::Enum as u32);
@@ -427,7 +423,7 @@ mod tests {
         assert_eq!(word(fields + 8), FieldKind::Dynamic.record_code());
 
         // Every reserved index has a named builtin record.
-        for index in 0..7 {
+        for index in 0..5 {
             let base = index * RECORD_SIZE;
             assert_eq!(word(base + 8), RecordKind::Builtin as u32);
             assert!(!text(base + 16).is_empty());
