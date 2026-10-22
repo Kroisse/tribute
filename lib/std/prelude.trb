@@ -749,7 +749,7 @@ pub(pkg) mod runtime {
                 True -> {
                     let half = high - low
                     let middle = low + half / 2
-                    case Slots::get(ev, middle).ability_id < ability_id {
+                    case ev.get(middle).ability_id < ability_id {
                         True -> search(ev, ability_id, middle + 1, high)
                         False -> search(ev, ability_id, low, middle)
                     }
@@ -760,25 +760,25 @@ pub(pkg) mod runtime {
 
         // The slot of `ability_id`: where its marker is, or would be inserted.
         fn find(ev: Slots(Marker), ability_id: Int) ->{} Nat {
-            search(ev, ability_id, 0, Slots::len(ev))
+            search(ev, ability_id, 0, ev.len)
         }
 
         fn holds(ev: Slots(Marker), at: Nat, ability_id: Int) ->{} Bool {
-            case at < Slots::len(ev) {
-                True -> Slots::get(ev, at).ability_id == ability_id
+            case at < ev.len {
+                True -> ev.get(at).ability_id == ability_id
                 False -> False
             }
         }
 
         fn missing(ev: Slots(Marker)) ->{} Marker {
-            Slots::get(ev, Slots::len(ev))
+            ev.get(ev.len)
         }
 
         // The top marker of `ability_id`.
         fn top(ev: Slots(Marker), ability_id: Int) ->{} Marker {
             let at = find(ev, ability_id)
             case holds(ev, at, ability_id) {
-                True -> Slots::get(ev, at)
+                True -> ev.get(at)
                 False -> missing(ev)
             }
         }
@@ -794,14 +794,14 @@ pub(pkg) mod runtime {
         ) ->{} Slots(Marker) {
             let at = find(ev, ability_id)
             case holds(ev, at, ability_id) {
-                True -> Slots::replace(ev, at, Marker {
+                True -> ev.replace(at, Marker {
                     ability_id: ability_id,
                     prompt_tag: prompt_tag,
                     tr_dispatch_fn: tr_dispatch_fn,
-                    shadowed: Some(Slots::get(ev, at)),
+                    shadowed: Some(ev.get(at)),
                     outer: outer,
                 })
-                False -> Slots::insert(ev, at, Marker {
+                False -> ev.insert(at, Marker {
                     ability_id: ability_id,
                     prompt_tag: prompt_tag,
                     tr_dispatch_fn: tr_dispatch_fn,
@@ -818,7 +818,7 @@ pub(pkg) mod runtime {
         pub(pkg) fn lookup_tr(ev: Slots(Marker), ability_id: Int) ->{} Dispatch {
             case top(ev, ability_id).tr_dispatch_fn {
                 Some(dispatch) -> dispatch
-                None -> lookup_tr(Slots::remove(ev, Slots::len(ev)), ability_id)
+                None -> lookup_tr(ev.remove(ev.len), ability_id)
             }
         }
 
@@ -835,11 +835,11 @@ pub(pkg) mod runtime {
         pub(pkg) fn mask(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
             let at = find(ev, ability_id)
             case holds(ev, at, ability_id) {
-                True -> case Slots::get(ev, at).shadowed {
-                    Some(below) -> Slots::replace(ev, at, below)
-                    None -> Slots::remove(ev, at)
+                True -> case ev.get(at).shadowed {
+                    Some(below) -> ev.replace(at, below)
+                    None -> ev.remove(at)
                 }
-                False -> Slots::replace(ev, at, missing(ev))
+                False -> ev.replace(at, missing(ev))
             }
         }
 
@@ -855,7 +855,7 @@ pub(pkg) mod runtime {
         pub(pkg) fn tail(ev: Slots(Marker), slot: Int) ->{} Slots(Marker) {
             let at = find(ev, slot)
             case holds(ev, at, slot) {
-                True -> Slots::get(ev, at).outer
+                True -> ev.get(at).outer
                 False -> ev
             }
         }

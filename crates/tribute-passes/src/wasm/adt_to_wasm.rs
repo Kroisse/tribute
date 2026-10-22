@@ -538,12 +538,10 @@ impl RewritePattern for ArrayOfPattern {
 
         let loc = ctx.op(op).location;
         let array_ty = gc_array_type(ctx, array_of.r#type(ctx));
-        let elements: Vec<_> = array_of
-            .elements(ctx)
-            .to_vec()
-            .into_iter()
-            .map(|element| gc_element_operand(ctx, rewriter, array_ty, element, loc))
-            .collect();
+        let mut elements = array_of.elements(ctx).to_vec();
+        for element in &mut elements {
+            *element = gc_element_operand(ctx, rewriter, array_ty, *element, loc);
+        }
         let new_op = wasm_gc_dialect::ArrayNewFixed::operands(elements)
             .r#type(array_ty)
             .build(ctx, loc);
@@ -575,12 +573,10 @@ impl RewritePattern for ArraySplicePattern {
         let loc = ctx.op(op).location;
         let array_ty = gc_array_type(ctx, splice.r#type(ctx));
         let source = gc_array_operand(ctx, rewriter, splice.source(ctx), loc);
-        let elements: Vec<_> = splice
-            .elements(ctx)
-            .to_vec()
-            .into_iter()
-            .map(|element| gc_element_operand(ctx, rewriter, array_ty, element, loc))
-            .collect();
+        let mut elements = splice.elements(ctx).to_vec();
+        for element in &mut elements {
+            *element = gc_element_operand(ctx, rewriter, array_ty, *element, loc);
+        }
         let start = wasm_index(ctx, rewriter, splice.start(ctx), loc);
         let end = wasm_index(ctx, rewriter, splice.end(ctx), loc);
         let i32_ty = core::I32::type_ref(ctx);
