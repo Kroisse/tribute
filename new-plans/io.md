@@ -153,9 +153,9 @@ Stream의 수명은 [host resource의 수명](host-interface.md#수명)을 따�
 
 ## Entrypoint
 
-`main`은 `Nil`을 반환해야 한다. `main`의 residual row는 program의 host interface이며,
-[host interface의 조건](host-interface.md#host가-처리하는-ability)을 지키는 ability만 남을 수
-있다.
+`main`은 command 형태의 host가 부르는 [entrypoint](host-interface.md#entrypoint)이며
+`Nil`을 반환해야 한다. `main`의 residual row는 host interface의 일부이며,
+[host가 처리할 수 있는](host-interface.md#host가-처리하는-ability) ability만 남을 수 있다.
 
 ```rust
 fn main() ->{Io} Nil {
@@ -201,7 +201,7 @@ EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 반환
 노출하지 않는다.
 
 - `Io`의 operation은 WIT의 동기 함수가 되고, `OutStream`과 `InStream`은 그 interface의
-  resource가 된다. `main`에 남은 `Read`/`Write`의 operation은 비동기 함수가 된다.
+  resource가 된다. Entrypoint에 남은 `Read`/`Write`의 operation은 비동기 함수가 된다.
 - 이 interface는 WASI interface를 그대로 옮긴 것이 아니라 Tribute가 정한 계약이다.
   Wasm host는 이를 WASI의 표준 stream 위에 구현할 수 있다.
 - Native에서는 `tribute-runtime`이 같은 interface를 C ABI 위에서 구현한다.

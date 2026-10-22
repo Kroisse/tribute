@@ -74,11 +74,11 @@ fn(String) ->{Http, Async} Response      // Http와 Async
 ### Host Interface
 
 Program 밖의 기능은 host가 처리하는 ability로 연다. 그런 ability도 일반 ability이며,
-program 안에서 처리되지 않고 `main`에 남으면 host가 처리한다. `main`에 남은 row가
-program의 host interface이고, 규칙은 [host-interface.md](host-interface.md)가
-정한다. Compiler가 특별히 아는 ambient ability는 없다. 표준 입출력도 prelude source에
-선언한 ability `std::io::Io`와 그 위의 `std::io::Read`, `std::io::Write`로
-제공한다([io.md](io.md)).
+program 안에서 처리되지 않고 host가 부르는 entrypoint(`main` 등)에 남으면 host가
+처리한다. Entrypoint에 남은 row들이 program의 host interface이고, 규칙은
+[host-interface.md](host-interface.md)가 정한다. Compiler가 특별히 아는 ambient
+ability는 없다. 표준 입출력도 prelude source에 선언한 ability `std::io::Io`와 그 위의
+`std::io::Read`, `std::io::Write`로 제공한다([io.md](io.md)).
 
 ```rust
 use std::abilities::Throw

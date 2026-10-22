@@ -17,9 +17,9 @@
 
 ## Host가 처리하는 ability
 
-Host가 처리하는 ability는 선언의 종류가 아니다. `main`의 residual row에 남은 ability를
-host가 처리하며, 그 row가 program의 host interface다. Ability를 host가 처리하도록 따로
-표시하는 문법은 없다.
+Host가 처리하는 ability는 선언의 종류가 아니다. [Entrypoint](#entrypoint)의 residual
+row에 남은 ability를 host가 처리하며, 그 row들이 program의 host interface다. Ability를
+host가 처리하도록 따로 표시하는 문법은 없다.
 
 ```rust
 ability Clock {
@@ -32,27 +32,39 @@ ability Kv {
 }
 ```
 
-`main`의 residual row에 남는 ability는 다음 조건을 모두 지켜야 한다. Frontend는
-`main`에서 이 조건을 검사하고, 어긴 ability가 있으면 거부한다.
+Entrypoint의 residual row에 남는 ability는 다음 조건을 모두 지켜야 한다. Frontend는
+각 entrypoint에서 이 조건을 검사하고, 어긴 ability가 있으면 거부한다.
 
 - **Operation의 타입은 경계를 넘을 수 있다.** Parameter와 result는
-  [경계를 넘는 값](#경계를-넘는-값)으로 제한한다. 제네릭 ability는 `main`의 row에서
+  [경계를 넘는 값](#경계를-넘는-값)으로 제한한다. 제네릭 ability는 entrypoint의 row에서
   구체 instance가 되므로 그 instance의 타입으로 검사한다.
 
 `fn` operation과 `op` operation 모두 host에 맡길 수 있다. 둘은 경계에서 다른 종류의
 함수가 된다([Operation 종류와 경계](#operation-종류와-경계)).
 
-Ability가 host에 닿는 것은 작성자가 `main`의 row에 그 ability를 적었을 때뿐이다.
-`main`의 row는 본문에서 추론하지 않으므로, 처리를 잊은 ability가 조용히 host 요구가
+Ability가 host에 닿는 것은 작성자가 entrypoint의 row에 그 ability를 적었을 때뿐이다.
+Entrypoint의 row는 본문에서 추론하지 않으므로, 처리를 잊은 ability가 조용히 host 요구가
 되지 않는다.
 
-- **Tribute handler가 먼저 처리한다.** Host interface의 operation도 가장 가까운 handler로
-  dispatch된다. 프로그램 안에 handler가 없을 때만 host에 닿는다. 그래서 host
+- **Tribute handler가 먼저 처리한다.** Host interface의 operation도 가장 가까운
+  handler로 dispatch된다. 프로그램 안에 handler가 없을 때만 host에 닿는다. 그래서 이런
   ability를 쓰는 코드는 host 없이도 handler를 씌워 실행하고 테스트할 수 있다.
 - **같은 ability가 두 역할을 할 수 있다.** 어떤 program에서는 Tribute handler가
-  처리하는 ability를 다른 program은 `main`에 남겨 host에게 맡길 수 있다. 예를 들어
+  처리하는 ability를 다른 program은 entrypoint에 남겨 host에게 맡길 수 있다. 예를 들어
   [`std::io::Write`](io.md#read와-write)는 표준 handler로 stream에 묶을 수도, host가
   직접 구현할 수도 있다.
+
+## Entrypoint
+
+Entrypoint는 host가 부르는 Tribute 함수다. `main`은 command 형태의 host가 부르는
+entrypoint의 한 경우다. Plugin이나 embedding host는 여러 entrypoint를 부를 수 있다.
+
+- 각 entrypoint의 residual row에는 host가 처리할 수 있는 ability만 남을 수 있다.
+- 프로그램의 host interface는 모든 entrypoint의 residual row를 합친 것이다. 각
+  entrypoint의 signature는 그 entrypoint가 닿는 host 기능을 따로 보여 준다.
+
+Entrypoint를 표시하는 방법과 entrypoint signature의 규칙은 아래
+[미정 사항](#미정-사항)에 둔다.
 
 ## Host 경계
 
@@ -65,7 +77,8 @@ interface의 ability 하나가 WIT interface 하나가 되고, operation은 그 
 경계를 넘을 수 있는 것은 WIT로 표현할 수 있는 것으로 한정한다.
 
 - **Wasm:** 프로그램을 component로 내보내고, host interface를 component의 import로,
-  entrypoint를 export로 둔다. Host가 import를 채우지 못하면 실행 중이 아니라 instantiation에서 실패한다.
+  entrypoint를 export로 둔다. Host가 import를 채우지 못하면 실행 중이 아니라
+  instantiation에서 실패한다.
 - **Native:** 같은 WIT interface를 C ABI 위에서 쓴다. 값의 배치는 Component Model의
   canonical ABI를 그대로 따르므로, 경계용으로 값을 펼치고 읽는 lowering을 두 타겟이
   공유한다. Launcher나 embedder는 WIT에서 생성한 binding을 구현하며, 빠진 함수는
@@ -91,7 +104,7 @@ interface의 ability 하나가 WIT interface 하나가 되고, operation은 그 
 - **취소.** Program이 보관한 continuation을 resume하지 않고 버리면 그 호출을 취소한다.
   Host가 호출을 취소하면 보관한 continuation을 drop하며, 그 안의 값은 RC로 해제된다.
 - **끝나지 않는 operation.** 결과 타입이 `Never`인 `op`는 host가 값을 받고 resume하지
-  않는다. 예를 들어 `main`에 남은 `Throw(e)`는 처리되지 않은 오류를 host에 넘긴다.
+  않는다. 예를 들어 entrypoint에 남은 `Throw(e)`는 처리되지 않은 오류를 host에 넘긴다.
 
 Wasm에서 `op`의 import는 Component Model의 비동기 함수이며, entrypoint export는 callback
 방식으로 event loop에 돌아간다. Native launcher도 같은 event loop를 둔다. Host는 비동기
@@ -191,6 +204,10 @@ ability는 없다. 표준 ability의 두 층은 [std-abilities.md](std-abilities
 
 ## 미정 사항
 
+- **Entrypoint의 표시와 규칙.** `main` 밖의 entrypoint를 표시하는 방법이다. 예를 들어
+  `export` 같은 표시, root module의 `pub` 함수, 별도의 world 선언이 있다. Entrypoint의
+  parameter와 result가 경계를 넘을 수 있는 타입이어야 한다는 규칙, WIT export 이름,
+  entrypoint마다 root evidence를 따로 만들지도 정해야 한다.
 - **WIT 생성 규칙.** Host interface의 ability와 그 module path에서 WIT package,
   interface, 함수 이름을 만드는 방식이다. 구체 타입이 된 제네릭 인스턴스의 WIT 타입
   이름도 정해야 한다.
@@ -209,10 +226,11 @@ ability는 없다. 표준 ability의 두 층은 [std-abilities.md](std-abilities
   instance가 다르면 다른 ability라는 기존 규칙만으로 표현이 섞이지 않는다. 이 가운데
   하나를 들이기 전까지 Tribute handler에게 host resource는 불투명하다.
 - **Callback.** Host가 Tribute 함수를 다시 부르는 경로다. WIT에 함수 값이 없으므로
-  Tribute가 export하는 resource로 감싼다. 그 함수가 수행할 수 있는 effect와 경계
-  안에서의 재진입 규칙을 정해야 한다.
+  Tribute가 export하는 resource로 감싼다. 이것도 entrypoint의 한 종류다. 그 함수가
+  수행할 수 있는 effect와, 한 entrypoint가 실행 중일 때 host가 다른 entrypoint를 부르는
+  재진입 규칙을 정해야 한다.
 - **동시에 기다리는 호출.** `op` operation의 비동기 경계는 continuation 하나가 기다리는
   경우를 정한다. 여러 계산을 동시에 진행하고 여러 호출을 함께 기다리는 scheduler,
-  그리고 기다리는 동안 host가 다른 export를 부르는 재진입 규칙을 정해야 한다.
+  그리고 기다리는 동안 host가 다른 entrypoint를 부르는 재진입 규칙을 정해야 한다.
 - **열린 자식이 있는 부모의 close.** 자식 resource가 열린 채 부모를 close하면 실패를
   돌려줄지, 자식도 닫힌 것으로 표시할지, host의 규칙을 따를지 정해야 한다.

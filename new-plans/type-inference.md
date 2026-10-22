@@ -148,7 +148,7 @@ fn length(xs: List(a)) -> Nat
 ```
 
 Host가 처리하는 ability도 ability row의 concrete label로 전파되며 handler로 처리할 수 있다.
-`main`에 남은 ability는 host interface가 된다([host-interface.md](host-interface.md)).
+Entrypoint에 남은 ability는 host interface가 된다([host-interface.md](host-interface.md)).
 표준 입출력 API는 [io.md](io.md)를, calling convention은
 [cps-effects.md](cps-effects.md#호출-규약)를 따른다.
 

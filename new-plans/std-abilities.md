@@ -13,14 +13,15 @@
   Compiler가 특별히 아는 ambient ability는 두지 않는다.
 - 대부분의 코드는 handle 없는 ability를 요구한다. 그래서 library 코드는 어떤 파일이나
   stream에 닿을지 스스로 정하지 않고, 테스트는 host 없이 handler 하나로 대체할 수 있다.
-- Host 권한이 정해지는 곳은 handle을 다루는 ability가 처음 나타나는 곳, 보통 `main`이다.
-  `main`의 signature가 곧 program의 host interface다
-  ([Host 경계](host-interface.md#host-경계)).
+- Host 권한이 정해지는 곳은 handle을 다루는 ability가 처음 나타나는 곳, 보통 `main` 같은
+  entrypoint다. Entrypoint의 signature가 곧 그 entrypoint가 요구하는 host 기능이다
+  ([Entrypoint](host-interface.md#entrypoint)).
 
 ## 두 층
 
 표준 기능은 두 층으로 나눈다. 두 층 모두 일반 ability 선언이며, host가 처리하는지는
-선언이 아니라 `main`에 남느냐로 정해진다([Host가 처리하는 ability](host-interface.md#host가-처리하는-ability)).
+선언이 아니라 entrypoint에 남느냐로 정해진다
+([Host가 처리하는 ability](host-interface.md#host가-처리하는-ability)).
 
 | 층 | 예 | 성질 |
 | --- | --- | --- |
@@ -58,7 +59,7 @@ fn greet(name: String) ->{Write} Nil {
 fn capture(app: fn() ->{e, Write} a) ->{e} #(a, Bytes)
 ```
 
-Host가 대상 없는 ability를 직접 구현할 수 있다면 `main`이 그 ability를 그대로 남겨도
+Host가 대상 없는 ability를 직접 구현할 수 있다면 entrypoint가 그 ability를 그대로 남겨도
 된다(`fn main() ->{Write} Nil`).
 
 ### 대상 없는 층의 operation이 `op`인 이유
@@ -69,7 +70,7 @@ Host가 대상 없는 ability를 직접 구현할 수 있다면 `main`이 그 ab
 
 - **조기 종료.** 소비자 handler가 resume하지 않으면 생산자는 그 지점에서 멈춘다.
 - **비동기.** Handler가 결과를 돌려주기 전에 다른 `op`를 수행해 기다릴 수 있다.
-  `main`에 남은 `op`는 host interface에서 비동기 함수가 된다.
+  Entrypoint에 남은 `op`는 host interface에서 비동기 함수가 된다.
 - **변환.** 압축이나 tee처럼 받은 쓰기를 고쳐 바깥 `Write`로 보내는 handler를 쌓는다.
 
 대가로 대상 없는 층을 요구하는 함수는 CPS 규약을 쓴다. Handle 층은 `fn`이므로 묶는
@@ -121,8 +122,8 @@ pub fn read_line() ->{Read, Throw(Error)} String
 - **Handle 층의 가짜 resource.** Test handler가 자기 stream을 만들어 `Io`를 흉내 내는
   경우다. 대상 없는 층을 대체하면 대부분 필요 없다. 조건과 후보는
   [host-interface.md](host-interface.md#미정-사항)에 있다.
-- **Default handler.** `main`까지 처리되지 않은 ability에 entrypoint가 표준 handler를
-  씌우는 선언이다. `main`의 host interface가 signature와 달라지고 handler 설치 순서를
+- **Default handler.** Entrypoint까지 처리되지 않은 ability에 표준 handler를 씌우는
+  선언이다. Host interface가 entrypoint의 signature와 달라지고 handler 설치 순서를
   정해야 하므로 지금은 두지 않는다.
 - **파일 시스템.** Host가 준 directory handle을 통해서만 파일에 닿는 구조(`open_at`,
   preopen)를 검토한다. 전역 root는 두지 않는다. 파일 stream의 offset을 정하는 방식도
