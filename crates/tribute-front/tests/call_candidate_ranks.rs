@@ -206,3 +206,72 @@ fn test(n: Int) -> Nat {
         "{errors:#?}"
     );
 }
+
+/// A qualified path through a prelude name is the prelude's reading of it,
+/// at the package root and in an inline module; a type the scope declares
+/// under that name takes the path instead.
+#[salsa_test]
+fn qualified_path_through_a_prelude_name(db: &salsa::DatabaseImpl) {
+    let prelude = SourceCst::from_source_str(
+        db,
+        "prelude_path.trb",
+        r#"
+fn test(x: Option(Nat)) -> Option(Nat) {
+    x.Option::map(fn(n) n)
+}
+
+mod inner {
+    pub fn test(x: Option(Nat)) -> Option(Nat) {
+        x.Option::map(fn(n) n)
+    }
+}
+"#,
+    );
+    let declared = SourceCst::from_source_str(
+        db,
+        "declared_path.trb",
+        r#"
+enum Option { Nothing }
+
+pub mod Option {
+    pub fn map(opt: Option, f: fn(Nat) -> Nat) -> Option { opt }
+}
+
+fn test(x: Option) -> Option {
+    x.Option::map(fn(n) n)
+}
+
+mod inner {
+    enum Option { Nothing }
+
+    pub mod Option {
+        pub fn map(opt: Option, f: fn(Nat) -> Nat) -> Option { opt }
+    }
+
+    pub fn test(x: Option) -> Option {
+        x.Option::map(fn(n) n)
+    }
+}
+"#,
+    );
+
+    let map = |target: &str| TdnrSummary {
+        method_calls: vec![],
+        calls: vec![TdnrCall {
+            target: target.to_owned(),
+            arg_count: 2,
+        }],
+    };
+    assert_eq!(
+        tdnr_function_summary(db, prelude, "test"),
+        map("std::Option::map")
+    );
+    assert_eq!(
+        tdnr_function_summary(db, declared, "test"),
+        map("Option::map")
+    );
+    for source in [prelude, declared] {
+        let errors = ast_pipeline_error_messages(db, source);
+        assert!(errors.is_empty(), "{errors:#?}");
+    }
+}

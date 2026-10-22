@@ -514,9 +514,7 @@ impl<'db> Resolver<'db> {
     /// Whether the first segment of a qualified `path` is a prelude name the
     /// scope does not name through its declarations and `use`s.
     fn reaches_through_prelude(&self, path: &UnresolvedName) -> bool {
-        let Some(first) = path.path.first() else {
-            return false;
-        };
+        let first = path.path.first().expect("a method path has a segment");
         if self.env.library_namespace(first).is_none() || self.module_import(first).is_some() {
             return false;
         }
@@ -531,9 +529,7 @@ impl<'db> Resolver<'db> {
     /// Whether a qualified `path` starts with a path keyword or a dependency
     /// package the scope does not shadow, and so names one path only.
     fn names_one_path(&self, path: &UnresolvedName) -> bool {
-        let Some(first) = path.path.first() else {
-            return false;
-        };
+        let first = path.path.first().expect("a method path has a segment");
         matches!(
             absolute_path(self.package_depth, &self.module_path, &path.path),
             Ok(Some(_))
@@ -576,9 +572,7 @@ impl<'db> Resolver<'db> {
                 functions.push(*id);
             }
         };
-        let Some((name, namespace)) = path.split_last() else {
-            return functions;
-        };
+        let (name, namespace) = path.split_last().expect("a method path has a segment");
         match self.library_namespace_path(namespace) {
             Some(namespace) => push(&namespace, name),
             None if namespace.is_empty() => push(&[], name),
