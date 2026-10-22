@@ -76,19 +76,19 @@ fn(String) ->{Http, Async} Response      // Http와 Async
 Program 밖의 기능은 host ability로 연다. Host ability는 program 안에서 처리되지
 않으면 host가 처리하는 일반 ability이며, 규칙은
 [host-abilities.md](host-abilities.md)가 정한다. Compiler가 특별히 아는 ambient
-ability는 없다. 표준 입출력도 prelude source에 선언한 host ability `std::io::Io`와
-그 위의 일반 ability `std::io::Console`로 제공한다([io.md](io.md)).
+ability는 없다. 표준 입출력도 prelude source에 선언한 ability `std::io::Io`와
+그 위의 `std::io::Read`, `std::io::Write`로 제공한다([io.md](io.md)).
 
 ```rust
 use std::abilities::Throw
-use std::io::{Console, Error, print, print_line, read_line}
+use std::io::{Read, Write, Error, print, print_line, read_line}
 
-fn greet(name: String) ->{Console} Nil {
+fn greet(name: String) ->{Write} Nil {
     print("Hello, ")
     print_line(name)
 }
 
-fn prompt() ->{Console, Throw(Error)} String {
+fn prompt() ->{Read, Write, Throw(Error)} String {
     print("Name: ")
     read_line()
 }
@@ -232,7 +232,7 @@ ability State(s) {
 }
 
 ability Logger {
-    fn log(msg: String) -> Nil
+    op log(msg: String) -> Nil
 }
 
 ability Fail {
@@ -258,7 +258,7 @@ ability Stream(a) {
 
 // ❌ 불가: 다른 ability를 참조
 ability Reporter {
-    fn report(message: String) ->{Reporter, Console} Nil
+    op report(message: String) ->{Reporter, Write} Nil
 }
 ```
 
@@ -267,14 +267,17 @@ ability Reporter {
 ```rust
 // operation은 자신의 ability만 수행
 ability Reporter {
-    fn report(message: String) -> Nil
+    op report(message: String) -> Nil
 }
 
-// handler가 Console effect를 사용하여 구현
-fn run_reporter(comp: fn() ->{e, Reporter} a) ->{e, Console} a {
+// handler가 Write effect를 사용하여 구현
+fn run_reporter(comp: fn() ->{e, Reporter} a) ->{e, Write} a {
     handle comp() {
         do result { result }
-        fn Reporter::report(message) { print_line(message) }
+        op Reporter::report(message) {
+            print_line(message)
+            resume Nil
+        }
     }
 }
 ```
@@ -295,7 +298,10 @@ operation을 정의하듯, handler에서도 `fn`/`op` 키워드로 각 operation
 ```rust
 handle computation() {
     do result { result }
-    fn Logger::log(msg) { print_line(msg) }
+    op Logger::log(msg) {
+        print_line(msg)
+        resume Nil
+    }
     op State::get() { run_state(fn() resume state, state) }
 }
 ```
@@ -340,15 +346,15 @@ resume 값이 된다. 함수 정의와 동일한 구조:
 
 ```rust
 // 선언
-ability Logger {
-    fn log(msg: String) -> Nil
+ability Clock {
+    fn now_millis() -> Int
 }
 
 // handler (구현)
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
+fn fixed_clock(comp: fn() ->{e, Clock} a, now: Int) ->{e} a {
     handle comp() {
         do result { result }
-        fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
+        fn Clock::now_millis() { now } // Int 반환 → resume now
     }
 }
 ```
@@ -442,10 +448,13 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 중첩하거나 하나의 handler에서 여러 ability를 처리할 수 있다:
 
 ```rust
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Write} a {
     handle comp() {
         do result { result }
-        fn Logger::log(msg) { print_line(msg) }
+        op Logger::log(msg) {
+            print_line(msg)
+            resume Nil
+        }
     }
 }
 ```
@@ -453,10 +462,10 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
 ## 전체 예시
 
 ```rust
-use std::io::{Io, Console, console, print_line}
+use std::io::{Io, Write, stdio, print_line}
 
 ability Logger {
-    fn log(msg: String) -> Nil
+    op log(msg: String) -> Nil
 }
 
 ability State(s) {
@@ -478,15 +487,18 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     }
 }
 
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Write} a {
     handle comp() {
         do result { result }
-        fn Logger::log(msg) { print_line(msg) }
+        op Logger::log(msg) {
+            print_line(msg)
+            resume Nil
+        }
     }
 }
 
 fn main() ->{Io} Nil {
-    with console
+    with stdio
     fn() {
         fn() {
             counter()
@@ -503,7 +515,7 @@ fn main() ->{Io} Nil {
 
 | 선언 | resume | continuation 캡처 | handler arm | 용례 |
 | ---- | ------ | ----------------- | ----------- | ---- |
-| `fn log(msg: String) -> Nil` | 1회, 암시적 | 없음 | `fn`만 가능 | Reader, Logger |
+| `fn log(msg: String) -> Nil` | 1회, 암시적 | 없음 | `fn`만 가능 | Reader, Clock |
 | `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op` 또는 `fn` | State, Stream, Coroutine |
 | `op fail(msg: String) -> Never` | 0회 | 없음 | `op` 또는 `fn` | Fail, Exception |
 

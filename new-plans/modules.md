@@ -568,7 +568,7 @@ fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(
 // app/main.trb
 
 use std::collections::{List, Option}
-use std::io::{Io, Console, console, print_line}
+use std::io::{Io, Write, stdio, print_line}
 
 struct User {
     name: String
@@ -576,7 +576,7 @@ struct User {
 }
 
 fn main() ->{Io} Nil {
-    with console
+    with stdio
     let numbers = List::of(1, 2, 3, 4, 5)
 
     let result = numbers
@@ -594,7 +594,7 @@ fn main() ->{Io} Nil {
 }
 
 // 명시적 함수 전달 예시
-fn sort_and_print(items: List(String)) ->{Console} Nil {
+fn sort_and_print(items: List(String)) ->{Write} Nil {
     let sorted = List::sort(items, String::compare)
     sorted.each(fn(item) {
         print_line(item)

@@ -148,7 +148,7 @@ fn length(xs: List(a)) -> Nat
 ```
 
 Host ability도 ability row의 concrete label로 전파되며 handler로 처리할 수 있다.
-`main`에는 host ability만 남을 수 있다([host-abilities.md](host-abilities.md)).
+`main`에 남은 ability는 host interface가 된다([host-abilities.md](host-abilities.md)).
 표준 입출력 API는 [io.md](io.md)를, calling convention은
 [cps-effects.md](cps-effects.md#호출-규약)를 따른다.
 
@@ -279,8 +279,8 @@ Label을 명시한 열린 row `{A | u}`를 닫힌 row나 label을 명시한 row�
 ```rust
 fn apply(x: a, f: fn(a) ->{eff} b) ->{eff} b { f(x) }
 
-// eff = {Console}; 본문 row {Console | eff}는 선언된 {Console}과 같다
-fn shout() ->{Console} Nil { apply("io", print_line) }
+// eff = {Write}; 본문 row {Write | eff}는 선언된 {Write}와 같다
+fn shout() ->{Write} Nil { apply("io", print_line) }
 ```
 
 ### 지연된 호출의 effect
@@ -860,13 +860,13 @@ fn add(x: Int, y: Int) -> Int {
 ### Effect 전파
 
 ```rust
-fn fetch_and_print(url: String) ->{Http, Console} Nil {
+fn fetch_and_print(url: String) ->{Http, Write} Nil {
     let response = Http::get(url)
     print_line(response.body)
 }
 // Http::get : fn(String) ->{Http} Response
-// print_line : fn(String) ->{Console} Nil
-// 합집합: {Http, Console}
+// print_line : fn(String) ->{Write} Nil
+// 합집합: {Http, Write}
 ```
 
 ### Handler
@@ -876,7 +876,7 @@ fn with_state(comp: fn() ->{e, State(Int)} a) ->{e} a {
     run_state(comp, 0)
 }
 
-fn example() ->{Console} Int {
+fn example() ->{Write} Int {
     with_state(fn() {
         let n = State::get()
         State::set(n + 1)
@@ -884,8 +884,8 @@ fn example() ->{Console} Int {
         State::get()
     })
 }
-// comp의 effect: {Console, State(Int)}
-// State(Int) 소비 후: {Console}
+// comp의 effect: {Write, State(Int)}
+// State(Int) 소비 후: {Write}
 ```
 
 ### 고차 함수
@@ -909,10 +909,10 @@ fn compose(f: fn(a) ->{e1} b, g: fn(b) ->{e2} c) -> fn(a) ->{e1, e2} c {
 }
 
 let h = compose(
-    fn(x) { print_line(x); x },             // ->{Console}
+    fn(x) { print_line(x); x },             // ->{Write}
     fn(x) { Http::get(x) }                  // ->{Http}
 )
-// h : fn(String) ->{Console, Http} Response
+// h : fn(String) ->{Write, Http} Response
 ```
 
 ---

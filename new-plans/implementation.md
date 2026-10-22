@@ -410,9 +410,9 @@ suspended-operation 값을 검사하는 loop를 생성하지 않는다.
 Direct < EvidenceDirect < Cps
 ```
 
-`fn` operation만 가진 `std::io::Io`나 `std::io::Console`만 요구하는 함수는
-`EvidenceDirect`다. `Throw(std::io::Error)`가 함께 있으면 `Throw` 때문에 `Cps`가
-된다. 표준 입출력 API와 host 경계는 [io.md](io.md)와
+`fn` operation만 가진 `std::io::Io`만 요구하는 함수는 `EvidenceDirect`다.
+`op` operation을 가진 `std::io::Read`나 `std::io::Write`, `Throw(std::io::Error)`를
+요구하면 `Cps`가 된다. 표준 입출력 API와 host 경계는 [io.md](io.md)와
 [host-abilities.md](host-abilities.md)를 따른다.
 
 ### Root entry

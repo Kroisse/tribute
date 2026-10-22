@@ -603,7 +603,7 @@ Ability operation은 두 종류로 선언한다:
 
 ```rust
 ability Logger {
-    fn log(msg: String) -> Nil
+    op log(msg: String) -> Nil
 }
 
 ability State(s) {
@@ -649,7 +649,7 @@ operation을 정의하듯, handler에서도 같은 키워드로 각 operation의
 Body의 반환값이 곧 resume 값. `resume` 사용 불가:
 
 ```rust
-fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
+fn Clock::now_millis() { now } // Int 반환 → resume now
 ```
 
 **`op` handler arm과 `resume`:**
@@ -685,10 +685,13 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     }
 }
 
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Write} a {
     handle comp() {
         do result { result }
-        fn Logger::log(msg) { print_line(msg) }
+        op Logger::log(msg) {
+            print_line(msg)
+            resume Nil
+        }
     }
 }
 
@@ -733,7 +736,7 @@ fn fetch(url: String) ->{Http} Response {
     Http::get(url)
 }
 
-fn example() ->{State(Int), Console} Nil {
+fn example() ->{State(Int), Write} Nil {
     let n = State::get()
     print_line(Int::to_string(n))
 }
@@ -855,12 +858,12 @@ x * { y + z }           // x * (y + z) 와 동일
 
 ```rust
 fn main() ->{Io} Nil {
-    with console
+    with stdio
     print_line("Hello")
 }
-// console(fn() { print_line("Hello") })
+// stdio(fn() { print_line("Hello") })
 
-fn report(xs: List(Int)) ->{Console} Nil {
+fn report(xs: List(Int)) ->{Write} Nil {
     with x <- xs.each
     print_line(Int::to_string(x))
 }
@@ -1334,7 +1337,7 @@ let x = 1; let y = 2; x + y
 
 ```rust
 use std::collections::{List, Option}
-use std::io::{Io, Console, console, print_line}
+use std::io::{Io, Write, stdio, print_line}
 
 struct User {
     name: String
@@ -1347,10 +1350,10 @@ enum Status {
 }
 
 ability Logger {
-    fn log(msg: String) -> Nil
+    op log(msg: String) -> Nil
 }
 
-pub fn greet(user: User) ->{Console} Nil {
+pub fn greet(user: User) ->{Write} Nil {
     let greeting = "Hello, " <> user.name <> "!"
     print_line(greeting)
 }
@@ -1364,15 +1367,18 @@ fn process(users: List(User)) ->{Logger} List(String) {
         })
 }
 
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Write} a {
     handle comp() {
         do result { result }
-        fn Logger::log(msg) { print_line("[LOG] " <> msg) }
+        op Logger::log(msg) {
+            print_line("[LOG] " <> msg)
+            resume Nil
+        }
     }
 }
 
 fn main() ->{Io} Nil {
-    with console
+    with stdio
     let users = [
         User { name: "Alice", age: 30 },
         User { name: "Bob", age: 17 },
