@@ -1,4 +1,4 @@
-# Host Abilities
+# Host Interface
 
 > 이 문서는 Tribute 프로그램이 바깥 세계와 만나는 경계를 정한다. 외부 함수
 > 호출(FFI)은 따로 두지 않고, host가 handler를 공급하는 ability로 표현한다.
@@ -15,9 +15,10 @@
 - 브라우저, plugin host, 단독 실행 launcher가 같은 경계를 쓴다. 이들의 차이는 누가
   handler를 공급하느냐뿐이다([design.md](design.md#지향점)).
 
-## Host Ability
+## Host가 처리하는 ability
 
-Host ability는 프로그램 안에서 처리되지 않으면 host가 처리하는 ability다.
+프로그램 안에서 처리되지 않으면 host가 처리하는 ability가 있다. `main`에 처리되지 않은
+채 남은 그런 ability들이 프로그램의 host interface다.
 
 ```rust
 ability Clock {
@@ -30,28 +31,29 @@ ability Kv {
 }
 ```
 
-Ability를 host ability로 표시하는 선언 문법은 아래 [미정 사항](#미정-사항)에 둔다.
+Ability를 host가 처리할 수 있다고 표시하는 선언 문법은 아래 [미정 사항](#미정-사항)에
+둔다.
 표시 외에는 일반 ability와 같은 규칙을 따른다.
 
 - **Operation은 모두 `fn`이다.** Host 경계는 continuation을 넘기지 않는다. 선언부가
-  보증하므로([Operation 종류](abilities.md#operation-종류)) host ability operation의
-  호출은 continuation을 잡지 않는다. `op` operation을 가진 ability는 host ability가
-  될 수 없다.
-- **Tribute handler가 먼저 처리한다.** Host ability operation은 가장 가까운 handler로
-  dispatch된다. 프로그램 안에 handler가 없을 때만 host에 닿는다. 그래서 host
+  보증하므로([Operation 종류](abilities.md#operation-종류)) host가 처리하는 operation의
+  호출은 continuation을 잡지 않는다. `op` operation을 가진 ability는 host가 처리할 수
+  없다.
+- **Tribute handler가 먼저 처리한다.** 이 operation도 가장 가까운 handler로
+  dispatch된다. 프로그램 안에 handler가 없을 때만 host에 닿는다. 그래서 이런
   ability를 쓰는 코드는 host 없이도 handler를 씌워 실행하고 테스트할 수 있다.
-- **`main`의 residual row에 남을 수 있다.** `main`에 처리되지 않은 채 남은 host
-  ability들이 그 프로그램이 host에 요구하는 기능의 전부다. Host ability가 아닌
-  residual effect는 frontend가 거부한다.
+- **`main`의 residual row에 남을 수 있다.** `main`에 처리되지 않은 채 남은 ability들이
+  그 프로그램이 host에 요구하는 기능의 전부다. Host가 처리할 수 없는 ability가 남으면
+  frontend가 거부한다.
 
 ## Host 경계
 
-`main`의 residual row가 프로그램의 host interface다. Host는 그 row에 있는 host
-ability의 operation을 모두 구현해야 한다.
+`main`의 residual row가 프로그램의 host interface다. Host는 그 row에 있는 ability의
+operation을 모두 구현해야 한다.
 
 경계 계약은 WebAssembly Component Model의 interface 언어인 WIT로 표현한다. Host
-ability 선언 하나가 WIT interface 하나가 되고, operation은 그 interface의 함수가 된다.
-Host ability의 의미는 이 문서가 정하고, WIT는 그 의미를 target에 실어 나르는 표현이다.
+interface의 ability 하나가 WIT interface 하나가 되고, operation은 그 interface의 함수가
+된다. 그 의미는 이 문서가 정하고, WIT는 그 의미를 target에 실어 나르는 표현이다.
 경계를 넘을 수 있는 것은 WIT로 표현할 수 있는 것으로 한정한다.
 
 - **Wasm:** 프로그램을 component로 내보내고, host interface를 component의 import로
@@ -90,17 +92,17 @@ counting이나 [비순환 object 그래프](rc.md#비순환-object-그래프) �
 ## 표준 입출력과의 관계
 
 [`std::io::Io`](io.md)는 compiler가 정한 target I/O boundary에 고정된 builtin
-ambient ability다. Host ability는 같은 생각을 사용자가 정의한 ability로 일반화한다.
-`Io`를 host ability의 한 사례로 다시 정의할지는 미정이다. 그 전까지 `Io`는
+ambient ability다. Host interface는 같은 생각을 사용자가 정의한 ability로 일반화한다.
+`Io`를 host interface에 두는 일반 ability로 다시 정의할지는 미정이다. 그 전까지 `Io`는
 [io.md](io.md)의 규칙을 따른다. 특히 `Io`는 handler로 제거할 수 없다.
 
 ## 미정 사항
 
-- **선언 문법.** Ability를 host ability로 표시하는 방법이다. 예를 들어 attribute,
+- **선언 문법.** Ability를 host가 처리할 수 있다고 표시하는 방법이다. 예를 들어 attribute,
   keyword, 또는 module 단위 표시가 있다.
-- **WIT 생성 규칙.** Host ability와 그 module path에서 WIT package, interface, 함수
-  이름을 만드는 방식이다. 구체 타입이 된 제네릭 인스턴스의 WIT 타입 이름도 정해야
-  한다.
+- **WIT 생성 규칙.** Host interface의 ability와 그 module path에서 WIT package,
+  interface, 함수 이름을 만드는 방식이다. 구체 타입이 된 제네릭 인스턴스의 WIT 타입
+  이름도 정해야 한다.
 - **정수의 경계 표현.** WIT 정수는 고정 폭이다. 임의 정밀도 정수를 어느 폭으로
   넘길지, 범위를 넘는 값을 trap할지, 경계 전용 고정 폭 정수 타입을 따로 둘지 정해야
   한다.

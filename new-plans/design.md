@@ -26,11 +26,12 @@ Tribute는 도구와 AI가 코드를 쓰고 사람이 그 코드를 검토하는
 타입에 둔다.
 
 - **Ability row가 곧 권한이다.** 바깥 세계는 host가 handler를 공급하는
-  [host ability](host-abilities.md)로만 닿는다. 함수 시그니처의 ability row가 그 함수가
+  ability로만 닿으며, `main`에 남은 그런 ability가 program의
+  [host interface](host-interface.md)다. 함수 시그니처의 ability row가 그 함수가
   닿을 수 있는 host 기능을 보여 준다. 소스 언어에는 별도의 FFI가 없다. Compiler 내부의
   extern과 intrinsic 선언은 이 경계를 구현하는 수단이다.
 - **같은 경계로 여러 host에 들어간다.** 브라우저, plugin host, 단독 실행 launcher는
-  모두 Tribute module에 host ability를 공급하는 host다. Embedding과 단독 실행은 같은
+  모두 Tribute module의 host interface를 구현하는 host다. Embedding과 단독 실행은 같은
   모델의 두 경우다.
 - **적당히 쓰면 적당히 빠르다.** 최대 성능보다 예측 가능한 성능을 목표로 한다.
   Effect가 없는 코드는 CPS를 거치지 않고, tail-resumptive operation은 continuation을
@@ -281,7 +282,7 @@ closure 저장소를 물리화한다. 구체적인 pass 순서와 검증 경계�
 ## Target 전략
 
 [지향점](#지향점)에 따라 **Wasm module이 Tribute의 주된 산출물**이다. Wasm은 sandbox가
-기본이고 host가 import를 정의하므로, host ability 모델이 그대로 들어맞는다.
+기본이고 host가 import를 정의하므로, host interface 모델이 그대로 들어맞는다.
 
 - **Wasm 메모리 모델의 방향.** Wasm 타겟은 WasmGC에서 linear memory로 옮겨, native와
   같은 reference counting을 쓰는 방향을 택한다. 그러면 ownership 계획을 structured IR
@@ -293,7 +294,7 @@ closure 저장소를 물리화한다. 구체적인 pass 순서와 검증 경계�
   `op` operation에만 든다.
 - **단독 실행 파일은 세 경로로 만들 수 있다.** Native 타겟으로 직접 컴파일하거나,
   Wasm module을 runtime과 함께 미리 컴파일해 묶거나 C로 번역해 빌드한다. 어느 쪽이든
-  실행 파일은 host ability를 구현한 launcher와 Tribute module의 조합이다.
+  실행 파일은 host interface를 구현한 launcher와 Tribute module의 조합이다.
 - **Native 타겟의 역할.** Native 타겟은 개발, 테스트, 성능 측정의 기준이자 단독 실행
   경로의 하나다. Native 타겟을 유지할지는 linear memory Wasm을 기준으로 세 경로(native
   타겟, 미리 컴파일한 Wasm, C로 번역한 Wasm)의 실행 성능과 산출물 크기를 비교해
