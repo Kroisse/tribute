@@ -454,6 +454,34 @@ mod tests {
     }
 
     #[test]
+    fn pass_stops_at_its_iteration_limit() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() -> core.nil {
+    %dead = arith.const {value = 1} : core.i32
+    func.return
+  }
+}"#,
+        );
+        let core_module = crate::dialect::core::Module::from_op(&ctx, module.op()).unwrap();
+        let mut pm = crate::pass::PassManager::new();
+        pm.add_pass(
+            EliminateDeadCode::<crate::dialect::core::Module>::with_config(DceConfig {
+                max_iterations: 1,
+                ..DceConfig::default()
+            }),
+        );
+        pm.run(&mut ctx, core_module, &mut AnalysisCache::new())
+            .unwrap();
+
+        let func = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let block = ctx.region(func.body(&ctx)).blocks[0];
+        assert_eq!(ctx.block(block).ops.len(), 1);
+    }
+
+    #[test]
     fn empty_module() {
         let (mut ctx, loc) = test_ctx();
         let module = build_module(&mut ctx, loc, vec![]);
