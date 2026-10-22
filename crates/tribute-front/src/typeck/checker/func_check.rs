@@ -598,13 +598,16 @@ impl<'db> TypeChecker<'db> {
         let mut resolved = HashMap::default();
         // Errors of relations that waited for a call, not of the call.
         let mut waiting_errors = Vec::new();
+        // Once no call can be selected with the types determined so far,
+        // the types still undetermined rule no candidate out.
+        let mut settled = false;
         loop {
             let mut new_constraints = ConstraintSet::new();
             let mut remaining = Vec::new();
 
             for mc in std::mem::take(&mut deferred) {
                 if let super::expr::MethodSelection::One(entry) =
-                    self.select_deferred_method(solver, &mc)
+                    self.select_deferred_method(solver, &mc, settled)
                 {
                     // Method found — instantiate the TypeScheme to get fresh types
                     let func_ty = if let Some((scheme, origin)) =
@@ -646,6 +649,11 @@ impl<'db> TypeChecker<'db> {
             }
 
             if new_constraints.is_empty() {
+                if !settled && !remaining.is_empty() {
+                    settled = true;
+                    deferred = remaining;
+                    continue;
+                }
                 // A call has only the functions its scope names, so what
                 // is still undecided here stays so.
                 for mc in &remaining {
@@ -674,6 +682,7 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             deferred = remaining;
+            settled = false;
         }
         (resolved, waiting_errors)
     }
@@ -726,11 +735,13 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Select the function a deferred call names with the types `solver`
-    /// has inferred for its arguments and its result.
+    /// has inferred for its arguments and its result. `settled` says
+    /// whether those types are as determined as they will be.
     pub(crate) fn select_deferred_method(
         &self,
         solver: &TypeSolver<'db>,
         call: &crate::typeck::func_context::DeferredMethodCall<'db>,
+        settled: bool,
     ) -> super::expr::MethodSelection<'db> {
         if call.value {
             // A name used as a value is selected like a call of it would
@@ -738,7 +749,23 @@ impl<'db> TypeChecker<'db> {
             // is used at.
             let expected = solver.expected_type(call.result_ty);
             let TypeKind::Func { params, result, .. } = expected.kind(self.db()) else {
-                return super::expr::MethodSelection::Ambiguous(call.candidates.clone());
+                // Without a function type every candidate fits, so the
+                // highest rank decides once nothing more is determined.
+                let highest = match call.candidates.as_slice() {
+                    [highest] => highest,
+                    [highest, ..] if settled => highest,
+                    _ => {
+                        return super::expr::MethodSelection::Ambiguous(call.candidates.concat());
+                    }
+                };
+                return match highest.as_slice() {
+                    [only] => self
+                        .method_entry(*only)
+                        .map_or(super::expr::MethodSelection::None, |entry| {
+                            super::expr::MethodSelection::One(entry)
+                        }),
+                    _ => super::expr::MethodSelection::Ambiguous(highest.clone()),
+                };
             };
             // A value has no arguments of its own to report the number
             // of, so only a whole signature selects.
@@ -749,6 +776,7 @@ impl<'db> TypeChecker<'db> {
                         args: params,
                         arity: params.len(),
                         result: Some(*result),
+                        settled,
                     },
                 )
                 .0;
@@ -764,6 +792,7 @@ impl<'db> TypeChecker<'db> {
                 args: &args,
                 arity: args.len(),
                 result: Some(solver.expected_type(call.result_ty)),
+                settled,
             },
         )
     }
@@ -786,7 +815,7 @@ impl<'db> TypeChecker<'db> {
                     .format_with(", ", |ty, f| f(&format_args!("`{ty}`")))
             )
         };
-        let selection = self.select_deferred_method(solver, call);
+        let selection = self.select_deferred_method(solver, call, true);
         let names = |functions: &[crate::ast::FuncDefId<'db>]| {
             functions
                 .iter()

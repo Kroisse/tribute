@@ -46,7 +46,8 @@ struct PatternBinding<'db> {
 /// The function a method call selects for its receiver's type.
 pub(crate) enum MethodSelection<'db> {
     One(crate::typeck::MethodEntry<'db>),
-    /// Several functions a path may name take the receiver.
+    /// Several functions a path may name take the call, so it waits for
+    /// more of its types.
     Ambiguous(Vec<crate::ast::FuncDefId<'db>>),
     None,
 }
@@ -59,6 +60,10 @@ pub(crate) struct CallTypes<'a, 'db> {
     pub args: &'a [Type<'db>],
     pub arity: usize,
     pub result: Option<Type<'db>>,
+    /// Whether the types are as determined as they will be. Until then, a
+    /// function that fits is selected only when no function of a lower rank
+    /// fits, since a type determined later may rule it out.
+    pub settled: bool,
 }
 
 impl<'db> CallTypes<'_, 'db> {
@@ -87,15 +92,19 @@ impl<'db> CallTypes<'_, 'db> {
     }
 }
 
-/// The functions name resolution found for a call's callee.
+/// The functions name resolution found for a call's callee, by rank.
 pub(crate) fn candidate_functions<'db>(
-    candidates: &[ResolvedRef<'db>],
-) -> Vec<crate::ast::FuncDefId<'db>> {
+    candidates: &[Vec<ResolvedRef<'db>>],
+) -> Vec<Vec<crate::ast::FuncDefId<'db>>> {
     candidates
         .iter()
-        .filter_map(|candidate| match candidate {
-            ResolvedRef::Function { id } => Some(*id),
-            _ => None,
+        .map(|rank| {
+            rank.iter()
+                .filter_map(|candidate| match candidate {
+                    ResolvedRef::Function { id } => Some(*id),
+                    _ => None,
+                })
+                .collect()
         })
         .collect()
 }
@@ -1504,6 +1513,7 @@ impl<'db> TypeChecker<'db> {
                 args: first_ty.as_slice(),
                 arity,
                 result: None,
+                settled: false,
             },
         );
         if let MethodSelection::One(entry) = selection {
@@ -1536,6 +1546,7 @@ impl<'db> TypeChecker<'db> {
                 args: &arg_types,
                 arity,
                 result: None,
+                settled: false,
             },
         );
         if let MethodSelection::One(entry) = selection {
@@ -1583,7 +1594,7 @@ impl<'db> TypeChecker<'db> {
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         node: NodeId,
         name: &SymbolPath,
-        candidates: &[ResolvedRef<'db>],
+        candidates: &[Vec<ResolvedRef<'db>>],
     ) -> Type<'db> {
         let result_ty = ctx.fresh_type_var();
         let effect = ctx
@@ -1849,14 +1860,14 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Select the function a call names among the functions name resolution
-    /// found for it in the call's scope: the one whose signature takes the
-    /// call.
+    /// found for it in the call's scope, by rank: the one whose signature
+    /// takes the call.
     pub(crate) fn select_method(
         &self,
-        candidates: &[crate::ast::FuncDefId<'db>],
+        ranks: &[Vec<crate::ast::FuncDefId<'db>>],
         call: CallTypes<'_, 'db>,
     ) -> MethodSelection<'db> {
-        match self.select_function(candidates, call) {
+        match self.select_function(ranks, call) {
             // A call that passes the wrong number of arguments still names
             // the function its arguments select, which reports the number.
             (MethodSelection::None, Some(by_arguments)) => MethodSelection::One(by_arguments),
@@ -1864,62 +1875,95 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// The function among `candidates` whose whole signature takes `call`,
-    /// and, where none does, the one function whose parameters take the
-    /// arguments the call has, whatever their number and its result.
+    /// The function whose whole signature takes `call` in the highest rank
+    /// of `ranks` that has one, and, where no rank does, the one function of
+    /// any rank whose parameters take the arguments the call has, whatever
+    /// their number and its result. Before `call` is settled, a function
+    /// that lower ranks compete with is not selected yet.
     pub(crate) fn select_function(
         &self,
-        candidates: &[crate::ast::FuncDefId<'db>],
+        ranks: &[Vec<crate::ast::FuncDefId<'db>>],
         call: CallTypes<'_, 'db>,
     ) -> (
         MethodSelection<'db>,
         Option<crate::typeck::MethodEntry<'db>>,
     ) {
-        let candidates: Vec<crate::typeck::MethodEntry<'db>> = candidates
-            .iter()
-            .filter_map(|candidate| {
-                let (scheme, _) = self.env.function_scheme(*candidate)?;
-                Some(crate::typeck::MethodEntry {
-                    func_id: *candidate,
-                    func_ty: scheme.body(self.db()),
-                })
-            })
-            .collect();
-        let signatures: Vec<_> = candidates
-            .iter()
-            .filter_map(|entry| match entry.func_ty.kind(self.db()) {
-                TypeKind::Func { params, result, .. } => Some((entry, &params[..], *result)),
-                _ => None,
-            })
-            .collect();
-        let select = |matches: &dyn Fn(&[Type<'db>], Type<'db>) -> bool| {
-            let mut matching = signatures
-                .iter()
-                .filter(|(_, params, result)| matches(params, *result))
-                .map(|(entry, ..)| *entry);
-            match (matching.next(), matching.next()) {
-                (Some(entry), None) => MethodSelection::One(*entry),
-                (Some(first), Some(second)) => MethodSelection::Ambiguous(
-                    [first, second]
-                        .into_iter()
-                        .chain(matching)
-                        .map(|entry| entry.func_id)
-                        .collect(),
-                ),
-                (None, _) => MethodSelection::None,
+        let fits = |params: &[Type<'db>], result| call.matches(self.db(), params, result);
+        for (index, rank) in ranks.iter().enumerate() {
+            match self.select_matching(rank, fits) {
+                MethodSelection::None => {}
+                MethodSelection::One(entry) if !call.settled => {
+                    let lower: Vec<_> = ranks[index + 1..]
+                        .iter()
+                        .flatten()
+                        .copied()
+                        .filter(|function| {
+                            self.method_entry(*function).is_some_and(|entry| {
+                                matches!(
+                                    entry.func_ty.kind(self.db()),
+                                    TypeKind::Func { params, result, .. } if fits(params, *result)
+                                )
+                            })
+                        })
+                        .collect();
+                    if lower.is_empty() {
+                        return (MethodSelection::One(entry), None);
+                    }
+                    return (
+                        MethodSelection::Ambiguous(
+                            std::iter::once(entry.func_id).chain(lower).collect(),
+                        ),
+                        None,
+                    );
+                }
+                selection => return (selection, None),
             }
-        };
-        match select(&|params, result| call.matches(self.db(), params, result)) {
-            MethodSelection::None => {
-                let by_arguments =
-                    match select(&|params, _| call.arguments_match(self.db(), params)) {
-                        MethodSelection::One(entry) => Some(entry),
-                        _ => None,
-                    };
-                (MethodSelection::None, by_arguments)
-            }
-            selection => (selection, None),
         }
+        let by_arguments = match self.select_matching(&ranks.concat(), |params, _| {
+            call.arguments_match(self.db(), params)
+        }) {
+            MethodSelection::One(entry) => Some(entry),
+            _ => None,
+        };
+        (MethodSelection::None, by_arguments)
+    }
+
+    /// The functions among `candidates` whose signatures `matches`.
+    fn select_matching(
+        &self,
+        candidates: &[crate::ast::FuncDefId<'db>],
+        matches: impl Fn(&[Type<'db>], Type<'db>) -> bool,
+    ) -> MethodSelection<'db> {
+        let mut matching = candidates.iter().filter_map(|candidate| {
+            let entry = self.method_entry(*candidate)?;
+            match entry.func_ty.kind(self.db()) {
+                TypeKind::Func { params, result, .. } if matches(params, *result) => Some(entry),
+                _ => None,
+            }
+        });
+        match (matching.next(), matching.next()) {
+            (Some(entry), None) => MethodSelection::One(entry),
+            (Some(first), Some(second)) => MethodSelection::Ambiguous(
+                [first, second]
+                    .into_iter()
+                    .chain(matching)
+                    .map(|entry| entry.func_id)
+                    .collect(),
+            ),
+            (None, _) => MethodSelection::None,
+        }
+    }
+
+    /// `function` with the body of its type scheme.
+    pub(crate) fn method_entry(
+        &self,
+        function: crate::ast::FuncDefId<'db>,
+    ) -> Option<crate::typeck::MethodEntry<'db>> {
+        let (scheme, _) = self.env.function_scheme(function)?;
+        Some(crate::typeck::MethodEntry {
+            func_id: function,
+            func_ty: scheme.body(self.db()),
+        })
     }
 
     /// Look up a struct field type from the receiver type.
@@ -2117,9 +2161,13 @@ impl<'db> TypeChecker<'db> {
                 // Unselected, so the candidates have no type.
                 candidates: candidates
                     .iter()
-                    .map(|candidate| TypedRef {
-                        resolved: candidate.clone(),
-                        ty: ctx.error_type(),
+                    .map(|rank| {
+                        rank.iter()
+                            .map(|candidate| TypedRef {
+                                resolved: candidate.clone(),
+                                ty: ctx.error_type(),
+                            })
+                            .collect()
                     })
                     .collect(),
             },
@@ -2441,7 +2489,8 @@ impl<'db> TypeChecker<'db> {
     ) -> bool {
         let mut resolved = false;
         for call in ctx.deferred_methods().to_vec() {
-            let MethodSelection::One(entry) = self.select_deferred_method(solver, &call) else {
+            let MethodSelection::One(entry) = self.select_deferred_method(solver, &call, false)
+            else {
                 continue;
             };
             let Some(callee_ty) = ctx.instantiate_function_reference(call.callee, entry.func_id)

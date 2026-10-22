@@ -115,9 +115,12 @@ pub enum ExprKind<V> {
     /// selects one, replacing the expression with a reference to it.
     Functions {
         name: SymbolPath,
+        /// The candidates grouped by rank, highest first, without empty
+        /// groups. Selection tries a lower rank only when no candidate of
+        /// the higher ones fits.
         // V is the only phase-dependent value.
         #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
-        candidates: Vec<V>,
+        candidates: Vec<Vec<V>>,
     },
 
     // === Control Flow ===

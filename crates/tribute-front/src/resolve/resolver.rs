@@ -82,10 +82,22 @@ fn best_matches_by<T>(
     heap.into_sorted_vec().into_iter().map(|e| e.item).collect()
 }
 
+/// Add `rank` after `ranks`, without the functions a higher rank already
+/// has. An empty rank is dropped.
+fn push_rank<'db>(
+    ranks: &mut Vec<Vec<crate::ast::FuncDefId<'db>>>,
+    mut rank: Vec<crate::ast::FuncDefId<'db>>,
+) {
+    rank.retain(|function| !ranks.iter().flatten().any(|higher| higher == function));
+    if !rank.is_empty() {
+        ranks.push(rank);
+    }
+}
+
 /// What the path of a qualified method call names.
 enum MethodCandidates<'db> {
-    /// Functions, one of which the receiver's type selects.
-    Functions(Vec<ResolvedRef<'db>>),
+    /// Functions by rank, one of which the call's types select.
+    Functions(Vec<Vec<ResolvedRef<'db>>>),
     /// The one callee the path names, which is not a function.
     Callee(ResolvedRef<'db>),
     /// Nothing; the path was reported.
@@ -120,7 +132,7 @@ pub struct Resolver<'db> {
     module_imported_functions: Vec<HashMap<Symbol, Vec<crate::ast::FuncDefId<'db>>>>,
     /// The functions each method name has named so far in the package root
     /// (first) and in each enclosing inline module.
-    method_functions: Vec<HashMap<Symbol, Vec<crate::ast::FuncDefId<'db>>>>,
+    method_functions: Vec<HashMap<Symbol, Vec<Vec<crate::ast::FuncDefId<'db>>>>>,
     /// Source functions that redefine a struct field's function. They are
     /// reported and dropped, so the field's function is the definition.
     redefinitions: Vec<NodeId>,
@@ -351,6 +363,13 @@ impl<'db> Resolver<'db> {
     /// The binding a simple name has in the current scope, apart from local
     /// variables.
     fn lookup_simple(&self, sym: &Symbol) -> Option<&Binding<'db>> {
+        self.lookup_direct(sym)
+            .or_else(|| self.env.lookup_library(sym))
+    }
+
+    /// The binding a simple name has in the current scope through its
+    /// declarations and `use`s, apart from local variables and the prelude.
+    fn lookup_direct(&self, sym: &Symbol) -> Option<&Binding<'db>> {
         if !self.module_path.is_empty()
             && let Some(binding) = self.env.lookup_qualified(&self.module_path, sym)
         {
@@ -364,13 +383,14 @@ impl<'db> Resolver<'db> {
             return Some(binding);
         }
 
-        // An inline module sees its companion and the prelude, not the
-        // items of the modules around it; the package root sees its own
-        // items too.
+        // An inline module sees its companion, not the items of the modules
+        // around it; the package root sees its own items too.
         if self.module_path.is_empty() {
-            self.env.lookup(sym)
+            self.env
+                .lookup(sym)
+                .filter(|_| !self.env.is_library_only(sym))
         } else {
-            self.companion(sym).or_else(|| self.env.lookup_library(sym))
+            self.companion(sym)
         }
     }
 
@@ -402,14 +422,40 @@ impl<'db> Resolver<'db> {
         }))
     }
 
-    /// The functions an unqualified `name` imports when several `use`s give
-    /// it different ones.
-    fn imported_functions(&self, name: &UnresolvedName) -> Option<&[crate::ast::FuncDefId<'db>]> {
+    /// The functions an unqualified call or reference `name` may be, by
+    /// rank, when it may be more than one: the functions the scope names
+    /// directly, then the prelude function of that name. A local variable of
+    /// the name hides them all.
+    fn unqualified_functions(&self, name: &UnresolvedName) -> Option<Vec<Vec<ResolvedRef<'db>>>> {
         let sym = name.name();
         if !name.is_simple() || self.lookup_local(&sym).is_some() {
             return None;
         }
-        self.module_imported_functions(&sym)
+        let direct = match self.module_imported_functions(&sym) {
+            Some(imported) => imported.to_vec(),
+            None => match self.lookup_direct(&sym) {
+                Some(Binding::Function { id }) => vec![*id],
+                Some(_) => return None,
+                None => Vec::new(),
+            },
+        };
+        let library = match self.env.lookup_library(&sym) {
+            Some(binding @ Binding::Function { id }) if self.hidden(binding).is_none() => {
+                vec![*id]
+            }
+            _ => Vec::new(),
+        };
+        let mut ranks = Vec::new();
+        push_rank(&mut ranks, direct);
+        push_rank(&mut ranks, library);
+        let ranks: Vec<Vec<_>> = ranks
+            .into_iter()
+            .map(|mut rank| {
+                rank.sort_by_key(|function| function.path(self.db));
+                rank.into_iter().map(ResolvedRef::function).collect()
+            })
+            .collect();
+        (ranks.iter().map(Vec::len).sum::<usize>() > 1).then_some(ranks)
     }
 
     /// The functions several `use`s of the enclosing module give `name`,
@@ -441,16 +487,17 @@ impl<'db> Resolver<'db> {
     }
 
     /// The functions the path of a qualified method call `x.a::b(y)` may
-    /// name: `a::b` as the call's scope resolves it, and `m::a::b` for each
-    /// module `m` in that scope. A declaration's name counts as the module
-    /// that shares it.
+    /// name, by rank: `a::b` as the call's scope resolves it and `m::a::b`
+    /// for each name `m` in that scope, all reached through a name in scope,
+    /// then `a::b` and `p::a::b` through the prelude names `p`. A
+    /// declaration's name counts as the module that shares it.
     fn method_candidates(&self, path: &UnresolvedName) -> MethodCandidates<'db> {
-        let mut functions: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
+        let mut in_scope: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
         match self.qualified_entry(path) {
             Ok(Some((namespace, binding @ Binding::Function { id })))
                 if self.visible_through_entry(&namespace, &path.name(), binding) =>
             {
-                functions.push(*id)
+                in_scope.push(*id)
             }
             // A constructor or an ability operation takes the receiver as
             // its first argument without a choice by type.
@@ -463,6 +510,23 @@ impl<'db> Resolver<'db> {
                 return MethodCandidates::Unresolved;
             }
         }
+        for function in self.scope_namespace_functions(path) {
+            if !in_scope.contains(&function) {
+                in_scope.push(function);
+            }
+        }
+        let mut ranks = Vec::new();
+        push_rank(&mut ranks, in_scope);
+        push_rank(&mut ranks, self.library_method_functions(&path.path));
+        let Some(ranks) = self.visible_functions(ranks, path.id, path) else {
+            return MethodCandidates::Unresolved;
+        };
+        MethodCandidates::Functions(ranks)
+    }
+
+    /// The functions `m::path` names for each name `m` in the scope.
+    fn scope_namespace_functions(&self, path: &UnresolvedName) -> Vec<crate::ast::FuncDefId<'db>> {
+        let mut functions = Vec::new();
         for module in self.names_in_scope() {
             let nested = UnresolvedName::new(
                 SymbolPath::new(std::iter::once(&module).chain(path.path.iter()).cloned()),
@@ -476,30 +540,69 @@ impl<'db> Resolver<'db> {
                 functions.push(*id);
             }
         }
-        let Some(functions) = self.visible_functions(functions, path.id, path) else {
-            return MethodCandidates::Unresolved;
-        };
-        MethodCandidates::Functions(functions)
+        functions
     }
 
-    /// The functions of `functions` the current module sees, sorted by path.
-    /// When it sees none, report the method written as `written`: as hidden
-    /// if it would see one otherwise, else as unresolved.
+    /// The functions a method path names through the prelude, whatever the
+    /// scope's declarations and `use`s hide: the prelude's reading of the
+    /// path itself, and `p::path` for each prelude name `p`.
+    fn library_method_functions(&self, path: &[Symbol]) -> Vec<crate::ast::FuncDefId<'db>> {
+        let mut functions = Vec::new();
+        let mut push = |namespace: &[Symbol], name: &Symbol| {
+            if let Some(binding @ Binding::Function { id }) = match namespace {
+                [] => self.env.lookup_library(name),
+                _ => self.env.lookup_qualified(namespace, name),
+            } && self.visible_through_entry(namespace, name, binding)
+                && !functions.contains(id)
+            {
+                functions.push(*id);
+            }
+        };
+        let Some((name, namespace)) = path.split_last() else {
+            return functions;
+        };
+        match self.library_namespace_path(namespace) {
+            Some(namespace) => push(&namespace, name),
+            None if namespace.is_empty() => push(&[], name),
+            None => {}
+        }
+        for prelude_name in self.env.iter_library_names() {
+            if let Some(library) = self.env.library_namespace(&prelude_name) {
+                let namespace: Vec<Symbol> = library.iter().chain(namespace).cloned().collect();
+                push(&namespace, name);
+            }
+        }
+        functions
+    }
+
+    /// The functions of `ranks` the current module sees, each rank sorted by
+    /// path and empty ranks dropped. When it sees none, report the method
+    /// written as `written`: as hidden if it would see one otherwise, else
+    /// as unresolved.
     fn visible_functions(
         &self,
-        mut functions: Vec<crate::ast::FuncDefId<'db>>,
+        ranks: Vec<Vec<crate::ast::FuncDefId<'db>>>,
         node: NodeId,
         written: &UnresolvedName,
-    ) -> Option<Vec<ResolvedRef<'db>>> {
-        functions.sort_by_key(|function| function.path(self.db));
-        let (visible, hidden): (Vec<_>, Vec<_>) = functions
+    ) -> Option<Vec<Vec<ResolvedRef<'db>>>> {
+        let mut first_hidden = None;
+        let visible: Vec<Vec<_>> = ranks
             .into_iter()
-            .partition(|&id| self.hidden(&Binding::Function { id }).is_none());
+            .filter_map(|mut rank| {
+                rank.sort_by_key(|function| function.path(self.db));
+                let (visible, hidden): (Vec<_>, Vec<_>) = rank
+                    .into_iter()
+                    .partition(|&id| self.hidden(&Binding::Function { id }).is_none());
+                first_hidden = first_hidden.or(hidden.first().copied());
+                (!visible.is_empty())
+                    .then(|| visible.into_iter().map(ResolvedRef::function).collect())
+            })
+            .collect();
         if !visible.is_empty() {
-            return Some(visible.into_iter().map(ResolvedRef::function).collect());
+            return Some(visible);
         }
-        match hidden.first() {
-            Some(&id) => {
+        match first_hidden {
+            Some(id) => {
                 let binding = Binding::Function { id };
                 let restriction = self.hidden(&binding).expect("partitioned as hidden");
                 self.report_hidden(node, written, restriction);
@@ -510,49 +613,47 @@ impl<'db> Resolver<'db> {
         None
     }
 
-    /// The functions an unqualified method call `x.f(y)` may name: `f` as
-    /// the call's scope names it, and `m::f` for each module `m` in that
-    /// scope. A declaration's name counts as the module that shares it.
+    /// The functions an unqualified method call `x.f(y)` may name, by rank:
+    /// `f` as the call's scope names it directly, then `m::f` for each name
+    /// `m` in that scope, then the prelude's `f` and `p::f` for each prelude
+    /// name `p`. A declaration's name counts as the module that shares it.
     fn method_functions(
         &mut self,
         method: &Symbol,
         node: NodeId,
-    ) -> Vec<crate::ast::FuncDefId<'db>> {
+    ) -> Vec<Vec<crate::ast::FuncDefId<'db>>> {
         if let Some(functions) = self.method_functions.last().and_then(|m| m.get(method)) {
             return functions.clone();
         }
         // A method is a declared function; a local variable of its name does
         // not hide it.
-        let mut functions: Vec<crate::ast::FuncDefId<'db>> =
-            match self.module_imported_functions(method) {
-                Some(imported) => imported.to_vec(),
-                None => match self.lookup_simple(method) {
-                    Some(Binding::Function { id }) => vec![*id],
-                    _ => Vec::new(),
-                },
-            };
-        for module in self.names_in_scope() {
-            let nested = UnresolvedName::new(SymbolPath::new([module, method.clone()]), node);
-            if let Ok(Some((namespace, binding @ Binding::Function { id }))) =
-                self.qualified_entry(&nested)
-                && self.visible_through_entry(&namespace, &nested.name(), binding)
-                && !functions.contains(id)
-            {
-                functions.push(*id);
-            }
-        }
-        functions.sort_by_key(|function| function.path(self.db));
+        let direct = match self.module_imported_functions(method) {
+            Some(imported) => imported.to_vec(),
+            None => match self.lookup_direct(method) {
+                Some(Binding::Function { id }) => vec![*id],
+                _ => Vec::new(),
+            },
+        };
+        let path = UnresolvedName::new(SymbolPath::new([method.clone()]), node);
+        let mut ranks = Vec::new();
+        push_rank(&mut ranks, direct);
+        push_rank(&mut ranks, self.scope_namespace_functions(&path));
+        push_rank(&mut ranks, self.library_method_functions(&path.path));
         if let Some(scope) = self.method_functions.last_mut() {
-            scope.insert(method.clone(), functions.clone());
+            scope.insert(method.clone(), ranks.clone());
         }
-        functions
+        ranks
     }
 
-    /// The names an unqualified reference may use at this point, apart from
-    /// local variables.
+    /// The names an unqualified reference may use at this point through
+    /// declarations and `use`s, apart from local variables and the prelude.
     fn names_in_scope(&self) -> Vec<Symbol> {
         if self.module_path.is_empty() {
-            return self.env.iter_all_names().collect();
+            return self
+                .env
+                .iter_all_names()
+                .filter(|name| !self.env.is_library_only(name))
+                .collect();
         }
         let imports = self.module_imports.last();
         self.env
@@ -563,7 +664,6 @@ impl<'db> Resolver<'db> {
                     .into_iter()
                     .flat_map(|imports| imports.keys().cloned()),
             )
-            .chain(self.env.iter_library_names())
             .collect()
     }
 
@@ -1456,13 +1556,10 @@ impl<'db> Resolver<'db> {
             ExprKind::Var(name) => {
                 // The type the name is used at selects among the functions
                 // several `use`s give it.
-                match self.imported_functions(name) {
-                    Some(functions) => ExprKind::Functions {
+                match self.unqualified_functions(name) {
+                    Some(candidates) => ExprKind::Functions {
                         name: name.path.clone(),
-                        candidates: functions
-                            .iter()
-                            .map(|id| ResolvedRef::Function { id: *id })
-                            .collect(),
+                        candidates,
                     },
                     None => ExprKind::Var(self.resolve_name(name)),
                 }
@@ -1484,22 +1581,16 @@ impl<'db> Resolver<'db> {
             } => {
                 let args: Vec<_> = args.iter().map(|a| self.resolve_expr(a)).collect();
                 let callee = match &*callee.kind {
-                    ExprKind::Var(name) => match self.imported_functions(name) {
+                    ExprKind::Var(name) => match self.unqualified_functions(name) {
                         // The call's types select the function, as they do
                         // for a method call.
-                        Some(functions) => {
-                            let candidates = functions
-                                .iter()
-                                .map(|id| ResolvedRef::Function { id: *id })
-                                .collect();
-                            Expr::new(
-                                callee.id,
-                                ExprKind::Functions {
-                                    name: name.path.clone(),
-                                    candidates,
-                                },
-                            )
-                        }
+                        Some(candidates) => Expr::new(
+                            callee.id,
+                            ExprKind::Functions {
+                                name: name.path.clone(),
+                                candidates,
+                            },
+                        ),
                         None => self.resolve_expr(callee),
                     },
                     _ => self.resolve_expr(callee),
@@ -1556,8 +1647,16 @@ impl<'db> Resolver<'db> {
                 match candidates {
                     // One function is the callee, as a name that resolves to
                     // it would be.
-                    MethodCandidates::Functions(candidates) if candidates.len() == 1 => {
-                        ExprKind::Var(candidates.into_iter().next().expect("one candidate"))
+                    MethodCandidates::Functions(candidates)
+                        if candidates.iter().map(Vec::len).sum::<usize>() == 1 =>
+                    {
+                        ExprKind::Var(
+                            candidates
+                                .into_iter()
+                                .flatten()
+                                .next()
+                                .expect("one candidate"),
+                        )
                     }
                     MethodCandidates::Functions(candidates) => ExprKind::Functions {
                         name: name.clone(),
