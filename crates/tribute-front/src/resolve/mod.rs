@@ -15,10 +15,12 @@
 //! 3. Module-level definitions (functions, types, constructors)
 
 mod env;
+mod package;
 mod path;
 mod resolver;
 
 pub use env::{Binding, Export, ModuleEnv, Restriction};
+pub use package::Package;
 pub use resolver::Resolver;
 
 use trunk_ir::Symbol;
@@ -152,7 +154,7 @@ pub fn build_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
 ) -> ModuleEnv<'db> {
-    build_package_env(db, module, 0)
+    build_package_env(db, module, &Package::compiled())
 }
 
 /// Build the environment of a library package module from
@@ -161,15 +163,14 @@ pub fn build_library_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
 ) -> ModuleEnv<'db> {
-    build_package_env(db, module, 1)
+    build_package_env(db, module, &Package::std())
 }
 
-/// Build the environment of a package whose root is the module at the
-/// first `package_depth` segments of every module path.
+/// Build the environment of the module tree of `package`.
 fn build_package_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
-    package_depth: usize,
+    package: &Package,
 ) -> ModuleEnv<'db> {
     let mut env = ModuleEnv::new();
 
@@ -180,7 +181,7 @@ fn build_package_env<'db>(
     // Only nested `mod foo { ... }` declarations extend the module path.
     let mut prefix = SymbolPath::root();
     let scope = Scope {
-        package_depth,
+        package: package.clone(),
         outer: None,
     };
 
@@ -189,13 +190,13 @@ fn build_package_env<'db>(
     }
 
     inject_builtin_bindings(db, &mut env);
-    if package_depth > 0 {
-        inject_runtime_bindings(db, &mut env, package_depth);
+    if package.is_library() {
+        inject_runtime_bindings(db, &mut env, package);
     }
     // Resolve imports of declarations already present in this module. Imports
     // from another module are resolved again after its environment is merged.
     resolve_use_imports(&mut env);
-    resolve_exports(&mut env, package_depth);
+    resolve_exports(&mut env, package);
 
     env
 }
@@ -207,11 +208,11 @@ fn build_package_env<'db>(
 /// A re-export's path starts with a path keyword, from an import of the
 /// declaring module, from the module itself, or from a library namespace.
 /// The resolver reports a `use` whose target names nothing.
-pub fn resolve_exports(env: &mut ModuleEnv<'_>, package_depth: usize) {
+pub fn resolve_exports(env: &mut ModuleEnv<'_>, package: &Package) {
     let mut pending = env.take_exports();
     loop {
         let before = pending.len();
-        pending.retain(|export| !add_export(env, package_depth, export));
+        pending.retain(|export| !add_export(env, package, export));
         if pending.len() == before {
             break;
         }
@@ -226,12 +227,12 @@ pub fn resolve_exports(env: &mut ModuleEnv<'_>, package_depth: usize) {
 /// from what that import names; `hops` counts the imports followed.
 fn use_candidates(
     env: &ModuleEnv<'_>,
-    package_depth: usize,
+    package: &Package,
     module: &SymbolPath,
     path: &[Symbol],
     hops: usize,
 ) -> Vec<Vec<Symbol>> {
-    match path::absolute_path(package_depth, module, path) {
+    match path::absolute_path(package, module, path) {
         Ok(Some(target)) => return vec![target],
         Err(_) => return Vec::new(),
         Ok(None) => {}
@@ -244,7 +245,7 @@ fn use_candidates(
         if hops > env.module_use_count() {
             return Vec::new();
         }
-        return use_candidates(env, package_depth, module, imported, hops + 1)
+        return use_candidates(env, package, module, imported, hops + 1)
             .into_iter()
             .map(|target| target.into_iter().chain(rest.iter().cloned()).collect())
             .collect();
@@ -257,8 +258,8 @@ fn use_candidates(
 }
 
 /// Add `export` to its module's namespace if its target resolves.
-fn add_export(env: &mut ModuleEnv<'_>, package_depth: usize, export: &Export) -> bool {
-    let candidates = use_candidates(env, package_depth, &export.module, &export.path, 0);
+fn add_export(env: &mut ModuleEnv<'_>, package: &Package, export: &Export) -> bool {
+    let candidates = use_candidates(env, package, &export.module, &export.path, 0);
     let Some((target, binding)) = candidates.into_iter().find_map(|target| {
         let (last, namespace) = target.split_last()?;
         let binding = if namespace.is_empty() {
@@ -296,8 +297,8 @@ fn add_export(env: &mut ModuleEnv<'_>, package_depth: usize, export: &Export) ->
 /// What a declaration's visibility is relative to while its environment is
 /// collected.
 struct Scope {
-    /// How many leading segments of a module path are the package root.
-    package_depth: usize,
+    /// The package the declaration belongs to.
+    package: Package,
     /// The restriction of the modules around the declaration, if any of them
     /// is not public.
     outer: Option<Restriction>,
@@ -317,8 +318,9 @@ impl Scope {
             Visibility::Private => module.clone(),
             // The resolver reports a path that names no module around the
             // declaration, which is then private.
-            Visibility::Restricted(scope) => restriction_module(self.package_depth, module, scope)
-                .unwrap_or_else(|| module.clone()),
+            Visibility::Restricted(scope) => {
+                restriction_module(&self.package, module, scope).unwrap_or_else(|| module.clone())
+            }
         };
         let own = Restriction {
             within: Some(within),
@@ -333,30 +335,12 @@ impl Scope {
 /// module `module` that declares it, if that is `module` or a module
 /// around it.
 pub(crate) fn restriction_module(
-    package_depth: usize,
+    package: &Package,
     module: &[Symbol],
     scope: &[Symbol],
 ) -> Option<SymbolPath> {
-    let named = path::absolute_path(package_depth, module, scope).ok()??;
+    let named = path::absolute_path(package, module, scope).ok()??;
     module.starts_with(&named).then(|| SymbolPath::new(named))
-}
-
-/// The identity path of the module at the package-root path `module`, in
-/// a package whose root is the module at its first `package_depth`
-/// segments.
-///
-/// A library package's paths start with its name. The package being
-/// compiled omits its own, unless the path would then start with a library
-/// package's name: such a path starts with `pkg`, which names no module.
-pub fn identity_path(package_depth: usize, module: &[Symbol]) -> SymbolPath {
-    let qualified =
-        package_depth == 0 && module.first().is_some_and(|first| first == LIBRARY_PACKAGE);
-    SymbolPath::new(
-        qualified
-            .then(|| Symbol::new("pkg"))
-            .into_iter()
-            .chain(module.iter().cloned()),
-    )
 }
 
 /// The package the prelude is the root of. Its declarations' identities and
@@ -385,7 +369,7 @@ pub fn library_package_module(module: &Module<UnresolvedName>) -> Module<Unresol
 pub fn merge_library<'db>(env: &mut ModuleEnv<'db>, library: &ModuleEnv<'db>) {
     env.merge(library, &Symbol::new(LIBRARY_PACKAGE));
     resolve_use_imports(env);
-    resolve_exports(env, 0);
+    resolve_exports(env, &Package::compiled());
 }
 
 /// Resolve a library package module from [`library_package_module`], whose
@@ -397,7 +381,7 @@ pub fn resolve_library_with_env<'db>(
     span_map: SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
     Resolver::new(db, env, span_map)
-        .with_package_depth(1)
+        .with_package(Package::std())
         .resolve_module(module)
 }
 
@@ -447,14 +431,14 @@ fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEn
 fn inject_runtime_bindings<'db>(
     db: &'db dyn salsa::Database,
     env: &mut ModuleEnv<'db>,
-    package_depth: usize,
+    package: &Package,
 ) {
     let runtime = SymbolPath::new([LIBRARY_PACKAGE, "runtime"]);
     let slots = TypeDefId::builtin_slots(db);
     let name = slots.name(db);
     let pkg = vec![Symbol::new("pkg")];
     let restriction = Restriction {
-        within: restriction_module(package_depth, &runtime, &pkg),
+        within: restriction_module(package, &runtime, &pkg),
         declaration: slots.path(db).clone(),
         visibility: Visibility::Restricted(pkg),
     };
@@ -492,7 +476,7 @@ fn collect_definition<'db>(
     scope: &Scope,
 ) {
     // The identity path of the module, which the declarations' ids extend.
-    let mut ids = identity_path(scope.package_depth, prefix);
+    let mut ids = scope.package.identity_path(prefix);
     // Every binding of a declaration, its members' included, has the
     // declaration's visibility.
     let restriction = match decl {
@@ -632,7 +616,7 @@ fn collect_definition<'db>(
                 let import_name = u.alias.clone().unwrap_or(name);
                 // A path keyword names a package-root path; the resolver
                 // reports a keyword that names none.
-                let path = path::absolute_path(0, prefix, &u.path)
+                let path = path::absolute_path(&scope.package, prefix, &u.path)
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| u.path.clone());
@@ -670,13 +654,13 @@ fn collect_module<'db>(
     // then register them under the module's namespace
     if let Some(body) = &m.body {
         let path = prefix.child(m.name.clone());
-        let identity = identity_path(scope.package_depth, &path);
+        let identity = scope.package.identity_path(&path);
         let restriction = scope.restriction(prefix, identity, &m.visibility);
         if let Some(restriction) = &restriction {
             env.restrict_module(path, restriction.clone());
         }
         let inner_scope = Scope {
-            package_depth: scope.package_depth,
+            package: scope.package.clone(),
             outer: restriction,
         };
 

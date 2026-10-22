@@ -19,6 +19,7 @@ use crate::ast::{
 };
 
 use super::env::{Binding, ModuleEnv, Restriction};
+use super::package::Package;
 use super::path::{PathKeywordError, absolute_path};
 
 /// Find the best matches from `candidates` by a caller-provided score function.
@@ -124,9 +125,8 @@ pub struct Resolver<'db> {
     /// Source functions that redefine a struct field's function. They are
     /// reported and dropped, so the field's function is the definition.
     redefinitions: Vec<NodeId>,
-    /// How many leading segments of `module_path` are the package root:
-    /// zero for a user package, one for the prelude inside its `std` module.
-    package_depth: usize,
+    /// The package whose module tree `module_path` is a path of.
+    package: Package,
 }
 
 impl<'db> Resolver<'db> {
@@ -145,14 +145,13 @@ impl<'db> Resolver<'db> {
             module_imported_functions: Vec::new(),
             method_functions: vec![HashMap::default()],
             redefinitions: Vec::new(),
-            package_depth: 0,
+            package: Package::compiled(),
         }
     }
 
-    /// Resolve a package whose root is the module at the first
-    /// `package_depth` segments of every module path.
-    pub fn with_package_depth(mut self, package_depth: usize) -> Self {
-        self.package_depth = package_depth;
+    /// Resolve the module tree of `package`.
+    pub fn with_package(mut self, package: Package) -> Self {
+        self.package = package;
         self
     }
 
@@ -388,7 +387,7 @@ impl<'db> Resolver<'db> {
         let Some(namespace) = name.namespace() else {
             return Ok(None);
         };
-        if let Some(path) = absolute_path(self.package_depth, &self.module_path, &namespace)? {
+        if let Some(path) = absolute_path(&self.package, &self.module_path, &namespace)? {
             let binding = if path.is_empty() {
                 self.env.lookup(&sym)
             } else {
@@ -729,7 +728,7 @@ impl<'db> Resolver<'db> {
                 }
             }
             TypeAnnotationKind::Path(segments) => {
-                match absolute_path(self.package_depth, &self.module_path, segments) {
+                match absolute_path(&self.package, &self.module_path, segments) {
                     Ok(Some(path)) if !path.is_empty() => *segments = path,
                     Ok(Some(_)) => {
                         Diagnostic::new(
@@ -1138,7 +1137,7 @@ impl<'db> Resolver<'db> {
                 ModuleItem::Decl(decl) => {
                     let decl = self.resolve_decl(decl);
                     entries.push(DeclEntry {
-                        module: super::identity_path(self.package_depth, &self.module_path),
+                        module: self.package.identity_path(&self.module_path),
                         decl,
                     });
                 }
@@ -1162,7 +1161,7 @@ impl<'db> Resolver<'db> {
         let Visibility::Restricted(scope) = visibility else {
             return;
         };
-        let message = match absolute_path(self.package_depth, &self.module_path, scope) {
+        let message = match absolute_path(&self.package, &self.module_path, scope) {
             Err(error) => format!("`{visibility}`: {error}"),
             Ok(_) if self.restriction_module(scope).is_some() => return,
             Ok(_) => format!(
@@ -1182,7 +1181,7 @@ impl<'db> Resolver<'db> {
     /// The module the path of a `pub(scope)` marker in the current module
     /// names, if it is that module or a module around it.
     fn restriction_module(&self, scope: &[Symbol]) -> Option<SymbolPath> {
-        super::restriction_module(self.package_depth, &self.module_path, scope)
+        super::restriction_module(&self.package, &self.module_path, scope)
     }
 
     /// Resolve a function declaration.
@@ -1336,15 +1335,14 @@ impl<'db> Resolver<'db> {
     /// reported, since it would otherwise leave the import as a module
     /// placeholder.
     fn resolve_use_target(&self, u: &UseDecl) -> Option<Vec<Symbol>> {
-        let message =
-            if let Err(error) = absolute_path(self.package_depth, &self.module_path, &u.path) {
-                error.to_string()
-            } else if let Some(target) = self.use_target(&u.path) {
-                self.check_use_visibility(u, &target);
-                return Some(target);
-            } else {
-                format!("unresolved import `{}`", u.path.iter().format("::"))
-            };
+        let message = if let Err(error) = absolute_path(&self.package, &self.module_path, &u.path) {
+            error.to_string()
+        } else if let Some(target) = self.use_target(&u.path) {
+            self.check_use_visibility(u, &target);
+            return Some(target);
+        } else {
+            format!("unresolved import `{}`", u.path.iter().format("::"))
+        };
         Diagnostic::new(
             message,
             self.span_map.get_or_default(u.id),
@@ -1412,7 +1410,7 @@ impl<'db> Resolver<'db> {
             };
             found || self.env.has_namespace(path)
         };
-        match absolute_path(self.package_depth, &self.module_path, path) {
+        match absolute_path(&self.package, &self.module_path, path) {
             Ok(Some(path)) => return names(&path).then_some(path),
             Err(_) => return None,
             Ok(None) => {}
