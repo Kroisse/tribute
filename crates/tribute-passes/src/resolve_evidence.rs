@@ -11,7 +11,7 @@ use itertools::Itertools;
 use std::error::Error;
 use std::fmt;
 
-use tribute_core::get_calling_convention;
+use tribute_ir::calling_convention::get_calling_convention;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_control::{EVIDENCE_PLAN_ATTR, EvidenceStep};
@@ -484,8 +484,8 @@ mod tests {
     fn final_dispatch_fixture(operation: &str) -> String {
         format!(
             r#"core.module @test {{
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>
-  !evidence = adt.array<!marker, {{layout = "evidence"}}>
+  !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
+  !evidence = adt.array<!marker>
   func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %tr2: core.ptr) -> core.never {{
     {operation}
   }}
@@ -831,8 +831,8 @@ mod tests {
     #[test]
     fn bodyless_declarations_are_preserved_during_evidence_resolution() {
         let input = r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !evidence = adt.array<!marker, {layout = "evidence"}>
+  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !evidence = adt.array<!marker>
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
   func.func @body(%ev: !evidence, %prompt: core.i32) -> core.never {

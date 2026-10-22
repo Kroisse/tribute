@@ -39,9 +39,7 @@ use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::SortedMap;
-use crate::ast::{
-    AbilityId, CallingConvention, DeclTable, NodeId, SpanMap, Type, TypeScheme, TypedRef,
-};
+use crate::ast::{AbilityId, DeclTable, NodeId, SpanMap, Type, TypeScheme, TypedRef};
 
 pub use context::IrLoweringCtx;
 
@@ -156,9 +154,6 @@ pub struct TypedModule<'db> {
     pub local_instances: SortedMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
     /// The instance each reference to a generic function selects.
     pub function_instances: SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
-    pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
-    /// Who specializes convention classes.
-    pub convention_classes: crate::monomorphize::ConventionClasses,
     pub ability_definitions: HashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
     pub handler_operations: SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     pub perform_operations: SortedMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
@@ -173,8 +168,6 @@ pub struct TypedModule<'db> {
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
     /// The runtime structs to publish as prelude types.
     pub runtime_types: runtime_items::RuntimeTypes,
-    /// Convention classes of the class variables of each function instance.
-    pub row_classes: HashMap<SymbolPath, Vec<(crate::ast::RowVar, CallingConvention)>>,
     /// URIs of the other sources whose declarations were merged into `ast`.
     pub merged_sources: Vec<String>,
 }
@@ -227,7 +220,6 @@ mod tests {
             path,
             span_map,
             HashMap::default(),
-            HashMap::default(),
             SortedMap::default(),
         );
 
@@ -273,7 +265,6 @@ mod tests {
             path,
             SpanMap::default(),
             HashMap::default(),
-            HashMap::default(),
             SortedMap::default(),
         );
 
@@ -303,7 +294,6 @@ mod tests {
             &db,
             path,
             SpanMap::default(),
-            HashMap::default(),
             HashMap::default(),
             SortedMap::default(),
         );
@@ -337,7 +327,6 @@ mod tests {
             &db,
             path,
             span_map,
-            HashMap::default(),
             HashMap::default(),
             SortedMap::default(),
         );

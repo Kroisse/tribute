@@ -163,3 +163,41 @@ fn main() -> Nil { apply(fn(value) { value + value }, 21) }
     );
     assert_not_cast(&ir, value_name(lambda));
 }
+
+/// A named function bound by `let` and passed on at another callable type
+/// leaves no reference unused.
+#[salsa_test]
+fn every_named_function_reference_is_used(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_callback_unused_references.trb",
+        r#"
+fn identity(x: Int) ->{} Int { x }
+fn pure(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
+fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
+fn main() ->{} Int {
+    let named = identity
+    let alias = named
+    pure(fn(x: Int) open(alias, x), +3)
+}
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_specialized_ir(db, source);
+    let mut ctx = trunk_ir::context::IrContext::new();
+    let module = trunk_ir::parser::parse_test_module(&mut ctx, &ir);
+    let mut references = 0;
+    let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+        if <tribute_ir::dialect::tribute_control::FuncRef as trunk_ir::ops::DialectOp>::matches(
+            &ctx, op,
+        ) {
+            references += 1;
+            assert!(
+                ctx.has_uses(ctx.op_results(op)[0]),
+                "unused reference:\n{ir}"
+            );
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    assert!(references > 0, "{ir}");
+}

@@ -401,6 +401,10 @@ fn main() -> Nil { }
         for &op in module.ops(&ctx) {
             if let Ok(func_op) = func::Func::from_op(&ctx, op) {
                 let name = func_op.sym_name(&ctx).to_string();
+                // The evidence runtime takes evidence as ordinary values.
+                if name.starts_with("std::runtime::evidence::") {
+                    continue;
+                }
                 let CallableBody::Definition { entry, .. } =
                     classify_callable_body(&ctx, op).expect("well-formed frontend callable")
                 else {

@@ -1,4 +1,4 @@
-//! Compiler-wide calling-convention requirements.
+//! Tribute calling conventions and the IR that records them.
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
@@ -6,6 +6,9 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
+use crate::dialect::closure;
+
+/// Exact attribute key of a convention on a callable type or operation.
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
 pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_index";
 
@@ -13,11 +16,10 @@ pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_in
 ///
 /// Ordering is significant: composing requirements selects the stronger
 /// convention with [`CallingConvention::join`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::SalsaValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum CallingConvention {
     /// Pure function: source parameters and source result only.
-    #[default]
     Direct = 0,
     /// Tail-resumptive effect: evidence parameter, direct source result.
     EvidenceDirect = 1,
@@ -51,6 +53,24 @@ impl CallingConvention {
     pub fn closure_environment_index(self) -> usize {
         usize::from(self.needs_evidence())
     }
+
+    /// Keyword in the `convention(..)` syntax of source callables.
+    pub(crate) fn keyword(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::EvidenceDirect => "evidence_direct",
+            Self::Cps => "cps",
+        }
+    }
+
+    pub(crate) fn from_keyword(keyword: &str) -> Option<Self> {
+        match keyword {
+            "direct" => Some(Self::Direct),
+            "evidence_direct" => Some(Self::EvidenceDirect),
+            "cps" => Some(Self::Cps),
+            _ => None,
+        }
+    }
 }
 
 impl TryFrom<u8> for CallingConvention {
@@ -60,6 +80,17 @@ impl TryFrom<u8> for CallingConvention {
         CALLING_CONVENTIONS_BY_CODE
             .get(usize::from(code))
             .copied()
+            .ok_or(code)
+    }
+}
+
+impl TryFrom<i128> for CallingConvention {
+    type Error = i128;
+
+    fn try_from(code: i128) -> Result<Self, Self::Error> {
+        u8::try_from(code)
+            .ok()
+            .and_then(|code| Self::try_from(code).ok())
             .ok_or(code)
     }
 }
@@ -194,7 +225,7 @@ pub fn physical_closure_type_with_environment_index(
     convention: CallingConvention,
     environment_index: usize,
 ) -> TypeRef {
-    TypeDataBuilder::new("closure.closure")
+    TypeDataBuilder::new(closure::Closure::NAME)
         .param(function)
         .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
         .attr(
@@ -210,7 +241,7 @@ pub fn get_physical_closure_convention(
     closure: TypeRef,
 ) -> Option<CallingConvention> {
     let data = ctx.get_type(closure);
-    if !data.name.is(ctx, "closure.closure") {
+    if data.name != closure::Closure::NAME {
         return None;
     }
     data.attrs
@@ -224,7 +255,7 @@ pub fn get_physical_closure_convention(
 /// Read the exact environment slot from a convention-proven closure type.
 pub fn get_physical_closure_environment_index(ctx: &IrContext, closure: TypeRef) -> Option<usize> {
     let data = ctx.get_type(closure);
-    if !data.name.is(ctx, "closure.closure") {
+    if data.name != closure::Closure::NAME {
         return None;
     }
     data.attrs
@@ -244,9 +275,19 @@ mod tests {
         for convention in CALLING_CONVENTIONS_BY_CODE {
             let code = *convention as u8;
             assert_eq!(CallingConvention::try_from(code), Ok(*convention));
+            assert_eq!(
+                CallingConvention::try_from(i128::from(code)),
+                Ok(*convention)
+            );
+            assert_eq!(
+                CallingConvention::from_keyword(convention.keyword()),
+                Some(*convention)
+            );
         }
 
-        assert_eq!(CallingConvention::try_from(3), Err(3));
+        assert_eq!(CallingConvention::try_from(3u8), Err(3));
+        assert_eq!(CallingConvention::try_from(256i128), Err(256));
+        assert_eq!(CallingConvention::try_from(-1i128), Err(-1));
     }
 
     #[test]

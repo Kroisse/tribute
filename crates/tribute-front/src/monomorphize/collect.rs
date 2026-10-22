@@ -1,8 +1,8 @@
-use super::instance::{InstanceKey, InstanceKeys, for_each_declaration};
+use super::instance::InstanceKey;
 use super::nominal_index::NominalIndex;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
-use trunk_ir::{Symbol, SymbolPath};
+use trunk_ir::SymbolPath;
 
 use crate::ast::visit::{RefSite, Refs, walk_decl, walk_decl_table};
 use crate::ast::{
@@ -19,20 +19,19 @@ pub(super) fn collect_instantiations<'db>(
     module: &DeclTable<TypedRef<'db>>,
     function_types: &[(SymbolPath, TypeScheme<'db>)],
     function_instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-    keys: &InstanceKeys<'db>,
 ) -> HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>> {
-    let mut collector = InstantiationCollector::new(db, function_types, function_instances, keys);
-    for_each_declaration(&module.entries, &mut |enclosing, decl| {
+    let mut collector = InstantiationCollector::new(db, function_types, function_instances);
+    for entry in &module.entries {
         walk_decl(
             &mut Refs(|site, node, value: &TypedRef<'db>| {
                 // Only a function reference in expression position is a call site.
                 if site == RefSite::Var {
-                    collector.try_record(node, value, enclosing);
+                    collector.try_record(node, value);
                 }
             }),
-            decl,
+            &entry.decl,
         );
-    });
+    }
     collector.instantiations
 }
 
@@ -140,7 +139,6 @@ struct InstantiationCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
     schemes: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
     function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-    keys: &'a InstanceKeys<'db>,
     instantiations: HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
 }
 
@@ -149,7 +147,6 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
         db: &'db dyn salsa::Database,
         function_types: &[(SymbolPath, TypeScheme<'db>)],
         function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-        keys: &'a InstanceKeys<'db>,
     ) -> Self {
         let schemes = function_types
             .iter()
@@ -160,30 +157,22 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
             db,
             schemes,
             function_instances,
-            keys,
             instantiations: HashMap::default(),
         }
     }
 
-    fn try_record(
-        &mut self,
-        node_id: crate::ast::NodeId,
-        typed_ref: &TypedRef<'db>,
-        enclosing: Option<&[Symbol]>,
-    ) {
+    fn try_record(&mut self, node_id: crate::ast::NodeId, typed_ref: &TypedRef<'db>) {
         let ResolvedRef::Function { id } = &typed_ref.resolved else {
             return;
         };
         let Some(instance) = self.function_instances.get(&node_id) else {
             return;
         };
-        if !self.schemes.contains_key(&instance.function)
-            || !self.keys.refers_to(*id, instance.function)
-        {
+        if !self.schemes.contains_key(&instance.function) || *id != instance.function {
             return;
         }
         let id = &instance.function;
-        let Some(key) = self.keys.key(instance, enclosing) else {
+        let Some(key) = InstanceKey::of(instance) else {
             return;
         };
         if !key

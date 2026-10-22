@@ -38,10 +38,11 @@
 //!     │
 //!     ▼ eliminate_unreferenced_source_functions (artifact compiles only:
 //!     │   unreachable source-logical functions skip CPS legalization;
-//!     │   runtime functions stay)
-//!     ▼ specialize_convention_classes (when the frontend leaves classes to
-//!     │   it), then eliminate_unreferenced_source_functions again
-//!     │   (artifact compiles only)
+//!     │   runtime functions stay where a reachable perform, handle, or
+//!     │   evidence plan can make target lowering call them)
+//!     ▼ dce (unused pure operations, such as dead function references)
+//!     ▼ specialize_convention_classes, then
+//!     │   eliminate_unreferenced_source_functions again (artifact compiles only)
 //!     ▼ tribute_control_to_cps → lower_continuation_frames →
 //!       lower_closure_lambda → intrinsic/list/io lowering
 //! Module (CPS callable contracts, explicit evidence, and general
@@ -409,7 +410,6 @@ struct PreparedFrontend<'db> {
     typed: ast_typeck::TypeCheckOutput<'db>,
     compiler_intrinsics: HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
     runtime_types: ast_to_ir::runtime_items::RuntimeTypes,
-    row_classes: tribute_front::monomorphize::InstanceRowClasses,
 }
 
 /// Merge and specialize inside a tracked query so specialization failures
@@ -437,8 +437,6 @@ fn prepare_frontend_details<'db>(
     let user_span_map = typed.span_map(db);
 
     // Merge prelude at AST level
-    let merged_ability_conventions =
-        tribute_front::monomorphize::ability_conventions(typed.ability_definitions(db));
     let (merged_module, merged_fn_types, merged_node_types, merged_span_map) =
         if let Some(prelude) = prelude_module(db) {
             let prelude_module_ast = prelude.module(db);
@@ -580,8 +578,6 @@ fn prepare_frontend_details<'db>(
                 .flat_map(|prelude| prelude.exhaustive_cases(db).iter().copied())
                 .chain(typed.exhaustive_cases(db).iter().copied())
                 .collect(),
-            ability_conventions: merged_ability_conventions,
-            convention_classes: CONVENTION_CLASSES,
             compiler_intrinsics,
         },
     );
@@ -606,7 +602,6 @@ fn prepare_frontend_details<'db>(
     let mut exhaustive_cases: Vec<_> = mono_result.metadata.exhaustive_cases.into_iter().collect();
     exhaustive_cases.sort();
     let compiler_intrinsics = mono_result.metadata.compiler_intrinsics;
-    let row_classes = mono_result.row_classes;
     let typed = ast_typeck::TypeCheckOutput::new(
         db,
         mono_result.module,
@@ -649,7 +644,6 @@ fn prepare_frontend_details<'db>(
         typed,
         compiler_intrinsics,
         runtime_types,
-        row_classes,
     })
 }
 
@@ -664,7 +658,6 @@ fn merge_and_lower_to_ir_with<'db, M>(
     let typed = prepared.typed;
     let compiler_intrinsics = prepared.compiler_intrinsics.clone();
     let runtime_types = prepared.runtime_types.clone();
-    let row_classes = prepared.row_classes.clone();
     let mut ir = IrContext::new();
     let module = lower(
         ast_to_ir::TypedModule {
@@ -684,10 +677,6 @@ fn merge_and_lower_to_ir_with<'db, M>(
                 .specialized_enum_variants
                 .clone(),
             node_types: typed.expression_types(db).node_types.clone(),
-            ability_conventions: tribute_front::monomorphize::ability_conventions(
-                typed.ability_definitions(db),
-            ),
-            convention_classes: CONVENTION_CLASSES,
             ability_definitions: ast_typeck::ability_definitions_from_schemas(
                 typed.ability_definitions(db),
             ),
@@ -699,7 +688,6 @@ fn merge_and_lower_to_ir_with<'db, M>(
             well_known_types: *typed.well_known_types(db),
             compiler_intrinsics,
             runtime_types,
-            row_classes,
             merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
         },
         db,
@@ -752,11 +740,12 @@ pub fn compile_specialized_frontend(
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = PassManager::new();
-    pm.add_pass(EliminateUnreferencedSourceFunctions::new());
-    if CONVENTION_CLASSES == tribute_front::monomorphize::ConventionClasses::Pass {
-        pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses)
-            .add_pass(EliminateUnreferencedSourceFunctions::new());
-    }
+    pm.add_pass(EliminateUnreferencedSourceFunctions::new())
+        .add_pass(trunk_ir::transforms::EliminateDeadCode::<
+            core_dialect::Module,
+        >::new())
+        .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses)
+        .add_pass(EliminateUnreferencedSourceFunctions::new());
     pm.run(&mut ctx, core_module, &mut AnalysisCache::new())?;
     Ok(Some((ctx, m)))
 }
@@ -899,11 +888,6 @@ fn runtime_items_kept_alive(
     }
 }
 
-/// Who specializes convention classes: the frontend, or the class
-/// specialization pass at the head of the structural pipeline.
-const CONVENTION_CLASSES: tribute_front::monomorphize::ConventionClasses =
-    tribute_front::monomorphize::ConventionClasses::Pass;
-
 /// Build the shared structural pass pipeline that legalizes source-logical
 /// callable/control IR into CPS with explicit evidence. For
 /// [`SourceFunctions::Reachable`], it first removes the functions nothing
@@ -918,11 +902,12 @@ fn structural_pass_pipeline(
     if functions == SourceFunctions::Reachable {
         pm.add_pass(EliminateUnreferencedSourceFunctions::new());
     }
-    if CONVENTION_CLASSES == tribute_front::monomorphize::ConventionClasses::Pass {
-        pm.add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
-        if functions == SourceFunctions::Reachable {
-            pm.add_pass(EliminateUnreferencedSourceFunctions::new());
-        }
+    pm.add_pass(trunk_ir::transforms::EliminateDeadCode::<
+        core_dialect::Module,
+    >::new())
+        .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
+    if functions == SourceFunctions::Reachable {
+        pm.add_pass(EliminateUnreferencedSourceFunctions::new());
     }
     if cfg!(debug_assertions) {
         pm.add_pass(tribute_passes::check_convention_classes::CheckConventionClasses);
@@ -1111,9 +1096,7 @@ fn run_canonicalize_passes(
     let mut pm = PassManager::new();
     pm.nest::<func_dialect::Func>()
         .add_pass(trunk_ir::transforms::canonicalize_pass())
-        .add_pass(trunk_ir::transforms::dce_pass(
-            trunk_ir::transforms::DceConfig::default(),
-        ));
+        .add_pass(trunk_ir::transforms::EliminateDeadCode::new());
     pm.with_debug_verifier();
     pm.run(ctx, core_module, analyses)
 }
@@ -1153,13 +1136,9 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
 /// Run the native target pipeline: lowering + evidence_to_native + cleanup.
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     let mut analyses = AnalysisCache::new();
-    enter_target_lowering(
-        ctx,
-        m,
-        &mut analyses,
-        "native",
-        tribute_ir::runtime_items::RUNTIME_ITEMS,
-    )?;
+    // Native evidence lowering still calls the C runtime, so no runtime item
+    // stays alive into the native target.
+    enter_target_lowering(ctx, m, &mut analyses, "native", &[])?;
     lower_native_runtime_calls(ctx, m, &mut analyses)?;
     finish_target_lowering(
         ctx,
@@ -1212,10 +1191,13 @@ fn lower_wasm_runtime_calls(
 ) -> Result<(), DumpIrError> {
     let core_module = core_dialect::Module::from_op(ctx, m.op())
         .expect("Wasm evidence lowering requires a core.module");
-    tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, m);
+    let runtime = tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, m)
+        .map_err(|error| DumpIrError {
+            message: error.to_string(),
+        })?;
     let mut pm = PassManager::new();
     pm.nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::wasm::evidence_to_wasm::LowerEvidenceToWasm);
+        .add_pass(tribute_passes::wasm::evidence_to_wasm::LowerEvidenceToWasm::new(runtime));
     pm.with_debug_verifier();
     pm.run(ctx, core_module, analyses)?;
     tribute_ir::dialect::ability::remove_declarations(ctx, m);
@@ -1885,7 +1867,8 @@ mod tests {
     fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
         let mut ctx = IrContext::new();
         let source = r#"core.module @test {
-            !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+            !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
+            !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
             !Frame = adt.typeref<{name = "__tribute_continuation_frame_root_nil", tribute.cps_continuation_frame_result = core.nil}>
             !Done = closure.closure<func.func_sig<(core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
@@ -1894,6 +1877,9 @@ mod tests {
             !Payload = adt.struct<__tribute_ability_payload_7590c57e()>
             func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = 2} {
                 BODY
+            }
+            func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
+                func.return %id
             }
         }"#.replace("BODY", body);
         let module = trunk_ir::parser::parse_test_module(&mut ctx, &source);
@@ -1938,7 +1924,7 @@ mod tests {
             // The convention is consumed inside the boundary; the empty
             // physical result list is what identifies a Cps callable here.
             assert_eq!(
-                tribute_core::get_calling_convention(&ctx, function.op_ref()),
+                tribute_ir::calling_convention::get_calling_convention(&ctx, function.op_ref()),
                 None
             );
             assert!(
@@ -1967,23 +1953,6 @@ mod tests {
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );
-    }
-
-    #[test]
-    fn evidence_lookup_preserves_marker_type_in_emitted_binary() {
-        let mut ctx = trunk_ir::IrContext::new();
-        let module = trunk_ir::parser::parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-                func.func @__tribute_evidence_lookup(%ev: adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>, %id: core.i32) -> core.i32 attributes {abi = "C"}
-            }"#,
-        );
-        tribute_passes::wasm::evidence_to_wasm::bind_wasm_evidence_runtime(&mut ctx, module);
-        tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
-        let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();
-        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-            .validate_all(&binary.bytes)
-            .expect("evidence lookup must retain concrete Marker locals and return type");
     }
 
     #[test]
@@ -2051,10 +2020,19 @@ mod tests {
                                     .unwrap(),
                                 )
                             };
+                            // The evidence is the GC array of markers.
+                            assert!(
+                                matches!(
+                                    signature.params()[0],
+                                    ValType::Ref(evidence)
+                                        if matches!(evidence.heap_type(), wasmparser::HeapType::Concrete(_))
+                                ),
+                                "{:?}",
+                                signature.params()
+                            );
                             assert_eq!(
-                                signature.params(),
+                                signature.params()[1..],
                                 [
-                                    concrete(trunk_ir_wasm_backend::gc_types::EVIDENCE_IDX),
                                     concrete(trunk_ir_wasm_backend::gc_types::CLOSURE_STRUCT_IDX),
                                     concrete(trunk_ir_wasm_backend::gc_types::CLOSURE_STRUCT_IDX),
                                     ValType::I32,

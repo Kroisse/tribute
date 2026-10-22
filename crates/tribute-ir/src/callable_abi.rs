@@ -1,6 +1,6 @@
 //! Shared logical and lowered callable ABI layout.
 
-use crate::CallingConvention;
+use crate::calling_convention::CallingConvention;
 
 /// A source callable paired with its selected calling convention.
 #[derive(Clone, Debug, PartialEq, Eq)]

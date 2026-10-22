@@ -41,6 +41,18 @@ impl RewriteScope for Module {
     }
 }
 
+impl RewriteScope for core::Module {
+    type Regions = std::option::IntoIter<RegionRef>;
+
+    fn regions(self, ctx: &IrContext) -> Self::Regions {
+        Module::from(self).regions(ctx)
+    }
+
+    fn module_first_block(self, ctx: &IrContext) -> Option<BlockRef> {
+        Module::from(self).module_first_block(ctx)
+    }
+}
+
 impl RewriteScope for func::Func {
     type Regions = std::option::IntoIter<RegionRef>;
 

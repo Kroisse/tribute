@@ -197,7 +197,7 @@ Host resource에 linear type이나 affine type은 두지 않는다. Continuation
 ## 표준 입출력과의 관계
 
 표준 입출력도 같은 규칙을 따른다. [`std::io::Io`](io.md#io)와
-[`std::io::Read`, `std::io::Write`](io.md#read와-write)는 prelude source에 선언한
+[`std::io::Read`, `std::io::Write`](io.md#read와-write)는 패키지 `std`의 source에 선언한
 ability이며, Tribute handler로 가로챌 수 있다. Compiler가 특별히 아는 ambient
 ability는 없다. 표준 ability의 두 층은 [std-abilities.md](std-abilities.md)가
 정한다.

@@ -19,10 +19,7 @@ use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
 use super::row_binders::RowBinders;
 use crate::SortedMap;
-use crate::ast::{
-    AbilityId, CallingConvention, CtorId, LocalId, NodeId, RowClasses, RowVar, SpanMap, TypeKind,
-    TypeScheme,
-};
+use crate::ast::{CtorId, LocalId, NodeId, RowVar, SpanMap, TypeKind, TypeScheme};
 
 /// Encode a tagged type-shape node without relying on separator characters in
 /// source symbols. Each component carries its byte length, so nested keys are
@@ -44,26 +41,6 @@ where
     key
 }
 
-/// The IR convention of a frontend convention.
-pub(crate) fn control_convention(
-    convention: CallingConvention,
-) -> tribute_ir::dialect::tribute_control::CallingConvention {
-    use tribute_ir::dialect::tribute_control::CallingConvention as Control;
-    match convention {
-        CallingConvention::Direct => Control::Direct,
-        CallingConvention::EvidenceDirect => Control::EvidenceDirect,
-        CallingConvention::Cps => Control::Cps,
-    }
-}
-
-fn logical_convention_key(convention: CallingConvention) -> String {
-    match convention {
-        CallingConvention::Direct => "direct".into(),
-        CallingConvention::EvidenceDirect => "evidence_direct".into(),
-        CallingConvention::Cps => "cps".into(),
-    }
-}
-
 /// A source-visible callable synthesized by the logical frontend, such as a
 /// struct-field accessor. These signatures are semantic lowering metadata,
 /// not reconstructed by inspecting emitted operations.
@@ -73,12 +50,10 @@ pub(crate) struct LogicalGeneratedSignature {
     pub return_type: TypeRef,
     pub row: Row,
     pub binders: Vec<RowBinder>,
-    pub convention: Option<CallingConvention>,
 }
 
 /// The definition scope [`IrLoweringCtx::enter_definition`] replaced.
 pub(crate) struct DefinitionScope {
-    classes: Vec<(RowVar, CallingConvention)>,
     binders: RowBinders,
 }
 
@@ -108,17 +83,6 @@ pub struct IrLoweringCtx<'db> {
     function_ref_paths: HashMap<OpRef, SymbolPath>,
     /// Extern declarations synthesized for referenced prelude functions.
     logical_emitted_externs: HashSet<SymbolPath>,
-    /// Ability-level calling-convention requirements.
-    ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
-    /// Whether lowering writes conventions, or leaves them to the class
-    /// specialization pass.
-    assigns_conventions: bool,
-    /// Physical worker conventions for named function definitions.
-    ///
-    /// These are intentionally separate from semantic function-type
-    /// conventions: an effect-polymorphic pure definition may have a Direct
-    /// worker while its first-class function type requires a CPS adapter.
-    definition_conventions: HashMap<SymbolPath, CallingConvention>,
     /// Module path as a vector of segments (e.g., ["std", "Option"]).
     module_path: SymbolPath,
     /// Module's top-level block, used for in-place insertion of lifted lambdas.
@@ -141,10 +105,6 @@ pub struct IrLoweringCtx<'db> {
     compiler_intrinsics: HashMap<NodeId, Symbol>,
     /// The runtime structs to publish as prelude types.
     runtime_types: super::runtime_items::RuntimeTypes,
-    /// Convention classes of the class variables of each function instance.
-    row_classes: HashMap<SymbolPath, Vec<(RowVar, CallingConvention)>>,
-    /// The classes of the definition whose types are being read.
-    current_row_classes: Vec<(RowVar, CallingConvention)>,
     /// The row binders of each function definition of the module.
     row_binders: HashMap<SymbolPath, RowBinders>,
     /// The row binders of the definition whose types are being read.
@@ -175,7 +135,6 @@ impl<'db> IrLoweringCtx<'db> {
         path: PathRef,
         span_map: SpanMap,
         function_types: HashMap<SymbolPath, TypeScheme<'db>>,
-        ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
         node_types: SortedMap<NodeId, crate::ast::Type<'db>>,
     ) -> Self {
         Self {
@@ -191,9 +150,6 @@ impl<'db> IrLoweringCtx<'db> {
             logical_source_functions: HashSet::default(),
             function_ref_paths: HashMap::default(),
             logical_emitted_externs: HashSet::default(),
-            ability_conventions,
-            assigns_conventions: true,
-            definition_conventions: HashMap::default(),
             module_path: SymbolPath::root(),
             module_block: None,
             struct_fields: HashMap::default(),
@@ -202,8 +158,6 @@ impl<'db> IrLoweringCtx<'db> {
             logical_nominal_declarations: HashSet::default(),
             compiler_intrinsics: HashMap::default(),
             runtime_types: Default::default(),
-            row_classes: HashMap::default(),
-            current_row_classes: Vec::new(),
             row_binders: HashMap::default(),
             current_row_binders: Vec::new(),
             literal_equalities: LiteralEqualities::default(),
@@ -228,56 +182,16 @@ impl<'db> IrLoweringCtx<'db> {
         self
     }
 
-    /// Whether lowering writes conventions, or leaves every one to the class
-    /// specialization pass.
-    pub(crate) fn with_conventions(mut self, assigns: bool) -> Self {
-        self.assigns_conventions = assigns;
-        self
-    }
-
-    /// Whether lowering writes conventions.
-    pub(crate) fn assigns_conventions(&self) -> bool {
-        self.assigns_conventions
-    }
-
-    /// The convention lowering writes for the function type `ty`, or `None`
-    /// when the class specialization pass assigns it.
-    pub(crate) fn written_convention(
-        &self,
-        ty: crate::ast::Type<'db>,
-    ) -> Option<CallingConvention> {
-        self.assigns_conventions.then(|| {
-            self.calling_convention_for_type(ty)
-                .unwrap_or(CallingConvention::Cps)
-        })
-    }
-
-    pub(crate) fn with_row_classes(
-        mut self,
-        row_classes: HashMap<SymbolPath, Vec<(RowVar, CallingConvention)>>,
-    ) -> Self {
-        self.row_classes = row_classes;
-        self
-    }
-
-    /// The convention classes of the function instance `name`.
-    pub(crate) fn row_classes_of(&self, name: &[Symbol]) -> &RowClasses {
-        self.row_classes.get(name).map_or(&[], Vec::as_slice)
-    }
-
     /// Read types as the definition `name` sees them, and return the scope
     /// to restore with [`Self::leave_definition`].
     pub(crate) fn enter_definition(&mut self, name: &[Symbol]) -> DefinitionScope {
-        let classes = self.row_classes.get(name).cloned().unwrap_or_default();
         let binders = self.row_binders_of(name);
         DefinitionScope {
-            classes: std::mem::replace(&mut self.current_row_classes, classes),
             binders: std::mem::replace(&mut self.current_row_binders, binders),
         }
     }
 
     pub(crate) fn leave_definition(&mut self, outer: DefinitionScope) {
-        self.current_row_classes = outer.classes;
         self.current_row_binders = outer.binders;
     }
 
@@ -497,8 +411,7 @@ impl<'db> IrLoweringCtx<'db> {
                 existing.param_types == signature.param_types
                     && existing.return_type == signature.return_type
                     && existing.row == signature.row
-                    && existing.binders == signature.binders
-                    && existing.convention == signature.convention,
+                    && existing.binders == signature.binders,
                 "conflicting logical generated signature for {name}"
             );
         }
@@ -540,60 +453,6 @@ impl<'db> IrLoweringCtx<'db> {
     /// materialized in the logical module.
     pub(crate) fn mark_logical_extern_emitted(&mut self, name: SymbolPath) -> bool {
         self.logical_emitted_externs.insert(name)
-    }
-
-    /// Derive a function convention from both its ability row and ABI lower bound.
-    pub(crate) fn calling_convention_for_type(
-        &self,
-        ty: crate::ast::Type<'db>,
-    ) -> Option<CallingConvention> {
-        self.calling_convention_for_type_in(ty, &self.current_row_classes)
-    }
-
-    /// Derive the convention of a function type read with `classes`.
-    pub(crate) fn calling_convention_for_type_in(
-        &self,
-        ty: crate::ast::Type<'db>,
-        classes: &RowClasses,
-    ) -> Option<CallingConvention> {
-        crate::ast::calling_convention_for_function_type_in(
-            self.db,
-            ty,
-            &self.ability_conventions,
-            classes,
-        )
-    }
-
-    /// Derive a convention from an ability row without a function-level ABI bound.
-    pub(crate) fn calling_convention_for_ability_row(
-        &self,
-        effect: crate::ast::AbilityRow<'db>,
-    ) -> CallingConvention {
-        crate::ast::calling_convention_for_ability_row_in(
-            self.db,
-            effect,
-            &self.ability_conventions,
-            &self.current_row_classes,
-        )
-    }
-
-    /// Look up a function definition and derive its ABI convention.
-    pub(crate) fn function_calling_convention(&self, name: &[Symbol]) -> Option<CallingConvention> {
-        if let Some(convention) = self.definition_conventions.get(name) {
-            return Some(*convention);
-        }
-        let scheme = self.lookup_function_type(name)?;
-        let body = scheme.body(self.db);
-        self.calling_convention_for_type_in(body, self.row_classes_of(name))
-    }
-
-    /// Register the physical worker convention for a named definition.
-    pub(crate) fn register_definition_convention(
-        &mut self,
-        name: SymbolPath,
-        convention: CallingConvention,
-    ) {
-        self.definition_conventions.insert(name, convention);
     }
 
     /// Look up a local variable.
@@ -711,6 +570,9 @@ impl<'db> IrLoweringCtx<'db> {
             | TypeKind::LocalBoundVar { .. }
             | TypeKind::UniVar { .. } => self.anyref_type(ir),
             TypeKind::Named { id, .. } if id.is_builtin_list(self.db) => self.anyref_type(ir),
+            TypeKind::Named { id, .. } if id.is_builtin_dispatch(self.db) => {
+                tribute_ir::runtime_layout::closure_base(ir)
+            }
             TypeKind::Named { id, args, .. } if id.is_builtin_slots(self.db) => {
                 let [element] = args.as_slice() else {
                     panic!("Slots has one type argument, found {}", args.len());
@@ -739,13 +601,10 @@ impl<'db> IrLoweringCtx<'db> {
                     .map(|param| self.convert_logical_type(ir, *param))
                     .collect::<Vec<_>>();
                 let result = self.convert_logical_type(ir, *result);
-                let mut signature =
-                    tribute_ir::dialect::tribute_control::FuncSig::params(params, result)
-                        .row(self.ability_row(*effect));
-                if let Some(convention) = self.written_convention(ty) {
-                    signature = signature.convention(control_convention(convention));
-                }
-                signature.intern(ir).as_type_ref()
+                tribute_ir::dialect::tribute_control::FuncSig::params(params, result)
+                    .row(self.ability_row(*effect))
+                    .intern(ir)
+                    .as_type_ref()
             }
             TypeKind::Tuple(elements) => {
                 let elements = elements
@@ -790,7 +649,6 @@ impl<'db> IrLoweringCtx<'db> {
                 let mut parts = vec![params.len().to_string()];
                 parts.extend(params.iter().map(|param| self.logical_type_key(*param)));
                 parts.push(self.logical_type_key(*result));
-                parts.extend(self.written_convention(ty).map(logical_convention_key));
                 logical_key("callable", parts)
             }
             TypeKind::Tuple(elements) => {
@@ -859,7 +717,6 @@ impl<'db> IrLoweringCtx<'db> {
                 );
                 parts.push(self.source_type_key(*result, row_vars));
                 parts.push(self.source_row_key(*effect, row_vars));
-                parts.extend(self.written_convention(ty).map(logical_convention_key));
                 logical_key("callable", parts)
             }
             TypeKind::Tuple(elements) => {
@@ -900,6 +757,9 @@ impl<'db> IrLoweringCtx<'db> {
             crate::ast::TypeOrigin::Source(_) => "source",
             crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list",
             crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => "builtin_slots",
+            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Dispatch) => {
+                "builtin_dispatch"
+            }
             crate::ast::TypeOrigin::Synthetic => "synthetic",
         };
         logical_key(
@@ -957,6 +817,9 @@ impl<'db> IrLoweringCtx<'db> {
             crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list".into(),
             crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => {
                 "builtin_slots".into()
+            }
+            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Dispatch) => {
+                "builtin_dispatch".into()
             }
             crate::ast::TypeOrigin::Synthetic => "synthetic".into(),
         };
@@ -1119,7 +982,7 @@ impl Drop for ScopeGuard<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Type as AstType, TypeKind};
+    use crate::ast::{AbilityId, Type as AstType, TypeKind};
     use trunk_ir::ops::DialectType;
 
     fn test_db() -> salsa::DatabaseImpl {
@@ -1132,7 +995,6 @@ mod tests {
             db,
             path,
             crate::ast::SpanMap::default(),
-            HashMap::default(),
             HashMap::default(),
             SortedMap::default(),
         )
@@ -1254,7 +1116,6 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::default(),
-            HashMap::default(),
             SortedMap::default(),
         );
 
@@ -1277,7 +1138,6 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::default(),
-            HashMap::default(),
             SortedMap::default(),
         );
         let int = AstType::new(&db, TypeKind::Int);
@@ -1299,7 +1159,8 @@ mod tests {
         assert_eq!(signature.inputs(&ir), &[i32_ty]);
         assert_eq!(
             tribute_ir::dialect::tribute_control::func_sig_convention(&ir, logical_callable),
-            Some(tribute_ir::dialect::tribute_control::CallingConvention::Direct)
+            None,
+            "class specialization assigns conventions"
         );
 
         let never = AstType::new(&db, TypeKind::Never);
@@ -1400,7 +1261,6 @@ mod tests {
                 return_type: i32_ty,
                 row: Row::default(),
                 binders: vec![],
-                convention: Some(CallingConvention::Direct),
             },
         );
         // Re-registering the exact semantic signature is a deterministic
@@ -1413,7 +1273,6 @@ mod tests {
                 return_type: i32_ty,
                 row: Row::default(),
                 binders: vec![],
-                convention: Some(CallingConvention::Direct),
             },
         );
         let generated_signature = ctx
@@ -1421,10 +1280,6 @@ mod tests {
             .expect("generated logical signature must be retained");
         assert_eq!(generated_signature.param_types, vec![i32_ty]);
         assert_eq!(generated_signature.return_type, i32_ty);
-        assert_eq!(
-            generated_signature.convention,
-            Some(CallingConvention::Direct)
-        );
 
         let source_function = SymbolPath::new(["Forward", "run"]);
         ctx.register_logical_source_function(source_function.clone());
@@ -1484,7 +1339,6 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::default(),
-            HashMap::default(),
             SortedMap::default(),
         );
 
@@ -1534,7 +1388,6 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             ft,
-            HashMap::default(),
             SortedMap::default(),
         );
         assert_eq!(ctx.lookup_function_type(&name), Some(&scheme));

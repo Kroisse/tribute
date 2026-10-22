@@ -192,6 +192,19 @@ impl<'db> ModuleTypeEnv<'db> {
         type_defs.insert(SymbolPath::new([list_name]), list_scheme);
         type_defs.insert(SymbolPath::new(["std", "collections", "List"]), list_scheme);
         type_defs.insert(slots_id.path(db).clone(), slots_scheme);
+        let dispatch_id = TypeDefId::builtin_dispatch(db);
+        let dispatch_ty = Type::new(
+            db,
+            TypeKind::Named {
+                id: dispatch_id,
+                name: Symbol::new("Dispatch"),
+                args: Vec::new(),
+            },
+        );
+        type_defs.insert(
+            dispatch_id.path(db).clone(),
+            TypeScheme::mono(db, dispatch_ty),
+        );
 
         Self {
             db,
@@ -990,12 +1003,13 @@ mod tests {
         let exported = env.export_type_defs();
 
         // Should be sorted alphabetically by name
-        let expected: [&[&str]; 6] = [
+        let expected: [&[&str]; 7] = [
             &["Alpha"],
             &["List"],
             &["Middle"],
             &["Zebra"],
             &["std", "collections", "List"],
+            &["std", "runtime", "Dispatch"],
             &["std", "runtime", "Slots"],
         ];
         itertools::assert_equal(exported.iter().map(|(path, _)| path), expected);

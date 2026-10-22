@@ -5,7 +5,11 @@ use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::PassManager;
 use trunk_ir::printer::print_module;
 
 /// Prelude source, loaded at compile time relative to this file.
@@ -93,13 +97,6 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
     let function_types_map: HashMap<_, _> = result.function_types.into_iter().collect();
     let constructor_types: HashMap<_, _> = result.constructor_types.into_iter().collect();
     let ability_definitions: HashMap<_, _> = result.ability_definitions.into_iter().collect();
-    let ability_conventions =
-        tribute_front::ast::ability_conventions(ability_definitions.iter().map(|(id, info)| {
-            (
-                *id,
-                info.operations.values().map(|operation| operation.kind),
-            )
-        }));
     let compiler_intrinsics = prelude
         .as_ref()
         .map(|prelude| {
@@ -117,8 +114,6 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
         node_types: result.node_types,
         local_instances: result.local_instances,
         function_instances: result.function_instances,
-        ability_conventions,
-        convention_classes: Default::default(),
         ability_definitions,
         handler_operations: result.handler_operations,
         perform_operations: result.perform_operations,
@@ -128,7 +123,6 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
         well_known_types: result.well_known_types,
         compiler_intrinsics,
         runtime_types: Default::default(),
-        row_classes: HashMap::default(),
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
@@ -143,7 +137,12 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
         "logical frontend output must validate: {validation}"
     );
     if specialize {
-        tribute_passes::specialize_convention_classes::specialize(&mut ir, module.module)
+        let core_module = core::Module::from_op(&ir, module.module.op())
+            .expect("frontend output must be a core.module");
+        let mut pm = PassManager::new();
+        pm.add_pass(trunk_ir::transforms::EliminateDeadCode::<core::Module>::new())
+            .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
+        pm.run(&mut ir, core_module, &mut AnalysisCache::new())
             .expect("class specialization accepts frontend output");
         let validation = tribute_ir::dialect::tribute_control::validate(
             &ir,

@@ -77,7 +77,7 @@ Program 밖의 기능은 host가 처리하는 ability로 연다. 그런 ability�
 program 안에서 처리되지 않고 host가 부르는 entrypoint(`main` 등)에 남으면 host가
 처리한다. Entrypoint에 남은 row들이 program의 host interface이고, 규칙은
 [host-interface.md](host-interface.md)가 정한다. Compiler가 특별히 아는 ambient
-ability는 없다. 표준 입출력도 prelude source에 선언한 ability `std::io::Io`와 그 위의
+ability는 없다. 표준 입출력도 패키지 `std`의 source에 선언한 ability `std::io::Io`와 그 위의
 `std::io::Read`, `std::io::Write`로 제공한다([io.md](io.md)).
 
 ```rust
@@ -214,8 +214,7 @@ Ability operation은 두 종류로 선언한다:
 - **`op`**: General operation. Handler에서 `resume` 키워드를 통해
   resume 여부와 시점을 제어한다. `-> Never`를 반환하면 절대 resume하지 않는
   abort/exception 패턴을 표현한다.
-  `op`으로 선언된 operation은 handler에서 `fn`으로도 구현할 수 있다
-  (tail-resumptive가 충분한 경우).
+  `op`으로 선언된 operation은 handler에서 반드시 `op`으로 구현한다.
 
 ```rust
 ability Http {
@@ -317,7 +316,7 @@ computation의 실행 결과는 두 가지 중 하나:
 | arm | 대상 | 의미 |
 | --- | ---- | ---- |
 | `do value { expr }` | completion | Computation 완료, 결과값 바인딩 |
-| `fn Op(args) { body }` | `fn`/`op` operation | Tail-resumptive: body의 반환값이 resume 값 |
+| `fn Op(args) { body }` | `fn` operation만 | Tail-resumptive: body의 반환값이 resume 값 |
 | `op Op(args) { body }` | `op` operation만 | body에서 `resume`으로 명시적 resume |
 
 Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
@@ -325,7 +324,9 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 **Handler arm과 선언의 관계:**
 
 - `fn`으로 선언된 operation → handler에서 반드시 `fn`으로 구현 (`op`으로 구현 시 컴파일 에러)
-- `op`으로 선언된 operation → handler에서 `op` 또는 `fn`으로 구현 가능
+- `op`으로 선언된 operation → handler에서 반드시 `op`으로 구현 (`fn`으로 구현 시 컴파일 에러)
+- Arm의 종류는 선언의 종류와 같다. 꼬리에서 바로 `resume`하는 `op` arm을 빠른 경로로
+  내리는 것은 최적화가 정하며, 언어 계약에 속하지 않는다.
 
 **Handler arm의 완전성:**
 
@@ -361,6 +362,43 @@ fn fixed_clock(comp: fn() ->{e, Clock} a, now: Int) ->{e} a {
 ```
 
 `fn` handler arm에서는 `resume`을 사용할 수 **없다** (컴파일 에러).
+
+`fn` handler arm은 계산을 멈추거나(suspend) 버릴(abort) 수 없다. `fn` operation은
+어떤 handler 아래에서도 continuation을 handler에 넘기지 않고 perform 지점으로
+반환한다고 선언이 보증하고, `fn` arm은 그 operation의 구현이기 때문이다. 따라서 `fn`
+arm 본문은 다음을 할 수 없다. `Throw`와 `-> Never` operation도 포함한다.
+
+- `op` operation을 직접 perform한다.
+- Ability row에 `op` operation을 선언한 ability가 있는 callable을 호출한다. 그런
+  callable은 호출 도중 멈출 수 있다.
+
+직접 perform은 operation 단위로 판단하므로, `fn`과 `op`를 함께 선언한 ability의 `fn`
+operation은 직접 perform할 수 있다. 호출은 callee의 ability row로 판단하므로 그 ability를
+요구하는 함수는 호출할 수 없다. Arm 안의 `handle`이 처리하는 label은 그 handle 안에서
+제한을 받지 않는다. Lambda 본문은 lambda를 호출하는 곳에서 그 타입의 row로 판단한다.
+Arm 정의의 타입에 드러나는 위반은 typechecking 단계의 컴파일 에러이며, 진단은 arm이
+처리하는 operation과 arm이 닿는 금지된 ability를 나열한다.
+
+계산을 멈추거나 중단해야 하는 handler는 그 operation을 `op`으로 선언하고 `op` arm으로
+처리한다. 이 보증을 구현하는 방법, 곧 `fn` perform 지점이 continuation frame을 만들지
+않는 dispatch는 [CPS 전략](cps-effects.md#fn-operation-direct-dispatch)이 정한다.
+
+Row 변수로 들어오는 label도 같은 규칙을 따른다. `fn` arm이 effect-polymorphic
+callable을 호출하면, 그 row 변수를 고정한 인스턴스의 label에도 `op` operation을
+선언한 ability가 올 수 없다. 이 위반은 arm의 정의만으로는 드러나지 않는다. 정의에서는 그
+row가 row를 생략한 순수 함수의 호출과 같은 열린 row이기 때문이다. 그래서 인스턴스마다
+callee의 호출 규약을 정하는 단계가 이 위반을 컴파일 에러로 거부한다.
+
+```rust
+ability Stop { op stop() -> Never }
+
+fn limited(comp: fn() ->{e, Counter} Int) ->{e, Stop} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() { Stop::stop() } // ❌ 컴파일 에러: `fn` arm에서 `op` 수행
+    }
+}
+```
 
 ### `op` Operation Handler와 `resume`
 
@@ -516,9 +554,9 @@ fn main() ->{Io} Nil {
 
 | 선언 | resume | continuation 캡처 | handler arm | 용례 |
 | ---- | ------ | ----------------- | ----------- | ---- |
-| `fn log(msg: String) -> Nil` | 1회, 암시적 | 없음 | `fn`만 가능 | Reader, Clock |
-| `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op` 또는 `fn` | State, Stream, Coroutine |
-| `op fail(msg: String) -> Never` | 0회 | 없음 | `op` 또는 `fn` | Fail, Exception |
+| `fn now_millis() -> Int` | 1회, 암시적 | 없음 | `fn`만 가능 | Clock, Config |
+| `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op`만 가능 | State, Stream, Coroutine |
+| `op fail(msg: String) -> Never` | 0회 | 없음 | `op`만 가능 | Fail, Exception |
 
 ### Operation 규칙
 
@@ -527,8 +565,8 @@ fn main() ->{Io} Nil {
 | 암시적 effect | Operation은 자신이 속한 ability의 effect를 암시적으로 수행 |
 | ability annotation 금지 | Operation 시그니처에 ability annotation을 적을 수 없음 |
 | 다른 effect 필요 시 | Handler 구현부에서 처리 |
-| `fn` 선언 보증 | `fn`으로 선언 → 모든 handler에서 `fn`으로 구현 필수 |
-| `op` handler 유연성 | `op`으로 선언 → handler에서 `fn` 또는 `op`으로 구현 가능 |
+| 선언과 arm 일치 | `fn`/`op`으로 선언 → 모든 handler에서 같은 키워드로 구현 |
+| `fn` arm의 effect | `fn` arm 본문은 `op` operation을 perform하거나 그런 ability를 요구하는 callable을 호출할 수 없음 |
 
 ### 전체 문법 요약
 

@@ -9,7 +9,7 @@
 
 ## 목표
 
-- 바깥 세계에 닿는 표준 기능을 모두 prelude source에 선언한 ability로 제공한다.
+- 바깥 세계에 닿는 표준 기능을 모두 패키지 `std`의 source에 선언한 ability로 제공한다.
   Compiler가 특별히 아는 ambient ability는 두지 않는다.
 - 대부분의 코드는 handle 없는 ability를 요구한다. 그래서 library 코드는 어떤 파일이나
   stream에 닿을지 스스로 정하지 않고, 테스트는 host 없이 handler 하나로 대체할 수 있다.
@@ -73,7 +73,8 @@ Host가 대상 없는 ability를 직접 구현할 수 있다면 entrypoint가 �
   Entrypoint에 남은 `op`는 host interface에서 비동기 함수가 된다.
 - **변환.** 압축이나 tee처럼 받은 쓰기를 고쳐 바깥 `Write`로 보내는 handler를 쌓는다.
 
-대가로 대상 없는 층을 요구하는 함수는 CPS 규약을 쓴다. Handle 층은 `fn`이므로 묶는
+대가로 대상 없는 층을 요구하는 함수는 중단될 수 있는 함수가 되며, 그 호출 규약은
+[CPS 전략](cps-effects.md#호출-규약)이 정한다. Handle 층은 `fn`이므로 묶는
 handler 안쪽의 host 호출은 continuation을 잡지 않는다.
 
 ## Handle 층

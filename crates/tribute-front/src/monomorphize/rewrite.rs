@@ -7,7 +7,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
-use trunk_ir::{Symbol, SymbolPath};
+use trunk_ir::SymbolPath;
 
 use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_decl_table_mut};
 use crate::ast::{
@@ -15,7 +15,7 @@ use crate::ast::{
     TypedRef,
 };
 
-use super::instance::{InstanceKey, InstanceKeys, for_each_declaration_mut};
+use super::instance::InstanceKey;
 use super::mangle::mangle_type_path;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
@@ -30,9 +30,8 @@ pub fn rewrite_module<'db>(
     module: &mut DeclTable<TypedRef<'db>>,
     rewrite_map: &RewriteMap<'db>,
     instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
-    keys: &InstanceKeys<'db>,
 ) {
-    rewrite_decls(db, &mut module.entries, rewrite_map, instances, keys);
+    rewrite_decls(db, &mut module.entries, rewrite_map, instances);
 }
 
 /// Rewrite call sites in a list of declarations (e.g., specialized function bodies).
@@ -41,41 +40,36 @@ pub fn rewrite_decls<'db>(
     decls: &mut [DeclEntry<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
     instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
-    keys: &InstanceKeys<'db>,
 ) {
-    for_each_declaration_mut(decls, &mut |enclosing, decl| {
+    for entry in decls {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
             // Only a function reference in expression position is a call site.
             if site == RefSite::Var
                 && let Some(instance) = instances.get(&node)
-                && let Some(callee) =
-                    specialized_callee(db, rewrite_map, keys, instance, enclosing, value)
+                && let Some(callee) = specialized_callee(db, rewrite_map, instance, value)
             {
                 *value = callee;
             }
         });
-        walk_decl_mut(&mut rewrite, decl);
-    });
+        walk_decl_mut(&mut rewrite, &mut entry.decl);
+    }
 }
 
-/// The specialized function the reference `instance` inside `enclosing`
-/// refers to, if the callee was specialized for the reference's arguments.
+/// The specialized function the reference `instance` refers to, if the callee was specialized for the reference's arguments.
 fn specialized_callee<'db>(
     db: &'db dyn salsa::Database,
     rewrite_map: &RewriteMap<'db>,
-    keys: &InstanceKeys<'db>,
     instance: &crate::typeck::FunctionInstance<'db>,
-    enclosing: Option<&[Symbol]>,
     typed_ref: &TypedRef<'db>,
 ) -> Option<TypedRef<'db>> {
     let ResolvedRef::Function { id } = &typed_ref.resolved else {
         return None;
     };
-    if !keys.refers_to(*id, instance.function) {
+    if *id != instance.function {
         return None;
     }
     let entries = rewrite_map.get(&instance.function)?;
-    let key = keys.key(instance, enclosing)?;
+    let key = InstanceKey::of(instance)?;
     let (_, mangled) = entries.iter().find(|(entry, _)| *entry == key)?;
     Some(TypedRef::new(
         ResolvedRef::Function {
@@ -108,8 +102,7 @@ pub fn build_type_rewrite_map<'db>(
 
 /// Redirect references to a struct's field functions (`T::f`, `T::f::set`,
 /// `T::f::modify`) to the same function of the struct's specialization for
-/// the reference's type arguments, and to the function's instance for the
-/// reference's convention classes.
+/// the reference's type arguments.
 ///
 /// Field functions have no source declaration to clone; each specialized
 /// struct declaration has its own.  Run this before the instances' types are
@@ -119,9 +112,8 @@ pub fn rewrite_field_function_refs<'db>(
     module: &mut DeclTable<TypedRef<'db>>,
     type_rewrite_map: &TypeRewriteMap<'db>,
     instances: &mut HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
-    keys: &mut InstanceKeys<'db>,
 ) {
-    for_each_declaration_mut(&mut module.entries, &mut |enclosing, decl| {
+    for entry in &mut module.entries {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
             if site != RefSite::Var {
                 return;
@@ -135,9 +127,6 @@ pub fn rewrite_field_function_refs<'db>(
             if instance.function != *id {
                 return;
             }
-            let classes = keys
-                .key(instance, enclosing)
-                .filter(InstanceKey::has_weaker_class);
             let original = instance.function;
             let crate::typeck::FunctionInstanceOrigin::FieldAccessor { owner, field, kind } =
                 &mut instance.origin
@@ -154,16 +143,11 @@ pub fn rewrite_field_function_refs<'db>(
                 function = FuncDefId::new(db, kind.path(mangled, field));
                 *owner = owner.with_path(db, mangled.clone());
             }
-            if let Some(key) = classes {
-                let path = super::mangle::class_instance_path(function.path(db), &key.class_args);
-                keys.record(path.clone(), original, &key);
-                function = FuncDefId::new(db, path);
-            }
             instance.function = function;
             value.resolved = ResolvedRef::Function { id: function };
         });
-        walk_decl_mut(&mut rewrite, decl);
-    });
+        walk_decl_mut(&mut rewrite, &mut entry.decl);
+    }
 }
 
 /// Rewrite all Named types with type arguments to their mangled monomorphic versions
@@ -393,6 +377,7 @@ fn find_mangled_for_typedef<'db>(
 mod tests {
     use super::*;
     use crate::ast::AbilityRow;
+    use trunk_ir::Symbol;
 
     #[salsa::db]
     #[derive(Default)]

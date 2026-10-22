@@ -487,7 +487,7 @@ mod tests {
     }
 
     const RUNTIME_BINDINGS: &str = r#"core.module @test {
-  func.func @__tribute_evidence_lookup(%ev: core.ptr, %id: core.i32) -> core.i32 attributes {abi = "C"}
+  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
   func.func @__tribute_bytes_len(%bytes: core.bytes) -> core.i32 attributes {abi = "C"}
   func.func @__tribute_unbound_helper(%bytes: core.bytes) -> core.nil attributes {abi = "C"}
   func.func @user_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
@@ -496,8 +496,8 @@ mod tests {
     %printed = func.call %bytes {callee = @__tribute_unbound_helper} : core.nil
     %len = func.call %bytes {callee = @__tribute_bytes_len} : core.i32
     %id = func.call %len {callee = @user_bridge} : core.i32
-    %marker = func.call %ev, %id {callee = @__tribute_evidence_lookup} : core.i32
-    func.return %marker
+    %tag = func.call {callee = @__tribute_next_tag} : core.i32
+    func.return %tag
   }
 }"#;
 

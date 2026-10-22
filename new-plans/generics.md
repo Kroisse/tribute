@@ -11,7 +11,7 @@
 | 기본 전략          | Monomorphization                            | Type erasure, Dictionary passing |
 | 함수의 다형적 재귀 | Uniform representation (anyref)             | 에러로 거부                      |
 | 제네릭 타입        | 완전 monomorphization                       | Uniform representation           |
-| 효과 다형성        | Evidence passing + convention class 특수화  | Row 전체의 monomorphization      |
+| 효과 다형성        | Evidence passing                            | Row 전체의 monomorphization      |
 
 ---
 
@@ -95,8 +95,8 @@ Monomorph  Uniform Rep
 | 제네릭 함수            | **다형적 재귀** | Uniform representation |
 | Effect만 다형적인 함수 | -               | Evidence passing       |
 
-Ability row는 값으로 특수화하지 않는다. Row 변수가 요구하는 calling convention만
-[convention class](#row-변수의-convention-class)로 특수화한다.
+Ability row는 값으로 특수화하지 않는다. 실행 전략은 row 변수에 따라 정의를 따로
+만들 수 있다([아래](#row-변수의-convention-class)).
 
 이 도식의 uniform representation 선택은 함수의 다형적 재귀에 적용한다.
 Nominal 타입의 의존 인스턴스 수집과 확장 한도는 아래의
@@ -140,16 +140,9 @@ apply + [fn(Int) -> Bool]     → apply$6$0$Int$1$Bool
 swap + [(Int, Bool)]          → swap$7$0$Int$Bool$1
 ```
 
-[Convention class](#row-변수의-convention-class) 목록은 CPS 전략의
-[class 특수화 pass](cps-effects.md#class-특수화-pass)가 타입 인자 뒤에 `$9`와 class
-변수 순서대로 한 글자씩(`D`, `E`, `C`) 붙인다. 모든 class가 `Cps`이면 쓰지 않는다.
-
-```text
-map + [Int, Bool] + [Direct]          → map$Int$Bool$9D
-map + [Int, Bool] + [EvidenceDirect]  → map$Int$Bool$9E
-map + [Int, Bool] + [Cps]             → map$Int$Bool
-apply_twice + [] + [Direct]           → apply_twice$9D
-```
+CPS 전략이 row 변수의 class마다 만드는 인스턴스는, class가 모두 `Cps`이면 이
+이름을 그대로 쓰고 아니면 뒤에 접미사를 붙인다
+([class 특수화 pass](cps-effects.md#class-특수화-pass)).
 
 ### 알고리즘
 

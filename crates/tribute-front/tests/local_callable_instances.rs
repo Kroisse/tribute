@@ -7,7 +7,8 @@ use tribute_front::SourceCst;
 #[salsa_test]
 fn named_operator_preserves_target_and_consumer_conventions(db: &salsa::DatabaseImpl) {
     use std::ops::ControlFlow;
-    use tribute_ir::dialect::tribute_control::{self, CallingConvention};
+    use tribute_ir::calling_convention::CallingConvention;
+    use tribute_ir::dialect::tribute_control;
     use trunk_ir::SymbolPath;
     use trunk_ir::context::IrContext;
     use trunk_ir::ops::DialectOp;

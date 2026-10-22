@@ -4,7 +4,6 @@ mod instance;
 pub(crate) use instance::{
     LocalInstantiation, collect_ability_argument_tails, local_instantiations,
 };
-mod local;
 pub mod mangle;
 mod nominal;
 mod nominal_index;
@@ -19,8 +18,7 @@ use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::{Symbol, SymbolPath};
 
-pub use self::instance::InstanceRowClasses;
-use self::instance::{InstanceKey, InstanceKeys};
+use self::instance::InstanceKey;
 use crate::ast::{
     AbilityRow, CtorId, Decl, DeclTable, FuncDefId, NodeId, Type, TypeScheme, TypedRef,
 };
@@ -43,25 +41,10 @@ pub struct MonomorphizeMetadata<'db> {
     pub perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
     pub lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
     pub exhaustive_cases: HashSet<NodeId>,
-    /// The convention each ability requires of a callable that performs it.
-    pub ability_conventions: HashMap<crate::ast::AbilityId<'db>, crate::ast::CallingConvention>,
-    /// Who specializes convention classes.
-    pub convention_classes: ConventionClasses,
     /// Exact base identities transported to generated generic extern declarations.
     ///
     /// This is specialization metadata, not source-provenance or ownership data.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
-}
-
-/// Who specializes convention classes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum ConventionClasses {
-    /// The frontend: it names class instances and writes every convention.
-    Frontend,
-    /// The class specialization pass after the frontend, which leaves every
-    /// convention unassigned.
-    #[default]
-    Pass,
 }
 
 /// Result of monomorphization: updated module + function types.
@@ -69,8 +52,6 @@ pub struct MonomorphizeResult<'db> {
     pub module: DeclTable<TypedRef<'db>>,
     pub function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
     pub metadata: MonomorphizeMetadata<'db>,
-    /// The convention class of each class variable of every function instance.
-    pub row_classes: InstanceRowClasses,
 }
 
 /// Run monomorphization on a typed module.
@@ -102,8 +83,6 @@ pub fn monomorphize_functions<'db>(
     let mut all_function_types = fn_types_vec;
     let mut instantiations: HashMap<_, HashSet<_>> = HashMap::default();
     let mut reached_fixpoint = false;
-    let mut keys = InstanceKeys::new(db, &module, &source_function_types, &metadata);
-    local::settle_local_lambdas(db, &mut module.entries, &mut metadata, &mut keys);
 
     // A concrete clone can reveal direct calls that were abstract in its
     // source body. Clone the metadata first, then collect only unseen keys.
@@ -113,15 +92,12 @@ pub fn monomorphize_functions<'db>(
             &module,
             &source_function_types,
             &metadata.function_instances,
-            &keys,
         );
         let mut new_instantiations: HashMap<_, HashSet<_>> = HashMap::default();
         for (func_id, discovered) in discovered {
             let known = instantiations.entry(func_id).or_default();
             for key in discovered {
                 if known.insert(key.clone()) {
-                    let path = mangle::mangle_instance_path(db, func_id.path(db), &key);
-                    keys.record(path, func_id, &key);
                     new_instantiations.entry(func_id).or_default().insert(key);
                 }
             }
@@ -153,24 +129,16 @@ pub fn monomorphize_functions<'db>(
             .extend(compiler_intrinsic_specializations);
 
         let rewrite_map = build_rewrite_map(db, &instantiations, &source_function_types);
-        rewrite::rewrite_module(
-            db,
-            &mut module,
-            &rewrite_map,
-            &metadata.function_instances,
-            &keys,
-        );
+        rewrite::rewrite_module(db, &mut module, &rewrite_map, &metadata.function_instances);
         let mut specialized_decls: Vec<_> = specialized_declarations
             .into_iter()
             .map(|(placement, declaration)| placement.place(Decl::Function(declaration)))
             .collect();
-        local::settle_local_lambdas(db, &mut specialized_decls, &mut metadata, &mut keys);
         rewrite::rewrite_decls(
             db,
             &mut specialized_decls,
             &rewrite_map,
             &metadata.function_instances,
-            &keys,
         );
 
         module.entries.extend(specialized_decls);
@@ -292,7 +260,6 @@ pub fn monomorphize_functions<'db>(
             &mut module,
             &type_rewrite_map,
             &mut metadata.function_instances,
-            &mut keys,
         );
         let rewrite_ty = |ty| rewrite::rewrite_type(db, ty, &type_rewrite_map);
         let rewrite_scheme =
@@ -363,7 +330,6 @@ pub fn monomorphize_functions<'db>(
             &mut module,
             &rewrite::TypeRewriteMap::default(),
             &mut metadata.function_instances,
-            &mut keys,
         );
         module
     };
@@ -372,7 +338,6 @@ pub fn monomorphize_functions<'db>(
         module,
         function_types: fn_types_vec,
         metadata,
-        row_classes: keys.row_classes,
     })
 }
 
@@ -608,71 +573,6 @@ fn build_rewrite_map<'db>(
     rewrite_map
 }
 
-/// Apply `map` to every type, and `rows` to every row, the metadata records
-/// for `node`.
-fn map_metadata_types<'db>(
-    db: &'db dyn salsa::Database,
-    metadata: &mut MonomorphizeMetadata<'db>,
-    node: NodeId,
-    map: &dyn Fn(Type<'db>) -> Type<'db>,
-    rows: &crate::typeck::RowSubst<'db>,
-) {
-    if let Some(ty) = metadata.node_types.get_mut(&node) {
-        *ty = map(*ty);
-    }
-    if let Some(signature) = metadata.lambda_signatures.get_mut(&node) {
-        signature.function_type = map(signature.function_type);
-    }
-    if let Some(instance) = metadata.function_instances.get_mut(&node) {
-        instance.callable = map(instance.callable);
-        for ty in &mut instance.type_arguments {
-            *ty = map(*ty);
-        }
-        for row in &mut instance.row_arguments {
-            *row = rows.apply(db, *row);
-        }
-    }
-    if let Some(instance) = metadata.local_instances.get_mut(&node) {
-        instance.callable = map(instance.callable);
-        for row in &mut instance.row_arguments {
-            *row = rows.apply(db, *row);
-        }
-    }
-    if let Some(operation) = metadata.handler_operations.get_mut(&node) {
-        for ty in operation
-            .ability_args
-            .iter_mut()
-            .chain(operation.params.iter_mut())
-        {
-            *ty = map(*ty);
-        }
-        operation.result = map(operation.result);
-    }
-    if let Some(operation) = metadata.perform_operations.get_mut(&node) {
-        for ty in operation
-            .ability_args
-            .iter_mut()
-            .chain(operation.params.iter_mut())
-        {
-            *ty = map(*ty);
-        }
-        operation.result = map(operation.result);
-    }
-    for step in metadata.evidence_plans.get_mut(&node).into_iter().flatten() {
-        *step = step.map_types(map);
-    }
-}
-
-/// The convention each ability in `schemas` requires of a callable whose row
-/// names it.
-pub fn ability_conventions<'db>(
-    schemas: &[crate::typeck::AbilitySchema<'db>],
-) -> HashMap<crate::ast::AbilityId<'db>, crate::ast::CallingConvention> {
-    crate::ast::ability_conventions(schemas.iter().map(|(ability, _, operations)| {
-        (*ability, operations.iter().map(|operation| operation.kind))
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -767,11 +667,9 @@ mod tests {
             .into_iter()
             .collect::<HashMap<_, _>>(),
             exhaustive_cases: [origin].into_iter().collect::<HashSet<_>>(),
-            ability_conventions: HashMap::default(),
-            convention_classes: ConventionClasses::Frontend,
             compiler_intrinsics: HashMap::default(),
         };
-        let key = InstanceKey::of_types(vec![int]);
+        let key = InstanceKey::of_types([int]);
         let origins = [origin].into_iter().collect::<HashSet<_>>();
 
         specialize_metadata(&db, &mut metadata, &key, &origins);

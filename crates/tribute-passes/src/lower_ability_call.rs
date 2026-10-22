@@ -29,7 +29,7 @@ use trunk_ir::rewrite::{
 };
 
 use crate::effect_dispatch::pack_payload;
-use tribute_core::calling_convention::CLOSURE_ENVIRONMENT_INDEX_ATTR;
+use tribute_ir::calling_convention::CLOSURE_ENVIRONMENT_INDEX_ATTR;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_rt;
@@ -166,7 +166,9 @@ fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
         let region = ctx.block(block).parent_region?;
         let parent = ctx.region(region).parent_op?;
         if func::Func::matches(ctx, parent) {
-            if !tribute_core::get_calling_convention(ctx, parent)?.needs_evidence() {
+            if !tribute_ir::calling_convention::get_calling_convention(ctx, parent)?
+                .needs_evidence()
+            {
                 return None;
             }
             let environment_index = ctx
@@ -197,7 +199,7 @@ mod tests {
 
     /// Build the canonical evidence type string for use in test IR.
     fn evidence_type_str() -> &'static str {
-        "adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
+        "adt.array<adt.typeref<{name = \"std::runtime::evidence::Marker\"}>>"
     }
 
     #[test]

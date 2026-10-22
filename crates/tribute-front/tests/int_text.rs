@@ -254,10 +254,6 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-            ability_conventions: tribute_front::monomorphize::ability_conventions(
-                checked.ability_definitions(db),
-            ),
-            convention_classes: Default::default(),
             compiler_intrinsics: HashMap::default(),
         },
     )
@@ -276,10 +272,6 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         node_types: mono.metadata.node_types.into_iter().collect(),
         local_instances: mono.metadata.local_instances.into_iter().collect(),
         function_instances: mono.metadata.function_instances.into_iter().collect(),
-        ability_conventions: tribute_front::monomorphize::ability_conventions(
-            checked.ability_definitions(db),
-        ),
-        convention_classes: Default::default(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
@@ -291,7 +283,6 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: HashMap::default(),
         runtime_types: Default::default(),
-        row_classes: mono.row_classes,
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
@@ -365,10 +356,6 @@ fn lower_specialized_source(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-            ability_conventions: tribute_front::monomorphize::ability_conventions(
-                checked.ability_definitions(db),
-            ),
-            convention_classes: Default::default(),
             compiler_intrinsics: HashMap::default(),
         },
     )
@@ -387,10 +374,6 @@ fn lower_specialized_source(
         node_types: mono.metadata.node_types.into_iter().collect(),
         local_instances: mono.metadata.local_instances.into_iter().collect(),
         function_instances: mono.metadata.function_instances.into_iter().collect(),
-        ability_conventions: tribute_front::monomorphize::ability_conventions(
-            checked.ability_definitions(db),
-        ),
-        convention_classes: Default::default(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
@@ -402,7 +385,6 @@ fn lower_specialized_source(
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: HashMap::default(),
         runtime_types: Default::default(),
-        row_classes: mono.row_classes,
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
@@ -470,10 +452,6 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .iter()
             .cloned()
             .collect(),
-        ability_conventions: tribute_front::monomorphize::ability_conventions(
-            checked.ability_definitions(db),
-        ),
-        convention_classes: Default::default(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
@@ -490,7 +468,6 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: HashMap::default(),
         runtime_types: Default::default(),
-        row_classes: HashMap::default(),
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
@@ -622,7 +599,8 @@ fn use_bool() ->{} Bool { apply(True) }
 #[salsa::tracked]
 fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
     use std::ops::ControlFlow;
-    use tribute_ir::dialect::tribute_control::{Call, CallingConvention, Func, FuncSig, Lambda};
+    use tribute_ir::calling_convention::CallingConvention;
+    use tribute_ir::dialect::tribute_control::{Call, Func, FuncSig, Lambda};
     use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::walk::{WalkAction, walk_typed};
 

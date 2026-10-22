@@ -459,7 +459,9 @@ Handle body는 처리하는 label을 새 handler에 묶고 나머지 label은 �
 label을 먼저 가린다. 바깥 row가 그 label을 tail로만 가지면 가리지 않는다.
 Handler arm과 `do` arm은 처리한 label이 빠진 row로 검사되므로, arm의
 operation과 호출은 handle 바깥의 handler를 본다. `resume`의 handler 선택은
-[abilities.md](abilities.md#resume과-handler-선택)를 따른다.
+[abilities.md](abilities.md#resume과-handler-선택)를 따른다. `fn` arm 본문의
+perform과 호출은 solving이 끝난 뒤 검사하며, `op` operation을 수행하거나 그런
+ability를 요구하는 callable을 호출할 수 없다([abilities.md](abilities.md#fn-operation-handler)).
 
 Row 단일화는 시그니처 row 변수를 별칭의 대표로 유지한다. 열린 두 row를 맞출 때
 한쪽이 시그니처 row이고 다른 쪽이 label을 더하지 않으면, 새 변수를 만들지 않고
@@ -659,9 +661,9 @@ concrete effect만 보존하고, 람다가 검사된 문맥의 callable signatur
 open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
 새로운 open tail을 본문 효과의 무조건적인 기본값으로 만들지 않는다. 반환되거나
 escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
-받은 람다와, 본문에서 effect를 수행한 람다의 convention은 이 결과에서 그대로
-계산한다. 본문의 `handle`은 람다의 convention을 바꾸지 않는다
-([cps-effects.md](cps-effects.md#row와-호출-규약)).
+받은 람다와, 본문에서 effect를 수행한 람다의 row는 이 결과 그대로다. 본문의
+`handle`이 처리한 ability는 이 row에 남지 않는다. 실행 전략이 정하는 호출 규약은 이
+남은 row에서만 나온다([cps-effects.md](cps-effects.md#row와-호출-규약)).
 
 #### 함수 적용 (Infer)
 

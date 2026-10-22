@@ -12,6 +12,7 @@ use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::attr_kind::Type;
 use trunk_ir::op_flag::{IsolatedFromAbove, Pure};
 
+use crate::calling_convention::{CALLING_CONVENTION_ATTR, CallingConvention};
 use crate::dialect::adt;
 use itertools::Itertools;
 use trunk_ir::analysis::AnalysisCache;
@@ -42,52 +43,8 @@ pub use row::{
     quantified_rows, row_args, row_binders, row_unions, substitute_rows, visit_rows,
 };
 
-/// Exact type-attribute key used by logical callable types.
-pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
-
 /// Exact semantic identity copied from the trusted compiler-intrinsic registry.
 pub const COMPILER_INTRINSIC_ATTR: &str = "tribute.compiler_intrinsic";
-
-/// Source-logical callable convention.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(u8)]
-pub enum CallingConvention {
-    Direct = 0,
-    EvidenceDirect = 1,
-    Cps = 2,
-}
-
-impl CallingConvention {
-    fn keyword(self) -> &'static str {
-        match self {
-            Self::Direct => "direct",
-            Self::EvidenceDirect => "evidence_direct",
-            Self::Cps => "cps",
-        }
-    }
-
-    fn from_keyword(keyword: &str) -> Option<Self> {
-        match keyword {
-            "direct" => Some(Self::Direct),
-            "evidence_direct" => Some(Self::EvidenceDirect),
-            "cps" => Some(Self::Cps),
-            _ => None,
-        }
-    }
-}
-
-impl TryFrom<i128> for CallingConvention {
-    type Error = i128;
-
-    fn try_from(code: i128) -> Result<Self, Self::Error> {
-        match code {
-            0 => Ok(Self::Direct),
-            1 => Ok(Self::EvidenceDirect),
-            2 => Ok(Self::Cps),
-            _ => Err(code),
-        }
-    }
-}
 
 #[trunk_ir::dialect]
 mod tribute_control {
@@ -5763,6 +5720,27 @@ mod tests {
                 "{result}"
             );
         }
+    }
+
+    #[test]
+    fn a_handle_without_handler_clauses_survives_a_round_trip() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    ^handlers:
+  }
+}"#,
+        );
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let (reparsed, module) = parse_fixture(&printed);
+        let result = validate_local(&reparsed, module);
+        assert!(result.is_ok(), "{result}\n{printed}");
     }
 
     #[test]

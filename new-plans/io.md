@@ -8,7 +8,7 @@
 - 외부 입출력을 ability row에서 추적한다.
 - `print`, `print_line`, `read_line`을 일반 함수 API로 제공한다.
 - 입출력도 다른 ability와 같은 규칙을 따른다. Compiler가 특별히 아는 ambient
-  ability는 없으며, 표준 입출력 ability는 모두 prelude source에 선언한다.
+  ability는 없으며, 표준 입출력 ability는 모두 패키지 `std`의 source에 선언한다.
 - 일반 코드는 handle 없는 `Read`/`Write`를 요구한다. Handle을 다루는 `Io`는 그것을
   stream에 묶는 handler와 여러 stream을 함께 다루는 코드에만 나타난다.
 - Native와 Wasm이 같은 source API와 같은 host 경계를 사용한다.
@@ -90,7 +90,8 @@ ability를 처리하는 handler가 정한다. `fn() ->{e, Write} a` 같은 계�
 두 ability의 operation은 `op`다. Handler는 resume하지 않아 생산자를 멈출 수 있고,
 결과를 돌려주기 전에 다른 `op`를 수행하거나 기다릴 수 있다. 이 성질 때문에 조기
 종료, 비동기 입출력, 실패의 `throw`를 같은 ability로 다룬다. 그 대가로 `Read`나
-`Write`를 요구하는 함수는 CPS 규약을 쓴다([Calling Convention](#calling-convention)).
+`Write`를 요구하는 함수는 중단될 수 있는 함수가 된다
+([Calling Convention](#calling-convention)).
 
 Handler는 대상을 바꾸거나 변환을 끼운다.
 
@@ -146,10 +147,11 @@ Stream의 수명은 [host resource의 수명](host-interface.md#수명)을 따�
 
 ## Calling Convention
 
-`Io`는 `fn` operation만 가지므로 `Io`만 요구하는 함수는 `EvidenceDirect` 규약을 쓴다.
-`Read`와 `Write`는 `op` operation을 가지므로, 이를 요구하는 함수는 `Cps` 규약을 쓴다.
-규약은 [CPS 전략](cps-effects.md#호출-규약)이 정한다. 묶는 handler의 arm은 `Io`의
-`fn` operation만 부르므로, handler 안쪽의 host 호출은 continuation을 잡지 않는다.
+`Io`는 `fn` operation만 가지므로 `Io`만 요구하는 함수는 evidence를 받지만 중단되지
+않는다. `Read`와 `Write`는 `op` operation을 가지므로, 이를 요구하는 함수는 중단될 수
+있다. 각 경우의 호출 규약은 [CPS 전략](cps-effects.md#호출-규약)이 정한다. 묶는
+handler의 arm은 `Io`의 `fn` operation만 부르므로, handler 안쪽의 host 호출은
+continuation을 잡지 않는다.
 
 ## Entrypoint
 
@@ -174,7 +176,7 @@ fn main() ->{Write} Nil {
 }
 ```
 
-Native와 Wasm entrypoint는 target에 맞는 initial evidence를 만들어 main에 전달한다.
+Native와 Wasm entrypoint는 target에 맞는 initial evidence를 만들어 `main`에 전달한다.
 현재 representation에서는 empty evidence로 충분하지만 이를 source-level ABI로 고정하지
 않는다.
 
@@ -211,8 +213,8 @@ EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 반환
 ## Validation
 
 - `Read`, `Write`, `Io`가 일반 함수 호출을 통해 전파된다.
-- `{Io}`만 요구하는 함수는 `EvidenceDirect`, `{Write}`를 요구하는 함수는 `Cps` ABI를
-  사용한다.
+- `{Io}`만 요구하는 함수는 evidence를 받지만 중단되지 않는다. `{Write}`를 요구하는
+  함수는 중단될 수 있다.
 - `main ->{Io} Nil`과 `main ->{Write} Nil`은 허용된다.
 - 사용자가 정의한 같은 이름의 ability는 `std::io`의 ability와 구별된다.
 - `Write`를 처리하는 Tribute handler 아래에서 `print_line`은 host에 닿지 않는다.

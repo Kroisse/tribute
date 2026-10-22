@@ -89,6 +89,9 @@ pub(super) fn generate_specializations<'db>(
     let mut extern_function_types = Vec::new();
     let mut specialized_extern_declarations = Vec::new();
     let mut compiler_intrinsic_specializations = Vec::new();
+    // Keys that differ only in how a type is spelled, such as a nominal type
+    // named by its short or its qualified name, mangle to one instance.
+    let mut generated = HashSet::default();
 
     for (func_id, keys) in instantiations {
         let path = func_id.path(db);
@@ -106,6 +109,9 @@ pub(super) fn generate_specializations<'db>(
         for key in keys {
             let type_args = key.type_args.as_slice();
             let mangled_path = mangle_instance_path(db, path, key);
+            if !generated.insert(mangled_path.clone()) {
+                continue;
+            }
             let mangled = mangled_path.to_symbol();
             let placement = Placement::at(mangled_path.clone());
             let specialized_scheme = scheme
@@ -768,7 +774,7 @@ mod tests {
             bv0,
         );
         let mut result = Expr::new(node_id(1), ExprKind::Var(tr));
-        Substitute::new(&db, &InstanceKey::of_types(vec![int])).visit_expr_mut(&mut result);
+        Substitute::new(&db, &InstanceKey::of_types([int])).visit_expr_mut(&mut result);
 
         // NodeId should have the variant applied
         assert!(result.id.variant().is_some());
@@ -812,8 +818,7 @@ mod tests {
         };
 
         let mangled = mangle_name(&db, &Symbol::new("identity"), &[int]);
-        let specialized =
-            specialize_func_decl(&db, &func, &InstanceKey::of_types(vec![int]), mangled);
+        let specialized = specialize_func_decl(&db, &func, &InstanceKey::of_types([int]), mangled);
 
         assert_eq!(specialized.name.to_string(), "identity$Int");
         assert!(specialized.type_params.is_empty());
@@ -894,8 +899,8 @@ mod tests {
         let function_types = vec![(SymbolPath::new([func_name]), scheme)];
 
         let mut type_arg_sets = HashSet::default();
-        type_arg_sets.insert(InstanceKey::of_types(vec![int]));
-        type_arg_sets.insert(InstanceKey::of_types(vec![float]));
+        type_arg_sets.insert(InstanceKey::of_types([int]));
+        type_arg_sets.insert(InstanceKey::of_types([float]));
         let mut instantiations = HashMap::default();
         instantiations.insert(func_id, type_arg_sets);
 

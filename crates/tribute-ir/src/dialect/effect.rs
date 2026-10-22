@@ -24,7 +24,7 @@ mod effect {
     /// Operands are semantic ABI values:
     /// - `evidence`: current evidence value.
     /// - `prompt_tag`: runtime tag associated with the handler installation.
-    /// - `tr_dispatch_fn`: tail-resumptive dispatch closure, or null.
+    /// - `tr_dispatch_fn`: tail-resumptive dispatch closure.
     /// - `outer`: the evidence the handler is installed on, before the
     ///   installation's selection.
     #[flags(Pure)]
@@ -215,8 +215,8 @@ mod tests {
         let errors = |body_type: &str, result: &str| {
             let text = format!(
                 r#"core.module @test {{
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>
-  !ev = adt.array<!marker, {{layout = "evidence"}}>
+  !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
+  !ev = adt.array<!marker>
   !frame = adt.typeref<{{name = "frame_i32", tribute.cps_continuation_frame_result = core.i32}}>
   !body = closure.closure<func.func_sig<{body_type} -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
   func.func @run(%ev: !ev, %body: !body) -> {result} {{

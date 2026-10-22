@@ -145,9 +145,10 @@ Tribute는 Unison의 선례를 따라 algebraic effect를 **ability**라고 부�
 
 Compiler가 특별히 아는 ambient ability는 두지 않는다. Program 밖의 기능은
 host가 처리하는 ability로 열며, entrypoint에 남은 ability가 program의
-host interface가 된다. 표준 입출력도 prelude source에 선언한 ability `std::io::Io`와 그 위의
+host interface가 된다. 표준 입출력도 패키지 `std`의 source에 선언한 ability `std::io::Io`와 그 위의
 `std::io::Read`, `std::io::Write`로 제공한다([io.md](io.md),
-[std-abilities.md](std-abilities.md)).
+[std-abilities.md](std-abilities.md)). 호출 규약은 [CPS 전략](cps-effects.md#호출-규약)을
+따른다.
 
 ### Continuation 의미론
 
@@ -261,7 +262,7 @@ MLIR의 dialect 개념을 차용하여 여러 수준의 연산이 한 모듈 내
 ```text
 Source → CST → AST
     → 이름 해석·타입 추론·TDNR
-    → Prelude 병합·intrinsic 검증·monomorphization
+    → 패키지 std 병합·intrinsic 검증·monomorphization
     → source-logical tribute_control IR
     → pre-CPS 검증·tribute_control_to_cps
     → lambda lifting·intrinsic lowering

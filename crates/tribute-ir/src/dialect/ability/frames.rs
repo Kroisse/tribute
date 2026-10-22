@@ -9,9 +9,8 @@ use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 use trunk_ir::{IrContext, SymbolPath};
 
 use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
-use crate::dialect::tribute_control::{
-    CALLING_CONVENTION_ATTR, CallingConvention, EvidencePlanSite, verify_evidence_plan,
-};
+use crate::calling_convention::{CALLING_CONVENTION_ATTR, CallingConvention};
+use crate::dialect::tribute_control::{EvidencePlanSite, verify_evidence_plan};
 
 /// Declared kind of a handled operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -405,8 +404,8 @@ mod tests {
     use trunk_ir::rewrite::Module;
     use trunk_ir::validation::validate_operation_verifiers;
 
-    const TYPES: &str = r#"  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !ev = adt.array<!marker, {layout = "evidence"}>
+    const TYPES: &str = r#"  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !ev = adt.array<!marker>
   !frame_i32 = ability.frame<core.i32>
   !frame_nil = ability.frame<core.nil>
   !completion = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>

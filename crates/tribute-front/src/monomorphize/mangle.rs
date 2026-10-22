@@ -3,9 +3,7 @@ use std::fmt;
 use trunk_ir::{Symbol, SymbolPath};
 
 use super::instance::InstanceKey;
-use crate::ast::{
-    AbilityOrigin, AbilityRow, BuiltinAbility, CallingConvention, RowVar, Type, TypeDefId, TypeKind,
-};
+use crate::ast::{AbilityOrigin, AbilityRow, BuiltinAbility, RowVar, Type, TypeDefId, TypeKind};
 
 /// Generate a mangled symbol for a specialized generic function or type.
 ///
@@ -17,9 +15,8 @@ use crate::ast::{
 /// `$6` starts a function type, `$7` a tuple, `$8$n` the `n`th bound type
 /// variable, and `$5` a compiler-owned nominal type or ability. Before its
 /// result, a function type writes its ability row between `$2` and `$1`, or
-/// `$3$n` for the `n`th row variable of an open row, and a calling-convention
-/// floor above `Direct` after `$4`. Distinct type argument lists get distinct
-/// names:
+/// `$3$n` for the `n`th row variable of an open row. Distinct type argument
+/// lists get distinct names:
 ///
 /// - `identity + [Int]`              → `identity$Int`
 /// - `first + [Int, Text]`           → `first$Int$Text`
@@ -41,19 +38,14 @@ pub fn mangle_name(db: &dyn salsa::Database, base: &Symbol, type_args: &[Type<'_
     Symbol::new(&buf)
 }
 
-/// The name of the function instance `key` selects: the type arguments, then
-/// `$9` and one letter per class variable. Classes that are all `Cps` are
-/// omitted.
+/// The name of the function instance `key` selects: the base name with its
+/// type arguments.
 pub(crate) fn mangle_instance_name(
     db: &dyn salsa::Database,
     base: &Symbol,
     key: &InstanceKey<'_>,
 ) -> Symbol {
-    let name = mangle_name(db, base, &key.type_args);
-    if !key.has_weaker_class() {
-        return name;
-    }
-    class_instance_name(&name, &key.class_args)
+    mangle_name(db, base, &key.type_args)
 }
 
 /// The path of the function instance `key` selects of the function at
@@ -64,11 +56,6 @@ pub(crate) fn mangle_instance_path(
     key: &InstanceKey<'_>,
 ) -> SymbolPath {
     path.sibling(mangle_instance_name(db, own_name(path), key))
-}
-
-/// The path of the instance of the function at `path` for `classes`.
-pub(crate) fn class_instance_path(path: &SymbolPath, classes: &[CallingConvention]) -> SymbolPath {
-    path.sibling(class_instance_name(own_name(path), classes))
 }
 
 /// The path of the nominal type `id` instantiated with `type_args`: the
@@ -87,18 +74,6 @@ pub fn mangle_type_path(
 
 fn own_name(path: &SymbolPath) -> &Symbol {
     path.leaf().expect("a definition's path has its name")
-}
-
-/// `name` with `$9` and one letter per class.
-pub(crate) fn class_instance_name(name: &Symbol, classes: &[CallingConvention]) -> Symbol {
-    let mut buf = name.to_string();
-    buf.push_str("$9");
-    buf.extend(classes.iter().map(|class| match class {
-        CallingConvention::Direct => 'D',
-        CallingConvention::EvidenceDirect => 'E',
-        CallingConvention::Cps => 'C',
-    }));
-    Symbol::new(&buf)
 }
 
 fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol) -> Symbol {
@@ -566,26 +541,6 @@ mod tests {
             mangle_name(&db, &base, &[open(7), open(42)]).to_string(),
             "f$6$0$$1$2$3$0$Nat$6$0$$1$2$3$1$Nat"
         );
-    }
-
-    #[test]
-    fn test_instance_names_spell_classes_weaker_than_cps() {
-        let db = TestDb::default();
-        let base = Symbol::new("map");
-        let int = Type::new(&db, TypeKind::Int);
-        let name = |type_args: &[Type<'_>], class_args: &[CallingConvention]| {
-            let key = InstanceKey {
-                type_args: type_args.to_vec(),
-                class_args: class_args.to_vec(),
-            };
-            mangle_instance_name(&db, &base, &key).to_string()
-        };
-        use CallingConvention::{Cps, Direct, EvidenceDirect};
-
-        assert_eq!(name(&[int], &[Direct]), "map$Int$9D");
-        assert_eq!(name(&[int], &[EvidenceDirect, Cps]), "map$Int$9EC");
-        assert_eq!(name(&[int], &[Cps, Cps]), "map$Int");
-        assert_eq!(name(&[], &[Direct]), "map$9D");
     }
 
     #[test]

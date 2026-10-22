@@ -1,5 +1,5 @@
-//! Check that the convention classes the frontend specialized agree with the
-//! classes the rows of source-logical IR imply.
+//! Check that the convention classes class specialization chose agree with
+//! the classes the rows of source-logical IR imply.
 //!
 //! The rules are those of `new-plans/cps-effects.md` ("Row 변수의 convention
 //! class"), read from the IR alone: row binders, `row_args` of references and
@@ -9,8 +9,9 @@ use std::ops::ControlFlow;
 
 use itertools::Itertools;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::tribute_control;
-use tribute_ir::dialect::tribute_control::{CallingConvention, FuncSig, Row};
+use tribute_ir::dialect::tribute_control::{FuncSig, Row};
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -23,7 +24,7 @@ use crate::convention_classes::{
     settle_locals, split_name,
 };
 
-/// A place where the IR's rows imply another class than the frontend chose.
+/// A place where the IR's rows imply another class than specialization chose.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Disagreement {
     pub op: OpRef,
@@ -40,7 +41,7 @@ pub struct ConventionClassError {
     pub disagreements: Vec<Disagreement>,
 }
 
-/// Fails when a convention class the frontend specialized disagrees with
+/// Fails when a convention class specialization chose disagrees with
 /// the rows of the module.
 pub struct CheckConventionClasses;
 

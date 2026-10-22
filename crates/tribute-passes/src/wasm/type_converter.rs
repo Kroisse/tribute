@@ -23,8 +23,7 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use tribute_ir::dialect::ability::marker_adt_type_ref;
-use tribute_ir::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
+use tribute_ir::dialect::ability::is_evidence_type_ref;
 use tribute_ir::dialect::adt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -72,12 +71,24 @@ pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Get the Evidence type of the WASM representation.
 ///
-/// Evidence keeps its runtime layout identifier through Wasm lowering: it is
-/// the canonical `wasm_gc.array<Marker>` evidence layout, which emission maps to
-/// the builtin evidence array, and never an erased `wasm.arrayref`.
+/// Evidence is a concrete `wasm_gc.array` through Wasm lowering, never an
+/// erased `wasm.arrayref`, so the evidence runtime and its callers agree on
+/// one array type. Its elements are `wasm.structref`, as every marker value
+/// is: a marker holds evidence, so no structural element type can name it.
 pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
-    let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
-    gc_array_type(ctx, evidence)
+    let structref = wasm_dialect::Structref::params().intern(ctx).as_type_ref();
+    trunk_ir::types::TypeDataBuilder::new(trunk_ir::dialect::wasm_gc::Array::NAME)
+        .param(structref)
+        .intern(ctx)
+}
+
+/// Replace the evidence type with its GC array everywhere in `module`, once
+/// no `adt` operation reads it.
+pub(crate) fn convert_evidence_arrays(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
+    let evidence = evidence_wasm_type(ctx);
+    crate::closure_lower::substitute_module_types(ctx, module, |ctx, ty| {
+        is_evidence_type_ref(ctx, ty).then_some(evidence)
+    });
 }
 
 /// The GC array type that Wasm operations use for `ty`: an `adt.array`
@@ -87,6 +98,9 @@ pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
 pub fn gc_array_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     use tribute_ir::runtime_layout::LAYOUT_ATTR;
 
+    if is_evidence_type_ref(ctx, ty) {
+        return evidence_wasm_type(ctx);
+    }
     let Some(array) = tribute_ir::dialect::adt::Array::from_type_ref(ctx, ty) else {
         return ty;
     };
@@ -286,8 +300,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     let arrayref_ty = wasm_dialect::Arrayref::params().intern(ctx).as_type_ref();
     let closure_ty = closure_adt_type(ctx);
     let shared_closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-    let evidence_ty = evidence_wasm_type(ctx);
-    let marker_ty = marker_adt_type_ref(ctx);
     let bytes_data_ty = super::bytes::bytes_data_type(ctx);
     let bytes_data_gc_ty = super::bytes::bytes_data_gc_type(ctx);
 
@@ -392,14 +404,11 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
-    // Convert the evidence ADT type (`adt.array<Marker>`) -> its GC array
-    tc.add_conversion(move |ctx, ty| {
-        if is_evidence_type_ref(ctx, ty) {
-            Some(evidence_ty)
-        } else {
-            None
-        }
-    });
+    // Evidence keeps its `adt.array` type until `adt` lowering has consumed
+    // every operation that reads it as one; `convert-evidence-arrays` then
+    // replaces it with its GC array everywhere, as `convert-struct-layouts`
+    // does for user structs.
+    tc.add_conversion(move |ctx, ty| is_evidence_type_ref(ctx, ty).then_some(ty));
 
     // The bytes backing array keeps its layout identifier rather than
     // becoming an erased `wasm.arrayref`.
@@ -407,22 +416,11 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         (ty == bytes_data_ty || ty == bytes_data_gc_ty).then_some(bytes_data_gc_ty)
     });
 
-    // Convert any other array -> wasm.arrayref
+    // Convert any other `adt.array` -> wasm.arrayref. A GC array is already
+    // a Wasm type and stays as it is.
     tc.add_conversion(move |ctx, ty| {
-        if tribute_ir::dialect::adt::Array::matches(ctx, ty)
-            || trunk_ir::dialect::wasm_gc::Array::matches(ctx, ty)
-        {
+        if tribute_ir::dialect::adt::Array::matches(ctx, ty) {
             Some(arrayref_ty)
-        } else {
-            None
-        }
-    });
-
-    // Convert marker ADT type -> pass through (already standard ADT struct)
-    // This conversion is a no-op since marker_adt_type_ref() returns a standard adt.struct
-    tc.add_conversion(move |ctx, ty| {
-        if is_marker_type_ref(ctx, ty) {
-            Some(marker_ty)
         } else {
             None
         }

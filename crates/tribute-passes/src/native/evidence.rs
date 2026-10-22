@@ -8,7 +8,7 @@
 //!
 use std::ops::ControlFlow;
 
-use tribute_core::get_physical_closure_convention;
+use tribute_ir::calling_convention::get_physical_closure_convention;
 use tribute_ir::dialect::ability::{self, evidence_abi};
 use tribute_ir::dialect::{effect, tribute_rt};
 
@@ -667,8 +667,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !evidence = adt.array<!marker, {layout = "evidence"}>
+  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !evidence = adt.array<!marker>
   func.func @external(%ev: !evidence) -> !marker
   func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
     %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : core.ptr
@@ -704,8 +704,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !evidence = adt.array<!marker, {layout = "evidence"}>
+  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !evidence = adt.array<!marker>
   func.func @select(%ev: !evidence) -> !evidence {
     %masked = effect.mask %ev {ability = @State} : !evidence
     %dup = effect.dup %masked {ability = @State} : !evidence
@@ -756,8 +756,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !evidence = adt.array<!marker, {layout = "evidence"}>
+  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !evidence = adt.array<!marker>
   func.func @select(%ev: !evidence) -> !evidence {
     %tail = effect.tail %ev {index = 1} : !evidence
     %pushed = effect.push %tail, %ev {ability = @State} : !evidence

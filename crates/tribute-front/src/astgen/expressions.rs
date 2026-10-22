@@ -4,8 +4,8 @@ use tree_sitter::Node;
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    Arm, BinOpKind, CallSyntax, Expr, ExprKind, FieldInit, FloatBits, HandlerArm, HandlerKind,
-    Param, Pattern, Stmt, UnresolvedName,
+    Arm, BinOpKind, CallSyntax, Candidates, Expr, ExprKind, FieldInit, FloatBits, HandlerArm,
+    HandlerKind, Param, Pattern, Stmt, UnresolvedName,
 };
 
 use super::context::AstLoweringCtx;
@@ -270,7 +270,7 @@ fn method_call(
         ctx.fresh_id_with_span(method_node),
         ExprKind::Functions {
             name: method,
-            candidates: Vec::new(),
+            candidates: Candidates::default(),
         },
     );
     args.insert(0, receiver);
@@ -353,7 +353,8 @@ fn lower_field_initializer(
     node: Node,
 ) -> Option<FieldInit<UnresolvedName>> {
     let name_node = node.child_by_field_name("name")?;
-    let value_node = node.child_by_field_name("value")?;
+    // Shorthand `Name { field }` reads the variable named `field`.
+    let value_node = node.child_by_field_name("value").unwrap_or(name_node);
 
     let name = ctx.node_symbol(&name_node);
     let id = ctx.fresh_id_with_span(&name_node);

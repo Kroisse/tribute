@@ -198,8 +198,8 @@ fn main() -> Nil { }
                 matches!(ctx.value_def(arg), ValueDef::OpResult(op, _) if closure::New::matches(&ctx, op))
             })).expect("source call must pass a closure to its specialization");
             assert_eq!(
-                tribute_core::get_calling_convention(&ctx, call.op_ref()),
-                Some(tribute_core::CallingConvention::Direct)
+                tribute_ir::calling_convention::get_calling_convention(&ctx, call.op_ref()),
+                Some(tribute_ir::calling_convention::CallingConvention::Direct)
             );
             assert!(function_ops::<func::TailCall>(&ctx, caller).is_empty());
             let target = named_function(&ctx, module, &call.callee(&ctx).to_string());
@@ -207,8 +207,8 @@ fn main() -> Nil { }
             assert!(func::CallIndirect::matches(&ctx, indirect));
             assert_indirect_signature(&ctx, target, indirect);
             assert_eq!(
-                tribute_core::get_calling_convention(&ctx, indirect),
-                Some(tribute_core::CallingConvention::Direct)
+                tribute_ir::calling_convention::get_calling_convention(&ctx, indirect),
+                Some(tribute_ir::calling_convention::CallingConvention::Direct)
             );
             let args = &ctx.op_operands(indirect)[1..];
             assert_eq!(ctx.get_type(ctx.value_ty(*args.last().unwrap())).name, scalar);
@@ -446,8 +446,8 @@ fn only_return_value(ctx: &IrContext, function: func::Func) -> ValueRef {
 
 fn assert_direct_lifted_return(ctx: &IrContext, function: func::Func, expected: ValueRef) {
     assert_eq!(
-        tribute_core::get_calling_convention(ctx, function.op_ref()),
-        Some(tribute_core::CallingConvention::Direct),
+        tribute_ir::calling_convention::get_calling_convention(ctx, function.op_ref()),
+        Some(tribute_ir::calling_convention::CallingConvention::Direct),
         "lifted lambda must use the Direct convention"
     );
     assert_eq!(
@@ -478,9 +478,13 @@ fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
         // A transfer through a convention-proven closure keeps its convention
         // until closure lowering consumes it.
         let callee_ty = ctx.value_ty(operands[0]);
-        let expected = tribute_core::get_physical_closure_convention(ctx, callee_ty)
-            .map(|_| tribute_core::CallingConvention::Cps);
-        assert_eq!(tribute_core::get_calling_convention(ctx, call), expected);
+        let expected =
+            tribute_ir::calling_convention::get_physical_closure_convention(ctx, callee_ty)
+                .map(|_| tribute_ir::calling_convention::CallingConvention::Cps);
+        assert_eq!(
+            tribute_ir::calling_convention::get_calling_convention(ctx, call),
+            expected
+        );
     } else {
         assert_eq!(ctx.op_result_types(call), signature.results(ctx));
     }
@@ -501,7 +505,7 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
         ctx.op_attrs(call).get_type("signature").unwrap()
     );
     let environment_index =
-        tribute_core::calling_convention::get_physical_closure_environment_index(ctx, closure_ty)
+        tribute_ir::calling_convention::get_physical_closure_environment_index(ctx, closure_ty)
             .expect("environment placement");
     let lifted_signature = func::FuncSig::from_type_ref(ctx, lifted.r#type(ctx)).unwrap();
     let entry = ctx.region(lifted.body(ctx)).blocks[0];
@@ -521,8 +525,8 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
     assert_eq!(expected, lifted_signature.inputs(ctx));
     assert_eq!(signature.results(ctx), lifted_signature.results(ctx));
     assert_eq!(
-        tribute_core::get_calling_convention(ctx, lifted.op_ref()),
-        tribute_core::get_physical_closure_convention(ctx, closure_ty)
+        tribute_ir::calling_convention::get_calling_convention(ctx, lifted.op_ref()),
+        tribute_ir::calling_convention::get_physical_closure_convention(ctx, closure_ty)
     );
     (closure, lifted)
 }
@@ -583,7 +587,7 @@ fn test_lambda_with_capture() {
         let recovered = closure::Unpack::from_op(&ctx, defining_op(&ctx, addition.rhs(&ctx))).expect("captured addend");
         assert_eq!(recovered.results(&ctx), [addition.rhs(&ctx)]);
         let closure_ty = ctx.value_ty(closure.result(&ctx));
-        let env_index = tribute_core::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty).unwrap();
+        let env_index = tribute_ir::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty).unwrap();
         let entry = ctx.region(lifted.body(&ctx)).blocks[0];
         assert_eq!(recovered.closure(&ctx), ctx.block_args(entry)[env_index]);
         assert_eq!(ctx.value_ty(recovered.closure(&ctx)), closure_ty);
@@ -654,7 +658,7 @@ fn test_closure_lowering() {
         let callback = code.r#ref(&ctx);
         let closure_ty = ctx.value_ty(callback);
         let callable = closure::Closure::from_type_ref(&ctx, closure_ty).expect("retained callback contract");
-        let env_index = tribute_core::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty).unwrap();
+        let env_index = tribute_ir::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty).unwrap();
         let operands = &ctx.op_operands(call)[1..];
         assert_eq!(operands[env_index], callback);
         let signature = func::FuncSig::from_type_ref(&ctx, callable.func_type(&ctx)).unwrap();

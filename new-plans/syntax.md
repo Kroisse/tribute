@@ -417,6 +417,7 @@ pub mod Option {
 ```ebnf
 Path ::= PathStart ('::' PathSegment)*
 PathStart ::= PathKeyword | PathSegment        // 경로 키워드는 첫 segment에만
+            | '::' PathSegment                 // 의존 패키지의 루트 (`::std`)
 PathKeyword ::= 'pkg' | 'super' | 'self'
 PathSegment ::= Identifier | TypeId
 PathPrefix ::= PathStart '::' (PathSegment '::')*
