@@ -32,12 +32,11 @@ ability Kv {
 }
 ```
 
-Entrypoint의 residual row에 남는 ability는 다음 조건을 모두 지켜야 한다. Frontend는
-각 entrypoint에서 이 조건을 검사하고, 어긴 ability가 있으면 거부한다.
-
-- **Operation의 타입은 경계를 넘을 수 있다.** Parameter와 result는
-  [경계를 넘는 값](#경계를-넘는-값)으로 제한한다. 제네릭 ability는 entrypoint의 row에서
-  구체 instance가 되므로 그 instance의 타입으로 검사한다.
+Entrypoint의 residual row에 남는 ability는 **operation의 타입이 경계를 넘을 수
+있어야 한다.** Parameter와 result는 [경계를 넘는 값](#경계를-넘는-값)으로 제한한다.
+제네릭 ability는 entrypoint의 row에서 구체 instance가 되므로 그 instance의 타입으로
+검사한다. Frontend는 각 entrypoint에서 이 조건을 검사하고, 어긴 ability가 있으면
+거부한다.
 
 `fn` operation과 `op` operation 모두 host에 맡길 수 있다. 둘은 경계에서 다른 종류의
 함수가 된다([Operation 종류와 경계](#operation-종류와-경계)).
@@ -104,10 +103,14 @@ interface의 ability 하나가 WIT interface 하나가 되고, operation은 그 
   많아야 한 번이므로([`resume`의 사용 규칙](abilities.md#resume의-사용-규칙)) 두 규칙이
   맞는다.
 - **취소.** Program이 보관한 continuation을 resume하지 않고 버리면 host에 그 호출의
-  취소를 알린다. Host가 호출을 취소하면 보관한 continuation을 drop하며, 그 안의 값은
-  RC로 해제된다. 어느 쪽이든 continuation을 버린 뒤에는 그 호출을 다시 resume하지
-  않는다. 취소와 완료가 엇갈려 버린 뒤에 도착한 결과는 resume하지 않고 버리며, 결과에
-  담긴 host resource는 drop한다. 버리기 전에 도착한 완료는 평소처럼 resume한다.
+  취소를 알린다. Host가 호출을 취소하면 program은 보관한 continuation을 drop하고 그
+  entrypoint 호출을 비정상으로 끝낸다. 결과가 `Never`인 operation이 돌아올 때와 같은
+  종료 경로이며, drop된 continuation 안의 값은 RC로 해제된다. 그래서 `op` operation을
+  직접 구현하는 host는 실패를 취소로 알린다. 오류의 내용을 program에 전하려면
+  entrypoint에 남은 `Exception` 같은 실패 ability를 쓴다. 어느 쪽이든 continuation을
+  버린 뒤에는 그 호출을 다시 resume하지 않는다. 취소와 완료가 엇갈려 버린 뒤에 도착한
+  결과는 resume하지 않고 버리며, 결과에 담긴 host resource는 drop한다. 버리기 전에
+  도착한 완료는 평소처럼 resume한다.
 - **끝나지 않는 operation.** 결과 타입이 `Never`인 `op`는 resume할 값이 없으므로 결과
   없는 동기 함수가 된다. Host 호출이 돌아오면 program은 continuation을 버리고 그
   entrypoint 호출을 비정상으로 끝낸다. 예를 들어 entrypoint에 남은 `Throw(e)`는
@@ -136,7 +139,9 @@ Host operation의 parameter와 result는 WIT 타입으로 옮길 수 있는 타�
   되며, 인스턴스마다 WIT 타입 하나가 생긴다.
 - [Host resource](#host-resource) 값은 host가 만든 handle로 넘는다. 경계를 넘는
   handle은 모두 host가 이전에 돌려준 것이다.
-- 실패는 operation의 결과 타입으로 돌려준다. 경계를 넘는 예외는 없다.
+- 실패는 operation의 결과 타입으로 돌려준다. 경계를 넘는 예외는 없다. Entrypoint에
+  남은 `Exception`의 `Failure`도 예외가 아니라 결과 없는 동기 함수의 인자로 넘는다
+  ([Operation 종류와 경계](#operation-종류와-경계)).
 
 다음은 경계를 넘지 못한다.
 
@@ -221,12 +226,14 @@ ability는 없다. 표준 ability의 두 층은 [std-abilities.md](std-abilities
   entrypoint마다 root evidence를 따로 만들지도 정해야 한다.
 - **WIT 생성 규칙.** Host interface의 ability와 그 module path에서 WIT package,
   interface, 함수 이름을 만드는 방식이다. 구체 타입이 된 제네릭 인스턴스의 WIT 타입
-  이름도 정해야 한다.
+  이름과, `Throw(Error)`처럼 entrypoint에 남은 제네릭 ability instance마다 생기는 WIT
+  interface의 이름도 정해야 한다.
 - **정수의 경계 표현.** WIT 정수는 고정 폭이다. 임의 정밀도 정수를 어느 폭으로
   넘길지, 범위를 넘는 값을 trap할지, 경계 전용 고정 폭 정수 타입을 따로 둘지 정해야
   한다.
-- **Host resource의 선언 문법.** Ability 안에서 resource 타입을 선언하는 문법과,
-  그 타입의 WIT 이름을 정해야 한다.
+- **Host resource의 선언 문법.** Resource 타입을 선언하는 문법과 그 타입의 WIT 이름을
+  정해야 한다. 후보는 그 resource를 다루는 ability 안의 선언과 module 수준의 불투명
+  타입 선언이다.
 - **Tribute가 정의하는 resource.** `handle` 식이 resource의 표현을 정하게 하면 host
   ability를 흉내 내는 handler가 자기 handle을 만들 수 있다. 그러나 handler는 동적으로
   찾으므로, 한 arm이 받는 handle의 표현이 그 handler의 것인지 정적으로 알 수 없다.

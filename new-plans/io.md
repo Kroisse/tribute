@@ -124,7 +124,8 @@ fn archive(out: OutStream, lines: List(String)) ->{Io, Exception} Nil {
 모두 `fn`이며 host가 처리하도록 설계한다.
 
 - `stdout`, `stderr`, `stdin`은 host가 준 표준 stream을 돌려준다. Host가 그 stream을
-  제공하지 않으면 `None`이다.
+  제공하지 않으면 `None`이다. 호출마다 새 handle object를 돌려주므로, 그중 하나를
+  close해도 다른 호출로 얻은 handle은 열린 채다.
 - `write`와 `read`는 쓰거나 읽은 결과에 대해 `Write::write`, `Read::read`와 같은
   계약을 따르고, 실패는 `Err`로 돌려준다. 닫힌 stream은 `Err(Error::Closed)`, 그 밖의
   실패는 `Err(Error::System)`이다.
@@ -224,7 +225,8 @@ EOF는 잘못된 encoding과 같은 `Throw(Error)` 채널로 알리므로 반환
 - `Read`, `Write`, `Io`가 일반 함수 호출을 통해 전파된다.
 - `{Io}`만 요구하는 함수는 evidence를 받지만 중단되지 않는다. `{Write}`를 요구하는
   함수는 중단될 수 있다.
-- `main ->{Io} Nil`과 `main ->{Write} Nil`은 허용된다.
+- `main ->{Io, Exception} Nil`, `main ->{Io} Nil`, `main ->{Write} Nil`은 모두
+  허용된다.
 - 사용자가 정의한 같은 이름의 ability는 `std::io`의 ability와 구별된다.
 - `Write`를 처리하는 Tribute handler 아래에서 `print_line`은 host에 닿지 않는다.
 - `Write` handler가 resume하지 않으면 생산자는 그 지점에서 멈춘다.
