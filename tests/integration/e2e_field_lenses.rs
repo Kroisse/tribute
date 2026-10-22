@@ -403,7 +403,9 @@ fn main() -> Nil {
 }
 
 #[salsa_test]
-fn diag_ambiguous_method_path(db: &salsa::DatabaseImpl) {
+fn used_name_selects_its_method_path(db: &salsa::DatabaseImpl) {
+    // A path whose first segment the scope names directly outranks the same
+    // path through another name in scope.
     let diagnostics = messages(
         db,
         r#"
@@ -415,6 +417,31 @@ mod audit {
     }
 }
 use audit::name
+
+fn main() -> Nil {
+    let user = User { name: "John" }
+    let _ = user.name::set("Jane")
+}
+"#,
+    );
+    assert_eq!(diagnostics, []);
+}
+
+#[salsa_test]
+fn diag_ambiguous_method_path(db: &salsa::DatabaseImpl) {
+    // `User::name::set` and `audit::name::set` both come through names in
+    // scope, so they share a rank.
+    let diagnostics = messages(
+        db,
+        r#"
+struct User { name: String }
+
+mod audit {
+    pub mod name {
+        pub fn set(user: pkg::User, value: String) -> pkg::User { user }
+    }
+}
+use audit
 
 fn main() -> Nil {
     let user = User { name: "John" }
@@ -466,9 +493,9 @@ fn main() -> Nil {
 }
 
 #[salsa_test]
-fn diag_ambiguous_getter_path(db: &salsa::DatabaseImpl) {
-    // `x.User::name` reads the field only when the getter is the one function
-    // its path names for the receiver.
+fn declared_type_selects_its_getter_path(db: &salsa::DatabaseImpl) {
+    // `x.User::name` through the declared `User` outranks `audit::User::name`
+    // through the module name `audit`.
     let diagnostics = messages(
         db,
         r#"
@@ -487,11 +514,38 @@ fn main() -> Nil {
 }
 "#,
     );
+    assert_eq!(diagnostics, []);
+}
+
+#[salsa_test]
+fn diag_ambiguous_getter_path(db: &salsa::DatabaseImpl) {
+    // Without `User` in scope, the getter and `audit::User::name` both come
+    // through module names in scope, so they share a rank.
+    let diagnostics = messages(
+        db,
+        r#"
+mod model {
+    pub struct User { name: String }
+}
+
+mod audit {
+    pub mod User {
+        pub fn name(user: pkg::model::User) -> String { "audit" }
+    }
+}
+use model
+use audit
+
+fn read(user: model::User) -> String { user.User::name }
+
+fn main() -> Nil {}
+"#,
+    );
     assert_eq!(
         diagnostics,
         [(
-            "ambiguous path `User::name` for arguments of types (`User`): it names \
-                 `User::name`, `audit::User::name`"
+            "ambiguous path `User::name` for arguments of types (`model::User`): it names \
+                 `audit::User::name`, `model::User::name`"
                 .to_owned(),
             "User::name".to_owned()
         ),]
