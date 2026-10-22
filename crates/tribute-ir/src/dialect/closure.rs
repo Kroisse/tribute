@@ -1,5 +1,6 @@
 //! Closure dialect — closures and captures.
 
+use crate::calling_convention::ConventionBearing;
 use crate::dialect::tribute_rtti::ManagedRefType;
 use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::op_flag::Pure;
@@ -13,6 +14,9 @@ mod closure {
 
     /// A closure of the code function `func_ref` holding `captures` in order.
     /// The code function receives the closure itself as its environment.
+    /// The closure's calling convention is recorded through
+    /// `ConventionBearing` until closure lowering consumes it.
+    #[implements(ConventionBearing)]
     #[flags(Pure)]
     fn new(func_ref: Attr<SymbolRef>, captures: Variadic<_>) -> Value<_> {}
 
@@ -29,9 +33,10 @@ mod closure {
     /// The body region receives block arguments for the lambda's formal parameters.
     /// Captured values are referenced from the parent scope (NOT isolated from above).
     /// A downstream `lower_closure_lambda` pass extracts the body into a top-level
-    /// `func.func` and replaces this op with `closure.new`.
+    /// `func.func` and replaces this op with `closure.new`. Its calling
+    /// convention is recorded through `ConventionBearing`.
     #[asm_format]
-    #[implements(CallableOwner)]
+    #[implements(CallableOwner, ConventionBearing)]
     #[flags(Pure)]
     fn lambda(captures: Variadic<_>) -> Value<_> {
         #[region(body)]

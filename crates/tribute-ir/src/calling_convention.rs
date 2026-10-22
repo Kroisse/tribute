@@ -2,7 +2,7 @@
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::ops::DialectType;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -95,17 +95,106 @@ impl TryFrom<i128> for CallingConvention {
     }
 }
 
-/// Attach the logical calling convention to a high-level IR operation.
-pub fn set_calling_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
-    ctx.op_attrs_mut(op)
-        .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
+/// A convention an operation records that is not a valid one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+pub enum ConventionError {
+    /// The recorded value is not `Direct`, `EvidenceDirect`, or `Cps`.
+    #[display("malformed calling-convention metadata")]
+    Malformed,
+    /// The operation does not implement [`ConventionBearing`].
+    #[display("calling-convention metadata on an operation that cannot carry it")]
+    Unregistered,
 }
 
-/// Read explicitly attached calling-convention metadata.
-pub fn get_calling_convention(ctx: &IrContext, op: OpRef) -> Option<CallingConvention> {
-    let code = ctx.op_attrs(op).get_u8(CALLING_CONVENTION_ATTR).ok()??;
-    code.try_into().ok()
+/// A physical operation that records the calling convention of the callable
+/// it defines, creates, or transfers to, from CPS legalization until the
+/// last reader inside the representation/ABI boundary consumes it
+/// (`new-plans/cps-effects.md`, "CPS 변환의 호출 대상 형상").
+///
+/// Only these operations carry a convention, and passes read, write, and
+/// consume it only through this interface.
+#[trunk_ir::op_interface]
+pub trait ConventionBearing: DialectOp {
+    /// The recorded convention; `Ok(None)` when the operation records none.
+    fn calling_convention(
+        &self,
+        ctx: &IrContext,
+    ) -> Result<Option<CallingConvention>, ConventionError> {
+        read_convention(ctx, self.op_ref())
+    }
+
+    fn set_calling_convention(&self, ctx: &mut IrContext, convention: CallingConvention) {
+        ctx.op_attrs_mut(self.op_ref())
+            .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
+    }
+
+    /// Consume the recorded convention.
+    fn remove_calling_convention(&self, ctx: &mut IrContext) {
+        ctx.op_attrs_mut(self.op_ref())
+            .remove(CALLING_CONVENTION_ATTR);
+    }
 }
+
+impl DynConventionBearing {
+    /// The convention `op` records, rejecting a malformed value and a
+    /// convention on an operation that cannot carry one.
+    pub fn exact(ctx: &IrContext, op: OpRef) -> Result<Option<CallingConvention>, ConventionError> {
+        match Self::get(ctx, op) {
+            Some(bearing) => bearing.calling_convention(ctx),
+            None if ctx.op_attrs(op).contains_key(CALLING_CONVENTION_ATTR) => {
+                Err(ConventionError::Unregistered)
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// The valid convention `op` records, if any.
+    pub fn of(ctx: &IrContext, op: OpRef) -> Option<CallingConvention> {
+        Self::exact(ctx, op).ok().flatten()
+    }
+
+    /// Record `convention` on `op`.
+    ///
+    /// # Panics
+    ///
+    /// If `op` does not implement [`ConventionBearing`].
+    pub fn set(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
+        Self::get(ctx, op)
+            .expect("only a ConventionBearing operation records a calling convention")
+            .set_calling_convention(ctx, convention);
+    }
+}
+
+fn read_convention(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Result<Option<CallingConvention>, ConventionError> {
+    let Some(value) = ctx.op_attrs(op).get(CALLING_CONVENTION_ATTR) else {
+        return Ok(None);
+    };
+    match value {
+        Attribute::Int(code) => CallingConvention::try_from(*code)
+            .map(Some)
+            .map_err(|_| ConventionError::Malformed),
+        _ => Err(ConventionError::Malformed),
+    }
+}
+
+impl ConventionBearing for closure::Lambda {}
+impl ConventionBearing for closure::New {}
+impl ConventionBearing for func::Func {}
+impl ConventionBearing for func::Call {}
+impl ConventionBearing for func::CallIndirect {}
+impl ConventionBearing for func::TailCall {}
+impl ConventionBearing for func::TailCallIndirect {}
+
+trunk_ir::register_interfaces!(
+    func::Func: ConventionBearing;
+    func::Call: ConventionBearing;
+    func::CallIndirect: ConventionBearing;
+    func::TailCall: ConventionBearing;
+    func::TailCallIndirect: ConventionBearing
+);
 
 /// Result-indexed CPS completion target `Done<R>`.
 pub fn cps_done_type(ctx: &mut IrContext, result: TypeRef) -> TypeRef {
@@ -269,6 +358,162 @@ pub fn get_physical_closure_environment_index(ctx: &IrContext, closure: TypeRef)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::walk::{WalkAction, walk_op};
+
+    const CONVENTIONS: &str = r#"core.module @test {
+  func.func @direct() -> core.nil attributes {tribute.calling_convention = 0} {
+    func.return
+  }
+  func.func @untagged() -> core.nil {
+    func.return
+  }
+  func.func @malformed() -> core.nil attributes {tribute.calling_convention = 3} {
+    func.return
+  }
+  func.func @wrong_kind() -> core.nil attributes {tribute.calling_convention = "cps"} {
+    func.return
+  }
+  func.func @calls() -> core.nil attributes {tribute.calling_convention = 1} {
+    %r = func.call {callee = @direct, tribute.calling_convention = 0} : core.nil
+    %c = arith.const {value = 0, tribute.calling_convention = 0} : core.i32
+    func.return
+  }
+}"#;
+
+    fn ops(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Vec<OpRef> {
+        let mut ops = Vec::new();
+        let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            ops.push(op);
+            std::ops::ControlFlow::Continue(WalkAction::Advance)
+        });
+        ops
+    }
+
+    fn function(ctx: &IrContext, module: trunk_ir::rewrite::Module, name: &str) -> OpRef {
+        ops(ctx, module)
+            .into_iter()
+            .find(|&op| {
+                func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == name)
+            })
+            .expect("fixture function")
+    }
+
+    fn named(ctx: &IrContext, module: trunk_ir::rewrite::Module, name: &str) -> OpRef {
+        ops(ctx, module)
+            .into_iter()
+            .find(|&op| ctx.op(op).name.is(ctx, name))
+            .expect("fixture operation")
+    }
+
+    #[test]
+    fn convention_bearing_operations_are_registered() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.nil {
+    %r = func.call %x {callee = @f} : core.nil
+    func.tail_call %x {callee = @f}
+  }
+}"#,
+        );
+        assert!(DynConventionBearing::is_implemented(
+            &ctx,
+            function(&ctx, module, "f")
+        ));
+        assert!(DynConventionBearing::is_implemented(
+            &ctx,
+            named(&ctx, module, "func.call")
+        ));
+        assert!(DynConventionBearing::is_implemented(
+            &ctx,
+            named(&ctx, module, "func.tail_call")
+        ));
+        assert!(!DynConventionBearing::is_implemented(
+            &ctx,
+            named(&ctx, module, "core.module")
+        ));
+        let location = ctx.op(module.op()).location;
+        for name in [
+            closure::Lambda::NAME,
+            closure::New::NAME,
+            func::CallIndirect::NAME,
+            func::TailCallIndirect::NAME,
+        ] {
+            let op = trunk_ir::OperationDataBuilder::new(location, name).build(&mut ctx);
+            let op = ctx.create_op(op);
+            assert!(DynConventionBearing::is_implemented(&ctx, op), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn reads_distinguish_absent_malformed_and_unregistered_conventions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, CONVENTIONS);
+
+        assert_eq!(
+            DynConventionBearing::exact(&ctx, function(&ctx, module, "direct")),
+            Ok(Some(CallingConvention::Direct))
+        );
+        assert_eq!(
+            DynConventionBearing::exact(&ctx, function(&ctx, module, "calls")),
+            Ok(Some(CallingConvention::EvidenceDirect))
+        );
+        assert_eq!(
+            DynConventionBearing::exact(&ctx, named(&ctx, module, "func.call")),
+            Ok(Some(CallingConvention::Direct))
+        );
+        assert_eq!(
+            DynConventionBearing::exact(&ctx, function(&ctx, module, "untagged")),
+            Ok(None)
+        );
+        for malformed in ["malformed", "wrong_kind"] {
+            let op = function(&ctx, module, malformed);
+            assert_eq!(
+                DynConventionBearing::exact(&ctx, op),
+                Err(ConventionError::Malformed)
+            );
+            assert_eq!(DynConventionBearing::of(&ctx, op), None);
+        }
+        let constant = named(&ctx, module, "arith.const");
+        assert_eq!(
+            DynConventionBearing::exact(&ctx, constant),
+            Err(ConventionError::Unregistered)
+        );
+        assert_eq!(DynConventionBearing::of(&ctx, constant), None);
+        assert_eq!(
+            DynConventionBearing::exact(&ctx, named(&ctx, module, "func.return")),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn set_and_remove_round_trip_through_the_interface() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, CONVENTIONS);
+        let untagged = function(&ctx, module, "untagged");
+
+        DynConventionBearing::set(&mut ctx, untagged, CallingConvention::Cps);
+        assert_eq!(
+            DynConventionBearing::exact(&ctx, untagged),
+            Ok(Some(CallingConvention::Cps))
+        );
+
+        let bearing = DynConventionBearing::get(&ctx, untagged).unwrap();
+        bearing.remove_calling_convention(&mut ctx);
+        assert_eq!(DynConventionBearing::exact(&ctx, untagged), Ok(None));
+        assert!(!ctx.op_attrs(untagged).contains_key(CALLING_CONVENTION_ATTR));
+    }
+
+    #[test]
+    #[should_panic(expected = "only a ConventionBearing operation")]
+    fn setting_a_convention_on_an_unregistered_operation_panics() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, CONVENTIONS);
+        let constant = named(&ctx, module, "arith.const");
+        DynConventionBearing::set(&mut ctx, constant, CallingConvention::Direct);
+    }
 
     #[test]
     fn integer_codes_round_trip() {

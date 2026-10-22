@@ -1,6 +1,7 @@
 //! End-to-end tests for compilation and execution.
 
 use crate::common;
+use tribute_ir::calling_convention::DynConventionBearing;
 
 use common::{assert_native_output, compile_native_or_panic};
 use ropey::Rope;
@@ -198,7 +199,7 @@ fn main() -> Nil { }
                 matches!(ctx.value_def(arg), ValueDef::OpResult(op, _) if closure::New::matches(&ctx, op))
             })).expect("source call must pass a closure to its specialization");
             assert_eq!(
-                tribute_ir::calling_convention::get_calling_convention(&ctx, call.op_ref()),
+                DynConventionBearing::of(&ctx, call.op_ref()),
                 Some(tribute_ir::calling_convention::CallingConvention::Direct)
             );
             assert!(function_ops::<func::TailCall>(&ctx, caller).is_empty());
@@ -207,7 +208,7 @@ fn main() -> Nil { }
             assert!(func::CallIndirect::matches(&ctx, indirect));
             assert_indirect_signature(&ctx, target, indirect);
             assert_eq!(
-                tribute_ir::calling_convention::get_calling_convention(&ctx, indirect),
+                DynConventionBearing::of(&ctx, indirect),
                 Some(tribute_ir::calling_convention::CallingConvention::Direct)
             );
             let args = &ctx.op_operands(indirect)[1..];
@@ -446,7 +447,7 @@ fn only_return_value(ctx: &IrContext, function: func::Func) -> ValueRef {
 
 fn assert_direct_lifted_return(ctx: &IrContext, function: func::Func, expected: ValueRef) {
     assert_eq!(
-        tribute_ir::calling_convention::get_calling_convention(ctx, function.op_ref()),
+        DynConventionBearing::of(ctx, function.op_ref()),
         Some(tribute_ir::calling_convention::CallingConvention::Direct),
         "lifted lambda must use the Direct convention"
     );
@@ -481,10 +482,7 @@ fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
         let expected =
             tribute_ir::calling_convention::get_physical_closure_convention(ctx, callee_ty)
                 .map(|_| tribute_ir::calling_convention::CallingConvention::Cps);
-        assert_eq!(
-            tribute_ir::calling_convention::get_calling_convention(ctx, call),
-            expected
-        );
+        assert_eq!(DynConventionBearing::of(ctx, call), expected);
     } else {
         assert_eq!(ctx.op_result_types(call), signature.results(ctx));
     }
@@ -525,7 +523,7 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
     assert_eq!(expected, lifted_signature.inputs(ctx));
     assert_eq!(signature.results(ctx), lifted_signature.results(ctx));
     assert_eq!(
-        tribute_ir::calling_convention::get_calling_convention(ctx, lifted.op_ref()),
+        DynConventionBearing::of(ctx, lifted.op_ref()),
         tribute_ir::calling_convention::get_physical_closure_convention(ctx, closure_ty)
     );
     (closure, lifted)

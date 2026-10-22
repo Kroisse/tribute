@@ -1,5 +1,7 @@
 use super::*;
-use tribute_ir::calling_convention::cps_closure_function_type;
+use tribute_ir::calling_convention::{
+    CALLING_CONVENTION_ATTR, DynConventionBearing, cps_closure_function_type,
+};
 use tribute_ir::dialect::{adt, effect};
 use trunk_ir::SymbolPath;
 use trunk_ir::ops::DialectType;
@@ -154,8 +156,7 @@ fn collect_lambdas(ctx: &IrContext, op: OpRef, lambdas: &mut Vec<OpRef>) {
 
 fn collect_cps_tail_calls(ctx: &IrContext, op: OpRef, tails: &mut Vec<OpRef>) {
     if func::TailCallIndirect::matches(ctx, op)
-        && tribute_ir::calling_convention::get_calling_convention(ctx, op)
-            == Some(CallingConvention::Cps)
+        && DynConventionBearing::of(ctx, op) == Some(CallingConvention::Cps)
     {
         tails.push(op);
     }
@@ -269,8 +270,7 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
     collect_lambdas(&ctx, module.op(), &mut lambdas);
     let one_parameter_cps = lambdas.into_iter().find(|lambda| {
         let closure_ty = ctx.op_result_types(*lambda)[0];
-        tribute_ir::calling_convention::get_calling_convention(&ctx, *lambda)
-            == Some(CallingConvention::Cps)
+        DynConventionBearing::of(&ctx, *lambda) == Some(CallingConvention::Cps)
             && closure::Closure::from_type_ref(&ctx, closure_ty)
                 .and_then(|closure| func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx)))
                 .is_some_and(|callable| callable.inputs(&ctx).len() == 1)
@@ -296,7 +296,7 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
 fn convention_bearing_transfers(ctx: &IrContext, op: OpRef) -> Vec<OpRef> {
     fn visit(ctx: &IrContext, op: OpRef, transfers: &mut Vec<OpRef>) {
         if (func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op))
-            && tribute_ir::calling_convention::get_calling_convention(ctx, op).is_some()
+            && DynConventionBearing::of(ctx, op).is_some()
         {
             transfers.push(op);
         }
@@ -356,9 +356,7 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
     let transfers = convention_bearing_transfers(&ctx, module.op());
     let mut conventions: Vec<_> = transfers
         .iter()
-        .map(|transfer| {
-            tribute_ir::calling_convention::get_calling_convention(&ctx, *transfer).unwrap()
-        })
+        .map(|transfer| DynConventionBearing::of(&ctx, *transfer).unwrap())
         .collect();
     conventions.sort_unstable();
     assert_eq!(
@@ -374,8 +372,7 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
     );
 
     for transfer in &transfers {
-        let convention =
-            tribute_ir::calling_convention::get_calling_convention(&ctx, *transfer).unwrap();
+        let convention = DynConventionBearing::of(&ctx, *transfer).unwrap();
         let call = trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, *transfer).unwrap();
         let callee = call.indirect_callee(&ctx).unwrap();
         let expected = physical_closure_function_type(&ctx, ctx.value_ty(callee), convention)
@@ -542,8 +539,8 @@ fn source_signature_metadata_roundtrips_before_conversion() {
             .is_none()
     );
     assert_eq!(
-        ctx.op_attrs(lowered).get_i128(CALLING_CONVENTION_ATTR),
-        Some(CallingConvention::Direct as i128)
+        DynConventionBearing::of(&ctx, lowered),
+        Some(CallingConvention::Direct)
     );
 
     let mut lambdas = Vec::new();
@@ -1542,9 +1539,7 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
     collect_lambdas(&ctx, module.op(), &mut lambdas);
     let mut generated_param_counts = Vec::new();
     for lambda in lambdas {
-        if tribute_ir::calling_convention::get_calling_convention(&ctx, lambda)
-            != Some(CallingConvention::Cps)
-        {
+        if DynConventionBearing::of(&ctx, lambda) != Some(CallingConvention::Cps) {
             continue;
         }
         let closure_ty = ctx.op_result_types(lambda)[0];
@@ -2298,10 +2293,7 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
     collect_indirect_calls(&ctx, module.op(), &mut indirect_calls);
     let call = indirect_calls
         .into_iter()
-        .find(|op| {
-            tribute_ir::calling_convention::get_calling_convention(&ctx, *op)
-                == Some(CallingConvention::EvidenceDirect)
-        })
+        .find(|op| DynConventionBearing::of(&ctx, *op) == Some(CallingConvention::EvidenceDirect))
         .expect("fn handler dispatcher call");
     let call = func::CallIndirect::from_op(&ctx, call).unwrap();
     let expected = physical_closure_function_type(

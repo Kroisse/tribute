@@ -5,7 +5,7 @@
 use std::ops::ControlFlow;
 
 use rustc_hash::FxHashMap as HashMap;
-use tribute_ir::calling_convention::{CallingConvention, set_calling_convention};
+use tribute_ir::calling_convention::{CallingConvention, ConventionBearing};
 use tribute_ir::calling_convention::{cps_completion_type, cps_done_type, cps_resume_type};
 use tribute_ir::dialect::{ability, adt, tribute_control, tribute_rt};
 use trunk_ir::Symbol;
@@ -162,7 +162,7 @@ pub(super) fn build_suffix_rebound(
         .callee(trunk_ir::SymbolPath::new([dispatch_factory]))
         .results([value.dispatch])
         .build(ctx, location);
-    set_calling_convention(ctx, dispatch.op_ref(), CallingConvention::Direct);
+    dispatch.set_calling_convention(ctx, CallingConvention::Direct);
     ctx.push_op(block, dispatch.op_ref());
     let frame = pack_frame(ctx, block, location, &value, done, dispatch.result(ctx));
     let transfer =
@@ -263,7 +263,7 @@ pub(super) fn build_dispatch_adapter_factory(
         .r#type(factory_type)
         .regions(factory_region)
         .build(ctx, location);
-    set_calling_convention(ctx, factory.op_ref(), CallingConvention::Direct);
+    factory.set_calling_convention(ctx, CallingConvention::Direct);
     Ok(factory.op_ref())
 }
 
@@ -400,9 +400,8 @@ impl ExpandSuffixFrames {
             .callee(trunk_ir::SymbolPath::new([symbol]))
             .results([value.dispatch])
             .build(ctx, location);
-        tribute_ir::calling_convention::set_calling_convention(
+        dispatch.set_calling_convention(
             ctx,
-            dispatch.op_ref(),
             tribute_ir::calling_convention::CallingConvention::Direct,
         );
         ctx.push_op(block, dispatch.op_ref());
