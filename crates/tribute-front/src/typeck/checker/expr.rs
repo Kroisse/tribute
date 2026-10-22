@@ -12,7 +12,7 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    AbilityId, AbilityInstance, AbilityRow, Arm, BinOpKind, Expr, ExprKind, FieldInit,
+    AbilityId, AbilityInstance, AbilityRow, Arm, BinOpKind, Candidates, Expr, ExprKind, FieldInit,
     FieldPattern, HandlerArm, HandlerKind, LiteralPattern, LocalId, ModulePath, NodeId, OpDeclKind,
     Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef,
     collect_row_vars,
@@ -92,21 +92,14 @@ impl<'db> CallTypes<'_, 'db> {
     }
 }
 
-/// The functions name resolution found for a call's callee, by rank.
+/// The functions name resolution found for a call's callee.
 pub(crate) fn candidate_functions<'db>(
-    candidates: &[Vec<ResolvedRef<'db>>],
-) -> Vec<Vec<crate::ast::FuncDefId<'db>>> {
-    candidates
-        .iter()
-        .map(|rank| {
-            rank.iter()
-                .filter_map(|candidate| match candidate {
-                    ResolvedRef::Function { id } => Some(*id),
-                    _ => None,
-                })
-                .collect()
-        })
-        .collect()
+    candidates: &Candidates<ResolvedRef<'db>>,
+) -> Candidates<crate::ast::FuncDefId<'db>> {
+    candidates.filter_map(|candidate| match candidate {
+        ResolvedRef::Function { id } => Some(*id),
+        _ => None,
+    })
 }
 
 /// Check if a type contains any unification variables (UniVar).
@@ -1594,7 +1587,7 @@ impl<'db> TypeChecker<'db> {
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         node: NodeId,
         name: &SymbolPath,
-        candidates: &[Vec<ResolvedRef<'db>>],
+        candidates: &Candidates<ResolvedRef<'db>>,
     ) -> Type<'db> {
         let result_ty = ctx.fresh_type_var();
         let effect = ctx
@@ -1864,10 +1857,10 @@ impl<'db> TypeChecker<'db> {
     /// takes the call.
     pub(crate) fn select_method(
         &self,
-        ranks: &[Vec<crate::ast::FuncDefId<'db>>],
+        candidates: &Candidates<crate::ast::FuncDefId<'db>>,
         call: CallTypes<'_, 'db>,
     ) -> MethodSelection<'db> {
-        match self.select_function(ranks, call) {
+        match self.select_function(candidates, call) {
             // A call that passes the wrong number of arguments still names
             // the function its arguments select, which reports the number.
             (MethodSelection::None, Some(by_arguments)) => MethodSelection::One(by_arguments),
@@ -1876,25 +1869,27 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// The function whose whole signature takes `call` in the highest rank
-    /// of `ranks` that has one, and, where no rank does, the one function of
+    /// of `candidates` that has one, and, where no rank does, the one function of
     /// any rank whose parameters take the arguments the call has, whatever
     /// their number and its result. Before `call` is settled, a function
     /// that lower ranks compete with is not selected yet.
     pub(crate) fn select_function(
         &self,
-        ranks: &[Vec<crate::ast::FuncDefId<'db>>],
+        candidates: &Candidates<crate::ast::FuncDefId<'db>>,
         call: CallTypes<'_, 'db>,
     ) -> (
         MethodSelection<'db>,
         Option<crate::typeck::MethodEntry<'db>>,
     ) {
         let fits = |params: &[Type<'db>], result| call.matches(self.db(), params, result);
+        let ranks = candidates.ranks();
         for (index, rank) in ranks.iter().enumerate() {
             match self.select_matching(rank, fits) {
                 MethodSelection::None => {}
                 MethodSelection::One(entry) if !call.settled => {
                     let lower: Vec<_> = ranks[index + 1..]
                         .iter()
+                        .copied()
                         .flatten()
                         .copied()
                         .filter(|function| {
@@ -1919,12 +1914,12 @@ impl<'db> TypeChecker<'db> {
                 selection => return (selection, None),
             }
         }
-        let by_arguments = match self.select_matching(&ranks.concat(), |params, _| {
-            call.arguments_match(self.db(), params)
-        }) {
-            MethodSelection::One(entry) => Some(entry),
-            _ => None,
-        };
+        let all: Vec<_> = candidates.iter().copied().collect();
+        let by_arguments =
+            match self.select_matching(&all, |params, _| call.arguments_match(self.db(), params)) {
+                MethodSelection::One(entry) => Some(entry),
+                _ => None,
+            };
         (MethodSelection::None, by_arguments)
     }
 
@@ -2159,17 +2154,10 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Functions { name, candidates } => ExprKind::Functions {
                 name: name.clone(),
                 // Unselected, so the candidates have no type.
-                candidates: candidates
-                    .iter()
-                    .map(|rank| {
-                        rank.iter()
-                            .map(|candidate| TypedRef {
-                                resolved: candidate.clone(),
-                                ty: ctx.error_type(),
-                            })
-                            .collect()
-                    })
-                    .collect(),
+                candidates: candidates.map(|candidate| TypedRef {
+                    resolved: candidate.clone(),
+                    ty: ctx.error_type(),
+                }),
             },
             ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op: *op,

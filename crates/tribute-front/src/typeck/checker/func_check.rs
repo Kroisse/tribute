@@ -751,20 +751,27 @@ impl<'db> TypeChecker<'db> {
             let TypeKind::Func { params, result, .. } = expected.kind(self.db()) else {
                 // Without a function type every candidate fits, so the
                 // highest rank decides once nothing more is determined.
-                let highest = match call.candidates.as_slice() {
-                    [highest] => highest,
-                    [highest, ..] if settled => highest,
+                let mut ranks = call
+                    .candidates
+                    .ranks()
+                    .into_iter()
+                    .filter(|rank| !rank.is_empty());
+                let highest = match (ranks.next(), ranks.next()) {
+                    (Some(highest), None) => highest,
+                    (Some(highest), Some(_)) if settled => highest,
                     _ => {
-                        return super::expr::MethodSelection::Ambiguous(call.candidates.concat());
+                        return super::expr::MethodSelection::Ambiguous(
+                            call.candidates.iter().copied().collect(),
+                        );
                     }
                 };
-                return match highest.as_slice() {
+                return match highest {
                     [only] => self
                         .method_entry(*only)
                         .map_or(super::expr::MethodSelection::None, |entry| {
                             super::expr::MethodSelection::One(entry)
                         }),
-                    _ => super::expr::MethodSelection::Ambiguous(highest.clone()),
+                    _ => super::expr::MethodSelection::Ambiguous(highest.to_vec()),
                 };
             };
             // A value has no arguments of its own to report the number

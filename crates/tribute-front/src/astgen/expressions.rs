@@ -4,8 +4,8 @@ use tree_sitter::Node;
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    Arm, BinOpKind, CallSyntax, Expr, ExprKind, FieldInit, FloatBits, HandlerArm, HandlerKind,
-    Param, Pattern, Stmt, UnresolvedName,
+    Arm, BinOpKind, CallSyntax, Candidates, Expr, ExprKind, FieldInit, FloatBits, HandlerArm,
+    HandlerKind, Param, Pattern, Stmt, UnresolvedName,
 };
 
 use super::context::AstLoweringCtx;
@@ -270,7 +270,7 @@ fn method_call(
         ctx.fresh_id_with_span(method_node),
         ExprKind::Functions {
             name: method,
-            candidates: Vec::new(),
+            candidates: Candidates::default(),
         },
     );
     args.insert(0, receiver);
