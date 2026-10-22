@@ -379,8 +379,8 @@ arm 본문은 다음을 할 수 없다. `Throw`와 `-> Never` operation도 포�
 operation은 직접 perform할 수 있다. 호출은 callee의 ability row로 판단하므로 그 ability를
 요구하는 함수는 호출할 수 없다. Arm 안의 `handle`이 처리하는 label은 그 handle 안에서
 제한을 받지 않는다. Lambda 본문은 lambda를 호출하는 곳에서 그 타입의 row로 판단한다.
-위반은 typechecking 단계의 컴파일 에러이며, 진단은 arm이 처리하는 operation과 arm이
-닿는 금지된 ability를 나열한다.
+Arm 정의의 타입에 드러나는 위반은 typechecking 단계의 컴파일 에러이며, 진단은 arm이
+처리하는 operation과 arm이 닿는 금지된 ability를 나열한다.
 
 계산을 멈추거나 중단해야 하는 handler는 그 operation을 `op`으로 선언하고 `op` arm으로
 처리한다. 이 보증을 구현하는 방법, 곧 `fn` perform 지점이 continuation frame을 만들지
@@ -388,7 +388,9 @@ operation은 직접 perform할 수 있다. 호출은 callee의 ability row로 �
 
 Row 변수로 들어오는 label도 같은 규칙을 따른다. `fn` arm이 effect-polymorphic
 callable을 호출하면, 그 row 변수를 고정한 인스턴스의 label에도 `op` operation을
-선언한 ability가 올 수 없다.
+선언한 ability가 올 수 없다. 이 위반은 arm의 정의만으로는 드러나지 않는다. 정의에서는 그
+row가 row를 생략한 순수 함수의 호출과 같은 열린 row이기 때문이다. 그래서 인스턴스마다
+callee의 호출 규약을 정하는 단계가 이 위반을 컴파일 에러로 거부한다.
 
 ```rust
 ability Stop { op stop() -> Never }
