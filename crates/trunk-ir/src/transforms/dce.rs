@@ -3,12 +3,14 @@
 //! Removes operations whose results are never used and which have no side effects.
 //! Uses the arena's built-in use-chains to detect unused results.
 
+use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::op_flag::{OpFlag, Pure};
 use crate::ops::DialectOp;
-use crate::pass::{Pass, pass_fn};
+use crate::pass::{Pass, PassRunResult};
 use crate::refs::{BlockRef, OpRef, RegionRef};
 use crate::rewrite::RewriteScope;
+use std::marker::PhantomData;
 
 /// Configuration for dead code elimination.
 #[derive(Debug, Clone)]
@@ -73,10 +75,40 @@ pub fn eliminate_dead_code<S: RewriteScope>(
     }
 }
 
-/// Build a DCE pass anchored on `T`, such as a function or a module.
-pub fn dce_pass<T: DialectOp + RewriteScope>(config: DceConfig) -> impl Pass<Target = T> {
-    pass_fn("dce", move |ctx, target, _analyses| {
-        let result = eliminate_dead_code(ctx, target, config.clone());
+/// Dead code elimination anchored on `T`, such as a function or a module.
+pub struct EliminateDeadCode<T> {
+    config: DceConfig,
+    _target: PhantomData<fn(T)>,
+}
+
+impl<T> EliminateDeadCode<T> {
+    pub fn new() -> Self {
+        Self::with_config(DceConfig::default())
+    }
+
+    pub fn with_config(config: DceConfig) -> Self {
+        Self {
+            config,
+            _target: PhantomData,
+        }
+    }
+}
+
+impl<T> Default for EliminateDeadCode<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: DialectOp + RewriteScope> Pass for EliminateDeadCode<T> {
+    type Target = T;
+
+    fn name(&self) -> &'static str {
+        "dce"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: T, _: &mut AnalysisCache) -> PassRunResult {
+        let result = eliminate_dead_code(ctx, target, self.config.clone());
         if !result.reached_fixpoint {
             tracing::warn!(
                 "dce did not reach a fixed point: {} iterations, {} removed",
@@ -85,7 +117,7 @@ pub fn dce_pass<T: DialectOp + RewriteScope>(config: DceConfig) -> impl Pass<Tar
             );
         }
         Ok(())
-    })
+    }
 }
 
 /// Sweep all regions in a rewrite scope, removing dead ops.

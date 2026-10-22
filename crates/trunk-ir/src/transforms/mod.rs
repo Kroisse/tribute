@@ -14,7 +14,7 @@ pub mod scf_to_cf;
 
 pub use call_graph::{CallGraph, build_call_graph, recursive_functions, tarjan_scc};
 pub use canonicalize::{CanonicalizeResult, canonicalize, canonicalize_pass};
-pub use dce::{DceConfig, DceResult, dce_pass, eliminate_dead_code};
+pub use dce::{DceConfig, DceResult, EliminateDeadCode, eliminate_dead_code};
 pub use global_dce::{
     GlobalDceConfig, GlobalDceResult, eliminate_dead_definitions,
     eliminate_dead_definitions_with_config, eliminate_dead_functions,
