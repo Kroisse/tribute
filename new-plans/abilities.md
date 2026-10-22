@@ -415,7 +415,6 @@ ability Stop { op stop() -> Never }
 
 fn limited(comp: fn() ->{e, Counter} Int) ->{e, Stop} Int {
     handle comp() {
-        do result { result }
         fn Counter::next() { Stop::stop() } // ❌ 컴파일 에러: `fn` arm에서 `op` 수행
     }
 }
