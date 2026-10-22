@@ -183,7 +183,7 @@ zero-capture `func.unreachable` adapter를 포함한 conversion 세부는
 
 ## Nominal Type Identity
 
-Prelude 병합은 해석된 선언의 canonical path와 참조를 보존한다. Prelude의
+패키지 `std` 병합은 해석된 선언의 canonical path와 참조를 보존한다. Prelude의
 짧은 이름은 선언을 가리키는 binding이며, AST 병합이나 metadata 조회를 위해
 canonical path를 다시 짧은 이름으로 바꾸지 않는다. 함수 스킴, 특수화 대상,
 생성된 정의와 호출은 동일한 해석 결과를 사용한다.
@@ -249,7 +249,7 @@ violates that precondition; they never synthesize a fallback element or tail.
 Source-logical frontend의 원소 타입 선택과 생성자 메타데이터 구분은
 [List IR 계약](ir.md)을 따른다.
 
-The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
+Package `std` declares `List::prepend(value, tail)` as the minimal public dynamic
 construction API. Its source wrapper delegates to a private compiler intrinsic,
 and the shared pipeline replaces only that registry-verified private call with
 `list.prepend`. An ordinary source function with the same public qualified name
@@ -686,16 +686,19 @@ typecheck는 source와 선언 환경을 입력으로 하는 모듈 단위 query�
 소유하고 각 pass는 자신이 선언한 입력·출력 invariant를 검증한다. 변환 전에 검증하는
 계약과 실패 시 mutation 보장도 pass 경계에 명시한다.
 
-Prelude의 well-known type은 typechecking 결과의 별도 metadata로 보존한다.
-`WellKnownTypes`는 prelude `String`의 semantic type과 stable declaration identity를
+패키지 `std`의 well-known type은 typechecking 결과의 별도 metadata로 보존한다.
+`WellKnownTypes`는 `std::String`의 semantic type과 stable declaration identity를
 frontend 경계까지 전달한다. AST-to-IR은 declaration identity로 exact TrunkIR
 `TypeRef`를 구해 root module의 `tribute.types` attribute에 `std::String` 항목으로
 기록한다. Native/Wasm constant lowering은 이 항목만 사용하며 이름이나 layout으로
 복구하지 않는다. Textual IR에서 attribute가 유실되면 string constant lowering은
 실패한다.
 
-Prelude source는 compilation 입력이다. 테스트는 그 뒤에 덧붙인 source를 패키지
-`std`의 일부로 compile해, 사용자 패키지가 가리킬 수 없는 패키지 내부 항목
+표준 라이브러리 source(패키지 `std`의 루트 모듈)는 compilation 입력이다. 이름
+해석은 패키지마다 자기 루트에서 하며, 사용자 패키지의 해석은 의존 패키지 `std`의
+해석 결과를 의존성 표로 참조한다. `std`의 해석과 타입 검사 결과는 사용자 source에
+의존하지 않으므로, 사용자 source를 고쳐도 다시 계산하지 않는다. 테스트는 표준
+라이브러리 source 뒤에 덧붙인 source를 패키지 `std`의 일부로 compile해, 사용자 패키지가 가리킬 수 없는 패키지 내부 항목
 (`std::runtime`)을 사용자 프로그램이 부를 수 있는 함수로 감싸 시험한다.
 
 ### 파이프라인 구조
@@ -875,7 +878,7 @@ row 관계도 포함한다.
 변수를 downstream 의미 정보로 내보내지 않는다.
 
 CLI, LSP와 테스트는 같은 분석 의미를 사용하며 source와 외부 선언 환경을
-명시적으로 전달한다. Prelude 로딩과 타깃·공유 패스 조합은 root crate의
+명시적으로 전달한다. 패키지 `std` 로딩과 타깃·공유 패스 조합은 root crate의
 책임이다. 오류가 있는 분석 결과를 조회하는 것과 IR 생성을 허용하는 것은
 구분한다. LSP는 부분 결과를 사용할 수 있지만 컴파일 경로는 frontend 오류가
 있으면 lowering을 시작하지 않는다.
