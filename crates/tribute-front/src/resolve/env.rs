@@ -302,6 +302,17 @@ impl<'db> ModuleEnv<'db> {
         self.library.get(name)
     }
 
+    /// Whether the package root sees `name` only because the prelude or the
+    /// compiler supplies it, not through a declaration or a `use`.
+    pub fn is_library_only(&self, name: &Symbol) -> bool {
+        !self.definitions.contains_key(name)
+            && !self.use_paths.contains_key(name)
+            && self
+                .imports
+                .get(name)
+                .is_some_and(|binding| self.library.get(name) == Some(binding))
+    }
+
     /// The names the prelude and the compiler supply to every module.
     pub fn iter_library_names(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.library.keys().cloned()

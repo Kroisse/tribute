@@ -599,7 +599,8 @@ fn use_bool() ->{} Bool { apply(True) }
 #[salsa::tracked]
 fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
     use std::ops::ControlFlow;
-    use tribute_ir::dialect::tribute_control::{Call, CallingConvention, Func, FuncSig, Lambda};
+    use tribute_ir::calling_convention::CallingConvention;
+    use tribute_ir::dialect::tribute_control::{Call, Func, FuncSig, Lambda};
     use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::walk::{WalkAction, walk_typed};
 

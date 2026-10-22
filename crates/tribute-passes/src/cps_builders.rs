@@ -2,8 +2,8 @@
 //! share.
 
 use rustc_hash::FxHashSet as HashSet;
-use tribute_core::calling_convention::cps_closure_function_type;
-use tribute_core::{CallingConvention, set_calling_convention};
+use tribute_ir::calling_convention::cps_closure_function_type;
+use tribute_ir::calling_convention::{CallingConvention, set_calling_convention};
 use tribute_ir::dialect::{closure, tribute_control};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};

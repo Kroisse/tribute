@@ -9,9 +9,8 @@ use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 use trunk_ir::{IrContext, SymbolPath};
 
 use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
-use crate::dialect::tribute_control::{
-    CALLING_CONVENTION_ATTR, CallingConvention, EvidencePlanSite, verify_evidence_plan,
-};
+use crate::calling_convention::{CALLING_CONVENTION_ATTR, CallingConvention};
+use crate::dialect::tribute_control::{EvidencePlanSite, verify_evidence_plan};
 
 /// Declared kind of a handled operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

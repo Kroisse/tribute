@@ -12,7 +12,7 @@ use std::ops::ControlFlow;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
-use tribute_core::calling_convention::{cps_dispatch_type, cps_done_type};
+use tribute_ir::calling_convention::{cps_dispatch_type, cps_done_type};
 use tribute_ir::continuation_frame;
 use tribute_ir::dialect::{ability, effect, tribute_rt};
 use trunk_ir::Symbol;

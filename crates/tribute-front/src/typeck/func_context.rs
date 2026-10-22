@@ -239,8 +239,8 @@ pub struct DeferredMethodCall<'db> {
     pub method: SymbolPath,
     /// The callee's node, for span lookup in diagnostics.
     pub callee: NodeId,
-    /// The functions the callee may name.
-    pub candidates: Vec<FuncDefId<'db>>,
+    /// The functions the callee may name, by rank.
+    pub candidates: crate::ast::Candidates<FuncDefId<'db>>,
     /// Fresh UniVar for the method's return type — will be constrained after resolution.
     pub result_ty: Type<'db>,
     /// Argument types including receiver as first element.

@@ -18,9 +18,8 @@
 use std::collections::VecDeque;
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use tribute_ir::dialect::tribute_control::{
-    self, CallingConvention, FuncSig, Row, RowArgs, RowBinder,
-};
+use tribute_ir::calling_convention::CallingConvention;
+use tribute_ir::dialect::tribute_control::{self, FuncSig, Row, RowArgs, RowBinder};
 use trunk_ir::context::IrContext;
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::{DialectOp, DialectType};

@@ -6,6 +6,7 @@
 //! - `ResolvedRef`: After name resolution
 //! - `TypedRef`: After type checking
 
+use itertools::Itertools;
 use trunk_ir::{Symbol, SymbolPath};
 
 use super::node_id::NodeId;
@@ -22,6 +23,92 @@ pub struct FieldInit<V> {
     pub name: Symbol,
     /// The initializing expression.
     pub value: Expr<V>,
+}
+
+/// The functions a callee may name, by the rank of how each comes into the
+/// call's scope (`new-plans/modules.md` § 후보의 순위). A function is in its
+/// highest rank only.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct Candidates<V> {
+    /// The functions the scope names directly: its declarations and `use`s.
+    #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
+    direct: Vec<V>,
+    /// `m::f` for each name `m` in the scope, in a method call only.
+    #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
+    in_scope: Vec<V>,
+    /// The prelude's functions, whatever the scope hides.
+    #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
+    prelude: Vec<V>,
+}
+
+impl<V> Default for Candidates<V> {
+    fn default() -> Self {
+        Self {
+            direct: Vec::new(),
+            in_scope: Vec::new(),
+            prelude: Vec::new(),
+        }
+    }
+}
+
+impl<V: PartialEq> Candidates<V> {
+    /// The candidates of each rank, without those a higher rank has.
+    pub fn new(direct: Vec<V>, mut in_scope: Vec<V>, mut prelude: Vec<V>) -> Self {
+        in_scope.retain(|function| !direct.contains(function));
+        prelude.retain(|function| !direct.contains(function) && !in_scope.contains(function));
+        Self {
+            direct,
+            in_scope,
+            prelude,
+        }
+    }
+}
+
+impl<V> Candidates<V> {
+    /// The candidates of each rank, highest first.
+    pub fn ranks(&self) -> [&[V]; 3] {
+        [&self.direct, &self.in_scope, &self.prelude]
+    }
+
+    /// The candidates of each rank, highest first, to reorder.
+    pub fn ranks_mut(&mut self) -> [&mut Vec<V>; 3] {
+        [&mut self.direct, &mut self.in_scope, &mut self.prelude]
+    }
+
+    /// Every candidate, highest rank first.
+    pub fn iter(&self) -> impl Iterator<Item = &V> {
+        self.ranks().into_iter().flatten()
+    }
+
+    pub fn len(&self) -> usize {
+        self.ranks().iter().map(|rank| rank.len()).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ranks().iter().all(|rank| rank.is_empty())
+    }
+
+    /// The candidate, when there is one across all ranks.
+    pub fn single(&self) -> Option<&V> {
+        self.iter().exactly_one().ok()
+    }
+
+    /// Each candidate mapped by `f`, in its rank.
+    pub fn map<W>(&self, mut f: impl FnMut(&V) -> W) -> Candidates<W> {
+        self.filter_map(|candidate| Some(f(candidate)))
+    }
+
+    /// The candidates `f` maps to a value, in their ranks.
+    pub fn filter_map<W>(&self, mut f: impl FnMut(&V) -> Option<W>) -> Candidates<W> {
+        let [direct, in_scope, prelude] = self
+            .ranks()
+            .map(|rank| rank.iter().filter_map(&mut f).collect());
+        Candidates {
+            direct,
+            in_scope,
+            prelude,
+        }
+    }
 }
 
 /// An expression in the AST, parameterized by phase type `V`.
@@ -115,9 +202,11 @@ pub enum ExprKind<V> {
     /// selects one, replacing the expression with a reference to it.
     Functions {
         name: SymbolPath,
+        /// Selection tries a lower rank only when no candidate of the
+        /// higher ones fits.
         // V is the only phase-dependent value.
         #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
-        candidates: Vec<V>,
+        candidates: Candidates<V>,
     },
 
     // === Control Flow ===

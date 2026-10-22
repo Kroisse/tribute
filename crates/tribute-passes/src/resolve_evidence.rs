@@ -11,7 +11,7 @@ use itertools::Itertools;
 use std::error::Error;
 use std::fmt;
 
-use tribute_core::get_calling_convention;
+use tribute_ir::calling_convention::get_calling_convention;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_control::{EVIDENCE_PLAN_ATTR, EvidenceStep};

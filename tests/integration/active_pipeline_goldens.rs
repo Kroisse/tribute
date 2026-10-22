@@ -105,7 +105,7 @@ fn assert_native_delimiter_contract(ir_text: &str) {
 fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
     use std::collections::BTreeMap;
     use std::ops::ControlFlow;
-    use tribute_core::calling_convention::{CallingConvention, get_calling_convention};
+    use tribute_ir::calling_convention::{CallingConvention, get_calling_convention};
     use trunk_ir::dialect::func;
     use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::walk::{WalkAction, walk_op};

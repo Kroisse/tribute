@@ -137,7 +137,7 @@ fn sample() -> Module<u32> {
                                 63,
                                 ExprKind::Functions {
                                     name: SymbolPath::new(["m"]),
-                                    candidates: vec![],
+                                    candidates: crate::ast::Candidates::default(),
                                 },
                             ),
                             args: vec![leaf(15), leaf(16)],
