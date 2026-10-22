@@ -92,9 +92,9 @@ module export와 virtual `Io` binding은 resolver의 동일한 `std::io` namespa
 
 ## Entrypoint
 
-`main`은 `Nil`을 반환해야 한다. 모든 residual effect는 오류이지만 builtin
-`std::io::Io`와 [host가 처리하는 ability](host-interface.md#host가-처리하는-ability)는 예외적으로
-허용한다.
+`main`은 command 형태의 host가 부르는 [entrypoint](host-interface.md#entrypoint)이며
+`Nil`을 반환해야 한다. 모든 residual effect는 오류이지만 builtin `std::io::Io`와
+[host가 처리하는 ability](host-interface.md#host가-처리하는-ability)는 예외적으로 허용한다.
 
 ```rust
 fn main() ->{Io} Nil {

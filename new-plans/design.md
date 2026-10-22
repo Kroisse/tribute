@@ -26,7 +26,7 @@ Tribute는 도구와 AI가 코드를 쓰고 사람이 그 코드를 검토하는
 타입에 둔다.
 
 - **Ability row가 곧 권한이다.** 바깥 세계는 host가 handler를 공급하는
-  ability로만 닿으며, `main`에 남은 그런 ability가 program의
+  ability로만 닿으며, host가 부르는 entrypoint에 남은 그런 ability가 program의
   [host interface](host-interface.md)다. 함수 시그니처의 ability row가 그 함수가
   닿을 수 있는 host 기능을 보여 준다. 소스 언어에는 별도의 FFI가 없다. Compiler 내부의
   extern과 intrinsic 선언은 이 경계를 구현하는 수단이다.
