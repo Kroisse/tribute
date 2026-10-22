@@ -3411,31 +3411,9 @@ impl<'db> TypeChecker<'db> {
             (HandlerKind::Op { .. }, Some(body)) => Some(ctx.evidence.enter_op_arm(body)),
             _ => None,
         };
-        // A `fn` arm's own row is checked once solving settles it.
-        let fn_arm = match &arm.kind {
-            HandlerKind::Fn { ability, op, .. } => {
-                let outer_effect = ctx.current_effect();
-                ctx.set_current_effect(AbilityRow::pure(self.db()));
-                Some((self.extract_ability_id_from_ref(ability), op, outer_effect))
-            }
-            _ => None,
-        };
         let body = self.check_expr_with_ctx(ctx, &arm.body, body_mode);
         if let Some(outer_evidence) = outer_evidence {
             ctx.evidence.restore(outer_evidence);
-        }
-        if let Some((ability, op, outer_effect)) = fn_arm {
-            let effect = ctx.current_effect();
-            ctx.set_current_effect(outer_effect);
-            ctx.merge_effect(effect);
-            if let Some(ability) = ability {
-                ctx.record_fn_arm_effect(super::super::func_context::FnArmEffect {
-                    arm: arm.id,
-                    ability: ability.name(self.db()),
-                    op: op.clone(),
-                    effect,
-                });
-            }
         }
         if contributes_answer {
             let actual = ctx
@@ -3881,7 +3859,10 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    fn extract_ability_id_from_ref(&self, resolved: &ResolvedRef<'db>) -> Option<AbilityId<'db>> {
+    pub(super) fn extract_ability_id_from_ref(
+        &self,
+        resolved: &ResolvedRef<'db>,
+    ) -> Option<AbilityId<'db>> {
         match resolved {
             ResolvedRef::AbilityOp { ability, .. } => Some(*ability),
             ResolvedRef::Ability { id } => Some(*id),

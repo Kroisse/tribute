@@ -29,6 +29,7 @@ mod diagnostics;
 mod exhaustiveness;
 mod expr;
 mod finalize;
+mod fn_arm_check;
 mod func_check;
 
 use rustc_hash::FxHashMap as HashMap;

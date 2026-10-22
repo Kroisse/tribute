@@ -366,20 +366,25 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
 
 `fn` handler arm에서는 `resume`을 사용할 수 **없다** (컴파일 에러).
 
-`fn` handler arm은 중단(suspend)하거나 계산을 중단(abort)할 수 없다. Arm 본문의
-ability row에는 `op` operation을 하나라도 선언한 ability가 올 수 없다. 직접 perform하든
-그 ability를 요구하는 함수를 호출하든 같으며, `Throw`와 `-> Never` operation도
-포함한다. 따라서 `fn` arm은 `fn` operation만 선언한 ability와 ambient `Io`만 수행할
-수 있다. 판단은 [호출 규약](cps-effects.md#호출-규약)처럼 ability 단위이므로,
-`fn`과 `op`를 함께 선언한 ability는 그 `fn` operation을 수행하더라도 허용되지 않는다.
-위반은 typechecking 단계의 컴파일 에러이며, 진단은 arm이 처리하는 operation과 금지된
-ability를 나열한다.
+`fn` handler arm은 계산을 멈추거나(suspend) 버릴(abort) 수 없다. `fn` operation은
+어떤 handler 아래에서도 continuation을 handler에 넘기지 않고 perform 지점으로
+반환한다고 선언이 보증하고, `fn` arm은 그 operation의 구현이기 때문이다. 따라서 `fn`
+arm 본문은 다음을 할 수 없다. `Throw`와 `-> Never` operation도 포함한다.
 
-이유는 `fn` operation의 dispatch 방식에 있다. `fn` arm은 handle 층의 tail-resumptive
-dispatch closure로 실행되며, perform 지점은 continuation frame을 만들지 않는다. Arm이
-`op` operation을 수행하면 바깥 handler가 이어받을 continuation이 없으므로, 그 arm은
-`fn` operation을 수행한 계산을 멈추거나 버릴 수 없다. 계산을 멈추거나 중단해야 하는
-handler는 그 operation을 `op`으로 선언하고 `op` arm으로 처리한다.
+- `op` operation을 직접 perform한다.
+- Ability row에 `op` operation을 선언한 ability가 있는 callable을 호출한다. 그런
+  callable은 호출 도중 멈출 수 있다.
+
+직접 perform은 operation 단위로 판단하므로, `fn`과 `op`를 함께 선언한 ability의 `fn`
+operation은 직접 perform할 수 있다. 호출은 callee의 ability row로 판단하므로 그 ability를
+요구하는 함수는 호출할 수 없다. Arm 안의 `handle`이 처리하는 label은 그 handle 안에서
+제한을 받지 않는다. Lambda 본문은 lambda를 호출하는 곳에서 그 타입의 row로 판단한다.
+위반은 typechecking 단계의 컴파일 에러이며, 진단은 arm이 처리하는 operation과 arm이
+닿는 금지된 ability를 나열한다.
+
+계산을 멈추거나 중단해야 하는 handler는 그 operation을 `op`으로 선언하고 `op` arm으로
+처리한다. 이 보증을 구현하는 방법, 곧 `fn` perform 지점이 continuation frame을 만들지
+않는 dispatch는 [CPS 전략](cps-effects.md#fn-operation-direct-dispatch)이 정한다.
 
 Row 변수로 들어오는 label도 같은 규칙을 따른다. `fn` arm이 effect-polymorphic
 callable을 호출하면, 그 row 변수를 고정한 인스턴스의 label에도 `op` operation을
@@ -555,7 +560,7 @@ fn main() ->{Io} Nil {
 | ability annotation 금지 | Operation 시그니처에 ability annotation을 적을 수 없음 |
 | 다른 effect 필요 시 | Handler 구현부에서 처리 |
 | 선언과 arm 일치 | `fn`/`op`으로 선언 → 모든 handler에서 같은 키워드로 구현 |
-| `fn` arm의 effect | `fn` arm 본문은 `op` operation을 선언한 ability를 수행할 수 없음 |
+| `fn` arm의 effect | `fn` arm 본문은 `op` operation을 perform하거나 그런 ability를 요구하는 callable을 호출할 수 없음 |
 
 ### 전체 문법 요약
 

@@ -880,6 +880,41 @@ fn limited(comp: fn() ->{e, Counter} Int) ->{e, Stop} Int {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// A `fn` arm may perform the `fn` operation of a mixed ability directly,
+/// but not call a function that requires that ability, since such a
+/// function may perform its `op` operation.
+#[salsa_test]
+fn diag_fn_arm_calls_mixed_ability_helper(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Mixed {
+    fn ping() -> Int
+    op bail() -> Never
+}
+
+fn pinger() ->{Mixed} Int {
+    Mixed::ping()
+}
+
+fn counted(comp: fn() ->{e, Counter} Int) ->{e, Mixed} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() { Mixed::ping() + pinger() }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(

@@ -29,17 +29,6 @@ use super::constraint::{Constraint, ConstraintOrigin, ConstraintOriginKind, Cons
 use super::context::ModuleTypeEnv;
 use super::subst;
 
-/// The ability row a `fn` handler arm's body performs.
-///
-/// The arm is dispatched without a continuation frame, so once solving
-/// settles the row it may name only abilities that never suspend.
-pub(crate) struct FnArmEffect<'db> {
-    pub arm: NodeId,
-    pub ability: Symbol,
-    pub op: Symbol,
-    pub effect: AbilityRow<'db>,
-}
-
 /// Context for the handle expression currently being type-checked.
 ///
 /// Captures the body type and body ability row so that handler arms
@@ -133,10 +122,6 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// Fully instantiated operation metadata for handler arms.
     handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
-
-    /// Ability rows of `fn` handler arm bodies, checked once solving settles
-    /// them.
-    fn_arm_effects: HashMap<NodeId, FnArmEffect<'db>>,
 
     /// Handler validation is revisited during conversion; report each error once.
     reported_handler_errors: HashSet<(NodeId, &'static str)>,
@@ -277,7 +262,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_binding_owners: HashMap::default(),
             local_instances: HashMap::default(),
             handler_operations: HashMap::default(),
-            fn_arm_effects: HashMap::default(),
             reported_handler_errors: HashSet::default(),
             non_resumptive_resume_locals: HashMap::default(),
             reported_module_values: HashSet::default(),
@@ -763,15 +747,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &mut self,
     ) -> HashMap<NodeId, InstantiatedHandlerOperation<'db>> {
         std::mem::take(&mut self.handler_operations)
-    }
-
-    /// Record the ability row a `fn` handler arm's body performs.
-    pub(crate) fn record_fn_arm_effect(&mut self, effect: FnArmEffect<'db>) {
-        self.fn_arm_effects.insert(effect.arm, effect);
-    }
-
-    pub(crate) fn take_fn_arm_effects(&mut self) -> HashMap<NodeId, FnArmEffect<'db>> {
-        std::mem::take(&mut self.fn_arm_effects)
     }
 
     pub fn record_perform_operation(

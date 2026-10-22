@@ -13,12 +13,11 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    ExprKind, FuncDecl, FuncDefId, OpDeclKind, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef,
-    UniVarId,
+    ExprKind, FuncDecl, FuncDefId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
 };
 
 use super::super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
-use super::super::func_context::{FnArmEffect, FunctionInferenceContext};
+use super::super::func_context::FunctionInferenceContext;
 use super::super::solver::{LocatedSolveError, TypeSolver};
 #[cfg(test)]
 use super::diagnostics::{format_solve_error, solve_error_context};
@@ -150,7 +149,6 @@ impl<'db> TypeChecker<'db> {
         let early_resolutions = ctx.take_resolved_deferred_methods();
         let local_instances = ctx.take_local_instances();
         let func_handler_operations = ctx.take_handler_operations();
-        let fn_arm_effects = ctx.take_fn_arm_effects();
         let func_perform_operations = ctx.take_perform_operations();
         let func_lambda_signatures = ctx.take_lambda_signatures();
         let local_generalizations = ctx.take_local_generalizations();
@@ -349,12 +347,6 @@ impl<'db> TypeChecker<'db> {
         let substituted_ty = type_subst.apply_with_rows(self.db(), inferred_func_ty, row_subst);
 
         let mut reported_error = reported_undeclared;
-        if !solve_failed {
-            for (_, arm) in fn_arm_effects.iter().sorted_by_key(|(id, _)| **id) {
-                reported_error |=
-                    self.check_fn_arm_effect(arm, row_subst.apply(self.db(), arm.effect));
-            }
-        }
         // Validate that root `main` returns Nil.
         if is_root_main
             && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
@@ -482,6 +474,9 @@ impl<'db> TypeChecker<'db> {
             exhaustiveness_reported: &mut checked.exhaustiveness_reported,
         }
         .visit_expr_mut(&mut body);
+        if !solve_failed {
+            self.check_fn_arms(&body, &checked.node_types);
+        }
 
         for (node, mut instance) in local_instances {
             instance.callable = substitution.apply(instance.callable);
@@ -877,46 +872,6 @@ impl<'db> TypeChecker<'db> {
             CompilationPhase::TypeChecking,
         )
         .accumulate(self.db());
-    }
-
-    /// Report a `fn` handler arm whose settled row names an ability that
-    /// declares an `op` operation. The arm runs from the tail-resumptive
-    /// dispatch closure, which has no continuation frame to suspend or abort.
-    fn check_fn_arm_effect(
-        &self,
-        arm: &FnArmEffect<'db>,
-        effect: crate::ast::AbilityRow<'db>,
-    ) -> bool {
-        let suspending = effect
-            .instances(self.db())
-            .iter()
-            .filter(|instance| {
-                self.env
-                    .lookup_ability(instance.ability_id)
-                    .is_some_and(|ability| {
-                        ability
-                            .operations
-                            .values()
-                            .any(|operation| operation.kind == OpDeclKind::Op)
-                    })
-            })
-            .collect_vec();
-        if suspending.is_empty() {
-            return false;
-        }
-        Diagnostic::new(
-            format!(
-                "`fn` handler arm for `{}::{}` cannot perform effects that suspend or abort: {}",
-                arm.ability,
-                arm.op,
-                suspending.iter().format(", ")
-            ),
-            self.get_span(arm.arm),
-            DiagnosticSeverity::Error,
-            CompilationPhase::TypeChecking,
-        )
-        .accumulate(self.db());
-        true
     }
 
     /// Concrete effects of `body` that `declared` does not name.

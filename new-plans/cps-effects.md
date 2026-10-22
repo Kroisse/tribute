@@ -990,7 +990,7 @@ Handler와 evidence의 연결은 다음과 같다.
   `fn` arm은 층의 `tr_dispatch_fn`이 capture한 evidence를 받는다. Perform 지점
   evidence는 arm에 전달하지 않는다. `tr_dispatch_fn`은 non-CPS callable이고 `fn`
   perform 지점은 continuation frame을 만들지 않으므로, `fn` arm 본문은 CPS 규약을
-  요구하는 effect를 수행할 수 없다. Frontend가 이 arm의 row를 제한한다
+  요구하는 effect를 수행할 수 없다. Frontend가 이 arm의 perform과 호출을 제한한다
   ([abilities.md](abilities.md#fn-operation-handler)).
 - **Arm 안의 `resume`:** [abilities.md](abilities.md#resume과-handler-선택)에 따라
   arm 본문의 resume은 자기 handle body의 evidence를, arm 안 lambda의 resume은 그
