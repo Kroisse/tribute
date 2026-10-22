@@ -22,11 +22,11 @@ The `std::io` module exports:
 
 ```rust
 pub ability Read {
-    op read(max: Nat) -> Result(Bytes, Error)
+    op read(max: Nat) -> Bytes
 }
 
 pub ability Write {
-    op write(bytes: Bytes) -> Result(Nat, Error)
+    op write(bytes: Bytes) -> Nat
 }
 
 pub ability Io {
@@ -51,11 +51,11 @@ pub enum Error {
     System(SystemError)
 }
 
-pub fn write_all(bytes: Bytes) ->{Write} Result(Nil, Error)
+pub fn write_all(bytes: Bytes) ->{Write} Nil
 
-pub fn to_output(out: OutStream, app: fn() ->{e, Write} a) ->{e, Io} a
-pub fn from_input(input: InStream, app: fn() ->{e, Read} a) ->{e, Io} a
-pub fn stdio(app: fn() ->{e, Read, Write} a) ->{e, Io} a
+pub fn to_output(out: OutStream, app: fn() ->{e, Write} a) ->{e, Io, Exception} a
+pub fn from_input(input: InStream, app: fn() ->{e, Read} a) ->{e, Io, Exception} a
+pub fn stdio(app: fn() ->{e, Read, Write} a) ->{e, Io, Exception} a
 
 pub fn using_output(out: OutStream, body: fn(OutStream) ->{e} a) ->{e, Io} a
 pub fn using_input(input: InStream, body: fn(InStream) ->{e} a) ->{e, Io} a
@@ -85,11 +85,15 @@ ability를 처리하는 handler가 정한다. `fn() ->{e, Write} a` 같은 계�
   아니면 1 이상이다. `write_all`은 모두 쓸 때까지 반복한다.
 - `Read::read`는 `max`바이트 이하를 돌려준다. 빈 `Bytes`는 입력의 끝이다. `max`가
   0이면 빈 `Bytes`를 돌려주며 끝을 뜻하지 않는다.
-- 닫힌 대상은 `Err(Error::Closed)`, 그 밖의 실패는 `Err(Error::System)`이다.
+- Operation은 실패를 돌려주지 않는다. 대상에 쓰거나 읽지 못하면 그 operation을
+  처리하는 handler가 [`Exception`](std-abilities.md#실패-표현)을 raise한다. Handler
+  arm의 raise는 그 handler 바깥으로 가므로, 실패는 handler를 설치한 곳에서 다루며
+  `Read`/`Write`를 수행한 지점에서 복구하지 않는다. 실패할 일이 없는 handler, 예를 들어
+  출력을 메모리에 모으는 test handler는 raise하지 않는다.
 
 두 ability의 operation은 `op`다. Handler는 resume하지 않아 생산자를 멈출 수 있고,
 결과를 돌려주기 전에 다른 `op`를 수행하거나 기다릴 수 있다. 이 성질 때문에 조기
-종료, 비동기 입출력, 실패의 `throw`를 같은 ability로 다룬다. 그 대가로 `Read`나
+종료, 비동기 입출력, 실패의 raise를 같은 ability로 다룬다. 그 대가로 `Read`나
 `Write`를 요구하는 함수는 중단될 수 있는 함수가 된다
 ([Calling Convention](#calling-convention)).
 
@@ -98,12 +102,12 @@ Handler는 대상을 바꾸거나 변환을 끼운다.
 ```rust
 fn report(lines: List(String)) ->{Write} Nil { ... }   // 대상을 모른다
 
-fn main() ->{Io} Nil {
+fn main() ->{Io, Exception} Nil {
     with stdio                  // Read/Write를 표준 stream에 묶는다
     report(["a", "b"])
 }
 
-fn archive(out: OutStream, lines: List(String)) ->{Io} Nil {
+fn archive(out: OutStream, lines: List(String)) ->{Io, Exception} Nil {
     with to_output(out)         // 이 stream에 쓴다
     with gzip                   // Write를 받아 압축해 바깥 Write로 보낸다
     report(lines)
@@ -121,7 +125,9 @@ fn archive(out: OutStream, lines: List(String)) ->{Io} Nil {
 
 - `stdout`, `stderr`, `stdin`은 host가 준 표준 stream을 돌려준다. Host가 그 stream을
   제공하지 않으면 `None`이다.
-- `write`와 `read`는 `Write::write`, `Read::read`와 같은 계약을 따른다.
+- `write`와 `read`는 쓰거나 읽은 결과에 대해 `Write::write`, `Read::read`와 같은
+  계약을 따르고, 실패는 `Err`로 돌려준다. 닫힌 stream은 `Err(Error::Closed)`, 그 밖의
+  실패는 `Err(Error::System)`이다.
 - `close_output`은 남은 출력을 flush한 뒤 stream을 끝내고, `close_input`은 입력
   stream을 끝낸다. 그 과정의 실패를 돌려준다. 이미 닫힌 stream에는 아무 일도 하지
   않고 `Ok`다.
@@ -140,8 +146,10 @@ Stream의 수명은 [host resource의 수명](host-interface.md#수명)을 따�
 
 - `to_output(out, app)`은 `app`의 `Write::write`를 `Io::write(out, ..)`로 처리한다.
 - `from_input(input, app)`은 `app`의 `Read::read`를 `Io::read(input, ..)`로 처리한다.
-- `stdio(app)`은 `Read`를 stdin에, `Write`를 stdout에 묶는다. 표준 stream이 없을 때의
-  동작은 [미정 사항](#미정-사항)이다.
+- `stdio(app)`은 `Read`를 stdin에, `Write`를 stdout에 묶는다.
+- `Io`의 operation이 `Err`를 돌려주면 handler는 그 오류를 담은 `Failure`를 raise한다.
+  `stdio`가 쓰거나 읽으려는 표준 stream을 host가 주지 않았을 때도 그 operation에서
+  `Error::Closed`로 raise한다.
 
 이 handler들은 stream을 닫지 않는다. Stream의 수명은 handle을 가진 쪽이 정한다.
 
@@ -160,7 +168,7 @@ continuation을 잡지 않는다.
 [host가 처리할 수 있는](host-interface.md#host가-처리하는-ability) ability만 남을 수 있다.
 
 ```rust
-fn main() ->{Io} Nil {
+fn main() ->{Io, Exception} Nil {
     with stdio
     print_line("Hello")
 }
@@ -191,9 +199,10 @@ fn read_line() ->{Read, Throw(std::io::Error)} String
 - EOF 전에 일부 문자를 읽었다면 line ending이 없어도 마지막 줄로 반환한다.
 - 아무 문자도 읽지 못한 상태에서 EOF에 도달하면 `Error::EndOfFile`을 throw한다.
 - 입력이 유효한 UTF-8이 아니면 `Error::InvalidEncoding`을 throw한다.
-- OS 또는 host I/O 실패는 `Error::System`으로 throw한다.
+- OS 또는 host I/O 실패는 `read_line`이 아니라 `Read`를 처리하는 handler가
+  `Exception`으로 raise한다.
 
-EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 반환 타입을
+EOF는 잘못된 encoding과 같은 `Throw(Error)` 채널로 알리므로 반환 타입을
 `Option(String)`으로 만들지 않는다. `Abort`는 EOF를 나타내지 않는다.
 
 ## Host Boundary
@@ -219,18 +228,16 @@ EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 반환
 - 사용자가 정의한 같은 이름의 ability는 `std::io`의 ability와 구별된다.
 - `Write`를 처리하는 Tribute handler 아래에서 `print_line`은 host에 닿지 않는다.
 - `Write` handler가 resume하지 않으면 생산자는 그 지점에서 멈춘다.
-- 닫힌 stream의 `write`와 `read`는 host를 부르지 않고 `Err(Error::Closed)`다.
+- 닫힌 stream의 `Io::write`와 `Io::read`는 host를 부르지 않고 `Err(Error::Closed)`다.
+- 묶는 handler는 `Io` operation의 실패를 `Exception`으로 raise하며, 그 raise는 handler
+  안쪽의 `Exception` handler에 닿지 않는다.
 - 두 번째 close는 `Ok`이고, 닫힌 stream의 마지막 release는 drop을 다시 부르지 않는다.
 - `print`는 개행을 추가하지 않고 `print_line`은 정확히 하나 추가한다.
-- `read_line`은 빈 줄, 마지막 unterminated line, EOF, invalid UTF-8, system error를
-  구분한다.
+- `read_line`은 빈 줄, 마지막 unterminated line, EOF, invalid UTF-8을 구분한다.
 - Native와 Wasm 모두 동적 `String` I/O를 처리한다.
 
 ## 미정 사항
 
-- **출력 실패와 표준 stream이 없을 때.** `print`와 `print_line`은 실패를 돌려주지
-  않는다. `Write::write`가 실패하거나 `stdio`가 stdout을 얻지 못했을 때 출력을
-  버릴지, trap할지, `print`가 `Throw(Error)`를 요구할지 정해야 한다.
 - **표준 오류 출력.** 한 row에는 `Write`가 한 번만 나타날 수 있다. stdout과 stderr에
   함께 쓰는 코드를 `Write` 층에서 어떻게 표현할지 정해야 한다. 이름 붙인 instance
   ([중복 Label 금지](type-inference.md#중복-label-금지))나 별도 ability가 후보다.

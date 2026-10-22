@@ -43,11 +43,11 @@ Tribute handler가 없다고 증명된 호출이 evidence lookup 없이 import�
 최적화는 [host-interface.md](host-interface.md#host-경계)가 정한다.
 
 ```text
-print_line(ev, message) -> Nil
-main(ev) -> Nil
+fixed_now(ev) -> Int        // ->{Clock} Int, Clock은 fn operation만 가진다
 ```
 
-`read_line`은 실패 시 `Throw(Error)`를 수행하므로 CPS 규약을 사용한다. 두 번째
+`std::io::read_line`은 `op` operation을 가진 `Read`를 요구하고 실패 시
+`Throw(Error)`를 수행하므로 CPS 규약을 사용한다. 두 번째
 인자는 `Done<R>`과 `Dispatch<R>`를 함께 담은 `ContinuationFrame<R>`다. 논리적
 ABI에서 함수와 frame의 transfer target의 control result는 `Never`다. Physical
 lowering은 이를 empty-result callable과 proper tail transfer로 바꾸며 control carrier를

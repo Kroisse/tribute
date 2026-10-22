@@ -501,6 +501,7 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Write} a {
 ## 전체 예시
 
 ```rust
+use std::abilities::Exception
 use std::io::{Io, Write, stdio, print_line}
 
 ability Logger {
@@ -536,7 +537,7 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Write} a {
     }
 }
 
-fn main() ->{Io} Nil {
+fn main() ->{Io, Exception} Nil {
     with stdio
     fn() {
         fn() {

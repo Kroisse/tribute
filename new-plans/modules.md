@@ -651,6 +651,7 @@ fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(
 // app/main.trb
 
 use std::collections::{List, Option}
+use std::abilities::Exception
 use std::io::{Io, Write, stdio, print_line}
 
 struct User {
@@ -658,7 +659,7 @@ struct User {
     age: Int
 }
 
-fn main() ->{Io} Nil {
+fn main() ->{Io, Exception} Nil {
     with stdio
     let numbers = List::of(1, 2, 3, 4, 5)
 

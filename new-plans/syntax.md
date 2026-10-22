@@ -858,7 +858,7 @@ x * { y + z }           // x * (y + z) 와 동일
 **예시:**
 
 ```rust
-fn main() ->{Io} Nil {
+fn main() ->{Io, Exception} Nil {
     with stdio
     print_line("Hello")
 }
@@ -1338,6 +1338,7 @@ let x = 1; let y = 2; x + y
 
 ```rust
 use std::collections::{List, Option}
+use std::abilities::Exception
 use std::io::{Io, Write, stdio, print_line}
 
 struct User {
@@ -1378,7 +1379,7 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Write} a {
     }
 }
 
-fn main() ->{Io} Nil {
+fn main() ->{Io, Exception} Nil {
     with stdio
     let users = [
         User { name: "Alice", age: 30 },

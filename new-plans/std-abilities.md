@@ -33,14 +33,15 @@
 받아, 그 operation을 handle 층의 operation으로 처리한다.
 
 ```rust
-pub fn to_output(out: OutStream, app: fn() ->{e, Write} a) ->{e, Io} a
-pub fn stdio(app: fn() ->{e, Read, Write} a) ->{e, Io} a
+pub fn to_output(out: OutStream, app: fn() ->{e, Write} a) ->{e, Io, Exception} a
+pub fn stdio(app: fn() ->{e, Read, Write} a) ->{e, Io, Exception} a
 ```
 
 ```rust
+use std::abilities::Exception
 use std::io::{Io, Write, stdio, print_line}
 
-fn main() ->{Io} Nil {
+fn main() ->{Io, Exception} Nil {
     with stdio
     greet("Tribute")
 }
@@ -110,17 +111,54 @@ operation은 `Option`을 돌려준다.
 
 ## 실패 표현
 
-Operation 시그니처에는 다른 ability를 적을 수 없다
-([Operation의 Ability Row 규칙](abilities.md#operation의-ability-row-규칙)). 그래서
-operation은 실패를 `Result`로 돌려준다. 표준 라이브러리의 wrapper 함수가 이를
-`Throw`로 바꾸며, 호출 지점에서 잡을 수 있다.
+실패는 층마다 다른 길로 전한다.
+
+- **Handle 층은 `Result`를 돌려준다.** Operation 시그니처에는 다른 ability를 적을 수
+  없으므로([Operation의 Ability Row 규칙](abilities.md#operation의-ability-row-규칙))
+  `Io`의 operation은 실패를 `Result`로 돌려준다.
+- **대상 없는 층은 실패를 돌려주지 않는다.** 대상에 쓰거나 읽지 못하면 그 operation을
+  처리하는 handler가 `Exception`을 raise한다. 대상 없는 층의 operation은 `op`이므로 그
+  arm은 다른 `op`를 수행할 수 있다. Arm의 raise는 그 handler 바깥으로 가므로, 이 실패는
+  묶는 handler를 설치한 곳에서 다룬다. 실패할 일이 없는 handler에는 실패가 나타나지
+  않는다.
+- **호출 지점의 의미 있는 조건은 wrapper가 `Throw`로 알린다.** 입력의 끝처럼 호출한
+  쪽이 다룰 조건은 wrapper 함수가 `Throw`로 바꾸며, 호출 지점에서 잡을 수 있다.
 
 ```rust
-pub fn read_line() ->{Read, Throw(Error)} String
+pub fn read_line() ->{Read, Throw(Error)} String   // EOF, 잘못된 encoding
+pub fn stdio(app: fn() ->{e, Read, Write} a) ->{e, Io, Exception} a   // I/O 실패
 ```
+
+### `Exception`
+
+`std::abilities::Exception`은 오류의 타입을 row에 드러내지 않는 실패 ability다. 서로
+다른 라이브러리의 실패가 row에서 label 하나로 모인다. 오류 타입을 정확히 다루려는
+지역적인 경우에는 타입이 있는 `Throw(e)`를 쓴다.
+
+```rust
+pub ability Exception {
+    op raise(failure: Failure) -> Never
+}
+
+pub struct Failure {
+    kind: String
+    message: String
+}
+```
+
+- `kind`는 실패를 만든 오류 타입의 이름이고, `message`는 사람이 읽을 설명이다. 묶는
+  handler는 `std::io::Error`의 이름과 그 내용을 담는다.
+- Entrypoint에 남은 `Exception`은 결과가 `Never`인 `op`이므로, 처리되지 않은 `Failure`를
+  host에 넘기고 그 entrypoint를 끝낸다([Operation 종류와 경계](host-interface.md#operation-종류와-경계)).
+  `Failure`의 field는 모두 경계를 넘을 수 있는 타입이다.
 
 ## 미정 사항
 
+- **`Failure`의 payload.** 오류 값을 타입을 지운 채 담았다가 타입을 확인해 꺼내는
+  `Dynamic` 같은 payload를 `Failure`에 둘지 정해야 한다. Runtime 타입 descriptor는 source
+  타입마다 하나이므로([runtime-types.md](runtime-types.md)) 타입 확인은 descriptor
+  비교로 구현할 수 있다. Generic instance의 identity, 꺼내는 문법, 경계에서의 표현을
+  함께 정해야 한다.
 - **Handle 층의 가짜 resource.** Test handler가 자기 stream을 만들어 `Io`를 흉내 내는
   경우다. 대상 없는 층을 대체하면 대부분 필요 없다. 조건과 후보는
   [host-interface.md](host-interface.md#미정-사항)에 있다.
