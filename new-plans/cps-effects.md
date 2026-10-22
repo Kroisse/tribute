@@ -99,18 +99,21 @@ fn(a) -> b ≡ fn(a) ->{e} b
 바뀌지 않는다. Row의 tail은 다음과 같이 읽는다.
 
 ```text
-class 변수인 tail                      → 그 인스턴스에 고정된 class
-ability 인자에 나타나 class가 없는 tail → Cps
-그 밖의 tail                           → 요구 없음
+class 변수인 tail                                  → 그 인스턴스에 고정된 class
+추론된 row인 정의 자신의 tail 중 class 변수가 아닌 것 → 요구 없음
+그 밖의 tail                                       → Cps
 ```
 
 [Class 변수](#row-변수의-convention-class)의 requirement는 인스턴스가
 고정한다. Class가 전부 `Cps`인 인스턴스, 곧 특수화하지 않은 정의에서는 class 변수인
 tail이 `Cps`를 요구한다.
 
-마지막 줄은 생략된 annotation에서 생긴 tail 중 정의 안의 어떤 callable에도 닿지 않는
-것이다. 그런 tail은 정의의 코드를 바꾸지 않는다. 그러므로 effect-polymorphic `add`는
-Direct이고, 명시적인 `->{}`도 닫힌 빈 row이므로 Direct다.
+둘째 줄은 annotation을 생략한 정의([추론된 row](ir.md#추론된-row)) 자신의 row에서
+생긴 tail 중 정의 안의 어떤 callable에도 닿지 않는 것이다. 그런 tail은 정의의 코드를
+바꾸지 않는다. 그러므로 effect-polymorphic `add`는 Direct이고, 명시적인 `->{}`도
+닫힌 빈 row이므로 Direct다. 마지막 줄에는 ability 인자에 나타난 tail, 어느 scheme도
+양화하지 않은 tail, 그리고 명시적으로 적은 열린 row의 tail 중 class 변수가 아닌 것이
+들어간다.
 
 정의가 `Cps`가 아니면 그 row에는 `op`를 가진 ability도 class 없는 tail도 없다.
 본문의 `handle`, `resume`, `Cps` 호출은
