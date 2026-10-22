@@ -8,7 +8,7 @@
 //!
 use std::ops::ControlFlow;
 
-use tribute_core::get_physical_closure_convention;
+use tribute_ir::calling_convention::get_physical_closure_convention;
 use tribute_ir::dialect::ability::{self, evidence_abi};
 use tribute_ir::dialect::{effect, tribute_rt};
 

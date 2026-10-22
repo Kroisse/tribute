@@ -23,8 +23,8 @@ use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use tribute_core::calling_convention::get_physical_closure_environment_index;
-use tribute_core::{
+use tribute_ir::calling_convention::get_physical_closure_environment_index;
+use tribute_ir::calling_convention::{
     CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
     get_physical_closure_convention,
 };

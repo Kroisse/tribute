@@ -126,10 +126,8 @@ impl Converter<'_> {
     ) -> (TypeRef, CallingConvention) {
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical)
             .expect("pre-CPS validation checked function type");
-        let convention = convert_convention(
-            tribute_control::func_sig_convention(self.ctx, logical)
-                .expect("pre-CPS validation checked function convention"),
-        );
+        let convention = tribute_control::func_sig_convention(self.ctx, logical)
+            .expect("pre-CPS validation checked function convention");
         let (source_result, result_attrs) = callable.result_with_attrs(self.ctx);
         let result_attrs = result_attrs.clone();
         let result = self.convert_type(source_result);

@@ -1,8 +1,8 @@
 //! Builders of the resumption an expanded `ability.perform` or
 //! `ability.abort` passes to the dispatcher.
 
-use tribute_core::calling_convention::{cps_closure_function_type, cps_resume_type};
-use tribute_core::{CallingConvention, set_calling_convention};
+use tribute_ir::calling_convention::{CallingConvention, set_calling_convention};
+use tribute_ir::calling_convention::{cps_closure_function_type, cps_resume_type};
 use tribute_ir::dialect::{ability, adt, closure, effect, tribute_rt};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};

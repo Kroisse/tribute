@@ -37,12 +37,16 @@ fn generic_callback_selects_a_direct_instance_and_executes_wasm(db: &salsa::Data
     };
     assert_eq!(
         convention(&|name| name == "main"),
-        Some(Some(tribute_control::CallingConvention::EvidenceDirect)),
+        Some(Some(
+            tribute_ir::calling_convention::CallingConvention::EvidenceDirect
+        )),
         "a pure callback leaves the Io root as it is"
     );
     assert_eq!(
         convention(&|name| name.starts_with("apply_open$") && name.ends_with("$9D")),
-        Some(Some(tribute_control::CallingConvention::Direct)),
+        Some(Some(
+            tribute_ir::calling_convention::CallingConvention::Direct
+        )),
         "a pure callback selects the Direct instance"
     );
 
@@ -92,7 +96,7 @@ fn main() -> Nil {
         instances,
         [(
             "D".to_owned(),
-            Some(tribute_control::CallingConvention::Direct)
+            Some(tribute_ir::calling_convention::CallingConvention::Direct)
         )]
     );
 }
@@ -135,7 +139,7 @@ fn main() ->{Io} Nil {
         })
         .collect();
     functions.sort();
-    use tribute_control::CallingConvention::{Direct, EvidenceDirect};
+    use tribute_ir::calling_convention::CallingConvention::{Direct, EvidenceDirect};
     assert_eq!(
         functions,
         [

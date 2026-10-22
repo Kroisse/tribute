@@ -7,7 +7,7 @@
 //! `func.call_indirect` or a proper-tail `func.tail_call_indirect`. Only how
 //! evidence runtime values are typed differs per target; callers supply those.
 
-use tribute_core::CallingConvention;
+use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::ability::{self, compute_op_idx};
 
 use crate::target_abi::physical_parameter_attrs;

@@ -24,10 +24,10 @@
 
 use crate::collections::HashMap;
 
-use tribute_core::calling_convention::{
+use tribute_ir::calling_convention::{
     CLOSURE_ENVIRONMENT_INDEX_ATTR, get_physical_closure_environment_index,
 };
-use tribute_core::{
+use tribute_ir::calling_convention::{
     get_calling_convention, get_physical_closure_convention, set_calling_convention,
 };
 use trunk_ir::Symbol;
@@ -425,7 +425,7 @@ fn make_bind_name_attrs(ctx: &mut IrContext, name: &str) -> AttributeMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tribute_core::CallingConvention;
+    use tribute_ir::calling_convention::CallingConvention;
     use tribute_ir::dialect::tribute_rt;
     use trunk_ir::SymbolPath;
     use trunk_ir::context::RegionData;
@@ -519,8 +519,11 @@ mod tests {
             AttributeMap::new(),
         )
         .as_type_ref();
-        let closure_ty =
-            tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
+        let closure_ty = tribute_ir::calling_convention::physical_closure_type(
+            &mut ctx,
+            func_ty,
+            CallingConvention::Direct,
+        );
 
         // closure.lambda [] { ... } -> closure_ty
         let lambda_op = closure::Lambda::operands(Vec::<ValueRef>::new())
@@ -641,7 +644,7 @@ mod tests {
                 TypeDataBuilder::new("closure.closure").param(lambda_func_ty.as_type_ref());
             if let Some(provenance) = provenance {
                 closure_type = closure_type.attr(
-                    tribute_core::CALLING_CONVENTION_ATTR,
+                    tribute_ir::calling_convention::CALLING_CONVENTION_ATTR,
                     Attribute::Int(provenance as i128),
                 );
             }
@@ -732,8 +735,11 @@ mod tests {
         });
 
         let func_ty = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
-        let closure_ty =
-            tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
+        let closure_ty = tribute_ir::calling_convention::physical_closure_type(
+            &mut ctx,
+            func_ty,
+            CallingConvention::Direct,
+        );
 
         // closure.lambda [%a] { ... }
         let lambda_op = closure::Lambda::operands(vec![a_val])

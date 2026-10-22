@@ -10,13 +10,13 @@ use std::fmt;
 use std::ops::ControlFlow;
 use tribute_ir::continuation_frame;
 
-use tribute_core::calling_convention::{
-    CLOSURE_ENVIRONMENT_INDEX_ATTR, cps_closure_function_type,
-    get_physical_closure_environment_index,
-};
-use tribute_core::{
+use tribute_ir::calling_convention::{
     CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
     get_physical_closure_convention,
+};
+use tribute_ir::calling_convention::{
+    CLOSURE_ENVIRONMENT_INDEX_ATTR, cps_closure_function_type,
+    get_physical_closure_environment_index,
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, closure, effect, tribute_rt};
@@ -2213,7 +2213,7 @@ mod tests {
         let never = core::Never::params().intern(&mut ctx).as_type_ref();
         let evidence = ability::evidence_adt_type_ref(&mut ctx);
         let done_callable = func::func_sig(&mut ctx, [nil], [never]).as_type_ref();
-        let done = tribute_core::calling_convention::physical_closure_type_with_environment_index(
+        let done = tribute_ir::calling_convention::physical_closure_type_with_environment_index(
             &mut ctx,
             done_callable,
             CallingConvention::Cps,
@@ -2223,7 +2223,7 @@ mod tests {
         let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
         let anyref = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-        let dispatch = tribute_core::calling_convention::cps_dispatch_type(
+        let dispatch = tribute_ir::calling_convention::cps_dispatch_type(
             &mut ctx, evidence, frame, anyref, i32_ty,
         );
         let layout =
@@ -2597,10 +2597,10 @@ mod tests {
         let evidence = ability::evidence_adt_type_ref(&mut ctx);
         let frame_name = "__tribute_parameterized_dispatch_tag";
         let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
-        let done = tribute_core::calling_convention::cps_done_type(&mut ctx, nil);
+        let done = tribute_ir::calling_convention::cps_done_type(&mut ctx, nil);
         let anyref = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
         let parameterized_i32 = TypeDataBuilder::new("core.i32").param(nil).intern(&mut ctx);
-        let dispatch = tribute_core::calling_convention::cps_dispatch_type(
+        let dispatch = tribute_ir::calling_convention::cps_dispatch_type(
             &mut ctx,
             evidence,
             frame,

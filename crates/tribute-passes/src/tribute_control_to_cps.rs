@@ -11,13 +11,11 @@ use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;
 
-use tribute_core::calling_convention::{
-    cps_completion_type, cps_resume_exact_type, physical_closure_function_type,
-    physical_closure_type_with_environment_index,
-};
-use tribute_core::{
-    CALLING_CONVENTION_ATTR, CallableAbi, CallingConvention, physical_closure_type,
-    set_calling_convention,
+use tribute_ir::callable_abi::CallableAbi;
+use tribute_ir::calling_convention::{
+    CALLING_CONVENTION_ATTR, CallingConvention, cps_completion_type, cps_resume_exact_type,
+    physical_closure_function_type, physical_closure_type,
+    physical_closure_type_with_environment_index, set_calling_convention,
 };
 use tribute_ir::dialect::{ability, closure, effect, tribute_control};
 use trunk_ir::OpList;
@@ -58,14 +56,6 @@ fn evidence_plan_of(ctx: &IrContext, source: OpRef) -> Option<Attribute> {
     ctx.op_attrs(source)
         .get(tribute_control::EVIDENCE_PLAN_ATTR)
         .cloned()
-}
-
-fn convert_convention(convention: tribute_control::CallingConvention) -> CallingConvention {
-    match convention {
-        tribute_control::CallingConvention::Direct => CallingConvention::Direct,
-        tribute_control::CallingConvention::EvidenceDirect => CallingConvention::EvidenceDirect,
-        tribute_control::CallingConvention::Cps => CallingConvention::Cps,
-    }
 }
 
 #[derive(Clone)]
@@ -396,7 +386,7 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
             (
                 op,
                 CallableInfo {
-                    convention: convert_convention(convention),
+                    convention,
                     source_result: callable.result(ctx),
                     source_params: callable.inputs(ctx).to_vec(),
                     platform: ctx.op_attrs(op).contains_key("abi"),
