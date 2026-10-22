@@ -469,17 +469,20 @@ impl<'db> Resolver<'db> {
     }
 
     /// The functions the path of a qualified method call `x.a::b(y)` may
-    /// name, by rank: `a::b` as the call's scope resolves it together with
-    /// `m::a::b` for each name `m` in that scope, since a path is no name the
-    /// scope names directly, then `a::b` and `p::a::b` through the prelude
-    /// names `p`. A declaration's name counts as the module that shares it.
+    /// name, ranked by how its first segment comes into scope: `a::b` as the
+    /// call's scope resolves it, unless `a` is a prelude name, then
+    /// `m::a::b` for each name `m` in that scope, then `a::b` and `p::a::b`
+    /// through the prelude names `p`. A declaration's name counts as the
+    /// module that shares it.
     fn method_candidates(&self, path: &UnresolvedName) -> MethodCandidates<'db> {
-        let mut in_scope: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
+        let mut direct: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
         match self.qualified_entry(path) {
+            // A path through a prelude name is the prelude's reading of it.
+            Ok(Some((_, Binding::Function { .. }))) if self.reaches_through_prelude(path) => {}
             Ok(Some((namespace, binding @ Binding::Function { id })))
                 if self.visible_through_entry(&namespace, &path.name(), binding) =>
             {
-                in_scope.push(*id)
+                direct.push(*id)
             }
             // A constructor or an ability operation takes the receiver as
             // its first argument without a choice by type.
@@ -492,20 +495,32 @@ impl<'db> Resolver<'db> {
                 return MethodCandidates::Unresolved;
             }
         }
-        for function in self.scope_namespace_functions(path) {
-            if !in_scope.contains(&function) {
-                in_scope.push(function);
-            }
-        }
         let functions = Candidates::new(
-            Vec::new(),
-            in_scope,
+            direct,
+            self.scope_namespace_functions(path),
             self.library_method_functions(&path.path),
         );
         let Some(functions) = self.visible_functions(functions, path.id, path) else {
             return MethodCandidates::Unresolved;
         };
         MethodCandidates::Functions(functions)
+    }
+
+    /// Whether the first segment of a qualified `path` is a prelude name the
+    /// scope does not name through its declarations and `use`s.
+    fn reaches_through_prelude(&self, path: &UnresolvedName) -> bool {
+        let Some(first) = path.path.first() else {
+            return false;
+        };
+        if self.env.library_namespace(first).is_none() || self.module_import(first).is_some() {
+            return false;
+        }
+        if self.module_path.is_empty() {
+            !self.env.declares(first.clone()) && self.env.get_use_path(first).is_none()
+        } else {
+            let nested: Vec<Symbol> = self.module_path.iter().chain([first]).cloned().collect();
+            !self.env.has_namespace(&nested) && !self.defined_in_module(first)
+        }
     }
 
     /// The functions `m::path` names for each name `m` in the scope.
