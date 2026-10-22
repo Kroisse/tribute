@@ -797,18 +797,18 @@ pub(pkg) mod runtime {
             let at = ev.find(ability_id)
             case ev.holds(at, ability_id) {
                 True -> ev.replace(at, Marker {
-                    ability_id: ability_id,
-                    prompt_tag: prompt_tag,
-                    tr_dispatch_fn: tr_dispatch_fn,
+                    ability_id,
+                    prompt_tag,
+                    tr_dispatch_fn,
                     shadowed: Some(ev.get(at)),
-                    outer: outer,
+                    outer,
                 })
                 False -> ev.insert(at, Marker {
-                    ability_id: ability_id,
-                    prompt_tag: prompt_tag,
-                    tr_dispatch_fn: tr_dispatch_fn,
+                    ability_id,
+                    prompt_tag,
+                    tr_dispatch_fn,
                     shadowed: None,
-                    outer: outer,
+                    outer,
                 })
             }
         }
