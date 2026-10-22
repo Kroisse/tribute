@@ -6,6 +6,7 @@
 //! - `ResolvedRef`: After name resolution
 //! - `TypedRef`: After type checking
 
+use itertools::Itertools;
 use trunk_ir::{Symbol, SymbolPath};
 
 use super::node_id::NodeId;
@@ -84,14 +85,12 @@ impl<V> Candidates<V> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.ranks().iter().all(|rank| rank.is_empty())
     }
 
     /// The candidate, when there is one across all ranks.
     pub fn single(&self) -> Option<&V> {
-        let mut candidates = self.iter();
-        let only = candidates.next()?;
-        candidates.next().is_none().then_some(only)
+        self.iter().exactly_one().ok()
     }
 
     /// Each candidate mapped by `f`, in its rank.
