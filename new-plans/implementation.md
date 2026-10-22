@@ -413,7 +413,7 @@ Direct < EvidenceDirect < Cps
 `fn` operation만 가진 `std::io::Io`만 요구하는 함수는 `EvidenceDirect`다.
 `op` operation을 가진 `std::io::Read`나 `std::io::Write`, `Throw(std::io::Error)`를
 요구하면 `Cps`가 된다. 표준 입출력 API와 host 경계는 [io.md](io.md)와
-[host-abilities.md](host-abilities.md)를 따른다.
+[host-interface.md](host-interface.md)를 따른다.
 
 ### Root entry
 
@@ -946,9 +946,9 @@ handler가 가장 위에 오는지는
 [row 위치에 따른 evidence 선택](cps-effects.md#row-directed-evidence)이 정한다.
 표준 ability와 사용자 ability에 별도 연속 번호 대역을 예약하지 않는다.
 
-Host ability도 같은 ability id 체계를 쓴다. Tribute handler가 없다고 증명된 host
-ability 호출이 import를 직접 부르는 최적화는
-[host-abilities.md](host-abilities.md#host-경계)가 정한다.
+Host interface의 ability도 같은 ability id 체계를 쓴다. Tribute handler가 없다고
+증명된 호출이 import를 직접 부르는 최적화는
+[host-interface.md](host-interface.md#host-경계)가 정한다.
 
 ## Source Origin
 

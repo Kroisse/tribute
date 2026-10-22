@@ -13,8 +13,8 @@
   stream에 묶는 handler와 여러 stream을 함께 다루는 코드에만 나타난다.
 - Native와 Wasm이 같은 source API와 같은 host 경계를 사용한다.
 
-두 층의 구성 원칙은 [std-host-abilities.md](std-host-abilities.md)가, host
-ability의 일반 규칙은 [host-abilities.md](host-abilities.md)가 정한다.
+두 층의 구성 원칙은 [std-abilities.md](std-abilities.md)가, host interface의 일반
+규칙은 [host-interface.md](host-interface.md)가 정한다.
 
 ## Public API
 
@@ -65,9 +65,9 @@ pub fn print_line(message: String) ->{Write} Nil
 pub fn read_line() ->{Read, Throw(Error)} String
 ```
 
-`OutStream`과 `InStream`은 [host resource](host-abilities.md#host-resource) 타입이다.
+`OutStream`과 `InStream`은 [host resource](host-interface.md#host-resource) 타입이다.
 Tribute source는 이 값을 만들 수 없고 `Io`의 operation 결과로만 얻는다. 선언 문법은
-[host-abilities.md](host-abilities.md#미정-사항)의 미정 사항이다.
+[host-interface.md](host-interface.md#미정-사항)의 미정 사항이다.
 
 이 ability들은 일반 module export다. 사용자가 정의한 다른 module의 `ability Io {}`는
 이름이 같아도 별개의 ability다.
@@ -126,7 +126,7 @@ fn archive(out: OutStream, lines: List(String)) ->{Io} Nil {
   않고 `Ok`다.
 - 닫힌 stream에 `write`나 `read`를 하면 host를 부르지 않고 `Err(Error::Closed)`다.
 
-Stream의 수명은 [host resource의 수명](host-abilities.md#수명)을 따른다. Close하지
+Stream의 수명은 [host resource의 수명](host-interface.md#수명)을 따른다. Close하지
 않은 stream도 마지막 참조가 release되면 해제되지만 그 시점은 정하지 않는다.
 `using_output`과 `using_input`은 `body`가 끝나면 stream을 close하고 `body`의 결과를
 돌려준다. Close의 실패는 버리므로, 실패를 확인해야 하면 close operation을 직접
@@ -154,7 +154,7 @@ Stream의 수명은 [host resource의 수명](host-abilities.md#수명)을 따�
 ## Entrypoint
 
 `main`은 `Nil`을 반환해야 한다. `main`의 residual row는 program의 host interface이며,
-[host ability의 조건](host-abilities.md#host-ability)을 지키는 ability만 남을 수
+[host interface의 조건](host-interface.md#host가-처리하는-ability)을 지키는 ability만 남을 수
 있다.
 
 ```rust
@@ -166,7 +166,7 @@ fn main() ->{Io} Nil {
 
 `Write`도 그 조건을 지키므로 `main`에 남길 수 있다. 그때는 host가 `Write`를 직접
 구현한다. `Write::write`는 `op`이므로 host interface에서 비동기 함수가 된다
-([Host 경계](host-abilities.md#host-경계)).
+([Host 경계](host-interface.md#host-경계)).
 
 ```rust
 fn main() ->{Write} Nil {
@@ -196,7 +196,7 @@ EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 반환
 
 ## Host Boundary
 
-표준 입출력 ability는 [host 경계](host-abilities.md#host-경계)를 따라 target에
+표준 입출력 ability는 [host 경계](host-interface.md#host-경계)를 따라 target에
 내려간다. Public API는 `extern "C"`, WASI import, runtime symbol 같은 target detail을
 노출하지 않는다.
 

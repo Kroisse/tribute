@@ -483,8 +483,8 @@ ownership, liveness를 읽지 않는다. Runtime 자체의 code는 계측하지 
 
 ## Native I/O
 
-표준 입출력 host ability `std::io::Io`는 다른 host ability와 같이
-[host 경계](host-abilities.md#host-경계)를 따라 C ABI로 낮춘다. `tribute-runtime`이
+표준 입출력 ability `std::io::Io`는 host interface의 다른 ability와 같이
+[host 경계](host-interface.md#host-경계)를 따라 C ABI로 낮춘다. `tribute-runtime`이
 그 interface를 구현하며, 값은 canonical ABI 배치로 복사한다. Native runtime은
 Tribute enum/RTTI layout에 의존하지 않는다. E2E 검증은 subprocess stdin의 raw
 bytes로 빈 줄, partial EOF, EOF, invalid UTF-8을 확인한다

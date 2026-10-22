@@ -37,10 +37,10 @@ Ability annotation을 생략한 `fn(...) -> T`의 semantic type은
 effect가 발견되지 않으면 해당 named definition은 별도의 `Direct` worker를 가질 수
 있다.
 
-Host ability도 이 규칙을 그대로 따른다. `fn` operation만 가진 host ability만 요구하는
-함수는 `EvidenceDirect`이고, `op` operation을 가진 host ability를 요구하면 `Cps`다.
+Host가 처리하는 ability도 이 규칙을 그대로 따른다. `fn` operation만 가진 ability만
+요구하는 함수는 `EvidenceDirect`이고, `op` operation을 가진 ability를 요구하면 `Cps`다.
 Tribute handler가 없다고 증명된 호출이 evidence lookup 없이 import를 직접 부르는
-최적화는 [host-abilities.md](host-abilities.md#host-경계)가 정한다.
+최적화는 [host-interface.md](host-interface.md#host-경계)가 정한다.
 
 ```text
 print_line(ev, message) -> Nil

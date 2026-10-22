@@ -269,9 +269,9 @@ export를 추가할 뿐, 자원을 새로 계획하지 않는다.
 
 ### Standard I/O
 
-The standard I/O host ability `std::io::Io` lowers like every other host
-ability: its operations become imports of the component's host interface
-([host-abilities.md](host-abilities.md#host-경계)). Boundary values are copied
+The standard I/O ability `std::io::Io` lowers like every other ability in the
+host interface: its operations become imports of the component's host interface
+([host-interface.md](host-interface.md#host-경계)). Boundary values are copied
 into linear memory in canonical ABI layout, since a WasmGC `Bytes` array cannot
 be passed to the host directly. A host that implements `Io` over WASI streams
 does so outside the program ([io.md](io.md#host-boundary)).

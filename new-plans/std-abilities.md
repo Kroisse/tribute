@@ -1,7 +1,7 @@
-# Standard Host Abilities
+# Standard Abilities
 
 > 이 문서는 표준 라이브러리가 바깥 세계에 닿는 기능을 어떤 ability로 나누어
-> 제공하는지 정한다. Host ability 자체의 규칙은 [host-abilities.md](host-abilities.md)가,
+> 제공하는지 정한다. Host interface의 규칙은 [host-interface.md](host-interface.md)가,
 > 표준 입출력 API의 세부는 [io.md](io.md)가 정한다.
 
 현재 구현과 target 지원 범위는 [capabilities.md](capabilities.md)가 기록한다. 이
@@ -15,17 +15,17 @@
   stream에 닿을지 스스로 정하지 않고, 테스트는 host 없이 handler 하나로 대체할 수 있다.
 - Host 권한이 정해지는 곳은 handle을 다루는 ability가 처음 나타나는 곳, 보통 `main`이다.
   `main`의 signature가 곧 program의 host interface다
-  ([Host 경계](host-abilities.md#host-경계)).
+  ([Host 경계](host-interface.md#host-경계)).
 
 ## 두 층
 
-표준 기능은 두 층으로 나눈다. 두 층 모두 일반 ability 선언이며, host ability인지는
-선언이 아니라 `main`에 남느냐로 정해진다([Host Ability](host-abilities.md#host-ability)).
+표준 기능은 두 층으로 나눈다. 두 층 모두 일반 ability 선언이며, host가 처리하는지는
+선언이 아니라 `main`에 남느냐로 정해진다([Host가 처리하는 ability](host-interface.md#host가-처리하는-ability)).
 
 | 층 | 예 | 성질 |
 | --- | --- | --- |
 | 대상 없는 층 | `std::io::Read`, `std::io::Write` | handle이 없다. Operation은 `op`다. 대상은 handler가 정한다. |
-| Handle 층 | `std::io::Io` | [host resource](host-abilities.md#host-resource) handle을 다룬다. Operation은 `fn`이며 host가 처리하도록 설계한다. |
+| Handle 층 | `std::io::Io` | [host resource](host-interface.md#host-resource) handle을 다룬다. Operation은 `fn`이며 host가 처리하도록 설계한다. |
 
 두 층은 묶는 handler로 잇는다. 묶는 handler는 대상 없는 ability를 요구하는 계산을
 받아, 그 operation을 handle 층의 operation으로 처리한다.
@@ -79,7 +79,7 @@ handler 안쪽의 host 호출은 continuation을 잡지 않는다.
 
 Handle 층의 operation은 host resource 값을 주고받는다. 표준 입출력의 `OutStream`과
 `InStream`이 그 예다. Host resource는 host만 만들므로 handle이 그것을 모르는 handler에
-닿는 일이 없고, 수명은 drop과 close가 정한다([수명](host-abilities.md#수명)).
+닿는 일이 없고, 수명은 drop과 close가 정한다([수명](host-interface.md#수명)).
 
 Handle 층의 타입은 구체 타입이다. Test가 가짜 대상을 만들 때는 handle 층이 아니라
 대상 없는 층을 대체한다.
@@ -88,7 +88,7 @@ Handle 층의 타입은 구체 타입이다. Test가 가짜 대상을 만들 때
 `OutStream`과 `InStream`을 돌려주며, 읽기와 쓰기는 `Io`의 operation을 그대로 쓴다.
 파일이나 소켓처럼 읽고 쓰는 resource는 stream 자체가 아니라 stream을 내주는 resource다.
 그 resource의 ability가 읽기용과 쓰기용 stream을 따로 돌려주며, 각 stream은 따로 닫힌다
-([자식 resource](host-abilities.md#자식-resource)).
+([자식 resource](host-interface.md#자식-resource)).
 
 ## 표준 Ability
 
@@ -120,7 +120,7 @@ pub fn read_line() ->{Read, Throw(Error)} String
 
 - **Handle 층의 가짜 resource.** Test handler가 자기 stream을 만들어 `Io`를 흉내 내는
   경우다. 대상 없는 층을 대체하면 대부분 필요 없다. 조건과 후보는
-  [host-abilities.md](host-abilities.md#미정-사항)에 있다.
+  [host-interface.md](host-interface.md#미정-사항)에 있다.
 - **Default handler.** `main`까지 처리되지 않은 ability에 entrypoint가 표준 handler를
   씌우는 선언이다. `main`의 host interface가 signature와 달라지고 handler 설치 순서를
   정해야 하므로 지금은 두지 않는다.

@@ -17,8 +17,8 @@
 
 ## Host가 처리하는 ability
 
-Host ability는 선언의 종류가 아니라 역할이다. `main`의 residual row에 남아 host가
-처리하는 ability를 host ability라고 부른다. Host ability로 쓰려고 ability를 따로
+Host가 처리하는 ability는 선언의 종류가 아니다. `main`의 residual row에 남은 ability를
+host가 처리하며, 그 row가 program의 host interface다. Ability를 host가 처리하도록 따로
 표시하는 문법은 없다.
 
 ```rust
@@ -46,7 +46,7 @@ Ability가 host에 닿는 것은 작성자가 `main`의 row에 그 ability를 �
 `main`의 row는 본문에서 추론하지 않으므로, 처리를 잊은 ability가 조용히 host 요구가
 되지 않는다.
 
-- **Tribute handler가 먼저 처리한다.** Host ability operation은 가장 가까운 handler로
+- **Tribute handler가 먼저 처리한다.** Host interface의 operation도 가장 가까운 handler로
   dispatch된다. 프로그램 안에 handler가 없을 때만 host에 닿는다. 그래서 host
   ability를 쓰는 코드는 host 없이도 handler를 씌워 실행하고 테스트할 수 있다.
 - **같은 ability가 두 역할을 할 수 있다.** 어떤 program에서는 Tribute handler가
@@ -186,14 +186,14 @@ Host resource에 linear type이나 affine type은 두지 않는다. Continuation
 표준 입출력도 같은 규칙을 따른다. [`std::io::Io`](io.md#io)와
 [`std::io::Read`, `std::io::Write`](io.md#read와-write)는 prelude source에 선언한
 ability이며, Tribute handler로 가로챌 수 있다. Compiler가 특별히 아는 ambient
-ability는 없다. 표준 ability의 두 층은 [std-host-abilities.md](std-host-abilities.md)가
+ability는 없다. 표준 ability의 두 층은 [std-abilities.md](std-abilities.md)가
 정한다.
 
 ## 미정 사항
 
-- **WIT 생성 규칙.** Host ability와 그 module path에서 WIT package, interface, 함수
-  이름을 만드는 방식이다. 구체 타입이 된 제네릭 인스턴스의 WIT 타입 이름도 정해야
-  한다.
+- **WIT 생성 규칙.** Host interface의 ability와 그 module path에서 WIT package,
+  interface, 함수 이름을 만드는 방식이다. 구체 타입이 된 제네릭 인스턴스의 WIT 타입
+  이름도 정해야 한다.
 - **정수의 경계 표현.** WIT 정수는 고정 폭이다. 임의 정밀도 정수를 어느 폭으로
   넘길지, 범위를 넘는 값을 trap할지, 경계 전용 고정 폭 정수 타입을 따로 둘지 정해야
   한다.
