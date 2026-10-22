@@ -818,6 +818,68 @@ fn test() -> Nat {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// A `fn` arm runs without a continuation frame, so it cannot perform an
+/// `op` operation of an outer handler.
+#[salsa_test]
+fn diag_fn_arm_performs_op_operation(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn limited(comp: fn() ->{e, Counter} Int) ->{e, Stop} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() { Stop::stop() }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A call to a function whose row names an ability with an `op` operation
+/// is rejected in a `fn` arm like a direct perform.
+#[salsa_test]
+fn diag_fn_arm_calls_op_effect(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn halt() ->{Stop} Int {
+    Stop::stop()
+}
+
+fn limited(comp: fn() ->{e, Counter} Int) ->{e, Stop} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() { halt() }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
