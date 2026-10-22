@@ -90,8 +90,9 @@ interface의 ability 하나가 WIT interface 하나가 되고, operation은 그 
 | --- | --- | --- |
 | `fn` | 동기 함수 | host가 결과를 돌려주면 그 값으로 계속한다. |
 | `op` | `async` 함수 | 아래와 같다. |
+| 결과가 `Never`인 `op` | 결과 없는 동기 함수 | 돌아오면 entrypoint를 끝낸다. |
 
-`op` operation이 host에 닿으면 entrypoint의 host handler가 비동기 import를 부른다.
+결과가 `Never`가 아닌 `op` operation이 host에 닿으면 entrypoint의 host handler가 비동기 import를 부른다.
 
 - **Continuation은 program 밖으로 나가지 않는다.** Host가 그 자리에서 결과를 돌려주면
   바로 resume한다. 아니면 handler는 continuation을 host가 준 호출 식별자로 보관하고
@@ -101,10 +102,15 @@ interface의 ability 하나가 WIT interface 하나가 되고, operation은 그 
 - **Resume은 많아야 한 번이다.** 한 호출은 한 번만 완료된다. Tribute의 `resume`도
   많아야 한 번이므로([`resume`의 사용 규칙](abilities.md#resume의-사용-규칙)) 두 규칙이
   맞는다.
-- **취소.** Program이 보관한 continuation을 resume하지 않고 버리면 그 호출을 취소한다.
-  Host가 호출을 취소하면 보관한 continuation을 drop하며, 그 안의 값은 RC로 해제된다.
-- **끝나지 않는 operation.** 결과 타입이 `Never`인 `op`는 host가 값을 받고 resume하지
-  않는다. 예를 들어 entrypoint에 남은 `Throw(e)`는 처리되지 않은 오류를 host에 넘긴다.
+- **취소.** Program이 보관한 continuation을 resume하지 않고 버리면 host에 그 호출의
+  취소를 알린다. Host가 호출을 취소하면 보관한 continuation을 drop하며, 그 안의 값은
+  RC로 해제된다. 어느 쪽이든 continuation을 버린 뒤에는 그 호출을 다시 resume하지
+  않는다. 취소와 완료가 엇갈려 버린 뒤에 도착한 결과는 resume하지 않고 버리며, 결과에
+  담긴 host resource는 drop한다. 버리기 전에 도착한 완료는 평소처럼 resume한다.
+- **끝나지 않는 operation.** 결과 타입이 `Never`인 `op`는 resume할 값이 없으므로 결과
+  없는 동기 함수가 된다. Host 호출이 돌아오면 program은 continuation을 버리고 그
+  entrypoint 호출을 비정상으로 끝낸다. 예를 들어 entrypoint에 남은 `Throw(e)`는
+  처리되지 않은 오류 `e`를 host에 넘기고, 그 entrypoint는 값을 돌려주지 않는다.
 
 Wasm에서 `op`의 import는 Component Model의 비동기 함수이며, entrypoint export는 callback
 방식으로 event loop에 돌아간다. Native launcher도 같은 event loop를 둔다. Host는 비동기
@@ -155,7 +161,9 @@ Host resource는 host가 소유한 object를 가리키는 불투명 handle 타�
   handle의 소유권을 host로 넘기는 operation은 없다.
 - **표현.** Handle object는 host handle을 담은 불변 RC object다. Managed 참조를 담지
   않으므로 [비순환 object 그래프](rc.md#비순환-object-그래프)를 만들지 않는다. 닫힘
-  표시는 unmanaged flag다.
+  표시는 handle object 안의 unmanaged flag다. 같은 handle을 가리키는 참조는 모두 같은
+  object를 공유하므로 그 표시도 공유한다. 이 flag를 바꾸어도 managed field의 불변성은
+  바뀌지 않는다.
 
 ### 자식 resource
 
@@ -181,6 +189,8 @@ Host resource는 host가 소유한 object를 가리키는 불투명 handle 타�
   실패를 돌려줄 길이 없으므로 실패를 받는 곳은 close뿐이다.
 - **닫힌 handle.** Close한 handle을 쓰는 operation은 host를 부르지 않고 실패를 돌려준다.
   Host의 handle table은 비운 칸을 다시 쓰므로 이 검사는 Tribute 쪽 닫힘 표시로 한다.
+  닫힌 handle object의 모든 참조가 이 규칙을 따른다. 새 host resource는 새 handle
+  object를 받으므로 칸의 재사용이 이전 참조를 다시 유효하게 만들지 않는다.
   이미 닫힌 handle을 다시 close하면 아무 일도 하지 않고 성공한다. 닫힌 handle의
   마지막 참조가 release되면 drop을 다시 부르지 않는다.
 - **범위 helper.** Resource를 받아 계산이 끝나면 close하는 helper는 표준 라이브러리의

@@ -13,9 +13,10 @@
   Compiler가 특별히 아는 ambient ability는 두지 않는다.
 - 대부분의 코드는 handle 없는 ability를 요구한다. 그래서 library 코드는 어떤 파일이나
   stream에 닿을지 스스로 정하지 않고, 테스트는 host 없이 handler 하나로 대체할 수 있다.
-- Host 권한이 정해지는 곳은 handle을 다루는 ability가 처음 나타나는 곳, 보통 `main` 같은
-  entrypoint다. Entrypoint의 signature가 곧 그 entrypoint가 요구하는 host 기능이다
-  ([Entrypoint](host-interface.md#entrypoint)).
+- Host 권한은 entrypoint의 residual row가 정한다. Entrypoint의 signature가 곧 그
+  entrypoint가 요구하는 host 기능이다([Entrypoint](host-interface.md#entrypoint)).
+  Handle 층의 `Io`는 흔한 경우일 뿐 조건이 아니며, `main ->{Write} Nil`처럼 handle 층
+  없이 host에 맡길 수도 있다.
 
 ## 두 층
 
