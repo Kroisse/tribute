@@ -487,10 +487,10 @@ impl<'db> Resolver<'db> {
     }
 
     /// The functions the path of a qualified method call `x.a::b(y)` may
-    /// name, by rank: `a::b` as the call's scope resolves it and `m::a::b`
-    /// for each name `m` in that scope, all reached through a name in scope,
-    /// then `a::b` and `p::a::b` through the prelude names `p`. A
-    /// declaration's name counts as the module that shares it.
+    /// name, by rank: `a::b` as the call's scope resolves it together with
+    /// `m::a::b` for each name `m` in that scope, since a path is no name the
+    /// scope names directly, then `a::b` and `p::a::b` through the prelude
+    /// names `p`. A declaration's name counts as the module that shares it.
     fn method_candidates(&self, path: &UnresolvedName) -> MethodCandidates<'db> {
         let mut in_scope: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
         match self.qualified_entry(path) {
