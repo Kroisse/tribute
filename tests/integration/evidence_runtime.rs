@@ -24,37 +24,37 @@ pub mod evidence_tests {
     // Ability 10 at prompt 7, shadowed by prompt 8; ability 5 at prompt 3
     // sorts before it.
     fn one() ->{} Slots(Marker) {
-        extend(empty(), +10, +7, None, empty())
+        empty().extend(+10, +7, None, empty())
     }
 
     fn two() ->{} Slots(Marker) {
-        extend(one(), +10, +8, None, one())
+        one().extend(+10, +8, None, one())
     }
 
     fn three() ->{} Slots(Marker) {
-        extend(two(), +5, +3, None, two())
+        two().extend(+5, +3, None, two())
     }
 
     /// The prompts each operation leaves on top, one digit each.
     pub fn prompts() ->{} Int {
         let ev = three()
-        let tailed = with_tail(ev, -1, one())
-        let a = digit(lookup(ev, +10), lookup(ev, +5))
-        let b = digit(a, lookup(mask(ev, +10), +10))
-        let c = digit(b, lookup(outer(two(), +10), +10))
-        let d = digit(c, lookup(mask(dup(one(), +10), +10), +10))
-        let e = digit(d, lookup(tail(tailed, -1), +10))
-        let f = digit(e, lookup(tailed, +10))
-        let g = digit(f, lookup(tail(ev, -1), +10))
-        digit(g, lookup(push(one(), ev, +5), +5))
+        let tailed = ev.with_tail(-1, one())
+        let a = digit(ev.lookup(+10), ev.lookup(+5))
+        let b = digit(a, ev.mask(+10).lookup(+10))
+        let c = digit(b, two().outer(+10).lookup(+10))
+        let d = digit(c, one().dup(+10).mask(+10).lookup(+10))
+        let e = digit(d, tailed.tail(-1).lookup(+10))
+        let f = digit(e, tailed.lookup(+10))
+        let g = digit(f, ev.tail(-1).lookup(+10))
+        digit(g, one().push(ev, +5).lookup(+5))
     }
 
     pub fn missing() ->{} Int {
-        lookup(one(), +4)
+        one().lookup(+4)
     }
 
     pub fn masked_away() ->{} Int {
-        lookup(mask(one(), +10), +10)
+        one().mask(+10).lookup(+10)
     }
 }
 "#;

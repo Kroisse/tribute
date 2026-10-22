@@ -750,8 +750,8 @@ pub(pkg) mod runtime {
                     let half = high - low
                     let middle = low + half / 2
                     case ev.get(middle).ability_id < ability_id {
-                        True -> search(ev, ability_id, middle + 1, high)
-                        False -> search(ev, ability_id, low, middle)
+                        True -> ev.search(ability_id, middle + 1, high)
+                        False -> ev.search(ability_id, low, middle)
                     }
                 }
                 False -> low
@@ -760,7 +760,7 @@ pub(pkg) mod runtime {
 
         // The slot of `ability_id`: where its marker is, or would be inserted.
         fn find(ev: Slots(Marker), ability_id: Int) ->{} Nat {
-            search(ev, ability_id, 0, ev.len)
+            ev.search(ability_id, 0, ev.len)
         }
 
         fn holds(ev: Slots(Marker), at: Nat, ability_id: Int) ->{} Bool {
@@ -776,10 +776,10 @@ pub(pkg) mod runtime {
 
         // The top marker of `ability_id`.
         fn top(ev: Slots(Marker), ability_id: Int) ->{} Marker {
-            let at = find(ev, ability_id)
-            case holds(ev, at, ability_id) {
+            let at = ev.find(ability_id)
+            case ev.holds(at, ability_id) {
                 True -> ev.get(at)
-                False -> missing(ev)
+                False -> ev.missing
             }
         }
 
@@ -792,8 +792,8 @@ pub(pkg) mod runtime {
             tr_dispatch_fn: Option(Dispatch),
             outer: Slots(Marker),
         ) ->{} Slots(Marker) {
-            let at = find(ev, ability_id)
-            case holds(ev, at, ability_id) {
+            let at = ev.find(ability_id)
+            case ev.holds(at, ability_id) {
                 True -> ev.replace(at, Marker {
                     ability_id: ability_id,
                     prompt_tag: prompt_tag,
@@ -812,13 +812,13 @@ pub(pkg) mod runtime {
         }
 
         pub(pkg) fn lookup(ev: Slots(Marker), ability_id: Int) ->{} Int {
-            top(ev, ability_id).prompt_tag
+            ev.top(ability_id).prompt_tag
         }
 
         pub(pkg) fn lookup_tr(ev: Slots(Marker), ability_id: Int) ->{} Dispatch {
-            case top(ev, ability_id).tr_dispatch_fn {
+            case ev.top(ability_id).tr_dispatch_fn {
                 Some(dispatch) -> dispatch
-                None -> lookup_tr(ev.remove(ev.len), ability_id)
+                None -> ev.remove(ev.len).lookup_tr(ability_id)
             }
         }
 
@@ -829,44 +829,44 @@ pub(pkg) mod runtime {
             tr_dispatch_fn: Option(Dispatch),
             outer: Slots(Marker),
         ) ->{} Slots(Marker) {
-            install(ev, ability_id, prompt_tag, tr_dispatch_fn, outer)
+            ev.install(ability_id, prompt_tag, tr_dispatch_fn, outer)
         }
 
         pub(pkg) fn mask(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
-            let at = find(ev, ability_id)
-            case holds(ev, at, ability_id) {
+            let at = ev.find(ability_id)
+            case ev.holds(at, ability_id) {
                 True -> case ev.get(at).shadowed {
                     Some(below) -> ev.replace(at, below)
                     None -> ev.remove(at)
                 }
-                False -> ev.replace(at, missing(ev))
+                False -> ev.replace(at, ev.missing)
             }
         }
 
         pub(pkg) fn dup(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
-            let marker = top(ev, ability_id)
-            install(ev, ability_id, marker.prompt_tag, marker.tr_dispatch_fn, marker.outer)
+            let marker = ev.top(ability_id)
+            ev.install(ability_id, marker.prompt_tag, marker.tr_dispatch_fn, marker.outer)
         }
 
         pub(pkg) fn outer(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
-            top(ev, ability_id).outer
+            ev.top(ability_id).outer
         }
 
         pub(pkg) fn tail(ev: Slots(Marker), slot: Int) ->{} Slots(Marker) {
-            let at = find(ev, slot)
-            case holds(ev, at, slot) {
+            let at = ev.find(slot)
+            case ev.holds(at, slot) {
                 True -> ev.get(at).outer
                 False -> ev
             }
         }
 
         pub(pkg) fn with_tail(ev: Slots(Marker), slot: Int, tail: Slots(Marker)) ->{} Slots(Marker) {
-            install(ev, slot, +0, None, tail)
+            ev.install(slot, +0, None, tail)
         }
 
         pub(pkg) fn push(ev: Slots(Marker), source: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
-            let marker = top(source, ability_id)
-            install(ev, ability_id, marker.prompt_tag, marker.tr_dispatch_fn, marker.outer)
+            let marker = source.top(ability_id)
+            ev.install(ability_id, marker.prompt_tag, marker.tr_dispatch_fn, marker.outer)
         }
     }
 }
