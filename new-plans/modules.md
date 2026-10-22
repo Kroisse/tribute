@@ -167,7 +167,7 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
 항목이든 helper든 다음을 지킨다. 본문이 없는 compiler intrinsic 선언에는 적용하지
 않는다. Frontend가 검사한다.
 
-- Ability row가 비어 있어 `Direct` convention을 가진다. 빈 row는 `->{}`로
+- Ability row가 비어 있어 evidence를 받지 않고 중단되지 않는다. 빈 row는 `->{}`로
   명시한다. Row를 생략한 함수는 row 변수로 일반화되므로 거부한다. Handler를
   설치하거나 operation을 수행하지 않으므로 `effect.*`를 만들지 않으며, 그 함수를
   부르는 lowering이 그 함수 자신을 다시 lowering 대상으로 삼지 않는다.

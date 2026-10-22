@@ -659,9 +659,9 @@ concrete effect만 보존하고, 람다가 검사된 문맥의 callable signatur
 open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
 새로운 open tail을 본문 효과의 무조건적인 기본값으로 만들지 않는다. 반환되거나
 escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
-받은 람다와, 본문에서 effect를 수행한 람다의 convention은 이 결과에서 그대로
-계산한다. 본문의 `handle`은 람다의 convention을 바꾸지 않는다
-([cps-effects.md](cps-effects.md#row와-호출-규약)).
+받은 람다와, 본문에서 effect를 수행한 람다의 row는 이 결과 그대로다. 본문의
+`handle`이 처리한 ability는 이 row에 남지 않는다. 실행 전략이 정하는 호출 규약은 이
+남은 row에서만 나온다([cps-effects.md](cps-effects.md#row와-호출-규약)).
 
 #### 함수 적용 (Infer)
 
