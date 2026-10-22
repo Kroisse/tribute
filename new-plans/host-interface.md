@@ -92,7 +92,8 @@ interface의 ability 하나가 WIT interface 하나가 되고, operation은 그 
 | `op` | `async` 함수 | 아래와 같다. |
 | 결과가 `Never`인 `op` | 결과 없는 동기 함수 | 돌아오면 entrypoint를 끝낸다. |
 
-결과가 `Never`가 아닌 `op` operation이 host에 닿으면 entrypoint의 host handler가 비동기 import를 부른다.
+결과가 `Never`가 아닌 `op` operation이 host에 닿으면 entrypoint의 host handler가
+비동기 import를 부른다.
 
 - **Continuation은 program 밖으로 나가지 않는다.** Host가 그 자리에서 결과를 돌려주면
   바로 resume한다. 아니면 handler는 continuation을 host가 준 호출 식별자로 보관하고
