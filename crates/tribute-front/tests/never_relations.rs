@@ -734,11 +734,11 @@ fn fn_handler_metadata_keeps_operation_result_and_actual_never_body(db: &salsa::
         "fn_handler_metadata.trb",
         r#"
 ability Read { fn read() -> Nat }
-ability Stop { op stop() -> Never }
-fn result() ->{Stop} Nat {
+fn diverge() ->{} Never { diverge() }
+fn result() ->{} Nat {
     handle Read::read() {
         do value { value }
-        fn Read::read() { Stop::stop() }
+        fn Read::read() { diverge() }
     }
 }
 "#,

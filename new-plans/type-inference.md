@@ -459,7 +459,9 @@ Handle body는 처리하는 label을 새 handler에 묶고 나머지 label은 �
 label을 먼저 가린다. 바깥 row가 그 label을 tail로만 가지면 가리지 않는다.
 Handler arm과 `do` arm은 처리한 label이 빠진 row로 검사되므로, arm의
 operation과 호출은 handle 바깥의 handler를 본다. `resume`의 handler 선택은
-[abilities.md](abilities.md#resume과-handler-선택)를 따른다.
+[abilities.md](abilities.md#resume과-handler-선택)를 따른다. `fn` arm 본문의
+perform과 호출은 solving이 끝난 뒤 검사하며, `op` operation을 수행하거나 그런
+ability를 요구하는 callable을 호출할 수 없다([abilities.md](abilities.md#fn-operation-handler)).
 
 Row 단일화는 시그니처 row 변수를 별칭의 대표로 유지한다. 열린 두 row를 맞출 때
 한쪽이 시그니처 row이고 다른 쪽이 label을 더하지 않으면, 새 변수를 만들지 않고
