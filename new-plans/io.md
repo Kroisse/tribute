@@ -10,6 +10,9 @@
 - 런타임 경계인 `Io`와 사용자가 처리할 수 있는 algebraic ability를 구분한다.
 - Native와 Wasm이 같은 source API와 target-independent I/O boundary를 사용한다.
 
+사용자가 정의한 ability로 host 기능을 여는 일반 모델은
+[host-interface.md](host-interface.md)가 정한다.
+
 표준 라이브러리는 별도의 `Console` ability를 제공하지 않는다. 테스트 가능한
 추상화가 필요한 프로그램은 `Logger`, `Terminal` 같은 application-specific
 ability를 정의하고 handler에서 `std::io` 함수를 호출할 수 있다.
@@ -89,8 +92,9 @@ module export와 virtual `Io` binding은 resolver의 동일한 `std::io` namespa
 
 ## Entrypoint
 
-`main`은 `Nil`을 반환해야 한다. 모든 residual effect는 오류이지만 builtin
-`std::io::Io`만 예외적으로 허용한다.
+`main`은 command 형태의 host가 부르는 [entrypoint](host-interface.md#entrypoint)이며
+`Nil`을 반환해야 한다. 모든 residual effect는 오류이지만 builtin `std::io::Io`와
+[host가 처리하는 ability](host-interface.md#host가-처리하는-ability)는 예외적으로 허용한다.
 
 ```rust
 fn main() ->{Io} Nil {
@@ -101,7 +105,8 @@ fn main() ->{Io} Nil {
 Native와 Wasm entrypoint는 target에 맞는 initial evidence를 만들어 `main`에
 전달한다. 현재 representation에서는 empty evidence로
 충분하지만 이를 source-level ABI로 고정하지 않는다. 처리되지 않은 `Throw(Error)`나
-사용자 ability가 남아 있으면 frontend가 backend lowering 전에 거부한다.
+host가 처리할 수 없는 사용자 ability가 남아 있으면 frontend가 backend lowering 전에
+거부한다.
 
 ## `read_line` Contract
 
