@@ -467,6 +467,7 @@ pub(super) fn lower_module<'db>(
         tribute_ir::metadata::publish_prelude_type(ir, module.op_ref(), &path.to_string(), layout);
     }
     let module = IrModule::new(ir, module.op_ref()).expect("valid core.module operation");
+    remove_unused_function_references(ir, region);
     let operations = instance_operations(&ctx, ir, &declarations);
     tribute_control::declare_abilities(
         ir,
@@ -477,6 +478,27 @@ pub(super) fn lower_module<'db>(
     FrontendIrModule {
         module,
         compiler_intrinsics: declarations.compiler_intrinsics,
+    }
+}
+
+/// Remove the function references nothing uses. Lowering a named function at
+/// the callable type its use expects makes a new reference and leaves the
+/// first one behind, since that one could still have been bound and used.
+fn remove_unused_function_references(ir: &mut IrContext, region: trunk_ir::refs::RegionRef) {
+    let mut unused = Vec::new();
+    let _ = trunk_ir::walk::walk_region::<()>(ir, region, &mut |op| {
+        if tribute_control::FuncRef::matches(ir, op) && !ir.has_uses(ir.op_results(op)[0]) {
+            unused.push(op);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    for op in unused {
+        let block = ir
+            .op(op)
+            .parent_block
+            .expect("a reference lives in a block");
+        ir.remove_op_from_block(block, op);
+        ir.remove_op(op);
     }
 }
 
