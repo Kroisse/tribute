@@ -770,7 +770,9 @@ pub(pkg) mod runtime {
             }
         }
 
-        fn missing(ev: Slots(Marker)) ->{} Marker {
+        // Always traps: it reads the position past the end of `ev`. It stands
+        // where a missing ability's marker would be, which is a compiler bug.
+        fn trap_missing_ability(ev: Slots(Marker)) ->{} Marker {
             ev.get(ev.len)
         }
 
@@ -779,7 +781,7 @@ pub(pkg) mod runtime {
             let at = ev.find(ability_id)
             case ev.holds(at, ability_id) {
                 True -> ev.get(at)
-                False -> ev.missing
+                False -> ev.trap_missing_ability
             }
         }
 
@@ -839,7 +841,7 @@ pub(pkg) mod runtime {
                     Some(below) -> ev.replace(at, below)
                     None -> ev.remove(at)
                 }
-                False -> ev.replace(at, ev.missing)
+                False -> ev.replace(at, ev.trap_missing_ability)
             }
         }
 
