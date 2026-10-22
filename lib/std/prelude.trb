@@ -736,7 +736,7 @@ pub(pkg) mod runtime {
 
         pub(pkg) struct Marker {
             ability_id: Int,
-            prompt_tag: Int,
+            prompt_tag: Nat,
             tr_dispatch_fn: Option(Dispatch),
             shadowed: Option(Marker),
             outer: Slots(Marker),
@@ -790,7 +790,7 @@ pub(pkg) mod runtime {
         fn install(
             ev: Slots(Marker),
             ability_id: Int,
-            prompt_tag: Int,
+            prompt_tag: Nat,
             tr_dispatch_fn: Option(Dispatch),
             outer: Slots(Marker),
         ) ->{} Slots(Marker) {
@@ -813,7 +813,7 @@ pub(pkg) mod runtime {
             }
         }
 
-        pub(pkg) fn lookup(ev: Slots(Marker), ability_id: Int) ->{} Int {
+        pub(pkg) fn lookup(ev: Slots(Marker), ability_id: Int) ->{} Nat {
             ev.top(ability_id).prompt_tag
         }
 
@@ -827,7 +827,7 @@ pub(pkg) mod runtime {
         pub(pkg) fn extend(
             ev: Slots(Marker),
             ability_id: Int,
-            prompt_tag: Int,
+            prompt_tag: Nat,
             tr_dispatch_fn: Option(Dispatch),
             outer: Slots(Marker),
         ) ->{} Slots(Marker) {
@@ -863,7 +863,7 @@ pub(pkg) mod runtime {
         }
 
         pub(pkg) fn with_tail(ev: Slots(Marker), slot: Int, tail: Slots(Marker)) ->{} Slots(Marker) {
-            ev.install(slot, +0, None, tail)
+            ev.install(slot, 0, None, tail)
         }
 
         pub(pkg) fn push(ev: Slots(Marker), source: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {

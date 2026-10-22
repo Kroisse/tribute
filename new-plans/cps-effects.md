@@ -885,7 +885,7 @@ Marker와 Evidence는
 ```rust
 pub(pkg) struct Marker {
     ability_id: Int,
-    prompt_tag: Int,
+    prompt_tag: Nat,
     tr_dispatch_fn: Option(Dispatch),
     shadowed: Option(Marker),
     outer: Slots(Marker),
@@ -1019,12 +1019,12 @@ handle은 marker를 설치하지 않는다. 재개된 계산의 label은 lambda 
 `None`인 `tr_dispatch_fn`은 runtime 항목 안에서만 만들어진다(`with_tail`의 tail 칸).
 
 ```rust
-fn lookup(ev: Evidence, ability_id: Int) ->{} Int
+fn lookup(ev: Evidence, ability_id: Int) ->{} Nat
 fn lookup_tr(ev: Evidence, ability_id: Int) ->{} Dispatch
 fn extend(
     ev: Evidence,
     ability_id: Int,
-    prompt_tag: Int,
+    prompt_tag: Nat,
     tr_dispatch_fn: Option(Dispatch),
     outer: Evidence,
 ) ->{} Evidence

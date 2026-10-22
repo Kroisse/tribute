@@ -9,7 +9,7 @@ use super::common::run_wasm_in_std;
 
 const EVIDENCE_TESTS: &str = r#"
 pub mod evidence_tests {
-    use super::{Int, None}
+    use super::{Int, Nat, None}
     use super::runtime::Slots
     use super::runtime::evidence::{Marker, extend, lookup, mask, dup, outer, tail, with_tail, push}
 
@@ -17,29 +17,37 @@ pub mod evidence_tests {
         Slots::empty()
     }
 
-    fn digit(rest: Int, next: Int) ->{} Int {
-        rest * +10 + next
+    // A prompt below ten as an `Int`.
+    fn small(prompt: Nat) ->{} Int {
+        case prompt == 0 {
+            True -> +0
+            False -> small(prompt - 1) + +1
+        }
+    }
+
+    fn digit(rest: Int, next: Nat) ->{} Int {
+        rest * +10 + small(next)
     }
 
     // Ability 10 at prompt 7, shadowed by prompt 8; ability 5 at prompt 3
     // sorts before it.
     fn one() ->{} Slots(Marker) {
-        empty().extend(+10, +7, None, empty())
+        empty().extend(+10, 7, None, empty())
     }
 
     fn two() ->{} Slots(Marker) {
-        one().extend(+10, +8, None, one())
+        one().extend(+10, 8, None, one())
     }
 
     fn three() ->{} Slots(Marker) {
-        two().extend(+5, +3, None, two())
+        two().extend(+5, 3, None, two())
     }
 
     /// The prompts each operation leaves on top, one digit each.
     pub fn prompts() ->{} Int {
         let ev = three()
         let tailed = ev.with_tail(-1, one())
-        let a = digit(ev.lookup(+10), ev.lookup(+5))
+        let a = digit(small(ev.lookup(+10)), ev.lookup(+5))
         let b = digit(a, ev.mask(+10).lookup(+10))
         let c = digit(b, two().outer(+10).lookup(+10))
         let d = digit(c, one().dup(+10).mask(+10).lookup(+10))
@@ -50,11 +58,11 @@ pub mod evidence_tests {
     }
 
     pub fn missing() ->{} Int {
-        one().lookup(+4)
+        small(one().lookup(+4))
     }
 
     pub fn masked_away() ->{} Int {
-        one().mask(+10).lookup(+10)
+        small(one().mask(+10).lookup(+10))
     }
 }
 "#;
