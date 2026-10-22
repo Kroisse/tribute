@@ -132,7 +132,6 @@ impl RewritePattern for LowerCallPattern {
         let dispatch_op = effect::DispatchTail::operands(evidence_val, shift_value_val)
             .ability(ability)
             .op_name(op_name)
-            .results(t.anyref)
             .build(ctx, location);
         rewriter.insert_op(dispatch_op.op_ref());
 

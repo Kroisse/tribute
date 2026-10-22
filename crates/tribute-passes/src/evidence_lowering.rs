@@ -6,8 +6,8 @@
 //! runtime written in Tribute source, `std::runtime::evidence`
 //! (`new-plans/cps-effects.md`), which it finds by canonical path. The runtime
 //! functions are compiled like any other source function; marker
-//! construction and field access stay inside them. A target supplies only
-//! the type converter its dispatch checks compare types with.
+//! construction and field access stay inside them. The lowering is the same
+//! on every target.
 
 use std::rc::Rc;
 
@@ -73,32 +73,27 @@ pub fn prepare_evidence_runtime(
 
 /// Lower evidence operations in one function body with the functions of
 /// `runtime`, from [`prepare_evidence_runtime`] on the containing module.
-/// `converter` is the target's type converter.
 pub fn lower_evidence_func(
     ctx: &mut IrContext,
     func_op: func::Func,
     runtime: &EvidenceRuntime,
-    converter: TypeConverter,
 ) -> Result<(), ConversionError> {
-    let lowering = Rc::new(Lowering {
-        runtime: *runtime,
-        converter,
-    });
+    let runtime = Rc::new(*runtime);
     PatternApplicator::new(TypeConverter::new())
         .with_target(effect_abi_target())
         .add_pattern(LowerEffectExtend {
-            lowering: Rc::clone(&lowering),
+            runtime: Rc::clone(&runtime),
         })
         .add_pattern(LowerEffectStackOp {
-            lowering: Rc::clone(&lowering),
+            runtime: Rc::clone(&runtime),
         })
         .add_pattern(LowerEffectTailOp {
-            lowering: Rc::clone(&lowering),
+            runtime: Rc::clone(&runtime),
         })
         .add_pattern(LowerEffectDispatchTail {
-            lowering: Rc::clone(&lowering),
+            runtime: Rc::clone(&runtime),
         })
-        .add_pattern(LowerEffectDispatchCps { lowering })
+        .add_pattern(LowerEffectDispatchCps { runtime })
         .apply_partial_conversion(ctx, func_op, "evidence-effect-abi")?;
     Ok(())
 }
@@ -106,16 +101,14 @@ pub fn lower_evidence_func(
 /// PassManager-friendly evidence lowering pass.
 ///
 /// This pass is function-scoped; it takes the runtime functions
-/// [`prepare_evidence_runtime`] found on the module and builds the target's
-/// type converter with `converter` for each function.
+/// [`prepare_evidence_runtime`] found on the module.
 pub struct LowerEvidence {
     runtime: EvidenceRuntime,
-    converter: fn(&mut IrContext) -> TypeConverter,
 }
 
 impl LowerEvidence {
-    pub fn new(runtime: EvidenceRuntime, converter: fn(&mut IrContext) -> TypeConverter) -> Self {
-        Self { runtime, converter }
+    pub fn new(runtime: EvidenceRuntime) -> Self {
+        Self { runtime }
     }
 }
 
@@ -132,8 +125,7 @@ impl Pass for LowerEvidence {
         target: func::Func,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        let converter = (self.converter)(ctx);
-        lower_evidence_func(ctx, target, &self.runtime, converter)?;
+        lower_evidence_func(ctx, target, &self.runtime)?;
         Ok(())
     }
 }
@@ -194,13 +186,6 @@ fn evidence_runtime_requirements(ctx: &IrContext, module: Module) -> RuntimeRequ
     needs
 }
 
-/// What the patterns share: the runtime functions and the target's type
-/// converter.
-struct Lowering {
-    runtime: EvidenceRuntime,
-    converter: TypeConverter,
-}
-
 /// Call `function`, which [`prepare_evidence_runtime`] found because an
 /// operation of this kind needs it, and replace `op` with the call's result.
 fn replace_with_call(
@@ -256,7 +241,7 @@ fn some_dispatch(
 
 /// `effect.extend` → `std::runtime::evidence::extend`.
 struct LowerEffectExtend {
-    lowering: Rc<Lowering>,
+    runtime: Rc<EvidenceRuntime>,
 }
 
 impl RewritePattern for LowerEffectExtend {
@@ -270,7 +255,6 @@ impl RewritePattern for LowerEffectExtend {
             return false;
         };
         let function = self
-            .lowering
             .runtime
             .extend
             .expect("the evidence runtime was prepared for effect.extend");
@@ -297,7 +281,7 @@ impl RewritePattern for LowerEffectExtend {
 /// `effect.mask` / `effect.dup` / `effect.outer` → the runtime function of
 /// the same name.
 struct LowerEffectStackOp {
-    lowering: Rc<Lowering>,
+    runtime: Rc<EvidenceRuntime>,
 }
 
 impl RewritePattern for LowerEffectStackOp {
@@ -307,7 +291,7 @@ impl RewritePattern for LowerEffectStackOp {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let runtime = &self.lowering.runtime;
+        let runtime = &self.runtime;
         let (function, ability, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
             (runtime.mask, mask.ability(ctx).clone(), mask.evidence(ctx))
         } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
@@ -331,7 +315,7 @@ impl RewritePattern for LowerEffectStackOp {
 /// `effect.tail` / `effect.with_tail` / `effect.push` → the runtime
 /// function of the same name.
 struct LowerEffectTailOp {
-    lowering: Rc<Lowering>,
+    runtime: Rc<EvidenceRuntime>,
 }
 
 impl RewritePattern for LowerEffectTailOp {
@@ -341,7 +325,7 @@ impl RewritePattern for LowerEffectTailOp {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let runtime = &self.lowering.runtime;
+        let runtime = &self.runtime;
         let loc = ctx.op(op).location;
         let i32_ty = effect_dispatch::i32_type(ctx);
         let mut slot = |ctx: &mut IrContext, index: u32| {
@@ -381,7 +365,7 @@ impl RewritePattern for LowerEffectTailOp {
 /// `effect.dispatch_tail` → `std::runtime::evidence::lookup_tr` + indirect
 /// call.
 struct LowerEffectDispatchTail {
-    lowering: Rc<Lowering>,
+    runtime: Rc<EvidenceRuntime>,
 }
 
 impl RewritePattern for LowerEffectDispatchTail {
@@ -394,7 +378,7 @@ impl RewritePattern for LowerEffectDispatchTail {
         let Ok(dispatch_op) = effect::DispatchTail::from_op(ctx, op) else {
             return false;
         };
-        if !effect_dispatch::is_valid_tail_dispatch(ctx, op, &self.lowering.converter) {
+        if !effect_dispatch::is_valid_tail_dispatch(ctx, op) {
             return false;
         }
 
@@ -404,7 +388,6 @@ impl RewritePattern for LowerEffectDispatchTail {
             effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
         };
         let lookup_tr = self
-            .lowering
             .runtime
             .lookup_tr
             .expect("the evidence runtime was prepared for effect.dispatch_tail");
@@ -418,7 +401,7 @@ impl RewritePattern for LowerEffectDispatchTail {
 /// `effect.dispatch_cps` → `std::runtime::evidence::lookup` + proper-tail
 /// transfer.
 struct LowerEffectDispatchCps {
-    lowering: Rc<Lowering>,
+    runtime: Rc<EvidenceRuntime>,
 }
 
 impl RewritePattern for LowerEffectDispatchCps {
@@ -431,7 +414,7 @@ impl RewritePattern for LowerEffectDispatchCps {
         let Ok(dispatch_op) = effect::DispatchCps::from_op(ctx, op) else {
             return false;
         };
-        if !effect_dispatch::is_valid_cps_dispatch(ctx, op, &self.lowering.converter) {
+        if !effect_dispatch::is_valid_cps_dispatch(ctx, op) {
             return false;
         }
 
@@ -441,7 +424,6 @@ impl RewritePattern for LowerEffectDispatchCps {
             effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
         };
         let lookup = self
-            .lowering
             .runtime
             .lookup
             .expect("the evidence runtime was prepared for effect.dispatch_cps");
@@ -481,17 +463,6 @@ mod tests {
     func.return %ev
   }"#;
 
-    /// Lower one function with the Wasm converter; the patterns read it only
-    /// to check dispatch shapes.
-    fn lower_func(
-        ctx: &mut IrContext,
-        function: func::Func,
-        runtime: &EvidenceRuntime,
-    ) -> Result<(), ConversionError> {
-        let converter = crate::wasm::type_converter::wasm_type_converter(ctx);
-        lower_evidence_func(ctx, function, runtime, converter)
-    }
-
     fn module_text(body: &str) -> String {
         format!("core.module @test {{\n{RUNTIME}\n{body}\n}}")
     }
@@ -502,7 +473,7 @@ mod tests {
             if let Ok(function) = func::Func::from_op(ctx, op)
                 && !function.sym_name(ctx).starts_with("std::runtime::")
             {
-                lower_func(ctx, function, &runtime)?;
+                lower_evidence_func(ctx, function, &runtime)?;
             }
         }
         Ok(())
@@ -662,7 +633,7 @@ mod tests {
             })
             .unwrap();
 
-        let error = lower_func(&mut ctx, function, &runtime)
+        let error = lower_evidence_func(&mut ctx, function, &runtime)
             .expect_err("a result-bearing final dispatch is malformed");
 
         assert!(error.to_string().contains("effect.dispatch_cps"), "{error}");

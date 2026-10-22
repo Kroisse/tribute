@@ -34,8 +34,6 @@ trunk-ir-wasm-backend/    # trunk-ir만 의존
 
 tribute-passes/           # tribute-ir 의존
 ├── wasm/lower.rs         # Wasm lowering pipeline orchestration
-├── evidence_lowering.rs  # 경계 안: effect.* → runtime 항목 호출 + call/tail_call
-│                         #          (두 target 공유)
 ├── wasm/prompt_tag.rs    # 출구 뒤: prompt tag 할당 선언을 카운터로 바인딩
 ├── wasm/tribute_rt_to_wasm.rs
 ├── wasm/const_to_wasm.rs

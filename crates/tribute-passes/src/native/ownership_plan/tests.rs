@@ -484,8 +484,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
                 .filter(|f| f.sym_name(&ctx) == "install")
         })
         .unwrap();
-    let converter = native_type_converter(&mut ctx).0;
-    crate::evidence_lowering::lower_evidence_func(&mut ctx, install, &runtime, converter).unwrap();
+    crate::evidence_lowering::lower_evidence_func(&mut ctx, install, &runtime).unwrap();
 
     let lowered = print_module(&ctx, module.op());
     assert!(!lowered.contains("tribute_rt.into_raw"), "{lowered}");

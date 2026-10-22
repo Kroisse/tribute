@@ -1920,11 +1920,8 @@ mod tests {
         let runtime = crate::evidence_lowering::prepare_evidence_runtime(&ctx, module).unwrap();
         for op in module.ops_snapshot(&ctx) {
             if let Ok(function) = func::Func::from_op(&ctx, op) {
-                let converter = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
-                crate::evidence_lowering::lower_evidence_func(
-                    &mut ctx, function, &runtime, converter,
-                )
-                .unwrap();
+                crate::evidence_lowering::lower_evidence_func(&mut ctx, function, &runtime)
+                    .unwrap();
             }
         }
         crate::closure_lower::finalize_closure_storage_layout(&mut ctx, module);

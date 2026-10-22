@@ -84,12 +84,11 @@ fn call_probe_from_main(ctx: &mut IrContext, m: Module) -> OpRef {
 fn lower_runtime_calls(
     ctx: &mut IrContext,
     m: Module,
-    analyses: &mut AnalysisCache,
     target: TargetKind,
 ) -> Result<(), DumpIrError> {
     match target {
-        TargetKind::Native => lower_native_runtime_calls(ctx, m, analyses),
-        TargetKind::Wasm => lower_wasm_runtime_calls(ctx, m, analyses),
+        TargetKind::Native => lower_native_runtime_calls(ctx, m),
+        TargetKind::Wasm => lower_wasm_runtime_calls(ctx, m),
     }
 }
 
@@ -194,7 +193,7 @@ fn unused_runtime_functions_do_not_reach_the_boundary_exit() {
             "{target:?}: the target entry keeps the probe"
         );
 
-        lower_runtime_calls(&mut ctx, m, &mut analyses, target).expect("runtime calls");
+        lower_runtime_calls(&mut ctx, m, target).expect("runtime calls");
         finish_target_lowering(&mut ctx, m, &mut analyses, target).expect("boundary exit");
         assert_eq!(
             definition(&ctx, m, PROBE),
@@ -212,7 +211,7 @@ fn target_lowering_calls_runtime_functions_by_path() {
         let mut analyses = AnalysisCache::new();
         enter_target_lowering(&mut ctx, m, &mut analyses, "test", ITEMS).expect("target entry");
         let call = call_probe_from_main(&mut ctx, m);
-        lower_runtime_calls(&mut ctx, m, &mut analyses, target).expect("runtime calls");
+        lower_runtime_calls(&mut ctx, m, target).expect("runtime calls");
         finish_target_lowering(&mut ctx, m, &mut analyses, target).expect("boundary exit");
 
         let probe = RuntimeFunction::lookup(&ctx, m, PROBE)

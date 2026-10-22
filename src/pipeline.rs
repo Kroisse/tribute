@@ -1124,7 +1124,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
         "Wasm",
         tribute_ir::runtime_items::RUNTIME_ITEMS,
     )?;
-    lower_wasm_runtime_calls(ctx, m, &mut analyses)?;
+    lower_wasm_runtime_calls(ctx, m)?;
     finish_target_lowering(
         ctx,
         m,
@@ -1133,7 +1133,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
     )
 }
 
-/// Run the native target pipeline: lowering + evidence lowering + cleanup.
+/// Run the native target pipeline: lowering + cleanup.
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     let mut analyses = AnalysisCache::new();
     enter_target_lowering(
@@ -1143,7 +1143,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         "native",
         tribute_ir::runtime_items::RUNTIME_ITEMS,
     )?;
-    lower_native_runtime_calls(ctx, m, &mut analyses)?;
+    lower_native_runtime_calls(ctx, m)?;
     finish_target_lowering(
         ctx,
         m,
@@ -1152,8 +1152,9 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     )
 }
 
-/// The target-independent start of the representation/ABI boundary, up to
-/// the target lowering that calls runtime functions.
+/// The target-independent start of the representation/ABI boundary, through
+/// evidence lowering, up to the target-specific stages that call runtime
+/// functions.
 fn enter_target_lowering(
     ctx: &mut IrContext,
     m: Module,
@@ -1182,51 +1183,34 @@ fn enter_target_lowering(
     // lowering see the IR.
     run_canonicalize_passes(ctx, m, analyses, "post-inline canonicalization")?;
 
-    enter_target_closure_storage_boundary(ctx, m, analyses)
+    enter_target_closure_storage_boundary(ctx, m, analyses)?;
+    lower_evidence(ctx, m, analyses)
 }
 
-/// Wasm evidence lowering and the bytes intrinsic bridge: the stages that
-/// call runtime items.
-fn lower_wasm_runtime_calls(
-    ctx: &mut IrContext,
-    m: Module,
-    analyses: &mut AnalysisCache,
-) -> Result<(), DumpIrError> {
-    lower_evidence(
-        ctx,
-        m,
-        analyses,
-        tribute_passes::wasm::type_converter::wasm_type_converter,
-    )?;
+/// The Wasm bytes intrinsic bridge, the target-specific stage that calls
+/// runtime items.
+fn lower_wasm_runtime_calls(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     // Complete the supported bytes intrinsic bridge inside the boundary; the
     // lowering consumes its verified compiler intrinsic identity.
     tribute_passes::wasm::bytes::lower(ctx, m)?;
     Ok(())
 }
 
-/// Native evidence lowering and the bytes intrinsic bridge: the stages that
-/// call runtime items.
-fn lower_native_runtime_calls(
-    ctx: &mut IrContext,
-    m: Module,
-    analyses: &mut AnalysisCache,
-) -> Result<(), DumpIrError> {
-    lower_evidence(ctx, m, analyses, |ctx| {
-        tribute_passes::native::type_converter::native_type_converter(ctx).0
-    })?;
+/// The native bytes intrinsic bridge, the target-specific stage that calls
+/// runtime items.
+fn lower_native_runtime_calls(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     // Complete the supported bytes intrinsic bridge inside the boundary; the
     // lowering consumes its verified compiler intrinsic identity.
     tribute_passes::native::intrinsic_to_native::lower(ctx, m)?;
     Ok(())
 }
 
-/// Lower `effect.*` to calls of the evidence runtime, checking dispatch
-/// shapes with the target's `converter`, and drop the ability declarations.
+/// Lower `effect.*` to calls of the evidence runtime and drop the ability
+/// declarations.
 fn lower_evidence(
     ctx: &mut IrContext,
     m: Module,
     analyses: &mut AnalysisCache,
-    converter: fn(&mut IrContext) -> trunk_ir::rewrite::TypeConverter,
 ) -> Result<(), DumpIrError> {
     use tribute_passes::evidence_lowering::{LowerEvidence, prepare_evidence_runtime};
 
@@ -1237,7 +1221,7 @@ fn lower_evidence(
     })?;
     let mut pm = PassManager::new();
     pm.nest::<func_dialect::Func>()
-        .add_pass(LowerEvidence::new(runtime, converter));
+        .add_pass(LowerEvidence::new(runtime));
     pm.with_debug_verifier();
     pm.run(ctx, core_module, analyses)?;
     tribute_ir::dialect::ability::remove_declarations(ctx, m);

@@ -612,13 +612,11 @@ exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 �
       → effect ABI verification → target ABI validation
       → CPS signature physicalization
       → value delimiter and root entry bridge composition
+      → lower_closures_in_func → evidence_lowering
+      → finalize_closure_storage_layout → boundary exit verification
 
-WASM:   → lower_closures_in_func → evidence_lowering
-        → finalize_closure_storage_layout → boundary exit verification
-        → lower_to_wasm → backend-ready verification → emit_wasm
-Native: → lower_closures_in_func → evidence_lowering
-        → finalize_closure_storage_layout → boundary exit verification
-        → lower_to_clif → backend-ready verification → emit_native
+WASM:   → lower_to_wasm → backend-ready verification → emit_wasm
+Native: → lower_to_clif → backend-ready verification → emit_native
 ```
 
 Target ABI validation부터 boundary exit verification까지가

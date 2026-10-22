@@ -203,7 +203,7 @@ consumes only its exit contract:
 target ABI validation + CPS signature physicalization
 root and entry bridge composition
 closure lowering
-evidence lowering (`evidence_lowering`)
+evidence_lowering
 finalize_closure_storage_layout + boundary exit verification
 native String/Bytes/I/O/List lowering
 scf_to_cf
