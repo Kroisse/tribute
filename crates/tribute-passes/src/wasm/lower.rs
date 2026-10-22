@@ -193,7 +193,7 @@ fn wasm_lowering_passes() -> PassManager {
     .add_pass(pass_fn(
         "bind-prompt-tag-runtime",
         |ctx, m: core::Module, _| {
-            super::evidence_to_wasm::bind_wasm_prompt_tag_runtime(ctx, m.into());
+            super::prompt_tag::bind_wasm_prompt_tag_runtime(ctx, m.into());
             Ok(())
         },
     ))

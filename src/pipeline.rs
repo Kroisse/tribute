@@ -64,7 +64,7 @@
 //!     ▼ target ABI validation → CPS signature physicalization
 //!     ▼ root entry bridge
 //!     ▼ lower-prepared-closures
-//!     ▼ target evidence lowering ([wasm] evidence_to_wasm, [native] evidence_to_native)
+//!     ▼ evidence lowering (shared by the targets, each with its type converter)
 //!     ▼ bytes intrinsic bridge
 //!     ▼ closure storage layout finalization
 //!     ▼ cleanup (global DCE removes uncalled runtime items, canonicalize, DCE)
@@ -1124,7 +1124,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
         "Wasm",
         tribute_ir::runtime_items::RUNTIME_ITEMS,
     )?;
-    lower_wasm_runtime_calls(ctx, m, &mut analyses)?;
+    lower_wasm_runtime_calls(ctx, m)?;
     finish_target_lowering(
         ctx,
         m,
@@ -1133,13 +1133,17 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
     )
 }
 
-/// Run the native target pipeline: lowering + evidence_to_native + cleanup.
+/// Run the native target pipeline: lowering + cleanup.
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     let mut analyses = AnalysisCache::new();
-    // Native evidence lowering still calls the C runtime, so no runtime item
-    // stays alive into the native target.
-    enter_target_lowering(ctx, m, &mut analyses, "native", &[])?;
-    lower_native_runtime_calls(ctx, m, &mut analyses)?;
+    enter_target_lowering(
+        ctx,
+        m,
+        &mut analyses,
+        "native",
+        tribute_ir::runtime_items::RUNTIME_ITEMS,
+    )?;
+    lower_native_runtime_calls(ctx, m)?;
     finish_target_lowering(
         ctx,
         m,
@@ -1148,8 +1152,9 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     )
 }
 
-/// The target-independent start of the representation/ABI boundary, up to
-/// the target lowering that calls runtime functions.
+/// The target-independent start of the representation/ABI boundary, through
+/// evidence lowering, up to the target-specific stages that call runtime
+/// functions.
 fn enter_target_lowering(
     ctx: &mut IrContext,
     m: Module,
@@ -1169,65 +1174,57 @@ fn enter_target_lowering(
     );
 
     // General function inlining. Single-block-only (no `cf` dialect
-    // dependency), so it preserves the caller's block structure. That
-    // keeps `evidence_to_native`'s per-block producer/consumer correlation
-    // assumptions intact, keeps WASM lowering within the dialects it
-    // handles, and lets the same pass work on both backend paths.
+    // dependency), so it preserves the caller's block structure. That keeps
+    // WASM lowering within the dialects it handles and lets the same pass
+    // work on both backend paths.
     trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     // Fold what inlining exposed (struct reads of known constructions, box
     // round trips, constant selectors) before closure storage and evidence
     // lowering see the IR.
     run_canonicalize_passes(ctx, m, analyses, "post-inline canonicalization")?;
 
-    enter_target_closure_storage_boundary(ctx, m, analyses)
+    enter_target_closure_storage_boundary(ctx, m, analyses)?;
+    lower_evidence(ctx, m, analyses)
 }
 
-/// Wasm evidence lowering and the bytes intrinsic bridge: the stages that
-/// call runtime items.
-fn lower_wasm_runtime_calls(
-    ctx: &mut IrContext,
-    m: Module,
-    analyses: &mut AnalysisCache,
-) -> Result<(), DumpIrError> {
-    let core_module = core_dialect::Module::from_op(ctx, m.op())
-        .expect("Wasm evidence lowering requires a core.module");
-    let runtime = tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, m)
-        .map_err(|error| DumpIrError {
-            message: error.to_string(),
-        })?;
-    let mut pm = PassManager::new();
-    pm.nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::wasm::evidence_to_wasm::LowerEvidenceToWasm::new(runtime));
-    pm.with_debug_verifier();
-    pm.run(ctx, core_module, analyses)?;
-    tribute_ir::dialect::ability::remove_declarations(ctx, m);
+/// The Wasm bytes intrinsic bridge, the target-specific stage that calls
+/// runtime items.
+fn lower_wasm_runtime_calls(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     // Complete the supported bytes intrinsic bridge inside the boundary; the
     // lowering consumes its verified compiler intrinsic identity.
     tribute_passes::wasm::bytes::lower(ctx, m)?;
     Ok(())
 }
 
-/// Native evidence lowering and the bytes intrinsic bridge: the stages that
-/// call runtime items.
-fn lower_native_runtime_calls(
+/// The native bytes intrinsic bridge, the target-specific stage that calls
+/// runtime items.
+fn lower_native_runtime_calls(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
+    // Complete the supported bytes intrinsic bridge inside the boundary; the
+    // lowering consumes its verified compiler intrinsic identity.
+    tribute_passes::native::intrinsic_to_native::lower(ctx, m)?;
+    Ok(())
+}
+
+/// Lower `effect.*` to calls of the evidence runtime and drop the ability
+/// declarations.
+fn lower_evidence(
     ctx: &mut IrContext,
     m: Module,
     analyses: &mut AnalysisCache,
 ) -> Result<(), DumpIrError> {
-    if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
-        tribute_passes::native::evidence::prepare_native_evidence_runtime(ctx, m);
-        let mut pm = PassManager::new();
-        pm.nest::<func_dialect::Func>()
-            .add_pass(tribute_passes::native::evidence::LowerEvidenceToNative);
-        pm.with_debug_verifier();
-        pm.run(ctx, core_module, analyses)?;
-        tribute_ir::dialect::ability::remove_declarations(ctx, m);
-    } else {
-        tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
-    }
-    // Complete the supported bytes intrinsic bridge inside the boundary; the
-    // lowering consumes its verified compiler intrinsic identity.
-    tribute_passes::native::intrinsic_to_native::lower(ctx, m)?;
+    use tribute_passes::evidence_lowering::{LowerEvidence, prepare_evidence_runtime};
+
+    let core_module = core_dialect::Module::from_op(ctx, m.op())
+        .expect("evidence lowering requires a core.module");
+    let runtime = prepare_evidence_runtime(ctx, m).map_err(|error| DumpIrError {
+        message: error.to_string(),
+    })?;
+    let mut pm = PassManager::new();
+    pm.nest::<func_dialect::Func>()
+        .add_pass(LowerEvidence::new(runtime));
+    pm.with_debug_verifier();
+    pm.run(ctx, core_module, analyses)?;
+    tribute_ir::dialect::ability::remove_declarations(ctx, m);
     Ok(())
 }
 
@@ -2226,7 +2223,7 @@ fn main() -> Nil {
         db: &crate::TributeDatabaseImpl,
         target: tribute_passes::abi_boundary::TargetKind,
     ) {
-        let mut declared = false;
+        let (mut declared, mut called) = (false, false);
         for (path, text) in BOUNDARY_EXIT_PROGRAMS {
             let source = source_from_str(path, text);
             let (mut ctx, module) = run_shared_pipeline(db, source)
@@ -2240,9 +2237,15 @@ fn main() -> Nil {
                 !exit.contains("ability.decl"),
                 "{path}: evidence lowering removes ability declarations:\n{exit}"
             );
+            assert!(
+                !exit.contains("__tribute_evidence_"),
+                "{path}: evidence runs on the source runtime:\n{exit}"
+            );
             declared |= shared.contains("ability.decl");
+            called |= exit.contains("@\"std::runtime::evidence::");
         }
         assert!(declared, "a boundary program declares an ability instance");
+        assert!(called, "a boundary program calls the evidence runtime");
     }
 
     #[salsa_test]

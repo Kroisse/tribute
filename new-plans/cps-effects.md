@@ -1152,7 +1152,9 @@ Rules:
 
 - Every `evidence`, `outer`, `tail`, and `source` operand has the evidence
   type, and an evidence result has the type of its `evidence` operand.
-  `prompt_tag` is `core.i32`. The operation schemas check this.
+  `prompt_tag` is `core.i32`, and each dispatch `payload` and the
+  `effect.dispatch_tail` result are `tribute_rt.anyref`. The operation schemas
+  check this.
 - `ability.perform` and `ability.call` are illegal after the shared
   ability-dispatch lowering boundary.
 - `effect.*` operations may remain after shared lowering and before
@@ -1179,8 +1181,9 @@ decomposition, indirect call로 변환한다. Evidence는 일반 managed 배열�
 
 ### WasmGC
 
-WasmGC도 같은 shared middle-end를 사용한다. `wasm/evidence_to_wasm`은
-representation/ABI 경계 안에서 native와 같은 구조로 `effect.*`를 낮춘다.
+WasmGC도 같은 shared middle-end와 evidence lowering을 사용한다. Evidence
+lowering(`evidence_lowering`)은 target과 무관한 pass로, representation/ABI 경계
+안에서 두 target의 `effect.*`를 같은 구조로 낮춘다.
 `effect.extend`, `effect.mask`, `effect.dup`, `effect.outer`, `effect.tail`,
 `effect.with_tail`, `effect.push`는 각각 같은 이름의 runtime 항목 호출이 되고,
 `effect.dispatch_tail` / `effect.dispatch_cps`는 `lookup_tr` / `lookup` 호출, closure

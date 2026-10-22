@@ -10,13 +10,11 @@
 //! Index 1: BytesArray - array i8 backing storage for Bytes
 //! Index 2: BytesStruct - struct { data: ref BytesArray, offset: i32, len: i32 }
 //! Index 3: ClosureStruct - struct { i32 } (table index), the closure base
-//! Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: (ref null ClosureStruct), shadowed: anyref, outer: anyref } (evidence)
-//! Index 5: Evidence - array (ref Marker) (evidence array)
-//! Index 6: Described - struct { descriptor: i32 }, supertype of user structs and variants
-//! Index 7+: User-defined types (structs, arrays, variants, closure capture layouts, etc.)
+//! Index 4: Described - struct { descriptor: i32 }, supertype of user structs and variants
+//! Index 5+: User-defined types (structs, arrays, variants, closure capture layouts, etc.)
 //! ```
 
-use wasm_encoder::{FieldType, HeapType, RefType, StorageType, ValType};
+use wasm_encoder::{FieldType, StorageType, ValType};
 
 /// Type index for BoxedF64 (Float wrapper for polymorphic contexts).
 /// This is always index 0 in the GC type section.
@@ -36,22 +34,12 @@ pub const BYTES_STRUCT_IDX: u32 = 2;
 /// subtype that adds them after the table index.
 pub const CLOSURE_STRUCT_IDX: u32 = 3;
 
-/// Type index for Marker (struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: (ref null ClosureStruct), shadowed: anyref, outer: anyref }).
-/// This is always index 4 in the GC type section.
-/// Used for evidence-based handler dispatch in the ability system.
-pub const MARKER_IDX: u32 = 4;
-
-/// Type index for Evidence (array (ref Marker)).
-/// This is always index 5 in the GC type section.
-/// Evidence is a sorted array of markers for ability handler lookup.
-pub const EVIDENCE_IDX: u32 = 5;
-
 /// Type index for Described (struct { descriptor: i32 }). Only user structs and
 /// variants are its subtypes.
-/// This is always index 6 in the GC type section.
+/// This is always index 4 in the GC type section.
 /// Every user struct and variant type declares it as its `supertype`, so an
 /// erased reference can be cast to it to read the runtime type descriptor.
-pub const DESCRIBED_IDX: u32 = 6;
+pub const DESCRIBED_IDX: u32 = 4;
 
 /// Runtime layout identifier (the `layout` type attribute) of the builtin
 /// boxed float at [`BOXED_F64_IDX`].
@@ -60,12 +48,6 @@ pub const BOXED_F64_LAYOUT: &str = "boxed_f64";
 /// Runtime layout identifier of the builtin
 /// closure struct at [`CLOSURE_STRUCT_IDX`].
 pub const CLOSURE_LAYOUT: &str = "closure";
-
-/// Runtime layout identifier of the builtin evidence marker at [`MARKER_IDX`].
-pub const MARKER_LAYOUT: &str = "evidence_marker";
-
-/// Runtime layout identifier of the builtin evidence array at [`EVIDENCE_IDX`].
-pub const EVIDENCE_LAYOUT: &str = "evidence";
 
 /// Runtime layout identifier of the builtin bytes struct at
 /// [`BYTES_STRUCT_IDX`].
@@ -89,10 +71,6 @@ pub fn builtin_layout_idx(layout: &str) -> Option<u32> {
         Some(BYTES_STRUCT_IDX)
     } else if layout == CLOSURE_LAYOUT {
         Some(CLOSURE_STRUCT_IDX)
-    } else if layout == MARKER_LAYOUT {
-        Some(MARKER_IDX)
-    } else if layout == EVIDENCE_LAYOUT {
-        Some(EVIDENCE_IDX)
     } else if layout == DESCRIBED_LAYOUT {
         Some(DESCRIBED_IDX)
     } else {
@@ -101,7 +79,7 @@ pub fn builtin_layout_idx(layout: &str) -> Option<u32> {
 }
 
 /// First type index available for user-defined types.
-pub const FIRST_USER_TYPE_IDX: u32 = 7;
+pub const FIRST_USER_TYPE_IDX: u32 = 5;
 
 /// Closure base field count: the code field (table index) alone. Closure
 /// capture layouts are user-indexed subtypes that add their captures.
@@ -140,7 +118,7 @@ impl GcTypeDef {
 ///
 /// These must be prepended to the user-defined types when emitting.
 /// Indices: BoxedF64(0), BytesArray(1), BytesStruct(2), ClosureStruct(3),
-///          Marker(4), Evidence(5), Described(6).
+///          Described(4).
 pub fn builtin_types() -> Vec<GcTypeDef> {
     vec![
         // Index 0: BoxedF64 - struct { value: f64 }
@@ -176,41 +154,7 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
             element_type: StorageType::Val(ValType::I32),
             mutable: false,
         }]),
-        // Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: (ref null ClosureStruct), shadowed: anyref, outer: anyref }
-        GcTypeDef::Struct(vec![
-            FieldType {
-                element_type: StorageType::Val(ValType::I32),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::I32),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::Ref(RefType {
-                    nullable: true,
-                    heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
-                })),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-                mutable: false,
-            },
-        ]),
-        // Index 5: Evidence - array (ref null Marker)
-        GcTypeDef::Array(FieldType {
-            element_type: StorageType::Val(ValType::Ref(RefType {
-                nullable: true,
-                heap_type: HeapType::Concrete(MARKER_IDX),
-            })),
-            mutable: true,
-        }),
-        // Index 6: Described - struct { descriptor: i32 }
+        // Index 4: Described - struct { descriptor: i32 }
         GcTypeDef::Struct(vec![descriptor_field()]),
     ]
 }
@@ -232,7 +176,7 @@ pub fn descriptor_field() -> FieldType {
 /// classification against [`builtin_types`], so reindexing the builtin layout
 /// cannot silently change a physical classification.
 pub(crate) fn is_builtin_struct_index(index: u32) -> bool {
-    index < FIRST_USER_TYPE_IDX && !matches!(index, BYTES_ARRAY_IDX | EVIDENCE_IDX)
+    index < FIRST_USER_TYPE_IDX && index != BYTES_ARRAY_IDX
 }
 
 #[cfg(test)]
@@ -247,12 +191,10 @@ mod tests {
                 BYTES_ARRAY_IDX,
                 BYTES_STRUCT_IDX,
                 CLOSURE_STRUCT_IDX,
-                MARKER_IDX,
-                EVIDENCE_IDX,
                 DESCRIBED_IDX,
                 FIRST_USER_TYPE_IDX
             ],
-            [0, 1, 2, 3, 4, 5, 6, 7],
+            [0, 1, 2, 3, 4, 5],
         );
         for (index, definition) in builtin_types().iter().enumerate() {
             let index = index as u32;
@@ -268,7 +210,7 @@ mod tests {
     #[test]
     fn test_builtin_types() {
         let builtins = builtin_types();
-        assert_eq!(builtins.len(), 7);
+        assert_eq!(builtins.len(), 5);
 
         // BoxedF64
         assert!(matches!(&builtins[0], GcTypeDef::Struct(fields) if fields.len() == 1));
@@ -278,41 +220,10 @@ mod tests {
         assert!(matches!(&builtins[2], GcTypeDef::Struct(fields) if fields.len() == 3));
         // ClosureStruct
         assert!(matches!(&builtins[3], GcTypeDef::Struct(fields) if fields.len() == 1));
-        // Marker (5 fields: ability_id, prompt_tag, tr_dispatch_fn, shadowed, outer)
-        assert!(matches!(&builtins[4], GcTypeDef::Struct(fields) if fields.len() == 5));
-        // Evidence (array of Marker refs)
-        assert!(matches!(&builtins[5], GcTypeDef::Array(_)));
         // Described (the descriptor field alone)
         assert!(
-            matches!(&builtins[6], GcTypeDef::Struct(fields) if fields[..] == [descriptor_field()])
+            matches!(&builtins[4], GcTypeDef::Struct(fields) if fields[..] == [descriptor_field()])
         );
-    }
-
-    #[test]
-    fn test_evidence_array_element_is_nullable() {
-        // Evidence array elements must be nullable to allow array.new_default initialization
-        let builtins = builtin_types();
-        let evidence_def = &builtins[EVIDENCE_IDX as usize];
-
-        match evidence_def {
-            GcTypeDef::Array(field_type) => {
-                match field_type.element_type {
-                    StorageType::Val(ValType::Ref(ref_type)) => {
-                        assert!(
-                            ref_type.nullable,
-                            "Evidence array elements must be nullable for array.new_default"
-                        );
-                        // Also verify it references MARKER_IDX
-                        assert!(
-                            matches!(ref_type.heap_type, HeapType::Concrete(MARKER_IDX)),
-                            "Evidence array should contain Marker references"
-                        );
-                    }
-                    _ => panic!("Evidence array element should be a reference type"),
-                }
-            }
-            _ => panic!("Evidence (index 5) should be an array type"),
-        }
     }
 
     #[test]
@@ -320,15 +231,8 @@ mod tests {
         let builtins = builtin_types();
         let i32 = StorageType::Val(ValType::I32);
         let f64 = StorageType::Val(ValType::F64);
-        let anyref = StorageType::Val(ValType::Ref(RefType::ANYREF));
-        let closure = StorageType::Val(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
-        }));
         assert_eq!(CLOSURE_FIELD_COUNT, 1, "ClosureStruct field count");
-        let cases: [(&str, u32, &[StorageType]); 3] = [
-            // { ability_id, prompt_tag, tr_dispatch_fn, shadowed, outer }
-            ("Marker", MARKER_IDX, &[i32, i32, closure, anyref, anyref]),
+        let cases: [(&str, u32, &[StorageType]); 2] = [
             // { code: function table index }
             ("ClosureStruct", CLOSURE_STRUCT_IDX, &[i32]),
             ("BoxedF64", BOXED_F64_IDX, &[f64]),

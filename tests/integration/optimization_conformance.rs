@@ -121,7 +121,7 @@ fn generated_rtti_field_releases(ir: &str) -> String {
                 symbol
                     .strip_prefix("@__tribute_release_")
                     .and_then(|index| index.parse::<u32>().ok())
-                    .is_some_and(|index| index >= 7)
+                    .is_some_and(|index| index >= 5)
             });
         } else if function.is_some() && trimmed.contains("tribute_rt.release") {
             count += 1;
@@ -821,15 +821,15 @@ fn temporary_field_borrows_have_focused_before_after_ir(db: &salsa::DatabaseImpl
     .expect("preserved temporary-borrow stage IR should be available");
     assert_eq!(
         generated_rtti_field_releases(before),
-        "@__tribute_release_8=1"
+        "@__tribute_release_6=1"
     );
     assert_eq!(
         generated_rtti_field_releases(after),
-        "@__tribute_release_8=1"
+        "@__tribute_release_6=1"
     );
     assert_eq!(
         generated_rtti_field_releases(preserved_after),
-        "@__tribute_release_8=1"
+        "@__tribute_release_6=1"
     );
     let before = focused_rc_ops(before);
     let after = focused_rc_ops(after);

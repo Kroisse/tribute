@@ -27,7 +27,6 @@ pub mod const_to_native;
 pub mod descriptor_records;
 pub mod descriptor_to_clif;
 pub mod entrypoint;
-pub mod evidence;
 pub mod intrinsic_to_native;
 pub mod io;
 pub mod list;

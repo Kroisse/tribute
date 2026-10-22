@@ -241,12 +241,9 @@ fn allocation_size_for_type(
     {
         return Ok(0);
     }
-    // A `Bytes` object and an evidence are released by their reserved RTTI
-    // entries, and an array's size depends on its length.
-    if (data.name.is(ctx, "core.bytes"))
-        || tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
-        || tribute_ir::dialect::adt::Array::matches(ctx, ty)
-    {
+    // A `Bytes` object is released by its reserved RTTI entry, and an
+    // array's size depends on its length.
+    if (data.name.is(ctx, "core.bytes")) || tribute_ir::dialect::adt::Array::matches(ctx, ty) {
         return Ok(0);
     }
     let layout = plan.allocation_layout_for_type(ctx, ty)?;
