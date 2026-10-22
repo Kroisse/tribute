@@ -9,9 +9,9 @@ run_all: Some(Direct) () -> (core.i32)
   effect.delimit operands=2 results=1: 1
   effect.initial_evidence operands=0 results=1: 1
   func.return operands=1 results=0: 1
-run_state_with_console: Some(EvidenceDirect) (adt.array<adt.struct<_Marker>>) -> (core.i32)
+run_state_with_console: Some(EvidenceDirect) (adt.array<adt.typeref<std::runtime::evidence::Marker>>) -> (core.i32)
   effect.delimit operands=2 results=1: 1
   func.return operands=1 results=0: 1
-step: Some(Cps) (adt.array<adt.struct<_Marker>>, Frame<core.i32>) -> (core.never)
+step: Some(Cps) (adt.array<adt.typeref<std::runtime::evidence::Marker>>, Frame<core.i32>) -> (core.never)
   effect.dispatch_cps operands=4 results=0: 1
   effect.dispatch_tail operands=2 results=1: 1

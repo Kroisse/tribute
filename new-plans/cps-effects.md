@@ -896,7 +896,7 @@ Marker와 Evidence는
 ```rust
 pub(pkg) struct Marker {
     ability_id: Int,
-    prompt_tag: Int,
+    prompt_tag: Nat,
     tr_dispatch_fn: Option(Dispatch),
     shadowed: Option(Marker),
     outer: Slots(Marker),
@@ -933,7 +933,9 @@ Marker의 source 선언이 필드 순서와 타입의 유일한 정의다. Marke
 `std::runtime::evidence::Marker`이며 root module의 `tribute.types` 속성에서 이
 경로의 항목이 그 IR 타입을 게시한다.
 Hidden evidence parameter나 frame field처럼 evidence 타입이 필요한 shared pass는
-이 속성의 marker 타입으로 `adt.array`를 만든다. Marker를 만들고 필드를 읽는
+이 경로를 이름으로 가진 `adt.typeref`를 원소로 하는 `adt.array`를 만들며, 이
+타입이 evidence 타입이다. 이 이름은 게시된 marker 타입을 가리키므로 타입을 만드는
+데 module 접근이 필요 없다. Marker를 만들고 필드를 읽는
 code는 runtime 모듈 안에만 있으며, effect lowering과 그 밖의 pass는 marker를 직접
 만들거나 읽지 않는다.
 
@@ -1024,16 +1026,16 @@ handle은 marker를 설치하지 않는다. 재개된 계산의 label은 lambda 
 
 두 target의 effect lowering은 `std::runtime::evidence`의 같은 runtime 항목 함수를
 그 canonical 경로(`std::runtime::evidence::extend` 등)로 찾아 부른다. Lowering은
-`effect.extend`의 dispatch closure를 `Option(Dispatch)`로 감싸 넘기며, null이면
-`None`을 넘긴다.
+`effect.extend`의 dispatch closure를 `Option(Dispatch)`의 `Some`으로 감싸 넘긴다.
+`None`인 `tr_dispatch_fn`은 runtime 항목 안에서만 만들어진다(`with_tail`의 tail 칸).
 
 ```rust
-fn lookup(ev: Evidence, ability_id: Int) ->{} Int
+fn lookup(ev: Evidence, ability_id: Int) ->{} Nat
 fn lookup_tr(ev: Evidence, ability_id: Int) ->{} Dispatch
 fn extend(
     ev: Evidence,
     ability_id: Int,
-    prompt_tag: Int,
+    prompt_tag: Nat,
     tr_dispatch_fn: Option(Dispatch),
     outer: Evidence,
 ) ->{} Evidence
@@ -1058,7 +1060,9 @@ marker를 두고, `tail`은 그 칸의 `outer`를, 칸이 없으면 `ev` 자신�
 칸은 `ability_id`에 대한 이진 탐색으로 찾으며, 탐색은 tail position의 재귀다.
 없는 ability를 `lookup`, `lookup_tr`, `mask`, `dup`, `outer`, `push`하거나 dispatch
 closure가 없는 marker에 `lookup_tr`하는 것은 compiler bug이며, runtime code는 그
-실행을 trap으로 끝낸다.
+실행을 trap으로 끝낸다. Runtime code는 별도 trap primitive 없이 evidence의 범위 밖
+칸을 `Slots::get`이나 `Slots::remove`로 접근해 [target trap](types.md#slots)을
+일으킨다.
 
 ### `ability.handle_dispatch`
 
@@ -1179,3 +1183,9 @@ field 접근, `func.call_indirect` 또는 proper-tail `func.tail_call_indirect`�
 Wasm dialect lowering이 이를 `wasm.call_indirect` /
 `wasm.return_call_indirect`로 바꾼다. Runtime 항목은 다른 source 함수처럼 GC 배열과
 struct 위의 `wasm.func`로 compile된다.
+
+Marker는 `outer: Slots(Marker)`로 자기 배열을 담으므로 그대로 쓰면 재귀 GC 타입이
+된다. Wasm target은 struct의 배열 field를 `arrayref`로 저장하고 읽을 때 구체 배열로
+cast하며, evidence 배열의 원소는 `structref`로 저장한다. Evidence 값은 `adt` 연산이
+모두 Wasm 연산으로 바뀔 때까지 `adt.array` 타입을 유지하고, 그 뒤 한 번에
+`wasm_gc.array<wasm.structref>`로 바뀐다.

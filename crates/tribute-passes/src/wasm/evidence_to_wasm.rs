@@ -1,68 +1,37 @@
-//! Wasm evidence lowering and evidence runtime helpers (arena-based).
+//! Wasm evidence lowering (arena-based).
 //!
 //! Evidence lowering runs inside the representation/ABI boundary. It lowers
 //! `effect.extend`, the evidence selection operations, `effect.dispatch_tail`,
-//! and `effect.dispatch_cps` to shared value/control operations that call the
-//! evidence runtime helper ABI shared with native
-//! (`tribute_ir::dialect::ability::evidence_abi`), through bodyless helper
-//! declarations.
+//! and `effect.dispatch_cps` to calls of the evidence runtime written in
+//! Tribute source, `std::runtime::evidence` (`new-plans/cps-effects.md`),
+//! which it finds by canonical path. The runtime functions are compiled like
+//! any other source function; marker construction and field access stay
+//! inside them.
 //!
-//! After the boundary exit, [`bind_wasm_evidence_runtime`] replaces those
-//! declarations with the Wasm target runtime: helper implementations over a
-//! WasmGC evidence array, built on four internal helpers:
-//!
-//! - `__tribute_evidence_find_slot(ev, ability_id, low, high)` -> binary search
-//!   for the index of an ability's slot, or of where it would be inserted
-//! - `__tribute_evidence_find_marker(ev, ability_id)` -> the top marker of an
-//!   ability, or null
-//! - `__tribute_evidence_set_marker(ev, marker)` -> copy with the marker as the
-//!   top marker of its ability
-//! - `__tribute_evidence_remove_marker(ev, ability_id)` -> copy without the
-//!   ability's slot
-//!
-//! ## Evidence Structure
-//!
-//! Evidence is represented as a WasmGC array of Marker structs, sorted by
-//! ability_id. Each element is the top marker of its ability, and `shadowed`
-//! refers to the marker of the same ability it shadows, and `outer` to the
-//! evidence its handler was installed on:
-//!
-//! ```text
-//! Evidence = Array(Marker)
-//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: (ref null Closure), shadowed: anyref, outer: anyref }
-//! ```
-//!
-//! Marker construction and field access stay inside the helper
-//! implementations.
+//! After the boundary exit, [`bind_wasm_prompt_tag_runtime`] gives the
+//! prompt tag allocator `__tribute_next_tag` its Wasm implementation.
 
-use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
+use std::rc::Rc;
+
+use tribute_ir::dialect::ability;
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::effect;
+use tribute_ir::runtime_items::{RuntimeFunction, RuntimeFunctionError, evidence};
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{core, func, wasm as wasm_dialect};
-use trunk_ir::ops::DialectOp;
-use trunk_ir::ops::DialectType;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
-use trunk_ir::{StringRef, SymbolPath};
-use trunk_ir_wasm_backend::gc_types::{CLOSURE_STRUCT_IDX, EVIDENCE_IDX, MARKER_IDX};
+use trunk_ir::types::{Attribute, Location};
 
 use crate::effect_dispatch;
 
-/// Internal Wasm runtime helper: binary search for an ability's slot index.
-const FIND_SLOT: &str = "__tribute_evidence_find_slot";
-/// Internal Wasm runtime helper: lookup of an ability's top marker.
-const FIND_MARKER: &str = "__tribute_evidence_find_marker";
-/// Internal Wasm runtime helper: sorted marker insertion or replacement.
-const SET_MARKER: &str = "__tribute_evidence_set_marker";
-/// Internal Wasm runtime helper: removal of an ability's slot.
-const REMOVE_MARKER: &str = "__tribute_evidence_remove_marker";
 /// C link name of the helper that allocates a fresh prompt tag.
 pub const NEXT_TAG: &str = "__tribute_next_tag";
 
@@ -70,106 +39,88 @@ pub const NEXT_TAG: &str = "__tribute_next_tag";
 // Boundary: effect lowering
 // =============================================================================
 
-/// Declare the evidence runtime helpers that the module's `effect.*`
-/// operations will call.
-///
-/// Run once on the module before [`LowerEvidenceToWasm`]. Only helpers that
-/// some operation needs are declared, so the target binds no unused runtime.
-pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
-    let needs = evidence_helper_requirements(ctx, module);
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
-    let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-    let i32_ty = effect_dispatch::i32_type(ctx);
-    let declarations = [
-        (
-            needs.lookup,
-            evidence_abi::LOOKUP,
-            vec![evidence_ty, i32_ty],
-            i32_ty,
-        ),
-        (
-            needs.lookup_tr,
-            evidence_abi::LOOKUP_TR,
-            vec![evidence_ty, i32_ty],
-            closure_ty,
-        ),
-        (
-            needs.extend,
-            evidence_abi::EXTEND,
-            vec![evidence_ty, i32_ty, i32_ty, closure_ty, evidence_ty],
-            evidence_ty,
-        ),
-        (
-            needs.mask,
-            evidence_abi::MASK,
-            vec![evidence_ty, i32_ty],
-            evidence_ty,
-        ),
-        (
-            needs.dup,
-            evidence_abi::DUP,
-            vec![evidence_ty, i32_ty],
-            evidence_ty,
-        ),
-        (
-            needs.outer,
-            evidence_abi::OUTER,
-            vec![evidence_ty, i32_ty],
-            evidence_ty,
-        ),
-        (
-            needs.tail,
-            evidence_abi::TAIL,
-            vec![evidence_ty, i32_ty],
-            evidence_ty,
-        ),
-        (
-            needs.with_tail,
-            evidence_abi::WITH_TAIL,
-            vec![evidence_ty, i32_ty, evidence_ty],
-            evidence_ty,
-        ),
-        (
-            needs.push,
-            evidence_abi::PUSH,
-            vec![evidence_ty, evidence_ty, i32_ty],
-            evidence_ty,
-        ),
-    ];
-    for (needed, name, params, result) in declarations {
-        if !needed || has_function(ctx, module, name) {
-            continue;
-        }
-        let location = ctx.op(module.op()).location;
-        let declaration = crate::native::build_extern_func(ctx, location, name, &params, result);
-        prepend_module_op(ctx, module, declaration);
-    }
+/// The evidence runtime functions the module's `effect.*` operations call.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WasmEvidenceRuntime {
+    lookup: Option<RuntimeFunction>,
+    lookup_tr: Option<RuntimeFunction>,
+    extend: Option<RuntimeFunction>,
+    mask: Option<RuntimeFunction>,
+    dup: Option<RuntimeFunction>,
+    outer: Option<RuntimeFunction>,
+    tail: Option<RuntimeFunction>,
+    with_tail: Option<RuntimeFunction>,
+    push: Option<RuntimeFunction>,
 }
 
-/// Lower evidence operations in one function body.
+/// Find the evidence runtime functions that the module's `effect.*`
+/// operations will call.
 ///
-/// Precondition: [`prepare_wasm_evidence_runtime`] already declared the
-/// helpers for the containing module.
+/// Run once on the module before [`LowerEvidenceToWasm`]. A function no
+/// operation needs is not looked up, so a missing one fails only when used.
+pub fn prepare_wasm_evidence_runtime(
+    ctx: &IrContext,
+    module: Module,
+) -> Result<WasmEvidenceRuntime, RuntimeFunctionError> {
+    let needs = evidence_runtime_requirements(ctx, module);
+    let find = |needed: bool, path| {
+        needed
+            .then(|| RuntimeFunction::lookup(ctx, module, path))
+            .transpose()
+    };
+    Ok(WasmEvidenceRuntime {
+        lookup: find(needs.lookup, evidence::LOOKUP)?,
+        lookup_tr: find(needs.lookup_tr, evidence::LOOKUP_TR)?,
+        extend: find(needs.extend, evidence::EXTEND)?,
+        mask: find(needs.mask, evidence::MASK)?,
+        dup: find(needs.dup, evidence::DUP)?,
+        outer: find(needs.outer, evidence::OUTER)?,
+        tail: find(needs.tail, evidence::TAIL)?,
+        with_tail: find(needs.with_tail, evidence::WITH_TAIL)?,
+        push: find(needs.push, evidence::PUSH)?,
+    })
+}
+
+/// Lower evidence operations in one function body with the functions of
+/// `runtime`, from [`prepare_wasm_evidence_runtime`] on the containing module.
 pub fn lower_evidence_to_wasm_func(
     ctx: &mut IrContext,
     func_op: func::Func,
+    runtime: &WasmEvidenceRuntime,
 ) -> Result<(), ConversionError> {
+    let runtime = Rc::new(*runtime);
     PatternApplicator::new(TypeConverter::new())
         .with_target(wasm_effect_abi_target())
-        .add_pattern(LowerEffectExtendToWasm)
-        .add_pattern(LowerEffectStackOpToWasm)
-        .add_pattern(LowerEffectTailOpToWasm)
-        .add_pattern(LowerEffectDispatchTailToWasm)
-        .add_pattern(LowerEffectDispatchCpsToWasm)
+        .add_pattern(LowerEffectExtendToWasm {
+            runtime: Rc::clone(&runtime),
+        })
+        .add_pattern(LowerEffectStackOpToWasm {
+            runtime: Rc::clone(&runtime),
+        })
+        .add_pattern(LowerEffectTailOpToWasm {
+            runtime: Rc::clone(&runtime),
+        })
+        .add_pattern(LowerEffectDispatchTailToWasm {
+            runtime: Rc::clone(&runtime),
+        })
+        .add_pattern(LowerEffectDispatchCpsToWasm { runtime })
         .apply_partial_conversion(ctx, func_op, "wasm-evidence-effect-abi")?;
     Ok(())
 }
 
 /// PassManager-friendly Wasm evidence lowering pass.
 ///
-/// This pass is function-scoped and does not declare module-scope runtime
-/// helpers. Run [`prepare_wasm_evidence_runtime`] on the module first.
-pub struct LowerEvidenceToWasm;
+/// This pass is function-scoped; it takes the runtime functions
+/// [`prepare_wasm_evidence_runtime`] found on the module.
+pub struct LowerEvidenceToWasm {
+    runtime: WasmEvidenceRuntime,
+}
+
+impl LowerEvidenceToWasm {
+    pub fn new(runtime: WasmEvidenceRuntime) -> Self {
+        Self { runtime }
+    }
+}
 
 impl Pass for LowerEvidenceToWasm {
     type Target = func::Func;
@@ -184,7 +135,7 @@ impl Pass for LowerEvidenceToWasm {
         target: func::Func,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        lower_evidence_to_wasm_func(ctx, target)?;
+        lower_evidence_to_wasm_func(ctx, target, &self.runtime)?;
         Ok(())
     }
 }
@@ -204,9 +155,9 @@ fn wasm_effect_abi_target() -> ConversionTarget {
         .illegal_op("effect.dispatch_cps")
 }
 
-/// The helpers the module's `effect.*` operations call.
+/// The runtime functions the module's `effect.*` operations call.
 #[derive(Default)]
-struct HelperRequirements {
+struct RuntimeRequirements {
     lookup: bool,
     lookup_tr: bool,
     extend: bool,
@@ -218,8 +169,8 @@ struct HelperRequirements {
     push: bool,
 }
 
-fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> HelperRequirements {
-    fn visit(ctx: &IrContext, region: RegionRef, needs: &mut HelperRequirements) {
+fn evidence_runtime_requirements(ctx: &IrContext, module: Module) -> RuntimeRequirements {
+    fn visit(ctx: &IrContext, region: RegionRef, needs: &mut RuntimeRequirements) {
         for &block in &ctx.region(region).blocks {
             for &op in &ctx.block(block).ops {
                 needs.lookup |= effect::DispatchCps::matches(ctx, op);
@@ -238,52 +189,70 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> HelperRequir
         }
     }
 
-    let mut needs = HelperRequirements::default();
+    let mut needs = RuntimeRequirements::default();
     if let Some(body) = module.body(ctx) {
         visit(ctx, body, &mut needs);
     }
     needs
 }
 
-fn has_function(ctx: &IrContext, module: Module, name: &'static str) -> bool {
-    module.ops(ctx).iter().copied().any(|op| {
-        ctx.op_attrs(op).get_str("sym_name") == Some(name)
-            && (func::Func::matches(ctx, op) || wasm_dialect::Func::matches(ctx, op))
-    })
-}
-
-fn prepend_module_op(ctx: &mut IrContext, module: Module, op: OpRef) {
-    let Some(first_block) = module.first_block(ctx) else {
-        return;
-    };
-
-    if let Some(first_op) = ctx.block(first_block).ops.first().copied() {
-        ctx.insert_op_before(first_block, first_op, op);
-    } else {
-        ctx.push_op(first_block, op);
-    }
-}
-
-/// Retype a closure operand to the canonical closure slot of a helper call.
-fn as_canonical_closure(
+/// Call `function`, which [`prepare_wasm_evidence_runtime`] found because an
+/// operation of this kind needs it, and replace `op` with the call's result.
+fn replace_with_call(
     ctx: &mut IrContext,
-    loc: Location,
-    value: ValueRef,
+    op: OpRef,
+    function: Option<RuntimeFunction>,
+    args: Vec<ValueRef>,
+    rewriter: &mut PatternRewriter<'_>,
+) {
+    let function = function.expect("the evidence runtime was prepared for this operation");
+    let location = ctx.op(op).location;
+    let call = function.call(ctx, location, args);
+    rewriter.insert_op(call.op_ref());
+    rewriter.erase_op(vec![call.result(ctx)]);
+}
+
+/// `tr_dispatch_fn` as the `Some` of the runtime's `Option(Dispatch)`
+/// parameter `option_ty`.
+fn some_dispatch(
+    ctx: &mut IrContext,
+    location: Location,
+    tr_dispatch_fn: ValueRef,
+    option_ty: TypeRef,
     rewriter: &mut PatternRewriter<'_>,
 ) -> ValueRef {
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-    if ctx.value_ty(value) == closure_ty {
-        return value;
-    }
-    let cast = core::UnrealizedConversionCast::operands(value)
-        .results(closure_ty)
-        .build(ctx, loc);
-    rewriter.insert_op(cast.op_ref());
-    cast.result(ctx)
+    let dispatch = if ctx.value_ty(tr_dispatch_fn) == closure_ty {
+        tr_dispatch_fn
+    } else {
+        let cast = core::UnrealizedConversionCast::operands(tr_dispatch_fn)
+            .results(closure_ty)
+            .build(ctx, location);
+        rewriter.insert_op(cast.op_ref());
+        cast.result(ctx)
+    };
+    // The parameter is a reference to the published `Option` instance.
+    let option_name = ctx
+        .type_attrs(option_ty)
+        .get_str("name")
+        .expect("the Option(Dispatch) parameter is a nominal reference")
+        .to_owned();
+    let option_layout = ctx
+        .type_alias_by_text(&option_name)
+        .expect("the Option(Dispatch) layout is published");
+    let some = adt::VariantNew::operands([dispatch])
+        .r#type(option_layout)
+        .tag("Some")
+        .results(option_ty)
+        .build(ctx, location);
+    rewriter.insert_op(some.op_ref());
+    some.result(ctx)
 }
 
-/// `effect.extend` → `func.call @__tribute_evidence_extend`.
-struct LowerEffectExtendToWasm;
+/// `effect.extend` → `std::runtime::evidence::extend`.
+struct LowerEffectExtendToWasm {
+    runtime: Rc<WasmEvidenceRuntime>,
+}
 
 impl RewritePattern for LowerEffectExtendToWasm {
     fn match_and_rewrite(
@@ -295,32 +264,35 @@ impl RewritePattern for LowerEffectExtendToWasm {
         let Ok(extend_op) = effect::Extend::from_op(ctx, op) else {
             return false;
         };
+        let function = self
+            .runtime
+            .extend
+            .expect("the evidence runtime was prepared for effect.extend");
         let loc = ctx.op(op).location;
         let ability_id = {
             let ability = extend_op.ability(ctx).clone();
             effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
         };
-        let tr_dispatch = as_canonical_closure(ctx, loc, extend_op.tr_dispatch_fn(ctx), rewriter);
-        let result_ty = ctx.op_result_types(op)[0];
-        let call = func::Call::operands([
+        let option_ty = function.signature(ctx).inputs(ctx)[3];
+        let tr_dispatch =
+            some_dispatch(ctx, loc, extend_op.tr_dispatch_fn(ctx), option_ty, rewriter);
+        let args = vec![
             extend_op.evidence(ctx),
             ability_id,
             extend_op.prompt_tag(ctx),
             tr_dispatch,
             extend_op.outer(ctx),
-        ])
-        .callee(SymbolPath::new([evidence_abi::EXTEND]))
-        .results([result_ty])
-        .build(ctx, loc);
-        rewriter.insert_op(call.op_ref());
-        rewriter.erase_op(vec![call.result(ctx)]);
+        ];
+        replace_with_call(ctx, op, Some(function), args, rewriter);
         true
     }
 }
 
-/// `effect.mask` / `effect.dup` / `effect.outer` → the runtime call of the
-/// same name.
-struct LowerEffectStackOpToWasm;
+/// `effect.mask` / `effect.dup` / `effect.outer` → the runtime function of
+/// the same name.
+struct LowerEffectStackOpToWasm {
+    runtime: Rc<WasmEvidenceRuntime>,
+}
 
 impl RewritePattern for LowerEffectStackOpToWasm {
     fn match_and_rewrite(
@@ -329,21 +301,21 @@ impl RewritePattern for LowerEffectStackOpToWasm {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let (helper, ability, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
+        let (function, ability, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
             (
-                evidence_abi::MASK,
+                self.runtime.mask,
                 mask.ability(ctx).clone(),
                 mask.evidence(ctx),
             )
         } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
             (
-                evidence_abi::DUP,
+                self.runtime.dup,
                 dup.ability(ctx).clone(),
                 dup.evidence(ctx),
             )
         } else if let Ok(outer) = effect::Outer::from_op(ctx, op) {
             (
-                evidence_abi::OUTER,
+                self.runtime.outer,
                 outer.ability(ctx).clone(),
                 outer.evidence(ctx),
             )
@@ -352,20 +324,16 @@ impl RewritePattern for LowerEffectStackOpToWasm {
         };
         let loc = ctx.op(op).location;
         let ability_id = effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter);
-        let result_ty = ctx.op_result_types(op)[0];
-        let call = func::Call::operands([evidence, ability_id])
-            .callee(SymbolPath::new([helper]))
-            .results([result_ty])
-            .build(ctx, loc);
-        rewriter.insert_op(call.op_ref());
-        rewriter.erase_op(vec![call.result(ctx)]);
+        replace_with_call(ctx, op, function, vec![evidence, ability_id], rewriter);
         true
     }
 }
 
-/// `effect.tail` / `effect.with_tail` / `effect.push` → the runtime call of
-/// the same name.
-struct LowerEffectTailOpToWasm;
+/// `effect.tail` / `effect.with_tail` / `effect.push` → the runtime
+/// function of the same name.
+struct LowerEffectTailOpToWasm {
+    runtime: Rc<WasmEvidenceRuntime>,
+}
 
 impl RewritePattern for LowerEffectTailOpToWasm {
     fn match_and_rewrite(
@@ -384,13 +352,13 @@ impl RewritePattern for LowerEffectTailOpToWasm {
             rewriter.insert_op(slot.op_ref());
             slot.result(ctx)
         };
-        let (helper, operands) = if let Ok(tail) = effect::Tail::from_op(ctx, op) {
+        let (function, args) = if let Ok(tail) = effect::Tail::from_op(ctx, op) {
             let slot = slot(ctx, tail.index(ctx));
-            (evidence_abi::TAIL, vec![tail.evidence(ctx), slot])
+            (self.runtime.tail, vec![tail.evidence(ctx), slot])
         } else if let Ok(with_tail) = effect::WithTail::from_op(ctx, op) {
             let slot = slot(ctx, with_tail.index(ctx));
             (
-                evidence_abi::WITH_TAIL,
+                self.runtime.with_tail,
                 vec![with_tail.evidence(ctx), slot, with_tail.tail(ctx)],
             )
         } else if let Ok(push) = effect::Push::from_op(ctx, op) {
@@ -399,25 +367,22 @@ impl RewritePattern for LowerEffectTailOpToWasm {
                 effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
             };
             (
-                evidence_abi::PUSH,
+                self.runtime.push,
                 vec![push.evidence(ctx), push.source(ctx), ability_id],
             )
         } else {
             return false;
         };
-        let result_ty = ctx.op_result_types(op)[0];
-        let call = func::Call::operands(operands)
-            .callee(SymbolPath::new([helper]))
-            .results([result_ty])
-            .build(ctx, loc);
-        rewriter.insert_op(call.op_ref());
-        rewriter.erase_op(vec![call.result(ctx)]);
+        replace_with_call(ctx, op, function, args, rewriter);
         true
     }
 }
 
-/// `effect.dispatch_tail` → `__tribute_evidence_lookup_tr` + indirect call.
-struct LowerEffectDispatchTailToWasm;
+/// `effect.dispatch_tail` → `std::runtime::evidence::lookup_tr` + indirect
+/// call.
+struct LowerEffectDispatchTailToWasm {
+    runtime: Rc<WasmEvidenceRuntime>,
+}
 
 impl RewritePattern for LowerEffectDispatchTailToWasm {
     fn match_and_rewrite(
@@ -435,23 +400,26 @@ impl RewritePattern for LowerEffectDispatchTailToWasm {
         }
 
         let loc = ctx.op(op).location;
-        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
         let ability_id = {
             let ability = dispatch_op.ability(ctx).clone();
             effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
         };
-        let dispatch_closure = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
-            .callee(SymbolPath::new([evidence_abi::LOOKUP_TR]))
-            .results([closure_ty])
-            .build(ctx, loc);
+        let lookup_tr = self
+            .runtime
+            .lookup_tr
+            .expect("the evidence runtime was prepared for effect.dispatch_tail");
+        let dispatch_closure = lookup_tr.call(ctx, loc, [dispatch_op.evidence(ctx), ability_id]);
         rewriter.insert_op(dispatch_closure.op_ref());
         effect_dispatch::lower_tail_dispatch(ctx, op, dispatch_closure.result(ctx), rewriter);
         true
     }
 }
 
-/// `effect.dispatch_cps` → `__tribute_evidence_lookup` + proper-tail transfer.
-struct LowerEffectDispatchCpsToWasm;
+/// `effect.dispatch_cps` → `std::runtime::evidence::lookup` + proper-tail
+/// transfer.
+struct LowerEffectDispatchCpsToWasm {
+    runtime: Rc<WasmEvidenceRuntime>,
+}
 
 impl RewritePattern for LowerEffectDispatchCpsToWasm {
     fn match_and_rewrite(
@@ -469,15 +437,15 @@ impl RewritePattern for LowerEffectDispatchCpsToWasm {
         }
 
         let loc = ctx.op(op).location;
-        let i32_ty = effect_dispatch::i32_type(ctx);
         let ability_id = {
             let ability = dispatch_op.ability(ctx).clone();
             effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
         };
-        let prompt = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
-            .callee(SymbolPath::new([evidence_abi::LOOKUP]))
-            .results([i32_ty])
-            .build(ctx, loc);
+        let lookup = self
+            .runtime
+            .lookup
+            .expect("the evidence runtime was prepared for effect.dispatch_cps");
+        let prompt = lookup.call(ctx, loc, [dispatch_op.evidence(ctx), ability_id]);
         rewriter.insert_op(prompt.op_ref());
         effect_dispatch::lower_cps_dispatch(ctx, op, ability_id, prompt.result(ctx), rewriter);
         true
@@ -485,119 +453,41 @@ impl RewritePattern for LowerEffectDispatchCpsToWasm {
 }
 
 // =============================================================================
-// After the exit: Wasm runtime helper binding
+// After the exit: prompt tag allocator binding
 // =============================================================================
 
-/// Bind bodyless evidence runtime helper declarations to their Wasm
-/// implementations.
+/// Replace a bodyless `__tribute_next_tag` declaration with its Wasm
+/// implementation: a mutable `i32` counter global that the function returns
+/// and increments.
 ///
-/// Runs after Wasm dialect lowering has converted the declarations'
-/// signatures; each implementation adopts the declaration's signature.
-pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
+/// Runs after Wasm dialect lowering has converted the declaration's
+/// signature; the implementation adopts it.
+pub fn bind_wasm_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
     let Some(block) = module.first_block(ctx) else {
         return;
     };
-    let mut needs_find = false;
-    let mut needs_set = false;
-    let mut needs_remove = false;
     for op in module.ops_snapshot(ctx) {
-        let data = ctx.op(op);
         let is_function = wasm_dialect::Func::matches(ctx, op) || func::Func::matches(ctx, op);
         if !is_function || ctx.op_has_regions(op) {
             continue;
         }
         let attrs = ctx.op_attrs(op);
-        let Some(name_ref) = attrs.get_string_ref("sym_name") else {
+        if attrs.get_str("sym_name") != Some(NEXT_TAG) {
             continue;
-        };
-        let Some(signature) = attrs.get_type("type") else {
-            continue;
-        };
-        let location = data.location;
-        let name = ctx.str(name_ref);
-        let helper = if name == evidence_abi::LOOKUP {
-            needs_find = true;
-            Helper::MarkerField(MarkerField::PromptTag)
-        } else if name == evidence_abi::LOOKUP_TR {
-            needs_find = true;
-            Helper::MarkerField(MarkerField::TrDispatchFn)
-        } else if name == evidence_abi::EXTEND {
-            needs_find = true;
-            needs_set = true;
-            Helper::Extend
-        } else if name == evidence_abi::MASK {
-            needs_find = true;
-            needs_set = true;
-            needs_remove = true;
-            Helper::Mask
-        } else if name == evidence_abi::OUTER {
-            needs_find = true;
-            Helper::Outer
-        } else if name == evidence_abi::DUP {
-            needs_find = true;
-            needs_set = true;
-            Helper::Dup
-        } else if name == evidence_abi::TAIL {
-            needs_find = true;
-            Helper::Tail
-        } else if name == evidence_abi::WITH_TAIL {
-            needs_find = true;
-            needs_set = true;
-            Helper::WithTail
-        } else if name == evidence_abi::PUSH {
-            needs_find = true;
-            needs_set = true;
-            Helper::Push
-        } else if name == NEXT_TAG {
-            Helper::NextTag(add_tag_counter(ctx, module, location))
-        } else {
-            continue;
-        };
-        let implementation = build_helper(ctx, location, name_ref, signature, helper);
+        }
+        let name = attrs
+            .get_string_ref("sym_name")
+            .expect("a declaration has a name");
+        let signature = attrs
+            .get_type("type")
+            .expect("a function declaration has a signature");
+        let location = ctx.op(op).location;
+        let global = add_tag_counter(ctx, module, location);
+        let implementation = next_tag_function(ctx, location, name, signature, global);
         ctx.insert_op_before(block, op, implementation);
         ctx.remove_op_from_block(block, op);
         ctx.remove_op(op);
     }
-
-    let location = ctx.op(module.op()).location;
-    if needs_find && !has_function(ctx, module, FIND_MARKER) {
-        let op = generate_evidence_lookup_function(ctx, location);
-        prepend_module_op(ctx, module, op);
-    }
-    if needs_set && !has_function(ctx, module, SET_MARKER) {
-        let op = generate_evidence_set_function(ctx, location);
-        prepend_module_op(ctx, module, op);
-    }
-    if needs_remove && !has_function(ctx, module, REMOVE_MARKER) {
-        let op = generate_evidence_remove_function(ctx, location);
-        prepend_module_op(ctx, module, op);
-    }
-    if needs_find && !has_function(ctx, module, FIND_SLOT) {
-        let op = generate_evidence_slot_function(ctx, location);
-        prepend_module_op(ctx, module, op);
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Helper {
-    /// Look up the marker for an ability and return one of its fields.
-    MarkerField(MarkerField),
-    /// Build a marker from its fields and push it onto its ability's stack.
-    Extend,
-    /// Pop the top marker of an ability.
-    Mask,
-    /// Push a copy of the top marker of an ability.
-    Dup,
-    /// Return the evidence the top marker of an ability was installed on.
-    Outer,
-    /// Return the evidence of a row tail, or the evidence itself.
-    Tail,
-    /// Put a marker that holds the evidence of a row tail in its slot.
-    WithTail,
-    /// Push the top marker another evidence holds for an ability.
-    Push,
-    /// Return the tag counter global at this index and increment it.
-    NextTag(u32),
 }
 
 /// Append a mutable `i32` tag counter global, returning its index.
@@ -619,14 +509,14 @@ fn add_tag_counter(ctx: &mut IrContext, module: Module, location: Location) -> u
     index
 }
 
-/// Build a helper implementation with the declaration's (converted)
-/// signature.
-fn build_helper(
+/// The `wasm.func` that returns the counter `global` and increments it, with
+/// the declaration's (converted) signature.
+fn next_tag_function(
     ctx: &mut IrContext,
     location: Location,
-    name: StringRef,
+    name: trunk_ir::StringRef,
     signature: TypeRef,
-    helper: Helper,
+    global: u32,
 ) -> OpRef {
     let (inputs, results) = if let Some(sig) = wasm_dialect::FuncSig::from_type_ref(ctx, signature)
     {
@@ -651,242 +541,31 @@ fn build_helper(
         ops: smallvec![],
         parent_region: None,
     });
-    let args = ctx.block_args(block).to_vec();
-    let marker_ty = ability::marker_adt_type_ref(ctx);
-    // The top marker of the ability in `args[1]`, or null.
-    let find_marker = |ctx: &mut IrContext| {
-        let marker = wasm_dialect::Call::operands([args[0], args[1]])
-            .callee(SymbolPath::new([FIND_MARKER]))
-            .results([marker_ty])
-            .build(ctx, location);
-        ctx.push_op(block, marker.op_ref());
-        marker.results(ctx)[0]
-    };
-    let marker_field = |ctx: &mut IrContext, marker: ValueRef, field: MarkerField, ty: TypeRef| {
-        let get = wasm_dialect::StructGet::operands(marker)
-            .type_idx(MARKER_IDX)
-            .field_idx(field.index())
-            .results(ty)
-            .build(ctx, location);
-        ctx.push_op(block, get.op_ref());
-        get.result(ctx)
-    };
-    // The evidence with `fields` as the top marker of its ability.
-    let set_marker = |ctx: &mut IrContext, fields: [ValueRef; ability::MARKER_FIELD_COUNT]| {
-        let marker = wasm_dialect::StructNew::operands(fields)
-            .type_idx(MARKER_IDX)
-            .results(marker_ty)
-            .build(ctx, location);
-        ctx.push_op(block, marker.op_ref());
-        let call = wasm_dialect::Call::operands([args[0], marker.result(ctx)])
-            .callee(SymbolPath::new([SET_MARKER]))
-            .results([result_ty])
-            .build(ctx, location);
-        ctx.push_op(block, call.op_ref());
-        call.results(ctx)[0]
-    };
-    let returned = match helper {
-        Helper::MarkerField(field) => {
-            let marker = find_marker(ctx);
-            marker_field(ctx, marker, field, result_ty)
-        }
-        Helper::Extend => {
-            let shadowed = find_marker(ctx);
-            set_marker(ctx, [args[1], args[2], args[3], shadowed, args[4]])
-        }
-        Helper::Dup => {
-            let i32_ty = intern_i32(ctx);
-            let anyref_ty = intern_anyref(ctx);
-            let closure_ty = super::type_converter::closure_adt_type(ctx);
-            let top = find_marker(ctx);
-            let fields = [
-                marker_field(ctx, top, MarkerField::AbilityId, i32_ty),
-                marker_field(ctx, top, MarkerField::PromptTag, i32_ty),
-                marker_field(ctx, top, MarkerField::TrDispatchFn, closure_ty),
-                top,
-                marker_field(ctx, top, MarkerField::Outer, anyref_ty),
-            ];
-            set_marker(ctx, fields)
-        }
-        Helper::Outer => {
-            let anyref_ty = intern_anyref(ctx);
-            let top = find_marker(ctx);
-            let outer = marker_field(ctx, top, MarkerField::Outer, anyref_ty);
-            let evidence = wasm_dialect::RefCast::operands(outer)
-                .target_type(result_ty)
-                .type_idx(EVIDENCE_IDX)
-                .results(result_ty)
-                .build(ctx, location);
-            ctx.push_op(block, evidence.op_ref());
-            evidence.result(ctx)
-        }
-        Helper::Tail => {
-            let i32_ty = intern_i32(ctx);
-            let anyref_ty = intern_anyref(ctx);
-            let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
-            let slot = find_marker(ctx);
-            let absent = wasm_dialect::RefIsNull::operands(slot)
-                .results(i32_ty)
-                .build(ctx, location);
-            ctx.push_op(block, absent.op_ref());
-            let own = {
-                let inner = empty_block(ctx, location);
-                let ret = wasm_dialect::Return::operands(vec![args[0]]).build(ctx, location);
-                ctx.push_op(inner, ret.op_ref());
-                single_block_region(ctx, location, inner)
-            };
-            let held = {
-                let inner = empty_block(ctx, location);
-                let get = wasm_dialect::StructGet::operands(slot)
-                    .type_idx(MARKER_IDX)
-                    .field_idx(MarkerField::Outer.index())
-                    .results(anyref_ty)
-                    .build(ctx, location);
-                ctx.push_op(inner, get.op_ref());
-                let evidence = wasm_dialect::RefCast::operands(get.result(ctx))
-                    .target_type(result_ty)
-                    .type_idx(EVIDENCE_IDX)
-                    .results(result_ty)
-                    .build(ctx, location);
-                ctx.push_op(inner, evidence.op_ref());
-                let ret =
-                    wasm_dialect::Return::operands(vec![evidence.result(ctx)]).build(ctx, location);
-                ctx.push_op(inner, ret.op_ref());
-                single_block_region(ctx, location, inner)
-            };
-            let branch = wasm_dialect::If::operands(absent.result(ctx))
-                .results([nil_ty])
-                .regions(own, held)
-                .build(ctx, location);
-            ctx.push_op(block, branch.op_ref());
-            let unreachable = wasm_dialect::Unreachable::operands().build(ctx, location);
-            ctx.push_op(block, unreachable.op_ref());
-            return finish_helper(ctx, location, name, inputs, result_ty, block);
-        }
-        Helper::WithTail => {
-            let closure_ty = super::type_converter::closure_adt_type(ctx);
-            let shadowed = find_marker(ctx);
-            let no_dispatch = wasm_dialect::RefNull::operands()
-                .heap_type("struct")
-                .type_idx(CLOSURE_STRUCT_IDX)
-                .results(closure_ty)
-                .build(ctx, location);
-            ctx.push_op(block, no_dispatch.op_ref());
-            // A row tail slot has no prompt; the field repeats the slot.
-            set_marker(
-                ctx,
-                [args[1], args[1], no_dispatch.result(ctx), shadowed, args[2]],
-            )
-        }
-        Helper::Push => {
-            let i32_ty = intern_i32(ctx);
-            let anyref_ty = intern_anyref(ctx);
-            let closure_ty = super::type_converter::closure_adt_type(ctx);
-            let top_of = |ctx: &mut IrContext, evidence: ValueRef| {
-                let marker = wasm_dialect::Call::operands([evidence, args[2]])
-                    .callee(SymbolPath::new([FIND_MARKER]))
-                    .results([marker_ty])
-                    .build(ctx, location);
-                ctx.push_op(block, marker.op_ref());
-                marker.results(ctx)[0]
-            };
-            let pushed = top_of(ctx, args[1]);
-            let shadowed = top_of(ctx, args[0]);
-            let fields = [
-                args[2],
-                marker_field(ctx, pushed, MarkerField::PromptTag, i32_ty),
-                marker_field(ctx, pushed, MarkerField::TrDispatchFn, closure_ty),
-                shadowed,
-                marker_field(ctx, pushed, MarkerField::Outer, anyref_ty),
-            ];
-            set_marker(ctx, fields)
-        }
-        Helper::Mask => {
-            let i32_ty = intern_i32(ctx);
-            let anyref_ty = intern_anyref(ctx);
-            let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
-            let top = find_marker(ctx);
-            let shadowed = marker_field(ctx, top, MarkerField::Shadowed, anyref_ty);
-            let unshadowed = wasm_dialect::RefIsNull::operands(shadowed)
-                .results(i32_ty)
-                .build(ctx, location);
-            ctx.push_op(block, unshadowed.op_ref());
-
-            let remove_slot = {
-                let inner = empty_block(ctx, location);
-                let call = wasm_dialect::Call::operands([args[0], args[1]])
-                    .callee(SymbolPath::new([REMOVE_MARKER]))
-                    .results([result_ty])
-                    .build(ctx, location);
-                ctx.push_op(inner, call.op_ref());
-                let ret =
-                    wasm_dialect::Return::operands(vec![call.results(ctx)[0]]).build(ctx, location);
-                ctx.push_op(inner, ret.op_ref());
-                single_block_region(ctx, location, inner)
-            };
-            let restore_shadowed = {
-                let inner = empty_block(ctx, location);
-                let marker = wasm_dialect::RefCast::operands(shadowed)
-                    .target_type(marker_ty)
-                    .type_idx(MARKER_IDX)
-                    .results(marker_ty)
-                    .build(ctx, location);
-                ctx.push_op(inner, marker.op_ref());
-                let call = wasm_dialect::Call::operands([args[0], marker.result(ctx)])
-                    .callee(SymbolPath::new([SET_MARKER]))
-                    .results([result_ty])
-                    .build(ctx, location);
-                ctx.push_op(inner, call.op_ref());
-                let ret =
-                    wasm_dialect::Return::operands(vec![call.results(ctx)[0]]).build(ctx, location);
-                ctx.push_op(inner, ret.op_ref());
-                single_block_region(ctx, location, inner)
-            };
-            let branch = wasm_dialect::If::operands(unshadowed.result(ctx))
-                .results([nil_ty])
-                .regions(remove_slot, restore_shadowed)
-                .build(ctx, location);
-            ctx.push_op(block, branch.op_ref());
-            let unreachable = wasm_dialect::Unreachable::operands().build(ctx, location);
-            ctx.push_op(block, unreachable.op_ref());
-            return finish_helper(ctx, location, name, inputs, result_ty, block);
-        }
-        Helper::NextTag(global) => {
-            let current = wasm_dialect::GlobalGet::operands()
-                .index(global)
-                .results(result_ty)
-                .build(ctx, location);
-            ctx.push_op(block, current.op_ref());
-            let one = wasm_dialect::I32Const::operands()
-                .value(1)
-                .results(result_ty)
-                .build(ctx, location);
-            ctx.push_op(block, one.op_ref());
-            let next = wasm_dialect::I32Add::operands(current.result(ctx), one.result(ctx))
-                .build(ctx, location);
-            ctx.push_op(block, next.op_ref());
-            let set = wasm_dialect::GlobalSet::operands(next.result(ctx))
-                .index(global)
-                .build(ctx, location);
-            ctx.push_op(block, set.op_ref());
-            current.result(ctx)
-        }
-    };
-    let ret = wasm_dialect::Return::operands(vec![returned]).build(ctx, location);
+    let current = wasm_dialect::GlobalGet::operands()
+        .index(global)
+        .results(result_ty)
+        .build(ctx, location);
+    ctx.push_op(block, current.op_ref());
+    let one = wasm_dialect::I32Const::operands()
+        .value(1)
+        .results(result_ty)
+        .build(ctx, location);
+    ctx.push_op(block, one.op_ref());
+    let next =
+        wasm_dialect::I32Add::operands(current.result(ctx), one.result(ctx)).build(ctx, location);
+    ctx.push_op(block, next.op_ref());
+    let set = wasm_dialect::GlobalSet::operands(next.result(ctx))
+        .index(global)
+        .build(ctx, location);
+    ctx.push_op(block, set.op_ref());
+    let ret = wasm_dialect::Return::operands(vec![current.result(ctx)]).build(ctx, location);
     ctx.push_op(block, ret.op_ref());
-    finish_helper(ctx, location, name, inputs, result_ty, block)
-}
 
-/// Wrap a terminated body block into the helper's `wasm.func`.
-fn finish_helper(
-    ctx: &mut IrContext,
-    location: Location,
-    name: StringRef,
-    inputs: Vec<TypeRef>,
-    result_ty: TypeRef,
-    block: BlockRef,
-) -> OpRef {
-    let body = single_block_region(ctx, location, block);
+    let body = ctx.create_region(RegionData {
+        location,
+        blocks: smallvec![block],
+        parent_op: None,
+    });
     let func_ty = wasm_dialect::func_sig(ctx, inputs, [result_ty]).as_type_ref();
     wasm_dialect::Func::operands()
         .sym_name(name)
@@ -896,504 +575,46 @@ fn finish_helper(
         .op_ref()
 }
 
-// =============================================================================
-// Function Generation
-// =============================================================================
-
-/// Generate the internal `__tribute_evidence_find_slot` helper.
-///
-/// `(ev, ability_id, low, high) -> i32` is a recursive binary search over
-/// `ev[low..high]`. It returns the first index whose marker has an ability id
-/// not less than `ability_id`: the ability's slot if the evidence holds it,
-/// otherwise the position that keeps the array sorted.
-fn generate_evidence_slot_function(ctx: &mut IrContext, location: Location) -> OpRef {
-    let evidence_ty = evidence_ref_type(ctx);
-    let i32_ty = intern_i32(ctx);
-    let params = [evidence_ty, i32_ty, i32_ty, i32_ty];
-    let body = entry_block(ctx, location, &params);
-    let [ev, ability_id, low, high] = ctx.block_args(body)[..] else {
-        unreachable!("entry block has one argument per parameter")
-    };
-
-    // if low >= high: return low
-    let done = wasm_dialect::I32GeS::operands(low, high)
-        .results(i32_ty)
-        .build(ctx, location);
-    ctx.push_op(body, done.op_ref());
-    let done_then = {
-        let block = empty_block(ctx, location);
-        push_return(ctx, location, block, low);
-        single_block_region(ctx, location, block)
-    };
-    push_if(ctx, location, body, done.result(ctx), done_then, None);
-
-    // mid = (low + high) / 2
-    let sum = wasm_dialect::I32Add::operands(low, high).build(ctx, location);
-    ctx.push_op(body, sum.op_ref());
-    let two = i32_const(ctx, location, body, 2);
-    let mid_op = wasm_dialect::I32DivU::operands(sum.result(ctx), two)
-        .results(i32_ty)
-        .build(ctx, location);
-    let mid = mid_op.result(ctx);
-    ctx.push_op(body, mid_op.op_ref());
-
-    // if ev[mid].ability_id < ability_id: search ev[mid + 1..high]
-    // else: search ev[low..mid]
-    let mid_marker = marker_at(ctx, location, body, ev, mid);
-    let mid_id = marker_ability_id(ctx, location, body, mid_marker);
-    let below = wasm_dialect::I32LtS::operands(mid_id, ability_id)
-        .results(i32_ty)
-        .build(ctx, location);
-    ctx.push_op(body, below.op_ref());
-    let upper_half = {
-        let block = empty_block(ctx, location);
-        let one = i32_const(ctx, location, block, 1);
-        let next = wasm_dialect::I32Add::operands(mid, one).build(ctx, location);
-        ctx.push_op(block, next.op_ref());
-        let slot = find_slot(ctx, location, block, ev, ability_id, next.result(ctx), high);
-        push_return(ctx, location, block, slot);
-        single_block_region(ctx, location, block)
-    };
-    let lower_half = {
-        let block = empty_block(ctx, location);
-        let slot = find_slot(ctx, location, block, ev, ability_id, low, mid);
-        push_return(ctx, location, block, slot);
-        single_block_region(ctx, location, block)
-    };
-    push_if(
-        ctx,
-        location,
-        body,
-        below.result(ctx),
-        upper_half,
-        Some(lower_half),
-    );
-    push_unreachable(ctx, location, body);
-
-    helper_function(ctx, location, FIND_SLOT, &params, i32_ty, body)
-}
-
-/// Generate the internal `__tribute_evidence_find_marker` helper.
-///
-/// Returns the top marker with the given ability_id, or null if the evidence
-/// has none for that ability.
-fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) -> OpRef {
-    let evidence_ty = evidence_ref_type(ctx);
-    let i32_ty = intern_i32(ctx);
-    let marker_ty = ability::marker_adt_type_ref(ctx);
-    let params = [evidence_ty, i32_ty];
-    let body = entry_block(ctx, location, &params);
-    let [ev, ability_id] = ctx.block_args(body)[..] else {
-        unreachable!("entry block has one argument per parameter")
-    };
-
-    let len = evidence_len(ctx, location, body, ev);
-    let slot = find_whole_slot(ctx, location, body, ev, ability_id, len);
-    let found = {
-        let block = empty_block(ctx, location);
-        let marker = marker_at(ctx, location, block, ev, slot);
-        push_return(ctx, location, block, marker);
-        single_block_region(ctx, location, block)
-    };
-    push_if_slot_holds(ctx, location, body, ev, slot, ability_id, found);
-
-    let null = wasm_dialect::RefNull::operands()
-        .heap_type("struct")
-        .type_idx(MARKER_IDX)
-        .results(marker_ty)
-        .build(ctx, location);
-    ctx.push_op(body, null.op_ref());
-    push_return(ctx, location, body, null.result(ctx));
-
-    helper_function(ctx, location, FIND_MARKER, &params, marker_ty, body)
-}
-
-/// Generate the internal `__tribute_evidence_set_marker` helper.
-///
-/// Creates a new array with the marker in its ability's slot. A slot of the
-/// same ability is replaced; otherwise the marker is inserted at the position
-/// that keeps the array sorted.
-fn generate_evidence_set_function(ctx: &mut IrContext, location: Location) -> OpRef {
-    let evidence_ty = evidence_ref_type(ctx);
-    let marker_ty = ability::marker_adt_type_ref(ctx);
-    let params = [evidence_ty, marker_ty];
-    let body = entry_block(ctx, location, &params);
-    let [ev, marker] = ctx.block_args(body)[..] else {
-        unreachable!("entry block has one argument per parameter")
-    };
-
-    let ability_id = marker_ability_id(ctx, location, body, marker);
-    let old_len = evidence_len(ctx, location, body, ev);
-    let slot = find_whole_slot(ctx, location, body, ev, ability_id, old_len);
-    let zero = i32_const(ctx, location, body, 0);
-
-    // The ability's slot exists: copy the array and replace the slot.
-    let replace = {
-        let block = empty_block(ctx, location);
-        let new_ev = new_evidence(ctx, location, block, old_len);
-        copy_markers(ctx, location, block, (new_ev, zero), (ev, zero), old_len);
-        set_marker_at(ctx, location, block, new_ev, slot, marker);
-        push_return(ctx, location, block, new_ev);
-        single_block_region(ctx, location, block)
-    };
-    push_if_slot_holds(ctx, location, body, ev, slot, ability_id, replace);
-
-    // Otherwise insert the marker at `slot`.
-    let one = i32_const(ctx, location, body, 1);
-    let new_len = wasm_dialect::I32Add::operands(old_len, one).build(ctx, location);
-    ctx.push_op(body, new_len.op_ref());
-    let new_ev = new_evidence(ctx, location, body, new_len.result(ctx));
-    copy_markers(ctx, location, body, (new_ev, zero), (ev, zero), slot);
-    set_marker_at(ctx, location, body, new_ev, slot, marker);
-    let after_slot = wasm_dialect::I32Add::operands(slot, one).build(ctx, location);
-    ctx.push_op(body, after_slot.op_ref());
-    let suffix_len = wasm_dialect::I32Sub::operands(old_len, slot)
-        .results(intern_i32(ctx))
-        .build(ctx, location);
-    ctx.push_op(body, suffix_len.op_ref());
-    copy_markers(
-        ctx,
-        location,
-        body,
-        (new_ev, after_slot.result(ctx)),
-        (ev, slot),
-        suffix_len.result(ctx),
-    );
-    push_return(ctx, location, body, new_ev);
-
-    helper_function(ctx, location, SET_MARKER, &params, evidence_ty, body)
-}
-
-/// Generate the internal `__tribute_evidence_remove_marker` helper.
-///
-/// Creates a new array without the slot of the given ability_id. The evidence
-/// must hold the ability.
-fn generate_evidence_remove_function(ctx: &mut IrContext, location: Location) -> OpRef {
-    let evidence_ty = evidence_ref_type(ctx);
-    let i32_ty = intern_i32(ctx);
-    let params = [evidence_ty, i32_ty];
-    let body = entry_block(ctx, location, &params);
-    let [ev, ability_id] = ctx.block_args(body)[..] else {
-        unreachable!("entry block has one argument per parameter")
-    };
-
-    let old_len = evidence_len(ctx, location, body, ev);
-    let slot = find_whole_slot(ctx, location, body, ev, ability_id, old_len);
-    let zero = i32_const(ctx, location, body, 0);
-    let one = i32_const(ctx, location, body, 1);
-    let new_len = wasm_dialect::I32Sub::operands(old_len, one)
-        .results(i32_ty)
-        .build(ctx, location);
-    ctx.push_op(body, new_len.op_ref());
-    let new_ev = new_evidence(ctx, location, body, new_len.result(ctx));
-    copy_markers(ctx, location, body, (new_ev, zero), (ev, zero), slot);
-    let after_slot = wasm_dialect::I32Add::operands(slot, one).build(ctx, location);
-    ctx.push_op(body, after_slot.op_ref());
-    let suffix_len = wasm_dialect::I32Sub::operands(new_len.result(ctx), slot)
-        .results(i32_ty)
-        .build(ctx, location);
-    ctx.push_op(body, suffix_len.op_ref());
-    copy_markers(
-        ctx,
-        location,
-        body,
-        (new_ev, slot),
-        (ev, after_slot.result(ctx)),
-        suffix_len.result(ctx),
-    );
-    push_return(ctx, location, body, new_ev);
-
-    helper_function(ctx, location, REMOVE_MARKER, &params, evidence_ty, body)
-}
-
-// =============================================================================
-// Helper functions
-// =============================================================================
-
-/// Create the entry block of a generated helper with the given parameters.
-fn entry_block(ctx: &mut IrContext, location: Location, params: &[TypeRef]) -> BlockRef {
-    ctx.create_block(BlockData {
-        location,
-        args: params
-            .iter()
-            .map(|&ty| BlockArgData {
-                ty,
-                attrs: Default::default(),
-            })
-            .collect(),
-        ops: smallvec![],
-        parent_region: None,
-    })
-}
-
-/// Wrap a terminated entry block into a generated helper's `wasm.func`.
-fn helper_function(
-    ctx: &mut IrContext,
-    location: Location,
-    name: &'static str,
-    params: &[TypeRef],
-    result: TypeRef,
-    body: BlockRef,
-) -> OpRef {
-    let func_ty = wasm_dialect::func_sig(ctx, params.iter().copied(), [result]).as_type_ref();
-    let body = single_block_region(ctx, location, body);
-    wasm_dialect::Func::operands()
-        .sym_name(name)
-        .r#type(func_ty)
-        .regions(body)
-        .build(ctx, location)
-        .op_ref()
-}
-
-fn i32_const(ctx: &mut IrContext, location: Location, block: BlockRef, value: i32) -> ValueRef {
-    let i32_ty = intern_i32(ctx);
-    let op = wasm_dialect::I32Const::operands()
-        .value(value)
-        .results(i32_ty)
-        .build(ctx, location);
-    ctx.push_op(block, op.op_ref());
-    op.result(ctx)
-}
-
-fn evidence_len(
-    ctx: &mut IrContext,
-    location: Location,
-    block: BlockRef,
-    ev: ValueRef,
-) -> ValueRef {
-    let op = wasm_dialect::ArrayLen::operands(ev).build(ctx, location);
-    ctx.push_op(block, op.op_ref());
-    op.result(ctx)
-}
-
-fn new_evidence(
-    ctx: &mut IrContext,
-    location: Location,
-    block: BlockRef,
-    len: ValueRef,
-) -> ValueRef {
-    let evidence_ty = evidence_ref_type(ctx);
-    let op = wasm_dialect::ArrayNewDefault::operands(len)
-        .type_idx(EVIDENCE_IDX)
-        .results(evidence_ty)
-        .build(ctx, location);
-    ctx.push_op(block, op.op_ref());
-    op.result(ctx)
-}
-
-fn marker_at(
-    ctx: &mut IrContext,
-    location: Location,
-    block: BlockRef,
-    ev: ValueRef,
-    index: ValueRef,
-) -> ValueRef {
-    let marker_ty = ability::marker_adt_type_ref(ctx);
-    let op = wasm_dialect::ArrayGet::operands(ev, index)
-        .type_idx(EVIDENCE_IDX)
-        .results(marker_ty)
-        .build(ctx, location);
-    ctx.push_op(block, op.op_ref());
-    op.result(ctx)
-}
-
-fn set_marker_at(
-    ctx: &mut IrContext,
-    location: Location,
-    block: BlockRef,
-    ev: ValueRef,
-    index: ValueRef,
-    marker: ValueRef,
-) {
-    let op = wasm_dialect::ArraySet::operands(ev, index, marker)
-        .type_idx(EVIDENCE_IDX)
-        .build(ctx, location);
-    ctx.push_op(block, op.op_ref());
-}
-
-fn marker_ability_id(
-    ctx: &mut IrContext,
-    location: Location,
-    block: BlockRef,
-    marker: ValueRef,
-) -> ValueRef {
-    let i32_ty = intern_i32(ctx);
-    let op = wasm_dialect::StructGet::operands(marker)
-        .type_idx(MARKER_IDX)
-        .field_idx(MarkerField::AbilityId.index())
-        .results(i32_ty)
-        .build(ctx, location);
-    ctx.push_op(block, op.op_ref());
-    op.result(ctx)
-}
-
-/// `array.copy` of `len` markers between `(array, offset)` positions.
-fn copy_markers(
-    ctx: &mut IrContext,
-    location: Location,
-    block: BlockRef,
-    (dst, dst_offset): (ValueRef, ValueRef),
-    (src, src_offset): (ValueRef, ValueRef),
-    len: ValueRef,
-) {
-    let op = wasm_dialect::ArrayCopy::operands(dst, dst_offset, src, src_offset, len)
-        .dst_type_idx(EVIDENCE_IDX)
-        .src_type_idx(EVIDENCE_IDX)
-        .build(ctx, location);
-    ctx.push_op(block, op.op_ref());
-}
-
-/// Call `__tribute_evidence_find_slot` over `ev[low..high]`.
-fn find_slot(
-    ctx: &mut IrContext,
-    location: Location,
-    block: BlockRef,
-    ev: ValueRef,
-    ability_id: ValueRef,
-    low: ValueRef,
-    high: ValueRef,
-) -> ValueRef {
-    let i32_ty = intern_i32(ctx);
-    let call = wasm_dialect::Call::operands([ev, ability_id, low, high])
-        .callee(SymbolPath::new([FIND_SLOT]))
-        .results([i32_ty])
-        .build(ctx, location);
-    ctx.push_op(block, call.op_ref());
-    call.results(ctx)[0]
-}
-
-/// Call `__tribute_evidence_find_slot` over the whole evidence of length `len`.
-fn find_whole_slot(
-    ctx: &mut IrContext,
-    location: Location,
-    block: BlockRef,
-    ev: ValueRef,
-    ability_id: ValueRef,
-    len: ValueRef,
-) -> ValueRef {
-    let zero = i32_const(ctx, location, block, 0);
-    find_slot(ctx, location, block, ev, ability_id, zero, len)
-}
-
-/// Run `then` if `ev[slot]` exists and is the slot of `ability_id`:
-/// `if slot < len { if ev[slot].ability_id == ability_id { then } }`.
-fn push_if_slot_holds(
-    ctx: &mut IrContext,
-    location: Location,
-    block: BlockRef,
-    ev: ValueRef,
-    slot: ValueRef,
-    ability_id: ValueRef,
-    then: RegionRef,
-) {
-    let i32_ty = intern_i32(ctx);
-    let len = evidence_len(ctx, location, block, ev);
-    let in_bounds = wasm_dialect::I32LtS::operands(slot, len)
-        .results(i32_ty)
-        .build(ctx, location);
-    ctx.push_op(block, in_bounds.op_ref());
-    let check_ability = {
-        let inner = empty_block(ctx, location);
-        let existing = marker_at(ctx, location, inner, ev, slot);
-        let existing_id = marker_ability_id(ctx, location, inner, existing);
-        let same = wasm_dialect::I32Eq::operands(existing_id, ability_id)
-            .results(i32_ty)
-            .build(ctx, location);
-        ctx.push_op(inner, same.op_ref());
-        push_if(ctx, location, inner, same.result(ctx), then, None);
-        single_block_region(ctx, location, inner)
-    };
-    push_if(
-        ctx,
-        location,
-        block,
-        in_bounds.result(ctx),
-        check_ability,
-        None,
-    );
-}
-
-/// Append a resultless `wasm.if`; a missing `otherwise` is an empty region.
-fn push_if(
-    ctx: &mut IrContext,
-    location: Location,
-    block: BlockRef,
-    condition: ValueRef,
-    then: RegionRef,
-    otherwise: Option<RegionRef>,
-) {
-    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
-    let otherwise = otherwise.unwrap_or_else(|| {
-        let empty = empty_block(ctx, location);
-        single_block_region(ctx, location, empty)
-    });
-    let op = wasm_dialect::If::operands(condition)
-        .results([nil_ty])
-        .regions(then, otherwise)
-        .build(ctx, location);
-    ctx.push_op(block, op.op_ref());
-}
-
-fn push_return(ctx: &mut IrContext, location: Location, block: BlockRef, value: ValueRef) {
-    let op = wasm_dialect::Return::operands([value]).build(ctx, location);
-    ctx.push_op(block, op.op_ref());
-}
-
-fn push_unreachable(ctx: &mut IrContext, location: Location, block: BlockRef) {
-    let op = wasm_dialect::Unreachable::operands().build(ctx, location);
-    ctx.push_op(block, op.op_ref());
-}
-
-/// Get the WASM reference type for Evidence (wasm.arrayref).
-fn evidence_ref_type(ctx: &mut IrContext) -> TypeRef {
-    super::type_converter::evidence_wasm_type(ctx)
-}
-
-/// Intern a `core.i32` type.
-fn intern_i32(ctx: &mut IrContext) -> TypeRef {
-    TypeDataBuilder::new("core.i32").intern(ctx)
-}
-
-/// Intern a `wasm.anyref` type.
-fn intern_anyref(ctx: &mut IrContext) -> TypeRef {
-    wasm_dialect::Anyref::params().intern(ctx).as_type_ref()
-}
-
-fn empty_block(ctx: &mut IrContext, location: Location) -> BlockRef {
-    ctx.create_block(BlockData {
-        location,
-        args: vec![],
-        ops: smallvec![],
-        parent_region: None,
-    })
-}
-
-fn single_block_region(ctx: &mut IrContext, location: Location, block: BlockRef) -> RegionRef {
-    ctx.create_region(RegionData {
-        location,
-        blocks: smallvec![block],
-        parent_op: None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::SymbolPath;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
-    const TYPES: &str = r#"  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
-  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>"#;
+    /// The evidence type and stand-ins for the runtime functions.
+    const RUNTIME: &str = r#"  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch" { None(), Some(!Closure) }>
+  !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
+  func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
+    func.return %id
+  }
+  func.func @"std::runtime::evidence::lookup_tr"(%ev: !Evidence, %id: core.i32) -> !Closure {
+    %f = adt.ref_null {type = !Closure} : !Closure
+    func.return %f
+  }
+  func.func @"std::runtime::evidence::extend"(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !OptionRef, %outer: !Evidence) -> !Evidence {
+    func.return %ev
+  }
+  func.func @"std::runtime::evidence::mask"(%ev: !Evidence, %id: core.i32) -> !Evidence {
+    func.return %ev
+  }
+  func.func @"std::runtime::evidence::dup"(%ev: !Evidence, %id: core.i32) -> !Evidence {
+    func.return %ev
+  }"#;
 
     fn module_text(body: &str) -> String {
-        format!("core.module @test {{\n{TYPES}\n{body}\n}}")
+        format!("core.module @test {{\n{RUNTIME}\n{body}\n}}")
     }
 
     fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
-        prepare_wasm_evidence_runtime(ctx, module);
+        let runtime = prepare_wasm_evidence_runtime(ctx, module).expect("evidence runtime");
         for op in module.ops_snapshot(ctx) {
-            if let Ok(function) = func::Func::from_op(ctx, op) {
-                lower_evidence_to_wasm_func(ctx, function)?;
+            if let Ok(function) = func::Func::from_op(ctx, op)
+                && !function.sym_name(ctx).starts_with("std::runtime::")
+            {
+                lower_evidence_to_wasm_func(ctx, function, &runtime)?;
             }
         }
         Ok(())
@@ -1404,6 +625,17 @@ mod tests {
         let module = parse_test_module(&mut ctx, &module_text(body));
         lower(&mut ctx, module).expect("evidence lowering");
         print_module(&ctx, module.op())
+    }
+
+    fn calls(ctx: &IrContext, module: Module) -> Vec<(SymbolPath, usize)> {
+        let mut calls = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
+            if let Ok(call) = func::Call::from_op(ctx, op) {
+                calls.push((call.callee(ctx).clone(), ctx.op_operands(op).len()));
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        calls
     }
 
     fn assert_shared_dialect_only(printed: &str) {
@@ -1432,6 +664,10 @@ mod tests {
     func.return %dup
   }"#;
 
+    fn runtime_callee(name: &str) -> SymbolPath {
+        SymbolPath::new([format!("std::runtime::evidence::{name}").as_str()])
+    }
+
     #[test]
     fn mask_and_dup_call_the_runtime_with_the_ability_id() {
         let mut ctx = IrContext::new();
@@ -1440,44 +676,27 @@ mod tests {
         let printed = print_module(&ctx, module.op());
 
         assert_shared_dialect_only(&printed);
-        let mut calls = Vec::new();
-        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
-            if let Ok(call) = func::Call::from_op(&ctx, op) {
-                calls.push((call.callee(&ctx).clone(), ctx.op_operands(op).len()));
-            }
-            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
-        });
         assert_eq!(
-            calls,
-            [
-                (SymbolPath::new([evidence_abi::MASK]), 2),
-                (SymbolPath::new([evidence_abi::DUP]), 2)
-            ],
+            calls(&ctx, module),
+            [(runtime_callee("mask"), 2), (runtime_callee("dup"), 2)],
             "{printed}"
         );
-        assert!(!printed.contains("@__tribute_evidence_extend"), "{printed}");
-        assert!(!printed.contains("@__tribute_evidence_lookup"), "{printed}");
     }
 
     #[test]
     fn tail_dispatch_calls_the_selected_closure_indirectly() {
-        let printed = lower_text(TAIL);
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &module_text(TAIL));
+        lower(&mut ctx, module).unwrap();
+        let printed = print_module(&ctx, module.op());
 
         assert_shared_dialect_only(&printed);
-        assert!(
-            printed.contains("func.func @__tribute_evidence_lookup_tr("),
-            "{printed}"
-        );
-        assert!(
-            printed.contains("callee = @__tribute_evidence_lookup_tr"),
+        assert_eq!(
+            calls(&ctx, module),
+            [(runtime_callee("lookup_tr"), 2)],
             "{printed}"
         );
         assert!(printed.contains("func.call_indirect"), "{printed}");
-        assert!(
-            !printed.contains("@__tribute_evidence_lookup("),
-            "{printed}"
-        );
-        assert!(!printed.contains("@__tribute_evidence_extend"), "{printed}");
     }
 
     #[test]
@@ -1486,7 +705,7 @@ mod tests {
 
         assert_shared_dialect_only(&printed);
         assert!(
-            printed.contains("callee = @__tribute_evidence_lookup}"),
+            printed.contains(r#"callee = @"std::runtime::evidence::lookup"}"#),
             "{printed}"
         );
         assert!(printed.contains("func.tail_call_indirect"), "{printed}");
@@ -1494,25 +713,42 @@ mod tests {
     }
 
     #[test]
-    fn extend_calls_the_runtime_with_marker_fields() {
+    fn extend_passes_the_dispatch_closure_as_some() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &module_text(EXTEND));
         lower(&mut ctx, module).unwrap();
         let printed = print_module(&ctx, module.op());
 
         assert_shared_dialect_only(&printed);
-        let mut calls = Vec::new();
-        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
-            if let Ok(call) = func::Call::from_op(&ctx, op) {
-                calls.push((call.callee(&ctx).clone(), ctx.op_operands(op).len()));
-            }
-            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
-        });
         assert_eq!(
-            calls,
-            [(SymbolPath::new([evidence_abi::EXTEND]), 5)],
+            calls(&ctx, module),
+            [(runtime_callee("extend"), 5)],
             "{printed}"
         );
+        assert!(
+            printed.contains(r#"adt.variant_new %2 {tag = "Some""#),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn a_missing_runtime_function_fails_only_when_needed() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &module_text(
+                r#"  func.func @tail_slot(%ev: !Evidence) -> !Evidence {
+    %tail = effect.tail %ev {index = 0} : !Evidence
+    func.return %tail
+  }"#,
+            ),
+        );
+        let error = prepare_wasm_evidence_runtime(&ctx, module).expect_err("tail is missing");
+        assert_eq!(error.path, "std::runtime::evidence::tail");
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &module_text(SELECT));
+        assert!(prepare_wasm_evidence_runtime(&ctx, module).is_ok());
     }
 
     #[test]
@@ -1526,7 +762,7 @@ mod tests {
   }"#,
             ),
         );
-        prepare_wasm_evidence_runtime(&mut ctx, module);
+        let runtime = prepare_wasm_evidence_runtime(&ctx, module).unwrap();
         let before = print_module(&ctx, module.op());
         let function = module
             .ops(&ctx)
@@ -1539,139 +775,11 @@ mod tests {
             })
             .unwrap();
 
-        let error = lower_evidence_to_wasm_func(&mut ctx, function)
+        let error = lower_evidence_to_wasm_func(&mut ctx, function, &runtime)
             .expect_err("a result-bearing final dispatch is malformed");
 
         assert!(error.to_string().contains("effect.dispatch_cps"), "{error}");
         assert_eq!(print_module(&ctx, module.op()), before);
-    }
-
-    #[test]
-    fn only_needed_helpers_are_declared() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &module_text(EXTEND));
-        prepare_wasm_evidence_runtime(&mut ctx, module);
-        let printed = print_module(&ctx, module.op());
-
-        assert!(printed.contains("@__tribute_evidence_extend("), "{printed}");
-        assert!(!printed.contains("@__tribute_evidence_lookup"), "{printed}");
-    }
-
-    #[test]
-    fn binding_replaces_declarations_with_implementations() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
-  func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 attributes {abi = "C"}
-  func.func @__tribute_evidence_lookup_tr(%ev: wasm.arrayref, %id: core.i32) -> !Closure attributes {abi = "C"}
-  func.func @__tribute_evidence_extend(%ev: wasm.arrayref, %id: core.i32, %prompt: core.i32, %tr: !Closure, %outer: wasm.arrayref) -> wasm.arrayref attributes {abi = "C"}
-}"#,
-        );
-
-        bind_wasm_evidence_runtime(&mut ctx, module);
-
-        let mut functions = Vec::new();
-        for &op in module.ops(&ctx) {
-            let function = wasm_dialect::Func::from_op(&ctx, op).expect("bound wasm.func");
-            assert!(ctx.op_has_regions(op), "helpers must have bodies");
-            functions.push(function.sym_name(&ctx).to_string());
-        }
-        functions.sort();
-        assert_eq!(
-            functions,
-            [
-                "__tribute_evidence_extend",
-                "__tribute_evidence_find_marker",
-                "__tribute_evidence_find_slot",
-                "__tribute_evidence_lookup",
-                "__tribute_evidence_lookup_tr",
-                "__tribute_evidence_set_marker",
-            ]
-        );
-    }
-
-    #[test]
-    fn binding_mask_and_dup_adds_the_internal_helpers_they_use() {
-        let bound = |declarations: &str| {
-            let mut ctx = IrContext::new();
-            let module = parse_test_module(
-                &mut ctx,
-                &format!("core.module @test {{\n{declarations}\n}}"),
-            );
-            bind_wasm_evidence_runtime(&mut ctx, module);
-            let mut functions: Vec<_> = module
-                .ops(&ctx)
-                .iter()
-                .map(|&op| {
-                    assert!(ctx.op_has_regions(op), "helpers must have bodies");
-                    let function = wasm_dialect::Func::from_op(&ctx, op).expect("bound wasm.func");
-                    function.sym_name(&ctx).to_string()
-                })
-                .collect();
-            functions.sort();
-            functions
-        };
-
-        assert_eq!(
-            bound(
-                r#"  func.func @__tribute_evidence_dup(%ev: wasm.arrayref, %id: core.i32) -> wasm.arrayref attributes {abi = "C"}"#
-            ),
-            [
-                "__tribute_evidence_dup",
-                "__tribute_evidence_find_marker",
-                "__tribute_evidence_find_slot",
-                "__tribute_evidence_set_marker",
-            ]
-        );
-        assert_eq!(
-            bound(
-                r#"  func.func @__tribute_evidence_mask(%ev: wasm.arrayref, %id: core.i32) -> wasm.arrayref attributes {abi = "C"}"#
-            ),
-            [
-                "__tribute_evidence_find_marker",
-                "__tribute_evidence_find_slot",
-                "__tribute_evidence_mask",
-                "__tribute_evidence_remove_marker",
-                "__tribute_evidence_set_marker",
-            ]
-        );
-    }
-
-    #[test]
-    fn binding_row_tail_helpers_adds_the_internal_helpers_they_use() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @__tribute_evidence_tail(%ev: wasm.arrayref, %slot: core.i32) -> wasm.arrayref attributes {abi = "C"}
-  func.func @__tribute_evidence_with_tail(%ev: wasm.arrayref, %slot: core.i32, %tail: wasm.arrayref) -> wasm.arrayref attributes {abi = "C"}
-  func.func @__tribute_evidence_push(%ev: wasm.arrayref, %source: wasm.arrayref, %id: core.i32) -> wasm.arrayref attributes {abi = "C"}
-}"#,
-        );
-        bind_wasm_evidence_runtime(&mut ctx, module);
-        let mut functions: Vec<_> = module
-            .ops(&ctx)
-            .iter()
-            .map(|&op| {
-                assert!(ctx.op_has_regions(op), "helpers must have bodies");
-                let function = wasm_dialect::Func::from_op(&ctx, op).expect("bound wasm.func");
-                function.sym_name(&ctx).to_string()
-            })
-            .collect();
-        functions.sort();
-        assert_eq!(
-            functions,
-            [
-                "__tribute_evidence_find_marker",
-                "__tribute_evidence_find_slot",
-                "__tribute_evidence_push",
-                "__tribute_evidence_set_marker",
-                "__tribute_evidence_tail",
-                "__tribute_evidence_with_tail",
-            ]
-        );
     }
 
     #[test]
@@ -1685,7 +793,7 @@ mod tests {
 }"#,
         );
 
-        bind_wasm_evidence_runtime(&mut ctx, module);
+        bind_wasm_prompt_tag_runtime(&mut ctx, module);
 
         assert_eq!(
             print_module(&ctx, module.op()),
@@ -1705,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn binding_leaves_modules_without_helper_declarations_unchanged() {
+    fn binding_leaves_modules_without_a_tag_declaration_unchanged() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -1718,7 +826,7 @@ mod tests {
         );
         let before = print_module(&ctx, module.op());
 
-        bind_wasm_evidence_runtime(&mut ctx, module);
+        bind_wasm_prompt_tag_runtime(&mut ctx, module);
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }

@@ -215,8 +215,8 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>
-  !evidence = adt.array<!marker, {{layout = "evidence"}}>
+  !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
+  !evidence = adt.array<!marker>
   func.func @run(%ev: !evidence) -> core.never {{
     {operation}
   }}

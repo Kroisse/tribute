@@ -450,22 +450,26 @@ fn inject_runtime_bindings<'db>(
     package_depth: usize,
 ) {
     let runtime = SymbolPath::new([LIBRARY_PACKAGE, "runtime"]);
-    let slots = TypeDefId::builtin_slots(db);
-    let name = slots.name(db);
     let pkg = vec![Symbol::new("pkg")];
-    let restriction = Restriction {
-        within: restriction_module(package_depth, &runtime, &pkg),
-        declaration: slots.path(db).clone(),
-        visibility: Visibility::Restricted(pkg),
-    };
-    let binding = Binding::TypeDef { id: slots };
-    env.restrict(binding.clone(), restriction);
-    // The intrinsics' module `Slots` keeps its namespace; the name is the type.
-    if matches!(
-        env.lookup_qualified(&runtime, &name),
-        None | Some(Binding::Module { .. })
-    ) {
-        env.add_to_namespace(runtime, name, binding);
+    for id in [
+        TypeDefId::builtin_slots(db),
+        TypeDefId::builtin_dispatch(db),
+    ] {
+        let name = id.name(db);
+        let restriction = Restriction {
+            within: restriction_module(package_depth, &runtime, &pkg),
+            declaration: id.path(db).clone(),
+            visibility: Visibility::Restricted(pkg.clone()),
+        };
+        let binding = Binding::TypeDef { id };
+        env.restrict(binding.clone(), restriction);
+        // The intrinsics' module `Slots` keeps its namespace; the name is the type.
+        if matches!(
+            env.lookup_qualified(&runtime, &name),
+            None | Some(Binding::Module { .. })
+        ) {
+            env.add_to_namespace(runtime.clone(), name, binding);
+        }
     }
 }
 

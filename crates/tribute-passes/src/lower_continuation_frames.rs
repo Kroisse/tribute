@@ -464,8 +464,8 @@ mod tests {
         assert_eq!(answers(0, "core.i64", "core.i32"), [i64, i32]);
     }
 
-    const TYPES: &str = r#"  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !ev = adt.array<!marker, {layout = "evidence"}>
+    const TYPES: &str = r#"  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !ev = adt.array<!marker>
   !frame = ability.frame<core.i32>
   !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
   !nested = ability.frame<!resume>"#;

@@ -175,12 +175,25 @@ fn wasm_lowering_passes() -> PassManager {
         crate::wasm::adt_to_wasm::lower(ctx, m.into(), tc);
         Ok(())
     }))
-    // Bind the evidence runtime helpers that boundary evidence lowering
-    // declared to their Wasm implementations.
+    // Replace the evidence type with its GC array once no `adt` operation
+    // reads it, which leaves the casts `adt` lowering made to it as identities.
     .add_pass(pass_fn(
-        "bind-evidence-runtime",
+        "convert-evidence-arrays",
         |ctx, m: core::Module, _| {
-            super::evidence_to_wasm::bind_wasm_evidence_runtime(ctx, m.into());
+            super::type_converter::convert_evidence_arrays(ctx, m.into());
+            Ok(())
+        },
+    ))
+    // Fold the round trips that array operands of parameters took through
+    // their `adt.array` type while signature conversion ran ahead of `adt`
+    // lowering.
+    .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+    // Bind the prompt tag allocator that evidence resolution declared to its
+    // Wasm implementation.
+    .add_pass(pass_fn(
+        "bind-prompt-tag-runtime",
+        |ctx, m: core::Module, _| {
+            super::evidence_to_wasm::bind_wasm_prompt_tag_runtime(ctx, m.into());
             Ok(())
         },
     ))
@@ -480,21 +493,13 @@ mod tests {
     use trunk_ir::refs::PathRef;
     use trunk_ir::rewrite::LegalityCheck;
 
-    fn lower_text(ir: &str) -> String {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, ir);
-        lower_to_wasm(&mut ctx, module, &mut Default::default())
-            .expect("test module should lower to wasm");
-        print_module(&ctx, module.op())
-    }
-
     #[test]
     fn adt_struct_get_converts_evidence_result_consistently() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
   !Frame = adt.struct<Frame()>
   !Env = adt.struct<Env(closure: !Closure, evidence: !Evidence, frame: !Frame)>
@@ -513,6 +518,7 @@ mod tests {
         let tc = wasm_type_converter(&mut ctx);
         crate::wasm::descriptors::declare(&mut ctx, module);
         crate::wasm::adt_to_wasm::lower(&mut ctx, module, tc);
+        crate::wasm::type_converter::convert_evidence_arrays(&mut ctx, module);
 
         let func = module.ops(&ctx)[0];
         let body = ctx.op_region(func, 0).unwrap();
@@ -526,7 +532,7 @@ mod tests {
             .iter()
             .find_map(|&op| wasm_gc::StructGet::from_op(&ctx, op).ok())
             .expect("environment read should lower to wasm_gc.struct_get");
-        // Evidence keeps its layout identifier instead of erasing to arrayref.
+        // Evidence is its GC array instead of erasing to arrayref.
         let evidence = crate::wasm::type_converter::evidence_wasm_type(&mut ctx);
 
         // The descriptor field precedes the source fields.
@@ -965,31 +971,6 @@ mod tests {
             "{error}"
         );
         assert_eq!(print_module(&ctx, module.op()), before);
-    }
-
-    #[test]
-    fn lower_to_wasm_binds_evidence_runtime_declarations() {
-        let output = lower_text(
-            r#"core.module @test {
-  !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
-  func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
-  func.func @prompt(%ev: !Evidence) -> core.i32 {
-    %id = arith.const {value = 7} : core.i32
-    %prompt = func.call %ev, %id {callee = @__tribute_evidence_lookup} : core.i32
-    func.return %prompt
-  }
-}"#,
-        );
-
-        assert!(
-            output.contains("sym_name = \"__tribute_evidence_find_marker\","),
-            "{output}"
-        );
-        assert!(
-            output.contains("sym_name = \"__tribute_evidence_lookup\","),
-            "{output}"
-        );
-        assert!(!output.contains("abi = \"C\""), "{output}");
     }
 
     #[test]

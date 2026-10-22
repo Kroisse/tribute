@@ -101,8 +101,9 @@ pub(crate) fn handle_struct_get(
         function.instruction(&Instruction::I32WrapI64);
         function.instruction(&Instruction::RefI31);
     } else {
-        // Check if struct field type is anyref but IR result type is more specific.
-        // Insert ref.cast when a generic payload field recovers a concrete type.
+        // Check if struct field type is anyref or arrayref but IR result type
+        // is more specific. Insert ref.cast when a generic payload or an
+        // array field recovers a concrete type.
         let field_is_anyref = module_info
             .gc_types
             .get(type_idx as usize)
@@ -117,7 +118,8 @@ pub(crate) fn handle_struct_get(
                         nullable: true,
                         heap_type: HeapType::Abstract {
                             shared: false,
-                            ty: wasm_encoder::AbstractHeapType::Any,
+                            ty: wasm_encoder::AbstractHeapType::Any
+                                | wasm_encoder::AbstractHeapType::Array,
                         },
                     }))
                 )

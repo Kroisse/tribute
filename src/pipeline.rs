@@ -38,7 +38,8 @@
 //!     │
 //!     ▼ eliminate_unreferenced_source_functions (artifact compiles only:
 //!     │   unreachable source-logical functions skip CPS legalization;
-//!     │   runtime functions stay)
+//!     │   runtime functions stay where a reachable perform, handle, or
+//!     │   evidence plan can make target lowering call them)
 //!     ▼ specialize_convention_classes, then
 //!     │   eliminate_unreferenced_source_functions again (artifact compiles only)
 //!     ▼ tribute_control_to_cps → lower_continuation_frames →
@@ -1130,13 +1131,9 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
 /// Run the native target pipeline: lowering + evidence_to_native + cleanup.
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     let mut analyses = AnalysisCache::new();
-    enter_target_lowering(
-        ctx,
-        m,
-        &mut analyses,
-        "native",
-        tribute_ir::runtime_items::RUNTIME_ITEMS,
-    )?;
+    // Native evidence lowering still calls the C runtime, so no runtime item
+    // stays alive into the native target.
+    enter_target_lowering(ctx, m, &mut analyses, "native", &[])?;
     lower_native_runtime_calls(ctx, m, &mut analyses)?;
     finish_target_lowering(
         ctx,
@@ -1189,10 +1186,13 @@ fn lower_wasm_runtime_calls(
 ) -> Result<(), DumpIrError> {
     let core_module = core_dialect::Module::from_op(ctx, m.op())
         .expect("Wasm evidence lowering requires a core.module");
-    tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, m);
+    let runtime = tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, m)
+        .map_err(|error| DumpIrError {
+            message: error.to_string(),
+        })?;
     let mut pm = PassManager::new();
     pm.nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::wasm::evidence_to_wasm::LowerEvidenceToWasm);
+        .add_pass(tribute_passes::wasm::evidence_to_wasm::LowerEvidenceToWasm::new(runtime));
     pm.with_debug_verifier();
     pm.run(ctx, core_module, analyses)?;
     tribute_ir::dialect::ability::remove_declarations(ctx, m);
@@ -1862,7 +1862,8 @@ mod tests {
     fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
         let mut ctx = IrContext::new();
         let source = r#"core.module @test {
-            !Evidence = adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+            !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
+            !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
             !Frame = adt.typeref<{name = "__tribute_continuation_frame_root_nil", tribute.cps_continuation_frame_result = core.nil}>
             !Done = closure.closure<func.func_sig<(core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
@@ -1871,6 +1872,9 @@ mod tests {
             !Payload = adt.struct<__tribute_ability_payload_7590c57e()>
             func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = 2} {
                 BODY
+            }
+            func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
+                func.return %id
             }
         }"#.replace("BODY", body);
         let module = trunk_ir::parser::parse_test_module(&mut ctx, &source);
@@ -1947,23 +1951,6 @@ mod tests {
     }
 
     #[test]
-    fn evidence_lookup_preserves_marker_type_in_emitted_binary() {
-        let mut ctx = trunk_ir::IrContext::new();
-        let module = trunk_ir::parser::parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-                func.func @__tribute_evidence_lookup(%ev: adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>, %id: core.i32) -> core.i32 attributes {abi = "C"}
-            }"#,
-        );
-        tribute_passes::wasm::evidence_to_wasm::bind_wasm_evidence_runtime(&mut ctx, module);
-        tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
-        let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();
-        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-            .validate_all(&binary.bytes)
-            .expect("evidence lookup must retain concrete Marker locals and return type");
-    }
-
-    #[test]
     fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_binary() {
         use trunk_ir::dialect::wasm;
         let (mut ctx, module) = source_logical_cps_root_module(
@@ -2028,10 +2015,19 @@ mod tests {
                                     .unwrap(),
                                 )
                             };
+                            // The evidence is the GC array of markers.
+                            assert!(
+                                matches!(
+                                    signature.params()[0],
+                                    ValType::Ref(evidence)
+                                        if matches!(evidence.heap_type(), wasmparser::HeapType::Concrete(_))
+                                ),
+                                "{:?}",
+                                signature.params()
+                            );
                             assert_eq!(
-                                signature.params(),
+                                signature.params()[1..],
                                 [
-                                    concrete(trunk_ir_wasm_backend::gc_types::EVIDENCE_IDX),
                                     concrete(trunk_ir_wasm_backend::gc_types::CLOSURE_STRUCT_IDX),
                                     concrete(trunk_ir_wasm_backend::gc_types::CLOSURE_STRUCT_IDX),
                                     ValType::I32,
