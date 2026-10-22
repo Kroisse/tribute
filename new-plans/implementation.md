@@ -210,11 +210,11 @@ Specialization mangle은 type argument의 identity에 대해 단사(injective)�
 다른 type argument 목록은 서로 다른 이름을 얻는다. 함수 타입, 튜플, bound type
 variable, compiler-owned nominal 타입처럼 소스 선언이 이름 짓지 않는 타입은 숫자
 태그로 시작하므로, 같은 철자의 소스 타입 이름과 구분된다. 함수 타입은 parameter와 result
-외에 ability row와 calling-convention 하한을 함께 인코딩한다. Ability row는 각
+외에 ability row를 함께 인코딩한다. Ability row는 각
 ability의 origin과 qualified identity, ability argument를 row에 저장된 순서대로 쓰고,
 열린 row의 row variable은 한 mangle 안에서 처음 나타난 순서로 번호를 매겨 추론
-번호에 의존하지 않는다. Closed 빈 row와 `Direct` 하한을 가진 함수 타입의 mangle은
-parameter와 result만으로 이루어진다.
+번호에 의존하지 않는다. Closed 빈 row를 가진 함수 타입의 mangle은 parameter와
+result만으로 이루어진다.
 
 ---
 
@@ -450,36 +450,12 @@ Row에서 callable의 호출 규약을 정하는 규칙은
 [CPS 전략](cps-effects.md#row와-호출-규약)에 있다. Typechecking은 규약을 계산하지
 않는다.
 
-### 변환 범위
+### 변환 범위와 ability polymorphism
 
-모든 함수를 Cps convention으로 바꾸지는 않는다. `Cps` callable 호출과
-typechecked `operation_kind = "op"` 지점은 남은 계산을 continuation으로 전달한다:
-
-```text
-생략 annotation의 semantic type       → open row, indirect call은 Cps
-concrete residual effect 없는 worker  → Direct
-명시적 빈 effect (fn(a) ->{} b)      → Direct
-Ambient/fn effect                    → EvidenceDirect
-General op/Throw effect              → Cps, effect point만 continuation 처리
-Cps가 아닌 정의 안의 handle          → 값 delimiter, 정의의 convention은 그대로
-```
-
-### Ability Polymorphism 처리
-
-```rust
-fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
-```
-
-`f`가 순수인지 effectful인지 컴파일 타임에 모를 수 있다. 전략:
-
-1. **Class 특수화**: `e`는 매개변수의 함수 타입에 나타나므로 class 변수다. 호출
-   지점의 row 인자가 정한 class마다 인스턴스를 만들고, `f`의 convention과 `map`의
-   worker convention을 그 class에서 정한다.
-2. **열린 row는 Cps**: class가 정해지지 않은 row 변수는 더 강한 convention을 요구할
-   가능성을 배제할 수 없으므로 `ContinuationFrame<R>`를 포함하는 ABI를 사용한다
-3. **Evidence 전달**: effectful polymorphic 호출은 동일한 evidence를 전달한다.
-4. **Operation kind 보존**: 구체적인 `fn` operation call-site는 continuation을
-   capture하지 않고 `ability.call`을 사용한다.
+어떤 callable이 continuation을 받는지, 열린 row와 class 변수를 어떻게 다루는지, `Cps`가
+아닌 정의 안의 CPS 제어를 어떻게 감싸는지는 [CPS 전략](cps-effects.md)이 정한다.
+어느 경우든 effectful polymorphic 호출은 같은 evidence를 전달하고, 구체적인 `fn`
+operation 호출 지점은 continuation을 capture하지 않는다.
 
 ### Operation kind와 dispatch
 
