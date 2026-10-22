@@ -9,7 +9,8 @@
 use std::ops::ControlFlow;
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use tribute_ir::dialect::tribute_control::{CallingConvention, FuncSig, Row, RowBinder};
+use tribute_ir::calling_convention::CallingConvention;
+use tribute_ir::dialect::tribute_control::{FuncSig, Row, RowBinder};
 use tribute_ir::dialect::{ability, tribute_control};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};

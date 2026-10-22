@@ -5,8 +5,8 @@
 use std::ops::ControlFlow;
 
 use rustc_hash::FxHashMap as HashMap;
-use tribute_core::calling_convention::{cps_completion_type, cps_done_type, cps_resume_type};
-use tribute_core::{CallingConvention, set_calling_convention};
+use tribute_ir::calling_convention::{CallingConvention, set_calling_convention};
+use tribute_ir::calling_convention::{cps_completion_type, cps_done_type, cps_resume_type};
 use tribute_ir::dialect::{ability, adt, tribute_control, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -400,10 +400,10 @@ impl ExpandSuffixFrames {
             .callee(trunk_ir::SymbolPath::new([symbol]))
             .results([value.dispatch])
             .build(ctx, location);
-        tribute_core::set_calling_convention(
+        tribute_ir::calling_convention::set_calling_convention(
             ctx,
             dispatch.op_ref(),
-            tribute_core::CallingConvention::Direct,
+            tribute_ir::calling_convention::CallingConvention::Direct,
         );
         ctx.push_op(block, dispatch.op_ref());
         let frame = pack_frame(ctx, block, location, &value, done, dispatch.result(ctx));

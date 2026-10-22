@@ -1924,7 +1924,7 @@ mod tests {
             // The convention is consumed inside the boundary; the empty
             // physical result list is what identifies a Cps callable here.
             assert_eq!(
-                tribute_core::get_calling_convention(&ctx, function.op_ref()),
+                tribute_ir::calling_convention::get_calling_convention(&ctx, function.op_ref()),
                 None
             );
             assert!(
