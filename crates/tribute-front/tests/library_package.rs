@@ -308,3 +308,43 @@ fn g(x: ::std::DoesNotExist, y: pkg::Missing) -> Nat { 0 }
         ]
     );
 }
+
+/// An inline module re-exports through a leading `::`, and a path with a
+/// fixed start must name a type: not a module, and not nothing.
+#[salsa_test]
+fn rooted_paths_re_export_and_name_types(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod std {
+    pub fn answer() -> Nat { 42 }
+}
+
+mod m {
+    pub use ::std::Option::Some as Just
+
+    fn f(x: nope::T) -> Nat { 0 }
+}
+
+mod Geo {
+    pub fn area() -> Nat { 1 }
+}
+
+fn g(x: pkg::Geo) -> Nat { 0 }
+
+fn main() -> Nil {
+    let _ = case m::Just(1) {
+        Some(n) -> n
+        None -> std::answer()
+    }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "unresolved name `nope::T`",
+            "`pkg::Geo` names a module, not a type",
+        ]
+    );
+}

@@ -902,27 +902,16 @@ impl<'db> Resolver<'db> {
             TypeAnnotationKind::Path(segments) => match self.fixed_location(segments) {
                 // A path that starts with a keyword or `::` names only what
                 // is at its location.
-                Ok(Some(location)) if self.lookup_path(&location).is_some() => {
-                    *segments = location.identity().to_vec();
-                }
-                Ok(Some(location)) if !location.path.is_empty() => {
-                    let path = Symbol::new(&segments.iter().format("::").to_string());
-                    self.report_unresolved_annotation(ann.id, &path);
-                    ann.kind = TypeAnnotationKind::Error;
-                }
-                Ok(Some(_)) => {
-                    Diagnostic::new(
-                        format!(
-                            "`{}` names a module, not a type",
-                            segments.iter().format("::")
-                        ),
-                        self.span_map.get_or_default(ann.id),
-                        DiagnosticSeverity::Error,
-                        CompilationPhase::NameResolution,
-                    )
-                    .accumulate(self.db);
-                    ann.kind = TypeAnnotationKind::Error;
-                }
+                Ok(Some(location)) => match self.lookup_path(&location) {
+                    Some(Binding::Module { .. }) => self.report_module_annotation(ann),
+                    Some(_) => *segments = location.identity().to_vec(),
+                    None if location.path.is_empty() => self.report_module_annotation(ann),
+                    None => {
+                        let path = Symbol::new(&segments.iter().format("::").to_string());
+                        self.report_unresolved_annotation(ann.id, &path);
+                        ann.kind = TypeAnnotationKind::Error;
+                    }
+                },
                 Ok(None) => match self.namespace_in_scope(SymbolPath::new(segments.clone())) {
                     Some(location) => *segments = location.identity().to_vec(),
                     None => {
@@ -989,6 +978,23 @@ impl<'db> Resolver<'db> {
             .package
             .at(SymbolPath::new(parent.iter().chain([name]).cloned()));
         self.lookup_path(&location)
+    }
+
+    /// Report an annotation path that names a module rather than a type.
+    fn report_module_annotation(&self, ann: &mut TypeAnnotation) {
+        if let TypeAnnotationKind::Path(segments) = &ann.kind {
+            Diagnostic::new(
+                format!(
+                    "`{}` names a module, not a type",
+                    segments.iter().format("::")
+                ),
+                self.span_map.get_or_default(ann.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::NameResolution,
+            )
+            .accumulate(self.db);
+        }
+        ann.kind = TypeAnnotationKind::Error;
     }
 
     /// Report a type or ability name an annotation cannot see.
