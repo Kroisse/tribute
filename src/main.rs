@@ -257,7 +257,7 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
 
         // Show environment if requested
         if show_env {
-            println!("\n=== Module Environment ===");
+            println!("\n=== Package Environment ===");
             if let Some(parsed) = parsed_ast(db, source) {
                 let env = build_env(db, parsed.module(db), &Dependencies::none());
                 println!("{:#?}", env);

@@ -1717,8 +1717,8 @@ pub fn compile_to_native_binary(
 ///
 /// Uses the Type Info Injection approach to make prelude types available:
 /// 1. Parse user code to AST
-/// 2. Merge prelude bindings into user's PackageEnv
-/// 3. Resolve names with merged environment
+/// 2. Build the user's PackageEnv, which depends on package `std`
+/// 3. Resolve names through it and package `std`'s environment
 /// 4. Inject prelude TypeSchemes into user's ModuleTypeEnv
 /// 5. Type check with injected types
 #[salsa::tracked(returns(copy))]
