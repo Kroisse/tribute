@@ -639,6 +639,19 @@ pub fn verify_tribute_control_post_cps(
         });
     }
     failures.extend(verify_final_handle_dispatch_types(ctx, module));
+    failures.extend(
+        tribute_ir::calling_convention::verify_conventions(ctx, module.op())
+            .into_iter()
+            .map(|violation| BoundaryFailure {
+                op: Some(violation.op),
+                location: Some(ctx.op(violation.op).location),
+                message: format!(
+                    "{}: {}",
+                    ctx.op(violation.op).name.display(ctx),
+                    violation.error
+                ),
+            }),
+    );
     let symbols = analyses.require::<SymbolTable>(ctx, module.op());
     failures.extend(verify_physical_callable_graph(ctx, module, &symbols));
     failures.extend(

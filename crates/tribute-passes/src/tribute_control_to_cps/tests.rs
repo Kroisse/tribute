@@ -914,6 +914,25 @@ fn named_boundaries_report_local_and_core_validation_errors() {
 }
 
 #[test]
+fn post_boundary_rejects_a_convention_on_an_operation_that_cannot_carry_one() {
+    let (ctx, module) = parse(
+        r#"core.module @test {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
+    %n = core.nil_value {tribute.calling_convention = "direct"} : core.nil
+    func.return %n
+  }
+}"#,
+    );
+    let error = verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "core.nil_value: calling-convention metadata on an operation that cannot carry it"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
 fn post_boundary_rejects_recursively_nested_control_types() {
     let input = r#"core.module @test {
   !nested = core.tuple<closure.closure<func.func_sig<(tribute_control.resume_token<core.i32, core.i32>) -> core.i32>>>
