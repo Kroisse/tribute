@@ -453,6 +453,14 @@ Metadata/type/symbol 불일치는 conversion failure이며 hidden operand를 추
 builder를 재사용하되 `tribute_control` 전용 graph pattern은
 `tribute_control_to_cps`가 소유한다.
 
+Operation의 convention은 tribute-ir의 `ConventionBearing` operation interface가
+소유한다. 이 interface를 구현하는 `func.func`, `func.call`, `func.call_indirect`,
+`func.tail_call`, `func.tail_call_indirect`, `closure.lambda`, `closure.new`만
+convention을 가질 수 있다. Pass는 attribute key를 직접 읽거나 쓰지 않고 이
+interface로 convention을 읽고, 쓰고, 소비한다. Attribute 철자는 tribute-ir의 저장,
+출력, 파싱, 검증만 다룬다. 읽기는 convention이 없는 경우와 값이 잘못된 경우를
+구분하며, legalization 경계 검증과 물리화는 잘못된 값을 거부한다.
+
 같은 legalization에서 각 `tribute_control.perform`을 typecheck된
 `operation_kind`에 따라 변환한다. `"fn"`은 suffix를 capture하지 않고
 `ability.call`을, `"op"`은 `ability.perform`(source `op -> Never`에는

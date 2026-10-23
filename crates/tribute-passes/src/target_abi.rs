@@ -11,12 +11,11 @@ use std::ops::ControlFlow;
 use tribute_ir::continuation_frame;
 
 use tribute_ir::calling_convention::{
-    CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
-    get_physical_closure_convention,
-};
-use tribute_ir::calling_convention::{
     CLOSURE_ENVIRONMENT_INDEX_ATTR, cps_closure_function_type,
     get_physical_closure_environment_index,
+};
+use tribute_ir::calling_convention::{
+    CallingConvention, ConventionBearing, DynConventionBearing, get_physical_closure_convention,
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, closure, effect, tribute_rt};
@@ -126,6 +125,7 @@ pub fn lower_cps_signatures_to_physical(
     let mut result_types = Vec::new();
     let mut attributes = Vec::new();
     let mut consumed_attributes = Vec::new();
+    let mut consumed_conventions = Vec::new();
     let mut indirect_signatures = Vec::new();
     let mut block_args = Vec::new();
     let mut block_attributes = Vec::new();
@@ -213,10 +213,7 @@ pub fn lower_cps_signatures_to_physical(
         // lowering still reads the convention of a closure transfer; no later
         // pass reads any other transfer's.
         if is_transfer(converter.ctx, op)
-            && converter
-                .ctx
-                .op_attrs(op)
-                .contains_key(CALLING_CONVENTION_ATTR)
+            && exact_convention(converter.ctx, op)?.is_some()
             && indirect
                 .and_then(|call| call.indirect_callee(converter.ctx))
                 .is_none_or(|callee| {
@@ -224,7 +221,7 @@ pub fn lower_cps_signatures_to_physical(
                         .is_none()
                 })
         {
-            consumed_attributes.push((op, CALLING_CONVENTION_ATTR));
+            consumed_conventions.push(op);
         }
         let op_attributes: Vec<_> = converted_attributes
             .iter()
@@ -294,6 +291,11 @@ pub fn lower_cps_signatures_to_physical(
     for (op, name) in consumed_attributes {
         ctx.op_attrs_mut(op).remove(name);
     }
+    for op in consumed_conventions {
+        DynConventionBearing::get(ctx, op)
+            .expect("only a ConventionBearing operation records a calling convention")
+            .remove_calling_convention(ctx);
+    }
     for (op, signature) in indirect_signatures {
         assert!(
             DynIndirectCallLike::get(ctx, op)
@@ -346,7 +348,7 @@ fn validate_root_entry(
         return Ok(None);
     };
 
-    if get_calling_convention(ctx, worker_op) != Some(CallingConvention::Cps) {
+    if DynConventionBearing::of(ctx, worker_op) != Some(CallingConvention::Cps) {
         return Ok(None);
     }
     // The root contract fixes the source result of `main`.
@@ -444,7 +446,7 @@ pub fn compose_root_entry_bridge(
     let results = signature.results(ctx).to_vec();
     let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
-    let convention = get_calling_convention(ctx, worker_op);
+    let convention = DynConventionBearing::of(ctx, worker_op);
     match (convention, &cps_root) {
         (Some(CallingConvention::Cps), Some(_)) => {}
         (Some(CallingConvention::EvidenceDirect), None) if inputs == [evidence_ty] => {}
@@ -504,7 +506,7 @@ pub fn compose_root_entry_bridge(
         .r#type(wrapper_ty)
         .regions(body)
         .build(ctx, location);
-    set_root_convention(ctx, wrapper.op_ref(), CallingConvention::Direct);
+    wrapper.set_calling_convention(ctx, CallingConvention::Direct);
     ctx.push_op(module_block, wrapper.op_ref());
     Ok(())
 }
@@ -663,7 +665,7 @@ pub fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(
         let call = func::CallIndirect::operands(body, [evidence, built.frame])
             .signature(signature)
             .build(ctx, location);
-        set_root_convention(ctx, call.op_ref(), CallingConvention::Cps);
+        call.set_calling_convention(ctx, CallingConvention::Cps);
         ctx.insert_op_before(block, op, call.op_ref());
         let mut completed = None;
         for new in terminal.read_answer(ctx, location, built.cell) {
@@ -782,7 +784,7 @@ impl TerminalFunctions {
             .r#type(done_ty)
             .regions(done_region)
             .build(ctx, location);
-        set_root_convention(ctx, done_function.op_ref(), CallingConvention::Cps);
+        done_function.set_calling_convention(ctx, CallingConvention::Cps);
 
         let dispatch_ty = dispatch_entry_function_type(ctx, frame.dispatch)?;
         let dispatch_entry = ctx.create_block(BlockData {
@@ -817,7 +819,7 @@ impl TerminalFunctions {
             .r#type(dispatch_ty)
             .regions(dispatch_region)
             .build(ctx, location);
-        set_root_convention(ctx, dispatch_function.op_ref(), CallingConvention::Cps);
+        dispatch_function.set_calling_convention(ctx, CallingConvention::Cps);
 
         Ok(Self {
             frame,
@@ -1193,11 +1195,6 @@ fn is_parameterless_type(ctx: &IrContext, ty: TypeRef, name: trunk_ir::TypeName)
     data.name == name && data.params.is_empty() && data.attrs.is_empty()
 }
 
-fn set_root_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
-    ctx.op_attrs_mut(op)
-        .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
-}
-
 fn bind_name(ctx: &mut IrContext, name: &str) -> AttributeMap {
     let name = ctx.string_attr(name);
     AttributeMap::from_entries(ctx, [("bind_name", name)])
@@ -1228,14 +1225,8 @@ fn exact_convention(
     ctx: &IrContext,
     op: OpRef,
 ) -> Result<Option<CallingConvention>, TargetAbiError> {
-    let present = ctx.op_attrs(op).get(CALLING_CONVENTION_ATTR).is_some();
-    let convention = get_calling_convention(ctx, op);
-    if present && convention.is_none() {
-        return Err(TargetAbiError::new(
-            "target ABI: malformed calling-convention metadata",
-        ));
-    }
-    Ok(convention)
+    DynConventionBearing::exact(ctx, op)
+        .map_err(|error| TargetAbiError::new(format!("target ABI: {error}")))
 }
 
 fn collect_functions(
@@ -1863,6 +1854,7 @@ fn collect_ops(ctx: &IrContext, root: OpRef) -> Vec<OpRef> {
 mod tests {
     use super::*;
     use crate::test_support::assert_unchanged_on_error;
+    use tribute_ir::calling_convention::CALLING_CONVENTION_ATTR;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::types::TypeDataBuilder;
@@ -2247,12 +2239,12 @@ mod tests {
         let dispatch = function(&ctx, module, ROOT_UNHANDLED_SYMBOL);
 
         assert_eq!(
-            get_calling_convention(&ctx, wrapper.op_ref()),
+            DynConventionBearing::of(&ctx, wrapper.op_ref()),
             Some(CallingConvention::Direct)
         );
         for function in [worker, done_k, dispatch] {
             assert_eq!(
-                get_calling_convention(&ctx, function.op_ref()),
+                DynConventionBearing::of(&ctx, function.op_ref()),
                 Some(CallingConvention::Cps)
             );
             assert!(
@@ -2351,7 +2343,7 @@ mod tests {
         let signature = func::FuncSig::from_type_ref(&ctx, wrapper.r#type(&ctx)).unwrap();
         assert!(signature.inputs(&ctx).is_empty());
         assert_eq!(
-            get_calling_convention(&ctx, wrapper.op_ref()),
+            DynConventionBearing::of(&ctx, wrapper.op_ref()),
             Some(CallingConvention::Direct)
         );
         let ops = collect_ops(&ctx, wrapper.op_ref());
@@ -2390,7 +2382,7 @@ mod tests {
         let signature = func::FuncSig::from_type_ref(ctx, entry_main.r#type(ctx)).unwrap();
         assert!(signature.inputs(ctx).is_empty());
         assert_eq!(
-            get_calling_convention(ctx, entry_main.op_ref()),
+            DynConventionBearing::of(ctx, entry_main.op_ref()),
             Some(CallingConvention::Direct)
         );
         let ops = collect_ops(ctx, entry_main.op_ref());
@@ -2408,7 +2400,7 @@ mod tests {
         assert_eq!(ctx.op_operands(call.op_ref()), [empty.result(ctx)]);
         // The bridge reads the worker's convention and does not record it on
         // the call it builds.
-        assert_eq!(get_calling_convention(ctx, call.op_ref()), None);
+        assert_eq!(DynConventionBearing::of(ctx, call.op_ref()), None);
     }
 
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
@@ -2703,7 +2695,7 @@ mod tests {
 
         let run = function(&ctx, module, "run");
         assert_eq!(
-            get_calling_convention(&ctx, run.op_ref()),
+            DynConventionBearing::of(&ctx, run.op_ref()),
             Some(CallingConvention::Direct)
         );
         let call = collect_ops(&ctx, run.op_ref())
@@ -2711,7 +2703,7 @@ mod tests {
             .find(|&op| func::CallIndirect::matches(&ctx, op))
             .unwrap();
         assert_eq!(
-            get_calling_convention(&ctx, call),
+            DynConventionBearing::of(&ctx, call),
             Some(CallingConvention::Direct)
         );
     }

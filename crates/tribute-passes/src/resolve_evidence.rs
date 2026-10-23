@@ -10,8 +10,8 @@
 use itertools::Itertools;
 use std::error::Error;
 use std::fmt;
+use tribute_ir::calling_convention::DynConventionBearing;
 
-use tribute_ir::calling_convention::get_calling_convention;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_control::{EVIDENCE_PLAN_ATTR, EvidenceStep};
@@ -334,7 +334,7 @@ fn call_evidence_operand(ctx: &IrContext, op: OpRef) -> Option<u32> {
     } else {
         return None;
     };
-    let passes_evidence = get_calling_convention(ctx, op)
+    let passes_evidence = DynConventionBearing::of(ctx, op)
         .is_some_and(|convention| convention.needs_evidence())
         && ctx
             .op_operands(op)

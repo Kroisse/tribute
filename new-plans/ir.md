@@ -594,7 +594,9 @@ one result. `Result`와 `Params`는 source-logical type이며 기존 code `Direc
 [CPS 전략](cps-effects.md#row와-호출-규약)이 [ability row](#ability-row)에서 계산한
 값이며 body에서 추론하지 않는다. Legalization은 이를 기존
 `CallableAbi`와 physical `func.func_sig`, `closure.closure` 및
-`tribute.calling_convention` operation attribute로 바꾼다. Type verifier는
+`tribute.calling_convention` operation attribute로 바꾼다. Operation 쪽 convention은
+[`ConventionBearing` interface](cps-effects.md#pre-cps-callable-shape)로만 읽고
+쓴다. Type verifier는
 result 하나와 parameter 0개 이상, convention domain, 모든 component type의
 resolution을 검사하며 physical `func.func_sig`나 `closure.closure`를 component로
 허용하지 않는다. 전체 규칙은

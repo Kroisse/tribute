@@ -25,8 +25,7 @@ use std::sync::Arc;
 
 use tribute_ir::calling_convention::get_physical_closure_environment_index;
 use tribute_ir::calling_convention::{
-    CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
-    get_physical_closure_convention,
+    CallingConvention, ConventionBearing, DynConventionBearing, get_physical_closure_convention,
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::closure;
@@ -258,7 +257,7 @@ impl RewritePattern for LowerClosureCallArena {
         let caller_results = ctx.op_result_types(op).to_vec();
 
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let Some(convention) = get_calling_convention(ctx, op) else {
+        let Some(convention) = DynConventionBearing::of(ctx, op) else {
             return false;
         };
         if caller_results.len() != usize::from(convention != CallingConvention::Cps) {
@@ -288,7 +287,7 @@ impl RewritePattern for LowerClosureCallArena {
         let new_call = func::CallIndirect::operands(table_idx, new_args)
             .signature(contract.signature)
             .build(ctx, loc);
-        copy_indirect_call_attributes(ctx, op, new_call.op_ref());
+        copy_indirect_call_attributes(ctx, op, new_call);
 
         rewriter.insert_op(table_idx_op.op_ref());
 
@@ -320,7 +319,7 @@ impl RewritePattern for LowerClosureTailCallArena {
         let Some((&callee, args)) = operands.split_first() else {
             return false;
         };
-        let Some(convention) = get_calling_convention(ctx, op) else {
+        let Some(convention) = DynConventionBearing::of(ctx, op) else {
             return false;
         };
         if physical_closure_type_for_callee(ctx, callee).is_none() {
@@ -351,7 +350,7 @@ impl RewritePattern for LowerClosureTailCallArena {
         let tail = func::TailCallIndirect::operands(func_ref.result(ctx), args)
             .signature(contract.signature)
             .build(ctx, location);
-        copy_indirect_call_attributes(ctx, op, tail.op_ref());
+        copy_indirect_call_attributes(ctx, op, tail);
 
         rewriter.insert_op(func_ref.op_ref());
         rewriter.replace_op(tail.op_ref());
@@ -367,11 +366,15 @@ impl RewritePattern for LowerClosureTailCallArena {
 ///
 /// The semantic calling convention is consumed here: the lowered call's
 /// physical signature carries the contract it was validated against.
-fn copy_indirect_call_attributes(ctx: &mut IrContext, source: OpRef, destination: OpRef) {
+fn copy_indirect_call_attributes(
+    ctx: &mut IrContext,
+    source: OpRef,
+    destination: impl ConventionBearing,
+) {
     let mut attributes = ctx.op(source).attributes.clone();
     func::remove_indirect_call_signature(ctx, &mut attributes);
-    attributes.view_mut(ctx).remove(CALLING_CONVENTION_ATTR);
-    ctx.op_attrs_mut(destination).extend(attributes);
+    ctx.op_attrs_mut(destination.op_ref()).extend(attributes);
+    destination.remove_calling_convention(ctx);
 }
 
 pub(crate) fn physical_closure_type_for_callee(
@@ -405,7 +408,8 @@ fn exact_tail_results(
         let owner = ctx.region(ctx.block(parent).parent_region?).parent_op?;
         if let Ok(function) = func::Func::from_op(ctx, owner) {
             let caller = func::FuncSig::from_type_ref(ctx, function.r#type(ctx))?;
-            let caller_is_cps = get_calling_convention(ctx, owner) == Some(CallingConvention::Cps);
+            let caller_is_cps =
+                DynConventionBearing::of(ctx, owner) == Some(CallingConvention::Cps);
             return ((convention == CallingConvention::Cps) == caller_is_cps
                 && caller.results(ctx) == results)
                 .then(|| results.to_vec());
@@ -530,7 +534,7 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
         if physical_closure_type_for_callee(ctx, callee).is_none() {
             return true;
         }
-        let Some(convention) = get_calling_convention(ctx, op) else {
+        let Some(convention) = DynConventionBearing::of(ctx, op) else {
             return false;
         };
         if func::CallIndirect::matches(ctx, op) {
@@ -585,8 +589,7 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
         for func_op in discovered.into_iter().rev() {
             rewrite_validated_closures_in_func(ctx, func_op, functions.clone());
             // Closure lowering is the last reader of a function's convention.
-            ctx.op_attrs_mut(func_op.op_ref())
-                .remove(CALLING_CONVENTION_ATTR);
+            func_op.remove_calling_convention(ctx);
         }
     }
     Ok(())
@@ -1435,13 +1438,13 @@ mod tests {
         // Closure lowering leaves a non-closure transfer alone and consumes
         // only the enclosing function's convention.
         let caller = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
-        assert_eq!(get_calling_convention(&ctx, caller.op_ref()), None);
+        assert_eq!(DynConventionBearing::of(&ctx, caller.op_ref()), None);
         let call = collect_ops(&ctx, caller.op_ref())
             .into_iter()
             .find(|&op| func::CallIndirect::matches(&ctx, op))
             .unwrap();
         assert_eq!(
-            get_calling_convention(&ctx, call),
+            DynConventionBearing::of(&ctx, call),
             Some(CallingConvention::Direct)
         );
     }
