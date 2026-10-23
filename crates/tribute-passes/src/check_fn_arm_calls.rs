@@ -7,12 +7,11 @@
 //! rejects what the arm's definition shows; this check covers the calls
 //! whose convention depends on a class an instance fixes.
 
-use std::collections::VecDeque;
 use std::ops::ControlFlow;
 
 use derive_more::{Display, Error};
 use itertools::Itertools;
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::tribute_control::{self, FuncSig, Row};
 use tribute_ir::runtime_items::{RUNTIME_ITEMS, function_entry_points};
@@ -29,7 +28,7 @@ use crate::convention_classes::{
 };
 
 /// A call in a `fn` arm that may suspend or abort.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FnArmCall {
     pub location: Location,
     pub message: String,
@@ -69,9 +68,9 @@ impl trunk_ir::pass::Pass for CheckFnArmCalls {
 }
 
 /// Every call in a `fn` arm of a reachable instance that may suspend or
-/// abort. An instance is reachable from the roots the elimination of
-/// unreferenced definitions keeps, so a compilation without them, such as a
-/// module without `main`, checks no instance here.
+/// abort, once per source call. An instance is reachable from the roots the
+/// elimination of unreferenced definitions keeps, so a compilation without
+/// them, such as a module without `main`, checks no instance here.
 pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
     let requirements = requirements(ctx, module);
     let mut functions: Vec<Function> = module
@@ -82,33 +81,16 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
     let positions = settle_class_variables(&mut functions);
     let by_name: HashMap<&str, &Function> =
         functions.iter().map(|f| (f.name.as_str(), f)).collect();
-
-    let mut reached: HashSet<&str> = HashSet::default();
-    // The roots of the unreferenced-definition elimination: root `main`,
-    // `_start`, a definition with a foreign ABI, and the runtime functions.
-    let runtime: HashSet<String> = function_entry_points(RUNTIME_ITEMS)
-        .iter()
-        .filter_map(|path| path.leaf().map(|leaf| leaf.to_string()))
-        .collect();
-    let mut queue: VecDeque<&Function> = functions
-        .iter()
-        .filter(|function| {
-            function.is_root_main()
-                || function.name == "_start"
-                || runtime.contains(&function.name)
-                || ctx.op_attrs(function.op).contains_key("abi")
-        })
-        .collect();
+    let config = trunk_ir::transforms::GlobalDceConfig {
+        extra_entry_points: function_entry_points(RUNTIME_ITEMS),
+        ..Default::default()
+    };
+    let reachable =
+        trunk_ir::transforms::reachable_definitions_with_config(ctx, module, &config, |ctx, op| {
+            tribute_control::Func::matches(ctx, op) && ctx.op_has_regions(op)
+        });
     let mut calls = Vec::new();
-    while let Some(function) = queue.pop_front() {
-        if !reached.insert(function.name.as_str()) {
-            continue;
-        }
-        for reference in &function.references {
-            if let Some(callee) = by_name.get(reference.callee.as_str()) {
-                queue.push_back(callee);
-            }
-        }
+    for function in functions.iter().filter(|f| reachable.contains(&f.op)) {
         let Some(body) = ctx.op_region(function.op, 0) else {
             continue;
         };
@@ -140,7 +122,8 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
             ControlFlow::Continue(WalkAction::Advance)
         });
     }
-    calls
+    // Instances cloned from one definition repeat its calls.
+    calls.into_iter().unique().collect()
 }
 
 /// One reachable instance with the classes its name fixes.

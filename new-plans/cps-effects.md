@@ -271,8 +271,9 @@ Class 특수화가 convention을 정한 뒤, 적법화 전에 `fn` handler arm�
 인스턴스에서 정해져야 드러나는 위반이다.
 
 - 검사 대상은 참조되지 않는 정의 제거와 같은 root, 곧 root `main`, `_start`, 외부
-  ABI를 가진 정의, runtime 함수에서 참조로 닿는 인스턴스다. Root가 없는 compile은 이
-  검사를 하지 않는다. 특수화가 정의마다 만드는 class가
+  ABI를 가진 정의, runtime 함수, 함수 밖의 operation이 참조하는 정의에서 참조로 닿는
+  인스턴스다. Root가 없는 compile은 이 검사를 하지 않는다.
+- 한 정의에서 복제된 인스턴스 여럿이 같은 호출에서 위반하면 그 호출을 한 번 보고한다. 특수화가 정의마다 만드는 class가
   모두 `Cps`인 인스턴스는 그 class로 참조될 때만 검사한다.
 - Callee의 convention은 특수화가 쓴 값을 읽는다. 직접 호출은 callee 정의의
   convention을, 간접 호출은 callee 값 타입의 convention을 쓴다. Row의 tail을 다시

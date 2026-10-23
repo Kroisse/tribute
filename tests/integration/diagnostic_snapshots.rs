@@ -1088,6 +1088,58 @@ fn main() -> Nil {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// Instances that differ only in another class variable report a call in a
+/// `fn` arm once.
+#[salsa_test]
+fn diag_fn_arm_row_variable_call_reported_once(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+ability Tick {
+    fn tick() -> Int
+}
+
+fn count() ->{Counter} Int {
+    Counter::next()
+}
+
+fn limited(
+    f: fn() ->{e} Int,
+    h: fn() ->{d} Int,
+    comp: fn() ->{e, Counter} Int,
+) ->{e, d} Int {
+    let _ = h()
+    handle comp() {
+        fn Counter::next() { f() }
+    }
+}
+
+fn main() -> Nil {
+    let _ = handle limited(fn() Stop::stop(), fn() +1, fn() count()) {
+        op Stop::stop() { +0 }
+    }
+    let _ = handle limited(fn() Stop::stop(), fn() Tick::tick(), fn() count()) {
+        op Stop::stop() { +0 }
+        fn Tick::tick() { +1 }
+    }
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
