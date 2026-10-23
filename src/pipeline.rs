@@ -301,7 +301,7 @@ fn checked_prelude<'db>(
     db: &'db dyn salsa::Database,
 ) -> Option<(ast_typeck::TypeCheckOutput<'db>, PreludeExports<'db>)> {
     let (parsed, _) = parse_prelude(db)?;
-    let prelude_ast = &ast_resolve::library_package_module(parsed.module(db));
+    let prelude_ast = parsed.module(db);
     let span_map = parsed.span_map(db);
     let prelude_env = ast_resolve::build_library_env(db, prelude_ast);
     let resolved =
@@ -346,8 +346,7 @@ fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutpu
 #[salsa::tracked(returns(as_ref))]
 fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
     let (parsed, _) = parse_prelude(db)?;
-    let prelude_ast = ast_resolve::library_package_module(parsed.module(db));
-    Some(ast_resolve::build_library_env(db, &prelude_ast))
+    Some(ast_resolve::build_library_env(db, parsed.module(db)))
 }
 
 /// The names the prelude's package root gives another package: its public
@@ -360,8 +359,11 @@ pub fn library_names<'db>(
     };
     // The compiler-owned names, such as `List`, come with the prelude's.
     let mut names: Vec<_> = env
-        .iter_namespace(&[trunk_ir::Symbol::new(ast_resolve::LIBRARY_PACKAGE)])
-        .filter(|(_, binding)| env.restriction(binding).is_none())
+        .iter_definitions()
+        .chain(env.iter_namespace(&[]))
+        .filter(|(name, binding)| {
+            env.restriction(binding).is_none() && env.entry_restriction(&[], name).is_none()
+        })
         .map(|(name, binding)| (name, binding.clone()))
         .collect();
     for name in env.iter_library_names() {
