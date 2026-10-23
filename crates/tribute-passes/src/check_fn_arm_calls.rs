@@ -28,10 +28,13 @@ use crate::convention_classes::{
 };
 
 /// A call in a `fn` arm that may suspend or abort.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FnArmCall {
     pub location: Location,
     pub message: String,
+    /// The references that pass an effect with an `op` operation to the
+    /// row variable that makes the call `Cps`, in body order.
+    pub origins: Vec<Location>,
 }
 
 /// The calls in `fn` arms that may suspend or abort, as a pass failure.
@@ -89,41 +92,44 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
         trunk_ir::transforms::reachable_definitions_with_config(ctx, module, &config, |ctx, op| {
             tribute_control::Func::matches(ctx, op) && ctx.op_has_regions(op)
         });
-    let mut calls = Vec::new();
-    for function in functions.iter().filter(|f| reachable.contains(&f.op)) {
-        let Some(body) = ctx.op_region(function.op, 0) else {
+    let instances: Vec<Instance> = functions
+        .iter()
+        .filter(|f| reachable.contains(&f.op))
+        .map(|function| Instance::new(ctx, function, &positions, &by_name, &requirements))
+        .collect();
+    let mut calls: Vec<FnArmCall> = Vec::new();
+    for instance in &instances {
+        let Some(body) = ctx.op_region(instance.function.op, 0) else {
             continue;
-        };
-        let variables = positions.get(&function.base).map_or(&[][..], Vec::as_slice);
-        let claimed = if function.is_root_main() {
-            vec![CallingConvention::Direct; variables.len()]
-        } else {
-            function
-                .claimed
-                .clone()
-                .unwrap_or_else(|| vec![CallingConvention::Cps; variables.len()])
-        };
-        let classes = variables.iter().copied().zip(claimed).collect();
-        let locals = settle_locals(ctx, body, &function.binders, &requirements, &classes);
-        let instance = Instance {
-            ctx,
-            function,
-            by_name: &by_name,
-            requirements: &requirements,
-            classes,
-            locals,
         };
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if let Ok(handler) = tribute_control::Handler::from_op(ctx, op)
                 && handler.kind(ctx) == "fn"
             {
-                instance.check_arm(handler, &mut calls);
+                instance.check_arm(handler, &instances, &mut calls);
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
     }
-    // Instances cloned from one definition repeat its calls.
-    calls.into_iter().unique().collect()
+    // Instances cloned from one definition repeat its calls; each reports
+    // the uses that select it.
+    let mut merged: Vec<FnArmCall> = Vec::new();
+    for call in calls {
+        match merged
+            .iter_mut()
+            .find(|known| known.location == call.location && known.message == call.message)
+        {
+            Some(known) => {
+                for origin in call.origins {
+                    if !known.origins.contains(&origin) {
+                        known.origins.push(origin);
+                    }
+                }
+            }
+            None => merged.push(call),
+        }
+    }
+    merged
 }
 
 /// One reachable instance with the classes its name fixes.
@@ -136,7 +142,38 @@ struct Instance<'a> {
     locals: HashMap<u32, CallingConvention>,
 }
 
-impl Instance<'_> {
+impl<'a> Instance<'a> {
+    fn new(
+        ctx: &'a IrContext,
+        function: &'a Function,
+        positions: &HashMap<String, Vec<u32>>,
+        by_name: &'a HashMap<&'a str, &'a Function>,
+        requirements: &'a HashMap<SymbolPath, CallingConvention>,
+    ) -> Self {
+        let variables = positions.get(&function.base).map_or(&[][..], Vec::as_slice);
+        let claimed = if function.is_root_main() {
+            vec![CallingConvention::Direct; variables.len()]
+        } else {
+            function
+                .claimed
+                .clone()
+                .unwrap_or_else(|| vec![CallingConvention::Cps; variables.len()])
+        };
+        let classes = variables.iter().copied().zip(claimed).collect();
+        let locals = ctx
+            .op_region(function.op, 0)
+            .map(|body| settle_locals(ctx, body, &function.binders, requirements, &classes))
+            .unwrap_or_default();
+        Self {
+            ctx,
+            function,
+            by_name,
+            requirements,
+            classes,
+            locals,
+        }
+    }
+
     fn class(&self, row: &Row) -> CallingConvention {
         row_class(
             row,
@@ -147,9 +184,19 @@ impl Instance<'_> {
         )
     }
 
-    fn check_arm(&self, handler: tribute_control::Handler, calls: &mut Vec<FnArmCall>) {
+    fn check_arm(
+        &self,
+        handler: tribute_control::Handler,
+        instances: &[Instance],
+        calls: &mut Vec<FnArmCall>,
+    ) {
         let op_name = handler.op_name(self.ctx);
-        self.check_region(handler.body(self.ctx), &[], &mut |call| {
+        self.check_region(handler.body(self.ctx), &[], &mut |call, tail| {
+            let mut origins = Vec::new();
+            if let Some(tail) = tail {
+                let mut seen = Vec::new();
+                self.origins(tail, instances, &mut seen, &mut origins);
+            }
             calls.push(FnArmCall {
                 location: self.ctx.op(call).location,
                 message: format!(
@@ -158,8 +205,55 @@ impl Instance<'_> {
                      operation",
                     self.function.base
                 ),
+                origins,
             });
         });
+    }
+
+    /// The references that make class variable `tail` of this instance
+    /// `Cps`: where a row with an `op` operation is passed to it, through
+    /// the class variables of the instances on the way.
+    fn origins(
+        &self,
+        tail: u32,
+        instances: &[Instance],
+        seen: &mut Vec<(OpRef, u32)>,
+        origins: &mut Vec<Location>,
+    ) {
+        if seen.contains(&(self.function.op, tail)) {
+            return;
+        }
+        seen.push((self.function.op, tail));
+        for caller in instances {
+            for reference in &caller.function.references {
+                if reference.callee != self.function.name {
+                    continue;
+                }
+                let Some(row) = reference.rows.get(tail as usize) else {
+                    continue;
+                };
+                if caller.class(row) != CallingConvention::Cps {
+                    continue;
+                }
+                let through = Row::new(Vec::new(), row.tail);
+                let labels = Row::new(row.instances.clone(), None);
+                match row.tail {
+                    Some(outer)
+                        if caller.class(&labels) != CallingConvention::Cps
+                            && caller.classes.get(&outer) == Some(&CallingConvention::Cps)
+                            && caller.class(&through) == CallingConvention::Cps =>
+                    {
+                        caller.origins(outer, instances, seen, origins);
+                    }
+                    _ => {
+                        let location = self.ctx.op(reference.op).location;
+                        if !origins.contains(&location) {
+                            origins.push(location);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Report each call in `region` whose callee may suspend past the
@@ -168,7 +262,7 @@ impl Instance<'_> {
         &self,
         region: RegionRef,
         handled: &[SymbolPath],
-        report: &mut dyn FnMut(OpRef),
+        report: &mut dyn FnMut(OpRef, Option<u32>),
     ) {
         for &block in &self.ctx.region(region).blocks {
             for &op in &self.ctx.block(block).ops {
@@ -177,7 +271,12 @@ impl Instance<'_> {
         }
     }
 
-    fn check_op(&self, op: OpRef, handled: &[SymbolPath], report: &mut dyn FnMut(OpRef)) {
+    fn check_op(
+        &self,
+        op: OpRef,
+        handled: &[SymbolPath],
+        report: &mut dyn FnMut(OpRef, Option<u32>),
+    ) {
         let ctx = self.ctx;
         // A lambda's body runs where it is called, under its own convention.
         if tribute_control::Lambda::matches(ctx, op) {
@@ -204,8 +303,8 @@ impl Instance<'_> {
             }
             return;
         }
-        if self.may_suspend(op, handled) {
-            report(op);
+        if let Some(tail) = self.may_suspend(op, handled) {
+            report(op, tail);
         }
         for region in ctx.op_regions(op).collect::<Vec<_>>() {
             self.check_region(region, handled, report);
@@ -213,18 +312,15 @@ impl Instance<'_> {
     }
 
     /// Whether the call `op` reaches a `Cps` callee whose effects are not
-    /// all handled by `handled`.
-    fn may_suspend(&self, op: OpRef, handled: &[SymbolPath]) -> bool {
+    /// all handled by `handled`, and if so, the class variable of this
+    /// instance whose `Cps` class makes it so, when there is one.
+    fn may_suspend(&self, op: OpRef, handled: &[SymbolPath]) -> Option<Option<u32>> {
         let ctx = self.ctx;
         let direct =
             tribute_control::Call::matches(ctx, op) || tribute_control::TailCall::matches(ctx, op);
         let (convention, row) = if direct && let Some(callee) = reference_callee(ctx, op) {
-            let Some(callee) = self.by_name.get(callee.as_str()) else {
-                return false;
-            };
-            let Some(signature) = FuncSig::from_type_ref(ctx, callee.ty) else {
-                return false;
-            };
+            let callee = self.by_name.get(callee.as_str())?;
+            let signature = FuncSig::from_type_ref(ctx, callee.ty)?;
             // The callee's row is over its own binders; its tail stands for
             // the row the reference passes at that binder.
             let own = signature.row(ctx);
@@ -244,21 +340,14 @@ impl Instance<'_> {
         } else if tribute_control::CallIndirect::matches(ctx, op)
             || tribute_control::TailCallIndirect::matches(ctx, op)
         {
-            let Some(&callee) = ctx.op_operands(op).first() else {
-                return false;
-            };
-            let Some(signature) = FuncSig::from_type_ref(ctx, ctx.value_ty(callee)) else {
-                return false;
-            };
+            let &callee = ctx.op_operands(op).first()?;
+            let signature = FuncSig::from_type_ref(ctx, ctx.value_ty(callee))?;
             (signature.assigned_convention(ctx), signature.row(ctx))
         } else {
-            return false;
+            return None;
         };
         if convention != Some(CallingConvention::Cps) {
-            return false;
-        }
-        if handled.is_empty() {
-            return true;
+            return None;
         }
         let unhandled = Row::new(
             row.instances
@@ -266,6 +355,14 @@ impl Instance<'_> {
                 .filter(|instance| !handled.contains(instance)),
             row.tail,
         );
-        self.class(&unhandled) == CallingConvention::Cps
+        if !handled.is_empty() && self.class(&unhandled) != CallingConvention::Cps {
+            return None;
+        }
+        let labels = Row::new(unhandled.instances.clone(), None);
+        let tail = unhandled.tail.filter(|tail| {
+            self.class(&labels) != CallingConvention::Cps
+                && self.classes.get(tail) == Some(&CallingConvention::Cps)
+        });
+        Some(tail)
     }
 }

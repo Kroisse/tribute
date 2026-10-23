@@ -1064,13 +1064,24 @@ fn report_pass_error(db: &dyn salsa::Database, error: &PassError) {
             source.downcast_ref::<tribute_passes::check_fn_arm_calls::FnArmCallError>()
     {
         for call in &error.calls {
-            Diagnostic::new(
-                call.message.clone(),
-                call.location.span,
-                DiagnosticSeverity::Error,
-                CompilationPhase::Lowering,
-            )
-            .accumulate(db);
+            call.origins
+                .iter()
+                .fold(
+                    Diagnostic::builder(
+                        call.message.clone(),
+                        call.location.span,
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::Lowering,
+                    ),
+                    |diagnostic, origin| {
+                        diagnostic.label(
+                            origin.span,
+                            "this use passes effects that include an `op` operation",
+                        )
+                    },
+                )
+                .build()
+                .accumulate(db);
         }
         return;
     }

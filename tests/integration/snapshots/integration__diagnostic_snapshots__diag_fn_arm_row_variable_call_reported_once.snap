@@ -7,4 +7,13 @@ expression: result.diagnostics
     start: 350
     end: 353
   severity: Error
+  labels:
+    - span:
+        start: 403
+        end: 452
+      message: "this use passes effects that include an `op` operation"
+    - span:
+        start: 511
+        end: 570
+      message: "this use passes effects that include an `op` operation"
   phase: Lowering

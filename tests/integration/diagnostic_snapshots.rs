@@ -1140,6 +1140,57 @@ fn main() -> Nil {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// The diagnostic labels the use that passes the `op` effect, through the
+/// definitions that pass the row variable on, and not a use that passes only
+/// `fn` operations.
+#[salsa_test]
+fn diag_fn_arm_row_variable_call_labels_origin_through_definitions(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+ability Tick {
+    fn tick() -> Int
+}
+
+fn count() ->{Counter} Int {
+    Counter::next()
+}
+
+fn wrap(f: fn() ->{e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    inner(f, comp)
+}
+
+fn inner(f: fn() ->{e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
+        fn Counter::next() { f() }
+    }
+}
+
+fn main() -> Nil {
+    let _ = handle wrap(fn() Tick::tick(), fn() count()) {
+        fn Tick::tick() { +1 }
+    }
+    let _ = handle wrap(fn() Stop::stop(), fn() count()) {
+        op Stop::stop() { +0 }
+    }
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
