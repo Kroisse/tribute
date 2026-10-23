@@ -100,7 +100,7 @@ fn main() -> Nil { apply(double, 21) }
             .contains(&format!("(%0: {}, ", without_row(callback_ty))),
         "the fresh function reference must have apply's callback type, up to its row:\n{ir}"
     );
-    assert_eq!(callable_convention(&ir, callback_ty), "2");
+    assert_eq!(callable_convention(&ir, callback_ty), "\"cps\"");
     assert!(
         named_function_header(&ir, "double").contains("convention(direct)"),
         "the original named worker must remain Direct:\n{ir}"
@@ -134,8 +134,8 @@ fn main() -> Nil { apply_open(double, apply_direct(double, 21)) }
         .iter()
         .map(|line| callable_convention(&ir, type_after_colon(line)))
         .collect::<Vec<_>>();
-    assert!(conventions.contains(&"0"));
-    assert!(conventions.contains(&"2"));
+    assert!(conventions.contains(&"\"direct\""));
+    assert!(conventions.contains(&"\"cps\""));
     for value in reference_values {
         assert_not_cast(&ir, value);
     }

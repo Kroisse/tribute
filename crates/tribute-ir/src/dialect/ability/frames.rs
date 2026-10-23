@@ -137,10 +137,8 @@ fn closure_signature(ctx: &IrContext, ty: TypeRef) -> Option<(CallingConvention,
     if !data.name.is(ctx, "closure.closure") {
         return None;
     }
-    let convention = match ctx.type_attrs(ty).get(CALLING_CONVENTION_ATTR) {
-        Some(Attribute::Int(code)) => CallingConvention::try_from(*code).ok()?,
-        _ => return None,
-    };
+    let convention =
+        CallingConvention::from_attribute(ctx, ctx.type_attrs(ty).get(CALLING_CONVENTION_ATTR)?)?;
     let [function] = data.params.as_slice() else {
         return None;
     };
@@ -408,11 +406,11 @@ mod tests {
   !ev = adt.array<!marker>
   !frame_i32 = ability.frame<core.i32>
   !frame_nil = ability.frame<core.nil>
-  !completion = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  !resume = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  !op_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32, !resume, !resume) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 1}>
-  !never_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 1}>
-  !fn_arm = closure.closure<func.func_sig<(!ev) -> core.i32>, {tribute.calling_convention = 1, tribute.closure_environment_index = 1}>"#;
+  !completion = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+  !resume = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+  !op_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32, !resume, !resume) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 1}>
+  !never_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 1}>
+  !fn_arm = closure.closure<func.func_sig<(!ev) -> core.i32>, {tribute.calling_convention = "evidence_direct", tribute.closure_environment_index = 1}>"#;
 
     fn module(params: &str, body: &str) -> String {
         format!(
@@ -512,7 +510,7 @@ mod tests {
         assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
         assert_eq!(errors(&valid), "");
 
-        const NEVER: &str = "closure.closure<func.func_sig<(!ev, !frame_i32, core.never) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>";
+        const NEVER: &str = "closure.closure<func.func_sig<(!ev, !frame_i32, core.never) -> core.never>, {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 0}>";
         let cases = [
             (
                 "resumption into another frame",
@@ -706,8 +704,8 @@ mod tests {
     #[test]
     fn malformed_bindings_closures_and_bodies_are_rejected() {
         const EXTRA: &str = r#"  !plain = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>>
-  !returning = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.i32>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  !no_evidence = closure.closure<func.func_sig<(core.i32) -> core.i32>, {tribute.calling_convention = 1, tribute.closure_environment_index = 1}>
+  !returning = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.i32>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+  !no_evidence = closure.closure<func.func_sig<(core.i32) -> core.i32>, {tribute.calling_convention = "evidence_direct", tribute.closure_environment_index = 1}>
   !bad_code = closure.closure<func.func_sig<(!ev) -> core.i32>, {tribute.calling_convention = 7, tribute.closure_environment_index = 1}>"#;
         let with_extra = |params: &str, body: &str| {
             module(params, body).replacen(TYPES, &format!("{TYPES}\n{EXTRA}"), 1)

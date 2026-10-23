@@ -583,8 +583,8 @@ mod tests {
     #[test]
     fn call_selections_apply_in_order_to_the_passed_evidence() {
         let input = final_dispatch_fixture(
-            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = 1, evidence_plan = [{mask = @State}, {dup = @Console}]} : core.i32
-    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2, evidence_plan = [{dup = @State}]}"#,
+            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = "evidence_direct", evidence_plan = [{mask = @State}, {dup = @Console}]} : core.i32
+    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps", evidence_plan = [{dup = @State}]}"#,
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
@@ -597,9 +597,9 @@ mod tests {
             [
                 r#"%4 = effect.mask %0 {ability = @State} : !evidence"#,
                 r#"%5 = effect.dup %4 {ability = @Console} : !evidence"#,
-                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
+                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = "evidence_direct"} : core.i32"#,
                 r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
-                r#"func.tail_call_indirect %2, %7, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
+                r#"func.tail_call_indirect %2, %7, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps"}"#,
             ],
             "{body:#?}"
         );
@@ -608,8 +608,8 @@ mod tests {
     #[test]
     fn row_tail_selections_read_the_evidence_the_call_starts_from() {
         let input = final_dispatch_fixture(
-            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = 1, evidence_plan = [{select = 1}, {push = @State}]} : core.i32
-    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2, evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]}"#,
+            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = "evidence_direct", evidence_plan = [{select = 1}, {push = @State}]} : core.i32
+    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps", evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]}"#,
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
@@ -622,12 +622,12 @@ mod tests {
             [
                 r#"%4 = effect.tail %0 {index = 1} : !evidence"#,
                 r#"%5 = effect.push %4, %0 {ability = @State} : !evidence"#,
-                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
+                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = "evidence_direct"} : core.i32"#,
                 r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
                 r#"%8 = effect.with_tail %7, %0 {index = 0} : !evidence"#,
                 r#"%9 = effect.mask %0 {ability = @State} : !evidence"#,
                 r#"%10 = effect.with_tail %8, %9 {index = 1} : !evidence"#,
-                r#"func.tail_call_indirect %2, %10, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
+                r#"func.tail_call_indirect %2, %10, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps"}"#,
             ],
             "{body:#?}"
         );
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn selection_on_a_call_that_passes_no_evidence_is_rejected() {
         let input = final_dispatch_fixture(
-            r#"%direct = func.call %prompt {callee = @callee, tribute.calling_convention = 0, evidence_plan = [{mask = @State}]} : core.i32
+            r#"%direct = func.call %prompt {callee = @callee, tribute.calling_convention = "direct", evidence_plan = [{mask = @State}]} : core.i32
     func.unreachable"#,
         );
         let mut ctx = IrContext::new();

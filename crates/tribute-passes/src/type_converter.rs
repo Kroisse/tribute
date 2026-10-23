@@ -193,7 +193,7 @@ mod tests {
                 !Closure = adt.struct<_closure(code: core.i32), {{layout = "closure"}}>
                 func.func @transfer(%index: core.i32, %erased: tribute_rt.anyref) {{
                     {cast}
-                    func.tail_call_indirect %index, {arg} {{signature = func.func_sig<(!Closure) -> ()>, tribute.calling_convention = 2}}
+                    func.tail_call_indirect %index, {arg} {{signature = func.func_sig<(!Closure) -> ()>, tribute.calling_convention = "cps"}}
                 }}
             }}"#
                 ),

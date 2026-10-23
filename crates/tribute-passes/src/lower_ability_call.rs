@@ -210,7 +210,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
+  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = "evidence_direct"}} {{
     %msg = arith.const {{value = 1}} : tribute_rt.anyref
     %result = ability.call %msg {{ability = @Console, op_name = "print"}} : tribute_rt.anyref
     func.return %result
@@ -233,15 +233,15 @@ mod tests {
         for (attributes, params) in [
             ("", "%ev: !Evidence"),
             (
-                "attributes {tribute.calling_convention = 0}",
+                "attributes {tribute.calling_convention = \"direct\"}",
                 "%ev: !Evidence",
             ),
             (
-                "attributes {tribute.calling_convention = 1}",
+                "attributes {tribute.calling_convention = \"evidence_direct\"}",
                 "%value: core.i32, %ev: !Evidence",
             ),
             (
-                "attributes {tribute.calling_convention = 2}",
+                "attributes {tribute.calling_convention = \"cps\"}",
                 "%value: core.i32, %ev: !Evidence",
             ),
         ] {
@@ -275,7 +275,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> core.i32 attributes {{tribute.calling_convention = 1}} {{
+  func.func @test_fn(%ev: {ev_ty}) -> core.i32 attributes {{tribute.calling_convention = "evidence_direct"}} {{
     %result = ability.call {{ability = @Counter, op_name = "next"}} : core.i32
     func.return %result
   }}

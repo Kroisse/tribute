@@ -587,7 +587,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {tribute.calling_convention = 2} {
+  func.func @run() attributes {tribute.calling_convention = "cps"} {
     func.return
   }
 }"#
@@ -618,7 +618,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {meta = [{tribute.calling_convention = 2}]} {
+  func.func @run() attributes {meta = [{tribute.calling_convention = "cps"}]} {
     func.return
   }
 }"#
@@ -903,7 +903,7 @@ mod tests {
         let plain = verify(
             r#"core.module @test {
   !frame = adt.typeref<{name = "Frame"}>
-  func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2} {
+  func.func @run(%frame: !frame) attributes {tribute.calling_convention = "cps"} {
     %same = core.unrealized_conversion_cast %frame : !frame
     func.return
   }
@@ -913,7 +913,7 @@ mod tests {
         let annotated = verify(
             r#"core.module @test {
   !frame = adt.typeref<{name = "Frame", tribute.definition = loc("test.trb" 10:20)}>
-  func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2, tribute.definition = loc("test.trb" 30:40)} {
+  func.func @run(%frame: !frame) attributes {tribute.calling_convention = "cps", tribute.definition = loc("test.trb" 30:40)} {
     %same = core.unrealized_conversion_cast %frame : !frame
     func.return
   }

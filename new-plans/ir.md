@@ -584,13 +584,14 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 않는다.
 
 논리 callable type은
-`tribute_control.func_sig<(Params...) -> Result, {tribute.calling_convention = N}>`이다.
+`tribute_control.func_sig<(Params...) -> Result, {tribute.calling_convention = "K"}>`이다.
 Convention 속성은 [class 특수화](#convention과-class-특수화)가 쓰며, 그 전의 type에는
 없다.
 It uses flat `[inputs..., results...]` storage with mandatory `num_inputs` and
 `num_results` u32 delimiters; its source-owned validated API requires exactly
-one result. `Result`와 `Params`는 source-logical type이며 기존 code `Direct = 0`,
-`EvidenceDirect = 1`, `Cps = 2`를 그대로 사용한다. Convention은
+one result. `Result`와 `Params`는 source-logical type이다. Convention `K`는
+keyword 문자열 `"direct"`, `"evidence_direct"`, `"cps"` 가운데 하나이며, 이 문자열이
+convention의 유일한 저장 형식이다. 정수나 다른 값은 잘못된 convention이다. Convention은
 [CPS 전략](cps-effects.md#row와-호출-규약)이 [ability row](#ability-row)에서 계산한
 값이며 body에서 추론하지 않는다. Legalization은 이를 기존
 `CallableAbi`와 physical `func.func_sig`, `closure.closure` 및
@@ -653,7 +654,7 @@ non-resumptive case를 식별해야 하므로 `Never`용 `anyref` placeholder는
 가진다.
 
 ```text
-tribute_control.func_sig<(T) -> R, {tribute.calling_convention = 2,
+tribute_control.func_sig<(T) -> R, {tribute.calling_convention = "cps",
     ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}>
 ```
 
@@ -794,8 +795,9 @@ Type의 일치를 요구하는 규칙은 두 상태에서 같다. `call_indirect
 Convention이 없는 callable type이면 convention 표기를 생략한다. 간결한 convention 문법은
 `convention(direct)`,
 `convention(evidence_direct)`, `convention(cps)`이며 각각 callable type의
-`tribute.calling_convention = 0`, `1`, `2`로 round trip한다. Parser는 signature와
-keyword로 `tribute_control.func_sig`을 만들고 convention을 type에만 저장한다.
+`tribute.calling_convention = "direct"`, `"evidence_direct"`, `"cps"`로 round
+trip한다. Parser는 signature와 keyword로 `tribute_control.func_sig`을 만들고
+convention을 type에만 저장한다.
 출력기도 type attribute만 읽으며 body에서 추론하거나 operation에 중복
 attribute를 쓰지 않는다. 추가 operation attribute에
 `tribute.calling_convention`을 다시 적으면 parser 또는 verifier가 거부한다.

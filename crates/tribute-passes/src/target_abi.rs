@@ -1884,11 +1884,11 @@ mod tests {
             !Answer = core.{answer_name}
             !Evidence = adt.array<adt.typeref<{{name = "std::runtime::evidence::Marker"}}>>
             !Frame = adt.typeref<{{name = "{frame_name}", tribute.cps_continuation_frame_result = !Answer}}>
-            !Done = closure.closure<func.func_sig<(!Answer) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
-            !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
-            !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}>
+            !Done = closure.closure<func.func_sig<(!Answer) -> core.never>, {{tribute.calling_convention = "cps", tribute.closure_environment_index = 0}}>
+            !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = "cps", tribute.closure_environment_index = 0}}>
+            !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = "cps", tribute.closure_environment_index = 1}}>
             !{frame_name} = adt.struct<{frame_name}(done: !Done, dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
-            func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = 2}} {{
+            func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
                 effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability = @State, op_name = "get", answer_type = !Answer}}
             }}
             func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {{
@@ -2036,25 +2036,25 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
             !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-            !direct_closure = closure.closure<func.func_sig<() -> ()>, {tribute.calling_convention = 0}>
-            !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>, {tribute.calling_convention = 1}>
-            func.func @direct() attributes {tribute.calling_convention = 0} { func.return }
-            func.func @evidence(%ev: !Evidence) attributes {tribute.calling_convention = 1} { func.return }
-            func.func @unit() -> core.nil attributes {tribute.calling_convention = 0} {
+            !direct_closure = closure.closure<func.func_sig<() -> ()>, {tribute.calling_convention = "direct"}>
+            !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>, {tribute.calling_convention = "evidence_direct"}>
+            func.func @direct() attributes {tribute.calling_convention = "direct"} { func.return }
+            func.func @evidence(%ev: !Evidence) attributes {tribute.calling_convention = "evidence_direct"} { func.return }
+            func.func @unit() -> core.nil attributes {tribute.calling_convention = "direct"} {
                 %nil = core.nil_value : core.nil
                 func.return %nil
             }
-            func.func @caller(%ev: !Evidence) attributes {tribute.calling_convention = 1} {
-                func.call {callee = @direct, tribute.calling_convention = 0}
-                func.call %ev {callee = @evidence, tribute.calling_convention = 1}
+            func.func @caller(%ev: !Evidence) attributes {tribute.calling_convention = "evidence_direct"} {
+                func.call {callee = @direct, tribute.calling_convention = "direct"}
+                func.call %ev {callee = @evidence, tribute.calling_convention = "evidence_direct"}
                 %direct = func.constant {func_ref = @direct} : func.func_sig<() -> ()>
                 %evidence = func.constant {func_ref = @evidence} : func.func_sig<(!Evidence) -> ()>
-                func.call_indirect %direct {signature = func.func_sig<() -> ()>, tribute.calling_convention = 0}
-                func.call_indirect %evidence, %ev {signature = func.func_sig<(!Evidence) -> ()>, tribute.calling_convention = 1}
-                %nil = func.call {callee = @unit, tribute.calling_convention = 0} : core.nil
+                func.call_indirect %direct {signature = func.func_sig<() -> ()>, tribute.calling_convention = "direct"}
+                func.call_indirect %evidence, %ev {signature = func.func_sig<(!Evidence) -> ()>, tribute.calling_convention = "evidence_direct"}
+                %nil = func.call {callee = @unit, tribute.calling_convention = "direct"} : core.nil
                 func.return
             }
-            func.func @cps() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
+            func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
         }"#,
         );
         assert_eq!(ctx.type_alias_by_text("Evidence"), Some(evidence));
@@ -2119,12 +2119,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !cps = closure.closure<func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.never>, {tribute.calling_convention = 2}>
-  func.func @direct() -> core.never attributes {tribute.calling_convention = 0} { func.unreachable }
-  func.func @evidence() -> core.never attributes {tribute.calling_convention = 1} { func.unreachable }
-  func.func @cps() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
-  func.func @run(%callee: core.i32, %evidence: core.i32, %env: tribute_rt.anyref, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %evidence, %env, %done, %dispatch, %value {signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> core.never>, tribute.calling_convention = 2}
+  !cps = closure.closure<func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.never>, {tribute.calling_convention = "cps"}>
+  func.func @direct() -> core.never attributes {tribute.calling_convention = "direct"} { func.unreachable }
+  func.func @evidence() -> core.never attributes {tribute.calling_convention = "evidence_direct"} { func.unreachable }
+  func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
+  func.func @run(%callee: core.i32, %evidence: core.i32, %env: tribute_rt.anyref, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
+    func.tail_call_indirect %callee, %evidence, %env, %done, %dispatch, %value {signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> core.never>, tribute.calling_convention = "cps"}
   }
 }"#,
         );
@@ -2167,8 +2167,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @run(%callee: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.never>, tribute.calling_convention = 2}
+  func.func @run(%callee: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.never>, tribute.calling_convention = "cps"}
   }
 }"#,
         );
@@ -2195,7 +2195,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
 }"#,
@@ -2408,12 +2408,12 @@ mod tests {
 
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
   !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = 1} {
+  func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
     %nil = core.nil_value : core.nil
     func.return %nil
   }
-  func.func @caller(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = 1} {
-    %result = func.call %evidence {callee = @main, tribute.calling_convention = 1} : core.nil
+  func.func @caller(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
+    %result = func.call %evidence {callee = @main, tribute.calling_convention = "evidence_direct"} : core.nil
     func.return %result
   }
 }"#;
@@ -2439,12 +2439,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
     %nil = core.nil_value : core.nil
     func.return %nil
   }
-  func.func @caller() -> core.nil attributes {tribute.calling_convention = 0} {
-    %result = func.call {callee = @main, tribute.calling_convention = 0} : core.nil
+  func.func @caller() -> core.nil attributes {tribute.calling_convention = "direct"} {
+    %result = func.call {callee = @main, tribute.calling_convention = "direct"} : core.nil
     func.return %result
   }
 }"#,
@@ -2484,7 +2484,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main() -> core.i32 attributes {tribute.calling_convention = 0} {
+  func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %zero = arith.const {value = 0} : core.i32
     func.return %zero
   }
@@ -2529,7 +2529,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 r#"core.module @test {
-  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
 }"#,
@@ -2578,7 +2578,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
 }"#,
@@ -2624,16 +2624,16 @@ mod tests {
         for (input, expected) in [
             (
                 r#"core.module @test {
-  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee {tribute.calling_convention = 2}
+  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
+    func.tail_call_indirect %callee {tribute.calling_convention = "cps"}
   }
 }"#,
                 "lacks exact callable signature",
             ),
             (
                 r#"core.module @test {
-  func.func @pure(%callee: func.func_sig<(core.i32, core.i32) -> core.i32>, %left: core.i32, %right: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
-    %result = func.call_indirect %callee, %left, %right {tribute.calling_convention = 0} : core.i32
+  func.func @pure(%callee: func.func_sig<(core.i32, core.i32) -> core.i32>, %left: core.i32, %right: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    %result = func.call_indirect %callee, %left, %right {tribute.calling_convention = "direct"} : core.i32
     func.return %result
   }
 }"#,
@@ -2641,15 +2641,15 @@ mod tests {
             ),
             (
                 r#"core.module @test {
-  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee {signature = core.i32, tribute.calling_convention = 2}
+  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
+    func.tail_call_indirect %callee {signature = core.i32, tribute.calling_convention = "cps"}
   }
 }"#,
                 "lacks exact callable signature",
             ),
             (
                 r#"core.module @test {
-  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.tail_call_indirect %callee {signature = core.i32}
   }
 }"#,
@@ -2657,9 +2657,9 @@ mod tests {
             ),
             (
                 r#"core.module @test {
-  func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
-  func.func @run(%value: core.i1) -> core.never attributes {tribute.calling_convention = 2} {
-    func.tail_call %value {callee = @callee, tribute.calling_convention = 2}
+  func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
+  func.func @run(%value: core.i1) -> core.never attributes {tribute.calling_convention = "cps"} {
+    func.tail_call %value {callee = @callee, tribute.calling_convention = "cps"}
   }
 }"#,
                 "operands differ",
@@ -2686,9 +2686,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !callback = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = 0}>
-  func.func @run(%callback: !callback) -> core.i32 attributes {tribute.calling_convention = 0} {
-    %result = func.call_indirect %callback {signature = func.func_sig<() -> core.i32>, tribute.calling_convention = 0} : core.i32
+  !callback = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = "direct"}>
+  func.func @run(%callback: !callback) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    %result = func.call_indirect %callback {signature = func.func_sig<() -> core.i32>, tribute.calling_convention = "direct"} : core.i32
     func.return %result
   }
 }"#,
@@ -2717,13 +2717,13 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !semantic = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = 0}>
+  !semantic = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = "direct"}>
   !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
-  func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = 0} {
+  func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     func.unreachable
   }
-  func.func @run(%raw: !_closure) -> core.i32 attributes {tribute.calling_convention = 0} {
-    %result = func.call %raw {callee = @factory, tribute.calling_convention = 0} : core.i32
+  func.func @run(%raw: !_closure) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    %result = func.call %raw {callee = @factory, tribute.calling_convention = "direct"} : core.i32
     func.return %result
   }
 }"#,
@@ -2739,9 +2739,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 1}>
-  func.func @external(%evidence: core.i32, %environment: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
-  func.func @defined(%evidence: core.i32, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1} {
+  !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 1}>
+  func.func @external(%evidence: core.i32, %environment: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 1}
+  func.func @defined(%evidence: core.i32, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 1} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
@@ -2774,12 +2774,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Zero = closure.closure<func.func_sig<() -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  !One = closure.closure<func.func_sig<(core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  func.func @generated_zero(%__env: !Zero) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} {
+  !Zero = closure.closure<func.func_sig<() -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+  !One = closure.closure<func.func_sig<(core.i32) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+  func.func @generated_zero(%__env: !Zero) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 0} {
     func.unreachable
   }
-  func.func @generated_one(%__env: !One, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} {
+  func.func @generated_one(%__env: !One, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 0} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
@@ -2817,23 +2817,23 @@ mod tests {
     fn malformed_or_missing_environment_provenance_fails_before_mutation() {
         for (function, expected) in [
             (
-                "func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2}",
+                "func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\"}",
                 "function reference differs",
             ),
             (
-                "func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 3}",
+                "func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 3}",
                 "outside function signature",
             ),
             (
-                "func.func @external(%evidence: core.i32, %environment: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1}",
+                "func.func @external(%evidence: core.i32, %environment: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 1}",
                 "convention-proven closure",
             ),
             (
-                "func.func @external(%evidence: core.i32, %environment: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1} { func.unreachable }",
+                "func.func @external(%evidence: core.i32, %environment: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 1} { func.unreachable }",
                 "no matching `__env`",
             ),
             (
-                "func.func @external(%environment: !Env, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} { func.unreachable }",
+                "func.func @external(%environment: !Env, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 0} { func.unreachable }",
                 "differs from `__env` parameter",
             ),
         ] {
@@ -2842,7 +2842,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}>
+  !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>, {{tribute.calling_convention = "cps", tribute.closure_environment_index = 1}}>
   {function}
   func.func @holder() -> core.i32 {{
     %function = func.constant {{func_ref = @external}} : func.func_sig<(core.i32, core.i32) -> core.never>
@@ -2864,9 +2864,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Env2 = closure.closure<func.func_sig<() -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  !Env = closure.closure<func.func_sig<(!Env2) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  func.func @external(%__env: !Env, %environment: !Env2) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0} {
+  !Env2 = closure.closure<func.func_sig<() -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+  !Env = closure.closure<func.func_sig<(!Env2) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+  func.func @external(%__env: !Env, %environment: !Env2) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 0} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
@@ -2909,7 +2909,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @broken() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
+  func.func @broken() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
 }"#,
         );
         let broken = function(&ctx, module, "broken");
@@ -2949,7 +2949,7 @@ mod tests {
         let malformed = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @external(%value: core.i32) -> core.never attributes {tribute.calling_convention = 2}
+  func.func @external(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"}
   func.func @holder() -> core.i32 {
     %function = func.constant {func_ref = @external} : func.func_sig<(core.i1) -> core.never>
     func.unreachable
