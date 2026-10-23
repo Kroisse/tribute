@@ -247,10 +247,7 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             failures.push(BoundaryFailure {
                 op: Some(def),
                 location: Some(ctx.op(def).location),
-                message: format!(
-                    "dispatcher must preserve calling convention metadata {}",
-                    expected as u8
-                ),
+                message: format!("dispatcher must preserve calling convention metadata {expected}"),
             });
         }
     }

@@ -46,8 +46,8 @@ fn a_pure_callback_selects_the_direct_instance() {
 }"#,
     );
     for expected in [
-        "tribute_control.func @app['a0](%0: core.i32, %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 2}>) -> core.i32 row(| 'a0) convention(cps) {",
-        "tribute_control.func @\"app$9D\"['a0](%0: core.i32, %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 0}>) -> core.i32 row(| 'a0) convention(direct) {",
+        "tribute_control.func @app['a0](%0: core.i32, %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = \"cps\"}>) -> core.i32 row(| 'a0) convention(cps) {",
+        "tribute_control.func @\"app$9D\"['a0](%0: core.i32, %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = \"direct\"}>) -> core.i32 row(| 'a0) convention(direct) {",
         "tribute_control.func @bang(%0: core.i32) -> core.i32 convention(direct) {",
         "%2 = tribute_control.call %0, %1 {callee = @\"app$9D\", row_args = [{}]} : core.i32",
     ] {
@@ -168,8 +168,8 @@ fn a_layout_takes_the_convention_of_its_callable_field() {
     assert_contains(
         &printed,
         &[
-            "!Holder = adt.struct<Holder(callback: tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>)>",
-            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>",
+            "!Holder = adt.struct<Holder(callback: tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = \"direct\"}>)>",
+            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = \"direct\"}>",
             "%1 = adt.struct_get %0 {field = 0, type = !Holder} : !t0",
             "%3 = adt.struct_new %1 {type = !Holder} : !HolderRef",
         ],
@@ -366,7 +366,7 @@ fn module_level_types_and_references_to_main_keep_their_shape() {
         &printed,
         &[
             "ability.operation {kind = \"fn\", op_name = \"map\", param_types = [!t0], result_type = core.i32}",
-            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>",
+            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = \"direct\"}>",
             "tribute_control.func @ext(%arg0: core.i32) -> core.i32 convention(direct) attributes {abi = \"C\"}",
             "%1 = tribute_control.func_ref {func_ref = @main} : !t0",
             "callee = @\"app$9D\"",

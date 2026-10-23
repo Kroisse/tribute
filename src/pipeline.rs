@@ -1869,12 +1869,12 @@ mod tests {
             !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
             !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
             !Frame = adt.typeref<{name = "__tribute_continuation_frame_root_nil", tribute.cps_continuation_frame_result = core.nil}>
-            !Done = closure.closure<func.func_sig<(core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-            !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-            !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 1}>
+            !Done = closure.closure<func.func_sig<(core.nil) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+            !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+            !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 1}>
             !__tribute_continuation_frame_root_nil = adt.struct<__tribute_continuation_frame_root_nil(done: !Done, dispatch: !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
             !Payload = adt.struct<__tribute_ability_payload_7590c57e()>
-            func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = 2} {
+            func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = "cps"} {
                 BODY
             }
             func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
@@ -1904,7 +1904,7 @@ mod tests {
             r#"
             %done = adt.struct_get %frame {field = 0, type = !__tribute_continuation_frame_root_nil} : !Done
             %nil = core.nil_value : core.nil
-            func.tail_call_indirect %done, %nil {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
+            func.tail_call_indirect %done, %nil {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = "cps"}
         "#,
         );
 
@@ -2272,7 +2272,7 @@ fn main() -> Nil {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
     %nil = core.nil_value : core.nil
     func.return %nil
   }
@@ -2617,7 +2617,7 @@ fn main() ->{Io} Nil {
         let input = r#"core.module @one_shot {
   !state = adt.struct<OneShotState(consumed: core.i1)>
 
-  func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
+  func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
     %answer = scf.if %consumed : core.i32 {
       func.unreachable
@@ -2629,12 +2629,12 @@ fn main() ->{Io} Nil {
     func.return %answer
   }
 
-  func.func @main() -> core.i32 attributes {tribute.calling_convention = 0} {
+  func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %not_consumed = arith.const {value = 0} : core.i1
     %state = adt.struct_new %not_consumed {type = !state} : !state
     %input = arith.const {value = 0} : core.i32
-    %first = func.call %state, %input {callee = @one_shot_wrapper, tribute.calling_convention = 0} : core.i32
-    %second = func.call %state, %first {callee = @one_shot_wrapper, tribute.calling_convention = 0} : core.i32
+    %first = func.call %state, %input {callee = @one_shot_wrapper, tribute.calling_convention = "direct"} : core.i32
+    %second = func.call %state, %first {callee = @one_shot_wrapper, tribute.calling_convention = "direct"} : core.i32
     func.return %second
   }
 }"#;

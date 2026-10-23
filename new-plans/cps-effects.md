@@ -362,7 +362,7 @@ proper tail transfer로 내린다. Native의 호출 규약과 소유권 조건�
 ### CPS 변환의 호출 대상 형상
 
 입력 형상은 [ir.md](ir.md#direct-style-control)의 operation/type 계약을 따른다.
-모든 callable은 exact `tribute.calling_convention` code 0/1/2를 가진 logical
+모든 callable은 exact `tribute.calling_convention` keyword를 가진 logical
 type과 source parameter/result만 사용하며 evidence, environment, `ContinuationFrame<R>`는
 아직 없다.
 
@@ -418,7 +418,7 @@ ContinuationFrame의 `Done<R>`처럼 동적인 target으로의 이전은 `func.t
 Shared IR의 caller/callee result는 `core.never`이고 target signature의 result
 vector는 비어 있어야 한다.
 생성한 continuation, `done_k`, handler-dispatch function에도
-`tribute.calling_convention = 2`를 붙여 target ABI 검증이 semantic role을
+`tribute.calling_convention = "cps"`를 붙여 target ABI 검증이 semantic role을
 식별하게 한다. 이 속성은 [representation/ABI 경계](ir.md#representationabi-경계)
 안에서 소비되며, 경계 이후에는 signature의 `call_conv`와 proper-tail operation만
 남는다.
