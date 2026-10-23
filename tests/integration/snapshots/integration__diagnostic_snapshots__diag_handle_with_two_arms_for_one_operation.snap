@@ -1,0 +1,10 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "`handle` has more than one arm for `Counter::next`"
+  span:
+    start: 177
+    end: 202
+  severity: Error
+  phase: TypeChecking

@@ -282,7 +282,6 @@ ability Reporter {
 // handler가 Io effect를 사용하여 구현
 fn run_reporter(comp: fn() ->{e, Reporter} a) ->{e, Io} a {
     handle comp() {
-        do result { result }
         fn Reporter::report(message) { print_line(message) }
     }
 }
@@ -314,15 +313,33 @@ computation의 실행 결과는 두 가지 중 하나:
 - **완료**: computation이 값을 반환함 → `do value { expr }` 매칭
 - **Suspend**: ability operation에서 멈춤 → `fn`/`op` handler arm 매칭
 
+`do` arm은 생략할 수 있다. 생략하면 `do value { value }`, 즉 body의 결과를 그대로
+handle의 결과로 내는 identity completion을 쓴다:
+
+```rust
+handle computation() {
+    fn Logger::log(msg) { print_line(msg) }
+}
+```
+
 ### Handler Arm 종류
 
 | arm | 대상 | 의미 |
 | --- | ---- | ---- |
-| `do value { expr }` | completion | Computation 완료, 결과값 바인딩 |
+| `do value { expr }` | completion | Computation 완료, 결과값 바인딩 (생략 시 identity) |
 | `fn Op(args) { body }` | `fn` operation만 | Tail-resumptive: body의 반환값이 resume 값 |
 | `op Op(args) { body }` | `op` operation만 | body에서 `resume`으로 명시적 resume |
 
 Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
+
+**`do` arm 생략:**
+
+- `handle`의 `do` arm은 없거나 하나다. 둘 이상이면 typechecking 단계의 컴파일 에러다.
+- `do` arm이 없는 `handle`의 결과 타입은 body의 결과 타입이다. 따라서 값을 내는
+  `op` arm, 곧 `resume`하지 않고 끝나는 arm의 결과도 body의 결과 타입이어야 한다.
+  `resume`의 결과도 같은 타입이다.
+- 생략은 결과를 바꾸지 않는 completion에 한한다. Body의 결과를 다른 타입이나 값으로
+  바꾸려면 `do` arm을 적는다.
 
 **Handler arm과 선언의 관계:**
 
@@ -338,6 +355,8 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
   typechecking 단계의 컴파일 에러이며, 진단은 ability와 빠진 operation을 모두
   나열한다. Parametrized ability(`State(s)`)는 ability 선언 단위로 판단하고,
   이름이 같아도 다른 module의 ability는 서로 다른 ability로 판단한다.
+- 한 `handle`은 operation마다 arm을 최대 하나 가진다. 같은 operation의 arm이 둘
+  이상이면 typechecking 단계의 컴파일 에러다.
 - 빠진 arm은 암묵적으로 바깥 handler로 전달(forward)되거나 계산을 중단(abort)하거나
   trap하지 않는다. 일부 operation만 처리하는 handler는 허용되지 않는다.
 - Arm이 하나도 없는 ability는 그 `handle`이 처리하지 않는다. 그 label은 결과
@@ -358,7 +377,6 @@ ability Logger {
 // handler (구현)
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
-        do result { result }
         fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
     }
 }
@@ -397,7 +415,6 @@ ability Stop { op stop() -> Never }
 
 fn limited(comp: fn() ->{e, Counter} Int) ->{e, Stop} Int {
     handle comp() {
-        do result { result }
         fn Counter::next() { Stop::stop() } // ❌ 컴파일 에러: `fn` arm에서 `op` 수행
     }
 }
@@ -444,7 +461,6 @@ operation은 그 handle 바깥의 handler가 처리한다. 재개된 계산의 h
 ```rust
 fn counter(comp: fn() ->{e, State(Nat)} a) ->{e, State(Nat)} a {
     handle comp() {
-        do result { result }
         // State::get()은 바깥 State로 간다. resume 뒤의 State는 이 handler가 받는다.
         op State::get() { resume State::get() + 1 }
         op State::set(v) { resume Nil }
@@ -460,7 +476,6 @@ fn counter(comp: fn() ->{e, State(Nat)} a) ->{e, State(Nat)} a {
 ```rust
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        do result { result }
         op State::get() { run_state(fn() resume state, state) }
         op State::set(v) { run_state(fn() resume Nil, v) }
     }
@@ -492,7 +507,6 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 ```rust
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
-        do result { result }
         fn Logger::log(msg) { print_line(msg) }
     }
 }
@@ -520,7 +534,6 @@ fn counter() ->{Logger, State(Int)} Nil {
 
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        do result { result }
         op State::get() { run_state(fn() resume state, state) }
         op State::set(v) { run_state(fn() resume Nil, v) }
     }
@@ -528,7 +541,6 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
 
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
-        do result { result }
         fn Logger::log(msg) { print_line(msg) }
     }
 }
@@ -576,7 +588,7 @@ fn main() ->{Io} Nil {
 | `{ ... }` | block expression |
 | `fn(x) expr` | 람다 |
 | `handle expr { ... }` | effect handling |
-| `do value { expr }` | completion arm (handle 내) |
+| `do value { expr }` | completion arm (handle 내, 생략 시 identity) |
 | `fn Op(args) { body }` | `fn` operation handler (handle 내) |
 | `op Op(args) { body }` | `op` operation handler (handle 내) |
 
