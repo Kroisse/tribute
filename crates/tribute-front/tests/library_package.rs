@@ -129,3 +129,20 @@ fn main() -> Nil {}
         ["`std::runtime::Slots` is not visible here: `std::runtime::Slots` is declared `pub(pkg)`"]
     );
 }
+
+/// A package-root path names the package's own items, not the prelude's.
+#[salsa_test]
+fn a_package_root_path_does_not_name_a_prelude_item(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+fn main() -> Nil {
+    let _ = pkg::Some(1)
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["unresolved name `pkg::Some`; did you mean `Some`?"]
+    );
+}

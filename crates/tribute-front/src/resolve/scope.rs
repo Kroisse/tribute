@@ -76,9 +76,10 @@ impl<'s, 'db> Scope<'s, 'db> {
         Some((self.dependencies.get(first)?, rest))
     }
 
-    /// Look up an unqualified name: the package's own, then a prelude name.
+    /// Look up a name the package root declares or imports. The prelude's
+    /// names are not the root's; [`Self::lookup_library`] finds them.
     pub fn lookup(&self, name: &Symbol) -> Option<&'s Binding<'db>> {
-        self.own.lookup(name).or_else(|| self.lookup_library(name))
+        self.own.lookup(name)
     }
 
     /// Look up `name` in `namespace`.
