@@ -9,13 +9,8 @@ use trunk_ir::printer::print_module;
 use super::common::assert_native_output;
 
 const PROGRAM: &str = r#"
-use console::{Io, print_line}
-
-// The package root's `mod std` hides package `std` from its paths; this
-// module does not see it.
-mod console {
-    pub use std::io::{Io, print_line}
-}
+// The package root's `mod std` hides package `std`; `::std` reaches it.
+use ::std::io::{Io, print_line}
 
 mod std {
     pub mod Int {
