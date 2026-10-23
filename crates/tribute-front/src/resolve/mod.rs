@@ -557,13 +557,13 @@ fn collect_definition<'db>(
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
             let qualified = ids.child(e.name.clone());
-            let type_def_id = TypeDefId::source(db, qualified, e.id);
+            let type_def_id = TypeDefId::source(db, qualified.clone(), e.id);
             env.add_type(e.name.clone(), type_def_id);
             restrict(env, Binding::TypeDef { id: type_def_id });
 
             // Add each variant as a constructor in the enum's namespace
             for variant in &e.variants {
-                let variant_qualified = ids.child(variant.name.clone());
+                let variant_qualified = qualified.child(variant.name.clone());
                 let variant_id = CtorId::new(db, variant_qualified);
                 let binding = Binding::Constructor {
                     id: variant_id,

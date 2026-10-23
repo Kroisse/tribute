@@ -323,12 +323,12 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         let db = self.checker.db();
         // Test for an enum first: a variant may share its enum's name.
         if let Some(variants) = self.checker.env.lookup_enum_variants(ty.path(db)) {
-            // Variants are registered in the enum's module, not under the enum.
+            // Variants are registered under the enum.
             let variants = variants
                 .iter()
                 .map(|variant| {
                     let variant = variant.clone();
-                    let constructor = CtorId::new(db, ty.path(db).sibling(variant.clone()));
+                    let constructor = CtorId::new(db, ty.path(db).child(variant.clone()));
                     let (arity, _) = self.constructor_shape(constructor)?;
                     Some(VariantInfo {
                         name: variant,

@@ -250,7 +250,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                         for (constructor, variant) in entry.constructors.iter().zip(&e.variants) {
                             assert_eq!(
                                 constructor.id.qualified(db),
-                                Symbol::new(&format!("{prefix}::Nested::{}", variant.name))
+                                Symbol::new(&format!("{prefix}::Nested::{}::{}", e.name, variant.name))
                             );
                             assert_eq!(constructor.node, variant.id);
                             assert_eq!(constructor.fields, variant.fields.len());
@@ -382,7 +382,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 args: vec![hidden],
             },
         );
-        let ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["Value"]));
+        let ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["Root", "Value"]));
         for removal in [false, true] {
             let mut schemas: HashMap<_, _> = input
                 .constructor_types(db)
@@ -552,8 +552,8 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
     #[salsa_test]
     fn nominal_dependencies_reject_missing_wrong_owner_and_arity_schemas(db: &salsa::DatabaseImpl) {
         for (declaration, constructor) in [
-            ("enum Cell(a) { Value(a), Empty }", "Value"),
-            ("struct Cell(a) { value: a }", "Cell"),
+            ("enum Cell(a) { Value(a), Empty }", &["Cell", "Value"][..]),
+            ("struct Cell(a) { value: a }", &["Cell"][..]),
         ] {
             let source = crate::SourceCst::from_source_str(
                 db,
@@ -567,7 +567,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .iter()
                 .copied()
                 .collect();
-            let ctor = CtorId::new(db, trunk_ir::SymbolPath::new([constructor]));
+            let ctor = CtorId::new(db, trunk_ir::SymbolPath::new(constructor.iter().copied()));
             for kind in [
                 InstanceErrorKind::MissingInstance,
                 InstanceErrorKind::WrongDeclaration,

@@ -1066,10 +1066,10 @@ fn positional() -> Shape { Dot { value: 1 } }
         .map(|diagnostic| diagnostic.inner.message)
         .collect();
     for expected in [
-        "unknown field `depth` for variant `Rect`",
+        "unknown field `depth` for variant `Shape::Rect`",
         "missing field: tall",
-        "record spread is not allowed for variant `Rect`; write every field",
-        "`Dot` has positional fields; construct it with `Dot(...)`",
+        "record spread is not allowed for variant `Shape::Rect`; write every field",
+        "`Shape::Dot` has positional fields; construct it with `Dot(...)`",
     ] {
         assert!(
             errors.iter().any(|error| error == expected),

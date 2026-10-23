@@ -153,8 +153,8 @@ fn size(shape: Shape) -> Nat {
     assert_eq!(
         errors,
         [
-            "unknown field `size` for variant `Circle`",
-            "`Dot` has positional fields; match it with `Dot(...)`",
+            "unknown field `size` for variant `Shape::Circle`",
+            "`Shape::Dot` has positional fields; match it with `Dot(...)`",
         ]
     );
 }
@@ -184,10 +184,10 @@ fn size(shape: Shape) -> Nat {
     assert_eq!(
         errors,
         [
-            "constructor `Dot` expects 1 field, but the pattern has 2",
-            "constructor `Line` expects 2 fields, but the pattern has 1",
-            "constructor `Empty` expects 0 fields, but the pattern has 1",
-            "constructor `Dot` expects 1 field, but the pattern has 0",
+            "constructor `Shape::Dot` expects 1 field, but the pattern has 2",
+            "constructor `Shape::Line` expects 2 fields, but the pattern has 1",
+            "constructor `Shape::Empty` expects 0 fields, but the pattern has 1",
+            "constructor `Shape::Dot` expects 1 field, but the pattern has 0",
         ]
     );
 }
