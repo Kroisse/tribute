@@ -1038,8 +1038,10 @@ impl<'db> Resolver<'db> {
             // that name. Any longer `use` still unresolved names nothing, and
             // its declaration is reported.
             Binding::Import { path } if path.len() == 1 => {
-                let path_ref = ModulePath::new(self.db, path.clone());
-                ResolvedRef::Module { path: path_ref }
+                let identity = self.package.identity_path(path).to_vec();
+                ResolvedRef::Module {
+                    path: ModulePath::new(self.db, identity),
+                }
             }
             Binding::Import { .. } => ResolvedRef::local(LocalId::UNRESOLVED, name),
             Binding::AbilityOp { ability, op, kind } => {

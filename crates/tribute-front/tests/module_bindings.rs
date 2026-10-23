@@ -113,3 +113,48 @@ pub mod outer {
     let b = env.lookup_qualified(&SymbolPath::new(["outer"]), &Symbol::new("b"));
     assert_eq!(module_path(b), ["a", "b"]);
 }
+
+/// The module path a library package's `fn probe` body refers to.
+#[salsa::tracked]
+fn library_module_reference(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
+    use tribute_front::ast::{Decl, ExprKind, ResolvedRef};
+
+    let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
+    let module = parsed.module(db);
+    let env = build_library_env(db, module);
+    let resolved =
+        tribute_front::resolve::resolve_library_with_env(db, module, env, parsed.span_map(db));
+    let body = resolved
+        .decls()
+        .find_map(|decl| match decl {
+            Decl::Function(function) if function.name == "probe" => Some(&function.body),
+            _ => None,
+        })
+        .expect("fn probe");
+    let ExprKind::Block { value, .. } = &*body.kind else {
+        panic!("a block body");
+    };
+    match &*value.kind {
+        ExprKind::Var(ResolvedRef::Module { path }) => {
+            path.segments(db).iter().map(ToString::to_string).collect()
+        }
+        other => panic!("expected a module reference, got {other:?}"),
+    }
+}
+
+#[salsa_test]
+fn a_library_one_segment_import_names_its_module_by_identity(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "library_import.trb",
+        r#"
+pub mod io {
+    pub fn print() -> Nat { 1 }
+}
+use io
+
+fn probe() -> Nat { io }
+"#,
+    );
+    assert_eq!(library_module_reference(db, source)[..], ["std", "io"]);
+}
