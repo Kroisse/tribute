@@ -25,6 +25,12 @@ pub const RESERVED_WORDS: &[&str] = &["type", "where", "in"];
 /// Path keywords. They are reserved and have no raw form.
 pub const PATH_KEYWORDS: &[&str] = &["pkg", "super", "self"];
 
+/// The first segment of a path written with a leading `::`, which starts
+/// from a dependency package's root (`::std::Option`). No name is empty,
+/// so it is no other segment, and a path that starts with it prints with
+/// its leading `::`.
+pub const PATH_ROOT: &str = "";
+
 /// Whether `name` must be written as a raw identifier to be used as a name.
 pub fn needs_raw(name: &str) -> bool {
     KEYWORDS.contains(&name) || RESERVED_WORDS.contains(&name)

@@ -3,7 +3,7 @@
 use derive_more::Display;
 use trunk_ir::Symbol;
 
-use crate::keywords::PATH_KEYWORDS;
+use crate::keywords::{PATH_KEYWORDS, PATH_ROOT};
 
 /// Why a path's keywords do not denote a module.
 #[derive(Clone, Debug, Display, PartialEq, Eq)]
@@ -12,6 +12,17 @@ pub(crate) enum PathKeywordError {
     SuperAtRoot,
     #[display("path keyword `{_0}` may only start a path")]
     Misplaced(Symbol),
+    #[display("unresolved package `{_0}`: `::{_0}` names no package this package depends on")]
+    UnknownPackage(Symbol),
+}
+
+/// The dependency a path written with a leading `::` names, and the path
+/// within it; `None` for a path without one.
+pub(crate) fn dependency_path(path: &[Symbol]) -> Option<(&Symbol, &[Symbol])> {
+    match path {
+        [root, name, rest @ ..] if root == PATH_ROOT => Some((name, rest)),
+        _ => None,
+    }
 }
 
 fn keyword(segment: &Symbol) -> Option<&'static str> {

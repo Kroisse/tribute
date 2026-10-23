@@ -147,6 +147,9 @@ fn use_target<'db>(scope: Scope<'_, 'db>, path: &[Symbol]) -> Option<(Location, 
 /// imports, then a namespace the prelude supplies, then a dependency; a
 /// dependency whose name the root has is out of reach.
 pub(crate) fn root_location(scope: Scope<'_, '_>, path: &[Symbol]) -> Option<Location> {
+    if let Some((name, rest)) = path::dependency_path(path) {
+        return Some(scope.dependency_root(name)?.join(rest));
+    }
     let (first, rest) = path.split_first()?;
     if !scope.declares(first.clone()) && scope.lookup(first).is_none() {
         if let Some(library) = scope.library_namespace(first) {
@@ -258,6 +261,13 @@ fn use_candidates(
     path: &[Symbol],
     hops: usize,
 ) -> Vec<Location> {
+    if let Some((name, rest)) = path::dependency_path(path) {
+        return scope
+            .dependency_root(name)
+            .map(|root| root.join(rest))
+            .into_iter()
+            .collect();
+    }
     match path::absolute_path(module, path) {
         Ok(Some(target)) => return vec![scope.at_root(SymbolPath::new(target))],
         Err(_) => return Vec::new(),

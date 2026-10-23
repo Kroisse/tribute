@@ -202,10 +202,10 @@ mod m {
     assert_eq!(errors, Vec::<String>::new());
 }
 
-/// A `use` at the package root whose first segment the root declares
-/// reads the path in the root's module, not in package `std`.
+/// A `use` whose first segment names both a module of the package and
+/// package `std` is ambiguous; `self::`/`pkg::` and `::` tell them apart.
 #[salsa_test]
-fn a_root_import_through_a_module_named_std_stays_in_the_module(db: &salsa::DatabaseImpl) {
+fn an_import_through_a_module_named_std_is_ambiguous(db: &salsa::DatabaseImpl) {
     let errors = errors(
         db,
         r#"
@@ -214,10 +214,93 @@ mod std {
 }
 
 use std::answer
-use std::io::print_line
+use pkg::std::answer as mine
+use ::std::String::len
 
-fn main() -> Nil { let _ = answer() }
+mod m {
+    mod std {
+        pub fn answer() -> Nat { 42 }
+    }
+
+    use std::answer
+    use self::std::answer as mine
+}
+
+fn main() -> Nil { let _ = mine() + len("a") }
 "#,
     );
-    assert_eq!(errors, ["unresolved import `std::io::print_line`"]);
+    let ambiguous = |path: &str| {
+        format!(
+            "`use {path}` is ambiguous: `std` names both a name of this module and package \
+             `std`; write `self::std` or `pkg::std` for the module's name, or `::std` for \
+             the package"
+        )
+    };
+    assert_eq!(errors, [ambiguous("std::answer"), ambiguous("std::answer")]);
+}
+
+/// A path with a leading `::` names a dependency package even where a
+/// module of the same name hides it: in values, patterns, annotations,
+/// ability rows, handler arms, and imports.
+#[salsa_test]
+fn a_leading_separator_reaches_a_shadowed_package(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+use ::std::io::{Io, print_line}
+
+mod std {
+    pub fn answer() -> Nat { 42 }
+}
+
+mod m {
+    use ::std::Option::Some as Just
+
+    pub fn one() -> ::std::Option(Nat) { Just(1) }
+}
+
+fn unwrap(o: ::std::Option(Nat)) -> Nat {
+    case o {
+        ::std::Option::Some(n) -> n
+        ::std::Option::None -> std::answer()
+    }
+}
+
+fn say() ->{::std::io::Io} Nil { ::std::io::print_line("hi") }
+
+fn fail() ->{::std::abilities::Abort} Nat { ::std::abilities::Abort::abort() }
+
+fn main() ->{Io} Nil {
+    let _ = unwrap(::std::Option::Some(::std::String::len("a")))
+    let _ = unwrap(m::one())
+    let _ = handle fail() {
+        do result { result }
+        op ::std::abilities::Abort::abort() { 0 }
+    }
+    say()
+}
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}
+
+/// A leading `::` must name a package the package depends on.
+#[salsa_test]
+fn a_leading_separator_names_only_dependencies(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+use ::foo::bar
+
+fn f(x: ::nope::T) -> Nat { ::missing::g() }
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "unresolved package `foo`: `::foo` names no package this package depends on",
+            "unresolved package `nope`: `::nope` names no package this package depends on",
+            "unresolved package `missing`: `::missing` names no package this package depends on",
+        ]
+    );
 }
