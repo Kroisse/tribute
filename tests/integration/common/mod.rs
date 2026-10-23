@@ -685,3 +685,36 @@ fn assert_target_outputs(source_name: &str, expected_stdout: &str, native: Outpu
         );
     }
 }
+
+/// The frontend's source-logical IR after class specialization, printed: what
+/// CPS legalization reads, except that every definition stays, so a test can
+/// inspect one nothing calls.
+pub fn specialized_frontend_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
+    use itertools::Itertools;
+    use trunk_ir::analysis::AnalysisCache;
+    use trunk_ir::dialect::core;
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::pass::PassManager;
+
+    let Some((mut ctx, module)) = tribute::pipeline::compile_frontend(db, source) else {
+        let diagnostics = tribute::pipeline::compile_with_diagnostics(db, source).diagnostics;
+        panic!(
+            "the frontend rejects the source: {}",
+            diagnostics
+                .iter()
+                .format_with("; ", |diagnostic, f| f(&diagnostic.inner.message))
+        );
+    };
+    let core_module =
+        core::Module::from_op(&ctx, module.op()).expect("frontend output must be a core.module");
+    let mut passes = PassManager::new();
+    passes
+        .add_pass(trunk_ir::transforms::EliminateDeadCode::<core::Module>::new())
+        .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
+    passes
+        .run(&mut ctx, core_module, &mut AnalysisCache::new())
+        .expect("class specialization accepts frontend output");
+    let disagreements = tribute_passes::check_convention_classes::check(&ctx, module);
+    assert!(disagreements.is_empty(), "{disagreements:?}");
+    trunk_ir::printer::print_module(&ctx, module.op())
+}

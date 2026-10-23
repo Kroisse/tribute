@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_specialized_ir};
+use self::common::ast_pipeline_error_messages;
 use salsa_test_macros::salsa_test;
 use tribute_front::{
     SourceCst,
@@ -394,50 +394,6 @@ fn partial_generalization() -> #(Nat, Bool) {
     assert!(
         errors.is_empty(),
         "pure let binding should generalize: {errors:#?}"
-    );
-}
-
-#[salsa_test]
-fn returned_callback_keeps_its_cps_convention_after_pure_let(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "returned_callback_preserves_cps_convention_after_pure_let.trb",
-        r#"
-extern "C" fn __tribute_print_nat(value: Nat) -> Nil
-
-fn identity(f: fn(Nat) ->{e} Nat) -> fn(Nat) ->{e} Nat { f }
-
-fn main() -> Nil {
-    let f = identity(fn(x: Nat) { x + 10 })
-    let result = f(5)
-    __tribute_print_nat(result)
-}
-"#,
-    );
-
-    let errors = ast_pipeline_error_messages(db, source);
-    assert!(errors.is_empty(), "{errors:#?}");
-    let ir = run_ast_pipeline_with_specialized_ir(db, source);
-    let main = ir
-        .lines()
-        .find(|line| line.contains("func @main(") || line.contains("func @main["))
-        .expect("IR must contain main");
-    assert!(
-        main.contains("convention(direct)"),
-        "main keeps the convention of its row around the returned callback call:\n{ir}"
-    );
-    let lambda = ir
-        .lines()
-        .find(|line| line.contains("tribute_control.lambda("))
-        .expect("IR must contain the callback lambda");
-    assert!(
-        lambda.contains("convention(cps)"),
-        "the callback lambda must retain its CPS convention:\n{ir}"
-    );
-    assert!(
-        ir.lines()
-            .any(|line| line.contains("tribute_control.call_indirect")),
-        "the returned callback must use an indirect call:\n{ir}"
     );
 }
 
