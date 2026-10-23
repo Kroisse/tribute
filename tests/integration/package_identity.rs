@@ -9,13 +9,8 @@ use trunk_ir::printer::print_module;
 use super::common::assert_native_output;
 
 const PROGRAM: &str = r#"
-use console::{Io, print_line}
-
-// The package root's `mod std` hides package `std` from its paths; this
-// module does not see it.
-mod console {
-    pub use std::io::{Io, print_line}
-}
+// The package root's `mod std` hides package `std`; `::std` reaches it.
+use ::std::io::{Io, print_line}
 
 mod std {
     pub mod Int {
@@ -56,6 +51,28 @@ fn a_user_std_module_has_its_own_symbols(db: &salsa::DatabaseImpl) {
 #[test]
 fn a_user_std_module_runs_its_own_functions() {
     assert_native_output("package_identity.trb", PROGRAM, "103");
+}
+
+/// A leading `::` reaches package `std` past a user module named `std`.
+#[test]
+fn a_leading_separator_runs_the_package_past_a_user_std_module() {
+    assert_native_output(
+        "leading_separator.trb",
+        r#"
+use ::std::io::{Io, print_line}
+
+mod std {
+    pub mod Int {
+        pub fn probe(value: Int) ->{} Int { value + +100 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(::std::Int::to_string(std::Int::probe(+1)))
+}
+"#,
+        "101",
+    );
 }
 
 /// Package `std` is resolved from its own root: a `pub use` at its root
