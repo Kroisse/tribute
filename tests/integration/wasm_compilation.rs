@@ -68,7 +68,7 @@ fn test_compile_unsupported_wasm_read_line(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "wasm_read_line.trb",
-        r#"use abilities::Throw
+        r#"use std::abilities::Throw
 use std::io::{Error as IoError, Io, print_line, read_line}
 
 fn next_line() ->{Io} String {

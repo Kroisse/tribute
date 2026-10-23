@@ -9,7 +9,7 @@ use trunk_ir::printer::print_module;
 use super::common::assert_native_output;
 
 const PROGRAM: &str = r#"
-use io::{Io, print_line}
+use std::io::{Io, print_line}
 
 mod std {
     pub mod Int {

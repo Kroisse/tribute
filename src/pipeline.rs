@@ -2974,7 +2974,7 @@ use std::io::print
 use std::io::print_line
 use std::io::read_line
 
-fn input() ->{std::io::Io, abilities::Throw(std::io::Error)} String {
+fn input() ->{std::io::Io, std::abilities::Throw(std::io::Error)} String {
     read_line()
 }
 
@@ -4450,9 +4450,6 @@ fn main() -> String { "hello" }
                 "mod Float",
                 "mod Int",
                 "mod Nat",
-                "mod abilities",
-                "mod collections",
-                "mod io",
                 "type List",
                 "type Option",
                 "type Result",
@@ -4494,9 +4491,6 @@ fn main() -> String { "hello" }
                 "Result -> std::Result (std::Result)",
                 "Some -> std::Some",
                 "String -> std::String (std::String)",
-                "abilities -> std::abilities (std::abilities)",
-                "collections -> std::collections (std::collections)",
-                "io -> std::io (std::io)",
             ]
         );
     }

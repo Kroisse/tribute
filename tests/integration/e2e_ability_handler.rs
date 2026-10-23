@@ -12,7 +12,7 @@ use common::{
 
 fn cps_control_read_outcome_program() -> &'static str {
     r#"
-use abilities::Throw
+use std::abilities::Throw
 use std::io::{Error, Io, print_line, read_line}
 
 // `Line` intentionally owns public enum tag zero. The normal path pattern
@@ -1221,7 +1221,7 @@ fn main() -> Nil {
 // =============================================================================
 // Throw(e) Ability Tests (#193)
 //
-// These tests use the prelude-defined abilities (abilities::Abort, abilities::Throw).
+// These tests use the prelude-defined abilities (std::abilities::Abort, std::abilities::Throw).
 // =============================================================================
 
 /// Test basic Throw(e) ability from prelude.
@@ -1230,14 +1230,14 @@ fn main() -> Nil {
 /// type (like Abort). The handler catches the thrown error value.
 #[test]
 fn test_throw_basic() {
-    let code = r#"fn do_throw() ->{abilities::Throw(Nat)} Nat {
-    abilities::Throw::throw(42)
+    let code = r#"fn do_throw() ->{std::abilities::Throw(Nat)} Nat {
+    std::abilities::Throw::throw(42)
 }
 
 fn main() -> Nil {
     let result = handle do_throw() {
         do result { result }
-        op abilities::Throw::throw(error) { error }
+        op std::abilities::Throw::throw(error) { error }
     }
     __tribute_print_nat(result)
 }
@@ -1251,14 +1251,14 @@ fn main() -> Nil {
 /// an alternative result.
 #[test]
 fn test_throw_with_payload() {
-    let code = r#"fn throw_with_offset(x: Nat) ->{abilities::Throw(Nat)} Nat {
-    abilities::Throw::throw(x + 100)
+    let code = r#"fn throw_with_offset(x: Nat) ->{std::abilities::Throw(Nat)} Nat {
+    std::abilities::Throw::throw(x + 100)
 }
 
 fn main() -> Nil {
     let result = handle throw_with_offset(5) {
         do result { result }
-        op abilities::Throw::throw(error) { error }
+        op std::abilities::Throw::throw(error) { error }
     }
     __tribute_print_nat(result)
 }
@@ -1272,15 +1272,15 @@ fn main() -> Nil {
 /// the second throws, and the handler catches the error.
 #[test]
 fn test_throw_multiple_operations() {
-    let code = r#"fn no_throw() ->{abilities::Throw(Nat)} Nat {
+    let code = r#"fn no_throw() ->{std::abilities::Throw(Nat)} Nat {
     10
 }
 
-fn must_throw() ->{abilities::Throw(Nat)} Nat {
-    abilities::Throw::throw(77)
+fn must_throw() ->{std::abilities::Throw(Nat)} Nat {
+    std::abilities::Throw::throw(77)
 }
 
-fn do_work() ->{abilities::Throw(Nat)} Nat {
+fn do_work() ->{std::abilities::Throw(Nat)} Nat {
     let a = no_throw()
     let b = must_throw()
     a + b
@@ -1289,7 +1289,7 @@ fn do_work() ->{abilities::Throw(Nat)} Nat {
 fn main() -> Nil {
     let result = handle do_work() {
         do result { result }
-        op abilities::Throw::throw(error) { error }
+        op std::abilities::Throw::throw(error) { error }
     }
     __tribute_print_nat(result)
 }
@@ -1300,14 +1300,14 @@ fn main() -> Nil {
 /// Test Abort ability from prelude.
 #[test]
 fn test_prelude_abort() {
-    let code = r#"fn do_abort() ->{abilities::Abort} Nat {
-    abilities::Abort::abort()
+    let code = r#"fn do_abort() ->{std::abilities::Abort} Nat {
+    std::abilities::Abort::abort()
 }
 
 fn main() -> Nil {
     let result = handle do_abort() {
         do result { result }
-        op abilities::Abort::abort() { 99 }
+        op std::abilities::Abort::abort() { 99 }
     }
     __tribute_print_nat(result)
 }
@@ -1322,14 +1322,14 @@ fn main() -> Nil {
 /// Test effect-directed resolution: `abort()` resolves from ability row.
 #[test]
 fn test_effect_directed_abort() {
-    let code = r#"fn do_abort() ->{abilities::Abort} Nat {
+    let code = r#"fn do_abort() ->{std::abilities::Abort} Nat {
     abort()
 }
 
 fn main() -> Nil {
     let result = handle do_abort() {
         do result { result }
-        op abilities::Abort::abort() { 99 }
+        op std::abilities::Abort::abort() { 99 }
     }
     __tribute_print_nat(result)
 }
@@ -1340,14 +1340,14 @@ fn main() -> Nil {
 /// Test effect-directed resolution: `throw(x)` resolves from ability row.
 #[test]
 fn test_effect_directed_throw() {
-    let code = r#"fn do_throw() ->{abilities::Throw(Nat)} Nat {
+    let code = r#"fn do_throw() ->{std::abilities::Throw(Nat)} Nat {
     throw(42)
 }
 
 fn main() -> Nil {
     let result = handle do_throw() {
         do result { result }
-        op abilities::Throw::throw(error) { error }
+        op std::abilities::Throw::throw(error) { error }
     }
     __tribute_print_nat(result)
 }
@@ -1357,18 +1357,18 @@ fn main() -> Nil {
 
 /// Test that a local variable shadows an effect-injected operation.
 ///
-/// The parameter `abort` shadows `abilities::Abort::abort`, so calling
+/// The parameter `abort` shadows `std::abilities::Abort::abort`, so calling
 /// `abort()` invokes the parameter (a function), not the ability operation.
 #[test]
 fn test_effect_directed_local_shadows_op() {
-    let code = r#"fn use_local(abort: fn() ->{} Nat) ->{abilities::Abort} Nat {
+    let code = r#"fn use_local(abort: fn() ->{} Nat) ->{std::abilities::Abort} Nat {
     abort()
 }
 
 fn main() -> Nil {
     let result = handle use_local(fn() 77) {
         do result { result }
-        op abilities::Abort::abort() { 0 }
+        op std::abilities::Abort::abort() { 0 }
     }
     __tribute_print_nat(result)
 }
@@ -1381,10 +1381,10 @@ fn main() -> Nil {
 // Use Import Tests (#631)
 // =============================================================================
 
-/// Test `use abilities::Abort` makes Abort usable without qualification.
+/// Test `use std::abilities::Abort` makes Abort usable without qualification.
 #[test]
 fn test_use_import_abort() {
-    let code = r#"use abilities::Abort
+    let code = r#"use std::abilities::Abort
 
 fn do_abort() ->{Abort} Nat {
     abort()
@@ -1401,10 +1401,10 @@ fn main() -> Nil {
     assert_native_output("use_import_abort.trb", code, "99");
 }
 
-/// Test `use abilities::Throw` makes Throw(e) usable without qualification.
+/// Test `use std::abilities::Throw` makes Throw(e) usable without qualification.
 #[test]
 fn test_use_import_throw() {
-    let code = r#"use abilities::Throw
+    let code = r#"use std::abilities::Throw
 
 fn do_throw() ->{Throw(Nat)} Nat {
     throw(42)
@@ -1429,7 +1429,7 @@ fn test_cps_consumed_parameters_receive_one_unit_each() {
     let output = common::compile_and_run_native_asan(
         "cps_consumed_duplicate_arguments.trb",
         r#"
-use abilities::Throw
+use std::abilities::Throw
 use std::io::{Io, print_line}
 
 fn both(left: String, right: String) ->{Throw(String)} String {

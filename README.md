@@ -23,7 +23,7 @@ native, and WasmGC status. Compilation alone is not execution evidence.
 ## Quick Example
 
 ```text
-use abilities::Throw
+use std::abilities::Throw
 use std::io::{Io, print_line}
 
 fn fail() ->{Throw(String)} String {

@@ -717,7 +717,6 @@ pub mod prelude {
         pub use pkg::{String, Leaf, Branch}
         pub use pkg::{Int, Nat, Float, Bytes}
         pub use pkg::collections::List
-        pub use pkg::{abilities, collections, io}
     }
 }
 
