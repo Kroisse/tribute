@@ -13,7 +13,7 @@ use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId, Visibility
 /// Information about a resolved name binding.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Binding<'db> {
-    /// A function defined in this module or imported.
+    /// A function the package declares or imports.
     Function { id: FuncDefId<'db> },
 
     /// A type constructor (struct or enum variant).
@@ -139,14 +139,17 @@ pub struct Export {
 pub struct PackageEnv<'db> {
     /// The package whose module tree this environment holds.
     package: PackageName,
-    /// Names defined in this module (simple name → binding).
+    /// The names the package root declares (simple name → binding).
     definitions: HashMap<Symbol, Binding<'db>>,
-    /// Names imported via `use` statements (simple name → binding).
+    /// The names the package root's `use`s import, and its inline modules
+    /// (simple name → binding).
     imports: HashMap<Symbol, Binding<'db>>,
-    /// Qualified paths (namespace → name → binding).
+    /// The entries of each namespace below the package root: modules,
+    /// types, and abilities (namespace → name → binding).
     namespaces: HashMap<SymbolPath, HashMap<Symbol, Binding<'db>>>,
-    /// Original paths for resolved `use` imports (import name → original path).
-    /// Used to rewrite ability annotations from imported names to qualified paths.
+    /// The paths the package root's resolved `use`s import (import name →
+    /// path). Used to rewrite ability annotations from imported names to
+    /// qualified paths.
     use_paths: HashMap<Symbol, Vec<Symbol>>,
     /// The paths of the names that several `use`s import, in declaration
     /// order.
@@ -479,7 +482,7 @@ impl<'db> PackageEnv<'db> {
             .or_insert(binding);
     }
 
-    /// Look up an unqualified name.
+    /// Look up a name the package root declares or imports.
     pub fn lookup(&self, name: &Symbol) -> Option<&Binding<'db>> {
         // First check local definitions
         if let Some(b) = self.definitions.get(name) {
@@ -489,12 +492,12 @@ impl<'db> PackageEnv<'db> {
         self.imports.get(name)
     }
 
-    /// Check whether a name is defined locally, excluding imports.
+    /// Whether the package root declares `name`, apart from its imports.
     pub fn has_definition(&self, name: &Symbol) -> bool {
         self.definitions.contains_key(name)
     }
 
-    /// Look up a qualified path (e.g., "List::map").
+    /// Look up `name` in the namespace `namespace` (e.g. `List::map`).
     pub fn lookup_qualified(&self, namespace: &[Symbol], name: &Symbol) -> Option<&Binding<'db>> {
         self.namespaces.get(namespace)?.get(name)
     }
@@ -542,7 +545,7 @@ impl<'db> PackageEnv<'db> {
             }
     }
 
-    /// Iterate over all imports.
+    /// The names the package root imports.
     pub fn iter_imports(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
         self.imports.iter().map(|(k, v)| (k.clone(), v))
     }
@@ -553,17 +556,17 @@ impl<'db> PackageEnv<'db> {
         self.imports.insert(name, binding);
     }
 
-    /// Get the original `use` path for an import name.
+    /// The path the package root's `use` of `name` imports.
     pub fn get_use_path(&self, name: &Symbol) -> Option<&Vec<Symbol>> {
         self.use_paths.get(name)
     }
 
-    /// Iterate over all definitions in this environment.
+    /// The names the package root declares.
     pub fn iter_definitions(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
         self.definitions.iter().map(|(k, v)| (k.clone(), v))
     }
 
-    /// Iterate over all namespaces in this environment.
+    /// The package's namespaces.
     pub fn iter_namespaces(
         &self,
     ) -> impl Iterator<Item = (SymbolPath, impl Iterator<Item = (Symbol, &Binding<'db>)>)> {
@@ -572,7 +575,7 @@ impl<'db> PackageEnv<'db> {
             .map(|(ns, bindings)| (ns.clone(), bindings.iter().map(|(k, v)| (k.clone(), v))))
     }
 
-    /// Iterate over all names visible via unqualified lookup (definitions + imports).
+    /// The names the package root declares or imports.
     pub fn iter_all_names(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.definitions
             .keys()
