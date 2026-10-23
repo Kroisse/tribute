@@ -841,7 +841,7 @@ impl<'db> Resolver<'db> {
                 } else if let Some(target) = self.module_import(name) {
                     ann.kind = TypeAnnotationKind::Path(target.to_vec());
                 } else if let Some(path) = self.view().library_path(name) {
-                    ann.kind = TypeAnnotationKind::Path(path.to_vec());
+                    ann.kind = TypeAnnotationKind::Path(path);
                 } else {
                     self.report_unresolved_annotation(ann.id, name);
                     ann.kind = TypeAnnotationKind::Error;
@@ -859,7 +859,7 @@ impl<'db> Resolver<'db> {
                     && self.view().get_use_path(name).is_none()
                     && let Some(path) = self.view().library_path(name)
                 {
-                    ann.kind = TypeAnnotationKind::Path(path.to_vec());
+                    ann.kind = TypeAnnotationKind::Path(path);
                 }
             }
             TypeAnnotationKind::Path(segments) => {
@@ -1469,7 +1469,7 @@ impl<'db> Resolver<'db> {
                 if let Some(path) = self.view().get_use_path(sym)
                     && path.len() >= 2
                 {
-                    ann.kind = TypeAnnotationKind::Path(path.clone());
+                    ann.kind = TypeAnnotationKind::Path(path.to_vec());
                 }
             }
             TypeAnnotationKind::App { ctor, .. } => self.resolve_ability_in_annotation(ctor),

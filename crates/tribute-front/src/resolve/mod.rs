@@ -78,11 +78,11 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
     let module_imports: Vec<(Symbol, Vec<Symbol>)> = env
         .iter_imports()
         .filter_map(|(name, binding)| {
-            let path = match binding {
-                Binding::Import { path } => Some(path),
-                _ => env.get_use_path(&name),
-            }?;
-            (path.len() >= 2).then(|| (name, path.clone()))
+            let path: &[Symbol] = match binding {
+                Binding::Import { path } => path,
+                _ => env.get_use_path(&name)?,
+            };
+            (path.len() >= 2).then(|| (name, path.to_vec()))
         })
         .collect();
 
@@ -131,20 +131,17 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
 }
 
 /// The package path a `use` of `path` names and what is declared there.
-fn use_target<'db>(
-    scope: Scope<'_, 'db>,
-    path: Vec<Symbol>,
-) -> Option<(Vec<Symbol>, Binding<'db>)> {
+fn use_target<'db>(scope: Scope<'_, 'db>, path: Vec<Symbol>) -> Option<(SymbolPath, Binding<'db>)> {
     // A path into a library namespace continues from its package path,
     // unless the package declares the first segment itself.
-    let path: Vec<Symbol> = match path.split_first() {
+    let path = match path.split_first() {
         Some((first, rest))
             if !scope.declares(first.clone())
                 && let Some(library) = scope.library_namespace(first) =>
         {
-            library.iter().chain(rest).cloned().collect()
+            SymbolPath::new(library.iter().chain(rest).cloned())
         }
-        _ => path,
+        _ => SymbolPath::new(path),
     };
     let (target_name, namespace) = path.split_last()?;
     let binding = scope.lookup_qualified(namespace, target_name)?.clone();

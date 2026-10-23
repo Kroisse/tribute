@@ -243,7 +243,7 @@ impl<'s, 'db> Scope<'s, 'db> {
         self.own.has_definition(name)
     }
 
-    pub fn get_use_path(&self, name: &Symbol) -> Option<&'s Vec<Symbol>> {
+    pub fn get_use_path(&self, name: &Symbol) -> Option<&'s SymbolPath> {
         self.own.get_use_path(name)
     }
 

@@ -150,7 +150,7 @@ pub struct PackageEnv<'db> {
     /// The paths the package root's resolved `use`s import (import name →
     /// path). Used to rewrite ability annotations from imported names to
     /// qualified paths.
-    use_paths: HashMap<Symbol, Vec<Symbol>>,
+    use_paths: HashMap<Symbol, SymbolPath>,
     /// The paths of the names that several `use`s import, in declaration
     /// order.
     repeated_uses: HashMap<Symbol, Vec<Vec<Symbol>>>,
@@ -551,13 +551,13 @@ impl<'db> PackageEnv<'db> {
     }
 
     /// Replace an import binding, recording the original path.
-    pub fn replace_import(&mut self, name: Symbol, binding: Binding<'db>, path: Vec<Symbol>) {
+    pub fn replace_import(&mut self, name: Symbol, binding: Binding<'db>, path: SymbolPath) {
         self.use_paths.insert(name.clone(), path);
         self.imports.insert(name, binding);
     }
 
     /// The path the package root's `use` of `name` imports.
-    pub fn get_use_path(&self, name: &Symbol) -> Option<&Vec<Symbol>> {
+    pub fn get_use_path(&self, name: &Symbol) -> Option<&SymbolPath> {
         self.use_paths.get(name)
     }
 
