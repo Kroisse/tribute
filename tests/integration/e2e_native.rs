@@ -21,7 +21,7 @@ use common::{
 
 fn std_io_read_line_program() -> &'static str {
     r#"
-use abilities::Throw
+use std::abilities::Throw
 use std::io::{Error, Io, print_line, read_line}
 
 fn read_or_error() ->{Io} String {
@@ -1937,7 +1937,7 @@ fn test_native_std_io_read_line_preserves_buffered_input() {
     let output = compile_and_run_native_with_stdin(
         "std_io_read_line_buffered.trb",
         r#"
-use abilities::Throw
+use std::abilities::Throw
 use std::io::{Error, Io, print_line, read_line}
 
 fn read_or_error() ->{Io} String {

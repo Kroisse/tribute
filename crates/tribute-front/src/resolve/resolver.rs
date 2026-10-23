@@ -11,11 +11,11 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    AbilityOrigin, Arm, Candidates, Decl, DeclEntry, DeclTable, Expr, ExprKind,
-    FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind,
-    LocalId, LocalIdGen, Module, ModuleItem, ModulePath, NodeId, Param, ParamDecl, Pattern,
-    PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind,
-    TypeOrigin, TypeParamDecl, UnresolvedName, UseDecl, Visibility,
+    Arm, Candidates, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl,
+    FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen, Module,
+    ModuleItem, ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap,
+    Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName, UseDecl,
+    Visibility,
 };
 
 use super::env::{Binding, PackageEnv, Restriction};
@@ -829,16 +829,9 @@ impl<'db> Resolver<'db> {
     /// differs from the location's through a re-export.
     fn declared_path(&self, location: &Location) -> IdentityPath {
         let declared = match self.lookup_path(location) {
-            Some(Binding::TypeDef { id })
-                if matches!(id.origin(self.db), TypeOrigin::Source(_))
-                    || id.is_builtin_list(self.db) =>
-            {
-                id.path(self.db)
-            }
+            Some(Binding::TypeDef { id }) => id.path(self.db),
             Some(Binding::Constructor { id, tag: None, .. }) => id.path(self.db),
-            Some(Binding::Ability { id }) if id.origin(self.db) == AbilityOrigin::Source => {
-                id.path(self.db)
-            }
+            Some(Binding::Ability { id }) => id.path(self.db),
             _ => return location.identity(),
         };
         IdentityPath::new(declared.clone())

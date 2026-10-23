@@ -111,6 +111,15 @@ pub fn lower_cps_signatures_to_physical(
     ctx: &mut IrContext,
     module: Module,
 ) -> Result<(), TargetAbiError> {
+    if let Some(violation) =
+        tribute_ir::calling_convention::verify_conventions(ctx, module.op()).first()
+    {
+        return Err(TargetAbiError::new(format!(
+            "target ABI: {}: {}",
+            ctx.op(violation.op).name.display(ctx),
+            violation.error
+        )));
+    }
     let ops = collect_ops(ctx, module.op());
     let never = core::Never::params().intern(ctx).as_type_ref();
     let functions = collect_functions(ctx, &ops, never)?;
@@ -2971,5 +2980,41 @@ mod tests {
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(error.to_string().contains("malformed calling-convention"));
+    }
+
+    #[test]
+    fn convention_violations_are_rejected_before_mutation() {
+        for (body, expected) in [
+            (
+                r#"%c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32"#,
+                "arith.const: calling-convention metadata on an operation that cannot carry it",
+            ),
+            (
+                r#"%c = closure.new {func_ref = @callee, tribute.calling_convention = "cps"} : !direct"#,
+                "closure.new: calling convention differs from the one its callable type records",
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  !fn = func.func_sig<(core.i32) -> core.i32>
+  !direct = closure.closure<!fn, {{tribute.calling_convention = "direct", tribute.closure_environment_index = 0}}>
+  func.func @callee(%x: core.i32) -> core.i32 attributes {{tribute.calling_convention = "direct"}} {{
+    func.return %x
+  }}
+  func.func @main() -> core.nil attributes {{tribute.calling_convention = "direct"}} {{
+    {body}
+    %n = core.nil_value : core.nil
+    func.return %n
+  }}
+}}"#
+                ),
+            );
+            let error =
+                assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
+            assert!(error.to_string().contains(expected), "{error}");
+        }
     }
 }
