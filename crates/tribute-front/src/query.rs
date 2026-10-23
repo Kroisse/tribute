@@ -231,7 +231,7 @@ pub fn parsed_func<'db>(
 
 /// Resolve a single function by name.
 ///
-/// The function is resolved in the context of the full module environment.
+/// The function is resolved in the context of the full package environment.
 pub fn resolved_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,

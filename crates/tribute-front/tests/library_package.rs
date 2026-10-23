@@ -112,3 +112,37 @@ fn empty_root_module_shadows_a_library_name(db: &salsa::DatabaseImpl) {
         ["unresolved import `Option::Some`"]
     );
 }
+
+/// Package `std`'s `pub(pkg)` items stay hidden behind the dependency path.
+#[salsa_test]
+fn a_package_internal_std_item_is_hidden(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+fn slots(s: std::runtime::Slots(Nat)) -> Nat { 0 }
+
+fn main() -> Nil {}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["`std::runtime::Slots` is not visible here: `std::runtime::Slots` is declared `pub(pkg)`"]
+    );
+}
+
+/// A package-root path names the package's own items, not the prelude's.
+#[salsa_test]
+fn a_package_root_path_does_not_name_a_prelude_item(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+fn main() -> Nil {
+    let _ = pkg::Some(1)
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["unresolved name `pkg::Some`; did you mean `Some`?"]
+    );
+}

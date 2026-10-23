@@ -20,7 +20,7 @@ use tribute::pipeline::{
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
 use tribute_front::query::parsed_ast;
-use tribute_front::resolve::build_env;
+use tribute_front::resolve::{Dependencies, build_env};
 
 fn main() {
     let cli = Cli::parse();
@@ -257,9 +257,9 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
 
         // Show environment if requested
         if show_env {
-            println!("\n=== Module Environment ===");
+            println!("\n=== Package Environment ===");
             if let Some(parsed) = parsed_ast(db, source) {
-                let env = build_env(db, parsed.module(db));
+                let env = build_env(db, parsed.module(db), &Dependencies::none());
                 println!("{:#?}", env);
             } else {
                 println!("(Failed to parse AST)");
