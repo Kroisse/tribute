@@ -3,7 +3,7 @@
 
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
-use tribute_front::resolve::{Binding, PackageName, build_env, build_library_env};
+use tribute_front::resolve::{Binding, Dependencies, PackageName, build_env, build_library_env};
 use trunk_ir::{Symbol, SymbolPath};
 
 fn module_path(binding: Option<&Binding<'_>>) -> Vec<String> {
@@ -33,7 +33,7 @@ mod std {
 fn nested_modules_are_bound_by_identity(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "modules.trb", TREE);
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let env = build_env(db, parsed.module(db));
+    let env = build_env(db, parsed.module(db), &Dependencies::none());
     assert_eq!(env.package(), &PackageName::compiled());
 
     let c = env.lookup_qualified(&SymbolPath::new(["a", "b"]), &Symbol::new("c"));
@@ -78,7 +78,7 @@ use nowhere
 "#,
     );
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let env = build_env(db, parsed.module(db));
+    let env = build_env(db, parsed.module(db), &Dependencies::none());
 
     let b = env.lookup_qualified(&SymbolPath::new(["facade"]), &Symbol::new("b"));
     assert_eq!(module_path(b), ["a", "b"]);
@@ -108,7 +108,7 @@ pub mod outer {
 "#,
     );
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let env = build_env(db, parsed.module(db));
+    let env = build_env(db, parsed.module(db), &Dependencies::none());
 
     let b = env.lookup_qualified(&SymbolPath::new(["outer"]), &Symbol::new("b"));
     assert_eq!(module_path(b), ["a", "b"]);

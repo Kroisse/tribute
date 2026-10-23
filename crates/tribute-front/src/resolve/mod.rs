@@ -18,10 +18,12 @@ mod env;
 mod package;
 mod path;
 mod resolver;
+mod scope;
 
 pub use env::{Binding, Export, PackageEnv, Restriction};
 pub use package::PackageName;
 pub use resolver::Resolver;
+pub use scope::{Dependencies, Scope};
 
 use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
@@ -39,48 +41,44 @@ pub fn resolve_module<'db>(
     module: &Module<UnresolvedName>,
     span_map: SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    // Build the package environment from declarations
-    let mut env = build_env(db, module);
-    resolve_use_imports(&mut env);
+    // Build the package environment from declarations. Without the prelude,
+    // package `std` holds only the compiler-owned names.
+    let std = builtin_library_env(db, module.id);
+    let dependencies = Dependencies::std(&std);
+    let env = build_env(db, module, &dependencies);
 
     // Create resolver and process the module
-    let mut resolver = Resolver::new(db, env, span_map);
+    let mut resolver = Resolver::new(db, env, &dependencies, span_map);
     resolver.resolve_module(module)
 }
 
-/// Resolve names in a module with a pre-built environment.
-///
-/// This variant is used when prelude bindings need to be injected
-/// before name resolution. The caller is responsible for merging
-/// prelude bindings into the environment before calling this.
+/// Resolve names in a module with a pre-built environment, which
+/// [`build_env`] built against the same `dependencies`.
 pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     env: PackageEnv<'db>,
+    dependencies: &Dependencies<'_, 'db>,
     span_map: SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    let mut resolver = Resolver::new(db, env, span_map);
+    let mut resolver = Resolver::new(db, env, dependencies, span_map);
     resolver.resolve_module(module)
 }
 
 /// Resolve `use` imports that reference module-qualified paths.
 ///
 /// During `build_env`, `use` declarations are stored as `Binding::Import` placeholders
-/// because the referenced modules (e.g., prelude) may not yet be merged. This function
-/// re-resolves those imports against the full environment after prelude merge.
+/// until the whole package is collected. This function resolves them against the
+/// package and its dependencies.
 ///
-/// For example, `use abilities::Abort` upgrades from a `Module` binding to the actual
+/// For example, `use abilities::Abort` upgrades from a placeholder to the actual
 /// `Ability` binding, and registers the ability's operations under the imported name's
 /// namespace (so `Abort::abort` works).
-pub fn resolve_use_imports(env: &mut PackageEnv<'_>) {
+fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependencies<'_, 'db>) {
     // Collect Module bindings that need resolution
     let module_imports: Vec<(Symbol, Vec<Symbol>)> = env
         .iter_imports()
         .filter_map(|(name, binding)| {
-            // Library names come through their package paths, not a `use`.
-            if env.lookup_library(&name) == Some(binding) {
-                return None;
-            }
             let path = match binding {
                 Binding::Import { path } => Some(path),
                 _ => env.get_use_path(&name),
@@ -90,13 +88,15 @@ pub fn resolve_use_imports(env: &mut PackageEnv<'_>) {
         .collect();
 
     for (import_name, path) in module_imports {
-        let Some((path, binding)) = use_target(env, path) else {
+        let scope = Scope::new(env, dependencies);
+        let Some((path, binding)) = use_target(scope, path) else {
             continue;
         };
+        let entries = scope.collect_namespace(&path);
 
         // Transfer the imported name's sub-namespace entries.
         // e.g., `use abilities::Abort` makes `Abort::abort` available.
-        for (op_name, op_binding) in env.collect_namespace(&path) {
+        for (op_name, op_binding) in entries {
             env.add_to_namespace_if_absent(
                 SymbolPath::new([import_name.clone()]),
                 op_name,
@@ -113,7 +113,7 @@ pub fn resolve_use_imports(env: &mut PackageEnv<'_>) {
     for (name, paths) in &repeated {
         let mut functions = Vec::new();
         for path in paths {
-            match use_target(env, path.clone()) {
+            match use_target(Scope::new(env, dependencies), path.clone()) {
                 Some((_, Binding::Function { id })) if !functions.contains(&id) => {
                     functions.push(id);
                 }
@@ -133,31 +133,33 @@ pub fn resolve_use_imports(env: &mut PackageEnv<'_>) {
 
 /// The package path a `use` of `path` names and what is declared there.
 fn use_target<'db>(
-    env: &PackageEnv<'db>,
+    scope: Scope<'_, '_, 'db>,
     path: Vec<Symbol>,
 ) -> Option<(Vec<Symbol>, Binding<'db>)> {
     // A path into a library namespace continues from its package path,
     // unless the package declares the first segment itself.
     let path: Vec<Symbol> = match path.split_first() {
         Some((first, rest))
-            if !env.declares(first.clone())
-                && let Some(library) = env.library_namespace(first) =>
+            if !scope.declares(first.clone())
+                && let Some(library) = scope.library_namespace(first) =>
         {
             library.iter().chain(rest).cloned().collect()
         }
         _ => path,
     };
     let (target_name, namespace) = path.split_last()?;
-    let binding = env.lookup_qualified(namespace, target_name)?.clone();
+    let binding = scope.lookup_qualified(namespace, target_name)?.clone();
     Some((path, binding))
 }
 
-/// Build the environment of the package being compiled from its AST.
+/// Build the environment of the package being compiled from its AST, with
+/// the packages it depends on.
 pub fn build_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
+    dependencies: &Dependencies<'_, 'db>,
 ) -> PackageEnv<'db> {
-    build_package_env(db, module, &PackageName::compiled())
+    build_package_env(db, module, &PackageName::compiled(), dependencies)
 }
 
 /// Build the environment of the library package whose root module is
@@ -166,7 +168,18 @@ pub fn build_library_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
 ) -> PackageEnv<'db> {
-    build_package_env(db, module, &PackageName::std())
+    build_package_env(db, module, &PackageName::std(), &Dependencies::none())
+}
+
+/// The environment of a package `std` that declares nothing but the
+/// compiler-owned names, for resolving a package without the prelude.
+/// `id` identifies the empty root module.
+pub fn builtin_library_env<'db>(
+    db: &'db dyn salsa::Database,
+    id: crate::ast::NodeId,
+) -> PackageEnv<'db> {
+    let empty = Module::new(id, None, Vec::<ModuleItem<_>>::new());
+    build_library_env(db, &empty)
 }
 
 /// Build the environment of the module tree of `package`.
@@ -174,6 +187,7 @@ fn build_package_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     package: &PackageName,
+    dependencies: &Dependencies<'_, 'db>,
 ) -> PackageEnv<'db> {
     let mut env = PackageEnv::for_package(package.clone());
 
@@ -183,7 +197,7 @@ fn build_package_env<'db>(
     // The file-derived name is for external references, not internal ones.
     // Only nested `mod foo { ... }` declarations extend the module path.
     let mut prefix = SymbolPath::root();
-    let scope = Scope {
+    let scope = DeclScope {
         package: package.clone(),
         outer: None,
     };
@@ -192,30 +206,30 @@ fn build_package_env<'db>(
         collect_item(db, &mut env, item, &mut prefix, &scope);
     }
 
-    inject_builtin_bindings(db, &mut env, package);
     if package.is_library() {
+        inject_builtin_bindings(db, &mut env);
         inject_runtime_bindings(db, &mut env);
     }
-    // Resolve imports of declarations already present in this module. Imports
-    // from another module are resolved again after its environment is merged.
-    resolve_use_imports(&mut env);
-    resolve_exports(&mut env);
+    // A re-export may name what an import gives, and an import what a
+    // re-export adds.
+    resolve_use_imports(&mut env, dependencies);
+    resolve_exports(&mut env, dependencies);
+    resolve_use_imports(&mut env, dependencies);
 
     env
 }
 
 /// Add each re-export whose target resolves to the namespace of the module
-/// that declares it, until no more resolve; keep the others to try again
-/// after another environment is merged.
+/// that declares it, until no more resolve.
 ///
 /// A re-export's path starts with a path keyword, from an import of the
 /// declaring module, from the module itself, or from a library namespace.
 /// The resolver reports a `use` whose target names nothing.
-pub fn resolve_exports(env: &mut PackageEnv<'_>) {
+fn resolve_exports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependencies<'_, 'db>) {
     let mut pending = env.take_exports();
     loop {
         let before = pending.len();
-        pending.retain(|export| !add_export(env, export));
+        pending.retain(|export| !add_export(env, dependencies, export));
         if pending.len() == before {
             break;
         }
@@ -229,7 +243,7 @@ pub fn resolve_exports(env: &mut PackageEnv<'_>) {
 /// may name, in order. A first segment the module imports continues only
 /// from what that import names; `hops` counts the imports followed.
 fn use_candidates(
-    env: &PackageEnv<'_>,
+    scope: Scope<'_, '_, '_>,
     module: &SymbolPath,
     path: &[Symbol],
     hops: usize,
@@ -242,37 +256,42 @@ fn use_candidates(
     let Some((first, rest)) = path.split_first() else {
         return Vec::new();
     };
-    if let Some(imported) = env.module_use(module, first) {
+    if let Some(imported) = scope.own().module_use(module, first) {
         // A cycle of imports names nothing.
-        if hops > env.module_use_count() {
+        if hops > scope.own().module_use_count() {
             return Vec::new();
         }
-        return use_candidates(env, module, imported, hops + 1)
+        return use_candidates(scope, module, imported, hops + 1)
             .into_iter()
             .map(|target| target.into_iter().chain(rest.iter().cloned()).collect())
             .collect();
     }
     let mut candidates = vec![module.iter().chain(path).cloned().collect()];
-    if let Some(library) = env.library_namespace(first) {
+    if let Some(library) = scope.library_namespace(first) {
         candidates.push(library.iter().chain(rest).cloned().collect());
     }
     candidates
 }
 
 /// Add `export` to its module's namespace if its target resolves.
-fn add_export(env: &mut PackageEnv<'_>, export: &Export) -> bool {
-    let candidates = use_candidates(env, &export.module, &export.path, 0);
+fn add_export<'db>(
+    env: &mut PackageEnv<'db>,
+    dependencies: &Dependencies<'_, 'db>,
+    export: &Export,
+) -> bool {
+    let scope = Scope::new(env, dependencies);
+    let candidates = use_candidates(scope, &export.module, &export.path, 0);
     let Some((target, binding)) = candidates.into_iter().find_map(|target| {
         let (last, namespace) = target.split_last()?;
         let binding = if namespace.is_empty() {
-            env.lookup(last).cloned()
+            scope.lookup(last).cloned()
         } else {
-            env.lookup_qualified(namespace, last).cloned()
+            scope.lookup_qualified(namespace, last).cloned()
         };
         let binding = binding
             .filter(|b| !matches!(b, Binding::Import { .. }))
             .or_else(|| {
-                env.has_namespace(&target).then(|| Binding::Module {
+                scope.has_namespace(&target).then(|| Binding::Module {
                     path: env.package().identity_path(&target).to_vec(),
                 })
             })?;
@@ -280,9 +299,10 @@ fn add_export(env: &mut PackageEnv<'_>, export: &Export) -> bool {
     }) else {
         return false;
     };
+    let entries = scope.collect_namespace(&target);
     // The exported name's own namespace, e.g. `facade::Abort::abort`.
     let own = export.module.child(export.name.clone());
-    for (name, entry) in env.collect_namespace(&target) {
+    for (name, entry) in entries {
         env.add_to_namespace_if_absent(own.clone(), name, entry);
     }
     env.add_to_namespace_if_absent(export.module.clone(), export.name.clone(), binding);
@@ -298,7 +318,7 @@ fn add_export(env: &mut PackageEnv<'_>, export: &Export) -> bool {
 
 /// What a declaration's visibility is relative to while its environment is
 /// collected.
-struct Scope {
+struct DeclScope {
     /// The package the declaration belongs to.
     package: PackageName,
     /// The restriction of the modules around the declaration, if any of them
@@ -306,7 +326,7 @@ struct Scope {
     outer: Option<Restriction>,
 }
 
-impl Scope {
+impl DeclScope {
     /// The restriction of the declaration at `path` with `visibility`, in
     /// the module `module`, or `None` if it is public.
     fn restriction(
@@ -347,15 +367,6 @@ pub(crate) fn restriction_module(module: &[Symbol], scope: &[Symbol]) -> Option<
 /// their short names.
 pub const LIBRARY_PACKAGE: &str = "std";
 
-/// Give `env` the library package `library` declares: its root items under
-/// their short names, then re-resolve the package's own imports, which may
-/// name library items.
-pub fn merge_library<'db>(env: &mut PackageEnv<'db>, library: &PackageEnv<'db>) {
-    env.merge(library, &Symbol::new(LIBRARY_PACKAGE));
-    resolve_use_imports(env);
-    resolve_exports(env);
-}
-
 /// Resolve the library package whose root module is `module`.
 pub fn resolve_library_with_env<'db>(
     db: &'db dyn salsa::Database,
@@ -363,57 +374,35 @@ pub fn resolve_library_with_env<'db>(
     env: PackageEnv<'db>,
     span_map: SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    Resolver::new(db, env, span_map)
+    Resolver::new(db, env, &Dependencies::none(), span_map)
         .with_package(PackageName::std())
         .resolve_module(module)
 }
 
-/// Expose compiler-owned definitions through the ordinary resolver namespace.
-///
-/// They belong to package `std`. Its own environment holds them from its
-/// root; another package's holds them under `std`, as it holds the rest of
-/// the package.
-fn inject_builtin_bindings<'db>(
-    db: &'db dyn salsa::Database,
-    env: &mut PackageEnv<'db>,
-    package: &PackageName,
-) {
-    let std = |path: &[&str]| -> SymbolPath {
-        let root = (!package.is_library()).then(|| Symbol::new(LIBRARY_PACKAGE));
-        SymbolPath::new(
-            root.into_iter()
-                .chain(path.iter().map(|segment| Symbol::new(segment))),
-        )
+/// Expose compiler-owned definitions through the ordinary resolver namespace
+/// of package `std`, which owns them; other packages see them through it.
+fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut PackageEnv<'db>) {
+    let list = Symbol::new("List");
+    let list_type = Binding::TypeDef {
+        id: TypeDefId::builtin_list(db),
     };
-    env.add_library(
-        Symbol::new("List"),
-        Binding::TypeDef {
-            id: TypeDefId::builtin_list(db),
-        },
-        vec![Symbol::new("List")],
+    env.add_builtin(
+        list.clone(),
+        list_type.clone(),
+        TypeDefId::builtin_list(db).path(db).to_vec(),
+        SymbolPath::new(["collections", "List"]),
     );
-    env.add_library_namespace(Symbol::new("List"), std(&["collections", "List"]));
-    if !package.is_library() {
-        env.add_library_root(Symbol::new(LIBRARY_PACKAGE));
-    }
     // The source List module contributes members, not a new nominal type.
     // Keep its namespace while exposing the compiler-owned type at this path.
-    let collections = std(&["collections"]);
-    let list = Symbol::new("List");
+    let collections = SymbolPath::new(["collections"]);
     if matches!(
         env.lookup_qualified(&collections, &list),
         None | Some(Binding::Module { .. })
     ) {
-        env.add_to_namespace(
-            collections,
-            list,
-            Binding::TypeDef {
-                id: TypeDefId::builtin_list(db),
-            },
-        );
+        env.add_to_namespace(collections, list, list_type);
     }
     env.add_to_namespace(
-        std(&["io"]),
+        SymbolPath::new(["io"]),
         Symbol::new("Io"),
         Binding::Ability {
             id: AbilityId::builtin_io(db),
@@ -457,7 +446,7 @@ fn collect_item<'db>(
     env: &mut PackageEnv<'db>,
     item: &ModuleItem<UnresolvedName>,
     prefix: &mut SymbolPath,
-    scope: &Scope,
+    scope: &DeclScope,
 ) {
     match item {
         ModuleItem::Decl(decl) => collect_definition(db, env, decl, prefix, scope),
@@ -471,7 +460,7 @@ fn collect_definition<'db>(
     env: &mut PackageEnv<'db>,
     decl: &Decl<UnresolvedName>,
     prefix: &mut SymbolPath,
-    scope: &Scope,
+    scope: &DeclScope,
 ) {
     // The identity path of the module, which the declarations' ids extend.
     let mut ids = scope.package.identity_path(prefix);
@@ -649,7 +638,7 @@ fn collect_module<'db>(
     env: &mut PackageEnv<'db>,
     m: &ModuleDecl<UnresolvedName>,
     prefix: &mut SymbolPath,
-    scope: &Scope,
+    scope: &DeclScope,
 ) {
     // For inline modules, collect bindings into a temporary environment
     // then register them under the module's namespace
@@ -660,7 +649,7 @@ fn collect_module<'db>(
         if let Some(restriction) = &restriction {
             env.restrict_module(path.clone(), restriction.clone());
         }
-        let inner_scope = Scope {
+        let inner_scope = DeclScope {
             package: scope.package.clone(),
             outer: restriction,
         };
@@ -746,7 +735,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_module_function_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db));
+        let env = build_env(db, input.module(db), &Dependencies::none());
 
         // Math::add should be accessible
         let math_add = env.lookup_qualified(&SymbolPath::new(["Math"]), &Symbol::new("add"));
@@ -774,7 +763,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_module_struct_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db));
+        let env = build_env(db, input.module(db), &Dependencies::none());
 
         // Types::Point should be accessible as a constructor
         let types_point = env.lookup_qualified(&SymbolPath::new(["Types"]), &Symbol::new("Point"));
@@ -790,7 +779,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_module_enum_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db));
+        let env = build_env(db, input.module(db), &Dependencies::none());
 
         // Types::Color should be accessible
         let types_color = env.lookup_qualified(&SymbolPath::new(["Types"]), &Symbol::new("Color"));
@@ -813,7 +802,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_module_multiple_definitions(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db));
+        let env = build_env(db, input.module(db), &Dependencies::none());
 
         // All should be accessible via Utils::
         assert!(
@@ -837,7 +826,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_multiple_modules_namespaces(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db));
+        let env = build_env(db, input.module(db), &Dependencies::none());
 
         // Both A::foo and B::foo should exist
         let a_foo = env.lookup_qualified(&SymbolPath::new(["A"]), &Symbol::new("foo"));
@@ -856,7 +845,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_nested_module_enum_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db));
+        let env = build_env(db, input.module(db), &Dependencies::none());
 
         // Outer::Inner should exist
         assert!(
@@ -883,7 +872,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_module_no_override_parent(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db));
+        let env = build_env(db, input.module(db), &Dependencies::none());
 
         // foo should still be directly accessible
         assert!(
@@ -1114,7 +1103,7 @@ mod tests {
             ))],
         );
 
-        let env = build_env(db, &module);
+        let env = build_env(db, &module, &Dependencies::none());
         assert!(matches!(
             env.lookup_qualified(&SymbolPath::new(["std", "io"]), &Symbol::new("SystemError")),
             Some(Binding::Constructor { .. })
@@ -1147,7 +1136,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_extern_function_registered(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db));
+        let env = build_env(db, input.module(db), &Dependencies::none());
 
         let binding = env.lookup(&Symbol::new("__bytes_len"));
         assert!(binding.is_some(), "__bytes_len should be registered");
@@ -1192,7 +1181,7 @@ mod tests {
         db: &dyn salsa::Database,
         input: TestModuleInput,
     ) {
-        let env = build_env(db, input.module(db));
+        let env = build_env(db, input.module(db), &Dependencies::none());
 
         // Point::x should be registered as a function
         let point_x = env.lookup_qualified(&SymbolPath::new(["Point"]), &Symbol::new("x"));

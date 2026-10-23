@@ -4,7 +4,6 @@
 //! during the name resolution phase.
 
 use rustc_hash::FxHashMap as HashMap;
-use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::{Symbol, SymbolPath};
 
@@ -155,15 +154,12 @@ pub struct PackageEnv<'db> {
     /// The functions a name imports when several `use`s give it different
     /// ones. A call selects one by the type of its first argument.
     imported_functions: HashMap<Symbol, Vec<FuncDefId<'db>>>,
-    /// Names the prelude and the compiler supply, visible in every module.
-    library: HashMap<Symbol, Binding<'db>>,
-    /// First segments of the namespaces the prelude and the compiler supply.
-    library_roots: HashSet<Symbol>,
-    /// The package path of each library name, e.g. `Option` → `std::Option`.
-    library_paths: HashMap<Symbol, Vec<Symbol>>,
-    /// Library namespaces under their short first segment, e.g. `Option` →
-    /// `std::Option` and `List` → `std::collections::List`.
-    library_namespaces: HashMap<Symbol, SymbolPath>,
+    /// The compiler-owned names the package supplies to every module, each
+    /// with its identity path, e.g. `List`.
+    builtins: HashMap<Symbol, (Binding<'db>, Vec<Symbol>)>,
+    /// The namespaces a path starting with a compiler-owned name continues
+    /// in, e.g. `List` → `collections::List`.
+    builtin_namespaces: HashMap<Symbol, SymbolPath>,
     /// The bindings that are not public, each with the modules that see it.
     restrictions: HashMap<Binding<'db>, Restriction>,
     /// The modules that are not public, by package-root path.
@@ -278,68 +274,104 @@ impl<'db> PackageEnv<'db> {
         self.imported_functions.get(name).map(Vec::as_slice)
     }
 
-    /// Add an import only if no binding exists for that name.
-    ///
-    /// This is used to expose prelude definitions at the top level
-    /// without overriding user-defined names.
-    pub fn add_import_if_absent(&mut self, name: Symbol, binding: Binding<'db>) {
-        if !self.definitions.contains_key(&name) && !self.imports.contains_key(&name) {
-            self.imports.insert(name, binding);
+    /// Supply the compiler-owned `binding` to every module as `name`, with
+    /// the identity path `path`; a path starting with `name` continues in
+    /// `namespace`.
+    pub fn add_builtin(
+        &mut self,
+        name: Symbol,
+        binding: Binding<'db>,
+        path: Vec<Symbol>,
+        namespace: SymbolPath,
+    ) {
+        self.builtin_namespaces.insert(name.clone(), namespace);
+        self.builtins.insert(name, (binding, path));
+    }
+
+    /// The compiler-owned binding the package supplies as `name`.
+    pub fn builtin(&self, name: &Symbol) -> Option<&Binding<'db>> {
+        self.builtins.get(name).map(|(binding, _)| binding)
+    }
+
+    /// The identity path of the compiler-owned name `name`.
+    pub fn builtin_path(&self, name: &Symbol) -> Option<&[Symbol]> {
+        self.builtins.get(name).map(|(_, path)| path.as_slice())
+    }
+
+    /// The namespace a path starting with the compiler-owned name `name`
+    /// continues in.
+    pub fn builtin_namespace(&self, name: &Symbol) -> Option<&SymbolPath> {
+        self.builtin_namespaces.get(name)
+    }
+
+    /// The compiler-owned names the package supplies.
+    pub fn builtin_names(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.builtins.keys().cloned()
+    }
+
+    /// The item `name` of the package root, as another package sees it:
+    /// a definition, what the root re-exports, or a module.
+    pub fn root_item(&self, name: &Symbol) -> Option<&Binding<'db>> {
+        self.definitions
+            .get(name)
+            .or_else(|| self.lookup_qualified(&[], name))
+            .or_else(|| match self.imports.get(name) {
+                Some(binding @ Binding::Module { path })
+                    if *path == self.package.identity_path(std::slice::from_ref(name))[..] =>
+                {
+                    Some(binding)
+                }
+                _ => None,
+            })
+    }
+
+    /// The items of the package root, as another package sees them.
+    pub fn root_items(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
+        let mut names: Vec<Symbol> = self
+            .definitions
+            .keys()
+            .chain(
+                self.namespaces
+                    .get(&SymbolPath::root())
+                    .into_iter()
+                    .flat_map(|n| n.keys()),
+            )
+            .chain(self.imports.keys())
+            .cloned()
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+            .into_iter()
+            .filter_map(|name| Some((name.clone(), self.root_item(&name)?)))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    /// The name `name` the package's prelude gives another package: a root
+    /// item, except a re-export the package restricts, or a compiler-owned
+    /// name.
+    pub fn prelude_item(&self, name: &Symbol) -> Option<&Binding<'db>> {
+        if self.entry_restriction(&[], name).is_some() {
+            return self.builtin(name);
         }
+        self.root_item(name).or_else(|| self.builtin(name))
     }
 
-    /// Add a name the prelude or the compiler supplies to every module,
-    /// declared at the package path `path`.
-    pub fn add_library(&mut self, name: Symbol, binding: Binding<'db>, path: Vec<Symbol>) {
-        self.library.entry(name.clone()).or_insert(binding.clone());
-        self.library_paths.entry(name.clone()).or_insert(path);
-        self.add_import_if_absent(name, binding);
-    }
-
-    /// Let `alias` start a path into the library namespace `namespace`.
-    pub fn add_library_namespace(&mut self, alias: Symbol, namespace: SymbolPath) {
-        self.library_namespaces.entry(alias).or_insert(namespace);
-    }
-
-    /// The package path a library name is declared at.
-    pub fn library_path(&self, name: &Symbol) -> Option<&[Symbol]> {
-        self.library_paths.get(name).map(Vec::as_slice)
-    }
-
-    /// The library namespace a path starting with `alias` continues in.
-    pub fn library_namespace(&self, alias: &Symbol) -> Option<&SymbolPath> {
-        self.library_namespaces.get(alias)
-    }
-
-    /// Mark the namespaces under `root` as supplied to every module.
-    pub fn add_library_root(&mut self, root: Symbol) {
-        self.library_roots.insert(root);
-    }
-
-    /// A name the prelude or the compiler supplies to every module.
-    pub fn lookup_library(&self, name: &Symbol) -> Option<&Binding<'db>> {
-        self.library.get(name)
-    }
-
-    /// Whether the package root sees `name` only because the prelude or the
-    /// compiler supplies it, not through a declaration or a `use`.
-    pub fn is_library_only(&self, name: &Symbol) -> bool {
-        !self.definitions.contains_key(name)
-            && !self.use_paths.contains_key(name)
-            && self
-                .imports
-                .get(name)
-                .is_some_and(|binding| self.library.get(name) == Some(binding))
-    }
-
-    /// The names the prelude and the compiler supply to every module.
-    pub fn iter_library_names(&self) -> impl Iterator<Item = Symbol> + '_ {
-        self.library.keys().cloned()
-    }
-
-    /// Whether namespaces under `root` are supplied to every module.
-    pub fn is_library_root(&self, root: &Symbol) -> bool {
-        self.library_roots.contains(root)
+    /// The names the package's prelude gives another package.
+    pub fn prelude_items(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
+        let mut names: Vec<Symbol> = self
+            .root_items()
+            .map(|(name, _)| name)
+            .chain(self.builtin_names())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+            .into_iter()
+            .filter_map(|name| Some((name.clone(), self.prelude_item(&name)?)))
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     /// Restrict where `binding` is visible.
@@ -547,73 +579,5 @@ impl<'db> PackageEnv<'db> {
             .keys()
             .cloned()
             .chain(self.imports.keys().cloned())
-    }
-
-    /// Merge another environment into this one.
-    ///
-    /// Self takes precedence: user definitions shadow prelude.
-    /// This is used to inject prelude bindings into user code's environment.
-    ///
-    /// `other` is the environment of the library package `package`, read
-    /// from that package's root. This environment holds it under `package`:
-    /// the package's root items every module sees under their short names,
-    /// and its namespaces a path may enter by their first segment below the
-    /// package root.
-    pub fn merge(&mut self, other: &PackageEnv<'db>, package: &Symbol) {
-        let under = |path: &[Symbol]| {
-            SymbolPath::new(std::iter::once(package.clone()).chain(path.iter().cloned()))
-        };
-        for (binding, restriction) in &other.restrictions {
-            self.restrictions
-                .entry(binding.clone())
-                .or_insert_with(|| restriction.clone());
-        }
-        for (module, restriction) in &other.module_restrictions {
-            self.module_restrictions
-                .entry(under(module))
-                .or_insert_with(|| restriction.clone());
-        }
-        for ((namespace, name), restriction) in &other.entry_restrictions {
-            self.entry_restrictions
-                .entry((under(namespace), name.clone()))
-                .or_insert_with(|| restriction.clone());
-        }
-
-        // The package root's items: its definitions, what its root re-exports,
-        // and its top-level namespaces as modules.
-        let mut root: Vec<(Symbol, Binding<'db>)> = other
-            .iter_definitions()
-            .chain(other.iter_namespace(&[]))
-            .filter(|(name, _)| other.entry_restriction(&[], name).is_none())
-            .map(|(name, binding)| (name, binding.clone()))
-            .collect();
-        for (namespace, _) in other.iter_namespaces() {
-            if let Some(name) = namespace.as_simple()
-                && !root.iter().any(|(known, _)| known == name)
-            {
-                root.push((
-                    name.clone(),
-                    Binding::Module {
-                        path: under(&namespace).to_vec(),
-                    },
-                ));
-            }
-        }
-        root.sort_by(|(left, _), (right, _)| left.cmp(right));
-        for (name, binding) in root {
-            self.add_to_namespace_if_absent(under(&[]), name.clone(), binding.clone());
-            self.add_library(name.clone(), binding, vec![package.clone(), name]);
-        }
-
-        for (ns, bindings) in other.iter_namespaces() {
-            let Some(alias) = ns.first() else {
-                continue;
-            };
-            self.add_library_root(package.clone());
-            self.add_library_namespace(alias.clone(), under(std::slice::from_ref(alias)));
-            for (name, binding) in bindings {
-                self.add_to_namespace_if_absent(under(&ns), name, binding.clone());
-            }
-        }
     }
 }

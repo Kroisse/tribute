@@ -79,11 +79,13 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
     let prelude = load_prelude(db);
 
     // Build env, merging prelude bindings so operator names resolve
-    let mut env = tribute_front::resolve::build_env(db, ast);
-    if let Some(ref p) = prelude {
-        tribute_front::resolve::merge_library(&mut env, &p.env);
-    }
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
+    let dependencies = prelude
+        .as_ref()
+        .map(|p| tribute_front::resolve::Dependencies::std(&p.env))
+        .unwrap_or_default();
+    let env = tribute_front::resolve::build_env(db, ast, &dependencies);
+    let resolved =
+        tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map.clone());
 
     // Type-check with prelude types injected
     let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
@@ -170,11 +172,13 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     let span_map = parsed.span_map(db);
     let prelude = load_prelude(db);
 
-    let mut env = tribute_front::resolve::build_env(db, ast);
-    if let Some(ref p) = prelude {
-        tribute_front::resolve::merge_library(&mut env, &p.env);
-    }
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
+    let dependencies = prelude
+        .as_ref()
+        .map(|p| tribute_front::resolve::Dependencies::std(&p.env))
+        .unwrap_or_default();
+    let env = tribute_front::resolve::build_env(db, ast, &dependencies);
+    let resolved =
+        tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map.clone());
 
     let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
     if let Some(ref p) = prelude {
@@ -198,11 +202,13 @@ fn tdnr_function_summary_inner(
 
     let prelude = load_prelude(db);
 
-    let mut env = tribute_front::resolve::build_env(db, ast);
-    if let Some(ref p) = prelude {
-        tribute_front::resolve::merge_library(&mut env, &p.env);
-    }
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
+    let dependencies = prelude
+        .as_ref()
+        .map(|p| tribute_front::resolve::Dependencies::std(&p.env))
+        .unwrap_or_default();
+    let env = tribute_front::resolve::build_env(db, ast, &dependencies);
+    let resolved =
+        tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map.clone());
 
     let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
     if let Some(ref p) = prelude {

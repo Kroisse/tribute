@@ -350,31 +350,32 @@ fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<PackageEnv<'db>> {
     Some(ast_resolve::build_library_env(db, parsed.module(db)))
 }
 
-/// The names the prelude's package root gives another package: its public
-/// root items, which every module of a user package sees by name.
+/// The packages a user package depends on: package `std`.
+fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::Dependencies<'db, 'db> {
+    prelude_env(db)
+        .map(ast_resolve::Dependencies::std)
+        .unwrap_or_default()
+}
+
+/// The names the prelude gives a user package: the public ones of those
+/// its modules see by name.
 pub fn library_names<'db>(
     db: &'db dyn salsa::Database,
 ) -> Vec<(trunk_ir::Symbol, ast_resolve::Binding<'db>)> {
-    let Some(env) = prelude_env(db) else {
-        return Vec::new();
-    };
-    // The compiler-owned names, such as `List`, come with the prelude's.
-    let mut names: Vec<_> = env
-        .iter_definitions()
-        .chain(env.iter_namespace(&[]))
-        .filter(|(name, binding)| {
-            env.restriction(binding).is_none() && env.entry_restriction(&[], name).is_none()
+    let dependencies = prelude_dependencies(db);
+    let own = PackageEnv::new();
+    let scope = ast_resolve::Scope::new(&own, &dependencies);
+    scope
+        .iter_library_names()
+        .into_iter()
+        .filter_map(|name| {
+            let binding = scope.lookup_library(&name)?;
+            scope
+                .restriction(binding)
+                .is_none()
+                .then(|| (name, binding.clone()))
         })
-        .map(|(name, binding)| (name, binding.clone()))
-        .collect();
-    for name in env.iter_library_names() {
-        if !names.iter().any(|(known, _)| *known == name)
-            && let Some(binding) = env.lookup_library(&name)
-        {
-            names.push((name, binding.clone()));
-        }
-    }
-    names
+        .collect()
 }
 
 /// The prelude's type exports (TypeSchemes only, no UniVars), injected into
@@ -1735,15 +1736,13 @@ pub fn parse_and_lower_ast<'db>(
         user_ast.decls.len()
     );
 
-    // Phase 2: Build user env and merge prelude bindings
-    let mut user_env = ast_resolve::build_env(db, user_ast);
-    if let Some(p_env) = prelude_env(db) {
-        // Prelude bindings injected, user definitions take precedence
-        ast_resolve::merge_library(&mut user_env, p_env);
-    }
+    // Phase 2: Build user env, which depends on package std
+    let dependencies = prelude_dependencies(db);
+    let user_env = ast_resolve::build_env(db, user_ast, &dependencies);
 
-    // Phase 3: Name resolution with merged environment
-    let resolved_ast = ast_resolve::resolve_with_env(db, user_ast, user_env, span_map.clone());
+    // Phase 3: Name resolution
+    let resolved_ast =
+        ast_resolve::resolve_with_env(db, user_ast, user_env, &dependencies, span_map.clone());
 
     // Phase 4: Type checking with prelude types injected
     let mut checker = ast_typeck::TypeChecker::new(db, span_map.clone());

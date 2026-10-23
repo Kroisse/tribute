@@ -21,6 +21,7 @@ use crate::ast::{
 use super::env::{Binding, PackageEnv, Restriction};
 use super::package::PackageName;
 use super::path::{PathKeywordError, absolute_path};
+use super::scope::{Dependencies, Scope};
 
 /// Find the best matches from `candidates` by a caller-provided score function.
 ///
@@ -94,10 +95,12 @@ enum MethodCandidates<'db> {
 }
 
 /// Resolver for transforming unresolved names to resolved references.
-pub struct Resolver<'db> {
+pub struct Resolver<'a, 'db> {
     db: &'db dyn salsa::Database,
-    /// Module-level environment with function and type definitions.
+    /// The environment of the package being resolved.
     env: PackageEnv<'db>,
+    /// The packages it depends on.
+    dependencies: Dependencies<'a, 'db>,
     /// Stack of local scopes (function parameters, let bindings, etc.).
     local_scopes: Vec<HashMap<Symbol, LocalId>>,
     /// Generator for unique LocalIds.
@@ -129,12 +132,19 @@ pub struct Resolver<'db> {
     package: PackageName,
 }
 
-impl<'db> Resolver<'db> {
-    /// Create a new resolver with the given environment.
-    pub fn new(db: &'db dyn salsa::Database, env: PackageEnv<'db>, span_map: SpanMap) -> Self {
+impl<'a, 'db> Resolver<'a, 'db> {
+    /// Create a new resolver with the given environment, which was built
+    /// against `dependencies`.
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        env: PackageEnv<'db>,
+        dependencies: &Dependencies<'a, 'db>,
+        span_map: SpanMap,
+    ) -> Self {
         Self {
             db,
             env,
+            dependencies: dependencies.clone(),
             local_scopes: vec![HashMap::default()],
             local_id_gen: LocalIdGen::new(),
             resume_local_id_stack: Vec::new(),
@@ -153,6 +163,11 @@ impl<'db> Resolver<'db> {
     pub fn with_package(mut self, package: PackageName) -> Self {
         self.package = package;
         self
+    }
+
+    /// The names the package and its dependencies give.
+    fn view(&self) -> Scope<'_, 'a, 'db> {
+        Scope::new(&self.env, &self.dependencies)
     }
 
     /// Enter a new local scope.
@@ -256,9 +271,9 @@ impl<'db> Resolver<'db> {
         name: &Symbol,
         binding: &Binding<'db>,
     ) -> Option<&Restriction> {
-        self.env
+        self.view()
             .entry_restriction(namespace, name)
-            .or_else(|| self.env.restriction(binding))
+            .or_else(|| self.view().restriction(binding))
     }
 
     /// The restriction that hides the entry `name` of `namespace` from the
@@ -282,13 +297,13 @@ impl<'db> Resolver<'db> {
         name: &Symbol,
         binding: &Binding<'db>,
     ) -> bool {
-        self.env.entry_restriction(namespace, name).is_none()
+        self.view().entry_restriction(namespace, name).is_none()
             || self.hidden_entry(namespace, name, binding).is_none()
     }
 
     /// The restriction that hides `binding` from the current module.
     fn hidden(&self, binding: &Binding<'db>) -> Option<&Restriction> {
-        self.env
+        self.view()
             .restriction(binding)
             .filter(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
     }
@@ -313,7 +328,7 @@ impl<'db> Resolver<'db> {
             self.entry_restriction(namespace, name, binding)
         });
         (1..=modules)
-            .filter_map(|end| self.env.module_restriction(&path[..end]))
+            .filter_map(|end| self.view().module_restriction(&path[..end]))
             .chain(own)
             // Another package's restriction hides it however wide it is.
             .max_by_key(|restriction| {
@@ -353,14 +368,14 @@ impl<'db> Resolver<'db> {
     /// variables.
     fn lookup_simple(&self, sym: &Symbol) -> Option<&Binding<'db>> {
         self.lookup_direct(sym)
-            .or_else(|| self.env.lookup_library(sym))
+            .or_else(|| self.view().lookup_library(sym))
     }
 
     /// The binding a simple name has in the current scope through its
     /// declarations and `use`s, apart from local variables and the prelude.
     fn lookup_direct(&self, sym: &Symbol) -> Option<&Binding<'db>> {
         if !self.module_path.is_empty()
-            && let Some(binding) = self.env.lookup_qualified(&self.module_path, sym)
+            && let Some(binding) = self.view().lookup_qualified(&self.module_path, sym)
         {
             return Some(binding);
         }
@@ -377,7 +392,7 @@ impl<'db> Resolver<'db> {
         if self.module_path.is_empty() {
             self.env
                 .lookup(sym)
-                .filter(|_| !self.env.is_library_only(sym))
+                .filter(|_| !self.view().is_library_only(sym))
         } else {
             self.companion(sym)
         }
@@ -399,14 +414,14 @@ impl<'db> Resolver<'db> {
         };
         if let Some(path) = absolute_path(&self.module_path, &namespace)? {
             let binding = if path.is_empty() {
-                self.env.lookup(&sym)
+                self.view().lookup(&sym)
             } else {
-                self.env.lookup_qualified(&path, &sym)
+                self.view().lookup_qualified(&path, &sym)
             };
             return Ok(binding.map(|binding| (SymbolPath::new(path), binding)));
         }
         Ok(self.namespace_in_scope(namespace).and_then(|namespace| {
-            let binding = self.env.lookup_qualified(&namespace, &sym)?;
+            let binding = self.view().lookup_qualified(&namespace, &sym)?;
             Some((namespace, binding))
         }))
     }
@@ -428,7 +443,7 @@ impl<'db> Resolver<'db> {
                 None => Vec::new(),
             },
         };
-        let library = match self.env.lookup_library(&sym) {
+        let library = match self.view().lookup_library(&sym) {
             Some(binding @ Binding::Function { id }) if self.hidden(binding).is_none() => {
                 vec![*id]
             }
@@ -445,7 +460,7 @@ impl<'db> Resolver<'db> {
     /// whatever the local variables are.
     fn module_imported_functions(&self, name: &Symbol) -> Option<&[crate::ast::FuncDefId<'db>]> {
         if self.module_path.is_empty() {
-            return self.env.imported_functions(name);
+            return self.view().imported_functions(name);
         }
         if self.defined_in_module(name) {
             return None;
@@ -516,14 +531,14 @@ impl<'db> Resolver<'db> {
     /// scope does not name through its declarations and `use`s.
     fn reaches_through_prelude(&self, path: &UnresolvedName) -> bool {
         let first = path.path.first().expect("a method path has a segment");
-        if self.env.library_namespace(first).is_none() || self.module_import(first).is_some() {
+        if self.view().library_namespace(first).is_none() || self.module_import(first).is_some() {
             return false;
         }
         if self.module_path.is_empty() {
-            !self.env.declares(first.clone()) && self.env.get_use_path(first).is_none()
+            !self.view().declares(first.clone()) && self.view().get_use_path(first).is_none()
         } else {
             let nested: Vec<Symbol> = self.module_path.iter().chain([first]).cloned().collect();
-            !self.env.has_namespace(&nested) && !self.defined_in_module(first)
+            !self.view().has_namespace(&nested) && !self.defined_in_module(first)
         }
     }
 
@@ -532,7 +547,7 @@ impl<'db> Resolver<'db> {
     fn names_one_path(&self, path: &UnresolvedName) -> bool {
         let first = path.path.first().expect("a method path has a segment");
         matches!(absolute_path(&self.module_path, &path.path), Ok(Some(_)))
-            || (self.env.is_library_root(first)
+            || (self.view().is_library_root(first)
                 && self.module_import(first).is_none()
                 && self.lookup_direct(first).is_none())
     }
@@ -563,8 +578,8 @@ impl<'db> Resolver<'db> {
         let mut functions = Vec::new();
         let mut push = |namespace: &[Symbol], name: &Symbol| {
             if let Some(binding @ Binding::Function { id }) = match namespace {
-                [] => self.env.lookup_library(name),
-                _ => self.env.lookup_qualified(namespace, name),
+                [] => self.view().lookup_library(name),
+                _ => self.view().lookup_qualified(namespace, name),
             } && self.visible_through_entry(namespace, name, binding)
                 && !functions.contains(id)
             {
@@ -577,8 +592,8 @@ impl<'db> Resolver<'db> {
             None if namespace.is_empty() => push(&[], name),
             None => {}
         }
-        for prelude_name in self.env.iter_library_names() {
-            if let Some(library) = self.env.library_namespace(&prelude_name) {
+        for prelude_name in self.view().iter_library_names() {
+            if let Some(library) = self.view().library_namespace(&prelude_name) {
                 let namespace: Vec<Symbol> = library.iter().chain(namespace).cloned().collect();
                 push(&namespace, name);
             }
@@ -659,11 +674,11 @@ impl<'db> Resolver<'db> {
             return self
                 .env
                 .iter_all_names()
-                .filter(|name| !self.env.is_library_only(name))
+                .filter(|name| !self.view().is_library_only(name))
                 .collect();
         }
         let imports = self.module_imports.last();
-        self.env
+        self.view()
             .iter_namespace(&self.module_path)
             .map(|(name, _)| name)
             .chain(
@@ -677,7 +692,9 @@ impl<'db> Resolver<'db> {
     /// Whether the enclosing inline module itself defines `name`.
     fn defined_in_module(&self, name: &Symbol) -> bool {
         !self.module_path.is_empty() && {
-            self.env.lookup_qualified(&self.module_path, name).is_some()
+            self.view()
+                .lookup_qualified(&self.module_path, name)
+                .is_some()
         }
     }
 
@@ -708,36 +725,36 @@ impl<'db> Resolver<'db> {
         }
         let (first, rest) = namespace.split_first()?;
         if self.module_path.is_empty() {
-            if self.env.has_namespace(&namespace) {
+            if self.view().has_namespace(&namespace) {
                 return Some(namespace);
             }
             // A `use` gives the imported name's own namespace; a namespace
             // nested in it continues from the imported path.
             if !rest.is_empty()
-                && let Some(path) = self.env.get_use_path(first)
+                && let Some(path) = self.view().get_use_path(first)
             {
                 return Some(SymbolPath::new(path.iter().chain(rest).cloned()));
             }
-            if self.env.declares(first.clone()) {
+            if self.view().declares(first.clone()) {
                 return Some(namespace);
             }
         } else {
             let nested = SymbolPath::new(self.module_path.iter().chain(namespace.iter()).cloned());
-            if self.env.has_namespace(&nested) || self.defined_in_module(first) {
+            if self.view().has_namespace(&nested) || self.defined_in_module(first) {
                 return Some(nested);
             }
         }
-        if let Some(library) = self.env.library_namespace(first) {
+        if let Some(library) = self.view().library_namespace(first) {
             return Some(SymbolPath::new(library.iter().chain(rest).cloned()));
         }
-        (self.module_path.is_empty() || self.env.is_library_root(first)).then_some(namespace)
+        (self.module_path.is_empty() || self.view().is_library_root(first)).then_some(namespace)
     }
 
     /// The package path a path starting with a library namespace alias
     /// continues to, e.g. `Option::Some` → `std::Option::Some`.
     fn library_namespace_path(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
         let (first, rest) = path.split_first()?;
-        let namespace = self.env.library_namespace(first)?;
+        let namespace = self.view().library_namespace(first)?;
         Some(namespace.iter().chain(rest).cloned().collect())
     }
 
@@ -745,9 +762,9 @@ impl<'db> Resolver<'db> {
     fn lookup_path(&self, path: &[Symbol]) -> Option<&Binding<'db>> {
         let (last, namespace) = path.split_last()?;
         if namespace.is_empty() {
-            return self.env.lookup(last);
+            return self.view().lookup(last);
         }
-        self.env.lookup_qualified(namespace, last)
+        self.view().lookup_qualified(namespace, last)
     }
 
     /// Report a path whose keywords do not denote a module.
@@ -823,7 +840,7 @@ impl<'db> Resolver<'db> {
                     ann.kind = TypeAnnotationKind::Path(path);
                 } else if let Some(target) = self.module_import(name) {
                     ann.kind = TypeAnnotationKind::Path(target.to_vec());
-                } else if let Some(path) = self.env.library_path(name) {
+                } else if let Some(path) = self.view().library_path(name) {
                     ann.kind = TypeAnnotationKind::Path(path.to_vec());
                 } else {
                     self.report_unresolved_annotation(ann.id, name);
@@ -838,9 +855,9 @@ impl<'db> Resolver<'db> {
                         || TypeKind::from_primitive_name(spelling).is_some()
                 });
                 if !local
-                    && !self.env.declares(name.clone())
-                    && self.env.get_use_path(name).is_none()
-                    && let Some(path) = self.env.library_path(name)
+                    && !self.view().declares(name.clone())
+                    && self.view().get_use_path(name).is_none()
+                    && let Some(path) = self.view().library_path(name)
                 {
                     ann.kind = TypeAnnotationKind::Path(path.to_vec());
                 }
@@ -863,7 +880,7 @@ impl<'db> Resolver<'db> {
                     }
                     Ok(None) if self.module_path.is_empty() => {
                         let first = segments[0].clone();
-                        if !self.env.declares(first)
+                        if !self.view().declares(first)
                             && let Some(path) = self.library_namespace_path(segments)
                         {
                             *segments = path;
@@ -878,7 +895,7 @@ impl<'db> Resolver<'db> {
                                 self.module_path.iter().chain(&*segments).cloned().collect();
                         } else if let Some(path) = self.library_namespace_path(segments) {
                             *segments = path;
-                        } else if !self.env.is_library_root(first) {
+                        } else if !self.view().is_library_root(first) {
                             let path = Symbol::new(&segments.iter().format("::").to_string());
                             self.report_unresolved_annotation(ann.id, &path);
                             ann.kind = TypeAnnotationKind::Error;
@@ -942,9 +959,9 @@ impl<'db> Resolver<'db> {
             return None;
         }
         if parent.is_empty() {
-            return self.env.lookup(name);
+            return self.view().lookup(name);
         }
-        self.env.lookup_qualified(parent, name)
+        self.view().lookup_qualified(parent, name)
     }
 
     /// Report a type or ability name an annotation cannot see.
@@ -1012,7 +1029,7 @@ impl<'db> Resolver<'db> {
             .local_scopes
             .iter()
             .flat_map(|scope| scope.keys().cloned())
-            .chain(self.env.iter_all_names())
+            .chain(self.view().iter_all_names())
             .collect();
 
         let target = name.to_string();
@@ -1395,12 +1412,16 @@ impl<'db> Resolver<'db> {
                 .package
                 .module_path(&ability_name)
                 .unwrap_or(&ability_name);
-            for (op_name, binding) in self.env.iter_namespace(namespace) {
-                if matches!(binding, Binding::AbilityOp { .. }) {
-                    // Don't override existing entries (first ability wins;
-                    // TODO: detect ambiguity when multiple abilities export same op name)
-                    self.effect_ops.entry(op_name).or_insert(binding.clone());
-                }
+            let operations: Vec<(Symbol, Binding<'db>)> = self
+                .view()
+                .iter_namespace(namespace)
+                .filter(|(_, binding)| matches!(binding, Binding::AbilityOp { .. }))
+                .map(|(name, binding)| (name, binding.clone()))
+                .collect();
+            for (op_name, binding) in operations {
+                // Don't override existing entries (first ability wins;
+                // TODO: detect ambiguity when multiple abilities export same op name)
+                self.effect_ops.entry(op_name).or_insert(binding);
             }
         }
     }
@@ -1443,9 +1464,9 @@ impl<'db> Resolver<'db> {
         match &mut ann.kind {
             TypeAnnotationKind::Named(sym)
                 if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
-                    && !self.env.has_definition(sym) =>
+                    && !self.view().has_definition(sym) =>
             {
-                if let Some(path) = self.env.get_use_path(sym)
+                if let Some(path) = self.view().get_use_path(sym)
                     && path.len() >= 2
                 {
                     ann.kind = TypeAnnotationKind::Path(path.clone());
@@ -1541,11 +1562,11 @@ impl<'db> Resolver<'db> {
             // A single-segment path must name a definition: `env.lookup`
             // would also find the module placeholder this import inserted.
             let found = if namespace.is_empty() {
-                self.env.has_definition(last)
+                self.view().has_definition(last)
             } else {
-                self.env.lookup_qualified(namespace, last).is_some()
+                self.view().lookup_qualified(namespace, last).is_some()
             };
-            found || self.env.has_namespace(path)
+            found || self.view().has_namespace(path)
         };
         match absolute_path(&self.module_path, path) {
             Ok(Some(path)) => return names(&path).then_some(path),
@@ -1556,7 +1577,7 @@ impl<'db> Resolver<'db> {
             if names(path) {
                 return Some(path.to_vec());
             }
-            if self.env.declares(path.first()?.clone()) {
+            if self.view().declares(path.first()?.clone()) {
                 return None;
             }
             let library = self.library_namespace_path(path)?;
@@ -1581,7 +1602,7 @@ impl<'db> Resolver<'db> {
         }
         let library = path
             .first()
-            .is_some_and(|first| self.env.is_library_root(first));
+            .is_some_and(|first| self.view().is_library_root(first));
         (library && names(path)).then(|| path.to_vec())
     }
 
@@ -2019,7 +2040,7 @@ mod tests {
     #[salsa_test]
     fn test_resolve_local_variable(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
+        let mut resolver = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
 
         let param_name = Symbol::new("x");
 
@@ -2046,7 +2067,7 @@ mod tests {
     #[salsa_test]
     fn test_scope_isolation(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
+        let mut resolver = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
 
         let x = Symbol::new("x");
         let y = Symbol::new("y");
@@ -2077,7 +2098,7 @@ mod tests {
     #[salsa_test]
     fn test_nested_scopes(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
+        let mut resolver = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
 
         let x = Symbol::new("x");
         let y = Symbol::new("y");
@@ -2126,7 +2147,7 @@ mod tests {
         use crate::ast::{Pattern, PatternKind};
 
         let env = PackageEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
+        let mut resolver = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
         resolver.push_scope();
 
         // Create a ListRest pattern: [head, ..rest]
@@ -2169,7 +2190,7 @@ mod tests {
         use crate::ast::{Pattern, PatternKind};
 
         let env = PackageEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
+        let mut resolver = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
         resolver.push_scope();
 
         // Create an As pattern: _ as all
