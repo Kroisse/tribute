@@ -287,6 +287,11 @@ Class 특수화가 convention을 정한 뒤, 적법화 전에 `fn` handler arm�
 
 위반은 그 호출의 source 위치를 가진 컴파일 에러다. 진단은 arm이 처리하는 operation과,
 호출을 담은 정의를 그 class로 쓰는 인스턴스에서 callee가 멈출 수 있다는 사실을 밝힌다.
+호출을 `Cps`로 만드는 것이 인스턴스의 class 변수이면, 진단은 그 class를 정한 참조를
+보조 위치로 가리킨다. 참조가 넘기는 row가 `op`를 가진 ability나 class 없는 tail을 담은
+곳이 그 참조이며, 넘기는 row의 `Cps`가 다시 참조하는 쪽 인스턴스의 class 변수에서 오면
+그 class 변수를 정한 참조를 같은 방식으로 따라간다. 복제된 인스턴스들의 같은 호출은 한
+진단으로 합치고, 각 인스턴스의 참조를 모두 가리킨다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="direct-style-control-boundary"></a>
