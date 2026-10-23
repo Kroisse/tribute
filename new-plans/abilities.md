@@ -408,7 +408,8 @@ Row 변수로 들어오는 label도 같은 규칙을 따른다. `fn` arm이 effe
 callable을 호출하면, 그 row 변수를 고정한 인스턴스의 label에도 `op` operation을
 선언한 ability가 올 수 없다. 이 위반은 arm의 정의만으로는 드러나지 않는다. 정의에서는 그
 row가 row를 생략한 순수 함수의 호출과 같은 열린 row이기 때문이다. 그래서 인스턴스마다
-callee의 호출 규약을 정하는 단계가 이 위반을 컴파일 에러로 거부한다.
+callee의 호출 규약을 정한 뒤 그 호출을 컴파일 에러로 거부한다
+([`fn` arm 호출 검사](cps-effects.md#fn-arm-호출-검사)).
 
 ```rust
 ability Stop { op stop() -> Never }

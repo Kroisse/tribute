@@ -102,6 +102,44 @@ pub fn eliminate_dead_definitions_with_config(
     run(ctx, module, &config, &symbols, &graph, is_function)
 }
 
+/// The function definitions `is_function` identifies that are reachable
+/// from the roots [`eliminate_dead_definitions_with_config`] keeps: the
+/// definitions it would not remove.
+pub fn reachable_definitions_with_config(
+    ctx: &IrContext,
+    module: Module,
+    config: &GlobalDceConfig,
+    is_function: FunctionDefinition,
+) -> HashSet<OpRef> {
+    let symbols = SymbolTable::collect(ctx, module);
+    let graph = call_graph_over(ctx, module.op(), &symbols, is_function);
+    reachable(ctx, module, config, &symbols, &graph)
+}
+
+/// The functions of `graph` reachable from the roots of `module`.
+fn reachable(
+    ctx: &IrContext,
+    module: Module,
+    config: &GlobalDceConfig,
+    symbols: &SymbolTable,
+    graph: &CallGraph,
+) -> HashSet<OpRef> {
+    let is_candidate = |op| config.recursive || nearest_table(ctx, op) == Some(module.op());
+    let extra: HashSet<OpRef> = config
+        .extra_entry_points
+        .iter()
+        .filter_map(|path| symbols.resolve_in(ctx, module.op(), path))
+        .collect();
+    let mut roots: HashSet<OpRef> = graph
+        .functions
+        .iter()
+        .copied()
+        .filter(|&op| !is_candidate(op) || is_root(ctx, module, op) || extra.contains(&op))
+        .collect();
+    roots.extend(graph.module_references.iter().copied());
+    compute_reachable(graph, roots)
+}
+
 /// Eliminate the functions of `module` not reachable from its roots.
 ///
 /// Every definition of a duplicated name is a separate function, which no
@@ -116,19 +154,7 @@ fn run(
     is_function: FunctionDefinition,
 ) -> GlobalDceResult {
     let is_candidate = |op| config.recursive || nearest_table(ctx, op) == Some(module.op());
-    let extra: HashSet<OpRef> = config
-        .extra_entry_points
-        .iter()
-        .filter_map(|path| symbols.resolve_in(ctx, module.op(), path))
-        .collect();
-    let mut roots: HashSet<OpRef> = graph
-        .functions
-        .iter()
-        .copied()
-        .filter(|&op| !is_candidate(op) || is_root(ctx, module, op) || extra.contains(&op))
-        .collect();
-    roots.extend(graph.module_references.iter().copied());
-    let reachable = compute_reachable(graph, roots);
+    let reachable = reachable(ctx, module, config, symbols, graph);
 
     let dead: Vec<OpRef> = graph
         .functions

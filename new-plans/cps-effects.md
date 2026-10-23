@@ -262,6 +262,32 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
 지운다. Pass의 결과는 convention을 가진 source-logical IR이고, 적법화는 이 상태만
 받는다.
 
+### `fn` arm 호출 검사
+
+Class 특수화가 convention을 정한 뒤, 적법화 전에 `fn` handler arm의 호출을 검사한다.
+`fn` arm은 continuation frame 없이 실행되므로 그 안의 호출이 `Cps` callee에 닿으면
+[abilities.md](abilities.md#fn-operation-handler)의 보증을 어긴다. Arm의 정의에
+드러나는 위반은 typechecking이 거부하므로, 이 검사가 맡는 것은 row 변수의 class가
+인스턴스에서 정해져야 드러나는 위반이다.
+
+- 검사 대상은 참조되지 않는 정의 제거와 같은 root, 곧 root `main`, `_start`, 외부
+  ABI를 가진 정의, runtime 함수, 함수 밖의 operation이 참조하는 정의에서 참조로 닿는
+  인스턴스다. Root가 없는 compile은 이 검사를 하지 않는다.
+- 한 정의에서 복제된 인스턴스 여럿이 같은 호출에서 위반하면 그 호출을 한 번 보고한다. 특수화가 정의마다 만드는 class가
+  모두 `Cps`인 인스턴스는 그 class로 참조될 때만 검사한다.
+- Callee의 convention은 특수화가 쓴 값을 읽는다. 직접 호출은 callee 정의의
+  convention을, 간접 호출은 callee 값 타입의 convention을 쓴다. Row의 tail을 다시
+  읽지 않으므로, row를 생략한 순수 정의의 `Direct` worker 호출은 위반이 아니다.
+- `Cps` callee 호출은 arm 안의 `handle` body 밖에서는 위반이다. `handle` body 안에서는
+  그 호출의 row에서 둘러싼 `handle`들이 처리하는 label을 뺀 나머지의 class를 인스턴스의
+  class 표로 계산하고, 그 class가 `Cps`이면 위반이다.
+- Arm 안의 lambda 본문은 검사하지 않는다. Lambda는 호출될 때 그 타입의 convention으로
+  검사된다. 안쪽 `fn` arm은 따로 검사하고, 안쪽 `handle`의 completion과 `op` arm은 바깥
+  arm의 일부로 검사한다.
+
+위반은 그 호출의 source 위치를 가진 컴파일 에러다. 진단은 arm이 처리하는 operation과,
+호출을 담은 정의를 그 class로 쓰는 인스턴스에서 callee가 멈출 수 있다는 사실을 밝힌다.
+
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="direct-style-control-boundary"></a>
 

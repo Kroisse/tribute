@@ -43,6 +43,7 @@
 //!     ▼ dce (unused pure operations, such as dead function references)
 //!     ▼ specialize_convention_classes, then
 //!     │   eliminate_unreferenced_source_functions again (artifact compiles only)
+//!     ▼ check_fn_arm_calls (calls in `fn` arms that reach a `Cps` callee)
 //!     ▼ tribute_control_to_cps → lower_continuation_frames →
 //!       lower_closure_lambda → intrinsic/list/io lowering
 //! Module (CPS callable contracts, explicit evidence, and general
@@ -911,6 +912,7 @@ fn structural_pass_pipeline(
     if functions == SourceFunctions::Reachable {
         pm.add_pass(EliminateUnreferencedSourceFunctions::new());
     }
+    pm.add_pass(tribute_passes::check_fn_arm_calls::CheckFnArmCalls);
     if cfg!(debug_assertions) {
         pm.add_pass(tribute_passes::check_convention_classes::CheckConventionClasses);
     }
@@ -1056,6 +1058,22 @@ fn validate_and_report_arity(db: &dyn salsa::Database, ctx: &IrContext, m: Modul
 }
 
 fn report_pass_error(db: &dyn salsa::Database, error: &PassError) {
+    // A `fn` arm call that may suspend is a source error at that call.
+    if let trunk_ir::pass::PassErrorKind::Execution(source) = error.kind()
+        && let Some(error) =
+            source.downcast_ref::<tribute_passes::check_fn_arm_calls::FnArmCallError>()
+    {
+        for call in &error.calls {
+            Diagnostic::new(
+                call.message.clone(),
+                call.location.span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::Lowering,
+            )
+            .accumulate(db);
+        }
+        return;
+    }
     Diagnostic::new(
         format!("Pipeline failed: {error}"),
         Span::new(0, 0),

@@ -18,7 +18,7 @@ pub use dce::{DceConfig, DceResult, EliminateDeadCode, eliminate_dead_code};
 pub use global_dce::{
     GlobalDceConfig, GlobalDceResult, eliminate_dead_definitions,
     eliminate_dead_definitions_with_config, eliminate_dead_functions,
-    eliminate_dead_functions_with_config,
+    eliminate_dead_functions_with_config, reachable_definitions_with_config,
 };
 pub use inline::{
     InlineConfig, InlineError, InlineResult, inline_functions, inline_functions_with_config,
