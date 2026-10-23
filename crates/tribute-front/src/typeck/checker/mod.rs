@@ -163,8 +163,16 @@ impl<'db> TypeChecker<'db> {
             .iter()
             .filter(|entry| entry.module == root)
             .find_map(|entry| match &entry.decl {
-                Decl::Struct(decl) if decl.name == name => Some(decl.disambiguator),
-                Decl::Enum(decl) if decl.name == name => Some(decl.disambiguator),
+                Decl::Struct(crate::ast::StructDecl {
+                    name: declared,
+                    disambiguator,
+                    ..
+                })
+                | Decl::Enum(crate::ast::EnumDecl {
+                    name: declared,
+                    disambiguator,
+                    ..
+                }) if *declared == name => Some(*disambiguator),
                 _ => None,
             })?;
         let qualified = root.child(name.clone());

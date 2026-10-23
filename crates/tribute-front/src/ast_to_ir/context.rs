@@ -1395,6 +1395,29 @@ mod tests {
     }
 
     #[test]
+    fn redeclared_source_types_get_distinct_logical_keys() {
+        let db = test_db();
+        let mut ir = IrContext::new();
+        let ctx = lowering_ctx(&db, &mut ir);
+        let path = trunk_ir::SymbolPath::new(["A"]);
+        let named = |disambiguator| {
+            AstType::new(
+                &db,
+                TypeKind::Named {
+                    id: crate::ast::TypeDefId::declared(&db, path.clone(), disambiguator),
+                    name: Symbol::new("A"),
+                    args: vec![],
+                },
+            )
+        };
+
+        assert_ne!(
+            ctx.logical_type_key(named(0)),
+            ctx.logical_type_key(named(1))
+        );
+    }
+
+    #[test]
     fn nominal_origin_keys_tell_every_origin_apart() {
         use crate::ast::{BuiltinType, TypeOrigin};
 
