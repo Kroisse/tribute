@@ -112,3 +112,43 @@ fn empty_root_module_shadows_a_library_name(db: &salsa::DatabaseImpl) {
         ["unresolved import `Option::Some`"]
     );
 }
+
+/// A user module named `std` takes its own paths first; package `std`
+/// still supplies the paths the module does not declare.
+#[salsa_test]
+fn a_user_std_module_comes_before_package_std(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod std {
+    pub fn helper() -> Nat { 1 }
+}
+
+use std::helper
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    let _ = helper()
+    print_line("ok")
+}
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}
+
+/// Package `std`'s `pub(pkg)` items stay hidden behind the dependency path.
+#[salsa_test]
+fn a_package_internal_std_item_is_hidden(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+fn slots(s: std::runtime::Slots(Nat)) -> Nat { 0 }
+
+fn main() -> Nil {}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["`std::runtime::Slots` is not visible here: `std::runtime::Slots` is declared `pub(pkg)`"]
+    );
+}
