@@ -243,8 +243,9 @@ pub enum ConstructorShape {
     Unit,
     /// `.Name(a, b)`, with this many arguments or sub-patterns.
     Positional(usize),
-    /// `.Name { a, b }`, with the field names as written.
-    Fields(Vec<Symbol>),
+    /// `.Name { a, b }`, with the field names as written, and whether a
+    /// spread or a `..` gives the fields not written.
+    Fields { names: Vec<Symbol>, rest: bool },
 }
 
 /// The constructor an implicit constructor `.Name` at an expression or a

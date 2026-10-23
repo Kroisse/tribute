@@ -1059,11 +1059,15 @@ impl<'db> TypeChecker<'db> {
         } else {
             ConstructorShape::Positional(args.len())
         };
-        // A unit constructor used as a function value is not decided by
-        // the function type it is expected as.
-        let expected = expected
-            .filter(|ty| !(args.is_empty() && matches!(ty.kind(self.db()), TypeKind::Func { .. })));
+        // A constructor used as a function value is decided by the result
+        // of the function type it is expected as.
+        let expected = expected.map(|ty| match ty.kind(self.db()) {
+            TypeKind::Func { result, .. } if args.is_empty() => *result,
+            _ => ty,
+        });
+        let original = ctor;
         let ctor = &self.decide_constructor(ctx, node, ctor, expected, shape, false);
+        self.fix_implicit_constructor_instance(ctx, node, original, ctor, expected);
         let ctor_ty = self.infer_var_with_ctx(ctx, Some(node), ctor);
         if args.is_empty() {
             // Unit constructor (e.g., None) - just return the constructor type
@@ -1087,14 +1091,19 @@ impl<'db> TypeChecker<'db> {
         expected: Option<Type<'db>>,
     ) -> Type<'db> {
         let written: Vec<Symbol> = fields.iter().map(|f| f.name.clone()).collect();
+        let original = type_name;
         let type_name = &self.decide_constructor(
             ctx,
             record_id,
             type_name,
             expected,
-            ConstructorShape::Fields(written),
+            ConstructorShape::Fields {
+                names: written,
+                rest: spread.is_some(),
+            },
             false,
         );
+        self.fix_implicit_constructor_instance(ctx, record_id, original, type_name, expected);
         if let Some(deferred) = self.deferred_constructor(ctx, record_id) {
             // The fields are related to the constructor once it is selected.
             let (result, field_tys) = (deferred.result_ty, deferred.field_types.clone());
@@ -1237,7 +1246,7 @@ impl<'db> TypeChecker<'db> {
     /// Report written field names that do not fit the declared ones: unknown
     /// and duplicate fields in source order, then the first missing field in
     /// declaration order unless the rest are omitted explicitly.
-    fn report_field_shape(
+    pub(super) fn report_field_shape(
         &self,
         node: NodeId,
         owner: std::fmt::Arguments<'_>,
@@ -2928,7 +2937,9 @@ impl<'db> TypeChecker<'db> {
                 } else {
                     ConstructorShape::Positional(fields.len())
                 };
+                let original = ctor;
                 let ctor = &self.decide_constructor(ctx, pattern.id, ctor, expected, shape, true);
+                self.fix_implicit_constructor_instance(ctx, pattern.id, original, ctor, expected);
                 let ctor_ty = match ctor {
                     ResolvedRef::Module { path } => {
                         self.report_module_reference(ctx, pattern.id, *path, "a constructor")
@@ -2936,7 +2947,9 @@ impl<'db> TypeChecker<'db> {
                     ResolvedRef::ImplicitConstructor { .. } => {
                         self.infer_var_with_ctx(ctx, Some(pattern.id), ctor)
                     }
-                    _ => self.infer_var_with_ctx(ctx, None, ctor),
+                    _ => ctx
+                        .get_constructor_reference_type(pattern.id)
+                        .unwrap_or_else(|| self.infer_var_with_ctx(ctx, None, ctor)),
                 };
                 ctx.record_node_type(pattern.id, ctor_ty);
                 self.validate_variant_pattern_with_ctx(
@@ -2998,13 +3011,20 @@ impl<'db> TypeChecker<'db> {
                 rest,
             } => {
                 let written: Vec<Symbol> = fields.iter().map(|field| field.name.clone()).collect();
+                let original = type_name;
                 let type_name = &self.decide_constructor(
                     ctx,
                     pattern.id,
                     type_name,
                     expected,
-                    ConstructorShape::Fields(written.clone()),
+                    ConstructorShape::Fields {
+                        names: written.clone(),
+                        rest: *rest,
+                    },
                     true,
+                );
+                self.fix_implicit_constructor_instance(
+                    ctx, pattern.id, original, type_name, expected,
                 );
                 let (_, result, field_tys) =
                     self.constructor_field_shape(ctx, pattern.id, type_name, &written);

@@ -201,3 +201,90 @@ fn none() -> Option(Int) { None }
     );
     assert_eq!(errors, ["unresolved name `None`; did you mean `.None`?"]);
 }
+
+#[salsa_test]
+fn nested_constructors_see_the_field_types_of_the_outer_one(db: &salsa::DatabaseImpl) {
+    // `heap::Heap` is not in scope, so only the outer `.Some`'s instance
+    // tells the inner `.Leaf` from the scope's `Tree::Leaf`.
+    let errors = errors(
+        db,
+        r#"
+mod heap {
+    pub enum Heap(a) { Leaf(a), Empty }
+}
+enum Tree(a) { Leaf(a), Node(Tree(a), Tree(a)) }
+
+fn build() -> Option(heap::Heap(Int)) { .Some(.Leaf(+1)) }
+
+fn read(h: Option(heap::Heap(Int))) -> Int {
+    case h {
+        .Some(.Leaf(v)) -> v
+        .Some(.Empty) -> +0
+        .None -> +0
+    }
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[salsa_test]
+fn deferred_records_check_their_fields(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+struct Point { x: Int, y: Int }
+mod other {
+    pub enum Shape { Point { x: Int }, Blank }
+}
+use other::Shape
+
+fn take(p: Point) -> Int { p.x }
+fn shape(s: Shape) -> Int { +0 }
+
+fn missing() -> Int {
+    let p = .Point { x: +1 }
+    take(p)
+}
+
+fn unknown() -> Int {
+    let p = .Point { x: +1, z: +2 }
+    shape(p)
+}
+
+fn spread(base: Shape) -> Int {
+    let p = .Point { ..base, x: +1 }
+    shape(p)
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "missing field: y",
+            "unknown field `z` for variant `other::Shape::Point`",
+            "record spread is not allowed for variant `other::Shape::Point`; write every field",
+        ]
+    );
+}
+
+#[salsa_test]
+fn a_constructor_value_takes_the_result_of_its_function_type(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        &format!(
+            "{TYPES}{}",
+            r#"
+fn apply(f: fn(Int) ->{} Tree, n: Int) -> Tree { f(n) }
+
+fn eager() -> Tree { apply(.Leaf, +1) }
+
+fn deferred() -> Tree {
+    let f = .Leaf
+    f(+1)
+}
+"#
+        ),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+}

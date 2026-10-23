@@ -102,6 +102,58 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Fix the instance of the implicit constructor `original` decided as
+    /// `decided` at `node` to the type arguments of `expected`, the type it
+    /// was decided by, so that the arguments and sub-patterns inside it see
+    /// their field types where they are checked.
+    pub(super) fn fix_implicit_constructor_instance(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        node: NodeId,
+        original: &ResolvedRef<'db>,
+        decided: &ResolvedRef<'db>,
+        expected: Option<Type<'db>>,
+    ) {
+        let db = self.db();
+        let (
+            ResolvedRef::ImplicitConstructor { .. },
+            ResolvedRef::Constructor { id, .. },
+            Some(expected),
+        ) = (original, decided, expected)
+        else {
+            return;
+        };
+        let TypeKind::Named {
+            id: owner, args, ..
+        } = expected.kind(db)
+        else {
+            return;
+        };
+        if ctx.get_constructor_reference_type(node).is_some() {
+            return;
+        }
+        let Some(scheme) = self.env.lookup_constructor(*id) else {
+            return;
+        };
+        let body = scheme.body(db);
+        let result = match body.kind(db) {
+            TypeKind::Func { result, .. } => *result,
+            _ => body,
+        };
+        let constructs_owner = matches!(result.kind(db), TypeKind::Named { id, .. } if id == owner);
+        if !constructs_owner
+            || !scheme.effect_params(db).is_empty()
+            || scheme.type_params(db).len() != args.len()
+        {
+            return;
+        }
+        if let crate::typeck::subst::SubstResult::Ok(instance) =
+            crate::typeck::subst::substitute_bound_vars(db, body, args)
+        {
+            ctx.record_constructor_reference_type(node, instance);
+        }
+    }
+
     /// The implicit constructor at `node` that waits for its types.
     pub(super) fn deferred_constructor<'c>(
         &self,
@@ -127,7 +179,7 @@ impl<'db> TypeChecker<'db> {
         let count = match &shape {
             ConstructorShape::Unit => 0,
             ConstructorShape::Positional(count) => *count,
-            ConstructorShape::Fields(names) => names.len(),
+            ConstructorShape::Fields { names, .. } => names.len(),
         };
         let field_types: Vec<_> = (0..count).map(|_| ctx.fresh_type_var()).collect();
         let ctor_ty = match shape {
@@ -214,7 +266,7 @@ impl<'db> TypeChecker<'db> {
         settled: bool,
     ) -> ConstructorSelection<'db> {
         let db = self.db();
-        let expected = solver.expected_type(deferred.result_ty);
+        let expected = self.deferred_expected_type(solver, deferred);
         if !matches!(
             expected.kind(db),
             TypeKind::UniVar { .. } | TypeKind::Never | TypeKind::Error
@@ -256,6 +308,23 @@ impl<'db> TypeChecker<'db> {
         ConstructorSelection::None
     }
 
+    /// The type that names the constructor of `deferred` once solved: the
+    /// type of its value, or the result of the function a unit expression
+    /// is used as.
+    fn deferred_expected_type(
+        &self,
+        solver: &TypeSolver<'db>,
+        deferred: &DeferredConstructor<'db>,
+    ) -> Type<'db> {
+        let expected = solver.expected_type(deferred.result_ty);
+        match (expected.kind(self.db()), &deferred.shape) {
+            (TypeKind::Func { result, .. }, ConstructorShape::Unit) if !deferred.pattern => {
+                solver.type_subst().apply(self.db(), *result)
+            }
+            _ => expected,
+        }
+    }
+
     /// Whether the constructor `id` takes what `deferred` writes, whose
     /// fields have the types `fields` so far.
     fn constructor_fits(
@@ -277,7 +346,8 @@ impl<'db> TypeChecker<'db> {
             crate::typeck::parameter_type_matches(db, declared, actual)
         };
         match &deferred.shape {
-            ConstructorShape::Unit => params.is_empty(),
+            // A unit expression is the constructor as a value, of any arity.
+            ConstructorShape::Unit => params.is_empty() || !deferred.pattern,
             ConstructorShape::Positional(count) => {
                 params.len() == *count
                     && params
@@ -285,7 +355,7 @@ impl<'db> TypeChecker<'db> {
                         .zip(fields)
                         .all(|(declared, actual)| matches(*declared, *actual))
             }
-            ConstructorShape::Fields(names) => {
+            ConstructorShape::Fields { names, .. } => {
                 let Some(declared) = self.env.lookup_constructor_field_names(id) else {
                     return false;
                 };
@@ -360,10 +430,33 @@ impl<'db> TypeChecker<'db> {
                     constraints.push(Constraint::TypeEqAt(deferred.result_ty, result, origin));
                 }
             }
-            ConstructorShape::Fields(names) => {
+            ConstructorShape::Fields { names, rest } => {
                 constraints.push(Constraint::TypeEqAt(deferred.result_ty, result, origin));
                 match self.env.lookup_constructor_field_names(id) {
                     Some(declared) => {
+                        // The fields are checked as for a constructor
+                        // written by its path.
+                        let variant = matches!(
+                            result.kind(db),
+                            TypeKind::Named { id, .. }
+                                if self.env.lookup_enum_variants(id.path(db)).is_some()
+                        );
+                        if variant && *rest && !deferred.pattern {
+                            self.report_type_error(
+                                deferred.node_id,
+                                format!(
+                                    "record spread is not allowed for variant `{qualified}`; write every field"
+                                ),
+                            );
+                        }
+                        let kind = if variant { "variant" } else { "struct" };
+                        self.report_field_shape(
+                            deferred.node_id,
+                            format_args!("{kind} `{qualified}`"),
+                            declared,
+                            names.iter().cloned(),
+                            *rest,
+                        );
                         for (name, actual) in names.iter().zip(&deferred.field_types) {
                             if let Some(index) = declared.iter().position(|field| field == name) {
                                 constraints.push(relate(*actual, params[index]));
@@ -398,7 +491,7 @@ impl<'db> TypeChecker<'db> {
         deferred: &DeferredConstructor<'db>,
     ) {
         let name = &deferred.name;
-        let expected = solver.expected_type(deferred.result_ty);
+        let expected = self.deferred_expected_type(solver, deferred);
         let outcome = self.type_constructor(expected, name);
         if matches!(
             outcome,
