@@ -148,8 +148,11 @@ pub enum BuiltinType {
 /// The origin of a nominal type definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TypeOrigin {
-    /// A source declaration, identified independently of its spelling.
-    Source(NodeId),
+    /// A source declaration, identified by its path and by how many type
+    /// declarations of the same name precede it in its module. The path
+    /// includes the declaring package. Reparsing the same declaration, or
+    /// editing another, gives the same identity.
+    Source { disambiguator: u32 },
     /// A compiler-owned nominal type.
     Builtin(BuiltinType),
     /// A synthetic identity used by isolated tests and pre-resolution helpers.
@@ -172,8 +175,16 @@ pub struct TypeDefId<'db> {
 }
 
 impl<'db> TypeDefId<'db> {
-    pub fn source(db: &'db dyn salsa::Database, path: SymbolPath, declaration: NodeId) -> Self {
-        Self::new(db, TypeOrigin::Source(declaration), path)
+    /// The source declaration at `path` that `disambiguator` type
+    /// declarations of the same name precede.
+    pub fn declared(db: &'db dyn salsa::Database, path: SymbolPath, disambiguator: u32) -> Self {
+        Self::new(db, TypeOrigin::Source { disambiguator }, path)
+    }
+
+    /// The source type a name at `path` refers to: the first declaration
+    /// there.
+    pub fn source(db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
+        Self::declared(db, path, 0)
     }
 
     pub fn synthetic(db: &'db dyn salsa::Database, path: SymbolPath) -> Self {

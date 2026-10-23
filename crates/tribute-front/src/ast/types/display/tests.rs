@@ -120,17 +120,13 @@ fn ability_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
     let int = Type::new(db, TypeKind::Int);
     let pure = AbilityRow::pure(db);
     let open = AbilityRow::open(db, RowVar { id: 987 });
-    let named = |declaration| TypeKind::Named {
-        id: TypeDefId::source(
-            db,
-            trunk_ir::SymbolPath::new(["T"]),
-            NodeId::from_raw(declaration),
-        ),
+    let named = |module| TypeKind::Named {
+        id: TypeDefId::source(db, trunk_ir::SymbolPath::new([module, "T"])),
         name: Symbol::new("T"),
         args: vec![],
     };
     let pairs = [
-        (named(1), named(2)),
+        (named("A"), named("B")),
         (
             TypeKind::UniVar {
                 id: UniVarId::new(db, UniVarSource::Anonymous(1), 0),

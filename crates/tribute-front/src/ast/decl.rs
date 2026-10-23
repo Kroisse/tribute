@@ -188,6 +188,9 @@ pub struct StructDecl {
     pub visibility: Visibility,
     /// Struct name.
     pub name: Symbol,
+    /// How many type declarations of the same name precede this one in its
+    /// module. Zero unless the module redeclares the name.
+    pub disambiguator: u32,
     /// Type parameters.
     pub type_params: Vec<TypeParamDecl>,
     /// Struct fields.
@@ -222,6 +225,9 @@ pub struct EnumDecl {
     pub visibility: Visibility,
     /// Enum name.
     pub name: Symbol,
+    /// How many type declarations of the same name precede this one in its
+    /// module. Zero unless the module redeclares the name.
+    pub disambiguator: u32,
     /// Type parameters.
     pub type_params: Vec<TypeParamDecl>,
     /// Enum variants.
@@ -426,6 +432,7 @@ mod tests {
             id: NodeId::from_raw(id),
             visibility: Visibility::Private,
             name: Symbol::new(name),
+            disambiguator: 0,
             type_params: vec![],
             fields: vec![],
         })

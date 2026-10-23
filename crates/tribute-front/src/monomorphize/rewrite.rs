@@ -437,26 +437,20 @@ mod tests {
     fn test_type_rewrite_map_keeps_same_spelled_types_distinct() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let source = |name: &str, node| {
-            TypeDefId::source(
-                &db,
-                trunk_ir::SymbolPath::new([name]),
-                crate::ast::NodeId::from_raw(node),
-            )
-        };
+        let source = |name: &str| TypeDefId::source(&db, trunk_ir::SymbolPath::new([name]));
         let cases = [
             (
                 "builtin and source List",
                 [
                     (TypeDefId::builtin_list(&db), "5$List$Int"),
-                    (source("List", 1), "List$Int"),
+                    (source("List"), "List$Int"),
                 ],
             ),
             (
                 "same-spelled source types",
                 [
-                    (source("A::Thing", 1), "A::Thing$Int"),
-                    (source("B::Thing", 2), "B::Thing$Int"),
+                    (source("A::Thing"), "A::Thing$Int"),
+                    (source("B::Thing"), "B::Thing$Int"),
                 ],
             ),
         ];

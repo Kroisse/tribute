@@ -771,7 +771,7 @@ fn prescan_logical_nominal_layouts<'db>(
                             };
                             assert!(matches!(result.kind(ctx.db), TypeKind::Named { id, args, .. }
                                 if args.is_empty() && *id.path(ctx.db) == qualified
-                                    && id.origin(ctx.db) == crate::ast::TypeOrigin::Source(enumeration.id.origin())),
+                                    && id.origin(ctx.db) == crate::ast::TypeOrigin::Source { disambiguator: enumeration.disambiguator }),
                                 "specialized enum variant schema has wrong owner");
                             constructor_schema_fields(ctx, scheme, variant.fields.len())
                         } else {
@@ -785,8 +785,11 @@ fn prescan_logical_nominal_layouts<'db>(
                     .collect::<Vec<_>>();
                 let name = super::qualified_type_name(ctx.db, &enum_ctor);
                 let location = ctx.location(enumeration.id);
-                let definition =
-                    crate::typeck::DefinitionIdentity::new(enumeration.id, location.span);
+                let definition = crate::ast::TypeDefId::declared(
+                    ctx.db,
+                    qualified.clone(),
+                    enumeration.disambiguator,
+                );
                 let layout = if well_known_types.is_string(definition) {
                     ctx.adt_enum_type_with_definition(ir, &name, &variants, location)
                 } else {

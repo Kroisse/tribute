@@ -130,28 +130,10 @@ pub fn ability_definitions_from_schemas<'db>(
 }
 
 /// Semantic identities supplied by the prelude and required downstream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct DefinitionIdentity {
-    pub source: u64,
-    pub start: usize,
-    pub end: usize,
-}
-
-impl DefinitionIdentity {
-    pub fn new(declaration: NodeId, span: trunk_ir::Span) -> Self {
-        Self {
-            source: declaration.source(),
-            start: span.start,
-            end: span.end,
-        }
-    }
-}
-
-/// Semantic identities supplied by the prelude and required downstream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct WellKnownType<'db> {
     pub ty: Type<'db>,
-    pub definition: DefinitionIdentity,
+    pub definition: TypeDefId<'db>,
 }
 
 /// Semantic identities supplied by the prelude and required downstream.

@@ -21,6 +21,20 @@ use super::row_binders::RowBinders;
 use crate::SortedMap;
 use crate::ast::{CtorId, LocalId, NodeId, RowVar, SpanMap, TypeKind, TypeScheme};
 
+/// The key component that tells nominal type origins apart.
+fn nominal_origin_key(origin: crate::ast::TypeOrigin) -> String {
+    match origin {
+        crate::ast::TypeOrigin::Source { disambiguator: 0 } => "source".into(),
+        crate::ast::TypeOrigin::Source { disambiguator } => format!("source{disambiguator}"),
+        crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list".into(),
+        crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => "builtin_slots".into(),
+        crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Dispatch) => {
+            "builtin_dispatch".into()
+        }
+        crate::ast::TypeOrigin::Synthetic => "synthetic".into(),
+    }
+}
+
 /// Encode a tagged type-shape node without relying on separator characters in
 /// source symbols. Each component carries its byte length, so nested keys are
 /// readable in printed IR while still being uniquely decodable.
@@ -753,19 +767,10 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     fn source_nominal_key(&self, id: crate::ast::TypeDefId<'db>) -> String {
-        let origin = match id.origin(self.db) {
-            crate::ast::TypeOrigin::Source(_) => "source",
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list",
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => "builtin_slots",
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Dispatch) => {
-                "builtin_dispatch"
-            }
-            crate::ast::TypeOrigin::Synthetic => "synthetic",
-        };
         logical_key(
             "nominal",
             [
-                origin.to_owned(),
+                nominal_origin_key(id.origin(self.db)),
                 id.qualified(self.db).with_str(str::to_owned),
             ],
         )
@@ -812,18 +817,13 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     fn logical_nominal_key(&self, id: crate::ast::TypeDefId<'db>, name: &Symbol) -> String {
-        let origin = match id.origin(self.db) {
-            crate::ast::TypeOrigin::Source(_) => "source".into(),
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list".into(),
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => {
-                "builtin_slots".into()
-            }
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Dispatch) => {
-                "builtin_dispatch".into()
-            }
-            crate::ast::TypeOrigin::Synthetic => "synthetic".into(),
-        };
-        logical_key("nominal", [origin, name.with_str(str::to_owned)])
+        logical_key(
+            "nominal",
+            [
+                nominal_origin_key(id.origin(self.db)),
+                name.with_str(str::to_owned),
+            ],
+        )
     }
 
     fn logical_univar_key(&self, id: crate::ast::UniVarId<'db>) -> String {

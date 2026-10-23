@@ -45,9 +45,7 @@ use crate::ast::{
 };
 
 use super::context::ModuleTypeEnv;
-use super::{
-    DefinitionIdentity, PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes,
-};
+use super::{PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes};
 
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
@@ -160,23 +158,20 @@ impl<'db> TypeChecker<'db> {
     ) -> Option<WellKnownType<'db>> {
         let name = key.name();
         let root = Self::prelude_root();
-        let declaration = module
+        let disambiguator = module
             .entries
             .iter()
             .filter(|entry| entry.module == root)
             .find_map(|entry| match &entry.decl {
-                Decl::Struct(decl) if decl.name == name => Some(decl.id),
-                Decl::Enum(decl) if decl.name == name => Some(decl.id),
+                Decl::Struct(decl) if decl.name == name => Some(decl.disambiguator),
+                Decl::Enum(decl) if decl.name == name => Some(decl.disambiguator),
                 _ => None,
             })?;
         let qualified = root.child(name.clone());
         let ty = self.env.lookup_type_def(&qualified)?.body(self.db());
         Some(WellKnownType {
             ty,
-            definition: DefinitionIdentity::new(
-                declaration,
-                self.span_map.get_or_default(declaration),
-            ),
+            definition: crate::ast::TypeDefId::declared(self.db(), qualified, disambiguator),
         })
     }
 

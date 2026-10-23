@@ -147,10 +147,10 @@ impl<'db> TypeChecker<'db> {
             self.prefix = entry.module.clone();
             match &entry.decl {
                 Decl::Struct(s) => {
-                    self.predeclare_nominal_type(&s.name, s.id, &s.type_params);
+                    self.predeclare_nominal_type(&s.name, s.disambiguator, &s.type_params);
                 }
                 Decl::Enum(e) => {
-                    self.predeclare_nominal_type(&e.name, e.id, &e.type_params);
+                    self.predeclare_nominal_type(&e.name, e.disambiguator, &e.type_params);
                 }
                 _ => {}
             }
@@ -161,7 +161,7 @@ impl<'db> TypeChecker<'db> {
     fn predeclare_nominal_type(
         &mut self,
         name: &Symbol,
-        declaration: crate::ast::NodeId,
+        disambiguator: u32,
         params: &[crate::ast::TypeParamDecl],
     ) {
         let qualified = self.current_prefix().child(name.clone());
@@ -173,7 +173,7 @@ impl<'db> TypeChecker<'db> {
             .map(|index| Type::new(self.db(), TypeKind::BoundVar { index }))
             .collect();
         let ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::source(self.db(), qualified.clone(), declaration),
+            crate::ast::TypeDefId::declared(self.db(), qualified.clone(), disambiguator),
             qualified.to_symbol(),
             args,
         );
@@ -348,7 +348,7 @@ impl<'db> TypeChecker<'db> {
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
         let struct_ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::source(self.db(), qualified_name.clone(), s.id),
+            crate::ast::TypeDefId::declared(self.db(), qualified_name.clone(), s.disambiguator),
             qualified_name.to_symbol(),
             args,
         );
@@ -389,7 +389,7 @@ impl<'db> TypeChecker<'db> {
 
         // Register struct field information for accessor resolution
         self.env.register_struct_fields(
-            crate::ast::TypeDefId::source(self.db(), qualified_name, s.id),
+            crate::ast::TypeDefId::declared(self.db(), qualified_name, s.disambiguator),
             type_params,
             fields,
         );
@@ -410,7 +410,7 @@ impl<'db> TypeChecker<'db> {
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
         let enum_ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::source(self.db(), qualified_name.clone(), e.id),
+            crate::ast::TypeDefId::declared(self.db(), qualified_name.clone(), e.disambiguator),
             qualified_name.to_symbol(),
             args,
         );

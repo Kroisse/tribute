@@ -170,11 +170,7 @@ fn test_unify_named_types_rejects_builtin_and_source_with_same_spelling() {
     let source = Type::new(
         &db,
         TypeKind::Named {
-            id: TypeDefId::source(
-                &db,
-                trunk_ir::SymbolPath::new([name.clone()]),
-                crate::ast::NodeId::from_raw(1),
-            ),
+            id: TypeDefId::source(&db, trunk_ir::SymbolPath::new([name.clone()])),
             name,
             args: vec![int_ty],
         },
@@ -195,11 +191,7 @@ fn test_unify_named_types_rejects_same_spelled_source_declarations() {
     let first = Type::new(
         &db,
         TypeKind::Named {
-            id: TypeDefId::source(
-                &db,
-                trunk_ir::SymbolPath::new(["A", "Thing"]),
-                crate::ast::NodeId::from_raw(1),
-            ),
+            id: TypeDefId::source(&db, trunk_ir::SymbolPath::new(["A", "Thing"])),
             name: name.clone(),
             args: vec![int_ty],
         },
@@ -207,11 +199,7 @@ fn test_unify_named_types_rejects_same_spelled_source_declarations() {
     let second = Type::new(
         &db,
         TypeKind::Named {
-            id: TypeDefId::source(
-                &db,
-                trunk_ir::SymbolPath::new(["B", "Thing"]),
-                crate::ast::NodeId::from_raw(2),
-            ),
+            id: TypeDefId::source(&db, trunk_ir::SymbolPath::new(["B", "Thing"])),
             name,
             args: vec![int_ty],
         },
