@@ -814,7 +814,7 @@ impl<'db> Resolver<'db> {
             Some(Binding::Ability { id }) if id.origin(self.db) == AbilityOrigin::Source => {
                 id.path(self.db).to_vec()
             }
-            Some(Binding::TypeDef { id }) if library && id.is_builtin_list(self.db) => {
+            Some(Binding::TypeDef { id }) if id.is_builtin_list(self.db) => {
                 id.path(self.db).to_vec()
             }
             _ if library => self.package.identity_path(path).to_vec(),

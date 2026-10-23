@@ -304,6 +304,11 @@ fn add_export<'db>(
         env.add_to_namespace_if_absent(own.clone(), name, entry);
     }
     env.add_to_namespace_if_absent(export.module.clone(), export.name.clone(), binding);
+    env.set_export_target(
+        export.module.clone(),
+        export.name.clone(),
+        SymbolPath::new(target),
+    );
     if let Some(restriction) = &export.restriction {
         env.restrict_entry(
             export.module.clone(),
@@ -360,10 +365,13 @@ pub(crate) fn restriction_module(module: &[Symbol], scope: &[Symbol]) -> Option<
     module.starts_with(&named).then(|| SymbolPath::new(named))
 }
 
-/// The package the prelude is the root of. Its declarations' identities and
-/// symbols start with this path; every module sees its root items under
-/// their short names.
+/// The package the prelude belongs to. Its declarations' identities and
+/// symbols start with this path.
 pub const LIBRARY_PACKAGE: &str = "std";
+
+/// The module of [`LIBRARY_PACKAGE`] whose `pub` items every module sees
+/// under their short names.
+pub const PRELUDE_MODULE: [&str; 2] = ["prelude", "v0"];
 
 /// Resolve the library package whose root module is `module`.
 pub fn resolve_library_with_env<'db>(
@@ -384,12 +392,6 @@ fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut PackageE
     let list_type = Binding::TypeDef {
         id: TypeDefId::builtin_list(db),
     };
-    env.add_builtin(
-        list.clone(),
-        list_type.clone(),
-        TypeDefId::builtin_list(db).path(db).to_vec(),
-        SymbolPath::new(["collections", "List"]),
-    );
     // The source List module contributes members, not a new nominal type.
     // Keep its namespace while exposing the compiler-owned type at this path.
     let collections = SymbolPath::new(["collections"]);
