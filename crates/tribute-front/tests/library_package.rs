@@ -407,7 +407,9 @@ fn main() -> Nil {
         errors,
         [
             "unresolved name `nope::T`",
-            "unresolved import `std::String::len`",
+            "`use std::String::len` is ambiguous: `std` names both a name of this module and \
+             package `std`; write `self::std` or `pkg::std` for the module's name, or `::std` \
+             for the package",
         ]
     );
 }
