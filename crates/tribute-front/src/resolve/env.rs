@@ -1,4 +1,4 @@
-//! Module environment for name resolution.
+//! The name-resolution environment of a package.
 //!
 //! This module provides structures for tracking definitions and looking up names
 //! during the name resolution phase.
@@ -8,6 +8,7 @@ use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::{Symbol, SymbolPath};
 
+use super::package::PackageName;
 use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId, Visibility};
 
 /// Information about a resolved name binding.
@@ -34,7 +35,14 @@ pub enum Binding<'db> {
 
     /// A module or namespace binding.
     Module {
-        /// The namespace path.
+        /// The namespace's identity path.
+        path: Vec<Symbol>,
+    },
+
+    /// A `use` whose target is not resolved yet: the path it imports, as
+    /// written or expanded from its path keywords.
+    Import {
+        /// The imported path.
         path: Vec<Symbol>,
     },
 
@@ -129,11 +137,14 @@ pub struct Export {
     pub restriction: Option<Restriction>,
 }
 
-/// Module environment for name resolution.
+/// The name-resolution environment of one package's module tree.
 ///
-/// Tracks all names visible in the current module.
+/// Holds the root module's names and every module's namespace, read from
+/// the package root.
 #[derive(Clone, Debug, Default, PartialEq, Eq, salsa::SalsaValue)]
-pub struct ModuleEnv<'db> {
+pub struct PackageEnv<'db> {
+    /// The package whose module tree this environment holds.
+    package: PackageName,
     /// Names defined in this module (simple name → binding).
     definitions: HashMap<Symbol, Binding<'db>>,
     /// Names imported via `use` statements (simple name → binding).
@@ -173,10 +184,23 @@ pub struct ModuleEnv<'db> {
     entry_restrictions: HashMap<(SymbolPath, Symbol), Restriction>,
 }
 
-impl<'db> ModuleEnv<'db> {
-    /// Create a new empty module environment.
+impl<'db> PackageEnv<'db> {
+    /// Create a new empty environment of the package being compiled.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a new empty environment of `package`'s module tree.
+    pub fn for_package(package: PackageName) -> Self {
+        Self {
+            package,
+            ..Self::default()
+        }
+    }
+
+    /// The package whose module tree this environment holds.
+    pub fn package(&self) -> &PackageName {
+        &self.package
     }
 
     /// Add a function definition.
@@ -221,7 +245,7 @@ impl<'db> ModuleEnv<'db> {
 
     /// Add the placeholder of a `use` that imports `path` as `name`.
     pub fn add_use(&mut self, name: Symbol, path: Vec<Symbol>) {
-        if let Some(Binding::Module { path: earlier }) = self.imports.get(&name)
+        if let Some(Binding::Import { path: earlier }) = self.imports.get(&name)
             && *earlier != path
         {
             let paths = self
@@ -232,7 +256,7 @@ impl<'db> ModuleEnv<'db> {
                 paths.push(path.clone());
             }
         }
-        self.add_import(name, Binding::Module { path });
+        self.add_import(name, Binding::Import { path });
     }
 
     /// Take the paths of the names that several `use`s import, to put back
@@ -393,7 +417,7 @@ impl<'db> ModuleEnv<'db> {
 
     /// Take the restrictions of `other`, an environment of the same
     /// package.
-    pub fn absorb_restrictions(&mut self, other: &ModuleEnv<'db>) {
+    pub fn absorb_restrictions(&mut self, other: &PackageEnv<'db>) {
         self.restrictions.extend(
             other
                 .restrictions
@@ -483,7 +507,13 @@ impl<'db> ModuleEnv<'db> {
     pub fn declares(&self, name: Symbol) -> bool {
         self.has_definition(&name)
             || self.has_namespace(std::slice::from_ref(&name))
-            || matches!(self.imports.get(&name), Some(Binding::Module { path }) if path[..] == [name])
+            || match self.imports.get(&name) {
+                Some(Binding::Module { path }) => {
+                    *path == self.package.identity_path(std::slice::from_ref(&name))[..]
+                }
+                Some(Binding::Import { path }) => path[..] == [name],
+                _ => false,
+            }
     }
 
     /// Iterate over all imports.
@@ -534,15 +564,9 @@ impl<'db> ModuleEnv<'db> {
     /// the package's root items every module sees under their short names,
     /// and its namespaces a path may enter by their first segment below the
     /// package root.
-    pub fn merge(&mut self, other: &ModuleEnv<'db>, package: &Symbol) {
+    pub fn merge(&mut self, other: &PackageEnv<'db>, package: &Symbol) {
         let under = |path: &[Symbol]| {
             SymbolPath::new(std::iter::once(package.clone()).chain(path.iter().cloned()))
-        };
-        let binding_under = |binding: &Binding<'db>| match binding {
-            Binding::Module { path } => Binding::Module {
-                path: under(path).to_vec(),
-            },
-            binding => binding.clone(),
         };
         // What another package restricts, this one never sees.
         let foreign = |restriction: &Restriction| Restriction {
@@ -551,7 +575,7 @@ impl<'db> ModuleEnv<'db> {
         };
         for (binding, restriction) in &other.restrictions {
             self.restrictions
-                .entry(binding_under(binding))
+                .entry(binding.clone())
                 .or_insert_with(|| foreign(restriction));
         }
         for (module, restriction) in &other.module_restrictions {
@@ -571,7 +595,7 @@ impl<'db> ModuleEnv<'db> {
             .iter_definitions()
             .chain(other.iter_namespace(&[]))
             .filter(|(name, _)| other.entry_restriction(&[], name).is_none())
-            .map(|(name, binding)| (name, binding_under(binding)))
+            .map(|(name, binding)| (name, binding.clone()))
             .collect();
         for (namespace, _) in other.iter_namespaces() {
             if let Some(name) = namespace.as_simple()
@@ -598,7 +622,7 @@ impl<'db> ModuleEnv<'db> {
             self.add_library_root(package.clone());
             self.add_library_namespace(alias.clone(), under(std::slice::from_ref(alias)));
             for (name, binding) in bindings {
-                self.add_to_namespace_if_absent(under(&ns), name, binding_under(binding));
+                self.add_to_namespace_if_absent(under(&ns), name, binding.clone());
             }
         }
     }

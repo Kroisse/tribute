@@ -262,7 +262,7 @@ use tribute_front::ast_to_ir;
 use tribute_front::astgen::ParsedAst;
 use tribute_front::query as ast_query;
 use tribute_front::resolve as ast_resolve;
-use tribute_front::resolve::ModuleEnv;
+use tribute_front::resolve::PackageEnv;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
 use trunk_ir_cranelift_backend::{
@@ -339,12 +339,12 @@ fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutpu
     checked_prelude(db).map(|(typed, _)| typed)
 }
 
-/// Get prelude's ModuleEnv for name resolution.
+/// Get prelude's PackageEnv for name resolution.
 ///
-/// This parses the prelude to AST and builds its module environment.
+/// This parses the prelude to AST and builds its package environment.
 /// Cached by Salsa - computed once and reused.
 #[salsa::tracked(returns(as_ref))]
-fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
+fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<PackageEnv<'db>> {
     let (parsed, _) = parse_prelude(db)?;
     Some(ast_resolve::build_library_env(db, parsed.module(db)))
 }
@@ -1687,7 +1687,7 @@ pub fn compile_to_native_binary(
 ///
 /// Uses the Type Info Injection approach to make prelude types available:
 /// 1. Parse user code to AST
-/// 2. Merge prelude bindings into user's ModuleEnv
+/// 2. Merge prelude bindings into user's PackageEnv
 /// 3. Resolve names with merged environment
 /// 4. Inject prelude TypeSchemes into user's ModuleTypeEnv
 /// 5. Type check with injected types

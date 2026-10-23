@@ -66,6 +66,42 @@ fn main() -> Nil {}
     );
 }
 
+/// A name an unresolved `use` imports is reported once, at the `use`.
+#[salsa_test]
+fn names_of_unresolved_imports_are_not_reported_again(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+use nowhere::thing
+
+fn main() -> Nil {
+    let _ = thing()
+}
+"#,
+    );
+    assert_eq!(errors, ["unresolved import `nowhere::thing`"]);
+}
+
+/// A `use` of one segment names the package root's own module, which is
+/// not a value.
+#[salsa_test]
+fn a_one_segment_import_names_the_root_module(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod basic {
+    pub fn one() -> Nat { 1 }
+}
+use basic
+
+fn main() -> Nil {
+    let _ = basic
+}
+"#,
+    );
+    assert_eq!(errors, ["expected a value, found module `basic`"]);
+}
+
 /// A `use` path may start with a path keyword.
 #[salsa_test]
 fn path_keyword_imports_resolve(db: &salsa::DatabaseImpl) {

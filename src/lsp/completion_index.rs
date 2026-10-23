@@ -155,7 +155,7 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
             Binding::Constructor { tag: None, .. } => CompletionKind::Struct,
             Binding::TypeDef { .. } => CompletionKind::Enum,
             Binding::Ability { .. } => CompletionKind::Ability,
-            Binding::Module { .. } | Binding::AbilityOp { .. } => continue,
+            Binding::Module { .. } | Binding::Import { .. } | Binding::AbilityOp { .. } => continue,
         };
         items.push(AstCompletionItem {
             detail: Some(format!(
@@ -202,7 +202,7 @@ pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> 
             &mut path,
         );
     }
-    tribute_front::resolve::Package::compiled().identity_path(&path)
+    tribute_front::resolve::PackageName::compiled().identity_path(&path)
 }
 
 /// The items of `items` the body of `module` names. A declaration of the

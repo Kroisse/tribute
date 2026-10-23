@@ -18,7 +18,7 @@ const PRELUDE_SOURCE: &str = include_str!("../../../../lib/std/prelude.trb");
 /// Result of loading and type-checking the prelude.
 struct PreludeData<'db> {
     exports: tribute_front::typeck::PreludeExports<'db>,
-    env: tribute_front::resolve::ModuleEnv<'db>,
+    env: tribute_front::resolve::PackageEnv<'db>,
     typed_module: tribute_front::ast::DeclTable<tribute_front::ast::TypedRef<'db>>,
 }
 

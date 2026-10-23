@@ -1,7 +1,7 @@
 //! Name resolution logic.
 //!
 //! This module transforms `Expr<UnresolvedName>` into `Expr<ResolvedRef<'db>>`
-//! by looking up names in the module environment and local scopes.
+//! by looking up names in the package environment and local scopes.
 
 use rustc_hash::FxHashMap as HashMap;
 
@@ -18,8 +18,8 @@ use crate::ast::{
     TypeOrigin, TypeParamDecl, UnresolvedName, UseDecl, Visibility,
 };
 
-use super::env::{Binding, ModuleEnv, Restriction};
-use super::package::Package;
+use super::env::{Binding, PackageEnv, Restriction};
+use super::package::PackageName;
 use super::path::{PathKeywordError, absolute_path};
 
 /// Find the best matches from `candidates` by a caller-provided score function.
@@ -97,7 +97,7 @@ enum MethodCandidates<'db> {
 pub struct Resolver<'db> {
     db: &'db dyn salsa::Database,
     /// Module-level environment with function and type definitions.
-    env: ModuleEnv<'db>,
+    env: PackageEnv<'db>,
     /// Stack of local scopes (function parameters, let bindings, etc.).
     local_scopes: Vec<HashMap<Symbol, LocalId>>,
     /// Generator for unique LocalIds.
@@ -126,12 +126,12 @@ pub struct Resolver<'db> {
     /// reported and dropped, so the field's function is the definition.
     redefinitions: Vec<NodeId>,
     /// The package whose module tree `module_path` is a path of.
-    package: Package,
+    package: PackageName,
 }
 
 impl<'db> Resolver<'db> {
     /// Create a new resolver with the given environment.
-    pub fn new(db: &'db dyn salsa::Database, env: ModuleEnv<'db>, span_map: SpanMap) -> Self {
+    pub fn new(db: &'db dyn salsa::Database, env: PackageEnv<'db>, span_map: SpanMap) -> Self {
         Self {
             db,
             env,
@@ -145,12 +145,12 @@ impl<'db> Resolver<'db> {
             module_imported_functions: Vec::new(),
             method_functions: vec![HashMap::default()],
             redefinitions: Vec::new(),
-            package: Package::compiled(),
+            package: PackageName::compiled(),
         }
     }
 
     /// Resolve the module tree of `package`.
-    pub fn with_package(mut self, package: Package) -> Self {
+    pub fn with_package(mut self, package: PackageName) -> Self {
         self.package = package;
         self
     }
@@ -188,7 +188,7 @@ impl<'db> Resolver<'db> {
     fn resolve_name(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
         let sym = name.name();
 
-        // For simple names: check locals, builtins, then module environment
+        // For simple names: check locals, builtins, then the package environment
         if name.is_simple() {
             // First check local variables
             if let Some(local_id) = self.lookup_local(&sym) {
@@ -302,7 +302,7 @@ impl<'db> Resolver<'db> {
         // module of the item's name, whose visibility is its own.
         let item = self
             .lookup_path(path)
-            .filter(|binding| !matches!(binding, Binding::Module { .. }));
+            .filter(|binding| !matches!(binding, Binding::Module { .. } | Binding::Import { .. }));
         let modules = if item.is_some() {
             path.len().saturating_sub(1)
         } else {
@@ -1034,6 +1034,16 @@ impl<'db> Resolver<'db> {
                 let path_ref = ModulePath::new(self.db, path.clone());
                 ResolvedRef::Module { path: path_ref }
             }
+            // A `use` of one segment names the package root's own module of
+            // that name. Any longer `use` still unresolved names nothing, and
+            // its declaration is reported.
+            Binding::Import { path } if path.len() == 1 => {
+                let identity = self.package.identity_path(path).to_vec();
+                ResolvedRef::Module {
+                    path: ModulePath::new(self.db, identity),
+                }
+            }
+            Binding::Import { .. } => ResolvedRef::local(LocalId::UNRESOLVED, name),
             Binding::AbilityOp { ability, op, kind } => {
                 ResolvedRef::ability_op(*ability, op.clone(), *kind)
             }
@@ -2004,7 +2014,7 @@ mod tests {
 
     #[salsa_test]
     fn test_resolve_local_variable(db: &salsa::DatabaseImpl) {
-        let env = ModuleEnv::new();
+        let env = PackageEnv::new();
         let mut resolver = Resolver::new(db, env, SpanMap::default());
 
         let param_name = Symbol::new("x");
@@ -2031,7 +2041,7 @@ mod tests {
 
     #[salsa_test]
     fn test_scope_isolation(db: &salsa::DatabaseImpl) {
-        let env = ModuleEnv::new();
+        let env = PackageEnv::new();
         let mut resolver = Resolver::new(db, env, SpanMap::default());
 
         let x = Symbol::new("x");
@@ -2062,7 +2072,7 @@ mod tests {
 
     #[salsa_test]
     fn test_nested_scopes(db: &salsa::DatabaseImpl) {
-        let env = ModuleEnv::new();
+        let env = PackageEnv::new();
         let mut resolver = Resolver::new(db, env, SpanMap::default());
 
         let x = Symbol::new("x");
@@ -2111,7 +2121,7 @@ mod tests {
     fn test_list_rest_pattern_local_id(db: &salsa::DatabaseImpl) {
         use crate::ast::{Pattern, PatternKind};
 
-        let env = ModuleEnv::new();
+        let env = PackageEnv::new();
         let mut resolver = Resolver::new(db, env, SpanMap::default());
         resolver.push_scope();
 
@@ -2154,7 +2164,7 @@ mod tests {
     fn test_as_pattern_local_id(db: &salsa::DatabaseImpl) {
         use crate::ast::{Pattern, PatternKind};
 
-        let env = ModuleEnv::new();
+        let env = PackageEnv::new();
         let mut resolver = Resolver::new(db, env, SpanMap::default());
         resolver.push_scope();
 
