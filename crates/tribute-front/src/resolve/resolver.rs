@@ -302,7 +302,7 @@ impl<'db> Resolver<'db> {
         // module of the item's name, whose visibility is its own.
         let item = self
             .lookup_path(path)
-            .filter(|binding| !matches!(binding, Binding::Module { .. }));
+            .filter(|binding| !matches!(binding, Binding::Module { .. } | Binding::Import { .. }));
         let modules = if item.is_some() {
             path.len().saturating_sub(1)
         } else {
@@ -1030,7 +1030,7 @@ impl<'db> Resolver<'db> {
                 ResolvedRef::constructor(*id, tag.clone().unwrap_or(name))
             }
             Binding::TypeDef { id } => ResolvedRef::type_def(*id),
-            Binding::Module { path } => {
+            Binding::Module { path } | Binding::Import { path } => {
                 let path_ref = ModulePath::new(self.db, path.clone());
                 ResolvedRef::Module { path: path_ref }
             }

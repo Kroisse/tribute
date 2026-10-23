@@ -6,7 +6,7 @@ use super::LIBRARY_PACKAGE;
 
 /// A package: the module tree of one root module. Name resolution reads
 /// the tree's module paths from that root.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Package {
     /// The package's name, for a library package another one depends on.
     /// `None` for the package being compiled.
@@ -14,7 +14,7 @@ pub struct Package {
 }
 
 impl Package {
-    /// The package being compiled.
+    /// The package being compiled, also the default.
     pub fn compiled() -> Self {
         Self { name: None }
     }

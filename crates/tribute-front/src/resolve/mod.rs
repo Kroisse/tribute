@@ -65,7 +65,7 @@ pub fn resolve_with_env<'db>(
 
 /// Resolve `use` imports that reference module-qualified paths.
 ///
-/// During `build_env`, `use` declarations are stored as `Binding::Module` placeholders
+/// During `build_env`, `use` declarations are stored as `Binding::Import` placeholders
 /// because the referenced modules (e.g., prelude) may not yet be merged. This function
 /// re-resolves those imports against the full environment after prelude merge.
 ///
@@ -82,7 +82,7 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
                 return None;
             }
             let path = match binding {
-                Binding::Module { path } => Some(path),
+                Binding::Import { path } => Some(path),
                 _ => env.get_use_path(&name),
             }?;
             (path.len() >= 2).then(|| (name, path.clone()))
@@ -104,7 +104,7 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
             );
         }
 
-        // Replace the Module placeholder with the actual binding
+        // Replace the placeholder with the actual binding
         env.replace_import(import_name, binding, path);
     }
 
@@ -172,7 +172,7 @@ fn build_package_env<'db>(
     module: &Module<UnresolvedName>,
     package: &Package,
 ) -> ModuleEnv<'db> {
-    let mut env = ModuleEnv::new();
+    let mut env = ModuleEnv::for_package(package.clone());
 
     // Note: We don't use module.name as the initial prefix because
     // module.name is derived from the file name (e.g., "add" from "add.trb"),
@@ -267,10 +267,10 @@ fn add_export(env: &mut ModuleEnv<'_>, export: &Export) -> bool {
             env.lookup_qualified(namespace, last).cloned()
         };
         let binding = binding
-            .filter(|b| !matches!(b, Binding::Module { .. }))
+            .filter(|b| !matches!(b, Binding::Module { .. } | Binding::Import { .. }))
             .or_else(|| {
                 env.has_namespace(&target).then(|| Binding::Module {
-                    path: target.clone(),
+                    path: env.package().identity_path(&target).to_vec(),
                 })
             })?;
         Some((target, binding))
@@ -653,7 +653,7 @@ fn collect_module<'db>(
         let identity = scope.package.identity_path(&path);
         let restriction = scope.restriction(prefix, identity, &m.visibility);
         if let Some(restriction) = &restriction {
-            env.restrict_module(path, restriction.clone());
+            env.restrict_module(path.clone(), restriction.clone());
         }
         let inner_scope = Scope {
             package: scope.package.clone(),
@@ -664,7 +664,7 @@ fn collect_module<'db>(
         prefix.push(m.name.clone());
 
         // Collect inner declarations into a temporary environment
-        let mut inner_env = ModuleEnv::new();
+        let mut inner_env = ModuleEnv::for_package(scope.package.clone());
         for inner in body {
             collect_item(db, &mut inner_env, inner, prefix, &inner_scope);
         }
@@ -697,7 +697,10 @@ fn collect_module<'db>(
                     SymbolPath::new([m.name.clone()]),
                     inner.clone(),
                     Binding::Module {
-                        path: vec![m.name.clone(), inner.clone()],
+                        path: scope
+                            .package
+                            .identity_path(&path.child(inner.clone()))
+                            .to_vec(),
                     },
                 );
             }
@@ -707,7 +710,7 @@ fn collect_module<'db>(
         env.add_import(
             m.name.clone(),
             Binding::Module {
-                path: vec![m.name.clone()],
+                path: scope.package.identity_path(&path).to_vec(),
             },
         );
     }

@@ -155,7 +155,7 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
             Binding::Constructor { tag: None, .. } => CompletionKind::Struct,
             Binding::TypeDef { .. } => CompletionKind::Enum,
             Binding::Ability { .. } => CompletionKind::Ability,
-            Binding::Module { .. } | Binding::AbilityOp { .. } => continue,
+            Binding::Module { .. } | Binding::Import { .. } | Binding::AbilityOp { .. } => continue,
         };
         items.push(AstCompletionItem {
             detail: Some(format!(
