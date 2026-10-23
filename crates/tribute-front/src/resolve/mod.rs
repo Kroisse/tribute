@@ -43,8 +43,7 @@ pub fn resolve_module<'db>(
 ) -> DeclTable<ResolvedRef<'db>> {
     // Build the package environment from declarations. Without the prelude,
     // package `std` holds only the compiler-owned names.
-    let std = builtin_library_env(db, module.id);
-    let dependencies = Dependencies::std(&std);
+    let dependencies = Dependencies::std(builtin_library_env(db));
     let env = build_env(db, module, &dependencies);
 
     // Create resolver and process the module
@@ -58,7 +57,7 @@ pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     env: PackageEnv<'db>,
-    dependencies: &Dependencies<'_, 'db>,
+    dependencies: &Dependencies<'db>,
     span_map: SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
     let mut resolver = Resolver::new(db, env, dependencies, span_map);
@@ -74,7 +73,7 @@ pub fn resolve_with_env<'db>(
 /// For example, `use abilities::Abort` upgrades from a placeholder to the actual
 /// `Ability` binding, and registers the ability's operations under the imported name's
 /// namespace (so `Abort::abort` works).
-fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependencies<'_, 'db>) {
+fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependencies<'db>) {
     // Collect Module bindings that need resolution
     let module_imports: Vec<(Symbol, Vec<Symbol>)> = env
         .iter_imports()
@@ -133,7 +132,7 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
 
 /// The package path a `use` of `path` names and what is declared there.
 fn use_target<'db>(
-    scope: Scope<'_, '_, 'db>,
+    scope: Scope<'_, 'db>,
     path: Vec<Symbol>,
 ) -> Option<(Vec<Symbol>, Binding<'db>)> {
     // A path into a library namespace continues from its package path,
@@ -157,9 +156,9 @@ fn use_target<'db>(
 pub fn build_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
-    dependencies: &Dependencies<'_, 'db>,
+    dependencies: &Dependencies<'db>,
 ) -> PackageEnv<'db> {
-    build_package_env(db, module, &PackageName::compiled(), dependencies)
+    build_package_env(db, &module.decls, &PackageName::compiled(), dependencies)
 }
 
 /// Build the environment of the library package whose root module is
@@ -168,26 +167,23 @@ pub fn build_library_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
 ) -> PackageEnv<'db> {
-    build_package_env(db, module, &PackageName::std(), &Dependencies::none())
+    build_package_env(db, &module.decls, &PackageName::std(), &Dependencies::none())
 }
 
 /// The environment of a package `std` that declares nothing but the
 /// compiler-owned names, for resolving a package without the prelude.
-/// `id` identifies the empty root module.
-pub fn builtin_library_env<'db>(
-    db: &'db dyn salsa::Database,
-    id: crate::ast::NodeId,
-) -> PackageEnv<'db> {
-    let empty = Module::new(id, None, Vec::<ModuleItem<_>>::new());
-    build_library_env(db, &empty)
+#[salsa::tracked]
+pub fn builtin_library_env(db: &dyn salsa::Database) -> PackageEnv<'_> {
+    build_package_env(db, &[], &PackageName::std(), &Dependencies::none())
 }
 
-/// Build the environment of the module tree of `package`.
+/// Build the environment of the module tree of `package`, whose root
+/// module holds `decls`.
 fn build_package_env<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<UnresolvedName>,
+    decls: &[ModuleItem<UnresolvedName>],
     package: &PackageName,
-    dependencies: &Dependencies<'_, 'db>,
+    dependencies: &Dependencies<'db>,
 ) -> PackageEnv<'db> {
     let mut env = PackageEnv::for_package(package.clone());
 
@@ -202,7 +198,7 @@ fn build_package_env<'db>(
         outer: None,
     };
 
-    for item in &module.decls {
+    for item in decls {
         collect_item(db, &mut env, item, &mut prefix, &scope);
     }
 
@@ -225,7 +221,7 @@ fn build_package_env<'db>(
 /// A re-export's path starts with a path keyword, from an import of the
 /// declaring module, from the module itself, or from a library namespace.
 /// The resolver reports a `use` whose target names nothing.
-fn resolve_exports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependencies<'_, 'db>) {
+fn resolve_exports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependencies<'db>) {
     let mut pending = env.take_exports();
     loop {
         let before = pending.len();
@@ -243,7 +239,7 @@ fn resolve_exports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependencies<'
 /// may name, in order. A first segment the module imports continues only
 /// from what that import names; `hops` counts the imports followed.
 fn use_candidates(
-    scope: Scope<'_, '_, '_>,
+    scope: Scope<'_, '_>,
     module: &SymbolPath,
     path: &[Symbol],
     hops: usize,
@@ -276,7 +272,7 @@ fn use_candidates(
 /// Add `export` to its module's namespace if its target resolves.
 fn add_export<'db>(
     env: &mut PackageEnv<'db>,
-    dependencies: &Dependencies<'_, 'db>,
+    dependencies: &Dependencies<'db>,
     export: &Export,
 ) -> bool {
     let scope = Scope::new(env, dependencies);

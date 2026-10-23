@@ -95,12 +95,12 @@ enum MethodCandidates<'db> {
 }
 
 /// Resolver for transforming unresolved names to resolved references.
-pub struct Resolver<'a, 'db> {
+pub struct Resolver<'db> {
     db: &'db dyn salsa::Database,
     /// The environment of the package being resolved.
     env: PackageEnv<'db>,
     /// The packages it depends on.
-    dependencies: Dependencies<'a, 'db>,
+    dependencies: Dependencies<'db>,
     /// Stack of local scopes (function parameters, let bindings, etc.).
     local_scopes: Vec<HashMap<Symbol, LocalId>>,
     /// Generator for unique LocalIds.
@@ -132,13 +132,13 @@ pub struct Resolver<'a, 'db> {
     package: PackageName,
 }
 
-impl<'a, 'db> Resolver<'a, 'db> {
+impl<'db> Resolver<'db> {
     /// Create a new resolver with the given environment, which was built
     /// against `dependencies`.
     pub fn new(
         db: &'db dyn salsa::Database,
         env: PackageEnv<'db>,
-        dependencies: &Dependencies<'a, 'db>,
+        dependencies: &Dependencies<'db>,
         span_map: SpanMap,
     ) -> Self {
         Self {
@@ -166,7 +166,7 @@ impl<'a, 'db> Resolver<'a, 'db> {
     }
 
     /// The names the package and its dependencies give.
-    fn view(&self) -> Scope<'_, 'a, 'db> {
+    fn view(&self) -> Scope<'_, 'db> {
         Scope::new(&self.env, &self.dependencies)
     }
 

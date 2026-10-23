@@ -351,7 +351,7 @@ fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<PackageEnv<'db>> {
 }
 
 /// The packages a user package depends on: package `std`.
-fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::Dependencies<'db, 'db> {
+fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::Dependencies<'db> {
     prelude_env(db)
         .map(ast_resolve::Dependencies::std)
         .unwrap_or_default()

@@ -9,25 +9,25 @@ use crate::ast::FuncDefId;
 
 /// The packages a package depends on, each by its name.
 #[derive(Clone, Debug, Default)]
-pub struct Dependencies<'a, 'db> {
-    packages: Vec<(Symbol, &'a PackageEnv<'db>)>,
+pub struct Dependencies<'db> {
+    packages: Vec<(Symbol, &'db PackageEnv<'db>)>,
 }
 
-impl<'a, 'db> Dependencies<'a, 'db> {
+impl<'db> Dependencies<'db> {
     /// No dependencies.
     pub fn none() -> Self {
         Self::default()
     }
 
     /// The dependency on package `std`, whose environment is `std`.
-    pub fn std(std: &'a PackageEnv<'db>) -> Self {
+    pub fn std(std: &'db PackageEnv<'db>) -> Self {
         Self {
             packages: vec![(Symbol::new(LIBRARY_PACKAGE), std)],
         }
     }
 
     /// The environment of the dependency named `name`.
-    pub fn get(&self, name: &Symbol) -> Option<&'a PackageEnv<'db>> {
+    pub fn get(&self, name: &Symbol) -> Option<&'db PackageEnv<'db>> {
         self.packages
             .iter()
             .find_map(|(known, env)| (known == name).then_some(*env))
@@ -35,14 +35,14 @@ impl<'a, 'db> Dependencies<'a, 'db> {
 
     /// The package whose root items every module sees under their short
     /// names: the prelude's.
-    fn prelude(&self) -> Option<(&Symbol, &'a PackageEnv<'db>)> {
+    fn prelude(&self) -> Option<(&Symbol, &'db PackageEnv<'db>)> {
         self.packages
             .iter()
             .find(|(name, _)| name == LIBRARY_PACKAGE)
             .map(|(name, env)| (name, *env))
     }
 
-    fn iter(&self) -> impl Iterator<Item = &'a PackageEnv<'db>> + '_ {
+    fn iter(&self) -> impl Iterator<Item = &'db PackageEnv<'db>> + '_ {
         self.packages.iter().map(|(_, env)| *env)
     }
 }
@@ -53,13 +53,13 @@ impl<'a, 'db> Dependencies<'a, 'db> {
 /// names a dependency, and names nothing the package itself declares or
 /// imports, continues from that dependency's root.
 #[derive(Clone, Copy)]
-pub struct Scope<'s, 'a, 'db> {
+pub struct Scope<'s, 'db> {
     own: &'s PackageEnv<'db>,
-    dependencies: &'s Dependencies<'a, 'db>,
+    dependencies: &'s Dependencies<'db>,
 }
 
-impl<'s, 'a: 's, 'db> Scope<'s, 'a, 'db> {
-    pub fn new(own: &'s PackageEnv<'db>, dependencies: &'s Dependencies<'a, 'db>) -> Self {
+impl<'s, 'db> Scope<'s, 'db> {
+    pub fn new(own: &'s PackageEnv<'db>, dependencies: &'s Dependencies<'db>) -> Self {
         Self { own, dependencies }
     }
 

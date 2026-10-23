@@ -18,8 +18,25 @@ const PRELUDE_SOURCE: &str = include_str!("../../../../lib/std/prelude.trb");
 /// Result of loading and type-checking the prelude.
 struct PreludeData<'db> {
     exports: tribute_front::typeck::PreludeExports<'db>,
-    env: tribute_front::resolve::PackageEnv<'db>,
+    env: &'db tribute_front::resolve::PackageEnv<'db>,
     typed_module: tribute_front::ast::DeclTable<tribute_front::ast::TypedRef<'db>>,
+}
+
+#[salsa::tracked(returns(copy))]
+fn prelude_source(db: &dyn salsa::Database) -> SourceCst {
+    SourceCst::from_source_str(db, "prelude:///std/prelude", PRELUDE_SOURCE)
+}
+
+/// The environment of package `std`, which the packages under test depend
+/// on.
+#[salsa::tracked]
+fn prelude_env(db: &dyn salsa::Database) -> Option<tribute_front::resolve::PackageEnv<'_>> {
+    let parsed = tribute_front::query::parsed_ast_with_module_path(
+        db,
+        prelude_source(db),
+        trunk_ir::Symbol::new("prelude"),
+    )?;
+    Some(tribute_front::resolve::build_library_env(db, parsed.module(db)))
 }
 
 /// Load and type-check the prelude so tests can use arithmetic operators.
@@ -28,19 +45,15 @@ struct PreludeData<'db> {
 /// the prelude for Int, Nat, and Float. Without the prelude, no function
 /// is in scope for them.
 fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
-    let prelude_cst = SourceCst::from_source_str(db, "prelude:///std/prelude", PRELUDE_SOURCE);
-
     let parsed = tribute_front::query::parsed_ast_with_module_path(
         db,
-        prelude_cst,
+        prelude_source(db),
         trunk_ir::Symbol::new("prelude"),
     )?;
 
     let prelude_ast = parsed.module(db);
     let prelude_span_map = parsed.span_map(db);
-
-    // Build env for name resolution merging
-    let env = tribute_front::resolve::build_library_env(db, prelude_ast);
+    let env = prelude_env(db).as_ref()?;
 
     // Resolve prelude with its own env
     let resolved_prelude = tribute_front::resolve::resolve_library_with_env(
@@ -78,10 +91,10 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
     // Load prelude for operator declarations (Int::(+) etc.)
     let prelude = load_prelude(db);
 
-    // Build env, merging prelude bindings so operator names resolve
+    // Build env against package `std` so operator names resolve
     let dependencies = prelude
         .as_ref()
-        .map(|p| tribute_front::resolve::Dependencies::std(&p.env))
+        .map(|p| tribute_front::resolve::Dependencies::std(p.env))
         .unwrap_or_default();
     let env = tribute_front::resolve::build_env(db, ast, &dependencies);
     let resolved =
@@ -174,7 +187,7 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
 
     let dependencies = prelude
         .as_ref()
-        .map(|p| tribute_front::resolve::Dependencies::std(&p.env))
+        .map(|p| tribute_front::resolve::Dependencies::std(p.env))
         .unwrap_or_default();
     let env = tribute_front::resolve::build_env(db, ast, &dependencies);
     let resolved =
@@ -204,7 +217,7 @@ fn tdnr_function_summary_inner(
 
     let dependencies = prelude
         .as_ref()
-        .map(|p| tribute_front::resolve::Dependencies::std(&p.env))
+        .map(|p| tribute_front::resolve::Dependencies::std(p.env))
         .unwrap_or_default();
     let env = tribute_front::resolve::build_env(db, ast, &dependencies);
     let resolved =
