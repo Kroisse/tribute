@@ -425,6 +425,12 @@ ValuePath ::= PathPrefix? Identifier
 TypePath ::= PathPrefix? TypeId
 ```
 
+선행 `::`는 의존 패키지의 이름 앞에만 온다(`::std::Option`). 의미는
+[모듈 문서](modules.md#prelude와-패키지-std)를 따른다. `::`가 앞 경로를 잇는 구분자일
+수도 있고 새 경로의 시작일 수도 있는 자리에서는, 줄의 첫머리에 올 때만 새 경로를
+시작한다. 같은 줄의 `a ::b`는 경로 `a::b` 하나다. 다음 줄이 `::std::f()`로 시작하면
+새 문장이고, record field와 case arm 사이에서는 그 줄바꿈이 구분자다.
+
 선언 이름은 단일 `Identifier` 또는 `TypeId`지만, 참조 위치의 CST는 단일
 이름도 각각 `value_path` 또는 `type_path`로 감싼다. 따라서 `print`와
 `std::io::print`, `String`과 `std::io::Error`는 세그먼트 수와 무관하게 같은

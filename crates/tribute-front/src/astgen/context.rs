@@ -121,7 +121,11 @@ impl<'db> AstLoweringCtx<'db> {
             .filter(|child| {
                 matches!(
                     child.kind(),
-                    "path_segment" | "path_keyword" | "identifier" | "type_identifier"
+                    "path_root"
+                        | "path_segment"
+                        | "path_keyword"
+                        | "identifier"
+                        | "type_identifier"
                 )
             })
             .map(|child| self.node_symbol(&child))
@@ -152,6 +156,9 @@ impl<'db> AstLoweringCtx<'db> {
 
     /// Get a Symbol from a node's text, without the `r#` of raw identifiers.
     pub fn node_symbol(&self, node: &Node) -> Symbol {
+        if node.kind() == "path_root" {
+            return Symbol::new(crate::keywords::PATH_ROOT);
+        }
         Symbol::new(&crate::keywords::unraw(&self.node_text(node)))
     }
 }

@@ -137,8 +137,13 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
 /// declared there.
 fn use_target<'db>(scope: Scope<'_, 'db>, path: &[Symbol]) -> Option<(Location, Binding<'db>)> {
     let location = root_location(scope, path)?;
-    let (target_name, namespace) = location.split_last()?;
-    let binding = scope.lookup_qualified(&namespace, target_name)?.clone();
+    let binding = match location.split_last() {
+        Some((target_name, namespace)) => scope.lookup_qualified(&namespace, target_name)?.clone(),
+        // A package root, such as `::std`, is a module.
+        None => scope.has_namespace(&location).then(|| Binding::Module {
+            path: location.identity(),
+        })?,
+    };
     Some((location, binding))
 }
 
@@ -147,6 +152,9 @@ fn use_target<'db>(scope: Scope<'_, 'db>, path: &[Symbol]) -> Option<(Location, 
 /// imports, then a namespace the prelude supplies, then a dependency; a
 /// dependency whose name the root has is out of reach.
 pub(crate) fn root_location(scope: Scope<'_, '_>, path: &[Symbol]) -> Option<Location> {
+    if let Some((name, rest)) = path::dependency_path(path) {
+        return Some(scope.dependency_root(name)?.join(rest));
+    }
     let (first, rest) = path.split_first()?;
     if !scope.declares(first.clone()) && scope.lookup(first).is_none() {
         if let Some(library) = scope.library_namespace(first) {
@@ -258,6 +266,13 @@ fn use_candidates(
     path: &[Symbol],
     hops: usize,
 ) -> Vec<Location> {
+    if let Some((name, rest)) = path::dependency_path(path) {
+        return scope
+            .dependency_root(name)
+            .map(|root| root.join(rest))
+            .into_iter()
+            .collect();
+    }
     match path::absolute_path(module, path) {
         Ok(Some(target)) => return vec![scope.at_root(SymbolPath::new(target))],
         Err(_) => return Vec::new(),
