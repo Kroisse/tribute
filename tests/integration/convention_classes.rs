@@ -425,8 +425,8 @@ fn main() -> Nil {
 /// its row.
 #[salsa_test]
 fn test_open_callback_leaves_the_evidence_root_as_it_is(db: &salsa::DatabaseImpl) {
-    // This helper lowers before monomorphization. The original generic fixture
-    // is covered through the production pipeline in tests/integration/open_callback_evidence_root.rs.
+    // The generic fixture, which also runs on Wasm, is in
+    // `open_callback_evidence_root.rs`; this one is monomorphic.
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
@@ -809,6 +809,8 @@ fn main() -> Nil {
         main.contains("convention(direct)"),
         "main keeps the convention of its row around the returned callback call:\n{ir}"
     );
+    // The lambda's row is a body binder of `main` that its closed row does not
+    // fix, so its class stays `Cps` while `main` itself is `Direct`.
     let main_body = logical_function(&ir, "main");
     let lambda = main_body
         .lines()
