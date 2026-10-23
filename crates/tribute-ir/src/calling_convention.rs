@@ -110,6 +110,10 @@ pub enum ConventionError {
     /// The operation does not implement [`ConventionBearing`].
     #[display("calling-convention metadata on an operation that cannot carry it")]
     Unregistered,
+    /// The operation's convention differs from the one a type of the same
+    /// callable records.
+    #[display("calling convention differs from the one its callable type records")]
+    TypeDisagreement,
 }
 
 /// A physical operation that records the calling convention of the callable
@@ -139,6 +143,15 @@ pub trait ConventionBearing: DialectOp {
     fn remove_calling_convention(&self, ctx: &mut IrContext) {
         ctx.op_attrs_mut(self.op_ref())
             .remove(CALLING_CONVENTION_ATTR);
+    }
+
+    /// The type that records the convention of the same callable as well:
+    /// the closure a `closure.new` or `closure.lambda` makes, or the callee an
+    /// indirect transfer receives. Only a convention-proven `closure.closure`
+    /// records one. Verification queries this on unverified IR, so it reads
+    /// the operation fallibly.
+    fn convention_type(&self, _ctx: &IrContext) -> Option<TypeRef> {
+        None
     }
 }
 
@@ -184,13 +197,70 @@ fn read_convention(
         .ok_or(ConventionError::Malformed)
 }
 
-impl ConventionBearing for closure::Lambda {}
-impl ConventionBearing for closure::New {}
+impl ConventionBearing for closure::Lambda {
+    fn convention_type(&self, ctx: &IrContext) -> Option<TypeRef> {
+        ctx.op_result_types(self.op_ref()).first().copied()
+    }
+}
+
+impl ConventionBearing for closure::New {
+    fn convention_type(&self, ctx: &IrContext) -> Option<TypeRef> {
+        ctx.op_result_types(self.op_ref()).first().copied()
+    }
+}
+
 impl ConventionBearing for func::Func {}
 impl ConventionBearing for func::Call {}
-impl ConventionBearing for func::CallIndirect {}
 impl ConventionBearing for func::TailCall {}
-impl ConventionBearing for func::TailCallIndirect {}
+
+impl ConventionBearing for func::CallIndirect {
+    fn convention_type(&self, ctx: &IrContext) -> Option<TypeRef> {
+        indirect_callee_type(ctx, self.op_ref())
+    }
+}
+
+impl ConventionBearing for func::TailCallIndirect {
+    fn convention_type(&self, ctx: &IrContext) -> Option<TypeRef> {
+        indirect_callee_type(ctx, self.op_ref())
+    }
+}
+
+/// The type of an indirect transfer's callee, its first operand.
+fn indirect_callee_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
+    let callee = ctx.op_operands(op).first()?;
+    Some(ctx.value_ty(*callee))
+}
+
+/// A calling-convention violation of one operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConventionViolation {
+    pub op: OpRef,
+    pub error: ConventionError,
+}
+
+/// Every operation under `root` whose convention is malformed, sits on an
+/// operation that cannot carry one, or differs from the one a type of the
+/// same callable records (`new-plans/cps-effects.md`, "CPS 변환의 호출 대상
+/// 형상").
+pub fn verify_conventions(ctx: &IrContext, root: OpRef) -> Vec<ConventionViolation> {
+    let mut violations = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
+        let error = match DynConventionBearing::exact(ctx, op) {
+            Err(error) => Some(error),
+            Ok(Some(convention)) => DynConventionBearing::get(ctx, op)
+                .and_then(|bearing| bearing.convention_type(ctx))
+                .and_then(|ty| get_physical_closure_convention(ctx, ty))
+                .is_some_and(|recorded| recorded != convention)
+                .then_some(ConventionError::TypeDisagreement),
+            Ok(None) => None,
+        };
+        if let Some(error) = error {
+            violations.push(ConventionViolation { op, error });
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    violations
+}
 
 trunk_ir::register_interfaces!(
     func::Func: ConventionBearing;
@@ -446,6 +516,76 @@ mod tests {
             let op = ctx.create_op(op);
             assert!(DynConventionBearing::is_implemented(&ctx, op), "{name:?}");
         }
+    }
+
+    fn violations(input: &str) -> Vec<(String, ConventionError)> {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        verify_conventions(&ctx, module.op())
+            .into_iter()
+            .map(|violation| {
+                (
+                    ctx.op(violation.op).name.display(&ctx).to_string(),
+                    violation.error,
+                )
+            })
+            .collect()
+    }
+
+    const CLOSURES: &str = r#"core.module @test {
+  !fn = func.func_sig<(core.i32) -> core.i32>
+  !direct = closure.closure<!fn, {tribute.calling_convention = "direct", tribute.closure_environment_index = 0}>
+  !cps = closure.closure<!fn, {tribute.calling_convention = "cps", tribute.closure_environment_index = 1}>
+  !plain = closure.closure<!fn>
+  func.func @callee(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    func.return %x
+  }
+  func.func @agrees(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    %c = closure.new {func_ref = @callee, tribute.calling_convention = "direct"} : !direct
+    %r = func.call_indirect %c, %x {signature = !fn, tribute.calling_convention = "direct"} : core.i32
+    %p = closure.new {func_ref = @callee, tribute.calling_convention = "cps"} : !plain
+    func.return %r
+  }
+}"#;
+
+    #[test]
+    fn conventions_that_agree_with_their_types_verify() {
+        assert_eq!(violations(CLOSURES), []);
+    }
+
+    #[test]
+    fn a_convention_that_differs_from_its_closure_type_is_rejected() {
+        // A `Direct` closure made, and called, as if it were `Cps`.
+        let input = CLOSURES.replace(
+            "%r = func.call_indirect %c, %x {signature = !fn, tribute.calling_convention = \"direct\"}",
+            "%r = func.call_indirect %c, %x {signature = !fn, tribute.calling_convention = \"cps\"}",
+        );
+        let input = input.replace(
+            "%c = closure.new {func_ref = @callee, tribute.calling_convention = \"direct\"} : !direct",
+            "%c = closure.new {func_ref = @callee, tribute.calling_convention = \"cps\"} : !direct",
+        );
+        assert_eq!(
+            violations(&input),
+            [
+                ("closure.new".to_owned(), ConventionError::TypeDisagreement),
+                (
+                    "func.call_indirect".to_owned(),
+                    ConventionError::TypeDisagreement
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_convention_on_an_operation_that_cannot_carry_one_is_rejected() {
+        assert_eq!(
+            violations(CONVENTIONS),
+            [
+                ("func.func".to_owned(), ConventionError::Malformed),
+                ("func.func".to_owned(), ConventionError::Malformed),
+                ("arith.const".to_owned(), ConventionError::Unregistered),
+            ]
+        );
     }
 
     #[test]
