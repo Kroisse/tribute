@@ -58,6 +58,13 @@ fn count(s: shapes::Shape) -> Int {
         .Line(n) -> n
     }
 }
+
+fn argument() -> Int { count(.Dot) }
+
+fn later() -> Int {
+    let line = .Line(+1)
+    count(line)
+}
 "#,
     );
     assert!(errors.is_empty(), "{errors:?}");

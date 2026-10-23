@@ -70,16 +70,10 @@ impl<'db> TypeChecker<'db> {
                 self.report_type_constructor(node, ty, name, &missing);
                 ImplicitConstructor::Resolved(unresolved())
             }
+            // Without candidates, only a type determined later can name it.
             None | Some((_, TypeConstructor::Unknown)) => match candidates.single() {
                 Some(id) => {
                     ImplicitConstructor::Resolved(ResolvedRef::constructor(*id, name.clone()))
-                }
-                None if candidates.is_empty() => {
-                    self.report_type_error(
-                        node,
-                        format!("no type in scope has a constructor `{name}`"),
-                    );
-                    ImplicitConstructor::Resolved(unresolved())
                 }
                 None => ImplicitConstructor::Deferred(
                     self.defer_constructor(ctx, node, name, candidates, shape, pattern),
@@ -426,6 +420,9 @@ impl<'db> TypeChecker<'db> {
                 "ambiguous constructor `.{name}`: it may be {}; write its type",
                 names(&ctors)
             ),
+            ConstructorSelection::None if deferred.candidates.is_empty() => {
+                format!("no type in scope has a constructor `{name}`")
+            }
             ConstructorSelection::None => {
                 let ctors: Vec<_> = deferred.candidates.iter().copied().collect();
                 format!(

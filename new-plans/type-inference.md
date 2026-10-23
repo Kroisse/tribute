@@ -82,8 +82,7 @@ not instantiate a fresh constructor after the pattern has been solved.
 
 1. **타입의 namespace.** 그 타입이 nominal 타입 `T`로 정해지면 생성자는 `T`의
    생성자 중 이름이 `Name`인 것이다. Enum의 생성자는 variant이고, struct의 생성자는
-   타입과 이름이 같은 struct 자신이다. `T`는 스코프에 없어도 된다. 생성자는 쓰는
-   자리에서 [보여야](modules.md#가시성-visibility) 한다.
+   타입과 이름이 같은 struct 자신이다. `T`는 스코프에 없어도 된다.
 2. **스코프의 타입.** 타입이 아직 정해지지 않았으면 스코프의 타입 `T`마다 `T`의
    생성자 `Name`을 후보로 모은다
    ([암묵적 생성자의 후보](modules.md#암묵적-생성자의-후보)). 후보는
