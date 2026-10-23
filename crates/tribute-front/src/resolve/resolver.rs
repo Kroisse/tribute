@@ -270,7 +270,7 @@ impl<'db> Resolver<'db> {
         binding: &Binding<'db>,
     ) -> Option<&Restriction> {
         self.entry_restriction(namespace, name, binding)
-            .filter(|restriction| !restriction.is_visible_from(&self.module_path))
+            .filter(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
     }
 
     /// Whether the current module sees the re-export, if any, that the entry
@@ -290,7 +290,7 @@ impl<'db> Resolver<'db> {
     fn hidden(&self, binding: &Binding<'db>) -> Option<&Restriction> {
         self.env
             .restriction(binding)
-            .filter(|restriction| !restriction.is_visible_from(&self.module_path))
+            .filter(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
     }
 
     /// The narrowest restriction of what the package-root path `path` names,
@@ -315,11 +315,13 @@ impl<'db> Resolver<'db> {
         (1..=modules)
             .filter_map(|end| self.env.module_restriction(&path[..end]))
             .chain(own)
+            // Another package's restriction hides it however wide it is.
             .max_by_key(|restriction| {
-                restriction
-                    .within
-                    .as_ref()
-                    .map_or(usize::MAX, |within| within.len())
+                if restriction.package == self.package {
+                    restriction.within.len()
+                } else {
+                    usize::MAX
+                }
             })
     }
 
@@ -327,7 +329,7 @@ impl<'db> Resolver<'db> {
     /// from the current module.
     fn hidden_path(&self, path: &[Symbol]) -> Option<&Restriction> {
         self.path_restriction(path)
-            .filter(|restriction| !restriction.is_visible_from(&self.module_path))
+            .filter(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
     }
 
     /// Report a reference, written as `written`, to what `restriction` hides
@@ -1493,7 +1495,7 @@ impl<'db> Resolver<'db> {
             return;
         };
         let written = u.path.iter().format("::");
-        if !restriction.is_visible_from(&self.module_path) {
+        if !restriction.is_visible_from(&self.package, &self.module_path) {
             self.report_hidden(u.id, written, restriction);
             return;
         }
@@ -1506,9 +1508,11 @@ impl<'db> Resolver<'db> {
             },
             Visibility::Public => None,
         };
-        let wider = match (&exported, &restriction.within) {
-            (Some(exported), Some(within)) => exported.len() < within.len(),
-            _ => true,
+        let wider = match &exported {
+            Some(exported) => {
+                restriction.package != self.package || exported.len() < restriction.within.len()
+            }
+            None => true,
         };
         if wider {
             Diagnostic::new(

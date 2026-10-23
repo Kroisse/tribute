@@ -74,9 +74,11 @@ pub enum Binding<'db> {
 /// Where a binding or module that is not public is visible.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Restriction {
-    /// The module whose descendants, itself included, see it. `None` when it
-    /// is visible only in another package.
-    pub within: Option<SymbolPath>,
+    /// The package that declares it. Another package never sees it.
+    pub package: PackageName,
+    /// The module of that package whose descendants, itself included, see
+    /// it.
+    pub within: SymbolPath,
     /// The declaration whose visibility restricts it: its own, or that of a
     /// module around it.
     pub declaration: SymbolPath,
@@ -100,11 +102,9 @@ impl std::fmt::Display for Restriction {
 }
 
 impl Restriction {
-    /// Whether `module`, a module of this package, sees it.
-    pub fn is_visible_from(&self, module: &[Symbol]) -> bool {
-        self.within
-            .as_ref()
-            .is_some_and(|within| module.starts_with(within))
+    /// Whether `module`, a module of `package`, sees it.
+    pub fn is_visible_from(&self, package: &PackageName, module: &[Symbol]) -> bool {
+        self.package == *package && module.starts_with(&self.within)
     }
 
     /// The narrower of `self` and `outer`, the restriction of a module
@@ -112,12 +112,7 @@ impl Restriction {
     /// declaration, so the longer path is the narrower one.
     pub fn within_module(self, outer: Option<&Restriction>) -> Restriction {
         match outer {
-            Some(outer)
-                if outer.within.as_ref().map(|path| path.len())
-                    > self.within.as_ref().map(|path| path.len()) =>
-            {
-                outer.clone()
-            }
+            Some(outer) if outer.within.len() > self.within.len() => outer.clone(),
             _ => self,
         }
     }
@@ -568,25 +563,20 @@ impl<'db> PackageEnv<'db> {
         let under = |path: &[Symbol]| {
             SymbolPath::new(std::iter::once(package.clone()).chain(path.iter().cloned()))
         };
-        // What another package restricts, this one never sees.
-        let foreign = |restriction: &Restriction| Restriction {
-            within: None,
-            ..restriction.clone()
-        };
         for (binding, restriction) in &other.restrictions {
             self.restrictions
                 .entry(binding.clone())
-                .or_insert_with(|| foreign(restriction));
+                .or_insert_with(|| restriction.clone());
         }
         for (module, restriction) in &other.module_restrictions {
             self.module_restrictions
                 .entry(under(module))
-                .or_insert_with(|| foreign(restriction));
+                .or_insert_with(|| restriction.clone());
         }
         for ((namespace, name), restriction) in &other.entry_restrictions {
             self.entry_restrictions
                 .entry((under(namespace), name.clone()))
-                .or_insert_with(|| foreign(restriction));
+                .or_insert_with(|| restriction.clone());
         }
 
         // The package root's items: its definitions, what its root re-exports,

@@ -325,7 +325,8 @@ impl Scope {
             }
         };
         let own = Restriction {
-            within: Some(within),
+            package: self.package.clone(),
+            within,
             declaration: path,
             visibility: visibility.clone(),
         };
@@ -433,7 +434,8 @@ fn inject_runtime_bindings<'db>(db: &'db dyn salsa::Database, env: &mut PackageE
     ] {
         let name = id.name(db);
         let restriction = Restriction {
-            within: restriction_module(&runtime, &pkg),
+            package: PackageName::std(),
+            within: SymbolPath::root(),
             declaration: id.path(db).clone(),
             visibility: Visibility::Restricted(pkg.clone()),
         };
