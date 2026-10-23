@@ -250,7 +250,7 @@ fn area(shape: Shape) -> Nat {
     );
     assert_eq!(
         messages(db, &partial, DiagnosticSeverity::Error),
-        ["non-exhaustive case expression: missing patterns: Rect(_, False)"]
+        ["non-exhaustive case expression: missing patterns: .Rect(_, False)"]
     );
 
     let repeated = format!(

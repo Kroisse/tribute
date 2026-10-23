@@ -2,7 +2,7 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "non-exhaustive case expression: missing patterns: Some(False)"
+- message: "non-exhaustive case expression: missing patterns: .Some(False)"
   span:
     start: 44
     end: 45

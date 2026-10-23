@@ -505,7 +505,7 @@ fn value(pair: #(Item, Bool)) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: #(Empty, False)"]
+        ["non-exhaustive case expression: missing patterns: #(.Empty, False)"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -529,7 +529,7 @@ fn pick(o: Maybe(Bool)) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: Just(False)"]
+        ["non-exhaustive case expression: missing patterns: .Just(False)"]
     );
     assert_eq!(exhaustive, 0);
 
@@ -600,7 +600,7 @@ fn outer(shape: Shape) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: Other"]
+        ["non-exhaustive case expression: missing patterns: .Other"]
     );
     assert_eq!(exhaustive, 0);
 }

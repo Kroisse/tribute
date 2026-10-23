@@ -336,7 +336,10 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                     })
                 })
                 .collect::<Option<_>>()?;
-            return Some(Family { variants });
+            return Some(Family {
+                variants,
+                implicit: true,
+            });
         }
         if id.qualified(db) != *name {
             return None;
@@ -347,6 +350,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                 name: id.name(db),
                 arity,
             }],
+            implicit: false,
         })
     }
 

@@ -7,7 +7,7 @@ use salsa::Accumulator;
 use tree_sitter::Node;
 use trunk_ir::{Span, Symbol, SymbolPath};
 
-use crate::ast::{NodeId, SpanMapBuilder};
+use crate::ast::{NodeId, SpanMapBuilder, UnresolvedName};
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 /// Context for lowering CST to AST.
@@ -136,6 +136,18 @@ impl<'db> AstLoweringCtx<'db> {
             return SymbolPath::new([owner, operator]);
         }
         SymbolPath::new([self.node_symbol(node)])
+    }
+
+    /// The constructor a `type_path` or an `implicit_constructor` node names.
+    pub fn constructor_name(&mut self, node: &Node) -> UnresolvedName {
+        let path = self.node_path(node);
+        let id = self.fresh_id_with_span(node);
+        if node.kind() == "implicit_constructor" {
+            let name = path.leaf().expect("a constructor has a name").clone();
+            UnresolvedName::implicit(name, id)
+        } else {
+            UnresolvedName::new(path, id)
+        }
     }
 
     /// Get a Symbol from a node's text, without the `r#` of raw identifiers.

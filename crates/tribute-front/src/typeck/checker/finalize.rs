@@ -76,12 +76,16 @@ impl<'db> Substitution<'_, 'db> {
 
 /// Applies one function's solved substitution to its checked body.
 ///
-/// Deferred method calls become direct calls, and case expressions whose
+/// Deferred method calls become direct calls, deferred implicit
+/// constructors their selected constructors, and case expressions whose
 /// substituted arms cover their scrutinee are recorded as exhaustive.
 pub(super) struct Finalize<'a, 'db> {
     pub(super) checker: &'a TypeChecker<'db>,
     pub(super) substitution: &'a Substitution<'a, 'db>,
     pub(super) deferred_resolutions: &'a HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+    /// The constructor each implicit constructor selected after solving, and
+    /// its instance.
+    pub(super) constructor_resolutions: &'a HashMap<NodeId, (ResolvedRef<'db>, Type<'db>)>,
     pub(super) node_types: &'a HashMap<NodeId, Type<'db>>,
     pub(super) exhaustive_cases: &'a mut Vec<NodeId>,
     pub(super) exhaustiveness_reported: &'a mut HashSet<NodeId>,
@@ -94,7 +98,15 @@ impl<'db> Finalize<'_, 'db> {
 }
 
 impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
-    fn visit_ref_mut(&mut self, _: RefSite, _: NodeId, value: &mut TypedRef<'db>) {
+    fn visit_ref_mut(&mut self, _: RefSite, node: NodeId, value: &mut TypedRef<'db>) {
+        // An implicit constructor selected during solving becomes the
+        // constructor; one left unselected was reported.
+        if matches!(value.resolved, ResolvedRef::ImplicitConstructor { .. })
+            && let Some((resolved, instance)) = self.constructor_resolutions.get(&node)
+        {
+            value.resolved = resolved.clone();
+            value.ty = *instance;
+        }
         value.ty = self.apply(value.ty);
     }
 

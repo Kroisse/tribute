@@ -3210,7 +3210,7 @@ fn main() ->{std::io::Io} Nil {
 
         let result = compile_with_diagnostics(db, source);
         let has_non_exhaustive = result.diagnostics.iter().any(|d| {
-            d.inner.message.contains("missing patterns: Some(False)")
+            d.inner.message.contains("missing patterns: .Some(False)")
                 && d.inner.severity == DiagnosticSeverity::Error
         });
         assert!(

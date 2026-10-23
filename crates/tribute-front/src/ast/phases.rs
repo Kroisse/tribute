@@ -13,6 +13,7 @@ use std::fmt::{self, Display, Formatter};
 use trunk_ir::{Symbol, SymbolPath};
 
 use super::decl::OpDeclKind;
+use super::expr::Candidates;
 use super::node_id::NodeId;
 use super::types::Type;
 
@@ -36,12 +37,28 @@ pub struct UnresolvedName {
     pub path: SymbolPath,
     /// Node ID for looking up the span in SpanMap.
     pub id: NodeId,
+    /// Whether the name is an implicit constructor `.Name`, whose type its
+    /// context gives (`new-plans/type-inference.md` § 암묵적 생성자).
+    pub implicit: bool,
 }
 
 impl UnresolvedName {
     /// Create a new name reference (simple or qualified).
     pub fn new(path: SymbolPath, id: NodeId) -> Self {
-        Self { path, id }
+        Self {
+            path,
+            id,
+            implicit: false,
+        }
+    }
+
+    /// Create the implicit constructor `.name`.
+    pub fn implicit(name: Symbol, id: NodeId) -> Self {
+        Self {
+            path: SymbolPath::new([name]),
+            id,
+            implicit: true,
+        }
     }
 
     /// Returns true if this is a simple (unqualified) name.
@@ -65,6 +82,9 @@ impl UnresolvedName {
 
 impl Display for UnresolvedName {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if self.implicit {
+            f.write_str(".")?;
+        }
         Display::fmt(&self.path, f)
     }
 }
@@ -362,6 +382,15 @@ pub enum ResolvedRef<'db> {
         id: CtorId<'db>,
         /// The variant name (for enum variants) or type name (for structs).
         variant: Symbol,
+    },
+
+    /// An implicit constructor `.Name`, which type checking resolves to a
+    /// [`Constructor`](Self::Constructor) of the type its context gives,
+    /// falling back to `candidates`: the constructors `Name` of the types in
+    /// scope, by rank (`new-plans/modules.md` § 암묵적 생성자의 후보).
+    ImplicitConstructor {
+        name: Symbol,
+        candidates: Candidates<CtorId<'db>>,
     },
 
     /// Reference to a type definition (struct or enum).

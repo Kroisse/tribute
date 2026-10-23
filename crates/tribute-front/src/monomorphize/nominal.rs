@@ -250,7 +250,10 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                         for (constructor, variant) in entry.constructors.iter().zip(&e.variants) {
                             assert_eq!(
                                 constructor.id.qualified(db),
-                                Symbol::new(&format!("{prefix}::Nested::{}::{}", e.name, variant.name))
+                                Symbol::new(&format!(
+                                    "{prefix}::Nested::{}::{}",
+                                    e.name, variant.name
+                                ))
                             );
                             assert_eq!(constructor.node, variant.id);
                             assert_eq!(constructor.fields, variant.fields.len());

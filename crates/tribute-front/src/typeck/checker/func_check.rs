@@ -13,7 +13,8 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    ExprKind, FuncDecl, FuncDefId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
+    AbilityRow, ExprKind, FuncDecl, FuncDefId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef,
+    UniVarId,
 };
 
 use super::super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
@@ -23,6 +24,18 @@ use super::super::solver::{LocatedSolveError, TypeSolver};
 use super::diagnostics::{format_solve_error, solve_error_context};
 use super::finalize::{Finalize, Substitution};
 use super::{FunctionCheck, Mode, TypeChecker};
+
+/// What resolving a function's deferred calls and implicit constructors
+/// after solving selected.
+struct DeferredSelections<'db> {
+    /// The function each deferred call selected, and its instance.
+    functions: HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
+    /// The constructor each deferred implicit constructor selected, and its
+    /// instance.
+    constructors: HashMap<crate::ast::NodeId, (ResolvedRef<'db>, Type<'db>)>,
+    /// Errors of relations that waited for a selection, not of the selection.
+    waiting_errors: Vec<LocatedSolveError<'db>>,
+}
 use crate::ast::visit::VisitMut;
 
 impl<'db> TypeChecker<'db> {
@@ -156,6 +169,7 @@ impl<'db> TypeChecker<'db> {
         let body_ability_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
         let deferred_methods = ctx.take_deferred_methods();
+        let deferred_constructors = ctx.take_deferred_constructors();
         let become_method_operands = ctx.take_become_method_operands();
         let evidence = std::mem::take(&mut ctx.evidence);
         let next_row_var = ctx.next_row_var();
@@ -174,6 +188,14 @@ impl<'db> TypeChecker<'db> {
                 method.result_ty,
                 method.arg_types.clone(),
                 method.effect,
+            );
+        }
+        for constructor in &deferred_constructors {
+            solver.defer_producer(
+                constructor.node_id,
+                constructor.result_ty,
+                constructor.field_types.clone(),
+                AbilityRow::pure(self.db()),
             );
         }
 
@@ -200,9 +222,14 @@ impl<'db> TypeChecker<'db> {
         // 4b. Post-solve: resolve deferred method calls
         // After solving, UniVar receiver types may now be concrete.
         // Look up methods and add type constraints for return types.
-        let (mut deferred_resolutions, waiting_errors) = self.resolve_deferred_methods(
+        let DeferredSelections {
+            functions: mut deferred_resolutions,
+            constructors: constructor_resolutions,
+            waiting_errors,
+        } = self.resolve_deferred_methods(
             &mut solver,
             deferred_methods,
+            deferred_constructors,
             func.id,
             &mut func_instances,
         );
@@ -298,6 +325,14 @@ impl<'db> TypeChecker<'db> {
         );
         let mut body_univars = Vec::new();
         self.collect_univars_from_body(&body, type_subst, row_subst, &mut body_univars);
+        for (_, instance) in constructor_resolutions.values() {
+            type_subst.collect_univars_from_type(
+                self.db(),
+                *instance,
+                row_subst,
+                &mut body_univars,
+            );
+        }
         self.collect_univars_from_deferred_resolutions(
             &deferred_resolutions,
             type_subst,
@@ -469,6 +504,7 @@ impl<'db> TypeChecker<'db> {
             checker: self,
             substitution: &substitution,
             deferred_resolutions: &deferred_resolutions,
+            constructor_resolutions: &constructor_resolutions,
             node_types: &checked.node_types,
             exhaustive_cases: &mut checked.exhaustive_cases,
             exhaustiveness_reported: &mut checked.exhaustiveness_reported,
@@ -588,17 +624,19 @@ impl<'db> TypeChecker<'db> {
     /// Iteratively resolves methods whose receiver types are now concrete after solving.
     /// Each resolved method adds new type constraints (return type, param types),
     /// which are re-solved. Repeats until no more progress.
+    ///
+    /// Implicit constructors whose selection waits are selected in the same
+    /// rounds, since each selection may determine the other's types.
     fn resolve_deferred_methods(
         &self,
         solver: &mut TypeSolver<'db>,
         mut deferred: Vec<crate::typeck::func_context::DeferredMethodCall<'db>>,
+        mut constructors: Vec<crate::typeck::func_context::DeferredConstructor<'db>>,
         func_node_id: crate::ast::NodeId,
         instances: &mut HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-    ) -> (
-        HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
-        Vec<LocatedSolveError<'db>>,
-    ) {
+    ) -> DeferredSelections<'db> {
         let mut resolved = HashMap::default();
+        let mut resolved_constructors = HashMap::default();
         // Errors of relations that waited for a call, not of the call.
         let mut waiting_errors = Vec::new();
         // Once no call can be selected with the types determined so far,
@@ -650,17 +688,43 @@ impl<'db> TypeChecker<'db> {
                     remaining.push(mc);
                 }
             }
+            let mut remaining_constructors = Vec::new();
+            for constructor in std::mem::take(&mut constructors) {
+                if let super::implicit_ctor::ConstructorSelection::One(id) =
+                    self.select_deferred_constructor(solver, &constructor, settled)
+                {
+                    let (instance, constraints) =
+                        self.selected_constructor_constraints(solver, &constructor, id);
+                    resolved_constructors.insert(
+                        constructor.node_id,
+                        (
+                            ResolvedRef::constructor(id, constructor.name.clone()),
+                            instance,
+                        ),
+                    );
+                    solver.resolve_producer(constructor.node_id);
+                    for constraint in constraints {
+                        new_constraints.add(constraint);
+                    }
+                } else {
+                    remaining_constructors.push(constructor);
+                }
+            }
 
             if new_constraints.is_empty() {
-                if !settled && !remaining.is_empty() {
+                if !settled && !(remaining.is_empty() && remaining_constructors.is_empty()) {
                     settled = true;
                     deferred = remaining;
+                    constructors = remaining_constructors;
                     continue;
                 }
                 // A call has only the functions its scope names, so what
                 // is still undecided here stays so.
                 for mc in &remaining {
                     self.report_unresolved_method_path(solver, mc);
+                }
+                for constructor in &remaining_constructors {
+                    self.report_unselected_constructor(solver, constructor);
                 }
                 break;
             }
@@ -685,9 +749,14 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             deferred = remaining;
+            constructors = remaining_constructors;
             settled = false;
         }
-        (resolved, waiting_errors)
+        DeferredSelections {
+            functions: resolved,
+            constructors: resolved_constructors,
+            waiting_errors,
+        }
     }
 
     /// What selecting a function of type `callee` for the deferred `call`
