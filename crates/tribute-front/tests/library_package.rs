@@ -146,3 +146,141 @@ fn main() -> Nil {
         ["unresolved name `pkg::Some`; did you mean `Some`?"]
     );
 }
+
+/// A module the package root declares as `std` hides package `std` from the
+/// paths of the root: `std::…` names only the module, in expressions and
+/// annotations alike, while the prelude's names and namespaces still reach
+/// the package.
+#[salsa_test]
+fn a_root_module_named_std_hides_the_package(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod std {
+    pub fn answer() -> Nat { 42 }
+}
+
+fn mine() -> Nat { std::answer() }
+
+fn theirs() -> Nat { std::String::len("a") }
+
+fn annotated(o: std::Option(Nat)) -> Nat { 0 }
+
+fn call() -> Nat { annotated(Some(1)) }
+
+fn prelude() -> Option(List(Nat)) { Option::Some(List::prepend(1, [])) }
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "unresolved name `std::String::len`",
+            "type error at call site in function 'call': \
+             expected `pkg::std::Option(Nat)`, found `std::Option(Nat)`",
+        ]
+    );
+}
+
+/// A module named `std` hides the package only where it is in scope: an
+/// inline module does not see the package root's modules.
+#[salsa_test]
+fn a_root_module_named_std_is_not_in_scope_in_other_modules(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod std {
+    pub fn answer() -> Nat { 42 }
+}
+
+mod m {
+    use std::Option::Some
+
+    pub fn wrapped(o: std::Option(Nat)) -> std::Option(Nat) { Some(std::String::len("a")) }
+}
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}
+
+/// A `use` at the package root whose first segment the root declares
+/// reads the path in the root's module, not in package `std`.
+#[salsa_test]
+fn a_root_import_through_a_module_named_std_stays_in_the_module(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod std {
+    pub fn answer() -> Nat { 42 }
+}
+
+use std::answer
+use std::io::print_line
+
+fn main() -> Nil { let _ = answer() }
+"#,
+    );
+    assert_eq!(errors, ["unresolved import `std::io::print_line`"]);
+}
+
+/// Inline modules re-export through the prelude's namespaces, a dependency,
+/// and their own modules; a name an inline module has keeps its paths in
+/// the module, through an import too.
+#[salsa_test]
+fn inline_module_paths_start_from_what_the_module_names(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod std {
+    pub fn twice(n: Nat) -> Nat { n + n }
+}
+
+pub mod a {
+    pub mod b {
+        pub mod c {
+            pub fn one() -> Nat { 1 }
+        }
+    }
+}
+
+use a::b
+
+mod m {
+    pub use Option::Some as Just
+    pub use std::String::len as size
+    pub use std as library
+    pub use super::a::b::c as deeper
+
+    fn hidden(x: nope::T) -> Nat { 0 }
+}
+
+mod k {
+    use super::std
+
+    pub fn doubled() -> Nat { 1.std::twice() }
+}
+
+mod n {
+    mod std {
+        pub fn f() -> Nat { 1 }
+    }
+
+    use std::String::len
+}
+
+fn main() -> Nil {
+    let _ = case m::Just(m::size("a") + m::deeper::one() + b::c::one() + k::doubled()) {
+        Some(n) -> n
+        None -> 0
+    }
+    let _ = m::library::Some(1)
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "unresolved name `nope::T`",
+            "unresolved import `std::String::len`",
+        ]
+    );
+}

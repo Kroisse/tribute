@@ -21,7 +21,7 @@ mod resolver;
 mod scope;
 
 pub use env::{Binding, Export, PackageEnv, Restriction};
-pub use package::PackageName;
+pub use package::{IdentityPath, Location, PackageName};
 pub use resolver::Resolver;
 pub use scope::{Dependencies, Scope};
 
@@ -75,20 +75,23 @@ pub fn resolve_with_env<'db>(
 /// namespace (so `Abort::abort` works).
 fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependencies<'db>) {
     // Collect Module bindings that need resolution
-    let module_imports: Vec<(Symbol, Vec<Symbol>)> = env
+    let module_imports: Vec<(Symbol, Option<Vec<Symbol>>)> = env
         .iter_imports()
-        .filter_map(|(name, binding)| {
-            let path: &[Symbol] = match binding {
-                Binding::Import { path } => path,
-                _ => env.get_use_path(&name)?,
-            };
-            (path.len() >= 2).then(|| (name, path.to_vec()))
+        .filter_map(|(name, binding)| match binding {
+            Binding::Import { path } => (path.len() >= 2).then(|| (name, Some(path.clone()))),
+            _ => env.get_use_path(&name).map(|_| (name, None)),
         })
         .collect();
 
     for (import_name, path) in module_imports {
         let scope = Scope::new(env, dependencies);
-        let Some((path, binding)) = use_target(scope, path) else {
+        let target = match path {
+            Some(path) => use_target(scope, &path),
+            None => env.get_use_path(&import_name).and_then(|location| {
+                Some((location.clone(), scope.lookup_path(location)?.clone()))
+            }),
+        };
+        let Some((path, binding)) = target else {
             continue;
         };
         let entries = scope.collect_namespace(&path);
@@ -112,7 +115,7 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
     for (name, paths) in &repeated {
         let mut functions = Vec::new();
         for path in paths {
-            match use_target(Scope::new(env, dependencies), path.clone()) {
+            match use_target(Scope::new(env, dependencies), path) {
                 Some((_, Binding::Function { id })) if !functions.contains(&id) => {
                     functions.push(id);
                 }
@@ -130,22 +133,30 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
     env.set_repeated_uses(repeated);
 }
 
-/// The package path a `use` of `path` names and what is declared there.
-fn use_target<'db>(scope: Scope<'_, 'db>, path: Vec<Symbol>) -> Option<(SymbolPath, Binding<'db>)> {
-    // A path into a library namespace continues from its package path,
-    // unless the package declares the first segment itself.
-    let path = match path.split_first() {
-        Some((first, rest))
-            if !scope.declares(first.clone())
-                && let Some(library) = scope.library_namespace(first) =>
-        {
-            SymbolPath::new(library.iter().chain(rest).cloned())
+/// The location a `use` of `path` at the package root names and what is
+/// declared there.
+fn use_target<'db>(scope: Scope<'_, 'db>, path: &[Symbol]) -> Option<(Location, Binding<'db>)> {
+    let location = root_location(scope, path)?;
+    let (target_name, namespace) = location.split_last()?;
+    let binding = scope.lookup_qualified(&namespace, target_name)?.clone();
+    Some((location, binding))
+}
+
+/// The location a path written at the package root names, without path
+/// keywords. Its first segment is a name the package root declares or
+/// imports, then a namespace the prelude supplies, then a dependency; a
+/// dependency whose name the root has is out of reach.
+pub(crate) fn root_location(scope: Scope<'_, '_>, path: &[Symbol]) -> Option<Location> {
+    let (first, rest) = path.split_first()?;
+    if !scope.declares(first.clone()) && scope.lookup(first).is_none() {
+        if let Some(library) = scope.library_namespace(first) {
+            return Some(library.join(rest));
         }
-        _ => SymbolPath::new(path),
-    };
-    let (target_name, namespace) = path.split_last()?;
-    let binding = scope.lookup_qualified(namespace, target_name)?.clone();
-    Some((path, binding))
+        if let Some(root) = scope.dependency_root(first) {
+            return Some(root.join(rest));
+        }
+    }
+    Some(scope.at_root(SymbolPath::new(path.iter().cloned())))
 }
 
 /// Build the environment of the package being compiled from its AST, with
@@ -237,17 +248,18 @@ fn resolve_exports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependencies<'
     }
 }
 
-/// The package-root paths a `use` of `path` in the inline module `module`
-/// may name, in order. A first segment the module imports continues only
-/// from what that import names; `hops` counts the imports followed.
+/// The locations a `use` of `path` in the module `module` may name, in
+/// order. A first segment the module imports continues only from what that
+/// import names; `hops` counts the imports followed. A first segment the
+/// module itself has keeps the path in the module's package.
 fn use_candidates(
     scope: Scope<'_, '_>,
     module: &SymbolPath,
     path: &[Symbol],
     hops: usize,
-) -> Vec<Vec<Symbol>> {
+) -> Vec<Location> {
     match path::absolute_path(module, path) {
-        Ok(Some(target)) => return vec![target],
+        Ok(Some(target)) => return vec![scope.at_root(SymbolPath::new(target))],
         Err(_) => return Vec::new(),
         Ok(None) => {}
     }
@@ -261,12 +273,19 @@ fn use_candidates(
         }
         return use_candidates(scope, module, imported, hops + 1)
             .into_iter()
-            .map(|target| target.into_iter().chain(rest.iter().cloned()).collect())
+            .map(|target| target.join(rest))
             .collect();
     }
-    let mut candidates = vec![module.iter().chain(path).cloned().collect()];
-    if let Some(library) = scope.library_namespace(first) {
-        candidates.push(library.iter().chain(rest).cloned().collect());
+    let here = scope.at_root(module.clone());
+    let mut candidates = vec![here.join(path)];
+    let own = scope.lookup_qualified(&here, first).is_some()
+        || scope.has_namespace(&here.child(first.clone()));
+    if !own {
+        if let Some(library) = scope.library_namespace(first) {
+            candidates.push(library.join(rest));
+        } else if let Some(root) = scope.dependency_root(first) {
+            candidates.push(root.join(rest));
+        }
     }
     candidates
 }
@@ -280,17 +299,13 @@ fn add_export<'db>(
     let scope = Scope::new(env, dependencies);
     let candidates = use_candidates(scope, &export.module, &export.path, 0);
     let Some((target, binding)) = candidates.into_iter().find_map(|target| {
-        let (last, namespace) = target.split_last()?;
-        let binding = if namespace.is_empty() {
-            scope.lookup(last).cloned()
-        } else {
-            scope.lookup_qualified(namespace, last).cloned()
-        };
-        let binding = binding
+        let binding = scope
+            .lookup_path(&target)
+            .cloned()
             .filter(|b| !matches!(b, Binding::Import { .. }))
             .or_else(|| {
                 scope.has_namespace(&target).then(|| Binding::Module {
-                    path: env.package().identity_path(&target).to_vec(),
+                    path: target.identity(),
                 })
             })?;
         Some((target, binding))
@@ -304,11 +319,7 @@ fn add_export<'db>(
         env.add_to_namespace_if_absent(own.clone(), name, entry);
     }
     env.add_to_namespace_if_absent(export.module.clone(), export.name.clone(), binding);
-    env.set_export_target(
-        export.module.clone(),
-        export.name.clone(),
-        SymbolPath::new(target),
-    );
+    env.set_export_target(export.module.clone(), export.name.clone(), target);
     if let Some(restriction) = &export.restriction {
         env.restrict_entry(
             export.module.clone(),
@@ -691,10 +702,7 @@ fn collect_module<'db>(
                     SymbolPath::new([m.name.clone()]),
                     inner.clone(),
                     Binding::Module {
-                        path: scope
-                            .package
-                            .identity_path(&path.child(inner.clone()))
-                            .to_vec(),
+                        path: scope.package.at(path.child(inner.clone())).identity(),
                     },
                 );
             }
@@ -704,7 +712,7 @@ fn collect_module<'db>(
         env.add_import(
             m.name.clone(),
             Binding::Module {
-                path: scope.package.identity_path(&path).to_vec(),
+                path: scope.package.at(path.clone()).identity(),
             },
         );
     }

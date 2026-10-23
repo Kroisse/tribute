@@ -4469,7 +4469,10 @@ fn main() -> String { "hello" }
                     .expect("a prelude name has a path");
                 let path = path.iter().format("::");
                 match scope.library_namespace(&name) {
-                    Some(namespace) => format!("{name} -> {path} ({namespace})"),
+                    Some(namespace) => format!(
+                        "{name} -> {path} ({})",
+                        namespace.identity().iter().format("::")
+                    ),
                     None => format!("{name} -> {path}"),
                 }
             })
