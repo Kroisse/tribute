@@ -396,8 +396,7 @@ impl<'db> PackageEnv<'db> {
         self.module_restrictions.get(module)
     }
 
-    /// Record a re-export, to resolve with
-    /// [`crate::resolve::resolve_exports`].
+    /// Record a re-export, to resolve once the package is collected.
     pub fn add_export(&mut self, export: Export) {
         self.exports.push(export);
     }
