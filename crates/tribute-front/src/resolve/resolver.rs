@@ -1072,9 +1072,13 @@ impl<'db> Resolver<'db> {
         entries: &mut Vec<DeclEntry<ResolvedRef<'db>>>,
     ) {
         for item in items {
+            if let ModuleItem::Decl(decl) = item
+                && self.is_redefinition(decl)
+            {
+                continue;
+            }
             self.report_visibility_path(item);
             match item {
-                ModuleItem::Decl(decl) if self.is_redefinition(decl) => {}
                 ModuleItem::Decl(decl) => {
                     let decl = self.resolve_decl(decl);
                     entries.push(DeclEntry {

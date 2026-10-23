@@ -77,6 +77,15 @@ fn a_repeated_struct_gives_its_companion_no_field_functions(db: &salsa::Database
 }
 
 #[salsa_test]
+fn a_repeated_declaration_is_not_checked_further(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        "fn f() -> Nat { 1 }\npub(pkg::nowhere) fn f() -> Nat { 2 }\nfn main() -> Nil {}\n",
+    );
+    assert_eq!(errors, ["duplicate definition of `f`"]);
+}
+
+#[salsa_test]
 fn a_type_and_its_companion_module_coexist(db: &salsa::DatabaseImpl) {
     let errors = errors(
         db,
