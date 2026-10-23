@@ -1712,7 +1712,7 @@ fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fm
             write!(h, " inferred")?;
         }
         if let Some(convention) = convention {
-            write!(h, " convention({})", convention.keyword())?;
+            write!(h, " convention({convention})")?;
         }
     }
     print_extra_attributes(
@@ -1750,7 +1750,7 @@ fn parse_convention(input: &mut &str) -> winnow::ModalResult<Option<CallingConve
     '('.parse_next(input)?;
     ws.parse_next(input)?;
     let keyword = ident.parse_next(input)?;
-    let Some(convention) = CallingConvention::from_keyword(keyword) else {
+    let Ok(convention) = keyword.parse::<CallingConvention>() else {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::new(),
         ));
@@ -1977,7 +1977,7 @@ fn print_lambda(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> 
             print_row(h, &FuncSig(ty).row(h.ctx()))?;
         }
         if let Some(convention) = convention {
-            write!(h, " convention({})", convention.keyword())?;
+            write!(h, " convention({convention})")?;
         }
     }
     write!(h, " captures [")?;

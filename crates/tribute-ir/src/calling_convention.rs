@@ -1,5 +1,8 @@
 //! Tribute calling conventions and the IR that records them.
 
+use std::fmt;
+use std::str::FromStr;
+
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -16,6 +19,8 @@ pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_in
 ///
 /// Ordering is significant: composing requirements selects the stronger
 /// convention with [`CallingConvention::join`].
+///
+/// It displays as, and parses from, its [keyword](Self::keyword).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CallingConvention {
     /// Pure function: source parameters and source result only.
@@ -47,6 +52,8 @@ impl CallingConvention {
         usize::from(self.needs_evidence())
     }
 
+    const ALL: [Self; 3] = [Self::Direct, Self::EvidenceDirect, Self::Cps];
+
     /// The keyword that spells this convention, both as the stored
     /// attribute value and in the `convention(..)` syntax.
     pub fn keyword(self) -> &'static str {
@@ -54,15 +61,6 @@ impl CallingConvention {
             Self::Direct => "direct",
             Self::EvidenceDirect => "evidence_direct",
             Self::Cps => "cps",
-        }
-    }
-
-    pub fn from_keyword(keyword: &str) -> Option<Self> {
-        match keyword {
-            "direct" => Some(Self::Direct),
-            "evidence_direct" => Some(Self::EvidenceDirect),
-            "cps" => Some(Self::Cps),
-            _ => None,
         }
     }
 
@@ -75,9 +73,31 @@ impl CallingConvention {
     /// that is not one of the keywords.
     pub(crate) fn from_attribute(ctx: &IrContext, value: &Attribute) -> Option<Self> {
         match value {
-            Attribute::String(keyword) => Self::from_keyword(ctx.str(*keyword)),
+            Attribute::String(keyword) => ctx.str(*keyword).parse().ok(),
             _ => None,
         }
+    }
+}
+
+impl fmt::Display for CallingConvention {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.keyword())
+    }
+}
+
+/// A string that is not a calling-convention keyword.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display("unknown calling convention")]
+pub struct UnknownConvention;
+
+impl FromStr for CallingConvention {
+    type Err = UnknownConvention;
+
+    fn from_str(keyword: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|convention| convention.keyword() == keyword)
+            .ok_or(UnknownConvention)
     }
 }
 
@@ -509,12 +529,10 @@ mod tests {
                 CallingConvention::from_attribute(&ctx, &value),
                 Some(convention)
             );
-            assert_eq!(
-                CallingConvention::from_keyword(convention.keyword()),
-                Some(convention)
-            );
+            assert_eq!(convention.to_string().parse(), Ok(convention));
         }
 
+        assert!("Cps".parse::<CallingConvention>().is_err());
         let unknown = ctx.string_attr("tail");
         assert_eq!(CallingConvention::from_attribute(&ctx, &unknown), None);
         assert_eq!(
