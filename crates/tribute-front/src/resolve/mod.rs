@@ -143,12 +143,12 @@ fn use_target<'db>(scope: Scope<'_, 'db>, path: &[Symbol]) -> Option<(Location, 
 }
 
 /// The location a path written at the package root names, without path
-/// keywords. Its first segment is a name the package root declares, then a
-/// namespace the prelude supplies, then a dependency; a dependency the
-/// root declares the name of is out of reach.
+/// keywords. Its first segment is a name the package root declares or
+/// imports, then a namespace the prelude supplies, then a dependency; a
+/// dependency whose name the root has is out of reach.
 pub(crate) fn root_location(scope: Scope<'_, '_>, path: &[Symbol]) -> Option<Location> {
     let (first, rest) = path.split_first()?;
-    if !scope.declares(first.clone()) {
+    if !scope.declares(first.clone()) && scope.lookup(first).is_none() {
         if let Some(library) = scope.library_namespace(first) {
             return Some(library.join(rest));
         }
