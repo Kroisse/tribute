@@ -2,6 +2,9 @@
 
 : "${LINT_TEST_COMMAND_LOG:?must be set by test-lint.sh}"
 echo "cargo $*" >>"$LINT_TEST_COMMAND_LOG"
+if [ -n "${LINT_TEST_CWD_LOG:-}" ]; then
+    pwd -P >"$LINT_TEST_CWD_LOG"
+fi
 
 case "$1" in
     fmt)
