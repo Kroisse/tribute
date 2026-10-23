@@ -1393,4 +1393,30 @@ mod tests {
         assert_eq!(ctx.lookup_function_type(&name), Some(&scheme));
         assert_eq!(ctx.lookup_function_type(&[Symbol::new("missing")]), None);
     }
+
+    #[test]
+    fn nominal_origin_keys_tell_every_origin_apart() {
+        use crate::ast::{BuiltinType, TypeOrigin};
+
+        let keys = [
+            TypeOrigin::Source { disambiguator: 0 },
+            TypeOrigin::Source { disambiguator: 1 },
+            TypeOrigin::Builtin(BuiltinType::List),
+            TypeOrigin::Builtin(BuiltinType::Slots),
+            TypeOrigin::Builtin(BuiltinType::Dispatch),
+            TypeOrigin::Synthetic,
+        ]
+        .map(nominal_origin_key);
+        assert_eq!(
+            keys,
+            [
+                "source",
+                "source1",
+                "builtin_list",
+                "builtin_slots",
+                "builtin_dispatch",
+                "synthetic"
+            ]
+        );
+    }
 }
