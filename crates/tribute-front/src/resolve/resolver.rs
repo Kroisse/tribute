@@ -767,12 +767,10 @@ impl<'db> Resolver<'db> {
                 return Some(own);
             }
         } else {
+            // A first segment the module names keeps the path in it.
             let nested = self.here().join(namespace.iter());
-            if self.view().has_namespace(&nested) || self.defined_in_module(first) {
+            if self.view().has_namespace(&nested) || self.module_names(first) {
                 return Some(nested);
-            }
-            if self.module_names(first) {
-                return None;
             }
         }
         if let Some(library) = self.view().library_namespace(first) {
@@ -1607,8 +1605,9 @@ impl<'db> Resolver<'db> {
     /// names its first segment itself.
     fn use_target(&self, path: &[Symbol]) -> Option<Location> {
         let names = |location: &Location| {
+            // A package root names that package.
             let Some((last, namespace)) = location.split_last() else {
-                return false;
+                return self.view().has_namespace(location);
             };
             // A single-segment path must name a definition: `env.lookup`
             // would also find the module placeholder this import inserted.
