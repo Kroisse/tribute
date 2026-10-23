@@ -540,7 +540,7 @@ fn diag_duplicate_effect_in_annotation(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn test() ->{abilities::Throw(Int), abilities::Throw(Int)} Nil {
+fn test() ->{std::abilities::Throw(Int), std::abilities::Throw(Int)} Nil {
     Nil
 }
 "#,
@@ -558,11 +558,11 @@ fn diag_effects_that_type_arguments_can_merge(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn distinct() ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil {
+fn distinct() ->{std::abilities::Throw(Int), std::abilities::Throw(Bool)} Nil {
     Nil
 }
 
-fn merge(x: a) ->{abilities::Throw(a), abilities::Throw(Int)} Nil {
+fn merge(x: a) ->{std::abilities::Throw(a), std::abilities::Throw(Int)} Nil {
     Nil
 }
 "#,
@@ -580,15 +580,15 @@ fn diag_unsettled_ambiguous_effect_equality(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn one() ->{abilities::Throw(a)} Nil {
+fn one() ->{std::abilities::Throw(a)} Nil {
     Nil
 }
 
-fn take(f: fn() ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil) ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil {
+fn take(f: fn() ->{std::abilities::Throw(Int), std::abilities::Throw(Bool)} Nil) ->{std::abilities::Throw(Int), std::abilities::Throw(Bool)} Nil {
     f()
 }
 
-fn caller() ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil {
+fn caller() ->{std::abilities::Throw(Int), std::abilities::Throw(Bool)} Nil {
     take(one)
 }
 "#,

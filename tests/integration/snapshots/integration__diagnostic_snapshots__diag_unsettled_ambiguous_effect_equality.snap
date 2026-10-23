@@ -4,7 +4,7 @@ expression: result.diagnostics
 ---
 - message: "type error at call site in function 'caller': ambiguous ability: cannot match `{Throw(_)}` with `{Throw(Bool), Throw(Int)}`, more than one instance could correspond; annotate the ability's type arguments"
   span:
-    start: 261
-    end: 270
+    start: 296
+    end: 305
   severity: Error
   phase: TypeChecking

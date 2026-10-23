@@ -103,7 +103,7 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
 모듈은 패키지 `std` 자신의 모듈을 포함해 `std::prelude::v0`의 `pub` 항목을 짧은
 이름으로 본다. 그 항목은 대개 표준 라이브러리 선언의 re-export다. 값과 타입(`Option`,
 `Some`, `String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
-(`Option::map`, `Int::to_string`, `abilities::Throw`). Re-export는 대상의 namespace를
+(`Option::map`, `Int::to_string`). Re-export는 대상의 namespace를
 함께 가져오기 때문이다.
 
 - 모듈 안의 이름이 prelude 짧은 이름보다 우선한다. 가려진 prelude 항목은
@@ -114,9 +114,12 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
   `x.std::Option::map(f)`로 쓴다.
 - `std::prelude::v0`의 `use`는 prelude 짧은 이름으로 시작하지 않고 경로 키워드로
   쓴다(`pub use pkg::Option`). Prelude가 자기 자신에 기대지 않게 하기 위해서다.
-- Prelude에 둘 이름은 사용자 코드가 짧은 이름으로 쓰는 표준 타입, 생성자, namespace다.
-  Compiler 소유 `List`의 짧은 이름도 prelude의 re-export다. 같은 선언을 가리키므로
-  식별 경로는 바뀌지 않는다.
+- Prelude에 둘 이름은 사용자 코드가 짧은 이름으로 쓰는 표준 타입, 생성자, 그리고
+  타입과 같은 이름의 namespace(`Int`, `Bytes`)다. Compiler 소유 `List`의 짧은
+  이름도 prelude의 re-export다. 같은 선언을 가리키므로 식별 경로는 바뀌지 않는다.
+- 표준 라이브러리의 모듈(`std::abilities`, `std::io`, `std::collections`)은
+  prelude에 두지 않는다. 그 항목은 `std::io::print_line`처럼 패키지 경로로
+  가리키거나 `use`로 가져온다.
 
 진단은 타입을 식별 경로로 표시한다. 패키지 `std`의 타입은 `std::Option(Int)`처럼
 보인다.

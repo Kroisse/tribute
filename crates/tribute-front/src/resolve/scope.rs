@@ -3,10 +3,18 @@
 
 use trunk_ir::{Symbol, SymbolPath};
 
-use super::LIBRARY_PACKAGE;
+use std::sync::LazyLock;
+
 use super::env::{Binding, PackageEnv, Restriction};
 use super::package::{IdentityPath, Location, PackageName};
+use super::{LIBRARY_PACKAGE, PRELUDE_MODULE};
 use crate::ast::FuncDefId;
+
+/// The path of the prelude module from the root of its package.
+fn prelude_module() -> &'static SymbolPath {
+    static PRELUDE: LazyLock<SymbolPath> = LazyLock::new(|| SymbolPath::new(PRELUDE_MODULE));
+    &PRELUDE
+}
 
 /// The packages a package depends on, each by its name.
 #[derive(Clone, Debug, Default)]
@@ -34,8 +42,7 @@ impl<'db> Dependencies<'db> {
             .find_map(|(known, env)| (known == name).then_some(*env))
     }
 
-    /// The package whose root items every module sees under their short
-    /// names: the prelude's.
+    /// The package whose prelude module every module sees: package `std`.
     fn prelude(&self) -> Option<(&Symbol, &'db PackageEnv<'db>)> {
         self.packages
             .iter()
@@ -187,9 +194,9 @@ impl<'s, 'db> Scope<'s, 'db> {
             .entry_restriction(&namespace.path, name)
     }
 
-    /// The prelude's package and environment, for a package that depends
-    /// on it; the package's own compiler-owned names otherwise.
-    fn prelude(&self) -> Option<(Option<&Symbol>, &'s PackageEnv<'db>)> {
+    /// The package that holds the prelude module, if it is a dependency,
+    /// and its environment. Package `std` sees its own prelude module.
+    fn prelude(&self) -> Option<(Option<&'s Symbol>, &'s PackageEnv<'db>)> {
         if self.own.package().is_library() {
             return Some((None, self.own));
         }
@@ -198,43 +205,56 @@ impl<'s, 'db> Scope<'s, 'db> {
             .map(|(name, env)| (Some(name), env))
     }
 
-    /// A name the prelude supplies to every module.
+    /// A name the prelude supplies to every module: a `pub` item of the
+    /// prelude module.
     pub fn lookup_library(&self, name: &Symbol) -> Option<&'s Binding<'db>> {
-        match self.prelude()? {
-            (None, own) => own.builtin(name),
-            (Some(_), env) => env.prelude_item(name),
+        let (package, env) = self.prelude()?;
+        let prelude = prelude_module();
+        if package.is_some() && env.entry_restriction(prelude, name).is_some() {
+            return None;
         }
+        env.lookup_qualified(prelude, name)
     }
 
     /// The names the prelude supplies to every module.
     pub fn iter_library_names(&self) -> Vec<Symbol> {
-        match self.prelude() {
-            Some((None, own)) => own.builtin_names().collect(),
-            Some((Some(_), env)) => env.prelude_items().map(|(name, _)| name).collect(),
-            None => Vec::new(),
-        }
+        let Some((_, env)) = self.prelude() else {
+            return Vec::new();
+        };
+        let mut names: Vec<Symbol> = env
+            .iter_namespace(prelude_module())
+            .map(|(name, _)| name)
+            .filter(|name| self.lookup_library(name).is_some())
+            .collect();
+        names.sort();
+        names
     }
 
-    /// The identity path of the prelude name `name`.
-    pub fn library_path(&self, name: &Symbol) -> Option<IdentityPath> {
+    /// The path, from the root of the package that holds it, of what the
+    /// prelude name `name` names: a re-export's target, or the prelude
+    /// module's own item.
+    fn library_target(&self, name: &Symbol) -> Option<Location> {
         self.lookup_library(name)?;
-        let (package, env) = self.prelude()?;
-        Some(IdentityPath::new(match env.builtin_path(name) {
-            Some(path) => SymbolPath::new(path.iter().cloned()),
-            None => SymbolPath::new(package.into_iter().chain([name]).cloned()),
-        }))
+        let (_, env) = self.prelude()?;
+        let prelude = prelude_module();
+        Some(
+            env.export_target(prelude, name)
+                .cloned()
+                .unwrap_or_else(|| env.package().at(prelude.child(name.clone()))),
+        )
+    }
+
+    /// The identity path of what the prelude name `name` names.
+    pub fn library_path(&self, name: &Symbol) -> Option<IdentityPath> {
+        Some(self.library_target(name)?.identity())
     }
 
     /// The namespace a path starting with the prelude name `alias`
-    /// continues in, in the package that supplies the prelude.
+    /// continues in: that of the item it names, in the package that holds
+    /// it.
     pub fn library_namespace(&self, alias: &Symbol) -> Option<Location> {
-        let (package, env) = self.prelude()?;
-        if let Some(namespace) = env.builtin_namespace(alias) {
-            return Some(env.package().at(namespace.clone()));
-        }
-        let root = std::slice::from_ref(alias);
-        (package.is_some() && env.has_namespace(root))
-            .then(|| env.package().at(SymbolPath::new(root.iter().cloned())))
+        let target = self.library_target(alias)?;
+        self.has_namespace(&target).then_some(target)
     }
 
     /// Whether the package root sees `name` only because the prelude

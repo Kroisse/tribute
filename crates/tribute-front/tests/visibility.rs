@@ -374,7 +374,8 @@ fn main() -> Nil {
     );
     for expected in [
         "`std::io::ReadLineResult` is not visible here: `std::io::ReadLineResult` is private",
-        "`__tribute_bytes_len` is not visible here: `std::__tribute_bytes_len` is private",
+        // Not an item of `std::prelude::v0`, so not a short name.
+        "unresolved name `__tribute_bytes_len`",
         "`std::__tribute_bytes_len` is not visible here: `std::__tribute_bytes_len` is private",
         "`std::String::Cursor` is not visible here: `std::String::Cursor` is private",
         "`rope_equal` is not visible here: `std::String::rope_equal` is private",

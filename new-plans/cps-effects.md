@@ -490,7 +490,17 @@ Operation의 convention은 tribute-ir의 `ConventionBearing` operation interface
 convention을 가질 수 있다. Pass는 attribute key를 직접 읽거나 쓰지 않고 이
 interface로 convention을 읽고, 쓰고, 소비한다. Attribute 철자는 tribute-ir의 저장,
 출력, 파싱, 검증만 다룬다. 읽기는 convention이 없는 경우와 값이 잘못된 경우를
-구분하며, legalization 경계 검증과 물리화는 잘못된 값을 거부한다.
+구분한다.
+
+Legalization 출구 검증과 물리화 입구는 module 전체의 convention을 검증하며, 다음을
+거부한다.
+
+- 이 interface를 구현하지 않는 operation에 붙은 convention
+- Keyword가 아닌 convention 값
+- 같은 callable의 convention을 함께 기록한 type과 다른 operation의 convention.
+  그런 type은 `closure.new`와 `closure.lambda`의 결과 type, 그리고 indirect
+  transfer가 직접 받는 callee의 type이며, convention-proven `closure.closure`일
+  때만 convention을 기록한다.
 
 같은 legalization에서 각 `tribute_control.perform`을 typecheck된
 `operation_kind`에 따라 변환한다. `"fn"`은 suffix를 capture하지 않고

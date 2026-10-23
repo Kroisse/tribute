@@ -2974,7 +2974,7 @@ use std::io::print
 use std::io::print_line
 use std::io::read_line
 
-fn input() ->{std::io::Io, abilities::Throw(std::io::Error)} String {
+fn input() ->{std::io::Io, std::abilities::Throw(std::io::Error)} String {
     read_line()
 }
 
@@ -4413,6 +4413,88 @@ fn main() -> String { "hello" }
             !has_main_error,
             "non-main function returning Int should not produce main-specific error, got: {:?}",
             result.diagnostics
+        );
+    }
+
+    /// The short names every module of a user package sees, the public
+    /// items of `std::prelude::v0`, with the namespace a path through each
+    /// continues in and the package path it names.
+    #[salsa_test]
+    fn library_names_are_the_prelude_short_names(db: &crate::TributeDatabaseImpl) {
+        let mut names: Vec<String> = library_names(db)
+            .into_iter()
+            .map(|(name, binding)| {
+                let kind = match binding {
+                    ast_resolve::Binding::Function { .. } => "fn",
+                    ast_resolve::Binding::Constructor { .. } => "ctor",
+                    ast_resolve::Binding::TypeDef { .. } => "type",
+                    ast_resolve::Binding::Module { .. } => "mod",
+                    ast_resolve::Binding::Import { .. } => "use",
+                    ast_resolve::Binding::AbilityOp { .. } => "op",
+                    ast_resolve::Binding::Ability { .. } => "ability",
+                };
+                format!("{kind} {name}")
+            })
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "ctor Branch",
+                "ctor Error",
+                "ctor Leaf",
+                "ctor None",
+                "ctor Ok",
+                "ctor Some",
+                "mod Bytes",
+                "mod Float",
+                "mod Int",
+                "mod Nat",
+                "type List",
+                "type Option",
+                "type Result",
+                "type String",
+            ]
+        );
+
+        let dependencies = prelude_dependencies(db);
+        let own = PackageEnv::new();
+        let scope = ast_resolve::Scope::new(&own, &dependencies);
+        let paths: Vec<String> = scope
+            .iter_library_names()
+            .into_iter()
+            .map(|name| {
+                let path = scope
+                    .library_path(&name)
+                    .expect("a prelude name has a path");
+                let path = path.iter().format("::");
+                match scope.library_namespace(&name) {
+                    Some(namespace) => format!(
+                        "{name} -> {path} ({})",
+                        namespace.identity().iter().format("::")
+                    ),
+                    None => format!("{name} -> {path}"),
+                }
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "Branch -> std::Branch",
+                "Bytes -> std::Bytes (std::Bytes)",
+                "Error -> std::Error",
+                "Float -> std::Float (std::Float)",
+                "Int -> std::Int (std::Int)",
+                "Leaf -> std::Leaf",
+                "List -> std::collections::List (std::collections::List)",
+                "Nat -> std::Nat (std::Nat)",
+                "None -> std::None",
+                "Ok -> std::Ok",
+                "Option -> std::Option (std::Option)",
+                "Result -> std::Result (std::Result)",
+                "Some -> std::Some",
+                "String -> std::String (std::String)",
+            ]
         );
     }
 }

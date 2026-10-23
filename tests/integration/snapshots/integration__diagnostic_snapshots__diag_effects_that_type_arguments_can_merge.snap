@@ -4,12 +4,12 @@ expression: result.diagnostics
 ---
 - message: "function 'merge' declares `Throw` more than once with arguments that can be the same type"
   span:
-    start: 121
-    end: 142
+    start: 136
+    end: 162
   severity: Error
   labels:
     - span:
-        start: 100
-        end: 119
+        start: 110
+        end: 134
       message: first matching ability annotation is here
   phase: TypeChecking

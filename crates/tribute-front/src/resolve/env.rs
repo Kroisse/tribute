@@ -157,18 +157,15 @@ pub struct PackageEnv<'db> {
     /// The functions a name imports when several `use`s give it different
     /// ones. A call selects one by the type of its first argument.
     imported_functions: HashMap<Symbol, Vec<FuncDefId<'db>>>,
-    /// The compiler-owned names the package supplies to every module, each
-    /// with its identity path, e.g. `List`.
-    builtins: HashMap<Symbol, (Binding<'db>, Vec<Symbol>)>,
-    /// The namespaces a path starting with a compiler-owned name continues
-    /// in, e.g. `List` → `collections::List`.
-    builtin_namespaces: HashMap<Symbol, SymbolPath>,
     /// The bindings that are not public, each with the modules that see it.
     restrictions: HashMap<Binding<'db>, Restriction>,
     /// The modules that are not public, by package-root path.
     module_restrictions: HashMap<SymbolPath, Restriction>,
     /// The re-exports that inline modules declare.
     exports: Vec<Export>,
+    /// The location each resolved re-export names, by namespace and name,
+    /// e.g. `prelude::v0`, `List` → `collections::List` in package `std`.
+    export_targets: HashMap<(SymbolPath, Symbol), Location>,
     /// The `use`s of each inline module: the imported name and the path as
     /// written.
     module_uses: HashMap<(SymbolPath, Symbol), Vec<Symbol>>,
@@ -277,41 +274,6 @@ impl<'db> PackageEnv<'db> {
         self.imported_functions.get(name).map(Vec::as_slice)
     }
 
-    /// Supply the compiler-owned `binding` to every module as `name`, with
-    /// the identity path `path`; a path starting with `name` continues in
-    /// `namespace`.
-    pub fn add_builtin(
-        &mut self,
-        name: Symbol,
-        binding: Binding<'db>,
-        path: Vec<Symbol>,
-        namespace: SymbolPath,
-    ) {
-        self.builtin_namespaces.insert(name.clone(), namespace);
-        self.builtins.insert(name, (binding, path));
-    }
-
-    /// The compiler-owned binding the package supplies as `name`.
-    pub fn builtin(&self, name: &Symbol) -> Option<&Binding<'db>> {
-        self.builtins.get(name).map(|(binding, _)| binding)
-    }
-
-    /// The identity path of the compiler-owned name `name`.
-    pub fn builtin_path(&self, name: &Symbol) -> Option<&[Symbol]> {
-        self.builtins.get(name).map(|(_, path)| path.as_slice())
-    }
-
-    /// The namespace a path starting with the compiler-owned name `name`
-    /// continues in.
-    pub fn builtin_namespace(&self, name: &Symbol) -> Option<&SymbolPath> {
-        self.builtin_namespaces.get(name)
-    }
-
-    /// The compiler-owned names the package supplies.
-    pub fn builtin_names(&self) -> impl Iterator<Item = Symbol> + '_ {
-        self.builtins.keys().cloned()
-    }
-
     /// The item `name` of the package root, as another package sees it:
     /// a definition, what the root re-exports, or a module.
     pub fn root_item(&self, name: &Symbol) -> Option<&Binding<'db>> {
@@ -347,32 +309,6 @@ impl<'db> PackageEnv<'db> {
         names
             .into_iter()
             .filter_map(|name| Some((name.clone(), self.root_item(&name)?)))
-            .collect::<Vec<_>>()
-            .into_iter()
-    }
-
-    /// The name `name` the package's prelude gives another package: a root
-    /// item, except a re-export the package restricts, or a compiler-owned
-    /// name.
-    pub fn prelude_item(&self, name: &Symbol) -> Option<&Binding<'db>> {
-        if self.entry_restriction(&[], name).is_some() {
-            return self.builtin(name);
-        }
-        self.root_item(name).or_else(|| self.builtin(name))
-    }
-
-    /// The names the package's prelude gives another package.
-    pub fn prelude_items(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
-        let mut names: Vec<Symbol> = self
-            .root_items()
-            .map(|(name, _)| name)
-            .chain(self.builtin_names())
-            .collect();
-        names.sort();
-        names.dedup();
-        names
-            .into_iter()
-            .filter_map(|name| Some((name.clone(), self.prelude_item(&name)?)))
             .collect::<Vec<_>>()
             .into_iter()
     }
@@ -419,6 +355,16 @@ impl<'db> PackageEnv<'db> {
     /// How many `use`s the inline modules declare.
     pub fn module_use_count(&self) -> usize {
         self.module_uses.len()
+    }
+
+    /// Record that the re-export `name` of `namespace` names `target`.
+    pub fn set_export_target(&mut self, namespace: SymbolPath, name: Symbol, target: Location) {
+        self.export_targets.insert((namespace, name), target);
+    }
+
+    /// The location the re-export `name` of `namespace` names.
+    pub fn export_target(&self, namespace: &SymbolPath, name: &Symbol) -> Option<&Location> {
+        self.export_targets.get(&(namespace.clone(), name.clone()))
     }
 
     /// Take the re-exports recorded so far.

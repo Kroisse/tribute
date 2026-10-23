@@ -9,7 +9,13 @@ use trunk_ir::printer::print_module;
 use super::common::assert_native_output;
 
 const PROGRAM: &str = r#"
-use io::{Io, print_line}
+use console::{Io, print_line}
+
+// The package root's `mod std` hides package `std` from its paths; this
+// module does not see it.
+mod console {
+    pub use std::io::{Io, print_line}
+}
 
 mod std {
     pub mod Int {
@@ -75,8 +81,8 @@ fn main() ->{Io} Nil {
 }
 
 /// Package `std` is resolved from its own root: a `pub use` at its root
-/// exports a name, which other packages see by its short name and under
-/// `std`.
+/// exports a name, which other packages see under `std`. It is not a short
+/// name, as `std::prelude::v0` does not re-export it.
 #[test]
 fn a_std_root_re_export_is_visible_to_users() {
     super::common::assert_output_in_std_on_both_targets_with_native_asan(
@@ -92,9 +98,45 @@ pub use pkg::extras::seven
 use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
-    print_line(Int::to_string(seven() + std::seven()))
+    print_line(Int::to_string(std::extras::seven() + std::seven()))
 }
 "#,
         "14",
+    );
+}
+
+/// A module of package `std` sees the items of `std::prelude::v0` under
+/// their short names, as every module does, and its own names win over them.
+#[test]
+fn a_std_module_sees_the_prelude() {
+    super::common::assert_output_in_std_on_both_targets_with_native_asan(
+        "std_module_prelude.trb",
+        r#"
+pub mod extras {
+    enum Shadow { Some(Int) }
+
+    fn own() ->{} Int {
+        case Shadow::Some(+3) {
+            Some(n) -> n
+        }
+    }
+
+    pub fn total() ->{} Int {
+        let found = case Option::Some(+4) {
+            Option::Some(n) -> n
+            None -> +0
+        }
+        found + own()
+    }
+}
+"#,
+        r#"
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(std::extras::total()))
+}
+"#,
+        "7",
     );
 }

@@ -1,4 +1,4 @@
-//! The prelude is the root of package `std`: every module sees its root items
+//! The prelude is the module `std::prelude::v0`: every module sees its items
 //! and their namespaces under short names, and a user declaration or import
 //! of the same name takes precedence.
 

@@ -704,6 +704,23 @@ pub mod io {
 }
 
 // =============================================================================
+// Prelude
+// =============================================================================
+
+// Every module, including those of package `std`, sees the `pub` items of
+// `prelude::v0` under their short names (`new-plans/modules.md`). Its paths
+// start with `pkg` so that the prelude does not rely on itself.
+pub mod prelude {
+    pub mod v0 {
+        pub use pkg::{Option, None, Some}
+        pub use pkg::{Result, Ok, Error}
+        pub use pkg::{String, Leaf, Branch}
+        pub use pkg::{Int, Nat, Float, Bytes}
+        pub use pkg::collections::List
+    }
+}
+
+// =============================================================================
 // Compiler-owned Runtime
 // =============================================================================
 
