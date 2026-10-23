@@ -75,9 +75,11 @@ impl Display for UnresolvedName {
 
 /// A unique identifier for a local variable binding.
 ///
-/// LocalIds are unique within a function scope and are assigned
-/// during name resolution. They provide stable identity for
-/// variables even if the same name is shadowed.
+/// LocalIds are assigned during name resolution and are unique within one
+/// module-level function, including its lambdas and handler arms. Each such
+/// function numbers its own, so an edit to one function leaves the others'
+/// LocalIds unchanged. They provide stable identity for variables even if
+/// the same name is shadowed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LocalId(u32);
 
@@ -470,7 +472,7 @@ impl<'db> TypedRef<'db> {
 // Generator for LocalIds
 // ============================================================================
 
-/// Generator for unique LocalIds within a scope.
+/// Generator for the LocalIds of one module-level function.
 #[derive(Debug, Default)]
 pub struct LocalIdGen(u32);
 

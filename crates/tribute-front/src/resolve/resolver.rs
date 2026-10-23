@@ -101,17 +101,8 @@ pub struct Resolver<'db> {
     env: PackageEnv<'db>,
     /// The packages it depends on.
     dependencies: Dependencies<'db>,
-    /// Stack of local scopes (function parameters, let bindings, etc.).
-    local_scopes: Vec<HashMap<Symbol, LocalId>>,
-    /// Generator for unique LocalIds.
-    local_id_gen: LocalIdGen,
     /// Span map for emitting diagnostics with source locations.
     span_map: SpanMap,
-    /// Stack of LocalIds for `resume` in `op` handler arms.
-    resume_local_id_stack: Vec<LocalId>,
-    /// Ability operations injected from ability annotations (effect-directed resolution).
-    /// Maps unqualified operation name → Binding. Cleared on each function scope.
-    effect_ops: HashMap<Symbol, Binding<'db>>,
     /// Lexical nested-module namespace used for unqualified references in an
     /// inline module body.
     module_path: Vec<Symbol>,
@@ -122,14 +113,30 @@ pub struct Resolver<'db> {
     /// The functions a name imports in each enclosing inline module when
     /// several of the module's `use`s give it different ones.
     module_imported_functions: Vec<HashMap<Symbol, Vec<crate::ast::FuncDefId<'db>>>>,
-    /// The functions each method name has named so far in the package root
-    /// (first) and in each enclosing inline module.
-    method_functions: Vec<HashMap<Symbol, Candidates<crate::ast::FuncDefId<'db>>>>,
     /// Source functions that redefine a struct field's function. They are
     /// reported and dropped, so the field's function is the definition.
     redefinitions: Vec<NodeId>,
     /// The package whose module tree `module_path` is a path of.
     package: PackageName,
+}
+
+/// Resolver for the body of one module-level function, in the scope its
+/// module gives. Its local variables, and so their `LocalId`s, belong to that
+/// function alone.
+struct FunctionResolver<'r, 'db> {
+    /// The resolver of the module the function is in.
+    module: &'r Resolver<'db>,
+    /// Stack of local scopes (function parameters, let bindings, etc.).
+    local_scopes: Vec<HashMap<Symbol, LocalId>>,
+    /// Generator for the function's LocalIds.
+    local_id_gen: LocalIdGen,
+    /// Stack of LocalIds for `resume` in `op` handler arms.
+    resume_local_id_stack: Vec<LocalId>,
+    /// Ability operations injected from ability annotations (effect-directed resolution).
+    /// Maps unqualified operation name → Binding.
+    effect_ops: HashMap<Symbol, Binding<'db>>,
+    /// The functions each method name has named so far.
+    method_functions: HashMap<Symbol, Candidates<crate::ast::FuncDefId<'db>>>,
 }
 
 impl<'db> Resolver<'db> {
@@ -145,15 +152,10 @@ impl<'db> Resolver<'db> {
             db,
             env,
             dependencies: dependencies.clone(),
-            local_scopes: vec![HashMap::default()],
-            local_id_gen: LocalIdGen::new(),
-            resume_local_id_stack: Vec::new(),
             span_map,
-            effect_ops: HashMap::default(),
             module_path: Vec::new(),
             module_imports: Vec::new(),
             module_imported_functions: Vec::new(),
-            method_functions: vec![HashMap::default()],
             redefinitions: Vec::new(),
             package: PackageName::compiled(),
         }
@@ -168,73 +170,6 @@ impl<'db> Resolver<'db> {
     /// The names the package and its dependencies give.
     fn view(&self) -> Scope<'_, 'db> {
         Scope::new(&self.env, &self.dependencies)
-    }
-
-    /// Enter a new local scope.
-    fn push_scope(&mut self) {
-        self.local_scopes.push(HashMap::default());
-    }
-
-    /// Exit the current local scope.
-    fn pop_scope(&mut self) {
-        self.local_scopes.pop();
-    }
-
-    /// Bind a local variable in the current scope.
-    fn bind_local(&mut self, name: Symbol) -> LocalId {
-        let id = self.local_id_gen.fresh();
-        if let Some(scope) = self.local_scopes.last_mut() {
-            scope.insert(name, id);
-        }
-        id
-    }
-
-    /// Look up a local variable in all scopes.
-    fn lookup_local(&self, name: &Symbol) -> Option<LocalId> {
-        for scope in self.local_scopes.iter().rev() {
-            if let Some(&id) = scope.get(name) {
-                return Some(id);
-            }
-        }
-        None
-    }
-
-    /// Resolve an unresolved name to a ResolvedRef.
-    fn resolve_name(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
-        let sym = name.name();
-
-        // For simple names: check locals, builtins, then the package environment
-        if name.is_simple() {
-            // First check local variables
-            if let Some(local_id) = self.lookup_local(&sym) {
-                return ResolvedRef::local(local_id, sym);
-            }
-
-            if let Some(binding) = self.lookup_simple(&sym) {
-                return self.visible_ref(binding, name);
-            }
-
-            // Check effect-injected ability operations (effect-directed resolution)
-            if let Some(binding) = self.effect_ops.get(&sym) {
-                return self.visible_ref(binding, name);
-            }
-        } else {
-            // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
-            match self.qualified_entry(name) {
-                Ok(Some((namespace, binding))) => {
-                    return self.visible_entry_ref(&namespace, binding, name);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    self.report_path_keyword(name.id, error);
-                    return ResolvedRef::local(LocalId::UNRESOLVED, sym);
-                }
-            }
-        }
-
-        // Not found - emit diagnostic and return unresolved sentinel
-        self.report_unresolved_name(name);
-        ResolvedRef::local(LocalId::UNRESOLVED, sym)
     }
 
     /// The reference `name` makes to `binding`, or an unresolved one if the
@@ -428,36 +363,6 @@ impl<'db> Resolver<'db> {
         }))
     }
 
-    /// The functions an unqualified call or reference `name` may be, by
-    /// rank, when it may be more than one: the functions the scope names
-    /// directly, then the prelude function of that name. A local variable of
-    /// the name hides them all.
-    fn unqualified_functions(&self, name: &UnresolvedName) -> Option<Candidates<ResolvedRef<'db>>> {
-        let sym = name.name();
-        if !name.is_simple() || self.lookup_local(&sym).is_some() {
-            return None;
-        }
-        let direct = match self.module_imported_functions(&sym) {
-            Some(imported) => imported.to_vec(),
-            None => match self.lookup_direct(&sym) {
-                Some(Binding::Function { id }) => vec![*id],
-                Some(_) => return None,
-                None => Vec::new(),
-            },
-        };
-        let library = match self.view().lookup_library(&sym) {
-            Some(binding @ Binding::Function { id }) if self.hidden(binding).is_none() => {
-                vec![*id]
-            }
-            _ => Vec::new(),
-        };
-        let mut functions = Candidates::new(direct, Vec::new(), library);
-        for rank in functions.ranks_mut() {
-            rank.sort_by_key(|function| function.path(self.db));
-        }
-        (functions.len() > 1).then(|| functions.map(|&id| ResolvedRef::function(id)))
-    }
-
     /// The functions several `use`s of the enclosing module give `name`,
     /// whatever the local variables are.
     fn module_imported_functions(&self, name: &Symbol) -> Option<&[crate::ast::FuncDefId<'db>]> {
@@ -484,49 +389,6 @@ impl<'db> Resolver<'db> {
             CompilationPhase::NameResolution,
         )
         .accumulate(self.db);
-    }
-
-    /// The functions the path of a qualified method call `x.a::b(y)` may
-    /// name, ranked by how its first segment comes into scope: `a::b` as the
-    /// call's scope resolves it, unless `a` is a prelude name, then
-    /// `m::a::b` for each name `m` in that scope, then `a::b` and `p::a::b`
-    /// through the prelude names `p`. A path that starts with a keyword or a
-    /// dependency package names its one function only. A declaration's name
-    /// counts as the module that shares it.
-    fn method_candidates(&self, path: &UnresolvedName) -> MethodCandidates<'db> {
-        let mut direct: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
-        match self.qualified_entry(path) {
-            // A path through a prelude name is the prelude's reading of it.
-            Ok(Some((_, Binding::Function { .. }))) if self.reaches_through_prelude(path) => {}
-            Ok(Some((namespace, binding @ Binding::Function { id })))
-                if self.visible_through_entry(&namespace, &path.name(), binding) =>
-            {
-                direct.push(*id)
-            }
-            // A constructor or an ability operation takes the receiver as
-            // its first argument without a choice by type.
-            Ok(Some((namespace, binding))) => {
-                return MethodCandidates::Callee(self.visible_entry_ref(&namespace, binding, path));
-            }
-            Ok(None) => {}
-            Err(error) => {
-                self.report_path_keyword(path.id, error);
-                return MethodCandidates::Unresolved;
-            }
-        }
-        let functions = if self.names_one_path(path) {
-            Candidates::new(direct, Vec::new(), Vec::new())
-        } else {
-            Candidates::new(
-                direct,
-                self.scope_namespace_functions(path),
-                self.library_method_functions(&path.path),
-            )
-        };
-        let Some(functions) = self.visible_functions(functions, path.id, path) else {
-            return MethodCandidates::Unresolved;
-        };
-        MethodCandidates::Functions(functions)
     }
 
     /// Whether the first segment of a qualified `path` is a prelude name the
@@ -628,72 +490,6 @@ impl<'db> Resolver<'db> {
             if let Some(library) = self.view().library_namespace(&prelude_name) {
                 push(Some(&library.join(namespace)), name);
             }
-        }
-        functions
-    }
-
-    /// The functions of `functions` the current module sees, each rank
-    /// sorted by path. When it sees none, report the method written as
-    /// `written`: as hidden if it would see one otherwise, else as
-    /// unresolved.
-    fn visible_functions(
-        &self,
-        mut functions: Candidates<crate::ast::FuncDefId<'db>>,
-        node: NodeId,
-        written: &UnresolvedName,
-    ) -> Option<Candidates<ResolvedRef<'db>>> {
-        for rank in functions.ranks_mut() {
-            rank.sort_by_key(|function| function.path(self.db));
-        }
-        let visible = functions.filter_map(|&id| {
-            self.hidden(&Binding::Function { id })
-                .is_none()
-                .then(|| ResolvedRef::function(id))
-        });
-        if !visible.is_empty() {
-            return Some(visible);
-        }
-        match functions.iter().next() {
-            Some(&id) => {
-                let binding = Binding::Function { id };
-                let restriction = self.hidden(&binding).expect("every function is hidden");
-                self.report_hidden(node, written, restriction);
-            }
-            None if written.is_simple() => self.report_unresolved_method(node, &written.name()),
-            None => self.report_unresolved_name(written),
-        }
-        None
-    }
-
-    /// The functions an unqualified method call `x.f(y)` may name, by rank:
-    /// `f` as the call's scope names it directly, then `m::f` for each name
-    /// `m` in that scope, then the prelude's `f` and `p::f` for each prelude
-    /// name `p`. A declaration's name counts as the module that shares it.
-    fn method_functions(
-        &mut self,
-        method: &Symbol,
-        node: NodeId,
-    ) -> Candidates<crate::ast::FuncDefId<'db>> {
-        if let Some(functions) = self.method_functions.last().and_then(|m| m.get(method)) {
-            return functions.clone();
-        }
-        // A method is a declared function; a local variable of its name does
-        // not hide it.
-        let direct = match self.module_imported_functions(method) {
-            Some(imported) => imported.to_vec(),
-            None => match self.lookup_direct(method) {
-                Some(Binding::Function { id }) => vec![*id],
-                _ => Vec::new(),
-            },
-        };
-        let path = UnresolvedName::new(SymbolPath::new([method.clone()]), node);
-        let functions = Candidates::new(
-            direct,
-            self.scope_namespace_functions(&path),
-            self.library_method_functions(&path.path),
-        );
-        if let Some(scope) = self.method_functions.last_mut() {
-            scope.insert(method.clone(), functions.clone());
         }
         functions
     }
@@ -1022,49 +818,6 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Report an unresolved name diagnostic, with "did you mean?" suggestions.
-    fn report_unresolved_name(&self, name: &UnresolvedName) {
-        let span = self.span_map.get_or_default(name.id);
-        let similar = self.find_similar_names(&name.name());
-
-        let message = if similar.is_empty() {
-            format!("unresolved name `{}`", name)
-        } else {
-            let suggestions = similar
-                .iter()
-                .format_with(", ", |s, f| s.with_str(|name| f(&format_args!("`{name}`"))));
-            format!("unresolved name `{}`; did you mean {}?", name, suggestions)
-        };
-
-        Diagnostic::new(
-            message,
-            span,
-            DiagnosticSeverity::Error,
-            CompilationPhase::NameResolution,
-        )
-        .accumulate(self.db);
-    }
-
-    /// Find names in scope that are similar to the given name.
-    fn find_similar_names(&self, name: &Symbol) -> Vec<Symbol> {
-        use rustc_hash::FxHashSet as HashSet;
-
-        let candidates: HashSet<Symbol> = self
-            .local_scopes
-            .iter()
-            .flat_map(|scope| scope.keys().cloned())
-            .chain(self.view().iter_all_names())
-            .collect();
-
-        let target = name.to_string();
-        best_matches_by(
-            candidates,
-            |sym: &Symbol| sym.with_str(|s| strsim::jaro_winkler(&target, s)),
-            0.8,
-            3,
-        )
-    }
-
     /// Convert a binding to a resolved reference.
     fn binding_to_ref(&self, binding: &Binding<'db>, name: Symbol) -> ResolvedRef<'db> {
         match binding {
@@ -1113,7 +866,7 @@ impl<'db> Resolver<'db> {
     /// Resolve a declaration.
     fn resolve_decl(&mut self, decl: &Decl<UnresolvedName>) -> Decl<ResolvedRef<'db>> {
         match decl {
-            Decl::Function(f) => Decl::Function(self.resolve_func_decl(f)),
+            Decl::Function(f) => Decl::Function(FunctionResolver::new(self).resolve_func_decl(f)),
             // These declarations contain no expressions to resolve.
             Decl::ExternFunction(e) => {
                 let mut e = e.clone();
@@ -1221,11 +974,9 @@ impl<'db> Resolver<'db> {
             .filter_map(|(name, imported)| Some((name, imported.filter(|f| f.len() > 1)?)))
             .collect();
         self.module_imported_functions.push(functions);
-        self.method_functions.push(HashMap::default());
         if let Some(items) = &module.body {
             self.resolve_items(items, entries);
         }
-        self.method_functions.pop();
         self.module_imported_functions.pop();
         self.module_imports.pop();
         self.module_path.pop();
@@ -1351,96 +1102,6 @@ impl<'db> Resolver<'db> {
     /// names, if it is that module or a module around it.
     fn restriction_module(&self, scope: &[Symbol]) -> Option<SymbolPath> {
         super::restriction_module(&self.module_path, scope)
-    }
-
-    /// Resolve a function declaration.
-    fn resolve_func_decl(&mut self, func: &FuncDecl<UnresolvedName>) -> FuncDecl<ResolvedRef<'db>> {
-        // Enter a new scope for function body
-        self.push_scope();
-
-        // Bind parameters and assign local IDs
-        let mut params: Vec<ParamDecl> = func
-            .params
-            .iter()
-            .map(|p| {
-                let mut p = p.clone();
-                p.local_id = Some(self.bind_local(p.name.clone()));
-                p
-            })
-            .collect();
-        self.resolve_param_paths(&mut params);
-        let mut type_params = func.type_params.clone();
-        self.resolve_bound_paths(&mut type_params);
-        let mut return_ty = func.return_ty.clone();
-        if let Some(ty) = &mut return_ty {
-            self.resolve_annotation_paths(ty);
-        }
-
-        // Resolve imported ability names in ability annotations to qualified paths.
-        // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
-        let mut effects = func.effects.clone();
-        if let Some(effs) = &mut effects {
-            self.resolve_effect_annotations(effs);
-        }
-
-        // Inject ability operations from ability annotations into scope.
-        // This enables effect-directed name resolution: when a function declares
-        // an effect like `->{abilities::Abort}`, its operations (e.g., `abort()`)
-        // become directly callable without qualification. The resolved row names
-        // an ability imported by the enclosing module by its full path.
-        if let Some(effects) = &effects {
-            self.inject_ability_operations(effects);
-        }
-
-        // Resolve body
-        let body = self.resolve_expr(&func.body);
-
-        self.effect_ops.clear();
-        self.pop_scope();
-
-        FuncDecl {
-            id: func.id,
-            visibility: func.visibility.clone(),
-            name: func.name.clone(),
-            type_params,
-            params,
-            return_ty,
-            effects,
-            body,
-        }
-    }
-
-    /// Inject ability operations from ability annotations into the current scope.
-    ///
-    /// For each ability in the ability row, look up its operations in the module
-    /// environment and make them available as unqualified names. This enables
-    /// calling `abort()` instead of `abilities::Abort::abort()` when the function
-    /// declares `->{abilities::Abort}`.
-    ///
-    /// Parameters and local variables take precedence (already bound before this).
-    fn inject_ability_operations(&mut self, effects: &[TypeAnnotation]) {
-        self.effect_ops.clear();
-        for ann in effects {
-            let Some(ability_name) = Self::extract_ability_name(ann) else {
-                continue;
-            };
-
-            // The annotation names the ability by its identity.
-            let Some(namespace) = self.view().locate(&ability_name) else {
-                continue;
-            };
-            let operations: Vec<(Symbol, Binding<'db>)> = self
-                .view()
-                .iter_namespace(&namespace)
-                .filter(|(_, binding)| matches!(binding, Binding::AbilityOp { .. }))
-                .map(|(name, binding)| (name, binding.clone()))
-                .collect();
-            for (op_name, binding) in operations {
-                // Don't override existing entries (first ability wins;
-                // TODO: detect ambiguity when multiple abilities export same op name)
-                self.effect_ops.entry(op_name).or_insert(binding);
-            }
-        }
     }
 
     /// Extract the ability name (as a Symbol) from a type annotation.
@@ -1644,9 +1305,373 @@ impl<'db> Resolver<'db> {
         let dependency = self.view().dependency_root(first)?.join(rest);
         names(&dependency).then_some(dependency)
     }
+}
+
+impl<'r, 'db> FunctionResolver<'r, 'db> {
+    /// A resolver for one function in the module `module` is resolving.
+    fn new(module: &'r Resolver<'db>) -> Self {
+        Self {
+            module,
+            local_scopes: vec![HashMap::default()],
+            local_id_gen: LocalIdGen::new(),
+            resume_local_id_stack: Vec::new(),
+            effect_ops: HashMap::default(),
+            method_functions: HashMap::default(),
+        }
+    }
+
+    /// Enter a new local scope.
+    fn push_scope(&mut self) {
+        self.local_scopes.push(HashMap::default());
+    }
+
+    /// Exit the current local scope.
+    fn pop_scope(&mut self) {
+        self.local_scopes.pop();
+    }
+
+    /// Bind a local variable in the current scope.
+    fn bind_local(&mut self, name: Symbol) -> LocalId {
+        let id = self.local_id_gen.fresh();
+        if let Some(scope) = self.local_scopes.last_mut() {
+            scope.insert(name, id);
+        }
+        id
+    }
+
+    /// Look up a local variable in all scopes.
+    fn lookup_local(&self, name: &Symbol) -> Option<LocalId> {
+        for scope in self.local_scopes.iter().rev() {
+            if let Some(&id) = scope.get(name) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    /// Resolve an unresolved name to a ResolvedRef.
+    fn resolve_name(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
+        let sym = name.name();
+
+        // For simple names: check locals, builtins, then the package environment
+        if name.is_simple() {
+            // First check local variables
+            if let Some(local_id) = self.lookup_local(&sym) {
+                return ResolvedRef::local(local_id, sym);
+            }
+
+            if let Some(binding) = self.module.lookup_simple(&sym) {
+                return self.module.visible_ref(binding, name);
+            }
+
+            // Check effect-injected ability operations (effect-directed resolution)
+            if let Some(binding) = self.effect_ops.get(&sym) {
+                return self.module.visible_ref(binding, name);
+            }
+        } else {
+            // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
+            match self.module.qualified_entry(name) {
+                Ok(Some((namespace, binding))) => {
+                    return self.module.visible_entry_ref(&namespace, binding, name);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.module.report_path_keyword(name.id, error);
+                    return ResolvedRef::local(LocalId::UNRESOLVED, sym);
+                }
+            }
+        }
+
+        // Not found - emit diagnostic and return unresolved sentinel
+        self.report_unresolved_name(name);
+        ResolvedRef::local(LocalId::UNRESOLVED, sym)
+    }
+
+    /// The functions an unqualified call or reference `name` may be, by
+    /// rank, when it may be more than one: the functions the scope names
+    /// directly, then the prelude function of that name. A local variable of
+    /// the name hides them all.
+    fn unqualified_functions(&self, name: &UnresolvedName) -> Option<Candidates<ResolvedRef<'db>>> {
+        let sym = name.name();
+        if !name.is_simple() || self.lookup_local(&sym).is_some() {
+            return None;
+        }
+        let direct = match self.module.module_imported_functions(&sym) {
+            Some(imported) => imported.to_vec(),
+            None => match self.module.lookup_direct(&sym) {
+                Some(Binding::Function { id }) => vec![*id],
+                Some(_) => return None,
+                None => Vec::new(),
+            },
+        };
+        let library = match self.module.view().lookup_library(&sym) {
+            Some(binding @ Binding::Function { id }) if self.module.hidden(binding).is_none() => {
+                vec![*id]
+            }
+            _ => Vec::new(),
+        };
+        let mut functions = Candidates::new(direct, Vec::new(), library);
+        for rank in functions.ranks_mut() {
+            rank.sort_by_key(|function| function.path(self.module.db));
+        }
+        (functions.len() > 1).then(|| functions.map(|&id| ResolvedRef::function(id)))
+    }
+
+    /// The functions the path of a qualified method call `x.a::b(y)` may
+    /// name, ranked by how its first segment comes into scope: `a::b` as the
+    /// call's scope resolves it, unless `a` is a prelude name, then
+    /// `m::a::b` for each name `m` in that scope, then `a::b` and `p::a::b`
+    /// through the prelude names `p`. A path that starts with a keyword or a
+    /// dependency package names its one function only. A declaration's name
+    /// counts as the module that shares it.
+    fn method_candidates(&self, path: &UnresolvedName) -> MethodCandidates<'db> {
+        let mut direct: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
+        match self.module.qualified_entry(path) {
+            // A path through a prelude name is the prelude's reading of it.
+            Ok(Some((_, Binding::Function { .. })))
+                if self.module.reaches_through_prelude(path) => {}
+            Ok(Some((namespace, binding @ Binding::Function { id })))
+                if self
+                    .module
+                    .visible_through_entry(&namespace, &path.name(), binding) =>
+            {
+                direct.push(*id)
+            }
+            // A constructor or an ability operation takes the receiver as
+            // its first argument without a choice by type.
+            Ok(Some((namespace, binding))) => {
+                return MethodCandidates::Callee(
+                    self.module.visible_entry_ref(&namespace, binding, path),
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.module.report_path_keyword(path.id, error);
+                return MethodCandidates::Unresolved;
+            }
+        }
+        let functions = if self.module.names_one_path(path) {
+            Candidates::new(direct, Vec::new(), Vec::new())
+        } else {
+            Candidates::new(
+                direct,
+                self.module.scope_namespace_functions(path),
+                self.module.library_method_functions(&path.path),
+            )
+        };
+        let Some(functions) = self.visible_functions(functions, path.id, path) else {
+            return MethodCandidates::Unresolved;
+        };
+        MethodCandidates::Functions(functions)
+    }
+
+    /// The functions of `functions` the current module sees, each rank
+    /// sorted by path. When it sees none, report the method written as
+    /// `written`: as hidden if it would see one otherwise, else as
+    /// unresolved.
+    fn visible_functions(
+        &self,
+        mut functions: Candidates<crate::ast::FuncDefId<'db>>,
+        node: NodeId,
+        written: &UnresolvedName,
+    ) -> Option<Candidates<ResolvedRef<'db>>> {
+        for rank in functions.ranks_mut() {
+            rank.sort_by_key(|function| function.path(self.module.db));
+        }
+        let visible = functions.filter_map(|&id| {
+            self.module
+                .hidden(&Binding::Function { id })
+                .is_none()
+                .then(|| ResolvedRef::function(id))
+        });
+        if !visible.is_empty() {
+            return Some(visible);
+        }
+        match functions.iter().next() {
+            Some(&id) => {
+                let binding = Binding::Function { id };
+                let restriction = self
+                    .module
+                    .hidden(&binding)
+                    .expect("every function is hidden");
+                self.module.report_hidden(node, written, restriction);
+            }
+            None if written.is_simple() => {
+                self.module.report_unresolved_method(node, &written.name())
+            }
+            None => self.report_unresolved_name(written),
+        }
+        None
+    }
+
+    /// The functions an unqualified method call `x.f(y)` may name, by rank:
+    /// `f` as the call's scope names it directly, then `m::f` for each name
+    /// `m` in that scope, then the prelude's `f` and `p::f` for each prelude
+    /// name `p`. A declaration's name counts as the module that shares it.
+    fn method_functions(
+        &mut self,
+        method: &Symbol,
+        node: NodeId,
+    ) -> Candidates<crate::ast::FuncDefId<'db>> {
+        if let Some(functions) = self.method_functions.get(method) {
+            return functions.clone();
+        }
+        // A method is a declared function; a local variable of its name does
+        // not hide it.
+        let direct = match self.module.module_imported_functions(method) {
+            Some(imported) => imported.to_vec(),
+            None => match self.module.lookup_direct(method) {
+                Some(Binding::Function { id }) => vec![*id],
+                _ => Vec::new(),
+            },
+        };
+        let path = UnresolvedName::new(SymbolPath::new([method.clone()]), node);
+        let functions = Candidates::new(
+            direct,
+            self.module.scope_namespace_functions(&path),
+            self.module.library_method_functions(&path.path),
+        );
+        self.method_functions
+            .insert(method.clone(), functions.clone());
+        functions
+    }
+
+    /// Report an unresolved name diagnostic, with "did you mean?" suggestions.
+    fn report_unresolved_name(&self, name: &UnresolvedName) {
+        let span = self.module.span_map.get_or_default(name.id);
+        let similar = self.find_similar_names(&name.name());
+
+        let message = if similar.is_empty() {
+            format!("unresolved name `{}`", name)
+        } else {
+            let suggestions = similar
+                .iter()
+                .format_with(", ", |s, f| s.with_str(|name| f(&format_args!("`{name}`"))));
+            format!("unresolved name `{}`; did you mean {}?", name, suggestions)
+        };
+
+        Diagnostic::new(
+            message,
+            span,
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(self.module.db);
+    }
+
+    /// Find names in scope that are similar to the given name.
+    fn find_similar_names(&self, name: &Symbol) -> Vec<Symbol> {
+        use rustc_hash::FxHashSet as HashSet;
+
+        let candidates: HashSet<Symbol> = self
+            .local_scopes
+            .iter()
+            .flat_map(|scope| scope.keys().cloned())
+            .chain(self.module.view().iter_all_names())
+            .collect();
+
+        let target = name.to_string();
+        best_matches_by(
+            candidates,
+            |sym: &Symbol| sym.with_str(|s| strsim::jaro_winkler(&target, s)),
+            0.8,
+            3,
+        )
+    }
+
+    /// Resolve a function declaration.
+    fn resolve_func_decl(&mut self, func: &FuncDecl<UnresolvedName>) -> FuncDecl<ResolvedRef<'db>> {
+        // Enter a new scope for function body
+        self.push_scope();
+
+        // Bind parameters and assign local IDs
+        let mut params: Vec<ParamDecl> = func
+            .params
+            .iter()
+            .map(|p| {
+                let mut p = p.clone();
+                p.local_id = Some(self.bind_local(p.name.clone()));
+                p
+            })
+            .collect();
+        self.module.resolve_param_paths(&mut params);
+        let mut type_params = func.type_params.clone();
+        self.module.resolve_bound_paths(&mut type_params);
+        let mut return_ty = func.return_ty.clone();
+        if let Some(ty) = &mut return_ty {
+            self.module.resolve_annotation_paths(ty);
+        }
+
+        // Resolve imported ability names in ability annotations to qualified paths.
+        // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
+        let mut effects = func.effects.clone();
+        if let Some(effs) = &mut effects {
+            self.module.resolve_effect_annotations(effs);
+        }
+
+        // Inject ability operations from ability annotations into scope.
+        // This enables effect-directed name resolution: when a function declares
+        // an effect like `->{abilities::Abort}`, its operations (e.g., `abort()`)
+        // become directly callable without qualification. The resolved row names
+        // an ability imported by the enclosing module by its full path.
+        if let Some(effects) = &effects {
+            self.inject_ability_operations(effects);
+        }
+
+        // Resolve body
+        let body = self.resolve_expr(&func.body);
+
+        self.effect_ops.clear();
+        self.pop_scope();
+
+        FuncDecl {
+            id: func.id,
+            visibility: func.visibility.clone(),
+            name: func.name.clone(),
+            type_params,
+            params,
+            return_ty,
+            effects,
+            body,
+        }
+    }
+
+    /// Inject ability operations from ability annotations into the current scope.
+    ///
+    /// For each ability in the ability row, look up its operations in the module
+    /// environment and make them available as unqualified names. This enables
+    /// calling `abort()` instead of `abilities::Abort::abort()` when the function
+    /// declares `->{abilities::Abort}`.
+    ///
+    /// Parameters and local variables take precedence (already bound before this).
+    fn inject_ability_operations(&mut self, effects: &[TypeAnnotation]) {
+        self.effect_ops.clear();
+        for ann in effects {
+            let Some(ability_name) = Resolver::extract_ability_name(ann) else {
+                continue;
+            };
+
+            // The annotation names the ability by its identity.
+            let Some(namespace) = self.module.view().locate(&ability_name) else {
+                continue;
+            };
+            let operations: Vec<(Symbol, Binding<'db>)> = self
+                .module
+                .view()
+                .iter_namespace(&namespace)
+                .filter(|(_, binding)| matches!(binding, Binding::AbilityOp { .. }))
+                .map(|(name, binding)| (name, binding.clone()))
+                .collect();
+            for (op_name, binding) in operations {
+                // Don't override existing entries (first ability wins;
+                // TODO: detect ambiguity when multiple abilities export same op name)
+                self.effect_ops.entry(op_name).or_insert(binding);
+            }
+        }
+    }
 
     /// Resolve an expression.
-    pub fn resolve_expr(&mut self, expr: &Expr<UnresolvedName>) -> Expr<ResolvedRef<'db>> {
+    fn resolve_expr(&mut self, expr: &Expr<UnresolvedName>) -> Expr<ResolvedRef<'db>> {
         let kind = match &*expr.kind {
             ExprKind::Var(name) => {
                 // The type the name is used at selects among the functions
@@ -1778,7 +1803,7 @@ impl<'db> Resolver<'db> {
                     .map(|p| {
                         let mut p = p.clone();
                         if let Some(ty) = &mut p.ty {
-                            self.resolve_annotation_paths(ty);
+                            self.module.resolve_annotation_paths(ty);
                         }
                         p.local_id = Some(self.bind_local(p.name.clone()));
                         p
@@ -1843,7 +1868,7 @@ impl<'db> Resolver<'db> {
                 let pattern = self.resolve_pattern_with_bindings(pattern);
                 let mut ty = ty.clone();
                 if let Some(ty) = &mut ty {
-                    self.resolve_annotation_paths(ty);
+                    self.module.resolve_annotation_paths(ty);
                 }
                 Stmt::Let {
                     id: *id,
@@ -2079,7 +2104,8 @@ mod tests {
     #[salsa_test]
     fn test_resolve_local_variable(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let mut resolver = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let mut resolver = FunctionResolver::new(&module);
 
         let param_name = Symbol::new("x");
 
@@ -2106,7 +2132,8 @@ mod tests {
     #[salsa_test]
     fn test_scope_isolation(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let mut resolver = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
         let y = Symbol::new("y");
@@ -2137,7 +2164,8 @@ mod tests {
     #[salsa_test]
     fn test_nested_scopes(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let mut resolver = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
         let y = Symbol::new("y");
@@ -2186,7 +2214,8 @@ mod tests {
         use crate::ast::{Pattern, PatternKind};
 
         let env = PackageEnv::new();
-        let mut resolver = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 
         // Create a ListRest pattern: [head, ..rest]
@@ -2229,7 +2258,8 @@ mod tests {
         use crate::ast::{Pattern, PatternKind};
 
         let env = PackageEnv::new();
-        let mut resolver = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 
         // Create an As pattern: _ as all
