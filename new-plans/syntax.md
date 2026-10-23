@@ -672,7 +672,7 @@ continuation 캡처 자체를 생략하는 최적화가 가능하다.
 `-> Never`를 반환하는 operation의 handler body에서는 `resume`을 사용할 수 없다:
 
 ```rust
-op Fail::fail(msg) { None }
+op Fail::fail(msg) { .None }
 ```
 
 **예시:**
@@ -695,8 +695,8 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
 
 fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
     handle comp() {
-        do result { Some(result) }
-        op Fail::fail(msg) { None }
+        do result { .Some(result) }
+        op Fail::fail(msg) { .None }
     }
 }
 ```
@@ -828,7 +828,7 @@ x * { y + z }           // x * (y + z) 와 동일
 ### Record Expression
 
 ```ebnf
-RecordExpr ::= TypePath '{' RecordFields? '}'
+RecordExpr ::= (TypePath | ImplicitCtor) '{' RecordFields? '}'
 RecordFields ::= RecordField (',' RecordField)* ','?
 RecordField ::= '..' Expression                    // spread
               | Identifier ':' Expression          // field: value
@@ -847,19 +847,69 @@ Point { x: 10, y: 20 }
 ### Variant Construction
 
 ```ebnf
-VariantExpr ::= TypePath '(' ExprList? ')'     // positional
-              | TypePath '{' RecordFields '}'   // named
-              | TypePath                         // unit variant
+VariantExpr ::= CtorRef '(' ExprList? ')'      // positional
+              | CtorRef '{' RecordFields '}'    // named
+              | CtorRef                         // unit variant
+CtorRef ::= TypePath | ImplicitCtor
+ImplicitCtor ::= '.' TypeId
 ```
+
+Enum variant는 그 enum의 동명 namespace에만 있으므로
+([types.md](types.md#enum-variant의-이름)) 경로 `Option::Some`이나 암묵적 생성자
+`.Some`으로 가리킨다. 짧은 이름 `Some`은 그 variant를 `use`했을 때만 쓴다.
 
 **예시:**
 
 ```rust
-Some(42)
-None
-Branch(Leaf(1), Leaf(2))
-Ok { value: 42 }
-Error { error: "failed" }
+Option::Some(42)
+.Some(42)
+.None
+Tree::Branch(.Leaf(1), .Leaf(2))
+.Ok { value: 42 }
+Result::Error { error: "failed" }
+```
+
+### 암묵적 생성자
+
+`.Name`, `.Name(args)`, `.Name { fields }`는 타입을 쓰지 않은 생성자다. 기대 타입의
+namespace에서 생성자 `Name`을 찾는다. 기대 타입이 정해지지 않았으면 스코프에 있는
+타입들의 생성자 `Name` 중에서 고른다. 해석 규칙은
+[type-inference.md의 암묵적 생성자](type-inference.md#암묵적-생성자)를 따른다.
+같은 형식을 [패턴](#patterns)에도 쓴다.
+
+```rust
+fn find(xs: List(Int), n: Int) -> Option(Int) {
+    case xs {
+        [] -> .None
+        [x, ..rest] && x == n -> .Some(x)
+        [_, ..rest] -> find(rest, n)
+    }
+}
+
+let x = .Some(1)        // 스코프의 타입 중 Option만 Some을 가지면 Option(Int)
+```
+
+암묵적 생성자는 생성자에만 쓴다. `.f(x)`처럼 함수를 가리키는 형식은 없다.
+
+메서드 이름은 언제나 소문자 `Identifier`로 끝나므로, `.` 뒤에 `::`가 따르지 않는
+`TypeId`가 오면 그 `.`은 앞 식의 메서드 호출을 잇지 않고 암묵적 생성자를 시작한다.
+따라서 줄 첫머리의 `.Some(n)`은 새 문장이나 새 case arm을 시작한다. 줄 첫머리의
+`.map(f)`와 `.Option::map(f)`는 앞 줄의 식을 잇는 메서드 호출이다.
+
+```rust
+{
+    let x = compute()
+    .Some(x)            // 블록의 두 번째 문장
+}
+
+case opt {
+    .Some(n) -> n
+    .None -> 0
+}
+
+xs
+    .map(f)             // xs.map(f)
+    .Option::map(g)     // 위 결과의 Option::map
 ```
 
 ### Call and UFCS
@@ -1061,7 +1111,7 @@ CaseArm ::= Pattern ('&&' Expression)? '->' Expression
 `&&`부터 case arm의 최상위 `->` 구분자 앞까지 전체가 `Bool` guard 식이다.
 괄호나 중괄호 안의 `->`(예: lambda 반환 타입 `fn(x: Int) -> Bool { .. }`)는
 guard를 끝내지 않는다. 따라서
-`Some(x) && x > 0 && x < 10 -> ..`의 guard는 `x > 0 && x < 10`이다. 같은
+`.Some(x) && x > 0 && x < 10 -> ..`의 guard는 `x > 0 && x < 10`이다. 같은
 패턴에 guard를 여러 줄로 잇는 문법은 없으며, 필요하면 `&&`로 조건을 합치거나
 arm을 나눈다. guard가 거짓이면 다음 arm으로 넘어가고, guard가 있는 arm은
 망라성에 기여하지 않는다. `|`는 향후 or-pattern을 위해 비워 둔다.
@@ -1070,8 +1120,8 @@ arm을 나눈다. guard가 거짓이면 다음 arm으로 넘어가고, guard가 
 
 ```rust
 case opt {
-    Some(x) -> x
-    None -> 0
+    .Some(x) -> x
+    .None -> 0
 }
 
 // 단일 guard
@@ -1088,8 +1138,8 @@ case value {
 }
 
 case result {
-    Ok { value } -> value
-    Error { error } -> panic(error)
+    .Ok { value } -> value
+    .Error { error } -> panic(error)
 }
 ```
 
@@ -1113,7 +1163,7 @@ AsPattern ::= Pattern 'as' Identifier        // 전체를 바인딩
 LiteralPattern ::= Number | StringLit | BytesLit | Rune | 'True' | 'False' | 'Nil'
 WildcardPattern ::= '_'
 IdentifierPattern ::= Identifier
-VariantPattern ::= TypePath ('(' PatternList? ')' | '{' RecordPatternFields? '}')?
+VariantPattern ::= CtorRef ('(' PatternList? ')' | '{' RecordPatternFields? '}')?
 RecordPattern ::= VariantPattern                // 중괄호 형식; 필드를 이름으로 매칭
 ListPattern ::= '[' ListPatternItems? ']'
 ListPatternItems ::= Pattern (',' Pattern)* (',' RestPattern)? ','?  // [head, ..tail] or [head, ..]
@@ -1128,7 +1178,9 @@ RecordPatternField ::= Identifier (':' Pattern)?
 ```
 
 중괄호 필드의 이름 매칭, `..`, 필드 수 규칙은
-[types.md의 패턴 필드 검증](types.md#패턴-필드-검증)을 따른다.
+[types.md의 패턴 필드 검증](types.md#패턴-필드-검증)을 따른다. 암묵적 생성자
+패턴 `.Some(x)`는 매칭하는 값의 타입에서 생성자를 찾는다
+([암묵적 생성자](type-inference.md#암묵적-생성자)).
 
 **Note:** Handler arm (`do`, `fn`, `op`)은 `handle`
 표현식 내에서만 사용된다. 일반 `case` 표현식에서는 사용할 수 없다.
@@ -1148,11 +1200,11 @@ x
 name
 
 // Variant
-Some(x)
-None
-Branch(left, right)
-Ok { value }
-Error { error: e }
+.Some(x)
+.None
+Tree::Branch(left, right)
+.Ok { value }
+Result::Error { error: e }
 std::io::Error::EndOfFile
 std::io::ReadLineResult::Line(bytes)
 
@@ -1173,7 +1225,7 @@ Point { x, y: y_coord }     // 이름 변경
 #(x, _, z)                  // 일부만 바인딩
 
 // As pattern (전체 바인딩)
-Some(x) as opt              // x에 내부값, opt에 전체
+.Some(x) as opt             // x에 내부값, opt에 전체
 [head, ..tail] as list      // head, tail, list 모두 바인딩
 User { name, .. } as user   // name과 전체 user 바인딩
 ```
@@ -1259,6 +1311,9 @@ VisibilityPath ::= PathKeyword ('::' PathSegment)*
 - struct/enum 필드 사이
 - 블록 내 문장 사이
 - case arm 사이
+
+줄 첫머리의 `.`은 앞 줄의 식을 잇는 메서드 호출이다. 다만 `.` 뒤에 `::`가 따르지
+않는 `TypeId`가 오면 [암묵적 생성자](#암묵적-생성자)가 새 문장이나 arm을 시작한다.
 
 **예시:**
 
@@ -1384,6 +1439,8 @@ fn main() ->{Io} Nil {
 | `T::f(x)`             | Qualified call         |
 | `T { f: v }`          | Record construction    |
 | `T { ..x, f: v }`     | Record update (spread) |
+| `.V`, `.V(x)`         | 암묵적 생성자          |
+| `.V { f: v }`         | 암묵적 record 생성     |
 | `[a, b, c]`           | List literal           |
 | `#(a, b, c)`          | Tuple literal          |
 | `a <> b`              | Concatenation          |
@@ -1399,8 +1456,10 @@ fn main() ->{Io} Nil {
 | `42`, `"hi"`, `?a` | Literal (Number, String, Rune) |
 | `_`                | Wildcard                       |
 | `x`                | Binding                        |
-| `Some(x)`          | Variant (positional)           |
-| `Ok { value }`     | Variant (named)                |
+| `Option::Some(x)`  | Variant (positional)           |
+| `Result::Ok { v }` | Variant (named)                |
+| `.Some(x)`         | 암묵적 생성자 (positional)     |
+| `.Ok { value }`    | 암묵적 생성자 (named)          |
 | `T { f, .. }`      | Record (나머지 무시)           |
 | `[a, b, c]`        | List (정확히 일치)             |
 | `#(a, b, c)`       | Tuple                          |

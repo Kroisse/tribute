@@ -101,9 +101,9 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
 
 **Prelude.** prelude는 패키지 `std`의 모듈 `std::prelude::v0`다. 모든 패키지의 모든
 모듈은 패키지 `std` 자신의 모듈을 포함해 `std::prelude::v0`의 `pub` 항목을 짧은
-이름으로 본다. 그 항목은 대개 표준 라이브러리 선언의 re-export다. 값과 타입(`Option`,
-`Some`, `String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
-(`Option::map`, `Int::to_string`). Re-export는 대상의 namespace를
+이름으로 본다. 그 항목은 대개 표준 라이브러리 선언의 re-export다. 타입(`Option`,
+`String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
+(`Option::map`, `Option::Some`, `Int::to_string`). Re-export는 대상의 namespace를
 함께 가져오기 때문이다.
 
 - 모듈 안의 이름이 prelude 짧은 이름보다 우선한다. 가려진 prelude 항목은
@@ -114,9 +114,14 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
   `x.std::Option::map(f)`로 쓴다.
 - `std::prelude::v0`의 `use`는 prelude 짧은 이름으로 시작하지 않고 경로 키워드로
   쓴다(`pub use pkg::Option`). Prelude가 자기 자신에 기대지 않게 하기 위해서다.
-- Prelude에 둘 이름은 사용자 코드가 짧은 이름으로 쓰는 표준 타입, 생성자, 그리고
-  타입과 같은 이름의 namespace(`Int`, `Bytes`)다. Compiler 소유 `List`의 짧은
-  이름도 prelude의 re-export다. 같은 선언을 가리키므로 식별 경로는 바뀌지 않는다.
+- Prelude에 둘 이름은 사용자 코드가 짧은 이름으로 쓰는 표준 타입과, 타입과 같은
+  이름의 namespace(`Int`, `Bytes`)다. Compiler 소유 `List`의 짧은 이름도 prelude의
+  re-export다. 같은 선언을 가리키므로 식별 경로는 바뀌지 않는다.
+- Enum variant는 prelude에 두지 않는다. Variant는 enum의 namespace에만 있으므로
+  ([types.md](types.md#enum-variant의-이름)), prelude 타입의 variant는
+  `Option::Some`이나 [암묵적 생성자](type-inference.md#암묵적-생성자) `.Some`으로
+  가리킨다. 그래서 `Result::Error`와 `std::io::Error`처럼 이름이 같은 variant와
+  타입이 prelude에서 충돌하지 않는다.
 - 표준 라이브러리의 모듈(`std::abilities`, `std::io`, `std::collections`)은
   prelude에 두지 않는다. 그 항목은 `std::io::print_line`처럼 패키지 경로로
   가리키거나 `use`로 가져온다.
@@ -264,7 +269,9 @@ use std::collections::List::prepend
 
 ### 타입과 동명 네임스페이스
 
-타입 선언(`struct`, `enum`)은 암묵적으로 동명의 네임스페이스를 생성한다. 생성자는 자동으로 해당 네임스페이스에 포함된다.
+타입 선언(`struct`, `enum`)은 암묵적으로 동명의 네임스페이스를 생성한다. Enum의
+variant는 이 네임스페이스에만 선언되며, enum을 둘러싼 모듈에는 이름이 생기지
+않는다([types.md](types.md#enum-variant의-이름)).
 
 ```rust
 pub enum Option(a) {
@@ -283,15 +290,15 @@ pub enum Option(a) {
 pub mod Option {
     pub fn map(opt: Option(a), f: fn(a) -> b) -> Option(b) {
         case opt {
-            None -> None
-            Some(x) -> Some(f(x))
+            .None -> .None
+            .Some(x) -> .Some(f(x))
         }
     }
 
     pub fn unwrap_or(opt: Option(a), default: a) -> a {
         case opt {
-            None -> default
-            Some(x) -> x
+            .None -> default
+            .Some(x) -> x
         }
     }
 }
@@ -432,6 +439,29 @@ mod b {
 ```
 
 스코프에 없는 모듈의 선언은 호출의 후보를 바꾸지 않는다.
+
+### 암묵적 생성자의 후보
+
+[암묵적 생성자](type-inference.md#암묵적-생성자) `.Name`은 그 자리의 타입이 정해지면
+그 타입의 생성자를 쓴다. 타입이 정해지지 않았을 때만 스코프의 타입에서 후보를
+모은다. 후보는 스코프 안의 타입 이름 `T`마다 `T`의 생성자 `Name`이다. 경로
+`T::Name`으로 쓸 수 있는 생성자이며, 쓰는 자리에서 보이는 것만 든다. 순위는
+UFCS의 [후보의 순위](#후보의-순위)를 따른다.
+
+1. **스코프의 타입**: 호출 위치의 스코프가 선언이나 `use`로 가리키는 타입.
+2. **Prelude**: prelude의 짧은 이름이 가리키는 타입. 스코프의 선언이나 `use`가 그
+   짧은 이름을 가려도 이 순위의 후보로 남는다.
+
+같은 타입을 여러 이름으로 가리켜도 후보는 하나다. 고르는 방식과 기다리는 방식,
+모호성 오류는 [후보 선택](#후보-선택)과 같다.
+
+```rust
+use std::io::Error
+
+fn f() -> Result(Int, Error) {
+    .Error { error: .EndOfFile }    // 기대 타입 Result의 Error, 그 필드 타입 Error의
+}                                   // EndOfFile
+```
 
 ### 후보의 순위
 
