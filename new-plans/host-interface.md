@@ -58,12 +58,44 @@ Entrypoint의 row는 본문에서 추론하지 않으므로, 처리를 잊은 ab
 Entrypoint는 host가 부르는 Tribute 함수다. `main`은 command 형태의 host가 부르는
 entrypoint의 한 경우다. Plugin이나 embedding host는 여러 entrypoint를 부를 수 있다.
 
-- 각 entrypoint의 residual row에는 host가 처리할 수 있는 ability만 남을 수 있다.
-- 프로그램의 host interface는 모든 entrypoint의 residual row를 합친 것이다. 각
-  entrypoint의 signature는 그 entrypoint가 닿는 host 기능을 따로 보여 준다.
+```rust
+export fn on_request(req: Request) ->{Write, Kv} Response { ... }
+export fn on_shutdown() ->{Write} Nil { ... }
+```
 
-Entrypoint를 표시하는 방법과 entrypoint signature의 규칙은 아래
-[미정 사항](#미정-사항)에 둔다.
+- **표시.** 패키지 root module의 `export fn`이 entrypoint다
+  ([Export Function](syntax.md#export-function)). Root module의 `main`은 `export`
+  없이도 entrypoint다. `export`는 host가 부를 수 있는지를 정하고, `pub`은 다른 패키지의
+  코드가 부를 수 있는지를 정하므로 둘은 서로 독립이다.
+- **Signature.** Parameter와 result는 [경계를 넘는 값](#경계를-넘는-값)을 따른다.
+  제네릭 함수는 export할 수 없다. Host resource를 parameter나 result로 받는 entrypoint는
+  아래 [미정 사항](#미정-사항)에 둔다.
+- **Row.** 각 entrypoint의 residual row에는
+  [host가 처리할 수 있는 ability](#host가-처리하는-ability)만 남을 수 있다. 프로그램의
+  host interface는 모든 entrypoint의 residual row를 합친 것이다. 각 entrypoint의
+  signature는 그 entrypoint가 닿는 host 기능을 따로 보여 준다.
+- **WIT export.** Entrypoint는 함수 이름을 label로 바꾼 이름의 함수 export가 된다
+  ([WIT 이름](#wit-이름)). 결과 타입 `T`는 WIT에서 `result<T>`이고, `Nil`이면 `result`다.
+  정상 종료는 `ok`, [비정상 종료](#비정상-종료)는 payload 없는 `err`다. `main`은
+  `main: func() -> result`다.
+- **동기와 비동기.** Residual row에 결과가 `Never`가 아닌 `op` operation을 가진 ability가
+  있으면 그 entrypoint는 기다릴 수 있으므로 `async` export다. `fn` operation과 결과가
+  `Never`인 `op`만 남으면 동기 export다.
+- **재진입.** 한 entrypoint 호출이 기다리는 동안 host는 같은 entrypoint나 다른
+  entrypoint를 다시 부를 수 있다. 호출마다 자기 root evidence와 continuation을 가지며,
+  Tribute 데이터는 불변이고 handler에 공유되는 가변 상태가 없으므로, 호출들은 중단
+  지점에서만 서로 끼어든다. 호출 사이에 공유되는 것은 host resource뿐이며 그 닫힘
+  표시는 close의 의미 그대로다.
+
+### 비정상 종료
+
+Entrypoint 호출은 결과 없이 끝날 수 있다. 결과가 `Never`인 operation의 host 호출이
+돌아왔을 때와 host가 기다리는 호출을 취소했을 때다. 그때 program은 그 호출의
+continuation을 버리고 export를 `err`로 끝낸다. 오류의 내용은 그 전에 결과가 `Never`인
+operation의 인자로 이미 host에 넘어갔으므로 `err`에 다시 싣지 않는다. Trap은 Tribute
+자체의 오류(범위를 벗어난 index, 정수 폭 초과)에만 쓴다. Component model에서 trap은
+instance 전체를 쓸 수 없게 하므로, 한 entrypoint 호출의 실패가 다른 호출에 번지지 않게
+하려면 `err`여야 한다.
 
 ## Host 경계
 
@@ -104,8 +136,8 @@ interface의 ability 하나가 WIT interface 하나가 되고, operation은 그 
   맞는다.
 - **취소.** Program이 보관한 continuation을 resume하지 않고 버리면 host에 그 호출의
   취소를 알린다. Host가 호출을 취소하면 program은 보관한 continuation을 drop하고 그
-  entrypoint 호출을 비정상으로 끝낸다. 결과가 `Never`인 operation이 돌아올 때와 같은
-  종료 경로이며, drop된 continuation 안의 값은 RC로 해제된다. 그래서 `op` operation을
+  entrypoint 호출을 [비정상으로 끝낸다](#비정상-종료). 결과가 `Never`인 operation이
+  돌아올 때와 같은 종료 경로이며, drop된 continuation 안의 값은 RC로 해제된다. 그래서 `op` operation을
   직접 구현하는 host는 실패를 취소로 알린다. 오류의 내용을 program에 전하려면
   entrypoint에 남은 `Exception` 같은 실패 ability를 쓴다. 어느 쪽이든 continuation을
   버린 뒤에는 그 호출을 다시 resume하지 않는다. 취소와 완료가 엇갈려 버린 뒤에 도착한
@@ -113,7 +145,7 @@ interface의 ability 하나가 WIT interface 하나가 되고, operation은 그 
   도착한 완료는 평소처럼 resume한다.
 - **끝나지 않는 operation.** 결과 타입이 `Never`인 `op`는 resume할 값이 없으므로 결과
   없는 동기 함수가 된다. Host 호출이 돌아오면 program은 continuation을 버리고 그
-  entrypoint 호출을 비정상으로 끝낸다. 예를 들어 entrypoint에 남은
+  entrypoint 호출을 [비정상으로 끝낸다](#비정상-종료). 예를 들어 entrypoint에 남은
   [`Exception`](std-abilities.md#exception)은 처리되지 않은 `Failure`를 host에 넘기고,
   그 entrypoint는 값을 돌려주지 않는다.
 
@@ -173,7 +205,7 @@ WIT 이름은 source에서 결정적으로 만든다. 이름을 따로 지정하
 | operation `close_output` | 함수 `close-output` |
 | 경계를 넘는 struct와 enum | 선언된 module의 types interface(`tribute:std/io-types`)에 `record`/`variant`로 정의하고, ability interface가 `use`한다 |
 | host resource `OutStream` | 그 resource를 정의한 ability의 interface 안 `resource out-stream`. 다른 ability는 `use`한다 |
-| entrypoint `main` | export `main` |
+| entrypoint `on_request` | export `on-request`. `main`은 `main` |
 
 식별자는 다음 규칙으로 kebab-case label이 된다.
 
@@ -256,10 +288,10 @@ ability는 없다. 표준 ability의 두 층은 [std-abilities.md](std-abilities
 
 ## 미정 사항
 
-- **Entrypoint의 표시와 규칙.** `main` 밖의 entrypoint를 표시하는 방법이다. 예를 들어
-  `export` 같은 표시, root module의 `pub` 함수, 별도의 world 선언이 있다. Entrypoint의
-  parameter와 result가 경계를 넘을 수 있는 타입이어야 한다는 규칙, WIT export 이름,
-  entrypoint마다 root evidence를 따로 만들지도 정해야 한다.
+- **Entrypoint의 확장.** Root module 밖의 `export fn`과 그 WIT 이름, export를 WIT
+  interface로 묶는 방법, host resource를 parameter나 result로 받는 entrypoint다. Host가
+  넘긴 handle은 호출 뒤에도 Tribute 쪽 참조로 남을 수 있으므로 canonical ABI의 `borrow`
+  규칙과 맞추는 설계가 필요하다.
 - **패키지 metadata.** 사용자 패키지의 WIT namespace와 이름, 그리고 package version을
   적는 곳이다. 패키지를 별도 build 단위로 다루는 설계와 함께 정한다.
 - **Host resource의 선언 문법.** Resource 타입을 선언하는 문법과 그 타입의 WIT 이름을
@@ -275,11 +307,11 @@ ability는 없다. 표준 ability의 두 층은 [std-abilities.md](std-abilities
   instance가 다르면 다른 ability라는 기존 규칙만으로 표현이 섞이지 않는다. 이 가운데
   하나를 들이기 전까지 Tribute handler에게 host resource는 불투명하다.
 - **Callback.** Host가 Tribute 함수를 다시 부르는 경로다. WIT에 함수 값이 없으므로
-  Tribute가 export하는 resource로 감싼다. 이것도 entrypoint의 한 종류다. 그 함수가
-  수행할 수 있는 effect와, 한 entrypoint가 실행 중일 때 host가 다른 entrypoint를 부르는
-  재진입 규칙을 정해야 한다.
+  Tribute가 export하는 resource로 감싼다. 이것도 entrypoint의 한 종류이며 재진입 규칙은
+  [Entrypoint](#entrypoint)를 따른다. 그 함수가 수행할 수 있는 effect와 resource로
+  감싸는 방식을 정해야 한다.
 - **동시에 기다리는 호출.** `op` operation의 비동기 경계는 continuation 하나가 기다리는
-  경우를 정한다. 여러 계산을 동시에 진행하고 여러 호출을 함께 기다리는 scheduler,
-  그리고 기다리는 동안 host가 다른 entrypoint를 부르는 재진입 규칙을 정해야 한다.
+  경우를 정한다. 한 entrypoint 호출 안에서 여러 계산을 동시에 진행하고 여러 호출을
+  함께 기다리는 scheduler를 정해야 한다.
 - **열린 자식이 있는 부모의 close.** 자식 resource가 열린 채 부모를 close하면 실패를
   돌려줄지, 자식도 닫힌 것으로 표시할지, host의 규칙을 따를지 정해야 한다.

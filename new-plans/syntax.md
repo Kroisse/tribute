@@ -21,7 +21,7 @@ A?          선택적 (0개 또는 1개)
 ### Keywords
 
 ```text
-fn op do let const struct enum ability mod pub use extern case handle resume become as with
+fn op do let const struct enum ability mod pub use extern export case handle resume become as with
 True False Nil
 pkg super self
 ```
@@ -711,7 +711,7 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 ### Function Definition
 
 ```ebnf
-FunctionDef ::= Visibility 'fn' Identifier '(' TypedParamList? ')' ReturnType Block
+FunctionDef ::= Visibility 'export'? 'fn' Identifier '(' TypedParamList? ')' ReturnType Block
 
 TypedParamList ::= TypedParam (',' TypedParam)* ','?
 TypedParam ::= Identifier ':' Type
@@ -725,6 +725,18 @@ Param ::= Identifier (':' Type)?
 함수 선언은 파라미터 타입과 반환 타입을 모두 적는다. `main`도 `fn main() -> Nil`로
 쓴다. Ability row는 생략할 수 있으며, 생략하면 fresh row 변수이다. 람다의
 파라미터 타입은 생략할 수 있다([Lambda Expression](#lambda-expression)).
+
+### Export Function
+
+`export fn`은 host가 부르는 [entrypoint](host-interface.md#entrypoint)다. 패키지 root
+module에서만 쓸 수 있고, 제네릭 함수에는 쓸 수 없다. Root module의 `main`은 `export`
+없이도 entrypoint다. `export`는 가시성 수식자와 독립이며 그 뒤에 온다
+(`pub export fn`). Entrypoint의 signature가 지켜야 하는 규칙은
+[host-interface.md](host-interface.md#entrypoint)가 정한다.
+
+```rust
+export fn on_request(req: Request) ->{Write, Kv} Response { ... }
+```
 
 **예시:**
 
@@ -1411,6 +1423,7 @@ fn main() ->{Io, Exception} Nil {
 | `pub? enum Name(a) { }`    | Sum type      |
 | `pub? ability Name(a) { }` | Effect 선언   |
 | `pub? fn name() { }`       | 함수 정의     |
+| `export fn name() { }`     | Entrypoint    |
 
 ### Types
 
