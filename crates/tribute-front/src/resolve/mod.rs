@@ -270,7 +270,7 @@ fn add_export(env: &mut PackageEnv<'_>, export: &Export) -> bool {
             env.lookup_qualified(namespace, last).cloned()
         };
         let binding = binding
-            .filter(|b| !matches!(b, Binding::Module { .. } | Binding::Import { .. }))
+            .filter(|b| !matches!(b, Binding::Import { .. }))
             .or_else(|| {
                 env.has_namespace(&target).then(|| Binding::Module {
                     path: env.package().identity_path(&target).to_vec(),

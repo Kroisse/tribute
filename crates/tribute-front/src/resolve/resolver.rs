@@ -1030,10 +1030,18 @@ impl<'db> Resolver<'db> {
                 ResolvedRef::constructor(*id, tag.clone().unwrap_or(name))
             }
             Binding::TypeDef { id } => ResolvedRef::type_def(*id),
-            Binding::Module { path } | Binding::Import { path } => {
+            Binding::Module { path } => {
                 let path_ref = ModulePath::new(self.db, path.clone());
                 ResolvedRef::Module { path: path_ref }
             }
+            // A `use` of one segment names the package root's own module of
+            // that name. Any longer `use` still unresolved names nothing, and
+            // its declaration is reported.
+            Binding::Import { path } if path.len() == 1 => {
+                let path_ref = ModulePath::new(self.db, path.clone());
+                ResolvedRef::Module { path: path_ref }
+            }
+            Binding::Import { .. } => ResolvedRef::local(LocalId::UNRESOLVED, name),
             Binding::AbilityOp { ability, op, kind } => {
                 ResolvedRef::ability_op(*ability, op.clone(), *kind)
             }

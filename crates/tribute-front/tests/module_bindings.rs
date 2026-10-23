@@ -85,3 +85,31 @@ use nowhere
     // A `use` of one segment the package root names declares it there.
     assert!(env.declares(Symbol::new("nowhere")));
 }
+
+#[salsa_test]
+fn a_module_re_exported_twice_keeps_its_identity(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "re_export_twice.trb",
+        r#"
+pub mod a {
+    pub mod b {
+        pub fn f() -> Nat { 1 }
+    }
+}
+
+pub mod facade {
+    pub use pkg::a::b
+}
+
+pub mod outer {
+    pub use pkg::facade::b
+}
+"#,
+    );
+    let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
+    let env = build_env(db, parsed.module(db));
+
+    let b = env.lookup_qualified(&SymbolPath::new(["outer"]), &Symbol::new("b"));
+    assert_eq!(module_path(b), ["a", "b"]);
+}
