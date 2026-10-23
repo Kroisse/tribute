@@ -163,7 +163,7 @@ fn theirs() -> Nat { std::String::len("a") }
 
 fn annotated(o: std::Option(Nat)) -> Nat { 0 }
 
-fn call() -> Nat { annotated(Some(1)) }
+fn call() -> Nat { annotated(Option::Some(1)) }
 
 fn prelude() -> Option(List(Nat)) { Option::Some(List::prepend(1, [])) }
 "#,
@@ -266,11 +266,12 @@ mod n {
 
 fn main() -> Nil {
     let _ = case m::Just(m::size("a") + m::deeper::one() + b::c::one() + k::doubled()) {
-        Some(n) -> n
-        None -> 0
+        .Some(n) -> n
+        .None -> 0
     }
-    let _ = m::library::Some(1)
 }
+
+fn through_alias(o: m::library::Option(Nat)) -> Nat { 0 }
 "#,
     );
     assert_eq!(
