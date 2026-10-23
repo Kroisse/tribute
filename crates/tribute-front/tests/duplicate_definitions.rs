@@ -68,6 +68,15 @@ fn a_duplicate_inside_an_inline_module_is_reported(db: &salsa::DatabaseImpl) {
 }
 
 #[salsa_test]
+fn a_repeated_struct_gives_its_companion_no_field_functions(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        "struct A { x: Nat }\nstruct A { y: Nat }\nmod A {\n    pub mod y {\n        pub fn set(value: Nat) -> Nat { value }\n    }\n}\nfn main() -> Nil {}\n",
+    );
+    assert_eq!(errors, ["duplicate definition of `A`"]);
+}
+
+#[salsa_test]
 fn a_type_and_its_companion_module_coexist(db: &salsa::DatabaseImpl) {
     let errors = errors(
         db,

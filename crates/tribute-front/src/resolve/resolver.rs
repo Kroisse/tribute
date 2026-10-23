@@ -1018,7 +1018,8 @@ impl<'db> Resolver<'db> {
                 .iter()
                 .filter_map(|item| match item {
                     ModuleItem::Decl(Decl::Struct(declaration))
-                        if declaration.name == companion.name =>
+                        if declaration.name == companion.name
+                            && !self.redefinitions.contains(&declaration.id) =>
                     {
                         Some(&declaration.fields)
                     }
