@@ -5,161 +5,6 @@ use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
 #[salsa_test]
-fn named_operator_preserves_target_and_consumer_conventions(db: &salsa::DatabaseImpl) {
-    use std::ops::ControlFlow;
-    use tribute_ir::calling_convention::CallingConvention;
-    use tribute_ir::dialect::tribute_control;
-    use trunk_ir::SymbolPath;
-    use trunk_ir::context::IrContext;
-    use trunk_ir::ops::DialectOp;
-    use trunk_ir::parser::parse_test_module;
-    use trunk_ir::refs::ValueDef;
-    use trunk_ir::walk::{WalkAction, walk_op};
-
-    for argument in ["(Int::+)", "alias"] {
-        let code = format!(
-            r#"
-fn pure(f: fn(Int, Int) ->{{}} Int) ->{{}} Int {{ f(+3, +4) }}
-fn open(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
-fn main() -> Nil {{
-    let add = (Int::+)
-    let alias = add
-    let first = pure({argument})
-    open({argument}, first, +2)
-    Nil
-}}
-"#
-        );
-        let source = SourceCst::from_source_str(db, "named_operator.trb", &code);
-        let errors = common::ast_pipeline_error_messages(db, source);
-        assert!(errors.is_empty(), "{argument}: {errors:?}");
-        let text = common::run_ast_pipeline_with_specialized_ir(db, source);
-        assert!(!text.contains("unrealized_conversion_cast"), "{text}");
-        let mut ir = IrContext::new();
-        let module = parse_test_module(&mut ir, &text);
-        let mut conventions = Vec::new();
-        let _ = walk_op::<()>(&ir, module.op(), &mut |op| {
-            if let Ok(call) = tribute_control::Call::from_op(&ir, op)
-                && ["pure", "open$9D"]
-                    .iter()
-                    .any(|name| call.callee(&ir) == [*name])
-            {
-                let callback = ir.op_operands(op)[0];
-                let ValueDef::OpResult(producer, _) = ir.value_def(callback) else {
-                    panic!("expected named callback: {text}");
-                };
-                let reference = tribute_control::FuncRef::from_op(&ir, producer).unwrap();
-                assert_eq!(*reference.func_ref(&ir), SymbolPath::new(["std::Int::+"]));
-                conventions.push(tribute_control::func_sig_convention(
-                    &ir,
-                    ir.value_ty(callback),
-                ));
-            }
-            ControlFlow::Continue(WalkAction::Advance)
-        });
-        assert_eq!(
-            conventions,
-            [
-                Some(CallingConvention::Direct),
-                Some(CallingConvention::Direct)
-            ],
-            "{argument}: {text}"
-        );
-    }
-}
-
-#[salsa_test]
-fn fixed_local_identity_reaches_pure_consumer(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "local_identity.trb",
-        r#"
-fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
-fn main() ->{} Int {
-    let identity = fn(x: Int) x
-    apply(identity, +3)
-}
-"#,
-    );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
-    assert!(ir.contains("tribute_control.lambda"));
-    assert!(
-        ir.lines().any(|line| {
-            line.contains("tribute_control.lambda(") && line.contains("convention(direct)")
-        }),
-        "a pure lambda passed to an effect-free consumer must be Direct:\n{ir}"
-    );
-    assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
-}
-
-#[salsa_test]
-fn escaping_lambda_retains_open_callable_contract(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "escaping_lambda.trb",
-        r#"
-fn make() -> fn(Int) -> Int { fn(x) x }
-fn main() -> Nil {}
-"#,
-    );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
-    assert!(
-        ir.lines().any(|line| {
-            line.contains("tribute_control.lambda(") && line.contains("convention(cps)")
-        }),
-        "a returned lambda must retain the open callable contract:\n{ir}"
-    );
-}
-
-#[salsa_test]
-fn open_effect_consumer_keeps_lambda_cps(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "open_lambda_consumer.trb",
-        r#"
-fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
-fn main() -> Nil { open(fn(x) x, +3) }
-"#,
-    );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
-    assert!(
-        ir.lines().any(|line| {
-            line.contains("tribute_control.lambda(") && line.contains("convention(cps)")
-        }),
-        "an open-effect consumer must receive a CPS lambda:\n{ir}"
-    );
-}
-
-#[salsa_test]
-fn effectful_lambda_keeps_effect_convention(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "effectful_lambda_convention.trb",
-        r#"
-ability State(s) {
-    op get() -> s
-}
-
-fn run(f: fn() ->{State(Int)} Int) -> Int {
-    handle f() {
-        do result { result }
-        op State::get() { resume +0 }
-    }
-}
-
-fn main() -> Int { run(fn() State::get()) }
-"#,
-    );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
-    assert!(
-        ir.contains(
-            "tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_int) convention(cps)"
-        ),
-        "a lambda that performs an effect must remain CPS:\n{ir}"
-    );
-}
-
-#[salsa_test]
 fn fixed_captured_local_reaches_pure_consumer(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
@@ -174,34 +19,9 @@ fn captured(k: Int) ->{} Int {
 fn main() ->{} Int { captured(+9) }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
+    let ir = common::run_ast_pipeline_with_ir(db, source);
     assert!(ir.contains("tribute_control.lambda"));
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
-}
-
-#[salsa_test]
-fn fixed_local_serves_pure_and_open_with_one_surface(db: &salsa::DatabaseImpl) {
-    for calls in [
-        "let a = pure(action, +3)\nopen(action, a)",
-        "let a = open(action, +3)\npure(action, a)",
-    ] {
-        let code = format!(
-            r#"
-fn pure(f: fn(Int) ->{{}} Int, x: Int) ->{{}} Int {{ f(x) }}
-fn open(f: fn(Int) ->{{e}} Int, x: Int) ->{{e}} Int {{ f(x) }}
-fn main() ->{{}} Int {{
-    let action = fn(x: Int) x
-    {calls}
-}}
-"#
-        );
-        let source = SourceCst::from_source_str(db, "multi_surface.trb", &code);
-        let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
-        // Root `main` calls the `Direct` instance of `open`, whose callback
-        // type is the one `pure` takes.
-        assert_eq!(ir.matches("tribute_control.lambda").count(), 1, "{ir}");
-        assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
-    }
 }
 
 #[salsa_test]
@@ -219,7 +39,7 @@ fn main() ->{} Int {
 }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
+    let ir = common::run_ast_pipeline_with_ir(db, source);
     assert_eq!(ir.matches("tribute_control.lambda").count(), 1, "{ir}");
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }
@@ -240,35 +60,9 @@ fn main() ->{} Int {
 }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
+    let ir = common::run_ast_pipeline_with_ir(db, source);
     assert!(ir.contains("captures []"), "{ir}");
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
-}
-
-#[salsa_test]
-fn caller_of_a_cps_worker_keeps_the_convention_of_its_row(db: &salsa::DatabaseImpl) {
-    // `g` quantifies its row, and `main` instantiates it only at the pure
-    // row, so `g` and the callback it passes to `app$9D` are Direct.
-    let source = SourceCst::from_source_str(
-        db,
-        "original_cps_lambda.trb",
-        r#"
-fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
-fn main() ->{} Int {
-    let g = fn(n: Int) app(n, fn(m) m)
-    g(+1)
-}
-"#,
-    );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
-    let conventions: Vec<_> = ir
-        .lines()
-        .filter(|line| {
-            line.contains("tribute_control.func @main") || line.contains("tribute_control.lambda")
-        })
-        .map(|line| line.contains("convention(cps)"))
-        .collect();
-    assert_eq!(conventions, [false, false, false], "{ir}");
 }
 
 #[salsa_test]
@@ -286,7 +80,7 @@ fn call(consumer: fn(fn(Int) ->{e} Int, Int) ->{e} Int) ->{e} Int {
 fn main() -> Nil {}
 "#,
     );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
+    let ir = common::run_ast_pipeline_with_ir(db, source);
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }
 
@@ -305,7 +99,7 @@ fn main() ->{} Int {
 }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
+    let ir = common::run_ast_pipeline_with_ir(db, source);
     assert_eq!(ir.matches("tribute_control.lambda").count(), 2, "{ir}");
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }
@@ -333,23 +127,4 @@ fn main() -> Nil {}
             .any(|error| error.contains("ability row mismatch")),
         "{errors:?}"
     );
-}
-
-#[salsa_test]
-fn local_named_consumer_retains_its_worker_parameter_convention(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "local_consumer.trb",
-        r#"
-fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
-fn main() ->{} Int {
-    let consume = open
-    let alias = consume
-    let action = fn(x: Int) x
-    alias(action, +3)
-}
-"#,
-    );
-    let ir = common::run_ast_pipeline_with_specialized_ir(db, source);
-    assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }

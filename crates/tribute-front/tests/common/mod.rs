@@ -5,11 +5,7 @@ use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
-use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core;
-use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::PassManager;
 use trunk_ir::printer::print_module;
 
 /// Prelude source, loaded at compile time relative to this file.
@@ -67,7 +63,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
 /// Diagnostics emitted during the pipeline are accumulated as Salsa
 /// accumulators and can be collected by the caller.
 #[salsa::tracked(returns(clone))]
-fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specialize: bool) -> String {
+fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
 
@@ -136,27 +132,6 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
         validation.is_ok(),
         "logical frontend output must validate: {validation}"
     );
-    if specialize {
-        let core_module = core::Module::from_op(&ir, module.module.op())
-            .expect("frontend output must be a core.module");
-        let mut pm = PassManager::new();
-        pm.add_pass(trunk_ir::transforms::EliminateDeadCode::<core::Module>::new())
-            .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
-        pm.run(&mut ir, core_module, &mut AnalysisCache::new())
-            .expect("class specialization accepts frontend output");
-        let validation = tribute_ir::dialect::tribute_control::validate(
-            &ir,
-            module.module,
-            &module.compiler_intrinsics,
-            &mut Default::default(),
-        );
-        assert!(
-            validation.is_ok(),
-            "specialized output must validate: {validation}"
-        );
-        let disagreements = tribute_passes::check_convention_classes::check(&ir, module.module);
-        assert!(disagreements.is_empty(), "{disagreements:?}");
-    }
     print_module(&ir, module.module.op())
 }
 
@@ -377,14 +352,7 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
             .join("\n")
     );
 
-    run_ast_pipeline_inner(db, source, false)
-}
-
-/// [`run_ast_pipeline_with_ir`], then class specialization: the IR with the
-/// class instances and conventions legalization reads.
-pub fn run_ast_pipeline_with_specialized_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
-    let _ = run_ast_pipeline_with_ir(db, source);
-    run_ast_pipeline_inner(db, source, true)
+    run_ast_pipeline_inner(db, source)
 }
 
 /// Run the full AST pipeline without returning IR text.

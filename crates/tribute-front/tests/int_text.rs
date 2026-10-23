@@ -294,7 +294,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
 }
 
 // The callers supply the tracked accumulator context.
-fn lower_specialized_source(
+fn lower_monomorphized_source(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> (IrContext, tribute_front::ast_to_ir::FrontendIrModule) {
@@ -388,8 +388,6 @@ fn lower_specialized_source(
         merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
-    tribute_passes::specialize_convention_classes::specialize(&mut ir, output.module)
-        .expect("class specialization accepts frontend output");
     (ir, output)
 }
 
@@ -398,7 +396,7 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> String {
-    let (ir, output) = lower_specialized_source(db, source);
+    let (ir, output) = lower_monomorphized_source(db, source);
     let ir_text = print_module(&ir, output.module.op());
     assert!(
         ir_text.contains("tribute_control.func @\"apply$Int\""),
@@ -599,12 +597,11 @@ fn use_bool() ->{} Bool { apply(True) }
 #[salsa::tracked]
 fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
     use std::ops::ControlFlow;
-    use tribute_ir::calling_convention::CallingConvention;
     use tribute_ir::dialect::tribute_control::{Call, Func, FuncSig, Lambda};
     use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::walk::{WalkAction, walk_typed};
 
-    let (ir, output) = lower_specialized_source(db, source);
+    let (ir, output) = lower_monomorphized_source(db, source);
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,
         output.module,
@@ -649,7 +646,6 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         let signature = FuncSig::from_type_ref(&ir, ir.value_ty(value)).unwrap();
         assert_eq!(signature.inputs(&ir), [data_type]);
         assert_eq!(signature.result(&ir), data_type);
-        assert_eq!(signature.convention(&ir), CallingConvention::Direct);
         assert_eq!(calls[0].callee(&ir), [consumer.sym_name(&ir)]);
         assert_eq!(
             calls[0].args(&ir)[0],

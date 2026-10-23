@@ -337,6 +337,51 @@ fn each_instance_copies_its_lambdas_with_the_lambdas_inside() {
     );
 }
 
+/// A lambda with no row binder of its own is one value: passed both to a
+/// pure consumer and to an open one at the closed row, it stays a single
+/// `Direct` lambda, and the open consumer is its `Direct` instance.
+#[test]
+fn a_lambda_without_binders_is_shared_by_its_consumers() {
+    let printed = specialized(
+        r#"core.module @m {
+  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !pure = tribute_control.func_sig<(core.i32) -> core.i32>
+  tribute_control.func @pure(%f: !pure, %x: core.i32) -> core.i32 {
+    %r = tribute_control.call_indirect %f, %x : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @open['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
+    %r = tribute_control.call_indirect %f, %x : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @main(%x: core.i32) -> core.i32 {
+    %l = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
+      tribute_control.return %y
+    }
+    %a = tribute_control.call %l, %x {callee = @pure} : core.i32
+    %b = tribute_control.call %l, %a {callee = @open, row_args = [{}]} : core.i32
+    tribute_control.return %b
+  }
+}"#,
+    );
+    let main = &printed[printed
+        .find("tribute_control.func @main")
+        .expect("main is printed")..];
+    assert_eq!(
+        main.matches("tribute_control.lambda").count(),
+        1,
+        "{printed}"
+    );
+    assert_contains(
+        main,
+        &[
+            "%1 = tribute_control.lambda(%2: core.i32) -> core.i32 convention(direct) captures [] {",
+            "%3 = tribute_control.call %1, %0 {callee = @pure} : core.i32",
+            "%4 = tribute_control.call %1, %3 {callee = @\"open$9D\", row_args = [{}]} : core.i32",
+        ],
+    );
+}
+
 /// Types outside definitions take the conventions of their abilities, a
 /// bodyless definition has no class variables, a reference to root `main`
 /// stays on it, and an instance of the last definition follows it.
