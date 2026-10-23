@@ -45,9 +45,9 @@ enum Boxed(a) {
 }
 
 fn format_box(value: Int) -> String {
-    case Box(value) {
-        Box(inner) -> Int::to_string(inner)
-        Empty -> "empty"
+    case .Box(value) {
+        .Box(inner) -> Int::to_string(inner)
+        .Empty -> "empty"
     }
 }
 "#,
@@ -96,7 +96,7 @@ enum Result(a, e) {
 }
 
 fn ok_int(value: Int) -> Result(Int, String) {
-    Ok(value)
+    .Ok(value)
 }
 "#,
     );
@@ -133,7 +133,7 @@ enum IntBox {
 }
 
 fn box_int(value: Int) -> IntBox {
-    IntBox(value)
+    .IntBox(value)
 }
 "#,
     );

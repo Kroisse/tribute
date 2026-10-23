@@ -153,7 +153,8 @@ variant는 `Option::None`과 `Option::Some`이고, 이 경로가 variant의 식�
 - Variant는 경로(`Option::Some(1)`), [암묵적 생성자](type-inference.md#암묵적-생성자)
   (`.Some(1)`), 또는 그 variant를 `use`한 짧은 이름으로 가리킨다
   (`use std::Option::Some` 뒤의 `Some(1)`). 짧은 이름 `Some`은 보통의 이름
-  조회이므로 `use` 없이는 해석 오류다.
+  조회이므로 `use` 없이는 해석 오류다. 스코프의 타입에 그 이름의 생성자가 있으면
+  진단은 `.Some`을 제안한다.
 - 다른 enum의 variant는 이름이 같아도 서로의 이름을 가리지 않는다. `Result::Error`와
   `std::io::Error`는 둘 다 짧은 이름으로 스코프에 들어오지 않는 한 충돌하지 않는다.
 - Struct의 생성자는 struct 타입과 같은 이름으로 struct를 선언한 모듈에 있다.

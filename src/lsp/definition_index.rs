@@ -1121,8 +1121,8 @@ mod tests {
 
 fn unwrap(opt: Option) -> Int {
     case opt {
-        Some(v) -> v
-        None -> 0
+        .Some(v) -> v
+        .None -> 0
     }
 }"#,
         );

@@ -1038,8 +1038,8 @@ enum Wrap(a) {
     Empty,
 }
 
-fn rect() -> Shape { Rect { tall: True, width: 7 } }
-fn wrap() -> Wrap(Nat) { Box { tagged: False, value: 1 } }
+fn rect() -> Shape { .Rect { tall: True, width: 7 } }
+fn wrap() -> Wrap(Nat) { .Box { tagged: False, value: 1 } }
 "#;
     let errors: Vec<_> = diagnostics(db, valid)
         .into_iter()
@@ -1054,11 +1054,11 @@ enum Shape {
     Rect { width: Nat, tall: Bool },
 }
 
-fn unknown() -> Shape { Rect { width: 1, tall: True, depth: 2 } }
-fn missing() -> Shape { Rect { width: 1 } }
-fn mistyped() -> Shape { Rect { width: True, tall: True } }
-fn spread(shape: Shape) -> Shape { Rect { ..shape, width: 1 } }
-fn positional() -> Shape { Dot { value: 1 } }
+fn unknown() -> Shape { .Rect { width: 1, tall: True, depth: 2 } }
+fn missing() -> Shape { .Rect { width: 1 } }
+fn mistyped() -> Shape { .Rect { width: True, tall: True } }
+fn spread(shape: Shape) -> Shape { .Rect { ..shape, width: 1 } }
+fn positional() -> Shape { .Dot { value: 1 } }
 "#;
     let errors: Vec<_> = diagnostics(db, invalid)
         .into_iter()
@@ -1069,7 +1069,7 @@ fn positional() -> Shape { Dot { value: 1 } }
         "unknown field `depth` for variant `Shape::Rect`",
         "missing field: tall",
         "record spread is not allowed for variant `Shape::Rect`; write every field",
-        "`Shape::Dot` has positional fields; construct it with `Dot(...)`",
+        "`Shape::Dot` has positional fields; construct it with `.Dot(...)`",
     ] {
         assert!(
             errors.iter().any(|error| error == expected),

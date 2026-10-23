@@ -525,7 +525,7 @@ enum Wrapped(a) {
 }
 
 fn pair() -> #(Nat, Bool) {
-    let Wrapped(identity) = Wrapped(fn(value) value)
+    let .Wrapped(identity) = .Wrapped(fn(value) value)
     #(identity(1), identity(True))
 }
 "#,
@@ -626,7 +626,7 @@ extern "intrinsic" fn take_nat(value: Nat) ->{} Nil
 extern "intrinsic" fn take_bool(value: Bool) ->{} Nil
 
 fn restricted() -> Nil {
-    let Wrapped(value) = Wrapped(Source::get())
+    let .Wrapped(value) = .Wrapped(Source::get())
     take_nat(value)
     take_bool(value)
 }

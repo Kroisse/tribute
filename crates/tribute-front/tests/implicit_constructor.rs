@@ -183,3 +183,14 @@ fn deferred() -> Nil {
         ]
     );
 }
+
+#[salsa_test]
+fn a_bare_variant_name_suggests_the_implicit_constructor(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+fn none() -> Option(Int) { None }
+"#,
+    );
+    assert_eq!(errors, ["unresolved name `None`; did you mean `.None`?"]);
+}

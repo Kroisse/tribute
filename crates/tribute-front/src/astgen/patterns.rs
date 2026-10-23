@@ -553,7 +553,7 @@ mod tests {
         let source = r#"
             fn main() -> Nil {
                 case x {
-                    None -> 0
+                    .None -> 0
                     _ -> 1
                 }
             }
@@ -571,7 +571,7 @@ mod tests {
         let source = r#"
             fn main() -> Nil {
                 case x {
-                    Some(y) -> y
+                    .Some(y) -> y
                     _ -> 0
                 }
             }
@@ -788,8 +788,8 @@ mod tests {
         let source = r#"
             fn main() -> Nil {
                 case x {
-                    Some(y) as opt -> opt
-                    _ -> None
+                    .Some(y) as opt -> opt
+                    _ -> .None
                 }
             }
         "#;

@@ -5,6 +5,6 @@ expression: result.diagnostics
 - message: "constructor `std::Option::Some` expects 1 field, but the pattern has 2"
   span:
     start: 54
-    end: 64
+    end: 65
   severity: Error
   phase: TypeChecking

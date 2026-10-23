@@ -44,7 +44,7 @@ mod m {
 
 fn main() -> Nil {
     let _ = case m::one() {
-        Some(n) -> n
+        .Some(n) -> n
         Nothing -> 0
     }
 }
@@ -87,7 +87,7 @@ fn empty_root_module_shadows_a_library_name(db: &salsa::DatabaseImpl) {
     let call = |annotation: &str| {
         format!(
             "mod Option {{}}\n\nfn f(o: {annotation}) -> Nat {{ 0 }}\n\n\
-             fn main() -> Nil {{\n    let _ = f(Some(1))\n}}\n"
+             fn main() -> Nil {{\n    let _ = f(std::Option::Some(1))\n}}\n"
         )
     };
     assert_eq!(
@@ -105,7 +105,7 @@ fn empty_root_module_shadows_a_library_name(db: &salsa::DatabaseImpl) {
             db,
             "mod Option {}\n\nfn main() -> Nil {\n    let _ = Option::Some(1)\n}\n"
         ),
-        ["unresolved name `Option::Some`; did you mean `Some`?"]
+        ["unresolved name `Option::Some`"]
     );
     assert_eq!(
         errors(db, "mod Option {}\n\nuse Option::Some\n"),
@@ -137,14 +137,11 @@ fn a_package_root_path_does_not_name_a_prelude_item(db: &salsa::DatabaseImpl) {
         db,
         r#"
 fn main() -> Nil {
-    let _ = pkg::Some(1)
+    let _ = pkg::Option::Some(1)
 }
 "#,
     );
-    assert_eq!(
-        errors,
-        ["unresolved name `pkg::Some`; did you mean `Some`?"]
-    );
+    assert_eq!(errors, ["unresolved name `pkg::Option::Some`"]);
 }
 
 /// A module the package root declares as `std` hides package `std` from the

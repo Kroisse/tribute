@@ -376,13 +376,20 @@ impl<'db> TypeChecker<'db> {
                             }
                         }
                     }
-                    None => self.report_type_error(
-                        deferred.node_id,
-                        format!(
-                            "`{qualified}` has positional fields; write it as `.{}(...)`",
-                            id.name(db)
-                        ),
-                    ),
+                    None => {
+                        let verb = if deferred.pattern {
+                            "match"
+                        } else {
+                            "construct"
+                        };
+                        self.report_type_error(
+                            deferred.node_id,
+                            format!(
+                                "`{qualified}` has positional fields; {verb} it with `.{}(...)`",
+                                id.name(db)
+                            ),
+                        );
+                    }
                 }
             }
         }

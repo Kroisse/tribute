@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn test_type_index_uses_prelude() {
         let db = salsa::DatabaseImpl::default();
-        let text = "fn f(error: Int::ParseError) -> Nat {\n    let value = case error {\n        Int::ParseError::InvalidSyntax -> Some(1)\n        Int::ParseError::OutOfRange -> None\n    }\n    let other = value\n    0\n}\n";
+        let text = "fn f(error: Int::ParseError) -> Nat {\n    let value = case error {\n        Int::ParseError::InvalidSyntax -> .Some(1)\n        Int::ParseError::OutOfRange -> .None\n    }\n    let other = value\n    0\n}\n";
         let source = make_source(&db, text);
         let index = type_index(&db, source).expect("type index");
         let offset = text.rfind("value").unwrap();
@@ -540,8 +540,8 @@ mod tests {
 
 fn test(opt: Option) -> Int {
     case opt {
-        Some(v) -> v
-        None -> 0
+        .Some(v) -> v
+        .None -> 0
     }
 }"#,
         );

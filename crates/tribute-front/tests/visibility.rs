@@ -66,7 +66,7 @@ fn read(secret: m::Secret, mode: m::Mode) -> Nat {
 }
 
 fn main() -> Nil {
-    let _ = m::Quiet
+    let _ = m::Mode::Quiet
 }
 "#,
     );
@@ -84,7 +84,7 @@ fn main() -> Nil {
     );
     assert_hidden(
         &errors,
-        "`m::Quiet` is not visible here: `m::Mode` is private",
+        "`m::Mode::Quiet` is not visible here: `m::Mode` is private",
     );
     assert_hidden(
         &errors,

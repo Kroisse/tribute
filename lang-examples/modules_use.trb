@@ -18,11 +18,11 @@ pub mod collections {
     // Type-associated module shares the type's name (PascalCase)
     pub mod List {
         pub fn empty() -> List(a) {
-            Empty
+            .Empty
         }
 
         pub fn singleton(x: a) -> List(a) {
-            Cons(x, Empty)
+            .Cons(x, .Empty)
         }
     }
 
@@ -33,11 +33,11 @@ pub mod collections {
 
     pub mod Option {
         pub fn some(x: a) -> Option(a) {
-            Some(x)
+            .Some(x)
         }
 
         pub fn none() -> Option(a) {
-            None
+            .None
         }
     }
 }
@@ -68,8 +68,8 @@ fn main() ->{Io} Nil {
     let _xs = List::singleton(42)
 
     // Using imported constructors directly
-    let _opt = Some(10)
-    let _empty = None
+    let _opt = .Some(10)
+    let _empty = .None
 
     // Using aliased function
     print_line(Int::to_string(dbl(+5)))  // 10

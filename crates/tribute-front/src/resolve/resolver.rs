@@ -1079,8 +1079,17 @@ impl<'db> Resolver<'db> {
     fn report_unresolved_name(&self, name: &UnresolvedName) {
         let span = self.span_map.get_or_default(name.id);
         let similar = self.find_similar_names(&name.name());
+        // A variant is declared only in its enum's namespace, so a bare
+        // variant name is written as an implicit constructor.
+        let implicit = name.is_simple()
+            && matches!(
+                self.resolve_constructor(&UnresolvedName::implicit(name.name(), name.id)),
+                ResolvedRef::ImplicitConstructor { candidates, .. } if !candidates.is_empty()
+            );
 
-        let message = if similar.is_empty() {
+        let message = if implicit {
+            format!("unresolved name `{name}`; did you mean `.{name}`?")
+        } else if similar.is_empty() {
             format!("unresolved name `{}`", name)
         } else {
             let suggestions = similar

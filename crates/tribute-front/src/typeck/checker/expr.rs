@@ -1211,7 +1211,7 @@ impl<'db> TypeChecker<'db> {
             self.report_type_error(
                 record_id,
                 format!(
-                    "`{qualified}` has positional fields; construct it with `{}(...)`",
+                    "`{qualified}` has positional fields; construct it with `.{}(...)`",
                     id.name(self.db())
                 ),
             );
@@ -1379,7 +1379,7 @@ impl<'db> TypeChecker<'db> {
             self.report_type_error(
                 pattern_id,
                 format!(
-                    "`{qualified}` has positional fields; match it with `{}(...)`",
+                    "`{qualified}` has positional fields; match it with `.{}(...)`",
                     id.name(self.db())
                 ),
             );

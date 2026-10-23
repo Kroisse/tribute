@@ -570,9 +570,10 @@ mod tests {
         assert!(inner.iter().any(|name| name == "local"));
         assert!(!inner.iter().any(|name| name == "top"));
 
-        // The prelude's public items, and not its private ones.
+        // The prelude's public items, and not its private ones. Variants
+        // are only in their enum's namespace.
         for names in [&root, &inner] {
-            assert!(names.iter().any(|name| name == "Some"));
+            assert!(!names.iter().any(|name| name == "Some"));
             assert!(names.iter().any(|name| name == "Option"));
             assert!(names.iter().any(|name| name == "List"));
             assert!(!names.iter().any(|name| name == "__tribute_bytes_len"));
