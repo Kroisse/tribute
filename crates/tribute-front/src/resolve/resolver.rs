@@ -20,7 +20,7 @@ use crate::ast::{
 
 use super::env::{Binding, PackageEnv, Restriction};
 use super::package::{IdentityPath, Location, PackageName};
-use super::path::{PathKeywordError, absolute_path};
+use super::path::{PathKeywordError, absolute_path, dependency_path};
 use super::scope::{Dependencies, Scope};
 
 /// Find the best matches from `candidates` by a caller-provided score function.
@@ -418,8 +418,7 @@ impl<'db> Resolver<'db> {
         let Some(namespace) = name.namespace() else {
             return Ok(None);
         };
-        if let Some(path) = absolute_path(&self.module_path, &namespace)? {
-            let namespace = self.package.at(SymbolPath::new(path));
+        if let Some(namespace) = self.fixed_location(&namespace)? {
             let binding = self.view().lookup_path(&namespace.child(sym));
             return Ok(binding.map(|binding| (namespace, binding)));
         }
@@ -554,6 +553,21 @@ impl<'db> Resolver<'db> {
         }
     }
 
+    /// The one location `path` names wherever it is written, when it
+    /// starts with a path keyword or a leading `::`; `None` for a path that
+    /// starts with a name.
+    fn fixed_location(&self, path: &[Symbol]) -> Result<Option<Location>, PathKeywordError> {
+        if let Some((name, rest)) = dependency_path(path) {
+            let root = self
+                .view()
+                .dependency_root(name)
+                .ok_or_else(|| PathKeywordError::UnknownPackage(name.clone()))?;
+            return Ok(Some(root.join(rest)));
+        }
+        Ok(absolute_path(&self.module_path, path)?
+            .map(|path| self.package.at(SymbolPath::new(path))))
+    }
+
     /// The location of the current module.
     fn here(&self) -> Location {
         self.package
@@ -564,7 +578,7 @@ impl<'db> Resolver<'db> {
     /// package the scope does not shadow, and so names one path only.
     fn names_one_path(&self, path: &UnresolvedName) -> bool {
         let first = path.path.first().expect("a method path has a segment");
-        matches!(absolute_path(&self.module_path, &path.path), Ok(Some(_)))
+        matches!(self.fixed_location(&path.path), Ok(Some(_)))
             || (self.view().dependency_root(first).is_some() && !self.module_names(first))
     }
 
@@ -876,38 +890,32 @@ impl<'db> Resolver<'db> {
                     ann.kind = TypeAnnotationKind::Path(path.to_vec());
                 }
             }
-            TypeAnnotationKind::Path(segments) => {
-                match absolute_path(&self.module_path, segments) {
-                    Ok(Some(path)) if !path.is_empty() => {
-                        *segments = self.package.at(SymbolPath::new(path)).identity().to_vec();
-                    }
-                    Ok(Some(_)) => {
-                        Diagnostic::new(
-                            format!(
-                                "`{}` names a module, not a type",
-                                segments.iter().format("::")
-                            ),
-                            self.span_map.get_or_default(ann.id),
-                            DiagnosticSeverity::Error,
-                            CompilationPhase::NameResolution,
-                        )
-                        .accumulate(self.db);
+            TypeAnnotationKind::Path(segments) => match self.fixed_location(segments) {
+                // A path that starts with a keyword or `::` names only what
+                // is at its location.
+                Ok(Some(location)) => match self.lookup_path(&location) {
+                    Some(Binding::Module { .. }) => self.report_module_annotation(ann),
+                    Some(_) => *segments = location.identity().to_vec(),
+                    None if location.path.is_empty() => self.report_module_annotation(ann),
+                    None => {
+                        let path = Symbol::new(&segments.iter().format("::").to_string());
+                        self.report_unresolved_annotation(ann.id, &path);
                         ann.kind = TypeAnnotationKind::Error;
                     }
-                    Ok(None) => match self.namespace_in_scope(SymbolPath::new(segments.clone())) {
-                        Some(location) => *segments = location.identity().to_vec(),
-                        None => {
-                            let path = Symbol::new(&segments.iter().format("::").to_string());
-                            self.report_unresolved_annotation(ann.id, &path);
-                            ann.kind = TypeAnnotationKind::Error;
-                        }
-                    },
-                    Err(error) => {
-                        self.report_path_keyword(ann.id, error);
+                },
+                Ok(None) => match self.namespace_in_scope(SymbolPath::new(segments.clone())) {
+                    Some(location) => *segments = location.identity().to_vec(),
+                    None => {
+                        let path = Symbol::new(&segments.iter().format("::").to_string());
+                        self.report_unresolved_annotation(ann.id, &path);
                         ann.kind = TypeAnnotationKind::Error;
                     }
+                },
+                Err(error) => {
+                    self.report_path_keyword(ann.id, error);
+                    ann.kind = TypeAnnotationKind::Error;
                 }
-            }
+            },
             TypeAnnotationKind::App { ctor, args } => {
                 self.resolve_annotation_paths(ctor);
                 args.iter_mut()
@@ -961,6 +969,23 @@ impl<'db> Resolver<'db> {
             .package
             .at(SymbolPath::new(parent.iter().chain([name]).cloned()));
         self.lookup_path(&location)
+    }
+
+    /// Report an annotation path that names a module rather than a type.
+    fn report_module_annotation(&self, ann: &mut TypeAnnotation) {
+        if let TypeAnnotationKind::Path(segments) = &ann.kind {
+            Diagnostic::new(
+                format!(
+                    "`{}` names a module, not a type",
+                    segments.iter().format("::")
+                ),
+                self.span_map.get_or_default(ann.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::NameResolution,
+            )
+            .accumulate(self.db);
+        }
+        ann.kind = TypeAnnotationKind::Error;
     }
 
     /// Report a type or ability name an annotation cannot see.
@@ -1520,8 +1545,15 @@ impl<'db> Resolver<'db> {
     /// reported, since it would otherwise leave the import as a module
     /// placeholder.
     fn resolve_use_target(&self, u: &UseDecl) -> Option<Vec<Symbol>> {
-        let message = if let Err(error) = absolute_path(&self.module_path, &u.path) {
+        let message = if let Err(error) = self.fixed_location(&u.path) {
             error.to_string()
+        } else if let Some(first) = self.ambiguous_use_start(&u.path) {
+            format!(
+                "`use {}` is ambiguous: `{first}` names both a name of this module and \
+                 package `{first}`; write `self::{first}` or `pkg::{first}` for the module's \
+                 name, or `::{first}` for the package",
+                u.path.iter().format("::")
+            )
         } else if let Some(target) = self.use_target(&u.path) {
             self.check_use_visibility(u, &target);
             // Later phases read the target by its identity.
@@ -1537,6 +1569,18 @@ impl<'db> Resolver<'db> {
         )
         .accumulate(self.db);
         None
+    }
+
+    /// The first segment of a `use` path that names both a name of the
+    /// current module and a dependency, which makes the path ambiguous.
+    fn ambiguous_use_start<'p>(&self, path: &'p [Symbol]) -> Option<&'p Symbol> {
+        let (first, rest) = path.split_first()?;
+        // A `use` of one segment imports that name itself.
+        (!rest.is_empty()
+            && matches!(self.fixed_location(path), Ok(None))
+            && self.view().dependency_root(first).is_some()
+            && self.module_names(first))
+        .then_some(first)
     }
 
     /// Report a `use` of `target` that the current module does not see, or
@@ -1600,9 +1644,8 @@ impl<'db> Resolver<'db> {
             };
             found || self.view().has_namespace(location)
         };
-        match absolute_path(&self.module_path, path) {
-            Ok(Some(path)) => {
-                let location = self.package.at(SymbolPath::new(path));
+        match self.fixed_location(path) {
+            Ok(Some(location)) => {
                 return names(&location).then_some(location);
             }
             Err(_) => return None,
