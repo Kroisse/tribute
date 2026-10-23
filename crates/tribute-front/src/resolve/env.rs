@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::{Symbol, SymbolPath};
 
-use super::package::PackageName;
+use super::package::{IdentityPath, Location, PackageName};
 use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId, Visibility};
 
 /// Information about a resolved name binding.
@@ -35,7 +35,7 @@ pub enum Binding<'db> {
     /// A module or namespace binding.
     Module {
         /// The namespace's identity path.
-        path: Vec<Symbol>,
+        path: IdentityPath,
     },
 
     /// A `use` whose target is not resolved yet: the path it imports, as
@@ -147,10 +147,10 @@ pub struct PackageEnv<'db> {
     /// The entries of each namespace below the package root: modules,
     /// types, and abilities (namespace → name → binding).
     namespaces: HashMap<SymbolPath, HashMap<Symbol, Binding<'db>>>,
-    /// The paths the package root's resolved `use`s import (import name →
-    /// path). Used to rewrite ability annotations from imported names to
-    /// qualified paths.
-    use_paths: HashMap<Symbol, SymbolPath>,
+    /// The locations the package root's resolved `use`s import (import
+    /// name → location). Used to rewrite ability annotations from imported
+    /// names to qualified paths.
+    use_paths: HashMap<Symbol, Location>,
     /// The paths of the names that several `use`s import, in declaration
     /// order.
     repeated_uses: HashMap<Symbol, Vec<Vec<Symbol>>>,
@@ -320,7 +320,7 @@ impl<'db> PackageEnv<'db> {
             .or_else(|| self.lookup_qualified(&[], name))
             .or_else(|| match self.imports.get(name) {
                 Some(binding @ Binding::Module { path })
-                    if *path == self.package.identity_path(std::slice::from_ref(name))[..] =>
+                    if path[..] == self.package.identity_path(std::slice::from_ref(name))[..] =>
                 {
                     Some(binding)
                 }
@@ -538,7 +538,7 @@ impl<'db> PackageEnv<'db> {
             || self.has_namespace(std::slice::from_ref(&name))
             || match self.imports.get(&name) {
                 Some(Binding::Module { path }) => {
-                    *path == self.package.identity_path(std::slice::from_ref(&name))[..]
+                    path[..] == self.package.identity_path(std::slice::from_ref(&name))[..]
                 }
                 Some(Binding::Import { path }) => path[..] == [name],
                 _ => false,
@@ -550,14 +550,14 @@ impl<'db> PackageEnv<'db> {
         self.imports.iter().map(|(k, v)| (k.clone(), v))
     }
 
-    /// Replace an import binding, recording the original path.
-    pub fn replace_import(&mut self, name: Symbol, binding: Binding<'db>, path: SymbolPath) {
-        self.use_paths.insert(name.clone(), path);
+    /// Replace an import binding, recording the location it imports.
+    pub fn replace_import(&mut self, name: Symbol, binding: Binding<'db>, location: Location) {
+        self.use_paths.insert(name.clone(), location);
         self.imports.insert(name, binding);
     }
 
-    /// The path the package root's `use` of `name` imports.
-    pub fn get_use_path(&self, name: &Symbol) -> Option<&SymbolPath> {
+    /// The location the package root's `use` of `name` imports.
+    pub fn get_use_path(&self, name: &Symbol) -> Option<&Location> {
         self.use_paths.get(name)
     }
 

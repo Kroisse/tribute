@@ -1,4 +1,5 @@
-//! The name of the package a module tree belongs to.
+//! The name of the package a module tree belongs to, and the two ways a
+//! path names a place in a package: by identity, and from its root.
 
 use trunk_ir::{Symbol, SymbolPath};
 
@@ -64,8 +65,93 @@ impl PackageName {
             {
                 Some(rest)
             }
+            // A library package's paths start with its name.
+            (None, Some((first, _))) if first == LIBRARY_PACKAGE => None,
             (None, _) => Some(identity),
         }
+    }
+
+    /// The location of `path`, a path from this package's root.
+    pub fn at(&self, path: SymbolPath) -> Location {
+        Location {
+            package: self.clone(),
+            path,
+        }
+    }
+}
+
+/// A place in a package's module tree: the package, and the path from its
+/// root. A path from the root names a place only together with its
+/// package, since a module of one package may share its name with another
+/// package.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct Location {
+    pub package: PackageName,
+    pub path: SymbolPath,
+}
+
+impl Location {
+    /// The location `name` names in the module or namespace here.
+    pub fn child(&self, name: Symbol) -> Location {
+        self.package.at(self.path.child(name))
+    }
+
+    /// The location `path` continues to from here.
+    pub fn join<'a>(&self, path: impl IntoIterator<Item = &'a Symbol>) -> Location {
+        let mut joined = self.path.clone();
+        for segment in path {
+            joined.push(segment.clone());
+        }
+        self.package.at(joined)
+    }
+
+    /// The namespace that holds the entry here, and the entry's name; `None`
+    /// at a package root.
+    pub fn split_last(&self) -> Option<(&Symbol, Location)> {
+        let (last, namespace) = self.path.split_last()?;
+        Some((
+            last,
+            self.package.at(SymbolPath::new(namespace.iter().cloned())),
+        ))
+    }
+
+    /// The identity path of the place.
+    pub fn identity(&self) -> IdentityPath {
+        IdentityPath(self.package.identity_path(&self.path))
+    }
+}
+
+/// The path that identifies a declaration or module across packages: a
+/// library package's paths start with its name, the compiled package's
+/// omit theirs (`std::Option`, `geometry::area`, `pkg::std::f`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, salsa::SalsaValue)]
+pub struct IdentityPath(SymbolPath);
+
+impl IdentityPath {
+    pub fn new(path: SymbolPath) -> Self {
+        Self(path)
+    }
+
+    pub fn as_symbol_path(&self) -> &SymbolPath {
+        &self.0
+    }
+
+    pub fn into_symbol_path(self) -> SymbolPath {
+        self.0
+    }
+}
+
+impl std::fmt::Display for IdentityPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::ops::Deref for IdentityPath {
+    type Target = [Symbol];
+
+    fn deref(&self) -> &[Symbol] {
+        &self.0
     }
 }
 
@@ -110,5 +196,6 @@ mod tests {
             compiled.module_path(&path("geometry::area")),
             Some(&path("geometry::area")[..])
         );
+        assert_eq!(compiled.module_path(&path("std::io::print")), None);
     }
 }

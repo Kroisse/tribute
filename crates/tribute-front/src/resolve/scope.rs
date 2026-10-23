@@ -5,6 +5,7 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use super::LIBRARY_PACKAGE;
 use super::env::{Binding, PackageEnv, Restriction};
+use super::package::{IdentityPath, Location, PackageName};
 use crate::ast::FuncDefId;
 
 /// The packages a package depends on, each by its name.
@@ -49,9 +50,9 @@ impl<'db> Dependencies<'db> {
 
 /// A package's view of names: its own environment, then its dependencies'.
 ///
-/// Its paths are read from the package's root. A path whose first segment
-/// names a dependency, and names nothing the package itself declares or
-/// imports, continues from that dependency's root.
+/// Its places are [`Location`]s: a path from the root of the package
+/// itself or of one of its dependencies. Which package a written path
+/// starts in is the resolver's decision, not the scope's.
 #[derive(Clone, Copy)]
 pub struct Scope<'s, 'db> {
     own: &'s PackageEnv<'db>,
@@ -68,12 +69,36 @@ impl<'s, 'db> Scope<'s, 'db> {
         self.own
     }
 
-    /// The dependency a path whose first segment is `first` may continue
-    /// in. The package's own entries at the path come first, as they shadow
-    /// the dependency's.
-    fn dependency<'p>(&self, path: &'p [Symbol]) -> Option<(&'s PackageEnv<'db>, &'p [Symbol])> {
-        let (first, rest) = path.split_first()?;
-        Some((self.dependencies.get(first)?, rest))
+    /// The location `path` names from the package's own root.
+    pub fn at_root(&self, path: SymbolPath) -> Location {
+        self.own.package().at(path)
+    }
+
+    /// The environment of `package`: the package's own or a dependency's.
+    fn env(&self, package: &PackageName) -> Option<&'s PackageEnv<'db>> {
+        if package == self.own.package() {
+            return Some(self.own);
+        }
+        self.dependencies
+            .iter()
+            .find(|env| env.package() == package)
+    }
+
+    /// The root of the dependency named `name`.
+    pub fn dependency_root(&self, name: &Symbol) -> Option<Location> {
+        let env = self.dependencies.get(name)?;
+        Some(env.package().at(SymbolPath::root()))
+    }
+
+    /// The location of the identity path `identity`, in the package or a
+    /// dependency.
+    pub fn locate(&self, identity: &[Symbol]) -> Option<Location> {
+        std::iter::once(self.own)
+            .chain(self.dependencies.iter())
+            .find_map(|env| {
+                let path = env.package().module_path(identity)?;
+                Some(env.package().at(SymbolPath::new(path.iter().cloned())))
+            })
     }
 
     /// Look up a name the package root declares or imports. The prelude's
@@ -82,54 +107,57 @@ impl<'s, 'db> Scope<'s, 'db> {
         self.own.lookup(name)
     }
 
-    /// Look up `name` in `namespace`.
+    /// Look up `name` in `namespace`. Another package's root shows the
+    /// items it gives other packages.
     pub fn lookup_qualified(
         &self,
-        namespace: &[Symbol],
+        namespace: &Location,
         name: &Symbol,
     ) -> Option<&'s Binding<'db>> {
-        self.own.lookup_qualified(namespace, name).or_else(|| {
-            let (env, namespace) = self.dependency(namespace)?;
-            match namespace {
-                [] => env.root_item(name),
-                namespace => env.lookup_qualified(namespace, name),
-            }
+        let env = self.env(&namespace.package)?;
+        if namespace.path.is_root() && env.package() != self.own.package() {
+            return env.root_item(name);
+        }
+        env.lookup_qualified(&namespace.path, name)
+    }
+
+    /// The binding at `location`: an item the package root declares or
+    /// imports, or an entry of a namespace.
+    pub fn lookup_path(&self, location: &Location) -> Option<&'s Binding<'db>> {
+        let (last, namespace) = location.split_last()?;
+        if namespace.path.is_root() && namespace.package == *self.own.package() {
+            return self.lookup(last);
+        }
+        self.lookup_qualified(&namespace, last)
+    }
+
+    /// Whether `namespace` exists. Every package root does.
+    pub fn has_namespace(&self, namespace: &Location) -> bool {
+        self.env(&namespace.package).is_some_and(|env| {
+            (namespace.path.is_root() && env.package() != self.own.package())
+                || env.has_namespace(&namespace.path)
         })
     }
 
-    /// Whether `namespace` exists.
-    pub fn has_namespace(&self, namespace: &[Symbol]) -> bool {
-        self.own.has_namespace(namespace)
-            || self.dependency(namespace).is_some_and(|(env, namespace)| {
-                namespace.is_empty() || env.has_namespace(namespace)
-            })
-    }
-
-    /// The bindings of `namespace`, the package's own first.
-    pub fn collect_namespace(&self, namespace: &[Symbol]) -> Vec<(Symbol, Binding<'db>)> {
+    /// The bindings of `namespace`.
+    pub fn collect_namespace(&self, namespace: &Location) -> Vec<(Symbol, Binding<'db>)> {
         self.iter_namespace(namespace)
             .map(|(name, binding)| (name, binding.clone()))
             .collect()
     }
 
-    /// The names and bindings of `namespace`, the package's own first.
+    /// The names and bindings of `namespace`.
     pub fn iter_namespace(
         &self,
-        namespace: &[Symbol],
+        namespace: &Location,
     ) -> impl Iterator<Item = (Symbol, &'s Binding<'db>)> + use<'s, 'db> {
-        let mut entries: Vec<(Symbol, &'s Binding<'db>)> =
-            self.own.iter_namespace(namespace).collect();
-        if let Some((env, namespace)) = self.dependency(namespace) {
-            let theirs: Vec<(Symbol, &'s Binding<'db>)> = match namespace {
-                [] => env.root_items().collect(),
-                namespace => env.iter_namespace(namespace).collect(),
-            };
-            for (name, binding) in theirs {
-                if !entries.iter().any(|(known, _)| *known == name) {
-                    entries.push((name, binding));
-                }
+        let entries: Vec<(Symbol, &'s Binding<'db>)> = match self.env(&namespace.package) {
+            Some(env) if namespace.path.is_root() && env.package() != self.own.package() => {
+                env.root_items().collect()
             }
-        }
+            Some(env) => env.iter_namespace(&namespace.path).collect(),
+            None => Vec::new(),
+        };
         entries.into_iter()
     }
 
@@ -144,24 +172,19 @@ impl<'s, 'db> Scope<'s, 'db> {
     }
 
     /// Where the module at `module` is visible, if it is not public.
-    pub fn module_restriction(&self, module: &[Symbol]) -> Option<&'s Restriction> {
-        self.own.module_restriction(module).or_else(|| {
-            let (env, module) = self.dependency(module)?;
-            env.module_restriction(module)
-        })
+    pub fn module_restriction(&self, module: &Location) -> Option<&'s Restriction> {
+        self.env(&module.package)?.module_restriction(&module.path)
     }
 
     /// Where the re-exported entry `name` of `namespace` is visible, if it
     /// is not public.
     pub fn entry_restriction(
         &self,
-        namespace: &[Symbol],
+        namespace: &Location,
         name: &Symbol,
     ) -> Option<&'s Restriction> {
-        self.own.entry_restriction(namespace, name).or_else(|| {
-            let (env, namespace) = self.dependency(namespace)?;
-            env.entry_restriction(namespace, name)
-        })
+        self.env(&namespace.package)?
+            .entry_restriction(&namespace.path, name)
     }
 
     /// The prelude's package and environment, for a package that depends
@@ -193,32 +216,25 @@ impl<'s, 'db> Scope<'s, 'db> {
     }
 
     /// The identity path of the prelude name `name`.
-    pub fn library_path(&self, name: &Symbol) -> Option<Vec<Symbol>> {
+    pub fn library_path(&self, name: &Symbol) -> Option<IdentityPath> {
         self.lookup_library(name)?;
         let (package, env) = self.prelude()?;
-        Some(match env.builtin_path(name) {
-            Some(path) => path.to_vec(),
-            None => package.into_iter().chain([name]).cloned().collect(),
-        })
+        Some(IdentityPath::new(match env.builtin_path(name) {
+            Some(path) => SymbolPath::new(path.iter().cloned()),
+            None => SymbolPath::new(package.into_iter().chain([name]).cloned()),
+        }))
     }
 
     /// The namespace a path starting with the prelude name `alias`
-    /// continues in.
-    pub fn library_namespace(&self, alias: &Symbol) -> Option<SymbolPath> {
+    /// continues in, in the package that supplies the prelude.
+    pub fn library_namespace(&self, alias: &Symbol) -> Option<Location> {
         let (package, env) = self.prelude()?;
-        let under = |path: &[Symbol]| {
-            SymbolPath::new(package.into_iter().cloned().chain(path.iter().cloned()))
-        };
         if let Some(namespace) = env.builtin_namespace(alias) {
-            return Some(under(namespace));
+            return Some(env.package().at(namespace.clone()));
         }
         let root = std::slice::from_ref(alias);
-        (package.is_some() && env.has_namespace(root)).then(|| under(root))
-    }
-
-    /// Whether a path may start with `first` to name a dependency.
-    pub fn is_library_root(&self, first: &Symbol) -> bool {
-        self.dependencies.get(first).is_some()
+        (package.is_some() && env.has_namespace(root))
+            .then(|| env.package().at(SymbolPath::new(root.iter().cloned())))
     }
 
     /// Whether the package root sees `name` only because the prelude
@@ -244,7 +260,7 @@ impl<'s, 'db> Scope<'s, 'db> {
         self.own.has_definition(name)
     }
 
-    pub fn get_use_path(&self, name: &Symbol) -> Option<&'s SymbolPath> {
+    pub fn get_use_path(&self, name: &Symbol) -> Option<&'s Location> {
         self.own.get_use_path(name)
     }
 
