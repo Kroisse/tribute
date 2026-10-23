@@ -449,7 +449,7 @@ fn lower_type_path(ctx: &mut AstLoweringCtx<'_>, node: Node) -> TypeAnnotation {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "path_segment" | "path_keyword" | "type_identifier" => {
+            "path_root" | "path_segment" | "path_keyword" | "type_identifier" => {
                 segments.push(ctx.node_symbol(&child));
             }
             _ => {}
@@ -774,8 +774,13 @@ fn lower_use(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<UseDecl> {
 
     let visibility = lower_visibility(ctx, node);
 
-    // Expand the use tree into multiple (path, alias) pairs
-    let expanded = expand_use_tree(ctx, tree_node, &[]);
+    // Expand the use tree into multiple (path, alias) pairs, after the
+    // leading `::` if the declaration has one.
+    let root: Vec<Symbol> = find_child_by_kind(node, "path_root")
+        .map(|root| ctx.node_symbol(&root))
+        .into_iter()
+        .collect();
+    let expanded = expand_use_tree(ctx, tree_node, &root);
 
     expanded
         .into_iter()
