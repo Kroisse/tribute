@@ -1965,3 +1965,53 @@ fn main() ->{Io} Nil {
 "#;
     assert_output_on_both_targets("fn_arm_row_variable_calls.trb", source, "9\n-1");
 }
+
+/// A `fn` arm may call a `Cps` callable inside a `handle` of its own when the
+/// handle handles the concrete label and the instance fixes the rest of the
+/// row to `fn` operations.
+#[test]
+fn test_fn_arm_handles_concrete_label_of_row_variable_callable() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+ability Tick {
+    fn tick() -> Int
+}
+
+fn sum(n: Int, acc: Int) ->{Counter} Int {
+    case n == +0 {
+        True -> acc
+        False -> sum(n - +1, acc + Counter::next())
+    }
+}
+
+fn limited(g: fn() ->{Stop, e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
+        fn Counter::next() {
+            handle g() {
+                op Stop::stop() { +2 }
+            }
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let total = handle limited(fn() {
+        let _ = Tick::tick()
+        Stop::stop()
+    }, fn() sum(+3, +0)) {
+        fn Tick::tick() { +1 }
+    }
+    print_line(Int::to_string(total))
+}
+"#;
+    assert_output_on_both_targets("fn_arm_handles_row_variable_label.trb", source, "6");
+}

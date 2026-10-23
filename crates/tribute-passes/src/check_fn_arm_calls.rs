@@ -15,6 +15,7 @@ use itertools::Itertools;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::tribute_control::{self, FuncSig, Row};
+use tribute_ir::runtime_items::{RUNTIME_ITEMS, function_entry_points};
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -67,8 +68,10 @@ impl trunk_ir::pass::Pass for CheckFnArmCalls {
     }
 }
 
-/// Every call in a `fn` arm of an instance reachable from root `main` that
-/// may suspend or abort.
+/// Every call in a `fn` arm of a reachable instance that may suspend or
+/// abort. An instance is reachable from the roots the elimination of
+/// unreferenced definitions keeps, so a compilation without them, such as a
+/// module without `main`, checks no instance here.
 pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
     let requirements = requirements(ctx, module);
     let mut functions: Vec<Function> = module
@@ -81,9 +84,20 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
         functions.iter().map(|f| (f.name.as_str(), f)).collect();
 
     let mut reached: HashSet<&str> = HashSet::default();
+    // The roots of the unreferenced-definition elimination: root `main`,
+    // `_start`, a definition with a foreign ABI, and the runtime functions.
+    let runtime: HashSet<String> = function_entry_points(RUNTIME_ITEMS)
+        .iter()
+        .filter_map(|path| path.leaf().map(|leaf| leaf.to_string()))
+        .collect();
     let mut queue: VecDeque<&Function> = functions
         .iter()
-        .filter(|function| function.is_root_main())
+        .filter(|function| {
+            function.is_root_main()
+                || function.name == "_start"
+                || runtime.contains(&function.name)
+                || ctx.op_attrs(function.op).contains_key("abi")
+        })
         .collect();
     let mut calls = Vec::new();
     while let Some(function) = queue.pop_front() {

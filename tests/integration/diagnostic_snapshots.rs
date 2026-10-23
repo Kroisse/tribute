@@ -1040,6 +1040,54 @@ fn main() -> Nil {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// A `handle` inside a `fn` arm that handles the callable's concrete label
+/// does not cover an `op` operation the instance passes through the row
+/// variable.
+#[salsa_test]
+fn diag_fn_arm_inner_handle_leaves_row_variable_op(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+ability Halt {
+    op halt() -> Never
+}
+
+fn count() ->{Counter} Int {
+    Counter::next()
+}
+
+fn limited(g: fn() ->{Stop, e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
+        fn Counter::next() {
+            handle g() {
+                op Stop::stop() { +2 }
+            }
+        }
+    }
+}
+
+fn main() -> Nil {
+    let _ = handle limited(fn() Halt::halt(), fn() count()) {
+        op Halt::halt() { +0 }
+    }
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
