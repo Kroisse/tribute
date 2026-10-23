@@ -900,8 +900,15 @@ impl<'db> Resolver<'db> {
                 }
             }
             TypeAnnotationKind::Path(segments) => match self.fixed_location(segments) {
-                Ok(Some(location)) if !location.path.is_empty() => {
+                // A path that starts with a keyword or `::` names only what
+                // is at its location.
+                Ok(Some(location)) if self.lookup_path(&location).is_some() => {
                     *segments = location.identity().to_vec();
+                }
+                Ok(Some(location)) if !location.path.is_empty() => {
+                    let path = Symbol::new(&segments.iter().format("::").to_string());
+                    self.report_unresolved_annotation(ann.id, &path);
+                    ann.kind = TypeAnnotationKind::Error;
                 }
                 Ok(Some(_)) => {
                     Diagnostic::new(

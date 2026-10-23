@@ -293,6 +293,8 @@ fn a_leading_separator_names_only_dependencies(db: &salsa::DatabaseImpl) {
 use ::foo::bar
 
 fn f(x: ::nope::T) -> Nat { ::missing::g() }
+
+fn g(x: ::std::DoesNotExist, y: pkg::Missing) -> Nat { 0 }
 "#,
     );
     assert_eq!(
@@ -301,6 +303,8 @@ fn f(x: ::nope::T) -> Nat { ::missing::g() }
             "unresolved package `foo`: `::foo` names no package this package depends on",
             "unresolved package `nope`: `::nope` names no package this package depends on",
             "unresolved package `missing`: `::missing` names no package this package depends on",
+            "unresolved name `::std::DoesNotExist`",
+            "unresolved name `pkg::Missing`",
         ]
     );
 }
