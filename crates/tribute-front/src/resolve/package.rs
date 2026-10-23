@@ -131,20 +131,6 @@ impl IdentityPath {
     pub fn new(path: SymbolPath) -> Self {
         Self(path)
     }
-
-    pub fn as_symbol_path(&self) -> &SymbolPath {
-        &self.0
-    }
-
-    pub fn into_symbol_path(self) -> SymbolPath {
-        self.0
-    }
-}
-
-impl std::fmt::Display for IdentityPath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
 }
 
 impl std::ops::Deref for IdentityPath {

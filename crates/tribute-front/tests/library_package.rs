@@ -221,3 +221,66 @@ fn main() -> Nil { let _ = answer() }
     );
     assert_eq!(errors, ["unresolved import `std::io::print_line`"]);
 }
+
+/// Inline modules re-export through the prelude's namespaces, a dependency,
+/// and their own modules; a name an inline module has keeps its paths in
+/// the module, through an import too.
+#[salsa_test]
+fn inline_module_paths_start_from_what_the_module_names(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod std {
+    pub fn twice(n: Nat) -> Nat { n + n }
+}
+
+pub mod a {
+    pub mod b {
+        pub mod c {
+            pub fn one() -> Nat { 1 }
+        }
+    }
+}
+
+use a::b
+
+mod m {
+    pub use Option::Some as Just
+    pub use std::String::len as size
+    pub use std as library
+    pub use super::a::b::c as deeper
+
+    fn hidden(x: nope::T) -> Nat { 0 }
+}
+
+mod k {
+    use super::std
+
+    pub fn doubled() -> Nat { 1.std::twice() }
+}
+
+mod n {
+    mod std {
+        pub fn f() -> Nat { 1 }
+    }
+
+    use std::String::len
+}
+
+fn main() -> Nil {
+    let _ = case m::Just(m::size("a") + m::deeper::one() + b::c::one() + k::doubled()) {
+        Some(n) -> n
+        None -> 0
+    }
+    let _ = m::library::Some(1)
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "unresolved name `nope::T`",
+            "unresolved import `std::String::len`",
+        ]
+    );
+}
