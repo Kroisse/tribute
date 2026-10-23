@@ -137,8 +137,13 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
 /// declared there.
 fn use_target<'db>(scope: Scope<'_, 'db>, path: &[Symbol]) -> Option<(Location, Binding<'db>)> {
     let location = root_location(scope, path)?;
-    let (target_name, namespace) = location.split_last()?;
-    let binding = scope.lookup_qualified(&namespace, target_name)?.clone();
+    let binding = match location.split_last() {
+        Some((target_name, namespace)) => scope.lookup_qualified(&namespace, target_name)?.clone(),
+        // A package root, such as `::std`, is a module.
+        None => scope.has_namespace(&location).then(|| Binding::Module {
+            path: location.identity(),
+        })?,
+    };
     Some((location, binding))
 }
 

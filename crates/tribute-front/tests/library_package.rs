@@ -413,3 +413,27 @@ fn main() -> Nil {
         ]
     );
 }
+
+/// A `use` may name a dependency's root, and the name it imports reaches
+/// that package's items.
+#[salsa_test]
+fn a_root_import_may_name_a_dependency_root(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+use ::std as library
+
+mod std {
+    pub fn answer() -> Nat { 42 }
+}
+
+fn main() -> Nil {
+    let _ = case library::Some(std::answer()) {
+        library::Some(n) -> n
+        library::None -> 0
+    }
+}
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}
