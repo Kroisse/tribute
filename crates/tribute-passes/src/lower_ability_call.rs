@@ -29,7 +29,7 @@ use trunk_ir::rewrite::{
 };
 
 use crate::effect_dispatch::pack_payload;
-use tribute_ir::calling_convention::CLOSURE_ENVIRONMENT_INDEX_ATTR;
+use tribute_ir::calling_convention::{CLOSURE_ENVIRONMENT_INDEX_ATTR, DynConventionBearing};
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_rt;
@@ -132,7 +132,6 @@ impl RewritePattern for LowerCallPattern {
         let dispatch_op = effect::DispatchTail::operands(evidence_val, shift_value_val)
             .ability(ability)
             .op_name(op_name)
-            .results(t.anyref)
             .build(ctx, location);
         rewriter.insert_op(dispatch_op.op_ref());
 
@@ -166,9 +165,7 @@ fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
         let region = ctx.block(block).parent_region?;
         let parent = ctx.region(region).parent_op?;
         if func::Func::matches(ctx, parent) {
-            if !tribute_ir::calling_convention::get_calling_convention(ctx, parent)?
-                .needs_evidence()
-            {
+            if !DynConventionBearing::of(ctx, parent)?.needs_evidence() {
                 return None;
             }
             let environment_index = ctx

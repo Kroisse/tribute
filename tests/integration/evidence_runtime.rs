@@ -1,11 +1,13 @@
 //! The evidence runtime written in Tribute source, `std::runtime::evidence`.
 //!
 //! A prelude extension calls the runtime directly, so these tests check its
-//! marker stacks apart from the effect lowering that calls it. They run on
-//! Wasm only: native evidence lowering still maps evidence to the C runtime's
-//! pointer, so native cannot run the source runtime yet.
+//! marker stacks apart from the effect lowering that calls it, on both
+//! targets with native under AddressSanitizer.
 
-use super::common::run_wasm_in_std;
+use super::common::{
+    assert_output_in_std_on_both_targets_with_native_asan,
+    run_in_std_on_both_targets_with_native_asan,
+};
 
 const EVIDENCE_TESTS: &str = r#"
 pub mod evidence_tests {
@@ -67,20 +69,10 @@ pub mod evidence_tests {
 }
 "#;
 
-fn run(call: &str) -> std::process::Output {
-    let program = format!(
+fn program(call: &str) -> String {
+    format!(
         "fn main() ->{{std::io::Io}} Nil {{\n    std::io::print_line(Int::to_string({call}))\n}}\n"
-    );
-    run_wasm_in_std("evidence_runtime.trb", EVIDENCE_TESTS, &program)
-}
-
-fn stdout(output: &std::process::Output) -> String {
-    assert!(
-        output.status.success(),
-        "wasmtime failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    )
 }
 
 #[test]
@@ -88,7 +80,12 @@ fn markers_stack_per_ability() {
     // lookup 8 and 3; mask uncovers 7; outer is the evidence before; dup then
     // mask is the original; a tail slot holds its evidence, leaves ability 10
     // alone, and is absent from evidence without it; push copies the top.
-    assert_eq!(stdout(&run("std::evidence_tests::prompts()")), "837777883");
+    assert_output_in_std_on_both_targets_with_native_asan(
+        "evidence_runtime.trb",
+        EVIDENCE_TESTS,
+        &program("std::evidence_tests::prompts()"),
+        "837777883",
+    );
 }
 
 #[test]
@@ -98,12 +95,19 @@ fn a_missing_ability_traps() {
         "std::evidence_tests::missing()",
         "std::evidence_tests::masked_away()",
     ] {
-        let output = run(call);
-        assert!(!output.status.success(), "{call}: {output:?}");
-        assert!(output.stdout.is_empty(), "{call}: {output:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("wasm trap"),
-            "{call}: {output:?}"
+        let (native, wasm) = run_in_std_on_both_targets_with_native_asan(
+            "evidence_runtime.trb",
+            EVIDENCE_TESTS,
+            &program(call),
         );
+        for (target, output) in [("native", native), ("wasm", wasm)] {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{target}: {call}: {stderr}");
+            assert!(output.stdout.is_empty(), "{target}: {call}");
+            assert!(
+                !stderr.contains("AddressSanitizer"),
+                "{target}: {call}: {stderr}"
+            );
+        }
     }
 }

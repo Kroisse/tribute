@@ -434,25 +434,6 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, Location, StringRef};
 
-/// Runtime ABI symbols used by native and WASM evidence lowering.
-pub mod evidence_abi {
-    pub const EMPTY: &str = "__tribute_evidence_empty";
-    pub const LOOKUP: &str = "__tribute_evidence_lookup";
-    pub const EXTEND: &str = "__tribute_evidence_extend";
-    pub const MASK: &str = "__tribute_evidence_mask";
-    pub const DUP: &str = "__tribute_evidence_dup";
-    pub const OUTER: &str = "__tribute_evidence_outer";
-    pub const LOOKUP_TR: &str = "__tribute_evidence_lookup_tr";
-    pub const TAIL: &str = "__tribute_evidence_tail";
-    pub const WITH_TAIL: &str = "__tribute_evidence_with_tail";
-    pub const PUSH: &str = "__tribute_evidence_push";
-
-    /// Every runtime function above.
-    pub const ALL: [&str; 10] = [
-        EMPTY, LOOKUP, EXTEND, MASK, DUP, OUTER, LOOKUP_TR, TAIL, WITH_TAIL, PUSH,
-    ];
-}
-
 /// The evidence marker: a nominal reference to the prelude's
 /// `std::runtime::evidence::Marker`, whose layout the root module publishes
 /// in `tribute.types` (`new-plans/cps-effects.md`).

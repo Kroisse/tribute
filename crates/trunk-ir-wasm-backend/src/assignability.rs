@@ -13,8 +13,8 @@ use trunk_ir::refs::TypeRef;
 /// without a runtime cast.
 ///
 /// Registration follows the same structure the rest of the backend uses: builtin
-/// layouts at their reserved indices (`@bytes`, `_closure`,
-/// `_Marker`, ...) and the structural `wasm_gc.struct` types, each of which
+/// layouts at their reserved indices (`@bytes`, `_closure`, ...) and the
+/// structural `wasm_gc.struct` types, each of which
 /// receives an index. Any other spelling proves nothing and stays rejected.
 fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
     if let Some(index) = crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) {
@@ -25,8 +25,8 @@ fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Whether this IR type is registered by the backend as a concrete WasmGC array
 /// reference, and is therefore assignable to the abstract `wasm.arrayref`
-/// without a runtime cast. Only builtin array layouts (Bytes backing arrays and
-/// the Evidence array) qualify; `wasm_gc.array` spellings are handled by the
+/// without a runtime cast. Only builtin array layouts (Bytes backing arrays)
+/// qualify; `wasm_gc.array` spellings are handled by the
 /// abstract array rule and never acquire a concrete index on their own.
 fn is_registered_gc_array_reference(ctx: &IrContext, ty: TypeRef) -> bool {
     crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty)

@@ -538,6 +538,7 @@ impl<'db> TypeChecker<'db> {
                     }
                 }
                 self.report_missing_handler_arms(ctx, expr.id, handlers, &handled_ability_ids);
+                self.report_duplicate_handler_arms(ctx, handlers);
 
                 // Get the body's effect after checking (may have effects added)
                 let body_effect_after = ctx.current_effect();
@@ -3796,6 +3797,49 @@ impl<'db> TypeChecker<'db> {
     /// an arm for every declared operation; a missing arm is never an
     /// implicit forward. Abilities without arms are not handled and need no
     /// check. Missing operations are listed in name order.
+    /// Report every `do` arm after the first, and every arm for an
+    /// operation that an earlier arm of the same `handle` already handles.
+    fn report_duplicate_handler_arms(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        handlers: &[HandlerArm<ResolvedRef<'db>>],
+    ) {
+        let mut seen_do = false;
+        let mut seen_ops = HashSet::default();
+        for handler in handlers {
+            let message = match &handler.kind {
+                HandlerKind::Do { .. } => {
+                    if !std::mem::replace(&mut seen_do, true) {
+                        continue;
+                    }
+                    "`handle` may have at most one `do` arm".to_owned()
+                }
+                HandlerKind::Fn { ability, op, .. } | HandlerKind::Op { ability, op, .. } => {
+                    let Some(ability_id) = self.extract_ability_id_from_ref(ability) else {
+                        continue;
+                    };
+                    if seen_ops.insert((ability_id, op)) {
+                        continue;
+                    }
+                    format!(
+                        "`handle` has more than one arm for `{}::{op}`",
+                        ability_id.name(self.db())
+                    )
+                }
+            };
+            if !ctx.mark_handler_error(handler.id, "duplicate arm") {
+                continue;
+            }
+            Diagnostic::new(
+                message,
+                self.get_span(handler.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        }
+    }
+
     fn report_missing_handler_arms(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,

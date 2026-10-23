@@ -640,13 +640,6 @@ pub fn assert_output_in_std_on_both_targets_with_native_asan(
     assert_target_outputs(source_name, expected_stdout, native, wasm);
 }
 
-/// Run `source_code` on the Wasm target, with `prelude_extension` compiled
-/// as part of package `std`.
-#[allow(dead_code)]
-pub fn run_wasm_in_std(source_name: &str, prelude_extension: &str, source_code: &str) -> Output {
-    compile_and_run_wasm_impl(source_name, source_code, Some(prelude_extension))
-}
-
 /// Run `source_code` on the native target under AddressSanitizer and on the
 /// Wasm target, with `prelude_extension` compiled as part of package `std`.
 #[allow(dead_code)]

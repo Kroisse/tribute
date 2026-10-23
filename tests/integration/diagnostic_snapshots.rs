@@ -915,6 +915,91 @@ fn counted(comp: fn() ->{e, Counter} Int) ->{e, Mixed} Int {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// Without a `do` arm the handle completes with the body's result, so an
+/// `op` arm that returns another type is a type error.
+#[salsa_test]
+fn diag_handle_without_do_arm_op_arm_type_mismatch(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Stop {
+    op stop() -> Never
+}
+
+fn halt() ->{Stop} Int {
+    Stop::stop()
+}
+
+fn test() -> Int {
+    handle halt() {
+        op Stop::stop() { "stopped" }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A `handle` has at most one `do` arm.
+#[salsa_test]
+fn diag_handle_with_two_do_arms(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Stop {
+    op stop() -> Never
+}
+
+fn halt() ->{Stop} Int {
+    +1
+}
+
+fn test() -> Int {
+    handle halt() {
+        do value { value }
+        do value { value + +1 }
+        op Stop::stop() { +0 }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A `handle` has at most one arm for each operation.
+#[salsa_test]
+fn diag_handle_with_two_arms_for_one_operation(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+fn count() ->{Counter} Int {
+    Counter::next()
+}
+
+fn test() -> Int {
+    handle count() {
+        fn Counter::next() { +1 }
+        fn Counter::next() { +2 }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(

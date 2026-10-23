@@ -452,6 +452,14 @@ Metadata/type/symbol 불일치는 conversion failure이며 hidden operand를 추
 builder를 재사용하되 `tribute_control` 전용 graph pattern은
 `tribute_control_to_cps`가 소유한다.
 
+Operation의 convention은 tribute-ir의 `ConventionBearing` operation interface가
+소유한다. 이 interface를 구현하는 `func.func`, `func.call`, `func.call_indirect`,
+`func.tail_call`, `func.tail_call_indirect`, `closure.lambda`, `closure.new`만
+convention을 가질 수 있다. Pass는 attribute key를 직접 읽거나 쓰지 않고 이
+interface로 convention을 읽고, 쓰고, 소비한다. Attribute 철자는 tribute-ir의 저장,
+출력, 파싱, 검증만 다룬다. 읽기는 convention이 없는 경우와 값이 잘못된 경우를
+구분하며, legalization 경계 검증과 물리화는 잘못된 값을 거부한다.
+
 같은 legalization에서 각 `tribute_control.perform`을 typecheck된
 `operation_kind`에 따라 변환한다. `"fn"`은 suffix를 capture하지 않고
 `ability.call`을, `"op"`은 `ability.perform`(source `op -> Never`에는
@@ -1151,7 +1159,9 @@ Rules:
 
 - Every `evidence`, `outer`, `tail`, and `source` operand has the evidence
   type, and an evidence result has the type of its `evidence` operand.
-  `prompt_tag` is `core.i32`. The operation schemas check this.
+  `prompt_tag` is `core.i32`, and each dispatch `payload` and the
+  `effect.dispatch_tail` result are `tribute_rt.anyref`. The operation schemas
+  check this.
 - `ability.perform` and `ability.call` are illegal after the shared
   ability-dispatch lowering boundary.
 - `effect.*` operations may remain after shared lowering and before
@@ -1178,8 +1188,9 @@ decomposition, indirect call로 변환한다. Evidence는 일반 managed 배열�
 
 ### WasmGC
 
-WasmGC도 같은 shared middle-end를 사용한다. `wasm/evidence_to_wasm`은
-representation/ABI 경계 안에서 native와 같은 구조로 `effect.*`를 낮춘다.
+WasmGC도 같은 shared middle-end와 evidence lowering을 사용한다. Evidence
+lowering(`evidence_lowering`)은 target과 무관한 pass로, representation/ABI 경계
+안에서 두 target의 `effect.*`를 같은 구조로 낮춘다.
 `effect.extend`, `effect.mask`, `effect.dup`, `effect.outer`, `effect.tail`,
 `effect.with_tail`, `effect.push`는 각각 같은 이름의 runtime 항목 호출이 되고,
 `effect.dispatch_tail` / `effect.dispatch_cps`는 `lookup_tr` / `lookup` 호출, closure

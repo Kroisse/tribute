@@ -51,3 +51,28 @@ fn a_user_std_module_has_its_own_symbols(db: &salsa::DatabaseImpl) {
 fn a_user_std_module_runs_its_own_functions() {
     assert_native_output("package_identity.trb", PROGRAM, "103");
 }
+
+/// Package `std` is resolved from its own root: a `pub use` at its root
+/// exports a name, which other packages see by its short name and under
+/// `std`.
+#[test]
+fn a_std_root_re_export_is_visible_to_users() {
+    super::common::assert_output_in_std_on_both_targets_with_native_asan(
+        "std_root_re_export.trb",
+        r#"
+pub mod extras {
+    pub fn seven() ->{} Int { +7 }
+}
+
+pub use pkg::extras::seven
+"#,
+        r#"
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(seven() + std::seven()))
+}
+"#,
+        "14",
+    );
+}

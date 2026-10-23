@@ -631,14 +631,6 @@ mod tests {
             trunk_ir_wasm_backend::gc_types::CLOSURE_LAYOUT
         );
         assert_eq!(
-            tribute_ir::runtime_layout::EVIDENCE_MARKER,
-            trunk_ir_wasm_backend::gc_types::MARKER_LAYOUT
-        );
-        assert_eq!(
-            tribute_ir::runtime_layout::EVIDENCE,
-            trunk_ir_wasm_backend::gc_types::EVIDENCE_LAYOUT
-        );
-        assert_eq!(
             tribute_ir::runtime_layout::BYTES,
             trunk_ir_wasm_backend::gc_types::BYTES_LAYOUT
         );

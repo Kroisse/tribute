@@ -1861,3 +1861,52 @@ fn main() ->{Io} Nil {
 "#;
     assert_output_on_both_targets("fn_arm_performs_mixed_fn_operation.trb", source, "18");
 }
+
+/// A `handle` without a `do` arm completes with the body's result. An `op`
+/// arm that finishes without resuming produces that same type.
+#[test]
+fn test_handle_without_do_arm_is_identity_completion() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+ability Ask {
+    op ask() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn count() ->{Counter} Int {
+    Counter::next() + Counter::next()
+}
+
+fn ask_twice() ->{Ask} Int {
+    Ask::ask() * +10 + Ask::ask()
+}
+
+fn stop_early() ->{Stop} Int {
+    Stop::stop()
+}
+
+fn main() ->{Io} Nil {
+    let counted = handle count() {
+        fn Counter::next() { +3 }
+    }
+    print_line(Int::to_string(counted))
+    let asked = handle ask_twice() {
+        op Ask::ask() { resume +4 }
+    }
+    print_line(Int::to_string(asked))
+    let stopped = handle stop_early() {
+        op Stop::stop() { -1 }
+    }
+    print_line(Int::to_string(stopped))
+}
+"#;
+    assert_output_on_both_targets("handle_without_do_arm.trb", source, "6\n44\n-1");
+}

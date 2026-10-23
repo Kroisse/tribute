@@ -36,7 +36,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
         trunk_ir::Symbol::new("prelude"),
     )?;
 
-    let prelude_ast = &tribute_front::resolve::library_package_module(parsed.module(db));
+    let prelude_ast = parsed.module(db);
     let prelude_span_map = parsed.span_map(db);
 
     // Build env for name resolution merging
