@@ -32,11 +32,11 @@ ability Kv {
 }
 ```
 
-Entrypoint의 residual row에 남는 ability는 **operation의 타입이 경계를 넘을 수
-있어야 한다.** Parameter와 result는 [경계를 넘는 값](#경계를-넘는-값)으로 제한한다.
-제네릭 ability는 entrypoint의 row에서 구체 instance가 되므로 그 instance의 타입으로
-검사한다. Frontend는 각 entrypoint에서 이 조건을 검사하고, 어긴 ability가 있으면
-거부한다.
+Entrypoint의 residual row에 남는 ability는 **제네릭이 아니어야 하고, operation의
+타입이 경계를 넘을 수 있어야 한다.** Parameter와 result는
+[경계를 넘는 값](#경계를-넘는-값)으로 제한한다. `Throw(e)`처럼 타입 매개변수를 가진
+ability는 instance가 되어도 entrypoint에 남을 수 없다. Frontend는 각 entrypoint에서 이
+조건을 검사하고, 어긴 ability가 있으면 거부한다.
 
 `fn` operation과 `op` operation 모두 host에 맡길 수 있다. 둘은 경계에서 다른 종류의
 함수가 된다([Operation 종류와 경계](#operation-종류와-경계)).
@@ -113,8 +113,9 @@ interface의 ability 하나가 WIT interface 하나가 되고, operation은 그 
   도착한 완료는 평소처럼 resume한다.
 - **끝나지 않는 operation.** 결과 타입이 `Never`인 `op`는 resume할 값이 없으므로 결과
   없는 동기 함수가 된다. Host 호출이 돌아오면 program은 continuation을 버리고 그
-  entrypoint 호출을 비정상으로 끝낸다. 예를 들어 entrypoint에 남은 `Throw(e)`는
-  처리되지 않은 오류 `e`를 host에 넘기고, 그 entrypoint는 값을 돌려주지 않는다.
+  entrypoint 호출을 비정상으로 끝낸다. 예를 들어 entrypoint에 남은
+  [`Exception`](std-abilities.md#exception)은 처리되지 않은 `Failure`를 host에 넘기고,
+  그 entrypoint는 값을 돌려주지 않는다.
 
 Wasm에서 `op`의 import는 Component Model의 비동기 함수이며, entrypoint export는 callback
 방식으로 event loop에 돌아간다. Native launcher도 같은 event loop를 둔다. Host는 비동기
@@ -130,13 +131,19 @@ import를 호출한다. 그 사이에 Tribute handler가 없다고 증명된 호
 
 Host operation의 parameter와 result는 WIT 타입으로 옮길 수 있는 타입으로 제한한다.
 
-- `Bool`, `Float`, 정수(`Int`, `Nat`): 임의 정밀도 정수와 WIT의 고정 폭 정수 사이의
-  변환은 [미정 사항](#미정-사항)에 둔다.
-- `Bytes`, `String`: 경계에서 복사한다. Host는 호출이 끝난 뒤 Tribute 쪽 object를
-  참조하지 않고, Tribute도 host가 넘긴 버퍼를 호출 뒤에 참조하지 않는다.
-- 위 타입으로 만든 `Option`, struct, enum은 WIT의 `option`, `record`, `variant`로
-  옮기고 경계에서 값으로 펼친다. 제네릭 타입은 경계에서 인스턴스마다 구체 타입이
-  되며, 인스턴스마다 WIT 타입 하나가 생긴다.
+- `Bool`은 `bool`, `Float`는 `f64`, `Rune`은 `char`다.
+- **정수.** `Int`는 `s64`, `Nat`는 `u64`다. Host에서 오는 값은 언제나 `Int`/`Nat`에
+  담기므로 그 방향은 실패하지 않는다. Tribute에서 host로 가는 값이 그 폭을 넘으면
+  trap이다. 이는 범위를 벗어난 index와 같은 프로그램 오류다. 더 좁은 폭이 필요한
+  계약은 고정 폭 수치 타입을 들인 뒤 그 타입으로 적는다
+  ([numeric-types.md](numeric-types.md#향후-확장)).
+- `Bytes`는 `list<u8>`, `String`은 `string`이다. 둘 다 경계에서 복사한다. Host는 호출이
+  끝난 뒤 Tribute 쪽 object를 참조하지 않고, Tribute도 host가 넘긴 버퍼를 호출 뒤에
+  참조하지 않는다.
+- `Option(T)`, `Result(T, E)`, `List(T)`, tuple은 WIT의 builtin `option`, `result`,
+  `list`, `tuple`이다. 위 타입으로 만든 struct와 enum은 `record`와 `variant`로 옮기고
+  경계에서 값으로 펼친다.
+- `Nil`은 result 자리에서만 허용하며 결과 없는 함수가 된다.
 - [Host resource](#host-resource) 값은 host가 만든 handle로 넘는다. 경계를 넘는
   handle은 모두 host가 이전에 돌려준 것이다.
 - 실패는 operation의 결과 타입으로 돌려준다. 경계를 넘는 예외는 없다. Entrypoint에
@@ -148,6 +155,35 @@ Host operation의 parameter와 result는 WIT 타입으로 옮길 수 있는 타�
 - **재귀 타입.** WIT에는 재귀 타입이 없다. 트리 같은 재귀 데이터는 펼친 인코딩이나
   host resource를 거쳐 넘긴다.
 - **함수와 closure.** WIT에는 함수 값이 없다.
+- **사용자 정의 제네릭 타입의 instance.** `Pair(Int, String)`처럼 타입 매개변수를 가진
+  사용자 정의 타입은 instance가 되어도 경계를 넘지 못한다. WIT에는 제네릭이 없어
+  instance마다 이름을 지어야 하는데, 그 이름 규칙을 두지 않는다. 경계에 쓰려면 구체
+  타입을 따로 선언한다. 같은 이유로 제네릭 ability는 entrypoint에 남을 수 없다.
+- **parameter나 field 자리의 `Nil`.** WIT에는 단위 타입이 없다.
+
+### WIT 이름
+
+WIT 이름은 source에서 결정적으로 만든다. 이름을 따로 지정하는 attribute는 없다.
+
+| Tribute | WIT |
+| --- | --- |
+| 패키지 `std` | package `tribute:std` |
+| 사용자 패키지 | package `namespace:name`. 둘 다 패키지 metadata가 정하며, 없으면 host interface를 내보낼 수 없다 |
+| ability `std::io::Write` | interface `tribute:std/io-write`: 패키지 루트 아래 module path와 ability 이름을 `-`로 잇는다 |
+| operation `close_output` | 함수 `close-output` |
+| 경계를 넘는 struct와 enum | 선언된 module의 types interface(`tribute:std/io-types`)에 `record`/`variant`로 정의하고, ability interface가 `use`한다 |
+| host resource `OutStream` | 그 resource를 정의한 ability의 interface 안 `resource out-stream`. 다른 ability는 `use`한다 |
+| entrypoint `main` | export `main` |
+
+식별자는 다음 규칙으로 kebab-case label이 된다.
+
+- snake_case는 `_`를 `-`로 바꾼다. CamelCase는 단어 경계마다 `-`를 넣고 소문자로
+  만든다(`OutStream` → `out-stream`, `HTTPClient` → `http-client`).
+- WIT 키워드와 겹치는 이름은 `%`를 붙인다(`%type`). Raw identifier `r#type`도 같다.
+- WIT는 한 scope의 이름이 하이픈을 지우고 소문자로 만든 뒤에도 서로 달라야 한다
+  (strong uniqueness). 그래서 `foo_bar`와 `foobar`, 또는 `Foo` 타입과 `foo` 함수를 한
+  interface에 함께 내보낼 수 없다. 이런 충돌은 compile error이며, 접미사를 붙여 피하지
+  않는다. 이름이 입력에 따라 바뀌면 host 쪽 binding이 깨지기 때문이다.
 
 Managed 참조의 소유권은 경계를 넘지 않는다. 그래서 host는 Tribute의 reference
 counting이나 [비순환 object 그래프](rc.md#비순환-object-그래프) 계약에 참여하지 않는다.
@@ -224,13 +260,8 @@ ability는 없다. 표준 ability의 두 층은 [std-abilities.md](std-abilities
   `export` 같은 표시, root module의 `pub` 함수, 별도의 world 선언이 있다. Entrypoint의
   parameter와 result가 경계를 넘을 수 있는 타입이어야 한다는 규칙, WIT export 이름,
   entrypoint마다 root evidence를 따로 만들지도 정해야 한다.
-- **WIT 생성 규칙.** Host interface의 ability와 그 module path에서 WIT package,
-  interface, 함수 이름을 만드는 방식이다. 구체 타입이 된 제네릭 인스턴스의 WIT 타입
-  이름과, `Throw(Error)`처럼 entrypoint에 남은 제네릭 ability instance마다 생기는 WIT
-  interface의 이름도 정해야 한다.
-- **정수의 경계 표현.** WIT 정수는 고정 폭이다. 임의 정밀도 정수를 어느 폭으로
-  넘길지, 범위를 넘는 값을 trap할지, 경계 전용 고정 폭 정수 타입을 따로 둘지 정해야
-  한다.
+- **패키지 metadata.** 사용자 패키지의 WIT namespace와 이름, 그리고 package version을
+  적는 곳이다. 패키지를 별도 build 단위로 다루는 설계와 함께 정한다.
 - **Host resource의 선언 문법.** Resource 타입을 선언하는 문법과 그 타입의 WIT 이름을
   정해야 한다. 후보는 그 resource를 다루는 ability 안의 선언과 module 수준의 불투명
   타입 선언이다.
