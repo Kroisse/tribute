@@ -114,7 +114,8 @@ pub mod outer {
     assert_eq!(module_path(b), ["a", "b"]);
 }
 
-/// The module path a library package's `fn probe` body refers to.
+/// The module path the body of `fn probe` refers to, when `source` is
+/// resolved as the root module of package `std`.
 #[salsa::tracked]
 fn library_module_reference(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
     use tribute_front::ast::{Decl, ExprKind, ResolvedRef};
@@ -148,13 +149,13 @@ fn a_library_one_segment_import_names_its_module_by_identity(db: &salsa::Databas
         db,
         "library_import.trb",
         r#"
-pub mod io {
-    pub fn print() -> Nat { 1 }
+pub mod tools {
+    pub fn one() -> Nat { 1 }
 }
-use io
+use tools
 
-fn probe() -> Nat { io }
+fn probe() -> Nat { tools }
 "#,
     );
-    assert_eq!(library_module_reference(db, source)[..], ["std", "io"]);
+    assert_eq!(library_module_reference(db, source)[..], ["std", "tools"]);
 }
