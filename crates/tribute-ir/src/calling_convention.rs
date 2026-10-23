@@ -114,6 +114,10 @@ pub enum ConventionError {
     /// callable records.
     #[display("calling convention differs from the one its callable type records")]
     TypeDisagreement,
+    /// A type of the same callable records a value that is not one of the
+    /// convention keywords.
+    #[display("its callable type records malformed calling-convention metadata")]
+    MalformedType,
 }
 
 /// A physical operation that records the calling convention of the callable
@@ -245,14 +249,15 @@ pub struct ConventionViolation {
 pub fn verify_conventions(ctx: &IrContext, root: OpRef) -> Vec<ConventionViolation> {
     let mut violations = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
-        let error = match DynConventionBearing::exact(ctx, op) {
-            Err(error) => Some(error),
-            Ok(Some(convention)) => DynConventionBearing::get(ctx, op)
-                .and_then(|bearing| bearing.convention_type(ctx))
-                .and_then(|ty| get_physical_closure_convention(ctx, ty))
-                .is_some_and(|recorded| recorded != convention)
-                .then_some(ConventionError::TypeDisagreement),
-            Ok(None) => None,
+        let recorded = DynConventionBearing::get(ctx, op)
+            .and_then(|bearing| bearing.convention_type(ctx))
+            .map_or(Ok(None), |ty| recorded_closure_convention(ctx, ty));
+        let error = match (DynConventionBearing::exact(ctx, op), recorded) {
+            (Err(error), _) | (_, Err(error)) => Some(error),
+            (Ok(Some(convention)), Ok(Some(recorded))) => {
+                (recorded != convention).then_some(ConventionError::TypeDisagreement)
+            }
+            _ => None,
         };
         if let Some(error) = error {
             violations.push(ConventionViolation { op, error });
@@ -260,6 +265,24 @@ pub fn verify_conventions(ctx: &IrContext, root: OpRef) -> Vec<ConventionViolati
         std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
     });
     violations
+}
+
+/// The convention a `closure.closure` type records; `Ok(None)` for any other
+/// type and for a closure type without one.
+fn recorded_closure_convention(
+    ctx: &IrContext,
+    ty: TypeRef,
+) -> Result<Option<CallingConvention>, ConventionError> {
+    let data = ctx.get_type(ty);
+    if data.name != closure::Closure::NAME {
+        return Ok(None);
+    }
+    let Some(value) = data.attrs.view(ctx).get(CALLING_CONVENTION_ATTR) else {
+        return Ok(None);
+    };
+    CallingConvention::from_attribute(ctx, value)
+        .map(Some)
+        .ok_or(ConventionError::MalformedType)
 }
 
 trunk_ir::register_interfaces!(
@@ -404,12 +427,7 @@ pub fn get_physical_closure_convention(
     ctx: &IrContext,
     closure: TypeRef,
 ) -> Option<CallingConvention> {
-    let data = ctx.get_type(closure);
-    if data.name != closure::Closure::NAME {
-        return None;
-    }
-    let value = data.attrs.view(ctx).get(CALLING_CONVENTION_ATTR)?;
-    CallingConvention::from_attribute(ctx, value)
+    recorded_closure_convention(ctx, closure).ok().flatten()
 }
 
 /// Read the exact environment slot from a convention-proven closure type.
@@ -573,6 +591,18 @@ mod tests {
                     ConventionError::TypeDisagreement
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn a_malformed_convention_on_a_closure_type_is_rejected() {
+        let input = CLOSURES.replace(
+            "!plain = closure.closure<!fn>",
+            "!plain = closure.closure<!fn, {tribute.calling_convention = \"tail\"}>",
+        );
+        assert_eq!(
+            violations(&input),
+            [("closure.new".to_owned(), ConventionError::MalformedType)]
         );
     }
 
