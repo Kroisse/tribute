@@ -1,19 +1,20 @@
-//! The package a module tree is resolved as.
+//! The name of the package a module tree belongs to.
 
 use trunk_ir::{Symbol, SymbolPath};
 
 use super::LIBRARY_PACKAGE;
 
-/// A package: the module tree of one root module. Name resolution reads
-/// the tree's module paths from that root.
+/// Which package a module tree is: a library package another one depends
+/// on, by its name, or the package being compiled. Every module path of the
+/// tree is read from its root; this name spells its identity paths.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct Package {
+pub struct PackageName {
     /// The package's name, for a library package another one depends on.
     /// `None` for the package being compiled.
     name: Option<Symbol>,
 }
 
-impl Package {
+impl PackageName {
     /// The package being compiled, also the default.
     pub fn compiled() -> Self {
         Self { name: None }
@@ -78,7 +79,7 @@ mod tests {
 
     #[test]
     fn identity_paths_start_with_the_library_name() {
-        let std = Package::std();
+        let std = PackageName::std();
         assert_eq!(
             std.identity_path(&path("io::print")),
             path("std::io::print")[..]
@@ -92,7 +93,7 @@ mod tests {
 
     #[test]
     fn the_compiled_package_omits_its_name() {
-        let compiled = Package::compiled();
+        let compiled = PackageName::compiled();
         assert_eq!(
             compiled.identity_path(&path("geometry::area")),
             path("geometry::area")[..]

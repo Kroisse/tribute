@@ -1,4 +1,4 @@
-//! Module environment for name resolution.
+//! The name-resolution environment of a package.
 //!
 //! This module provides structures for tracking definitions and looking up names
 //! during the name resolution phase.
@@ -8,7 +8,7 @@ use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::{Symbol, SymbolPath};
 
-use super::package::Package;
+use super::package::PackageName;
 use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId, Visibility};
 
 /// Information about a resolved name binding.
@@ -137,13 +137,14 @@ pub struct Export {
     pub restriction: Option<Restriction>,
 }
 
-/// Module environment for name resolution.
+/// The name-resolution environment of one package's module tree.
 ///
-/// Tracks all names visible in the current module.
+/// Holds the root module's names and every module's namespace, read from
+/// the package root.
 #[derive(Clone, Debug, Default, PartialEq, Eq, salsa::SalsaValue)]
-pub struct ModuleEnv<'db> {
+pub struct PackageEnv<'db> {
     /// The package whose module tree this environment holds.
-    package: Package,
+    package: PackageName,
     /// Names defined in this module (simple name → binding).
     definitions: HashMap<Symbol, Binding<'db>>,
     /// Names imported via `use` statements (simple name → binding).
@@ -183,14 +184,14 @@ pub struct ModuleEnv<'db> {
     entry_restrictions: HashMap<(SymbolPath, Symbol), Restriction>,
 }
 
-impl<'db> ModuleEnv<'db> {
-    /// Create a new empty module environment of the package being compiled.
+impl<'db> PackageEnv<'db> {
+    /// Create a new empty environment of the package being compiled.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create a new empty environment of `package`'s module tree.
-    pub fn for_package(package: Package) -> Self {
+    pub fn for_package(package: PackageName) -> Self {
         Self {
             package,
             ..Self::default()
@@ -198,7 +199,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// The package whose module tree this environment holds.
-    pub fn package(&self) -> &Package {
+    pub fn package(&self) -> &PackageName {
         &self.package
     }
 
@@ -416,7 +417,7 @@ impl<'db> ModuleEnv<'db> {
 
     /// Take the restrictions of `other`, an environment of the same
     /// package.
-    pub fn absorb_restrictions(&mut self, other: &ModuleEnv<'db>) {
+    pub fn absorb_restrictions(&mut self, other: &PackageEnv<'db>) {
         self.restrictions.extend(
             other
                 .restrictions
@@ -563,7 +564,7 @@ impl<'db> ModuleEnv<'db> {
     /// the package's root items every module sees under their short names,
     /// and its namespaces a path may enter by their first segment below the
     /// package root.
-    pub fn merge(&mut self, other: &ModuleEnv<'db>, package: &Symbol) {
+    pub fn merge(&mut self, other: &PackageEnv<'db>, package: &Symbol) {
         let under = |path: &[Symbol]| {
             SymbolPath::new(std::iter::once(package.clone()).chain(path.iter().cloned()))
         };

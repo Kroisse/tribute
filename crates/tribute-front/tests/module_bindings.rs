@@ -3,7 +3,7 @@
 
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
-use tribute_front::resolve::{Binding, Package, build_env, build_library_env};
+use tribute_front::resolve::{Binding, PackageName, build_env, build_library_env};
 use trunk_ir::{Symbol, SymbolPath};
 
 fn module_path(binding: Option<&Binding<'_>>) -> Vec<String> {
@@ -34,7 +34,7 @@ fn nested_modules_are_bound_by_identity(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "modules.trb", TREE);
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
     let env = build_env(db, parsed.module(db));
-    assert_eq!(env.package(), &Package::compiled());
+    assert_eq!(env.package(), &PackageName::compiled());
 
     let c = env.lookup_qualified(&SymbolPath::new(["a", "b"]), &Symbol::new("c"));
     assert_eq!(module_path(c), ["a", "b", "c"]);
@@ -56,4 +56,32 @@ fn library_modules_are_bound_under_the_package(db: &salsa::DatabaseImpl) {
     let c = env.lookup_qualified(&SymbolPath::new(["a", "b"]), &Symbol::new("c"));
     assert_eq!(module_path(c), ["std", "a", "b", "c"]);
     assert!(env.declares(Symbol::new("a")));
+}
+
+#[salsa_test]
+fn a_re_exported_module_keeps_its_identity(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "re_export.trb",
+        r#"
+pub mod a {
+    pub mod b {
+        pub fn f() -> Nat { 1 }
+    }
+}
+
+pub mod facade {
+    pub use pkg::a::b
+}
+
+use nowhere
+"#,
+    );
+    let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
+    let env = build_env(db, parsed.module(db));
+
+    let b = env.lookup_qualified(&SymbolPath::new(["facade"]), &Symbol::new("b"));
+    assert_eq!(module_path(b), ["a", "b"]);
+    // A `use` of one segment the package root names declares it there.
+    assert!(env.declares(Symbol::new("nowhere")));
 }

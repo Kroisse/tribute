@@ -53,7 +53,7 @@ pub enum Command {
         /// Path to the source file to debug
         file: PathBuf,
 
-        /// Show module environment details
+        /// Show package environment details
         #[arg(long)]
         show_env: bool,
     },
