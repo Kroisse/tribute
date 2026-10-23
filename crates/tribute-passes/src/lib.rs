@@ -12,6 +12,7 @@
 pub mod abi_boundary;
 pub mod bytes_intrinsic;
 pub mod check_convention_classes;
+pub mod check_fn_arm_calls;
 pub mod closure_lower;
 mod collections;
 mod convention_classes;

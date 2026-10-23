@@ -1000,6 +1000,46 @@ fn test() -> Int {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// A `fn` arm that calls an effect-polymorphic callable is rejected at the
+/// call when an instance fixes the callable's row to one with an `op`
+/// operation.
+#[salsa_test]
+fn diag_fn_arm_calls_op_effect_through_row_variable(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn count() ->{Counter} Int {
+    Counter::next()
+}
+
+fn limited(f: fn() ->{e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
+        fn Counter::next() { f() }
+    }
+}
+
+fn main() -> Nil {
+    let _ = handle limited(fn() Stop::stop(), fn() count()) {
+        op Stop::stop() { +0 }
+    }
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
