@@ -36,7 +36,10 @@ fn prelude_env(db: &dyn salsa::Database) -> Option<tribute_front::resolve::Packa
         prelude_source(db),
         trunk_ir::Symbol::new("prelude"),
     )?;
-    Some(tribute_front::resolve::build_library_env(db, parsed.module(db)))
+    Some(tribute_front::resolve::build_library_env(
+        db,
+        parsed.module(db),
+    ))
 }
 
 /// Load and type-check the prelude so tests can use arithmetic operators.

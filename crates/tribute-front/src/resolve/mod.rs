@@ -167,7 +167,12 @@ pub fn build_library_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
 ) -> PackageEnv<'db> {
-    build_package_env(db, &module.decls, &PackageName::std(), &Dependencies::none())
+    build_package_env(
+        db,
+        &module.decls,
+        &PackageName::std(),
+        &Dependencies::none(),
+    )
 }
 
 /// The environment of a package `std` that declares nothing but the
