@@ -17,13 +17,11 @@
 //! | 2 | Nat | fixed 12-byte release |
 //! | 3 | Int | fixed 12-byte release |
 //! | 4 | Float | fixed 16-byte release |
-//! | 5 | evidence | releases its markers, frees the fixed part plus them |
-//! | 6 | evidence marker | releases its three references, fixed release |
-//! | 7+ | declared struct, variant, and array descriptors | per-descriptor deep release |
+//! | 5+ | declared struct, variant, and array descriptors | per-descriptor deep release |
 //!
 //! Indices are private to one compiled program: the table and
-//! `__tribute_deep_release` interpret them within the module. Only the indices
-//! of the objects the runtime allocates (0, 5 and 6) are shared with it, so
+//! `__tribute_deep_release` interpret them within the module. Only the index
+//! of the object the runtime allocates (`Bytes`, 0) is shared with it, so
 //! growing the reserved range otherwise needs no compatibility step; user
 //! indices simply start after it.
 //!
@@ -80,28 +78,17 @@ impl ClifTypes {
     }
 }
 
-/// Reserved RTTI indices. The runtime allocates `Bytes` (index 0), evidences
-/// and markers itself, so it shares those three numbers.
+/// Reserved RTTI indices. The runtime allocates `Bytes` (index 0) itself, so
+/// it shares that number.
 pub const RTTI_NIL: u32 = 0;
 pub const RTTI_BOOL: u32 = 1;
 pub const RTTI_NAT: u32 = 2;
 pub const RTTI_INT: u32 = 3;
 pub const RTTI_FLOAT: u32 = 4;
-pub const RTTI_EVIDENCE: u32 = 5;
-pub const RTTI_MARKER: u32 = 6;
 
 /// First index for declared allocation layouts, right after the last
 /// reserved index.
-pub const RTTI_USER_START: u32 = RTTI_MARKER + 1;
-
-/// The RC header and the evidence payload before its markers: `[len]`.
-const EVIDENCE_FIXED_ALLOC_SIZE: u64 = 16;
-/// The RC header and the marker payload
-/// `[ability_id] [prompt_tag] [dispatch] [shadowed] [outer]`.
-const MARKER_ALLOC_SIZE: u64 = 40;
-/// Payload offsets of a marker's dispatch closure, shadowed marker and outer
-/// evidence.
-const MARKER_REFERENCE_OFFSETS: [i32; 3] = [8, 16, 24];
+pub const RTTI_USER_START: u32 = RTTI_FLOAT + 1;
 
 /// The RC header and the fixed `Bytes` payload `[ptr] [len] [owner] [cap]`.
 const BYTES_FIXED_ALLOC_SIZE: u64 = 40;
@@ -248,24 +235,6 @@ pub(crate) fn generate_rtti(
     );
     ctx.push_op(module_block, bytes_release);
     release_fns.insert(RTTI_NIL, release_fn_symbol(RTTI_NIL));
-    // The runtime also allocates evidences and their markers.
-    let evidence_release = generate_reference_array_release_function(
-        ctx,
-        RTTI_EVIDENCE,
-        EVIDENCE_FIXED_ALLOC_SIZE,
-        loc,
-    );
-    ctx.push_op(module_block, evidence_release);
-    release_fns.insert(RTTI_EVIDENCE, release_fn_symbol(RTTI_EVIDENCE));
-    let marker_release = generate_release_function(
-        ctx,
-        RTTI_MARKER,
-        &MARKER_REFERENCE_OFFSETS,
-        AllocSize::Fixed(MARKER_ALLOC_SIZE),
-        loc,
-    );
-    ctx.push_op(module_block, marker_release);
-    release_fns.insert(RTTI_MARKER, release_fn_symbol(RTTI_MARKER));
     for (rtti_idx, alloc_size) in primitive_releases {
         let func_op = generate_fixed_release_function(ctx, rtti_idx, alloc_size, loc);
         ctx.push_op(module_block, func_op);

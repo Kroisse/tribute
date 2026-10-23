@@ -506,16 +506,6 @@ mod tests {
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
         let resolved = print_module(&ctx, module.op());
         assert_eq!(resolved.matches("effect.extend").count(), 2);
-        for name in [ability::evidence_abi::LOOKUP, ability::evidence_abi::EXTEND] {
-            assert!(
-                module
-                    .ops(&ctx)
-                    .iter()
-                    .copied()
-                    .all(|op| { ctx.op_attrs(op).get_str("sym_name") != Some(name) }),
-                "shared resolution must not fabricate target helper {name}"
-            );
-        }
         assert_eq!(resolved.matches("func.call").count(), 0);
         assert!(!resolved.contains("__tribute_next_tag"));
         assert!(resolved.contains("ability.handle_dispatch"));

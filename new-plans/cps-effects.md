@@ -996,7 +996,10 @@ Handler와 evidence의 연결은 다음과 같다.
 - **Handler arm, `do` arm:** handle을 설치한 층의 바깥 evidence로 실행한다.
   General arm은 handle 층의 dispatcher에게서 이 evidence와 exit frame을 받고,
   `fn` arm은 층의 `tr_dispatch_fn`이 capture한 evidence를 받는다. Perform 지점
-  evidence는 arm에 전달하지 않는다.
+  evidence는 arm에 전달하지 않는다. `tr_dispatch_fn`은 non-CPS callable이고 `fn`
+  perform 지점은 continuation frame을 만들지 않으므로, `fn` arm 본문은 CPS 규약을
+  요구하는 effect를 수행할 수 없다. Frontend가 이 arm의 perform과 호출을 제한한다
+  ([abilities.md](abilities.md#fn-operation-handler)).
 - **Arm 안의 `resume`:** [abilities.md](abilities.md#resume과-handler-선택)에 따라
   arm 본문의 resume은 자기 handle body의 evidence를, arm 안 lambda의 resume은 그
   lambda가 받은 evidence를 continuation에 넘긴다. Arm 본문의 resume은 resume하는
@@ -1157,7 +1160,9 @@ Rules:
 
 - Every `evidence`, `outer`, `tail`, and `source` operand has the evidence
   type, and an evidence result has the type of its `evidence` operand.
-  `prompt_tag` is `core.i32`. The operation schemas check this.
+  `prompt_tag` is `core.i32`, and each dispatch `payload` and the
+  `effect.dispatch_tail` result are `tribute_rt.anyref`. The operation schemas
+  check this.
 - `ability.perform` and `ability.call` are illegal after the shared
   ability-dispatch lowering boundary.
 - `effect.*` operations may remain after shared lowering and before
@@ -1184,8 +1189,9 @@ decomposition, indirect call로 변환한다. Evidence는 일반 managed 배열�
 
 ### WasmGC
 
-WasmGC도 같은 shared middle-end를 사용한다. `wasm/evidence_to_wasm`은
-representation/ABI 경계 안에서 native와 같은 구조로 `effect.*`를 낮춘다.
+WasmGC도 같은 shared middle-end와 evidence lowering을 사용한다. Evidence
+lowering(`evidence_lowering`)은 target과 무관한 pass로, representation/ABI 경계
+안에서 두 target의 `effect.*`를 같은 구조로 낮춘다.
 `effect.extend`, `effect.mask`, `effect.dup`, `effect.outer`, `effect.tail`,
 `effect.with_tail`, `effect.push`는 각각 같은 이름의 runtime 항목 호출이 되고,
 `effect.dispatch_tail` / `effect.dispatch_cps`는 `lookup_tr` / `lookup` 호출, closure

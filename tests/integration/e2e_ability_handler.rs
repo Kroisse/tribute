@@ -1755,3 +1755,109 @@ fn main() ->{Io} Nil {
 "#;
     assert_output_on_both_targets("handle_resume_return_callable.trb", source, "42\n42");
 }
+
+/// A `fn` handler arm may perform `fn` operations of an outer handler, use
+/// the ambient `Io`, and call helpers whose rows stay without `op` abilities.
+#[test]
+fn test_fn_arm_performs_outer_fn_operation() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+ability Tick {
+    fn tick() -> Int
+}
+
+fn sum(n: Int, acc: Int) ->{Counter} Int {
+    case n == +0 {
+        True -> acc
+        False -> sum(n - +1, acc + Counter::next())
+    }
+}
+
+fn double(x: Int) -> Int { x * +2 }
+
+fn counted(comp: fn() ->{e, Counter} Int) ->{e, Tick, Io} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() {
+            print_line("next")
+            double(Tick::tick())
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let total = handle counted(fn() sum(+3, +0)) {
+        do result { result }
+        fn Tick::tick() { +5 }
+    }
+    print_line(Int::to_string(total))
+}
+"#;
+    assert_output_on_both_targets(
+        "fn_arm_performs_outer_fn_operation.trb",
+        source,
+        "next\nnext\nnext\n30",
+    );
+}
+
+/// A `fn` arm may perform the `fn` operation of an ability that also
+/// declares an `op` operation, and may call a suspending helper inside a
+/// `handle` of its own.
+#[test]
+fn test_fn_arm_performs_mixed_fn_operation_and_handles_op_locally() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+ability Mixed {
+    fn ping() -> Int
+    op bail() -> Never
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn sum(n: Int, acc: Int) ->{Counter} Int {
+    case n == +0 {
+        True -> acc
+        False -> sum(n - +1, acc + Counter::next())
+    }
+}
+
+fn halt() ->{Stop} Int {
+    Stop::stop()
+}
+
+fn counted(comp: fn() ->{e, Counter} Int) ->{e, Mixed} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() {
+            let local = handle halt() {
+                do value { value }
+                op Stop::stop() { +1 }
+            }
+            Mixed::ping() + local
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let total = handle counted(fn() sum(+3, +0)) {
+        do result { result }
+        fn Mixed::ping() { +5 }
+        op Mixed::bail() { -1 }
+    }
+    print_line(Int::to_string(total))
+}
+"#;
+    assert_output_on_both_targets("fn_arm_performs_mixed_fn_operation.trb", source, "18");
+}

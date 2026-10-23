@@ -529,10 +529,21 @@ impl<'db> ModuleEnv<'db> {
     /// Self takes precedence: user definitions shadow prelude.
     /// This is used to inject prelude bindings into user code's environment.
     ///
-    /// `other` declares the library package `package`, whose root items every
-    /// module sees under their short names, and whose namespaces a path may
-    /// enter by their first segment below the package root.
+    /// `other` is the environment of the library package `package`, read
+    /// from that package's root. This environment holds it under `package`:
+    /// the package's root items every module sees under their short names,
+    /// and its namespaces a path may enter by their first segment below the
+    /// package root.
     pub fn merge(&mut self, other: &ModuleEnv<'db>, package: &Symbol) {
+        let under = |path: &[Symbol]| {
+            SymbolPath::new(std::iter::once(package.clone()).chain(path.iter().cloned()))
+        };
+        let binding_under = |binding: &Binding<'db>| match binding {
+            Binding::Module { path } => Binding::Module {
+                path: under(path).to_vec(),
+            },
+            binding => binding.clone(),
+        };
         // What another package restricts, this one never sees.
         let foreign = |restriction: &Restriction| Restriction {
             within: None,
@@ -540,44 +551,54 @@ impl<'db> ModuleEnv<'db> {
         };
         for (binding, restriction) in &other.restrictions {
             self.restrictions
-                .entry(binding.clone())
+                .entry(binding_under(binding))
                 .or_insert_with(|| foreign(restriction));
         }
         for (module, restriction) in &other.module_restrictions {
             self.module_restrictions
-                .entry(module.clone())
+                .entry(under(module))
                 .or_insert_with(|| foreign(restriction));
         }
-        for (entry, restriction) in &other.entry_restrictions {
+        for ((namespace, name), restriction) in &other.entry_restrictions {
             self.entry_restrictions
-                .entry(entry.clone())
+                .entry((under(namespace), name.clone()))
                 .or_insert_with(|| foreign(restriction));
         }
-        for (name, binding) in other.iter_namespace(std::slice::from_ref(package)) {
-            // A re-export the package restricts is no name of another one.
-            if other
-                .entry_restriction(std::slice::from_ref(package), &name)
-                .is_some()
+
+        // The package root's items: its definitions, what its root re-exports,
+        // and its top-level namespaces as modules.
+        let mut root: Vec<(Symbol, Binding<'db>)> = other
+            .iter_definitions()
+            .chain(other.iter_namespace(&[]))
+            .filter(|(name, _)| other.entry_restriction(&[], name).is_none())
+            .map(|(name, binding)| (name, binding_under(binding)))
+            .collect();
+        for (namespace, _) in other.iter_namespaces() {
+            if let Some(name) = namespace.as_simple()
+                && !root.iter().any(|(known, _)| known == name)
             {
-                continue;
+                root.push((
+                    name.clone(),
+                    Binding::Module {
+                        path: under(&namespace).to_vec(),
+                    },
+                ));
             }
-            self.add_library(name.clone(), binding.clone(), vec![package.clone(), name]);
+        }
+        root.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (name, binding) in root {
+            self.add_to_namespace_if_absent(under(&[]), name.clone(), binding.clone());
+            self.add_library(name.clone(), binding, vec![package.clone(), name]);
         }
 
         for (ns, bindings) in other.iter_namespaces() {
-            if let Some(root) = ns.first() {
-                self.add_library_root(root.clone());
-            }
-            if let [root, alias, ..] = &ns[..]
-                && root == package
-            {
-                self.add_library_namespace(
-                    alias.clone(),
-                    SymbolPath::new([package.clone(), alias.clone()]),
-                );
-            }
+            let Some(alias) = ns.first() else {
+                continue;
+            };
+            self.add_library_root(package.clone());
+            self.add_library_namespace(alias.clone(), under(std::slice::from_ref(alias)));
             for (name, binding) in bindings {
-                self.add_to_namespace_if_absent(ns.clone(), name, binding.clone());
+                self.add_to_namespace_if_absent(under(&ns), name, binding_under(binding));
             }
         }
     }

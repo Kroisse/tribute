@@ -3859,7 +3859,10 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    fn extract_ability_id_from_ref(&self, resolved: &ResolvedRef<'db>) -> Option<AbilityId<'db>> {
+    pub(super) fn extract_ability_id_from_ref(
+        &self,
+        resolved: &ResolvedRef<'db>,
+    ) -> Option<AbilityId<'db>> {
         match resolved {
             ResolvedRef::AbilityOp { ability, .. } => Some(*ability),
             ResolvedRef::Ability { id } => Some(*id),

@@ -474,6 +474,9 @@ impl<'db> TypeChecker<'db> {
             exhaustiveness_reported: &mut checked.exhaustiveness_reported,
         }
         .visit_expr_mut(&mut body);
+        if !solve_failed {
+            self.check_fn_arms(&body, &checked.node_types);
+        }
 
         for (node, mut instance) in local_instances {
             instance.callable = substitution.apply(instance.callable);

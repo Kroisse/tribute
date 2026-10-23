@@ -1,15 +1,13 @@
-//! Wasm evidence lowering (arena-based).
+//! Target evidence lowering (arena-based).
 //!
-//! Evidence lowering runs inside the representation/ABI boundary. It lowers
-//! `effect.extend`, the evidence selection operations, `effect.dispatch_tail`,
-//! and `effect.dispatch_cps` to calls of the evidence runtime written in
-//! Tribute source, `std::runtime::evidence` (`new-plans/cps-effects.md`),
-//! which it finds by canonical path. The runtime functions are compiled like
-//! any other source function; marker construction and field access stay
-//! inside them.
-//!
-//! After the boundary exit, [`bind_wasm_prompt_tag_runtime`] gives the
-//! prompt tag allocator `__tribute_next_tag` its Wasm implementation.
+//! Evidence lowering runs inside the representation/ABI boundary on every
+//! target. It lowers `effect.extend`, the evidence selection operations,
+//! `effect.dispatch_tail`, and `effect.dispatch_cps` to calls of the evidence
+//! runtime written in Tribute source, `std::runtime::evidence`
+//! (`new-plans/cps-effects.md`), which it finds by canonical path. The runtime
+//! functions are compiled like any other source function; marker
+//! construction and field access stay inside them. The lowering is the same
+//! on every target.
 
 use std::rc::Rc;
 
@@ -18,30 +16,22 @@ use tribute_ir::dialect::adt;
 use tribute_ir::dialect::effect;
 use tribute_ir::runtime_items::{RuntimeFunction, RuntimeFunctionError, evidence};
 use trunk_ir::analysis::AnalysisCache;
-use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{core, func, wasm as wasm_dialect};
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::{core, func};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
-use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location};
 
 use crate::effect_dispatch;
 
-/// C link name of the helper that allocates a fresh prompt tag.
-pub const NEXT_TAG: &str = "__tribute_next_tag";
-
-// =============================================================================
-// Boundary: effect lowering
-// =============================================================================
-
 /// The evidence runtime functions the module's `effect.*` operations call.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct WasmEvidenceRuntime {
+pub struct EvidenceRuntime {
     lookup: Option<RuntimeFunction>,
     lookup_tr: Option<RuntimeFunction>,
     extend: Option<RuntimeFunction>,
@@ -56,19 +46,19 @@ pub struct WasmEvidenceRuntime {
 /// Find the evidence runtime functions that the module's `effect.*`
 /// operations will call.
 ///
-/// Run once on the module before [`LowerEvidenceToWasm`]. A function no
-/// operation needs is not looked up, so a missing one fails only when used.
-pub fn prepare_wasm_evidence_runtime(
+/// Run once on the module before [`LowerEvidence`]. A function no operation
+/// needs is not looked up, so a missing one fails only when used.
+pub fn prepare_evidence_runtime(
     ctx: &IrContext,
     module: Module,
-) -> Result<WasmEvidenceRuntime, RuntimeFunctionError> {
+) -> Result<EvidenceRuntime, RuntimeFunctionError> {
     let needs = evidence_runtime_requirements(ctx, module);
     let find = |needed: bool, path| {
         needed
             .then(|| RuntimeFunction::lookup(ctx, module, path))
             .transpose()
     };
-    Ok(WasmEvidenceRuntime {
+    Ok(EvidenceRuntime {
         lookup: find(needs.lookup, evidence::LOOKUP)?,
         lookup_tr: find(needs.lookup_tr, evidence::LOOKUP_TR)?,
         extend: find(needs.extend, evidence::EXTEND)?,
@@ -82,51 +72,51 @@ pub fn prepare_wasm_evidence_runtime(
 }
 
 /// Lower evidence operations in one function body with the functions of
-/// `runtime`, from [`prepare_wasm_evidence_runtime`] on the containing module.
-pub fn lower_evidence_to_wasm_func(
+/// `runtime`, from [`prepare_evidence_runtime`] on the containing module.
+pub fn lower_evidence_func(
     ctx: &mut IrContext,
     func_op: func::Func,
-    runtime: &WasmEvidenceRuntime,
+    runtime: &EvidenceRuntime,
 ) -> Result<(), ConversionError> {
     let runtime = Rc::new(*runtime);
     PatternApplicator::new(TypeConverter::new())
-        .with_target(wasm_effect_abi_target())
-        .add_pattern(LowerEffectExtendToWasm {
+        .with_target(effect_abi_target())
+        .add_pattern(LowerEffectExtend {
             runtime: Rc::clone(&runtime),
         })
-        .add_pattern(LowerEffectStackOpToWasm {
+        .add_pattern(LowerEffectStackOp {
             runtime: Rc::clone(&runtime),
         })
-        .add_pattern(LowerEffectTailOpToWasm {
+        .add_pattern(LowerEffectTailOp {
             runtime: Rc::clone(&runtime),
         })
-        .add_pattern(LowerEffectDispatchTailToWasm {
+        .add_pattern(LowerEffectDispatchTail {
             runtime: Rc::clone(&runtime),
         })
-        .add_pattern(LowerEffectDispatchCpsToWasm { runtime })
-        .apply_partial_conversion(ctx, func_op, "wasm-evidence-effect-abi")?;
+        .add_pattern(LowerEffectDispatchCps { runtime })
+        .apply_partial_conversion(ctx, func_op, "evidence-effect-abi")?;
     Ok(())
 }
 
-/// PassManager-friendly Wasm evidence lowering pass.
+/// PassManager-friendly evidence lowering pass.
 ///
 /// This pass is function-scoped; it takes the runtime functions
-/// [`prepare_wasm_evidence_runtime`] found on the module.
-pub struct LowerEvidenceToWasm {
-    runtime: WasmEvidenceRuntime,
+/// [`prepare_evidence_runtime`] found on the module.
+pub struct LowerEvidence {
+    runtime: EvidenceRuntime,
 }
 
-impl LowerEvidenceToWasm {
-    pub fn new(runtime: WasmEvidenceRuntime) -> Self {
+impl LowerEvidence {
+    pub fn new(runtime: EvidenceRuntime) -> Self {
         Self { runtime }
     }
 }
 
-impl Pass for LowerEvidenceToWasm {
+impl Pass for LowerEvidence {
     type Target = func::Func;
 
     fn name(&self) -> &'static str {
-        "lower-evidence-to-wasm"
+        "lower-evidence"
     }
 
     fn run(
@@ -135,12 +125,12 @@ impl Pass for LowerEvidenceToWasm {
         target: func::Func,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        lower_evidence_to_wasm_func(ctx, target, &self.runtime)?;
+        lower_evidence_func(ctx, target, &self.runtime)?;
         Ok(())
     }
 }
 
-fn wasm_effect_abi_target() -> ConversionTarget {
+fn effect_abi_target() -> ConversionTarget {
     ConversionTarget::new()
         .legal_op("func.func")
         .recursive_legal_op("func.func")
@@ -196,7 +186,7 @@ fn evidence_runtime_requirements(ctx: &IrContext, module: Module) -> RuntimeRequ
     needs
 }
 
-/// Call `function`, which [`prepare_wasm_evidence_runtime`] found because an
+/// Call `function`, which [`prepare_evidence_runtime`] found because an
 /// operation of this kind needs it, and replace `op` with the call's result.
 fn replace_with_call(
     ctx: &mut IrContext,
@@ -250,11 +240,11 @@ fn some_dispatch(
 }
 
 /// `effect.extend` → `std::runtime::evidence::extend`.
-struct LowerEffectExtendToWasm {
-    runtime: Rc<WasmEvidenceRuntime>,
+struct LowerEffectExtend {
+    runtime: Rc<EvidenceRuntime>,
 }
 
-impl RewritePattern for LowerEffectExtendToWasm {
+impl RewritePattern for LowerEffectExtend {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -290,32 +280,25 @@ impl RewritePattern for LowerEffectExtendToWasm {
 
 /// `effect.mask` / `effect.dup` / `effect.outer` → the runtime function of
 /// the same name.
-struct LowerEffectStackOpToWasm {
-    runtime: Rc<WasmEvidenceRuntime>,
+struct LowerEffectStackOp {
+    runtime: Rc<EvidenceRuntime>,
 }
 
-impl RewritePattern for LowerEffectStackOpToWasm {
+impl RewritePattern for LowerEffectStackOp {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
+        let runtime = &self.runtime;
         let (function, ability, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
-            (
-                self.runtime.mask,
-                mask.ability(ctx).clone(),
-                mask.evidence(ctx),
-            )
+            (runtime.mask, mask.ability(ctx).clone(), mask.evidence(ctx))
         } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
-            (
-                self.runtime.dup,
-                dup.ability(ctx).clone(),
-                dup.evidence(ctx),
-            )
+            (runtime.dup, dup.ability(ctx).clone(), dup.evidence(ctx))
         } else if let Ok(outer) = effect::Outer::from_op(ctx, op) {
             (
-                self.runtime.outer,
+                runtime.outer,
                 outer.ability(ctx).clone(),
                 outer.evidence(ctx),
             )
@@ -331,17 +314,18 @@ impl RewritePattern for LowerEffectStackOpToWasm {
 
 /// `effect.tail` / `effect.with_tail` / `effect.push` → the runtime
 /// function of the same name.
-struct LowerEffectTailOpToWasm {
-    runtime: Rc<WasmEvidenceRuntime>,
+struct LowerEffectTailOp {
+    runtime: Rc<EvidenceRuntime>,
 }
 
-impl RewritePattern for LowerEffectTailOpToWasm {
+impl RewritePattern for LowerEffectTailOp {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
+        let runtime = &self.runtime;
         let loc = ctx.op(op).location;
         let i32_ty = effect_dispatch::i32_type(ctx);
         let mut slot = |ctx: &mut IrContext, index: u32| {
@@ -354,11 +338,11 @@ impl RewritePattern for LowerEffectTailOpToWasm {
         };
         let (function, args) = if let Ok(tail) = effect::Tail::from_op(ctx, op) {
             let slot = slot(ctx, tail.index(ctx));
-            (self.runtime.tail, vec![tail.evidence(ctx), slot])
+            (runtime.tail, vec![tail.evidence(ctx), slot])
         } else if let Ok(with_tail) = effect::WithTail::from_op(ctx, op) {
             let slot = slot(ctx, with_tail.index(ctx));
             (
-                self.runtime.with_tail,
+                runtime.with_tail,
                 vec![with_tail.evidence(ctx), slot, with_tail.tail(ctx)],
             )
         } else if let Ok(push) = effect::Push::from_op(ctx, op) {
@@ -367,7 +351,7 @@ impl RewritePattern for LowerEffectTailOpToWasm {
                 effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
             };
             (
-                self.runtime.push,
+                runtime.push,
                 vec![push.evidence(ctx), push.source(ctx), ability_id],
             )
         } else {
@@ -380,11 +364,11 @@ impl RewritePattern for LowerEffectTailOpToWasm {
 
 /// `effect.dispatch_tail` → `std::runtime::evidence::lookup_tr` + indirect
 /// call.
-struct LowerEffectDispatchTailToWasm {
-    runtime: Rc<WasmEvidenceRuntime>,
+struct LowerEffectDispatchTail {
+    runtime: Rc<EvidenceRuntime>,
 }
 
-impl RewritePattern for LowerEffectDispatchTailToWasm {
+impl RewritePattern for LowerEffectDispatchTail {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -394,8 +378,7 @@ impl RewritePattern for LowerEffectDispatchTailToWasm {
         let Ok(dispatch_op) = effect::DispatchTail::from_op(ctx, op) else {
             return false;
         };
-        let converter = super::type_converter::wasm_type_converter(ctx);
-        if !effect_dispatch::is_valid_tail_dispatch(ctx, op, &converter) {
+        if !effect_dispatch::is_valid_tail_dispatch(ctx, op) {
             return false;
         }
 
@@ -417,11 +400,11 @@ impl RewritePattern for LowerEffectDispatchTailToWasm {
 
 /// `effect.dispatch_cps` → `std::runtime::evidence::lookup` + proper-tail
 /// transfer.
-struct LowerEffectDispatchCpsToWasm {
-    runtime: Rc<WasmEvidenceRuntime>,
+struct LowerEffectDispatchCps {
+    runtime: Rc<EvidenceRuntime>,
 }
 
-impl RewritePattern for LowerEffectDispatchCpsToWasm {
+impl RewritePattern for LowerEffectDispatchCps {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -431,8 +414,7 @@ impl RewritePattern for LowerEffectDispatchCpsToWasm {
         let Ok(dispatch_op) = effect::DispatchCps::from_op(ctx, op) else {
             return false;
         };
-        let converter = super::type_converter::wasm_type_converter(ctx);
-        if !effect_dispatch::is_valid_cps_dispatch(ctx, op, &converter) {
+        if !effect_dispatch::is_valid_cps_dispatch(ctx, op) {
             return false;
         }
 
@@ -450,129 +432,6 @@ impl RewritePattern for LowerEffectDispatchCpsToWasm {
         effect_dispatch::lower_cps_dispatch(ctx, op, ability_id, prompt.result(ctx), rewriter);
         true
     }
-}
-
-// =============================================================================
-// After the exit: prompt tag allocator binding
-// =============================================================================
-
-/// Replace a bodyless `__tribute_next_tag` declaration with its Wasm
-/// implementation: a mutable `i32` counter global that the function returns
-/// and increments.
-///
-/// Runs after Wasm dialect lowering has converted the declaration's
-/// signature; the implementation adopts it.
-pub fn bind_wasm_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
-    let Some(block) = module.first_block(ctx) else {
-        return;
-    };
-    for op in module.ops_snapshot(ctx) {
-        let is_function = wasm_dialect::Func::matches(ctx, op) || func::Func::matches(ctx, op);
-        if !is_function || ctx.op_has_regions(op) {
-            continue;
-        }
-        let attrs = ctx.op_attrs(op);
-        if attrs.get_str("sym_name") != Some(NEXT_TAG) {
-            continue;
-        }
-        let name = attrs
-            .get_string_ref("sym_name")
-            .expect("a declaration has a name");
-        let signature = attrs
-            .get_type("type")
-            .expect("a function declaration has a signature");
-        let location = ctx.op(op).location;
-        let global = add_tag_counter(ctx, module, location);
-        let implementation = next_tag_function(ctx, location, name, signature, global);
-        ctx.insert_op_before(block, op, implementation);
-        ctx.remove_op_from_block(block, op);
-        ctx.remove_op(op);
-    }
-}
-
-/// Append a mutable `i32` tag counter global, returning its index.
-fn add_tag_counter(ctx: &mut IrContext, module: Module, location: Location) -> u32 {
-    let index = module
-        .ops(ctx)
-        .iter()
-        .filter(|&&op| wasm_dialect::Global::matches(ctx, op))
-        .count() as u32;
-    let global = wasm_dialect::Global::operands()
-        .valtype("i32")
-        .mutable(true)
-        .init(Attribute::Int(0))
-        .build(ctx, location);
-    let block = module
-        .first_block(ctx)
-        .expect("a module with declarations has a body block");
-    ctx.push_op(block, global.op_ref());
-    index
-}
-
-/// The `wasm.func` that returns the counter `global` and increments it, with
-/// the declaration's (converted) signature.
-fn next_tag_function(
-    ctx: &mut IrContext,
-    location: Location,
-    name: trunk_ir::StringRef,
-    signature: TypeRef,
-    global: u32,
-) -> OpRef {
-    let (inputs, results) = if let Some(sig) = wasm_dialect::FuncSig::from_type_ref(ctx, signature)
-    {
-        (sig.inputs(ctx).to_vec(), sig.results(ctx).to_vec())
-    } else {
-        let sig = func::FuncSig::from_type_ref(ctx, signature)
-            .expect("runtime helper declaration must have a function signature");
-        (sig.inputs(ctx).to_vec(), sig.results(ctx).to_vec())
-    };
-    let result_ty = *results
-        .first()
-        .expect("runtime helper declaration must have one result");
-    let block = ctx.create_block(BlockData {
-        location,
-        args: inputs
-            .iter()
-            .map(|&ty| BlockArgData {
-                ty,
-                attrs: Default::default(),
-            })
-            .collect(),
-        ops: smallvec![],
-        parent_region: None,
-    });
-    let current = wasm_dialect::GlobalGet::operands()
-        .index(global)
-        .results(result_ty)
-        .build(ctx, location);
-    ctx.push_op(block, current.op_ref());
-    let one = wasm_dialect::I32Const::operands()
-        .value(1)
-        .results(result_ty)
-        .build(ctx, location);
-    ctx.push_op(block, one.op_ref());
-    let next =
-        wasm_dialect::I32Add::operands(current.result(ctx), one.result(ctx)).build(ctx, location);
-    ctx.push_op(block, next.op_ref());
-    let set = wasm_dialect::GlobalSet::operands(next.result(ctx))
-        .index(global)
-        .build(ctx, location);
-    ctx.push_op(block, set.op_ref());
-    let ret = wasm_dialect::Return::operands(vec![current.result(ctx)]).build(ctx, location);
-    ctx.push_op(block, ret.op_ref());
-
-    let body = ctx.create_region(RegionData {
-        location,
-        blocks: smallvec![block],
-        parent_op: None,
-    });
-    let func_ty = wasm_dialect::func_sig(ctx, inputs, [result_ty]).as_type_ref();
-    wasm_dialect::Func::operands()
-        .sym_name(name)
-        .r#type(func_ty)
-        .regions(body)
-        .build(ctx, location)
-        .op_ref()
 }
 
 #[cfg(test)]
@@ -609,12 +468,12 @@ mod tests {
     }
 
     fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
-        let runtime = prepare_wasm_evidence_runtime(ctx, module).expect("evidence runtime");
+        let runtime = prepare_evidence_runtime(ctx, module).expect("evidence runtime");
         for op in module.ops_snapshot(ctx) {
             if let Ok(function) = func::Func::from_op(ctx, op)
                 && !function.sym_name(ctx).starts_with("std::runtime::")
             {
-                lower_evidence_to_wasm_func(ctx, function, &runtime)?;
+                lower_evidence_func(ctx, function, &runtime)?;
             }
         }
         Ok(())
@@ -640,7 +499,6 @@ mod tests {
 
     fn assert_shared_dialect_only(printed: &str) {
         assert!(!printed.contains("effect."), "{printed}");
-        assert!(!printed.contains("wasm."), "{printed}");
         assert!(!printed.contains("tribute.calling_convention"), "{printed}");
     }
 
@@ -743,12 +601,12 @@ mod tests {
   }"#,
             ),
         );
-        let error = prepare_wasm_evidence_runtime(&ctx, module).expect_err("tail is missing");
+        let error = prepare_evidence_runtime(&ctx, module).expect_err("tail is missing");
         assert_eq!(error.path, "std::runtime::evidence::tail");
 
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &module_text(SELECT));
-        assert!(prepare_wasm_evidence_runtime(&ctx, module).is_ok());
+        assert!(prepare_evidence_runtime(&ctx, module).is_ok());
     }
 
     #[test]
@@ -762,7 +620,7 @@ mod tests {
   }"#,
             ),
         );
-        let runtime = prepare_wasm_evidence_runtime(&ctx, module).unwrap();
+        let runtime = prepare_evidence_runtime(&ctx, module).unwrap();
         let before = print_module(&ctx, module.op());
         let function = module
             .ops(&ctx)
@@ -775,59 +633,10 @@ mod tests {
             })
             .unwrap();
 
-        let error = lower_evidence_to_wasm_func(&mut ctx, function, &runtime)
+        let error = lower_evidence_func(&mut ctx, function, &runtime)
             .expect_err("a result-bearing final dispatch is malformed");
 
         assert!(error.to_string().contains("effect.dispatch_cps"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
-    }
-
-    #[test]
-    fn next_tag_counts_in_a_global_appended_after_existing_ones() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  wasm.global {valtype = "i32", mutable = false, init = 7}
-  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
-}"#,
-        );
-
-        bind_wasm_prompt_tag_runtime(&mut ctx, module);
-
-        assert_eq!(
-            print_module(&ctx, module.op()),
-            r#"core.module @test {
-  wasm.global {init = 7, mutable = false, valtype = "i32"}
-  wasm.func {sym_name = "__tribute_next_tag", type = wasm.func_sig<() -> core.i32>} {
-      %0 = wasm.global_get {index = 1} : core.i32
-      %1 = wasm.i32_const {value = 1} : core.i32
-      %2 = wasm.i32_add %0, %1 : core.i32
-      wasm.global_set %2 {index = 1}
-      wasm.return %0
-  }
-  wasm.global {init = 0, mutable = true, valtype = "i32"}
-}
-"#
-        );
-    }
-
-    #[test]
-    fn binding_leaves_modules_without_a_tag_declaration_unchanged() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @main() -> core.nil {
-    %nil = core.nil_value : core.nil
-    func.return %nil
-  }
-}"#,
-        );
-        let before = print_module(&ctx, module.op());
-
-        bind_wasm_prompt_tag_runtime(&mut ctx, module);
-
         assert_eq!(print_module(&ctx, module.op()), before);
     }
 }

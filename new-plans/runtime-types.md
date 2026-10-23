@@ -35,8 +35,8 @@ runtime 정보를 정한다. 그런 기능의 문법과 출력 형식은 이 문
 - 동등 비교는 타입마다 정의한 함수이며 내용을 비교한다. Scalar는 값을, `String`과
   `Bytes`는 바이트를 비교한다. 두 값이 같은 object인지 묻는 연산은 없다.
 - 주소를 드러내는 연산이 없다.
-- 바깥 세계와 주고받는 값은 경계에서 복사하므로, host도 Tribute object의
-  identity를 보지 못한다.
+- 바깥 세계와 주고받는 값은 [경계에서 복사](host-interface.md#경계를-넘는-값)하므로,
+  host도 Tribute object의 identity를 보지 못한다.
 
 그래서 값이 heap object인지, 다른 값 안에 inline으로 놓였는지, 여러 곳이 한 object를
 공유하는지는 프로그램의 결과를 바꾸지 않는다. 각 타입의 표현은 compiler가 target과

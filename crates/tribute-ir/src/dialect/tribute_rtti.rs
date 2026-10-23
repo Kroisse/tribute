@@ -234,7 +234,7 @@ pub fn allocation_descriptor(
 
 /// The runtime type descriptor a native allocation operation creates: an
 /// [`allocation_descriptor`], or the array type an array construction
-/// allocates. An evidence array has its reserved descriptor instead.
+/// allocates.
 pub fn native_allocation_descriptor(
     ctx: &IrContext,
     op: trunk_ir::OpRef,
@@ -248,7 +248,7 @@ pub fn native_allocation_descriptor(
     } else {
         return allocation_descriptor(ctx, op);
     };
-    (!crate::dialect::ability::is_evidence_type_ref(ctx, array_ty)).then_some((array_ty, None))
+    Some((array_ty, None))
 }
 
 /// The field types of the descriptor `(ty, tag)`: the struct's fields, the

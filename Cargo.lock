@@ -1934,8 +1934,6 @@ dependencies = [
  "itoa",
  "libc",
  "proptest",
- "proptest-state-machine",
- "smallvec",
  "tribute-rc",
  "zmij",
 ]
