@@ -31,13 +31,13 @@ pub(super) fn format_solve_error(
         && expected.to_string() == actual.to_string()
     {
         match (expected_id.origin(db), actual_id.origin(db)) {
-            (TypeOrigin::Builtin(_), TypeOrigin::Source(_)) => {
+            (TypeOrigin::Builtin(_), TypeOrigin::Source { .. }) => {
                 return format!(
                     "canonical compiler-owned type `{expected}` is distinct from \
                      source-declared type `{actual}`"
                 );
             }
-            (TypeOrigin::Source(_), TypeOrigin::Builtin(_)) => {
+            (TypeOrigin::Source { .. }, TypeOrigin::Builtin(_)) => {
                 return format!(
                     "canonical compiler-owned type `{actual}` is distinct from \
                      source-declared type `{expected}`"

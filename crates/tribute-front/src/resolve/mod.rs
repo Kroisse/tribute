@@ -603,7 +603,7 @@ fn collect_definition<'db>(
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
             let qualified = ids.child(s.name.clone());
-            let type_def_id = TypeDefId::source(db, qualified.clone(), s.id);
+            let type_def_id = TypeDefId::declared(db, qualified.clone(), s.disambiguator);
             let ctor_id = CtorId::new(db, qualified);
             env.add_type(s.name.clone(), type_def_id);
             env.add_constructor(s.name.clone(), ctor_id, None, s.fields.len());
@@ -651,7 +651,7 @@ fn collect_definition<'db>(
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
             let qualified = ids.child(e.name.clone());
-            let type_def_id = TypeDefId::source(db, qualified.clone(), e.id);
+            let type_def_id = TypeDefId::declared(db, qualified.clone(), e.disambiguator);
             env.add_type(e.name.clone(), type_def_id);
             restrict(env, Binding::TypeDef { id: type_def_id });
 
@@ -1025,6 +1025,7 @@ mod tests {
             id: fresh_node_id(),
             visibility: Visibility::Private,
             name: Symbol::new(name),
+            disambiguator: 0,
             type_params: vec![],
             fields: vec![FieldDecl {
                 id: fresh_node_id(),
@@ -1045,6 +1046,7 @@ mod tests {
             id: fresh_node_id(),
             visibility: Visibility::Private,
             name: Symbol::new(name),
+            disambiguator: 0,
             type_params: vec![],
             variants: variants
                 .iter()
@@ -1322,6 +1324,7 @@ mod tests {
                 id: fresh_node_id(),
                 visibility: Visibility::Private,
                 name: Symbol::new("Point"),
+                disambiguator: 0,
                 type_params: vec![],
                 fields: vec![
                     FieldDecl {

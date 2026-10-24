@@ -4307,8 +4307,8 @@ fn main() -> String { "hello" }
             crate::prelude::PRELUDE_URI
         );
         assert_eq!(
-            (definition.span.start, definition.span.end),
-            (canonical.definition.start, canonical.definition.end)
+            canonical.definition,
+            tribute_front::ast::TypeDefId::source(db, trunk_ir::SymbolPath::new(["std", "String"]))
         );
 
         let user_lookalike = ctx.types().iter().find_map(|(ty, data)| {

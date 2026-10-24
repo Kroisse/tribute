@@ -71,11 +71,7 @@ fn declared_struct_id<'db>(
             _ => None,
         })
         .unwrap_or_else(|| panic!("missing struct {name}"));
-    TypeDefId::source(
-        db,
-        trunk_ir::SymbolPath::new([structure.name.clone()]),
-        structure.id,
-    )
+    TypeDefId::source(db, trunk_ir::SymbolPath::new([structure.name.clone()]))
 }
 
 fn node_type<'db>(

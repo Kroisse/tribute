@@ -1,5 +1,6 @@
 //! CST to AST lowering for declarations.
 
+use rustc_hash::FxHashMap as HashMap;
 use tree_sitter::Node;
 use trunk_ir::Symbol;
 
@@ -12,6 +13,22 @@ use crate::ast::{
 use super::context::AstLoweringCtx;
 use super::expressions::lower_expr;
 use super::helpers::is_comment;
+
+/// Number the type declarations of a module that share a name, in order, so
+/// that each has its own identity even when the module redeclares the name.
+fn assign_type_disambiguators(items: &mut [ModuleItem<UnresolvedName>]) {
+    let mut seen: HashMap<Symbol, u32> = HashMap::default();
+    for item in items {
+        let (name, disambiguator) = match item {
+            ModuleItem::Decl(Decl::Struct(decl)) => (&decl.name, &mut decl.disambiguator),
+            ModuleItem::Decl(Decl::Enum(decl)) => (&decl.name, &mut decl.disambiguator),
+            _ => continue,
+        };
+        let count = seen.entry(name.clone()).or_default();
+        *disambiguator = *count;
+        *count += 1;
+    }
+}
 
 /// Lower a CST source file to an AST Module.
 ///
@@ -39,6 +56,7 @@ pub fn lower_module(
 
         decls.extend(lower_decl(ctx, child));
     }
+    assign_type_disambiguators(&mut decls);
 
     Module { id, name, decls }
 }
@@ -492,6 +510,7 @@ fn lower_struct(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<StructDecl> 
         id,
         visibility: lower_visibility(ctx, node),
         name,
+        disambiguator: 0,
         type_params,
         fields,
     })
@@ -568,6 +587,7 @@ fn lower_enum(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<EnumDecl> {
         id,
         visibility: lower_visibility(ctx, node),
         name,
+        disambiguator: 0,
         type_params,
         variants,
     })
@@ -855,6 +875,7 @@ fn lower_mod(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<ModuleDecl<Unre
             }
             decls.extend(lower_decl(ctx, child));
         }
+        assign_type_disambiguators(&mut decls);
         Some(decls)
     } else {
         // External module (file-based) - no inline body

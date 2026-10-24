@@ -805,8 +805,8 @@ mod tests {
 
     use super::{AbilityInfo, ModuleTypeEnv};
     use crate::ast::{
-        AbilityId, AbilityOrigin, BuiltinAbility, CtorId, FuncDefId, NodeId, Type, TypeDefId,
-        TypeKind, TypeOrigin, TypeScheme,
+        AbilityId, AbilityOrigin, BuiltinAbility, CtorId, FuncDefId, Type, TypeDefId, TypeKind,
+        TypeOrigin, TypeScheme,
     };
 
     // =========================================================================
@@ -817,11 +817,7 @@ mod tests {
     fn string_type_fallback_ignores_user_string(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
         let name = Symbol::new("String");
-        let user_id = TypeDefId::source(
-            db,
-            trunk_ir::SymbolPath::new([name.clone()]),
-            NodeId::from_raw(1),
-        );
+        let user_id = TypeDefId::source(db, trunk_ir::SymbolPath::new([name.clone()]));
         let user_ty = env.named_type_with_id(user_id, name.clone(), vec![]);
         env.register_type_def(
             trunk_ir::SymbolPath::new([name]),

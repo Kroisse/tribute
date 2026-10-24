@@ -287,6 +287,7 @@ fn specialize_struct_decl<'db>(
         id: decl.id.with_variant(variant),
         visibility: crate::ast::Visibility::Private,
         name: mangled_name,
+        disambiguator: decl.disambiguator,
         type_params: vec![],
         fields: decl
             .fields
@@ -315,6 +316,7 @@ fn specialize_enum_decl<'db>(
         id: decl.id.with_variant(variant),
         visibility: crate::ast::Visibility::Private,
         name: mangled_name,
+        disambiguator: decl.disambiguator,
         type_params: vec![],
         variants: decl
             .variants
@@ -1115,6 +1117,7 @@ mod tests {
             id: node_id(1),
             visibility: crate::ast::Visibility::Public,
             name: Symbol::new("Pair"),
+            disambiguator: 0,
             type_params: vec![
                 crate::ast::TypeParamDecl {
                     id: node_id(2),
@@ -1184,6 +1187,7 @@ mod tests {
             id: node_id(1),
             visibility: crate::ast::Visibility::Public,
             name: Symbol::new("Option"),
+            disambiguator: 0,
             type_params: vec![crate::ast::TypeParamDecl {
                 id: node_id(2),
                 name: Symbol::new("a"),
