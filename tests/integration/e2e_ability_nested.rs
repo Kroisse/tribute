@@ -7,7 +7,7 @@
 
 use crate::common;
 
-use common::{PRINT_NAT, assert_native_output, assert_output_on_both_targets};
+use common::{assert_native_output, assert_output_on_both_targets};
 
 // =============================================================================
 // Multi-Ability Execution Tests (#499)
@@ -22,9 +22,7 @@ use common::{PRINT_NAT, assert_native_output, assert_output_on_both_targets};
 /// Expected: Reader::ask() returns 42, State::set(42), State::get() returns 42.
 #[test]
 fn test_two_abilities_nested_handlers() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -57,13 +55,12 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 
 fn main() ->{std::io::Io} Nil {
     let result = run_reader(fn() { run_state(fn() { use_both() }, 0) }, 42)
-    print_nat(result)
+    std::io::print_line(Nat::to_string(result))
     let swapped = run_state(fn() { run_reader(fn() { use_both() }, 42) }, 0)
-    print_nat(swapped)
+    std::io::print_line(Nat::to_string(swapped))
 }
-"#
-    );
-    assert_output_on_both_targets("two_abilities_nested.trb", &code, "42\n42");
+"#;
+    assert_output_on_both_targets("two_abilities_nested.trb", code, "42\n42");
 }
 
 /// Test same ability with different type parameter instances nested (State inside State).
@@ -74,7 +71,9 @@ fn main() ->{std::io::Io} Nil {
 /// the correct prompt with distinct type parameters.
 #[test]
 fn test_same_ability_different_type_params_nested() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -99,9 +98,9 @@ fn outer() ->{State(Nat)} Nat {
     State::get()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_state(fn() { outer() }, 0)
-    __tribute_print_nat(result)
+    print_line(Nat::to_string(result))
 }
 "#;
     // outer: set(7), run inner with State(Bool) (doesn't affect outer State(Nat)), get() → 7
@@ -114,7 +113,9 @@ fn main() -> Nil {
 /// State::get() → 0 (stateless handler returns +0), returns 0+1=1.
 #[test]
 fn test_multiple_abilities_single_handler() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -130,14 +131,14 @@ fn use_both() ->{State(Nat), Reader(Nat)} Nat {
     n + 1
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle use_both() {
         do result { result }
         op State::get() { resume 0 }
         op State::set(v) { resume Nil }
         op Reader::ask() { resume 10 }
     }
-    __tribute_print_nat(result)
+    print_line(Nat::to_string(result))
 }
 "#;
     assert_native_output("multi_ability_single_handler.trb", code, "1");
@@ -154,9 +155,7 @@ fn main() -> Nil {
 /// selected again and its state remains 100.
 #[test]
 fn test_nested_handler_same_ability_same_type_shadowing() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -181,13 +180,12 @@ fn main() ->{std::io::Io} Nil {
         let outer_val = State::get()
         inner_result * 1000 + outer_val
     }, 100)
-    print_nat(result)
+    std::io::print_line(Nat::to_string(result))
 }
-"#
-    );
+"#;
     // inner: get()→0, set(1), get()→1 → inner_result=1
     // outer: get()→100 (unchanged) → outer_val=100
-    assert_output_on_both_targets("nested_handler_shadowing.trb", &code, "1100");
+    assert_output_on_both_targets("nested_handler_shadowing.trb", code, "1100");
 }
 
 /// Test calling a different ability operation inside a handler arm.
@@ -196,7 +194,9 @@ fn main() ->{std::io::Io} Nil {
 /// Logger handler wraps State handler from outside.
 #[test]
 fn test_nested_handler_cross_ability_in_handler_arm() {
-    let code = r#"ability Logger {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Logger {
     op log(msg: Nat) -> Nil
 }
 
@@ -215,10 +215,10 @@ fn run_logging_state(comp: fn() ->{e, State(Nat), Logger} a, init: Nat) ->{e, Lo
     }
 }
 
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
         op Logger::log(msg) {
-            __tribute_print_nat(msg)
+            print_line(Nat::to_string(msg))
             run_logger(fn() { resume Nil })
         }
     }
@@ -230,11 +230,11 @@ fn computation() ->{State(Nat), Logger} Nat {
     State::get()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_logger(fn() {
         run_logging_state(fn() { computation() }, 0)
     })
-    __tribute_print_nat(result)
+    print_line(Nat::to_string(result))
 }
 "#;
     // set(10) → Logger::log(10) prints 10
@@ -251,7 +251,9 @@ fn main() -> Nil {
 /// Expected: 10 + 32 = 42.
 #[test]
 fn test_nested_handler_resume_triggers_different_effect() {
-    let code = r#"ability A {
+    let code = r#"use std::io::{Io, print_line}
+
+ability A {
     op do_a() -> Nat
 }
 
@@ -277,9 +279,9 @@ fn computation() ->{A, B} Nat {
     a + b
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_a(fn() { run_b(fn() { computation() }) })
-    __tribute_print_nat(result)
+    print_line(Nat::to_string(result))
 }
 "#;
     assert_native_output("nested_handler_reentrant_yield.trb", code, "42");
@@ -292,9 +294,7 @@ fn main() -> Nil {
 /// are combined into one decimal digit each.
 #[test]
 fn test_nested_handler_deep_four_levels_same_ability() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -324,15 +324,14 @@ fn main() ->{std::io::Io} Nil {
             }, 2)
         }, 3)
     }, 4)
-    print_nat(result)
+    std::io::print_line(Nat::to_string(result))
 }
-"#
-    );
+"#;
     // level 4 (outermost): get()→4
     // level 3: get()→3
     // level 2: get()→2
     // level 1 (innermost): get()→1, set(2), get()→2
-    assert_output_on_both_targets("nested_handler_deep_four_levels.trb", &code, "43212");
+    assert_output_on_both_targets("nested_handler_deep_four_levels.trb", code, "43212");
 }
 
 /// Two instances of one ability whose arguments share a representation
@@ -342,7 +341,9 @@ fn main() ->{std::io::Io} Nil {
 /// outer `State(Nat)` and must reach the outer handler (7), not the inner one.
 #[test]
 fn test_same_ability_instances_with_shared_representation() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -368,9 +369,9 @@ fn both() ->{State(Int), State(Nat)} Nat {
     get_nat()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_state(fn() { run_state(fn() { both() }, +1) }, 7)
-    __tribute_print_nat(result)
+    print_line(Nat::to_string(result))
 }
 "#;
     assert_native_output("same_ability_shared_representation.trb", code, "7");
@@ -380,7 +381,9 @@ fn main() -> Nil {
 /// with the same shape remain distinct evidence entries.
 #[test]
 fn test_same_ability_instances_with_distinct_nominal_arguments() {
-    let code = r#"struct Point { value: Nat }
+    let code = r#"use std::io::{Io, print_line}
+
+struct Point { value: Nat }
 struct Color { value: Nat }
 
 ability State(s) {
@@ -410,9 +413,9 @@ fn both() ->{State(Color), State(Point)} Nat {
     value
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_state(fn() { run_state(fn() { both() }, Color { value: 1 }) }, Point { value: 7 })
-    __tribute_print_nat(result)
+    print_line(Nat::to_string(result))
 }
 "#;
     assert_native_output("same_ability_distinct_nominals.trb", code, "7");
@@ -422,7 +425,9 @@ fn main() -> Nil {
 /// ability instances.
 #[test]
 fn test_same_ability_instances_with_same_spelled_nominal_arguments() {
-    let code = r#"pub mod A {
+    let code = r#"use std::io::{Io, print_line}
+
+pub mod A {
     pub struct Color { value: Nat }
 }
 
@@ -457,9 +462,9 @@ fn both() ->{State(B::Color), State(A::Color)} Nat {
     value
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_state(fn() { run_state(fn() { both() }, B::Color { value: 1 }) }, A::Color { value: 7 })
-    __tribute_print_nat(result)
+    print_line(Nat::to_string(result))
 }
 "#;
     assert_native_output("same_ability_same_spelled_nominals.trb", code, "7");

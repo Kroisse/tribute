@@ -1,4 +1,4 @@
-extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+use std::io::{Io, print_line}
 
 enum Inner {
     Value(Nat)
@@ -20,10 +20,10 @@ fn read_nested(outer: Outer) -> Nat {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let inner = Value(10)
     let outer = Wrapped(inner)
     let first = read_nested(outer)
     let second = read_nested(outer)
-    __tribute_print_nat(first + second)
+    print_line(Nat::to_string(first + second))
 }

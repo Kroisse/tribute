@@ -5,7 +5,7 @@
 //! program.
 
 use super::common::{
-    PRINT_NAT, assert_output_in_std_on_both_targets_with_native_asan,
+    assert_output_in_std_on_both_targets_with_native_asan,
     run_in_std_on_both_targets_with_native_asan,
 };
 use salsa::Database;
@@ -82,20 +82,18 @@ pub mod slots_tests {
 
 #[test]
 fn slots_build_read_and_copy_on_both_targets() {
-    let program = format!(
-        "{PRINT_NAT}
-fn main() ->{{std::io::Io}} Nil {{
-    print_nat(std::slots_tests::scalars())
+    let program = "
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(Nat::to_string(std::slots_tests::scalars()))
     std::io::print_line(std::slots_tests::strings_text())
     std::io::print_line(std::slots_tests::pairs_text())
-    print_nat(std::slots_tests::pairs_left())
-}}
-"
-    );
+    std::io::print_line(Nat::to_string(std::slots_tests::pairs_left()))
+}
+";
     assert_output_in_std_on_both_targets_with_native_asan(
         "runtime_slots.trb",
         SLOTS_TESTS,
-        &program,
+        program,
         "110230200\nab|c|c|b\nzxy\n287",
     );
 }
@@ -128,10 +126,10 @@ pub mod slots_bounds {
 fn positions_past_the_end_trap_on_both_targets() {
     for call in [
         "std::io::print_line(std::slots_bounds::get_at_len())",
-        "print_nat(std::slots_bounds::insert_past_len())",
-        "print_nat(std::slots_bounds::remove_at_len())",
+        "std::io::print_line(Nat::to_string(std::slots_bounds::insert_past_len()))",
+        "std::io::print_line(Nat::to_string(std::slots_bounds::remove_at_len()))",
     ] {
-        let program = format!("{PRINT_NAT}\nfn main() ->{{std::io::Io}} Nil {{\n    {call}\n}}\n");
+        let program = format!("\nfn main() ->{{std::io::Io}} Nil {{\n    {call}\n}}\n");
         let (native, wasm) =
             run_in_std_on_both_targets_with_native_asan("slots_bounds.trb", OUT_OF_RANGE, &program);
         for (target, output) in [("native", native), ("wasm", wasm)] {

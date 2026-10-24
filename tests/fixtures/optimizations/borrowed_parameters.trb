@@ -1,4 +1,4 @@
-extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+use std::io::{Io, print_line}
 
 enum BoxedNat {
     Boxed(Nat)
@@ -12,7 +12,7 @@ fn read_while_borrowing(boxed: BoxedNat) -> Nat {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let boxed = Boxed(10)
-    __tribute_print_nat(read_while_borrowing(boxed))
+    print_line(Nat::to_string(read_while_borrowing(boxed)))
 }

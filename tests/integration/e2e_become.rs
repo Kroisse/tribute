@@ -7,7 +7,7 @@
 
 use crate::common;
 
-use common::{PRINT_NAT, assert_output_on_both_targets};
+use common::assert_output_on_both_targets;
 
 /// Deep enough that a frame per call overflows any default stack.
 const DEPTH: &str = "10000000";
@@ -15,9 +15,7 @@ const DEPTH: &str = "10000000";
 /// A self tail call in a case arm, between Direct callables.
 #[test]
 fn test_become_self_recursion_runs_in_constant_stack() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 fn count(n: Nat, acc: Nat) -> Nat {
     case n {
         0 -> acc
@@ -26,20 +24,17 @@ fn count(n: Nat, acc: Nat) -> Nat {
 }
 
 fn main() ->{std::io::Io} Nil {
-    print_nat(count(DEPTH, 0))
+    std::io::print_line(Nat::to_string(count(DEPTH, 0)))
 }
 "#
-        .replace("DEPTH", DEPTH)
-    );
+    .replace("DEPTH", DEPTH);
     assert_output_on_both_targets("become_self.trb", &code, DEPTH);
 }
 
 /// Mutual tail calls through a nested block in a case arm.
 #[test]
 fn test_become_mutual_recursion_runs_in_constant_stack() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 fn is_even(n: Nat) -> Nat {
     case n {
         0 -> 1
@@ -55,11 +50,10 @@ fn is_odd(n: Nat) -> Nat {
 }
 
 fn main() ->{std::io::Io} Nil {
-    print_nat(is_even(DEPTH))
+    std::io::print_line(Nat::to_string(is_even(DEPTH)))
 }
 "#
-        .replace("DEPTH", DEPTH)
-    );
+    .replace("DEPTH", DEPTH);
     assert_output_on_both_targets("become_mutual.trb", &code, "1");
 }
 
@@ -67,9 +61,7 @@ fn main() ->{std::io::Io} Nil {
 /// named function.
 #[test]
 fn test_become_callable_value_runs_in_constant_stack() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 fn step(f: fn(Nat, fn(Nat) ->{} Nat) ->{} Nat, n: Nat) -> Nat {
     case n {
         0 -> 7
@@ -82,11 +74,10 @@ fn apply(n: Nat, k: fn(Nat) ->{} Nat) -> Nat {
 }
 
 fn main() ->{std::io::Io} Nil {
-    print_nat(step(apply, DEPTH))
+    std::io::print_line(Nat::to_string(step(apply, DEPTH)))
 }
 "#
-        .replace("DEPTH", DEPTH)
-    );
+    .replace("DEPTH", DEPTH);
     assert_output_on_both_targets("become_indirect.trb", &code, "7");
 }
 
@@ -94,9 +85,7 @@ fn main() ->{std::io::Io} Nil {
 /// and a tail call to a value-returning callee completes through it.
 #[test]
 fn test_become_under_a_handler_runs_in_constant_stack() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 ability Tick {
     op tick() -> Nil
 }
@@ -118,9 +107,8 @@ fn main() ->{std::io::Io} Nil {
         do result { result }
         op Tick::tick() { resume Nil }
     }
-    print_nat(total)
+    std::io::print_line(Nat::to_string(total))
 }
-"#
-    );
-    assert_output_on_both_targets("become_handler.trb", &code, "100000");
+"#;
+    assert_output_on_both_targets("become_handler.trb", code, "100000");
 }

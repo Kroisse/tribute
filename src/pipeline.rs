@@ -2526,11 +2526,11 @@ fn main() -> Nil {
             db,
             "closure_exec_simple.trb",
             r#"
-extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+use std::io::{Io, print_line}
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let f = fn(x) { x + 1 }
-    __tribute_print_nat(f(41))
+    print_line(Nat::to_string(f(41)))
 }
 "#,
         );

@@ -1,3 +1,4 @@
+use std::io::{Io, print_line}
 use std::collections::List as Sequence
 use std::collections::List::prepend as push
 
@@ -25,7 +26,7 @@ fn apply(f: fn(Nat, Sequence(Nat)) ->{e} Sequence(Nat), tail: Sequence(Nat)) ->{
     f(3, tail)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let first = std::collections::List::prepend(1, [])
     let second = Sequence::prepend(2, first)
     let third = apply(push, second)
@@ -33,8 +34,8 @@ fn main() -> Nil {
         [value, .._] -> value
         _ -> 0
     }
-    __tribute_print_nat(List::prepend(20, 22))
-    __tribute_print_nat(head)
-    __tribute_print_nat(A::prepend(4, 5))
-    __tribute_print_nat(B::prepend(6, 7))
+    print_line(Nat::to_string(List::prepend(20, 22)))
+    print_line(Nat::to_string(head))
+    print_line(Nat::to_string(A::prepend(4, 5)))
+    print_line(Nat::to_string(B::prepend(6, 7)))
 }
