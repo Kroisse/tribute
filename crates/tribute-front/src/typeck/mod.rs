@@ -331,6 +331,39 @@ pub struct ExpressionTypeMetadata<'db> {
     pub exhaustive_cases: Vec<NodeId>,
 }
 
+impl<'db> ExpressionTypeMetadata<'db> {
+    /// This metadata after that of the package it depends on, as one table:
+    /// an entry here replaces the dependency's for the same node.
+    pub fn after_dependency(&self, dependency: &Self) -> Self {
+        fn layered<V: Clone>(
+            dependency: &SortedMap<NodeId, V>,
+            own: &SortedMap<NodeId, V>,
+        ) -> SortedMap<NodeId, V> {
+            let mut layered = dependency.clone();
+            layered.extend(own.iter().cloned());
+            layered
+        }
+        let mut exhaustive_cases: Vec<_> = dependency
+            .exhaustive_cases
+            .iter()
+            .chain(&self.exhaustive_cases)
+            .copied()
+            .collect();
+        exhaustive_cases.sort();
+        exhaustive_cases.dedup();
+        Self {
+            node_types: layered(&dependency.node_types, &self.node_types),
+            function_instances: layered(&dependency.function_instances, &self.function_instances),
+            local_instances: layered(&dependency.local_instances, &self.local_instances),
+            evidence_plans: layered(&dependency.evidence_plans, &self.evidence_plans),
+            handler_operations: layered(&dependency.handler_operations, &self.handler_operations),
+            perform_operations: layered(&dependency.perform_operations, &self.perform_operations),
+            lambda_signatures: layered(&dependency.lambda_signatures, &self.lambda_signatures),
+            exhaustive_cases,
+        }
+    }
+}
+
 /// Constructor declarations and exact schemes for cloned enum variants.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ConstructorTypeMetadata<'db> {

@@ -224,69 +224,9 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             .cloned()
             .collect(),
         tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: checked
-                .declarations(db)
-                .constructor_types
-                .schemes
-                .iter()
-                .cloned()
-                .collect(),
-            specialized_enum_variants: checked
-                .declarations(db)
-                .constructor_types
-                .specialized_enum_variants
-                .iter()
-                .cloned()
-                .collect(),
-            local_instances: checked
-                .expression_types(db)
-                .local_instances
-                .iter()
-                .cloned()
-                .collect(),
-            evidence_plans: checked
-                .expression_types(db)
-                .evidence_plans
-                .iter()
-                .cloned()
-                .collect(),
-            function_instances: checked
-                .expression_types(db)
-                .function_instances
-                .iter()
-                .cloned()
-                .collect(),
-            node_types: checked
-                .expression_types(db)
-                .node_types
-                .iter()
-                .cloned()
-                .collect(),
-            handler_operations: checked
-                .expression_types(db)
-                .handler_operations
-                .iter()
-                .cloned()
-                .collect(),
-            perform_operations: checked
-                .expression_types(db)
-                .perform_operations
-                .iter()
-                .cloned()
-                .collect(),
-            lambda_signatures: checked
-                .expression_types(db)
-                .lambda_signatures
-                .iter()
-                .cloned()
-                .collect(),
-            exhaustive_cases: checked
-                .expression_types(db)
-                .exhaustive_cases
-                .iter()
-                .copied()
-                .collect(),
-            compiler_intrinsics: HashMap::default(),
+            constructor_types: checked.declarations(db).constructor_types.clone(),
+            expressions: checked.expression_types(db).clone(),
+            compiler_intrinsics: tribute_front::SortedMap::default(),
         },
     )
     .expect("checked instances must specialize");
@@ -295,23 +235,29 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         ast: mono.module,
         span_map: checked.span_map(db),
         function_types: mono.function_types.into_iter().collect(),
-        constructor_types: mono.metadata.constructor_types,
-        specialized_enum_variants: mono
+        constructor_types: mono
             .metadata
-            .specialized_enum_variants
+            .constructor_types
+            .schemes
             .into_iter()
             .collect(),
-        node_types: mono.metadata.node_types.into_iter().collect(),
-        local_instances: mono.metadata.local_instances.into_iter().collect(),
-        function_instances: mono.metadata.function_instances.into_iter().collect(),
+        specialized_enum_variants: mono.metadata.constructor_types.specialized_enum_variants,
+        node_types: mono.metadata.expressions.node_types,
+        local_instances: mono.metadata.expressions.local_instances,
+        function_instances: mono.metadata.expressions.function_instances,
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             &checked.declarations(db).ability_definitions,
         ),
-        handler_operations: mono.metadata.handler_operations.into_iter().collect(),
-        perform_operations: mono.metadata.perform_operations.into_iter().collect(),
-        lambda_signatures: mono.metadata.lambda_signatures.into_iter().collect(),
-        exhaustive_cases: mono.metadata.exhaustive_cases,
-        evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
+        handler_operations: mono.metadata.expressions.handler_operations,
+        perform_operations: mono.metadata.expressions.perform_operations,
+        lambda_signatures: mono.metadata.expressions.lambda_signatures,
+        exhaustive_cases: mono
+            .metadata
+            .expressions
+            .exhaustive_cases
+            .into_iter()
+            .collect(),
+        evidence_plans: mono.metadata.expressions.evidence_plans,
         well_known_types: checked.declarations(db).well_known_types,
         compiler_intrinsics: HashMap::default(),
         runtime_types: Default::default(),
@@ -358,69 +304,9 @@ fn lower_monomorphized_source(
             .cloned()
             .collect(),
         tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: checked
-                .declarations(db)
-                .constructor_types
-                .schemes
-                .iter()
-                .cloned()
-                .collect(),
-            specialized_enum_variants: checked
-                .declarations(db)
-                .constructor_types
-                .specialized_enum_variants
-                .iter()
-                .cloned()
-                .collect(),
-            local_instances: checked
-                .expression_types(db)
-                .local_instances
-                .iter()
-                .cloned()
-                .collect(),
-            evidence_plans: checked
-                .expression_types(db)
-                .evidence_plans
-                .iter()
-                .cloned()
-                .collect(),
-            function_instances: checked
-                .expression_types(db)
-                .function_instances
-                .iter()
-                .cloned()
-                .collect(),
-            node_types: checked
-                .expression_types(db)
-                .node_types
-                .iter()
-                .cloned()
-                .collect(),
-            handler_operations: checked
-                .expression_types(db)
-                .handler_operations
-                .iter()
-                .cloned()
-                .collect(),
-            perform_operations: checked
-                .expression_types(db)
-                .perform_operations
-                .iter()
-                .cloned()
-                .collect(),
-            lambda_signatures: checked
-                .expression_types(db)
-                .lambda_signatures
-                .iter()
-                .cloned()
-                .collect(),
-            exhaustive_cases: checked
-                .expression_types(db)
-                .exhaustive_cases
-                .iter()
-                .copied()
-                .collect(),
-            compiler_intrinsics: HashMap::default(),
+            constructor_types: checked.declarations(db).constructor_types.clone(),
+            expressions: checked.expression_types(db).clone(),
+            compiler_intrinsics: tribute_front::SortedMap::default(),
         },
     )
     .expect("checked instances must specialize");
@@ -429,23 +315,29 @@ fn lower_monomorphized_source(
         ast: mono.module,
         span_map: checked.span_map(db),
         function_types: mono.function_types.into_iter().collect(),
-        constructor_types: mono.metadata.constructor_types,
-        specialized_enum_variants: mono
+        constructor_types: mono
             .metadata
-            .specialized_enum_variants
+            .constructor_types
+            .schemes
             .into_iter()
             .collect(),
-        node_types: mono.metadata.node_types.into_iter().collect(),
-        local_instances: mono.metadata.local_instances.into_iter().collect(),
-        function_instances: mono.metadata.function_instances.into_iter().collect(),
+        specialized_enum_variants: mono.metadata.constructor_types.specialized_enum_variants,
+        node_types: mono.metadata.expressions.node_types,
+        local_instances: mono.metadata.expressions.local_instances,
+        function_instances: mono.metadata.expressions.function_instances,
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             &checked.declarations(db).ability_definitions,
         ),
-        handler_operations: mono.metadata.handler_operations.into_iter().collect(),
-        perform_operations: mono.metadata.perform_operations.into_iter().collect(),
-        lambda_signatures: mono.metadata.lambda_signatures.into_iter().collect(),
-        exhaustive_cases: mono.metadata.exhaustive_cases,
-        evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
+        handler_operations: mono.metadata.expressions.handler_operations,
+        perform_operations: mono.metadata.expressions.perform_operations,
+        lambda_signatures: mono.metadata.expressions.lambda_signatures,
+        exhaustive_cases: mono
+            .metadata
+            .expressions
+            .exhaustive_cases
+            .into_iter()
+            .collect(),
+        evidence_plans: mono.metadata.expressions.evidence_plans,
         well_known_types: checked.declarations(db).well_known_types,
         compiler_intrinsics: HashMap::default(),
         runtime_types: Default::default(),

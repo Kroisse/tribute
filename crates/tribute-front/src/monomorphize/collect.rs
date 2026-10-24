@@ -18,7 +18,7 @@ pub(super) fn collect_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<TypedRef<'db>>,
     function_types: &[(SymbolPath, TypeScheme<'db>)],
-    function_instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+    function_instances: &crate::SortedMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
 ) -> HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>> {
     let mut collector = InstantiationCollector::new(db, function_types, function_instances);
     for entry in &module.entries {
@@ -138,7 +138,8 @@ fn extract_recursive<'db>(
 struct InstantiationCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
     schemes: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
-    function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+    function_instances:
+        &'a crate::SortedMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
     instantiations: HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
 }
 
@@ -146,7 +147,10 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
     fn new(
         db: &'db dyn salsa::Database,
         function_types: &[(SymbolPath, TypeScheme<'db>)],
-        function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+        function_instances: &'a crate::SortedMap<
+            crate::ast::NodeId,
+            crate::typeck::FunctionInstance<'db>,
+        >,
     ) -> Self {
         let schemes = function_types
             .iter()

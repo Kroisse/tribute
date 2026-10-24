@@ -56,7 +56,8 @@ impl<K: Ord, V> SortedMap<K, V> {
     }
 
     /// Insert `value` for `key`, returning the value it replaces. Inserting
-    /// shifts the later entries; collect a whole map with `FromIterator`.
+    /// shifts the later entries; add many entries at once with `Extend`, or
+    /// collect a whole map with `FromIterator`.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         match self.entries.binary_search_by(|(entry, _)| entry.cmp(&key)) {
             Ok(index) => Some(std::mem::replace(&mut self.entries[index].1, value)),
@@ -137,6 +138,30 @@ impl<K: Ord, V> FromIterator<(K, V)> for SortedMap<K, V> {
     }
 }
 
+/// Adds entries in any order with one merge of the sorted entries. An added
+/// entry replaces the stored one for its key, and when a key repeats among
+/// the added entries the last one wins, as with `HashMap::extend`.
+impl<K: Ord, V> Extend<(K, V)> for SortedMap<K, V> {
+    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
+        let added: Self = iter.into_iter().collect();
+        if added.entries.is_empty() {
+            return;
+        }
+        let stored = std::mem::take(&mut self.entries);
+        let mut merged = Vec::with_capacity(stored.len() + added.entries.len());
+        let mut stored = stored.into_iter().peekable();
+        for (key, value) in added.entries {
+            while let Some(entry) = stored.next_if(|(stored_key, _)| *stored_key < key) {
+                merged.push(entry);
+            }
+            stored.next_if(|(stored_key, _)| *stored_key == key);
+            merged.push((key, value));
+        }
+        merged.extend(stored);
+        self.entries = merged;
+    }
+}
+
 impl<K, V> IntoIterator for SortedMap<K, V> {
     type Item = (K, V);
     type IntoIter = std::vec::IntoIter<(K, V)>;
@@ -169,6 +194,7 @@ mod tests {
         Insert(u8, u32),
         Remove(u8),
         AddTo(u8, u32),
+        Extend(Vec<(u8, u32)>),
     }
 
     /// The reference model of a map built from `initial` and then edited.
@@ -201,7 +227,8 @@ mod tests {
             prop_oneof![
                 (key.clone(), any::<u32>()).prop_map(|(key, value)| Edit::Insert(key, value)),
                 key.clone().prop_map(Edit::Remove),
-                (key, any::<u32>()).prop_map(|(key, delta)| Edit::AddTo(key, delta)),
+                (key.clone(), any::<u32>()).prop_map(|(key, delta)| Edit::AddTo(key, delta)),
+                prop::collection::vec((key, any::<u32>()), 0..8).prop_map(Edit::Extend),
             ]
             .boxed()
         }
@@ -214,6 +241,10 @@ mod tests {
                     *value = value.wrapping_add(delta);
                     *value
                 }),
+                Edit::Extend(ref entries) => {
+                    state.entries.extend(entries.iter().copied());
+                    None
+                }
             };
             state
         }
@@ -254,6 +285,10 @@ mod tests {
                     *value = value.wrapping_add(delta);
                     *value
                 }),
+                Edit::Extend(entries) => {
+                    map.extend(entries);
+                    None
+                }
             };
             assert_eq!(returned, model.returned);
             map

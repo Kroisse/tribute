@@ -398,47 +398,48 @@ fn prepare_frontend_details<'db>(
     use tribute_front::ast::{DeclTable, TypedRef};
 
     let user_module = typed.module(db);
-    let user_node_types = &typed.expression_types(db).node_types;
     let user_span_map = typed.span_map(db);
     // Type checking reads package std's declarations without copying them,
-    // so specialization takes them as one table with the user's.
-    let declarations = match prelude_module(db) {
-        Some(prelude) => typed
-            .declarations(db)
-            .after_dependency(prelude.declarations(db)),
-        None => typed.declarations(db).clone(),
+    // so specialization takes them as one table with the user's, and std's
+    // per-expression metadata ahead of the user's.
+    let (declarations, expressions) = match prelude_module(db) {
+        Some(prelude) => (
+            typed
+                .declarations(db)
+                .after_dependency(prelude.declarations(db)),
+            typed
+                .expression_types(db)
+                .after_dependency(prelude.expression_types(db)),
+        ),
+        None => (
+            typed.declarations(db).clone(),
+            typed.expression_types(db).clone(),
+        ),
     };
     let merged_fn_types: HashMap<_, _> = declarations.function_types.iter().cloned().collect();
 
     // Merge prelude at AST level
-    let (merged_module, merged_node_types, merged_span_map) =
-        if let Some(prelude) = prelude_module(db) {
-            let prelude_module_ast = prelude.module(db);
-            let prelude_node_types = &prelude.expression_types(db).node_types;
-            let prelude_span_map = prelude.span_map(db);
+    let (merged_module, merged_span_map) = if let Some(prelude) = prelude_module(db) {
+        let prelude_module_ast = prelude.module(db);
+        let prelude_span_map = prelude.span_map(db);
 
-            // Prepend prelude decls before user decls
-            let mut merged_ast = DeclTable::<TypedRef<'db>> {
-                id: user_module.id,
-                name: user_module.name.clone(),
-                entries: prelude_module_ast.entries.clone(),
-            };
-            merged_ast
-                .entries
-                .extend(user_module.entries.iter().cloned());
-
-            // Merge node_types: prelude first, user overrides
-            let mut node_types: HashMap<_, _> = prelude_node_types.iter().cloned().collect();
-            node_types.extend(user_node_types.iter().cloned());
-
-            // Merge span maps (user overrides prelude on conflict)
-            let merged_span_map = user_span_map.merge(&prelude_span_map);
-
-            (merged_ast, node_types, merged_span_map)
-        } else {
-            let node_types: HashMap<_, _> = user_node_types.iter().cloned().collect();
-            (user_module.clone(), node_types, user_span_map)
+        // Prepend prelude decls before user decls
+        let mut merged_ast = DeclTable::<TypedRef<'db>> {
+            id: user_module.id,
+            name: user_module.name.clone(),
+            entries: prelude_module_ast.entries.clone(),
         };
+        merged_ast
+            .entries
+            .extend(user_module.entries.iter().cloned());
+
+        // Merge span maps (user overrides prelude on conflict)
+        let merged_span_map = user_span_map.merge(&prelude_span_map);
+
+        (merged_ast, merged_span_map)
+    } else {
+        (user_module.clone(), user_span_map)
+    };
 
     let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(&merged_module) {
         Ok(registered) => registered,
@@ -479,110 +480,15 @@ fn prepare_frontend_details<'db>(
         }
     };
 
-    let mut function_instances: HashMap<_, _> = prelude_module(db)
-        .map(|prelude| {
-            prelude
-                .expression_types(db)
-                .function_instances
-                .iter()
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-    function_instances.extend(
-        typed
-            .expression_types(db)
-            .function_instances
-            .iter()
-            .cloned(),
-    );
     // Monomorphize generic functions
     let mono_result = tribute_front::monomorphize::monomorphize_functions(
         db,
         merged_module,
         merged_fn_types,
         tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: declarations
-                .constructor_types
-                .schemes
-                .iter()
-                .cloned()
-                .collect(),
-            specialized_enum_variants: declarations
-                .constructor_types
-                .specialized_enum_variants
-                .iter()
-                .cloned()
-                .collect(),
-            node_types: merged_node_types,
-            local_instances: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| prelude.expression_types(db).local_instances.clone())
-                .chain(typed.expression_types(db).local_instances.iter().cloned())
-                .collect(),
-            function_instances,
-            evidence_plans: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| prelude.expression_types(db).evidence_plans.clone())
-                .chain(typed.expression_types(db).evidence_plans.iter().cloned())
-                .collect(),
-            handler_operations: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| {
-                    prelude
-                        .expression_types(db)
-                        .handler_operations
-                        .iter()
-                        .cloned()
-                })
-                .chain(
-                    typed
-                        .expression_types(db)
-                        .handler_operations
-                        .iter()
-                        .cloned(),
-                )
-                .collect(),
-            perform_operations: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| {
-                    prelude
-                        .expression_types(db)
-                        .perform_operations
-                        .iter()
-                        .cloned()
-                })
-                .chain(
-                    typed
-                        .expression_types(db)
-                        .perform_operations
-                        .iter()
-                        .cloned(),
-                )
-                .collect(),
-            lambda_signatures: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| {
-                    prelude
-                        .expression_types(db)
-                        .lambda_signatures
-                        .iter()
-                        .cloned()
-                })
-                .chain(typed.expression_types(db).lambda_signatures.iter().cloned())
-                .collect(),
-            exhaustive_cases: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| {
-                    prelude
-                        .expression_types(db)
-                        .exhaustive_cases
-                        .iter()
-                        .copied()
-                })
-                .chain(typed.expression_types(db).exhaustive_cases.iter().copied())
-                .collect(),
-            compiler_intrinsics,
+            constructor_types: declarations.constructor_types.clone(),
+            expressions,
+            compiler_intrinsics: compiler_intrinsics.into_iter().collect(),
         },
     );
     let mono_result = match mono_result {
@@ -603,49 +509,20 @@ fn prepare_frontend_details<'db>(
             return None;
         }
     };
-    let mut exhaustive_cases: Vec<_> = mono_result.metadata.exhaustive_cases.into_iter().collect();
-    exhaustive_cases.sort();
-    let compiler_intrinsics = mono_result.metadata.compiler_intrinsics;
+    let metadata = mono_result.metadata;
     let typed = ast_typeck::TypeCheckOutput::new(
         db,
         mono_result.module,
         ast_typeck::DeclarationTypeMetadata {
             function_types: mono_result.function_types,
-            constructor_types: ast_typeck::ConstructorTypeMetadata {
-                schemes: mono_result.metadata.constructor_types.into_iter().collect(),
-                specialized_enum_variants: mono_result
-                    .metadata
-                    .specialized_enum_variants
-                    .into_iter()
-                    .collect(),
-            },
-            ability_definitions: declarations.ability_definitions.clone(),
+            constructor_types: metadata.constructor_types,
+            ability_definitions: declarations.ability_definitions,
             well_known_types: declarations.well_known_types,
         },
-        ast_typeck::ExpressionTypeMetadata {
-            node_types: mono_result.metadata.node_types.into_iter().collect(),
-            function_instances: mono_result
-                .metadata
-                .function_instances
-                .into_iter()
-                .collect(),
-            local_instances: mono_result.metadata.local_instances.into_iter().collect(),
-            evidence_plans: mono_result.metadata.evidence_plans.into_iter().collect(),
-            handler_operations: mono_result
-                .metadata
-                .handler_operations
-                .into_iter()
-                .collect(),
-            perform_operations: mono_result
-                .metadata
-                .perform_operations
-                .into_iter()
-                .collect(),
-            lambda_signatures: mono_result.metadata.lambda_signatures.into_iter().collect(),
-            exhaustive_cases,
-        },
+        metadata.expressions,
         merged_span_map,
     );
+    let compiler_intrinsics = metadata.compiler_intrinsics.into_iter().collect();
     Some(PreparedFrontend {
         typed,
         compiler_intrinsics,
