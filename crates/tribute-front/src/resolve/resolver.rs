@@ -853,6 +853,7 @@ impl<'db> Resolver<'db> {
         &mut self,
         module: &Module<UnresolvedName>,
     ) -> DeclTable<ResolvedRef<'db>> {
+        self.report_repeated_definitions(&module.decls);
         self.report_field_lens_redefinitions(&module.decls);
         let mut entries = Vec::new();
         self.resolve_items(&module.decls, &mut entries);
@@ -907,6 +908,7 @@ impl<'db> Resolver<'db> {
         module: &crate::ast::ModuleDecl<UnresolvedName>,
         entries: &mut Vec<DeclEntry<ResolvedRef<'db>>>,
     ) {
+        self.report_repeated_definitions(module.body.as_deref().unwrap_or_default());
         self.report_field_lens_redefinitions(module.body.as_deref().unwrap_or_default());
         // For inline modules, recursively resolve nested declarations
         self.module_path.push(module.name.clone());
@@ -982,6 +984,27 @@ impl<'db> Resolver<'db> {
         self.module_path.pop();
     }
 
+    /// Report each declaration that repeats the name of an earlier one in its
+    /// module, and record it as a redefinition. The earlier declaration is
+    /// the definition.
+    fn report_repeated_definitions(&mut self, items: &[ModuleItem<UnresolvedName>]) {
+        for repeat in super::repeated_definitions(items) {
+            Diagnostic::builder(
+                format!("duplicate definition of `{}`", repeat.name),
+                self.span_map.get_or_default(repeat.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::NameResolution,
+            )
+            .label(
+                self.span_map.get_or_default(repeat.earlier),
+                "first defined here",
+            )
+            .build()
+            .accumulate(self.db);
+            self.redefinitions.push(repeat.id);
+        }
+    }
+
     /// Report a companion module that declares a function the struct beside
     /// it already has, `T::f::set` or `T::f::modify` for a named field `f`,
     /// and record the function as a redefinition.
@@ -995,7 +1018,8 @@ impl<'db> Resolver<'db> {
                 .iter()
                 .filter_map(|item| match item {
                     ModuleItem::Decl(Decl::Struct(declaration))
-                        if declaration.name == companion.name =>
+                        if declaration.name == companion.name
+                            && !self.redefinitions.contains(&declaration.id) =>
                     {
                         Some(&declaration.fields)
                     }
@@ -1041,19 +1065,20 @@ impl<'db> Resolver<'db> {
     }
 
     /// Resolve the items of a module body into `entries`, without the
-    /// functions reported as redefinitions.
+    /// declarations reported as redefinitions.
     fn resolve_items(
         &mut self,
         items: &[ModuleItem<UnresolvedName>],
         entries: &mut Vec<DeclEntry<ResolvedRef<'db>>>,
     ) {
         for item in items {
+            if let ModuleItem::Decl(decl) = item
+                && self.is_redefinition(decl)
+            {
+                continue;
+            }
             self.report_visibility_path(item);
             match item {
-                ModuleItem::Decl(Decl::Function(function))
-                    if self.redefinitions.contains(&function.id) => {}
-                ModuleItem::Decl(Decl::ExternFunction(function))
-                    if self.redefinitions.contains(&function.id) => {}
                 ModuleItem::Decl(decl) => {
                     let decl = self.resolve_decl(decl);
                     entries.push(DeclEntry {
@@ -1064,6 +1089,19 @@ impl<'db> Resolver<'db> {
                 ModuleItem::Module(module) => self.resolve_module_decl(module, entries),
             }
         }
+    }
+
+    /// Whether `decl` was reported as a redefinition.
+    fn is_redefinition(&self, decl: &Decl<UnresolvedName>) -> bool {
+        let id = match decl {
+            Decl::Function(f) => f.id,
+            Decl::ExternFunction(f) => f.id,
+            Decl::Struct(s) => s.id,
+            Decl::Enum(e) => e.id,
+            Decl::Ability(a) => a.id,
+            Decl::Use(_) => return false,
+        };
+        self.redefinitions.contains(&id)
     }
 
     /// Report a `pub(path)` marker on `item` whose path names neither the
