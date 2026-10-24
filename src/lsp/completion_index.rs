@@ -190,11 +190,10 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
     }
     for (ty, name) in tribute::library_constructors(db) {
         items.push(AstCompletionItem {
-            detail: Some(if ty == name {
-                format!("{}::{ty}", tribute_front::resolve::LIBRARY_PACKAGE)
-            } else {
-                format!("{}::{ty}::{name}", tribute_front::resolve::LIBRARY_PACKAGE)
-            }),
+            detail: Some(format!(
+                "{}::{ty}::{name}",
+                tribute_front::resolve::LIBRARY_PACKAGE
+            )),
             name,
             kind: CompletionKind::Constructor,
             module: None,

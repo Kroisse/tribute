@@ -1476,6 +1476,7 @@ mod tests {
         // `..` is a spread, and no `.` is no constructor.
         assert!(!at("User { ..|"));
         assert!(!at("let x = |"));
+        assert!(!at("|"));
     }
 
     #[test]
