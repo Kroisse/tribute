@@ -392,9 +392,8 @@ fn main() -> Nil {
         .Some(n) -> n
         .None -> 0
     }
+    let _ = m::library::Option::Some(1)
 }
-
-fn through_alias(o: m::library::Option(Nat)) -> Nat { 0 }
 "#,
     );
     assert_eq!(
@@ -469,5 +468,107 @@ mod m {
             "unresolved name `nope::T`",
             "unresolved name `std::Nope`",
         ]
+    );
+}
+
+/// A path continues through a re-export into the re-exported item's
+/// namespace, unless the re-export is hidden from where the path is.
+#[salsa_test]
+fn paths_continue_through_a_re_export(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod a {
+    pub mod m {
+        pub use std as library
+        pub(super) use std as internal
+    }
+
+    fn inside() -> Option(Nat) { m::internal::Option::Some(1) }
+}
+
+fn variant() -> Option(Nat) { a::m::library::Option::Some(1) }
+fn function() -> Nat { a::m::library::Option::unwrap_or(Option::Some(1), 0) }
+fn rooted() -> Option(Nat) { pkg::a::m::library::Option::None }
+fn hidden() -> Option(Nat) { a::m::internal::Option::Some(1) }
+"#,
+    );
+    assert_eq!(errors, ["unresolved name `a::m::internal::Option::Some`"]);
+}
+
+/// A path follows a chain of re-exports to the end, however many of them
+/// replace a prefix of the same length.
+#[salsa_test]
+fn paths_continue_through_a_chain_of_re_exports(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod m0 {
+    pub use std as library
+}
+pub mod m1 {
+    pub use pkg::m0::library as library
+}
+pub mod m2 {
+    pub use pkg::m1::library as library
+}
+pub mod m3 {
+    pub use pkg::m2::library as library
+}
+pub mod m4 {
+    pub use pkg::m3::library as library
+}
+
+fn chained() -> Option(Nat) { m4::library::Option::Some(1) }
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}
+
+/// A type annotation continues through a re-export as a value path does.
+#[salsa_test]
+fn annotations_continue_through_a_re_export(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod source {
+    pub mod nested {
+        pub enum E { V }
+    }
+}
+
+mod facade {
+    pub use pkg::source as api
+}
+
+fn make() -> facade::api::nested::E { facade::api::nested::E::V }
+fn take(e: pkg::facade::api::nested::E) -> Nat { 0 }
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}
+
+/// A re-export that names a module inside the one it shares its name with
+/// does not make a path grow without end.
+#[salsa_test]
+fn a_re_export_into_its_namesake_ends_the_path(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod m {
+    pub mod a {
+        pub mod b {
+            pub fn f() -> Nat { 0 }
+        }
+    }
+    pub use pkg::m::a::b as a
+}
+
+fn missing() -> Nat { pkg::m::a::missing::f() }
+"#,
+    );
+    assert!(
+        errors.contains(&"unresolved name `pkg::m::a::missing::f`".to_owned()),
+        "{errors:?}"
     );
 }
