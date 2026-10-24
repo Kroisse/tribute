@@ -20,48 +20,174 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use self::instance::InstanceKey;
 use crate::SortedMap;
+use crate::ast::SpanMap;
 use crate::ast::{
     AbilityRow, CtorId, Decl, DeclTable, FuncDefId, NodeId, Type, TypeScheme, TypedRef,
 };
 use crate::typeck::subst::{BoundVarOutOfBounds, substitute_ability_row, substitute_bound_vars};
 use crate::typeck::{
-    ConstructorTypeMetadata, ExpressionTypeMetadata, InstantiatedHandlerOperation,
-    InstantiatedPerformOperation, LambdaSignature,
+    ConstructorTypeMetadata, DeclarationTypeMetadata, ExpressionTypeMetadata,
+    InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature, TypeCheckOutput,
 };
 
 const MAX_TRANSITIVE_SPECIALIZATION_ROUNDS: usize = 64;
 
-/// The metadata specialization reads and extends: the type-check output's
-/// own groups, with the compiler intrinsic identities.
-pub struct MonomorphizeMetadata<'db> {
-    pub constructor_types: ConstructorTypeMetadata<'db>,
-    pub expressions: ExpressionTypeMetadata<'db>,
-    /// Exact base identities transported to generated generic extern declarations.
-    ///
-    /// This is specialization metadata, not source-provenance or ownership data.
-    pub compiler_intrinsics: SortedMap<NodeId, Symbol>,
+/// What specialization reads: one checked module, with the declarations of
+/// the package it depends on for lookup and, when merged, that package's
+/// bodies and per-expression metadata ahead of its own
+/// (`new-plans/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
+pub struct SpecializationInput<'db> {
+    module: DeclTable<TypedRef<'db>>,
+    declarations: DeclarationTypeMetadata<'db>,
+    expressions: ExpressionTypeMetadata<'db>,
+    compiler_intrinsics: SortedMap<NodeId, Symbol>,
+    span_map: SpanMap,
 }
 
-/// Result of monomorphization: updated module + function types.
-pub struct MonomorphizeResult<'db> {
+impl<'db> SpecializationInput<'db> {
+    /// The checked module, with the declarations of `dependency` under its
+    /// own.
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        checked: TypeCheckOutput<'db>,
+        dependency: Option<TypeCheckOutput<'db>>,
+    ) -> Self {
+        let declarations = match dependency {
+            Some(dependency) => checked
+                .declarations(db)
+                .after_dependency(dependency.declarations(db)),
+            None => checked.declarations(db).clone(),
+        };
+        Self {
+            module: checked.module(db).clone(),
+            declarations,
+            expressions: checked.expression_types(db).clone(),
+            compiler_intrinsics: SortedMap::default(),
+            span_map: checked.span_map(db),
+        }
+    }
+
+    /// Specialize `dependency`'s bodies too: its declarations come first in
+    /// the module, and its per-expression metadata and source spans under
+    /// this module's.
+    pub fn merge_bodies(
+        mut self,
+        db: &'db dyn salsa::Database,
+        dependency: TypeCheckOutput<'db>,
+    ) -> Self {
+        let mut entries = dependency.module(db).entries.clone();
+        entries.append(&mut self.module.entries);
+        self.module.entries = entries;
+        self.expressions = self
+            .expressions
+            .after_dependency(dependency.expression_types(db));
+        self.span_map = self.span_map.merge(&dependency.span_map(db));
+        self
+    }
+
+    /// Carry the compiler intrinsic identities of the module's declarations.
+    pub fn with_compiler_intrinsics(
+        mut self,
+        intrinsics: impl IntoIterator<Item = (NodeId, Symbol)>,
+    ) -> Self {
+        self.compiler_intrinsics = intrinsics.into_iter().collect();
+        self
+    }
+
+    /// The declaration table specialization starts from.
+    pub fn module(&self) -> &DeclTable<TypedRef<'db>> {
+        &self.module
+    }
+
+    pub fn declarations(&self) -> &DeclarationTypeMetadata<'db> {
+        &self.declarations
+    }
+
+    pub fn span_map(&self) -> &SpanMap {
+        &self.span_map
+    }
+}
+
+/// The specialization result, the only input the lowering input is built
+/// from: the declaration table with the concrete instances added, the
+/// metadata substituted with it, and the compiler intrinsic identities.
+#[salsa::tracked]
+pub struct SpecializedFrontend<'db> {
     pub module: DeclTable<TypedRef<'db>>,
-    pub function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
-    pub metadata: MonomorphizeMetadata<'db>,
+    pub declarations: DeclarationTypeMetadata<'db>,
+    pub expression_types: ExpressionTypeMetadata<'db>,
+    /// Exact base identities transported to generated generic extern
+    /// declarations. This is specialization metadata, not source-provenance
+    /// or ownership data.
+    pub compiler_intrinsics: SortedMap<NodeId, Symbol>,
+    #[returns(clone)]
+    pub span_map: SpanMap,
 }
 
-/// Run monomorphization on a typed module.
-///
-/// This is the main entry point that:
-/// 1. Collects all generic function/type instantiations
-/// 2. Generates specialized copies with concrete types
-/// 3. Rewrites call sites and type references to use specialized versions
-/// 4. Appends specialized functions/types to the module
+/// The metadata specialization reads and extends.
+struct MonomorphizeMetadata<'db> {
+    constructor_types: ConstructorTypeMetadata<'db>,
+    expressions: ExpressionTypeMetadata<'db>,
+    compiler_intrinsics: SortedMap<NodeId, Symbol>,
+}
+
+/// Specialize `input`: collect every generic function and type
+/// instantiation it reaches, generate concrete copies, rewrite call sites
+/// and type references to them, and append them to the module.
 pub fn monomorphize_functions<'db>(
+    db: &'db dyn salsa::Database,
+    input: SpecializationInput<'db>,
+) -> Result<SpecializedFrontend<'db>, Vec<InstanceError>> {
+    let SpecializationInput {
+        module,
+        declarations,
+        expressions,
+        compiler_intrinsics,
+        span_map,
+    } = input;
+    let DeclarationTypeMetadata {
+        function_types,
+        constructor_types,
+        ability_definitions,
+        well_known_types,
+    } = declarations;
+    let (module, function_types, metadata) = monomorphize(
+        db,
+        module,
+        function_types.into_iter().collect(),
+        MonomorphizeMetadata {
+            constructor_types,
+            expressions,
+            compiler_intrinsics,
+        },
+    )?;
+    Ok(SpecializedFrontend::new(
+        db,
+        module,
+        DeclarationTypeMetadata {
+            function_types,
+            constructor_types: metadata.constructor_types,
+            ability_definitions,
+            well_known_types,
+        },
+        metadata.expressions,
+        metadata.compiler_intrinsics,
+        span_map,
+    ))
+}
+
+type Monomorphized<'db> = (
+    DeclTable<TypedRef<'db>>,
+    Vec<(SymbolPath, TypeScheme<'db>)>,
+    MonomorphizeMetadata<'db>,
+);
+
+fn monomorphize<'db>(
     db: &'db dyn salsa::Database,
     module: DeclTable<TypedRef<'db>>,
     function_types: HashMap<SymbolPath, TypeScheme<'db>>,
     mut metadata: MonomorphizeMetadata<'db>,
-) -> Result<MonomorphizeResult<'db>, Vec<InstanceError>> {
+) -> Result<Monomorphized<'db>, Vec<InstanceError>> {
     // Cloning finds exhaustive cases by binary search.
     metadata.expressions.exhaustive_cases.sort();
     metadata.expressions.exhaustive_cases.dedup();
@@ -359,11 +485,7 @@ pub fn monomorphize_functions<'db>(
         module
     };
 
-    Ok(MonomorphizeResult {
-        module,
-        function_types: fn_types_vec,
-        metadata,
-    })
+    Ok((module, fn_types_vec, metadata))
 }
 
 fn specialize_metadata<'db>(

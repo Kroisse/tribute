@@ -560,3 +560,83 @@ pub fn typecheck_module<'db>(
     let checker = TypeChecker::new(db, span_map.clone());
     TypeCheckOutput::from_check(db, checker.check_module(module), span_map)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::TypeKind;
+
+    fn expressions<'db>(
+        node_types: impl IntoIterator<Item = (NodeId, Type<'db>)>,
+        exhaustive_cases: Vec<NodeId>,
+    ) -> ExpressionTypeMetadata<'db> {
+        ExpressionTypeMetadata {
+            node_types: node_types.into_iter().collect(),
+            function_instances: SortedMap::default(),
+            local_instances: SortedMap::default(),
+            evidence_plans: SortedMap::default(),
+            handler_operations: SortedMap::default(),
+            perform_operations: SortedMap::default(),
+            lambda_signatures: SortedMap::default(),
+            exhaustive_cases,
+        }
+    }
+
+    #[test]
+    fn expression_metadata_layers_over_its_dependency() {
+        let db = salsa::DatabaseImpl::default();
+        let (int, nat) = (Type::new(&db, TypeKind::Int), Type::new(&db, TypeKind::Nat));
+        let [shared, library, own] = [1, 2, 3].map(NodeId::from_raw);
+        let dependency = expressions([(shared, int), (library, int)], vec![library, shared]);
+        let module = expressions([(shared, nat), (own, nat)], vec![own]);
+
+        let layered = module.after_dependency(&dependency);
+        assert_eq!(
+            &*layered.node_types,
+            [(shared, nat), (library, int), (own, nat)]
+        );
+        assert_eq!(layered.exhaustive_cases, [shared, library, own]);
+    }
+
+    #[test]
+    fn declaration_metadata_layers_over_its_dependency() {
+        let db = salsa::DatabaseImpl::default();
+        let scheme = |kind| TypeScheme::mono(&db, Type::new(&db, kind));
+        let declarations = |function_types, well_known_types| DeclarationTypeMetadata {
+            function_types,
+            constructor_types: ConstructorTypeMetadata::default(),
+            ability_definitions: Vec::new(),
+            well_known_types,
+        };
+        let path = |name: &str| SymbolPath::new(["std", name]);
+        let well_known = WellKnownTypes {
+            string_equality: Some(FuncDefId::new(&db, path("eq"))),
+            ..WellKnownTypes::empty()
+        };
+        let dependency = declarations(
+            vec![
+                (path("a"), scheme(TypeKind::Int)),
+                (path("b"), scheme(TypeKind::Int)),
+            ],
+            well_known,
+        );
+        let module = declarations(
+            vec![
+                (path("b"), scheme(TypeKind::Nat)),
+                (SymbolPath::new(["c"]), scheme(TypeKind::Nat)),
+            ],
+            WellKnownTypes::empty(),
+        );
+
+        let layered = module.after_dependency(&dependency);
+        assert_eq!(
+            layered.function_types,
+            [
+                (path("a"), scheme(TypeKind::Int)),
+                (path("b"), scheme(TypeKind::Nat)),
+                (SymbolPath::new(["c"]), scheme(TypeKind::Nat)),
+            ]
+        );
+        assert_eq!(layered.well_known_types, well_known);
+    }
+}
