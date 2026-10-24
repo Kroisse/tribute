@@ -1,4 +1,4 @@
-extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+use std::io::{Io, print_line}
 
 enum BoxedNat {
     Boxed(Nat)
@@ -20,6 +20,6 @@ fn read_root(boxed: BoxedNat) -> Nat {
     read_middle(boxed) + read_middle(boxed)
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(read_root(.Boxed(10)))
+fn main() ->{Io} Nil {
+    print_line(read_root(.Boxed(10)).to_string)
 }

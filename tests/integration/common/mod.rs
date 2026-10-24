@@ -255,15 +255,14 @@ pub fn compile_and_run_native_with_closed_stdin(source_name: &str, source_code: 
 
 /// Extern declarations for print intrinsics, prepended to test source code.
 pub const PRINT_EXTERNS: &str = "\
-extern \"C\" fn __tribute_print_nat(value: Nat) -> Nil
 extern \"C\" fn __tribute_print_int(value: Int) -> Nil
 extern \"C\" fn __tribute_print_float(value: Float) -> Nil
 ";
 
 /// Run a native test and assert that stdout matches the expected output.
 ///
-/// Automatically prepends extern declarations for `__tribute_print_nat`
-/// and `__tribute_print_int`.
+/// Automatically prepends extern declarations for `__tribute_print_int`
+/// and `__tribute_print_float`.
 #[allow(dead_code)]
 pub fn assert_native_output(source_name: &str, source_code: &str, expected_stdout: &str) {
     let full_source = format!("{PRINT_EXTERNS}\n{source_code}");
@@ -490,35 +489,6 @@ fn compile_native_test_binary_impl(
         NativeTestBinary::from_object_bytes(object_bytes)
     })
 }
-
-/// Tribute source defining `print_nat`, which prints a `Nat` in decimal
-/// followed by a newline on every target, unlike the native-only
-/// `__tribute_print_nat` intrinsic.
-#[allow(dead_code)]
-pub const PRINT_NAT: &str = r#"
-fn nat_text(n: Nat) -> String {
-    let digit = case n % 10 {
-        0 -> "0"
-        1 -> "1"
-        2 -> "2"
-        3 -> "3"
-        4 -> "4"
-        5 -> "5"
-        6 -> "6"
-        7 -> "7"
-        8 -> "8"
-        _ -> "9"
-    }
-    case n < 10 {
-        True -> digit
-        False -> nat_text(n / 10) <> digit
-    }
-}
-
-fn print_nat(n: Nat) ->{std::io::Io} Nil {
-    std::io::print_line(nat_text(n))
-}
-"#;
 
 /// Compile Tribute source code to a Wasm module and run it with wasmtime.
 ///

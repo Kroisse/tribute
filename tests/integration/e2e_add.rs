@@ -21,10 +21,11 @@ fn test_add_compiles_and_runs() {
     assert_native_output(
         "add.trb",
         r#"
+use std::io::{Io, print_line}
 fn add(x: Nat, y: Nat) -> Nat { x + y }
 
-fn main() -> Nil {
-    __tribute_print_nat(add(40, 2))
+fn main() ->{Io} Nil {
+    print_line(add(40, 2).to_string)
 }
 "#,
         "42",
@@ -38,10 +39,11 @@ fn test_generic_int_identity() {
     assert_native_output(
         "int_identity.trb",
         r#"
+use std::io::{Io, print_line}
 fn identity(x: a) ->{} a { x }
 
-fn main() -> Nil {
-    __tribute_print_nat(identity(42))
+fn main() ->{Io} Nil {
+    print_line(identity(42).to_string)
 }
 "#,
         "42",
@@ -54,11 +56,12 @@ fn test_struct_construction() {
     assert_native_output(
         "struct_construction.trb",
         r#"
+use std::io::{Io, print_line}
 struct Point { x: Nat, y: Nat }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
-    __tribute_print_nat(42)
+    print_line(42.to_string)
 }
 "#,
         "42",
@@ -71,11 +74,12 @@ fn test_struct_accessor() {
     assert_native_output(
         "struct_accessor.trb",
         r#"
+use std::io::{Io, print_line}
 struct Point { x: Nat, y: Nat }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
-    __tribute_print_nat(p.x())
+    print_line(p.x().to_string)
 }
 "#,
         "10",
@@ -112,14 +116,15 @@ fn test_generic_struct_argument() {
     assert_native_output(
         "generic_struct.trb",
         r#"
+use std::io::{Io, print_line}
 struct Point { x: Nat, y: Nat }
 
 fn identity(x: a) ->{} a { x }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
     let p2 = identity(p)
-    __tribute_print_nat(p2.x())
+    print_line(p2.x().to_string)
 }
 "#,
         "10",
@@ -132,12 +137,13 @@ fn test_generic_multiple_types() {
     assert_native_output(
         "generic_multiple.trb",
         r#"
+use std::io::{Io, print_line}
 fn identity(x: a) ->{} a { x }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let i = identity(42)
     let _ = identity(3.14)
-    __tribute_print_nat(i)
+    print_line(i.to_string)
 }
 "#,
         "42",
@@ -150,10 +156,11 @@ fn test_generic_two_params() {
     assert_native_output(
         "generic_two_params.trb",
         r#"
+use std::io::{Io, print_line}
 fn first(x: a, y: b) ->{} a { x }
 
-fn main() -> Nil {
-    __tribute_print_nat(first(10, 3.14))
+fn main() ->{Io} Nil {
+    print_line(first(10, 3.14).to_string)
 }
 "#,
         "10",
@@ -166,10 +173,11 @@ fn test_generic_nested_calls() {
     assert_native_output(
         "generic_nested.trb",
         r#"
+use std::io::{Io, print_line}
 fn identity(x: a) ->{} a { x }
 
-fn main() -> Nil {
-    __tribute_print_nat(identity(identity(identity(42))))
+fn main() ->{Io} Nil {
+    print_line(identity(identity(identity(42))).to_string)
 }
 "#,
         "42",
@@ -704,9 +712,10 @@ fn test_closure_execution_simple() {
     assert_native_output(
         "closure_exec_simple.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let f = fn(x) { x + 1 }
-    __tribute_print_nat(f(41))
+    print_line(f(41).to_string)
 }
 "#,
         "42",

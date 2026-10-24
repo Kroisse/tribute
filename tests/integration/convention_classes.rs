@@ -788,14 +788,14 @@ fn returned_callback_keeps_its_cps_convention_after_pure_let(db: &salsa::Databas
         db,
         "returned_callback_preserves_cps_convention_after_pure_let.trb",
         r#"
-extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+fn consume(value: Nat) -> Nil { Nil }
 
 fn identity(f: fn(Nat) ->{e} Nat) -> fn(Nat) ->{e} Nat { f }
 
 fn main() -> Nil {
     let f = identity(fn(x: Nat) { x + 10 })
     let result = f(5)
-    __tribute_print_nat(result)
+    consume(result)
 }
 "#,
     );

@@ -20,7 +20,9 @@ use common::{assert_native_output, assert_output_on_both_targets};
 /// can perform State operations.
 #[test]
 fn test_ability_row_poly_higher_order_function_slow() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -37,14 +39,14 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_state(fn() {
         apply(fn(x: Nat) {
             State::set(x)
             State::get()
         }, 7)
     }, 0)
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     // apply calls the callback with x=7, which does set(7), get() → 7
@@ -57,7 +59,9 @@ fn main() -> Nil {
 /// so `e` is instantiated to `{State(Nat), Reader(Nat)}`.
 #[test]
 fn test_ability_row_poly_multiple_abilities() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -85,7 +89,7 @@ fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_reader(fn() {
         run_state(fn() {
             apply(fn() {
@@ -95,7 +99,7 @@ fn main() -> Nil {
             })
         }, 0)
     }, 42)
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     // callback: ask() → 42, set(42), get() → 42
@@ -108,13 +112,15 @@ fn main() -> Nil {
 /// `e` is instantiated to `{}` (empty row), so no handler is needed.
 #[test]
 fn test_ability_row_poly_pure_for_effectful() {
-    let code = r#"fn apply(f: fn(Nat) ->{e} Nat, x: Nat) ->{e} Nat {
+    let code = r#"use std::io::{Io, print_line}
+
+fn apply(f: fn(Nat) ->{e} Nat, x: Nat) ->{e} Nat {
     f(x)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = apply(fn(x: Nat) { x + 10 }, 5)
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     // pure lambda: 5 + 10 = 15, no handler needed
@@ -127,7 +133,9 @@ fn main() -> Nil {
 /// `e = {Reader(Nat)}`. Each call site independently instantiates the row variable.
 #[test]
 fn test_ability_row_poly_unification_across_call_sites_slow() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -155,18 +163,18 @@ fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     // call 1: e = {State(Nat)}
     let a = run_state(fn() {
         apply(fn() { State::get() })
     }, 10)
-    __tribute_print_nat(a)
+    print_line(a.to_string)
 
     // call 2: e = {Reader(Nat)}
     let b = run_reader(fn() {
         apply(fn() { Reader::ask() })
     }, 20)
-    __tribute_print_nat(b)
+    print_line(b.to_string)
 }
 "#;
     // call 1: get() with State(init=10) → 10
@@ -181,14 +189,16 @@ fn main() -> Nil {
 /// with a closure obtained from a function return value.
 #[test]
 fn test_returned_closure_call() {
-    let code = r#"fn identity(f: fn(Nat) ->{e} Nat) -> fn(Nat) ->{e} Nat {
+    let code = r#"use std::io::{Io, print_line}
+
+fn identity(f: fn(Nat) ->{e} Nat) -> fn(Nat) ->{e} Nat {
     f
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let f = identity(fn(x: Nat) { x + 10 })
     let result = f(5)
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     // identity returns the lambda, f(5) = 5 + 10 = 15
@@ -202,7 +212,9 @@ fn main() -> Nil {
 /// function type selects its own specialization.
 #[test]
 fn test_specializations_distinguish_function_argument_ability_rows() {
-    let code = r#"ability Ask {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Ask {
     op ask() -> Nat
 }
 
@@ -232,8 +244,8 @@ fn told() -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(asked() + told())
+fn main() ->{Io} Nil {
+    print_line({ asked() + told() }.to_string)
 }
 "#;
     // ask() → 40, tell() → 2
@@ -245,6 +257,8 @@ fn main() -> Nil {
 #[test]
 fn test_ability_row_method_resolved_after_solving() {
     let code = r#"
+use std::io::{Io, print_line}
+
 ability Ask {
     op ask() -> Nat
 }
@@ -263,12 +277,12 @@ fn run() ->{Ask} Nat {
     callback(Box { value: 1 }) + direct(Box { value: 1 })
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let total = handle run() {
         do result { result }
         op Ask::ask() { resume 20 }
     }
-    __tribute_print_nat(total)
+    print_line(total.to_string)
 }
 "#;
     // each(bump) → 1 + 20, asks() → 1 + 20

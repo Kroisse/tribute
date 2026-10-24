@@ -14,7 +14,7 @@ use crate::common;
 #[cfg(unix)]
 use common::compile_and_run_native_with_closed_stdin;
 use common::{
-    PRINT_NAT, assert_native_output, assert_output_on_both_targets,
+    assert_native_output, assert_output_on_both_targets,
     assert_output_on_both_targets_with_native_asan, compile_and_run_native,
     compile_and_run_native_asan, compile_and_run_native_with_stdin,
 };
@@ -142,8 +142,10 @@ fn test_native_arithmetic() {
     assert_native_output(
         "arithmetic.trb",
         r#"
-fn main() -> Nil {
-    __tribute_print_nat(10 + 20 + 3)
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    print_line({{ 10 + 20 + 3 }}.to_string)
 }
 "#,
         "33",
@@ -155,6 +157,8 @@ fn test_native_path_keywords() {
     assert_native_output(
         "path_keywords.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn base() -> Nat { 1 }
 
 mod outer {
@@ -167,8 +171,8 @@ mod outer {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(self::outer::inner::sum())
+fn main() ->{Io} Nil {
+    print_line(self::outer::inner::sum().to_string)
 }
 "#,
         "111",
@@ -181,11 +185,11 @@ fn test_native_extern_c_in_module_links_by_declared_name() {
         "extern_c_in_module.trb",
         r#"
 mod ffi {
-    pub extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+    pub extern "C" fn __tribute_print_int(value: Int) -> Nil
 }
 
 fn main() -> Nil {
-    ffi::__tribute_print_nat(7)
+    ffi::__tribute_print_int(+7)
 }
 "#,
     );
@@ -202,6 +206,8 @@ fn test_native_user_enum_shadows_prelude_type() {
     assert_native_output(
         "user_option.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Option(a) {
     None,
     Some(a)
@@ -211,10 +217,10 @@ fn wrap(x: Nat) -> Option(Nat) {
     .Some(x)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     case wrap(5) {
-        .Some(n) -> __tribute_print_nat(n)
-        .None -> __tribute_print_nat(0)
+        .Some(n) -> print_line(n.to_string)
+        .None -> print_line(0.to_string)
     }
 }
 "#,
@@ -227,6 +233,8 @@ fn test_native_shadowed_prelude_type_by_package_path() {
     assert_native_output(
         "shadowed_option_path.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Option(a) {
     None,
     Some(a)
@@ -236,14 +244,14 @@ fn mine(x: Nat) -> Option(Nat) { .Some(x) }
 
 fn theirs(x: Nat) -> std::Option(Nat) { std::Option::Some(x) }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     case theirs(1) {
-        std::Option::Some(n) -> __tribute_print_nat(n)
-        std::Option::None -> __tribute_print_nat(0)
+        std::Option::Some(n) -> print_line(n.to_string)
+        std::Option::None -> print_line(0.to_string)
     }
     case mine(2) {
-        .Some(n) -> __tribute_print_nat(n)
-        .None -> __tribute_print_nat(0)
+        .Some(n) -> print_line(n.to_string)
+        .None -> print_line(0.to_string)
     }
 }
 "#,
@@ -256,16 +264,18 @@ fn test_native_user_function_beside_prelude_function_of_the_same_path() {
     assert_native_output(
         "user_option_map.trb",
         r#"
+use std::io::{Io, print_line}
+
 pub mod Option {
     pub fn map(x: Nat) -> Nat { x + 1 }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(Option::map(1))
+fn main() ->{Io} Nil {
+    print_line(Option::map(1).to_string)
     let doubled = .Some(3).std::Option::map(fn(n) { n * 2 })
     case doubled {
-        .Some(n) -> __tribute_print_nat(n)
-        .None -> __tribute_print_nat(0)
+        .Some(n) -> print_line(n.to_string)
+        .None -> print_line(0.to_string)
     }
 }
 "#,
@@ -278,12 +288,14 @@ fn test_native_function_call() {
     assert_native_output(
         "function_call.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn add(a: Nat, b: Nat) -> Nat {
     a + b
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(add(10, 20))
+fn main() ->{Io} Nil {
+    print_line(add(10, 20).to_string)
 }
 "#,
         "30",
@@ -295,6 +307,8 @@ fn test_native_generic_specializations_distinguish_same_spelled_source_types() {
     assert_native_output(
         "generic_same_spelled_source_types.trb",
         r#"
+use std::io::{Io, print_line}
+
 pub mod A {
     pub struct Thing { value: Nat }
 }
@@ -310,10 +324,10 @@ fn keep(value: a) -> a {
 fn accept_a(_value: A::Thing) -> Nil {}
 fn accept_b(_value: B::Thing) -> Nil {}
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     accept_a(keep(A::Thing { value: 1 }))
     accept_b(keep(B::Thing { value: 2 }))
-    __tribute_print_nat(3)
+    print_line(3.to_string)
 }
 "#,
         "3",
@@ -325,6 +339,8 @@ fn test_native_nested_generic_types_keep_declaration_identity() {
     assert_native_output(
         "nested_generic_nominal_identity.trb",
         r#"
+use std::io::{Io, print_line}
+
 pub mod A {
     pub struct Token(a) {}
 
@@ -341,11 +357,11 @@ pub mod B {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let a = A::Token {}
     let b = B::Token {}
-    __tribute_print_nat(a.tag())
-    __tribute_print_nat(b.tag())
+    print_line(a.tag().to_string)
+    print_line(b.tag().to_string)
 }
 "#,
         "1\n12",
@@ -357,10 +373,12 @@ fn test_native_let_binding() {
     assert_native_output(
         "let_binding.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let a = 10
     let b = 20
-    __tribute_print_nat(a + b)
+    print_line({ a + b }.to_string)
 }
 "#,
         "30",
@@ -372,16 +390,18 @@ fn test_native_list_literal_evaluates_left_to_right_once() {
     assert_native_output(
         "list_literal_order.trb",
         r#"
-fn mark(value: Nat) -> Nat {
-    __tribute_print_nat(value)
+use std::io::{Io, print_line}
+
+fn mark(value: Nat) ->{Io} Nat {
+    print_line(value.to_string)
     value
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let values = [mark(1), mark(2), mark(3)]
     case values {
         [] -> Nil
-        [head, ..tail] -> __tribute_print_nat(head)
+        [head, ..tail] -> print_line(head.to_string)
     }
 }
 "#,
@@ -394,6 +414,8 @@ fn test_native_list_empty_exact_and_rest_patterns() {
     assert_native_output(
         "list_patterns.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn classify(values: List(Nat)) -> Nat {
     case values {
         [] -> 0
@@ -403,11 +425,11 @@ fn classify(values: List(Nat)) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(classify([]))
-    __tribute_print_nat(classify([4]))
-    __tribute_print_nat(classify([5, 6]))
-    __tribute_print_nat(classify([7, 8, 9]))
+fn main() ->{Io} Nil {
+    print_line(classify([]).to_string)
+    print_line(classify([4]).to_string)
+    print_line(classify([5, 6]).to_string)
+    print_line(classify([7, 8, 9]).to_string)
 }
 "#,
         "0\n4\n11\n7",
@@ -421,6 +443,8 @@ fn test_native_tuple_case_without_catch_all() {
     assert_native_output(
         "tuple_case_without_catch_all.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Item {
     Number(Nat),
     Empty,
@@ -434,10 +458,10 @@ fn value(pair: #(Item, Bool)) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(value(#(.Empty, True)))
-    __tribute_print_nat(value(#(.Number(4), True)))
-    __tribute_print_nat(value(#(.Number(5), False)))
+fn main() ->{Io} Nil {
+    print_line(value(#(.Empty, True)).to_string)
+    print_line(value(#(.Number(4), True)).to_string)
+    print_line(value(#(.Number(5), False)).to_string)
 }
 "#,
         "0\n4\n105",
@@ -450,6 +474,8 @@ fn test_native_nested_variant_case() {
     assert_native_output(
         "nested_variant_case.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn pick(o: Option(Bool)) -> Nat {
     case o {
         .None -> 0
@@ -458,10 +484,10 @@ fn pick(o: Option(Bool)) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(pick(.None))
-    __tribute_print_nat(pick(.Some(True)))
-    __tribute_print_nat(pick(.Some(False)))
+fn main() ->{Io} Nil {
+    print_line(pick(.None).to_string)
+    print_line(pick(.Some(True)).to_string)
+    print_line(pick(.Some(False)).to_string)
 }
 "#,
         "0\n1\n2",
@@ -476,6 +502,8 @@ fn test_native_struct_patterns() {
     assert_native_output(
         "struct_patterns.trb",
         r#"
+use std::io::{Io, print_line}
+
 struct Point { x: Nat, y: Bool }
 
 fn pick(p: Point) -> Nat {
@@ -497,11 +525,11 @@ fn positional(p: Point) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(pick(Point { x: 1, y: True }))
-    __tribute_print_nat(pick(Point { x: 2, y: False }))
-    __tribute_print_nat(first(Point { x: 3, y: True }))
-    __tribute_print_nat(positional(Point { x: 4, y: True }))
+fn main() ->{Io} Nil {
+    print_line(pick(Point { x: 1, y: True }).to_string)
+    print_line(pick(Point { x: 2, y: False }).to_string)
+    print_line(first(Point { x: 3, y: True }).to_string)
+    print_line(positional(Point { x: 4, y: True }).to_string)
 }
 "#,
         "100\n2\n3\n5",
@@ -515,6 +543,8 @@ fn test_native_named_variant_patterns() {
     assert_native_output(
         "named_variant_patterns.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Shape {
     Circle(Nat),
     Rect { width: Nat, tall: Bool },
@@ -528,10 +558,10 @@ fn size(shape: Shape) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(size(.Circle(1)))
-    __tribute_print_nat(size(.Rect(2, True)))
-    __tribute_print_nat(size(.Rect(3, False)))
+fn main() ->{Io} Nil {
+    print_line(size(.Circle(1)).to_string)
+    print_line(size(.Rect(2, True)).to_string)
+    print_line(size(.Rect(3, False)).to_string)
 }
 "#,
         "1\n12\n3",
@@ -544,6 +574,8 @@ fn test_native_generic_struct_pattern() {
     assert_native_output(
         "generic_struct_pattern.trb",
         r#"
+use std::io::{Io, print_line}
+
 struct Pair(a, b) { left: a, right: b }
 
 fn second(pair: Pair(Nat, Nat)) -> Nat {
@@ -551,8 +583,8 @@ fn second(pair: Pair(Nat, Nat)) -> Nat {
     right
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(second(Pair { left: 1, right: 2 }))
+fn main() ->{Io} Nil {
+    print_line(second(Pair { left: 1, right: 2 }).to_string)
 }
 "#,
         "2",
@@ -566,6 +598,8 @@ fn test_native_generic_named_variant_pattern() {
     assert_native_output(
         "generic_named_variant_pattern.trb",
         r#"
+use std::io::{Io, print_line}
+
 struct Point { x: Nat, y: Nat }
 
 enum Wrap(a) {
@@ -588,11 +622,11 @@ fn nested(o: Option(Point)) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(get(.Box(1, True)))
-    __tribute_print_nat(get(.Box(2, False)))
-    __tribute_print_nat(get(.Empty))
-    __tribute_print_nat(nested(.Some(Point { x: 3, y: 4 })))
+fn main() ->{Io} Nil {
+    print_line(get(.Box(1, True)).to_string)
+    print_line(get(.Box(2, False)).to_string)
+    print_line(get(.Empty).to_string)
+    print_line(nested(.Some(Point { x: 3, y: 4 })).to_string)
 }
 "#,
         "11\n2\n0\n4",
@@ -606,6 +640,8 @@ fn test_native_named_variant_records() {
     assert_native_output(
         "named_variant_records.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Shape {
     Dot(Nat),
     Rect { width: Nat, tall: Bool },
@@ -632,11 +668,11 @@ fn get(w: Wrap(Nat)) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(size(.Rect { tall: True, width: 7 }))
-    __tribute_print_nat(size(.Rect { width: 3, tall: False }))
-    __tribute_print_nat(get(.Box { tagged: True, value: 1 }))
-    __tribute_print_nat(get(.Box { value: 2, tagged: False }))
+fn main() ->{Io} Nil {
+    print_line(size(.Rect { tall: True, width: 7 }).to_string)
+    print_line(size(.Rect { width: 3, tall: False }).to_string)
+    print_line(get(.Box { tagged: True, value: 1 }).to_string)
+    print_line(get(.Box { value: 2, tagged: False }).to_string)
 }
 "#,
         "17\n3\n101\n2",
@@ -648,9 +684,7 @@ fn main() -> Nil {
 /// runs under ASan.
 #[test]
 fn test_guarded_arms_after_coverage() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 fn count(flag: Bool, n: Nat) -> Nat {
     case flag {
         True -> 1
@@ -669,22 +703,21 @@ fn wrap(flag: Bool, n: Nat) -> Option(Nat) {
 
 fn show(value: Option(Nat)) ->{std::io::Io} Nil {
     case value {
-        .Some(n) -> print_nat(n)
-        .None -> print_nat(0)
+        .Some(n) -> std::io::print_line(n.to_string)
+        .None -> std::io::print_line(0.to_string)
     }
 }
 
 fn main() ->{std::io::Io} Nil {
-    print_nat(count(True, 1))
-    print_nat(count(False, 1))
+    std::io::print_line(count(True, 1).to_string)
+    std::io::print_line(count(False, 1).to_string)
     show(wrap(True, 7))
     show(wrap(False, 7))
 }
-"#
-    );
+"#;
     assert_output_on_both_targets_with_native_asan(
         "guarded_arms_after_coverage.trb",
-        &code,
+        code,
         "1\n2\n7\n0",
     );
 }
@@ -695,9 +728,7 @@ fn main() ->{std::io::Io} Nil {
 /// always.
 #[test]
 fn test_literal_patterns() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 fn s(x: String) -> Nat {
     case x {
         "abc" -> 1
@@ -738,28 +769,27 @@ fn t(x: #(Nil, String)) -> Nat {
     }
 }
 fn main() ->{std::io::Io} Nil {
-    print_nat(s("abc"))
-    print_nat(s("ab" <> "c"))
-    print_nat(s(""))
-    print_nat(s("x"))
-    print_nat(by(b"a" <> b"b"))
-    print_nat(by(b""))
-    print_nat(by(b"abc"))
-    print_nat(f(1.5))
-    print_nat(f(-0.0))
-    print_nat(f(0.0 / 0.0))
-    print_nat(r(?a))
-    print_nat(r(?\n))
-    print_nat(r(?b))
-    print_nat(n(Nil))
-    print_nat(t(#(Nil, "a")))
-    print_nat(t(#(Nil, "b")))
+    std::io::print_line(s("abc").to_string)
+    std::io::print_line(s("ab" <> "c").to_string)
+    std::io::print_line(s("").to_string)
+    std::io::print_line(s("x").to_string)
+    std::io::print_line(by(b"a" <> b"b").to_string)
+    std::io::print_line(by(b"").to_string)
+    std::io::print_line(by(b"abc").to_string)
+    std::io::print_line(f(1.5).to_string)
+    std::io::print_line(f(-0.0).to_string)
+    std::io::print_line(f(0.0 / 0.0).to_string)
+    std::io::print_line(r(?a).to_string)
+    std::io::print_line(r(?\n).to_string)
+    std::io::print_line(r(?b).to_string)
+    std::io::print_line(n(Nil).to_string)
+    std::io::print_line(t(#(Nil, "a")).to_string)
+    std::io::print_line(t(#(Nil, "b")).to_string)
 }
-"#
-    );
+"#;
     assert_output_on_both_targets(
         "literal_patterns.trb",
-        &code,
+        code,
         "1\n1\n2\n0\n1\n2\n0\n1\n2\n0\n1\n2\n0\n7\n1\n0",
     );
 }
@@ -771,6 +801,8 @@ fn test_native_lone_rest_patterns() {
     assert_native_output(
         "lone_rest_patterns.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Shape {
     Circle { radius: Nat },
     Rect { width: Nat, tall: Bool },
@@ -790,10 +822,10 @@ fn count(xs: List(Nat)) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(kind(.Circle { radius: 3 }))
-    __tribute_print_nat(kind(.Rect { width: 1, tall: True }))
-    __tribute_print_nat(count([4, 5]))
+fn main() ->{Io} Nil {
+    print_line(kind(.Circle { radius: 3 }).to_string)
+    print_line(kind(.Rect { width: 1, tall: True }).to_string)
+    print_line(count([4, 5]).to_string)
 }
 "#,
         "1\n2\n1",
@@ -807,6 +839,8 @@ fn test_native_case_over_enum_spelled_by_another_name() {
     assert_native_output(
         "enum_spelled_by_another_name.trb",
         r#"
+use std::io::{Io, print_line}
+
 mod shapes {
     pub enum Shape { Dot(Nat), Other }
 
@@ -827,10 +861,10 @@ fn outer(shape: Shape) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(shapes::inner(Shape::Dot(7)))
-    __tribute_print_nat(outer(.Dot(7)))
-    __tribute_print_nat(outer(shapes::Shape::Other))
+fn main() ->{Io} Nil {
+    print_line(shapes::inner(Shape::Dot(7)).to_string)
+    print_line(outer(.Dot(7)).to_string)
+    print_line(outer(shapes::Shape::Other).to_string)
 }
 "#,
         "7\n17\n1",
@@ -842,6 +876,8 @@ fn test_native_short_lists_skip_nested_pattern_observation() {
     assert_native_output(
         "list_nested_pattern_safety.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Item {
     Number(Nat),
 }
@@ -860,11 +896,11 @@ fn prefix(values: List(Item)) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(exact([]))
-    __tribute_print_nat(exact([.Number(1)]))
-    __tribute_print_nat(prefix([]))
-    __tribute_print_nat(prefix([.Number(1)]))
+fn main() ->{Io} Nil {
+    print_line(exact([]).to_string)
+    print_line(exact([.Number(1)]).to_string)
+    print_line(prefix([]).to_string)
+    print_line(prefix([.Number(1)]).to_string)
 }
 "#,
         "9\n9\n8\n8",
@@ -876,6 +912,8 @@ fn test_native_list_constructor_patterns_bind_payloads() {
     assert_native_output(
         "list_constructor_bindings.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Item { Number(Nat), Nested(Item), Other }
 
 fn exact(values: List(Item)) -> Nat {
@@ -899,20 +937,20 @@ fn nested(values: List(List(Item))) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(exact([.Number(3), .Number(4)]))
-    __tribute_print_nat(exact([.Number(3), .Number(4), .Number(5)]))
-    __tribute_print_nat(exact([.Other, .Number(4)]))
-    __tribute_print_nat(exact([.Number(3), .Other]))
-    __tribute_print_nat(prefix([.Number(1), .Number(2), .Number(3), .Number(4)]))
-    __tribute_print_nat(prefix([.Number(1), .Number(2)]))
-    __tribute_print_nat(prefix([.Other, .Number(2)]))
-    __tribute_print_nat(prefix([.Number(1), .Other]))
-    __tribute_print_nat(nested([[.Nested(.Number(6))]]))
-    __tribute_print_nat(nested([]))
-    __tribute_print_nat(nested([[]]))
-    __tribute_print_nat(nested([[.Nested(.Other)]]))
-    __tribute_print_nat(nested([[.Other]]))
+fn main() ->{Io} Nil {
+    print_line(exact([.Number(3), .Number(4)]).to_string)
+    print_line(exact([.Number(3), .Number(4), .Number(5)]).to_string)
+    print_line(exact([.Other, .Number(4)]).to_string)
+    print_line(exact([.Number(3), .Other]).to_string)
+    print_line(prefix([.Number(1), .Number(2), .Number(3), .Number(4)]).to_string)
+    print_line(prefix([.Number(1), .Number(2)]).to_string)
+    print_line(prefix([.Other, .Number(2)]).to_string)
+    print_line(prefix([.Number(1), .Other]).to_string)
+    print_line(nested([[.Nested(.Number(6))]]).to_string)
+    print_line(nested([]).to_string)
+    print_line(nested([[]]).to_string)
+    print_line(nested([[.Nested(.Other)]]).to_string)
+    print_line(nested([[.Other]]).to_string)
 }
 "#,
         "7\n9\n9\n9\n10\n12\n8\n8\n6\n0\n0\n0\n0",
@@ -979,6 +1017,8 @@ fn test_native_list_tail_order_and_persistence() {
     assert_native_output(
         "list_tail_persistence.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn tail(values: List(Nat)) -> List(Nat) {
     case values {
         [] -> []
@@ -993,13 +1033,13 @@ fn head_or_zero(values: List(Nat)) -> Nat {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let original = [4, 5, 6]
     let rest = tail(original)
     let last = tail(rest)
-    __tribute_print_nat(head_or_zero(original))
-    __tribute_print_nat(head_or_zero(rest))
-    __tribute_print_nat(head_or_zero(last))
+    print_line(head_or_zero(original).to_string)
+    print_line(head_or_zero(rest).to_string)
+    print_line(head_or_zero(last).to_string)
 }
 "#,
         "4\n5\n6",
@@ -1011,6 +1051,8 @@ fn test_native_list_as_pattern_binds_the_whole_sequence() {
     assert_native_output(
         "list_as_pattern.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn observe(values: List(Nat)) -> Nat {
     case values {
         [head, ..tail] as whole -> case whole {
@@ -1021,9 +1063,9 @@ fn observe(values: List(Nat)) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(observe([]))
-    __tribute_print_nat(observe([2, 3]))
+fn main() ->{Io} Nil {
+    print_line(observe([]).to_string)
+    print_line(observe([2, 3]).to_string)
 }
 "#,
         "9\n223",
@@ -1125,6 +1167,8 @@ fn test_native_generic_specializations_distinguish_builtin_and_source_list() {
     assert_native_output(
         "generic_builtin_and_source_list.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum List(a) {
     SourceList(a),
 }
@@ -1144,9 +1188,9 @@ fn source_value(value: List(Nat)) -> Nat {
     2
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let source = source_value(keep(.SourceList(2)))
-    __tribute_print_nat(builtin_value() + source)
+    print_line({ builtin_value() + source }.to_string)
 }
 "#,
         "3",
@@ -1158,14 +1202,16 @@ fn test_native_source_list_prepend_function_is_not_treated_as_intrinsic() {
     assert_native_output(
         "source_list_prepend_function.trb",
         r#"
+use std::io::{Io, print_line}
+
 pub mod List {
     pub fn prepend(value: Nat, tail: Nat) -> Nat {
         value + tail
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(List::prepend(20, 22))
+fn main() ->{Io} Nil {
+    print_line(List::prepend(20, 22).to_string)
 }
 "#,
         "42",
@@ -1190,6 +1236,8 @@ fn test_native_case_expression() {
     assert_native_output(
         "case_expression.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn classify(n: Nat) -> Nat {
     case n {
         0 -> 0
@@ -1198,8 +1246,8 @@ fn classify(n: Nat) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(classify(5))
+fn main() ->{Io} Nil {
+    print_line(classify(5).to_string)
 }
 "#,
         "2",
@@ -1211,11 +1259,13 @@ fn test_native_struct() {
     assert_native_output(
         "struct.trb",
         r#"
+use std::io::{Io, print_line}
+
 struct Point { x: Nat, y: Nat }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
-    __tribute_print_nat(p.x())
+    print_line(p.x().to_string)
 }
 "#,
         "10",
@@ -1227,10 +1277,12 @@ fn test_native_closure() {
     assert_native_output(
         "closure.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let a = 10
     let f = fn(x) { x + a }
-    __tribute_print_nat(f(32))
+    print_line(f(32).to_string)
 }
 "#,
         "42",
@@ -1242,6 +1294,8 @@ fn test_native_enum_case() {
     assert_native_output(
         "enum_case.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Shape {
     Circle(Nat),
     Square(Nat),
@@ -1254,8 +1308,8 @@ fn area(s: Shape) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(area(.Circle(5)))
+fn main() ->{Io} Nil {
+    print_line(area(.Circle(5)).to_string)
 }
 "#,
         "25",
@@ -1268,6 +1322,8 @@ fn test_native_enum_empty_variants() {
     assert_native_output(
         "enum_empty.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Color {
     Red,
     Green,
@@ -1282,8 +1338,8 @@ fn to_num(c: Color) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(to_num(.Green))
+fn main() ->{Io} Nil {
+    print_line(to_num(.Green).to_string)
 }
 "#,
         "2",
@@ -1296,6 +1352,8 @@ fn test_native_enum_option_like() {
     assert_native_output(
         "enum_option.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Maybe {
     Just(Nat),
     Nothing,
@@ -1308,9 +1366,9 @@ fn maybe_unwrap(m: Maybe, default: Nat) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(maybe_unwrap(.Just(42), 0))
-    __tribute_print_nat(maybe_unwrap(.Nothing, 99))
+fn main() ->{Io} Nil {
+    print_line(maybe_unwrap(.Just(42), 0).to_string)
+    print_line(maybe_unwrap(.Nothing, 99).to_string)
 }
 "#,
         "42\n99",
@@ -1322,6 +1380,8 @@ fn test_native_recursion() {
     assert_native_output(
         "recursion.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn fibonacci(n: Nat) -> Nat {
     case n {
         0 -> 0
@@ -1330,8 +1390,8 @@ fn fibonacci(n: Nat) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(fibonacci(10))
+fn main() ->{Io} Nil {
+    print_line(fibonacci(10).to_string)
 }
 "#,
         "55",
@@ -1343,10 +1403,12 @@ fn test_native_tuple_create_and_match() {
     assert_native_output(
         "tuple_create_match.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let t = #(1, 2)
     let #(a, b) = t
-    __tribute_print_nat(a + b)
+    print_line({ a + b }.to_string)
 }
 "#,
         "3",
@@ -1360,6 +1422,8 @@ fn test_native_tuple_constructor_pattern() {
     assert_native_output(
         "tuple_constructor_pattern.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Item { Number(Nat), Empty }
 
 fn first(p: #(Item, Nat)) -> Nat {
@@ -1377,10 +1441,10 @@ fn sum(items: List(#(Item, Nat))) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(first(#(.Number(1), 2)))
-    __tribute_print_nat(first(#(.Empty, 5)))
-    __tribute_print_nat(sum([#(.Number(10), 1), #(.Empty, 2), #(.Number(3), 4)]))
+fn main() ->{Io} Nil {
+    print_line(first(#(.Number(1), 2)).to_string)
+    print_line(first(#(.Empty, 5)).to_string)
+    print_line(sum([#(.Number(10), 1), #(.Empty, 2), #(.Number(3), 4)]).to_string)
 }
 "#,
         "3\n0\n118",
@@ -1393,6 +1457,8 @@ fn test_native_bool_case() {
     assert_native_output(
         "bool_case.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn pick(b: Bool) -> Nat {
     case b {
         True -> 10
@@ -1400,9 +1466,9 @@ fn pick(b: Bool) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(pick(True))
-    __tribute_print_nat(pick(False))
+fn main() ->{Io} Nil {
+    print_line(pick(True).to_string)
+    print_line(pick(False).to_string)
 }
 "#,
         "10\n42",
@@ -1415,6 +1481,8 @@ fn test_native_short_circuit_and() {
     assert_native_output(
         "short_circuit_and.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn bool_to_nat(b: Bool) -> Nat {
     case b {
         True -> 1
@@ -1422,10 +1490,10 @@ fn bool_to_nat(b: Bool) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(bool_to_nat(False && True))
-    __tribute_print_nat(bool_to_nat(True && True))
-    __tribute_print_nat(bool_to_nat(True && False))
+fn main() ->{Io} Nil {
+    print_line(bool_to_nat(False && True).to_string)
+    print_line(bool_to_nat(True && True).to_string)
+    print_line(bool_to_nat(True && False).to_string)
 }
 "#,
         "0\n1\n0",
@@ -1438,6 +1506,8 @@ fn test_native_short_circuit_or() {
     assert_native_output(
         "short_circuit_or.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn bool_to_nat(b: Bool) -> Nat {
     case b {
         True -> 1
@@ -1445,10 +1515,10 @@ fn bool_to_nat(b: Bool) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(bool_to_nat(True || False))
-    __tribute_print_nat(bool_to_nat(False || True))
-    __tribute_print_nat(bool_to_nat(False || False))
+fn main() ->{Io} Nil {
+    print_line(bool_to_nat(True || False).to_string)
+    print_line(bool_to_nat(False || True).to_string)
+    print_line(bool_to_nat(False || False).to_string)
 }
 "#,
         "1\n1\n0",
@@ -1462,15 +1532,17 @@ fn test_native_short_circuit_and_skips_rhs() {
     assert_native_output(
         "short_circuit_and_side_effect.trb",
         r#"
-fn side_effect() -> Bool {
-    __tribute_print_nat(99)
+use std::io::{Io, print_line}
+
+fn side_effect() ->{Io} Bool {
+    print_line(99.to_string)
     True
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     case False && side_effect() {
-        True -> __tribute_print_nat(1)
-        False -> __tribute_print_nat(0)
+        True -> print_line(1.to_string)
+        False -> print_line(0.to_string)
     }
 }
 "#,
@@ -1484,15 +1556,17 @@ fn test_native_short_circuit_or_skips_rhs() {
     assert_native_output(
         "short_circuit_or_side_effect.trb",
         r#"
-fn side_effect() -> Bool {
-    __tribute_print_nat(99)
+use std::io::{Io, print_line}
+
+fn side_effect() ->{Io} Bool {
+    print_line(99.to_string)
     False
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     case True || side_effect() {
-        True -> __tribute_print_nat(1)
-        False -> __tribute_print_nat(0)
+        True -> print_line(1.to_string)
+        False -> print_line(0.to_string)
     }
 }
 "#,
@@ -1507,6 +1581,8 @@ fn test_native_enum_mixed_type_fields() {
     assert_native_output(
         "enum_mixed_fields.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Tree {
     Leaf(Nat),
     Branch(Tree, Tree, Nat),
@@ -1519,9 +1595,9 @@ fn sum(t: Tree) -> Nat {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let t = .Branch(.Leaf(1), .Branch(.Leaf(2), .Leaf(3), 0), 0)
-    __tribute_print_nat(sum(t))
+    print_line(sum(t).to_string)
 }
 "#,
         "6",
@@ -1883,6 +1959,8 @@ fn test_native_string_equality_does_not_collide_with_user_string_cursor() {
     assert_native_output(
         "string_cursor_name.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum StringCursor {
     UserCursor(Nat),
     EmptyCursor,
@@ -1895,15 +1973,15 @@ fn bool_to_nat(value: Bool) -> Nat {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let cursor = .UserCursor(7)
     case cursor {
-        .UserCursor(value) -> __tribute_print_nat(value)
-        .EmptyCursor -> __tribute_print_nat(0)
+        .UserCursor(value) -> print_line(value.to_string)
+        .EmptyCursor -> print_line(0.to_string)
     }
-    __tribute_print_nat(bool_to_nat("leaf" == "leaf"))
+    print_line(bool_to_nat("leaf" == "leaf").to_string)
     let rope = "ro" <> "pe"
-    __tribute_print_nat(bool_to_nat(rope == "rope"))
+    print_line(bool_to_nat(rope == "rope").to_string)
 }
 "#,
         "7\n1\n1",
@@ -2363,9 +2441,11 @@ fn test_native_bytes_literal_len() {
     assert_native_output(
         "bytes_lit_len.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let bs = b"hello"
-    __tribute_print_nat(bs.len())
+    print_line(bs.len().to_string)
 }
 "#,
         "5",
@@ -2405,11 +2485,13 @@ fn test_native_bytes_get_or_panic() {
     assert_native_output(
         "bytes_get_or_panic.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let bs = b"abc"
-    __tribute_print_nat(bs.get_or_panic(0))
-    __tribute_print_nat(bs.get_or_panic(1))
-    __tribute_print_nat(bs.get_or_panic(2))
+    print_line(bs.get_or_panic(0).to_string)
+    print_line(bs.get_or_panic(1).to_string)
+    print_line(bs.get_or_panic(2).to_string)
 }
 "#,
         "97\n98\n99",
@@ -2418,18 +2500,15 @@ fn main() -> Nil {
 
 #[test]
 fn test_bytes_get_or_panic_reads_high_bytes_unsigned() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 fn main() ->{std::io::Io} Nil {
     let bs = b"\xff\x80\x7f"
-    print_nat(bs.get_or_panic(0))
-    print_nat(bs.get_or_panic(1))
-    print_nat(bs.get_or_panic(2))
+    std::io::print_line(bs.get_or_panic(0).to_string)
+    std::io::print_line(bs.get_or_panic(1).to_string)
+    std::io::print_line(bs.get_or_panic(2).to_string)
 }
-"#
-    );
-    assert_output_on_both_targets("bytes_get_or_panic_high.trb", &code, "255\n128\n127");
+"#;
+    assert_output_on_both_targets("bytes_get_or_panic_high.trb", code, "255\n128\n127");
 }
 
 #[test]
@@ -2491,9 +2570,7 @@ fn main() ->{Io} Nil {
 
 #[test]
 fn test_nat_comparisons_and_bytes_slice_clamping() {
-    let code = format!(
-        "{PRINT_NAT}{}",
-        r#"
+    let code = r#"
 fn bit(value: Bool) -> String {
     case value {
         True -> "1"
@@ -2512,11 +2589,10 @@ fn main() ->{std::io::Io} Nil {
     )
     let bs = b"hello"
     let sl = bs.slice(3, 100)
-    print_nat(sl.len())
+    std::io::print_line(sl.len().to_string)
 }
-"#
-    );
-    assert_output_on_both_targets("nat_comparisons.trb", &code, "1010\n1010\n111\n2");
+"#;
+    assert_output_on_both_targets("nat_comparisons.trb", code, "1010\n1010\n111\n2");
 }
 
 #[test]
@@ -2524,11 +2600,13 @@ fn test_native_bytes_as_function_arg() {
     assert_native_output(
         "bytes_fn_arg.trb",
         r#"
-fn print_bytes_len(bs: Bytes) -> Nil {
-    __tribute_print_nat(bs.len())
+use std::io::{Io, print_line}
+
+fn print_bytes_len(bs: Bytes) ->{Io} Nil {
+    print_line(bs.len().to_string)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let bs = b"test"
     print_bytes_len(bs)
 }
@@ -2542,6 +2620,8 @@ fn test_native_variants_are_told_apart_by_descriptor() {
     assert_native_output(
         "variant_descriptor.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Shape {
     Circle(Nat),
     Square(Nat),
@@ -2560,11 +2640,11 @@ fn area(shape: Shape) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(area(.Circle(2)))
-    __tribute_print_nat(area(.Square(3)))
-    __tribute_print_nat(area(.Pair(4, 5)))
-    __tribute_print_nat(area(.Empty))
+fn main() ->{Io} Nil {
+    print_line(area(.Circle(2)).to_string)
+    print_line(area(.Square(3)).to_string)
+    print_line(area(.Pair(4, 5)).to_string)
+    print_line(area(.Empty).to_string)
 }
 "#,
         "12\n9\n20\n0",
@@ -2576,6 +2656,8 @@ fn test_native_fieldless_enum_objects_hold_only_their_header() {
     assert_native_output(
         "fieldless_enum.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Color {
     Red,
     Green,
@@ -2590,10 +2672,10 @@ fn code(color: Color) -> Nat {
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(code(.Red))
-    __tribute_print_nat(code(.Green))
-    __tribute_print_nat(code(.Blue))
+fn main() ->{Io} Nil {
+    print_line(code(.Red).to_string)
+    print_line(code(.Green).to_string)
+    print_line(code(.Blue).to_string)
 }
 "#,
         "1\n2\n3",
@@ -2816,9 +2898,11 @@ fn test_native_string_empty() {
     assert_native_output(
         "string_empty.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let s = String::empty()
-    __tribute_print_nat(s.len())
+    print_line(s.len().to_string)
 }
 "#,
         "0",
@@ -2830,9 +2914,11 @@ fn test_native_bytes_empty() {
     assert_native_output(
         "bytes_empty.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let bs = Bytes::empty()
-    __tribute_print_nat(bs.len())
+    print_line(bs.len().to_string)
 }
 "#,
         "0",
