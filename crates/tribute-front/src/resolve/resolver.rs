@@ -823,6 +823,12 @@ impl<'db> Resolver<'db> {
                         return;
                     }
                 };
+                // Its namespace continues through a re-export on it, as a
+                // value path's does.
+                let location = location.map(|location| match location.split_last() {
+                    Some((name, namespace)) => self.through_exports(namespace).child(name.clone()),
+                    None => location,
+                });
                 // The path names only what is at its location.
                 match location
                     .as_ref()

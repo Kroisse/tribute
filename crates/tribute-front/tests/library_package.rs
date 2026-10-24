@@ -524,3 +524,26 @@ fn chained() -> Option(Nat) { m4::library::Option::Some(1) }
     );
     assert_eq!(errors, Vec::<String>::new());
 }
+
+/// A type annotation continues through a re-export as a value path does.
+#[salsa_test]
+fn annotations_continue_through_a_re_export(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod source {
+    pub mod nested {
+        pub enum E { V }
+    }
+}
+
+mod facade {
+    pub use pkg::source as api
+}
+
+fn make() -> facade::api::nested::E { facade::api::nested::E::V }
+fn take(e: pkg::facade::api::nested::E) -> Nat { 0 }
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}
