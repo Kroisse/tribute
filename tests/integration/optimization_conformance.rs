@@ -178,12 +178,10 @@ fn fixture_allocation_field_releases(ir: &str) -> Vec<usize> {
         .into_iter()
         .map(|index| {
             let symbol = format!("{}{index}", tribute_passes::native::rtti::RELEASE_FN_PREFIX);
-            let Some(release) = functions
+            let release = functions
                 .iter()
                 .find(|function| function.sym_name(&ctx) == symbol.as_str())
-            else {
-                return 0;
-            };
+                .unwrap_or_else(|| panic!("missing release function for RTTI index {index}"));
             let mut count = 0;
             let _ = walk_op::<()>(&ctx, release.op_ref(), &mut |op| {
                 count += usize::from(tribute_rt::Release::matches(&ctx, op));
