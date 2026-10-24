@@ -23,15 +23,19 @@ fn prelude_source(db: &dyn salsa::Database) -> SourceCst {
     SourceCst::from_source_str(db, "prelude:///std/prelude", PRELUDE_SOURCE)
 }
 
+fn parsed_prelude(db: &dyn salsa::Database) -> Option<tribute_front::astgen::ParsedAst<'_>> {
+    tribute_front::query::parsed_ast_with_module_path(
+        db,
+        prelude_source(db),
+        trunk_ir::Symbol::new("prelude"),
+    )
+}
+
 /// The environment of package `std`, which the packages under test depend
 /// on.
 #[salsa::tracked]
 fn prelude_env(db: &dyn salsa::Database) -> Option<tribute_front::resolve::PackageEnv<'_>> {
-    let parsed = tribute_front::query::parsed_ast_with_module_path(
-        db,
-        prelude_source(db),
-        trunk_ir::Symbol::new("prelude"),
-    )?;
+    let parsed = parsed_prelude(db)?;
     Some(tribute_front::resolve::build_library_env(
         db,
         parsed.module(db),
@@ -44,11 +48,7 @@ fn prelude_env(db: &dyn salsa::Database) -> Option<tribute_front::resolve::Packa
 /// the prelude for Int, Nat, and Float. Without the prelude, no function
 /// is in scope for them.
 fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
-    let parsed = tribute_front::query::parsed_ast_with_module_path(
-        db,
-        prelude_source(db),
-        trunk_ir::Symbol::new("prelude"),
-    )?;
+    let parsed = parsed_prelude(db)?;
 
     let prelude_ast = parsed.module(db);
     let prelude_span_map = parsed.span_map(db);
@@ -74,6 +74,30 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     })
 }
 
+/// `ast` resolved against package `std`, and a type checker that knows the
+/// prelude's exports.
+fn resolve_with_prelude<'db>(
+    db: &'db dyn salsa::Database,
+    ast: &tribute_front::ast::Module<tribute_front::ast::UnresolvedName>,
+    span_map: tribute_front::ast::SpanMap,
+    prelude: Option<&PreludeData<'db>>,
+) -> (
+    DeclTable<ResolvedRef<'db>>,
+    tribute_front::typeck::TypeChecker<'db>,
+) {
+    let dependencies = prelude
+        .map(|p| tribute_front::resolve::Dependencies::std(p.env))
+        .unwrap_or_default();
+    let env = tribute_front::resolve::build_env(db, ast, &dependencies);
+    let resolved =
+        tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map.clone());
+    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
+    if let Some(p) = prelude {
+        checker.inject_prelude(&p.exports);
+    }
+    (resolved, checker)
+}
+
 /// Inner tracked function that runs the full pipeline.
 ///
 /// Diagnostics emitted during the pipeline are accumulated as Salsa
@@ -90,20 +114,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     // Load prelude for operator declarations (Int::(+) etc.)
     let prelude = load_prelude(db);
 
-    // Build env against package `std` so operator names resolve
-    let dependencies = prelude
-        .as_ref()
-        .map(|p| tribute_front::resolve::Dependencies::std(p.env))
-        .unwrap_or_default();
-    let env = tribute_front::resolve::build_env(db, ast, &dependencies);
-    let resolved =
-        tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map.clone());
-
-    // Type-check with prelude types injected
-    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
-    if let Some(ref p) = prelude {
-        checker.inject_prelude(&p.exports);
-    }
+    let (resolved, checker) = resolve_with_prelude(db, ast, span_map.clone(), prelude.as_ref());
     let result = checker.check_module(&resolved);
 
     let tdnr_ast = result.module;
@@ -163,18 +174,7 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     let span_map = parsed.span_map(db);
     let prelude = load_prelude(db);
 
-    let dependencies = prelude
-        .as_ref()
-        .map(|p| tribute_front::resolve::Dependencies::std(p.env))
-        .unwrap_or_default();
-    let env = tribute_front::resolve::build_env(db, ast, &dependencies);
-    let resolved =
-        tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map.clone());
-
-    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
-    if let Some(ref p) = prelude {
-        checker.inject_prelude(&p.exports);
-    }
+    let (resolved, checker) = resolve_with_prelude(db, ast, span_map, prelude.as_ref());
     let _ = checker.check_module(&resolved);
 }
 
@@ -193,18 +193,7 @@ fn tdnr_function_summary_inner(
 
     let prelude = load_prelude(db);
 
-    let dependencies = prelude
-        .as_ref()
-        .map(|p| tribute_front::resolve::Dependencies::std(p.env))
-        .unwrap_or_default();
-    let env = tribute_front::resolve::build_env(db, ast, &dependencies);
-    let resolved =
-        tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map.clone());
-
-    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
-    if let Some(ref p) = prelude {
-        checker.inject_prelude(&p.exports);
-    }
+    let (resolved, checker) = resolve_with_prelude(db, ast, span_map, prelude.as_ref());
     let result = checker.check_module(&resolved);
 
     let module = result.module;

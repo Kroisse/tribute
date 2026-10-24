@@ -44,6 +44,7 @@ use crate::ast::{
     Decl, DeclEntry, DeclTable, FuncDefId, NodeId, ResolvedRef, SpanMap, Type, TypeScheme,
     TypedRef, UniVarId,
 };
+use crate::resolve::PackageName;
 
 use super::context::ModuleTypeEnv;
 use super::{PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes};
@@ -147,18 +148,13 @@ pub struct TypeChecker<'db> {
 }
 
 impl<'db> TypeChecker<'db> {
-    /// The module whose items the prelude declares at its root: its package.
-    fn prelude_root() -> SymbolPath {
-        SymbolPath::new([crate::resolve::LIBRARY_PACKAGE])
-    }
-
     fn prelude_well_known_type(
         &self,
         module: &DeclTable<ResolvedRef<'db>>,
         key: impl WellKnownTypeKey,
     ) -> Option<WellKnownType<'db>> {
         let name = key.name();
-        let root = Self::prelude_root();
+        let root = PackageName::std().identity_path(&[]);
         let disambiguator = module
             .entries
             .iter()
@@ -193,7 +189,7 @@ impl<'db> TypeChecker<'db> {
         let string = self.prelude_well_known_type(module, StringType);
         // `==` of a prelude type is the function of that name in the type's
         // module.
-        let root = Self::prelude_root();
+        let root = PackageName::std().identity_path(&[]);
         let equality = |type_name: &str| {
             let function = FuncDefId::new(self.db(), root.child(type_name).child("=="));
             self.env.lookup_function(function).map(|_| function)

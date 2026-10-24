@@ -54,6 +54,13 @@ impl PackageName {
         SymbolPath::new(package.into_iter().chain(module.iter().cloned()))
     }
 
+    /// The identity path of the item at `module`, a path of this package's
+    /// module tree from its root, spelled as text.
+    pub fn identity_path_of(&self, module: &[&str]) -> SymbolPath {
+        let module: Vec<Symbol> = module.iter().copied().map(Symbol::new).collect();
+        self.identity_path(&module)
+    }
+
     /// The module path, from this package's root, of the identity path
     /// `identity`, if it is one of this package's paths.
     pub fn module_path<'a>(&self, identity: &'a [Symbol]) -> Option<&'a [Symbol]> {
