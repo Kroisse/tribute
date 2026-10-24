@@ -779,22 +779,22 @@ ability Ask {
 }
 
 fn use_ask() ->{Ask, Io} Int {
-    print_line(Int::to_string(+10))
+    print_line(+10.to_string)
     Ask::ask()
 }
 
 fn main() ->{Io} Nil {
     let result = handle use_ask() {
         do result {
-            print_line(Int::to_string(+30))
+            print_line(+30.to_string)
             result
         }
         fn Ask::ask() {
-            print_line(Int::to_string(+20))
+            print_line(+20.to_string)
             +41
         }
     }
-    print_line(Int::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output(

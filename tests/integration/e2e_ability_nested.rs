@@ -525,7 +525,7 @@ fn body() ->{State(Int), Scale, Io} Float {
     let b = step(-3)
     let c = step(+100)
     let total = State::get()
-    print_line(Int::to_string(total))
+    print_line(total.to_string)
     a + b + c
 }
 

@@ -62,7 +62,7 @@ fn apply(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
 fn main() ->{{std::io::Io}} Nil {{
     let add = (Int::+)
     let alias = add
-    std::io::print_line(Int::to_string(apply(alias, +1, +2)))
+    std::io::print_line(apply(alias, +1, +2).to_string)
 }}
 "#,
         common::PRINT_EXTERNS,
@@ -126,8 +126,8 @@ fn named_direct_both_reaches_native_execution() {
 fn apply(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
 fn pure(f: fn(Int, Int) ->{{}} Int) ->{{}} Int {{ f(+3, +4) }}
 fn main() ->{{std::io::Io}} Nil {{
-    std::io::print_line(Int::to_string(pure((Int::+))))
-    std::io::print_line(Int::to_string(apply((Int::+), +1, +2)))
+    std::io::print_line(pure((Int::+)).to_string)
+    std::io::print_line(apply((Int::+), +1, +2).to_string)
 }}
 "#,
         common::PRINT_EXTERNS,

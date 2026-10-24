@@ -124,8 +124,8 @@ fn main() ->{Io} Nil {
     let a = 1.5
     let b = 1.5
     case a == b {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -143,8 +143,8 @@ fn main() ->{Io} Nil {
     let a = 1.0
     let b = 2.0
     case a < b {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -162,8 +162,8 @@ fn main() ->{Io} Nil {
     let a = 1.0
     let b = 2.0
     case a != b {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -181,8 +181,8 @@ fn main() ->{Io} Nil {
     let a = 2.0
     let b = 1.0
     case a > b {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -200,8 +200,8 @@ fn main() ->{Io} Nil {
     let a = 1.0
     let b = 2.0
     case a <= b {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -219,8 +219,8 @@ fn main() ->{Io} Nil {
     let a = 2.0
     let b = 2.0
     case a >= b {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -239,28 +239,28 @@ fn main() ->{Io} Nil {
     let x = 1.0
 
     case nan == x {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
     case nan != x {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
     case nan < x {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
     case nan <= x {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
     case nan > x {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
     case nan >= x {
-        True -> print_line(Int::to_string(+1))
-        False -> print_line(Int::to_string(+0))
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,

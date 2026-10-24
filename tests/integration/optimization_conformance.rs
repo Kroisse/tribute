@@ -36,7 +36,7 @@ extern "C" fn __tribute_print_float(value: Float) -> Nil
 fn identity(value: a) -> a { value }
 
 fn main() ->{Io} Nil {
-    print_line(Int::to_string(identity(+7)))
+    print_line(identity(+7).to_string)
     __tribute_print_float(identity(3.5))
 }
 "#;

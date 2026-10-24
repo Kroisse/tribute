@@ -245,7 +245,7 @@ fn double(n: Int) -> Int {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Int::to_string(apply(double, +21)))
+    print_line(apply(double, +21).to_string)
 }
 "#,
         "42",
@@ -266,7 +266,7 @@ fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Int::to_string(apply(fn(value) { value + +1 }, +41)))
+    print_line(apply(fn(value) { value + +1 }, +41).to_string)
 }
 "#,
         "42",
@@ -393,7 +393,7 @@ fn main() ->{Io} Nil {
         ),
         .Num(+2)
     )
-    print_line(Int::to_string(eval(expr)))
+    print_line(eval(expr).to_string)
 }
 "#,
         "9",
