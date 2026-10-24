@@ -629,6 +629,12 @@ Row 변수에 대해서도 occurs check 필요:
 unify(e, {State(Int) | e})  -- 에러: e가 자기 자신을 포함
 ```
 
+Occurs check는 현재 타입 대입과 row 대입을 모두 적용한 결과에서 변수를 찾는다.
+Row 대입을 거쳐 드러난 effect 인자 안의 타입 변수도 이미 바인딩되어 있으면 그
+바인딩을 따라간다. 그래서 `c`를 `fn() ->{e} Int`에 바인딩하려 할 때 `e := {State(d)}`이고
+`d := #(c, Int)`이면 occurs check 에러다. 대입은 항상 순환이 없어야 하며, 대입
+적용은 그 전제에서 종료한다.
+
 ---
 
 ## Handler와 Effect 소비

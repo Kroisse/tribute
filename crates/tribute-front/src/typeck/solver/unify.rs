@@ -177,9 +177,18 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Check if a type variable occurs in a type (for occurs check).
+    ///
+    /// Bound variables are followed, since a type argument reached through
+    /// a row substitution has not had the type substitution applied.
     pub(super) fn occurs_in(&self, var: UniVarId<'db>, ty: Type<'db>) -> bool {
         match ty.kind(self.db) {
-            TypeKind::UniVar { id } => *id == var,
+            TypeKind::UniVar { id } => {
+                *id == var
+                    || self
+                        .type_subst
+                        .get(*id)
+                        .is_some_and(|bound| self.occurs_in(var, bound))
+            }
             TypeKind::Named { args, .. } => args.iter().any(|a| self.occurs_in(var, *a)),
             TypeKind::Func {
                 params,
