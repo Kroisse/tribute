@@ -21,6 +21,7 @@ mod e2e_float;
 mod e2e_implicit_constructors;
 mod e2e_int_text;
 mod e2e_local_callables;
+mod e2e_nat_text;
 mod e2e_native;
 mod e2e_records;
 mod evidence_lambda;
