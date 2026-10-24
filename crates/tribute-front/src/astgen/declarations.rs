@@ -886,9 +886,9 @@ fn lower_mod(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<ModuleDecl<Unre
     let name = ctx.node_symbol(&name_node);
     let visibility = lower_visibility(ctx, node);
 
-    // Check for inline module body
-    let body = if let Some(body_node) = node.child_by_field_name("body") {
-        Some(ctx.in_module(name.clone(), |ctx| {
+    // An external (file-based) module has no inline body.
+    let body = node.child_by_field_name("body").map(|body_node| {
+        ctx.in_module(name.clone(), |ctx| {
             let mut decls = Vec::new();
             let mut cursor = body_node.walk();
             for child in body_node.named_children(&mut cursor) {
@@ -899,11 +899,8 @@ fn lower_mod(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<ModuleDecl<Unre
             }
             assign_type_disambiguators(&mut decls);
             decls
-        }))
-    } else {
-        // External module (file-based) - no inline body
-        None
-    };
+        })
+    });
 
     Some(ModuleDecl {
         id,
