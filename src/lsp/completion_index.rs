@@ -611,7 +611,12 @@ mod tests {
             let mut found: Vec<_> = items
                 .iter()
                 .filter(|item| item.module.as_ref() == Some(&module))
-                .map(|item| (item.name.to_string(), item.detail.clone().unwrap_or_default()))
+                .map(|item| {
+                    (
+                        item.name.to_string(),
+                        item.detail.clone().unwrap_or_default(),
+                    )
+                })
                 .collect();
             found.sort();
             found
@@ -619,10 +624,17 @@ mod tests {
         let pair = |name: &str, detail: &str| (name.to_owned(), detail.to_owned());
         assert_eq!(
             at(&[]),
-            [pair("Dot", "Shape::Dot"), pair("Line", "Shape::Line"), pair("Point", "Point")]
+            [
+                pair("Dot", "Shape::Dot"),
+                pair("Line", "Shape::Line"),
+                pair("Point", "Point")
+            ]
         );
         // An alias names the type, but not a struct's own constructor.
-        assert_eq!(at(&["inner"]), [pair("Dot", "S::Dot"), pair("Line", "S::Line")]);
+        assert_eq!(
+            at(&["inner"]),
+            [pair("Dot", "S::Dot"), pair("Line", "S::Line")]
+        );
     }
 
     #[test]
