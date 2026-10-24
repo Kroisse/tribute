@@ -505,7 +505,7 @@ fn value(pair: #(Item, Bool)) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: #(.Empty, False)"]
+        ["non-exhaustive case expression on `#(Item, Bool)`: missing patterns: #(.Empty, False)"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -529,7 +529,7 @@ fn pick(o: Maybe(Bool)) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: .Just(False)"]
+        ["non-exhaustive case expression on `Maybe(Bool)`: missing patterns: .Just(False)"]
     );
     assert_eq!(exhaustive, 0);
 
@@ -600,7 +600,7 @@ fn outer(shape: Shape) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: .Other"]
+        ["non-exhaustive case expression on `Shape`: missing patterns: .Other"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -641,7 +641,7 @@ fn pick(flag: Bool, enabled: Bool) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: True"]
+        ["non-exhaustive case expression on `Bool`: missing patterns: True"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -663,7 +663,7 @@ fn both(flags: Flags) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: Flags(False, True)"]
+        ["non-exhaustive case expression on `Flags`: missing patterns: Flags(False, True)"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -683,7 +683,7 @@ fn code(name: String) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: _"]
+        ["non-exhaustive case expression on `std::String`: missing patterns: _"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -792,7 +792,7 @@ fn only(value: Nil) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: #(Nil, False)"]
+        ["non-exhaustive case expression on `#(Nil, Bool)`: missing patterns: #(Nil, False)"]
     );
     assert_eq!(exhaustive, 1);
 }

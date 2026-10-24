@@ -87,6 +87,10 @@ pub(super) struct Finalize<'a, 'db> {
     /// its instance.
     pub(super) constructor_resolutions: &'a HashMap<NodeId, (ResolvedRef<'db>, Type<'db>)>,
     pub(super) node_types: &'a HashMap<NodeId, Type<'db>>,
+    /// The node types as inference recorded them. A diagnostic shows one
+    /// solved but not generalized, so a variable nothing determined reads
+    /// `_` rather than a binder of the function.
+    pub(super) unbound_node_types: &'a HashMap<NodeId, Type<'db>>,
     pub(super) exhaustive_cases: &'a mut Vec<NodeId>,
     pub(super) exhaustiveness_reported: &'a mut HashSet<NodeId>,
 }
@@ -140,10 +144,19 @@ impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
                 }
             }
             ExprKind::Case { scrutinee, arms } => {
+                let shown_ty = self.unbound_node_types.get(&scrutinee.id).map(|ty| {
+                    let substitution = self.substitution;
+                    substitution.type_subst.apply_with_rows(
+                        substitution.db,
+                        *ty,
+                        substitution.row_subst,
+                    )
+                });
                 if let Some(scrutinee_ty) = self.node_types.get(&scrutinee.id).copied()
                     && self.checker.check_exhaustiveness(
                         self.exhaustiveness_reported,
                         scrutinee_ty,
+                        shown_ty.unwrap_or(scrutinee_ty),
                         arms,
                         scrutinee.id,
                     )

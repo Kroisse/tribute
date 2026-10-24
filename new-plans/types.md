@@ -576,20 +576,21 @@ case command {
 ### 망라성과 도달 불가 arm
 
 모든 `case`는 망라적이어야 한다. scrutinee가 가질 수 있는 값 중 어떤 arm에도
-매칭되지 않는 값이 있으면 오류이며, 진단은 누락된 값을 나타내는 예시 패턴을 최대
-세 개 보여준다.
+매칭되지 않는 값이 있으면 오류이며, 진단은 scrutinee의 타입과 누락된 값을 나타내는
+예시 패턴을 최대 세 개 보여준다.
 
 ```rust
 case opt {
     .None -> 0
     .Some(True) -> 1
 }
-// error: non-exhaustive case expression: missing patterns: .Some(False)
+// error: non-exhaustive case expression on `std::Option(Bool)`: missing patterns: .Some(False)
 ```
 
 검사는 타입 검사가 소유하며, 패턴 행렬의 usefulness로 판정한다. 검사는 이름 해석과
 [암묵적 생성자](type-inference.md#암묵적-생성자) 해석이 확정한 생성자를 본다.
-예시 패턴의 enum variant는 암묵적 생성자 형식으로 보인다. 중첩 패턴도 모두
+예시 패턴의 enum variant는 암묵적 생성자 형식으로 보인다. 그 타입은 진단이 보이는
+scrutinee의 타입과 상위 패턴의 필드 타입으로 정해진다. 중첩 패턴도 모두
 분석하므로 `.Some(True)`는 `.Some(_)`를 덮지 않는다. 튜플 scrutinee는 각 요소를 한
 열로 보고 함께 분석한다.
 

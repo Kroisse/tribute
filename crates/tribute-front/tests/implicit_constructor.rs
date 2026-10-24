@@ -185,8 +185,8 @@ fn deferred() -> Nil {
     assert_eq!(
         errors,
         [
-            "non-exhaustive case expression: missing patterns: .Node(_, _)",
-            "non-exhaustive case expression: missing patterns: .Leaf(_)",
+            "non-exhaustive case expression on `Tree`: missing patterns: .Node(_, _)",
+            "non-exhaustive case expression on `Heap`: missing patterns: .Leaf(_)",
         ]
     );
 }

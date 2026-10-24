@@ -29,11 +29,13 @@ impl<'db> TypeChecker<'db> {
     /// Check that a case expression is exhaustive and warn about arms that
     /// earlier arms already cover.
     ///
-    /// Returns whether the case was proved exhaustive.
+    /// Returns whether the case was proved exhaustive. A diagnostic shows
+    /// the scrutinee's type as `shown_ty`.
     pub(super) fn check_exhaustiveness(
         &self,
         reported: &mut HashSet<NodeId>,
         scrutinee_ty: Type<'db>,
+        shown_ty: Type<'db>,
         arms: &[Arm<TypedRef<'db>>],
         span_node_id: NodeId,
     ) -> bool {
@@ -121,7 +123,7 @@ impl<'db> TypeChecker<'db> {
                 self.report_case(
                     span_node_id,
                     &format!(
-                        "non-exhaustive case expression: missing patterns: {}{more}",
+                        "non-exhaustive case expression on `{shown_ty}`: missing patterns: {}{more}",
                         shown.format(", ")
                     ),
                     DiagnosticSeverity::Error,

@@ -493,7 +493,7 @@ impl<'db> TypeChecker<'db> {
 
         // 6. Materialize the solved node types before rebuilding the body.
         // Post-solve case coverage consults these entries during body substitution.
-        for (node_id, ty) in func_node_types {
+        for (&node_id, &ty) in &func_node_types {
             let substituted = substitution.apply(ty);
             checked.node_types.insert(node_id, substituted);
         }
@@ -506,6 +506,7 @@ impl<'db> TypeChecker<'db> {
             deferred_resolutions: &deferred_resolutions,
             constructor_resolutions: &constructor_resolutions,
             node_types: &checked.node_types,
+            unbound_node_types: &func_node_types,
             exhaustive_cases: &mut checked.exhaustive_cases,
             exhaustiveness_reported: &mut checked.exhaustiveness_reported,
         }
