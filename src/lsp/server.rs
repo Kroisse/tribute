@@ -451,19 +451,19 @@ impl LspServer {
         // Extract prefix from current position (for filtering)
         let prefix = extract_completion_prefix(&rope, offset);
 
-        let implicit = starts_implicit_constructor(&rope, offset - prefix.len());
+        let dot = dot_context(&rope, offset - prefix.len());
         let items = self.db.attach(|db| {
             let module = module_at(db, source_cst, offset);
-            // After the `.` of an implicit constructor, only constructors
-            // fit; both a module's own and the prelude's are candidates.
-            if implicit {
-                let constructors = completion_index::constructor_items(db, source_cst);
-                return Some(
-                    filter_completions(constructors, &prefix)
-                        .filter(|item| item.module.as_ref().is_none_or(|own| *own == module))
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                );
+            // After the `.` of an implicit constructor, constructors fit;
+            // both a module's own and the prelude's are candidates.
+            let constructors = || {
+                filter_completions(completion_index::constructor_items(db, source_cst), &prefix)
+                    .filter(|item| item.module.as_ref().is_none_or(|own| *own == module))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            if dot == DotContext::ImplicitConstructor {
+                return Some(constructors());
             }
             let all_items = completion_items(db, source_cst);
 
@@ -473,6 +473,12 @@ impl LspServer {
 
             // Add keyword completions
             completions.extend(complete_keywords(&prefix));
+
+            // A line-leading `.` either continues the line before it or
+            // starts an implicit constructor.
+            if dot == DotContext::Either {
+                completions.extend(constructors());
+            }
 
             Some(completions)
         })?;
@@ -1031,26 +1037,41 @@ fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
     }
 }
 
-/// Whether a name starting at byte `start` follows the `.` of an implicit
-/// constructor (`.Some`): a `.` that no expression ends right before on its
-/// line. A `.` right after an expression continues a method call, and one
-/// after another `.` is part of a spread. A line-leading `.` may start one,
-/// since a constructor's uppercase name never continues a method call.
-fn starts_implicit_constructor(rope: &Rope, start: usize) -> bool {
+/// What a `.` right before a name being completed starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DotContext {
+    /// No `.`, or one that continues the expression right before it (a
+    /// method call) or another `.` (a spread).
+    Other,
+    /// An implicit constructor (`.Some`): no expression ends before the `.`.
+    ImplicitConstructor,
+    /// A line-leading `.`, which continues the line before it as a method
+    /// call (`.map`, `.Option::map`) or starts an implicit constructor.
+    Either,
+}
+
+/// What the `.` right before byte `start`, where the name being completed
+/// starts, begins.
+fn dot_context(rope: &Rope, start: usize) -> DotContext {
     let Some(dot) = start.checked_sub(1) else {
-        return false;
+        return DotContext::Other;
     };
     if rope
         .get_byte_slice(dot..start)
         .is_none_or(|text| text != ".")
     {
-        return false;
+        return DotContext::Other;
     }
-    let line_start = rope.line_to_byte(rope.byte_to_line(dot));
+    let line = rope.byte_to_line(dot);
+    let line_start = rope.line_to_byte(line);
     let before = rope.byte_slice(line_start..dot).to_string();
     match before.trim_end_matches([' ', '\t']).chars().last() {
-        None => true,
-        Some(c) => !(c.is_alphanumeric() || matches!(c, '_' | ')' | ']' | '}' | '"' | '\'' | '.')),
+        None if line == 0 => DotContext::ImplicitConstructor,
+        None => DotContext::Either,
+        Some(c) if c.is_alphanumeric() || matches!(c, '_' | ')' | ']' | '}' | '"' | '\'' | '.') => {
+            DotContext::Other
+        }
+        Some(_) => DotContext::ImplicitConstructor,
     }
 }
 
@@ -1451,32 +1472,29 @@ mod tests {
     }
 
     #[test]
-    fn test_implicit_constructor_context() {
+    fn test_dot_context() {
         let at = |text: &str| {
-            let rope = Rope::from_str(text);
             let start = text.rfind('|').expect("a cursor mark");
-            let rope = {
-                let mut rope = rope;
-                rope.remove(rope.byte_to_char(start)..rope.byte_to_char(start + 1));
-                rope
-            };
-            starts_implicit_constructor(&rope, start)
+            let mut rope = Rope::from_str(text);
+            rope.remove(rope.byte_to_char(start)..rope.byte_to_char(start + 1));
+            dot_context(&rope, start)
         };
         // Where an expression starts, `.` starts an implicit constructor.
-        assert!(at("let x = .|"));
-        assert!(at("f(a, .|"));
-        assert!(at("case x {\n    .|"));
-        assert!(at("x ==.|"));
-        // A line-leading `.` may start one too.
-        assert!(at("xs\n    .|"));
+        assert_eq!(at("let x = .|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("f(a, .|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("x ==.|"), DotContext::ImplicitConstructor);
+        assert_eq!(at(".|"), DotContext::ImplicitConstructor);
+        // A line-leading `.` may continue the line before it, or start one.
+        assert_eq!(at("xs\n    .|"), DotContext::Either);
+        assert_eq!(at("case x {\n    .|"), DotContext::Either);
         // Right after an expression, `.` continues a method call.
-        assert!(!at("xs.|"));
-        assert!(!at("f(x).|"));
-        assert!(!at("\"s\".|"));
+        assert_eq!(at("xs.|"), DotContext::Other);
+        assert_eq!(at("f(x).|"), DotContext::Other);
+        assert_eq!(at("\"s\".|"), DotContext::Other);
         // `..` is a spread, and no `.` is no constructor.
-        assert!(!at("User { ..|"));
-        assert!(!at("let x = |"));
-        assert!(!at("|"));
+        assert_eq!(at("User { ..|"), DotContext::Other);
+        assert_eq!(at("let x = |"), DotContext::Other);
+        assert_eq!(at("|"), DotContext::Other);
     }
 
     #[test]
@@ -2136,6 +2154,49 @@ mod tests {
         assert_eq!(
             list.items[0].kind,
             Some(lsp_types::CompletionItemKind::CONSTRUCTOR)
+        );
+    }
+
+    #[test]
+    fn test_completion_after_a_line_leading_dot_keeps_methods() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("completion_line_dot");
+        let source = "enum Mode { Many }\nfn mapped(n: Nat) -> Nat { n }\nfn run() -> Nat {\n    1\n    .\n}";
+
+        harness.open_document(&uri, source);
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 4,
+                    character: 5, // After the line-leading `.`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let kind_of = |label: &str| {
+            list.items
+                .iter()
+                .find(|item| item.label == label)
+                .and_then(|item| item.kind)
+        };
+        assert_eq!(
+            kind_of("mapped"),
+            Some(lsp_types::CompletionItemKind::FUNCTION),
+            "the `.` may continue a method chain"
+        );
+        assert_eq!(
+            kind_of("Many"),
+            Some(lsp_types::CompletionItemKind::CONSTRUCTOR),
+            "the `.` may start an implicit constructor"
         );
     }
 

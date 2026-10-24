@@ -188,7 +188,7 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
             _ => {}
         }
     }
-    for (ty, name) in tribute::library_constructors(db) {
+    for (ty, name) in prelude_constructors(db) {
         items.push(AstCompletionItem {
             detail: Some(format!(
                 "{}::{ty}::{name}",
@@ -200,6 +200,31 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
         });
     }
     items
+}
+
+/// The constructors of the prelude's types, as `(type, variant)`: the
+/// public variants of its enums, the only prelude types with constructors.
+fn prelude_constructors(db: &dyn salsa::Database) -> Vec<(Symbol, Symbol)> {
+    let dependencies = tribute::prelude_dependencies(db);
+    let own = tribute_front::resolve::PackageEnv::new();
+    let scope = tribute_front::resolve::Scope::new(&own, &dependencies);
+    let mut constructors: Vec<_> = tribute::library_names(db)
+        .into_iter()
+        .filter(|(_, binding)| matches!(binding, Binding::TypeDef { .. }))
+        .filter_map(|(name, _)| Some((scope.library_namespace(&name)?, name)))
+        .flat_map(|(namespace, name)| {
+            scope
+                .iter_namespace(&namespace)
+                .filter(|(_, binding)| {
+                    matches!(binding, Binding::Constructor { tag: Some(_), .. })
+                        && scope.restriction(binding).is_none()
+                })
+                .map(move |(variant, _)| (name.clone(), variant))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    constructors.sort();
+    constructors
 }
 
 /// The identity path of the module whose body contains the byte offset

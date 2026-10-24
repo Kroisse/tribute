@@ -351,7 +351,7 @@ fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<PackageEnv<'db>> {
 }
 
 /// The packages a user package depends on: package `std`.
-fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::Dependencies<'db> {
+pub fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::Dependencies<'db> {
     prelude_env(db)
         .map(ast_resolve::Dependencies::std)
         .unwrap_or_default()
@@ -376,33 +376,6 @@ pub fn library_names<'db>(
                 .then(|| (name, binding.clone()))
         })
         .collect()
-}
-
-/// The constructors of the prelude's types, as `(type, variant)`: the
-/// public variants of its enums, the only prelude types with constructors.
-pub fn library_constructors(db: &dyn salsa::Database) -> Vec<(trunk_ir::Symbol, trunk_ir::Symbol)> {
-    let dependencies = prelude_dependencies(db);
-    let own = PackageEnv::new();
-    let scope = ast_resolve::Scope::new(&own, &dependencies);
-    let mut constructors: Vec<_> = library_names(db)
-        .into_iter()
-        .filter(|(_, binding)| matches!(binding, ast_resolve::Binding::TypeDef { .. }))
-        .filter_map(|(name, _)| Some((scope.library_namespace(&name)?, name)))
-        .flat_map(|(namespace, name)| {
-            scope
-                .iter_namespace(&namespace)
-                .filter(|(_, binding)| {
-                    matches!(
-                        binding,
-                        ast_resolve::Binding::Constructor { tag: Some(_), .. }
-                    ) && scope.restriction(binding).is_none()
-                })
-                .map(move |(variant, _)| (name.clone(), variant))
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    constructors.sort();
-    constructors
 }
 
 /// The prelude's type exports (TypeSchemes only, no UniVars), injected into
