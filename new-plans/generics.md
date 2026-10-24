@@ -396,7 +396,8 @@ exports, and typed bodies share the same parsed declarations, including their
 nominal definition identities. A source declaration's identity is its origin
 kind, its package-qualified path, and the number of same-named type
 declarations before it in its module (see `types.md`), so reparsing the same
-declaration yields the same identity and an edit elsewhere does not change it.
+declaration yields the same identity, and an edit elsewhere changes it only
+when it changes that path or that count.
 Prelude merging, deferred method desugaring, and specialized AST cloning
 preserve the record. Clones substitute their enclosing type arguments into
 nested instance records.

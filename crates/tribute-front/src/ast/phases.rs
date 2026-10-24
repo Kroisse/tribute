@@ -153,7 +153,8 @@ pub enum TypeOrigin {
     /// A source declaration, identified by its path and by how many type
     /// declarations of the same name precede it in its module. The path
     /// includes the declaring package. Reparsing the same declaration, or
-    /// editing another, gives the same identity.
+    /// editing another, gives the same identity unless the edit changes
+    /// the declaration's path or the same-named declarations before it.
     Source { disambiguator: u32 },
     /// A compiler-owned nominal type.
     Builtin(BuiltinType),

@@ -18,7 +18,8 @@ types, including declarations in different nested modules.
 정해진다. 마지막 값은 module이 이름을 다시 선언하지 않으면 0이며, 다시 선언한
 잘못된 module에서도 각 선언이 자기 identity를 갖게 한다. 이름으로 타입을 가리키는
 참조는 그 path의 첫 선언을 뜻한다. Source 위치는 identity에 들어가지 않으므로, 같은
-선언을 다시 파싱하거나 다른 선언을 편집해도 identity는 바뀌지 않는다. 같은 철자의
+선언을 다시 파싱하거나 다른 선언을 편집해도 identity는 바뀌지 않는다. 바뀌는 것은
+편집이 선언의 path나 그보다 앞선 같은 이름의 타입 선언 수를 바꿀 때뿐이다. 같은 철자의
 source 타입과 compiler 소유 타입(`List`)은 출처 종류로 구별된다.
 
 Qualified and locally unqualified references to one declaration resolve to the
