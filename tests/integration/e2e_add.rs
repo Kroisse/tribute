@@ -25,7 +25,7 @@ use std::io::{Io, print_line}
 fn add(x: Nat, y: Nat) -> Nat { x + y }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(add(40, 2)))
+    print_line(add(40, 2).to_string)
 }
 "#,
         "42",
@@ -43,7 +43,7 @@ use std::io::{Io, print_line}
 fn identity(x: a) ->{} a { x }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(identity(42)))
+    print_line(identity(42).to_string)
 }
 "#,
         "42",
@@ -61,7 +61,7 @@ struct Point { x: Nat, y: Nat }
 
 fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
-    print_line(Nat::to_string(42))
+    print_line(42.to_string)
 }
 "#,
         "42",
@@ -79,7 +79,7 @@ struct Point { x: Nat, y: Nat }
 
 fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
-    print_line(Nat::to_string(p.x()))
+    print_line(p.x().to_string)
 }
 "#,
         "10",
@@ -124,7 +124,7 @@ fn identity(x: a) ->{} a { x }
 fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
     let p2 = identity(p)
-    print_line(Nat::to_string(p2.x()))
+    print_line(p2.x().to_string)
 }
 "#,
         "10",
@@ -143,7 +143,7 @@ fn identity(x: a) ->{} a { x }
 fn main() ->{Io} Nil {
     let i = identity(42)
     let _ = identity(3.14)
-    print_line(Nat::to_string(i))
+    print_line(i.to_string)
 }
 "#,
         "42",
@@ -160,7 +160,7 @@ use std::io::{Io, print_line}
 fn first(x: a, y: b) ->{} a { x }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(first(10, 3.14)))
+    print_line(first(10, 3.14).to_string)
 }
 "#,
         "10",
@@ -177,7 +177,7 @@ use std::io::{Io, print_line}
 fn identity(x: a) ->{} a { x }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(identity(identity(identity(42)))))
+    print_line(identity(identity(identity(42))).to_string)
 }
 "#,
         "42",
@@ -721,7 +721,7 @@ fn test_closure_execution_simple() {
 use std::io::{Io, print_line}
 fn main() ->{Io} Nil {
     let f = fn(x) { x + 1 }
-    print_line(Nat::to_string(f(41)))
+    print_line(f(41).to_string)
 }
 "#,
         "42",

@@ -34,8 +34,8 @@ fn main() ->{Io} Nil {
         [value, .._] -> value
         _ -> 0
     }
-    print_line(Nat::to_string(List::prepend(20, 22)))
-    print_line(Nat::to_string(head))
-    print_line(Nat::to_string(A::prepend(4, 5)))
-    print_line(Nat::to_string(B::prepend(6, 7)))
+    print_line(List::prepend(20, 22).to_string)
+    print_line(head.to_string)
+    print_line(A::prepend(4, 5).to_string)
+    print_line(B::prepend(6, 7).to_string)
 }

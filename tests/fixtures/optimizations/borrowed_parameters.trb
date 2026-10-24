@@ -14,5 +14,5 @@ fn read_while_borrowing(boxed: BoxedNat) -> Nat {
 
 fn main() ->{Io} Nil {
     let boxed = .Boxed(10)
-    print_line(Nat::to_string(read_while_borrowing(boxed)))
+    print_line(read_while_borrowing(boxed).to_string)
 }

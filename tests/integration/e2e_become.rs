@@ -24,7 +24,7 @@ fn count(n: Nat, acc: Nat) -> Nat {
 }
 
 fn main() ->{std::io::Io} Nil {
-    std::io::print_line(Nat::to_string(count(DEPTH, 0)))
+    std::io::print_line(count(DEPTH, 0).to_string)
 }
 "#
     .replace("DEPTH", DEPTH);
@@ -50,7 +50,7 @@ fn is_odd(n: Nat) -> Nat {
 }
 
 fn main() ->{std::io::Io} Nil {
-    std::io::print_line(Nat::to_string(is_even(DEPTH)))
+    std::io::print_line(is_even(DEPTH).to_string)
 }
 "#
     .replace("DEPTH", DEPTH);
@@ -74,7 +74,7 @@ fn apply(n: Nat, k: fn(Nat) ->{} Nat) -> Nat {
 }
 
 fn main() ->{std::io::Io} Nil {
-    std::io::print_line(Nat::to_string(step(apply, DEPTH)))
+    std::io::print_line(step(apply, DEPTH).to_string)
 }
 "#
     .replace("DEPTH", DEPTH);
@@ -107,7 +107,7 @@ fn main() ->{std::io::Io} Nil {
         do result { result }
         op Tick::tick() { resume Nil }
     }
-    std::io::print_line(Nat::to_string(total))
+    std::io::print_line(total.to_string)
 }
 "#;
     assert_output_on_both_targets("become_handler.trb", code, "100000");

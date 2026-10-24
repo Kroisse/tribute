@@ -145,7 +145,7 @@ fn test_native_arithmetic() {
 use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(10 + 20 + 3))
+    print_line({{ 10 + 20 + 3 }}.to_string)
 }
 "#,
         "33",
@@ -172,7 +172,7 @@ mod outer {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(self::outer::inner::sum()))
+    print_line(self::outer::inner::sum().to_string)
 }
 "#,
         "111",
@@ -221,8 +221,8 @@ fn wrap(x: Nat) -> Option(Nat) {
 
 fn main() ->{Io} Nil {
     case wrap(5) {
-        .Some(n) -> print_line(Nat::to_string(n))
-        .None -> print_line(Nat::to_string(0))
+        .Some(n) -> print_line(n.to_string)
+        .None -> print_line(0.to_string)
     }
 }
 "#,
@@ -248,12 +248,12 @@ fn theirs(x: Nat) -> std::Option(Nat) { std::Option::Some(x) }
 
 fn main() ->{Io} Nil {
     case theirs(1) {
-        std::Option::Some(n) -> print_line(Nat::to_string(n))
-        std::Option::None -> print_line(Nat::to_string(0))
+        std::Option::Some(n) -> print_line(n.to_string)
+        std::Option::None -> print_line(0.to_string)
     }
     case mine(2) {
-        .Some(n) -> print_line(Nat::to_string(n))
-        .None -> print_line(Nat::to_string(0))
+        .Some(n) -> print_line(n.to_string)
+        .None -> print_line(0.to_string)
     }
 }
 "#,
@@ -273,11 +273,11 @@ pub mod Option {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(Option::map(1)))
+    print_line(Option::map(1).to_string)
     let doubled = .Some(3).std::Option::map(fn(n) { n * 2 })
     case doubled {
-        .Some(n) -> print_line(Nat::to_string(n))
-        .None -> print_line(Nat::to_string(0))
+        .Some(n) -> print_line(n.to_string)
+        .None -> print_line(0.to_string)
     }
 }
 "#,
@@ -297,7 +297,7 @@ fn add(a: Nat, b: Nat) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(add(10, 20)))
+    print_line(add(10, 20).to_string)
 }
 "#,
         "30",
@@ -329,7 +329,7 @@ fn accept_b(_value: B::Thing) -> Nil {}
 fn main() ->{Io} Nil {
     accept_a(keep(A::Thing { value: 1 }))
     accept_b(keep(B::Thing { value: 2 }))
-    print_line(Nat::to_string(3))
+    print_line(3.to_string)
 }
 "#,
         "3",
@@ -362,8 +362,8 @@ pub mod B {
 fn main() ->{Io} Nil {
     let a = A::Token {}
     let b = B::Token {}
-    print_line(Nat::to_string(a.tag()))
-    print_line(Nat::to_string(b.tag()))
+    print_line(a.tag().to_string)
+    print_line(b.tag().to_string)
 }
 "#,
         "1\n12",
@@ -380,7 +380,7 @@ use std::io::{Io, print_line}
 fn main() ->{Io} Nil {
     let a = 10
     let b = 20
-    print_line(Nat::to_string(a + b))
+    print_line({ a + b }.to_string)
 }
 "#,
         "30",
@@ -395,7 +395,7 @@ fn test_native_list_literal_evaluates_left_to_right_once() {
 use std::io::{Io, print_line}
 
 fn mark(value: Nat) ->{Io} Nat {
-    print_line(Nat::to_string(value))
+    print_line(value.to_string)
     value
 }
 
@@ -403,7 +403,7 @@ fn main() ->{Io} Nil {
     let values = [mark(1), mark(2), mark(3)]
     case values {
         [] -> Nil
-        [head, ..tail] -> print_line(Nat::to_string(head))
+        [head, ..tail] -> print_line(head.to_string)
     }
 }
 "#,
@@ -428,10 +428,10 @@ fn classify(values: List(Nat)) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(classify([])))
-    print_line(Nat::to_string(classify([4])))
-    print_line(Nat::to_string(classify([5, 6])))
-    print_line(Nat::to_string(classify([7, 8, 9])))
+    print_line(classify([]).to_string)
+    print_line(classify([4]).to_string)
+    print_line(classify([5, 6]).to_string)
+    print_line(classify([7, 8, 9]).to_string)
 }
 "#,
         "0\n4\n11\n7",
@@ -461,9 +461,9 @@ fn value(pair: #(Item, Bool)) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(value(#(.Empty, True))))
-    print_line(Nat::to_string(value(#(.Number(4), True))))
-    print_line(Nat::to_string(value(#(.Number(5), False))))
+    print_line(value(#(.Empty, True)).to_string)
+    print_line(value(#(.Number(4), True)).to_string)
+    print_line(value(#(.Number(5), False)).to_string)
 }
 "#,
         "0\n4\n105",
@@ -487,9 +487,9 @@ fn pick(o: Option(Bool)) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(pick(.None)))
-    print_line(Nat::to_string(pick(.Some(True))))
-    print_line(Nat::to_string(pick(.Some(False))))
+    print_line(pick(.None).to_string)
+    print_line(pick(.Some(True)).to_string)
+    print_line(pick(.Some(False)).to_string)
 }
 "#,
         "0\n1\n2",
@@ -528,10 +528,10 @@ fn positional(p: Point) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(pick(Point { x: 1, y: True })))
-    print_line(Nat::to_string(pick(Point { x: 2, y: False })))
-    print_line(Nat::to_string(first(Point { x: 3, y: True })))
-    print_line(Nat::to_string(positional(Point { x: 4, y: True })))
+    print_line(pick(Point { x: 1, y: True }).to_string)
+    print_line(pick(Point { x: 2, y: False }).to_string)
+    print_line(first(Point { x: 3, y: True }).to_string)
+    print_line(positional(Point { x: 4, y: True }).to_string)
 }
 "#,
         "100\n2\n3\n5",
@@ -561,9 +561,9 @@ fn size(shape: Shape) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(size(.Circle(1))))
-    print_line(Nat::to_string(size(.Rect(2, True))))
-    print_line(Nat::to_string(size(.Rect(3, False))))
+    print_line(size(.Circle(1)).to_string)
+    print_line(size(.Rect(2, True)).to_string)
+    print_line(size(.Rect(3, False)).to_string)
 }
 "#,
         "1\n12\n3",
@@ -586,7 +586,7 @@ fn second(pair: Pair(Nat, Nat)) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(second(Pair { left: 1, right: 2 })))
+    print_line(second(Pair { left: 1, right: 2 }).to_string)
 }
 "#,
         "2",
@@ -625,10 +625,10 @@ fn nested(o: Option(Point)) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(get(.Box(1, True))))
-    print_line(Nat::to_string(get(.Box(2, False))))
-    print_line(Nat::to_string(get(.Empty)))
-    print_line(Nat::to_string(nested(.Some(Point { x: 3, y: 4 }))))
+    print_line(get(.Box(1, True)).to_string)
+    print_line(get(.Box(2, False)).to_string)
+    print_line(get(.Empty).to_string)
+    print_line(nested(.Some(Point { x: 3, y: 4 })).to_string)
 }
 "#,
         "11\n2\n0\n4",
@@ -671,10 +671,10 @@ fn get(w: Wrap(Nat)) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(size(.Rect { tall: True, width: 7 })))
-    print_line(Nat::to_string(size(.Rect { width: 3, tall: False })))
-    print_line(Nat::to_string(get(.Box { tagged: True, value: 1 })))
-    print_line(Nat::to_string(get(.Box { value: 2, tagged: False })))
+    print_line(size(.Rect { tall: True, width: 7 }).to_string)
+    print_line(size(.Rect { width: 3, tall: False }).to_string)
+    print_line(get(.Box { tagged: True, value: 1 }).to_string)
+    print_line(get(.Box { value: 2, tagged: False }).to_string)
 }
 "#,
         "17\n3\n101\n2",
@@ -705,14 +705,14 @@ fn wrap(flag: Bool, n: Nat) -> Option(Nat) {
 
 fn show(value: Option(Nat)) ->{std::io::Io} Nil {
     case value {
-        .Some(n) -> std::io::print_line(Nat::to_string(n))
-        .None -> std::io::print_line(Nat::to_string(0))
+        .Some(n) -> std::io::print_line(n.to_string)
+        .None -> std::io::print_line(0.to_string)
     }
 }
 
 fn main() ->{std::io::Io} Nil {
-    std::io::print_line(Nat::to_string(count(True, 1)))
-    std::io::print_line(Nat::to_string(count(False, 1)))
+    std::io::print_line(count(True, 1).to_string)
+    std::io::print_line(count(False, 1).to_string)
     show(wrap(True, 7))
     show(wrap(False, 7))
 }
@@ -771,22 +771,22 @@ fn t(x: #(Nil, String)) -> Nat {
     }
 }
 fn main() ->{std::io::Io} Nil {
-    std::io::print_line(Nat::to_string(s("abc")))
-    std::io::print_line(Nat::to_string(s("ab" <> "c")))
-    std::io::print_line(Nat::to_string(s("")))
-    std::io::print_line(Nat::to_string(s("x")))
-    std::io::print_line(Nat::to_string(by(b"a" <> b"b")))
-    std::io::print_line(Nat::to_string(by(b"")))
-    std::io::print_line(Nat::to_string(by(b"abc")))
-    std::io::print_line(Nat::to_string(f(1.5)))
-    std::io::print_line(Nat::to_string(f(-0.0)))
-    std::io::print_line(Nat::to_string(f(0.0 / 0.0)))
-    std::io::print_line(Nat::to_string(r(?a)))
-    std::io::print_line(Nat::to_string(r(?\n)))
-    std::io::print_line(Nat::to_string(r(?b)))
-    std::io::print_line(Nat::to_string(n(Nil)))
-    std::io::print_line(Nat::to_string(t(#(Nil, "a"))))
-    std::io::print_line(Nat::to_string(t(#(Nil, "b"))))
+    std::io::print_line(s("abc").to_string)
+    std::io::print_line(s("ab" <> "c").to_string)
+    std::io::print_line(s("").to_string)
+    std::io::print_line(s("x").to_string)
+    std::io::print_line(by(b"a" <> b"b").to_string)
+    std::io::print_line(by(b"").to_string)
+    std::io::print_line(by(b"abc").to_string)
+    std::io::print_line(f(1.5).to_string)
+    std::io::print_line(f(-0.0).to_string)
+    std::io::print_line(f(0.0 / 0.0).to_string)
+    std::io::print_line(r(?a).to_string)
+    std::io::print_line(r(?\n).to_string)
+    std::io::print_line(r(?b).to_string)
+    std::io::print_line(n(Nil).to_string)
+    std::io::print_line(t(#(Nil, "a")).to_string)
+    std::io::print_line(t(#(Nil, "b")).to_string)
 }
 "#;
     assert_output_on_both_targets(
@@ -825,9 +825,9 @@ fn count(xs: List(Nat)) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(kind(.Circle { radius: 3 })))
-    print_line(Nat::to_string(kind(.Rect { width: 1, tall: True })))
-    print_line(Nat::to_string(count([4, 5])))
+    print_line(kind(.Circle { radius: 3 }).to_string)
+    print_line(kind(.Rect { width: 1, tall: True }).to_string)
+    print_line(count([4, 5]).to_string)
 }
 "#,
         "1\n2\n1",
@@ -864,9 +864,9 @@ fn outer(shape: Shape) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(shapes::inner(Shape::Dot(7))))
-    print_line(Nat::to_string(outer(.Dot(7))))
-    print_line(Nat::to_string(outer(shapes::Shape::Other)))
+    print_line(shapes::inner(Shape::Dot(7)).to_string)
+    print_line(outer(.Dot(7)).to_string)
+    print_line(outer(shapes::Shape::Other).to_string)
 }
 "#,
         "7\n17\n1",
@@ -899,10 +899,10 @@ fn prefix(values: List(Item)) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(exact([])))
-    print_line(Nat::to_string(exact([.Number(1)])))
-    print_line(Nat::to_string(prefix([])))
-    print_line(Nat::to_string(prefix([.Number(1)])))
+    print_line(exact([]).to_string)
+    print_line(exact([.Number(1)]).to_string)
+    print_line(prefix([]).to_string)
+    print_line(prefix([.Number(1)]).to_string)
 }
 "#,
         "9\n9\n8\n8",
@@ -940,19 +940,19 @@ fn nested(values: List(List(Item))) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(exact([.Number(3), .Number(4)])))
-    print_line(Nat::to_string(exact([.Number(3), .Number(4), .Number(5)])))
-    print_line(Nat::to_string(exact([.Other, .Number(4)])))
-    print_line(Nat::to_string(exact([.Number(3), .Other])))
-    print_line(Nat::to_string(prefix([.Number(1), .Number(2), .Number(3), .Number(4)])))
-    print_line(Nat::to_string(prefix([.Number(1), .Number(2)])))
-    print_line(Nat::to_string(prefix([.Other, .Number(2)])))
-    print_line(Nat::to_string(prefix([.Number(1), .Other])))
-    print_line(Nat::to_string(nested([[.Nested(.Number(6))]])))
-    print_line(Nat::to_string(nested([])))
-    print_line(Nat::to_string(nested([[]])))
-    print_line(Nat::to_string(nested([[.Nested(.Other)]])))
-    print_line(Nat::to_string(nested([[.Other]])))
+    print_line(exact([.Number(3), .Number(4)]).to_string)
+    print_line(exact([.Number(3), .Number(4), .Number(5)]).to_string)
+    print_line(exact([.Other, .Number(4)]).to_string)
+    print_line(exact([.Number(3), .Other]).to_string)
+    print_line(prefix([.Number(1), .Number(2), .Number(3), .Number(4)]).to_string)
+    print_line(prefix([.Number(1), .Number(2)]).to_string)
+    print_line(prefix([.Other, .Number(2)]).to_string)
+    print_line(prefix([.Number(1), .Other]).to_string)
+    print_line(nested([[.Nested(.Number(6))]]).to_string)
+    print_line(nested([]).to_string)
+    print_line(nested([[]]).to_string)
+    print_line(nested([[.Nested(.Other)]]).to_string)
+    print_line(nested([[.Other]]).to_string)
 }
 "#,
         "7\n9\n9\n9\n10\n12\n8\n8\n6\n0\n0\n0\n0",
@@ -1039,9 +1039,9 @@ fn main() ->{Io} Nil {
     let original = [4, 5, 6]
     let rest = tail(original)
     let last = tail(rest)
-    print_line(Nat::to_string(head_or_zero(original)))
-    print_line(Nat::to_string(head_or_zero(rest)))
-    print_line(Nat::to_string(head_or_zero(last)))
+    print_line(head_or_zero(original).to_string)
+    print_line(head_or_zero(rest).to_string)
+    print_line(head_or_zero(last).to_string)
 }
 "#,
         "4\n5\n6",
@@ -1066,8 +1066,8 @@ fn observe(values: List(Nat)) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(observe([])))
-    print_line(Nat::to_string(observe([2, 3])))
+    print_line(observe([]).to_string)
+    print_line(observe([2, 3]).to_string)
 }
 "#,
         "9\n223",
@@ -1192,7 +1192,7 @@ fn source_value(value: List(Nat)) -> Nat {
 
 fn main() ->{Io} Nil {
     let source = source_value(keep(.SourceList(2)))
-    print_line(Nat::to_string(builtin_value() + source))
+    print_line({ builtin_value() + source }.to_string)
 }
 "#,
         "3",
@@ -1213,7 +1213,7 @@ pub mod List {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(List::prepend(20, 22)))
+    print_line(List::prepend(20, 22).to_string)
 }
 "#,
         "42",
@@ -1249,7 +1249,7 @@ fn classify(n: Nat) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(classify(5)))
+    print_line(classify(5).to_string)
 }
 "#,
         "2",
@@ -1267,7 +1267,7 @@ struct Point { x: Nat, y: Nat }
 
 fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
-    print_line(Nat::to_string(p.x()))
+    print_line(p.x().to_string)
 }
 "#,
         "10",
@@ -1284,7 +1284,7 @@ use std::io::{Io, print_line}
 fn main() ->{Io} Nil {
     let a = 10
     let f = fn(x) { x + a }
-    print_line(Nat::to_string(f(32)))
+    print_line(f(32).to_string)
 }
 "#,
         "42",
@@ -1311,7 +1311,7 @@ fn area(s: Shape) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(area(.Circle(5))))
+    print_line(area(.Circle(5)).to_string)
 }
 "#,
         "25",
@@ -1341,7 +1341,7 @@ fn to_num(c: Color) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(to_num(.Green)))
+    print_line(to_num(.Green).to_string)
 }
 "#,
         "2",
@@ -1369,8 +1369,8 @@ fn maybe_unwrap(m: Maybe, default: Nat) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(maybe_unwrap(.Just(42), 0)))
-    print_line(Nat::to_string(maybe_unwrap(.Nothing, 99)))
+    print_line(maybe_unwrap(.Just(42), 0).to_string)
+    print_line(maybe_unwrap(.Nothing, 99).to_string)
 }
 "#,
         "42\n99",
@@ -1393,7 +1393,7 @@ fn fibonacci(n: Nat) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(fibonacci(10)))
+    print_line(fibonacci(10).to_string)
 }
 "#,
         "55",
@@ -1410,7 +1410,7 @@ use std::io::{Io, print_line}
 fn main() ->{Io} Nil {
     let t = #(1, 2)
     let #(a, b) = t
-    print_line(Nat::to_string(a + b))
+    print_line({ a + b }.to_string)
 }
 "#,
         "3",
@@ -1444,9 +1444,9 @@ fn sum(items: List(#(Item, Nat))) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(first(#(.Number(1), 2))))
-    print_line(Nat::to_string(first(#(.Empty, 5))))
-    print_line(Nat::to_string(sum([#(.Number(10), 1), #(.Empty, 2), #(.Number(3), 4)])))
+    print_line(first(#(.Number(1), 2)).to_string)
+    print_line(first(#(.Empty, 5)).to_string)
+    print_line(sum([#(.Number(10), 1), #(.Empty, 2), #(.Number(3), 4)]).to_string)
 }
 "#,
         "3\n0\n118",
@@ -1469,8 +1469,8 @@ fn pick(b: Bool) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(pick(True)))
-    print_line(Nat::to_string(pick(False)))
+    print_line(pick(True).to_string)
+    print_line(pick(False).to_string)
 }
 "#,
         "10\n42",
@@ -1493,9 +1493,9 @@ fn bool_to_nat(b: Bool) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(bool_to_nat(False && True)))
-    print_line(Nat::to_string(bool_to_nat(True && True)))
-    print_line(Nat::to_string(bool_to_nat(True && False)))
+    print_line(bool_to_nat(False && True).to_string)
+    print_line(bool_to_nat(True && True).to_string)
+    print_line(bool_to_nat(True && False).to_string)
 }
 "#,
         "0\n1\n0",
@@ -1518,9 +1518,9 @@ fn bool_to_nat(b: Bool) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(bool_to_nat(True || False)))
-    print_line(Nat::to_string(bool_to_nat(False || True)))
-    print_line(Nat::to_string(bool_to_nat(False || False)))
+    print_line(bool_to_nat(True || False).to_string)
+    print_line(bool_to_nat(False || True).to_string)
+    print_line(bool_to_nat(False || False).to_string)
 }
 "#,
         "1\n1\n0",
@@ -1537,14 +1537,14 @@ fn test_native_short_circuit_and_skips_rhs() {
 use std::io::{Io, print_line}
 
 fn side_effect() ->{Io} Bool {
-    print_line(Nat::to_string(99))
+    print_line(99.to_string)
     True
 }
 
 fn main() ->{Io} Nil {
     case False && side_effect() {
-        True -> print_line(Nat::to_string(1))
-        False -> print_line(Nat::to_string(0))
+        True -> print_line(1.to_string)
+        False -> print_line(0.to_string)
     }
 }
 "#,
@@ -1561,14 +1561,14 @@ fn test_native_short_circuit_or_skips_rhs() {
 use std::io::{Io, print_line}
 
 fn side_effect() ->{Io} Bool {
-    print_line(Nat::to_string(99))
+    print_line(99.to_string)
     False
 }
 
 fn main() ->{Io} Nil {
     case True || side_effect() {
-        True -> print_line(Nat::to_string(1))
-        False -> print_line(Nat::to_string(0))
+        True -> print_line(1.to_string)
+        False -> print_line(0.to_string)
     }
 }
 "#,
@@ -1599,7 +1599,7 @@ fn sum(t: Tree) -> Nat {
 
 fn main() ->{Io} Nil {
     let t = .Branch(.Leaf(1), .Branch(.Leaf(2), .Leaf(3), 0), 0)
-    print_line(Nat::to_string(sum(t)))
+    print_line(sum(t).to_string)
 }
 "#,
         "6",
@@ -1978,12 +1978,12 @@ fn bool_to_nat(value: Bool) -> Nat {
 fn main() ->{Io} Nil {
     let cursor = .UserCursor(7)
     case cursor {
-        .UserCursor(value) -> print_line(Nat::to_string(value))
-        .EmptyCursor -> print_line(Nat::to_string(0))
+        .UserCursor(value) -> print_line(value.to_string)
+        .EmptyCursor -> print_line(0.to_string)
     }
-    print_line(Nat::to_string(bool_to_nat("leaf" == "leaf")))
+    print_line(bool_to_nat("leaf" == "leaf").to_string)
     let rope = "ro" <> "pe"
-    print_line(Nat::to_string(bool_to_nat(rope == "rope")))
+    print_line(bool_to_nat(rope == "rope").to_string)
 }
 "#,
         "7\n1\n1",
@@ -2447,7 +2447,7 @@ use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
     let bs = b"hello"
-    print_line(Nat::to_string(bs.len()))
+    print_line(bs.len().to_string)
 }
 "#,
         "5",
@@ -2491,9 +2491,9 @@ use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
     let bs = b"abc"
-    print_line(Nat::to_string(bs.get_or_panic(0)))
-    print_line(Nat::to_string(bs.get_or_panic(1)))
-    print_line(Nat::to_string(bs.get_or_panic(2)))
+    print_line(bs.get_or_panic(0).to_string)
+    print_line(bs.get_or_panic(1).to_string)
+    print_line(bs.get_or_panic(2).to_string)
 }
 "#,
         "97\n98\n99",
@@ -2505,9 +2505,9 @@ fn test_bytes_get_or_panic_reads_high_bytes_unsigned() {
     let code = r#"
 fn main() ->{std::io::Io} Nil {
     let bs = b"\xff\x80\x7f"
-    std::io::print_line(Nat::to_string(bs.get_or_panic(0)))
-    std::io::print_line(Nat::to_string(bs.get_or_panic(1)))
-    std::io::print_line(Nat::to_string(bs.get_or_panic(2)))
+    std::io::print_line(bs.get_or_panic(0).to_string)
+    std::io::print_line(bs.get_or_panic(1).to_string)
+    std::io::print_line(bs.get_or_panic(2).to_string)
 }
 "#;
     assert_output_on_both_targets("bytes_get_or_panic_high.trb", code, "255\n128\n127");
@@ -2591,7 +2591,7 @@ fn main() ->{std::io::Io} Nil {
     )
     let bs = b"hello"
     let sl = bs.slice(3, 100)
-    std::io::print_line(Nat::to_string(sl.len()))
+    std::io::print_line(sl.len().to_string)
 }
 "#;
     assert_output_on_both_targets("nat_comparisons.trb", code, "1010\n1010\n111\n2");
@@ -2605,7 +2605,7 @@ fn test_native_bytes_as_function_arg() {
 use std::io::{Io, print_line}
 
 fn print_bytes_len(bs: Bytes) ->{Io} Nil {
-    print_line(Nat::to_string(bs.len()))
+    print_line(bs.len().to_string)
 }
 
 fn main() ->{Io} Nil {
@@ -2643,10 +2643,10 @@ fn area(shape: Shape) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(area(.Circle(2))))
-    print_line(Nat::to_string(area(.Square(3))))
-    print_line(Nat::to_string(area(.Pair(4, 5))))
-    print_line(Nat::to_string(area(.Empty)))
+    print_line(area(.Circle(2)).to_string)
+    print_line(area(.Square(3)).to_string)
+    print_line(area(.Pair(4, 5)).to_string)
+    print_line(area(.Empty).to_string)
 }
 "#,
         "12\n9\n20\n0",
@@ -2675,9 +2675,9 @@ fn code(color: Color) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(code(.Red)))
-    print_line(Nat::to_string(code(.Green)))
-    print_line(Nat::to_string(code(.Blue)))
+    print_line(code(.Red).to_string)
+    print_line(code(.Green).to_string)
+    print_line(code(.Blue).to_string)
 }
 "#,
         "1\n2\n3",
@@ -2904,7 +2904,7 @@ use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
     let s = String::empty()
-    print_line(Nat::to_string(s.len()))
+    print_line(s.len().to_string)
 }
 "#,
         "0",
@@ -2920,7 +2920,7 @@ use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
     let bs = Bytes::empty()
-    print_line(Nat::to_string(bs.len()))
+    print_line(bs.len().to_string)
 }
 "#,
         "0",
