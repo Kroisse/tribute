@@ -15,7 +15,9 @@ use std::num::NonZero;
 /// name, and how many items of that kind and name precede it in its module;
 /// module-level nodes (the module itself, `mod` and `use` declarations) are
 /// owned by their module. An edit therefore changes the NodeIds of the items
-/// it touches only: an unchanged item keeps its NodeIds wherever it moves.
+/// it touches only: an unchanged item keeps its NodeIds wherever it moves,
+/// unless it moves past an item of the same kind and name in its module,
+/// which changes how many such items precede it.
 ///
 /// The source hash is derived from the source file URI, so nodes from
 /// different files (e.g., prelude vs user code) are distinguished without
