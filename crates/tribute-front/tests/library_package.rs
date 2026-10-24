@@ -495,3 +495,32 @@ fn hidden() -> Option(Nat) { a::m::internal::Option::Some(1) }
     );
     assert_eq!(errors, ["unresolved name `a::m::internal::Option::Some`"]);
 }
+
+/// A path follows a chain of re-exports to the end, however many of them
+/// replace a prefix of the same length.
+#[salsa_test]
+fn paths_continue_through_a_chain_of_re_exports(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod m0 {
+    pub use std as library
+}
+pub mod m1 {
+    pub use pkg::m0::library as library
+}
+pub mod m2 {
+    pub use pkg::m1::library as library
+}
+pub mod m3 {
+    pub use pkg::m2::library as library
+}
+pub mod m4 {
+    pub use pkg::m3::library as library
+}
+
+fn chained() -> Option(Nat) { m4::library::Option::Some(1) }
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}

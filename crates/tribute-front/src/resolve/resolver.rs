@@ -370,10 +370,13 @@ impl<'db> Resolver<'db> {
     /// std as library` in `m`, is `Option` in package `std`. A re-export the
     /// current module does not see stops the path.
     fn through_exports(&self, namespace: Location) -> Location {
+        use rustc_hash::FxHashSet as HashSet;
+
         let mut namespace = namespace;
-        // Each re-export names a location that resolved without it, so a
-        // path follows at most one per segment.
-        for _ in 0..=namespace.path.len() {
+        // A chain of re-exports may replace a prefix without shortening the
+        // path, so the locations seen so far end a cycle.
+        let mut seen = HashSet::default();
+        while seen.insert(namespace.clone()) {
             if self.view().has_namespace(&namespace) {
                 break;
             }
