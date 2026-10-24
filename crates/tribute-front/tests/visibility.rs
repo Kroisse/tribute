@@ -444,3 +444,29 @@ fn value() -> Option(Nat) { a::m::Opt::Some(1) }
         ]
     );
 }
+
+/// A restricted re-export does not widen the visibility of a member of what
+/// it names.
+#[salsa_test]
+fn a_restricted_re_export_keeps_its_members_private(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod source {
+    fn secret() -> Nat { 1 }
+    pub fn open() -> Nat { 2 }
+}
+
+pub mod facade {
+    pub(pkg) use pkg::source as alias
+}
+
+fn hidden() -> Nat { facade::alias::secret() }
+fn visible() -> Nat { facade::alias::open() }
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["`facade::alias::secret` is not visible here: `source::secret` is private"]
+    );
+}

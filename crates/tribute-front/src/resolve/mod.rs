@@ -328,15 +328,30 @@ fn add_export<'db>(
     }) else {
         return false;
     };
-    let entries = scope.collect_namespace(&target);
+    // An entry under the exported name is visible only where both it and
+    // the re-export are.
+    let entries: Vec<_> = scope
+        .collect_namespace(&target)
+        .into_iter()
+        .map(|(name, entry)| {
+            let member = scope
+                .entry_restriction(&target, &name)
+                .or_else(|| scope.restriction(&entry))
+                .cloned();
+            let restriction = match (export.restriction.clone(), member) {
+                (Some(export), Some(member)) => Some(narrower(export, member)),
+                (export, member) => export.or(member),
+            };
+            (name, entry, restriction)
+        })
+        .collect();
     // The exported name's own namespace, e.g. `facade::Abort::abort`.
     let own = export.module.child(export.name.clone());
-    for (name, entry) in entries {
-        // The entries under the exported name are visible where it is.
+    for (name, entry, restriction) in entries {
         if env.add_to_namespace_if_absent(&own, &name, entry)
-            && let Some(restriction) = &export.restriction
+            && let Some(restriction) = restriction
         {
-            env.restrict_entry(own.clone(), name, restriction.clone());
+            env.restrict_entry(own.clone(), name, restriction);
         }
     }
     env.add_to_namespace_if_absent(&export.module, &export.name, binding);
@@ -349,6 +364,17 @@ fn add_export<'db>(
         );
     }
     true
+}
+
+/// The narrower of `export`, the restriction of a re-export in the package
+/// being collected, and `member`, that of an entry it shows. Another
+/// package's restriction hides the entry from this whole package.
+fn narrower(export: Restriction, member: Restriction) -> Restriction {
+    if member.package != export.package || member.within.len() > export.within.len() {
+        member
+    } else {
+        export
+    }
 }
 
 /// What a declaration's visibility is relative to while its environment is
