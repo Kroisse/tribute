@@ -176,15 +176,15 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
     };
     let entries = &output.module(db).entries;
     // Each type's constructors, by the type's package-root path.
-    let types: HashMap<SymbolPath, TypeConstructors<'_>> = entries
+    let types: HashMap<SymbolPath, TypeConstructors> = entries
         .iter()
         .filter_map(|entry| {
             let constructors = match &entry.decl {
                 Decl::Enum(e) => TypeConstructors::Variants(
-                    &e.name,
-                    e.variants.iter().map(|v| &v.name).collect(),
+                    e.name.clone(),
+                    e.variants.iter().map(|v| v.name.clone()).collect(),
                 ),
-                Decl::Struct(s) => TypeConstructors::Struct(&s.name),
+                Decl::Struct(s) => TypeConstructors::Struct(s.name.clone()),
                 _ => return None,
             };
             Some((
@@ -194,7 +194,7 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
         })
         .collect();
     let mut items = Vec::new();
-    let mut add = |module: &SymbolPath, ty: &Symbol, constructors: &TypeConstructors<'_>| {
+    let mut add = |module: &SymbolPath, ty: &Symbol, constructors: &TypeConstructors| {
         let mut push = |name: &Symbol, detail: String| {
             items.push(AstCompletionItem {
                 name: name.clone(),
@@ -205,13 +205,13 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
         };
         match constructors {
             TypeConstructors::Variants(_, variants) => {
-                for &variant in variants {
+                for variant in variants {
                     push(variant, format!("{ty}::{variant}"));
                 }
             }
             // A struct's constructor has the struct's own name, which an
             // alias does not rename.
-            TypeConstructors::Struct(own) if ty == *own => push(own, ty.to_string()),
+            TypeConstructors::Struct(own) if ty == own => push(own, ty.to_string()),
             TypeConstructors::Struct(_) => {}
         }
     };
@@ -227,12 +227,21 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
                 &s.name,
                 &types[&entry.module.child(s.name.clone())],
             ),
+            // A type a dependency declares is found in its environment.
             Decl::Use(u) => {
-                if let Some(target) = &u.target
-                    && let Some(ty) = types.get(&target[..])
-                {
-                    add(&entry.module, u.alias.as_ref().unwrap_or(ty.name()), ty);
-                }
+                let Some(target) = &u.target else { continue };
+                let dependency;
+                let ty = match types.get(&target[..]) {
+                    Some(ty) => ty,
+                    None => match dependency_type_constructors(db, target) {
+                        Some(ty) => {
+                            dependency = ty;
+                            &dependency
+                        }
+                        None => continue,
+                    },
+                };
+                add(&entry.module, u.alias.as_ref().unwrap_or(ty.name()), ty);
             }
             _ => {}
         }
@@ -271,18 +280,46 @@ fn prelude_names(db: &dyn salsa::Database) -> Vec<(Symbol, Binding<'_>)> {
 }
 
 /// The constructors of a type the completion index knows.
-enum TypeConstructors<'a> {
+enum TypeConstructors {
     /// An enum, by its name, and its variants.
-    Variants(&'a Symbol, Vec<&'a Symbol>),
+    Variants(Symbol, Vec<Symbol>),
     /// A struct, its own constructor, by its name.
-    Struct(&'a Symbol),
+    Struct(Symbol),
 }
 
-impl TypeConstructors<'_> {
+impl TypeConstructors {
     fn name(&self) -> &Symbol {
         match self {
             Self::Variants(name, _) | Self::Struct(name) => name,
         }
+    }
+}
+
+/// The constructors of the type a dependency declares at `identity`, with
+/// the public variants of an enum.
+fn dependency_type_constructors(
+    db: &dyn salsa::Database,
+    identity: &[Symbol],
+) -> Option<TypeConstructors> {
+    let dependencies = tribute::prelude_dependencies(db);
+    let own = tribute_front::resolve::PackageEnv::new();
+    let scope = tribute_front::resolve::Scope::new(&own, &dependencies);
+    let location = scope.locate(identity)?;
+    let name = identity.last()?.clone();
+    match scope.lookup_path(&location)? {
+        Binding::TypeDef { .. } => Some(TypeConstructors::Variants(
+            name,
+            scope
+                .iter_namespace(&location)
+                .filter(|(_, binding)| {
+                    matches!(binding, Binding::Constructor { tag: Some(_), .. })
+                        && scope.restriction(binding).is_none()
+                })
+                .map(|(variant, _)| variant)
+                .collect(),
+        )),
+        Binding::Constructor { tag: None, .. } => Some(TypeConstructors::Struct(name)),
+        _ => None,
     }
 }
 
@@ -663,6 +700,28 @@ mod tests {
                 pair("Line", "S::Line"),
                 pair("Pair", "Q::Pair"),
             ]
+        );
+    }
+
+    #[test]
+    fn test_constructor_items_include_imported_dependency_types() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "use std::io::Error\nmod inner {\n    use std::io::Error as IoError\n}\n";
+        let source = make_source(&db, text);
+        let items = constructor_items(&db, source);
+        let detail_at = |module: &SymbolPath, name: &str| {
+            items
+                .iter()
+                .find(|item| item.module.as_ref() == Some(module) && item.name == name)
+                .and_then(|item| item.detail.clone())
+        };
+        assert_eq!(
+            detail_at(&SymbolPath::root(), "EndOfFile").as_deref(),
+            Some("Error::EndOfFile")
+        );
+        assert_eq!(
+            detail_at(&SymbolPath::new(["inner"]), "EndOfFile").as_deref(),
+            Some("IoError::EndOfFile")
         );
     }
 
