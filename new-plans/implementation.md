@@ -694,8 +694,11 @@ frontend 경계까지 전달한다. AST-to-IR은 declaration identity로 exact T
 
 표준 라이브러리 source(패키지 `std`의 루트 모듈)는 compilation 입력이다. 이름
 해석은 패키지마다 자기 루트에서 하며, 사용자 패키지의 해석은 의존 패키지 `std`의
-해석 결과를 의존성 표로 참조한다. `std`의 해석과 타입 검사 결과는 사용자 source에
-의존하지 않으므로, 사용자 source를 고쳐도 다시 계산하지 않는다. 테스트는 표준
+해석 결과를 의존성 표로 참조한다. 타입 검사도 패키지마다 하며, 사용자 패키지의
+검사는 의존 패키지 `std`의 검사 결과를 같은 의존성 표로 조회한다. 한 패키지의 타입
+검사 결과는 그 패키지가 선언한 항목만 담고 의존 패키지의 선언을 복사하지 않는다.
+`std`의 해석과 타입 검사 결과는 사용자 source에 의존하지 않으므로, 사용자 source를
+고쳐도 다시 계산하지 않는다. 테스트는 표준
 라이브러리 source 뒤에 덧붙인 source를 패키지 `std`의 일부로 compile해, 사용자 패키지가 가리킬 수 없는 패키지 내부 항목
 (`std::runtime`)을 사용자 프로그램이 부를 수 있는 함수로 감싸 시험한다.
 
@@ -828,8 +831,8 @@ keep the origin recorded at their shared annotation-to-row conversion point.
 | --- | --- |
 | 구문 분석 | unresolved AST, 원본 위치, 구문 진단 |
 | 이름 해석 | 선언과 참조의 identity, lexical binding, 선언 테이블 |
-| 타입 검사 | typed 선언 테이블, type schemes, 표현식 타입, 선택된 callable과 operation 인스턴스 |
-| 특수화 | 구체 인스턴스를 더한 선언 테이블, 함께 치환된 메타데이터, 원본 위치 대응 |
+| 타입 검사 | 자기 패키지의 typed 선언 테이블, type schemes, 표현식 타입, 선택된 callable과 operation 인스턴스 |
+| 특수화 | 구체 인스턴스를 더한 선언 테이블, 함께 치환된 메타데이터, compiler intrinsic identity, 원본 위치 대응 |
 | 논리 IR 생성 | source-logical callable/control IR, 검증에 필요한 선언 메타데이터 |
 
 모듈 계층은 구문 분석과 이름 해석에서만 의미를 가진다. Scope, `use`,
@@ -850,6 +853,20 @@ path를 가지며, 모듈 path는 선언 identity의 path에서 마지막 compon
 인스턴스, constructor scheme, handler/perform/lambda 정보, coverage 증명,
 nominal identity와 intrinsic provenance가 누락되지 않게 한다. 이 계약은
 동일한 정보를 여러 결과 객체에 중복 저장하도록 요구하지 않는다.
+
+Lowering 입력을 만드는 경로는 특수화 결과에서 출발하는 하나뿐이며, 타입 검사
+결과는 lowering 입력이 될 수 없다. 테스트도 같은 경로를 거친다. 특수화는 하나의
+선언 테이블을 대상으로 한다. 의존 패키지의 선언 메타데이터(function·constructor
+scheme, ability 정의, well-known identity)는 조회로 받고, 의존 패키지의 본문과
+표현식·참조별 메타데이터는 사용자 패키지의 것보다 앞에 쌓아 병합한다. 의존
+패키지의 본문을 병합하지 않은 특수화는 사용자 패키지의 선언만 특수화한다. 현재
+compilation 단위는 하나의 module이므로 의존 패키지 generic의 인스턴스도 그
+module에 둔다. Separate compilation에서 그 소유권을 정하는 조건은
+[Linking — Separate Compilation의 요구 조건](linking.md#separate-compilation의-요구-조건)을
+따른다.
+
+Compiler intrinsic 선언의 identity는 특수화 결과가 함께 가진다. Runtime item
+검사와 병합된 source 목록은 root crate의 준비 단계가 lowering에 공급하는 환경이다.
 
 Nominal 선언 인덱스와 치환된 constructor 스킴은 frontend 준비 단계가 소유한다.
 Lowering은 준비에 성공한 AST와 대응 스킴을 함께 소비한다. 인스턴스 수집,
