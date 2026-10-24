@@ -176,38 +176,45 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
     };
     let entries = &output.module(db).entries;
     // Each type's constructors, by the type's package-root path.
-    let types: HashMap<SymbolPath, (&Symbol, Vec<&Symbol>)> = entries
+    let types: HashMap<SymbolPath, TypeConstructors<'_>> = entries
         .iter()
         .filter_map(|entry| {
-            let (name, constructors) = match &entry.decl {
-                Decl::Enum(e) => (&e.name, e.variants.iter().map(|v| &v.name).collect()),
-                Decl::Struct(s) => (&s.name, vec![&s.name]),
+            let constructors = match &entry.decl {
+                Decl::Enum(e) => TypeConstructors::Variants(
+                    &e.name,
+                    e.variants.iter().map(|v| &v.name).collect(),
+                ),
+                Decl::Struct(s) => TypeConstructors::Struct(&s.name),
                 _ => return None,
             };
-            Some((entry.module.child(name.clone()), (name, constructors)))
+            Some((
+                entry.module.child(constructors.name().clone()),
+                constructors,
+            ))
         })
         .collect();
     let mut items = Vec::new();
-    let mut add =
-        |module: &SymbolPath, ty: &Symbol, (own, constructors): &(&Symbol, Vec<&Symbol>)| {
-            for &name in constructors {
-                // A struct's constructor has the struct's own name, which an
-                // alias does not rename.
-                if name == *own && ty != *own {
-                    continue;
-                }
-                items.push(AstCompletionItem {
-                    name: name.clone(),
-                    kind: CompletionKind::Constructor,
-                    detail: Some(if name == *own {
-                        ty.to_string()
-                    } else {
-                        format!("{ty}::{name}")
-                    }),
-                    module: Some(module.clone()),
-                });
-            }
+    let mut add = |module: &SymbolPath, ty: &Symbol, constructors: &TypeConstructors<'_>| {
+        let mut push = |name: &Symbol, detail: String| {
+            items.push(AstCompletionItem {
+                name: name.clone(),
+                kind: CompletionKind::Constructor,
+                detail: Some(detail),
+                module: Some(module.clone()),
+            });
         };
+        match constructors {
+            TypeConstructors::Variants(_, variants) => {
+                for &variant in variants {
+                    push(variant, format!("{ty}::{variant}"));
+                }
+            }
+            // A struct's constructor has the struct's own name, which an
+            // alias does not rename.
+            TypeConstructors::Struct(own) if ty == *own => push(own, ty.to_string()),
+            TypeConstructors::Struct(_) => {}
+        }
+    };
     for entry in entries {
         match &entry.decl {
             Decl::Enum(e) => add(
@@ -224,7 +231,7 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
                 if let Some(target) = &u.target
                     && let Some(ty) = types.get(&target[..])
                 {
-                    add(&entry.module, u.alias.as_ref().unwrap_or(ty.0), ty);
+                    add(&entry.module, u.alias.as_ref().unwrap_or(ty.name()), ty);
                 }
             }
             _ => {}
@@ -261,6 +268,22 @@ fn prelude_names(db: &dyn salsa::Database) -> Vec<(Symbol, Binding<'_>)> {
                 .then(|| (name, binding.clone()))
         })
         .collect()
+}
+
+/// The constructors of a type the completion index knows.
+enum TypeConstructors<'a> {
+    /// An enum, by its name, and its variants.
+    Variants(&'a Symbol, Vec<&'a Symbol>),
+    /// A struct, its own constructor, by its name.
+    Struct(&'a Symbol),
+}
+
+impl TypeConstructors<'_> {
+    fn name(&self) -> &Symbol {
+        match self {
+            Self::Variants(name, _) | Self::Struct(name) => name,
+        }
+    }
 }
 
 /// The constructors of the prelude's types, as `(type, variant)`: the
@@ -603,7 +626,7 @@ mod tests {
     #[test]
     fn test_constructor_items_include_imported_types() {
         let db = salsa::DatabaseImpl::default();
-        let text = "mod shapes {\n    pub enum Shape { Dot, Line(Nat) }\n    pub struct Point { x: Nat }\n}\nuse shapes::Shape\nuse shapes::Point\nmod inner {\n    use super::shapes::Shape as S\n    use super::shapes::Point as P\n}\n";
+        let text = "mod shapes {\n    pub enum Shape { Dot, Line(Nat) }\n    pub struct Point { x: Nat }\n    pub enum Pair { Pair(Nat, Nat), Empty }\n}\nuse shapes::Shape\nuse shapes::Point\nmod inner {\n    use super::shapes::Shape as S\n    use super::shapes::Point as P\n    use super::shapes::Pair as Q\n}\n";
         let source = make_source(&db, text);
         let items = constructor_items(&db, source);
         let at = |module: &[&str]| -> Vec<(String, String)> {
@@ -630,10 +653,16 @@ mod tests {
                 pair("Point", "Point")
             ]
         );
-        // An alias names the type, but not a struct's own constructor.
+        // An alias names the type, but not a struct's own constructor; a
+        // variant named like its enum is still a variant.
         assert_eq!(
             at(&["inner"]),
-            [pair("Dot", "S::Dot"), pair("Line", "S::Line")]
+            [
+                pair("Dot", "S::Dot"),
+                pair("Empty", "Q::Empty"),
+                pair("Line", "S::Line"),
+                pair("Pair", "Q::Pair"),
+            ]
         );
     }
 

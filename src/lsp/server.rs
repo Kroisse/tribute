@@ -1065,7 +1065,11 @@ fn dot_context(rope: &Rope, start: usize) -> DotContext {
     let line = rope.byte_to_line(dot);
     let line_start = rope.line_to_byte(line);
     let before = rope.byte_slice(line_start..dot).to_string();
-    let before = before.trim_end_matches([' ', '\t']);
+    // A block comment between a receiver and its `.` changes nothing; one
+    // that began on an earlier line hides what comes before it.
+    let Some(before) = without_trailing_comments(&before) else {
+        return DotContext::Either;
+    };
     match before.chars().last() {
         None if line == 0 => DotContext::ImplicitConstructor,
         None => DotContext::Either,
@@ -1083,6 +1087,35 @@ fn dot_context(rope: &Rope, start: usize) -> DotContext {
         Some(')' | ']' | '}' | '"' | '\'' | '.') => DotContext::Other,
         Some(_) => DotContext::ImplicitConstructor,
     }
+}
+
+/// `text` without the spaces and block comments at its end, or `None` if a
+/// comment there began before `text` does.
+fn without_trailing_comments(text: &str) -> Option<&str> {
+    let mut text = text.trim_end_matches([' ', '\t']);
+    while let Some(inside) = text.strip_suffix("*/") {
+        // Block comments nest, so the comment starts at the `/*` that
+        // balances its `*/`.
+        let mut depth = 1;
+        let mut end = inside.len();
+        while depth > 0 {
+            let open = inside[..end].rfind("/*");
+            let close = inside[..end].rfind("*/");
+            match (open, close) {
+                (Some(open), Some(close)) if close > open => {
+                    depth += 1;
+                    end = close;
+                }
+                (Some(open), _) => {
+                    depth -= 1;
+                    end = open;
+                }
+                (None, _) => return None,
+            }
+        }
+        text = inside[..end].trim_end_matches([' ', '\t']);
+    }
+    Some(text)
 }
 
 /// The keywords an expression or a pattern follows, which an implicit
@@ -1508,6 +1541,12 @@ mod tests {
         assert_eq!(at("xs.|"), DotContext::Other);
         assert_eq!(at("outlet.|"), DotContext::Other);
         assert_eq!(at("r#let.|"), DotContext::Other);
+        // Block comments before the `.` are skipped.
+        assert_eq!(at("xs /* why */ .|"), DotContext::Other);
+        assert_eq!(at("xs /* a /* nested */ b */.|"), DotContext::Other);
+        assert_eq!(at("f(a, /* first */ .|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("xs\n    /* note */ .|"), DotContext::Either);
+        assert_eq!(at("xs /* note\n    begun */ .|"), DotContext::Either);
         assert_eq!(at("f(x).|"), DotContext::Other);
         assert_eq!(at("\"s\".|"), DotContext::Other);
         // `..` is a spread, and no `.` is no constructor.
