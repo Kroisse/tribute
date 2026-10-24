@@ -421,7 +421,7 @@ impl<'db> TypeChecker<'db> {
         // Register enum variant names for exhaustiveness checking
         let variant_names: Vec<Symbol> = e.variants.iter().map(|v| v.name.clone()).collect();
         self.env
-            .register_enum_variants(qualified_name, variant_names);
+            .register_enum_variants(qualified_name.clone(), variant_names);
 
         // Register constructors for each variant
         // Build name → BoundVar index lookup for type parameter resolution
@@ -450,7 +450,7 @@ impl<'db> TypeChecker<'db> {
             let effect_params = collect_row_vars(self.db(), ctor_ty);
             let ctor_scheme =
                 TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
-            let ctor_id = CtorId::new(self.db(), self.current_prefix().child(variant.name.clone()));
+            let ctor_id = CtorId::new(self.db(), qualified_name.child(variant.name.clone()));
             self.env.register_constructor(ctor_id, ctor_scheme);
             if let Some(names) = field_names(&variant.fields) {
                 self.env.register_constructor_field_names(ctor_id, names);

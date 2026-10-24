@@ -112,14 +112,14 @@ pub mod extras {
 
     fn own() ->{} Int {
         case Shadow::Some(+3) {
-            Some(n) -> n
+            .Some(n) -> n
         }
     }
 
     pub fn total() ->{} Int {
         let found = case Option::Some(+4) {
             Option::Some(n) -> n
-            None -> +0
+            .None -> +0
         }
         found + own()
     }

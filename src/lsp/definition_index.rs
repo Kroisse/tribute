@@ -631,6 +631,10 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             ResolvedRef::Module { .. } => ResolvedTarget::Other {
                 name: Symbol::new("module"),
             },
+            // Left after a reported error: type checking selects a constructor.
+            ResolvedRef::ImplicitConstructor { name, .. } => {
+                ResolvedTarget::Other { name: name.clone() }
+            }
             ResolvedRef::AbilityOp { ability, op, .. } => ResolvedTarget::AbilityOp {
                 ability: ability.name(self.db),
                 op: op.clone(),
@@ -1118,8 +1122,8 @@ mod tests {
 
 fn unwrap(opt: Option) -> Int {
     case opt {
-        Some(v) -> v
-        None -> 0
+        .Some(v) -> v
+        .None -> 0
     }
 }"#,
         );

@@ -2,7 +2,7 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "non-exhaustive case expression: missing patterns: []"
+- message: "non-exhaustive case expression on `List(Nat)`: missing patterns: []"
   span:
     start: 43
     end: 45

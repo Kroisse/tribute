@@ -1119,11 +1119,11 @@ enum Boxed(a) {
 fn read() ->{State(Int)} Int { State::get() }
 
 fn consume(value: Boxed(Int)) -> Int {
-    case value { Boxed(result) -> result }
+    case value { .Boxed(result) -> result }
 }
 
 fn run() -> Int {
-    consume(Boxed(handle read() {
+    consume(.Boxed(handle read() {
         do result { result }
         op State::get() { resume +41 }
     }))
@@ -1258,7 +1258,7 @@ fn run() ->{Trace} Boxed(fn() -> Bool) {
     Trace::before()
     // `fn` is atomic to normalization, so this constructor argument exercises
     // the mode-preserving Cons strict-child path from a normalized CPS parent.
-    Boxed(fn() {
+    .Boxed(fn() {
         case True {
             True -> False || handle read() {
                 do result { result }
@@ -1329,7 +1329,7 @@ fn run() ->{State(Int)} Int {
     let base = Point { x: 0, y: 0 }
     let pair = #(read(), read())
     let point = Point { x: read(), ..base }
-    let boxed = Boxed(read())
+    let boxed = .Boxed(read())
     0
 }
 
@@ -1470,12 +1470,12 @@ fn logical_nominal_callable_fields_use_control_callables(db: &salsa::DatabaseImp
 struct Holder { callback: fn(Int) -> Int }
 enum Choice { Callback(#(fn(Int) -> Int, List(fn(Int) -> Int))), Other }
 
-fn make(callback: fn(Int) ->{} Int) -> Choice { Callback(#(callback, [callback])) }
+fn make(callback: fn(Int) ->{} Int) -> Choice { .Callback(#(callback, [callback])) }
 fn inspect(choice: Choice, fallback: fn(Int) ->{} Int) -> fn(Int) ->{} Int {
     case choice {
-        Callback(#(callback, [nested])) -> nested
-        Callback(_) -> fallback
-        Other -> fallback
+        .Callback(#(callback, [nested])) -> nested
+        .Callback(_) -> fallback
+        .Other -> fallback
     }
 }
 "#,
@@ -1542,23 +1542,23 @@ fn logical_list_constructor_patterns_use_element_types(db: &salsa::DatabaseImpl)
 
     for (body, expected_heads) in [
         (
-            "fn observe(xs: List(Item)) -> Nat { case xs { [Number(x), Number(y)] -> x, _ -> 0 } }",
+            "fn observe(xs: List(Item)) -> Nat { case xs { [.Number(x), .Number(y)] -> x, _ -> 0 } }",
             4,
         ),
         (
-            "fn observe(xs: List(Item)) -> Nat { case xs { [Number(x), Number(y), ..tail] -> y, _ -> 0 } }",
+            "fn observe(xs: List(Item)) -> Nat { case xs { [.Number(x), .Number(y), ..tail] -> y, _ -> 0 } }",
             4,
         ),
         (
-            "fn observe(xs: List(List(Item))) -> Nat { case xs { [[Nested(Number(x))]] -> x, _ -> 0 } }",
+            "fn observe(xs: List(List(Item))) -> Nat { case xs { [[.Nested(.Number(x))]] -> x, _ -> 0 } }",
             4,
         ),
         (
-            "fn observe(xs: List(Boxed(a)), fallback: a) -> a { case xs { [Box(x), ..tail] -> x, _ -> fallback } }",
+            "fn observe(xs: List(Boxed(a)), fallback: a) -> a { case xs { [.Box(x), ..tail] -> x, _ -> fallback } }",
             2,
         ),
         (
-            "fn observe(xs: List(Item), fallback: String) -> String { case xs { [Text(x)] -> x, _ -> fallback } }",
+            "fn observe(xs: List(Item), fallback: String) -> String { case xs { [.Text(x)] -> x, _ -> fallback } }",
             2,
         ),
     ] {
@@ -1646,9 +1646,9 @@ enum Pair { Pair(Int, Int), None }
 
 fn classify_pair(value: Pair) -> Int {
     case value {
-        Pair(1, 2) -> 1
-        Pair(_, _) -> 2
-        None -> 0
+        .Pair(1, 2) -> 1
+        .Pair(_, _) -> 2
+        .None -> 0
     }
 }
 

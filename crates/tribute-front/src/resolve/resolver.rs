@@ -11,11 +11,11 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    Arm, Candidates, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl,
-    FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen, Module,
-    ModuleItem, ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap,
-    Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName, UseDecl,
-    Visibility,
+    Arm, Candidates, CtorId, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS,
+    FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen,
+    Module, ModuleItem, ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef,
+    SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName,
+    UseDecl, Visibility,
 };
 
 use super::env::{Binding, PackageEnv, Restriction};
@@ -461,6 +461,93 @@ impl<'db> Resolver<'db> {
             }
         }
         functions
+    }
+
+    /// The candidates of an implicit constructor `.Name`, which type
+    /// checking selects from by the type its context gives.
+    fn implicit_constructor(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
+        let ctor = name.name();
+        let mut in_scope: Vec<_> = self
+            .names_in_scope()
+            .into_iter()
+            .filter_map(|ty| {
+                let binding = self.lookup_direct(&ty)?;
+                let path =
+                    UnresolvedName::new(SymbolPath::new([ty.clone(), ctor.clone()]), name.id);
+                let variant = match self.qualified_entry(&path) {
+                    Ok(Some((namespace, binding))) => self
+                        .visible_through_entry(&namespace, &ctor, binding)
+                        .then_some(binding),
+                    _ => None,
+                };
+                self.type_constructor(&ty, binding, &ctor, variant)
+            })
+            .collect();
+        let mut prelude: Vec<_> = self
+            .view()
+            .iter_library_names()
+            .into_iter()
+            .filter_map(|ty| {
+                let binding = self.view().lookup_library(&ty)?;
+                let variant = self.view().library_namespace(&ty).and_then(|namespace| {
+                    self.view()
+                        .lookup_qualified(&namespace, &ctor)
+                        .filter(|binding| self.visible_through_entry(&namespace, &ctor, binding))
+                });
+                self.type_constructor(&ty, binding, &ctor, variant)
+            })
+            .collect();
+        for rank in [&mut in_scope, &mut prelude] {
+            rank.sort_by_key(|ctor: &CtorId<'db>| ctor.path(self.db));
+            rank.dedup();
+        }
+        let mut hidden: Vec<_> = self
+            .view()
+            .restrictions()
+            .filter_map(|(binding, restriction)| match binding {
+                Binding::Constructor { id, .. }
+                    if id.name(self.db) == ctor
+                        && !restriction.is_visible_from(&self.package, &self.module_path) =>
+                {
+                    Some((*id, restriction.to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        hidden.sort_by_key(|(id, _)| id.path(self.db));
+        ResolvedRef::ImplicitConstructor {
+            name: ctor,
+            candidates: Candidates::new(Vec::new(), in_scope, prelude),
+            hidden,
+        }
+    }
+
+    /// The constructor `ctor` of the type a scope's name `ty` binds to
+    /// `binding`: the struct itself when it has that name, or the variant
+    /// `variant` that the namespace `ty::ctor` holds when it is the enum's.
+    fn type_constructor(
+        &self,
+        ty: &Symbol,
+        binding: &Binding<'db>,
+        ctor: &Symbol,
+        variant: Option<&Binding<'db>>,
+    ) -> Option<CtorId<'db>> {
+        match (binding, variant) {
+            (Binding::Constructor { id, tag: None, .. }, _) if ty == ctor => {
+                self.hidden(binding).is_none().then_some(*id)
+            }
+            (
+                Binding::TypeDef { id },
+                Some(Binding::Constructor {
+                    id: variant,
+                    tag: Some(_),
+                    ..
+                }),
+            ) if variant.path(self.db).parent().as_ref() == Some(id.path(self.db)) => {
+                Some(*variant)
+            }
+            _ => None,
+        }
     }
 
     /// The functions a method path names through the prelude, whatever the
@@ -1577,12 +1664,33 @@ impl<'r, 'db> FunctionResolver<'r, 'db> {
         functions
     }
 
+    /// The constructor a reference names: a path as [`resolve_name`]
+    /// resolves it, or the candidates of an implicit constructor `.Name`.
+    ///
+    /// [`resolve_name`]: Self::resolve_name
+    fn resolve_constructor(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
+        if name.implicit {
+            self.module.implicit_constructor(name)
+        } else {
+            self.resolve_name(name)
+        }
+    }
+
     /// Report an unresolved name diagnostic, with "did you mean?" suggestions.
     fn report_unresolved_name(&self, name: &UnresolvedName) {
         let span = self.module.span_map.get_or_default(name.id);
         let similar = self.find_similar_names(&name.name());
+        // A variant is declared only in its enum's namespace, so a bare
+        // variant name is written as an implicit constructor.
+        let implicit = name.is_simple()
+            && matches!(
+                self.module.implicit_constructor(&UnresolvedName::implicit(name.name(), name.id)),
+                ResolvedRef::ImplicitConstructor { candidates, .. } if !candidates.is_empty()
+            );
 
-        let message = if similar.is_empty() {
+        let message = if implicit {
+            format!("unresolved name `{name}`; did you mean `.{name}`?")
+        } else if similar.is_empty() {
             format!("unresolved name `{}`", name)
         } else {
             let suggestions = similar
@@ -1764,7 +1872,7 @@ impl<'r, 'db> FunctionResolver<'r, 'db> {
             }
 
             ExprKind::Cons { ctor, args } => {
-                let resolved_ctor = self.resolve_name(ctor);
+                let resolved_ctor = self.resolve_constructor(ctor);
                 let args = args.iter().map(|a| self.resolve_expr(a)).collect();
                 ExprKind::Cons {
                     ctor: resolved_ctor,
@@ -1777,7 +1885,7 @@ impl<'r, 'db> FunctionResolver<'r, 'db> {
                 fields,
                 spread,
             } => {
-                let resolved_type = self.resolve_name(type_name);
+                let resolved_type = self.resolve_constructor(type_name);
                 let fields = fields
                     .iter()
                     .map(|f| FieldInit {
@@ -2036,7 +2144,7 @@ impl<'r, 'db> FunctionResolver<'r, 'db> {
             PatternKind::Literal(lit) => PatternKind::Literal(lit.clone()),
 
             PatternKind::Variant { ctor, fields } => {
-                let resolved_ctor = self.resolve_name(ctor);
+                let resolved_ctor = self.resolve_constructor(ctor);
                 let fields = fields
                     .iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
@@ -2052,7 +2160,7 @@ impl<'r, 'db> FunctionResolver<'r, 'db> {
                 fields,
                 rest,
             } => {
-                let resolved_type = self.resolve_name(type_name);
+                let resolved_type = self.resolve_constructor(type_name);
                 let fields = fields
                     .iter()
                     .map(|f| {

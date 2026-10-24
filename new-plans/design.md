@@ -64,8 +64,8 @@ fn add(x: Int, y: Int) -> Int {
 // 패턴 매칭
 fn describe(value: Option(Int)) -> String {
     case value {
-        Some(n) -> "got: " <> Int::to_string(n)
-        None -> "nothing"
+        .Some(n) -> "got: " <> Int::to_string(n)
+        .None -> "nothing"
     }
 }
 

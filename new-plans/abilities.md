@@ -174,8 +174,8 @@ opt.or_else(fn() fallback())
 ```rust
 fn or_else(opt: Option(a), fallback: fn() ->{e} a) ->{e} a {
     case opt {
-        Some(x) -> x
-        None -> fallback()
+        .Some(x) -> x
+        .None -> fallback()
     }
 }
 ```
@@ -495,8 +495,8 @@ ability Fail {
 
 fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
     handle comp() {
-        do result { Some(result) }
-        op Fail::fail(msg) { None }   // resume 없음, drop 불필요
+        do result { .Some(result) }
+        op Fail::fail(msg) { .None }   // resume 없음, drop 불필요
     }
 }
 ```

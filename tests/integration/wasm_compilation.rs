@@ -506,14 +506,14 @@ enum Shape {
 
 fn area(shape: Shape) -> Int {
     case shape {
-        Circle(r) -> r * r * +3
-        Square(s) -> s * s
-        Empty -> +0
+        .Circle(r) -> r * r * +3
+        .Square(s) -> s * s
+        .Empty -> +0
     }
 }
 
 fn main() ->{std::io::Io} Nil {
-    std::io::print_line(Int::to_string(area(Circle(+2)) + area(Square(+3)) + area(Empty)))
+    std::io::print_line(Int::to_string(area(.Circle(+2)) + area(.Square(+3)) + area(.Empty)))
 }
 "#,
     );

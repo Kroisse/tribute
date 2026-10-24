@@ -93,7 +93,7 @@ fn run() ->{State(Int)} Int {
     let base = Point { x: +0, y: +0 }
     let pair = #(read(), read())
     let point = Point { x: read(), ..base }
-    let boxed = Boxed(read())
+    let boxed = .Boxed(read())
     +0
 }
 

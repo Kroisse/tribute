@@ -144,6 +144,22 @@ enum Expr {
 enum Ordering { Less, Equal, Greater }
 ```
 
+### Enum variant의 이름
+
+Enum variant는 그 enum의 [동명 namespace](modules.md#타입과-동명-네임스페이스)에만
+선언된다. Enum을 둘러싼 모듈에는 variant의 이름이 생기지 않는다. `Option`의
+variant는 `Option::None`과 `Option::Some`이고, 이 경로가 variant의 식별자다.
+
+- Variant는 경로(`Option::Some(1)`), [암묵적 생성자](type-inference.md#암묵적-생성자)
+  (`.Some(1)`), 또는 그 variant를 `use`한 짧은 이름으로 가리킨다
+  (`use std::Option::Some` 뒤의 `Some(1)`). 짧은 이름 `Some`은 보통의 이름
+  조회이므로 `use` 없이는 해석 오류다. 스코프의 타입에 그 이름의 생성자가 있으면
+  진단은 `.Some`을 제안한다.
+- 다른 enum의 variant는 이름이 같아도 서로의 이름을 가리지 않는다. `Result::Error`와
+  `std::io::Error`는 둘 다 짧은 이름으로 스코프에 들어오지 않는 한 충돌하지 않는다.
+- Struct의 생성자는 struct 타입과 같은 이름으로 struct를 선언한 모듈에 있다.
+- Variant는 따로 가시성을 쓰지 않으며, 그 enum의 가시성을 따른다.
+
 ### 타입 파라미터
 
 타입 파라미터는 소괄호를 사용한다:
@@ -155,8 +171,8 @@ enum Result(a, e) { Ok { value: a }, Error { error: e } }
 
 // 사용
 let box: Box(Int) = Box { value: 42 }
-let opt: Option(String) = Some("hello")
-let res: Result(Int, String) = Ok { value: 42 }
+let opt: Option(String) = .Some("hello")
+let res: Result(Int, String) = .Ok { value: 42 }
 ```
 
 ### 선언 안의 함수 타입
@@ -193,17 +209,24 @@ let box = Box { value: 42 }
 
 ### Enum Variant 생성
 
-Positional field는 소괄호, named field는 중괄호:
+Positional field는 소괄호, named field는 중괄호. Variant는 enum의 namespace
+경로나 [암묵적 생성자](type-inference.md#암묵적-생성자)로 가리킨다:
 
 ```rust
 // Positional
-let some = Some(42)
-let none = None
-let tree = Branch(Leaf(1), Leaf(2))
+let some = Option::Some(42)
+let none: Option(Int) = .None
+let tree = Tree::Branch(.Leaf(1), .Leaf(2))
 
 // Named
-let ok = Ok { value: 42 }
-let error = Error { error: "something went wrong" }
+let ok: Result(Int, String) = .Ok { value: 42 }
+let error = Result::Error { error: "something went wrong" }
+
+// 암묵적 생성자 패턴은 매칭하는 값의 타입에서 생성자를 찾는다
+case opt {
+    .Some(x) -> x
+    .None -> 0
+}
 ```
 
 ## List
@@ -471,13 +494,13 @@ user
 
 ```rust
 case opt {
-    Some(x) -> x
-    None -> 0
+    .Some(x) -> x
+    .None -> 0
 }
 
 case result {
-    Ok { value } -> value
-    Error { error } -> panic(error)
+    .Ok { value } -> value
+    .Error { error } -> panic(error)
 }
 ```
 
@@ -508,8 +531,8 @@ case user {
 }
 
 case result {
-    Ok { value, .. } -> handle_value(value)
-    Error { error, .. } -> handle_error(error)
+    .Ok { value, .. } -> handle_value(value)
+    .Error { error, .. } -> handle_error(error)
 }
 ```
 
@@ -553,19 +576,22 @@ case command {
 ### 망라성과 도달 불가 arm
 
 모든 `case`는 망라적이어야 한다. scrutinee가 가질 수 있는 값 중 어떤 arm에도
-매칭되지 않는 값이 있으면 오류이며, 진단은 누락된 값을 나타내는 예시 패턴을 최대
-세 개 보여준다.
+매칭되지 않는 값이 있으면 오류이며, 진단은 scrutinee의 타입과 누락된 값을 나타내는
+예시 패턴을 최대 세 개 보여준다.
 
 ```rust
 case opt {
-    None -> 0
-    Some(True) -> 1
+    .None -> 0
+    .Some(True) -> 1
 }
-// error: non-exhaustive case expression: missing patterns: Some(False)
+// error: non-exhaustive case expression on `std::Option(Bool)`: missing patterns: .Some(False)
 ```
 
-검사는 타입 검사가 소유하며, 패턴 행렬의 usefulness로 판정한다. 중첩 패턴도 모두
-분석하므로 `Some(True)`는 `Some(_)`를 덮지 않는다. 튜플 scrutinee는 각 요소를 한
+검사는 타입 검사가 소유하며, 패턴 행렬의 usefulness로 판정한다. 검사는 이름 해석과
+[암묵적 생성자](type-inference.md#암묵적-생성자) 해석이 확정한 생성자를 본다.
+예시 패턴의 enum variant는 암묵적 생성자 형식으로 보인다. 그 타입은 진단이 보이는
+scrutinee의 타입과 상위 패턴의 필드 타입으로 정해진다. 중첩 패턴도 모두
+분석하므로 `.Some(True)`는 `.Some(_)`를 덮지 않는다. 튜플 scrutinee는 각 요소를 한
 열로 보고 함께 분석한다.
 
 - 유한한 구성자 집합으로 다루는 것: 튜플, enum variant, struct(구성자 하나),
@@ -622,10 +648,10 @@ enum Expr {
 
 ```rust
 case expr {
-    Lit(n) -> n
-    Var(name) -> lookup(name)
-    BinOp { op: "+", lhs, rhs } -> eval(lhs) + eval(rhs)
-    BinOp { op, lhs, rhs } -> apply_op(op, eval(lhs), eval(rhs))
+    .Lit(n) -> n
+    .Var(name) -> lookup(name)
+    .BinOp { op: "+", lhs, rhs } -> eval(lhs) + eval(rhs)
+    .BinOp { op, lhs, rhs } -> apply_op(op, eval(lhs), eval(rhs))
 }
 ```
 
@@ -640,7 +666,8 @@ case expr {
 | (타입 선언에서 개행 시 쉼표 생략 가능) | `struct`, `enum` 내부에서만 적용 |
 | `Type(a, b)` | 타입 파라미터 |
 | `Name { field: value }` | Struct/named variant 생성 |
-| `Variant(value)` | Positional variant 생성 |
+| `Enum::Variant(value)` | Positional variant 생성 |
+| `.Variant(value)`, `.Variant { field: value }` | 암묵적 생성자 |
 | `Name { field }` | Shorthand (변수명 = 필드명) |
 | `Name { ..x, field: value }` | Spread (복사 후 일부 변경) |
 | `x.field` | 필드 접근 (UFCS, 괄호 생략) |
