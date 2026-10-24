@@ -451,7 +451,9 @@ impl LspServer {
         // Extract prefix from current position (for filtering)
         let prefix = extract_completion_prefix(&rope, offset);
 
-        let dot = dot_context(&rope, offset - prefix.len());
+        let dot = source_cst.tree(&self.db).map_or(DotContext::Other, |tree| {
+            dot_context(&rope, tree, offset - prefix.len())
+        });
         let items = self.db.attach(|db| {
             let module = module_at(db, source_cst, offset);
             // After the `.` of an implicit constructor, constructors fit;
@@ -1051,8 +1053,8 @@ enum DotContext {
 }
 
 /// What the `.` right before byte `start`, where the name being completed
-/// starts, begins.
-fn dot_context(rope: &Rope, start: usize) -> DotContext {
+/// starts, begins, read from the token before it in `tree`.
+fn dot_context(rope: &Rope, tree: &tree_sitter::Tree, start: usize) -> DotContext {
     let Some(dot) = start.checked_sub(1) else {
         return DotContext::Other;
     };
@@ -1064,63 +1066,75 @@ fn dot_context(rope: &Rope, start: usize) -> DotContext {
     }
     let line = rope.byte_to_line(dot);
     let line_start = rope.line_to_byte(line);
-    let before = rope.byte_slice(line_start..dot).to_string();
-    // A block comment between a receiver and its `.` changes nothing; one
-    // that began on an earlier line hides what comes before it.
-    let Some(before) = without_trailing_comments(&before) else {
-        return DotContext::Either;
-    };
-    match before.chars().last() {
-        None if line == 0 => DotContext::ImplicitConstructor,
-        None => DotContext::Either,
-        Some(c) if c.is_alphanumeric() || c == '_' => {
-            // A keyword that an expression or a pattern follows is no
-            // receiver; any other word, a raw one included, is.
-            let word = before.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
-            let keyword = &before[word.len()..];
-            if !word.ends_with('#') && EXPRESSION_KEYWORDS.contains(&keyword) {
+    let root = tree.root_node();
+    let mut end = dot;
+    loop {
+        while end > line_start && matches!(rope.byte(end - 1), b' ' | b'\t') {
+            end -= 1;
+        }
+        if end == line_start {
+            return if line == 0 {
                 DotContext::ImplicitConstructor
             } else {
-                DotContext::Other
-            }
+                DotContext::Either
+            };
         }
-        Some(')' | ']' | '}' | '"' | '\'' | '.') => DotContext::Other,
-        Some(_) => DotContext::ImplicitConstructor,
+        let Some(token) = root.descendant_for_byte_range(end - 1, end) else {
+            return DotContext::Other;
+        };
+        // A comment between a receiver and its `.` changes nothing; one that
+        // began on an earlier line hides what comes before it.
+        if token.is_extra() {
+            if token.start_byte() < line_start {
+                return DotContext::Either;
+            }
+            end = token.start_byte();
+            continue;
+        }
+        // A token the `.` is part of, such as `..`, starts no constructor.
+        if token.end_byte() > end {
+            return DotContext::Other;
+        }
+        return if EXPRESSION_KEYWORDS.contains(&token.kind()) {
+            DotContext::ImplicitConstructor
+        } else if ends_expression(token) {
+            DotContext::Other
+        } else {
+            DotContext::ImplicitConstructor
+        };
     }
 }
 
-/// `text` without the spaces and block comments at its end, or `None` if a
-/// comment there began before `text` does.
-fn without_trailing_comments(text: &str) -> Option<&str> {
-    let mut text = text.trim_end_matches([' ', '\t']);
-    while let Some(inside) = text.strip_suffix("*/") {
-        // Block comments nest, so the comment starts at the `/*` that
-        // balances its `*/`.
-        let mut depth = 1;
-        let mut end = inside.len();
-        while depth > 0 {
-            let open = inside[..end].rfind("/*");
-            let close = inside[..end].rfind("*/");
-            match (open, close) {
-                (Some(open), Some(close)) if close > open => {
-                    depth += 1;
-                    end = close;
-                }
-                (Some(open), _) => {
-                    depth -= 1;
-                    end = open;
-                }
-                (None, _) => return None,
-            }
-        }
-        text = inside[..end].trim_end_matches([' ', '\t']);
-    }
-    Some(text)
+/// Whether `token`, the last token before a `.`, ends an expression the `.`
+/// may continue as a method call's receiver.
+fn ends_expression(token: tree_sitter::Node<'_>) -> bool {
+    matches!(
+        token.kind(),
+        "identifier"
+            | "type_identifier"
+            | "number_literal"
+            | "number_suffix"
+            | "rune"
+            | "keyword_true"
+            | "keyword_false"
+            | "keyword_nil"
+            | ")"
+            | "]"
+            | "}"
+            | "\""
+    ) || token.kind().contains("string")
+        || token.kind().contains("bytes")
 }
 
-/// The keywords an expression or a pattern follows, which an implicit
+/// The keyword tokens an expression or a pattern follows, which an implicit
 /// constructor may start right after: `let .Some(x)`, `resume .None`.
-const EXPRESSION_KEYWORDS: &[&str] = &["let", "case", "handle", "resume", "become"];
+const EXPRESSION_KEYWORDS: &[&str] = &[
+    "keyword_let",
+    "keyword_case",
+    "keyword_handle",
+    "keyword_resume",
+    "keyword_become",
+];
 
 /// Extract the identifier prefix at the cursor position for completion filtering.
 fn extract_completion_prefix(rope: &Rope, offset: usize) -> String {
@@ -1520,17 +1534,28 @@ mod tests {
 
     #[test]
     fn test_dot_context() {
-        let at = |text: &str| {
+        // The text as it would be inside a function body being edited, or,
+        // for `at_top`, at the start of a file.
+        let classify = |text: &str| {
             let start = text.rfind('|').expect("a cursor mark");
             let mut rope = Rope::from_str(text);
             rope.remove(rope.byte_to_char(start)..rope.byte_to_char(start + 1));
-            dot_context(&rope, start)
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_tribute::LANGUAGE.into())
+                .expect("the grammar loads");
+            let tree = parser
+                .parse(rope.to_string(), None)
+                .expect("the text parses");
+            dot_context(&rope, &tree, start)
         };
+        let at = |text: &str| classify(&format!("fn f() {{\n{text}"));
+        let at_top = |text: &str| classify(text);
         // Where an expression starts, `.` starts an implicit constructor.
         assert_eq!(at("let x = .|"), DotContext::ImplicitConstructor);
         assert_eq!(at("f(a, .|"), DotContext::ImplicitConstructor);
         assert_eq!(at("x ==.|"), DotContext::ImplicitConstructor);
-        assert_eq!(at(".|"), DotContext::ImplicitConstructor);
+        assert_eq!(at_top(".|"), DotContext::ImplicitConstructor);
         assert_eq!(at("let .|"), DotContext::ImplicitConstructor);
         assert_eq!(at("    resume .|"), DotContext::ImplicitConstructor);
         assert_eq!(at("case .|"), DotContext::ImplicitConstructor);
@@ -1541,6 +1566,10 @@ mod tests {
         assert_eq!(at("xs.|"), DotContext::Other);
         assert_eq!(at("outlet.|"), DotContext::Other);
         assert_eq!(at("r#let.|"), DotContext::Other);
+        // Hash-delimited literals end an expression too.
+        assert_eq!(at("r#\"text\"#.|"), DotContext::Other);
+        assert_eq!(at("#\"text\"#.|"), DotContext::Other);
+        assert_eq!(at("?a.|"), DotContext::Other);
         // Block comments before the `.` are skipped.
         assert_eq!(at("xs /* why */ .|"), DotContext::Other);
         assert_eq!(at("xs /* a /* nested */ b */.|"), DotContext::Other);
@@ -1552,7 +1581,7 @@ mod tests {
         // `..` is a spread, and no `.` is no constructor.
         assert_eq!(at("User { ..|"), DotContext::Other);
         assert_eq!(at("let x = |"), DotContext::Other);
-        assert_eq!(at("|"), DotContext::Other);
+        assert_eq!(at_top("|"), DotContext::Other);
     }
 
     #[test]
