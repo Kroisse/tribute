@@ -634,13 +634,13 @@ fn collect_definition<'db>(
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
             let qualified = ids.child(e.name.clone());
-            let type_def_id = TypeDefId::source(db, qualified, e.id);
+            let type_def_id = TypeDefId::source(db, qualified.clone(), e.id);
             env.add_type(e.name.clone(), type_def_id);
             restrict(env, Binding::TypeDef { id: type_def_id });
 
-            // Add each variant as a constructor in the enum's namespace
+            // Each variant is a constructor in the enum's namespace
             for variant in &e.variants {
-                let variant_qualified = ids.child(variant.name.clone());
+                let variant_qualified = qualified.child(variant.name.clone());
                 let variant_id = CtorId::new(db, variant_qualified);
                 let binding = Binding::Constructor {
                     id: variant_id,
@@ -648,18 +648,12 @@ fn collect_definition<'db>(
                     arity: variant.fields.len(),
                 };
                 restrict(env, binding.clone());
-                // Add to namespace (e.g., Option::Some)
+                // A variant is declared only in its enum's namespace
+                // (e.g., Option::Some).
                 env.add_to_namespace(
                     SymbolPath::new([e.name.clone()]),
                     variant.name.clone(),
-                    binding.clone(),
-                );
-                // Also add directly for unqualified access (e.g., Some)
-                env.add_constructor(
-                    variant.name.clone(),
-                    variant_id,
-                    Some(variant.name.clone()),
-                    variant.fields.len(),
+                    binding,
                 );
             }
         }
@@ -873,9 +867,18 @@ mod tests {
         let types_color = env.lookup_qualified(&SymbolPath::new(["Types"]), &Symbol::new("Color"));
         assert!(types_color.is_some(), "Types::Color should be in namespace");
 
-        // Types::Red should also be accessible (variant is in module's namespace)
-        let types_red = env.lookup_qualified(&SymbolPath::new(["Types"]), &Symbol::new("Red"));
-        assert!(types_red.is_some(), "Types::Red should be in namespace");
+        // Types::Color::Red is the variant; the module has no `Red`.
+        let types_red =
+            env.lookup_qualified(&SymbolPath::new(["Types", "Color"]), &Symbol::new("Red"));
+        assert!(
+            types_red.is_some(),
+            "Types::Color::Red should be in namespace"
+        );
+        assert!(
+            env.lookup_qualified(&SymbolPath::new(["Types"]), &Symbol::new("Red"))
+                .is_none(),
+            "Red should not be in the module's namespace"
+        );
 
         // "Color" and "Red" should NOT be directly accessible
         assert!(
@@ -942,11 +945,11 @@ mod tests {
             "Outer::Inner should exist"
         );
 
-        // Outer::Variant should exist (enum variants are hoisted to module namespace)
+        // A variant is only in its enum's namespace
         assert!(
             env.lookup_qualified(&SymbolPath::new(["Outer"]), &Symbol::new("Variant"))
-                .is_some(),
-            "Outer::Variant should exist"
+                .is_none(),
+            "Outer::Variant should not exist"
         );
 
         // Outer::Inner::Variant should exist
@@ -1157,7 +1160,6 @@ mod tests {
         // mod Outer { enum Inner { Variant } }
         // Should create:
         // - Outer::Inner (the enum type)
-        // - Outer::Variant (the variant, also available directly under Outer)
         // - Outer::Inner::Variant (the variant via enum namespace)
         let module = Module::new(
             fresh_node_id(),

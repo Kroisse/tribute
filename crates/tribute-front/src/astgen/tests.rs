@@ -944,8 +944,8 @@ fn test_case_with_patterns() {
     let source = r#"
             fn main() -> Nil {
                 case opt {
-                    Some(x) -> x
-                    None -> 0
+                    .Some(x) -> x
+                    .None -> 0
                 }
             }
         "#;
@@ -1260,8 +1260,8 @@ fn test_constructor_pattern() {
     let source = r#"
             fn main() -> Nil {
                 case x {
-                    Some(value) -> value
-                    None() -> 0
+                    .Some(value) -> value
+                    .None() -> 0
                 }
             }
         "#;
@@ -2563,8 +2563,8 @@ fn test_as_pattern() {
 
             fn test(opt: Option(Nat)) -> Nat {
                 case opt {
-                    Some(x) as whole -> x
-                    None -> 0
+                    .Some(x) as whole -> x
+                    .None -> 0
                 }
             }
         "#;

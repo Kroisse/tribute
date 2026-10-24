@@ -144,7 +144,7 @@ ability Ask {
 }
 
 fn constructor(n: Int) -> Opt {
-    become Som(n)
+    become .Som(n)
 }
 
 fn foreign(n: Int) -> Int {

@@ -293,9 +293,7 @@ fn lower_constructor_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<
         return ExprKind::Error;
     };
 
-    let sym = ctx.node_path(&name_node);
-    let name_id = ctx.fresh_id_with_span(&name_node);
-    let ctor = UnresolvedName::new(sym, name_id);
+    let ctor = ctx.constructor_name(&name_node);
 
     let args = args_node
         .map(|args| lower_argument_list(ctx, args))
@@ -312,9 +310,7 @@ fn lower_record_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
         return ExprKind::Error;
     };
 
-    let type_name_sym = ctx.node_path(&type_node);
-    let type_name_id = ctx.fresh_id_with_span(&type_node);
-    let type_name = UnresolvedName::new(type_name_sym, type_name_id);
+    let type_name = ctx.constructor_name(&type_node);
 
     let mut fields = Vec::new();
     let mut spread = None;

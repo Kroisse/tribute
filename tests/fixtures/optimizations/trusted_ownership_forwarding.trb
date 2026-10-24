@@ -7,8 +7,8 @@ enum BoxedNat {
 
 fn read_leaf(boxed: BoxedNat) -> Nat {
     case boxed {
-        Boxed(value) -> value
-        Wrapped(_) -> 0
+        .Boxed(value) -> value
+        .Wrapped(_) -> 0
     }
 }
 
@@ -21,5 +21,5 @@ fn read_root(boxed: BoxedNat) -> Nat {
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(read_root(Boxed(10)))
+    __tribute_print_nat(read_root(.Boxed(10)))
 }

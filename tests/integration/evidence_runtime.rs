@@ -11,7 +11,7 @@ use super::common::{
 
 const EVIDENCE_TESTS: &str = r#"
 pub mod evidence_tests {
-    use super::{Int, Nat, None}
+    use super::{Int, Nat}
     use super::runtime::Slots
     use super::runtime::evidence::{Marker, extend, lookup, mask, dup, outer, tail, with_tail, push}
 
@@ -34,15 +34,15 @@ pub mod evidence_tests {
     // Ability 10 at prompt 7, shadowed by prompt 8; ability 5 at prompt 3
     // sorts before it.
     fn one() ->{} Slots(Marker) {
-        empty().extend(+10, 7, None, empty())
+        empty().extend(+10, 7, .None, empty())
     }
 
     fn two() ->{} Slots(Marker) {
-        one().extend(+10, 8, None, one())
+        one().extend(+10, 8, .None, one())
     }
 
     fn three() ->{} Slots(Marker) {
-        two().extend(+5, 3, None, two())
+        two().extend(+5, 3, .None, two())
     }
 
     /// The prompts each operation leaves on top, one digit each.

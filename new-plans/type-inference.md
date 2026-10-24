@@ -72,6 +72,57 @@ Variant patterns preserve the constructor type constrained against the matched
 value. This applies to let destructuring as well as case arms: conversion must
 not instantiate a fresh constructor after the pattern has been solved.
 
+### 암묵적 생성자
+
+암묵적 생성자 `.Name`, `.Name(args)`, `.Name { fields }`
+([syntax.md](syntax.md#암묵적-생성자))는 생성자를 그 자리의 타입으로 정한다.
+표현식에서는 그 표현식의 타입이고, 패턴에서는 그 패턴이 매칭하는 값의 타입이다.
+`case`의 arm 패턴은 scrutinee의 타입, 하위 패턴은 상위 패턴이 정한 필드나 원소의
+타입, `let` 패턴은 값의 타입이다.
+
+1. **타입의 namespace.** 그 타입이 nominal 타입 `T`로 정해지면 생성자는 `T`의
+   생성자 중 이름이 `Name`인 것이다. Enum의 생성자는 variant이고, struct의 생성자는
+   타입과 이름이 같은 struct 자신이다. `T`는 스코프에 없어도 되지만, 생성자는 쓰는
+   자리에서 [보여야](modules.md#가시성-visibility) 한다. 인자 없이 쓴
+   `.Name`을 함수 값으로 쓰면 그 함수 타입의 결과가 `T`다(`xs.map(.Some)`).
+2. **스코프의 타입.** 타입이 아직 정해지지 않았으면 스코프의 타입 `T`마다 `T`의
+   생성자 `Name`을 후보로 모은다
+   ([암묵적 생성자의 후보](modules.md#암묵적-생성자의-후보)). 후보는
+   [후보 선택](modules.md#후보-선택) 규칙으로 고른다. 생성자의 필드가 매개변수이고,
+   인자나 하위 패턴이 인자이며, `T`의 인스턴스가 결과다. 맞는 후보가 여럿이면 타입이
+   더 정해질 때까지 기다린다. 기다리는 동안 그 자리의 타입이 nominal 타입 `T`로
+   정해지면 1번 규칙으로 `T`에서 찾는다.
+
+해석한 생성자는 경로로 쓴 생성자와 같다. 같은 노드의 constructor 인스턴스 규칙
+([레코드 생성 검사](#레코드-생성-검사))과 필드 검증을 그대로 적용한다. Typed AST에는
+해석한 생성자만 남으며, 망라성 검사와 이후 단계는 경로로 쓴 생성자와 구분하지 않는다.
+생성자는 effect를 수행하지 않으므로, 해석을 기다리는 암묵적 생성자는
+[지연된 호출](#지연된-호출의-effect)과 달리 row에 기여하지 않는다.
+
+진단은 다음과 같다.
+
+- 타입 `T`에 생성자 `Name`이 없으면 오류다. 진단은 `T`를 식별 경로로 보인다.
+- 타입 `T`의 생성자 `Name`이 쓰는 자리에서 보이지 않으면 오류다.
+- 그 자리의 타입이 생성자를 가진 nominal 타입이 아니면(함수, tuple, `Nil`) 오류다.
+- 스코프의 어느 타입에도 생성자 `Name`이 없으면 오류다.
+- 함수 본문을 다 푼 뒤에도 맞는 후보가 여럿이면 모호성 오류다. 진단은 맞는
+  후보를 나열하고 경로로 쓰도록 안내한다. 맞는 후보가 하나도 없으면 오류다.
+- 해석한 생성자의 인자 수, 필드, 하위 패턴 수 오류는 경로로 쓴 생성자와 같은
+  규칙으로 진단한다.
+
+```rust
+fn parse(s: String) -> Result(Int, String) {
+    case s {
+        "" -> .Error { error: "empty" }     // Result의 namespace
+        _ -> .Ok { value: 0 }
+    }
+}
+
+let x = .Some(1)        // 스코프의 타입 중 Option만 Some을 가지면 Option(Int)
+let y = .Leaf(1)        // 스코프의 Tree(a)와 Heap(a)가 둘 다 Leaf(a)를 가지면 y가
+                        // 쓰이는 자리의 타입을 기다린다. 끝내 정해지지 않으면 모호성 오류
+```
+
 ### Equality, 표현식 검사, 공통 결과 타입
 
 제약 solver는 다음 세 관계를 구별한다.

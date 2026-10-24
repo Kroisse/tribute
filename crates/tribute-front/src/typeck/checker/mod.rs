@@ -31,6 +31,7 @@ mod expr;
 mod finalize;
 mod fn_arm_check;
 mod func_check;
+mod implicit_ctor;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;

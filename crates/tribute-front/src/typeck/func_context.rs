@@ -201,6 +201,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
     deferred_methods: Vec<DeferredMethodCall<'db>>,
     /// Deferred method calls resolved before the function was solved.
     resolved_deferred_methods: Vec<(DeferredMethodCall<'db>, FuncDefId<'db>, Type<'db>)>,
+    /// The implicit constructors decided at each expression or pattern.
+    implicit_constructors: HashMap<NodeId, ImplicitConstructor<'db>>,
 
     /// Evidence scopes and the calls and resumes made in them.
     pub(crate) evidence: super::evidence_plan::EvidenceTracker<'db>,
@@ -232,6 +234,56 @@ pub struct DeferredMethodCall<'db> {
     pub arg_types: Vec<Type<'db>>,
     /// Fresh row for the method's effects, joined into the caller's row.
     pub effect: AbilityRow<'db>,
+}
+
+/// What an implicit constructor `.Name` must take, as it is written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConstructorShape {
+    /// `.Name`.
+    Unit,
+    /// `.Name(a, b)`, with this many arguments or sub-patterns.
+    Positional(usize),
+    /// `.Name { a, b }`, with the field names as written, and whether a
+    /// spread or a `..` gives the fields not written.
+    Fields { names: Vec<Symbol>, rest: bool },
+}
+
+/// The constructor an implicit constructor `.Name` at an expression or a
+/// pattern names, as type checking decided it.
+#[derive(Clone)]
+pub enum ImplicitConstructor<'db> {
+    /// The constructor its type or its only candidate gave where it is
+    /// written, or an unresolved reference after a reported error.
+    Resolved(crate::ast::ResolvedRef<'db>),
+    /// A selection that waits for more of its types.
+    Deferred(DeferredConstructor<'db>),
+}
+
+/// An implicit constructor whose selection waits until after constraint
+/// solving, like a [`DeferredMethodCall`].
+#[derive(Clone)]
+pub struct DeferredConstructor<'db> {
+    /// The expression or pattern.
+    pub node_id: NodeId,
+    /// The constructor's name.
+    pub name: Symbol,
+    /// The constructors of the types in scope with that name, by rank.
+    pub candidates: crate::ast::Candidates<CtorId<'db>>,
+    /// The constructors with that name the module does not see, with why.
+    pub hidden: Vec<(CtorId<'db>, String)>,
+    /// How it is written.
+    pub shape: ConstructorShape,
+    /// Whether it is a pattern, whose fields equal the constructor's
+    /// rather than coerce to them.
+    pub pattern: bool,
+    /// What stands for the constructor's type until it is selected: a pure
+    /// function from `field_types` to `result_ty`, or `result_ty` itself
+    /// for a unit.
+    pub ctor_ty: Type<'db>,
+    /// The type of the value it constructs or matches.
+    pub result_ty: Type<'db>,
+    /// The type of each argument, sub-pattern, or field, as written.
+    pub field_types: Vec<Type<'db>>,
 }
 
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
@@ -288,6 +340,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             method_syntax_calls: HashSet::default(),
             deferred_methods: Vec::new(),
             resolved_deferred_methods: Vec::new(),
+            implicit_constructors: HashMap::default(),
             evidence: Default::default(),
         }
     }
@@ -1000,6 +1053,47 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub fn deferred_methods(&self) -> &[DeferredMethodCall<'db>] {
         &self.deferred_methods
+    }
+
+    /// The implicit constructor decided at `node`.
+    pub fn implicit_constructor(&self, node: NodeId) -> Option<&ImplicitConstructor<'db>> {
+        self.implicit_constructors.get(&node)
+    }
+
+    /// Record the implicit constructor decided at `node`.
+    pub fn record_implicit_constructor(
+        &mut self,
+        node: NodeId,
+        constructor: ImplicitConstructor<'db>,
+    ) {
+        self.implicit_constructors.insert(node, constructor);
+    }
+
+    /// The implicit constructors still to be selected, in source order.
+    pub fn deferred_constructors(&self) -> Vec<&DeferredConstructor<'db>> {
+        let mut deferred: Vec<_> = self
+            .implicit_constructors
+            .values()
+            .filter_map(|constructor| match constructor {
+                ImplicitConstructor::Deferred(deferred) => Some(deferred),
+                ImplicitConstructor::Resolved(_) => None,
+            })
+            .collect();
+        deferred.sort_by_key(|deferred| deferred.node_id);
+        deferred
+    }
+
+    /// Take the implicit constructors still to be selected, in source order.
+    pub fn take_deferred_constructors(&mut self) -> Vec<DeferredConstructor<'db>> {
+        let mut deferred: Vec<_> = std::mem::take(&mut self.implicit_constructors)
+            .into_values()
+            .filter_map(|constructor| match constructor {
+                ImplicitConstructor::Deferred(deferred) => Some(deferred),
+                ImplicitConstructor::Resolved(_) => None,
+            })
+            .collect();
+        deferred.sort_by_key(|deferred| deferred.node_id);
+        deferred
     }
 
     pub(crate) fn next_row_var(&self) -> u64 {

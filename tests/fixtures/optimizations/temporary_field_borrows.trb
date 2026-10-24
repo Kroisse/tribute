@@ -12,17 +12,17 @@ enum Outer {
 
 fn read_nested(outer: Outer) -> Nat {
     case outer {
-        Wrapped(inner) -> case inner {
-            Value(value) -> value
-            Empty -> 0
+        .Wrapped(inner) -> case inner {
+            .Value(value) -> value
+            .Empty -> 0
         }
-        Missing -> 0
+        .Missing -> 0
     }
 }
 
 fn main() -> Nil {
-    let inner = Value(10)
-    let outer = Wrapped(inner)
+    let inner = .Value(10)
+    let outer = .Wrapped(inner)
     let first = read_nested(outer)
     let second = read_nested(outer)
     __tribute_print_nat(first + second)

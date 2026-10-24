@@ -96,8 +96,8 @@ enum Option(a) {
 
 fn unwrap_or(opt: Option(Nat), default: Nat) -> Nat {
     case opt {
-        Some(x) -> x
-        None -> default
+        .Some(x) -> x
+        .None -> default
     }
 }
 "#,
@@ -216,7 +216,7 @@ fn list_constructor_pattern_retains_callable_metadata(db: &salsa::DatabaseImpl) 
         r#"
 enum Item { Number(Nat) }
 fn observe(values: List(Item)) -> Nat {
-    case values { [Number(value)] -> value, _ -> 0 }
+    case values { [.Number(value)] -> value, _ -> 0 }
 }
 "#,
     );
@@ -341,9 +341,9 @@ enum Result(a, e) {
 fn nested(flag: Bool) -> Nat {
     let identity = fn(value) value
     case flag {
-        True -> case identity(Ok(1)) {
-            Ok(value) -> value
-            Err(_) -> 0
+        True -> case identity(.Ok(1)) {
+            .Ok(value) -> value
+            .Err(_) -> 0
         }
         False -> 0
     }
@@ -398,15 +398,15 @@ enum Box { Boxed(Item) }
 
 fn weight(item: Item) -> Nat {
     case item {
-        Number(n) -> n
-        Empty -> 0
+        .Number(n) -> n
+        .Empty -> 0
     }
 }
 
 fn test(b: Box) -> Nat {
     case b {
-        Boxed(Number(n) as item) -> n + weight(item)
-        Boxed(Empty) -> 0
+        .Boxed(.Number(n) as item) -> n + weight(item)
+        .Boxed(.Empty) -> 0
     }
 }
 "#,
@@ -469,9 +469,9 @@ enum Item { Number(Nat), Empty }
 
 fn value(pair: #(Item, Bool)) -> Nat {
     case pair {
-        #(Number(n), _) -> n
-        #(Empty, True) -> 1
-        #(Empty, False) -> 0
+        #(.Number(n), _) -> n
+        #(.Empty, True) -> 1
+        #(.Empty, False) -> 0
     }
 }
 
@@ -497,15 +497,15 @@ enum Item { Number(Nat), Empty }
 
 fn value(pair: #(Item, Bool)) -> Nat {
     case pair {
-        #(Number(n), _) -> n
-        #(Empty, True) -> 1
+        #(.Number(n), _) -> n
+        #(.Empty, True) -> 1
     }
 }
 "#,
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: #(Empty, False)"]
+        ["non-exhaustive case expression on `#(Item, Bool)`: missing patterns: #(.Empty, False)"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -521,15 +521,15 @@ enum Maybe(a) { Nothing, Just(a) }
 
 fn pick(o: Maybe(Bool)) -> Nat {
     case o {
-        Nothing -> 0
-        Just(True) -> 1
+        .Nothing -> 0
+        .Just(True) -> 1
     }
 }
 "#,
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: Just(False)"]
+        ["non-exhaustive case expression on `Maybe(Bool)`: missing patterns: .Just(False)"]
     );
     assert_eq!(exhaustive, 0);
 
@@ -540,9 +540,9 @@ enum Maybe(a) { Nothing, Just(a) }
 
 fn pick(o: Maybe(Bool)) -> Nat {
     case o {
-        Nothing -> 0
-        Just(True) -> 1
-        Just(False) -> 2
+        .Nothing -> 0
+        .Just(True) -> 1
+        .Just(False) -> 2
     }
 }
 "#,
@@ -563,8 +563,8 @@ mod shapes {
 
     pub fn inner(shape: Shape) -> Nat {
         case shape {
-            Dot(n) -> n
-            Other -> 0
+            .Dot(n) -> n
+            .Other -> 0
         }
     }
 }
@@ -573,8 +573,8 @@ use shapes::Shape
 
 fn outer(shape: Shape) -> Nat {
     case shape {
-        shapes::Dot(n) -> n
-        shapes::Other -> 0
+        Shape::Dot(n) -> n
+        shapes::Shape::Other -> 0
     }
 }
 "#,
@@ -593,14 +593,14 @@ use shapes::Shape
 
 fn outer(shape: Shape) -> Nat {
     case shape {
-        shapes::Dot(n) -> n
+        Shape::Dot(n) -> n
     }
 }
 "#,
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: Other"]
+        ["non-exhaustive case expression on `Shape`: missing patterns: .Other"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -616,8 +616,8 @@ enum Color { Red, Blue }
 
 fn size(shape: Shape) -> Nat {
     case shape {
-        Red -> 0
-        Blue -> 1
+        .Red -> 0
+        .Blue -> 1
     }
 }
 "#,
@@ -641,7 +641,7 @@ fn pick(flag: Bool, enabled: Bool) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: True"]
+        ["non-exhaustive case expression on `Bool`: missing patterns: True"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -663,7 +663,7 @@ fn both(flags: Flags) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: Flags(False, True)"]
+        ["non-exhaustive case expression on `Flags`: missing patterns: Flags(False, True)"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -683,7 +683,7 @@ fn code(name: String) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: _"]
+        ["non-exhaustive case expression on `std::String`: missing patterns: _"]
     );
     assert_eq!(exhaustive, 0);
 }
@@ -703,9 +703,9 @@ fn flag(value: Bool) -> Nat {
 
 fn option(value: Option(Nat)) -> Nat {
     case value {
-        Some(_) -> 1
-        Some(1) -> 2
-        None -> 0
+        .Some(_) -> 1
+        .Some(1) -> 2
+        .None -> 0
     }
 }
 "#,
@@ -792,7 +792,7 @@ fn only(value: Nil) -> Nat {
     );
     assert_eq!(
         errors,
-        ["non-exhaustive case expression: missing patterns: #(Nil, False)"]
+        ["non-exhaustive case expression on `#(Nil, Bool)`: missing patterns: #(Nil, False)"]
     );
     assert_eq!(exhaustive, 1);
 }

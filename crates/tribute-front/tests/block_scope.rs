@@ -116,8 +116,8 @@ enum Option(a) {
 fn example(opt: Option(Nat)) -> Nat {
     {
         case opt {
-            Some(x) -> x
-            None -> 0
+            .Some(x) -> x
+            .None -> 0
         }
     }
 }

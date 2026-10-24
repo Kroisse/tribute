@@ -150,7 +150,7 @@ enum List(a) {
 }
 
 fn source_value() -> List(Nat) {
-    UserList(1)
+    .UserList(1)
 }
 
 fn value() -> Nat {
@@ -215,8 +215,8 @@ fn diag_non_exhaustive_nested_variant(db: &salsa::DatabaseImpl) {
         r#"
 fn pick(o: Option(Bool)) -> Nat {
     case o {
-        None -> 0
-        Some(True) -> 1
+        .None -> 0
+        .Some(True) -> 1
     }
 }
 "#,
@@ -273,8 +273,8 @@ fn diag_constructor_pattern_arity(db: &salsa::DatabaseImpl) {
         r#"
 fn get(o: Option(Nat)) -> Nat {
     case o {
-        Some(a, b) -> a
-        None -> 0
+        .Some(a, b) -> a
+        .None -> 0
     }
 }
 "#,
@@ -1237,7 +1237,7 @@ fn diag_open_callback_in_pure_field(db: &salsa::DatabaseImpl) {
         r#"
 enum Choice { Callback(fn(Int) -> Int), Other }
 
-fn make(callback: fn(Int) ->{e} Int) -> Choice { Callback(callback) }
+fn make(callback: fn(Int) ->{e} Int) -> Choice { .Callback(callback) }
 
 fn main() -> Nil { Nil }
 "#,
