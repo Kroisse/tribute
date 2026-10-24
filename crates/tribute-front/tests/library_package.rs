@@ -547,3 +547,28 @@ fn take(e: pkg::facade::api::nested::E) -> Nat { 0 }
     );
     assert_eq!(errors, Vec::<String>::new());
 }
+
+/// A re-export that names a module inside the one it shares its name with
+/// does not make a path grow without end.
+#[salsa_test]
+fn a_re_export_into_its_namesake_ends_the_path(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod m {
+    pub mod a {
+        pub mod b {
+            pub fn f() -> Nat { 0 }
+        }
+    }
+    pub use pkg::m::a::b as a
+}
+
+fn missing() -> Nat { pkg::m::a::missing::f() }
+"#,
+    );
+    assert!(
+        errors.contains(&"unresolved name `pkg::m::a::missing::f`".to_owned()),
+        "{errors:?}"
+    );
+}

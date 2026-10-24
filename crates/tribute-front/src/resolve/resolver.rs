@@ -370,35 +370,56 @@ impl<'db> Resolver<'db> {
     /// std as library` in `m`, is `Option` in package `std`. A re-export the
     /// current module does not see stops the path.
     fn through_exports(&self, namespace: Location) -> Location {
+        if self.view().has_namespace(&namespace) {
+            return namespace;
+        }
+        // Each segment continues from the one before it: to what a re-export
+        // of that name names, whose own entries alone the exporting module
+        // holds a copy of, or else into a namespace.
+        let mut current = namespace.package.at(SymbolPath::root());
+        for (index, segment) in namespace.path.iter().enumerate() {
+            let next = current.child(segment.clone());
+            current = if let Some(target) = self.export_chain(&current, segment) {
+                target
+            } else if self.view().has_namespace(&next) {
+                next
+            } else {
+                return next.join(&namespace.path[index + 1..]);
+            };
+        }
+        current
+    }
+
+    /// What the re-export of `name` in `namespace` names, followed through
+    /// the re-exports it names in turn, if the current module sees each.
+    fn export_chain(&self, namespace: &Location, name: &Symbol) -> Option<Location> {
         use rustc_hash::FxHashSet as HashSet;
 
-        let mut namespace = namespace;
-        // A chain of re-exports may replace a prefix without shortening the
-        // path, so the locations seen so far end a cycle.
+        let visible = |outer: &Location, name: &Symbol| {
+            let target = self.view().export_target(outer, name)?;
+            let hidden = self
+                .view()
+                .entry_restriction(outer, name)
+                .is_some_and(|restriction| {
+                    !restriction.is_visible_from(&self.package, &self.module_path)
+                });
+            (!hidden).then(|| target.clone())
+        };
+        let mut target = visible(namespace, name)?;
+        // A target that is itself a re-export continues to what that names.
+        // Each step replaces the location with a recorded target, so the
+        // targets seen so far end a cycle.
         let mut seen = HashSet::default();
-        while seen.insert(namespace.clone()) {
-            if self.view().has_namespace(&namespace) {
+        while seen.insert(target.clone()) {
+            let Some(next) = target
+                .split_last()
+                .and_then(|(name, outer)| visible(&outer, name))
+            else {
                 break;
-            }
-            let next = (0..namespace.path.len()).find_map(|index| {
-                let (outer, rest) = namespace.path.split_at(index);
-                let (name, rest) = rest.split_first()?;
-                let outer = namespace.package.at(SymbolPath::new(outer.iter().cloned()));
-                let target = self.view().export_target(&outer, name)?;
-                let hidden =
-                    self.view()
-                        .entry_restriction(&outer, name)
-                        .is_some_and(|restriction| {
-                            !restriction.is_visible_from(&self.package, &self.module_path)
-                        });
-                (!hidden).then(|| target.join(rest))
-            });
-            match next {
-                Some(next) => namespace = next,
-                None => break,
-            }
+            };
+            target = next;
         }
-        namespace
+        Some(target)
     }
 
     /// The functions several `use`s of the enclosing module give `name`,
