@@ -351,31 +351,10 @@ fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<PackageEnv<'db>> {
 }
 
 /// The packages a user package depends on: package `std`.
-fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::Dependencies<'db> {
+pub fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::Dependencies<'db> {
     prelude_env(db)
         .map(ast_resolve::Dependencies::std)
         .unwrap_or_default()
-}
-
-/// The names the prelude gives a user package: the public ones of those
-/// its modules see by name.
-pub fn library_names<'db>(
-    db: &'db dyn salsa::Database,
-) -> Vec<(trunk_ir::Symbol, ast_resolve::Binding<'db>)> {
-    let dependencies = prelude_dependencies(db);
-    let own = PackageEnv::new();
-    let scope = ast_resolve::Scope::new(&own, &dependencies);
-    scope
-        .iter_library_names()
-        .into_iter()
-        .filter_map(|name| {
-            let binding = scope.lookup_library(&name)?;
-            scope
-                .restriction(binding)
-                .is_none()
-                .then(|| (name, binding.clone()))
-        })
-        .collect()
 }
 
 /// The prelude's type exports (TypeSchemes only, no UniVars), injected into
@@ -4424,8 +4403,14 @@ fn main() -> String { "hello" }
     /// continues in and the package path it names.
     #[salsa_test]
     fn library_names_are_the_prelude_short_names(db: &crate::TributeDatabaseImpl) {
-        let mut names: Vec<String> = library_names(db)
+        let dependencies = prelude_dependencies(db);
+        let own = PackageEnv::new();
+        let scope = ast_resolve::Scope::new(&own, &dependencies);
+        let mut names: Vec<String> = scope
+            .iter_library_names()
             .into_iter()
+            .filter_map(|name| Some((name.clone(), scope.lookup_library(&name)?)))
+            .filter(|(_, binding)| scope.restriction(binding).is_none())
             .map(|(name, binding)| {
                 let kind = match binding {
                     ast_resolve::Binding::Function { .. } => "fn",
@@ -4454,9 +4439,6 @@ fn main() -> String { "hello" }
             ]
         );
 
-        let dependencies = prelude_dependencies(db);
-        let own = PackageEnv::new();
-        let scope = ast_resolve::Scope::new(&own, &dependencies);
         let paths: Vec<String> = scope
             .iter_library_names()
             .into_iter()

@@ -137,7 +137,7 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
         }
     }
 
-    let mut library = tribute::library_names(db);
+    let mut library = prelude_names(db);
     library.sort_by(|(left, _), (right, _)| left.cmp(right));
     for (name, binding) in library {
         let kind = match binding {
@@ -160,6 +160,192 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
     }
 
     items
+}
+
+/// The constructors an implicit constructor `.Name` may name: the variants
+/// and structs of the types each module declares or imports, which that
+/// module's body names, then those of the prelude's types, which every
+/// module names. Each item's detail is the constructor's path through its
+/// type as the module names the type.
+#[salsa::tracked(returns(deref))]
+pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstCompletionItem> {
+    use rustc_hash::FxHashMap as HashMap;
+
+    let Some(output) = tribute::parse_and_lower_ast(db, source) else {
+        return Vec::new();
+    };
+    let entries = &output.module(db).entries;
+    // Each type's constructors, by the type's package-root path.
+    let types: HashMap<SymbolPath, TypeConstructors> = entries
+        .iter()
+        .filter_map(|entry| {
+            let constructors = match &entry.decl {
+                Decl::Enum(e) => TypeConstructors::Variants(
+                    e.name.clone(),
+                    e.variants.iter().map(|v| v.name.clone()).collect(),
+                ),
+                Decl::Struct(s) => TypeConstructors::Struct(s.name.clone()),
+                _ => return None,
+            };
+            Some((
+                entry.module.child(constructors.name().clone()),
+                constructors,
+            ))
+        })
+        .collect();
+    let mut items = Vec::new();
+    let mut add = |module: &SymbolPath, ty: &Symbol, constructors: &TypeConstructors| {
+        let mut push = |name: &Symbol, detail: String| {
+            items.push(AstCompletionItem {
+                name: name.clone(),
+                kind: CompletionKind::Constructor,
+                detail: Some(detail),
+                module: Some(module.clone()),
+            });
+        };
+        match constructors {
+            TypeConstructors::Variants(_, variants) => {
+                for variant in variants {
+                    push(variant, format!("{ty}::{variant}"));
+                }
+            }
+            // A struct's constructor has the struct's own name, which an
+            // alias does not rename.
+            TypeConstructors::Struct(own) if ty == own => push(own, ty.to_string()),
+            TypeConstructors::Struct(_) => {}
+        }
+    };
+    for entry in entries {
+        match &entry.decl {
+            Decl::Enum(e) => add(
+                &entry.module,
+                &e.name,
+                &types[&entry.module.child(e.name.clone())],
+            ),
+            Decl::Struct(s) => add(
+                &entry.module,
+                &s.name,
+                &types[&entry.module.child(s.name.clone())],
+            ),
+            // A type a dependency declares is found in its environment.
+            Decl::Use(u) => {
+                let Some(target) = &u.target else { continue };
+                let dependency;
+                let ty = match types.get(&target[..]) {
+                    Some(ty) => ty,
+                    None => match dependency_type_constructors(db, target) {
+                        Some(ty) => {
+                            dependency = ty;
+                            &dependency
+                        }
+                        None => continue,
+                    },
+                };
+                add(&entry.module, u.alias.as_ref().unwrap_or(ty.name()), ty);
+            }
+            _ => {}
+        }
+    }
+    for (ty, name) in prelude_constructors(db) {
+        items.push(AstCompletionItem {
+            detail: Some(format!(
+                "{}::{ty}::{name}",
+                tribute_front::resolve::LIBRARY_PACKAGE
+            )),
+            name,
+            kind: CompletionKind::Constructor,
+            module: None,
+        });
+    }
+    items
+}
+
+/// The names the prelude gives a user package: the public ones of those
+/// its modules see by name.
+fn prelude_names(db: &dyn salsa::Database) -> Vec<(Symbol, Binding<'_>)> {
+    let dependencies = tribute::prelude_dependencies(db);
+    let own = tribute_front::resolve::PackageEnv::new();
+    let scope = tribute_front::resolve::Scope::new(&own, &dependencies);
+    scope
+        .iter_library_names()
+        .into_iter()
+        .filter_map(|name| {
+            let binding = scope.lookup_library(&name)?;
+            scope
+                .restriction(binding)
+                .is_none()
+                .then(|| (name, binding.clone()))
+        })
+        .collect()
+}
+
+/// The constructors of a type the completion index knows.
+enum TypeConstructors {
+    /// An enum, by its name, and its variants.
+    Variants(Symbol, Vec<Symbol>),
+    /// A struct, its own constructor, by its name.
+    Struct(Symbol),
+}
+
+impl TypeConstructors {
+    fn name(&self) -> &Symbol {
+        match self {
+            Self::Variants(name, _) | Self::Struct(name) => name,
+        }
+    }
+}
+
+/// The constructors of the type a dependency declares at `identity`, with
+/// the public variants of an enum.
+fn dependency_type_constructors(
+    db: &dyn salsa::Database,
+    identity: &[Symbol],
+) -> Option<TypeConstructors> {
+    let dependencies = tribute::prelude_dependencies(db);
+    let own = tribute_front::resolve::PackageEnv::new();
+    let scope = tribute_front::resolve::Scope::new(&own, &dependencies);
+    let location = scope.locate(identity)?;
+    let name = identity.last()?.clone();
+    match scope.lookup_path(&location)? {
+        Binding::TypeDef { .. } => Some(TypeConstructors::Variants(
+            name,
+            scope
+                .iter_namespace(&location)
+                .filter(|(_, binding)| {
+                    matches!(binding, Binding::Constructor { tag: Some(_), .. })
+                        && scope.restriction(binding).is_none()
+                })
+                .map(|(variant, _)| variant)
+                .collect(),
+        )),
+        Binding::Constructor { tag: None, .. } => Some(TypeConstructors::Struct(name)),
+        _ => None,
+    }
+}
+
+/// The constructors of the prelude's types, as `(type, variant)`: the
+/// public variants of its enums, the only prelude types with constructors.
+fn prelude_constructors(db: &dyn salsa::Database) -> Vec<(Symbol, Symbol)> {
+    let dependencies = tribute::prelude_dependencies(db);
+    let own = tribute_front::resolve::PackageEnv::new();
+    let scope = tribute_front::resolve::Scope::new(&own, &dependencies);
+    let mut constructors: Vec<_> = prelude_names(db)
+        .into_iter()
+        .filter(|(_, binding)| matches!(binding, Binding::TypeDef { .. }))
+        .filter_map(|(name, _)| Some((scope.library_namespace(&name)?, name)))
+        .flat_map(|(namespace, name)| {
+            scope
+                .iter_namespace(&namespace)
+                .filter(|(_, binding)| {
+                    matches!(binding, Binding::Constructor { tag: Some(_), .. })
+                        && scope.restriction(binding).is_none()
+                })
+                .map(move |(variant, _)| (name.clone(), variant))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    constructors.sort();
+    constructors
 }
 
 /// The identity path of the module whose body contains the byte offset
@@ -473,6 +659,106 @@ mod tests {
     }
 
     // Completion tests
+
+    #[test]
+    fn test_constructor_items_include_imported_types() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "mod shapes {\n    pub enum Shape { Dot, Line(Nat) }\n    pub struct Point { x: Nat }\n    pub enum Pair { Pair(Nat, Nat), Empty }\n}\nuse shapes::Shape\nuse shapes::Point\nmod inner {\n    use super::shapes::Shape as S\n    use super::shapes::Point as P\n    use super::shapes::Pair as Q\n}\n";
+        let source = make_source(&db, text);
+        let items = constructor_items(&db, source);
+        let at = |module: &[&str]| -> Vec<(String, String)> {
+            let module = SymbolPath::new(module.iter().copied());
+            let mut found: Vec<_> = items
+                .iter()
+                .filter(|item| item.module.as_ref() == Some(&module))
+                .map(|item| {
+                    (
+                        item.name.to_string(),
+                        item.detail.clone().unwrap_or_default(),
+                    )
+                })
+                .collect();
+            found.sort();
+            found
+        };
+        let pair = |name: &str, detail: &str| (name.to_owned(), detail.to_owned());
+        assert_eq!(
+            at(&[]),
+            [
+                pair("Dot", "Shape::Dot"),
+                pair("Line", "Shape::Line"),
+                pair("Point", "Point")
+            ]
+        );
+        // An alias names the type, but not a struct's own constructor; a
+        // variant named like its enum is still a variant.
+        assert_eq!(
+            at(&["inner"]),
+            [
+                pair("Dot", "S::Dot"),
+                pair("Empty", "Q::Empty"),
+                pair("Line", "S::Line"),
+                pair("Pair", "Q::Pair"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_constructor_items_include_imported_dependency_types() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "use std::io::Error\nmod inner {\n    use std::io::Error as IoError\n}\n";
+        let source = make_source(&db, text);
+        let items = constructor_items(&db, source);
+        let detail_at = |module: &SymbolPath, name: &str| {
+            items
+                .iter()
+                .find(|item| item.module.as_ref() == Some(module) && item.name == name)
+                .and_then(|item| item.detail.clone())
+        };
+        assert_eq!(
+            detail_at(&SymbolPath::root(), "EndOfFile").as_deref(),
+            Some("Error::EndOfFile")
+        );
+        assert_eq!(
+            detail_at(&SymbolPath::new(["inner"]), "EndOfFile").as_deref(),
+            Some("IoError::EndOfFile")
+        );
+    }
+
+    #[test]
+    fn test_constructor_items_are_variants_structs_and_the_preludes() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "enum Color { Red, Green }\nstruct Point { x: Nat }\nmod inner {\n    enum Mode { Quiet }\n}\n";
+        let source = make_source(&db, text);
+        let items = constructor_items(&db, source);
+        let at = |module: &SymbolPath| -> Vec<(String, Option<String>)> {
+            items
+                .iter()
+                .filter(|item| item.module.as_ref().is_none_or(|own| own == module))
+                .map(|item| (item.name.to_string(), item.detail.clone()))
+                .collect()
+        };
+        let root = at(&SymbolPath::root());
+        for (name, detail) in [
+            ("Red", "Color::Red"),
+            ("Green", "Color::Green"),
+            ("Point", "Point"),
+            ("Some", "std::Option::Some"),
+            ("Error", "std::Result::Error"),
+        ] {
+            assert!(
+                root.iter()
+                    .any(|(n, d)| n == name && d.as_deref() == Some(detail)),
+                "{name} in {root:?}"
+            );
+        }
+        assert!(!root.iter().any(|(name, _)| name == "Quiet"));
+        assert!(
+            items
+                .iter()
+                .all(|item| item.kind == CompletionKind::Constructor)
+        );
+    }
 
     #[test]
     fn test_complete_keywords_fn() {
