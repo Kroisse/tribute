@@ -354,13 +354,72 @@ impl<'db> Resolver<'db> {
             return Ok(None);
         };
         if let Some(namespace) = self.fixed_location(&namespace)? {
+            let namespace = self.through_exports(namespace);
             let binding = self.view().lookup_path(&namespace.child(sym));
             return Ok(binding.map(|binding| (namespace, binding)));
         }
         Ok(self.namespace_in_scope(namespace).and_then(|namespace| {
+            let namespace = self.through_exports(namespace);
             let binding = self.view().lookup_qualified(&namespace, &sym)?;
             Some((namespace, binding))
         }))
+    }
+
+    /// `namespace`, or, when it is not a namespace itself, where it continues
+    /// through a re-export on its path: `m::library::Option`, after `pub use
+    /// std as library` in `m`, is `Option` in package `std`. A re-export the
+    /// current module does not see stops the path.
+    fn through_exports(&self, namespace: Location) -> Location {
+        if self.view().has_namespace(&namespace) {
+            return namespace;
+        }
+        // Each segment continues from the one before it: to what a re-export
+        // of that name names, whose own entries alone the exporting module
+        // holds a copy of, or else into a namespace.
+        let mut current = namespace.package.at(SymbolPath::root());
+        for (index, segment) in namespace.path.iter().enumerate() {
+            let next = current.child(segment.clone());
+            current = if let Some(target) = self.export_chain(&current, segment) {
+                target
+            } else if self.view().has_namespace(&next) {
+                next
+            } else {
+                return next.join(&namespace.path[index + 1..]);
+            };
+        }
+        current
+    }
+
+    /// What the re-export of `name` in `namespace` names, followed through
+    /// the re-exports it names in turn, if the current module sees each.
+    fn export_chain(&self, namespace: &Location, name: &Symbol) -> Option<Location> {
+        use rustc_hash::FxHashSet as HashSet;
+
+        let visible = |outer: &Location, name: &Symbol| {
+            let target = self.view().export_target(outer, name)?;
+            let hidden = self
+                .view()
+                .entry_restriction(outer, name)
+                .is_some_and(|restriction| {
+                    !restriction.is_visible_from(&self.package, &self.module_path)
+                });
+            (!hidden).then(|| target.clone())
+        };
+        let mut target = visible(namespace, name)?;
+        // A target that is itself a re-export continues to what that names.
+        // Each step replaces the location with a recorded target, so the
+        // targets seen so far end a cycle.
+        let mut seen = HashSet::default();
+        while seen.insert(target.clone()) {
+            let Some(next) = target
+                .split_last()
+                .and_then(|(name, outer)| visible(&outer, name))
+            else {
+                break;
+            };
+            target = next;
+        }
+        Some(target)
     }
 
     /// The functions several `use`s of the enclosing module give `name`,
@@ -785,6 +844,12 @@ impl<'db> Resolver<'db> {
                         return;
                     }
                 };
+                // Its namespace continues through a re-export on it, as a
+                // value path's does.
+                let location = location.map(|location| match location.split_last() {
+                    Some((name, namespace)) => self.through_exports(namespace).child(name.clone()),
+                    None => location,
+                });
                 // The path names only what is at its location.
                 match location
                     .as_ref()

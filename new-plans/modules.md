@@ -941,6 +941,12 @@ pub use pkg::internal::{TypeA, TypeB}
 pub use pkg::internal::LongTypeName as Short
 ```
 
+Re-export한 이름은 대상을 가리킨다. 그 이름 뒤로 이어지는 경로는 대상에서, 대상의
+namespace를 따라 끝까지 이어진다. 모듈 `m`이 `pub use std as library`를 선언하면
+`m::library::Option::Some`은 패키지 `std`의 `Option::Some`이다. 경로가 지나는
+re-export도 [가시성](#가시성-visibility) 규칙을 따르므로, 쓰는 자리에서 보이지 않는
+re-export를 지나는 경로는 그 re-export에서 멈춘다.
+
 ### 완전한 예시
 
 ```rust
