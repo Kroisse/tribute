@@ -194,7 +194,7 @@ pub fn function_schemes<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<&'db [(SymbolPath, TypeScheme<'db>)]> {
-    type_check_output(db, source).map(|o| o.function_types(db))
+    type_check_output(db, source).map(|o| o.declarations(db).function_types.as_slice())
 }
 
 // =============================================================================
@@ -458,7 +458,7 @@ fn explicit() ->{} Nil { Nil }
         );
 
         // function_types should be a valid Vec (possibly empty for simple cases)
-        let _ft = output.function_types(&db);
+        let _ft = &output.declarations(&db).function_types;
     }
 
     /// Recursively check if a type contains any unresolved UniVar.

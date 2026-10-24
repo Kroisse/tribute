@@ -402,9 +402,6 @@ pub type ParsedModule = Module<UnresolvedName>;
 /// Module after name resolution.
 pub type ResolvedModule<'db> = Module<ResolvedRef<'db>>;
 
-/// Module after type checking.
-pub type TypedModule<'db> = Module<TypedRef<'db>>;
-
 /// Declaration after parsing.
 pub type ParsedDecl = Decl<UnresolvedName>;
 

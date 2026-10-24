@@ -833,7 +833,11 @@ mod tests {
         let span_map = SpanMap::default();
         let resolved = resolve::resolve_module(db, module, span_map.clone());
         let output = typeck::typecheck_module(db, &resolved, span_map);
-        format!("{:#?}\n{:#?}", output.module(db), output.function_types(db))
+        format!(
+            "{:#?}\n{:#?}",
+            output.module(db),
+            output.declarations(db).function_types
+        )
     }
 
     /// Run the typecheck pipeline in a fresh database, returning the

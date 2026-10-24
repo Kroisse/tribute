@@ -312,25 +312,7 @@ fn checked_prelude<'db>(
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
     let (result, exports) = checker.check_prelude(&resolved);
 
-    let typed = ast_typeck::TypeCheckOutput::new(
-        db,
-        result.module,
-        result.function_types,
-        result.constructor_types.into(),
-        ast_typeck::ExpressionTypeMetadata {
-            node_types: result.node_types,
-            function_instances: result.function_instances,
-            local_instances: result.local_instances,
-            evidence_plans: result.evidence_plans,
-        },
-        ast_typeck::ability_schemas(&result.ability_definitions),
-        result.handler_operations,
-        result.perform_operations,
-        result.lambda_signatures,
-        result.exhaustive_cases,
-        result.well_known_types,
-        span_map,
-    );
+    let typed = ast_typeck::TypeCheckOutput::from_check(db, result, span_map);
     Some((typed, exports))
 }
 
@@ -415,7 +397,7 @@ fn prepare_frontend_details<'db>(
     use tribute_front::ast::{DeclTable, TypedRef};
 
     let user_module = typed.module(db);
-    let user_fn_types = typed.function_types(db);
+    let user_fn_types = &typed.declarations(db).function_types;
     let user_node_types = &typed.expression_types(db).node_types;
     let user_span_map = typed.span_map(db);
 
@@ -423,7 +405,7 @@ fn prepare_frontend_details<'db>(
     let (merged_module, merged_fn_types, merged_node_types, merged_span_map) =
         if let Some(prelude) = prelude_module(db) {
             let prelude_module_ast = prelude.module(db);
-            let prelude_fn_types = prelude.function_types(db);
+            let prelude_fn_types = &prelude.declarations(db).function_types;
             let prelude_node_types = &prelude.expression_types(db).node_types;
             let prelude_span_map = prelude.span_map(db);
 
@@ -518,13 +500,15 @@ fn prepare_frontend_details<'db>(
         merged_fn_types,
         tribute_front::monomorphize::MonomorphizeMetadata {
             constructor_types: typed
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .schemes
                 .iter()
                 .cloned()
                 .collect(),
             specialized_enum_variants: typed
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .specialized_enum_variants
                 .iter()
                 .cloned()
@@ -543,23 +527,59 @@ fn prepare_frontend_details<'db>(
                 .collect(),
             handler_operations: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.handler_operations(db).iter().cloned())
-                .chain(typed.handler_operations(db).iter().cloned())
+                .flat_map(|prelude| {
+                    prelude
+                        .expression_types(db)
+                        .handler_operations
+                        .iter()
+                        .cloned()
+                })
+                .chain(
+                    typed
+                        .expression_types(db)
+                        .handler_operations
+                        .iter()
+                        .cloned(),
+                )
                 .collect(),
             perform_operations: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.perform_operations(db).iter().cloned())
-                .chain(typed.perform_operations(db).iter().cloned())
+                .flat_map(|prelude| {
+                    prelude
+                        .expression_types(db)
+                        .perform_operations
+                        .iter()
+                        .cloned()
+                })
+                .chain(
+                    typed
+                        .expression_types(db)
+                        .perform_operations
+                        .iter()
+                        .cloned(),
+                )
                 .collect(),
             lambda_signatures: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.lambda_signatures(db).iter().cloned())
-                .chain(typed.lambda_signatures(db).iter().cloned())
+                .flat_map(|prelude| {
+                    prelude
+                        .expression_types(db)
+                        .lambda_signatures
+                        .iter()
+                        .cloned()
+                })
+                .chain(typed.expression_types(db).lambda_signatures.iter().cloned())
                 .collect(),
             exhaustive_cases: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.exhaustive_cases(db).iter().copied())
-                .chain(typed.exhaustive_cases(db).iter().copied())
+                .flat_map(|prelude| {
+                    prelude
+                        .expression_types(db)
+                        .exhaustive_cases
+                        .iter()
+                        .copied()
+                })
+                .chain(typed.expression_types(db).exhaustive_cases.iter().copied())
                 .collect(),
             compiler_intrinsics,
         },
@@ -588,14 +608,18 @@ fn prepare_frontend_details<'db>(
     let typed = ast_typeck::TypeCheckOutput::new(
         db,
         mono_result.module,
-        mono_result.function_types,
-        ast_typeck::ConstructorTypeMetadata {
-            schemes: mono_result.metadata.constructor_types.into_iter().collect(),
-            specialized_enum_variants: mono_result
-                .metadata
-                .specialized_enum_variants
-                .into_iter()
-                .collect(),
+        ast_typeck::DeclarationTypeMetadata {
+            function_types: mono_result.function_types,
+            constructor_types: ast_typeck::ConstructorTypeMetadata {
+                schemes: mono_result.metadata.constructor_types.into_iter().collect(),
+                specialized_enum_variants: mono_result
+                    .metadata
+                    .specialized_enum_variants
+                    .into_iter()
+                    .collect(),
+            },
+            ability_definitions: typed.declarations(db).ability_definitions.clone(),
+            well_known_types: typed.declarations(db).well_known_types,
         },
         ast_typeck::ExpressionTypeMetadata {
             node_types: mono_result.metadata.node_types.into_iter().collect(),
@@ -606,21 +630,19 @@ fn prepare_frontend_details<'db>(
                 .collect(),
             local_instances: mono_result.metadata.local_instances.into_iter().collect(),
             evidence_plans: mono_result.metadata.evidence_plans.into_iter().collect(),
+            handler_operations: mono_result
+                .metadata
+                .handler_operations
+                .into_iter()
+                .collect(),
+            perform_operations: mono_result
+                .metadata
+                .perform_operations
+                .into_iter()
+                .collect(),
+            lambda_signatures: mono_result.metadata.lambda_signatures.into_iter().collect(),
+            exhaustive_cases,
         },
-        typed.ability_definitions(db).to_vec(),
-        mono_result
-            .metadata
-            .handler_operations
-            .into_iter()
-            .collect(),
-        mono_result
-            .metadata
-            .perform_operations
-            .into_iter()
-            .collect(),
-        mono_result.metadata.lambda_signatures.into_iter().collect(),
-        exhaustive_cases,
-        *typed.well_known_types(db),
         merged_span_map,
     );
     Some(PreparedFrontend {
@@ -648,27 +670,39 @@ fn merge_and_lower_to_ir_with<'db, M>(
             local_instances: typed.expression_types(db).local_instances.clone(),
             function_instances: typed.expression_types(db).function_instances.clone(),
             span_map: typed.span_map(db).clone(),
-            function_types: typed.function_types(db).iter().cloned().collect(),
+            function_types: typed
+                .declarations(db)
+                .function_types
+                .iter()
+                .cloned()
+                .collect(),
             constructor_types: typed
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .schemes
                 .iter()
                 .cloned()
                 .collect(),
             specialized_enum_variants: typed
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .specialized_enum_variants
                 .clone(),
             node_types: typed.expression_types(db).node_types.clone(),
             ability_definitions: ast_typeck::ability_definitions_from_schemas(
-                typed.ability_definitions(db),
+                &typed.declarations(db).ability_definitions,
             ),
-            handler_operations: typed.handler_operations(db).clone(),
-            perform_operations: typed.perform_operations(db).clone(),
-            lambda_signatures: typed.lambda_signatures(db).clone(),
-            exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
+            handler_operations: typed.expression_types(db).handler_operations.clone(),
+            perform_operations: typed.expression_types(db).perform_operations.clone(),
+            lambda_signatures: typed.expression_types(db).lambda_signatures.clone(),
+            exhaustive_cases: typed
+                .expression_types(db)
+                .exhaustive_cases
+                .iter()
+                .copied()
+                .collect(),
             evidence_plans: typed.expression_types(db).evidence_plans.clone(),
-            well_known_types: *typed.well_known_types(db),
+            well_known_types: typed.declarations(db).well_known_types,
             compiler_intrinsics,
             runtime_types,
             merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
@@ -1737,24 +1771,8 @@ pub fn parse_and_lower_ast<'db>(
         result.node_types.len()
     );
 
-    Some(ast_typeck::TypeCheckOutput::new(
-        db,
-        result.module,
-        result.function_types,
-        result.constructor_types.into(),
-        ast_typeck::ExpressionTypeMetadata {
-            node_types: result.node_types,
-            function_instances: result.function_instances,
-            local_instances: result.local_instances,
-            evidence_plans: result.evidence_plans,
-        },
-        ast_typeck::ability_schemas(&result.ability_definitions),
-        result.handler_operations,
-        result.perform_operations,
-        result.lambda_signatures,
-        result.exhaustive_cases,
-        result.well_known_types,
-        span_map,
+    Some(ast_typeck::TypeCheckOutput::from_check(
+        db, result, span_map,
     ))
 }
 
@@ -3055,7 +3073,8 @@ fn main() ->{std::io::Io} Nil {
         let typed = prelude_module(db).expect("typed prelude");
         for (id, exported) in exports.function_types(db) {
             let (_, definition) = typed
-                .function_types(db)
+                .declarations(db)
+                .function_types
                 .iter()
                 .find(|(path, _)| path == id.path(db))
                 .expect("exported function has a typed declaration");
@@ -3501,7 +3520,10 @@ fn main() -> Nil {}
         let typed = parse_and_lower_ast(db, source).expect("typed fixture");
         let prepared =
             prepare_frontend_for_lowering(db, typed, source).expect("closed nominal dependencies");
-        let schemas = &prepared.constructor_types(db).specialized_enum_variants;
+        let schemas = &prepared
+            .declarations(db)
+            .constructor_types
+            .specialized_enum_variants;
         let mut seen = HashSet::default();
         for (name, declaration) in prepared
             .module(db)
@@ -3534,10 +3556,11 @@ fn main() -> Nil {}
             }
         }
         assert_eq!(seen.len(), schemas.len());
-        for (id, source_scheme) in &typed.constructor_types(db).schemes {
+        for (id, source_scheme) in &typed.declarations(db).constructor_types.schemes {
             if id.qualified(db) == "Box" {
                 let retained = prepared
-                    .constructor_types(db)
+                    .declarations(db)
+                    .constructor_types
                     .schemes
                     .iter()
                     .find(|(key, _)| key == id)
@@ -4036,7 +4059,7 @@ fn main() -> Nil { }
 "#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
-        let well_known = typed.well_known_types(db);
+        let well_known = typed.declarations(db).well_known_types;
         let qualified = |id: Option<tribute_front::ast::FuncDefId<'_>>| {
             id.map(|id| id.qualified(db).to_string())
         };
@@ -4264,7 +4287,8 @@ fn main() -> String { "hello" }
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
         let canonical = typed
-            .well_known_types(db)
+            .declarations(db)
+            .well_known_types
             .string
             .expect("prelude String identity");
         let FrontendCompilation {

@@ -550,8 +550,8 @@ fn factory() -> fn() ->{Stop} Nat { fn() { Stop::stop() } }
     assert!(errors.is_empty(), "{errors:#?}");
     let checked = tribute_front::query::type_check_output(db, source).unwrap();
     let metadata = checked.expression_types(db);
-    assert_eq!(checked.lambda_signatures(db).len(), 1);
-    let (lambda_id, signature) = &checked.lambda_signatures(db)[0];
+    assert_eq!(checked.expression_types(db).lambda_signatures.len(), 1);
+    let (lambda_id, signature) = &checked.expression_types(db).lambda_signatures[0];
     let TypeKind::Func { result, .. } = signature.function_type.kind(db) else {
         panic!("expected callable");
     };
@@ -703,7 +703,8 @@ fn result() ->{} Nat {
     assert!(errors.is_empty(), "{errors:#?}");
     let checked = tribute_front::query::type_check_output(db, source).unwrap();
     let (_, operation) = checked
-        .handler_operations(db)
+        .expression_types(db)
+        .handler_operations
         .iter()
         .find(|(_, operation)| operation.kind == tribute_front::ast::OpDeclKind::Fn)
         .unwrap();
@@ -765,7 +766,8 @@ fn late_method() -> Nat {
     assert!(errors.is_empty(), "{errors:#?}");
     let checked = tribute_front::query::type_check_output(db, source).unwrap();
     let callbacks: Vec<_> = checked
-        .lambda_signatures(db)
+        .expression_types(db)
+        .lambda_signatures
         .iter()
         .filter_map(|(_, signature)| match signature.function_type.kind(db) {
             TypeKind::Func { params, result, .. } if params.is_empty() => Some(*result),

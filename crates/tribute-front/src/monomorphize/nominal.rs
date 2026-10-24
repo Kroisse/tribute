@@ -263,7 +263,8 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             }
         }
         let roots: Vec<_> = input
-            .function_types(db)
+            .declarations(db)
+            .function_types
             .iter()
             .map(|(_, s)| s.body(db))
             .collect();
@@ -304,7 +305,8 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         );
         let index = NominalIndex::new(db, input.module(db));
         let schemas: HashMap<_, _> = input
-            .constructor_types(db)
+            .declarations(db)
+            .constructor_types
             .schemes
             .iter()
             .copied()
@@ -314,7 +316,11 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         let seeds = collect::collect_type_instantiations_with_index(
             db,
             input.module(db),
-            input.function_types(db).iter().map(|(_, s)| s.body(db)),
+            input
+                .declarations(db)
+                .function_types
+                .iter()
+                .map(|(_, s)| s.body(db)),
             &index,
         );
         let collected = collect(db, &index, &schemas, seeds).unwrap();
@@ -385,7 +391,8 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         let ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["Root", "Value"]));
         for removal in [false, true] {
             let mut schemas: HashMap<_, _> = input
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .schemes
                 .iter()
                 .copied()
@@ -411,7 +418,11 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             let seeds = collect::collect_type_instantiations(
                 db,
                 input.module(db),
-                input.function_types(db).iter().map(|(_, s)| s.body(db)),
+                input
+                    .declarations(db)
+                    .function_types
+                    .iter()
+                    .map(|(_, s)| s.body(db)),
             );
             assert!(!seeds.contains_key(&hidden_id));
             let result = collect(
@@ -482,11 +493,16 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 db,
                 crate::SourceCst::from_source_str(db, "nominal_limits.trb", source),
             );
-            let roots = input.function_types(db).iter().map(|(_, s)| s.body(db));
+            let roots = input
+                .declarations(db)
+                .function_types
+                .iter()
+                .map(|(_, s)| s.body(db));
             let seeds = collect::collect_type_instantiations(db, input.module(db), roots);
             assert!(!seeds.is_empty());
             let schemas = input
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .schemes
                 .iter()
                 .copied()
@@ -530,10 +546,15 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         let seeds = collect::collect_type_instantiations(
             db,
             input.module(db),
-            input.function_types(db).iter().map(|(_, s)| s.body(db)),
+            input
+                .declarations(db)
+                .function_types
+                .iter()
+                .map(|(_, s)| s.body(db)),
         );
         let schemes = input
-            .constructor_types(db)
+            .declarations(db)
+            .constructor_types
             .schemes
             .iter()
             .copied()
@@ -562,7 +583,8 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             );
             let input = checked(db, source);
             let original: HashMap<_, _> = input
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .schemes
                 .iter()
                 .copied()
@@ -622,7 +644,11 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 let seeds = collect::collect_type_instantiations(
                     db,
                     input.module(db),
-                    input.function_types(db).iter().map(|(_, s)| s.body(db)),
+                    input
+                        .declarations(db)
+                        .function_types
+                        .iter()
+                        .map(|(_, s)| s.body(db)),
                 );
                 let result = collect(
                     db,
@@ -636,7 +662,8 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 assert_eq!(errors[0].kind, kind);
                 assert_eq!(
                     input
-                        .constructor_types(db)
+                        .declarations(db)
+                        .constructor_types
                         .schemes
                         .iter()
                         .copied()

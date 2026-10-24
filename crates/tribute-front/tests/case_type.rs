@@ -312,7 +312,7 @@ fn nested(flag: Bool) -> Nat {
     let checked = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output");
     let (outer, inner) = nested_case_ids(checked.module(db));
-    let exhaustive = checked.exhaustive_cases(db);
+    let exhaustive = &checked.expression_types(db).exhaustive_cases;
     assert_eq!(exhaustive.iter().filter(|&&case| case == outer).count(), 1);
     assert_eq!(exhaustive.iter().filter(|&&case| case == inner).count(), 1);
 
@@ -354,7 +354,7 @@ fn nested(flag: Bool) -> Nat {
     let checked = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output");
     let (outer, inner) = nested_case_ids(checked.module(db));
-    let exhaustive = checked.exhaustive_cases(db);
+    let exhaustive = &checked.expression_types(db).exhaustive_cases;
     assert_eq!(exhaustive.iter().filter(|&&case| case == outer).count(), 1);
     assert_eq!(exhaustive.iter().filter(|&&case| case == inner).count(), 1);
 }
@@ -438,7 +438,8 @@ fn exhaustiveness_outcome(
         .collect();
     let exhaustive = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output")
-        .exhaustive_cases(db)
+        .expression_types(db)
+        .exhaustive_cases
         .len();
     (messages, exhaustive)
 }

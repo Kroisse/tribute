@@ -8,7 +8,7 @@ use tribute_front::{
         AbilityId, AbilityInstance, AbilityRow, Decl, RowRemoval, RowUnion, RowVar, Type,
         TypeDefId, TypeKind, TypeParam,
     },
-    typeck::TypeCheckOutput,
+    typeck::{DeclarationTypeMetadata, TypeCheckOutput},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -54,8 +54,8 @@ fn prepare_root<'db>(
         sources: vec![row],
         result: row,
     };
-    let mut functions = typed.function_types(db).to_vec();
-    let mut constructors = typed.constructor_types(db).clone();
+    let mut functions = typed.declarations(db).function_types.clone();
+    let mut constructors = typed.declarations(db).constructor_types.clone();
     let mut metadata = typed.expression_types(db).clone();
     let (_, scheme) = functions
         .iter_mut()
@@ -109,15 +109,12 @@ fn prepare_root<'db>(
     let input = TypeCheckOutput::new(
         db,
         typed.module(db).clone(),
-        functions,
-        constructors,
+        DeclarationTypeMetadata {
+            function_types: functions,
+            constructor_types: constructors,
+            ..typed.declarations(db).clone()
+        },
         metadata,
-        typed.ability_definitions(db).to_vec(),
-        typed.handler_operations(db).clone(),
-        typed.perform_operations(db).clone(),
-        typed.lambda_signatures(db).clone(),
-        typed.exhaustive_cases(db).to_vec(),
-        *typed.well_known_types(db),
         typed.span_map(db),
     );
     let prepared = prepare_frontend_for_lowering(db, input, source);
@@ -151,7 +148,8 @@ fn main() -> Nil { marker() }
         .unwrap_or_else(|| panic!("{root:?} did not materialize Packet(Nat)"));
     assert!(declaration.type_params.is_empty());
     let marker = prepared
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
         .find(|(name, _)| name == ["marker"])
         .unwrap()
@@ -170,7 +168,8 @@ fn main() -> Nil { marker() }
         Root::Removal => marker.row_removals(db)[0].removed.instances(db)[0].args[0],
         Root::ConstructorUnion => {
             prepared
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .schemes
                 .iter()
                 .find(|(id, _)| id.qualified(db) == "Packet")

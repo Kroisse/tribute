@@ -254,7 +254,8 @@ fn checked_signatures(db: &dyn salsa::Database, text: &str) -> (Vec<String>, Vec
     assert_eq!(errors(db, text), Vec::<String>::new());
     let output = tribute_front::query::type_check_output(db, source).unwrap();
     let mut schemes: Vec<_> = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
         .map(|(name, scheme)| format!("{name}: {scheme:?}"))
         .collect();
@@ -305,7 +306,8 @@ fn instances_use_the_declared_scheme(db: &salsa::DatabaseImpl) {
     for (_, instance) in instances {
         let name = instance.function.qualified(db);
         let (_, scheme) = output
-            .function_types(db)
+            .declarations(db)
+            .function_types
             .iter()
             .find(|(candidate, _)| candidate == instance.function.path(db))
             .unwrap_or_else(|| panic!("no scheme for {name}"));
@@ -336,7 +338,8 @@ fn main() -> Nil { }
     assert_eq!(errors(db, text), Vec::<String>::new());
     let output = tribute_front::query::type_check_output(db, source).unwrap();
     let (_, scheme) = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
         .find(|(name, _)| name == ["run_state"])
         .unwrap();
