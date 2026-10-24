@@ -777,7 +777,7 @@ impl<'db> TypeChecker<'db> {
         call_ty
     }
 
-    fn infer_expr_type_with_ctx(
+    pub(super) fn infer_expr_type_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         expr: &Expr<ResolvedRef<'db>>,
@@ -1054,20 +1054,8 @@ impl<'db> TypeChecker<'db> {
         args: &[Expr<ResolvedRef<'db>>],
         expected: Option<Type<'db>>,
     ) -> Type<'db> {
-        let shape = if args.is_empty() {
-            ConstructorShape::Unit
-        } else {
-            ConstructorShape::Positional(args.len())
-        };
-        // A constructor used as a function value is decided by the result
-        // of the function type it is expected as.
-        let expected = expected.map(|ty| match ty.kind(self.db()) {
-            TypeKind::Func { result, .. } if args.is_empty() => *result,
-            _ => ty,
-        });
-        let original = ctor;
+        let shape = ConstructorShape::of_arity(args.len());
         let ctor = &self.decide_constructor(ctx, node, ctor, expected, shape, false);
-        self.fix_implicit_constructor_instance(ctx, node, original, ctor, expected);
         let ctor_ty = self.infer_var_with_ctx(ctx, Some(node), ctor);
         if args.is_empty() {
             // Unit constructor (e.g., None) - just return the constructor type
@@ -1091,7 +1079,6 @@ impl<'db> TypeChecker<'db> {
         expected: Option<Type<'db>>,
     ) -> Type<'db> {
         let written: Vec<Symbol> = fields.iter().map(|f| f.name.clone()).collect();
-        let original = type_name;
         let type_name = &self.decide_constructor(
             ctx,
             record_id,
@@ -1103,18 +1090,7 @@ impl<'db> TypeChecker<'db> {
             },
             false,
         );
-        self.fix_implicit_constructor_instance(ctx, record_id, original, type_name, expected);
-        if let Some(deferred) = self.deferred_constructor(ctx, record_id) {
-            // The fields are related to the constructor once it is selected.
-            let (result, field_tys) = (deferred.result_ty, deferred.field_types.clone());
-            for (field, field_ty) in fields.iter().zip(field_tys) {
-                let actual = self.infer_expr_type_with_ctx(ctx, &field.value);
-                ctx.constrain_coerce(actual, field_ty, field.value.id);
-            }
-            if let Some(spread_expr) = spread {
-                let spread_ty = self.infer_expr_type_with_ctx(ctx, spread_expr);
-                ctx.constrain_coerce(spread_ty, result, spread_expr.id);
-            }
+        if let Some(result) = self.infer_deferred_record_with_ctx(ctx, record_id, fields, spread) {
             return result;
         }
         let ctor_ty = self.instantiate_value_constructor_with_ctx(ctx, record_id, type_name);
@@ -2647,12 +2623,7 @@ impl<'db> TypeChecker<'db> {
                 );
             }
             for constructor in ctx.deferred_constructors() {
-                solver.defer_producer(
-                    constructor.node_id,
-                    constructor.result_ty,
-                    constructor.field_types.clone(),
-                    AbilityRow::pure(self.db()),
-                );
+                constructor.defer_in(self.db(), &mut solver);
             }
             let solved = solver
                 .solve(ctx.constraints_snapshot())
@@ -2932,14 +2903,8 @@ impl<'db> TypeChecker<'db> {
                 LiteralPattern::Nil => ctx.nil_type(),
             },
             PatternKind::Variant { ctor, fields } => {
-                let shape = if fields.is_empty() {
-                    ConstructorShape::Unit
-                } else {
-                    ConstructorShape::Positional(fields.len())
-                };
-                let original = ctor;
+                let shape = ConstructorShape::of_arity(fields.len());
                 let ctor = &self.decide_constructor(ctx, pattern.id, ctor, expected, shape, true);
-                self.fix_implicit_constructor_instance(ctx, pattern.id, original, ctor, expected);
                 let ctor_ty = match ctor {
                     ResolvedRef::Module { path } => {
                         self.report_module_reference(ctx, pattern.id, *path, "a constructor")
@@ -3011,7 +2976,6 @@ impl<'db> TypeChecker<'db> {
                 rest,
             } => {
                 let written: Vec<Symbol> = fields.iter().map(|field| field.name.clone()).collect();
-                let original = type_name;
                 let type_name = &self.decide_constructor(
                     ctx,
                     pattern.id,
@@ -3022,9 +2986,6 @@ impl<'db> TypeChecker<'db> {
                         rest: *rest,
                     },
                     true,
-                );
-                self.fix_implicit_constructor_instance(
-                    ctx, pattern.id, original, type_name, expected,
                 );
                 let (_, result, field_tys) =
                     self.constructor_field_shape(ctx, pattern.id, type_name, &written);
@@ -3665,12 +3626,7 @@ impl<'db> TypeChecker<'db> {
             );
         }
         for constructor in ctx.deferred_constructors() {
-            solver.defer_producer(
-                constructor.node_id,
-                constructor.result_ty,
-                constructor.field_types.clone(),
-                AbilityRow::pure(self.db()),
-            );
+            constructor.defer_in(self.db(), &mut solver);
         }
         let _ = solver.solve(ctx.constraints_snapshot());
         ctx.reserve_row_vars(solver.next_row_var());
