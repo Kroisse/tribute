@@ -378,6 +378,39 @@ pub fn library_names<'db>(
         .collect()
 }
 
+/// The constructors of the prelude's types, as `(type, constructor)`: an
+/// enum's public variants, and a struct, which is its own constructor.
+pub fn library_constructors(db: &dyn salsa::Database) -> Vec<(trunk_ir::Symbol, trunk_ir::Symbol)> {
+    let dependencies = prelude_dependencies(db);
+    let own = PackageEnv::new();
+    let scope = ast_resolve::Scope::new(&own, &dependencies);
+    let mut constructors = Vec::new();
+    for (name, binding) in library_names(db) {
+        match binding {
+            ast_resolve::Binding::Constructor { tag: None, .. } => {
+                constructors.push((name.clone(), name));
+            }
+            ast_resolve::Binding::TypeDef { .. } => {
+                let Some(namespace) = scope.library_namespace(&name) else {
+                    continue;
+                };
+                for (variant, binding) in scope.iter_namespace(&namespace) {
+                    if matches!(
+                        binding,
+                        ast_resolve::Binding::Constructor { tag: Some(_), .. }
+                    ) && scope.restriction(binding).is_none()
+                    {
+                        constructors.push((name.clone(), variant));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    constructors.sort();
+    constructors
+}
+
 /// The prelude's type exports (TypeSchemes only, no UniVars), injected into
 /// user module type checking.
 fn prelude_exports(db: &dyn salsa::Database) -> Option<PreludeExports<'_>> {

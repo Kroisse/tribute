@@ -451,9 +451,21 @@ impl LspServer {
         // Extract prefix from current position (for filtering)
         let prefix = extract_completion_prefix(&rope, offset);
 
+        let implicit = starts_implicit_constructor(&rope, offset - prefix.len());
         let items = self.db.attach(|db| {
-            let all_items = completion_items(db, source_cst);
             let module = module_at(db, source_cst, offset);
+            // After the `.` of an implicit constructor, only constructors
+            // fit; both a module's own and the prelude's are candidates.
+            if implicit {
+                let constructors = completion_index::constructor_items(db, source_cst);
+                return Some(
+                    filter_completions(constructors, &prefix)
+                        .filter(|item| item.module.as_ref().is_none_or(|own| *own == module))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+            }
+            let all_items = completion_items(db, source_cst);
 
             // Offer what the cursor's module names, filtered by prefix
             let in_scope: Vec<_> = completions_in(all_items, &module).cloned().collect();
@@ -1019,6 +1031,29 @@ fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
     }
 }
 
+/// Whether a name starting at byte `start` follows the `.` of an implicit
+/// constructor (`.Some`): a `.` that no expression ends right before on its
+/// line. A `.` right after an expression continues a method call, and one
+/// after another `.` is part of a spread. A line-leading `.` may start one,
+/// since a constructor's uppercase name never continues a method call.
+fn starts_implicit_constructor(rope: &Rope, start: usize) -> bool {
+    let Some(dot) = start.checked_sub(1) else {
+        return false;
+    };
+    if rope
+        .get_byte_slice(dot..start)
+        .is_none_or(|text| text != ".")
+    {
+        return false;
+    }
+    let line_start = rope.line_to_byte(rope.byte_to_line(dot));
+    let before = rope.byte_slice(line_start..dot).to_string();
+    match before.trim_end_matches([' ', '\t']).chars().last() {
+        None => true,
+        Some(c) => !(c.is_alphanumeric() || matches!(c, '_' | ')' | ']' | '}' | '"' | '\'' | '.')),
+    }
+}
+
 /// Extract the identifier prefix at the cursor position for completion filtering.
 fn extract_completion_prefix(rope: &Rope, offset: usize) -> String {
     if offset == 0 {
@@ -1413,6 +1448,34 @@ mod tests {
         assert_eq!(byte_line_col(&rope, 0), (0, 0));
         assert_eq!(byte_line_col(&rope, 6), (1, 0));
         assert_eq!(byte_line_col(&rope, 8), (1, 2));
+    }
+
+    #[test]
+    fn test_implicit_constructor_context() {
+        let at = |text: &str| {
+            let rope = Rope::from_str(text);
+            let start = text.rfind('|').expect("a cursor mark");
+            let rope = {
+                let mut rope = rope;
+                rope.remove(rope.byte_to_char(start)..rope.byte_to_char(start + 1));
+                rope
+            };
+            starts_implicit_constructor(&rope, start)
+        };
+        // Where an expression starts, `.` starts an implicit constructor.
+        assert!(at("let x = .|"));
+        assert!(at("f(a, .|"));
+        assert!(at("case x {\n    .|"));
+        assert!(at("x ==.|"));
+        // A line-leading `.` may start one too.
+        assert!(at("xs\n    .|"));
+        // Right after an expression, `.` continues a method call.
+        assert!(!at("xs.|"));
+        assert!(!at("f(x).|"));
+        assert!(!at("\"s\".|"));
+        // `..` is a spread, and no `.` is no constructor.
+        assert!(!at("User { ..|"));
+        assert!(!at("let x = |"));
     }
 
     #[test]
@@ -2037,6 +2100,41 @@ mod tests {
                 lsp_types::Position::new(2, 22)
             ),
             "the edit must replace the typed `r#ca`"
+        );
+    }
+
+    #[test]
+    fn test_completion_after_an_implicit_constructor_dot() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("completion_implicit");
+        let source =
+            "enum Color { Red, Green }\nfn green() -> Nat { 1 }\nfn pick() -> Color { .G }";
+
+        harness.open_document(&uri, source);
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 23, // After `.G`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let labels: Vec<_> = list.items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["Green"], "only constructors fit after `.`");
+        assert_eq!(list.items[0].detail.as_deref(), Some("Color::Green"));
+        assert_eq!(
+            list.items[0].kind,
+            Some(lsp_types::CompletionItemKind::CONSTRUCTOR)
         );
     }
 

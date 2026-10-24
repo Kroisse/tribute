@@ -162,6 +162,47 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
     items
 }
 
+/// The constructors an implicit constructor `.Name` may name: the variants
+/// and structs each module declares, which that module's body names, then
+/// those of the prelude's types, which every module names. Each item's
+/// detail is the constructor's path through its type.
+#[salsa::tracked(returns(deref))]
+pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstCompletionItem> {
+    let Some(output) = tribute::parse_and_lower_ast(db, source) else {
+        return Vec::new();
+    };
+    let mut items = Vec::new();
+    for entry in &output.module(db).entries {
+        let item = |ty: &Symbol, name: &Symbol| AstCompletionItem {
+            name: name.clone(),
+            kind: CompletionKind::Constructor,
+            detail: Some(format!("{ty}::{name}")),
+            module: Some(entry.module.clone()),
+        };
+        match &entry.decl {
+            Decl::Enum(e) => items.extend(e.variants.iter().map(|v| item(&e.name, &v.name))),
+            Decl::Struct(s) => items.push(AstCompletionItem {
+                detail: Some(s.name.to_string()),
+                ..item(&s.name, &s.name)
+            }),
+            _ => {}
+        }
+    }
+    for (ty, name) in tribute::library_constructors(db) {
+        items.push(AstCompletionItem {
+            detail: Some(if ty == name {
+                format!("{}::{ty}", tribute_front::resolve::LIBRARY_PACKAGE)
+            } else {
+                format!("{}::{ty}::{name}", tribute_front::resolve::LIBRARY_PACKAGE)
+            }),
+            name,
+            kind: CompletionKind::Constructor,
+            module: None,
+        });
+    }
+    items
+}
+
 /// The identity path of the module whose body contains the byte offset
 /// `offset` of `source`, as the module's declarations record it.
 pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> SymbolPath {
@@ -473,6 +514,41 @@ mod tests {
     }
 
     // Completion tests
+
+    #[test]
+    fn test_constructor_items_are_variants_structs_and_the_preludes() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "enum Color { Red, Green }\nstruct Point { x: Nat }\nmod inner {\n    enum Mode { Quiet }\n}\n";
+        let source = make_source(&db, text);
+        let items = constructor_items(&db, source);
+        let at = |module: &SymbolPath| -> Vec<(String, Option<String>)> {
+            items
+                .iter()
+                .filter(|item| item.module.as_ref().is_none_or(|own| own == module))
+                .map(|item| (item.name.to_string(), item.detail.clone()))
+                .collect()
+        };
+        let root = at(&SymbolPath::root());
+        for (name, detail) in [
+            ("Red", "Color::Red"),
+            ("Green", "Color::Green"),
+            ("Point", "Point"),
+            ("Some", "std::Option::Some"),
+            ("Error", "std::Result::Error"),
+        ] {
+            assert!(
+                root.iter()
+                    .any(|(n, d)| n == name && d.as_deref() == Some(detail)),
+                "{name} in {root:?}"
+            );
+        }
+        assert!(!root.iter().any(|(name, _)| name == "Quiet"));
+        assert!(
+            items
+                .iter()
+                .all(|item| item.kind == CompletionKind::Constructor)
+        );
+    }
 
     #[test]
     fn test_complete_keywords_fn() {
