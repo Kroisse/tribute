@@ -151,6 +151,13 @@ fn valid_source_has_no_diagnostics(db: &salsa::DatabaseImpl) {
 - Diagnostic tests must invoke a tracked frontend or pipeline query.
 - Incremental tests update the existing source input and assert a meaningful
   changed result; simply calling a query twice does not prove invalidation.
+- Reuse tests assert which queries an edit reruns. The `LoggingDb` in
+  `crates/tribute-front/tests/common/execution_log.rs` records each
+  `EventKind::WillExecute`, the event Salsa sends before running a query. A
+  query whose inputs did not change sends `DidValidateMemoizedValue` instead
+  and is not recorded. A query that reruns but returns an equal value keeps
+  its previous revision, so assert reuse on a query that depends on it, as
+  `tests/query_reuse.rs` does with `function_count` over `func_names`.
 - Source-logical frontend tests inspect `tribute_control` operations and
   logical signatures. CPS and backend tests enter the shared/target route.
 
