@@ -525,7 +525,7 @@ enum Wrapped(a) {
 }
 
 fn pair() -> #(Nat, Bool) {
-    let .Wrapped(identity) = .Wrapped(fn(value) value)
+    let .Wrapped(identity) = Wrapped::Wrapped(fn(value) value)
     #(identity(1), identity(True))
 }
 "#,

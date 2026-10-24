@@ -45,7 +45,7 @@ enum Boxed(a) {
 }
 
 fn format_box(value: Int) -> String {
-    case .Box(value) {
+    case Boxed::Box(value) {
         .Box(inner) -> Int::to_string(inner)
         .Empty -> "empty"
     }
