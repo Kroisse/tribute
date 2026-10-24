@@ -295,7 +295,8 @@ fn parse_prelude<'db>(db: &'db dyn salsa::Database) -> Option<(ParsedAst<'db>, c
 /// Parse, resolve, and type check the prelude once.
 ///
 /// Returns both the typed prelude, which user modules import methods from and
-/// merge before lowering, and the exports injected into their type checking.
+/// merge before lowering, and the exports their type checking reads through
+/// the dependency table.
 /// Salsa caches the result for all subsequent compilations.
 #[salsa::tracked(returns(copy))]
 fn checked_prelude<'db>(
@@ -339,8 +340,8 @@ pub fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::D
         .unwrap_or_default()
 }
 
-/// The prelude's type exports (TypeSchemes only, no UniVars), injected into
-/// user module type checking.
+/// The prelude's type exports (TypeSchemes only, no UniVars), which user
+/// module type checking reads through the dependency table.
 fn prelude_exports(db: &dyn salsa::Database) -> Option<PreludeExports<'_>> {
     checked_prelude(db).map(|(_, exports)| exports)
 }
@@ -397,15 +398,22 @@ fn prepare_frontend_details<'db>(
     use tribute_front::ast::{DeclTable, TypedRef};
 
     let user_module = typed.module(db);
-    let user_fn_types = &typed.declarations(db).function_types;
     let user_node_types = &typed.expression_types(db).node_types;
     let user_span_map = typed.span_map(db);
+    // Type checking reads package std's declarations without copying them,
+    // so specialization takes them as one table with the user's.
+    let declarations = match prelude_module(db) {
+        Some(prelude) => typed
+            .declarations(db)
+            .after_dependency(prelude.declarations(db)),
+        None => typed.declarations(db).clone(),
+    };
+    let merged_fn_types: HashMap<_, _> = declarations.function_types.iter().cloned().collect();
 
     // Merge prelude at AST level
-    let (merged_module, merged_fn_types, merged_node_types, merged_span_map) =
+    let (merged_module, merged_node_types, merged_span_map) =
         if let Some(prelude) = prelude_module(db) {
             let prelude_module_ast = prelude.module(db);
-            let prelude_fn_types = &prelude.declarations(db).function_types;
             let prelude_node_types = &prelude.expression_types(db).node_types;
             let prelude_span_map = prelude.span_map(db);
 
@@ -419,10 +427,6 @@ fn prepare_frontend_details<'db>(
                 .entries
                 .extend(user_module.entries.iter().cloned());
 
-            // Merge function_types: prelude first, user overrides
-            let mut fn_types: HashMap<_, _> = prelude_fn_types.iter().cloned().collect();
-            fn_types.extend(user_fn_types.iter().cloned());
-
             // Merge node_types: prelude first, user overrides
             let mut node_types: HashMap<_, _> = prelude_node_types.iter().cloned().collect();
             node_types.extend(user_node_types.iter().cloned());
@@ -430,11 +434,10 @@ fn prepare_frontend_details<'db>(
             // Merge span maps (user overrides prelude on conflict)
             let merged_span_map = user_span_map.merge(&prelude_span_map);
 
-            (merged_ast, fn_types, node_types, merged_span_map)
+            (merged_ast, node_types, merged_span_map)
         } else {
-            let fn_types: HashMap<_, _> = user_fn_types.iter().cloned().collect();
             let node_types: HashMap<_, _> = user_node_types.iter().cloned().collect();
-            (user_module.clone(), fn_types, node_types, user_span_map)
+            (user_module.clone(), node_types, user_span_map)
         };
 
     let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(&merged_module) {
@@ -499,15 +502,13 @@ fn prepare_frontend_details<'db>(
         merged_module,
         merged_fn_types,
         tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: typed
-                .declarations(db)
+            constructor_types: declarations
                 .constructor_types
                 .schemes
                 .iter()
                 .cloned()
                 .collect(),
-            specialized_enum_variants: typed
-                .declarations(db)
+            specialized_enum_variants: declarations
                 .constructor_types
                 .specialized_enum_variants
                 .iter()
@@ -618,8 +619,8 @@ fn prepare_frontend_details<'db>(
                     .into_iter()
                     .collect(),
             },
-            ability_definitions: typed.declarations(db).ability_definitions.clone(),
-            well_known_types: typed.declarations(db).well_known_types,
+            ability_definitions: declarations.ability_definitions.clone(),
+            well_known_types: declarations.well_known_types,
         },
         ast_typeck::ExpressionTypeMetadata {
             node_types: mono_result.metadata.node_types.into_iter().collect(),
@@ -1728,12 +1729,12 @@ pub fn compile_to_native_binary(
 /// Returns the typed AST with span map, ready for `ast_to_ir` lowering.
 /// Does NOT call `ast_to_ir` — that is the caller's responsibility.
 ///
-/// Uses the Type Info Injection approach to make prelude types available:
+/// The user package depends on package `std`:
 /// 1. Parse user code to AST
 /// 2. Build the user's PackageEnv, which depends on package `std`
 /// 3. Resolve names through it and package `std`'s environment
-/// 4. Inject prelude TypeSchemes into user's ModuleTypeEnv
-/// 5. Type check with injected types
+/// 4. Type check, reading package `std`'s declarations through the
+///    dependency table; the output holds only the user's declarations
 #[salsa::tracked(returns(copy))]
 pub fn parse_and_lower_ast<'db>(
     db: &'db dyn salsa::Database,
@@ -1757,10 +1758,10 @@ pub fn parse_and_lower_ast<'db>(
     let resolved_ast =
         ast_resolve::resolve_with_env(db, user_ast, user_env, &dependencies, span_map.clone());
 
-    // Phase 4: Type checking with prelude types injected
+    // Phase 4: Type checking against package std
     let mut checker = ast_typeck::TypeChecker::new(db, span_map.clone());
     if let Some(p_exports) = prelude_exports(db) {
-        checker.inject_prelude(&p_exports); // Prelude TypeSchemes injected (no UniVars)
+        checker.depend_on(&p_exports);
     }
     let result = checker.check_module(&resolved_ast);
 
@@ -4039,6 +4040,55 @@ mod Nested {
         }
     }
 
+    /// Type checking reads package std through the dependency table: the
+    /// user's output holds only the user's declarations, and preparation
+    /// takes std's with them as one table.
+    #[salsa_test]
+    fn type_check_output_holds_only_its_package_declarations(db: &salsa::DatabaseImpl) {
+        let source = SourceCst::from_source_str(
+            db,
+            "own_declarations.trb",
+            "fn helper(x: Int) -> Option(Int) { Some(x + +1) }\nfn main() -> Nil { let _ = helper(+1) }",
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let own = typed.declarations(db);
+        let is_std = |path: &SymbolPath| path.first().is_some_and(|first| first == "std");
+        assert!(
+            own.function_types.iter().all(|(path, _)| !is_std(path)),
+            "{:?}",
+            own.function_types
+        );
+        assert!(
+            own.function_types
+                .iter()
+                .any(|(path, _)| *path == ["helper"])
+        );
+        assert!(
+            own.constructor_types
+                .schemes
+                .iter()
+                .all(|(id, _)| !is_std(id.path(db))),
+            "{:?}",
+            own.constructor_types.schemes
+        );
+
+        let prepared = prepare_frontend_for_lowering(db, typed, source).expect("prepared");
+        let merged = prepared.declarations(db);
+        assert!(
+            merged
+                .function_types
+                .iter()
+                .any(|(path, _)| *path == ["std", "Int", "+"])
+        );
+        assert!(
+            merged
+                .constructor_types
+                .schemes
+                .iter()
+                .any(|(id, _)| *id.path(db) == ["std", "Option", "Some"])
+        );
+    }
+
     /// Literal patterns compare through the prelude's `==` for their type,
     /// resolved by receiver type, even beside a user `String` lookalike with
     /// its own `==`.
@@ -4059,7 +4109,14 @@ fn main() -> Nil { }
 "#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
-        let well_known = typed.declarations(db).well_known_types;
+        // The user's check output holds only its own declarations; std's
+        // identities join them in preparation.
+        let prepared = prepare_frontend_for_lowering(db, typed, source).expect("prepared");
+        assert_eq!(
+            typed.declarations(db).well_known_types,
+            ast_typeck::WellKnownTypes::empty()
+        );
+        let well_known = prepared.declarations(db).well_known_types;
         let qualified = |id: Option<tribute_front::ast::FuncDefId<'_>>| {
             id.map(|id| id.qualified(db).to_string())
         };
@@ -4286,7 +4343,8 @@ fn main() -> String { "hello" }
 "#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
-        let canonical = typed
+        let canonical = prepare_frontend_for_lowering(db, typed, source)
+            .expect("prepared")
             .declarations(db)
             .well_known_types
             .string
