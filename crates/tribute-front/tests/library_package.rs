@@ -392,9 +392,8 @@ fn main() -> Nil {
         .Some(n) -> n
         .None -> 0
     }
+    let _ = m::library::Option::Some(1)
 }
-
-fn through_alias(o: m::library::Option(Nat)) -> Nat { 0 }
 "#,
     );
     assert_eq!(
@@ -470,4 +469,29 @@ mod m {
             "unresolved name `std::Nope`",
         ]
     );
+}
+
+/// A path continues through a re-export into the re-exported item's
+/// namespace, unless the re-export is hidden from where the path is.
+#[salsa_test]
+fn paths_continue_through_a_re_export(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod a {
+    pub mod m {
+        pub use std as library
+        pub(super) use std as internal
+    }
+
+    fn inside() -> Option(Nat) { m::internal::Option::Some(1) }
+}
+
+fn variant() -> Option(Nat) { a::m::library::Option::Some(1) }
+fn function() -> Nat { a::m::library::Option::unwrap_or(Option::Some(1), 0) }
+fn rooted() -> Option(Nat) { pkg::a::m::library::Option::None }
+fn hidden() -> Option(Nat) { a::m::internal::Option::Some(1) }
+"#,
+    );
+    assert_eq!(errors, ["unresolved name `a::m::internal::Option::Some`"]);
 }

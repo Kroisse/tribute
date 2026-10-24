@@ -186,6 +186,12 @@ impl<'s, 'db> Scope<'s, 'db> {
             .chain(self.dependencies.iter().flat_map(|env| env.restrictions()))
     }
 
+    /// The location the re-export of `name` in `namespace` names.
+    pub fn export_target(&self, namespace: &Location, name: &Symbol) -> Option<&'s Location> {
+        self.env(&namespace.package)?
+            .export_target(&namespace.path, name)
+    }
+
     /// Where the module at `module` is visible, if it is not public.
     pub fn module_restriction(&self, module: &Location) -> Option<&'s Restriction> {
         self.env(&module.package)?.module_restriction(&module.path)

@@ -354,13 +354,48 @@ impl<'db> Resolver<'db> {
             return Ok(None);
         };
         if let Some(namespace) = self.fixed_location(&namespace)? {
+            let namespace = self.through_exports(namespace);
             let binding = self.view().lookup_path(&namespace.child(sym));
             return Ok(binding.map(|binding| (namespace, binding)));
         }
         Ok(self.namespace_in_scope(namespace).and_then(|namespace| {
+            let namespace = self.through_exports(namespace);
             let binding = self.view().lookup_qualified(&namespace, &sym)?;
             Some((namespace, binding))
         }))
+    }
+
+    /// `namespace`, or, when it is not a namespace itself, where it continues
+    /// through a re-export on its path: `m::library::Option`, after `pub use
+    /// std as library` in `m`, is `Option` in package `std`. A re-export the
+    /// current module does not see stops the path.
+    fn through_exports(&self, namespace: Location) -> Location {
+        let mut namespace = namespace;
+        // Each re-export names a location that resolved without it, so a
+        // path follows at most one per segment.
+        for _ in 0..=namespace.path.len() {
+            if self.view().has_namespace(&namespace) {
+                break;
+            }
+            let next = (0..namespace.path.len()).find_map(|index| {
+                let (outer, rest) = namespace.path.split_at(index);
+                let (name, rest) = rest.split_first()?;
+                let outer = namespace.package.at(SymbolPath::new(outer.iter().cloned()));
+                let target = self.view().export_target(&outer, name)?;
+                let hidden =
+                    self.view()
+                        .entry_restriction(&outer, name)
+                        .is_some_and(|restriction| {
+                            !restriction.is_visible_from(&self.package, &self.module_path)
+                        });
+                (!hidden).then(|| target.join(rest))
+            });
+            match next {
+                Some(next) => namespace = next,
+                None => break,
+            }
+        }
+        namespace
     }
 
     /// The functions several `use`s of the enclosing module give `name`,
