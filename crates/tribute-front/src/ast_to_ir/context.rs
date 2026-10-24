@@ -21,6 +21,20 @@ use super::row_binders::RowBinders;
 use crate::SortedMap;
 use crate::ast::{CtorId, LocalId, NodeId, RowVar, SpanMap, TypeKind, TypeScheme};
 
+/// The key component that tells nominal type origins apart.
+fn nominal_origin_key(origin: crate::ast::TypeOrigin) -> String {
+    match origin {
+        crate::ast::TypeOrigin::Source { disambiguator: 0 } => "source".into(),
+        crate::ast::TypeOrigin::Source { disambiguator } => format!("source{disambiguator}"),
+        crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list".into(),
+        crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => "builtin_slots".into(),
+        crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Dispatch) => {
+            "builtin_dispatch".into()
+        }
+        crate::ast::TypeOrigin::Synthetic => "synthetic".into(),
+    }
+}
+
 /// Encode a tagged type-shape node without relying on separator characters in
 /// source symbols. Each component carries its byte length, so nested keys are
 /// readable in printed IR while still being uniquely decodable.
@@ -753,19 +767,10 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     fn source_nominal_key(&self, id: crate::ast::TypeDefId<'db>) -> String {
-        let origin = match id.origin(self.db) {
-            crate::ast::TypeOrigin::Source(_) => "source",
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list",
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => "builtin_slots",
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Dispatch) => {
-                "builtin_dispatch"
-            }
-            crate::ast::TypeOrigin::Synthetic => "synthetic",
-        };
         logical_key(
             "nominal",
             [
-                origin.to_owned(),
+                nominal_origin_key(id.origin(self.db)),
                 id.qualified(self.db).with_str(str::to_owned),
             ],
         )
@@ -812,18 +817,13 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     fn logical_nominal_key(&self, id: crate::ast::TypeDefId<'db>, name: &Symbol) -> String {
-        let origin = match id.origin(self.db) {
-            crate::ast::TypeOrigin::Source(_) => "source".into(),
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list".into(),
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => {
-                "builtin_slots".into()
-            }
-            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Dispatch) => {
-                "builtin_dispatch".into()
-            }
-            crate::ast::TypeOrigin::Synthetic => "synthetic".into(),
-        };
-        logical_key("nominal", [origin, name.with_str(str::to_owned)])
+        logical_key(
+            "nominal",
+            [
+                nominal_origin_key(id.origin(self.db)),
+                name.with_str(str::to_owned),
+            ],
+        )
     }
 
     fn logical_univar_key(&self, id: crate::ast::UniVarId<'db>) -> String {
@@ -1392,5 +1392,54 @@ mod tests {
         );
         assert_eq!(ctx.lookup_function_type(&name), Some(&scheme));
         assert_eq!(ctx.lookup_function_type(&[Symbol::new("missing")]), None);
+    }
+
+    #[test]
+    fn redeclared_source_types_get_distinct_logical_keys() {
+        let db = test_db();
+        let mut ir = IrContext::new();
+        let ctx = lowering_ctx(&db, &mut ir);
+        let path = trunk_ir::SymbolPath::new(["A"]);
+        let named = |disambiguator| {
+            AstType::new(
+                &db,
+                TypeKind::Named {
+                    id: crate::ast::TypeDefId::declared(&db, path.clone(), disambiguator),
+                    name: Symbol::new("A"),
+                    args: vec![],
+                },
+            )
+        };
+
+        assert_ne!(
+            ctx.logical_type_key(named(0)),
+            ctx.logical_type_key(named(1))
+        );
+    }
+
+    #[test]
+    fn nominal_origin_keys_tell_every_origin_apart() {
+        use crate::ast::{BuiltinType, TypeOrigin};
+
+        let keys = [
+            TypeOrigin::Source { disambiguator: 0 },
+            TypeOrigin::Source { disambiguator: 1 },
+            TypeOrigin::Builtin(BuiltinType::List),
+            TypeOrigin::Builtin(BuiltinType::Slots),
+            TypeOrigin::Builtin(BuiltinType::Dispatch),
+            TypeOrigin::Synthetic,
+        ]
+        .map(nominal_origin_key);
+        assert_eq!(
+            keys,
+            [
+                "source",
+                "source1",
+                "builtin_list",
+                "builtin_slots",
+                "builtin_dispatch",
+                "synthetic"
+            ]
+        );
     }
 }

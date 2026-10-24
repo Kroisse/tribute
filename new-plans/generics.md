@@ -393,10 +393,14 @@ function-local quantified variables as well as declaration binders; rendering
 does not change their semantic scope or instantiate them.
 Prelude name resolution, type
 exports, and typed bodies share the same parsed declarations, including their
-nominal definition identities. Independently reparsing the same text does not
-establish declaration identity. Prelude merging, deferred
-method desugaring, and specialized AST cloning preserve the record. Clones
-substitute their enclosing type arguments into nested instance records.
+nominal definition identities. A source declaration's identity is its origin
+kind, its package-qualified path, and the number of same-named type
+declarations before it in its module (see `types.md`), so reparsing the same
+declaration yields the same identity, and an edit elsewhere changes it only
+when it changes that path or that count.
+Prelude merging, deferred method desugaring, and specialized AST cloning
+preserve the record. Clones substitute their enclosing type arguments into
+nested instance records.
 Effect-only type arguments participate in ordinary type specialization; open
 residual rows continue to use evidence passing. The recorded row arguments
 become the `row_args` of references in source-logical IR, from which the class

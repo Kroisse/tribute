@@ -238,14 +238,14 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 assert_eq!(index.is_generic(*id), generic);
                 match entry.source {
                     NominalDeclaration::Struct(s) => {
-                        assert_eq!(*id, TypeDefId::source(db, path.clone(), s.id));
+                        assert_eq!(*id, TypeDefId::source(db, path.clone()));
                         assert_eq!(entry.constructors.len(), 1);
                         assert_eq!(entry.constructors[0].id.qualified(db), name);
                         assert_eq!(entry.constructors[0].node, s.id);
                         assert_eq!(entry.constructors[0].fields, s.fields.len());
                     }
                     NominalDeclaration::Enum(e) => {
-                        assert_eq!(*id, TypeDefId::source(db, path, e.id));
+                        assert_eq!(*id, TypeDefId::source(db, path));
                         assert_eq!(entry.constructors.len(), 2);
                         for (constructor, variant) in entry.constructors.iter().zip(&e.variants) {
                             assert_eq!(
@@ -365,11 +365,8 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 _ => None,
             })
             .unwrap();
-        let hidden_id = TypeDefId::source(
-            db,
-            trunk_ir::SymbolPath::new([hidden_decl.name.clone()]),
-            hidden_decl.id,
-        );
+        let hidden_id =
+            TypeDefId::source(db, trunk_ir::SymbolPath::new([hidden_decl.name.clone()]));
         let hidden = Type::new(
             db,
             TypeKind::Named {

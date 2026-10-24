@@ -52,7 +52,7 @@ pub(super) fn validate<'db>(
             }
             Decl::Struct(decl) => {
                 let name = entry.module.child(decl.name.clone());
-                let owner = crate::ast::TypeDefId::source(db, name, decl.id);
+                let owner = crate::ast::TypeDefId::declared(db, name, decl.disambiguator);
                 for field in &decl.fields {
                     if let Some(name) = field.name.clone() {
                         fields.insert((owner, name));

@@ -146,7 +146,8 @@ pub struct PackageEnv<'db> {
     imports: HashMap<Symbol, Binding<'db>>,
     /// The entries of each namespace below the package root: modules,
     /// types, and abilities (namespace → name → binding).
-    namespaces: HashMap<SymbolPath, HashMap<Symbol, Binding<'db>>>,
+    namespaces:
+        crate::collections::HashMap<SymbolPath, crate::collections::HashMap<Symbol, Binding<'db>>>,
     /// The locations the package root's resolved `use`s import (import
     /// name → location). Used to rewrite ability annotations from imported
     /// names to qualified paths.
@@ -171,8 +172,9 @@ pub struct PackageEnv<'db> {
     module_uses: HashMap<(SymbolPath, Symbol), Vec<Symbol>>,
     /// The namespace entries re-exports add that are not public, by
     /// namespace and name. Such an entry is visible where its `use` makes
-    /// it, not where its binding is.
-    entry_restrictions: HashMap<(SymbolPath, Symbol), Restriction>,
+    /// it, not where its binding is, and only where every one of its
+    /// restrictions does.
+    entry_restrictions: HashMap<(SymbolPath, Symbol), Vec<Restriction>>,
 }
 
 impl<'db> PackageEnv<'db> {
@@ -377,22 +379,30 @@ impl<'db> PackageEnv<'db> {
         std::mem::take(&mut self.exports)
     }
 
-    /// Restrict where the entry `name` of `namespace` is visible.
+    /// Restrict where the entry `name` of `namespace` is visible, besides
+    /// any restriction it already has.
     pub fn restrict_entry(
         &mut self,
         namespace: SymbolPath,
         name: Symbol,
         restriction: Restriction,
     ) {
-        self.entry_restrictions
-            .insert((namespace, name), restriction);
+        let restrictions = self
+            .entry_restrictions
+            .entry((namespace, name))
+            .or_default();
+        if !restrictions.contains(&restriction) {
+            restrictions.push(restriction);
+        }
     }
 
-    /// Where the entry `name` of `namespace` is visible, if a re-export
-    /// added it and it is not public.
-    pub fn entry_restriction(&self, namespace: &[Symbol], name: &Symbol) -> Option<&Restriction> {
+    /// The restrictions of the entry `name` of `namespace`, if a re-export
+    /// added it and it is not public. It is visible only where every one of
+    /// them is.
+    pub fn entry_restrictions(&self, namespace: &[Symbol], name: &Symbol) -> &[Restriction] {
         self.entry_restrictions
             .get(&(SymbolPath::new(namespace.iter().cloned()), name.clone()))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Take the restrictions of `other`, an environment of the same
@@ -419,18 +429,28 @@ impl<'db> PackageEnv<'db> {
         );
     }
 
-    /// Add a qualified name to a namespace only if it doesn't already exist.
+    /// Add a qualified name to a namespace only if it doesn't already
+    /// exist, and say whether it was added.
     pub fn add_to_namespace_if_absent(
         &mut self,
-        namespace: SymbolPath,
-        name: Symbol,
+        namespace: &SymbolPath,
+        name: &Symbol,
         binding: Binding<'db>,
-    ) {
-        self.namespaces
-            .entry(namespace)
+    ) -> bool {
+        use hashbrown::hash_map::EntryRef;
+
+        match self
+            .namespaces
+            .entry_ref(namespace)
             .or_default()
-            .entry(name)
-            .or_insert(binding);
+            .entry_ref(name)
+        {
+            EntryRef::Occupied(_) => false,
+            EntryRef::Vacant(entry) => {
+                entry.insert_with_key(name.clone(), binding);
+                true
+            }
+        }
     }
 
     /// Look up a name the package root declares or imports.

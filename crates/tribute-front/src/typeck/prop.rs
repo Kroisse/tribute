@@ -21,7 +21,7 @@ use proptest::prelude::*;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, AbilityInstance, AbilityRow, NodeId, RowVar, Type, TypeDefId, TypeKind, UniVarId,
+    AbilityId, AbilityInstance, AbilityRow, RowVar, Type, TypeDefId, TypeKind, UniVarId,
     UniVarSource,
 };
 
@@ -47,7 +47,7 @@ const PLACEHOLDER: u64 = u64::MAX;
 enum NominalOrigin {
     BuiltinList,
     Synthetic,
-    Source(usize),
+    Source,
 }
 
 /// A nominal type: origin, qualified identity, display name, arity.
@@ -56,11 +56,11 @@ type Nominal = (NominalOrigin, &'static str, &'static str, usize);
 const NOMINALS: &[Nominal] = &[
     (NominalOrigin::BuiltinList, "List", "List", 1),
     // Same spelling as the builtin list, different identity.
-    (NominalOrigin::Source(1), "List", "List", 1),
+    (NominalOrigin::Source, "List", "List", 1),
     (NominalOrigin::Synthetic, "Option", "Option", 1),
     // Same display name, different declarations.
-    (NominalOrigin::Source(2), "A::Thing", "Thing", 1),
-    (NominalOrigin::Source(3), "B::Thing", "Thing", 1),
+    (NominalOrigin::Source, "A::Thing", "Thing", 1),
+    (NominalOrigin::Source, "B::Thing", "Thing", 1),
     (NominalOrigin::Synthetic, "Text", "Text", 0),
     (NominalOrigin::Synthetic, "Pair", "Pair", 2),
 ];
@@ -95,11 +95,9 @@ fn nominal_id<'db>(db: &'db dyn salsa::Database, index: usize) -> (TypeDefId<'db
         NominalOrigin::Synthetic => {
             TypeDefId::synthetic(db, trunk_ir::SymbolPath::new(qualified.split("::")))
         }
-        NominalOrigin::Source(node) => TypeDefId::source(
-            db,
-            trunk_ir::SymbolPath::new(qualified.split("::")),
-            NodeId::from_raw(node),
-        ),
+        NominalOrigin::Source => {
+            TypeDefId::source(db, trunk_ir::SymbolPath::new(qualified.split("::")))
+        }
     };
     (id, Symbol::new(name))
 }

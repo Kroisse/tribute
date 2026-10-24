@@ -38,11 +38,7 @@ fn prepare_root<'db>(
     let packet = Type::new(
         db,
         TypeKind::Named {
-            id: TypeDefId::source(
-                db,
-                trunk_ir::SymbolPath::new([packet_decl.name.clone()]),
-                packet_decl.id,
-            ),
+            id: TypeDefId::source(db, trunk_ir::SymbolPath::new([packet_decl.name.clone()])),
             name: packet_decl.name.clone(),
             args: vec![Type::new(db, TypeKind::Nat)],
         },
@@ -201,12 +197,7 @@ fn main() -> Nil { marker() }
         .unwrap();
     assert_eq!(
         id.origin(db),
-        TypeDefId::source(
-            db,
-            trunk_ir::SymbolPath::new([original.name.clone()]),
-            original.id
-        )
-        .origin(db)
+        TypeDefId::source(db, trunk_ir::SymbolPath::new([original.name.clone()])).origin(db)
     );
 }
 

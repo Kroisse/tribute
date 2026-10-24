@@ -592,6 +592,7 @@ mod tests {
                     id: NodeId::from_raw(i + 1),
                     visibility: crate::ast::Visibility::Private,
                     name: Symbol::new(name),
+                    disambiguator: 0,
                     type_params: (0..arity)
                         .map(|p| crate::ast::TypeParamDecl {
                             id: NodeId::from_raw(100 + i * 2 + p),

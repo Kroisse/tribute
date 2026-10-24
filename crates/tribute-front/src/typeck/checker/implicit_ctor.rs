@@ -10,7 +10,9 @@ use itertools::Itertools;
 use trunk_ir::Symbol;
 
 use super::TypeChecker;
-use crate::ast::{AbilityRow, CtorId, LocalId, NodeId, ResolvedRef, Type, TypeKind};
+use crate::ast::{
+    AbilityRow, CtorId, Expr, FieldInit, LocalId, NodeId, ResolvedRef, Type, TypeKind,
+};
 use crate::typeck::constraint::{Constraint, ConstraintOrigin, ConstraintOriginKind};
 use crate::typeck::func_context::{
     ConstructorShape, DeferredConstructor, FunctionInferenceContext, ImplicitConstructor,
@@ -46,9 +48,11 @@ impl<'db> TypeChecker<'db> {
     /// The constructor `resolved` names at the expression or pattern `node`.
     ///
     /// A path is itself. An implicit constructor is decided on its first
-    /// visit: by the constructor `expected` has, else by its only candidate,
-    /// else it waits, and stays the implicit constructor whose type
-    /// [`deferred_constructor`](Self::deferred_constructor) gives.
+    /// visit: by the constructor the type `expected` of it has, else by its
+    /// only candidate, else it waits, and stays the implicit constructor
+    /// whose type [`deferred_constructor`](Self::deferred_constructor)
+    /// gives. A constructor decided where `expected` is known is
+    /// instantiated with that type's arguments.
     pub(super) fn decide_constructor(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -69,6 +73,7 @@ impl<'db> TypeChecker<'db> {
         if ctx.implicit_constructor(node).is_some() {
             return self.constructor_reference(ctx, node, resolved);
         }
+        let expected = expected.map(|ty| self.constructed_type(ty, &shape, pattern));
         let unresolved = || ResolvedRef::local(LocalId::UNRESOLVED, name.clone());
         let decided = match expected.map(|ty| (ty, self.type_constructor(ty, name, hidden))) {
             Some((_, TypeConstructor::Found(id))) => {
@@ -105,8 +110,54 @@ impl<'db> TypeChecker<'db> {
                 }
             },
         };
+        if let (
+            ImplicitConstructor::Resolved(ResolvedRef::Constructor { id, .. }),
+            Some(expected),
+        ) = (&decided, expected)
+        {
+            self.fix_constructor_instance(ctx, node, *id, expected);
+        }
         ctx.record_implicit_constructor(node, decided);
         self.constructor_reference(ctx, node, resolved)
+    }
+
+    /// The type that names the constructor written as `shape` where `ty` is
+    /// expected: `ty` itself, or the result of the function type a unit
+    /// expression is used as (`xs.map(.Some)`).
+    fn constructed_type(
+        &self,
+        ty: Type<'db>,
+        shape: &ConstructorShape,
+        pattern: bool,
+    ) -> Type<'db> {
+        match (ty.kind(self.db()), shape) {
+            (TypeKind::Func { result, .. }, ConstructorShape::Unit) if !pattern => *result,
+            _ => ty,
+        }
+    }
+
+    /// Infer the fields and spread of the record at `record_id` if it is an
+    /// implicit constructor that waits for its types, and give the type of
+    /// its value. The fields are related to the constructor once it is
+    /// selected.
+    pub(super) fn infer_deferred_record_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        record_id: NodeId,
+        fields: &[FieldInit<ResolvedRef<'db>>],
+        spread: Option<&Expr<ResolvedRef<'db>>>,
+    ) -> Option<Type<'db>> {
+        let deferred = self.deferred_constructor(ctx, record_id)?;
+        let (result, field_tys) = (deferred.result_ty, deferred.field_types.clone());
+        for (field, field_ty) in fields.iter().zip(field_tys) {
+            let actual = self.infer_expr_type_with_ctx(ctx, &field.value);
+            ctx.constrain_coerce(actual, field_ty, field.value.id);
+        }
+        if let Some(spread_expr) = spread {
+            let spread_ty = self.infer_expr_type_with_ctx(ctx, spread_expr);
+            ctx.constrain_coerce(spread_ty, result, spread_expr.id);
+        }
+        Some(result)
     }
 
     /// The constructor `resolved` names at `node` as it was decided there,
@@ -127,27 +178,18 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Fix the instance of the implicit constructor `original` decided as
-    /// `decided` at `node` to the type arguments of `expected`, the type it
-    /// was decided by, so that the arguments and sub-patterns inside it see
+    /// Fix the instance of the constructor `id` an implicit constructor at
+    /// `node` was decided as to the type arguments of `expected`, the type
+    /// expected of it, so that the arguments and sub-patterns inside it see
     /// their field types where they are checked.
-    pub(super) fn fix_implicit_constructor_instance(
+    fn fix_constructor_instance(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         node: NodeId,
-        original: &ResolvedRef<'db>,
-        decided: &ResolvedRef<'db>,
-        expected: Option<Type<'db>>,
+        id: CtorId<'db>,
+        expected: Type<'db>,
     ) {
         let db = self.db();
-        let (
-            ResolvedRef::ImplicitConstructor { .. },
-            ResolvedRef::Constructor { id, .. },
-            Some(expected),
-        ) = (original, decided, expected)
-        else {
-            return;
-        };
         let TypeKind::Named {
             id: owner, args, ..
         } = expected.kind(db)
@@ -157,7 +199,7 @@ impl<'db> TypeChecker<'db> {
         if ctx.get_constructor_reference_type(node).is_some() {
             return;
         }
-        let Some(scheme) = self.env.lookup_constructor(*id) else {
+        let Some(scheme) = self.env.lookup_constructor(id) else {
             return;
         };
         let body = scheme.body(db);
@@ -345,12 +387,8 @@ impl<'db> TypeChecker<'db> {
         deferred: &DeferredConstructor<'db>,
     ) -> Type<'db> {
         let expected = solver.expected_type(deferred.result_ty);
-        match (expected.kind(self.db()), &deferred.shape) {
-            (TypeKind::Func { result, .. }, ConstructorShape::Unit) if !deferred.pattern => {
-                solver.type_subst().apply(self.db(), *result)
-            }
-            _ => expected,
-        }
+        let constructed = self.constructed_type(expected, &deferred.shape, deferred.pattern);
+        solver.type_subst().apply(self.db(), constructed)
     }
 
     /// Whether the constructor `id` takes what `deferred` writes, whose

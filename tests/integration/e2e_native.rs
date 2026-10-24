@@ -191,7 +191,7 @@ mod ffi {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(ffi::__tribute_bytes_len(b"1234567")))
+    print_line(ffi::__tribute_bytes_len(b"1234567").to_string)
 }
 "#,
     );

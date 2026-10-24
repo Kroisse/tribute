@@ -99,12 +99,9 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
 
         // Transfer the imported name's sub-namespace entries.
         // e.g., `use abilities::Abort` makes `Abort::abort` available.
+        let namespace = SymbolPath::new([import_name.clone()]);
         for (op_name, op_binding) in entries {
-            env.add_to_namespace_if_absent(
-                SymbolPath::new([import_name.clone()]),
-                op_name,
-                op_binding,
-            );
+            env.add_to_namespace_if_absent(&namespace, &op_name, op_binding);
         }
 
         // Replace the placeholder with the actual binding
@@ -331,13 +328,33 @@ fn add_export<'db>(
     }) else {
         return false;
     };
-    let entries = scope.collect_namespace(&target);
+    // An entry under the exported name is visible only where both it and
+    // the re-export are.
+    let entries: Vec<_> = scope
+        .collect_namespace(&target)
+        .into_iter()
+        .map(|(name, entry)| {
+            let member = scope.entry_restrictions(&target, &name);
+            let member: Vec<_> = if member.is_empty() {
+                scope.restriction(&entry).into_iter().collect()
+            } else {
+                member.iter().collect()
+            };
+            let restrictions: Vec<Restriction> =
+                export.restriction.iter().chain(member).cloned().collect();
+            (name, entry, restrictions)
+        })
+        .collect();
     // The exported name's own namespace, e.g. `facade::Abort::abort`.
     let own = export.module.child(export.name.clone());
-    for (name, entry) in entries {
-        env.add_to_namespace_if_absent(own.clone(), name, entry);
+    for (name, entry, restrictions) in entries {
+        if env.add_to_namespace_if_absent(&own, &name, entry) {
+            for restriction in restrictions {
+                env.restrict_entry(own.clone(), name.clone(), restriction);
+            }
+        }
     }
-    env.add_to_namespace_if_absent(export.module.clone(), export.name.clone(), binding);
+    env.add_to_namespace_if_absent(&export.module, &export.name, binding);
     env.set_export_target(export.module.clone(), export.name.clone(), target);
     if let Some(restriction) = &export.restriction {
         env.restrict_entry(
@@ -586,7 +603,7 @@ fn collect_definition<'db>(
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
             let qualified = ids.child(s.name.clone());
-            let type_def_id = TypeDefId::source(db, qualified.clone(), s.id);
+            let type_def_id = TypeDefId::declared(db, qualified.clone(), s.disambiguator);
             let ctor_id = CtorId::new(db, qualified);
             env.add_type(s.name.clone(), type_def_id);
             env.add_constructor(s.name.clone(), ctor_id, None, s.fields.len());
@@ -634,7 +651,7 @@ fn collect_definition<'db>(
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
             let qualified = ids.child(e.name.clone());
-            let type_def_id = TypeDefId::source(db, qualified.clone(), e.id);
+            let type_def_id = TypeDefId::declared(db, qualified.clone(), e.disambiguator);
             env.add_type(e.name.clone(), type_def_id);
             restrict(env, Binding::TypeDef { id: type_def_id });
 
@@ -773,8 +790,8 @@ fn collect_module<'db>(
             // Preserve the type binding already transferred above.
             if let Some(inner) = inner_ns.as_simple() {
                 env.add_to_namespace_if_absent(
-                    SymbolPath::new([m.name.clone()]),
-                    inner.clone(),
+                    &SymbolPath::new([m.name.clone()]),
+                    inner,
                     Binding::Module {
                         path: scope.package.at(path.child(inner.clone())).identity(),
                     },
@@ -1008,6 +1025,7 @@ mod tests {
             id: fresh_node_id(),
             visibility: Visibility::Private,
             name: Symbol::new(name),
+            disambiguator: 0,
             type_params: vec![],
             fields: vec![FieldDecl {
                 id: fresh_node_id(),
@@ -1028,6 +1046,7 @@ mod tests {
             id: fresh_node_id(),
             visibility: Visibility::Private,
             name: Symbol::new(name),
+            disambiguator: 0,
             type_params: vec![],
             variants: variants
                 .iter()
@@ -1305,6 +1324,7 @@ mod tests {
                 id: fresh_node_id(),
                 visibility: Visibility::Private,
                 name: Symbol::new("Point"),
+                disambiguator: 0,
                 type_params: vec![],
                 fields: vec![
                     FieldDecl {
