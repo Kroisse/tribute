@@ -119,12 +119,13 @@ fn test_float_comparison_branch_eq() {
     assert_native_output(
         "float_cmp_branch_eq.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let a = 1.5
     let b = 1.5
     case a == b {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -137,12 +138,13 @@ fn test_float_comparison_branch_lt() {
     assert_native_output(
         "float_cmp_branch_lt.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let a = 1.0
     let b = 2.0
     case a < b {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -155,12 +157,13 @@ fn test_float_comparison_branch_ne() {
     assert_native_output(
         "float_cmp_branch_ne.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let a = 1.0
     let b = 2.0
     case a != b {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -173,12 +176,13 @@ fn test_float_comparison_branch_gt() {
     assert_native_output(
         "float_cmp_branch_gt.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let a = 2.0
     let b = 1.0
     case a > b {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -191,12 +195,13 @@ fn test_float_comparison_branch_le() {
     assert_native_output(
         "float_cmp_branch_le.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let a = 1.0
     let b = 2.0
     case a <= b {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -209,12 +214,13 @@ fn test_float_comparison_branch_ge() {
     assert_native_output(
         "float_cmp_branch_ge.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let a = 2.0
     let b = 2.0
     case a >= b {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,
@@ -227,33 +233,34 @@ fn test_float_comparison_nan_semantics() {
     assert_native_output(
         "float_cmp_nan_semantics.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let nan = 0.0 / 0.0
     let x = 1.0
 
     case nan == x {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
     case nan != x {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
     case nan < x {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
     case nan <= x {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
     case nan > x {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
     case nan >= x {
-        True -> __tribute_print_int(+1)
-        False -> __tribute_print_int(+0)
+        True -> print_line(+1.to_string)
+        False -> print_line(+0.to_string)
     }
 }
 "#,

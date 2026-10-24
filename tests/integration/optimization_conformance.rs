@@ -29,13 +29,14 @@ const TEMPORARY_FIELD_BORROWS: &str =
 const TEMPORARY_FIELD_BORROWS_EFFECTS: &str =
     include_str!("../fixtures/optimizations/temporary_field_borrows_effects.trb");
 const BOXED_DYNAMIC_PRIMITIVES: &str = r#"
-extern "C" fn __tribute_print_int(value: Int) -> Nil
+use std::io::{Io, print_line}
+
 extern "C" fn __tribute_print_float(value: Float) -> Nil
 
 fn identity(value: a) -> a { value }
 
-fn main() -> Nil {
-    __tribute_print_int(identity(+7))
+fn main() ->{Io} Nil {
+    print_line(identity(+7).to_string)
     __tribute_print_float(identity(3.5))
 }
 "#;

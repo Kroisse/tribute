@@ -234,6 +234,8 @@ fn test_function_type_parameter() {
     assert_native_output(
         "function_type.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(x)
 }
@@ -242,8 +244,8 @@ fn double(n: Int) -> Int {
     n + n
 }
 
-fn main() -> Nil {
-    __tribute_print_int(apply(double, +21))
+fn main() ->{Io} Nil {
+    print_line(apply(double, +21).to_string)
 }
 "#,
         "42",
@@ -257,12 +259,14 @@ fn test_open_callback_root_main_executes() {
     assert_native_output(
         "open_callback_root_main.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(x)
 }
 
-fn main() -> Nil {
-    __tribute_print_int(apply(fn(value) { value + +1 }, +41))
+fn main() ->{Io} Nil {
+    print_line(apply(fn(value) { value + +1 }, +41).to_string)
 }
 "#,
         "42",
@@ -361,6 +365,8 @@ fn test_calc_eval() {
     assert_native_output(
         "calc.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Expr {
     Num(Int),
     Add(Expr, Expr),
@@ -379,7 +385,7 @@ fn eval(e: Expr) -> Int {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let expr = .Div(
         .Mul(
             .Add(.Num(+1), .Num(+2)),
@@ -387,7 +393,7 @@ fn main() -> Nil {
         ),
         .Num(+2)
     )
-    __tribute_print_int(eval(expr))
+    print_line(eval(expr).to_string)
 }
 "#,
         "9",

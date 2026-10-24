@@ -772,27 +772,29 @@ fn main() ->{Io} Nil {
 #[test]
 fn test_source_logical_fn_handler_observes_terminal_order_and_result() {
     let code = r#"
+use std::io::{Io, print_line}
+
 ability Ask {
     fn ask() -> Int
 }
 
-fn use_ask() ->{Ask} Int {
-    __tribute_print_int(+10)
+fn use_ask() ->{Ask, Io} Int {
+    print_line(+10.to_string)
     Ask::ask()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle use_ask() {
         do result {
-            __tribute_print_int(+30)
+            print_line(+30.to_string)
             result
         }
         fn Ask::ask() {
-            __tribute_print_int(+20)
+            print_line(+20.to_string)
             +41
         }
     }
-    __tribute_print_int(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output(

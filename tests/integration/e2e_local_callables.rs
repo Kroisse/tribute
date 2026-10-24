@@ -22,10 +22,11 @@ fn assert_native(body: &str, expected: &[u8]) {
 fn fixed_local_identity_prints_three() {
     assert_native(
         r#"
+use std::io::{Io, print_line}
 fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let identity = fn(x: Int) x
-    __tribute_print_int(apply(identity, +3))
+    print_line(apply(identity, +3).to_string)
 }
 "#,
         b"3\n",
@@ -36,13 +37,14 @@ fn main() -> Nil {
 fn captured_alias_prints_nine() {
     assert_native(
         r#"
+use std::io::{Io, print_line}
 fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 fn captured(k: Int) ->{} Int {
     let action = fn(x: Int) k
     let alias = action
     apply(alias, +3)
 }
-fn main() -> Nil { __tribute_print_int(captured(+9)) }
+fn main() ->{Io} Nil { print_line(captured(+9).to_string) }
 "#,
         b"9\n",
     );
@@ -52,16 +54,17 @@ fn main() -> Nil { __tribute_print_int(captured(+9)) }
 fn factory_rhs_is_evaluated_once() {
     assert_native(
         r#"
-fn make() -> fn(Int) ->{} Int {
-    __tribute_print_int(+1)
+use std::io::{Io, print_line}
+fn make() ->{Io} fn(Int) ->{} Int {
+    print_line(+1.to_string)
     fn(x: Int) ->{} Int { x }
 }
 fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let action = make()
     let alias = action
-    __tribute_print_int(apply(action, +3))
-    __tribute_print_int(apply(alias, +9))
+    print_line(apply(action, +3).to_string)
+    print_line(apply(alias, +9).to_string)
 }
 "#,
         b"1\n3\n9\n",
@@ -105,12 +108,13 @@ fn main() -> Nil {}
 fn named_direct_pure_and_open_consumers() {
     assert_native(
         r#"
+use std::io::{Io, print_line}
 fn identity(x: Int) ->{} Int { x }
 fn pure(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let first = pure(identity, +3)
-    __tribute_print_int(open(identity, first))
+    print_line(open(identity, first).to_string)
 }
 "#,
         b"3\n",
@@ -126,13 +130,14 @@ fn local_pure_and_open_consumers() {
         assert_native(
             &format!(
                 r#"
+use std::io::{{Io, print_line}}
 fn pure(f: fn(Int) ->{{}} Int, x: Int) ->{{}} Int {{ f(x) }}
 fn open(f: fn(Int) ->{{e}} Int, x: Int) ->{{e}} Int {{ f(x) }}
 fn run() ->{{}} Int {{
     let action = fn(x: Int) x
     {calls}
 }}
-fn main() -> Nil {{ __tribute_print_int(run()) }}
+fn main() ->{{Io}} Nil {{ print_line(run().to_string) }}
 "#
             ),
             b"3\n",
@@ -144,12 +149,13 @@ fn main() -> Nil {{ __tribute_print_int(run()) }}
 fn existing_generalized_local_direct_calls() {
     assert_native(
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let identity = fn(x) x
-    __tribute_print_int(identity(+3))
+    print_line(identity(+3).to_string)
     case identity(True) {
-        True -> __tribute_print_int(+4)
-        False -> __tribute_print_int(+0)
+        True -> print_line({{ +4 }}.to_string)
+        False -> print_line({{ +0 }}.to_string)
     }
 }
 "#,
@@ -161,13 +167,14 @@ fn main() -> Nil {
 fn managed_capture_retains_its_field() {
     assert_native(
         r#"
+use std::io::{Io, print_line}
 struct Box { value: Int }
 fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 fn captured(k: Box) ->{} Int {
     let action = fn(x: Int) k.value
     apply(action, +3)
 }
-fn main() -> Nil { __tribute_print_int(captured(Box { value: +9 })) }
+fn main() ->{Io} Nil { print_line(captured(Box { value: +9 }).to_string) }
 "#,
         b"9\n",
     );
@@ -177,6 +184,7 @@ fn main() -> Nil { __tribute_print_int(captured(Box { value: +9 })) }
 fn local_open_then_pure_consumers() {
     assert_native(
         r#"
+use std::io::{Io, print_line}
 fn pure(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 fn run() ->{} Int {
@@ -184,7 +192,7 @@ fn run() ->{} Int {
     let first = open(action, +3)
     pure(action, first)
 }
-fn main() -> Nil { __tribute_print_int(run()) }
+fn main() ->{Io} Nil { print_line(run().to_string) }
 "#,
         b"3\n",
     );
