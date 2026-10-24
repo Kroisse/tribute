@@ -280,14 +280,16 @@ Monomorphization은 `tribute-front`의 typed AST와 명시적인 함수 인스�
 ### 파이프라인의 책임
 
 `parse_and_lower_ast()`는 이름 해석과 타입 추론·TDNR을 수행하고, 선택된 함수
-인스턴스와 semantic 메타데이터를 반환한다. `prepare_frontend_for_lowering()`은
-Prelude 병합, 도달하는 인스턴스 검증, 특수화 및 메타데이터 재작성을 담당한다.
-IR lowering은 이 준비 단계가 성공한 결과만 소비한다.
+인스턴스와 semantic 메타데이터를 반환한다. 타입 검사는 의존 패키지 `std`의
+선언을 의존성 표로 조회하며, 그 결과에는 사용자 패키지의 선언만 담긴다.
+`prepare_frontend_for_lowering()`은 의존 패키지 본문의 병합, 도달하는 인스턴스
+검증, 특수화 및 메타데이터 재작성을 담당한다. IR lowering은 이 준비 단계가 성공한
+결과만 소비하며, 타입 검사 결과로부터 lowering 입력을 만드는 경로는 없다.
 
 ```text
 parse_and_lower_ast: 해석·타입 추론·TDNR·인스턴스 기록
     ↓
-prepare_frontend_for_lowering: 병합·검증·특수화·메타데이터 재작성
+prepare_frontend_for_lowering: 의존 패키지 병합·검증·특수화·메타데이터 재작성
     ↓
 ast_to_ir: IR lowering
 ```
