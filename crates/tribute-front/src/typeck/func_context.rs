@@ -248,6 +248,17 @@ pub enum ConstructorShape {
     Fields { names: Vec<Symbol>, rest: bool },
 }
 
+impl ConstructorShape {
+    /// `.Name` with `count` arguments or sub-patterns, `.Name` alone for none.
+    pub fn of_arity(count: usize) -> Self {
+        if count == 0 {
+            Self::Unit
+        } else {
+            Self::Positional(count)
+        }
+    }
+}
+
 /// The constructor an implicit constructor `.Name` at an expression or a
 /// pattern names, as type checking decided it.
 #[derive(Clone)]
@@ -284,6 +295,23 @@ pub struct DeferredConstructor<'db> {
     pub result_ty: Type<'db>,
     /// The type of each argument, sub-pattern, or field, as written.
     pub field_types: Vec<Type<'db>>,
+}
+
+impl<'db> DeferredConstructor<'db> {
+    /// Register the constructor with `solver` as a producer of its value,
+    /// which waits for the selection and performs no effect.
+    pub fn defer_in(
+        &self,
+        db: &'db dyn salsa::Database,
+        solver: &mut super::solver::TypeSolver<'db>,
+    ) {
+        solver.defer_producer(
+            self.node_id,
+            self.result_ty,
+            self.field_types.clone(),
+            AbilityRow::pure(db),
+        );
+    }
 }
 
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {

@@ -13,8 +13,7 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityRow, ExprKind, FuncDecl, FuncDefId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef,
-    UniVarId,
+    ExprKind, FuncDecl, FuncDefId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
 };
 
 use super::super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
@@ -191,12 +190,7 @@ impl<'db> TypeChecker<'db> {
             );
         }
         for constructor in &deferred_constructors {
-            solver.defer_producer(
-                constructor.node_id,
-                constructor.result_ty,
-                constructor.field_types.clone(),
-                AbilityRow::pure(self.db()),
-            );
+            constructor.defer_in(self.db(), &mut solver);
         }
 
         let mut solve_failed = false;
