@@ -265,20 +265,14 @@ Operation을 낮추는 단계는 그 결과가 의존하는 모듈 수준 자원
 `wasm.data` operation의 순서이다. 모듈 조립은 선언된 memory를 export하고 entrypoint
 export를 추가할 뿐, 자원을 새로 계획하지 않는다.
 
-### Dynamic basic output
+### Standard I/O
 
-WASI preview1 `fd_write` cannot read a WasmGC `Bytes` array directly because its
-iovec points into linear memory. The initial `tribute_io.write` lowering copies
-the dynamic `Bytes` slice into an instance-local linear scratch buffer, appends
-the optional newline there, and invokes `fd_write` with compiler-owned iovec and
-`nwritten` cells. The lowering declares the `fd_write` import and the linear
-memory that holds these cells, grows memory when required, and retries partial or
-interrupted writes. See [io.md](io.md#wasm-runtime-boundary) for lifetime and
-failure rules.
-
-Wasm output uses `tribute_io.write`. String literals remain canonical `String`
-values until the standard-library I/O wrapper explicitly converts them to
-`Bytes`.
+The standard I/O ability `std::io::Io` lowers like every other ability in the
+host interface: its operations become imports of the component's host interface
+([host-interface.md](host-interface.md#host-경계)). Boundary values are copied
+into linear memory in canonical ABI layout, since a WasmGC `Bytes` array cannot
+be passed to the host directly. A host that implements `Io` over WASI streams
+does so outside the program ([io.md](io.md#host-boundary)).
 
 ### Private List layout
 

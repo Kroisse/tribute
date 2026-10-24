@@ -22,7 +22,7 @@ evidence, 중단 가능성, `become`의 proper tail call만 정하며 규약을 
 | Convention | Parameters | Result | Requirement |
 | ---------- | ---------- | ------ | ----------- |
 | `Direct` | source parameters | source result | closed empty ability row or pure named worker |
-| `EvidenceDirect` | evidence + source parameters | source result | `Io` or tail-resumptive `fn` effect |
+| `EvidenceDirect` | evidence + source parameters | source result | tail-resumptive `fn` effect |
 | `Cps` | evidence + `ContinuationFrame<R>` + source parameters | source result를 직접 반환하지 않음 | general `op`, `Throw`, or another CPS effect |
 
 규약을 합성할 때 `Direct < EvidenceDirect < Cps` 순서로 더 강한 규약이
@@ -37,18 +37,17 @@ Ability annotation을 생략한 `fn(...) -> T`의 semantic type은
 effect가 발견되지 않으면 해당 named definition은 별도의 `Direct` worker를 가질 수
 있다.
 
-`Io`만 요구하는 함수는 현재 `EvidenceDirect`를 사용한다. Evidence는 전달되지만
-`Io` operation을 dispatch하기 위한 handler lookup은 수행하지 않는다. Evidence의
-concrete representation과 ambient runtime capability 저장 여부는 backend 구현
-세부사항이다. Ambient-only 함수에서 evidence를 완전히 제거하는 최적화는 후속
-작업이다.
+Host가 처리하는 ability도 이 규칙을 그대로 따른다. `fn` operation만 가진 ability만
+요구하는 함수는 `EvidenceDirect`이고, `op` operation을 가진 ability를 요구하면 `Cps`다.
+Tribute handler가 없다고 증명된 호출이 evidence lookup 없이 import를 직접 부르는
+최적화는 [host-interface.md](host-interface.md#host-경계)가 정한다.
 
 ```text
-print_line(ev, message) -> Nil
-main(ev) -> Nil
+fixed_now(ev) -> Int        // ->{Clock} Int, Clock은 fn operation만 가진다
 ```
 
-`read_line`은 실패 시 `Throw(Error)`를 수행하므로 CPS 규약을 사용한다. 두 번째
+`std::io::read_line`은 `op` operation을 가진 `Read`를 요구하고 실패 시
+`Throw(Error)`를 수행하므로 CPS 규약을 사용한다. 두 번째
 인자는 `Done<R>`과 `Dispatch<R>`를 함께 담은 `ContinuationFrame<R>`다. 논리적
 ABI에서 함수와 frame의 transfer target의 control result는 `Never`다. Physical
 lowering은 이를 empty-result callable과 proper tail transfer로 바꾸며 control carrier를
