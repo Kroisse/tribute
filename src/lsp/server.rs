@@ -1065,15 +1065,29 @@ fn dot_context(rope: &Rope, start: usize) -> DotContext {
     let line = rope.byte_to_line(dot);
     let line_start = rope.line_to_byte(line);
     let before = rope.byte_slice(line_start..dot).to_string();
-    match before.trim_end_matches([' ', '\t']).chars().last() {
+    let before = before.trim_end_matches([' ', '\t']);
+    match before.chars().last() {
         None if line == 0 => DotContext::ImplicitConstructor,
         None => DotContext::Either,
-        Some(c) if c.is_alphanumeric() || matches!(c, '_' | ')' | ']' | '}' | '"' | '\'' | '.') => {
-            DotContext::Other
+        Some(c) if c.is_alphanumeric() || c == '_' => {
+            // A keyword that an expression or a pattern follows is no
+            // receiver; any other word, a raw one included, is.
+            let word = before.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
+            let keyword = &before[word.len()..];
+            if !word.ends_with('#') && EXPRESSION_KEYWORDS.contains(&keyword) {
+                DotContext::ImplicitConstructor
+            } else {
+                DotContext::Other
+            }
         }
+        Some(')' | ']' | '}' | '"' | '\'' | '.') => DotContext::Other,
         Some(_) => DotContext::ImplicitConstructor,
     }
 }
+
+/// The keywords an expression or a pattern follows, which an implicit
+/// constructor may start right after: `let .Some(x)`, `resume .None`.
+const EXPRESSION_KEYWORDS: &[&str] = &["let", "case", "handle", "resume", "become"];
 
 /// Extract the identifier prefix at the cursor position for completion filtering.
 fn extract_completion_prefix(rope: &Rope, offset: usize) -> String {
@@ -1484,11 +1498,16 @@ mod tests {
         assert_eq!(at("f(a, .|"), DotContext::ImplicitConstructor);
         assert_eq!(at("x ==.|"), DotContext::ImplicitConstructor);
         assert_eq!(at(".|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("let .|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("    resume .|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("case .|"), DotContext::ImplicitConstructor);
         // A line-leading `.` may continue the line before it, or start one.
         assert_eq!(at("xs\n    .|"), DotContext::Either);
         assert_eq!(at("case x {\n    .|"), DotContext::Either);
         // Right after an expression, `.` continues a method call.
         assert_eq!(at("xs.|"), DotContext::Other);
+        assert_eq!(at("outlet.|"), DotContext::Other);
+        assert_eq!(at("r#let.|"), DotContext::Other);
         assert_eq!(at("f(x).|"), DotContext::Other);
         assert_eq!(at("\"s\".|"), DotContext::Other);
         // `..` is a spread, and no `.` is no constructor.
