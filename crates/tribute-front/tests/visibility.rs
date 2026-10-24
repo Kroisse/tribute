@@ -414,3 +414,33 @@ fn later() -> Nat {
         ]
     );
 }
+
+/// The entries a re-export shows under its name are visible where the
+/// re-export is, so a path or annotation through them does not get around
+/// a hidden re-export.
+#[salsa_test]
+fn entries_under_a_hidden_re_export_are_hidden(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod a {
+    pub mod m {
+        pub(super) use std as internal
+        pub(super) use std::Option as Opt
+    }
+
+    fn inside(o: m::internal::Option(Nat)) -> Option(Nat) { m::Opt::Some(1) }
+}
+
+fn annotation(o: a::m::internal::Option(Nat)) -> Nat { 0 }
+fn value() -> Option(Nat) { a::m::Opt::Some(1) }
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`a::m::internal::Option` is not visible here: `a::m::internal` is declared `pub(super)`",
+            "`a::m::Opt::Some` is not visible here: `a::m::Opt` is declared `pub(super)`",
+        ]
+    );
+}

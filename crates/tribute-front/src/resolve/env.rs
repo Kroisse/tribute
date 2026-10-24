@@ -425,12 +425,14 @@ impl<'db> PackageEnv<'db> {
         namespace: SymbolPath,
         name: Symbol,
         binding: Binding<'db>,
-    ) {
-        self.namespaces
-            .entry(namespace)
-            .or_default()
-            .entry(name)
-            .or_insert(binding);
+    ) -> bool {
+        match self.namespaces.entry(namespace).or_default().entry(name) {
+            std::collections::hash_map::Entry::Occupied(_) => false,
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(binding);
+                true
+            }
+        }
     }
 
     /// Look up a name the package root declares or imports.

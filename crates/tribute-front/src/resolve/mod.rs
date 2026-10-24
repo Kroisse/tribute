@@ -335,7 +335,12 @@ fn add_export<'db>(
     // The exported name's own namespace, e.g. `facade::Abort::abort`.
     let own = export.module.child(export.name.clone());
     for (name, entry) in entries {
-        env.add_to_namespace_if_absent(own.clone(), name, entry);
+        // The entries under the exported name are visible where it is.
+        if env.add_to_namespace_if_absent(own.clone(), name.clone(), entry)
+            && let Some(restriction) = &export.restriction
+        {
+            env.restrict_entry(own.clone(), name, restriction.clone());
+        }
     }
     env.add_to_namespace_if_absent(export.module.clone(), export.name.clone(), binding);
     env.set_export_target(export.module.clone(), export.name.clone(), target);
