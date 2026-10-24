@@ -419,16 +419,24 @@ impl<'db> PackageEnv<'db> {
         );
     }
 
-    /// Add a qualified name to a namespace only if it doesn't already exist.
+    /// Add a qualified name to a namespace only if it doesn't already
+    /// exist, and say whether it was added.
     pub fn add_to_namespace_if_absent(
         &mut self,
-        namespace: SymbolPath,
+        namespace: &SymbolPath,
         name: Symbol,
         binding: Binding<'db>,
     ) -> bool {
-        match self.namespaces.entry(namespace).or_default().entry(name) {
-            std::collections::hash_map::Entry::Occupied(_) => false,
-            std::collections::hash_map::Entry::Vacant(entry) => {
+        use std::collections::hash_map::Entry;
+
+        let Some(entries) = self.namespaces.get_mut(namespace) else {
+            let entries = std::iter::once((name, binding)).collect();
+            self.namespaces.insert(namespace.clone(), entries);
+            return true;
+        };
+        match entries.entry(name) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(entry) => {
                 entry.insert(binding);
                 true
             }
