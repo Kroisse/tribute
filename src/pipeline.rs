@@ -4306,7 +4306,10 @@ fn main() -> String { "hello" }
             ctx.paths().get(definition.path),
             crate::prelude::PRELUDE_URI
         );
-        assert_eq!(canonical.definition.qualified(db), "std::String");
+        assert_eq!(
+            canonical.definition,
+            tribute_front::ast::TypeDefId::source(db, trunk_ir::SymbolPath::new(["std", "String"]))
+        );
 
         let user_lookalike = ctx.types().iter().find_map(|(ty, data)| {
             (ty != string_ty
