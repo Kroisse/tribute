@@ -889,6 +889,27 @@ query는 모듈 결과에서 해당 함수를 선택한다. 함수 이름으로 
 입력에 대한 모듈 결과 재사용과, 입력 변경 후 함수별 재검사 생략은 서로
 다른 보장이다.
 
+### 편집 위치와 무관한 frontend identity
+
+Frontend가 AST와 분석 결과에 담는 identity는 source 위치에 의존하지 않는다. 한
+item을 편집해도 다른 item의 resolved·typed 선언은 바뀌지 않으며, 이것이 결과를
+item 단위로 재사용하기 위한 전제이다.
+
+- **AST 노드:** `NodeId`는 노드를 소유한 item과 그 item 안에서 astgen이 매긴
+  순번으로 정해진다. Item은 module path, 종류, 이름, 같은 module에서 그 item보다
+  앞선 같은 종류·이름의 item 수로 식별한다. Module 자신과 `mod`·`use` 선언처럼
+  item에 속하지 않는 노드는 그 module이 소유한다. 바뀌지 않은 item은 다른 item이
+  추가·삭제되거나 위치가 옮겨져도 같은 `NodeId`를 갖는다. 예외는 편집이 그 item보다
+  앞선 같은 종류·이름의 item 수를 바꿀 때뿐이다.
+- **지역 변수:** `LocalId`는 module 수준 함수 하나 안에서만 유일하며, 각 함수가
+  자기 번호를 매긴다.
+- **선언:** 함수와 타입 선언의 identity는 package를 포함한 path로 정해진다.
+  타입 선언 규칙은 `types.md`의 Nominal Identity를 따른다.
+- **위치:** Source 위치는 `NodeId`에서 절대 span으로 가는 별도 span map에만 있고,
+  AST와 분석 결과는 위치를 담지 않는다. 진단처럼 위치가 필요한 출력만 span map을
+  읽는다. Item 단위로 결과를 재사용하려면 그 결과가 내보내는 진단도 소유 item 기준의
+  상대 위치로 표현해, 결과를 다시 계산하지 않고도 절대 위치로 옮길 수 있어야 한다.
+
 ---
 
 ## Type System for Evidence

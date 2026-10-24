@@ -54,7 +54,6 @@
 
 mod decl;
 mod expr;
-pub mod lookup;
 pub(crate) mod node_id;
 mod pattern;
 mod phases;
