@@ -25,12 +25,13 @@ pub use package::{IdentityPath, Location, PackageName};
 pub use resolver::Resolver;
 pub use scope::{Dependencies, Scope};
 
+use rustc_hash::FxHashMap as HashMap;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
 
 use crate::ast::{
     AbilityId, CtorId, Decl, DeclTable, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ModuleDecl,
-    ModuleItem, ResolvedRef, SpanMap, TypeDefId, UnresolvedName, Visibility,
+    ModuleItem, NodeId, ResolvedRef, SpanMap, TypeDefId, UnresolvedName, Visibility,
 };
 
 /// Resolve names in a module.
@@ -219,8 +220,11 @@ fn build_package_env<'db>(
         outer: None,
     };
 
+    let repeats = repeated_definitions(decls);
     for item in decls {
-        collect_item(db, &mut env, item, &mut prefix, &scope);
+        if !is_repeat(item, &repeats) {
+            collect_item(db, &mut env, item, &mut prefix, &scope);
+        }
     }
 
     if package.is_library() {
@@ -466,6 +470,64 @@ fn inject_runtime_bindings<'db>(db: &'db dyn salsa::Database, env: &mut PackageE
     }
 }
 
+/// A declaration that repeats the name of an earlier one in its module.
+pub(crate) struct RepeatedDefinition {
+    pub name: Symbol,
+    pub id: NodeId,
+    pub earlier: NodeId,
+}
+
+/// The declarations of a module body that repeat the name of an earlier
+/// declaration. Functions, structs, enums, and abilities share the
+/// environment's definition table, so a name is declared once among them.
+/// A companion module and a `use` do not declare in that table.
+pub(crate) fn repeated_definitions(
+    items: &[ModuleItem<UnresolvedName>],
+) -> Vec<RepeatedDefinition> {
+    let mut seen: HashMap<Symbol, NodeId> = HashMap::default();
+    let mut repeats = Vec::new();
+    for item in items {
+        let ModuleItem::Decl(decl) = item else {
+            continue;
+        };
+        let (name, id) = match decl {
+            Decl::Function(f) => (&f.name, f.id),
+            Decl::ExternFunction(f) => (&f.name, f.id),
+            Decl::Struct(s) => (&s.name, s.id),
+            Decl::Enum(e) => (&e.name, e.id),
+            Decl::Ability(a) => (&a.name, a.id),
+            Decl::Use(_) => continue,
+        };
+        match seen.get(name) {
+            Some(&earlier) => repeats.push(RepeatedDefinition {
+                name: name.clone(),
+                id,
+                earlier,
+            }),
+            None => {
+                seen.insert(name.clone(), id);
+            }
+        }
+    }
+    repeats
+}
+
+/// Whether `item` is one of the `repeats`, which the environment leaves out.
+pub(crate) fn is_repeat(item: &ModuleItem<UnresolvedName>, repeats: &[RepeatedDefinition]) -> bool {
+    let ModuleItem::Decl(decl) = item else {
+        return false;
+    };
+    let id = match decl {
+        Decl::Function(f) => f.id,
+        Decl::ExternFunction(f) => f.id,
+        Decl::Struct(s) => s.id,
+        Decl::Enum(e) => e.id,
+        Decl::Ability(a) => a.id,
+        Decl::Use(_) => return false,
+    };
+    repeats.iter().any(|repeat| repeat.id == id)
+}
+
 /// Collect the definitions of a module item into the environment.
 fn collect_item<'db>(
     db: &'db dyn salsa::Database,
@@ -679,8 +741,11 @@ fn collect_module<'db>(
 
         // Collect inner declarations into a temporary environment
         let mut inner_env = PackageEnv::for_package(scope.package.clone());
+        let repeats = repeated_definitions(body);
         for inner in body {
-            collect_item(db, &mut inner_env, inner, prefix, &inner_scope);
+            if !is_repeat(inner, &repeats) {
+                collect_item(db, &mut inner_env, inner, prefix, &inner_scope);
+            }
         }
 
         prefix.pop();

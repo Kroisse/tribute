@@ -314,6 +314,14 @@ enum Option(a) { None, Some(a) }
 let option = Option::None  // 값 `option`과 타입 `Option`은 다른 네임스페이스
 ```
 
+### 중복 선언
+
+한 모듈(패키지 루트, 파일 모듈, 인라인 `mod` 본문) 안에서 `fn`, `extern fn`,
+`struct`, `enum`, `ability`는 이름 하나를 한 번만 선언할 수 있다. 같은 이름을 다시
+선언하면 나중 선언이 오류이며, 먼저 선언한 것이 그 이름의 정의로 남는다. 오류가 난
+선언은 이후 단계에 전달되지 않는다. 타입과 같은 이름의 companion `mod`, `use`,
+다른 모듈의 같은 이름은 중복이 아니다.
+
 ---
 
 ## UFCS (Uniform Function Call Syntax)
