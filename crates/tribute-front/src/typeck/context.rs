@@ -10,6 +10,8 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use trunk_ir::SymbolPath;
 
+use crate::resolve::PackageName;
+
 use trunk_ir::Symbol;
 
 use crate::ast::{
@@ -190,7 +192,10 @@ impl<'db> ModuleTypeEnv<'db> {
         );
         let mut type_defs = HashMap::default();
         type_defs.insert(SymbolPath::new([list_name]), list_scheme);
-        type_defs.insert(SymbolPath::new(["std", "collections", "List"]), list_scheme);
+        type_defs.insert(
+            PackageName::std().identity_path_of(&["collections", "List"]),
+            list_scheme,
+        );
         type_defs.insert(slots_id.path(db).clone(), slots_scheme);
         let dispatch_id = TypeDefId::builtin_dispatch(db);
         let dispatch_ty = Type::new(

@@ -12,6 +12,8 @@ use std::fmt::{self, Display, Formatter};
 
 use trunk_ir::{Symbol, SymbolPath};
 
+use crate::resolve::PackageName;
+
 use super::decl::OpDeclKind;
 use super::expr::Candidates;
 use super::node_id::NodeId;
@@ -226,7 +228,7 @@ impl<'db> TypeDefId<'db> {
         Self::new(
             db,
             TypeOrigin::Builtin(BuiltinType::Slots),
-            SymbolPath::new(["std", "runtime", "Slots"]),
+            PackageName::std().identity_path_of(&["runtime", "Slots"]),
         )
     }
 
@@ -234,7 +236,7 @@ impl<'db> TypeDefId<'db> {
         Self::new(
             db,
             TypeOrigin::Builtin(BuiltinType::Dispatch),
-            SymbolPath::new(["std", "runtime", "Dispatch"]),
+            PackageName::std().identity_path_of(&["runtime", "Dispatch"]),
         )
     }
 
@@ -322,8 +324,10 @@ pub struct AbilityId<'db> {
     pub path: SymbolPath,
 }
 
-/// The path of the compiler-owned `Io` ability.
-const BUILTIN_IO: [&str; 3] = ["std", "io", "Io"];
+/// The identity path of the compiler-owned `Io` ability.
+fn builtin_io_path() -> SymbolPath {
+    PackageName::std().identity_path_of(&["io", "Io"])
+}
 
 impl<'db> AbilityId<'db> {
     pub fn source(db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
@@ -334,16 +338,13 @@ impl<'db> AbilityId<'db> {
         Self::new(
             db,
             AbilityOrigin::Builtin(BuiltinAbility::Io),
-            SymbolPath::new(BUILTIN_IO),
+            builtin_io_path(),
         )
     }
 
     /// Look up a compiler-owned ability by its source path segments.
     pub fn builtin_from_path(db: &'db dyn salsa::Database, path: &[Symbol]) -> Option<Self> {
-        path.iter()
-            .map(Symbol::as_str)
-            .eq(BUILTIN_IO)
-            .then(|| Self::builtin_io(db))
+        (*path == *builtin_io_path()).then(|| Self::builtin_io(db))
     }
 
     /// Resolve a fully-qualified source path through the builtin registry.
