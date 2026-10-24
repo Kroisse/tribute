@@ -111,17 +111,8 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
         match &entry.decl {
             Decl::Function(func) => items.push(item(&func.name, CompletionKind::Function, None)),
             Decl::Struct(s) => items.push(item(&s.name, CompletionKind::Struct, None)),
-            Decl::Enum(e) => {
-                items.push(item(&e.name, CompletionKind::Enum, None));
-                // Add variant constructors
-                for variant in &e.variants {
-                    items.push(item(
-                        &variant.name,
-                        CompletionKind::Constructor,
-                        Some(format!("{}::{}", e.name, variant.name)),
-                    ));
-                }
-            }
+            // Its variants are only in its namespace, not names of the module.
+            Decl::Enum(e) => items.push(item(&e.name, CompletionKind::Enum, None)),
             Decl::ExternFunction(func) => {
                 items.push(item(&func.name, CompletionKind::Function, None));
             }
@@ -589,7 +580,7 @@ mod tests {
         let named: Vec<_> = completions_in(items, &root)
             .filter(|item| item.name == "Option" || item.name == "Some")
             .collect();
-        assert_eq!(named.len(), 2, "{named:#?}");
+        assert_eq!(named.len(), 1, "{named:#?}");
         assert!(named.iter().all(|item| item.module.is_some()));
     }
 
@@ -632,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn test_completion_items_enum_with_variants() {
+    fn test_completion_items_enum_without_its_variants() {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "enum Color { Red, Green, Blue }");
 
@@ -643,10 +634,8 @@ mod tests {
         assert!(color_item.is_some());
         assert_eq!(color_item.unwrap().kind, CompletionKind::Enum);
 
-        // Should have the variants
-        let red_item = items.iter().find(|i| i.name == "Red");
-        assert!(red_item.is_some());
-        assert_eq!(red_item.unwrap().kind, CompletionKind::Constructor);
+        // The variants are only in the enum's namespace
+        assert!(!items.iter().any(|i| i.name == "Red"));
     }
 
     // Document symbols tests

@@ -781,6 +781,7 @@ PrimaryExpr ::= Literal
               | ListExpr
               | TupleExpr
               | RecordExpr
+              | VariantExpr
               | OperatorFn
               | Lambda
               | CaseExpr

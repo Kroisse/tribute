@@ -10,7 +10,7 @@ use itertools::Itertools;
 use trunk_ir::Symbol;
 
 use super::TypeChecker;
-use crate::ast::{AbilityRow, Candidates, CtorId, LocalId, NodeId, ResolvedRef, Type, TypeKind};
+use crate::ast::{AbilityRow, CtorId, LocalId, NodeId, ResolvedRef, Type, TypeKind};
 use crate::typeck::constraint::{Constraint, ConstraintOrigin, ConstraintOriginKind};
 use crate::typeck::func_context::{
     ConstructorShape, DeferredConstructor, FunctionInferenceContext, ImplicitConstructor,
@@ -27,6 +27,9 @@ enum TypeConstructor<'db> {
     Missing,
     /// The type is not one with constructors.
     NotNominal,
+    /// The type has the constructor, but the module does not see it, for
+    /// the reason given.
+    Hidden(CtorId<'db>, String),
 }
 
 /// The constructor a deferred implicit constructor selects among its
@@ -55,18 +58,28 @@ impl<'db> TypeChecker<'db> {
         shape: ConstructorShape,
         pattern: bool,
     ) -> ResolvedRef<'db> {
-        let ResolvedRef::ImplicitConstructor { name, candidates } = resolved else {
+        let ResolvedRef::ImplicitConstructor {
+            name,
+            candidates,
+            hidden,
+        } = resolved
+        else {
             return resolved.clone();
         };
         if ctx.implicit_constructor(node).is_some() {
             return self.constructor_reference(ctx, node, resolved);
         }
         let unresolved = || ResolvedRef::local(LocalId::UNRESOLVED, name.clone());
-        let decided = match expected.map(|ty| (ty, self.type_constructor(ty, name))) {
+        let decided = match expected.map(|ty| (ty, self.type_constructor(ty, name, hidden))) {
             Some((_, TypeConstructor::Found(id))) => {
                 ImplicitConstructor::Resolved(ResolvedRef::constructor(id, name.clone()))
             }
-            Some((ty, missing @ (TypeConstructor::Missing | TypeConstructor::NotNominal))) => {
+            Some((
+                ty,
+                missing @ (TypeConstructor::Missing
+                | TypeConstructor::NotNominal
+                | TypeConstructor::Hidden(..)),
+            )) => {
                 self.report_type_constructor(node, ty, name, &missing);
                 ImplicitConstructor::Resolved(unresolved())
             }
@@ -75,9 +88,21 @@ impl<'db> TypeChecker<'db> {
                 Some(id) => {
                     ImplicitConstructor::Resolved(ResolvedRef::constructor(*id, name.clone()))
                 }
-                None => ImplicitConstructor::Deferred(
-                    self.defer_constructor(ctx, node, name, candidates, shape, pattern),
-                ),
+                None => {
+                    let (ctor_ty, result_ty, field_types) =
+                        self.constructor_placeholder(ctx, &shape);
+                    ImplicitConstructor::Deferred(DeferredConstructor {
+                        node_id: node,
+                        name: name.clone(),
+                        candidates: candidates.clone(),
+                        hidden: hidden.clone(),
+                        shape,
+                        pattern,
+                        ctor_ty,
+                        result_ty,
+                        field_types,
+                    })
+                }
             },
         };
         ctx.record_implicit_constructor(node, decided);
@@ -166,17 +191,16 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    fn defer_constructor(
+    /// The types that stand for a constructor written as `shape` until it
+    /// is selected: the constructor's type, the type of its value, and the
+    /// type of each argument, sub-pattern, or field.
+    fn constructor_placeholder(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        node: NodeId,
-        name: &Symbol,
-        candidates: &Candidates<CtorId<'db>>,
-        shape: ConstructorShape,
-        pattern: bool,
-    ) -> DeferredConstructor<'db> {
+        shape: &ConstructorShape,
+    ) -> (Type<'db>, Type<'db>, Vec<Type<'db>>) {
         let result_ty = ctx.fresh_type_var();
-        let count = match &shape {
+        let count = match shape {
             ConstructorShape::Unit => 0,
             ConstructorShape::Positional(count) => *count,
             ConstructorShape::Fields { names, .. } => names.len(),
@@ -188,21 +212,17 @@ impl<'db> TypeChecker<'db> {
                 .env
                 .func_type(field_types.clone(), result_ty, AbilityRow::pure(self.db())),
         };
-        DeferredConstructor {
-            node_id: node,
-            name: name.clone(),
-            candidates: candidates.clone(),
-            shape,
-            pattern,
-            ctor_ty,
-            result_ty,
-            field_types,
-        }
+        (ctor_ty, result_ty, field_types)
     }
 
     /// The constructor `name` of `ty`, the type an implicit constructor
-    /// constructs or matches.
-    fn type_constructor(&self, ty: Type<'db>, name: &Symbol) -> TypeConstructor<'db> {
+    /// constructs or matches, which is not one of the `hidden` ones.
+    fn type_constructor(
+        &self,
+        ty: Type<'db>,
+        name: &Symbol,
+        hidden: &[(CtorId<'db>, String)],
+    ) -> TypeConstructor<'db> {
         let db = self.db();
         match ty.kind(db) {
             TypeKind::Named { id, .. } => {
@@ -215,9 +235,13 @@ impl<'db> TypeChecker<'db> {
                 let structure = (id.name(db) == *name)
                     .then(|| CtorId::new(db, path.clone()))
                     .filter(|ctor| self.env.lookup_constructor(*ctor).is_some());
-                variant
-                    .or(structure)
-                    .map_or(TypeConstructor::Missing, TypeConstructor::Found)
+                match variant.or(structure) {
+                    Some(ctor) => match hidden.iter().find(|(id, _)| *id == ctor) {
+                        Some((_, reason)) => TypeConstructor::Hidden(ctor, reason.clone()),
+                        None => TypeConstructor::Found(ctor),
+                    },
+                    None => TypeConstructor::Missing,
+                }
             }
             TypeKind::Int
             | TypeKind::Nat
@@ -246,6 +270,10 @@ impl<'db> TypeChecker<'db> {
             TypeConstructor::NotNominal => {
                 format!("`.{name}` needs a type with constructors, found `{ty}`")
             }
+            TypeConstructor::Hidden(ctor, reason) => format!(
+                "`{}` is not visible here: {reason}",
+                ctor.qualified(self.db())
+            ),
             TypeConstructor::Found(_) | TypeConstructor::Unknown => return,
         };
         self.report_type_error(node, message);
@@ -271,7 +299,7 @@ impl<'db> TypeChecker<'db> {
             expected.kind(db),
             TypeKind::UniVar { .. } | TypeKind::Never | TypeKind::Error
         ) {
-            return match self.type_constructor(expected, &deferred.name) {
+            return match self.type_constructor(expected, &deferred.name, &deferred.hidden) {
                 TypeConstructor::Found(id) => ConstructorSelection::One(id),
                 _ => ConstructorSelection::None,
             };
@@ -492,10 +520,10 @@ impl<'db> TypeChecker<'db> {
     ) {
         let name = &deferred.name;
         let expected = self.deferred_expected_type(solver, deferred);
-        let outcome = self.type_constructor(expected, name);
+        let outcome = self.type_constructor(expected, name, &deferred.hidden);
         if matches!(
             outcome,
-            TypeConstructor::Missing | TypeConstructor::NotNominal
+            TypeConstructor::Missing | TypeConstructor::NotNominal | TypeConstructor::Hidden(..)
         ) {
             self.report_type_constructor(deferred.node_id, expected, name, &outcome);
             return;

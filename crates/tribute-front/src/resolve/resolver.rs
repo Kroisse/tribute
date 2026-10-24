@@ -501,9 +501,24 @@ impl<'db> Resolver<'db> {
             rank.sort_by_key(|ctor: &CtorId<'db>| ctor.path(self.db));
             rank.dedup();
         }
+        let mut hidden: Vec<_> = self
+            .view()
+            .restrictions()
+            .filter_map(|(binding, restriction)| match binding {
+                Binding::Constructor { id, .. }
+                    if id.name(self.db) == ctor
+                        && !restriction.is_visible_from(&self.package, &self.module_path) =>
+                {
+                    Some((*id, restriction.to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        hidden.sort_by_key(|(id, _)| id.path(self.db));
         ResolvedRef::ImplicitConstructor {
             name: ctor,
             candidates: Candidates::new(Vec::new(), in_scope, prelude),
+            hidden,
         }
     }
 

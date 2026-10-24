@@ -288,3 +288,99 @@ fn deferred() -> Tree {
     );
     assert!(errors.is_empty(), "{errors:?}");
 }
+
+#[salsa_test]
+fn deferred_constructors_are_selected_by_their_fields(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod a {
+    pub enum Shape { Point { x: Int, y: Int }, Blank }
+}
+mod b {
+    pub enum Mark { Point { x: Int }, Plain }
+}
+use a::Shape
+use b::Mark
+
+fn by_fields() -> Nil {
+    let p = .Point { x: +1, y: +2 }
+    Nil
+}
+
+fn by_pattern() -> Nil {
+    let f = fn(v) {
+        case v {
+            .Point { x, y } -> x + y
+            .Blank -> +0
+        }
+    }
+    Nil
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[salsa_test]
+fn deferred_constructors_report_what_does_not_fit(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        &format!(
+            "{TYPES}{}",
+            r#"
+fn take(t: Tree) -> Nil { Nil }
+
+fn arity() -> Nil {
+    let t = .Leaf(+1, +2)
+    take(t)
+}
+
+fn braces() -> Nil {
+    let t = .Leaf { value: +1 }
+    take(t)
+}
+
+fn nothing_fits() -> Nil {
+    let t = .Leaf("x")
+    Nil
+}
+"#
+        ),
+    );
+    assert_eq!(
+        errors,
+        [
+            "constructor `Tree::Leaf` expects 1 field, but it is given 2",
+            "`Tree::Leaf` has positional fields; construct it with `.Leaf(...)`",
+            "no constructor `.Leaf` in scope fits here: `Heap::Leaf`, `Tree::Leaf`, `std::String::Leaf`",
+        ]
+    );
+}
+
+#[salsa_test]
+fn a_deferred_constructor_waits_across_a_handler(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        &format!(
+            "{TYPES}{}",
+            r#"
+ability Ask {
+    op ask() -> Int
+}
+
+fn take(t: Tree) -> Int { +0 }
+
+fn handled() -> Int {
+    let t = .Leaf(+1)
+    let n = handle Ask::ask() {
+        do r { r }
+        op Ask::ask() { resume +1 }
+    }
+    take(t) + n
+}
+"#
+        ),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+}

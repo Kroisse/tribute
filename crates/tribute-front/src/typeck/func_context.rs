@@ -269,6 +269,8 @@ pub struct DeferredConstructor<'db> {
     pub name: Symbol,
     /// The constructors of the types in scope with that name, by rank.
     pub candidates: crate::ast::Candidates<CtorId<'db>>,
+    /// The constructors with that name the module does not see, with why.
+    pub hidden: Vec<(CtorId<'db>, String)>,
     /// How it is written.
     pub shape: ConstructorShape,
     /// Whether it is a pattern, whose fields equal the constructor's

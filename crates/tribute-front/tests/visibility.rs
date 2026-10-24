@@ -384,3 +384,33 @@ fn main() -> Nil {
     }
     assert_eq!(errors.len(), 5, "{errors:#?}");
 }
+
+/// An implicit constructor does not reach a hidden constructor through the
+/// type its context gives.
+#[salsa_test]
+fn an_implicit_constructor_does_not_name_a_hidden_variant(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod m {
+    enum Mode { Quiet, Loud }
+    pub fn take(mode: Mode) -> Nat { 0 }
+    pub fn inside() -> Nat { take(.Quiet) }
+}
+
+fn outside() -> Nat { m::take(.Quiet) }
+
+fn later() -> Nat {
+    let mode = .Loud
+    m::take(mode)
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`m::Mode::Quiet` is not visible here: `m::Mode` is private",
+            "`m::Mode::Loud` is not visible here: `m::Mode` is private",
+        ]
+    );
+}

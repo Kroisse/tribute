@@ -82,7 +82,8 @@ not instantiate a fresh constructor after the pattern has been solved.
 
 1. **타입의 namespace.** 그 타입이 nominal 타입 `T`로 정해지면 생성자는 `T`의
    생성자 중 이름이 `Name`인 것이다. Enum의 생성자는 variant이고, struct의 생성자는
-   타입과 이름이 같은 struct 자신이다. `T`는 스코프에 없어도 된다. 인자 없이 쓴
+   타입과 이름이 같은 struct 자신이다. `T`는 스코프에 없어도 되지만, 생성자는 쓰는
+   자리에서 [보여야](modules.md#가시성-visibility) 한다. 인자 없이 쓴
    `.Name`을 함수 값으로 쓰면 그 함수 타입의 결과가 `T`다(`xs.map(.Some)`).
 2. **스코프의 타입.** 타입이 아직 정해지지 않았으면 스코프의 타입 `T`마다 `T`의
    생성자 `Name`을 후보로 모은다
@@ -101,6 +102,7 @@ not instantiate a fresh constructor after the pattern has been solved.
 진단은 다음과 같다.
 
 - 타입 `T`에 생성자 `Name`이 없으면 오류다. 진단은 `T`를 식별 경로로 보인다.
+- 타입 `T`의 생성자 `Name`이 쓰는 자리에서 보이지 않으면 오류다.
 - 그 자리의 타입이 생성자를 가진 nominal 타입이 아니면(함수, tuple, `Nil`) 오류다.
 - 스코프의 어느 타입에도 생성자 `Name`이 없으면 오류다.
 - 함수 본문을 다 푼 뒤에도 맞는 후보가 여럿이면 모호성 오류다. 진단은 맞는

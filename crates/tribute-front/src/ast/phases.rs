@@ -393,6 +393,9 @@ pub enum ResolvedRef<'db> {
     ImplicitConstructor {
         name: Symbol,
         candidates: Candidates<CtorId<'db>>,
+        /// The constructors `Name` the current module does not see, with
+        /// why, which its context's type may not name either.
+        hidden: Vec<(CtorId<'db>, String)>,
     },
 
     /// Reference to a type definition (struct or enum).
