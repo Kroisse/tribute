@@ -97,8 +97,7 @@ fn empty_root_module_shadows_a_library_name(db: &salsa::DatabaseImpl) {
     );
     assert_eq!(
         errors(db, &call("Option::Option(Nat)")),
-        ["type error at call site in function 'main': \
-             expected `Option::Option(Nat)`, found `std::Option(Nat)`"]
+        ["unresolved name `Option::Option`"]
     );
     assert_eq!(
         errors(
@@ -166,8 +165,6 @@ fn theirs() -> Nat { std::String::len("a") }
 
 fn annotated(o: std::Option(Nat)) -> Nat { 0 }
 
-fn call() -> Nat { annotated(Some(1)) }
-
 fn prelude() -> Option(List(Nat)) { Option::Some(List::prepend(1, [])) }
 "#,
     );
@@ -175,8 +172,7 @@ fn prelude() -> Option(List(Nat)) { Option::Some(List::prepend(1, [])) }
         errors,
         [
             "unresolved name `std::String::len`",
-            "type error at call site in function 'call': \
-             expected `pkg::std::Option(Nat)`, found `std::Option(Nat)`",
+            "unresolved name `std::Option`",
         ]
     );
 }
@@ -436,4 +432,44 @@ fn main() -> Nil {
 "#,
     );
     assert_eq!(errors, Vec::<String>::new());
+}
+
+/// An annotation path names only what is at the location it reads: one
+/// that names nothing is reported at the package root as in a module.
+#[salsa_test]
+fn an_annotation_path_must_name_a_type(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod geo {
+    pub struct Point { x: Nat }
+
+    pub mod shapes {
+        pub enum Shape { Dot }
+    }
+}
+
+use geo::shapes
+
+fn own(p: geo::Point, s: shapes::Shape) -> Nat { 0 }
+
+fn dependency(o: std::Option(Nat), l: std::collections::List(Nat)) -> Nat { 0 }
+
+fn missing(a: nope::T, b: geo::Nope, c: std::Nope) -> Nat { 0 }
+
+mod m {
+    fn missing(a: nope::T, b: std::Nope) -> Nat { 0 }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "unresolved name `nope::T`",
+            "unresolved name `geo::Nope`",
+            "unresolved name `std::Nope`",
+            "unresolved name `nope::T`",
+            "unresolved name `std::Nope`",
+        ]
+    );
 }

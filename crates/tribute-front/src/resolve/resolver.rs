@@ -686,32 +686,35 @@ impl<'db> Resolver<'db> {
                     ann.kind = TypeAnnotationKind::Path(path.to_vec());
                 }
             }
-            TypeAnnotationKind::Path(segments) => match self.fixed_location(segments) {
-                // A path that starts with a keyword or `::` names only what
-                // is at its location.
-                Ok(Some(location)) => match self.lookup_path(&location) {
-                    Some(Binding::Module { .. }) => self.report_module_annotation(ann),
-                    Some(_) => *segments = location.identity().to_vec(),
-                    None if location.path.is_empty() => self.report_module_annotation(ann),
-                    None => {
+            TypeAnnotationKind::Path(segments) => {
+                // A path that starts with a keyword or `::` names one
+                // location; any other path starts where the scope reads it.
+                let location = match self.fixed_location(segments) {
+                    Ok(Some(location)) => Some(location),
+                    Ok(None) => self.namespace_in_scope(SymbolPath::new(segments.clone())),
+                    Err(error) => {
+                        self.report_path_keyword(ann.id, error);
+                        ann.kind = TypeAnnotationKind::Error;
+                        return;
+                    }
+                };
+                // The path names only what is at its location.
+                match location
+                    .as_ref()
+                    .map(|location| (location, self.lookup_path(location)))
+                {
+                    Some((_, Some(Binding::Module { .. }))) => self.report_module_annotation(ann),
+                    Some((location, Some(_))) => *segments = location.identity().to_vec(),
+                    Some((location, None)) if location.path.is_empty() => {
+                        self.report_module_annotation(ann)
+                    }
+                    _ => {
                         let path = Symbol::new(&segments.iter().format("::").to_string());
                         self.report_unresolved_annotation(ann.id, &path);
                         ann.kind = TypeAnnotationKind::Error;
                     }
-                },
-                Ok(None) => match self.namespace_in_scope(SymbolPath::new(segments.clone())) {
-                    Some(location) => *segments = location.identity().to_vec(),
-                    None => {
-                        let path = Symbol::new(&segments.iter().format("::").to_string());
-                        self.report_unresolved_annotation(ann.id, &path);
-                        ann.kind = TypeAnnotationKind::Error;
-                    }
-                },
-                Err(error) => {
-                    self.report_path_keyword(ann.id, error);
-                    ann.kind = TypeAnnotationKind::Error;
                 }
-            },
+            }
             TypeAnnotationKind::App { ctor, args } => {
                 self.resolve_annotation_paths(ctor);
                 args.iter_mut()
