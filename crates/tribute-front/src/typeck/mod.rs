@@ -29,7 +29,7 @@ pub(crate) mod prop;
 mod solver;
 pub mod subst;
 
-pub use checker::{Mode, TypeChecker};
+pub use checker::{Mode, ModuleCheckResult, TypeChecker};
 pub use constraint::{Constraint, ConstraintSet};
 pub use context::{AbilityInfo, AbilityOpInfo, MethodEntry, ModuleTypeEnv, parameter_type_matches};
 
@@ -171,12 +171,6 @@ impl WellKnownTypes<'_> {
     }
 }
 
-/// Salsa-tracked struct holding the complete type checking output.
-///
-/// Bundles the typed AST module with function type schemes so that
-/// both can be derived from a single type checking invocation.
-/// Also stores the SpanMap so that downstream stages (e.g., ast_to_ir)
-/// can look up source spans without a separate plumbing path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum FunctionInstanceOrigin<'db> {
     Declaration,
@@ -316,6 +310,8 @@ impl<'db> EvidenceStep<'db> {
     }
 }
 
+/// What type checking fixed for each expression and reference, keyed by
+/// node.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ExpressionTypeMetadata<'db> {
     pub node_types: SortedMap<NodeId, Type<'db>>,
@@ -324,6 +320,14 @@ pub struct ExpressionTypeMetadata<'db> {
     /// Non-identity evidence selections of calls, resumes, and handle
     /// installations, keyed by their expressions.
     pub evidence_plans: SortedMap<NodeId, Vec<EvidenceStep<'db>>>,
+    /// Exact semantic operation instances for handler arms.
+    pub handler_operations: SortedMap<NodeId, InstantiatedHandlerOperation<'db>>,
+    /// Exact semantic operation instances for ability-operation calls.
+    pub perform_operations: SortedMap<NodeId, InstantiatedPerformOperation<'db>>,
+    /// Fully solved callable signatures for lambda expressions.
+    pub lambda_signatures: SortedMap<NodeId, LambdaSignature<'db>>,
+    /// Case expressions which type checking proved exhaustive.
+    pub exhaustive_cases: Vec<NodeId>,
 }
 
 /// Constructor declarations and exact schemes for cloned enum variants.
@@ -342,37 +346,65 @@ impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<
     }
 }
 
-#[salsa::tracked]
-pub struct TypeCheckOutput<'db> {
-    /// The type-checked AST module.
-    pub module: DeclTable<TypedRef<'db>>,
-    /// Function type schemes collected during type checking.
-    /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
-    #[returns(deref)]
+/// What type checking fixed for the module's declarations.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct DeclarationTypeMetadata<'db> {
+    /// Function type schemes, keyed by path because `FuncDefId` does not
+    /// implement `Ord`.
     pub function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
     /// Constructor schemes used to build logical nominal layouts without
     /// reinterpreting source annotations.
     pub constructor_types: ConstructorTypeMetadata<'db>,
-    /// Exact expression types and callee instantiations.
-    pub expression_types: ExpressionTypeMetadata<'db>,
     /// Deterministic ability schemas required by the public logical-lowering
     /// boundary. This preserves semantic declarations without re-inspection.
-    #[returns(deref)]
     pub ability_definitions: Vec<AbilitySchema<'db>>,
-    /// Exact semantic operation instances for handler arms.
-    pub handler_operations: SortedMap<NodeId, InstantiatedHandlerOperation<'db>>,
-    /// Exact semantic operation instances for ability-operation calls.
-    pub perform_operations: SortedMap<NodeId, InstantiatedPerformOperation<'db>>,
-    /// Fully solved callable signatures for lambda expressions.
-    pub lambda_signatures: SortedMap<NodeId, LambdaSignature<'db>>,
-    /// Case expressions which type checking proved exhaustive.
-    #[returns(deref)]
-    pub exhaustive_cases: Vec<NodeId>,
     /// Prelude-defined semantic type identities.
     pub well_known_types: WellKnownTypes<'db>,
+}
+
+/// The complete output of type checking one module: the typed AST with
+/// the metadata of its declarations and of its expressions, and the span map
+/// later stages read source locations from.
+#[salsa::tracked]
+pub struct TypeCheckOutput<'db> {
+    /// The type-checked AST module.
+    pub module: DeclTable<TypedRef<'db>>,
+    pub declarations: DeclarationTypeMetadata<'db>,
+    pub expression_types: ExpressionTypeMetadata<'db>,
     /// Source span information for AST nodes.
     #[returns(clone)]
     pub span_map: SpanMap,
+}
+
+impl<'db> TypeCheckOutput<'db> {
+    /// The output of a finished module check.
+    pub fn from_check(
+        db: &'db dyn salsa::Database,
+        result: ModuleCheckResult<'db>,
+        span_map: SpanMap,
+    ) -> Self {
+        Self::new(
+            db,
+            result.module,
+            DeclarationTypeMetadata {
+                function_types: result.function_types,
+                constructor_types: result.constructor_types.into(),
+                ability_definitions: ability_schemas(&result.ability_definitions),
+                well_known_types: result.well_known_types,
+            },
+            ExpressionTypeMetadata {
+                node_types: result.node_types,
+                function_instances: result.function_instances,
+                local_instances: result.local_instances,
+                evidence_plans: result.evidence_plans,
+                handler_operations: result.handler_operations,
+                perform_operations: result.perform_operations,
+                lambda_signatures: result.lambda_signatures,
+                exhaustive_cases: result.exhaustive_cases,
+            },
+            span_map,
+        )
+    }
 }
 
 /// Prelude's exported type information.
@@ -435,24 +467,5 @@ pub fn typecheck_module<'db>(
     span_map: SpanMap,
 ) -> TypeCheckOutput<'db> {
     let checker = TypeChecker::new(db, span_map.clone());
-    let result = checker.check_module(module);
-    TypeCheckOutput::new(
-        db,
-        result.module,
-        result.function_types,
-        result.constructor_types.into(),
-        ExpressionTypeMetadata {
-            node_types: result.node_types,
-            function_instances: result.function_instances,
-            local_instances: result.local_instances,
-            evidence_plans: result.evidence_plans,
-        },
-        ability_schemas(&result.ability_definitions),
-        result.handler_operations,
-        result.perform_operations,
-        result.lambda_signatures,
-        result.exhaustive_cases,
-        result.well_known_types,
-        span_map,
-    )
+    TypeCheckOutput::from_check(db, checker.check_module(module), span_map)
 }

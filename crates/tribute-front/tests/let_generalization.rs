@@ -229,7 +229,8 @@ fn pass(value: a) -> a {
         .expect("type checking should produce output");
     let scheme = |name: &str| {
         output
-            .function_types(db)
+            .declarations(db)
+            .function_types
             .iter()
             .find_map(|(candidate, scheme)| (candidate == [name]).then_some(*scheme))
             .unwrap_or_else(|| panic!("missing function scheme for {name}"))
@@ -254,7 +255,8 @@ fn pass(value: a) -> a {
                 && matches!(result.kind(db), TypeKind::BoundVar { index: 0 })
     ));
     for ty in output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
         .map(|(_, scheme)| scheme.body(db))
         .chain(
@@ -273,7 +275,8 @@ fn pass(value: a) -> a {
         )
         .chain(
             output
-                .lambda_signatures(db)
+                .expression_types(db)
+                .lambda_signatures
                 .iter()
                 .map(|(_, signature)| signature.function_type),
         )
@@ -303,7 +306,7 @@ fn pass(value: a) -> a {
                 "{name} node metadata exceeds its scheme arity {arity}: {ty:?}"
             );
         }
-        for (lambda, signature) in output.lambda_signatures(db) {
+        for (lambda, signature) in &output.expression_types(db).lambda_signatures {
             if nodes.contains(lambda) {
                 assert!(
                     !type_contains_out_of_scope_bound(db, signature.function_type, arity),
@@ -338,7 +341,8 @@ fn pass(value: a) -> a {
     );
     assert!(
         output
-            .lambda_signatures(db)
+            .expression_types(db)
+            .lambda_signatures
             .iter()
             .all(|(_, signature)| is_local_identity_signature(db, signature.function_type)),
         "each identity definition must retain one LocalBoundVar owner"
@@ -365,7 +369,7 @@ fn pair() -> Nil {
     let output = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output");
     let (scope, signature) = output
-        .lambda_signatures(db)
+        .expression_types(db).lambda_signatures
         .iter()
         .find(|(_, signature)| {
             matches!(signature.function_type.kind(db), TypeKind::Func { effect, .. } if !effect.instances(db).is_empty())
@@ -458,7 +462,8 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
     let output = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output");
     let run_writer = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
         .find_map(|(name, scheme)| (name == ["run_writer"]).then_some(*scheme))
         .expect("run_writer scheme should be present");
@@ -474,7 +479,8 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
     };
 
     let signatures: Vec<_> = output
-        .lambda_signatures(db)
+        .expression_types(db)
+        .lambda_signatures
         .iter()
         .map(|(_, signature)| signature.clone())
         .collect();
@@ -699,7 +705,8 @@ fn make() ->{} fn(a) ->{} a {
     let errors = tribute_front::query::type_check_output::accumulated::<Diagnostic>(db, source);
     assert!(errors.is_empty(), "{errors:?}");
     let scheme = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
         .find(|(name, _)| name == ["make"])
         .unwrap()
@@ -770,7 +777,7 @@ fn shared() -> #(Nat, Bool, Nat, Bool, Nat) {
     assert_eq!(lets.len(), 2, "shared has two lets");
     assert_ne!(lets[0].0, lets[1].0, "the lets have distinct root patterns");
 
-    let signatures = output.lambda_signatures(db);
+    let signatures = &output.expression_types(db).lambda_signatures;
     assert_eq!(signatures.len(), 2, "each let has one identity lambda");
     for (lambda, signature) in signatures.iter() {
         let (root, _) = lets

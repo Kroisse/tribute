@@ -319,7 +319,12 @@ fn main() -> Nil { }
             let typed = parse_and_lower_ast(db, source).expect("typechecked source");
             let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
             assert!(diagnostics.is_empty(), "{diagnostics:?}");
-            let function_types: HashMap<_, _> = typed.function_types(db).iter().cloned().collect();
+            let function_types: HashMap<_, _> = typed
+                .declarations(db)
+                .function_types
+                .iter()
+                .cloned()
+                .collect();
             let inputs = RuntimeInputs {
                 module: typed.module(db),
                 function_types: &function_types,
@@ -377,7 +382,12 @@ fn main() -> Nil { }
         salsa::Database::attach(&db, |db| {
             let source = source(db, REJECTED);
             let typed = parse_and_lower_ast(db, source).expect("typechecked source");
-            let function_types: HashMap<_, _> = typed.function_types(db).iter().cloned().collect();
+            let function_types: HashMap<_, _> = typed
+                .declarations(db)
+                .function_types
+                .iter()
+                .cloned()
+                .collect();
             let inputs = RuntimeInputs {
                 module: typed.module(db),
                 function_types: &function_types,

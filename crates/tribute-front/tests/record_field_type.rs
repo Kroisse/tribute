@@ -577,7 +577,8 @@ fn mapper() -> Mapper(Int, Bool) { Mapper { map: fn(value) { True } } }
     };
     let lambda = &fields[0].value;
     let signature = checked
-        .lambda_signatures(db)
+        .expression_types(db)
+        .lambda_signatures
         .iter()
         .find_map(|(id, signature)| (*id == lambda.id).then_some(signature))
         .expect("missing lambda signature");
