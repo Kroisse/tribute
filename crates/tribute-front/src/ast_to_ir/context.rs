@@ -651,7 +651,7 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Error => "error".into(),
             TypeKind::BoundVar { index } => logical_key("bound", [index.to_string()]),
             TypeKind::LocalBoundVar { scope, index } => {
-                logical_key("local_bound", [scope.raw().to_string(), index.to_string()])
+                logical_key("local_bound", [scope.to_string(), index.to_string()])
             }
             TypeKind::UniVar { id } => self.logical_univar_key(*id),
             TypeKind::Named { id, name, args } => {

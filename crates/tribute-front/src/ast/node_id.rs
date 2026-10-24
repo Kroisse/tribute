@@ -7,15 +7,20 @@
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
 
-use tree_sitter::Node;
-
 /// Unique identifier for an AST node within a compilation unit.
 ///
-/// This combines a source hash with the CST node's `id()` value from tree-sitter.
-/// The source hash is derived from the source file URI, so nodes from different
-/// files (e.g., prelude vs user code) are naturally distinguished without manual
-/// tag assignment. This prevents key-space collisions when merging SpanMaps or
-/// node_types HashMaps.
+/// A NodeId names a node by the item that owns it and the node's position
+/// among that item's nodes, as rust-analyzer names an expression by its body
+/// and an index into it. The owner is a hash of the item's module path, kind,
+/// name, and how many items of that kind and name precede it in its module;
+/// module-level nodes (the module itself, `mod` and `use` declarations) are
+/// owned by their module. An edit therefore changes the NodeIds of the items
+/// it touches only: an unchanged item keeps its NodeIds wherever it moves.
+///
+/// The source hash is derived from the source file URI, so nodes from
+/// different files (e.g., prelude vs user code) are distinguished without
+/// manual tag assignment. This prevents key-space collisions when merging
+/// SpanMaps or node_types HashMaps.
 ///
 /// For monomorphized copies of generic functions, the `variant` field
 /// distinguishes nodes from different specializations. Original AST nodes
@@ -28,20 +33,23 @@ use tree_sitter::Node;
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, salsa::SalsaValue)]
 pub struct NodeId {
     source: u64,
-    raw: usize,
+    owner: u64,
+    index: u32,
     variant: Option<NonZero<u64>>,
 }
 
 impl NodeId {
-    /// Create a NodeId from a CST node with a source hash.
+    /// The node at `index` among the nodes of the item `owner` in the source
+    /// file whose hash is `source`.
     ///
-    /// The source hash distinguishes nodes from different parse sessions.
-    /// Use [`source_hash`] to compute the hash from a URI.
+    /// Use [`source_hash`] to compute the source hash from a URI and
+    /// [`owner_hash`] to compute the owner from an item's key.
     #[inline]
-    pub fn from_cst(node: &Node, source: u64) -> Self {
+    pub const fn new(source: u64, owner: u64, index: u32) -> Self {
         Self {
             source,
-            raw: node.id(),
+            owner,
+            index,
             variant: None,
         }
     }
@@ -62,9 +70,8 @@ impl NodeId {
             NonZero::new(hasher.finish()).unwrap_or(NonZero::<u64>::MIN)
         });
         Self {
-            source: self.source,
-            raw: self.raw,
             variant: Some(variant),
+            ..self
         }
     }
 
@@ -76,15 +83,22 @@ impl NodeId {
     pub const fn origin(self) -> Self {
         Self {
             source: self.source,
-            raw: self.raw,
+            owner: self.owner,
+            index: self.index,
             variant: None,
         }
     }
 
-    /// Get the raw CST node id.
+    /// Get the hash of the item that owns the node.
     #[inline]
-    pub const fn raw(self) -> usize {
-        self.raw
+    pub const fn owner(self) -> u64 {
+        self.owner
+    }
+
+    /// Get the node's position among its owner's nodes.
+    #[inline]
+    pub const fn index(self) -> u32 {
+        self.index
     }
 
     /// Get the source hash.
@@ -100,6 +114,13 @@ impl NodeId {
     }
 }
 
+/// Compute the owner of an item's nodes from the item's key.
+pub fn owner_hash(key: impl Hash) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Compute a source hash from a URI string.
 ///
 /// This produces a stable `u64` hash used to tag NodeIds so that nodes
@@ -112,10 +133,10 @@ pub fn source_hash(uri: &str) -> u64 {
 
 impl std::fmt::Display for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.source == 0 {
-            write!(f, "#{}", self.raw)
+        if self.source == 0 && self.owner == 0 {
+            write!(f, "#{}", self.index)
         } else {
-            write!(f, "#{:x}:{}", self.source, self.raw)
+            write!(f, "#{:x}:{:x}:{}", self.source, self.owner, self.index)
         }
     }
 }
@@ -123,13 +144,9 @@ impl std::fmt::Display for NodeId {
 #[cfg(test)]
 impl NodeId {
     /// Create a NodeId from a raw value (for testing only).
-    /// Uses source hash 0 by default.
+    /// Uses source hash and owner 0.
     pub const fn from_raw(id: usize) -> Self {
-        Self {
-            source: 0,
-            raw: id,
-            variant: None,
-        }
+        Self::new(0, 0, id as u32)
     }
 }
 
@@ -140,7 +157,7 @@ mod tests {
     #[test]
     fn test_node_id_from_raw() {
         let id = NodeId::from_raw(12345);
-        assert_eq!(id.raw(), 12345);
+        assert_eq!(id.index(), 12345);
         assert_eq!(id.source(), 0);
     }
 
@@ -156,16 +173,15 @@ mod tests {
 
     #[test]
     fn test_node_id_different_source_not_equal() {
-        let id1 = NodeId {
-            source: source_hash("file:///a.trb"),
-            raw: 42,
-            variant: None,
-        };
-        let id2 = NodeId {
-            source: source_hash("prelude:///std/prelude"),
-            raw: 42,
-            variant: None,
-        };
+        let id1 = NodeId::new(source_hash("file:///a.trb"), 0, 42);
+        let id2 = NodeId::new(source_hash("prelude:///std/prelude"), 0, 42);
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_node_id_different_owner_not_equal() {
+        let id1 = NodeId::new(0, owner_hash(("fn", "f")), 3);
+        let id2 = NodeId::new(0, owner_hash(("fn", "g")), 3);
         assert_ne!(id1, id2);
     }
 
@@ -177,12 +193,8 @@ mod tests {
 
     #[test]
     fn test_node_id_display_with_source() {
-        let id = NodeId {
-            source: 0xff,
-            raw: 123,
-            variant: None,
-        };
-        assert_eq!(format!("{}", id), "#ff:123");
+        let id = NodeId::new(0xff, 0xa, 123);
+        assert_eq!(format!("{}", id), "#ff:a:123");
     }
 
     #[test]

@@ -64,6 +64,27 @@ pub fn lower_module(
 /// Lower a CST declaration node to module items.
 /// Returns a Vec because use declarations can expand to multiple items.
 fn lower_decl(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ModuleItem<UnresolvedName>> {
+    if let Some((kind, name)) = item_key(ctx, node) {
+        return ctx.in_item(kind, &name, |ctx| lower_item(ctx, node));
+    }
+    lower_item(ctx, node)
+}
+
+/// The kind and name that identify the item `node` declares, which owns the
+/// nodes inside it. Module-level declarations without a body of their own
+/// (`mod`, `use`) have none: their module owns their nodes.
+fn item_key(ctx: &AstLoweringCtx<'_>, node: Node) -> Option<(&'static str, String)> {
+    let (kind, declaration) = match node.kind() {
+        "function_definition" => ("fn", node.named_child(0)?),
+        "struct_declaration" | "enum_declaration" => ("type", node),
+        "ability_declaration" => ("ability", node),
+        _ => return None,
+    };
+    let name = declaration.child_by_field_name("name")?;
+    Some((kind, ctx.node_text_owned(&name)))
+}
+
+fn lower_item(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ModuleItem<UnresolvedName>> {
     let decls: Vec<Decl<UnresolvedName>> = match node.kind() {
         "function_definition" => lower_function(ctx, node).into_iter().collect(),
         "struct_declaration" => lower_struct(ctx, node)
@@ -867,16 +888,18 @@ fn lower_mod(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<ModuleDecl<Unre
 
     // Check for inline module body
     let body = if let Some(body_node) = node.child_by_field_name("body") {
-        let mut decls = Vec::new();
-        let mut cursor = body_node.walk();
-        for child in body_node.named_children(&mut cursor) {
-            if is_comment(child.kind()) {
-                continue;
+        Some(ctx.in_module(name.clone(), |ctx| {
+            let mut decls = Vec::new();
+            let mut cursor = body_node.walk();
+            for child in body_node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                decls.extend(lower_decl(ctx, child));
             }
-            decls.extend(lower_decl(ctx, child));
-        }
-        assign_type_disambiguators(&mut decls);
-        Some(decls)
+            assign_type_disambiguators(&mut decls);
+            decls
+        }))
     } else {
         // External module (file-based) - no inline body
         None

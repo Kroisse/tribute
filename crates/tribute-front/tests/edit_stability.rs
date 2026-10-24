@@ -1,11 +1,11 @@
-//! Tests that an edit inside one function leaves the resolved identities of
-//! the other functions in the module unchanged.
+//! Tests that an edit outside a function leaves its resolved and typed
+//! declaration unchanged, so that results computed from it can be reused.
 
 use salsa_test_macros::salsa_test;
 use tribute_front::{
     SourceCst,
-    ast::{Decl, FuncDecl, ResolvedRef},
-    query::resolved_module,
+    ast::{Decl, FuncDecl, ResolvedRef, TypedRef},
+    query::{resolved_module, type_check_output},
 };
 
 const PATH: &str = "test.trb";
@@ -27,6 +27,24 @@ fn resolved_function<'db>(
         .unwrap_or_else(|| panic!("function `{name}` should be declared"))
 }
 
+fn typed_function<'db>(
+    db: &'db dyn salsa::Database,
+    text: &str,
+    name: &str,
+) -> FuncDecl<TypedRef<'db>> {
+    let source = SourceCst::from_source_str(db, PATH, text);
+    let output = type_check_output(db, source).expect("source should type check");
+    output
+        .module(db)
+        .entries
+        .iter()
+        .find_map(|entry| match &entry.decl {
+            Decl::Function(func) if func.name == name => Some(func.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("function `{name}` should be declared"))
+}
+
 fn local_ids(func: &FuncDecl<ResolvedRef<'_>>) -> Vec<u32> {
     let debug = format!("{func:?}");
     debug
@@ -39,16 +57,17 @@ fn local_ids(func: &FuncDecl<ResolvedRef<'_>>) -> Vec<u32> {
         .collect()
 }
 
-fn local_ids_before_and_after(
-    db: &dyn salsa::Database,
-    before: &str,
-    after: &str,
-    name: &str,
-) -> (Vec<u32>, Vec<u32>) {
-    (
-        local_ids(&resolved_function(db, before, name)),
-        local_ids(&resolved_function(db, after, name)),
-    )
+/// Assert that `name` resolves and type checks to the same declaration in
+/// `before` and `after`.
+fn assert_unchanged(db: &dyn salsa::Database, before: &str, after: &str, name: &str) {
+    assert_eq!(
+        resolved_function(db, before, name),
+        resolved_function(db, after, name)
+    );
+    assert_eq!(
+        typed_function(db, before, name),
+        typed_function(db, after, name)
+    );
 }
 
 const G: &str = r#"
@@ -67,16 +86,28 @@ fn module_with_f(f_body: &str) -> String {
 }
 
 #[salsa_test]
-fn edit_in_earlier_function_keeps_later_local_ids(db: &salsa::DatabaseImpl) {
+fn an_edit_in_an_earlier_function_keeps_later_declarations(db: &salsa::DatabaseImpl) {
     let before = module_with_f("    x");
     let after = module_with_f("    let y = x + 1\n    y");
 
-    let (g_before, g_after) = local_ids_before_and_after(db, &before, &after, "g");
-    assert!(!g_before.is_empty(), "g should contain local ids");
-    assert_eq!(g_before, g_after);
+    assert_unchanged(db, &before, &after, "g");
+    assert_ne!(
+        resolved_function(db, &before, "f"),
+        resolved_function(db, &after, "f")
+    );
+}
 
-    let (f_before, f_after) = local_ids_before_and_after(db, &before, &after, "f");
-    assert_ne!(f_before, f_after);
+#[salsa_test]
+fn comments_and_new_items_before_a_function_keep_it(db: &salsa::DatabaseImpl) {
+    let before = module_with_f("    x");
+    let after = format!(
+        "// A comment that moves everything down.\n\nstruct Point {{ x: Int }}\n\n\
+         fn h(p: Point) -> Int {{ p.x }}\n\n{}",
+        module_with_f("    // inside f\n    x")
+    );
+
+    assert_unchanged(db, &before, &after, "f");
+    assert_unchanged(db, &before, &after, "g");
 }
 
 #[salsa_test]
