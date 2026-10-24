@@ -1,6 +1,8 @@
 //\! Shared test helpers for tribute-front integration tests.
 #![allow(dead_code)]
 
+pub mod execution_log;
+
 use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
@@ -59,12 +61,12 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
         db,
         prelude_ast,
         env.clone(),
-        prelude_span_map.clone(),
+        prelude_span_map,
     );
 
     // Type-check once for both the exports injected into user modules and
     // the typed module lowering reads the intrinsics from.
-    let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
+    let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map.clone());
     let (result, exports) = checker.check_prelude(&resolved_prelude);
 
     Some(PreludeData {
@@ -79,7 +81,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
 fn resolve_with_prelude<'db>(
     db: &'db dyn salsa::Database,
     ast: &tribute_front::ast::Module<tribute_front::ast::UnresolvedName>,
-    span_map: tribute_front::ast::SpanMap,
+    span_map: &tribute_front::ast::SpanMap,
     prelude: Option<&PreludeData<'db>>,
 ) -> (
     DeclTable<ResolvedRef<'db>>,
@@ -89,9 +91,8 @@ fn resolve_with_prelude<'db>(
         .map(|p| tribute_front::resolve::Dependencies::std(p.env))
         .unwrap_or_default();
     let env = tribute_front::resolve::build_env(db, ast, &dependencies);
-    let resolved =
-        tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map.clone());
-    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
+    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map);
+    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
     if let Some(p) = prelude {
         checker.inject_prelude(&p.exports);
     }
@@ -114,7 +115,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     // Load prelude for operator declarations (Int::(+) etc.)
     let prelude = load_prelude(db);
 
-    let (resolved, checker) = resolve_with_prelude(db, ast, span_map.clone(), prelude.as_ref());
+    let (resolved, checker) = resolve_with_prelude(db, ast, span_map, prelude.as_ref());
     let result = checker.check_module(&resolved);
 
     let tdnr_ast = result.module;
@@ -132,7 +133,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let mut ir = IrContext::new();
     let module = tribute_front::ast_to_ir::TypedModule {
         ast: tdnr_ast,
-        span_map,
+        span_map: span_map.clone(),
         function_types: function_types_map,
         constructor_types,
         specialized_enum_variants: Default::default(),

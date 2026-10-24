@@ -194,7 +194,7 @@ mod tests {
             &crate::resolve::Dependencies::none(),
             parsed.span_map(db),
         );
-        crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db))
+        crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db).clone())
     }
 
     #[salsa_test]

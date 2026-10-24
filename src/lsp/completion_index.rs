@@ -374,7 +374,7 @@ pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> 
     if let Some(parsed) = ast_query::parsed_ast(db, source) {
         descend(
             &parsed.module(db).decls,
-            &parsed.span_map(db),
+            parsed.span_map(db),
             offset,
             &mut path,
         );

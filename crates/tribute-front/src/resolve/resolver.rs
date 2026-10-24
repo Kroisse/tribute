@@ -95,14 +95,14 @@ enum MethodCandidates<'db> {
 }
 
 /// Resolver for transforming unresolved names to resolved references.
-pub struct Resolver<'db> {
+pub struct Resolver<'s, 'db> {
     db: &'db dyn salsa::Database,
     /// The environment of the package being resolved.
     env: PackageEnv<'db>,
     /// The packages it depends on.
     dependencies: Dependencies<'db>,
     /// Span map for emitting diagnostics with source locations.
-    span_map: SpanMap,
+    span_map: &'s SpanMap,
     /// Lexical nested-module namespace used for unqualified references in an
     /// inline module body.
     module_path: Vec<Symbol>,
@@ -123,9 +123,9 @@ pub struct Resolver<'db> {
 /// Resolver for the body of one module-level function, in the scope its
 /// module gives. Its local variables, and so their `LocalId`s, belong to that
 /// function alone.
-struct FunctionResolver<'r, 'db> {
+struct FunctionResolver<'r, 's, 'db> {
     /// The resolver of the module the function is in.
-    module: &'r Resolver<'db>,
+    module: &'r Resolver<'s, 'db>,
     /// Stack of local scopes (function parameters, let bindings, etc.).
     local_scopes: Vec<HashMap<Symbol, LocalId>>,
     /// Generator for the function's LocalIds.
@@ -139,14 +139,14 @@ struct FunctionResolver<'r, 'db> {
     method_functions: HashMap<Symbol, Candidates<crate::ast::FuncDefId<'db>>>,
 }
 
-impl<'db> Resolver<'db> {
+impl<'s, 'db> Resolver<'s, 'db> {
     /// Create a new resolver with the given environment, which was built
     /// against `dependencies`.
     pub fn new(
         db: &'db dyn salsa::Database,
         env: PackageEnv<'db>,
         dependencies: &Dependencies<'db>,
-        span_map: SpanMap,
+        span_map: &'s SpanMap,
     ) -> Self {
         Self {
             db,
@@ -1514,9 +1514,9 @@ impl<'db> Resolver<'db> {
     }
 }
 
-impl<'r, 'db> FunctionResolver<'r, 'db> {
+impl<'r, 's, 'db> FunctionResolver<'r, 's, 'db> {
     /// A resolver for one function in the module `module` is resolving.
-    fn new(module: &'r Resolver<'db>) -> Self {
+    fn new(module: &'r Resolver<'s, 'db>) -> Self {
         Self {
             module,
             local_scopes: vec![HashMap::default()],
@@ -2332,7 +2332,8 @@ mod tests {
     #[salsa_test]
     fn test_resolve_local_variable(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let span_map = SpanMap::default();
+        let module = Resolver::new(db, env, &Dependencies::none(), &span_map);
         let mut resolver = FunctionResolver::new(&module);
 
         let param_name = Symbol::new("x");
@@ -2360,7 +2361,8 @@ mod tests {
     #[salsa_test]
     fn test_scope_isolation(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let span_map = SpanMap::default();
+        let module = Resolver::new(db, env, &Dependencies::none(), &span_map);
         let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
@@ -2392,7 +2394,8 @@ mod tests {
     #[salsa_test]
     fn test_nested_scopes(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let span_map = SpanMap::default();
+        let module = Resolver::new(db, env, &Dependencies::none(), &span_map);
         let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
@@ -2442,7 +2445,8 @@ mod tests {
         use crate::ast::{Pattern, PatternKind};
 
         let env = PackageEnv::new();
-        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let span_map = SpanMap::default();
+        let module = Resolver::new(db, env, &Dependencies::none(), &span_map);
         let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 
@@ -2486,7 +2490,8 @@ mod tests {
         use crate::ast::{Pattern, PatternKind};
 
         let env = PackageEnv::new();
-        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::default());
+        let span_map = SpanMap::default();
+        let module = Resolver::new(db, env, &Dependencies::none(), &span_map);
         let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 
