@@ -21,5 +21,5 @@ fn read_root(boxed: BoxedNat) -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(read_root(.Boxed(10))))
+    print_line(read_root(.Boxed(10)).to_string)
 }

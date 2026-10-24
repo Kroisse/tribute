@@ -84,10 +84,10 @@ pub mod slots_tests {
 fn slots_build_read_and_copy_on_both_targets() {
     let program = "
 fn main() ->{std::io::Io} Nil {
-    std::io::print_line(Nat::to_string(std::slots_tests::scalars()))
+    std::io::print_line(std::slots_tests::scalars().to_string)
     std::io::print_line(std::slots_tests::strings_text())
     std::io::print_line(std::slots_tests::pairs_text())
-    std::io::print_line(Nat::to_string(std::slots_tests::pairs_left()))
+    std::io::print_line(std::slots_tests::pairs_left().to_string)
 }
 ";
     assert_output_in_std_on_both_targets_with_native_asan(
@@ -126,8 +126,8 @@ pub mod slots_bounds {
 fn positions_past_the_end_trap_on_both_targets() {
     for call in [
         "std::io::print_line(std::slots_bounds::get_at_len())",
-        "std::io::print_line(Nat::to_string(std::slots_bounds::insert_past_len()))",
-        "std::io::print_line(Nat::to_string(std::slots_bounds::remove_at_len()))",
+        "std::io::print_line(std::slots_bounds::insert_past_len().to_string)",
+        "std::io::print_line(std::slots_bounds::remove_at_len().to_string)",
     ] {
         let program = format!("\nfn main() ->{{std::io::Io}} Nil {{\n    {call}\n}}\n");
         let (native, wasm) =

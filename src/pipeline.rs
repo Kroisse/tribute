@@ -2530,7 +2530,7 @@ use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
     let f = fn(x) { x + 1 }
-    print_line(Nat::to_string(f(41)))
+    print_line(f(41).to_string)
 }
 "#,
         );

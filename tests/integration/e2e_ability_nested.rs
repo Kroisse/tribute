@@ -55,9 +55,9 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 
 fn main() ->{std::io::Io} Nil {
     let result = run_reader(fn() { run_state(fn() { use_both() }, 0) }, 42)
-    std::io::print_line(Nat::to_string(result))
+    std::io::print_line(result.to_string)
     let swapped = run_state(fn() { run_reader(fn() { use_both() }, 42) }, 0)
-    std::io::print_line(Nat::to_string(swapped))
+    std::io::print_line(swapped.to_string)
 }
 "#;
     assert_output_on_both_targets("two_abilities_nested.trb", code, "42\n42");
@@ -100,7 +100,7 @@ fn outer() ->{State(Nat)} Nat {
 
 fn main() ->{Io} Nil {
     let result = run_state(fn() { outer() }, 0)
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     // outer: set(7), run inner with State(Bool) (doesn't affect outer State(Nat)), get() → 7
@@ -138,7 +138,7 @@ fn main() ->{Io} Nil {
         op State::set(v) { resume Nil }
         op Reader::ask() { resume 10 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("multi_ability_single_handler.trb", code, "1");
@@ -180,7 +180,7 @@ fn main() ->{std::io::Io} Nil {
         let outer_val = State::get()
         inner_result * 1000 + outer_val
     }, 100)
-    std::io::print_line(Nat::to_string(result))
+    std::io::print_line(result.to_string)
 }
 "#;
     // inner: get()→0, set(1), get()→1 → inner_result=1
@@ -218,7 +218,7 @@ fn run_logging_state(comp: fn() ->{e, State(Nat), Logger} a, init: Nat) ->{e, Lo
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
         op Logger::log(msg) {
-            print_line(Nat::to_string(msg))
+            print_line(msg.to_string)
             run_logger(fn() { resume Nil })
         }
     }
@@ -234,7 +234,7 @@ fn main() ->{Io} Nil {
     let result = run_logger(fn() {
         run_logging_state(fn() { computation() }, 0)
     })
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     // set(10) → Logger::log(10) prints 10
@@ -281,7 +281,7 @@ fn computation() ->{A, B} Nat {
 
 fn main() ->{Io} Nil {
     let result = run_a(fn() { run_b(fn() { computation() }) })
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("nested_handler_reentrant_yield.trb", code, "42");
@@ -324,7 +324,7 @@ fn main() ->{std::io::Io} Nil {
             }, 2)
         }, 3)
     }, 4)
-    std::io::print_line(Nat::to_string(result))
+    std::io::print_line(result.to_string)
 }
 "#;
     // level 4 (outermost): get()→4
@@ -371,7 +371,7 @@ fn both() ->{State(Int), State(Nat)} Nat {
 
 fn main() ->{Io} Nil {
     let result = run_state(fn() { run_state(fn() { both() }, +1) }, 7)
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("same_ability_shared_representation.trb", code, "7");
@@ -415,7 +415,7 @@ fn both() ->{State(Color), State(Point)} Nat {
 
 fn main() ->{Io} Nil {
     let result = run_state(fn() { run_state(fn() { both() }, Color { value: 1 }) }, Point { value: 7 })
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("same_ability_distinct_nominals.trb", code, "7");
@@ -464,7 +464,7 @@ fn both() ->{State(B::Color), State(A::Color)} Nat {
 
 fn main() ->{Io} Nil {
     let result = run_state(fn() { run_state(fn() { both() }, B::Color { value: 1 }) }, A::Color { value: 7 })
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("same_ability_same_spelled_nominals.trb", code, "7");

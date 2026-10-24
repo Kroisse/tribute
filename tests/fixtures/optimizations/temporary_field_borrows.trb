@@ -25,5 +25,5 @@ fn main() ->{Io} Nil {
     let outer = .Wrapped(inner)
     let first = read_nested(outer)
     let second = read_nested(outer)
-    print_line(Nat::to_string(first + second))
+    print_line({ first + second }.to_string)
 }

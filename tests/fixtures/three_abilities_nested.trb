@@ -48,5 +48,5 @@ fn main() ->{Io} Nil {
             run_state(fn() { use_all() }, 0)
         })
     }, 5)
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }

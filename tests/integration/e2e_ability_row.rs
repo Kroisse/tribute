@@ -46,7 +46,7 @@ fn main() ->{Io} Nil {
             State::get()
         }, 7)
     }, 0)
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     // apply calls the callback with x=7, which does set(7), get() → 7
@@ -99,7 +99,7 @@ fn main() ->{Io} Nil {
             })
         }, 0)
     }, 42)
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     // callback: ask() → 42, set(42), get() → 42
@@ -120,7 +120,7 @@ fn apply(f: fn(Nat) ->{e} Nat, x: Nat) ->{e} Nat {
 
 fn main() ->{Io} Nil {
     let result = apply(fn(x: Nat) { x + 10 }, 5)
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     // pure lambda: 5 + 10 = 15, no handler needed
@@ -168,13 +168,13 @@ fn main() ->{Io} Nil {
     let a = run_state(fn() {
         apply(fn() { State::get() })
     }, 10)
-    print_line(Nat::to_string(a))
+    print_line(a.to_string)
 
     // call 2: e = {Reader(Nat)}
     let b = run_reader(fn() {
         apply(fn() { Reader::ask() })
     }, 20)
-    print_line(Nat::to_string(b))
+    print_line(b.to_string)
 }
 "#;
     // call 1: get() with State(init=10) → 10
@@ -198,7 +198,7 @@ fn identity(f: fn(Nat) ->{e} Nat) -> fn(Nat) ->{e} Nat {
 fn main() ->{Io} Nil {
     let f = identity(fn(x: Nat) { x + 10 })
     let result = f(5)
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     // identity returns the lambda, f(5) = 5 + 10 = 15
@@ -245,7 +245,7 @@ fn told() -> Nat {
 }
 
 fn main() ->{Io} Nil {
-    print_line(Nat::to_string(asked() + told()))
+    print_line({ asked() + told() }.to_string)
 }
 "#;
     // ask() → 40, tell() → 2
@@ -282,7 +282,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Ask::ask() { resume 20 }
     }
-    print_line(Nat::to_string(total))
+    print_line(total.to_string)
 }
 "#;
     // each(bump) → 1 + 20, asks() → 1 + 20

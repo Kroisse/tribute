@@ -566,7 +566,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Fail::fail() { 99 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     // Handler returns 99 directly without calling resume, so x + 100 is never reached
@@ -595,7 +595,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op FailNever::fail() { 99 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_op_never_abort.trb", code, "99");
@@ -622,7 +622,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Abort::abort(code) { code }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("abort_with_payload.trb", code, "99");
@@ -652,7 +652,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Abort::abort() { 20 }
     }
-    print_line(Nat::to_string(a + b))
+    print_line({ a + b }.to_string)
 }
 "#;
     assert_native_output("abort_multiple_handles.trb", code, "30");
@@ -683,8 +683,8 @@ fn main() ->{Io} Nil {
         do result { result }
         op Abort::abort() { 0 }
     }
-    print_line(Nat::to_string(a))
-    print_line(Nat::to_string(b))
+    print_line(a.to_string)
+    print_line(b.to_string)
 }
 "#;
     let reversed = code.replace(
@@ -728,7 +728,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op MyMod::Counter::inc() { resume 1 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_ability_in_module.trb", code, "2");
@@ -760,7 +760,7 @@ fn main() ->{Io} Nil {
         do result { result }
         fn Ask::ask() { 42 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("fn_handler_arm.trb", code, "42");
@@ -827,7 +827,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Ask::ask() { resume 0 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_result_identity.trb", code, "10");
@@ -851,7 +851,7 @@ fn main() ->{Io} Nil {
         do result { 42 }
         op Ask::ask() { resume 0 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_result_constant.trb", code, "42");
@@ -880,7 +880,7 @@ fn main() ->{Io} Nil {
         op State::get() { resume 0 }
         op State::set(v) { resume Nil }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_transforms_result.trb", code, "20");
@@ -909,7 +909,7 @@ fn main() ->{Io} Nil {
         do result { result + result }
         op State::get() { resume 10 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_transforms_resumed_result.trb", code, "42");
@@ -948,7 +948,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 
 fn main() ->{Io} Nil {
     let result = run_state(fn() { counter() }, 0)
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("counter_value.trb", code, "0");
@@ -982,7 +982,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 
 fn main() ->{Io} Nil {
     let result = run_state(fn() { counter() }, 10)
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("counter_nonzero.trb", code, "10");
@@ -1021,7 +1021,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 
 fn main() ->{Io} Nil {
     let result = run_state(fn() { mutate() }, 0)
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("state_multiple_mutations.trb", code, "13");
@@ -1053,7 +1053,7 @@ fn main() ->{Io} Nil {
         op State::get() { resume 5 }
         op State::set(v) { resume Nil }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_result_body_value.trb", code, "11");
@@ -1092,7 +1092,7 @@ fn main() ->{Io} Nil {
         op State::get() { resume 5 }
         op State::set(v) { resume Nil }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("multiple_effectful_then_pure_call.trb", code, "10");
@@ -1124,7 +1124,7 @@ fn main() ->{Io} Nil {
         op State::get() { resume 7 }
         op State::set(v) { resume Nil }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("non_effectful_call_in_nested_region.trb", code, "7");
@@ -1158,7 +1158,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Multi::combine(x, y, z) { resume x + y + z }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_multi_param_op.trb", code, "60");
@@ -1182,7 +1182,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Pair::make(a, b) { resume a + b }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_two_param_op.trb", code, "10");
@@ -1206,7 +1206,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Pick::choose(a, _, c) { resume a + c }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_multi_param_partial.trb", code, "400");
@@ -1230,7 +1230,7 @@ fn main() ->{Io} Nil {
         do result { result }
         fn Arith::add(a, b) { a + b }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_multi_param_fn.trb", code, "42");
@@ -1256,7 +1256,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Math::mul(a, b) { resume a * b }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_multi_param_repeated.trb", code, "60");
@@ -1285,7 +1285,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op std::abilities::Throw::throw(error) { error }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("throw_basic.trb", code, "42");
@@ -1308,7 +1308,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op std::abilities::Throw::throw(error) { error }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("throw_with_payload.trb", code, "105");
@@ -1341,7 +1341,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op std::abilities::Throw::throw(error) { error }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("throw_multiple_ops.trb", code, "77");
@@ -1361,7 +1361,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op std::abilities::Abort::abort() { 99 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("prelude_abort.trb", code, "99");
@@ -1385,7 +1385,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op std::abilities::Abort::abort() { 99 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("effect_directed_abort.trb", code, "99");
@@ -1405,7 +1405,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op std::abilities::Throw::throw(error) { error }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("effect_directed_throw.trb", code, "42");
@@ -1428,7 +1428,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op std::abilities::Abort::abort() { 0 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     // abort() calls the parameter (returns 77), not the ability op (would return 0)
@@ -1455,7 +1455,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Abort::abort() { 99 }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("use_import_abort.trb", code, "99");
@@ -1477,7 +1477,7 @@ fn main() ->{Io} Nil {
         do result { result }
         op Throw::throw(error) { error }
     }
-    print_line(Nat::to_string(result))
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("use_import_throw.trb", code, "42");
