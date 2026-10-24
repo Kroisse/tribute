@@ -329,6 +329,11 @@ impl<'db> PackageEnv<'db> {
         self.restrictions.get(binding)
     }
 
+    /// The bindings that are not public, with where each is visible.
+    pub fn restrictions(&self) -> impl Iterator<Item = (&Binding<'db>, &Restriction)> {
+        self.restrictions.iter()
+    }
+
     /// Where the module at the package-root path `module` is visible, if it
     /// is not public.
     pub fn module_restriction(&self, module: &[Symbol]) -> Option<&Restriction> {

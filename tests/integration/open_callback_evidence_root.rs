@@ -68,7 +68,7 @@ fn a_pure_prelude_callback_selects_the_direct_instance(db: &salsa::DatabaseImpl)
         db,
         "test.trb",
         r#"
-fn pure() ->{} Option(Int) { Option::map(Some(+1), fn(n) n + +1) }
+fn pure() ->{} Option(Int) { Option::map(.Some(+1), fn(n) n + +1) }
 
 fn main() -> Nil {
     let _ = pure()
@@ -112,8 +112,8 @@ fn calls_in_one_body_select_instances_independently(db: &salsa::DatabaseImpl) {
 use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
-    let _ = Option::map(Some(+1), fn(n) n + +1)
-    let _ = Option::map(Some("io"), fn(s) print_line(s))
+    let _ = Option::map(.Some(+1), fn(n) n + +1)
+    let _ = Option::map(.Some("io"), fn(s) print_line(s))
     Nil
 }
 "#,

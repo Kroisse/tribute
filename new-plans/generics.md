@@ -46,7 +46,7 @@ enum Result(a, e) {
 ```rust
 let box: Box(Int) = Box { value: 42 }
 let pair: Pair(Int, String) = Pair { first: 1, second: "hello" }
-let result: Result(Int, String) = Ok { value: 42 }
+let result: Result(Int, String) = .Ok { value: 42 }
 ```
 
 ### 제네릭 함수

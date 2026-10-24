@@ -23,6 +23,9 @@ pub(super) struct FamilyId(pub(super) usize);
 #[derive(Clone, Debug)]
 pub(super) struct Family {
     pub(super) variants: Vec<VariantInfo>,
+    /// Whether the constructors are an enum's variants, which an example
+    /// pattern writes as implicit constructors (`.Some(_)`).
+    pub(super) implicit: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -351,11 +354,13 @@ impl fmt::Display for Rendered<'_> {
             Ctor::Nil => f.write_str("Nil"),
             Ctor::Tuple(_) => write!(f, "#({})", fields()),
             Ctor::Variant { family, index } => {
-                let name = self.families[family.0].variants[*index].name.clone();
+                let family = &self.families[family.0];
+                let name = &family.variants[*index].name;
+                let dot = if family.implicit { "." } else { "" };
                 if !has_fields {
-                    write!(f, "{name}")
+                    write!(f, "{dot}{name}")
                 } else {
-                    write!(f, "{name}({})", fields())
+                    write!(f, "{dot}{name}({})", fields())
                 }
             }
             Ctor::Literal(_) | Ctor::ListAtLeast(0) => f.write_str("_"),
@@ -402,6 +407,7 @@ mod tests {
                     arity: 1,
                 },
             ],
+            implicit: true,
         }]
     }
 
@@ -475,10 +481,10 @@ mod tests {
     fn nested_variant_is_not_covered_by_one_field_value() {
         let families = option();
         let arms = vec![none(), some(bool_(true))];
-        assert_eq!(missing(&families, arms).unwrap(), ["Some(False)"]);
+        assert_eq!(missing(&families, arms).unwrap(), [".Some(False)"]);
         let arms = vec![none(), some(bool_(true)), some(bool_(false))];
         assert!(missing(&families, arms).unwrap().is_empty());
-        assert_eq!(missing(&families, vec![some(wild())]).unwrap(), ["None"]);
+        assert_eq!(missing(&families, vec![some(wild())]).unwrap(), [".None"]);
     }
 
     #[test]

@@ -5,6 +5,6 @@ expression: result.diagnostics
 - message: "row variable `e` in the signature of `make` is closed in its body"
   span:
     start: 50
-    end: 119
+    end: 120
   severity: Error
   phase: TypeChecking

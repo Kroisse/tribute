@@ -178,6 +178,14 @@ impl<'s, 'db> Scope<'s, 'db> {
         })
     }
 
+    /// The bindings of the package and its dependencies that are not
+    /// public, with where each is visible.
+    pub fn restrictions(&self) -> impl Iterator<Item = (&'s Binding<'db>, &'s Restriction)> {
+        self.own
+            .restrictions()
+            .chain(self.dependencies.iter().flat_map(|env| env.restrictions()))
+    }
+
     /// Where the module at `module` is visible, if it is not public.
     pub fn module_restriction(&self, module: &Location) -> Option<&'s Restriction> {
         self.env(&module.package)?.module_restriction(&module.path)

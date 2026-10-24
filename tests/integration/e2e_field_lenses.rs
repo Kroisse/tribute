@@ -639,16 +639,16 @@ enum Choice { Callback(fn(Int) -> Int), Other }
 fn read(holder: Holder) -> fn(Int) ->{} Int { holder.callback }
 fn pick(choice: Choice, fallback: fn(Int) ->{} Int) -> fn(Int) ->{} Int {
     case choice {
-        Callback(f) -> f
-        Other -> fallback
+        .Callback(f) -> f
+        .Other -> fallback
     }
 }
 
 fn main() ->{Io} Nil {
     let holder = Holder { callback: fn(x) x + +1 }
     let f = read(holder)
-    let g = pick(Callback(f), f)
-    let h = pick(Other, fn(x) x * +2)
+    let g = pick(.Callback(f), f)
+    let h = pick(.Other, fn(x) x * +2)
     print_line(Int::to_string(g(+1)))
     print_line(Int::to_string(h(+5)))
 }

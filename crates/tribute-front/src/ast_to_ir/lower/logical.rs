@@ -761,7 +761,7 @@ fn prescan_logical_nominal_layouts<'db>(
                     .iter()
                     .map(|variant| {
                         let variant_ctor =
-                            CtorId::new(ctx.db, prefix.child(variant.name.clone()));
+                            CtorId::new(ctx.db, qualified.child(variant.name.clone()));
                         let fields = if enumeration.id.variant().is_some() {
                             let scheme = *specialized_enum_variants.get(&variant.id)
                                 .expect("missing specialized enum variant schema");

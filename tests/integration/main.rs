@@ -18,6 +18,7 @@ mod e2e_become;
 mod e2e_effect_instances;
 mod e2e_field_lenses;
 mod e2e_float;
+mod e2e_implicit_constructors;
 mod e2e_int_text;
 mod e2e_local_callables;
 mod e2e_native;

@@ -3087,7 +3087,7 @@ fn main() ->{std::io::Io} Nil {
     #[salsa_test]
     fn test_prelude_option_type(db: &salsa::DatabaseImpl) {
         // Use Option type from prelude
-        let source = source_from_str("test.trb", "fn maybe() -> Option(Int) { None }");
+        let source = source_from_str("test.trb", "fn maybe() -> Option(Int) { .None }");
 
         let result = compile_with_diagnostics(db, source);
         // Should compile without "unresolved" errors for Option or None
@@ -3105,7 +3105,10 @@ fn main() ->{std::io::Io} Nil {
     #[salsa_test]
     fn test_prelude_result_type(db: &salsa::DatabaseImpl) {
         // Use Result type from prelude
-        let source = source_from_str("test.trb", "fn success() -> Result(Int, String) { Ok(42) }");
+        let source = source_from_str(
+            "test.trb",
+            "fn success() -> Result(Int, String) { .Ok(42) }",
+        );
 
         let result = compile_with_diagnostics(db, source);
         // Should compile without "unresolved" errors for Result or Ok
@@ -3201,8 +3204,8 @@ fn main() ->{std::io::Io} Nil {
             r#"
             fn pick(o: Option(Bool)) -> Nat {
                 case o {
-                    None -> 0
-                    Some(True) -> 1
+                    .None -> 0
+                    .Some(True) -> 1
                 }
             }
             "#,
@@ -3210,7 +3213,7 @@ fn main() ->{std::io::Io} Nil {
 
         let result = compile_with_diagnostics(db, source);
         let has_non_exhaustive = result.diagnostics.iter().any(|d| {
-            d.inner.message.contains("missing patterns: Some(False)")
+            d.inner.message.contains("missing patterns: .Some(False)")
                 && d.inner.severity == DiagnosticSeverity::Error
         });
         assert!(
@@ -3511,8 +3514,8 @@ fn keep_bool(value: Outer(Bool)) -> Outer(Bool) { value }
 fn keep_loop(value: Loop(Int)) -> Loop(Int) { value }
 fn keep_a(value: A::Token(Int)) -> A::Token(Int) { value }
 fn keep_b(value: B::Token(Bool)) -> B::Token(Bool) { value }
-fn int_payload(value: Boxed(Int)) -> Int { case value { Box(x) -> x, EmptyBox -> +0 } }
-fn bool_payload(value: Boxed(Bool)) -> Bool { case value { Box(x) -> x, EmptyBox -> False } }
+fn int_payload(value: Boxed(Int)) -> Int { case value { .Box(x) -> x, .EmptyBox -> +0 } }
+fn bool_payload(value: Boxed(Bool)) -> Bool { case value { .Box(x) -> x, .EmptyBox -> False } }
 fn main() -> Nil {}
 "#,
         );
@@ -4437,12 +4440,6 @@ fn main() -> String { "hello" }
         assert_eq!(
             names,
             [
-                "ctor Branch",
-                "ctor Error",
-                "ctor Leaf",
-                "ctor None",
-                "ctor Ok",
-                "ctor Some",
                 "mod Bytes",
                 "mod Float",
                 "mod Int",
@@ -4477,19 +4474,13 @@ fn main() -> String { "hello" }
         assert_eq!(
             paths,
             [
-                "Branch -> std::Branch",
                 "Bytes -> std::Bytes (std::Bytes)",
-                "Error -> std::Error",
                 "Float -> std::Float (std::Float)",
                 "Int -> std::Int (std::Int)",
-                "Leaf -> std::Leaf",
                 "List -> std::collections::List (std::collections::List)",
                 "Nat -> std::Nat (std::Nat)",
-                "None -> std::None",
-                "Ok -> std::Ok",
                 "Option -> std::Option (std::Option)",
                 "Result -> std::Result (std::Result)",
-                "Some -> std::Some",
                 "String -> std::String (std::String)",
             ]
         );

@@ -169,7 +169,7 @@ enum Item { Number(Nat), Empty }
 
 fn first(p: #(Item, Nat)) -> Nat {
     case p {
-        #(Number(x), y) -> x + y
+        #(.Number(x), y) -> x + y
         _ -> 0
     }
 }

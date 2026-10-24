@@ -363,21 +363,21 @@ enum Expr {
 
 fn eval(e: Expr) -> Int {
     case e {
-        Num(n) -> n,
-        Add(l, r) -> eval(l) + eval(r),
-        Sub(l, r) -> eval(l) - eval(r),
-        Mul(l, r) -> eval(l) * eval(r),
-        Div(l, r) -> eval(l) / eval(r),
+        .Num(n) -> n,
+        .Add(l, r) -> eval(l) + eval(r),
+        .Sub(l, r) -> eval(l) - eval(r),
+        .Mul(l, r) -> eval(l) * eval(r),
+        .Div(l, r) -> eval(l) / eval(r),
     }
 }
 
 fn main() -> Nil {
-    let expr = Div(
-        Mul(
-            Add(Num(+1), Num(+2)),
-            Sub(Num(+10), Num(+4))
+    let expr = .Div(
+        .Mul(
+            .Add(.Num(+1), .Num(+2)),
+            .Sub(.Num(+10), .Num(+4))
         ),
-        Num(+2)
+        .Num(+2)
     )
     __tribute_print_int(eval(expr))
 }

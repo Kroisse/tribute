@@ -143,8 +143,8 @@ enum Shape {
 pub mod Shape {
     pub fn size(shape: Shape) -> Nat {
         case shape {
-            Circle(r) -> r
-            Square(s) -> s
+            .Circle(r) -> r
+            .Square(s) -> s
         }
     }
 }
@@ -165,8 +165,8 @@ fn prelude_is_in_scope_in_every_module(db: &salsa::DatabaseImpl) {
 mod m {
     pub fn get(o: Option(Int)) -> Int {
         case o {
-            Some(x) -> x
-            None -> +0
+            .Some(x) -> x
+            .None -> +0
         }
     }
 
@@ -174,7 +174,7 @@ mod m {
 }
 
 fn main() -> Nil {
-    let _ = m::text(m::get(Some(+1)))
+    let _ = m::text(m::get(.Some(+1)))
 }
 "#,
     );

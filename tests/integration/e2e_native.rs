@@ -208,13 +208,13 @@ enum Option(a) {
 }
 
 fn wrap(x: Nat) -> Option(Nat) {
-    Some(x)
+    .Some(x)
 }
 
 fn main() -> Nil {
     case wrap(5) {
-        Some(n) -> __tribute_print_nat(n)
-        None -> __tribute_print_nat(0)
+        .Some(n) -> __tribute_print_nat(n)
+        .None -> __tribute_print_nat(0)
     }
 }
 "#,
@@ -232,7 +232,7 @@ enum Option(a) {
     Some(a)
 }
 
-fn mine(x: Nat) -> Option(Nat) { Some(x) }
+fn mine(x: Nat) -> Option(Nat) { .Some(x) }
 
 fn theirs(x: Nat) -> std::Option(Nat) { std::Option::Some(x) }
 
@@ -242,8 +242,8 @@ fn main() -> Nil {
         std::Option::None -> __tribute_print_nat(0)
     }
     case mine(2) {
-        Some(n) -> __tribute_print_nat(n)
-        None -> __tribute_print_nat(0)
+        .Some(n) -> __tribute_print_nat(n)
+        .None -> __tribute_print_nat(0)
     }
 }
 "#,
@@ -262,10 +262,10 @@ pub mod Option {
 
 fn main() -> Nil {
     __tribute_print_nat(Option::map(1))
-    let doubled = Some(3).std::Option::map(fn(n) { n * 2 })
+    let doubled = .Some(3).std::Option::map(fn(n) { n * 2 })
     case doubled {
-        Some(n) -> __tribute_print_nat(n)
-        None -> __tribute_print_nat(0)
+        .Some(n) -> __tribute_print_nat(n)
+        .None -> __tribute_print_nat(0)
     }
 }
 "#,
@@ -428,16 +428,16 @@ enum Item {
 
 fn value(pair: #(Item, Bool)) -> Nat {
     case pair {
-        #(Empty, _) -> 0
-        #(Number(n), True) -> n
-        #(Number(n), False) -> n + 100
+        #(.Empty, _) -> 0
+        #(.Number(n), True) -> n
+        #(.Number(n), False) -> n + 100
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(value(#(Empty, True)))
-    __tribute_print_nat(value(#(Number(4), True)))
-    __tribute_print_nat(value(#(Number(5), False)))
+    __tribute_print_nat(value(#(.Empty, True)))
+    __tribute_print_nat(value(#(.Number(4), True)))
+    __tribute_print_nat(value(#(.Number(5), False)))
 }
 "#,
         "0\n4\n105",
@@ -452,16 +452,16 @@ fn test_native_nested_variant_case() {
         r#"
 fn pick(o: Option(Bool)) -> Nat {
     case o {
-        None -> 0
-        Some(True) -> 1
-        Some(False) -> 2
+        .None -> 0
+        .Some(True) -> 1
+        .Some(False) -> 2
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(pick(None))
-    __tribute_print_nat(pick(Some(True)))
-    __tribute_print_nat(pick(Some(False)))
+    __tribute_print_nat(pick(.None))
+    __tribute_print_nat(pick(.Some(True)))
+    __tribute_print_nat(pick(.Some(False)))
 }
 "#,
         "0\n1\n2",
@@ -522,16 +522,16 @@ enum Shape {
 
 fn size(shape: Shape) -> Nat {
     case shape {
-        Circle(radius) -> radius
-        Rect { tall: True, width } -> width + 10
-        Rect { width, tall: False } -> width
+        .Circle(radius) -> radius
+        .Rect { tall: True, width } -> width + 10
+        .Rect { width, tall: False } -> width
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(size(Circle(1)))
-    __tribute_print_nat(size(Rect(2, True)))
-    __tribute_print_nat(size(Rect(3, False)))
+    __tribute_print_nat(size(.Circle(1)))
+    __tribute_print_nat(size(.Rect(2, True)))
+    __tribute_print_nat(size(.Rect(3, False)))
 }
 "#,
         "1\n12\n3",
@@ -575,24 +575,24 @@ enum Wrap(a) {
 
 fn get(w: Wrap(Nat)) -> Nat {
     case w {
-        Box { tagged: True, value } -> value + 10
-        Box { value, .. } -> value
-        Empty -> 0
+        .Box { tagged: True, value } -> value + 10
+        .Box { value, .. } -> value
+        .Empty -> 0
     }
 }
 
 fn nested(o: Option(Point)) -> Nat {
     case o {
-        Some(Point { y, .. }) -> y
-        None -> 0
+        .Some(Point { y, .. }) -> y
+        .None -> 0
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(get(Box(1, True)))
-    __tribute_print_nat(get(Box(2, False)))
-    __tribute_print_nat(get(Empty))
-    __tribute_print_nat(nested(Some(Point { x: 3, y: 4 })))
+    __tribute_print_nat(get(.Box(1, True)))
+    __tribute_print_nat(get(.Box(2, False)))
+    __tribute_print_nat(get(.Empty))
+    __tribute_print_nat(nested(.Some(Point { x: 3, y: 4 })))
 }
 "#,
         "11\n2\n0\n4",
@@ -618,25 +618,25 @@ enum Wrap(a) {
 
 fn size(shape: Shape) -> Nat {
     case shape {
-        Dot(n) -> n
-        Rect { tall: True, width } -> width + 10
-        Rect { width, tall: False } -> width
+        .Dot(n) -> n
+        .Rect { tall: True, width } -> width + 10
+        .Rect { width, tall: False } -> width
     }
 }
 
 fn get(w: Wrap(Nat)) -> Nat {
     case w {
-        Box { tagged: True, value } -> value + 100
-        Box { value, .. } -> value
-        Empty -> 0
+        .Box { tagged: True, value } -> value + 100
+        .Box { value, .. } -> value
+        .Empty -> 0
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(size(Rect { tall: True, width: 7 }))
-    __tribute_print_nat(size(Rect { width: 3, tall: False }))
-    __tribute_print_nat(get(Box { tagged: True, value: 1 }))
-    __tribute_print_nat(get(Box { value: 2, tagged: False }))
+    __tribute_print_nat(size(.Rect { tall: True, width: 7 }))
+    __tribute_print_nat(size(.Rect { width: 3, tall: False }))
+    __tribute_print_nat(get(.Box { tagged: True, value: 1 }))
+    __tribute_print_nat(get(.Box { value: 2, tagged: False }))
 }
 "#,
         "17\n3\n101\n2",
@@ -661,16 +661,16 @@ fn count(flag: Bool, n: Nat) -> Nat {
 
 fn wrap(flag: Bool, n: Nat) -> Option(Nat) {
     case flag {
-        True -> Some(n)
-        False -> None
-        _ && n > 0 -> Some(0)
+        True -> .Some(n)
+        False -> .None
+        _ && n > 0 -> .Some(0)
     }
 }
 
 fn show(value: Option(Nat)) ->{std::io::Io} Nil {
     case value {
-        Some(n) -> print_nat(n)
-        None -> print_nat(0)
+        .Some(n) -> print_nat(n)
+        .None -> print_nat(0)
     }
 }
 
@@ -778,8 +778,8 @@ enum Shape {
 
 fn kind(shape: Shape) -> Nat {
     case shape {
-        Circle { .. } -> 1
-        Rect { .., } -> 2
+        .Circle { .. } -> 1
+        .Rect { .., } -> 2
     }
 }
 
@@ -791,8 +791,8 @@ fn count(xs: List(Nat)) -> Nat {
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(kind(Circle { radius: 3 }))
-    __tribute_print_nat(kind(Rect { width: 1, tall: True }))
+    __tribute_print_nat(kind(.Circle { radius: 3 }))
+    __tribute_print_nat(kind(.Rect { width: 1, tall: True }))
     __tribute_print_nat(count([4, 5]))
 }
 "#,
@@ -812,8 +812,8 @@ mod shapes {
 
     pub fn inner(shape: Shape) -> Nat {
         case shape {
-            Dot(n) -> n
-            Other -> 0
+            .Dot(n) -> n
+            .Other -> 0
         }
     }
 }
@@ -822,15 +822,15 @@ use shapes::Shape
 
 fn outer(shape: Shape) -> Nat {
     case shape {
-        shapes::Dot(n) -> n + 10
-        shapes::Other -> 1
+        Shape::Dot(n) -> n + 10
+        shapes::Shape::Other -> 1
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(shapes::inner(shapes::Dot(7)))
-    __tribute_print_nat(outer(shapes::Dot(7)))
-    __tribute_print_nat(outer(shapes::Other))
+    __tribute_print_nat(shapes::inner(Shape::Dot(7)))
+    __tribute_print_nat(outer(.Dot(7)))
+    __tribute_print_nat(outer(shapes::Shape::Other))
 }
 "#,
         "7\n17\n1",
@@ -848,23 +848,23 @@ enum Item {
 
 fn exact(values: List(Item)) -> Nat {
     case values {
-        [Number(first), Number(second)] -> first + second
+        [.Number(first), .Number(second)] -> first + second
         _ -> 9
     }
 }
 
 fn prefix(values: List(Item)) -> Nat {
     case values {
-        [Number(first), Number(second), ..tail] -> first + second
+        [.Number(first), .Number(second), ..tail] -> first + second
         _ -> 8
     }
 }
 
 fn main() -> Nil {
     __tribute_print_nat(exact([]))
-    __tribute_print_nat(exact([Number(1)]))
+    __tribute_print_nat(exact([.Number(1)]))
     __tribute_print_nat(prefix([]))
-    __tribute_print_nat(prefix([Number(1)]))
+    __tribute_print_nat(prefix([.Number(1)]))
 }
 "#,
         "9\n9\n8\n8",
@@ -880,39 +880,39 @@ enum Item { Number(Nat), Nested(Item), Other }
 
 fn exact(values: List(Item)) -> Nat {
     case values {
-        [Number(first), Number(second)] -> first + second
+        [.Number(first), .Number(second)] -> first + second
         _ -> 9
     }
 }
 
 fn prefix(values: List(Item)) -> Nat {
     case values {
-        [Number(first), Number(second), ..tail] -> first + second + exact(tail)
+        [.Number(first), .Number(second), ..tail] -> first + second + exact(tail)
         _ -> 8
     }
 }
 
 fn nested(values: List(List(Item))) -> Nat {
     case values {
-        [[Nested(Number(value)), ..], ..] -> value
+        [[.Nested(.Number(value)), ..], ..] -> value
         _ -> 0
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(exact([Number(3), Number(4)]))
-    __tribute_print_nat(exact([Number(3), Number(4), Number(5)]))
-    __tribute_print_nat(exact([Other, Number(4)]))
-    __tribute_print_nat(exact([Number(3), Other]))
-    __tribute_print_nat(prefix([Number(1), Number(2), Number(3), Number(4)]))
-    __tribute_print_nat(prefix([Number(1), Number(2)]))
-    __tribute_print_nat(prefix([Other, Number(2)]))
-    __tribute_print_nat(prefix([Number(1), Other]))
-    __tribute_print_nat(nested([[Nested(Number(6))]]))
+    __tribute_print_nat(exact([.Number(3), .Number(4)]))
+    __tribute_print_nat(exact([.Number(3), .Number(4), .Number(5)]))
+    __tribute_print_nat(exact([.Other, .Number(4)]))
+    __tribute_print_nat(exact([.Number(3), .Other]))
+    __tribute_print_nat(prefix([.Number(1), .Number(2), .Number(3), .Number(4)]))
+    __tribute_print_nat(prefix([.Number(1), .Number(2)]))
+    __tribute_print_nat(prefix([.Other, .Number(2)]))
+    __tribute_print_nat(prefix([.Number(1), .Other]))
+    __tribute_print_nat(nested([[.Nested(.Number(6))]]))
     __tribute_print_nat(nested([]))
     __tribute_print_nat(nested([[]]))
-    __tribute_print_nat(nested([[Nested(Other)]]))
-    __tribute_print_nat(nested([[Other]]))
+    __tribute_print_nat(nested([[.Nested(.Other)]]))
+    __tribute_print_nat(nested([[.Other]]))
 }
 "#,
         "7\n9\n9\n9\n10\n12\n8\n8\n6\n0\n0\n0\n0",
@@ -930,33 +930,33 @@ enum Boxed(a) { Box(a), EmptyBox }
 
 fn first_or(values: List(Boxed(a)), fallback: a) -> a {
     case values {
-        [Box(value), ..] -> value
+        [.Box(value), ..] -> value
         _ -> fallback
     }
 }
 
 fn tail(values: List(Boxed(String))) -> List(Boxed(String)) {
     case values {
-        [Box(value), ..rest] -> rest
+        [.Box(value), ..rest] -> rest
         _ -> []
     }
 }
 
 fn saved_tail(label: String) -> List(Boxed(String)) {
-    tail([Box(label), Box(label <> "!")])
+    tail([.Box(label), .Box(label <> "!")])
 }
 
 fn main() ->{Io} Nil {
-    let original = [Box("first"), Box("second")]
+    let original = [.Box("first"), .Box("second")]
     let rest = tail(original)
     print_line(first_or(rest, "missing"))
     print_line(first_or(original, "missing"))
-    let saved = first_or([Box("kept" <> "!")], "missing")
+    let saved = first_or([.Box("kept" <> "!")], "missing")
     print_line(saved)
     print_line(first_or(saved_tail("tail"), "missing"))
-    print_line(first_or([EmptyBox], "empty"))
+    print_line(first_or([.EmptyBox], "empty"))
     print_line(first_or([], "short"))
-    case first_or([Box(42)], 0) {
+    case first_or([.Box(42)], 0) {
         42 -> print_line("generic")
         _ -> print_line("wrong")
     }
@@ -1145,7 +1145,7 @@ fn source_value(value: List(Nat)) -> Nat {
 }
 
 fn main() -> Nil {
-    let source = source_value(keep(SourceList(2)))
+    let source = source_value(keep(.SourceList(2)))
     __tribute_print_nat(builtin_value() + source)
 }
 "#,
@@ -1249,13 +1249,13 @@ enum Shape {
 
 fn area(s: Shape) -> Nat {
     case s {
-        Circle(r) -> r * r
-        Square(side) -> side * side
+        .Circle(r) -> r * r
+        .Square(side) -> side * side
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(area(Circle(5)))
+    __tribute_print_nat(area(.Circle(5)))
 }
 "#,
         "25",
@@ -1276,14 +1276,14 @@ enum Color {
 
 fn to_num(c: Color) -> Nat {
     case c {
-        Red -> 1
-        Green -> 2
-        Blue -> 3
+        .Red -> 1
+        .Green -> 2
+        .Blue -> 3
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(to_num(Green))
+    __tribute_print_nat(to_num(.Green))
 }
 "#,
         "2",
@@ -1303,14 +1303,14 @@ enum Maybe {
 
 fn maybe_unwrap(m: Maybe, default: Nat) -> Nat {
     case m {
-        Just(x) -> x
-        Nothing -> default
+        .Just(x) -> x
+        .Nothing -> default
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(maybe_unwrap(Just(42), 0))
-    __tribute_print_nat(maybe_unwrap(Nothing, 99))
+    __tribute_print_nat(maybe_unwrap(.Just(42), 0))
+    __tribute_print_nat(maybe_unwrap(.Nothing, 99))
 }
 "#,
         "42\n99",
@@ -1364,7 +1364,7 @@ enum Item { Number(Nat), Empty }
 
 fn first(p: #(Item, Nat)) -> Nat {
     case p {
-        #(Number(x), y) -> x + y
+        #(.Number(x), y) -> x + y
         _ -> 0
     }
 }
@@ -1372,15 +1372,15 @@ fn first(p: #(Item, Nat)) -> Nat {
 fn sum(items: List(#(Item, Nat))) -> Nat {
     case items {
         [] -> 0
-        [#(Number(x), y), ..rest] -> x + y + sum(rest)
+        [#(.Number(x), y), ..rest] -> x + y + sum(rest)
         [_, ..rest] -> 100 + sum(rest)
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(first(#(Number(1), 2)))
-    __tribute_print_nat(first(#(Empty, 5)))
-    __tribute_print_nat(sum([#(Number(10), 1), #(Empty, 2), #(Number(3), 4)]))
+    __tribute_print_nat(first(#(.Number(1), 2)))
+    __tribute_print_nat(first(#(.Empty, 5)))
+    __tribute_print_nat(sum([#(.Number(10), 1), #(.Empty, 2), #(.Number(3), 4)]))
 }
 "#,
         "3\n0\n118",
@@ -1514,13 +1514,13 @@ enum Tree {
 
 fn sum(t: Tree) -> Nat {
     case t {
-        Leaf(n) -> n
-        Branch(left, right, len) -> sum(left) + sum(right) + len
+        .Leaf(n) -> n
+        .Branch(left, right, len) -> sum(left) + sum(right) + len
     }
 }
 
 fn main() -> Nil {
-    let t = Branch(Leaf(1), Branch(Leaf(2), Leaf(3), 0), 0)
+    let t = .Branch(.Leaf(1), .Branch(.Leaf(2), .Leaf(3), 0), 0)
     __tribute_print_nat(sum(t))
 }
 "#,
@@ -1896,10 +1896,10 @@ fn bool_to_nat(value: Bool) -> Nat {
 }
 
 fn main() -> Nil {
-    let cursor = UserCursor(7)
+    let cursor = .UserCursor(7)
     case cursor {
-        UserCursor(value) -> __tribute_print_nat(value)
-        EmptyCursor -> __tribute_print_nat(0)
+        .UserCursor(value) -> __tribute_print_nat(value)
+        .EmptyCursor -> __tribute_print_nat(0)
     }
     __tribute_print_nat(bool_to_nat("leaf" == "leaf"))
     let rope = "ro" <> "pe"
@@ -2442,12 +2442,12 @@ fn main() ->{std::io::Io} Nil {
     let a = bs.get(0)
     let b = bs.get(2)
     case a {
-        Some(_) -> std::io::print_line("some")
-        None -> std::io::print_line("none")
+        .Some(_) -> std::io::print_line("some")
+        .None -> std::io::print_line("none")
     }
     case b {
-        Some(_) -> std::io::print_line("some")
-        None -> std::io::print_line("none")
+        .Some(_) -> std::io::print_line("some")
+        .None -> std::io::print_line("none")
     }
 }
 "#,
@@ -2552,19 +2552,19 @@ enum Shape {
 
 fn area(shape: Shape) -> Nat {
     case shape {
-        Circle(r) -> r * r * 3
-        Square(s) -> s * s
-        Pair(w, h) -> w * h
-        Empty -> 0
-        Unused(n) -> n + 1000
+        .Circle(r) -> r * r * 3
+        .Square(s) -> s * s
+        .Pair(w, h) -> w * h
+        .Empty -> 0
+        .Unused(n) -> n + 1000
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(area(Circle(2)))
-    __tribute_print_nat(area(Square(3)))
-    __tribute_print_nat(area(Pair(4, 5)))
-    __tribute_print_nat(area(Empty))
+    __tribute_print_nat(area(.Circle(2)))
+    __tribute_print_nat(area(.Square(3)))
+    __tribute_print_nat(area(.Pair(4, 5)))
+    __tribute_print_nat(area(.Empty))
 }
 "#,
         "12\n9\n20\n0",
@@ -2584,16 +2584,16 @@ enum Color {
 
 fn code(color: Color) -> Nat {
     case color {
-        Red -> 1
-        Green -> 2
-        Blue -> 3
+        .Red -> 1
+        .Green -> 2
+        .Blue -> 3
     }
 }
 
 fn main() -> Nil {
-    __tribute_print_nat(code(Red))
-    __tribute_print_nat(code(Green))
-    __tribute_print_nat(code(Blue))
+    __tribute_print_nat(code(.Red))
+    __tribute_print_nat(code(.Green))
+    __tribute_print_nat(code(.Blue))
 }
 "#,
         "1\n2\n3",
@@ -2643,22 +2643,22 @@ enum Flag {
 
 fn read(inner: Inner) -> Int {
     case inner {
-        Value(value) -> value
-        Empty -> +0
+        .Value(value) -> value
+        .Empty -> +0
     }
 }
 
 fn merged(flag: Flag, inner: Inner, other: Inner) -> Int {
     let picked = case flag {
-        Yes -> inner
-        No -> other
+        .Yes -> inner
+        .No -> other
     }
     read(inner) + read(picked)
 }
 
 fn main() ->{Io} Nil {
-    print_line(Int::to_string(merged(Yes, Value(+2), Value(+3))))
-    print_line(Int::to_string(merged(No, Value(+2), Value(+3))))
+    print_line(Int::to_string(merged(.Yes, .Value(+2), .Value(+3))))
+    print_line(Int::to_string(merged(.No, .Value(+2), .Value(+3))))
 }
 "#,
         "4\n5",
@@ -2682,35 +2682,35 @@ enum Flag {
 
 fn read(inner: Inner) -> Int {
     case inner {
-        Value(value) -> value
-        Empty -> +0
+        .Value(value) -> value
+        .Empty -> +0
     }
 }
 
 fn one_arm(flag: Flag, inner: Inner) -> Int {
     case flag {
-        Yes -> read(inner)
-        No -> +0
+        .Yes -> read(inner)
+        .No -> +0
     }
 }
 
 fn nested(outer: Flag, flag: Flag, inner: Inner) -> Int {
     case outer {
-        Yes -> case flag {
-            Yes -> read(inner)
-            No -> +1
+        .Yes -> case flag {
+            .Yes -> read(inner)
+            .No -> +1
         }
-        No -> +2
+        .No -> +2
     }
 }
 
 fn main() ->{Io} Nil {
-    print_line(Int::to_string(one_arm(Yes, Value(+7))))
-    print_line(Int::to_string(one_arm(No, Value(+7))))
-    print_line(Int::to_string(one_arm(Yes, Empty)))
-    print_line(Int::to_string(nested(Yes, Yes, Value(+5))))
-    print_line(Int::to_string(nested(Yes, No, Value(+5))))
-    print_line(Int::to_string(nested(No, Yes, Value(+5))))
+    print_line(Int::to_string(one_arm(.Yes, .Value(+7))))
+    print_line(Int::to_string(one_arm(.No, .Value(+7))))
+    print_line(Int::to_string(one_arm(.Yes, .Empty)))
+    print_line(Int::to_string(nested(.Yes, .Yes, .Value(+5))))
+    print_line(Int::to_string(nested(.Yes, .No, .Value(+5))))
+    print_line(Int::to_string(nested(.No, .Yes, .Value(+5))))
 }
 "#;
     // The paths that do not read `inner` release it; the sanitizer run guards
@@ -2985,13 +2985,13 @@ fn asked(x: Option(Int)) ->{Ask, Io} Option(Int) {
 }
 
 fn main() ->{Io} Nil {
-    let answer = handle asked(Some(+1)) {
+    let answer = handle asked(.Some(+1)) {
         do value { value }
         op Ask::ask() { resume +40 }
     }
     case answer {
-        Some(n) -> print_line(Int::to_string(n))
-        None -> print_line("none")
+        .Some(n) -> print_line(Int::to_string(n))
+        .None -> print_line("none")
     }
 }
 "#,

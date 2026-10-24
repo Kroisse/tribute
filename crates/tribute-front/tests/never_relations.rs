@@ -218,17 +218,17 @@ fn abort() ->{Stop} Never { Stop::stop() }
 
 fn nat_first(choice: Choice) ->{Stop} Nat {
     case choice {
-        A -> 1
-        B -> abort()
-        C -> 2
+        .A -> 1
+        .B -> abort()
+        .C -> 2
     }
 }
 
 fn never_first(choice: Choice) ->{Stop} Nat {
     case choice {
-        A -> abort()
-        B -> 1
-        C -> 2
+        .A -> abort()
+        .B -> 1
+        .C -> 2
     }
 }
 
@@ -291,25 +291,25 @@ fn abort() ->{Stop} Never { Stop::stop() }
 
 fn bad(choice: Choice) ->{Stop} Nat {
     case choice {
-        A -> abort()
-        B -> 1
-        C -> True
+        .A -> abort()
+        .B -> 1
+        .C -> True
     }
 }
 
 fn never_in_middle(choice: Choice) ->{Stop} Nat {
     case choice {
-        A -> 1
-        B -> abort()
-        C -> True
+        .A -> 1
+        .B -> abort()
+        .C -> True
     }
 }
 
 fn never_last(choice: Choice) ->{Stop} Nat {
     case choice {
-        A -> 1
-        B -> True
-        C -> abort()
+        .A -> 1
+        .B -> True
+        .C -> abort()
     }
 }
 "#,

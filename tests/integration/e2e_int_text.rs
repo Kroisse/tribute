@@ -35,8 +35,8 @@ use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
     case Int::parse("0") {
-        Ok(value) -> print_line(Int::to_string(value))
-        Error(_) -> print_line("error")
+        .Ok(value) -> print_line(Int::to_string(value))
+        .Error(_) -> print_line("error")
     }
 }
 "#,
@@ -59,11 +59,11 @@ use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
     case Int::parse("2") {
-        Ok(left) -> case Int::parse("3") {
-            Ok(right) -> print_line(Int::to_string(left + right))
-            Error(_) -> print_line("error")
+        .Ok(left) -> case Int::parse("3") {
+            .Ok(right) -> print_line(Int::to_string(left + right))
+            .Error(_) -> print_line("error")
         }
-        Error(_) -> print_line("error")
+        .Error(_) -> print_line("error")
     }
 }
 "##,
@@ -87,12 +87,12 @@ use std::io::{Io, print_line}
 
 enum LocalError { Failed }
 
-fn parsed() -> Result(Int, LocalError) { Ok(+0) }
+fn parsed() -> Result(Int, LocalError) { .Ok(+0) }
 
 fn main() ->{Io} Nil {
     case parsed() {
-        Ok(value) -> print_line(Int::to_string(value))
-        Error(_) -> print_line("error")
+        .Ok(value) -> print_line(Int::to_string(value))
+        .Error(_) -> print_line("error")
     }
 }
 "#,
@@ -116,9 +116,9 @@ use std::io::{Io, print_line}
 enum Boxed(a) { Box(a), Empty }
 
 fn main() ->{Io} Nil {
-    case Box(+42) {
-        Box(value) -> print_line(Int::to_string(value))
-        Empty -> print_line("empty")
+    case .Box(+42) {
+        .Box(value) -> print_line(Int::to_string(value))
+        .Empty -> print_line("empty")
     }
 }
 "#,
@@ -141,8 +141,8 @@ use std::io::{Io, print_line}
 
 fn show_parse(input: String) -> String {
     case Int::parse(input) {
-        Ok(value) -> "ok:" <> Int::to_string(value)
-        Error(error) -> case error {
+        .Ok(value) -> "ok:" <> Int::to_string(value)
+        .Error(error) -> case error {
             Int::ParseError::InvalidSyntax -> "error:syntax"
             Int::ParseError::OutOfRange -> "error:range"
         }
@@ -151,8 +151,8 @@ fn show_parse(input: String) -> String {
 
 fn show_round_trip(input: String) -> String {
     case Int::parse(input) {
-        Ok(value) -> show_parse(Int::to_string(value))
-        Error(_) -> "unexpected"
+        .Ok(value) -> show_parse(Int::to_string(value))
+        .Error(_) -> "unexpected"
     }
 }
 

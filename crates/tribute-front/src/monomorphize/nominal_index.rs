@@ -85,7 +85,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                         .iter()
                         .map(|v| Constructor {
                             node: v.id,
-                            id: CtorId::new(db, prefix.child(v.name.clone())),
+                            id: CtorId::new(db, prefix.child(e.name.clone()).child(v.name.clone())),
                             fields: v.fields.len(),
                         })
                         .collect(),
