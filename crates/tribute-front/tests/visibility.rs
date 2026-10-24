@@ -414,3 +414,88 @@ fn later() -> Nat {
         ]
     );
 }
+
+/// The entries a re-export shows under its name are visible where the
+/// re-export is, so a path or annotation through them does not get around
+/// a hidden re-export.
+#[salsa_test]
+fn entries_under_a_hidden_re_export_are_hidden(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod a {
+    pub mod m {
+        pub(super) use std as internal
+        pub(super) use std::Option as Opt
+    }
+
+    fn inside(o: m::internal::Option(Nat)) -> Option(Nat) { m::Opt::Some(1) }
+}
+
+fn annotation(o: a::m::internal::Option(Nat)) -> Nat { 0 }
+fn value() -> Option(Nat) { a::m::Opt::Some(1) }
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`a::m::internal::Option` is not visible here: `a::m::internal` is declared `pub(super)`",
+            "`a::m::Opt::Some` is not visible here: `a::m::Opt` is declared `pub(super)`",
+        ]
+    );
+}
+
+/// A restricted re-export does not widen the visibility of a member of what
+/// it names.
+#[salsa_test]
+fn a_restricted_re_export_keeps_its_members_private(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod source {
+    fn secret() -> Nat { 1 }
+    pub fn open() -> Nat { 2 }
+}
+
+pub mod facade {
+    pub(pkg) use pkg::source as alias
+}
+
+fn hidden() -> Nat { facade::alias::secret() }
+fn visible() -> Nat { facade::alias::open() }
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["`facade::alias::secret` is not visible here: `source::secret` is private"]
+    );
+}
+
+/// An entry under a re-export is visible only where both it and the
+/// re-export are, even where the two are visible in unrelated modules.
+#[salsa_test]
+fn an_entry_under_a_re_export_needs_both_visible(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod source {
+    pub mod inner {
+        fn secret() -> Nat { 1 }
+        fn inside() -> Nat { pkg::facade::alias::secret() }
+    }
+}
+
+pub mod facade {
+    pub(self) use pkg::source::inner as alias
+    fn here() -> Nat { alias::secret() }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`pkg::facade::alias::secret` is not visible here: `facade::alias` is declared `pub(self)`",
+            "`alias::secret` is not visible here: `source::inner::secret` is private",
+        ]
+    );
+}

@@ -945,7 +945,9 @@ Re-export한 이름은 대상을 가리킨다. 그 이름 뒤로 이어지는 �
 namespace를 따라 끝까지 이어진다. 모듈 `m`이 `pub use std as library`를 선언하면
 `m::library::Option::Some`은 패키지 `std`의 `Option::Some`이다. 경로가 지나는
 re-export도 [가시성](#가시성-visibility) 규칙을 따르므로, 쓰는 자리에서 보이지 않는
-re-export를 지나는 경로는 그 re-export에서 멈춘다.
+re-export를 지나는 경로는 그 re-export에서 멈춘다. Re-export한 이름 아래의 항목
+(`m::Opt::Some`, `m::library::Option`)도 그 re-export와 같은 가시성을 가지므로, 경로나
+타입 annotation으로 그 항목을 가리켜도 보이지 않는 re-export를 우회하지 않는다.
 
 ### 완전한 예시
 

@@ -197,15 +197,11 @@ impl<'s, 'db> Scope<'s, 'db> {
         self.env(&module.package)?.module_restriction(&module.path)
     }
 
-    /// Where the re-exported entry `name` of `namespace` is visible, if it
-    /// is not public.
-    pub fn entry_restriction(
-        &self,
-        namespace: &Location,
-        name: &Symbol,
-    ) -> Option<&'s Restriction> {
-        self.env(&namespace.package)?
-            .entry_restriction(&namespace.path, name)
+    /// The restrictions of the re-exported entry `name` of `namespace`,
+    /// none if it is public. It is visible only where every one of them is.
+    pub fn entry_restrictions(&self, namespace: &Location, name: &Symbol) -> &'s [Restriction] {
+        self.env(&namespace.package)
+            .map_or(&[], |env| env.entry_restrictions(&namespace.path, name))
     }
 
     /// The package that holds the prelude module, if it is a dependency,
@@ -224,7 +220,7 @@ impl<'s, 'db> Scope<'s, 'db> {
     pub fn lookup_library(&self, name: &Symbol) -> Option<&'s Binding<'db>> {
         let (package, env) = self.prelude()?;
         let prelude = prelude_module();
-        if package.is_some() && env.entry_restriction(prelude, name).is_some() {
+        if package.is_some() && !env.entry_restrictions(prelude, name).is_empty() {
             return None;
         }
         env.lookup_qualified(prelude, name)
