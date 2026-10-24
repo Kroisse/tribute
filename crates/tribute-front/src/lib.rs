@@ -17,6 +17,7 @@
 pub mod ast;
 pub mod ast_to_ir;
 pub mod astgen;
+mod collections;
 pub mod keywords;
 pub mod monomorphize;
 pub mod query;

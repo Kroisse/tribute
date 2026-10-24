@@ -101,7 +101,7 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
         // e.g., `use abilities::Abort` makes `Abort::abort` available.
         let namespace = SymbolPath::new([import_name.clone()]);
         for (op_name, op_binding) in entries {
-            env.add_to_namespace_if_absent(&namespace, op_name, op_binding);
+            env.add_to_namespace_if_absent(&namespace, &op_name, op_binding);
         }
 
         // Replace the placeholder with the actual binding
@@ -333,13 +333,13 @@ fn add_export<'db>(
     let own = export.module.child(export.name.clone());
     for (name, entry) in entries {
         // The entries under the exported name are visible where it is.
-        if env.add_to_namespace_if_absent(&own, name.clone(), entry)
+        if env.add_to_namespace_if_absent(&own, &name, entry)
             && let Some(restriction) = &export.restriction
         {
             env.restrict_entry(own.clone(), name, restriction.clone());
         }
     }
-    env.add_to_namespace_if_absent(&export.module, export.name.clone(), binding);
+    env.add_to_namespace_if_absent(&export.module, &export.name, binding);
     env.set_export_target(export.module.clone(), export.name.clone(), target);
     if let Some(restriction) = &export.restriction {
         env.restrict_entry(
@@ -776,7 +776,7 @@ fn collect_module<'db>(
             if let Some(inner) = inner_ns.as_simple() {
                 env.add_to_namespace_if_absent(
                     &SymbolPath::new([m.name.clone()]),
-                    inner.clone(),
+                    inner,
                     Binding::Module {
                         path: scope.package.at(path.child(inner.clone())).identity(),
                     },

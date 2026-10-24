@@ -146,7 +146,8 @@ pub struct PackageEnv<'db> {
     imports: HashMap<Symbol, Binding<'db>>,
     /// The entries of each namespace below the package root: modules,
     /// types, and abilities (namespace → name → binding).
-    namespaces: HashMap<SymbolPath, HashMap<Symbol, Binding<'db>>>,
+    namespaces:
+        crate::collections::HashMap<SymbolPath, crate::collections::HashMap<Symbol, Binding<'db>>>,
     /// The locations the package root's resolved `use`s import (import
     /// name → location). Used to rewrite ability annotations from imported
     /// names to qualified paths.
@@ -424,20 +425,20 @@ impl<'db> PackageEnv<'db> {
     pub fn add_to_namespace_if_absent(
         &mut self,
         namespace: &SymbolPath,
-        name: Symbol,
+        name: &Symbol,
         binding: Binding<'db>,
     ) -> bool {
-        use std::collections::hash_map::Entry;
+        use hashbrown::hash_map::EntryRef;
 
-        let Some(entries) = self.namespaces.get_mut(namespace) else {
-            let entries = std::iter::once((name, binding)).collect();
-            self.namespaces.insert(namespace.clone(), entries);
-            return true;
-        };
-        match entries.entry(name) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(entry) => {
-                entry.insert(binding);
+        match self
+            .namespaces
+            .entry_ref(namespace)
+            .or_default()
+            .entry_ref(name)
+        {
+            EntryRef::Occupied(_) => false,
+            EntryRef::Vacant(entry) => {
+                entry.insert_with_key(name.clone(), binding);
                 true
             }
         }
