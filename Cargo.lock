@@ -1930,7 +1930,6 @@ version = "0.1.0"
 name = "tribute-runtime"
 version = "0.1.0"
 dependencies = [
- "itoa",
  "libc",
  "proptest",
  "tribute-rc",

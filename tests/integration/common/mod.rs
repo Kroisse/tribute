@@ -253,16 +253,15 @@ pub fn compile_and_run_native_with_closed_stdin(source_name: &str, source_code: 
     )
 }
 
-/// Extern declarations for print intrinsics, prepended to test source code.
+/// Extern declaration for the float print intrinsic, prepended to test source code.
 pub const PRINT_EXTERNS: &str = "\
-extern \"C\" fn __tribute_print_int(value: Int) -> Nil
 extern \"C\" fn __tribute_print_float(value: Float) -> Nil
 ";
 
 /// Run a native test and assert that stdout matches the expected output.
 ///
-/// Automatically prepends extern declarations for `__tribute_print_int`
-/// and `__tribute_print_float`.
+/// Automatically prepends the extern declaration for
+/// `__tribute_print_float`.
 #[allow(dead_code)]
 pub fn assert_native_output(source_name: &str, source_code: &str, expected_stdout: &str) {
     let full_source = format!("{PRINT_EXTERNS}\n{source_code}");

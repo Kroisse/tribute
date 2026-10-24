@@ -21,7 +21,6 @@ derive_more = { version = "2.0", features = ["display", "error", "from"] }
 fluent-uri = "0.1.4"
 insta = { version = "1.48", features = ["yaml"] }
 itertools = "0.14"
-itoa = "1"
 inventory = "0.3"
 lasso = "0.7"
 string_cache = { version = "0.11", default-features = false }

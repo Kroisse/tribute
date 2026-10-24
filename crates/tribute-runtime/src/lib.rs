@@ -124,21 +124,6 @@ pub extern "C" fn __tribute_next_tag() -> i32 {
 // Debug I/O (temporary — for e2e test verification)
 // =============================================================================
 
-/// Print a signed 32-bit integer to stdout, followed by a newline.
-///
-/// Matches Tribute's `Int` type which maps to `core.i32` in TrunkIR.
-///
-/// Signature: `(value: i32) -> ()`
-#[unsafe(no_mangle)]
-pub extern "C" fn __tribute_print_int(value: i32) {
-    let mut buf = itoa::Buffer::new();
-    let s = buf.format(value);
-    unsafe {
-        libc::write(libc::STDOUT_FILENO, s.as_ptr().cast(), s.len());
-        libc::write(libc::STDOUT_FILENO, b"\n".as_ptr().cast(), 1);
-    }
-}
-
 /// Print a 64-bit float to stdout, followed by a newline.
 ///
 /// Matches Tribute's `Float` type which maps to `core.f64` in TrunkIR.

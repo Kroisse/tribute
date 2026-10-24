@@ -59,10 +59,10 @@ fn named_local_operator_prints_three() {
     let source = format!(
         r#"{}
 fn apply(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
-fn main() -> Nil {{
+fn main() ->{{std::io::Io}} Nil {{
     let add = (Int::+)
     let alias = add
-    __tribute_print_int(apply(alias, +1, +2))
+    std::io::print_line(Int::to_string(apply(alias, +1, +2)))
 }}
 "#,
         common::PRINT_EXTERNS,
@@ -125,9 +125,9 @@ fn named_direct_both_reaches_native_execution() {
         r#"{}
 fn apply(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
 fn pure(f: fn(Int, Int) ->{{}} Int) ->{{}} Int {{ f(+3, +4) }}
-fn main() -> Nil {{
-    __tribute_print_int(pure((Int::+)))
-    __tribute_print_int(apply((Int::+), +1, +2))
+fn main() ->{{std::io::Io}} Nil {{
+    std::io::print_line(Int::to_string(pure((Int::+))))
+    std::io::print_line(Int::to_string(apply((Int::+), +1, +2)))
 }}
 "#,
         common::PRINT_EXTERNS,
@@ -184,12 +184,14 @@ fn test_native_extern_c_in_module_links_by_declared_name() {
     let output = compile_and_run_native(
         "extern_c_in_module.trb",
         r#"
+use std::io::{Io, print_line}
+
 mod ffi {
-    pub extern "C" fn __tribute_print_int(value: Int) -> Nil
+    pub extern "C" fn __tribute_bytes_len(bytes: Bytes) -> Nat
 }
 
-fn main() -> Nil {
-    ffi::__tribute_print_int(+7)
+fn main() ->{Io} Nil {
+    print_line(Nat::to_string(ffi::__tribute_bytes_len(b"1234567")))
 }
 "#,
     );

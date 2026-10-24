@@ -479,6 +479,8 @@ fn asan_ability_smoke_program() -> String {
         "{}\n{}",
         common::PRINT_EXTERNS,
         r#"
+use std::io::{Io, print_line}
+
 ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -518,16 +520,16 @@ fn step(n: Int) ->{State(Int), Scale} Float {
     Scale::scale(1.5)
 }
 
-fn body() ->{State(Int), Scale} Float {
+fn body() ->{State(Int), Scale, Io} Float {
     let a = step(+10)
     let b = step(-3)
     let c = step(+100)
     let total = State::get()
-    __tribute_print_int(total)
+    print_line(Int::to_string(total))
     a + b + c
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let offset = 0.25
     let result = run_scale(
         fn() { run_state(fn() { body() }, +5) },
