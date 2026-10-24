@@ -137,7 +137,7 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
         }
     }
 
-    let mut library = tribute::library_names(db);
+    let mut library = prelude_names(db);
     library.sort_by(|(left, _), (right, _)| left.cmp(right));
     for (name, binding) in library {
         let kind = match binding {
@@ -202,13 +202,32 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
     items
 }
 
+/// The names the prelude gives a user package: the public ones of those
+/// its modules see by name.
+fn prelude_names(db: &dyn salsa::Database) -> Vec<(Symbol, Binding<'_>)> {
+    let dependencies = tribute::prelude_dependencies(db);
+    let own = tribute_front::resolve::PackageEnv::new();
+    let scope = tribute_front::resolve::Scope::new(&own, &dependencies);
+    scope
+        .iter_library_names()
+        .into_iter()
+        .filter_map(|name| {
+            let binding = scope.lookup_library(&name)?;
+            scope
+                .restriction(binding)
+                .is_none()
+                .then(|| (name, binding.clone()))
+        })
+        .collect()
+}
+
 /// The constructors of the prelude's types, as `(type, variant)`: the
 /// public variants of its enums, the only prelude types with constructors.
 fn prelude_constructors(db: &dyn salsa::Database) -> Vec<(Symbol, Symbol)> {
     let dependencies = tribute::prelude_dependencies(db);
     let own = tribute_front::resolve::PackageEnv::new();
     let scope = tribute_front::resolve::Scope::new(&own, &dependencies);
-    let mut constructors: Vec<_> = tribute::library_names(db)
+    let mut constructors: Vec<_> = prelude_names(db)
         .into_iter()
         .filter(|(_, binding)| matches!(binding, Binding::TypeDef { .. }))
         .filter_map(|(name, _)| Some((scope.library_namespace(&name)?, name)))
