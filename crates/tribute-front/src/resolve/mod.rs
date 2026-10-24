@@ -334,24 +334,24 @@ fn add_export<'db>(
         .collect_namespace(&target)
         .into_iter()
         .map(|(name, entry)| {
-            let member = scope
-                .entry_restriction(&target, &name)
-                .or_else(|| scope.restriction(&entry))
-                .cloned();
-            let restriction = match (export.restriction.clone(), member) {
-                (Some(export), Some(member)) => Some(narrower(export, member)),
-                (export, member) => export.or(member),
+            let member = scope.entry_restrictions(&target, &name);
+            let member: Vec<_> = if member.is_empty() {
+                scope.restriction(&entry).into_iter().collect()
+            } else {
+                member.iter().collect()
             };
-            (name, entry, restriction)
+            let restrictions: Vec<Restriction> =
+                export.restriction.iter().chain(member).cloned().collect();
+            (name, entry, restrictions)
         })
         .collect();
     // The exported name's own namespace, e.g. `facade::Abort::abort`.
     let own = export.module.child(export.name.clone());
-    for (name, entry, restriction) in entries {
-        if env.add_to_namespace_if_absent(&own, &name, entry)
-            && let Some(restriction) = restriction
-        {
-            env.restrict_entry(own.clone(), name, restriction);
+    for (name, entry, restrictions) in entries {
+        if env.add_to_namespace_if_absent(&own, &name, entry) {
+            for restriction in restrictions {
+                env.restrict_entry(own.clone(), name.clone(), restriction);
+            }
         }
     }
     env.add_to_namespace_if_absent(&export.module, &export.name, binding);
@@ -364,17 +364,6 @@ fn add_export<'db>(
         );
     }
     true
-}
-
-/// The narrower of `export`, the restriction of a re-export in the package
-/// being collected, and `member`, that of an entry it shows. Another
-/// package's restriction hides the entry from this whole package.
-fn narrower(export: Restriction, member: Restriction) -> Restriction {
-    if member.package != export.package || member.within.len() > export.within.len() {
-        member
-    } else {
-        export
-    }
 }
 
 /// What a declaration's visibility is relative to while its environment is

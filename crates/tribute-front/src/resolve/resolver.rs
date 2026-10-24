@@ -200,15 +200,18 @@ impl<'db> Resolver<'db> {
 
     /// The restriction of the entry `name` of `namespace`, which holds
     /// `binding`: a re-export's own, or else the binding's.
-    fn entry_restriction(
+    fn entry_restrictions(
         &self,
         namespace: &Location,
         name: &Symbol,
         binding: &Binding<'db>,
-    ) -> Option<&Restriction> {
-        self.view()
-            .entry_restriction(namespace, name)
-            .or_else(|| self.view().restriction(binding))
+    ) -> Vec<&Restriction> {
+        let entry = self.view().entry_restrictions(namespace, name);
+        if entry.is_empty() {
+            self.view().restriction(binding).into_iter().collect()
+        } else {
+            entry.iter().collect()
+        }
     }
 
     /// The restriction that hides the entry `name` of `namespace` from the
@@ -219,8 +222,9 @@ impl<'db> Resolver<'db> {
         name: &Symbol,
         binding: &Binding<'db>,
     ) -> Option<&Restriction> {
-        self.entry_restriction(namespace, name, binding)
-            .filter(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
+        self.entry_restrictions(namespace, name, binding)
+            .into_iter()
+            .find(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
     }
 
     /// Whether the current module sees the re-export, if any, that the entry
@@ -232,7 +236,7 @@ impl<'db> Resolver<'db> {
         name: &Symbol,
         binding: &Binding<'db>,
     ) -> bool {
-        self.view().entry_restriction(namespace, name).is_none()
+        self.view().entry_restrictions(namespace, name).is_empty()
             || self.hidden_entry(namespace, name, binding).is_none()
     }
 
@@ -243,11 +247,10 @@ impl<'db> Resolver<'db> {
             .filter(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
     }
 
-    /// The narrowest restriction of what `location` names, from the modules
-    /// on its path and the binding at its end. Each of them is visible
-    /// within a module around that binding, so the narrowest one decides
-    /// where it is visible.
-    fn path_restriction(&self, location: &Location) -> Option<&Restriction> {
+    /// The restrictions of what `location` names, from the modules on its
+    /// path and the binding at its end. It is visible only where every one
+    /// of them is.
+    fn path_restrictions(&self, location: &Location) -> Vec<&Restriction> {
         // A path that names an item does not pass through the companion
         // module of the item's name, whose visibility is its own.
         let item = self
@@ -259,10 +262,12 @@ impl<'db> Resolver<'db> {
         } else {
             path.len()
         };
-        let own = item.and_then(|binding| {
-            let (name, namespace) = location.split_last()?;
-            self.entry_restriction(&namespace, name, binding)
-        });
+        let own = item
+            .and_then(|binding| {
+                let (name, namespace) = location.split_last()?;
+                Some(self.entry_restrictions(&namespace, name, binding))
+            })
+            .unwrap_or_default();
         (1..=modules)
             .filter_map(|end| {
                 let module = location
@@ -271,21 +276,26 @@ impl<'db> Resolver<'db> {
                 self.view().module_restriction(&module)
             })
             .chain(own)
-            // Another package's restriction hides it however wide it is.
-            .max_by_key(|restriction| {
-                if restriction.package == self.package {
-                    restriction.within.len()
-                } else {
-                    usize::MAX
-                }
-            })
+            .collect()
     }
 
-    /// The restriction that hides what `location` names from the current
-    /// module.
+    /// How narrow `restriction` is to the current package: another
+    /// package's hides it however wide it is.
+    fn narrowness(&self, restriction: &Restriction) -> usize {
+        if restriction.package == self.package {
+            restriction.within.len()
+        } else {
+            usize::MAX
+        }
+    }
+
+    /// The narrowest restriction that hides what `location` names from the
+    /// current module.
     fn hidden_path(&self, location: &Location) -> Option<&Restriction> {
-        self.path_restriction(location)
+        self.path_restrictions(location)
+            .into_iter()
             .filter(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
+            .max_by_key(|restriction| self.narrowness(restriction))
     }
 
     /// Report a reference, written as `written`, to what `restriction` hides
@@ -399,10 +409,9 @@ impl<'db> Resolver<'db> {
             let target = self.view().export_target(outer, name)?;
             let hidden = self
                 .view()
-                .entry_restriction(outer, name)
-                .is_some_and(|restriction| {
-                    !restriction.is_visible_from(&self.package, &self.module_path)
-                });
+                .entry_restrictions(outer, name)
+                .iter()
+                .any(|restriction| !restriction.is_visible_from(&self.package, &self.module_path));
             (!hidden).then(|| target.clone())
         };
         let mut target = visible(namespace, name)?;
@@ -1407,12 +1416,13 @@ impl<'db> Resolver<'db> {
     /// Report a `use` of `target` that the current module does not see, or
     /// that re-exports it more widely than it is visible.
     fn check_use_visibility(&self, u: &UseDecl, target: &Location) {
-        let Some(restriction) = self.path_restriction(target) else {
-            return;
-        };
         let written = u.path.iter().format("::");
-        if !restriction.is_visible_from(&self.package, &self.module_path) {
+        if let Some(restriction) = self.hidden_path(target) {
             self.report_hidden(u.id, written, restriction);
+            return;
+        }
+        let restrictions = self.path_restrictions(target);
+        if restrictions.is_empty() {
             return;
         }
         let exported = match &u.visibility {
@@ -1424,13 +1434,17 @@ impl<'db> Resolver<'db> {
             },
             Visibility::Public => None,
         };
-        let wider = match &exported {
-            Some(exported) => {
-                restriction.package != self.package || exported.len() < restriction.within.len()
-            }
-            None => true,
-        };
-        if wider {
+        // A `use` may not show what it names wider than any of its
+        // restrictions.
+        let wider = restrictions
+            .into_iter()
+            .find(|restriction| match &exported {
+                Some(exported) => {
+                    restriction.package != self.package || exported.len() < restriction.within.len()
+                }
+                None => true,
+            });
+        if let Some(restriction) = wider {
             Diagnostic::new(
                 format!(
                     "`{written}` cannot be re-exported as `{}`: {restriction}",

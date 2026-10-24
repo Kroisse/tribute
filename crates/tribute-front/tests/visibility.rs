@@ -470,3 +470,32 @@ fn visible() -> Nat { facade::alias::open() }
         ["`facade::alias::secret` is not visible here: `source::secret` is private"]
     );
 }
+
+/// An entry under a re-export is visible only where both it and the
+/// re-export are, even where the two are visible in unrelated modules.
+#[salsa_test]
+fn an_entry_under_a_re_export_needs_both_visible(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod source {
+    pub mod inner {
+        fn secret() -> Nat { 1 }
+        fn inside() -> Nat { pkg::facade::alias::secret() }
+    }
+}
+
+pub mod facade {
+    pub(self) use pkg::source::inner as alias
+    fn here() -> Nat { alias::secret() }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`pkg::facade::alias::secret` is not visible here: `facade::alias` is declared `pub(self)`",
+            "`alias::secret` is not visible here: `source::inner::secret` is private",
+        ]
+    );
+}

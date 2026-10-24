@@ -172,8 +172,9 @@ pub struct PackageEnv<'db> {
     module_uses: HashMap<(SymbolPath, Symbol), Vec<Symbol>>,
     /// The namespace entries re-exports add that are not public, by
     /// namespace and name. Such an entry is visible where its `use` makes
-    /// it, not where its binding is.
-    entry_restrictions: HashMap<(SymbolPath, Symbol), Restriction>,
+    /// it, not where its binding is, and only where every one of its
+    /// restrictions does.
+    entry_restrictions: HashMap<(SymbolPath, Symbol), Vec<Restriction>>,
 }
 
 impl<'db> PackageEnv<'db> {
@@ -378,22 +379,30 @@ impl<'db> PackageEnv<'db> {
         std::mem::take(&mut self.exports)
     }
 
-    /// Restrict where the entry `name` of `namespace` is visible.
+    /// Restrict where the entry `name` of `namespace` is visible, besides
+    /// any restriction it already has.
     pub fn restrict_entry(
         &mut self,
         namespace: SymbolPath,
         name: Symbol,
         restriction: Restriction,
     ) {
-        self.entry_restrictions
-            .insert((namespace, name), restriction);
+        let restrictions = self
+            .entry_restrictions
+            .entry((namespace, name))
+            .or_default();
+        if !restrictions.contains(&restriction) {
+            restrictions.push(restriction);
+        }
     }
 
-    /// Where the entry `name` of `namespace` is visible, if a re-export
-    /// added it and it is not public.
-    pub fn entry_restriction(&self, namespace: &[Symbol], name: &Symbol) -> Option<&Restriction> {
+    /// The restrictions of the entry `name` of `namespace`, if a re-export
+    /// added it and it is not public. It is visible only where every one of
+    /// them is.
+    pub fn entry_restrictions(&self, namespace: &[Symbol], name: &Symbol) -> &[Restriction] {
         self.entry_restrictions
             .get(&(SymbolPath::new(namespace.iter().cloned()), name.clone()))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Take the restrictions of `other`, an environment of the same
