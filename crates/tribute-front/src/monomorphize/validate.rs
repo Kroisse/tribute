@@ -13,12 +13,29 @@ use trunk_ir::SymbolPath;
 pub enum InstanceErrorKind {
     MissingInstance,
     WrongDeclaration,
-    TypeArgumentArity { expected: usize, found: usize },
-    RowArgumentArity { expected: usize, found: usize },
+    TypeArgumentArity {
+        expected: usize,
+        found: usize,
+    },
+    RowArgumentArity {
+        expected: usize,
+        found: usize,
+    },
     IncompleteTypeArgument,
     IncompleteAbilityArgument,
     InconsistentCallable,
+    /// A backstop for runaway expansion that polymorphic recursion
+    /// rejection does not catch.
     ExpansionLimit,
+    /// A reference to a function of the caller's own recursive group at
+    /// type arguments that strictly contain the caller's type parameters,
+    /// spelled with the caller's parameter names. `callee` is `None` when
+    /// the caller references itself.
+    PolymorphicRecursion {
+        caller: String,
+        callee: Option<String>,
+        instantiation: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -31,11 +48,30 @@ impl InstanceError {
     /// The source diagnostic of this error, at the reference whose instance
     /// is invalid.
     pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> Diagnostic {
-        Diagnostic::new(
-            format!(
-                "invalid specialization instance at {}: {:?}",
-                self.node, self.kind
+        let message = match &self.kind {
+            InstanceErrorKind::ExpansionLimit => "specialization did not terminate: generic \
+                 definitions keep requiring instances at new type arguments"
+                .to_owned(),
+            InstanceErrorKind::PolymorphicRecursion {
+                caller,
+                callee: None,
+                instantiation,
+            } => format!(
+                "`{caller}` calls itself at `{instantiation}`; polymorphic recursion is not \
+                 supported"
             ),
+            InstanceErrorKind::PolymorphicRecursion {
+                caller,
+                callee: Some(callee),
+                instantiation,
+            } => format!(
+                "`{caller}` calls `{callee}` of its own recursive group at `{instantiation}`; \
+                 polymorphic recursion is not supported"
+            ),
+            kind => format!("invalid specialization instance at {}: {kind:?}", self.node),
+        };
+        Diagnostic::new(
+            message,
             spans.get_or_default(self.node),
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
