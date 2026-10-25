@@ -3,6 +3,7 @@
 
 pub mod execution_log;
 
+use itertools::Itertools;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
@@ -347,14 +348,10 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
         parse_errors.len(),
         parse_errors
             .iter()
-            .map(|d| {
-                format!(
-                    "  - [{}] {} (span: {}..{})",
-                    d.phase, d.inner.message, d.inner.span.start, d.inner.span.end
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+            .format_with("\n", |d, f| f(&format_args!(
+                "  - [{}] {} (span: {}..{})",
+                d.phase, d.inner.message, d.inner.span.start, d.inner.span.end
+            )))
     );
 
     let ir = run_ast_pipeline_inner(db, source);
@@ -367,11 +364,10 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
         errors.is_empty(),
         "Expected no errors, but found {}:\n{}",
         errors.len(),
-        errors
-            .iter()
-            .map(|d| format!("  - [{}] {}", d.phase, d.inner.message))
-            .collect::<Vec<_>>()
-            .join("\n")
+        errors.iter().format_with("\n", |d, f| f(&format_args!(
+            "  - [{}] {}",
+            d.phase, d.inner.message
+        )))
     );
     ir
 }
