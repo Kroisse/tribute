@@ -30,6 +30,7 @@ pub mod entrypoint;
 pub mod intrinsic_to_native;
 pub mod io;
 pub mod list;
+pub mod optimization;
 pub mod ownership_lowering;
 pub mod ownership_plan;
 mod ownership_transfers;
