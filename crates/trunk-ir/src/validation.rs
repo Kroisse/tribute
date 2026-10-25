@@ -23,6 +23,7 @@ use derive_more::{Display, Error};
 
 use super::analysis::AnalysisCache;
 use super::context::IrContext;
+use super::dialect::core;
 use super::op_def::OpDef;
 use super::op_flag::{IsolatedFromAbove, OpFlag};
 use super::op_interface::{
@@ -30,6 +31,7 @@ use super::op_interface::{
     RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
 };
 use super::ops::{DialectOp, DialectType};
+use super::pass::{Pass, PassRunResult};
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
 use super::symbol_table::{SymbolTable, link_name, qualified_name};
@@ -1208,7 +1210,7 @@ fn check_call_arity_in_region(
 /// correct number of arguments matching the callee's function signature.
 ///
 /// Arity mismatches are reported as warnings via `ctx.report_warning`.
-pub fn validate_call_arity(ctx: &IrContext, module: Module) {
+fn validate_call_arity(ctx: &IrContext, module: Module) {
     let symbols = SymbolTable::collect(ctx, module);
     let _ = walk::walk_op::<std::convert::Infallible>(ctx, module.op(), &mut |op| {
         if !is_arity_checked_function(ctx, op) {
@@ -1221,6 +1223,63 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
         }
         std::ops::ControlFlow::Continue(walk::WalkAction::Skip)
     });
+}
+
+/// Check that every `func.call` and `func.tail_call` passes as many
+/// arguments as its callee's signature takes. A mismatch is a warning
+/// reported to the context's diagnostics; it does not fail the run.
+pub struct CheckCallArity;
+
+impl Pass for CheckCallArity {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-call-arity"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        validate_call_arity(ctx, target.into());
+        Ok(())
+    }
+}
+
+/// In debug builds, log the [`validate_value_integrity`] errors of the
+/// module, labeled with the pipeline point `boundary`. It never fails the
+/// run and does nothing in release builds.
+pub struct CheckValueIntegrity {
+    pub boundary: &'static str,
+}
+
+impl Pass for CheckValueIntegrity {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-value-integrity"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        if cfg!(debug_assertions) {
+            let result = validate_value_integrity(ctx, target.into());
+            if !result.is_ok() {
+                tracing::warn!(
+                    "Value integrity errors {}: {:?}",
+                    self.boundary,
+                    result.errors
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Run all validations and combine results.

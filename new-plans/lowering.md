@@ -171,7 +171,10 @@ indirect calls with explicit exact signatures, so Wasm dialect lowering never
 sees `effect.*`. Final GC indices are assigned only after
 cast conversion and reconciliation; final emission validation rejects any
 remaining `core.unrealized_conversion_cast` and checks the complete module
-before producing a binary.
+before producing a binary. Cast legalization, reconciliation, and GC index
+assignment belong to emission: once reference upcasts are elided, the IR
+follows the backend's physical assignability rule instead of the operations'
+declared schemas, so debug schema verification does not run on them.
 
 The lower-level `trunk-ir-wasm-backend` pass group handles target-independent
 dialect conversion:

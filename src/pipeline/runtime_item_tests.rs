@@ -54,7 +54,7 @@ fn definition(ctx: &IrContext, m: Module, path: &[&str]) -> Option<OpRef> {
 /// still present; the target entry is the first DCE it meets.
 fn shared_output(db: &salsa::DatabaseImpl) -> (IrContext, Module) {
     salsa::Database::attach(db, |db| {
-        check_shared_pipeline(db, source(db, PROGRAM))
+        compile_ast(db, source(db, PROGRAM))
             .expect("shared middle-end")
             .expect("frontend output")
     })
@@ -81,15 +81,18 @@ fn call_probe_from_main(ctx: &mut IrContext, m: Module) -> OpRef {
     call.op_ref()
 }
 
-fn lower_runtime_calls(
+/// Run `stages` for `target` with the test runtime items.
+fn run_target_stages(
     ctx: &mut IrContext,
     m: Module,
     target: TargetKind,
-) -> Result<(), DumpIrError> {
-    match target {
-        TargetKind::Native => lower_native_runtime_calls(ctx, m),
-        TargetKind::Wasm => lower_wasm_runtime_calls(ctx, m),
-    }
+    stages: std::ops::RangeInclusive<Stage>,
+) -> PassResult {
+    let config = StageConfig {
+        runtime: ITEMS,
+        ..StageConfig::target(target)
+    };
+    run_stages(ctx, m, config, stages)
 }
 
 #[test]
@@ -203,15 +206,27 @@ fn unused_runtime_functions_do_not_reach_the_boundary_exit() {
     for target in [TargetKind::Native, TargetKind::Wasm] {
         let db = salsa::DatabaseImpl::default();
         let (mut ctx, m) = shared_output(&db);
-        let mut analyses = AnalysisCache::new();
-        enter_target_lowering(&mut ctx, m, &mut analyses, "test", ITEMS).expect("target entry");
+        run_target_stages(&mut ctx, m, target, Stage::EnterTarget..=Stage::EnterTarget)
+            .expect("target entry");
         assert!(
             RuntimeFunction::lookup(&ctx, m, PROBE).is_ok(),
             "{target:?}: the target entry keeps the probe"
         );
 
-        lower_runtime_calls(&mut ctx, m, target).expect("runtime calls");
-        finish_target_lowering(&mut ctx, m, &mut analyses, target).expect("boundary exit");
+        run_target_stages(
+            &mut ctx,
+            m,
+            target,
+            Stage::LowerRuntimeCalls..=Stage::LowerRuntimeCalls,
+        )
+        .expect("runtime calls");
+        run_target_stages(
+            &mut ctx,
+            m,
+            target,
+            Stage::ExitBoundary..=Stage::ExitBoundary,
+        )
+        .expect("boundary exit");
         assert_eq!(
             definition(&ctx, m, PROBE),
             None,
@@ -225,11 +240,23 @@ fn target_lowering_calls_runtime_functions_by_path() {
     for target in [TargetKind::Native, TargetKind::Wasm] {
         let db = salsa::DatabaseImpl::default();
         let (mut ctx, m) = shared_output(&db);
-        let mut analyses = AnalysisCache::new();
-        enter_target_lowering(&mut ctx, m, &mut analyses, "test", ITEMS).expect("target entry");
+        run_target_stages(&mut ctx, m, target, Stage::EnterTarget..=Stage::EnterTarget)
+            .expect("target entry");
         let call = call_probe_from_main(&mut ctx, m);
-        lower_runtime_calls(&mut ctx, m, target).expect("runtime calls");
-        finish_target_lowering(&mut ctx, m, &mut analyses, target).expect("boundary exit");
+        run_target_stages(
+            &mut ctx,
+            m,
+            target,
+            Stage::LowerRuntimeCalls..=Stage::LowerRuntimeCalls,
+        )
+        .expect("runtime calls");
+        run_target_stages(
+            &mut ctx,
+            m,
+            target,
+            Stage::ExitBoundary..=Stage::ExitBoundary,
+        )
+        .expect("boundary exit");
 
         let probe = RuntimeFunction::lookup(&ctx, m, PROBE)
             .unwrap_or_else(|error| panic!("{target:?}: {error}"));
