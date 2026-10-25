@@ -51,9 +51,10 @@
 //!     │                                    ◄── run_through_cps_lowering
 //!     ▼ LowerEffects
 //!     │   lower_ability_call → resolve_evidence → lower_handle_dispatch
-//!     │                                    ◄── run_shared_middle_end
+//!     │                                    ◄── run_shared_middle_end,
+//!     │                                        compile_ast (all functions)
 //!     ▼ CheckArity (warnings into the context's diagnostics)
-//!     │                                    ◄── compile_ast / compile_with_diagnostics
+//!     │                                    ◄── compile_with_diagnostics
 //!     ├─── Representation/ABI Boundary (run_target_to_boundary_exit) ──┤
 //!     ▼ EnterTarget
 //!     │   global DCE (unreachable functions skip target lowering; runtime
