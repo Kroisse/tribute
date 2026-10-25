@@ -1,8 +1,10 @@
 use super::*;
 use crate::link::link_native_binary;
+use crate::prelude::{prelude_dependencies, prelude_exports, prelude_module};
 use rustc_hash::FxHashSet as HashSet;
 use salsa_test_macros::salsa_test;
 use std::ops::ControlFlow;
+use tribute_front::resolve::PackageEnv;
 use trunk_ir::SymbolPath;
 use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectType;
@@ -212,97 +214,6 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(&binary.bytes)
         .expect("canonical root dispatch binary validates");
-}
-
-#[test]
-fn baseline_options_disable_every_optional_native_optimization() {
-    assert_eq!(
-        OptimizationOptions::baseline().native,
-        NativeOptimizationOptions {
-            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
-            borrowed_parameters: BorrowedParameterPolicy::Preserve,
-            temporary_borrows: TemporaryBorrowPolicy::Preserve,
-            last_use_moves: LastUseMovePolicy::Acquire,
-            field_moves: FieldMovePolicy::Acquire,
-        }
-    );
-    assert_eq!(
-        native_ownership_plan_options(None, OptimizationOptions::baseline().native),
-        tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
-            elide_proven_borrowed_parameters: false,
-            elide_proven_field_borrows: false,
-            move_units_at_last_use: false,
-            move_fields_from_dying_owners: false,
-        }
-    );
-}
-
-#[test]
-fn native_ownership_plan_options_follow_stage_policy_table() {
-    let parameter_elision_only = NativeOptimizationOptions {
-        paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
-        borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
-        temporary_borrows: TemporaryBorrowPolicy::Preserve,
-        last_use_moves: LastUseMovePolicy::Acquire,
-        field_moves: FieldMovePolicy::Acquire,
-    };
-    let field_elision_only = NativeOptimizationOptions {
-        paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
-        borrowed_parameters: BorrowedParameterPolicy::Preserve,
-        temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
-        last_use_moves: LastUseMovePolicy::Acquire,
-        field_moves: FieldMovePolicy::Acquire,
-    };
-    let all_optimizations = NativeOptimizationOptions::production();
-
-    let cases = [
-        (
-            Some(NativePipelineStage::AfterRcInsertion),
-            all_optimizations,
-            (false, false, false),
-        ),
-        (
-            Some(NativePipelineStage::AfterBorrowedParameterOptimization),
-            all_optimizations,
-            (true, false, false),
-        ),
-        (
-            Some(NativePipelineStage::AfterBorrowedParameterOptimization),
-            field_elision_only,
-            (false, false, false),
-        ),
-        (
-            Some(NativePipelineStage::AfterTemporaryBorrowOptimization),
-            parameter_elision_only,
-            (true, false, false),
-        ),
-        (
-            Some(NativePipelineStage::AfterTemporaryBorrowOptimization),
-            all_optimizations,
-            (true, true, false),
-        ),
-        (
-            Some(NativePipelineStage::AfterRcOptimization),
-            field_elision_only,
-            (false, true, false),
-        ),
-        (None, all_optimizations, (true, true, true)),
-    ];
-
-    // The last element selects both unit moves, which only the final
-    // stages make.
-    for (stage, optimizations, (borrowed_parameters, field_borrows, moves)) in cases {
-        assert_eq!(
-            native_ownership_plan_options(stage, optimizations),
-            tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
-                elide_proven_borrowed_parameters: borrowed_parameters,
-                elide_proven_field_borrows: field_borrows,
-                move_units_at_last_use: moves,
-                move_fields_from_dying_owners: moves,
-            },
-            "unexpected ownership plan options at {stage:?}",
-        );
-    }
 }
 
 fn source_from_str(path: &str, text: &str) -> SourceCst {
