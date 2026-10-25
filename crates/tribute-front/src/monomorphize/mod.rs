@@ -7,6 +7,7 @@ pub(crate) use instance::{
 pub mod mangle;
 mod nominal;
 mod nominal_index;
+mod recursion;
 mod rewrite;
 mod validate;
 pub(crate) use collect::is_concrete_type;
@@ -184,6 +185,16 @@ fn monomorphize<'db>(
     // Cloning finds exhaustive cases by binary search.
     metadata.expressions.exhaustive_cases.sort();
     metadata.expressions.exhaustive_cases.dedup();
+    let mut errors = recursion::check(
+        db,
+        &module,
+        &function_types,
+        &metadata.expressions.function_instances,
+    );
+    if !errors.is_empty() {
+        errors.sort_by_key(|error| error.node);
+        return Err(errors);
+    }
     let errors = validate::validate(db, &module, &function_types, &metadata);
     if !errors.is_empty() {
         return Err(errors);

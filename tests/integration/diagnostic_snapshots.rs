@@ -1246,3 +1246,160 @@ fn main() -> Nil { Nil }
     assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
+
+// =============================================================================
+// Polymorphic recursion
+// =============================================================================
+
+#[salsa_test]
+fn diag_direct_polymorphic_recursion(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Pair(a) { left: a, right: a }
+
+fn depth(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> 1 + depth(n - 1, Pair { left: x, right: x })
+    }
+}
+
+fn main() -> Nil { let _ = depth(3, 7) }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_mutual_polymorphic_recursion(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Pair(a) { left: a, right: a }
+
+fn even(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> odd(n - 1, Pair { left: x, right: x })
+    }
+}
+
+fn odd(n: Nat, y: b) -> Nat {
+    case n == 0 {
+        True -> 1
+        False -> even(n - 1, y)
+    }
+}
+
+fn main() -> Nil { let _ = even(4, 7) }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// Unreached generic definitions are checked too.
+#[salsa_test]
+fn diag_unreached_polymorphic_recursion(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn nest(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> nest(n - 1, #(x, x))
+    }
+}
+
+fn main() -> Nil { Nil }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// Recursion that keeps the caller's type parameters, permutes them, uses
+/// unrelated arguments, or reaches a non-recursive helper at a larger type
+/// specializes to finitely many instances.
+#[salsa_test]
+fn finite_generic_recursion_is_accepted(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Pair(a) { left: a, right: a }
+
+fn same(n: Nat, x: a) -> a {
+    case n == 0 {
+        True -> x
+        False -> same(n - 1, x)
+    }
+}
+
+fn swap(n: Nat, x: a, y: b) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> swap(n - 1, y, x)
+    }
+}
+
+fn reset(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> reset(n - 1, 5)
+    }
+}
+
+fn wrap(x: a) -> Pair(a) { Pair { left: x, right: x } }
+
+fn repeat(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> {
+            let _ = wrap(x)
+            repeat(n - 1, x)
+        }
+    }
+}
+
+fn main() -> Nil {
+    let _ = same(2, True)
+    let _ = swap(3, 1, False) + reset(2, True) + repeat(2, 7)
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(result.diagnostics.is_empty(), "{:#?}", result.diagnostics);
+}
+
+/// A nested datatype is not polymorphic recursion of a function; the
+/// expansion limit stops its specialization.
+#[salsa_test]
+fn diag_specialization_expansion_limit(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Pair(a) { left: a, right: a }
+
+enum Nest(a) { Leaf(a), Deeper(Nest(Pair(a))) }
+
+fn leaf(x: a) -> Nest(a) { .Leaf(x) }
+
+fn main() -> Nil {
+    let _ = leaf(1)
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}

@@ -457,11 +457,6 @@ impl<'db> TypeChecker<'db> {
         let generalized =
             type_subst.apply_generalization(self.db(), substituted_ty, row_subst, &var_to_index);
 
-        // Create type params for all generalized UniVars
-        let type_params: Vec<crate::ast::TypeParam> = (0..var_to_index.len())
-            .map(|_| crate::ast::TypeParam::anonymous())
-            .collect();
-
         // The declared signature is the function's final scheme; checking the
         // body never republishes it.
         if let Some((declared, _)) = &signature_instance {
@@ -469,7 +464,7 @@ impl<'db> TypeChecker<'db> {
                 solve_failed
                     || reported_error
                     || (declared.body(self.db()) == generalized
-                        && declared.type_params(self.db()) == type_params),
+                        && declared.type_params(self.db()).len() == var_to_index.len()),
                 "checked type of `{}` differs from its declaration:\n  declared: {:?}\n  checked:  {:?}",
                 func.name,
                 declared,

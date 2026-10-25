@@ -4,7 +4,7 @@ use std::fmt;
 
 use itertools::Itertools;
 
-use super::{AbilityInstance, AbilityRow, Type, TypeKind};
+use super::{AbilityInstance, AbilityRow, Type, TypeKind, TypeParam};
 
 impl fmt::Display for Type<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -15,54 +15,112 @@ impl fmt::Display for Type<'_> {
 
 impl fmt::Display for TypeKind<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        salsa::with_attached_database(|db| match self {
-            Self::Int => f.write_str("Int"),
-            Self::Nat => f.write_str("Nat"),
-            Self::Float => f.write_str("Float"),
-            Self::Bool => f.write_str("Bool"),
-            Self::Bytes => f.write_str("Bytes"),
-            Self::Rune => f.write_str("Rune"),
-            Self::Nil => f.write_str("Nil"),
-            Self::Never => f.write_str("Never"),
-            Self::Named { name, args, .. } => {
-                name.with_str(|s| f.write_str(s))?;
-                if !args.is_empty() {
-                    let args = args
-                        .iter()
-                        .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                    write!(f, "({args})")
-                } else {
-                    Ok(())
-                }
-            }
-            Self::Func { params, result, .. } => {
-                let params = params
-                    .iter()
-                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                write!(f, "fn({params}) -> {}", result.kind(db))
-            }
-            Self::Tuple(elems) => {
-                let elems = elems
-                    .iter()
-                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                write!(f, "#({elems})")
-            }
-            Self::BoundVar { index } => write!(f, "_{}", index),
-            Self::LocalBoundVar { index, .. } => write!(f, "_local{}", index),
-            Self::UniVar { .. } => f.write_str("_"),
-            Self::App { ctor, args } => {
-                let args = args
-                    .iter()
-                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                write!(f, "{}({args})", ctor.kind(db))
-            }
-            Self::Continuation { arg, result, .. } => {
-                write!(f, "Continuation({} -> {})", arg.kind(db), result.kind(db))
-            }
-            Self::Error => f.write_str("<error>"),
-        })
-        .unwrap_or(Err(fmt::Error))
+        salsa::with_attached_database(|db| write_kind(db, self, &[], f)).unwrap_or(Err(fmt::Error))
     }
+}
+
+/// A type whose `BoundVar`s refer to the type parameters of one scheme,
+/// formatted with those parameters' names.
+pub(crate) struct WithTypeParams<'a, 'db> {
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    params: &'a [TypeParam],
+}
+
+impl<'db> Type<'db> {
+    /// Format this type, spelling each `BoundVar` by the name of the
+    /// parameter in `params` it refers to.
+    pub(crate) fn display_with_params<'a>(
+        self,
+        db: &'db dyn salsa::Database,
+        params: &'a [TypeParam],
+    ) -> WithTypeParams<'a, 'db> {
+        WithTypeParams {
+            db,
+            ty: self,
+            params,
+        }
+    }
+}
+
+impl fmt::Display for WithTypeParams<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_kind(self.db, self.ty.kind(self.db), self.params, f)
+    }
+}
+
+fn write_kind<'db>(
+    db: &'db dyn salsa::Database,
+    kind: &TypeKind<'db>,
+    params: &[TypeParam],
+    f: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    match kind {
+        TypeKind::Int => f.write_str("Int"),
+        TypeKind::Nat => f.write_str("Nat"),
+        TypeKind::Float => f.write_str("Float"),
+        TypeKind::Bool => f.write_str("Bool"),
+        TypeKind::Bytes => f.write_str("Bytes"),
+        TypeKind::Rune => f.write_str("Rune"),
+        TypeKind::Nil => f.write_str("Nil"),
+        TypeKind::Never => f.write_str("Never"),
+        TypeKind::Named { name, args, .. } => {
+            name.with_str(|s| f.write_str(s))?;
+            if !args.is_empty() {
+                write!(f, "({})", list(db, args, params))
+            } else {
+                Ok(())
+            }
+        }
+        TypeKind::Func {
+            params: inputs,
+            result,
+            ..
+        } => write!(
+            f,
+            "fn({}) -> {}",
+            list(db, inputs, params),
+            result.display_with_params(db, params)
+        ),
+        TypeKind::Tuple(elems) => write!(f, "#({})", list(db, elems, params)),
+        TypeKind::BoundVar { index } => {
+            match params
+                .get(*index as usize)
+                .and_then(|param| param.name.as_ref())
+            {
+                Some(name) => name.with_str(|s| f.write_str(s)),
+                None => write!(f, "_{}", index),
+            }
+        }
+        TypeKind::LocalBoundVar { index, .. } => write!(f, "_local{}", index),
+        TypeKind::UniVar { .. } => f.write_str("_"),
+        TypeKind::App { ctor, args } => {
+            write!(
+                f,
+                "{}({})",
+                ctor.display_with_params(db, params),
+                list(db, args, params)
+            )
+        }
+        TypeKind::Continuation { arg, result, .. } => write!(
+            f,
+            "Continuation({} -> {})",
+            arg.display_with_params(db, params),
+            result.display_with_params(db, params)
+        ),
+        TypeKind::Error => f.write_str("<error>"),
+    }
+}
+
+fn list<'a, 'db: 'a>(
+    db: &'db dyn salsa::Database,
+    types: &'a [Type<'db>],
+    params: &'a [TypeParam],
+) -> impl fmt::Display + 'a {
+    types
+        .iter()
+        .map(move |ty| ty.display_with_params(db, params))
+        .format(", ")
 }
 
 impl fmt::Display for AbilityInstance<'_> {

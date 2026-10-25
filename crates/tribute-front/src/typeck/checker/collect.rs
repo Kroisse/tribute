@@ -34,6 +34,16 @@ struct SignatureVariables<'db> {
 }
 
 impl SignatureVariables<'_> {
+    /// The scheme's type parameters, each named by the variable the
+    /// signature spells for it.
+    fn type_params(&self) -> Vec<TypeParam> {
+        let mut params = vec![TypeParam::anonymous(); self.next_type as usize];
+        for (name, &index) in &self.types {
+            params[index as usize] = TypeParam::named(name.clone());
+        }
+        params
+    }
+
     fn fresh_row(&mut self) -> RowVar {
         // Zero is reserved for the implicit, omitted ability annotation.
         self.next_row += 1;
@@ -232,9 +242,7 @@ impl<'db> TypeChecker<'db> {
         let func_ty = self.env.func_type(param_types, return_ty, effect);
 
         // Build type params from the collected BoundVars
-        let type_params: Vec<TypeParam> = (0..vars.next_type)
-            .map(|_| TypeParam::anonymous())
-            .collect();
+        let type_params = vars.type_params();
 
         let mut effect_params = collect_row_vars(self.db(), func_ty);
         for union in &vars.unions {
@@ -299,9 +307,7 @@ impl<'db> TypeChecker<'db> {
         let effect = AbilityRow::pure(self.db());
         let func_ty = self.env.func_type(param_types, return_ty, effect);
 
-        let type_params: Vec<TypeParam> = (0..vars.next_type)
-            .map(|_| TypeParam::anonymous())
-            .collect();
+        let type_params = vars.type_params();
 
         let mut effect_params = collect_row_vars(self.db(), func_ty);
         for union in &vars.unions {

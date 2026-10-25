@@ -9,7 +9,7 @@
 | 항목               | 선택                                        | 대안 (채택하지 않음)             |
 | ------------------ | ------------------------------------------- | -------------------------------- |
 | 기본 전략          | Monomorphization                            | Type erasure, Dictionary passing |
-| 함수의 다형적 재귀 | Uniform representation (anyref)             | 에러로 거부                      |
+| 함수의 다형적 재귀 | 에러로 거부                                 | Uniform representation (anyref)  |
 | 제네릭 타입        | 완전 monomorphization                       | Uniform representation           |
 | 효과 다형성        | Evidence passing                            | Row 전체의 monomorphization      |
 
@@ -69,36 +69,24 @@ fn map_effect(a, b)(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b) {
 
 ---
 
-## Hybrid Monomorphization
-
-### 전략
-
-```text
-제네릭 함수
-       │
-       ▼
-  다형적 재귀 감지?
-       │
-   ┌───┴───┐
-   │ No    │ Yes
-   ▼       ▼
-Monomorph  Uniform Rep
-(특수화)   (anyref/boxing)
-```
+## 특수화 전략
 
 ### 처리 방식
 
-| 대상                   | 조건            | 처리 방식              |
-| ---------------------- | --------------- | ---------------------- |
-| 제네릭 타입            | 일반            | Monomorphization       |
-| 제네릭 함수            | 일반            | Monomorphization       |
-| 제네릭 함수            | **다형적 재귀** | Uniform representation |
-| Effect만 다형적인 함수 | -               | Evidence passing       |
+| 대상                   | 조건            | 처리 방식        |
+| ---------------------- | --------------- | ---------------- |
+| 제네릭 타입            | 일반            | Monomorphization |
+| 제네릭 함수            | 일반            | Monomorphization |
+| 제네릭 함수            | **다형적 재귀** | 컴파일 에러      |
+| Effect만 다형적인 함수 | -               | Evidence passing |
 
 Ability row는 값으로 특수화하지 않는다. 실행 전략은 row 변수에 따라 정의를 따로
 만들 수 있다([아래](#row-변수의-convention-class)).
 
-이 도식의 uniform representation 선택은 함수의 다형적 재귀에 적용한다.
+모든 제네릭 함수는 monomorphization으로만 컴파일한다. 값의 표현은 컴파일러가
+고르며 코드 작성자가 제어하지 않으므로
+([runtime-types.md](runtime-types.md#표현은-의미에-드러나지-않는다)), 특수화로 컴파일할 수 없는 다형적 재귀를
+다른 표현으로 대신 컴파일하지 않고 [거부한다](#polymorphic-recursion).
 Nominal 타입의 의존 인스턴스 수집과 확장 한도는 아래의
 [Nominal 타입 수집과 재작성](#nominal-타입-수집과-재작성) 계약을 따른다.
 
@@ -186,50 +174,50 @@ fn main() -> Nil {
 
 ### 정의
 
-함수 `f<a>` 가 **다형적 재귀**인 경우:
+호출 그래프에서 서로 도달 가능한 함수들은 하나의 **재귀 그룹**을 이룬다(강연결
+요소). 자기 자신을 호출하는 함수는 혼자서도 재귀 그룹이다.
 
-- `f`가 자기 자신을 호출하면서
-- 타입 인자가 원래 `a`와 다름
+함수 `f`의 본문이 같은 재귀 그룹의 함수 `g`(`f` 자신 포함)를 참조하고, 그 참조가
+선택한 타입 인자 중 하나가 `f`의 타입 매개변수를 **진부분으로 포함**하면, 이
+참조는 **다형적 재귀**다. 진부분으로 포함한다는 것은 타입 인자가 `f`의 타입
+매개변수를 언급하지만 그 매개변수 하나만으로 이루어지지 않았다는 뜻이다.
 
 ```rust
-// 다형적 재귀 예시
-fn nest(a)(n: Int, x: a) -> ??? {
+struct Pair(a) { left: a, right: a }
+
+fn depth(n: Nat, x: a) -> Nat {
     case n == 0 {
-        True -> x
-        False -> nest(n - 1, Pair(x, x))
-        //            ↑ nest<Pair<a, a>> 호출 (a가 아님!)
+        True -> 0
+        False -> 1 + depth(n - 1, Pair { left: x, right: x })
+        //           ↑ depth를 Pair(a)로 참조한다
     }
 }
 ```
 
-### 문제점
+다형적 재귀가 아닌 경우:
 
-순수 monomorphization으로는 무한 인스턴스화 발생:
+- 같은 타입 매개변수로 다시 인스턴스화하는 재귀(`f(a)`가 `f(a)`를 호출).
+- 타입 매개변수의 순서만 바꾸는 재귀(`f(a, b)`가 `f(b, a)`를 호출).
+- `f`의 타입 매개변수를 언급하지 않는 타입 인자(`f(a)`가 `f(Int)`를 호출).
+- 재귀 그룹 밖의 함수를 `Pair(a)` 같은 타입 인자로 호출하는 경우.
 
-- `nest<Int>` → `nest<Pair<Int, Int>>`
-  → `nest<Pair<Pair<Int, Int>, Pair<Int, Int>>>` → ...
+### 거부
 
-### 해결책: Uniform Representation
+Monomorphization은 다형적 재귀에서 끝나지 않는다. `depth(Int)`는
+`depth(Pair(Int))`를, 그것은 다시 `depth(Pair(Pair(Int)))`를 요구한다. Tribute는
+다형적 재귀를 지원하지 않으며 이를 컴파일 에러로 거부한다.
 
-다형적 재귀 함수는 자동으로 **uniform representation** 사용:
+이 규칙은 정의의 성질이다. 도달 여부와 관계없이 특수화 전에 모든 제네릭 함수의
+checked function instance로 검사한다. 판정은 재귀 그룹 안의 각 참조만 보고
+내리므로 보수적이다. `f(a)`가 `g`를 `Pair(a)`로 호출하고 `g`가 `f`를 `Int`로만
+호출해 실제 인스턴스가 유한하더라도 거부한다.
 
-```rust
-// 컴파일러가 자동으로 변환
-fn nest(n: Int, x: anyref) -> anyref {
-    case n == 0 {
-        True -> x
-        False -> nest(n - 1, box(Pair(unbox(x), unbox(x))))
-    }
-}
+진단은 다형적 재귀인 참조의 위치에서 보고하며, 호출하는 함수, 호출되는 함수,
+그 참조가 요구하는 타입 인자를 호출하는 함수의 타입 매개변수 이름으로 표시한다.
+
+```text
+`depth` calls itself at `Pair(a)`; polymorphic recursion is not supported
 ```
-
-### 감지 알고리즘
-
-타입 추론 중 재귀 호출 패턴 분석:
-
-1. 함수 `f<a>`의 본문에서 `f` 호출 찾기
-2. 호출 시 타입 인자가 `a`를 포함하지만 `a`와 다른지 확인
-3. 다르면 다형적 재귀로 표시
 
 ---
 
@@ -249,26 +237,6 @@ fn nest(n: Int, x: anyref) -> anyref {
   (field $first i64)
   (field $second (ref $string))))
 ```
-
-### Uniform Representation
-
-다형적 재귀 함수에서는 `anyref` 사용:
-
-```wasm
-;; 타입 계층
-any (anyref) ← 다형적 값의 공통 타입
- ├─ i31      ← 31비트 정수 (힙 할당 없음!)
- └─ struct   ← 박스/사용자 정의 타입
-```
-
-**Boxing 전략:**
-
-| 원본 타입    | WasmGC 표현        | 힙 할당   |
-| ------------ | ------------------ | --------- |
-| Int (fixnum) | `i31ref`           | 없음      |
-| Int (bignum) | `(ref $BigInt)`    | 자동 승격 |
-| Float        | `(ref $BoxedF64)`  | 필요      |
-| struct/enum  | 기존 참조 업캐스트 | 없음      |
 
 ---
 
@@ -300,11 +268,13 @@ ast_to_ir: IR lowering
 `(FuncDefId, type_arguments)`를 사용한다. `node_types`나 callable 타입에서 타입
 인자를 역추론하지 않는다. 함수 값으로 전달되는 참조도 같은 계약을 따른다.
 
-선택된 선언 스킴, 인자 개수, callable 및 row 인자의 일관성을 먼저 검사한다.
+[다형적 재귀](#polymorphic-recursion) 검사가 이 과정보다 먼저 실행된다. 이어서
+선택된 선언 스킴, 인자 개수, callable 및 row 인자의 일관성을 검사한다.
 원본 함수의 binder 순서에 맞춰 타입을 치환하고, 특수화된 정의의 모든 typed
 메타데이터에도 같은 치환을 적용한다. 스킴 본문과 합집합·차집합 제약은 함께
 변환한다. 생성된 clone 내부의 참조가 새 인스턴스를 드러내면 같은 인스턴스 키를
-재사용하며 고정점까지 수집한다. 확장 한도를 넘으면 구조적 진단을 반환한다.
+재사용하며 고정점까지 수집한다. 확장 한도는 다형적 재귀 검사가 잡지 못한 다른
+무한 확장을 막는 안전장치이며, 한도를 넘으면 구조적 진단을 반환한다.
 
 타입 인자를 갖는 함수를 이 과정으로 특수화한다. 타입 인자가 없는 함수는 정의 하나를
 그대로 쓴다. [Class 변수](#row-변수의-convention-class)에 따른 특수화는 이 과정이 아니라
@@ -354,7 +324,7 @@ identity와 runtime variant tag는 유지하며, 다른 모듈이나 다른 타�
 동일 인스턴스의 재귀·상호 재귀는 중복 생성하지 않는다. 계속 새로운 타입 인자를
 만드는 확장은 최대 64회 의존성 확장과 4,096개 고유 nominal 인스턴스 한도에서
 진단한다. 한도 초과나 잘못된 constructor 스킴으로 준비가 실패하면 부분 결과를
-IR 생성에 전달하지 않는다. 이 한도는 함수의 다형적 재귀 처리 정책을 바꾸지 않는다.
+IR 생성에 전달하지 않는다. 다형적 재귀는 이 한도에 앞서 [거부한다](#polymorphic-recursion).
 
 ### 이름과 identity
 
