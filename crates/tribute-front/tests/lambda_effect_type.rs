@@ -249,7 +249,7 @@ ability State(s) {
 
 fn counter() ->{State(Int)} Int {
     let n = State::get()
-    State::set(n + 1)
+    State::set(n + +1)
     n
 }
 
@@ -261,12 +261,12 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Int {
+fn count_three() -> Int {
     run_state(fn() {
         counter()
         counter()
         counter()
-    }, 0)
+    }, +0)
 }
 "#,
     );
@@ -340,7 +340,7 @@ fn with_state(f: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Nat {
+fn read_state() -> Nat {
     with_state(fn() {
         State::get()
     }, 42)

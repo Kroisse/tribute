@@ -14,8 +14,7 @@ const PRELUDE_SOURCE: &str = include_str!("../../../../lib/std/prelude.trb");
 struct PreludeData<'db> {
     exports: tribute_front::typeck::PreludeExports<'db>,
     env: &'db tribute_front::resolve::PackageEnv<'db>,
-    typed_module: tribute_front::ast::DeclTable<tribute_front::ast::TypedRef<'db>>,
-    declarations: tribute_front::typeck::DeclarationTypeMetadata<'db>,
+    checked: tribute_front::typeck::TypeCheckOutput<'db>,
 }
 
 #[salsa::tracked(returns(copy))]
@@ -62,8 +61,8 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
         prelude_span_map.clone(),
     );
 
-    // Type-check once for both the exports injected into user modules and
-    // the typed module lowering reads the intrinsics from.
+    // Type-check once for both the exports user modules depend on and the
+    // declarations specialization looks up.
     let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map.clone());
     let (result, exports) = checker.check_prelude(&resolved_prelude);
     let checked = tribute_front::typeck::TypeCheckOutput::from_check(db, result, prelude_span_map);
@@ -71,8 +70,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     Some(PreludeData {
         exports,
         env,
-        typed_module: checked.module(db).clone(),
-        declarations: checked.declarations(db).clone(),
+        checked,
     })
 }
 
@@ -122,45 +120,29 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         checker.check_module(&resolved),
         span_map.clone(),
     );
-    // Type checking reads package std's declarations without copying them;
-    // lowering takes them as one table with the user's.
-    let declarations = match &prelude {
-        Some(prelude) => checked
-            .declarations(db)
-            .after_dependency(&prelude.declarations),
-        None => checked.declarations(db).clone(),
-    };
-    let expressions = checked.expression_types(db).clone();
+    // Specialization looks package std's declarations up but specializes only
+    // the module under test, so its output holds no prelude bodies.
     let compiler_intrinsics = prelude
         .as_ref()
         .map(|prelude| {
-            tribute_front::ast_to_ir::registered_compiler_intrinsics(&prelude.typed_module)
+            tribute_front::ast_to_ir::registered_compiler_intrinsics(prelude.checked.module(db))
                 .expect("prelude intrinsic directives must be supported")
         })
         .unwrap_or_default();
+    let input = tribute_front::monomorphize::SpecializationInput::new(
+        db,
+        checked,
+        prelude.as_ref().map(|prelude| prelude.checked),
+    )
+    .with_compiler_intrinsics(compiler_intrinsics);
+    let specialized = tribute_front::monomorphize::monomorphize_functions(db, input)
+        .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let module = tribute_front::ast_to_ir::TypedModule {
-        ast: checked.module(db).clone(),
-        span_map,
-        function_types: declarations.function_types.into_iter().collect(),
-        constructor_types: declarations.constructor_types.schemes.into_iter().collect(),
-        specialized_enum_variants: Default::default(),
-        node_types: expressions.node_types,
-        local_instances: expressions.local_instances,
-        function_instances: expressions.function_instances,
-        ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
-            &declarations.ability_definitions,
-        ),
-        handler_operations: expressions.handler_operations,
-        perform_operations: expressions.perform_operations,
-        lambda_signatures: expressions.lambda_signatures,
-        exhaustive_cases: expressions.exhaustive_cases.into_iter().collect(),
-        evidence_plans: expressions.evidence_plans,
-        well_known_types: declarations.well_known_types,
-        compiler_intrinsics,
-        runtime_types: Default::default(),
-        merged_sources: Vec::new(),
-    }
+    let module = tribute_front::ast_to_ir::TypedModule::from_specialized(
+        db,
+        specialized,
+        Default::default(),
+    )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,

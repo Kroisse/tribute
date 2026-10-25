@@ -40,6 +40,7 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use crate::SortedMap;
 use crate::ast::{AbilityId, DeclTable, NodeId, SpanMap, Type, TypeScheme, TypedRef};
+use crate::monomorphize::SpecializationOutput;
 
 pub use context::IrLoweringCtx;
 
@@ -172,7 +173,61 @@ pub struct TypedModule<'db> {
     pub merged_sources: Vec<String>,
 }
 
+/// What lowering reads besides the specialization result: the runtime
+/// structs the root crate's preparation checked, and the other sources whose
+/// declarations specialization merged.
+#[derive(Default)]
+pub struct LoweringEnvironment {
+    pub runtime_types: runtime_items::RuntimeTypes,
+    pub merged_sources: Vec<String>,
+}
+
 impl<'db> TypedModule<'db> {
+    /// The lowering input of a specialization result
+    /// (`new-plans/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
+    pub fn from_specialized(
+        db: &'db dyn salsa::Database,
+        specialized: SpecializationOutput<'db>,
+        environment: LoweringEnvironment,
+    ) -> Self {
+        let declarations = specialized.declarations(db);
+        let expressions = specialized.expression_types(db);
+        Self {
+            ast: specialized.module(db).clone(),
+            span_map: specialized.span_map(db),
+            function_types: declarations.function_types.iter().cloned().collect(),
+            constructor_types: declarations
+                .constructor_types
+                .schemes
+                .iter()
+                .cloned()
+                .collect(),
+            specialized_enum_variants: declarations
+                .constructor_types
+                .specialized_enum_variants
+                .clone(),
+            node_types: expressions.node_types.clone(),
+            local_instances: expressions.local_instances.clone(),
+            function_instances: expressions.function_instances.clone(),
+            ability_definitions: crate::typeck::ability_definitions_from_schemas(
+                &declarations.ability_definitions,
+            ),
+            handler_operations: expressions.handler_operations.clone(),
+            perform_operations: expressions.perform_operations.clone(),
+            lambda_signatures: expressions.lambda_signatures.clone(),
+            exhaustive_cases: expressions.exhaustive_cases.iter().copied().collect(),
+            evidence_plans: expressions.evidence_plans.clone(),
+            well_known_types: declarations.well_known_types,
+            compiler_intrinsics: specialized
+                .compiler_intrinsics(db)
+                .iter()
+                .cloned()
+                .collect(),
+            runtime_types: environment.runtime_types,
+            merged_sources: environment.merged_sources,
+        }
+    }
+
     /// Lower this typed module to arena TrunkIR.
     ///
     /// This is the main entry point for AST-to-IR transformation.

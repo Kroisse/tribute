@@ -843,7 +843,7 @@ fn test_record_generic_type(db: &salsa::DatabaseImpl) {
 struct Pair(a, b) { first: a, second: b }
 
 fn make_pair() -> Pair(Int, Bool) {
-    Pair { first: 42, second: True }
+    Pair { first: +42, second: True }
 }
 "#,
     );
@@ -922,7 +922,7 @@ fn test_snapshot_record_generic(db: &salsa::DatabaseImpl) {
 struct Pair(a, b) { first: a, second: b }
 
 fn make_pair() -> Pair(Int, Bool) {
-    Pair { first: 42, second: True }
+    Pair { first: +42, second: True }
 }
 "#,
     );
