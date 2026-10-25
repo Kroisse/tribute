@@ -52,17 +52,17 @@ let result: Result(Int, String) = .Ok { value: 42 }
 ### 제네릭 함수
 
 ```rust
-// 타입 파라미터는 함수 이름 뒤 소괄호에
-fn identity(a)(x: a) -> a {
+// 시그니처에 쓴 소문자 타입 이름이 함수의 타입 파라미터다
+fn identity(x: a) -> a {
     x
 }
 
-fn map(a, b)(xs: List(a), f: fn(a) -> b) -> List(b) {
+fn map(xs: List(a), f: fn(a) -> b) -> List(b) {
     // ...
 }
 
 // 효과 다형적 함수
-fn map_effect(a, b)(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b) {
+fn map_effect(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b) {
     // ...
 }
 ```
@@ -151,7 +151,7 @@ CPS 전략이 row 변수의 class마다 만드는 인스턴스는, class가 모�
 
 ```rust
 // 원본
-fn identity(a)(x: a) -> a { x }
+fn identity(x: a) -> a { x }
 
 fn main() -> Nil {
     identity(42)       // identity<Int>
