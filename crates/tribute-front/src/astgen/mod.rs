@@ -71,13 +71,18 @@ pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName
 
 /// Salsa-tracked parsing result containing both Module and SpanMap.
 ///
-/// This allows both to be computed together and cached efficiently.
+/// This allows both to be computed together and cached efficiently. Every
+/// reparse creates this struct again, so its fields are tracked: its identity
+/// then does not depend on their content, and a field equal to the previous
+/// revision's keeps that revision, so a query that reads only the module
+/// is not rerun when only positions moved.
 #[salsa::tracked]
 pub struct ParsedAst<'db> {
     /// The parsed AST module with unresolved names.
+    #[tracked]
     pub module: Module<UnresolvedName>,
     /// The span map for looking up source locations.
-    #[returns(clone)]
+    #[tracked]
     pub span_map: SpanMap,
 }
 

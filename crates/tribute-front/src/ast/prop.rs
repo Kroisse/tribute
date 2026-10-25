@@ -818,7 +818,7 @@ mod tests {
     #[salsa::tracked]
     fn run_resolve(db: &dyn salsa::Database, input: PropTestInput) {
         let module = input.module(db);
-        let _resolved = resolve::resolve_module(db, module, SpanMap::default());
+        let _resolved = resolve::resolve_module(db, module, &SpanMap::default());
     }
 
     /// Tracked wrapper: resolve → typecheck pipeline.
@@ -831,8 +831,8 @@ mod tests {
     fn run_resolve_and_typecheck(db: &dyn salsa::Database, input: PropTestInput) -> String {
         let module = input.module(db);
         let span_map = SpanMap::default();
-        let resolved = resolve::resolve_module(db, module, span_map.clone());
-        let output = typeck::typecheck_module(db, &resolved, span_map);
+        let resolved = resolve::resolve_module(db, module, &span_map);
+        let output = typeck::typecheck_module(db, &resolved, span_map.clone());
         format!(
             "{:#?}\n{:#?}",
             output.module(db),

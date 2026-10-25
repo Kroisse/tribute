@@ -1362,7 +1362,7 @@ pub fn parse_and_lower_ast<'db>(
 
     // Phase 3: Name resolution
     let resolved_ast =
-        ast_resolve::resolve_with_env(db, user_ast, user_env, &dependencies, span_map.clone());
+        ast_resolve::resolve_with_env(db, user_ast, user_env, &dependencies, span_map);
 
     // Phase 4: Type checking against package std
     let mut checker = ast_typeck::TypeChecker::new(db, span_map.clone());
@@ -1379,7 +1379,9 @@ pub fn parse_and_lower_ast<'db>(
     );
 
     Some(ast_typeck::TypeCheckOutput::from_check(
-        db, result, span_map,
+        db,
+        result,
+        span_map.clone(),
     ))
 }
 

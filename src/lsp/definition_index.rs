@@ -774,7 +774,7 @@ pub fn definition_index<'db>(
     let module = tribute::parse_and_lower_ast(db, source)?.module(db);
     let span_map = ast_query::span_map(db, source)?;
 
-    Some(AstDefinitionIndex::build(db, module, &span_map))
+    Some(AstDefinitionIndex::build(db, module, span_map))
 }
 
 // =============================================================================

@@ -64,6 +64,15 @@ fields have narrow `salsa_value` proofs: they own their children, and `V` must
 itself implement `SalsaValue`. Do not store a reference tied to an old database
 revision in a tracked value.
 
+A tracked struct's identity is the hash of its untracked fields. A struct that
+a query creates again on every run, such as `ParsedAst` from each reparse,
+marks its fields `#[tracked]`. Its identity then does not depend on their
+content, so the query keeps returning the same struct, and each field keeps its
+previous revision while its value compares equal. A query that reads only an
+unchanged field is not rerun. Never leave a field whose `Hash` follows an
+allocation, such as a pointer-hashed `SpanMap`, untracked: every run would then
+allocate a new struct, and everything that reads it would rerun.
+
 ## Creating a Source Input
 
 Use the existing constructor when a test needs parsed source:
