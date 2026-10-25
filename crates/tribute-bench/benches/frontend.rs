@@ -40,7 +40,7 @@ fn generic_instances_source(types: usize) -> String {
 }
 
 fn specialization(c: &mut Criterion) {
-    let mut group = c.benchmark_group("frontend/specialization");
+    let mut group = c.benchmark_group("frontend");
     for types in [16, 64] {
         let program = Program {
             name: "generic_instances",
@@ -49,7 +49,7 @@ fn specialization(c: &mut Criterion) {
             wasm: WasmSupport::Supported,
         };
         stages::frontend(&program).expect("the program compiles");
-        group.bench_function(types.to_string(), |b| {
+        group.bench_function(format!("specialization/{types}_types"), |b| {
             b.iter_batched(
                 || (),
                 |()| stages::frontend(&program).expect("frontend"),
