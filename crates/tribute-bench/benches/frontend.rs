@@ -1,13 +1,14 @@
-//! Frontend compile time of programs whose generic functions and types are
-//! instantiated at many types, so specialization dominates.
+//! Frontend compile time: parse through specialization, from a fresh
+//! database, for workloads that stress one frontend stage each.
 //!
 //! ```text
-//! cargo bench -p tribute-bench --bench specialization -- --save-baseline <name>
-//! cargo bench -p tribute-bench --bench specialization -- --baseline <name>
+//! cargo bench -p tribute-bench --bench frontend -- --save-baseline <name>
+//! cargo bench -p tribute-bench --bench frontend -- --baseline <name>
 //! ```
 //!
-//! Each program instantiates a generic struct and three generic functions,
-//! one calling the others, at every one of `types` distinct structs.
+//! - `frontend/specialization/<types>`: a program instantiating a generic
+//!   struct and three generic functions, one calling the others, at every
+//!   one of `types` distinct structs.
 
 use std::time::Duration;
 
@@ -39,7 +40,7 @@ fn generic_instances_source(types: usize) -> String {
 }
 
 fn specialization(c: &mut Criterion) {
-    let mut group = c.benchmark_group("frontend/generic_instances");
+    let mut group = c.benchmark_group("frontend/specialization");
     for types in [16, 64] {
         let program = Program {
             name: "generic_instances",

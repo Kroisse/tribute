@@ -25,7 +25,7 @@ name = "abi_boundary"
 harness = false
 
 [[bench]]
-name = "specialization"
+name = "frontend"
 harness = false
 
 [lints.rust]
