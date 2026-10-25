@@ -131,3 +131,27 @@ impl std::fmt::Display for CompilationPhase {
         }
     }
 }
+
+/// Compare diagnostics using a stable user-facing order.
+///
+/// Compilation phase is primary, followed by source location and message as
+/// deterministic tie-breakers. This is also used by the CLI for target-specific
+/// accumulator results.
+pub fn compare_diagnostics(left: &Diagnostic, right: &Diagnostic) -> std::cmp::Ordering {
+    fn phase_rank(phase: &CompilationPhase) -> u8 {
+        match phase {
+            CompilationPhase::Parsing => 0,
+            CompilationPhase::AstGeneration => 1,
+            CompilationPhase::TirGeneration => 2,
+            CompilationPhase::NameResolution => 3,
+            CompilationPhase::TypeChecking => 4,
+            CompilationPhase::Lowering => 5,
+            CompilationPhase::Optimization => 6,
+        }
+    }
+
+    phase_rank(&left.phase)
+        .cmp(&phase_rank(&right.phase))
+        .then_with(|| left.inner.span.cmp(&right.inner.span))
+        .then_with(|| left.inner.message.cmp(&right.inner.message))
+}
