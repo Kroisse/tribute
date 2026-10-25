@@ -34,7 +34,7 @@ fn format(value: Int) -> String {
 }
 
 #[salsa_test]
-fn generic_constructor_boxes_int_for_its_specialized_layout(db: &salsa::DatabaseImpl) {
+fn generic_constructor_stores_int_in_its_specialized_layout(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "generic_constructor_int.trb",
@@ -54,38 +54,34 @@ fn format_box(value: Int) -> String {
     );
 
     let ir = run_ast_pipeline_with_ir(db, source);
+    assert!(
+        ir.contains(r#"!"Boxed$Int" = adt.enum<"Boxed$Int" { Empty(), Box(core.i32) }>"#),
+        "Boxed(Int) must be specialized to a layout with an Int field:\n{ir}"
+    );
     let format_box = ir
         .split("tribute_control.func @format_box")
         .nth(1)
         .expect("format_box function must be lowered");
-    let layout_cast = format_box
-        .find("tribute_rt.box_int")
-        .expect("generic constructor field must be boxed to its erased layout type");
     let construct = format_box
-        .find("adt.variant_new")
-        .expect("generic constructor must construct Box");
+        .find(r#"adt.variant_new %0 {tag = "Box", type = !"Boxed$Int"}"#)
+        .expect("Box(value) must construct the specialized Boxed$Int");
     let int_to_string = format_box
         .find("callee = @\"std::Int::to_string\"")
         .expect("Box payload must be passed to Int::to_string");
-    let payload_recovery = format_box[..int_to_string]
-        .rfind("tribute_rt.unbox_int")
-        .expect("erased Box payload must be unboxed before Int::to_string");
     assert!(
-        format_box[layout_cast..construct].contains(": tribute_rt.anyref"),
-        "generic Box field must be converted to its erased layout type before construction:\n{format_box}"
+        format_box[construct..int_to_string].contains(
+            r#"adt.variant_get %9 {field = 0, tag = "Box", type = !"Boxed$Int"} : core.i32"#
+        ),
+        "pattern use must read the Int payload from the specialized layout:\n{format_box}"
     );
     assert!(
-        format_box[payload_recovery..int_to_string].contains(": core.i32"),
-        "pattern use must recover the erased Box payload as Int before Int::to_string:\n{format_box}"
-    );
-    assert!(
-        layout_cast < construct && construct < payload_recovery && payload_recovery < int_to_string,
-        "generic Box construction and pattern use must cross distinct layout and recovery boundaries:\n{format_box}"
+        !format_box.contains("tribute_rt.box_int") && !format_box.contains("tribute_rt.unbox_int"),
+        "a specialized layout must hold Int without boxing:\n{format_box}"
     );
 }
 
 #[salsa_test]
-fn generic_result_constructor_boxes_int_for_its_specialized_layout(db: &salsa::DatabaseImpl) {
+fn generic_result_constructor_stores_int_in_its_specialized_layout(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "generic_result_constructor_int.trb",
@@ -106,19 +102,13 @@ fn ok_int(value: Int) -> Result(Int, String) {
         .split("tribute_control.func @ok_int")
         .nth(1)
         .expect("ok_int function must be lowered");
-    let construct = ok_int
-        .find("adt.variant_new")
-        .expect("generic Result constructor must construct Ok");
-    let cast = ok_int
-        .find("tribute_rt.box_int")
-        .expect("generic Result field must be boxed to its erased layout type");
     assert!(
-        ok_int[cast..construct].contains(": tribute_rt.anyref"),
-        "generic Result field must be converted to the resolved erased layout type:\n{ok_int}"
+        ok_int.contains(r#"adt.variant_new %0 {tag = "Ok", type = !"Result$Int$std::String"}"#),
+        ".Ok(value) must construct the specialized Result(Int, String) from the Int directly:\n{ok_int}"
     );
     assert!(
-        cast < construct,
-        "logical generic construction must convert its Int field before adt.variant_new:\n{ok_int}"
+        !ok_int.contains("tribute_rt.box_int"),
+        "a specialized layout must hold Int without boxing:\n{ok_int}"
     );
 }
 
@@ -304,82 +294,20 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         span_map,
     );
     let checked = tribute_front::typeck::typecheck_module(db, &resolved, span_map);
-    let typed = checked.module(db).clone();
+    let mono = tribute_front::monomorphize::monomorphize_functions(
+        db,
+        tribute_front::monomorphize::SpecializationInput::new(db, checked, None),
+    )
+    .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule {
-        ast: typed,
-        local_instances: checked
-            .expression_types(db)
-            .local_instances
-            .iter()
-            .cloned()
-            .collect(),
-        function_instances: checked.expression_types(db).function_instances.clone(),
-        span_map: tribute_front::ast::SpanMaps::new([span_map]),
-        function_types: checked
-            .declarations(db)
-            .function_types
-            .iter()
-            .cloned()
-            .collect(),
-        constructor_types: checked
-            .declarations(db)
-            .constructor_types
-            .schemes
-            .iter()
-            .cloned()
-            .collect(),
-        specialized_enum_variants: checked
-            .declarations(db)
-            .constructor_types
-            .specialized_enum_variants
-            .iter()
-            .cloned()
-            .collect(),
-        node_types: checked
-            .expression_types(db)
-            .node_types
-            .iter()
-            .cloned()
-            .collect(),
-        ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
-            &checked.declarations(db).ability_definitions,
-        ),
-        handler_operations: checked
-            .expression_types(db)
-            .handler_operations
-            .iter()
-            .cloned()
-            .collect(),
-        perform_operations: checked
-            .expression_types(db)
-            .perform_operations
-            .iter()
-            .cloned()
-            .collect(),
-        lambda_signatures: checked
-            .expression_types(db)
-            .lambda_signatures
-            .iter()
-            .cloned()
-            .collect(),
-        exhaustive_cases: checked
-            .expression_types(db)
-            .exhaustive_cases
-            .iter()
-            .copied()
-            .collect(),
-        evidence_plans: checked
-            .expression_types(db)
-            .evidence_plans
-            .iter()
-            .cloned()
-            .collect(),
-        well_known_types: checked.declarations(db).well_known_types,
-        compiler_intrinsics: HashMap::default(),
-        runtime_types: Default::default(),
-        merged_sources: Vec::new(),
-    }
+    let output = tribute_front::ast_to_ir::TypedModule::from_specialization(
+        db,
+        mono,
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([span_map]),
+            ..Default::default()
+        },
+    )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let declarations =
         &tribute_ir::dialect::tribute_control::operation_declarations(&ir, output.module);
