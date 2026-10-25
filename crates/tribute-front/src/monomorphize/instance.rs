@@ -123,12 +123,6 @@ pub(crate) fn collect_ability_argument_tails<'db>(
                 collect_ability_argument_tails(db, *arg, excluded);
             }
         }
-        TypeKind::App { ctor, args } => {
-            collect_ability_argument_tails(db, *ctor, excluded);
-            for arg in args {
-                collect_ability_argument_tails(db, *arg, excluded);
-            }
-        }
         TypeKind::Func {
             params,
             result,

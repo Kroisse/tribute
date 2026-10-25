@@ -26,6 +26,7 @@
 
 mod context;
 mod lower;
+mod nominal;
 mod row_binders;
 pub mod runtime_items;
 

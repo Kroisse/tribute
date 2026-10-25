@@ -116,12 +116,6 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
             format!("({})", elems_str.join(", "))
         }
 
-        TypeKind::App { ctor, args } => {
-            let ctor_str = print_ast_type(db, *ctor);
-            let args_str: Vec<String> = args.iter().map(|t| print_ast_type(db, *t)).collect();
-            format!("{}({})", ctor_str, args_str.join(", "))
-        }
-
         TypeKind::Error => "<error>".to_string(),
 
         // Primitives are handled by early return above
@@ -457,29 +451,6 @@ mod tests {
         let bool_ty = Type::new(&db, TypeKind::Bool);
         let tuple_ty = Type::new(&db, TypeKind::Tuple(vec![int_ty, bool_ty]));
         assert_eq!(print_ast_type(&db, tuple_ty), "(Int, Bool)");
-    }
-
-    #[test]
-    fn test_print_ast_type_app() {
-        let db = salsa::DatabaseImpl::default();
-
-        let int_ty = Type::new(&db, TypeKind::Int);
-        let ctor_ty = Type::new(
-            &db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(&db),
-                name: trunk_ir::Symbol::new("List"),
-                args: vec![],
-            },
-        );
-        let app_ty = Type::new(
-            &db,
-            TypeKind::App {
-                ctor: ctor_ty,
-                args: vec![int_ty],
-            },
-        );
-        assert_eq!(print_ast_type(&db, app_ty), "List(Int)");
     }
 
     #[test]

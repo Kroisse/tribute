@@ -1,8 +1,22 @@
 //! Bounded local callable materialization, before any source lambda is emitted.
-use super::*;
-use crate::ast::{LocalId, NodeId, Type};
+
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use tribute_ir::dialect::tribute_control;
+use trunk_ir::context::IrContext;
+use trunk_ir::ops::DialectType;
+use trunk_ir::refs::{TypeRef, ValueRef};
+
+use crate::ast::{
+    Expr, ExprKind, LocalId, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind,
+    TypedRef,
+};
+use crate::ast_to_ir::context::IrLoweringCtx;
+use crate::ast_to_ir::lower::{FuncSignature, IrBuilder};
 use crate::monomorphize::is_concrete_type;
 use crate::typeck::LambdaSignature;
+
+use super::callable::{RowArguments, lower_lambda};
+use super::declarations::Declarations;
 
 type Key<'db> = (NodeId, Type<'db>, TypeRef);
 
@@ -457,6 +471,6 @@ fn instantiated_parameters<'db>(
 ) -> Option<Vec<trunk_ir::refs::TypeRef>> {
     let name = function.path(ctx.db).clone();
     let declared = FuncSignature::lookup_logical(ctx, ir, &name)?;
-    let args = super::RowArguments::Instance(reference).rows(ctx, declarations, &name, &declared);
+    let args = RowArguments::Instance(reference).rows(ctx, declarations, &name, &declared);
     Some(declared.instantiate(ir, &args).param_types)
 }

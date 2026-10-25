@@ -11,6 +11,21 @@ use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectType;
 use trunk_ir::walk::{WalkAction, walk_region};
 
+/// The shared middle-end output for `source`.
+fn run_shared_pipeline(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> PassResult<Option<(IrContext, Module)>> {
+    compile_frontend_for_shared_route(db, source)
+        .map(run_shared_middle_end)
+        .transpose()
+}
+
+/// The root `core.module` of `module`.
+fn core_module(ctx: &IrContext, module: Module) -> core_dialect::Module {
+    core_dialect::Module::from_op(ctx, module.op()).expect("core.module")
+}
+
 /// Run one module pass on `module`, without a verifier.
 fn run_pass(
     ctx: &mut IrContext,
@@ -68,7 +83,8 @@ fn source_logical_root_defers_closure_storage_until_target_finalization() {
     let (mut ctx, module) = source_logical_cps_root_module("func.unreachable");
     let root = core_module(&ctx, module);
     let mut pm = PassManager::new();
-    add_target_closure_storage_passes(&mut pm);
+    pm.add_pass(tribute_passes::target_abi::PhysicalizeCpsCallables)
+        .add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
     pm.run(&mut ctx, root, &mut Default::default()).unwrap();
     let after_abi = trunk_ir::printer::print_module(&ctx, module.op());
     assert!(after_abi.contains("closure.closure"), "{after_abi}");
@@ -94,7 +110,12 @@ fn empty_result_cps_root_executes_native_done_continuation() {
         "#,
     );
 
-    run_native_target_pipeline(&mut ctx, module).expect("logical CPS root crosses native boundary");
+    run_target_to_boundary_exit(
+        &mut ctx,
+        module,
+        tribute_passes::abi_boundary::TargetKind::Native,
+    )
+    .expect("logical CPS root crosses native boundary");
     for name in ["__tribute_main", "__tribute_done_k", "__tribute_unhandled"] {
         let function = module
             .ops(&ctx)
@@ -118,7 +139,7 @@ fn empty_result_cps_root_executes_native_done_continuation() {
                 .is_empty()
         );
     }
-    let object = compile_module_to_native(
+    let object = lower_and_emit_native(
         &mut ctx,
         module,
         false,
@@ -151,8 +172,13 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
             effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.nil}
         "#,
     );
-    run_wasm_target_pipeline(&mut ctx, module).unwrap();
-    let binary = compile_to_wasm(&mut ctx, module).unwrap_or_else(|error| {
+    run_target_to_boundary_exit(
+        &mut ctx,
+        module,
+        tribute_passes::abi_boundary::TargetKind::Wasm,
+    )
+    .unwrap();
+    let binary = lower_and_emit_wasm(&mut ctx, module).unwrap_or_else(|error| {
         panic!(
             "{error}\n{}",
             trunk_ir::printer::print_module(&ctx, module.op())
@@ -529,14 +555,17 @@ fn prepare_native_fixture(
     let (mut ctx, module) = run_shared_pipeline(db, source)
         .expect("shared pipeline must succeed")
         .expect("fixture must lower");
-    validate_and_report_arity(db, &ctx, module);
-    run_native_target_pipeline(&mut ctx, module).expect("native target lowering must succeed");
-    prepare_module_to_native(
+    run_target_to_boundary_exit(
         &mut ctx,
         module,
-        false,
-        NativeOptimizationOptions::production(),
-        None,
+        tribute_passes::abi_boundary::TargetKind::Native,
+    )
+    .expect("native target lowering must succeed");
+    run_stages(
+        &mut ctx,
+        module,
+        StageConfig::target(tribute_passes::abi_boundary::TargetKind::Native),
+        Stage::LowerTarget..=Stage::LowerTarget,
     )
     .expect("native preparation must succeed");
     trunk_ir_cranelift_backend::validate_clif_ir(&ctx, module)
@@ -734,7 +763,7 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
     let mut ctx = IrContext::new();
     let module = trunk_ir::parser::parse_test_module(&mut ctx, input);
 
-    let object = compile_module_to_native(
+    let object = lower_and_emit_native(
         &mut ctx,
         module,
         false,
@@ -808,7 +837,7 @@ fn physical_module_without_control_metadata_runs_native_tail_calls() {
     let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
     assert!(verified.is_ok(), "{verified}");
 
-    let object = compile_module_to_native(
+    let object = lower_and_emit_native(
         &mut ctx,
         module,
         false,
@@ -851,7 +880,7 @@ fn physical_module_with_mismatched_tail_convention_is_rejected() {
     );
     let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
     assert!(verified.is_ok(), "{verified}");
-    let error = compile_module_to_native(
+    let error = lower_and_emit_native(
         &mut ctx,
         module,
         false,
@@ -2076,8 +2105,16 @@ fn both_targets_consume_the_bytes_intrinsic_inside_the_boundary(db: &salsa::Data
             .expect("shared pipeline must succeed")
             .expect("fixture must lower");
         match target {
-            TargetKind::Native => run_native_target_pipeline(&mut ctx, module),
-            TargetKind::Wasm => run_wasm_target_pipeline(&mut ctx, module),
+            TargetKind::Native => run_target_to_boundary_exit(
+                &mut ctx,
+                module,
+                tribute_passes::abi_boundary::TargetKind::Native,
+            ),
+            TargetKind::Wasm => run_target_to_boundary_exit(
+                &mut ctx,
+                module,
+                tribute_passes::abi_boundary::TargetKind::Wasm,
+            ),
         }
         .unwrap_or_else(|error| panic!("{target:?} boundary failed: {error}"));
 
@@ -2223,7 +2260,12 @@ fn types_surviving_wasm_lowering(
     let (mut ctx, module) = run_shared_pipeline(db, source)
         .expect("shared pipeline must succeed")
         .expect("fixture must lower");
-    run_wasm_target_pipeline(&mut ctx, module).expect("Wasm boundary");
+    run_target_to_boundary_exit(
+        &mut ctx,
+        module,
+        tribute_passes::abi_boundary::TargetKind::Wasm,
+    )
+    .expect("Wasm boundary");
     run_pass(&mut ctx, module, tribute_passes::wasm::lower::LowerToWasm).expect("Wasm lowering");
 
     let mut sites = std::collections::BTreeSet::new();
@@ -2363,7 +2405,12 @@ fn wasm_lowering_carries_only_preserved_language_metadata(db: &salsa::DatabaseIm
     let (mut ctx, module) = run_shared_pipeline(db, source)
         .expect("shared pipeline must succeed")
         .expect("fixture must lower");
-    run_wasm_target_pipeline(&mut ctx, module).expect("Wasm boundary");
+    run_target_to_boundary_exit(
+        &mut ctx,
+        module,
+        tribute_passes::abi_boundary::TargetKind::Wasm,
+    )
+    .expect("Wasm boundary");
     run_pass(&mut ctx, module, tribute_passes::wasm::lower::LowerToWasm).expect("Wasm lowering");
 
     // Wasm lowering copies operation attributes without interpreting

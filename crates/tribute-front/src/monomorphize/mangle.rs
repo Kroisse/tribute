@@ -132,7 +132,7 @@ fn write_type_mangled(
         // existing uniform representation boundary, where both kinds of
         // quantified variables use their index only.
         TypeKind::LocalBoundVar { index, .. } => write!(f, "8${index}"),
-        TypeKind::UniVar { .. } | TypeKind::App { .. } | TypeKind::Continuation { .. } => {
+        TypeKind::UniVar { .. } | TypeKind::Continuation { .. } => {
             panic!("mangle_name requires fully-resolved concrete types");
         }
         TypeKind::Error => f.write_str("error"),

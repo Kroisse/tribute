@@ -23,6 +23,7 @@ use derive_more::{Display, Error};
 
 use super::analysis::AnalysisCache;
 use super::context::IrContext;
+use super::dialect::core;
 use super::op_def::OpDef;
 use super::op_flag::{IsolatedFromAbove, OpFlag};
 use super::op_interface::{
@@ -30,6 +31,7 @@ use super::op_interface::{
     RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
 };
 use super::ops::{DialectOp, DialectType};
+use super::pass::{Pass, PassRunResult};
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
 use super::symbol_table::{SymbolTable, link_name, qualified_name};
@@ -1208,7 +1210,7 @@ fn check_call_arity_in_region(
 /// correct number of arguments matching the callee's function signature.
 ///
 /// Arity mismatches are reported as warnings via `ctx.report_warning`.
-pub fn validate_call_arity(ctx: &IrContext, module: Module) {
+fn validate_call_arity(ctx: &IrContext, module: Module) {
     let symbols = SymbolTable::collect(ctx, module);
     let _ = walk::walk_op::<std::convert::Infallible>(ctx, module.op(), &mut |op| {
         if !is_arity_checked_function(ctx, op) {
@@ -1221,6 +1223,63 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
         }
         std::ops::ControlFlow::Continue(walk::WalkAction::Skip)
     });
+}
+
+/// Check that every `func.call` and `func.tail_call` passes as many
+/// arguments as its callee's signature takes. A mismatch is a warning
+/// reported to the context's diagnostics; it does not fail the run.
+pub struct CheckCallArity;
+
+impl Pass for CheckCallArity {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-call-arity"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        validate_call_arity(ctx, target.into());
+        Ok(())
+    }
+}
+
+/// In debug builds, log the [`validate_value_integrity`] errors of the
+/// module, labeled with the pipeline point `boundary`. It never fails the
+/// run and does nothing in release builds.
+pub struct CheckValueIntegrity {
+    pub boundary: &'static str,
+}
+
+impl Pass for CheckValueIntegrity {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-value-integrity"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        if cfg!(debug_assertions) {
+            let result = validate_value_integrity(ctx, target.into());
+            if !result.is_ok() {
+                tracing::warn!(
+                    "Value integrity errors {}: {:?}",
+                    self.boundary,
+                    result.errors
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Run all validations and combine results.
@@ -2454,6 +2513,51 @@ mod tests {
         assert!(
             text.contains("else_region must terminate with scf.yield"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn check_passes_report_through_the_context_and_never_fail() {
+        use crate::pass::PassManager;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
+    %2 = arith.addi %0, %1 : core.i32
+    func.return %2
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    %1 = func.call %0 {callee = @add} : core.i32
+    func.return %1
+  }
+}"#,
+        );
+        let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        let passes = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&passes);
+        let mut pm = PassManager::new();
+        pm.add_pass(CheckValueIntegrity { boundary: "test" })
+            .add_pass(CheckCallArity);
+        pm.with_instrumentation(move |_ctx, name, _op| seen.borrow_mut().push(name.to_owned()));
+
+        pm.run(&mut ctx, root, &mut AnalysisCache::new())
+            .expect("the checks never fail the run");
+
+        assert_eq!(
+            *passes.borrow(),
+            ["check-value-integrity", "check-call-arity"]
+        );
+        let diagnostics = ctx.diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(
+            diagnostics[0].message.contains("1 argument(s), expected 2"),
+            "{}",
+            diagnostics[0].message
         );
     }
 

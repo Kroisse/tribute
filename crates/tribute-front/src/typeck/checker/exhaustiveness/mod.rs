@@ -137,10 +137,6 @@ impl<'db> TypeChecker<'db> {
     fn nominal_type(&self, ty: Type<'db>) -> Option<TypeDefId<'db>> {
         match ty.kind(self.db()) {
             TypeKind::Named { id, .. } => Some(*id),
-            TypeKind::App { ctor, .. } => match ctor.kind(self.db()) {
-                TypeKind::Named { id, .. } => Some(*id),
-                _ => None,
-            },
             _ => None,
         }
     }
