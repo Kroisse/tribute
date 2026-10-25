@@ -76,20 +76,6 @@ fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
             "fn(Int, Bool) -> Int",
         ),
         (
-            TypeKind::App {
-                ctor: int,
-                args: vec![],
-            },
-            "Int()",
-        ),
-        (
-            TypeKind::App {
-                ctor: int,
-                args: vec![bool_ty],
-            },
-            "Int(Bool)",
-        ),
-        (
             TypeKind::Continuation {
                 arg: int,
                 result: bool_ty,

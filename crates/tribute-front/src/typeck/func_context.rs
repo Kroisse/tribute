@@ -1526,10 +1526,7 @@ mod tests {
 
     /// Create a type parameter with just a name.
     fn type_param(name: Symbol) -> TypeParam {
-        TypeParam {
-            name: Some(name),
-            kind: None,
-        }
+        TypeParam { name: Some(name) }
     }
 
     #[salsa::tracked(returns(copy))]
@@ -1731,7 +1728,7 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_instantiate_scheme_freshens_rows_in_app_and_continuation(db: &dyn salsa::Database) {
+    fn test_instantiate_scheme_freshens_rows_in_tuple_and_continuation(db: &dyn salsa::Database) {
         fn continuation_effect<'db>(
             db: &'db dyn salsa::Database,
             ty: Type<'db>,
@@ -1756,24 +1753,18 @@ mod tests {
                 effect: shared,
             },
         );
-        let app = Type::new(
-            db,
-            TypeKind::App {
-                ctor: continuation,
-                args: vec![continuation],
-            },
-        );
-        let scheme = TypeScheme::new(db, vec![], vec![RowVar { id: 0 }], app);
+        let pair = Type::new(db, TypeKind::Tuple(vec![continuation, continuation]));
+        let scheme = TypeScheme::new(db, vec![], vec![RowVar { id: 0 }], pair);
 
         let instantiated = ctx.instantiate_scheme(scheme);
-        let TypeKind::App { ctor, args } = instantiated.kind(db) else {
-            panic!("expected application type");
+        let TypeKind::Tuple(elements) = instantiated.kind(db) else {
+            panic!("expected tuple type");
         };
-        let ctor_effect = continuation_effect(db, *ctor);
-        let arg_effect = continuation_effect(db, args[0]);
+        let first_effect = continuation_effect(db, elements[0]);
+        let second_effect = continuation_effect(db, elements[1]);
 
-        assert_eq!(ctor_effect.rest(db), arg_effect.rest(db));
-        assert_ne!(ctor_effect.rest(db), shared.rest(db));
+        assert_eq!(first_effect.rest(db), second_effect.rest(db));
+        assert_ne!(first_effect.rest(db), shared.rest(db));
     }
 
     #[salsa_test]

@@ -232,7 +232,6 @@ fn is_concrete_type_cached<'db>(
         TypeKind::BoundVar { .. }
         | TypeKind::LocalBoundVar { .. }
         | TypeKind::UniVar { .. }
-        | TypeKind::App { .. }
         | TypeKind::Error => false,
         TypeKind::Continuation {
             arg,
@@ -358,12 +357,6 @@ fn collect_from_type_inner<'db>(
         TypeKind::Tuple(elems) => {
             for e in elems {
                 collect_from_type_inner(db, *e, index, result, seen);
-            }
-        }
-        TypeKind::App { ctor, args } => {
-            collect_from_type_inner(db, *ctor, index, result, seen);
-            for a in args {
-                collect_from_type_inner(db, *a, index, result, seen);
             }
         }
         TypeKind::Continuation {

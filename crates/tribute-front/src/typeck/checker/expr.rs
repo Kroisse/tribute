@@ -122,9 +122,6 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
                 || ability_row_contains_univar(db, *effect)
         }
         TypeKind::Tuple(elems) => elems.iter().any(|e| type_contains_univar(db, *e)),
-        TypeKind::App { ctor, args } => {
-            type_contains_univar(db, *ctor) || args.iter().any(|a| type_contains_univar(db, *a))
-        }
         TypeKind::Continuation {
             arg,
             result,
@@ -1862,7 +1859,7 @@ impl<'db> TypeChecker<'db> {
 
     /// Extract struct declaration identity and type arguments from a type.
     ///
-    /// Returns (Some(struct_id), type_args) if the type is a Named or App type,
+    /// Returns (Some(struct_id), type_args) if the type is a Named type,
     /// otherwise (None, empty vec).
     fn extract_struct_info(
         &self,
@@ -1870,13 +1867,6 @@ impl<'db> TypeChecker<'db> {
     ) -> (Option<crate::ast::TypeDefId<'db>>, Vec<Type<'db>>) {
         match ty.kind(self.db()) {
             TypeKind::Named { id, args, .. } => (Some(*id), args.clone()),
-            TypeKind::App { ctor, args } => {
-                if let TypeKind::Named { id, .. } = ctor.kind(self.db()) {
-                    (Some(*id), args.clone())
-                } else {
-                    (None, vec![])
-                }
-            }
             _ => (None, vec![]),
         }
     }
@@ -1894,14 +1884,6 @@ impl<'db> TypeChecker<'db> {
                 if id.is_builtin_list(self.db()) && args.len() == 1 =>
             {
                 args[0]
-            }
-            TypeKind::App { ctor, args } if args.len() == 1 => {
-                if let TypeKind::Named { id, .. } = ctor.kind(self.db())
-                    && id.is_builtin_list(self.db())
-                {
-                    return args[0];
-                }
-                ctx.fresh_type_var()
             }
             _ => ctx.fresh_type_var(),
         }
@@ -2056,13 +2038,6 @@ impl<'db> TypeChecker<'db> {
         // Extract struct declaration identity from receiver type.
         let struct_id = match receiver_ty.kind(self.db()) {
             TypeKind::Named { id, .. } => *id,
-            TypeKind::App { ctor, .. } => {
-                // Recursively extract from constructor
-                match ctor.kind(self.db()) {
-                    TypeKind::Named { id, .. } => *id,
-                    _ => return None,
-                }
-            }
             TypeKind::UniVar { .. } => {
                 // Type not yet known - can't resolve field
                 return None;
@@ -2076,7 +2051,6 @@ impl<'db> TypeChecker<'db> {
         // Substitute BoundVars with actual type arguments if any
         let actual_args: Vec<Type<'db>> = match receiver_ty.kind(self.db()) {
             TypeKind::Named { args, .. } => args.clone(),
-            TypeKind::App { args, .. } => args.clone(),
             _ => vec![],
         };
 
@@ -4650,17 +4624,6 @@ mod tests {
         let cases = [
             ("List<Int>", list_int, int_ty),
             ("List<String>", list_of(vec![string_ty]), string_ty),
-            (
-                "App(List, [Int])",
-                Type::new(
-                    db,
-                    TypeKind::App {
-                        ctor: list_of(vec![]),
-                        args: vec![int_ty],
-                    },
-                ),
-                int_ty,
-            ),
             ("List<List<Int>>", list_of(vec![list_int]), list_int),
         ];
 

@@ -125,26 +125,6 @@ pub fn substitute_bound_vars<'db>(
             }
             SubstResult::Ok(Type::new(db, TypeKind::Tuple(new_elements)))
         }
-        TypeKind::App { ctor, args } => {
-            let new_ctor = match substitute_bound_vars(db, *ctor, subst) {
-                SubstResult::Ok(ty) => ty,
-                err @ SubstResult::OutOfBounds { .. } => return err,
-            };
-            let mut new_args = Vec::with_capacity(args.len());
-            for arg in args {
-                match substitute_bound_vars(db, *arg, subst) {
-                    SubstResult::Ok(ty) => new_args.push(ty),
-                    err @ SubstResult::OutOfBounds { .. } => return err,
-                }
-            }
-            SubstResult::Ok(Type::new(
-                db,
-                TypeKind::App {
-                    ctor: new_ctor,
-                    args: new_args,
-                },
-            ))
-        }
         TypeKind::Continuation {
             arg,
             result,
@@ -417,18 +397,6 @@ fn freshen_row_vars_inner<'db>(
                     .collect(),
             ),
         ),
-        TypeKind::App { ctor, args } => Type::new(
-            db,
-            TypeKind::App {
-                ctor: freshen_row_vars_inner(db, *ctor, quantified_rows, fresh_row_var, row_vars),
-                args: args
-                    .iter()
-                    .map(|arg| {
-                        freshen_row_vars_inner(db, *arg, quantified_rows, fresh_row_var, row_vars)
-                    })
-                    .collect(),
-            },
-        ),
         TypeKind::Continuation {
             arg,
             result,
@@ -667,7 +635,7 @@ mod laws {
     }
 
     fn body(n: u32) -> TypeGen {
-        ARGS.bound_vars(n).higher_kinded(true)
+        ARGS.bound_vars(n).continuations(true)
     }
 
     fn build_all<'db>(db: &'db dyn salsa::Database, shapes: &[TypeShape]) -> Vec<Type<'db>> {
@@ -706,7 +674,7 @@ mod laws {
         /// arguments; rows without them keep their interned identity.
         #[test]
         fn types_without_bound_vars_are_unchanged(
-            ty in type_shape(ARGS.higher_kinded(true)),
+            ty in type_shape(ARGS.continuations(true)),
             row in row_shape(ARGS),
             args in proptest::collection::vec(type_shape(ARGS), 0..=2),
         ) {
@@ -765,7 +733,7 @@ mod laws {
         #[test]
         fn out_of_range_index_is_reported(
             (ty, args) in (0u32..=2).prop_flat_map(|n| (
-                type_shape(ARGS.bound_vars(n + 2).higher_kinded(true)),
+                type_shape(ARGS.bound_vars(n + 2).continuations(true)),
                 proptest::collection::vec(type_shape(ARGS), n as usize),
             )),
         ) {
