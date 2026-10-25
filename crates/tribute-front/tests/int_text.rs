@@ -219,48 +219,14 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule {
-        ast: mono.module(db).clone(),
-        span_map: tribute_front::ast::SpanMaps::new([parsed.span_map(db)]),
-        function_types: mono
-            .declarations(db)
-            .function_types
-            .iter()
-            .cloned()
-            .collect(),
-        constructor_types: mono
-            .declarations(db)
-            .constructor_types
-            .schemes
-            .iter()
-            .cloned()
-            .collect(),
-        specialized_enum_variants: mono
-            .declarations(db)
-            .constructor_types
-            .specialized_enum_variants
-            .clone(),
-        node_types: mono.expression_types(db).node_types.clone(),
-        local_instances: mono.expression_types(db).local_instances.clone(),
-        function_instances: mono.expression_types(db).function_instances.clone(),
-        ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
-            &mono.declarations(db).ability_definitions,
-        ),
-        handler_operations: mono.expression_types(db).handler_operations.clone(),
-        perform_operations: mono.expression_types(db).perform_operations.clone(),
-        lambda_signatures: mono.expression_types(db).lambda_signatures.clone(),
-        exhaustive_cases: mono
-            .expression_types(db)
-            .exhaustive_cases
-            .iter()
-            .copied()
-            .collect(),
-        evidence_plans: mono.expression_types(db).evidence_plans.clone(),
-        well_known_types: mono.declarations(db).well_known_types,
-        compiler_intrinsics: HashMap::default(),
-        runtime_types: Default::default(),
-        merged_sources: Vec::new(),
-    }
+    let output = tribute_front::ast_to_ir::TypedModule::from_specialization(
+        db,
+        mono,
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([parsed.span_map(db)]),
+            ..Default::default()
+        },
+    )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let ir_text = print_module(&ir, output.module.op());
     assert!(
@@ -297,48 +263,14 @@ fn lower_monomorphized_source(
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule {
-        ast: mono.module(db).clone(),
-        span_map: tribute_front::ast::SpanMaps::new([parsed.span_map(db)]),
-        function_types: mono
-            .declarations(db)
-            .function_types
-            .iter()
-            .cloned()
-            .collect(),
-        constructor_types: mono
-            .declarations(db)
-            .constructor_types
-            .schemes
-            .iter()
-            .cloned()
-            .collect(),
-        specialized_enum_variants: mono
-            .declarations(db)
-            .constructor_types
-            .specialized_enum_variants
-            .clone(),
-        node_types: mono.expression_types(db).node_types.clone(),
-        local_instances: mono.expression_types(db).local_instances.clone(),
-        function_instances: mono.expression_types(db).function_instances.clone(),
-        ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
-            &mono.declarations(db).ability_definitions,
-        ),
-        handler_operations: mono.expression_types(db).handler_operations.clone(),
-        perform_operations: mono.expression_types(db).perform_operations.clone(),
-        lambda_signatures: mono.expression_types(db).lambda_signatures.clone(),
-        exhaustive_cases: mono
-            .expression_types(db)
-            .exhaustive_cases
-            .iter()
-            .copied()
-            .collect(),
-        evidence_plans: mono.expression_types(db).evidence_plans.clone(),
-        well_known_types: mono.declarations(db).well_known_types,
-        compiler_intrinsics: HashMap::default(),
-        runtime_types: Default::default(),
-        merged_sources: Vec::new(),
-    }
+    let output = tribute_front::ast_to_ir::TypedModule::from_specialization(
+        db,
+        mono,
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([parsed.span_map(db)]),
+            ..Default::default()
+        },
+    )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     (ir, output)
 }

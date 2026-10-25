@@ -256,16 +256,7 @@ fn prepare_frontend_details<'db>(
         Ok(registered) => registered,
         Err(unsupported) => {
             for directive in unsupported {
-                Diagnostic::new(
-                    format!(
-                        "unsupported compiler intrinsic directive `{}`",
-                        directive.identity
-                    ),
-                    span_map.get_or_default(directive.node),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::Lowering,
-                )
-                .accumulate(db);
+                directive.diagnostic(&span_map).accumulate(db);
             }
             return None;
         }
@@ -301,16 +292,7 @@ fn prepare_frontend_details<'db>(
         Ok(specialized) => specialized,
         Err(errors) => {
             for error in errors {
-                Diagnostic::new(
-                    format!(
-                        "invalid specialization instance at {}: {:?}",
-                        error.node, error.kind
-                    ),
-                    span_map.get_or_default(error.node),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(db);
+                error.diagnostic(&span_map).accumulate(db);
             }
             return None;
         }
@@ -336,53 +318,17 @@ fn merge_and_lower_to_ir_with<'db, M>(
 ) -> (IrContext, M) {
     let prepared = prepare_frontend_details(db, *typed, source)
         .expect("frontend instances must be checked before lowering");
-    let typed = prepared.specialized;
-    let compiler_intrinsics = typed.compiler_intrinsics(db).iter().cloned().collect();
-    let runtime_types = prepared.runtime_types.clone();
     let mut ir = IrContext::new();
     let module = lower(
-        ast_to_ir::TypedModule {
-            ast: typed.module(db).clone(),
-            local_instances: typed.expression_types(db).local_instances.clone(),
-            function_instances: typed.expression_types(db).function_instances.clone(),
-            span_map: frontend_spans(db, source),
-            function_types: typed
-                .declarations(db)
-                .function_types
-                .iter()
-                .cloned()
-                .collect(),
-            constructor_types: typed
-                .declarations(db)
-                .constructor_types
-                .schemes
-                .iter()
-                .cloned()
-                .collect(),
-            specialized_enum_variants: typed
-                .declarations(db)
-                .constructor_types
-                .specialized_enum_variants
-                .clone(),
-            node_types: typed.expression_types(db).node_types.clone(),
-            ability_definitions: ast_typeck::ability_definitions_from_schemas(
-                &typed.declarations(db).ability_definitions,
-            ),
-            handler_operations: typed.expression_types(db).handler_operations.clone(),
-            perform_operations: typed.expression_types(db).perform_operations.clone(),
-            lambda_signatures: typed.expression_types(db).lambda_signatures.clone(),
-            exhaustive_cases: typed
-                .expression_types(db)
-                .exhaustive_cases
-                .iter()
-                .copied()
-                .collect(),
-            evidence_plans: typed.expression_types(db).evidence_plans.clone(),
-            well_known_types: typed.declarations(db).well_known_types,
-            compiler_intrinsics,
-            runtime_types,
-            merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
-        },
+        ast_to_ir::TypedModule::from_specialization(
+            db,
+            prepared.specialized,
+            ast_to_ir::LoweringEnvironment {
+                span_map: frontend_spans(db, source),
+                runtime_types: prepared.runtime_types.clone(),
+                merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
+            },
+        ),
         db,
         &mut ir,
         source.uri(db).as_str(),
