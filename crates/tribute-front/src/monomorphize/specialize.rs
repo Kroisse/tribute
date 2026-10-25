@@ -794,7 +794,7 @@ mod tests {
         let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
         let int = Type::new(&db, TypeKind::Int);
 
-        // Build a simple generic function: fn identity(a)(x: a) -> a { x }
+        // Build a simple generic function: fn identity(x: a) -> a { x }
         let body_ref = TypedRef::new(
             ResolvedRef::Local {
                 id: crate::ast::LocalId::new(0),
