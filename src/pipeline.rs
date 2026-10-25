@@ -811,6 +811,17 @@ pub fn run_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrCon
     .into_result()
 }
 
+/// Run the stages [`compile_with_diagnostics`] runs after the frontend, on
+/// every function of a frontend result, reachable or not.
+pub fn check_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrContext, Module)> {
+    run_stages_from_frontend(
+        frontend,
+        StageConfig::shared(SourceFunctions::All),
+        Stage::Specialize..=Stage::CheckArity,
+    )
+    .into_result()
+}
+
 /// Run `target`'s pipeline from the shared middle-end output to the
 /// representation/ABI boundary exit.
 pub fn run_target_to_boundary_exit(
