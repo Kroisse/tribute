@@ -169,183 +169,29 @@ impl OptimizationOptions {
     }
 }
 
-/// Independently selectable native-backend optimizations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NativeOptimizationOptions {
-    pub paired_rc_elimination: PairedRcEliminationPolicy,
-    pub borrowed_parameters: BorrowedParameterPolicy,
-    pub temporary_borrows: TemporaryBorrowPolicy,
-    pub last_use_moves: LastUseMovePolicy,
-    pub field_moves: FieldMovePolicy,
-}
-
-impl NativeOptimizationOptions {
-    pub const fn production() -> Self {
-        Self {
-            paired_rc_elimination: PairedRcEliminationPolicy::Enabled,
-            borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
-            temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
-            last_use_moves: LastUseMovePolicy::Move,
-            field_moves: FieldMovePolicy::Move,
-        }
-    }
-
-    pub const fn baseline() -> Self {
-        Self {
-            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
-            borrowed_parameters: BorrowedParameterPolicy::Preserve,
-            temporary_borrows: TemporaryBorrowPolicy::Preserve,
-            last_use_moves: LastUseMovePolicy::Acquire,
-            field_moves: FieldMovePolicy::Acquire,
-        }
-    }
-}
-
-/// Policy for local retain/release pair elimination.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PairedRcEliminationPolicy {
-    Disabled,
-    Enabled,
-}
-
-/// Policy for eliding ownership of proven borrowed native parameters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BorrowedParameterPolicy {
-    Preserve,
-    ElideProvenBorrowed,
-}
-
-/// Policy for eliding ownership of proven field-derived native temporaries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TemporaryBorrowPolicy {
-    Preserve,
-    ElideProvenFieldBorrows,
-}
-
-/// Policy for moving a native value's ownership unit into a store or an
-/// ordinary consumed call that is its last use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LastUseMovePolicy {
-    Acquire,
-    Move,
-}
-
-/// Policy for moving a field's unit out of an owner that dies in the block
-/// where the field is read, instead of acquiring one for the field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FieldMovePolicy {
-    Acquire,
-    Move,
-}
-
 impl Default for OptimizationOptions {
     fn default() -> Self {
         Self::production()
     }
 }
 
-/// Stable native-pipeline boundaries available to optimization tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum NativePipelineStage {
-    /// Immediately after reference-counting operations are inserted.
-    AfterRcInsertion,
-    /// After borrowed-parameter-aware insertion, before paired elimination.
-    AfterBorrowedParameterOptimization,
-    /// After temporary field-borrow-aware insertion, before last-use moves and
-    /// paired elimination.
-    AfterTemporaryBorrowOptimization,
-    /// After optional local RC optimization, before cast resolution and lowering.
-    AfterRcOptimization,
-}
+pub use tribute_passes::native::optimization::{
+    BorrowedParameterPolicy, FieldMovePolicy, LastUseMovePolicy, NativeOptimizationOptions,
+    NativePipelineStage, PairedRcEliminationPolicy, TemporaryBorrowPolicy,
+};
 
 // AST-based pipeline imports
 use tribute_front::ast_to_ir;
-use tribute_front::astgen::ParsedAst;
 use tribute_front::monomorphize::{SpecializationInput, SpecializationOutput};
 use tribute_front::query as ast_query;
 use tribute_front::resolve as ast_resolve;
-use tribute_front::resolve::PackageEnv;
 use tribute_front::typeck as ast_typeck;
-use tribute_front::typeck::PreludeExports;
 use trunk_ir_cranelift_backend::{
     CompilationResult as NativeCompilationResult, emit_module_to_native,
 };
 use trunk_ir_wasm_backend::{
     CompilationError, CompilationResult as WasmCompilationResult, WasmBinary,
 };
-
-// =============================================================================
-// Standard Library Prelude
-// =============================================================================
-
-/// Parse the prelude source.
-///
-/// This is the first stage of prelude processing, shared by all prelude-related functions.
-/// Returns both the parsed AST and the SourceCst to avoid redundant creation.
-#[salsa::tracked(returns(copy))]
-fn parse_prelude<'db>(db: &'db dyn salsa::Database) -> Option<(ParsedAst<'db>, crate::SourceCst)> {
-    let prelude_source = crate::prelude::prelude_source(db)?;
-    let parsed = ast_query::parsed_ast_with_module_path(
-        db,
-        prelude_source,
-        trunk_ir::Symbol::new("prelude"),
-    )?;
-    Some((parsed, prelude_source))
-}
-
-/// Parse, resolve, and type check the prelude once.
-///
-/// Returns both the typed prelude, which user modules import methods from and
-/// merge before lowering, and the exports their type checking reads through
-/// the dependency table.
-/// Salsa caches the result for all subsequent compilations.
-#[salsa::tracked(returns(copy))]
-fn checked_prelude<'db>(
-    db: &'db dyn salsa::Database,
-) -> Option<(ast_typeck::TypeCheckOutput<'db>, PreludeExports<'db>)> {
-    let (parsed, _) = parse_prelude(db)?;
-    let prelude_ast = parsed.module(db);
-    let span_map = parsed.span_map(db);
-    let prelude_env = ast_resolve::build_library_env(db, prelude_ast);
-    let resolved =
-        ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env, span_map.clone());
-
-    // Typecheck with independent TypeContext (all UniVars resolved)
-    let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
-    let (result, exports) = checker.check_prelude(&resolved);
-
-    let typed = ast_typeck::TypeCheckOutput::from_check(db, result, span_map);
-    Some((typed, exports))
-}
-
-/// The prelude's typed AST (parse → resolve → typecheck), without
-/// lowering to TrunkIR. The caller is responsible for `ast_to_ir`.
-fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutput<'_>> {
-    checked_prelude(db).map(|(typed, _)| typed)
-}
-
-/// Get prelude's PackageEnv for name resolution.
-///
-/// This parses the prelude to AST and builds its package environment.
-/// Cached by Salsa - computed once and reused.
-#[salsa::tracked(returns(as_ref))]
-fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<PackageEnv<'db>> {
-    let (parsed, _) = parse_prelude(db)?;
-    Some(ast_resolve::build_library_env(db, parsed.module(db)))
-}
-
-/// The packages a user package depends on: package `std`.
-pub fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::Dependencies<'db> {
-    prelude_env(db)
-        .map(ast_resolve::Dependencies::std)
-        .unwrap_or_default()
-}
-
-/// The prelude's type exports (TypeSchemes only, no UniVars), which user
-/// module type checking reads through the dependency table.
-fn prelude_exports(db: &dyn salsa::Database) -> Option<PreludeExports<'_>> {
-    checked_prelude(db).map(|(_, exports)| exports)
-}
 
 /// Merge prelude decls into user's typed AST and lower to arena IR.
 ///
@@ -398,7 +244,7 @@ fn prepare_frontend_details<'db>(
     // Type checking reads package std's declarations without copying them.
     // Specialization takes them as one table with the user's, and std's
     // bodies and per-expression metadata ahead of the user's.
-    let prelude = prelude_module(db);
+    let prelude = crate::prelude::prelude_module(db);
     let mut input = SpecializationInput::new(db, typed, prelude);
     if let Some(prelude) = prelude {
         input = input.merge_bodies(db, prelude);
@@ -712,21 +558,6 @@ pub fn run_through_cps_lowering(
 // Full Pipeline (Orchestration)
 // =============================================================================
 
-/// Global DCE configuration that roots every function of `runtime`.
-///
-/// A runtime function is a root until the target lowering stages that call
-/// it have run (`new-plans/modules.md`, "생존 범위"). Every runtime function
-/// is called by target evidence lowering or earlier; the cleanup DCE after
-/// it removes the ones nothing calls.
-fn runtime_items_kept_alive(
-    runtime: &[tribute_ir::runtime_items::RuntimeItem],
-) -> trunk_ir::transforms::GlobalDceConfig {
-    trunk_ir::transforms::GlobalDceConfig {
-        extra_entry_points: tribute_ir::runtime_items::function_entry_points(runtime),
-        ..Default::default()
-    }
-}
-
 /// Build the shared structural pass pipeline that legalizes source-logical
 /// callable/control IR into CPS with explicit evidence. For
 /// [`SourceFunctions::Reachable`], it first removes the functions nothing
@@ -1036,7 +867,7 @@ fn enter_target_lowering(
     trunk_ir::transforms::global_dce::eliminate_dead_functions_with_config(
         ctx,
         m,
-        runtime_items_kept_alive(runtime),
+        tribute_ir::runtime_items::kept_alive(runtime),
         analyses,
     );
 
@@ -1293,55 +1124,6 @@ pub fn wasm_binary_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> V
 // Native Pipeline (Cranelift)
 // =============================================================================
 
-/// Select ownership-plan policy for each observable native pipeline boundary.
-///
-/// The staged dump boundaries deliberately suppress later elisions so their
-/// output remains comparable with the corresponding optimization policy.
-fn native_ownership_plan_options(
-    stop_after: Option<NativePipelineStage>,
-    optimizations: NativeOptimizationOptions,
-) -> tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
-    let configured = tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
-        elide_proven_borrowed_parameters: matches!(
-            optimizations.borrowed_parameters,
-            BorrowedParameterPolicy::ElideProvenBorrowed
-        ),
-        elide_proven_field_borrows: matches!(
-            optimizations.temporary_borrows,
-            TemporaryBorrowPolicy::ElideProvenFieldBorrows
-        ),
-        move_units_at_last_use: matches!(optimizations.last_use_moves, LastUseMovePolicy::Move),
-        move_fields_from_dying_owners: matches!(optimizations.field_moves, FieldMovePolicy::Move),
-    };
-
-    match stop_after {
-        Some(NativePipelineStage::AfterRcInsertion) => {
-            tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
-                elide_proven_borrowed_parameters: false,
-                elide_proven_field_borrows: false,
-                move_units_at_last_use: false,
-                move_fields_from_dying_owners: false,
-            }
-        }
-        Some(NativePipelineStage::AfterBorrowedParameterOptimization) => {
-            tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
-                elide_proven_borrowed_parameters: configured.elide_proven_borrowed_parameters,
-                elide_proven_field_borrows: false,
-                move_units_at_last_use: false,
-                move_fields_from_dying_owners: false,
-            }
-        }
-        Some(NativePipelineStage::AfterTemporaryBorrowOptimization) => {
-            tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
-                move_units_at_last_use: false,
-                move_fields_from_dying_owners: false,
-                ..configured
-            }
-        }
-        Some(NativePipelineStage::AfterRcOptimization) | None => configured,
-    }
-}
-
 /// Compile a TrunkIR module to a native object file (arena-based).
 ///
 /// This function runs all backend passes in a single arena session:
@@ -1414,7 +1196,10 @@ fn native_lowering_passes(
         .add_pass(trunk_ir::transforms::scf_to_cf_pass());
 
     pm.add_pass(LowerNativeOwnership {
-        options: native_ownership_plan_options(stop_after, optimizations),
+        options: tribute_passes::native::optimization::ownership_plan_options(
+            stop_after,
+            optimizations,
+        ),
     })
     // A descriptor read takes a managed reference, so it is lowered before
     // type conversion turns its operand into a pointer.
@@ -1572,7 +1357,7 @@ pub fn parse_and_lower_ast<'db>(
     );
 
     // Phase 2: Build user env, which depends on package std
-    let dependencies = prelude_dependencies(db);
+    let dependencies = crate::prelude::prelude_dependencies(db);
     let user_env = ast_resolve::build_env(db, user_ast, &dependencies);
 
     // Phase 3: Name resolution
@@ -1581,7 +1366,7 @@ pub fn parse_and_lower_ast<'db>(
 
     // Phase 4: Type checking against package std
     let mut checker = ast_typeck::TypeChecker::new(db, span_map.clone());
-    if let Some(p_exports) = prelude_exports(db) {
+    if let Some(p_exports) = crate::prelude::prelude_exports(db) {
         checker.depend_on(&p_exports);
     }
     let result = checker.check_module(&resolved_ast);
@@ -1645,36 +1430,12 @@ pub fn compile_with_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> 
             .into_iter()
             .cloned()
             .collect();
-    diagnostics.sort_by(compare_diagnostics);
+    diagnostics.sort_by(tribute_core::diagnostic::compare_diagnostics);
 
     CompilationResult {
         produced_module,
         diagnostics,
     }
-}
-
-/// Compare diagnostics using a stable user-facing order.
-///
-/// Compilation phase is primary, followed by source location and message as
-/// deterministic tie-breakers. This is also used by the CLI for target-specific
-/// accumulator results.
-pub fn compare_diagnostics(left: &Diagnostic, right: &Diagnostic) -> std::cmp::Ordering {
-    fn phase_rank(phase: &CompilationPhase) -> u8 {
-        match phase {
-            CompilationPhase::Parsing => 0,
-            CompilationPhase::AstGeneration => 1,
-            CompilationPhase::TirGeneration => 2,
-            CompilationPhase::NameResolution => 3,
-            CompilationPhase::TypeChecking => 4,
-            CompilationPhase::Lowering => 5,
-            CompilationPhase::Optimization => 6,
-        }
-    }
-
-    phase_rank(&left.phase)
-        .cmp(&phase_rank(&right.phase))
-        .then_with(|| left.inner.span.cmp(&right.inner.span))
-        .then_with(|| left.inner.message.cmp(&right.inner.message))
 }
 
 #[cfg(test)]
