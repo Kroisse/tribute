@@ -40,7 +40,7 @@ use crate::ast::{
 pub fn resolve_module<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
-    span_map: &SpanMap,
+    span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
     // Build the package environment from declarations. Without the prelude,
     // package `std` holds only the compiler-owned names.
@@ -59,7 +59,7 @@ pub fn resolve_with_env<'db>(
     module: &Module<UnresolvedName>,
     env: PackageEnv<'db>,
     dependencies: &Dependencies<'db>,
-    span_map: &SpanMap,
+    span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
     let mut resolver = Resolver::new(db, env, dependencies, span_map);
     resolver.resolve_module(module)
@@ -425,7 +425,7 @@ pub fn resolve_library_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     env: PackageEnv<'db>,
-    span_map: &SpanMap,
+    span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
     Resolver::new(db, env, &Dependencies::none(), span_map)
         .with_package(PackageName::std())
