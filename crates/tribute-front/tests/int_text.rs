@@ -209,7 +209,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule::from_specialization(
+    let output = tribute_front::ast_to_ir::LoweringInput::from_specialization(
         db,
         mono,
         tribute_front::ast_to_ir::LoweringEnvironment {
@@ -253,7 +253,7 @@ fn lower_monomorphized_source(
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule::from_specialization(
+    let output = tribute_front::ast_to_ir::LoweringInput::from_specialization(
         db,
         mono,
         tribute_front::ast_to_ir::LoweringEnvironment {
@@ -300,7 +300,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule::from_specialization(
+    let output = tribute_front::ast_to_ir::LoweringInput::from_specialization(
         db,
         mono,
         tribute_front::ast_to_ir::LoweringEnvironment {

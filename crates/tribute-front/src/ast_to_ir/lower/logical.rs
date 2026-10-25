@@ -29,7 +29,7 @@ use crate::ast::{
 };
 
 use super::super::context::{IrLoweringCtx, LogicalGeneratedSignature};
-use super::super::{FrontendIrModule, TypedModule};
+use super::super::{FrontendIrModule, LoweringInput};
 use super::{FuncSignature, IrBuilder};
 
 mod local_callables;
@@ -360,12 +360,12 @@ fn lower_expr_for_callable_parameter<'db>(
 }
 
 pub(super) fn lower_module<'db>(
-    typed: TypedModule<'db>,
+    typed: LoweringInput<'db>,
     db: &'db dyn salsa::Database,
     ir: &mut IrContext,
     path: PathRef,
 ) -> FrontendIrModule {
-    let TypedModule {
+    let LoweringInput {
         ast,
         span_map,
         function_types,
@@ -679,7 +679,7 @@ fn plan_local_callables<'db>(
     }
 }
 
-impl<'db> TypedModule<'db> {
+impl<'db> LoweringInput<'db> {
     pub(crate) fn lower_module(
         self,
         db: &'db dyn salsa::Database,
