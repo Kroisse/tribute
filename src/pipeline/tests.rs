@@ -1358,18 +1358,22 @@ fn main() -> Nil {
 "#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
-        let (_, monomorphized) =
-            merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
-        let ast = format!("{:#?}", monomorphized.ast);
+        let monomorphized =
+            prepare_frontend_for_lowering(db, typed, source).expect("specialized frontend");
+        let ast = format!("{:#?}", monomorphized.module(db));
         let concrete = "std::collections::List::__tribute_list_prepend_intrinsic$std::String";
 
         assert!(
-            monomorphized.function_types.contains_key(&SymbolPath::new([
-                "std",
-                "collections",
-                "List",
-                "__tribute_list_prepend_intrinsic$std::String",
-            ])),
+            has_function_type(
+                db,
+                monomorphized,
+                &SymbolPath::new([
+                    "std",
+                    "collections",
+                    "List",
+                    "__tribute_list_prepend_intrinsic$std::String",
+                ])
+            ),
             "monomorphization must retain the concrete intrinsic scheme"
         );
         assert!(
@@ -1448,11 +1452,11 @@ fn main() -> Nil {
         "{instances:#?}"
     );
 
-    let (_, prepared) = merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
+    let prepared = prepare_frontend_for_lowering(db, typed, source).expect("specialized frontend");
     let specialized = Symbol::new("std::collections::List::prepend$Nat");
     assert_eq!(
         prepared
-            .ast
+            .module(db)
             .entries
             .iter()
             .filter_map(declaration_with_name)
@@ -1461,61 +1465,29 @@ fn main() -> Nil {
         1,
         "all import paths must share one specialized definition"
     );
-    assert!(prepared.function_types.contains_key(&SymbolPath::new([
-        "std",
-        "collections",
-        "List",
-        "prepend$Nat"
-    ])));
-    assert!(
-        !prepared
-            .function_types
-            .contains_key(&SymbolPath::new(["List", "prepend$Nat"]))
-    );
+    assert!(has_function_type(
+        db,
+        prepared,
+        &SymbolPath::new(["std", "collections", "List", "prepend$Nat"])
+    ));
+    assert!(!has_function_type(
+        db,
+        prepared,
+        &SymbolPath::new(["List", "prepend$Nat"])
+    ));
 }
 
-#[salsa_test]
-fn logical_enum_layout_rejects_missing_or_wrong_specialized_schema(db: &salsa::DatabaseImpl) {
-    use tribute_front::ast::{Decl, Type, TypeKind, TypeScheme};
-    let source = source_from_str(
-        "invalid_enum_schema.trb",
-        "enum Boxed(a) { Box(a), Empty }\nfn keep(value: Boxed(Int)) -> Boxed(Int) { value }\nfn main() -> Nil {}",
-    );
-    let typed = parse_and_lower_ast(db, source).unwrap();
-    for (missing, expected) in [
-        (true, "missing specialized enum variant schema"),
-        (false, "specialized enum variant schema has wrong owner"),
-    ] {
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            merge_and_lower_to_ir_with(db, &typed, source, |mut input, db, ir, uri| {
-                let variant = input
-                    .ast
-                    .decls()
-                    .find_map(|d| match d {
-                        Decl::Enum(e) if e.name == "Boxed$Int" => Some(e.variants[0].id),
-                        _ => None,
-                    })
-                    .unwrap();
-                if missing {
-                    input.specialized_enum_variants.remove(&variant);
-                } else {
-                    input
-                        .specialized_enum_variants
-                        .insert(variant, TypeScheme::mono(db, Type::new(db, TypeKind::Int)));
-                }
-                input.lower_to_ir(db, ir, uri)
-            })
-        }));
-        let Err(error) = failure else {
-            panic!("invalid specialized schema was accepted")
-        };
-        let message = error
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| error.downcast_ref::<&str>().copied())
-            .unwrap_or("");
-        assert!(message.contains(expected), "{message}");
-    }
+/// Whether specialization left a function scheme at `path`.
+fn has_function_type(
+    db: &dyn salsa::Database,
+    specialized: SpecializationOutput<'_>,
+    path: &SymbolPath,
+) -> bool {
+    specialized
+        .declarations(db)
+        .function_types
+        .iter()
+        .any(|(function, _)| function == path)
 }
 
 #[salsa_test]
@@ -1617,17 +1589,19 @@ fn main() -> Nil {}
             );
         }
     }
-    let (mut ir, logical) = merge_and_lower_to_ir_with(db, &typed, source, |typed, db, ir, uri| {
-        typed.lower_to_ir(db, ir, uri)
-    });
+    let FrontendCompilation {
+        context: mut ir,
+        module,
+        compiler_intrinsics,
+    } = merge_and_lower_to_ir(db, &typed, source);
     for after_cps in [false, true] {
         if after_cps {
-            tribute_passes::specialize_convention_classes::specialize(&mut ir, logical.module)
+            tribute_passes::specialize_convention_classes::specialize(&mut ir, module)
                 .expect("class specialization accepts frontend output");
             tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
                 &mut ir,
-                logical.module,
-                &logical.compiler_intrinsics,
+                module,
+                &compiler_intrinsics,
                 &mut Default::default(),
             )
             .unwrap();
@@ -1671,7 +1645,7 @@ fn main() -> Nil {}
             assert_eq!(ir.str(variants[0].0), "Item");
             assert_eq!(ir.get_type(variants[0].1[0]).name, primitive);
         }
-        let output = trunk_ir::printer::print_module(&ir, logical.module.op());
+        let output = trunk_ir::printer::print_module(&ir, module.op());
         for (name, primitive) in [("Boxed$Int", "core.i32"), ("Boxed$Bool", "core.i1")] {
             assert!(
                 output.lines().any(|line| line.contains("adt.variant_get")
@@ -1749,18 +1723,20 @@ fn main() -> Nil {}
     let typed = parse_and_lower_ast(db, source).expect("frontend output");
     let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    let (mut ir, logical) = merge_and_lower_to_ir_with(db, &typed, source, |typed, db, ir, uri| {
-        typed.lower_to_ir(db, ir, uri)
-    });
+    let FrontendCompilation {
+        context: mut ir,
+        module,
+        compiler_intrinsics,
+    } = merge_and_lower_to_ir(db, &typed, source);
     let mut source_tuple = None;
     for after_cps in [false, true] {
         if after_cps {
-            tribute_passes::specialize_convention_classes::specialize(&mut ir, logical.module)
+            tribute_passes::specialize_convention_classes::specialize(&mut ir, module)
                 .expect("class specialization accepts frontend output");
             tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
                 &mut ir,
-                logical.module,
-                &logical.compiler_intrinsics,
+                module,
+                &compiler_intrinsics,
                 &mut Default::default(),
             )
             .expect("CPS converts published layout fields");
@@ -1770,8 +1746,7 @@ fn main() -> Nil {}
             ("keep_b", "B::Token$Nat", STRUCT),
             ("keep_choice", "Choice$Nat", ENUM),
         ] {
-            let parameter = logical
-                .module
+            let parameter = module
                 .ops(&ir)
                 .iter()
                 .copied()
@@ -1833,11 +1808,13 @@ fn source_list_does_not_change_logical_prelude_signatures(db: &salsa::DatabaseIm
         "enum List(a) { SourceList(a), }\nfn main() -> Nil {}",
     );
     let typed = parse_and_lower_ast(db, source).expect("frontend output");
-    let (ir, logical) = merge_and_lower_to_ir_with(db, &typed, source, |typed, db, ir, uri| {
-        typed.lower_to_ir(db, ir, uri)
-    });
+    let FrontendCompilation {
+        context: ir,
+        module,
+        compiler_intrinsics,
+    } = merge_and_lower_to_ir(db, &typed, source);
     let mut checked = 0;
-    for &operation in logical.module.ops(&ir) {
+    for &operation in module.ops(&ir) {
         let Ok(function) = tribute_control::Func::from_op(&ir, operation) else {
             continue;
         };
@@ -1851,12 +1828,8 @@ fn source_list_does_not_change_logical_prelude_signatures(db: &salsa::DatabaseIm
         }
     }
     assert_eq!(checked, 1);
-    let validation = tribute_control::validate(
-        &ir,
-        logical.module,
-        &logical.compiler_intrinsics,
-        &mut Default::default(),
-    );
+    let validation =
+        tribute_control::validate(&ir, module, &compiler_intrinsics, &mut Default::default());
     assert!(validation.is_ok(), "{validation}");
 }
 
@@ -1892,12 +1865,14 @@ fn main() -> Nil {
             diagnostics.is_empty(),
             "recursive handler fixture must type-check without diagnostics: {diagnostics:#?}"
         );
-        let (_, monomorphized) =
-            merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
+        let monomorphized =
+            prepare_frontend_for_lowering(db, typed, source).expect("specialized frontend");
         let specialized = SymbolPath::new(["run_state$Nat$Nat"]);
         let scheme = monomorphized
+            .declarations(db)
             .function_types
-            .get(&specialized)
+            .iter()
+            .find_map(|(path, scheme)| (*path == specialized).then_some(*scheme))
             .expect("recursive handler call must collect a concrete run_state specialization");
 
         assert!(
@@ -1905,7 +1880,7 @@ fn main() -> Nil {
             "specialized run_state must not retain generic binders: {scheme:?}"
         );
         let specialized_body = monomorphized
-            .ast
+            .module(db)
             .decls()
             .find_map(|decl| match decl {
                 tribute_front::ast::Decl::Function(function) if specialized == [&function.name] => {

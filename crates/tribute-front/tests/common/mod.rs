@@ -137,7 +137,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let specialized = tribute_front::monomorphize::monomorphize_functions(db, input)
         .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let module = tribute_front::ast_to_ir::TypedModule::from_specialization(
+    let module = tribute_front::ast_to_ir::LoweringInput::from_specialization(
         db,
         specialized,
         tribute_front::ast_to_ir::LoweringEnvironment {

@@ -101,19 +101,36 @@ fn frontend_publishes_runtime_types_with_the_prelude_types() {
         // The prepared metadata is checked against the compiler's own item
         // set under `std::runtime`, which has no `rt` items; check the test
         // set here instead.
-        merge_and_lower_to_ir_with(db, &typed, source, |mut typed, db, ir, uri| {
-            typed.runtime_types = check_runtime(
-                db,
-                &RuntimeInputs {
-                    module: &typed.ast,
-                    function_types: &typed.function_types,
-                },
-                RUNTIME,
-                ITEMS,
-            )
-            .expect("runtime items");
-            typed.lower_to_ir(db, ir, uri)
-        })
+        let specialized =
+            prepare_frontend_for_lowering(db, typed, source).expect("specialized frontend");
+        let function_types: HashMap<_, _> = specialized
+            .declarations(db)
+            .function_types
+            .iter()
+            .cloned()
+            .collect();
+        let runtime_types = check_runtime(
+            db,
+            &RuntimeInputs {
+                module: specialized.module(db),
+                function_types: &function_types,
+            },
+            RUNTIME,
+            ITEMS,
+        )
+        .expect("runtime items");
+        let mut ctx = IrContext::new();
+        let frontend = ast_to_ir::LoweringInput::from_specialization(
+            db,
+            specialized,
+            ast_to_ir::LoweringEnvironment {
+                span_map: frontend_spans(db, source),
+                runtime_types,
+                merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
+            },
+        )
+        .lower_to_ir(db, &mut ctx, source.uri(db).as_str());
+        (ctx, frontend)
     });
     let m = frontend.module;
 

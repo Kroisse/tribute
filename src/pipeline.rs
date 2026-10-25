@@ -187,10 +187,19 @@ fn merge_and_lower_to_ir<'db>(
     typed: &ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
 ) -> FrontendCompilation {
-    let (context, frontend) =
-        merge_and_lower_to_ir_with(db, typed, source, |typed, db, ir, source_uri| {
-            typed.lower_to_ir(db, ir, source_uri)
-        });
+    let prepared = prepare_frontend_details(db, *typed, source)
+        .expect("frontend instances must be checked before lowering");
+    let mut context = IrContext::new();
+    let frontend = ast_to_ir::LoweringInput::from_specialization(
+        db,
+        prepared.specialized,
+        ast_to_ir::LoweringEnvironment {
+            span_map: frontend_spans(db, source),
+            runtime_types: prepared.runtime_types.clone(),
+            merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
+        },
+    )
+    .lower_to_ir(db, &mut context, source.uri(db).as_str());
     FrontendCompilation {
         context,
         module: frontend.module,
@@ -289,32 +298,6 @@ fn prepare_frontend_details<'db>(
 fn frontend_spans(db: &dyn salsa::Database, source: SourceCst) -> SpanMaps<'_> {
     let prelude = crate::prelude::prelude_span_map(db);
     SpanMaps::new(ast_query::span_map(db, source).into_iter().chain(prelude))
-}
-
-fn merge_and_lower_to_ir_with<'db, M>(
-    db: &'db dyn salsa::Database,
-    typed: &ast_typeck::TypeCheckOutput<'db>,
-    source: SourceCst,
-    lower: impl FnOnce(ast_to_ir::TypedModule<'db>, &'db dyn salsa::Database, &mut IrContext, &str) -> M,
-) -> (IrContext, M) {
-    let prepared = prepare_frontend_details(db, *typed, source)
-        .expect("frontend instances must be checked before lowering");
-    let mut ir = IrContext::new();
-    let module = lower(
-        ast_to_ir::TypedModule::from_specialization(
-            db,
-            prepared.specialized,
-            ast_to_ir::LoweringEnvironment {
-                span_map: frontend_spans(db, source),
-                runtime_types: prepared.runtime_types.clone(),
-                merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
-            },
-        ),
-        db,
-        &mut ir,
-        source.uri(db).as_str(),
-    );
-    (ir, module)
 }
 
 /// Arena IR together with the registered compiler intrinsics the shared CPS

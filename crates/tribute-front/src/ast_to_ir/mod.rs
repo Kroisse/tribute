@@ -157,37 +157,38 @@ pub fn registered_compiler_intrinsics<V>(
     }
 }
 
-/// A type-checked module and the metadata required to lower it to TrunkIR.
-///
-/// This models the boundary between the typed frontend and IR lowering as one
-/// value, instead of passing parallel metadata collections positionally.
-pub struct TypedModule<'db> {
-    pub ast: DeclTable<TypedRef<'db>>,
+/// The module and metadata IR lowering reads, built only from a
+/// specialization result by [`LoweringInput::from_specialization`]
+/// (`new-plans/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
+pub struct LoweringInput<'db> {
+    pub(crate) ast: DeclTable<TypedRef<'db>>,
     /// The span maps of the module's merged sources.
-    pub span_map: SpanMaps<'db>,
-    pub function_types: HashMap<SymbolPath, TypeScheme<'db>>,
-    pub constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
-    pub specialized_enum_variants: SortedMap<NodeId, TypeScheme<'db>>,
-    pub node_types: SortedMap<NodeId, Type<'db>>,
-    pub local_instances: SortedMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    pub(crate) span_map: SpanMaps<'db>,
+    pub(crate) function_types: HashMap<SymbolPath, TypeScheme<'db>>,
+    pub(crate) constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
+    pub(crate) specialized_enum_variants: SortedMap<NodeId, TypeScheme<'db>>,
+    pub(crate) node_types: SortedMap<NodeId, Type<'db>>,
+    pub(crate) local_instances: SortedMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
     /// The instance each reference to a generic function selects.
-    pub function_instances: SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
-    pub ability_definitions: HashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
-    pub handler_operations: SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
-    pub perform_operations: SortedMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    pub(crate) function_instances: SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    pub(crate) ability_definitions: HashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
+    pub(crate) handler_operations:
+        SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+    pub(crate) perform_operations:
+        SortedMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     /// Solved source-callable signatures for lambda expressions.
-    pub lambda_signatures: SortedMap<NodeId, crate::typeck::LambdaSignature<'db>>,
+    pub(crate) lambda_signatures: SortedMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     /// Case expressions whose source coverage is known to be exhaustive.
-    pub exhaustive_cases: HashSet<NodeId>,
+    pub(crate) exhaustive_cases: HashSet<NodeId>,
     /// Non-identity evidence selections of calls, resumes, and handles.
-    pub evidence_plans: SortedMap<NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
-    pub well_known_types: crate::typeck::WellKnownTypes<'db>,
+    pub(crate) evidence_plans: SortedMap<NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
+    pub(crate) well_known_types: crate::typeck::WellKnownTypes<'db>,
     /// Exact intrinsic-directive declaration IDs and canonical identities.
-    pub compiler_intrinsics: HashMap<NodeId, Symbol>,
+    pub(crate) compiler_intrinsics: HashMap<NodeId, Symbol>,
     /// The runtime structs to publish as prelude types.
-    pub runtime_types: runtime_items::RuntimeTypes,
+    pub(crate) runtime_types: runtime_items::RuntimeTypes,
     /// URIs of the other sources whose declarations were merged into `ast`.
-    pub merged_sources: Vec<String>,
+    pub(crate) merged_sources: Vec<String>,
 }
 
 /// What lowering reads besides the specialization result: the span maps of
@@ -200,7 +201,7 @@ pub struct LoweringEnvironment<'db> {
     pub merged_sources: Vec<String>,
 }
 
-impl<'db> TypedModule<'db> {
+impl<'db> LoweringInput<'db> {
     /// The lowering input of `specialized`, in the environment the root
     /// crate's preparation supplies
     /// (`new-plans/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
@@ -273,6 +274,79 @@ mod tests {
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
+    }
+
+    /// Lower `source` with its specialized enum variant schemas edited, and
+    /// return the panic message lowering rejects the edit with.
+    #[salsa::tracked(returns(clone))]
+    fn edited_enum_schema_failure(
+        db: &dyn salsa::Database,
+        source: crate::SourceCst,
+        missing: bool,
+    ) -> String {
+        use crate::resolve::{Dependencies, build_env, resolve_with_env};
+        let parsed = crate::query::parsed_ast(db, source).expect("fixture parses");
+        let ast = parsed.module(db);
+        let env = build_env(db, ast, &Dependencies::none());
+        let resolved = resolve_with_env(db, ast, env, &Dependencies::none(), parsed.span_map(db));
+        let checked = crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db));
+        let specialized = crate::monomorphize::monomorphize_functions(
+            db,
+            crate::monomorphize::SpecializationInput::new(db, checked, None),
+        )
+        .expect("fixture specializes");
+        let mut input = LoweringInput::from_specialization(
+            db,
+            specialized,
+            LoweringEnvironment {
+                span_map: SpanMaps::new([parsed.span_map(db)]),
+                ..Default::default()
+            },
+        );
+        let variant = input
+            .ast
+            .decls()
+            .find_map(|decl| match decl {
+                crate::ast::Decl::Enum(e) if e.name == "Boxed$Int" => Some(e.variants[0].id),
+                _ => None,
+            })
+            .expect("Boxed(Int) is specialized");
+        if missing {
+            input.specialized_enum_variants.remove(&variant);
+        } else {
+            input.specialized_enum_variants.insert(
+                variant,
+                TypeScheme::mono(db, Type::new(db, crate::ast::TypeKind::Int)),
+            );
+        }
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            input.lower_to_ir(db, &mut IrContext::new(), "invalid_enum_schema.trb")
+        }));
+        let Err(error) = failure else {
+            panic!("invalid specialized schema was accepted")
+        };
+        error
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| error.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn logical_enum_layout_rejects_missing_or_wrong_specialized_schema() {
+        let db = test_db();
+        let source = crate::SourceCst::from_source_str(
+            &db,
+            "invalid_enum_schema.trb",
+            "enum Boxed(a) { Box(a), Empty }\nfn keep(value: Boxed(Int)) -> Boxed(Int) { value }\nfn main() -> Nil {}",
+        );
+        for (missing, expected) in [
+            (true, "missing specialized enum variant schema"),
+            (false, "specialized enum variant schema has wrong owner"),
+        ] {
+            let message = edited_enum_schema_failure(&db, source, missing);
+            assert!(message.contains(expected), "{message}");
+        }
     }
 
     #[test]
