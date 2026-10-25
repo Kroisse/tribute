@@ -509,7 +509,7 @@ fn check_shared_pipeline(
     let Some(frontend) = compile_frontend_for_shared_route(db, source) else {
         return Ok(None);
     };
-    shared_middle_end(frontend, SourceFunctions::All).map(Some)
+    check_shared_middle_end(frontend).map(Some)
 }
 
 /// Which source-logical functions the shared middle-end legalizes.
@@ -525,6 +525,12 @@ enum SourceFunctions {
 /// The result is ready for [`run_target_to_boundary_exit`].
 pub fn run_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrContext, Module)> {
     shared_middle_end(frontend, SourceFunctions::Reachable)
+}
+
+/// Run the shared middle-end on every function of a frontend result,
+/// reachable or not, as a compilation for diagnostics does.
+pub fn check_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrContext, Module)> {
+    shared_middle_end(frontend, SourceFunctions::All)
 }
 
 fn shared_middle_end(
