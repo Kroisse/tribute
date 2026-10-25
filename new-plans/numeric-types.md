@@ -251,7 +251,7 @@ any (anyref)
 Int는 이미 anyref 서브타입이므로, 다형적 함수에서 추가 boxing이 필요 없다:
 
 ```rust
-fn identity(a)(x: a) -> a { x }
+fn identity(x: a) -> a { x }
 
 // Int로 호출
 identity(42)
