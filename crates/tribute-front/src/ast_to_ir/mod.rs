@@ -276,60 +276,23 @@ mod tests {
         salsa::DatabaseImpl::new()
     }
 
-    /// Lower `source` with its specialized enum variant schemas edited, and
-    /// return the panic message lowering rejects the edit with.
-    #[salsa::tracked(returns(clone))]
-    fn edited_enum_schema_failure(
+    /// The specialization result of a fixture without dependencies.
+    #[salsa::tracked(returns(copy))]
+    fn specialize_fixture(
         db: &dyn salsa::Database,
         source: crate::SourceCst,
-        missing: bool,
-    ) -> String {
+    ) -> crate::monomorphize::SpecializationOutput<'_> {
         use crate::resolve::{Dependencies, build_env, resolve_with_env};
         let parsed = crate::query::parsed_ast(db, source).expect("fixture parses");
         let ast = parsed.module(db);
         let env = build_env(db, ast, &Dependencies::none());
         let resolved = resolve_with_env(db, ast, env, &Dependencies::none(), parsed.span_map(db));
         let checked = crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db));
-        let specialized = crate::monomorphize::monomorphize_functions(
+        crate::monomorphize::monomorphize_functions(
             db,
             crate::monomorphize::SpecializationInput::new(db, checked, None),
         )
-        .expect("fixture specializes");
-        let mut input = LoweringInput::from_specialization(
-            db,
-            specialized,
-            LoweringEnvironment {
-                span_map: SpanMaps::new([parsed.span_map(db)]),
-                ..Default::default()
-            },
-        );
-        let variant = input
-            .ast
-            .decls()
-            .find_map(|decl| match decl {
-                crate::ast::Decl::Enum(e) if e.name == "Boxed$Int" => Some(e.variants[0].id),
-                _ => None,
-            })
-            .expect("Boxed(Int) is specialized");
-        if missing {
-            input.specialized_enum_variants.remove(&variant);
-        } else {
-            input.specialized_enum_variants.insert(
-                variant,
-                TypeScheme::mono(db, Type::new(db, crate::ast::TypeKind::Int)),
-            );
-        }
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            input.lower_to_ir(db, &mut IrContext::new(), "invalid_enum_schema.trb")
-        }));
-        let Err(error) = failure else {
-            panic!("invalid specialized schema was accepted")
-        };
-        error
-            .downcast_ref::<String>()
-            .cloned()
-            .or_else(|| error.downcast_ref::<&str>().map(|s| s.to_string()))
-            .unwrap_or_default()
+        .expect("fixture specializes")
     }
 
     #[test]
@@ -340,11 +303,49 @@ mod tests {
             "invalid_enum_schema.trb",
             "enum Boxed(a) { Box(a), Empty }\nfn keep(value: Boxed(Int)) -> Boxed(Int) { value }\nfn main() -> Nil {}",
         );
+        let specialized = specialize_fixture(&db, source);
+        let span_map = crate::query::parsed_ast(&db, source)
+            .expect("fixture parses")
+            .span_map(&db);
         for (missing, expected) in [
             (true, "missing specialized enum variant schema"),
             (false, "specialized enum variant schema has wrong owner"),
         ] {
-            let message = edited_enum_schema_failure(&db, source, missing);
+            let mut input = LoweringInput::from_specialization(
+                &db,
+                specialized,
+                LoweringEnvironment {
+                    span_map: SpanMaps::new([span_map]),
+                    ..Default::default()
+                },
+            );
+            let variant = input
+                .ast
+                .decls()
+                .find_map(|decl| match decl {
+                    crate::ast::Decl::Enum(e) if e.name == "Boxed$Int" => Some(e.variants[0].id),
+                    _ => None,
+                })
+                .expect("Boxed(Int) is specialized");
+            if missing {
+                input.specialized_enum_variants.remove(&variant);
+            } else {
+                input.specialized_enum_variants.insert(
+                    variant,
+                    TypeScheme::mono(&db, Type::new(&db, crate::ast::TypeKind::Int)),
+                );
+            }
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                input.lower_to_ir(&db, &mut IrContext::new(), "invalid_enum_schema.trb")
+            }));
+            let Err(error) = failure else {
+                panic!("invalid specialized schema was accepted")
+            };
+            let message = error
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| error.downcast_ref::<&str>().copied())
+                .unwrap_or("");
             assert!(message.contains(expected), "{message}");
         }
     }
