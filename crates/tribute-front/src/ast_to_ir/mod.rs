@@ -277,7 +277,7 @@ mod tests {
     }
 
     /// The specialization result of a fixture without dependencies.
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn specialize_fixture(
         db: &dyn salsa::Database,
         source: crate::SourceCst,
@@ -303,7 +303,7 @@ mod tests {
             "invalid_enum_schema.trb",
             "enum Boxed(a) { Box(a), Empty }\nfn keep(value: Boxed(Int)) -> Boxed(Int) { value }\nfn main() -> Nil {}",
         );
-        let specialized = specialize_fixture(&db, source);
+        let specialized = *specialize_fixture(&db, source);
         let span_map = crate::query::parsed_ast(&db, source)
             .expect("fixture parses")
             .span_map(&db);
