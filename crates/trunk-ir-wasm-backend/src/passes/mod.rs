@@ -4,7 +4,7 @@
 
 pub mod arith_to_wasm;
 pub mod func_to_wasm;
-pub mod reference_upcast_elision;
+pub mod reference_upcast;
 pub mod scf_to_wasm;
 pub mod signature_conversion;
 pub mod wasm_gc_to_wasm;

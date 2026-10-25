@@ -248,11 +248,14 @@ representation을 바꾸는 operation만 만들며, 타입이 다른 값을 그�
 않는다. 표현이 같은 두 타입은 target 타입 변환 뒤 같은
 타입이 되므로 그 사이의 cast는 동일 타입 cast로 남는다.
 
-Pass가 만드는 boxing·unboxing과 type converter는 subtype 관계를 다루지 않는다. WasmGC처럼
-서브타입 참조를 상위 타입 자리에 그대로 받는 target은 target 변환 단계에서
-backend의 물리적 할당 가능성 규칙에 따라 서브타입에서 상위 타입으로 가는 cast를
-지우고 source 값을 그대로 쓴다(upcast elision). 표현이 같다는 사실만으로는
-subtype이 아니다.
+Pass가 만드는 boxing·unboxing과 type converter는 subtype 관계를 다루지 않는다.
+Operation schema도 타입을 정확히 비교하며 subtype을 모른다. WasmGC처럼 서브타입
+참조를 상위 타입 자리에 그대로 받는 target은 target 변환 단계에서 서브타입에서
+상위 타입으로 가는 cast를 그 target의 명시적 upcast operation(`wasm.ref_upcast`)으로
+바꾼다. 이 operation은 instruction을 만들지 않으며, 그 operand가 runtime cast 없이
+결과 타입으로 넓혀지는지는 backend의 물리적 할당 가능성 규칙이 emission 전에
+검사한다. 따라서 upcast 뒤의 IR도 operation schema를 만족한다. 표현이 같다는
+사실만으로는 subtype이 아니다.
 
 Reconciliation은 type converter 없이 동일 타입 cast, 원래 타입으로 돌아오는 cast
 chain, 사용되지 않는 cast만 제거하므로 어느 지점에서 실행해도 의미를 바꾸지

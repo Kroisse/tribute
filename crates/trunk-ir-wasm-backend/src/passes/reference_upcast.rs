@@ -1,29 +1,33 @@
-//! Elide WasmGC reference upcasts left as `core.unrealized_conversion_cast`.
+//! Write WasmGC reference upcasts left as `core.unrealized_conversion_cast`
+//! as `wasm.ref_upcast`.
 //!
 //! WasmGC accepts a reference of a subtype where a supertype is declared and
 //! has no upcast instruction. The shared cast legalization never forwards a
 //! value of another type, so a cast from a concrete reference to an abstract
-//! GC reference stays after it. This target pattern elides such a cast and
-//! uses its source directly, following the backend's physical assignability
-//! rule ([`is_wasm_physical_argument_assignable`]): only widenings the
-//! emission performs without a runtime cast qualify.
+//! GC reference stays after it. Operation schemas compare types exactly, so
+//! the cast cannot simply be dropped; this target pattern replaces it with
+//! `wasm.ref_upcast`, which emission writes as no instruction. Only the
+//! widenings of the backend's physical assignability rule
+//! ([`is_wasm_physical_argument_assignable`]) qualify: those emission performs
+//! without a runtime cast.
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core;
+use trunk_ir::dialect::{core, wasm};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 
 use crate::is_wasm_physical_argument_assignable;
 
-/// Elide a cast from a concrete WasmGC reference to an abstract supertype.
+/// Replace a cast from a concrete WasmGC reference to an abstract supertype
+/// with `wasm.ref_upcast`.
 ///
 /// Matches only a cast whose result already has its converted type and is
 /// `wasm.anyref`, `wasm.structref`, or `wasm.arrayref`. Register it after the
 /// cast legalization pattern so that result types are converted first.
-pub struct ReferenceUpcastElisionPattern;
+pub struct ReferenceUpcastPattern;
 
-impl RewritePattern for ReferenceUpcastElisionPattern {
+impl RewritePattern for ReferenceUpcastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -49,7 +53,11 @@ impl RewritePattern for ReferenceUpcastElisionPattern {
         {
             return false;
         }
-        rewriter.erase_op(vec![input]);
+        let location = ctx.op(op).location;
+        let upcast = wasm::RefUpcast::operands(input)
+            .results(result_ty)
+            .build(ctx, location);
+        rewriter.replace_op(upcast.op_ref());
         true
     }
 }
@@ -67,9 +75,9 @@ mod tests {
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::{Module, PatternApplicator, TypeConverter};
 
-    fn elide(ctx: &mut IrContext, module: Module, tc: TypeConverter) {
+    fn upcast(ctx: &mut IrContext, module: Module, tc: TypeConverter) {
         let result = PatternApplicator::new(tc)
-            .add_pattern(ReferenceUpcastElisionPattern)
+            .add_pattern(ReferenceUpcastPattern)
             .apply_partial(ctx, module);
         assert!(result.reached_fixpoint);
     }
@@ -85,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn elides_registered_and_abstract_upcasts() {
+    fn writes_registered_and_abstract_upcasts() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -104,7 +112,7 @@ mod tests {
 }"#,
         );
 
-        elide(&mut ctx, module, TypeConverter::new());
+        upcast(&mut ctx, module, TypeConverter::new());
 
         assert_ir(
             &ctx,
@@ -113,7 +121,12 @@ mod tests {
   !Closure = test.layout<core.i32, wasm.anyref, {layout = "closure"}>
   !Ref = wasm_gc.struct<core.i32>
   func.func @f(%c: !Closure, %r: !Ref, %s: wasm.structref, %a: wasm_gc.array<core.i32>) {
-    func.call %c, %c, %r, %s, %a {callee = @use}
+    %c_struct = wasm.ref_upcast %c : wasm.structref
+    %c_any = wasm.ref_upcast %c : wasm.anyref
+    %r_struct = wasm.ref_upcast %r : wasm.structref
+    %s_any = wasm.ref_upcast %s : wasm.anyref
+    %a_array = wasm.ref_upcast %a : wasm.arrayref
+    func.call %c_struct, %c_any, %r_struct, %s_any, %a_array {callee = @use}
     func.return
   }
 }"#,
@@ -134,7 +147,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
 
-        elide(&mut ctx, module, TypeConverter::new());
+        upcast(&mut ctx, module, TypeConverter::new());
 
         assert_ir(&ctx, module, input);
     }
@@ -162,7 +175,7 @@ mod tests {
         let mut tc = TypeConverter::new();
         tc.add_conversion(move |_ctx, ty| (ty == structref).then_some(anyref));
 
-        elide(&mut ctx, module, tc);
+        upcast(&mut ctx, module, tc);
 
         assert_ir(&ctx, module, input);
     }

@@ -222,8 +222,9 @@ before target conversion only retypes a value. A target
 conversion converts every value's type, including cast results through
 `UnrealizedCastConversionPattern`; its materializer builds only real
 representation changes and never forwards a value of another type. A target
-whose type system accepts subtype references elides those upcasts itself; the
-Wasm target's `ReferenceUpcastElisionPattern` follows the backend's physical
+whose type system accepts subtype references writes those upcasts as its own
+explicit operation, since schemas compare types exactly; the Wasm target's
+`ReferenceUpcastPattern` turns them into `wasm.ref_upcast` by the backend's physical
 assignability rule. The converter-free `ReconcileUnrealizedCasts` pass then folds
 identities and cast chains, and a cast left after that is rejected by the
 target emission boundary.
