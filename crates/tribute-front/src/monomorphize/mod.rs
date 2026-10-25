@@ -151,7 +151,11 @@ pub fn monomorphize_functions<'db>(
         ability_definitions,
         well_known_types,
     } = declarations;
-    let (module, function_types, metadata) = monomorphize(
+    let Monomorphized {
+        module,
+        function_types,
+        metadata,
+    } = monomorphize(
         db,
         module,
         function_types.into_iter().collect(),
@@ -176,11 +180,13 @@ pub fn monomorphize_functions<'db>(
     ))
 }
 
-type Monomorphized<'db> = (
-    DeclTable<TypedRef<'db>>,
-    Vec<(SymbolPath, TypeScheme<'db>)>,
-    MonomorphizeMetadata<'db>,
-);
+/// The specialized module, with every function's scheme and the metadata
+/// substituted with it.
+struct Monomorphized<'db> {
+    module: DeclTable<TypedRef<'db>>,
+    function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
+    metadata: MonomorphizeMetadata<'db>,
+}
 
 fn monomorphize<'db>(
     db: &'db dyn salsa::Database,
@@ -247,14 +253,7 @@ fn monomorphize<'db>(
         } = specializations;
         let mut clones = MetadataClones::default();
         for (key, origins) in metadata_origins {
-            clone_metadata(
-                db,
-                &metadata.expressions,
-                key.variant(),
-                &key.type_args,
-                &origins,
-                &mut clones,
-            );
+            clones.clone_instance(db, &metadata.expressions, &key, &origins);
         }
         clones.add_to(&mut metadata.expressions);
         metadata
@@ -494,7 +493,11 @@ fn monomorphize<'db>(
         module
     };
 
-    Ok((module, fn_types_vec, metadata))
+    Ok(Monomorphized {
+        module,
+        function_types: fn_types_vec,
+        metadata,
+    })
 }
 
 /// The metadata cloned for one round of instances. A clone reads only the
@@ -513,6 +516,119 @@ struct MetadataClones<'db> {
 }
 
 impl<'db> MetadataClones<'db> {
+    /// Clone the metadata of `origins`, the nodes of the generic declaration
+    /// `key` instantiates, to the instance's nodes, with `key`'s type
+    /// arguments substituted.
+    fn clone_instance(
+        &mut self,
+        db: &'db dyn salsa::Database,
+        expressions: &ExpressionTypeMetadata<'db>,
+        key: &InstanceKey<'db>,
+        origins: &HashSet<NodeId>,
+    ) {
+        let (variant, type_args) = (key.variant(), key.type_args.as_slice());
+        let substitute = |ty| substitute_type(db, ty, type_args);
+        clone_entries(
+            &expressions.node_types,
+            origins,
+            variant,
+            substitute,
+            &mut self.node_types,
+        );
+        clone_entries(
+            &expressions.function_instances,
+            origins,
+            variant,
+            |mut instance| {
+                instance.callable = substitute(instance.callable);
+                instance.type_arguments = instance
+                    .type_arguments
+                    .into_iter()
+                    .map(substitute)
+                    .collect();
+                instance.row_arguments = instance
+                    .row_arguments
+                    .into_iter()
+                    .map(|row| substitute_row(db, row, type_args))
+                    .collect();
+                instance
+            },
+            &mut self.function_instances,
+        );
+        clone_entries(
+            &expressions.local_instances,
+            origins,
+            variant,
+            |mut instance| {
+                instance.binding = instance.binding.with_variant(variant);
+                instance.callable = substitute(instance.callable);
+                instance.scheme = instance
+                    .scheme
+                    .to_builder(db)
+                    .map_types(db, substitute)
+                    .build(db);
+                for row in &mut instance.row_arguments {
+                    *row = substitute_row(db, *row, type_args);
+                }
+                instance
+            },
+            &mut self.local_instances,
+        );
+        clone_entries(
+            &expressions.handler_operations,
+            origins,
+            variant,
+            |operation| InstantiatedHandlerOperation {
+                ability: operation.ability,
+                ability_args: operation.ability_args.into_iter().map(substitute).collect(),
+                kind: operation.kind,
+                params: operation.params.into_iter().map(substitute).collect(),
+                result: substitute(operation.result),
+            },
+            &mut self.handler_operations,
+        );
+        clone_entries(
+            &expressions.perform_operations,
+            origins,
+            variant,
+            |operation| InstantiatedPerformOperation {
+                ability: operation.ability,
+                ability_args: operation.ability_args.into_iter().map(substitute).collect(),
+                kind: operation.kind,
+                params: operation.params.into_iter().map(substitute).collect(),
+                result: substitute(operation.result),
+            },
+            &mut self.perform_operations,
+        );
+        clone_entries(
+            &expressions.evidence_plans,
+            origins,
+            variant,
+            |plan| {
+                plan.into_iter()
+                    .map(|step| step.map_types(substitute))
+                    .collect()
+            },
+            &mut self.evidence_plans,
+        );
+        clone_entries(
+            &expressions.lambda_signatures,
+            origins,
+            variant,
+            |signature| LambdaSignature {
+                function_type: substitute(signature.function_type),
+            },
+            &mut self.lambda_signatures,
+        );
+        self.exhaustive_cases.extend(
+            origins
+                .iter()
+                .filter(|id| expressions.exhaustive_cases.binary_search(id).is_ok())
+                .map(|id| id.with_variant(variant)),
+        );
+    }
+
+    /// Add the clones to their tables, one merge per table.
     fn add_to(self, expressions: &mut ExpressionTypeMetadata<'db>) {
         expressions.node_types.extend(self.node_types);
         expressions
@@ -533,117 +649,6 @@ impl<'db> MetadataClones<'db> {
             expressions.exhaustive_cases.dedup();
         }
     }
-}
-
-/// Clone the metadata of `origins` to the nodes of the same identity with
-/// `variant`, with `type_args` substituted.
-fn clone_metadata<'db>(
-    db: &'db dyn salsa::Database,
-    expressions: &ExpressionTypeMetadata<'db>,
-    variant: std::num::NonZero<u64>,
-    type_args: &[Type<'db>],
-    origins: &HashSet<NodeId>,
-    clones: &mut MetadataClones<'db>,
-) {
-    let substitute = |ty| substitute_type(db, ty, type_args);
-    clone_entries(
-        &expressions.node_types,
-        origins,
-        variant,
-        substitute,
-        &mut clones.node_types,
-    );
-    clone_entries(
-        &expressions.function_instances,
-        origins,
-        variant,
-        |mut instance| {
-            instance.callable = substitute(instance.callable);
-            instance.type_arguments = instance
-                .type_arguments
-                .into_iter()
-                .map(substitute)
-                .collect();
-            instance.row_arguments = instance
-                .row_arguments
-                .into_iter()
-                .map(|row| substitute_row(db, row, type_args))
-                .collect();
-            instance
-        },
-        &mut clones.function_instances,
-    );
-    clone_entries(
-        &expressions.local_instances,
-        origins,
-        variant,
-        |mut instance| {
-            instance.binding = instance.binding.with_variant(variant);
-            instance.callable = substitute(instance.callable);
-            instance.scheme = instance
-                .scheme
-                .to_builder(db)
-                .map_types(db, substitute)
-                .build(db);
-            for row in &mut instance.row_arguments {
-                *row = substitute_row(db, *row, type_args);
-            }
-            instance
-        },
-        &mut clones.local_instances,
-    );
-    clone_entries(
-        &expressions.handler_operations,
-        origins,
-        variant,
-        |operation| InstantiatedHandlerOperation {
-            ability: operation.ability,
-            ability_args: operation.ability_args.into_iter().map(substitute).collect(),
-            kind: operation.kind,
-            params: operation.params.into_iter().map(substitute).collect(),
-            result: substitute(operation.result),
-        },
-        &mut clones.handler_operations,
-    );
-    clone_entries(
-        &expressions.perform_operations,
-        origins,
-        variant,
-        |operation| InstantiatedPerformOperation {
-            ability: operation.ability,
-            ability_args: operation.ability_args.into_iter().map(substitute).collect(),
-            kind: operation.kind,
-            params: operation.params.into_iter().map(substitute).collect(),
-            result: substitute(operation.result),
-        },
-        &mut clones.perform_operations,
-    );
-    clone_entries(
-        &expressions.evidence_plans,
-        origins,
-        variant,
-        |plan| {
-            plan.into_iter()
-                .map(|step| step.map_types(substitute))
-                .collect()
-        },
-        &mut clones.evidence_plans,
-    );
-    clone_entries(
-        &expressions.lambda_signatures,
-        origins,
-        variant,
-        |signature| LambdaSignature {
-            function_type: substitute(signature.function_type),
-        },
-        &mut clones.lambda_signatures,
-    );
-    clones.exhaustive_cases.extend(
-        origins
-            .iter()
-            .filter(|id| expressions.exhaustive_cases.binary_search(id).is_ok())
-            .map(|id| id.with_variant(variant)),
-    );
 }
 
 /// Add to `clones` the entry of each origin `table` holds, at the node with
@@ -810,14 +815,7 @@ mod tests {
         let origins = [origin].into_iter().collect::<HashSet<_>>();
 
         let mut clones = MetadataClones::default();
-        clone_metadata(
-            &db,
-            &metadata.expressions,
-            key.variant(),
-            &key.type_args,
-            &origins,
-            &mut clones,
-        );
+        clones.clone_instance(&db, &metadata.expressions, &key, &origins);
         clones.add_to(&mut metadata.expressions);
 
         let clone = origin.with_variant(key.variant());
