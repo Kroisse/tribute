@@ -32,6 +32,9 @@ use tribute_bench::stages::{self, TARGETS, target_name};
 const FRONT_STAGE_PROGRAMS: [&str; 2] = ["fibonacci", "state_handler"];
 
 fn compile_stages(c: &mut Criterion) {
+    // CodSpeed reports show a benchmark by its name within the group, so
+    // each name starts with its program.
+    let mut group = c.benchmark_group("compile");
     for program in PROGRAMS {
         let frontend = match stages::frontend(program) {
             Ok(frontend) => frontend,
@@ -40,10 +43,9 @@ fn compile_stages(c: &mut Criterion) {
                 continue;
             }
         };
-        let mut group = c.benchmark_group(format!("compile/{}", program.name));
         let front_stages = FRONT_STAGE_PROGRAMS.contains(&program.name);
         if front_stages {
-            group.bench_function("frontend", |b| {
+            group.bench_function(format!("{}/frontend", program.name), |b| {
                 b.iter_batched(
                     || (),
                     |()| stages::frontend(program).expect("frontend"),
@@ -56,12 +58,11 @@ fn compile_stages(c: &mut Criterion) {
             Ok(shared) => shared,
             Err(error) => {
                 eprintln!("skipping {} after the frontend: {error}", program.name);
-                group.finish();
                 continue;
             }
         };
         if front_stages {
-            group.bench_function("shared_middle_end", |b| {
+            group.bench_function(format!("{}/shared_middle_end", program.name), |b| {
                 b.iter_batched(
                     || frontend.clone(),
                     |frontend| stages::shared_middle_end(frontend).expect("shared middle-end"),
@@ -72,8 +73,8 @@ fn compile_stages(c: &mut Criterion) {
         for target in TARGETS {
             bench_target(&mut group, program, &shared, target);
         }
-        group.finish();
     }
+    group.finish();
 }
 
 /// Copy the IR a stage starts from. Each iteration's setup clones a prepared
@@ -88,7 +89,7 @@ fn bench_target(
     shared: &(IrContext, Module),
     target: TargetKind,
 ) {
-    let name = target_name(target);
+    let name = format!("{}/{}", program.name, target_name(target));
     let exit = {
         let (mut ctx, module) = clone_ir(shared);
         stages::to_boundary_exit(&mut ctx, module, target).map(|()| (ctx, module))
@@ -100,7 +101,7 @@ fn bench_target(
     let exit = match exit {
         Ok(exit) => exit,
         Err(error) => {
-            eprintln!("skipping {}/{name}: {error}", program.name);
+            eprintln!("skipping {name}: {error}");
             return;
         }
     };
@@ -133,7 +134,7 @@ fn native_runtime(c: &mut Criterion) {
         return;
     }
     let dir = tempfile::tempdir().expect("temporary directory");
-    let mut group = c.benchmark_group("run/native");
+    let mut group = c.benchmark_group("run");
     for program in PROGRAMS {
         let executable = dir.path().join(program.name);
         let linked = stages::emitted(program, TargetKind::Native)
@@ -142,7 +143,7 @@ fn native_runtime(c: &mut Criterion) {
             eprintln!("skipping native run of {}: {error}", program.name);
             continue;
         }
-        group.bench_function(program.name, |b| {
+        group.bench_function(format!("{}/native", program.name), |b| {
             b.iter(|| {
                 let output = stages::run(&mut Command::new(&executable), program.stdin)
                     .expect("run native executable");

@@ -261,6 +261,7 @@ pub enum NativePipelineStage {
 // AST-based pipeline imports
 use tribute_front::ast_to_ir;
 use tribute_front::astgen::ParsedAst;
+use tribute_front::monomorphize::{SpecializationInput, SpecializationOutput};
 use tribute_front::query as ast_query;
 use tribute_front::resolve as ast_resolve;
 use tribute_front::resolve::PackageEnv;
@@ -368,12 +369,11 @@ fn merge_and_lower_to_ir<'db>(
     }
 }
 
-/// Specialized frontend output together with the exact compiler-intrinsic
-/// identities the shared CPS boundary needs.
+/// Specialized frontend output, with the runtime types root-crate
+/// preparation supplies to lowering.
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 struct PreparedFrontend<'db> {
-    typed: ast_typeck::TypeCheckOutput<'db>,
-    compiler_intrinsics: HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
+    specialized: SpecializationOutput<'db>,
     runtime_types: ast_to_ir::runtime_items::RuntimeTypes,
 }
 
@@ -384,8 +384,8 @@ pub fn prepare_frontend_for_lowering<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
-) -> Option<ast_typeck::TypeCheckOutput<'db>> {
-    prepare_frontend_details(db, typed, source).map(|prepared| prepared.typed)
+) -> Option<SpecializationOutput<'db>> {
+    prepare_frontend_details(db, typed, source).map(|prepared| prepared.specialized)
 }
 
 #[salsa::tracked(returns(as_ref))]
@@ -394,52 +394,17 @@ fn prepare_frontend_details<'db>(
     typed: ast_typeck::TypeCheckOutput<'db>,
     _source: SourceCst,
 ) -> Option<PreparedFrontend<'db>> {
-    use tribute_front::ast::{DeclTable, TypedRef};
+    // Type checking reads package std's declarations without copying them.
+    // Specialization takes them as one table with the user's, and std's
+    // bodies and per-expression metadata ahead of the user's.
+    let prelude = prelude_module(db);
+    let mut input = SpecializationInput::new(db, typed, prelude);
+    if let Some(prelude) = prelude {
+        input = input.merge_bodies(db, prelude);
+    }
+    let span_map = input.span_map().clone();
 
-    let user_module = typed.module(db);
-    let user_node_types = &typed.expression_types(db).node_types;
-    let user_span_map = typed.span_map(db);
-    // Type checking reads package std's declarations without copying them,
-    // so specialization takes them as one table with the user's.
-    let declarations = match prelude_module(db) {
-        Some(prelude) => typed
-            .declarations(db)
-            .after_dependency(prelude.declarations(db)),
-        None => typed.declarations(db).clone(),
-    };
-    let merged_fn_types: HashMap<_, _> = declarations.function_types.iter().cloned().collect();
-
-    // Merge prelude at AST level
-    let (merged_module, merged_node_types, merged_span_map) =
-        if let Some(prelude) = prelude_module(db) {
-            let prelude_module_ast = prelude.module(db);
-            let prelude_node_types = &prelude.expression_types(db).node_types;
-            let prelude_span_map = prelude.span_map(db);
-
-            // Prepend prelude decls before user decls
-            let mut merged_ast = DeclTable::<TypedRef<'db>> {
-                id: user_module.id,
-                name: user_module.name.clone(),
-                entries: prelude_module_ast.entries.clone(),
-            };
-            merged_ast
-                .entries
-                .extend(user_module.entries.iter().cloned());
-
-            // Merge node_types: prelude first, user overrides
-            let mut node_types: HashMap<_, _> = prelude_node_types.iter().cloned().collect();
-            node_types.extend(user_node_types.iter().cloned());
-
-            // Merge span maps (user overrides prelude on conflict)
-            let merged_span_map = user_span_map.merge(&prelude_span_map);
-
-            (merged_ast, node_types, merged_span_map)
-        } else {
-            let node_types: HashMap<_, _> = user_node_types.iter().cloned().collect();
-            (user_module.clone(), node_types, user_span_map)
-        };
-
-    let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(&merged_module) {
+    let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(input.module()) {
         Ok(registered) => registered,
         Err(unsupported) => {
             for directive in unsupported {
@@ -448,7 +413,7 @@ fn prepare_frontend_details<'db>(
                         "unsupported compiler intrinsic directive `{}`",
                         directive.identity
                     ),
-                    merged_span_map.get_or_default(directive.node),
+                    span_map.get_or_default(directive.node),
                     DiagnosticSeverity::Error,
                     CompilationPhase::Lowering,
                 )
@@ -458,13 +423,18 @@ fn prepare_frontend_details<'db>(
         }
     };
     // Without a prelude there are no runtime declarations to check.
-    let runtime_items =
-        prelude_module(db).map_or(&[][..], |_| tribute_ir::runtime_items::RUNTIME_ITEMS);
+    let runtime_items = prelude.map_or(&[][..], |_| tribute_ir::runtime_items::RUNTIME_ITEMS);
+    let function_types: HashMap<_, _> = input
+        .declarations()
+        .function_types
+        .iter()
+        .cloned()
+        .collect();
     let runtime_types = match ast_to_ir::runtime_items::check_runtime(
         db,
         &ast_to_ir::runtime_items::RuntimeInputs {
-            module: &merged_module,
-            function_types: &merged_fn_types,
+            module: input.module(),
+            function_types: &function_types,
         },
         tribute_ir::runtime_items::RUNTIME_MODULE,
         runtime_items,
@@ -472,120 +442,15 @@ fn prepare_frontend_details<'db>(
         Ok(types) => types,
         Err(errors) => {
             for error in errors {
-                error.diagnostic(&merged_span_map).accumulate(db);
+                error.diagnostic(&span_map).accumulate(db);
             }
             return None;
         }
     };
 
-    let mut function_instances: HashMap<_, _> = prelude_module(db)
-        .map(|prelude| {
-            prelude
-                .expression_types(db)
-                .function_instances
-                .iter()
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-    function_instances.extend(
-        typed
-            .expression_types(db)
-            .function_instances
-            .iter()
-            .cloned(),
-    );
-    // Monomorphize generic functions
-    let mono_result = tribute_front::monomorphize::monomorphize_functions(
-        db,
-        merged_module,
-        merged_fn_types,
-        tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: declarations
-                .constructor_types
-                .schemes
-                .iter()
-                .cloned()
-                .collect(),
-            specialized_enum_variants: declarations
-                .constructor_types
-                .specialized_enum_variants
-                .iter()
-                .cloned()
-                .collect(),
-            node_types: merged_node_types,
-            local_instances: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| prelude.expression_types(db).local_instances.clone())
-                .chain(typed.expression_types(db).local_instances.iter().cloned())
-                .collect(),
-            function_instances,
-            evidence_plans: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| prelude.expression_types(db).evidence_plans.clone())
-                .chain(typed.expression_types(db).evidence_plans.iter().cloned())
-                .collect(),
-            handler_operations: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| {
-                    prelude
-                        .expression_types(db)
-                        .handler_operations
-                        .iter()
-                        .cloned()
-                })
-                .chain(
-                    typed
-                        .expression_types(db)
-                        .handler_operations
-                        .iter()
-                        .cloned(),
-                )
-                .collect(),
-            perform_operations: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| {
-                    prelude
-                        .expression_types(db)
-                        .perform_operations
-                        .iter()
-                        .cloned()
-                })
-                .chain(
-                    typed
-                        .expression_types(db)
-                        .perform_operations
-                        .iter()
-                        .cloned(),
-                )
-                .collect(),
-            lambda_signatures: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| {
-                    prelude
-                        .expression_types(db)
-                        .lambda_signatures
-                        .iter()
-                        .cloned()
-                })
-                .chain(typed.expression_types(db).lambda_signatures.iter().cloned())
-                .collect(),
-            exhaustive_cases: prelude_module(db)
-                .into_iter()
-                .flat_map(|prelude| {
-                    prelude
-                        .expression_types(db)
-                        .exhaustive_cases
-                        .iter()
-                        .copied()
-                })
-                .chain(typed.expression_types(db).exhaustive_cases.iter().copied())
-                .collect(),
-            compiler_intrinsics,
-        },
-    );
-    let mono_result = match mono_result {
-        Ok(result) => result,
+    let input = input.with_compiler_intrinsics(compiler_intrinsics);
+    let specialized = match tribute_front::monomorphize::monomorphize_functions(db, input) {
+        Ok(specialized) => specialized,
         Err(errors) => {
             for error in errors {
                 Diagnostic::new(
@@ -593,7 +458,7 @@ fn prepare_frontend_details<'db>(
                         "invalid specialization instance at {}: {:?}",
                         error.node, error.kind
                     ),
-                    merged_span_map.get_or_default(error.node),
+                    span_map.get_or_default(error.node),
                     DiagnosticSeverity::Error,
                     CompilationPhase::TypeChecking,
                 )
@@ -602,52 +467,8 @@ fn prepare_frontend_details<'db>(
             return None;
         }
     };
-    let mut exhaustive_cases: Vec<_> = mono_result.metadata.exhaustive_cases.into_iter().collect();
-    exhaustive_cases.sort();
-    let compiler_intrinsics = mono_result.metadata.compiler_intrinsics;
-    let typed = ast_typeck::TypeCheckOutput::new(
-        db,
-        mono_result.module,
-        ast_typeck::DeclarationTypeMetadata {
-            function_types: mono_result.function_types,
-            constructor_types: ast_typeck::ConstructorTypeMetadata {
-                schemes: mono_result.metadata.constructor_types.into_iter().collect(),
-                specialized_enum_variants: mono_result
-                    .metadata
-                    .specialized_enum_variants
-                    .into_iter()
-                    .collect(),
-            },
-            ability_definitions: declarations.ability_definitions.clone(),
-            well_known_types: declarations.well_known_types,
-        },
-        ast_typeck::ExpressionTypeMetadata {
-            node_types: mono_result.metadata.node_types.into_iter().collect(),
-            function_instances: mono_result
-                .metadata
-                .function_instances
-                .into_iter()
-                .collect(),
-            local_instances: mono_result.metadata.local_instances.into_iter().collect(),
-            evidence_plans: mono_result.metadata.evidence_plans.into_iter().collect(),
-            handler_operations: mono_result
-                .metadata
-                .handler_operations
-                .into_iter()
-                .collect(),
-            perform_operations: mono_result
-                .metadata
-                .perform_operations
-                .into_iter()
-                .collect(),
-            lambda_signatures: mono_result.metadata.lambda_signatures.into_iter().collect(),
-            exhaustive_cases,
-        },
-        merged_span_map,
-    );
     Some(PreparedFrontend {
-        typed,
-        compiler_intrinsics,
+        specialized,
         runtime_types,
     })
 }
@@ -660,8 +481,8 @@ fn merge_and_lower_to_ir_with<'db, M>(
 ) -> (IrContext, M) {
     let prepared = prepare_frontend_details(db, *typed, source)
         .expect("frontend instances must be checked before lowering");
-    let typed = prepared.typed;
-    let compiler_intrinsics = prepared.compiler_intrinsics.clone();
+    let typed = prepared.specialized;
+    let compiler_intrinsics = typed.compiler_intrinsics(db).iter().cloned().collect();
     let runtime_types = prepared.runtime_types.clone();
     let mut ir = IrContext::new();
     let module = lower(
