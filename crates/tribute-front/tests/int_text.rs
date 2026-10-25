@@ -211,7 +211,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             &tribute_front::resolve::Dependencies::none(),
             parsed.span_map(db),
         ),
-        parsed.span_map(db).clone(),
+        parsed.span_map(db),
     );
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
@@ -221,7 +221,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module(db).clone(),
-        span_map: mono.span_map(db),
+        span_map: tribute_front::ast::SpanMaps::new([parsed.span_map(db)]),
         function_types: mono
             .declarations(db)
             .function_types
@@ -289,7 +289,7 @@ fn lower_monomorphized_source(
             &tribute_front::resolve::Dependencies::none(),
             parsed.span_map(db),
         ),
-        parsed.span_map(db).clone(),
+        parsed.span_map(db),
     );
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
@@ -299,7 +299,7 @@ fn lower_monomorphized_source(
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module(db).clone(),
-        span_map: mono.span_map(db),
+        span_map: tribute_front::ast::SpanMaps::new([parsed.span_map(db)]),
         function_types: mono
             .declarations(db)
             .function_types
@@ -371,7 +371,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         &tribute_front::resolve::Dependencies::none(),
         span_map,
     );
-    let checked = tribute_front::typeck::typecheck_module(db, &resolved, span_map.clone());
+    let checked = tribute_front::typeck::typecheck_module(db, &resolved, span_map);
     let typed = checked.module(db).clone();
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
@@ -383,7 +383,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .cloned()
             .collect(),
         function_instances: checked.expression_types(db).function_instances.clone(),
-        span_map: checked.span_map(db),
+        span_map: tribute_front::ast::SpanMaps::new([span_map]),
         function_types: checked
             .declarations(db)
             .function_types

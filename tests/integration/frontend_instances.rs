@@ -54,7 +54,6 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
         typed.module(db).clone(),
         typed.declarations(db).clone(),
         metadata,
-        typed.span_map(db),
     );
     prepare_frontend_for_lowering(db, damaged, source).is_some()
 }

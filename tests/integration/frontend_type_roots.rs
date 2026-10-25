@@ -115,7 +115,6 @@ fn prepare_root<'db>(
             ..typed.declarations(db).clone()
         },
         metadata,
-        typed.span_map(db),
     );
     let prepared = prepare_frontend_for_lowering(db, input, source);
     let errors = prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, input, source);

@@ -454,26 +454,19 @@ impl<'db> DeclarationTypeMetadata<'db> {
 }
 
 /// The complete output of type checking one module: the typed AST with
-/// the metadata of its declarations and of its expressions, and the span map
-/// later stages read source locations from.
+/// the metadata of its declarations and of its expressions. Source
+/// locations stay in the span map of the parse it was checked from.
 #[salsa::tracked]
 pub struct TypeCheckOutput<'db> {
     /// The type-checked AST module.
     pub module: DeclTable<TypedRef<'db>>,
     pub declarations: DeclarationTypeMetadata<'db>,
     pub expression_types: ExpressionTypeMetadata<'db>,
-    /// Source span information for AST nodes.
-    #[returns(clone)]
-    pub span_map: SpanMap,
 }
 
 impl<'db> TypeCheckOutput<'db> {
     /// The output of a finished module check.
-    pub fn from_check(
-        db: &'db dyn salsa::Database,
-        result: ModuleCheckResult<'db>,
-        span_map: SpanMap,
-    ) -> Self {
+    pub fn from_check(db: &'db dyn salsa::Database, result: ModuleCheckResult<'db>) -> Self {
         Self::new(
             db,
             result.module,
@@ -493,7 +486,6 @@ impl<'db> TypeCheckOutput<'db> {
                 lambda_signatures: result.lambda_signatures,
                 exhaustive_cases: result.exhaustive_cases,
             },
-            span_map,
         )
     }
 }
@@ -555,10 +547,10 @@ pub struct PreludeExports<'db> {
 pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<ResolvedRef<'db>>,
-    span_map: SpanMap,
+    span_map: &'db SpanMap,
 ) -> TypeCheckOutput<'db> {
-    let checker = TypeChecker::new(db, span_map.clone());
-    TypeCheckOutput::from_check(db, checker.check_module(module), span_map)
+    let checker = TypeChecker::new(db, span_map);
+    TypeCheckOutput::from_check(db, checker.check_module(module))
 }
 
 #[cfg(test)]

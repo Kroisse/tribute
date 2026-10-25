@@ -2,6 +2,7 @@
 
 use ropey::Rope;
 use tree_sitter::Parser;
+use tribute_front::ast::SpanMap;
 use tribute_front::astgen::ParsedAst;
 use tribute_front::query as ast_query;
 use tribute_front::resolve as ast_resolve;
@@ -75,11 +76,17 @@ fn checked_prelude<'db>(
     let resolved = ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env, span_map);
 
     // Typecheck with independent TypeContext (all UniVars resolved)
-    let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
+    let checker = ast_typeck::TypeChecker::new(db, span_map);
     let (result, exports) = checker.check_prelude(&resolved);
 
-    let typed = ast_typeck::TypeCheckOutput::from_check(db, result, span_map.clone());
+    let typed = ast_typeck::TypeCheckOutput::from_check(db, result);
     Some((typed, exports))
+}
+
+/// The span map of the prelude's parse, which locates its nodes in a module
+/// merged with it.
+pub(crate) fn prelude_span_map(db: &dyn salsa::Database) -> Option<&SpanMap> {
+    parse_prelude(db).map(|(parsed, _)| parsed.span_map(db))
 }
 
 /// The prelude's typed AST (parse → resolve → typecheck), without

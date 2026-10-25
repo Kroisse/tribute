@@ -126,7 +126,7 @@ pub struct TypeChecker<'db> {
     /// Current module prefix for qualified function names (e.g., "foo::bar").
     pub(crate) prefix: SymbolPath,
     /// Span map for converting NodeId to Span in diagnostics.
-    pub(crate) span_map: SpanMap,
+    pub(crate) span_map: &'db SpanMap,
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
@@ -202,7 +202,7 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Create a new type checker with the given span map.
-    pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap) -> Self {
+    pub fn new(db: &'db dyn salsa::Database, span_map: &'db SpanMap) -> Self {
         Self {
             env: ModuleTypeEnv::new(db),
             prefix: SymbolPath::root(),
