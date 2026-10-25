@@ -99,10 +99,27 @@ fn validate_operation(
     }
     validate_return_call_indirect(ctx, op, errors);
     validate_direct_callable_contracts(ctx, op, symbols, errors);
+    validate_ref_upcast(ctx, op, errors);
 
     // Recursively validate nested regions
     for region in ctx.op_regions(op) {
         validate_region(ctx, region, depth + 1, symbols, errors);
+    }
+}
+
+/// A `wasm.ref_upcast` must widen its operand without a runtime cast.
+fn validate_ref_upcast(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
+    let Ok(upcast) = wasm_dialect::RefUpcast::from_op(ctx, op) else {
+        return;
+    };
+    let operand = ctx.value_ty(upcast.r#ref(ctx));
+    let result = upcast.result_ty(ctx);
+    if !crate::is_wasm_physical_argument_assignable(ctx, operand, result) {
+        errors.push(format!(
+            "wasm.ref_upcast from {} does not widen to {} without a cast",
+            ctx.get_type(operand).name.display(ctx),
+            ctx.get_type(result).name.display(ctx)
+        ));
     }
 }
 
@@ -554,6 +571,31 @@ mod tests {
 
         assert!(is_wasm_physical_result_assignable(&ctx, arrayref, plain));
         assert!(!is_wasm_physical_result_assignable(&ctx, arrayref, data));
+    }
+
+    #[test]
+    fn ref_upcast_widens_only_without_a_cast() {
+        let validate = |operand: &str, result: &str| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  !Leaf = wasm_gc.struct<core.i32>
+  wasm.func @widen(%value: {operand}) -> {result} {{
+    %wide = wasm.ref_upcast %value : {result}
+    wasm.return %wide
+  }}
+}}"#
+                ),
+            );
+            validate_wasm_ir(&ctx, module)
+        };
+
+        validate("!Leaf", "wasm.structref").expect("a registered struct widens to structref");
+        validate("wasm.structref", "wasm.anyref").expect("structref widens to anyref");
+        let error = validate("wasm.anyref", "wasm.structref").expect_err("a downcast needs a cast");
+        assert!(error.to_string().contains("does not widen to"), "{error}");
     }
 
     #[test]

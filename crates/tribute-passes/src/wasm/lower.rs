@@ -20,7 +20,7 @@ use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
 };
 use trunk_ir::types::Location;
-use trunk_ir_wasm_backend::passes::reference_upcast_elision::ReferenceUpcastElisionPattern;
+use trunk_ir_wasm_backend::passes::reference_upcast::ReferenceUpcastPattern;
 use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConversionPattern;
 
 use super::type_converter::wasm_type_converter;
@@ -511,8 +511,9 @@ impl Pass for LowerToWasm {
 
 /// A module pass that legalizes the `unrealized_conversion_cast` operations
 /// left after Wasm lowering with the Wasm type converter: it converts their
-/// result types, materializes real representation changes, and elides WasmGC
-/// reference upcasts. [`trunk_ir::conversion::ReconcileUnrealizedCasts`] then
+/// result types, materializes real representation changes, and writes WasmGC
+/// reference upcasts as `wasm.ref_upcast`.
+/// [`trunk_ir::conversion::ReconcileUnrealizedCasts`] then
 /// folds the identities left behind, and the emission boundary in
 /// [`FinalizeWasmGcTypes`] rejects any cast that remains.
 pub struct LegalizeUnrealizedCasts;
@@ -533,7 +534,7 @@ impl Pass for LegalizeUnrealizedCasts {
         let tc = wasm_type_converter(ctx);
         let result = PatternApplicator::new(tc)
             .add_pattern(UnrealizedCastConversionPattern)
-            .add_pattern(ReferenceUpcastElisionPattern)
+            .add_pattern(ReferenceUpcastPattern)
             .apply_partial(ctx, Module::from(target));
         if !result.reached_fixpoint {
             warn!("wasm cast legalization did not reach a fixpoint");

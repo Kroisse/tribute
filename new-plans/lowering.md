@@ -158,7 +158,7 @@ intrinsic_to_wasm
 wasm_lowerer
 convert_struct_layouts
 verify_wasm_backend_ready
-cast legalization + reference upcast elision + ReconcileUnrealizedCasts
+cast legalization + wasm.ref_upcast for reference upcasts + ReconcileUnrealizedCasts
 finalize_wasm_gc_types
 verify_wasm_emission_ready
 ```
