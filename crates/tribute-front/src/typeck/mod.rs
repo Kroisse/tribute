@@ -37,6 +37,7 @@ use crate::SortedMap;
 use crate::ast::SpanMap;
 pub use func_context::FunctionInferenceContext;
 use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 use trunk_ir::SymbolPath;
 
@@ -346,7 +347,9 @@ impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<
     }
 }
 
-/// What type checking fixed for the module's declarations.
+/// What type checking fixed for the module's declarations. A module's
+/// output holds only its own package's declarations; the dependency's join
+/// them in specialization (`DeclarationTypeMetadata::after_dependency`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct DeclarationTypeMetadata<'db> {
     /// Function type schemes, keyed by path because `FuncDefId` does not
@@ -358,8 +361,63 @@ pub struct DeclarationTypeMetadata<'db> {
     /// Deterministic ability schemas required by the public logical-lowering
     /// boundary. This preserves semantic declarations without re-inspection.
     pub ability_definitions: Vec<AbilitySchema<'db>>,
-    /// Prelude-defined semantic type identities.
+    /// The well-known identities the package declares; empty for any package
+    /// but `std`.
     pub well_known_types: WellKnownTypes<'db>,
+}
+
+impl<'db> DeclarationTypeMetadata<'db> {
+    /// These declarations after those of the package they depend on, as
+    /// one table: a declaration here replaces the dependency's with the same
+    /// identity, and the well-known identities come from whichever package
+    /// declares them.
+    pub fn after_dependency(&self, dependency: &Self) -> Self {
+        fn layered<K: Eq + std::hash::Hash, V: Clone>(
+            dependency: &[V],
+            own: &[V],
+            key: impl Fn(&V) -> K,
+        ) -> Vec<V> {
+            let own_keys: HashSet<K> = own.iter().map(&key).collect();
+            dependency
+                .iter()
+                .filter(|entry| !own_keys.contains(&key(entry)))
+                .chain(own)
+                .cloned()
+                .collect()
+        }
+        let constructor_types = ConstructorTypeMetadata {
+            schemes: layered(
+                &dependency.constructor_types.schemes,
+                &self.constructor_types.schemes,
+                |(id, _)| *id,
+            ),
+            specialized_enum_variants: dependency
+                .constructor_types
+                .specialized_enum_variants
+                .iter()
+                .chain(&self.constructor_types.specialized_enum_variants)
+                .map(|(node, scheme)| (*node, *scheme))
+                .collect(),
+        };
+        Self {
+            function_types: layered(
+                &dependency.function_types,
+                &self.function_types,
+                |(path, _)| path.clone(),
+            ),
+            constructor_types,
+            ability_definitions: layered(
+                &dependency.ability_definitions,
+                &self.ability_definitions,
+                |(id, ..)| *id,
+            ),
+            well_known_types: if self.well_known_types == WellKnownTypes::empty() {
+                dependency.well_known_types
+            } else {
+                self.well_known_types
+            },
+        }
+    }
 }
 
 /// The complete output of type checking one module: the typed AST with
@@ -446,7 +504,7 @@ pub struct PreludeExports<'db> {
     pub constructor_field_names: Vec<(CtorId<'db>, Vec<Symbol>)>,
 
     /// Ability operation schemas exported by the prelude as deterministic
-    /// vectors (the module environment rebuilds its lookup map on injection).
+    /// vectors (a dependent module's environment indexes them for lookup).
     #[returns(deref)]
     pub ability_definitions: Vec<(
         AbilityId<'db>,

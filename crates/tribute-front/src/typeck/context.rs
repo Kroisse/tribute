@@ -142,7 +142,60 @@ pub struct ModuleTypeEnv<'db> {
     /// Used for handler arm type checking.
     ability_defs: HashMap<AbilityId<'db>, AbilityInfo<'db>>,
 
+    /// Well-known identities this package declares; only package `std` has
+    /// them.
     well_known_types: super::WellKnownTypes<'db>,
+
+    /// What the package `std` this module depends on declares. Lookups read
+    /// it after this module's own declarations, which never copy it.
+    dependency: Option<Box<DependencyTypes<'db>>>,
+}
+
+/// The declarations a dependency package exports, indexed for lookup.
+struct DependencyTypes<'db> {
+    function_types: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
+    extern_functions: HashSet<FuncDefId<'db>>,
+    constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
+    type_defs: HashMap<SymbolPath, TypeScheme<'db>>,
+    struct_fields: HashMap<TypeDefId<'db>, StructFieldInfo<'db>>,
+    enum_variants: HashMap<SymbolPath, Vec<Symbol>>,
+    constructor_field_names: HashMap<CtorId<'db>, Vec<Symbol>>,
+    ability_defs: HashMap<AbilityId<'db>, AbilityInfo<'db>>,
+    well_known_types: super::WellKnownTypes<'db>,
+}
+
+impl<'db> DependencyTypes<'db> {
+    fn new(db: &'db dyn salsa::Database, exports: &super::PreludeExports<'db>) -> Self {
+        Self {
+            function_types: exports.function_types(db).iter().copied().collect(),
+            extern_functions: exports.extern_functions(db).iter().copied().collect(),
+            constructor_types: exports.constructor_types(db).iter().copied().collect(),
+            type_defs: exports.type_defs(db).iter().cloned().collect(),
+            struct_fields: exports.struct_fields(db).iter().cloned().collect(),
+            enum_variants: exports.enum_variants(db).iter().cloned().collect(),
+            constructor_field_names: exports
+                .constructor_field_names(db)
+                .iter()
+                .cloned()
+                .collect(),
+            ability_defs: exports
+                .ability_definitions(db)
+                .iter()
+                .map(|(ability, type_params, operations)| {
+                    let info = AbilityInfo {
+                        id: *ability,
+                        type_params: type_params.clone(),
+                        operations: operations
+                            .iter()
+                            .map(|op| (op.name.clone(), op.clone()))
+                            .collect(),
+                    };
+                    (*ability, info)
+                })
+                .collect(),
+            well_known_types: *exports.well_known_types(db),
+        }
+    }
 }
 
 impl<'db> ModuleTypeEnv<'db> {
@@ -222,6 +275,7 @@ impl<'db> ModuleTypeEnv<'db> {
             constructor_field_names: HashMap::default(),
             ability_defs,
             well_known_types: super::WellKnownTypes::empty(),
+            dependency: None,
         }
     }
 
@@ -247,6 +301,10 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Whether a function was declared `extern`.
     pub fn is_extern_function(&self, id: FuncDefId<'db>) -> bool {
         self.extern_functions.contains(&id)
+            || self
+                .dependency
+                .as_ref()
+                .is_some_and(|dependency| dependency.extern_functions.contains(&id))
     }
 
     /// Register a constructor's type scheme.
@@ -290,17 +348,26 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Look up a function's type scheme.
     pub fn lookup_function(&self, id: FuncDefId<'db>) -> Option<TypeScheme<'db>> {
-        self.function_types.get(&id).copied()
+        self.function_types
+            .get(&id)
+            .or_else(|| self.dependency.as_ref()?.function_types.get(&id))
+            .copied()
     }
 
     /// Look up a constructor's type scheme.
     pub fn lookup_constructor(&self, id: CtorId<'db>) -> Option<TypeScheme<'db>> {
-        self.constructor_types.get(&id).copied()
+        self.constructor_types
+            .get(&id)
+            .or_else(|| self.dependency.as_ref()?.constructor_types.get(&id))
+            .copied()
     }
 
     /// Look up a type definition.
     pub fn lookup_type_def(&self, path: &[Symbol]) -> Option<TypeScheme<'db>> {
-        self.type_defs.get(path).copied()
+        self.type_defs
+            .get(path)
+            .or_else(|| self.dependency.as_ref()?.type_defs.get(path))
+            .copied()
     }
 
     /// Look up a type definition from a lexical module scope.
@@ -326,8 +393,7 @@ impl<'db> ModuleTypeEnv<'db> {
         &self,
         struct_id: TypeDefId<'db>,
     ) -> Option<&[(Symbol, Type<'db>)]> {
-        self.struct_fields
-            .get(&struct_id)
+        self.struct_field_info(struct_id)
             .map(|(_, fields)| fields.as_slice())
     }
 
@@ -338,7 +404,7 @@ impl<'db> ModuleTypeEnv<'db> {
         struct_id: TypeDefId<'db>,
         field_name: &Symbol,
     ) -> Option<(&[TypeParam], Type<'db>)> {
-        let (type_params, fields) = self.struct_fields.get(&struct_id)?;
+        let (type_params, fields) = self.struct_field_info(struct_id)?;
         for (name, ty) in fields {
             if *name == *field_name {
                 return Some((type_params.as_slice(), *ty));
@@ -446,18 +512,26 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Look up enum variants by enum name.
     pub fn lookup_enum_variants(&self, enum_path: &[Symbol]) -> Option<&[Symbol]> {
-        self.enum_variants.get(enum_path).map(|v| v.as_slice())
+        self.enum_variants
+            .get(enum_path)
+            .or_else(|| self.dependency.as_ref()?.enum_variants.get(enum_path))
+            .map(|v| v.as_slice())
     }
 
     /// Field names of a constructor in declaration order, or `None` if its
     /// fields are positional.
     pub fn lookup_constructor_field_names(&self, id: CtorId<'db>) -> Option<&[Symbol]> {
-        self.constructor_field_names.get(&id).map(Vec::as_slice)
+        self.constructor_field_names
+            .get(&id)
+            .or_else(|| self.dependency.as_ref()?.constructor_field_names.get(&id))
+            .map(Vec::as_slice)
     }
 
     /// Look up an ability definition by ID.
     pub fn lookup_ability(&self, id: AbilityId<'db>) -> Option<&AbilityInfo<'db>> {
-        self.ability_defs.get(&id)
+        self.ability_defs
+            .get(&id)
+            .or_else(|| self.dependency.as_ref()?.ability_defs.get(&id))
     }
 
     /// Look up an ability operation by ability ID and operation name.
@@ -466,8 +540,7 @@ impl<'db> ModuleTypeEnv<'db> {
         ability: AbilityId<'db>,
         op: &Symbol,
     ) -> Option<&AbilityOpInfo<'db>> {
-        self.ability_defs
-            .get(&ability)
+        self.lookup_ability(ability)
             .and_then(|info| info.operations.get(op))
     }
 
@@ -483,51 +556,34 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     // =========================================================================
-    // Prelude injection
+    // Dependency
     // =========================================================================
 
-    /// Inject prelude's resolved type information into this environment.
-    ///
-    /// This is called before type checking user code to make prelude's
-    /// types available. The injected types contain only BoundVars (no UniVars).
-    pub fn inject_prelude(&mut self, exports: &super::PreludeExports<'db>) {
-        self.well_known_types = *exports.well_known_types(self.db);
-        for (id, scheme) in exports.function_types(self.db) {
-            self.function_types.insert(*id, *scheme);
-        }
-        self.extern_functions
-            .extend(exports.extern_functions(self.db).iter().copied());
-        for (id, scheme) in exports.constructor_types(self.db) {
-            self.constructor_types.insert(*id, *scheme);
-        }
-        for (name, scheme) in exports.type_defs(self.db) {
-            self.type_defs.insert(name.clone(), *scheme);
-        }
-        for (id, (type_params, fields)) in exports.struct_fields(self.db) {
-            self.register_struct_fields(*id, type_params.clone(), fields.clone());
-        }
-        for (name, variants) in exports.enum_variants(self.db) {
-            self.enum_variants.insert(name.clone(), variants.clone());
-        }
-        for (id, names) in exports.constructor_field_names(self.db) {
-            self.constructor_field_names.insert(*id, names.clone());
-        }
-        for (ability, type_params, operations) in exports.ability_definitions(self.db) {
-            self.ability_defs.insert(
-                *ability,
-                AbilityInfo {
-                    id: *ability,
-                    type_params: type_params.clone(),
-                    operations: operations
-                        .iter()
-                        .map(|op| (op.name.clone(), op.clone()))
-                        .collect(),
-                },
-            );
+    /// Read the declarations package `std` exports after this module's
+    /// own. The module's output holds only its own declarations.
+    pub fn depend_on(&mut self, exports: &super::PreludeExports<'db>) {
+        self.dependency = Some(Box::new(DependencyTypes::new(self.db, exports)));
+    }
+
+    /// The struct field declarations of `struct_id`, from this module or its
+    /// dependency.
+    fn struct_field_info(&self, struct_id: TypeDefId<'db>) -> Option<&StructFieldInfo<'db>> {
+        self.struct_fields
+            .get(&struct_id)
+            .or_else(|| self.dependency.as_ref()?.struct_fields.get(&struct_id))
+    }
+
+    /// The well-known identities in scope: this package's own, or those of
+    /// the package `std` it depends on.
+    pub fn well_known_types(&self) -> super::WellKnownTypes<'db> {
+        match &self.dependency {
+            Some(dependency) => dependency.well_known_types,
+            None => self.well_known_types,
         }
     }
 
-    pub fn well_known_types(&self) -> super::WellKnownTypes<'db> {
+    /// The well-known identities this package declares.
+    pub fn own_well_known_types(&self) -> super::WellKnownTypes<'db> {
         self.well_known_types
     }
 
@@ -692,7 +748,7 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Create the String type (prelude-defined enum).
     pub fn string_type(&self) -> Type<'db> {
-        self.well_known_types
+        self.well_known_types()
             .string
             .map(|string| string.ty)
             .unwrap_or_else(|| Type::new(self.db, TypeKind::string(self.db)))
