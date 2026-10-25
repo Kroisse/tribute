@@ -357,7 +357,23 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
             .join("\n")
     );
 
-    run_ast_pipeline_inner(db, source)
+    let ir = run_ast_pipeline_inner(db, source);
+    // Production lowers only a module without errors.
+    let errors: Vec<_> = run_ast_pipeline_inner::accumulated::<Diagnostic>(db, source)
+        .into_iter()
+        .filter(|d| d.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "Expected no errors, but found {}:\n{}",
+        errors.len(),
+        errors
+            .iter()
+            .map(|d| format!("  - [{}] {}", d.phase, d.inner.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    ir
 }
 
 /// Run the full AST pipeline without returning IR text.

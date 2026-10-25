@@ -26,8 +26,8 @@ fn test_pure_lambda_no_effect(db: &salsa::DatabaseImpl) {
         r#"
 fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 
-fn main() -> Int {
-    apply(fn(n) { n + 1 }, 41)
+fn answer() -> Int {
+    apply(fn(n) { n + +1 }, +41)
 }
 "#,
     );
@@ -45,9 +45,9 @@ fn test_pure_lambda_with_capture_no_effect(db: &salsa::DatabaseImpl) {
         r#"
 fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 
-fn main() -> Int {
-    let offset = 10
-    apply(fn(n) { n + offset }, 32)
+fn answer() -> Int {
+    let offset = +10
+    apply(fn(n) { n + offset }, +32)
 }
 "#,
     );
@@ -78,12 +78,12 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume 42 }
+        op State::get() { resume +42 }
         op State::set(v) { resume Nil }
     }
 }
 
-fn main() -> Int {
+fn read_state() -> Int {
     run_with_state(fn() { State::get() })
 }
 "#,
@@ -110,19 +110,19 @@ ability State(s) {
 
 fn counter() ->{State(Int)} Int {
     let n = State::get()
-    State::set(n + 1)
+    State::set(n + +1)
     n
 }
 
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume 0 }
+        op State::get() { resume +0 }
         op State::set(v) { resume Nil }
     }
 }
 
-fn main() -> Int {
+fn read_state() -> Int {
     run_with_state(fn() { counter() })
 }
 "#,
@@ -147,15 +147,15 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume 0 }
+        op State::get() { resume +0 }
         op State::set(v) { resume Nil }
     }
 }
 
-fn main() -> Int {
+fn read_state() -> Int {
     run_with_state(fn() {
         let n = State::get()
-        State::set(n + 1)
+        State::set(n + +1)
         n
     })
 }
@@ -227,7 +227,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Int { 0 }
+fn zero() -> Int { +0 }
 "#,
     );
 
@@ -295,13 +295,13 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume 99 }
+        op State::get() { resume +99 }
     }
 }
 
 fn apply_thunk(f: fn() ->{e} Int) ->{e} Int { f() }
 
-fn main() -> Int {
+fn read_state() -> Int {
     apply_thunk(fn() {
         run_with_state(fn() { State::get() })
     })

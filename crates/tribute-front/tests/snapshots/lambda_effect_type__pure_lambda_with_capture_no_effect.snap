@@ -4,19 +4,21 @@ assertion_line: 56
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @apply['a0](%0: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>, %1: core.i32) -> core.i32 row(| 'a0) {
+  !t0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+
+  tribute_control.func @apply['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
       %2 = tribute_control.call_indirect %0, %1 : core.i32
       tribute_control.return %2
   }
-  tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
-  tribute_control.func @main['a0, body 'a1]() -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
+  tribute_control.func @answer['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = arith.const {value = 10} : core.i32
-      %1 = tribute_control.lambda(%2: core.i32) -> core.i32 row(| 'a1) captures [%0] {
-          %3 = tribute_control.call %2, %0 {callee = @"std::Nat::+"} : core.i32
+      %1 = tribute_control.lambda(%2: core.i32) -> core.i32 row(| 'a0) captures [%0] {
+          %3 = tribute_control.call %2, %0 {callee = @"std::Int::+"} : core.i32
           tribute_control.return %3
       }
       %4 = arith.const {value = 32} : core.i32
-      %5 = tribute_control.call %1, %4 {callee = @apply, row_args = [{tail = 1}]} : core.i32
+      %5 = tribute_control.call %1, %4 {callee = @apply, row_args = [{tail = 0}]} : core.i32
       tribute_control.return %5
   }
 }

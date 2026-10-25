@@ -16,7 +16,7 @@ fn captured(k: Int) ->{} Int {
     apply(action, +3)
 }
 
-fn main() ->{} Int { captured(+9) }
+fn entry() ->{} Int { captured(+9) }
 "#,
     );
     let ir = common::run_ast_pipeline_with_ir(db, source);
@@ -31,7 +31,7 @@ fn repeated_instance_and_alias_share_materialization(db: &salsa::DatabaseImpl) {
         "alias.trb",
         r#"
 fn pure(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
-fn main() ->{} Int {
+fn entry() ->{} Int {
     let action = fn(x: Int) x
     let alias = action
     let first = pure(alias, +3)
@@ -53,7 +53,7 @@ fn named_alias_uses_adapter_without_obsolete_capture(db: &salsa::DatabaseImpl) {
 fn identity(x: Int) ->{} Int { x }
 fn pure(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
-fn main() ->{} Int {
+fn entry() ->{} Int {
     let named = identity
     let alias = named
     pure(fn(x: Int) open(alias, x), +3)
@@ -72,12 +72,12 @@ fn named_alias_adapts_for_indirect_consumer(db: &salsa::DatabaseImpl) {
         "indirect_consumer.trb",
         r#"
 fn identity(x: Int) ->{} Int { x }
-fn call(consumer: fn(fn(Int) ->{e} Int, Int) ->{e} Int) ->{e} Int {
+fn call(consumer: fn(Int) ->{e} Int, x: Int) ->{e} Int { consumer(x) }
+fn entry() ->{} Int {
     let named = identity
     let alias = named
-    consumer(alias, +3)
+    call(alias, +3)
 }
-fn main() -> Nil {}
 "#,
     );
     let ir = common::run_ast_pipeline_with_ir(db, source);
@@ -91,7 +91,7 @@ fn shadowed_bindings_materialize_independently(db: &salsa::DatabaseImpl) {
         "shadowed.trb",
         r#"
 fn pure(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
-fn main() ->{} Int {
+fn entry() ->{} Int {
     let action = fn(x: Int) x
     let first = pure(action, +3)
     let action = fn(x: Int) first

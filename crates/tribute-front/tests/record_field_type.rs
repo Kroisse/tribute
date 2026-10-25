@@ -770,7 +770,7 @@ fn test_record_field_type_correct(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn make_point() -> Point {
-    Point { x: 10, y: 20 }
+    Point { x: +10, y: +20 }
 }
 "#,
     );
@@ -788,7 +788,7 @@ fn test_record_mixed_field_types(db: &salsa::DatabaseImpl) {
 struct Person { name: String, age: Int, active: Bool }
 
 fn make_person() -> Person {
-    Person { name: "Alice", age: 30, active: True }
+    Person { name: "Alice", age: +30, active: True }
 }
 "#,
     );
@@ -807,7 +807,7 @@ fn test_record_spread_same_type(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn update_x(p: Point) -> Point {
-    Point { x: 100, ..p }
+    Point { x: +100, ..p }
 }
 "#,
     );
@@ -861,7 +861,7 @@ fn test_record_field_type_inference(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn test() -> Int {
-    let p = Point { x: 1, y: 2 }
+    let p = Point { x: +1, y: +2 }
     p.x
 }
 "#,
@@ -884,7 +884,7 @@ fn test_snapshot_record_construction(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn make_point() -> Point {
-    Point { x: 10, y: 20 }
+    Point { x: +10, y: +20 }
 }
 "#,
     );
@@ -903,7 +903,7 @@ fn test_snapshot_record_spread(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn update_x(p: Point) -> Point {
-    Point { x: 100, ..p }
+    Point { x: +100, ..p }
 }
 "#,
     );
@@ -962,7 +962,7 @@ fn test_snapshot_record_spread_all_fields_explicit(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn replace_all(p: Point) -> Point {
-    Point { x: 1, y: 2, ..p }
+    Point { x: +1, y: +2, ..p }
 }
 "#,
     );
@@ -981,11 +981,11 @@ fn test_record_spread_complex_expr(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn origin() -> Point {
-    Point { x: 0, y: 0 }
+    Point { x: +0, y: +0 }
 }
 
 fn shift_x() -> Point {
-    Point { x: 10, ..origin() }
+    Point { x: +10, ..origin() }
 }
 "#,
     );
@@ -1009,7 +1009,7 @@ fn test_record_forward_reference(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 fn make_point() -> Point {
-    Point { x: 1, y: 2 }
+    Point { x: +1, y: +2 }
 }
 
 struct Point { x: Int, y: Int }

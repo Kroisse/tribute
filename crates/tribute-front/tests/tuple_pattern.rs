@@ -20,9 +20,9 @@ fn test_tuple_pattern_basic(db: &salsa::DatabaseImpl) {
         r#"
 fn test(x: Bool, y: Bool) -> Int {
     case #(x, y) {
-        #(True, True) -> 1
-        #(True, False) -> 2
-        #(False, _) -> 3
+        #(True, True) -> +1
+        #(True, False) -> +2
+        #(False, _) -> +3
     }
 }
 "#,
@@ -40,10 +40,10 @@ fn test_tuple_pattern_nested(db: &salsa::DatabaseImpl) {
         r#"
 fn test(a: Bool, b: Bool, c: Bool) -> Int {
     case #(a, #(b, c)) {
-        #(True, #(True, True)) -> 1
-        #(True, #(_, False)) -> 2
-        #(True, #(False, True)) -> 4
-        #(False, _) -> 3
+        #(True, #(True, True)) -> +1
+        #(True, #(_, False)) -> +2
+        #(True, #(False, True)) -> +4
+        #(False, _) -> +3
     }
 }
 "#,
@@ -66,7 +66,7 @@ fn first(pair: #(a, b)) -> a {
 }
 
 fn test() -> Int {
-    first(#(42, True))
+    first(#(+42, True))
 }
 "#,
     );
