@@ -86,19 +86,16 @@
 //! collected at the end of compilation.
 
 use crate::SourceCst;
-use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Span;
 use trunk_ir::analysis::AnalysisCache;
-use trunk_ir::conversion::{ReconcileUnrealizedCasts, UnrealizedCastConversionPattern};
+use trunk_ir::conversion::ReconcileUnrealizedCasts;
 use trunk_ir::dialect::{core as core_dialect, func as func_dialect};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{PassError, PassManager, PassResult};
-use trunk_ir::rewrite::PatternApplicator;
 use trunk_ir::{IrContext, Module};
-use trunk_ir_wasm_backend::passes::reference_upcast_elision::ReferenceUpcastElisionPattern;
 
 /// Error returned while dumping shared or target-specific IR.
 #[derive(Debug, Clone, PartialEq, Eq, derive_more::Display, derive_more::Error)]
@@ -109,22 +106,6 @@ pub struct DumpIrError {
 
 impl From<PassError> for DumpIrError {
     fn from(error: PassError) -> Self {
-        Self {
-            message: error.to_string(),
-        }
-    }
-}
-
-impl From<tribute_passes::bytes_intrinsic::BytesIntrinsicError> for DumpIrError {
-    fn from(error: tribute_passes::bytes_intrinsic::BytesIntrinsicError) -> Self {
-        Self {
-            message: error.to_string(),
-        }
-    }
-}
-
-impl From<tribute_passes::target_abi::TargetAbiError> for DumpIrError {
-    fn from(error: tribute_passes::target_abi::TargetAbiError) -> Self {
         Self {
             message: error.to_string(),
         }
@@ -427,53 +408,21 @@ pub struct CompilationResult {
 /// Runs all WASM backend passes in a single arena session:
 /// 1. Lowers the module from func/scf/arith dialects to wasm dialect operations
 /// 2. Converts and reconciles unrealized conversion casts using the WASM type converter
-/// 3. Validates and emits the wasm binary (delegated to trunk-ir-wasm-backend)
+/// 3. Assigns the module-local indices of the WasmGC operations materialization
+///    introduced, then validates and emits the wasm binary (delegated to
+///    trunk-ir-wasm-backend)
 fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult<WasmBinary> {
     let _span = tracing::info_span!("compile_to_wasm").entered();
-    let mut analyses = AnalysisCache::new();
+    let core_module = core_dialect::Module::from_op(ctx, module.op())
+        .expect("wasm lowering requires a core.module");
+    let mut pm = PassManager::new();
+    pm.add_pass(tribute_passes::wasm::lower::lower_to_wasm_pass())
+        .add_pass(tribute_passes::wasm::lower::legalize_unrealized_casts_pass())
+        .add_pass(ReconcileUnrealizedCasts)
+        .add_pass(tribute_passes::wasm::lower::finalize_wasm_gc_types_pass());
+    pm.run(ctx, core_module, &mut AnalysisCache::new())
+        .map_err(wasm_lowering_failure)?;
 
-    // Phase 1 - Lower to wasm dialect (Tribute-specific)
-    {
-        let _span = tracing::info_span!("lower_to_wasm").entered();
-        tribute_passes::wasm::lower::lower_to_wasm(ctx, module, &mut analyses)
-            .map_err(wasm_lowering_failure)?;
-    }
-
-    // Phase 2 - Legalize unrealized_conversion_cast operations (WASM type
-    // converter): convert their result types, materialize real
-    // representation changes, elide WasmGC reference upcasts, and reconcile
-    // the identities left behind. A remaining cast is rejected by the
-    // emission boundary in `finalize_wasm_gc_types`.
-    {
-        let _span = tracing::info_span!("legalize_unrealized_casts").entered();
-        let tc = tribute_passes::wasm::type_converter::wasm_type_converter(ctx);
-        let result = PatternApplicator::new(tc)
-            .add_pattern(UnrealizedCastConversionPattern)
-            .add_pattern(ReferenceUpcastElisionPattern)
-            .apply_partial(ctx, module);
-        if !result.reached_fixpoint {
-            tracing::warn!("wasm cast legalization did not reach a fixpoint");
-        }
-        let core_module = core_dialect::Module::from_op(ctx, module.op())
-            .expect("wasm cast reconciliation requires a core.module");
-        let mut reconcile = PassManager::new();
-        reconcile.add_pass(ReconcileUnrealizedCasts);
-        reconcile
-            .run(ctx, core_module, &mut analyses)
-            .map_err(tribute_passes::wasm::lower::WasmLowerError::from)
-            .map_err(wasm_lowering_failure)?;
-    }
-
-    // Materialization may introduce semantic WasmGC operations after the main
-    // lowering pipeline. Assign their module-local indices before emission.
-    {
-        let _span = tracing::info_span!("wasm_gc_to_wasm_after_casts").entered();
-        tribute_passes::wasm::lower::finalize_wasm_gc_types(ctx, module)
-            .map_err(tribute_passes::wasm::lower::WasmLowerError::from)
-            .map_err(wasm_lowering_failure)?;
-    }
-
-    // Phase 3 - Emit WASM binary
     let _span = tracing::info_span!("emit_module_to_wasm").entered();
     trunk_ir_wasm_backend::emit_module_to_wasm(ctx, module)
 }
@@ -731,39 +680,11 @@ fn debug_validate_value_integrity(ctx: &IrContext, m: Module, boundary: &str) {
 
 /// Forward known struct reads module-wide, then run canonicalization and DCE
 /// on every function.
-///
-/// `stage` names the caller in diagnostics. A failed pass is returned so the
-/// caller stops lowering.
-fn run_canonicalize_passes(
-    ctx: &mut IrContext,
-    m: Module,
-    analyses: &mut AnalysisCache,
-    stage: &str,
-) -> Result<(), PassError> {
-    let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) else {
-        tracing::warn!("{stage} skipped function passes: root op is not core.module");
-        return Ok(());
-    };
-    tribute_ir::dialect::adt::forward_struct_gets(ctx, m);
-    let mut pm = PassManager::new();
-    pm.nest::<func_dialect::Func>()
+fn add_canonicalize_passes(pm: &mut PassManager) {
+    pm.add_pass(tribute_ir::dialect::adt::forward_struct_gets_pass())
+        .nest::<func_dialect::Func>()
         .add_pass(trunk_ir::transforms::canonicalize_pass())
         .add_pass(trunk_ir::transforms::EliminateDeadCode::new());
-    pm.with_debug_verifier();
-    pm.run(ctx, core_module, analyses)
-}
-
-/// Run global DCE + canonicalization (shared cleanup after all lowering).
-///
-/// The passes that created conversion casts already emitted their boxing, so
-/// the casts left here only retype values for the target type conversion.
-fn run_cleanup_passes(
-    ctx: &mut IrContext,
-    m: Module,
-    analyses: &mut AnalysisCache,
-) -> Result<(), PassError> {
-    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, analyses);
-    run_canonicalize_passes(ctx, m, analyses, "cleanup")
 }
 
 /// Run the WASM target pipeline: lowering + cleanup.
@@ -816,27 +737,26 @@ fn enter_target_lowering(
 ) -> Result<(), DumpIrError> {
     debug_validate_value_integrity(ctx, m, &format!("before {target} target lowering"));
 
+    let mut pm = PassManager::new();
     // Drop unreachable functions first, so that no later pass lowers them.
     // Runtime functions stay until the target lowering has called them.
-    trunk_ir::transforms::global_dce::eliminate_dead_functions_with_config(
-        ctx,
-        m,
+    pm.add_pass(trunk_ir::transforms::global_dce::global_dce_pass(
         tribute_ir::runtime_items::kept_alive(runtime),
-        analyses,
-    );
-
+    ))
     // General function inlining. Single-block-only (no `cf` dialect
     // dependency), so it preserves the caller's block structure. That keeps
     // WASM lowering within the dialects it handles and lets the same pass
     // work on both backend paths.
-    trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
+    .add_pass(trunk_ir::transforms::inline::inline_functions_pass());
     // Fold what inlining exposed (struct reads of known constructions, box
     // round trips, constant selectors) before closure storage and evidence
     // lowering see the IR.
-    run_canonicalize_passes(ctx, m, analyses, "post-inline canonicalization")?;
-
-    enter_target_closure_storage_boundary(ctx, m, analyses)?;
-    lower_evidence(ctx, m, analyses)
+    add_canonicalize_passes(&mut pm);
+    add_target_closure_storage_passes(&mut pm);
+    pm.add_pass(tribute_passes::evidence_lowering::LowerEvidence);
+    pm.with_debug_verifier();
+    pm.run(ctx, core_module(ctx, m), analyses)?;
+    Ok(())
 }
 
 /// The Wasm bytes intrinsic bridge, the target-specific stage that calls
@@ -844,8 +764,7 @@ fn enter_target_lowering(
 fn lower_wasm_runtime_calls(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     // Complete the supported bytes intrinsic bridge inside the boundary; the
     // lowering consumes its verified compiler intrinsic identity.
-    tribute_passes::wasm::bytes::lower(ctx, m)?;
-    Ok(())
+    run_module_pass(ctx, m, tribute_passes::wasm::bytes::lower_pass())
 }
 
 /// The native bytes intrinsic bridge, the target-specific stage that calls
@@ -853,31 +772,29 @@ fn lower_wasm_runtime_calls(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
 fn lower_native_runtime_calls(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     // Complete the supported bytes intrinsic bridge inside the boundary; the
     // lowering consumes its verified compiler intrinsic identity.
-    tribute_passes::native::intrinsic_to_native::lower(ctx, m)?;
+    run_module_pass(
+        ctx,
+        m,
+        tribute_passes::native::intrinsic_to_native::lower_pass(),
+    )
+}
+
+/// Run one module pass with the debug verifier.
+fn run_module_pass(
+    ctx: &mut IrContext,
+    m: Module,
+    pass: impl trunk_ir::pass::Pass<Target = core_dialect::Module> + 'static,
+) -> Result<(), DumpIrError> {
+    let mut pm = PassManager::new();
+    pm.add_pass(pass);
+    pm.with_debug_verifier();
+    pm.run(ctx, core_module(ctx, m), &mut AnalysisCache::new())?;
     Ok(())
 }
 
-/// Lower `effect.*` to calls of the evidence runtime and drop the ability
-/// declarations.
-fn lower_evidence(
-    ctx: &mut IrContext,
-    m: Module,
-    analyses: &mut AnalysisCache,
-) -> Result<(), DumpIrError> {
-    use tribute_passes::evidence_lowering::{LowerEvidence, prepare_evidence_runtime};
-
-    let core_module = core_dialect::Module::from_op(ctx, m.op())
-        .expect("evidence lowering requires a core.module");
-    let runtime = prepare_evidence_runtime(ctx, m).map_err(|error| DumpIrError {
-        message: error.to_string(),
-    })?;
-    let mut pm = PassManager::new();
-    pm.nest::<func_dialect::Func>()
-        .add_pass(LowerEvidence::new(runtime));
-    pm.with_debug_verifier();
-    pm.run(ctx, core_module, analyses)?;
-    tribute_ir::dialect::ability::remove_declarations(ctx, m);
-    Ok(())
+/// The root `core.module` of the pipeline's arena session.
+fn core_module(ctx: &IrContext, m: Module) -> core_dialect::Module {
+    core_dialect::Module::from_op(ctx, m.op()).expect("target lowering requires a core.module")
 }
 
 /// The end of the representation/ABI boundary, after every stage that calls
@@ -889,11 +806,27 @@ fn finish_target_lowering(
     analyses: &mut AnalysisCache,
     target: tribute_passes::abi_boundary::TargetKind,
 ) -> Result<(), DumpIrError> {
-    tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
+    run_module_pass(
+        ctx,
+        m,
+        tribute_passes::closure_lower::finalize_closure_storage_layout_pass(),
+    )?;
     debug_validate_value_integrity(ctx, m, "after target evidence lowering");
 
-    run_cleanup_passes(ctx, m, analyses)?;
-    enforce_boundary_exit(ctx, m, target)
+    // The passes that created conversion casts already emitted their boxing,
+    // so the casts left here only retype values for the target type
+    // conversion.
+    let mut pm = PassManager::new();
+    pm.add_pass(trunk_ir::transforms::global_dce::global_dce_pass(
+        Default::default(),
+    ));
+    add_canonicalize_passes(&mut pm);
+    pm.add_pass(tribute_passes::abi_boundary::check_boundary_exit_pass(
+        target,
+    ));
+    pm.with_debug_verifier();
+    pm.run(ctx, core_module(ctx, m), analyses)?;
+    Ok(())
 }
 
 /// Run `target`'s pipeline from the shared middle-end output to the
@@ -949,43 +882,12 @@ pub fn emit_native_from_boundary_exit(
         .map_err(EmitError::Native)
 }
 
-/// Reject a module whose representation/ABI boundary exit violates the
-/// contract.
-fn enforce_boundary_exit(
-    ctx: &IrContext,
-    m: Module,
-    target: tribute_passes::abi_boundary::TargetKind,
-) -> Result<(), DumpIrError> {
-    let violations = tribute_passes::abi_boundary::verify_boundary_exit(ctx, m, target);
-    if violations.is_empty() {
-        return Ok(());
-    }
-    Err(DumpIrError {
-        message: format!(
-            "{target:?} representation/ABI boundary exit violations: {}",
-            violations.iter().format("; ")
-        ),
-    })
-}
-
 /// Enter the sole target-side closure storage boundary. Exact ABI validation
 /// observes semantic closure types first; `LowerPreparedClosures` then consumes
 /// any remaining closure operations before whole-module storage finalization.
-fn enter_target_closure_storage_boundary(
-    ctx: &mut IrContext,
-    m: Module,
-    analyses: &mut AnalysisCache,
-) -> Result<(), DumpIrError> {
-    tribute_passes::target_abi::lower_cps_signatures_to_physical(ctx, m)?;
-    tribute_passes::target_abi::compose_root_entry_bridge(ctx, m)?;
-    tribute_passes::target_abi::compose_value_delimiters(ctx, m)?;
-    let core_module = core_dialect::Module::from_op(ctx, m.op())
-        .expect("target closure lowering requires a core.module");
-    let mut pm = PassManager::new();
-    pm.add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
-    pm.with_debug_verifier();
-    pm.run(ctx, core_module, analyses)?;
-    Ok(())
+fn add_target_closure_storage_passes(pm: &mut PassManager) {
+    pm.add_pass(tribute_passes::target_abi::physicalize_cps_callables_pass())
+        .add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
 }
 
 /// Dump IR text at the target's representation/ABI boundary exit.
@@ -1221,7 +1123,7 @@ fn native_pass_failure(error: PassError) -> trunk_ir_cranelift_backend::Compilat
     trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
 }
 
-fn wasm_lowering_failure(error: tribute_passes::wasm::lower::WasmLowerError) -> CompilationError {
+fn wasm_lowering_failure(error: PassError) -> CompilationError {
     CompilationError::ir_validation(error.to_string())
 }
 

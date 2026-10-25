@@ -23,6 +23,7 @@ use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::pass::{Pass, pass_fn};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::smallvec::smallvec;
@@ -692,6 +693,23 @@ pub fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(
         }
     }
     Ok(())
+}
+
+/// A module pass that physicalizes CPS callables: it runs
+/// [`lower_cps_signatures_to_physical`], [`compose_root_entry_bridge`], and
+/// [`compose_value_delimiters`] in order. The IR satisfies the operation
+/// schemas again only after all three, so they form one pass.
+pub fn physicalize_cps_callables_pass() -> impl Pass<Target = core::Module> {
+    pass_fn(
+        "physicalize-cps-callables",
+        |ctx, module: core::Module, _| {
+            let module = Module::from(module);
+            lower_cps_signatures_to_physical(ctx, module)?;
+            compose_root_entry_bridge(ctx, module)?;
+            compose_value_delimiters(ctx, module)?;
+            Ok(())
+        },
+    )
 }
 
 /// The terminal `Done<R>` and `Dispatch<R>` of a completion cell: `Done`

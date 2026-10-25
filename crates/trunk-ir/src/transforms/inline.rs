@@ -17,9 +17,10 @@
 //! return `InlineError::MultiBlockCallee`.
 
 use crate::context::IrContext;
-use crate::dialect::func;
+use crate::dialect::{core, func};
 use crate::ir_mapping::IrMapping;
 use crate::ops::DialectOp;
+use crate::pass::{Pass, pass_fn};
 use crate::refs::{OpRef, RegionRef, ValueRef};
 
 // =========================================================================
@@ -1491,4 +1492,12 @@ mod pass {
         });
         (has_call, has_add)
     }
+}
+
+/// A module pass that runs [`inline_functions`].
+pub fn inline_functions_pass() -> impl Pass<Target = core::Module> {
+    pass_fn("inline-functions", |ctx, module: core::Module, analyses| {
+        inline_functions(ctx, module.into(), analyses);
+        Ok(())
+    })
 }

@@ -12,6 +12,7 @@ use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::{Pass, pass_fn};
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::TypeDataBuilder;
@@ -32,6 +33,14 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicEr
         ensure_runtime_declaration(ctx, module);
     }
     Ok(())
+}
+
+/// A module pass that runs [`lower`].
+pub fn lower_pass() -> impl Pass<Target = core::Module> {
+    pass_fn("native-bytes-intrinsics", |ctx, module: core::Module, _| {
+        lower(ctx, module.into())?;
+        Ok(())
+    })
 }
 
 /// Rewrite one bytes element read into a call to the runtime function, which

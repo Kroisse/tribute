@@ -11,12 +11,15 @@ use std::borrow::Cow;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
+use itertools::Itertools;
+
 use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::pass::{Pass, pass_fn};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::{SymbolTable, link_name};
@@ -164,6 +167,44 @@ pub fn verify_boundary_exit(
     verifier.check_runtime_bindings(&ops, &functions, target);
     verifier.check_root_entry(module, &functions);
     verifier.violations
+}
+
+/// The boundary exit violations of a module, reported together.
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display(
+    "{target:?} representation/ABI boundary exit violations: {}",
+    violations.iter().format("; ")
+)]
+pub struct BoundaryExitError {
+    pub target: TargetKind,
+    pub violations: Vec<BoundaryViolation>,
+}
+
+/// Reject a module whose representation/ABI boundary exit violates the
+/// contract for `target`.
+pub fn check_boundary_exit(
+    ctx: &IrContext,
+    module: Module,
+    target: TargetKind,
+) -> Result<(), BoundaryExitError> {
+    let violations = verify_boundary_exit(ctx, module, target);
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(BoundaryExitError { target, violations })
+    }
+}
+
+/// A module pass that runs [`check_boundary_exit`]. It verifies in every
+/// build, unlike the debug verifier of a [`trunk_ir::pass::PassManager`].
+pub fn check_boundary_exit_pass(target: TargetKind) -> impl Pass<Target = core::Module> {
+    pass_fn(
+        "check-boundary-exit",
+        move |ctx, module: core::Module, _| {
+            check_boundary_exit(ctx, module.into(), target)?;
+            Ok(())
+        },
+    )
 }
 
 /// A violation found inside a type, relative to the site that uses the type.

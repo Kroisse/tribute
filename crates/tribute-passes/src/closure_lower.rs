@@ -36,7 +36,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::pass::{Pass, PassRunResult};
+use trunk_ir::pass::{Pass, PassRunResult, pass_fn};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -705,6 +705,17 @@ pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     substitute_module_types(ctx, module, move |ctx, ty| {
         closure::Closure::matches(ctx, ty).then_some(closure_struct)
     });
+}
+
+/// A module pass that runs [`finalize_closure_storage_layout`].
+pub fn finalize_closure_storage_layout_pass() -> impl Pass<Target = core::Module> {
+    pass_fn(
+        "finalize-closure-storage-layout",
+        |ctx, module: core::Module, _| {
+            finalize_closure_storage_layout(ctx, module.into());
+            Ok(())
+        },
+    )
 }
 
 /// Replace every type `substitute` maps, wherever it occurs in `module`:

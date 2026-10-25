@@ -19,8 +19,9 @@ use std::collections::VecDeque;
 
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
-use crate::dialect::func;
+use crate::dialect::{core, func};
 use crate::ops::DialectOp;
+use crate::pass::{Pass, pass_fn};
 use crate::refs::OpRef;
 use crate::rewrite::Module;
 use crate::symbol::SymbolPath;
@@ -215,6 +216,15 @@ fn compute_reachable(graph: &CallGraph, roots: HashSet<OpRef>) -> HashSet<OpRef>
 
 #[cfg(test)]
 mod prop_tests;
+
+/// A module pass that runs [`eliminate_dead_functions_with_config`] with
+/// `config`.
+pub fn global_dce_pass(config: GlobalDceConfig) -> impl Pass<Target = core::Module> {
+    pass_fn("global-dce", move |ctx, module: core::Module, analyses| {
+        eliminate_dead_functions_with_config(ctx, module.into(), config.clone(), analyses);
+        Ok(())
+    })
+}
 
 #[cfg(test)]
 mod tests {

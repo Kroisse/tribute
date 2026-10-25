@@ -9,6 +9,7 @@
 //! construction and field access stay inside them. The lowering is the same
 //! on every target.
 
+use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use tribute_ir::dialect::ability;
@@ -26,6 +27,7 @@ use trunk_ir::rewrite::{
     TypeConverter,
 };
 use trunk_ir::types::{Attribute, Location};
+use trunk_ir::walk::{WalkAction, walk_op};
 
 use crate::effect_dispatch;
 
@@ -98,22 +100,13 @@ pub fn lower_evidence_func(
     Ok(())
 }
 
-/// PassManager-friendly evidence lowering pass.
-///
-/// This pass is function-scoped; it takes the runtime functions
-/// [`prepare_evidence_runtime`] found on the module.
-pub struct LowerEvidence {
-    runtime: EvidenceRuntime,
-}
-
-impl LowerEvidence {
-    pub fn new(runtime: EvidenceRuntime) -> Self {
-        Self { runtime }
-    }
-}
+/// Lower evidence operations in every function of the module with the
+/// runtime functions [`prepare_evidence_runtime`] finds there, then remove the
+/// ability declarations, which nothing names afterwards.
+pub struct LowerEvidence;
 
 impl Pass for LowerEvidence {
-    type Target = func::Func;
+    type Target = core::Module;
 
     fn name(&self) -> &'static str {
         "lower-evidence"
@@ -122,10 +115,22 @@ impl Pass for LowerEvidence {
     fn run(
         &mut self,
         ctx: &mut IrContext,
-        target: func::Func,
+        target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        lower_evidence_func(ctx, target, &self.runtime)?;
+        let module = Module::from(target);
+        let runtime = prepare_evidence_runtime(ctx, module)?;
+        let mut functions = Vec::new();
+        let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            if let Ok(function) = func::Func::from_op(ctx, op) {
+                functions.push(function);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        for function in functions {
+            lower_evidence_func(ctx, function, &runtime)?;
+        }
+        ability::remove_declarations(ctx, module);
         Ok(())
     }
 }
