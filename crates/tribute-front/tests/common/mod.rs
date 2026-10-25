@@ -3,7 +3,6 @@
 
 pub mod execution_log;
 
-use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
@@ -18,6 +17,7 @@ struct PreludeData<'db> {
     exports: tribute_front::typeck::PreludeExports<'db>,
     env: &'db tribute_front::resolve::PackageEnv<'db>,
     typed_module: tribute_front::ast::DeclTable<tribute_front::ast::TypedRef<'db>>,
+    declarations: tribute_front::typeck::DeclarationTypeMetadata<'db>,
 }
 
 #[salsa::tracked(returns(copy))]
@@ -68,11 +68,14 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     // the typed module lowering reads the intrinsics from.
     let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map.clone());
     let (result, exports) = checker.check_prelude(&resolved_prelude);
+    let checked =
+        tribute_front::typeck::TypeCheckOutput::from_check(db, result, prelude_span_map.clone());
 
     Some(PreludeData {
         exports,
         env,
-        typed_module: result.module,
+        typed_module: checked.module(db).clone(),
+        declarations: checked.declarations(db).clone(),
     })
 }
 
@@ -94,7 +97,7 @@ fn resolve_with_prelude<'db>(
     let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map);
     let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
     if let Some(p) = prelude {
-        checker.inject_prelude(&p.exports);
+        checker.depend_on(&p.exports);
     }
     (resolved, checker)
 }
@@ -116,13 +119,20 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let prelude = load_prelude(db);
 
     let (resolved, checker) = resolve_with_prelude(db, ast, span_map, prelude.as_ref());
-    let result = checker.check_module(&resolved);
-
-    let tdnr_ast = result.module;
-
-    let function_types_map: HashMap<_, _> = result.function_types.into_iter().collect();
-    let constructor_types: HashMap<_, _> = result.constructor_types.into_iter().collect();
-    let ability_definitions: HashMap<_, _> = result.ability_definitions.into_iter().collect();
+    let checked = tribute_front::typeck::TypeCheckOutput::from_check(
+        db,
+        checker.check_module(&resolved),
+        span_map.clone(),
+    );
+    // Type checking reads package std's declarations without copying them;
+    // lowering takes them as one table with the user's.
+    let declarations = match &prelude {
+        Some(prelude) => checked
+            .declarations(db)
+            .after_dependency(&prelude.declarations),
+        None => checked.declarations(db).clone(),
+    };
+    let expressions = checked.expression_types(db).clone();
     let compiler_intrinsics = prelude
         .as_ref()
         .map(|prelude| {
@@ -132,21 +142,23 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         .unwrap_or_default();
     let mut ir = IrContext::new();
     let module = tribute_front::ast_to_ir::TypedModule {
-        ast: tdnr_ast,
+        ast: checked.module(db).clone(),
         span_map: span_map.clone(),
-        function_types: function_types_map,
-        constructor_types,
+        function_types: declarations.function_types.into_iter().collect(),
+        constructor_types: declarations.constructor_types.schemes.into_iter().collect(),
         specialized_enum_variants: Default::default(),
-        node_types: result.node_types,
-        local_instances: result.local_instances,
-        function_instances: result.function_instances,
-        ability_definitions,
-        handler_operations: result.handler_operations,
-        perform_operations: result.perform_operations,
-        lambda_signatures: result.lambda_signatures,
-        exhaustive_cases: result.exhaustive_cases.into_iter().collect(),
-        evidence_plans: result.evidence_plans,
-        well_known_types: result.well_known_types,
+        node_types: expressions.node_types,
+        local_instances: expressions.local_instances,
+        function_instances: expressions.function_instances,
+        ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
+            &declarations.ability_definitions,
+        ),
+        handler_operations: expressions.handler_operations,
+        perform_operations: expressions.perform_operations,
+        lambda_signatures: expressions.lambda_signatures,
+        exhaustive_cases: expressions.exhaustive_cases.into_iter().collect(),
+        evidence_plans: expressions.evidence_plans,
+        well_known_types: declarations.well_known_types,
         compiler_intrinsics,
         runtime_types: Default::default(),
         merged_sources: Vec::new(),
