@@ -2517,6 +2517,51 @@ mod tests {
     }
 
     #[test]
+    fn check_passes_report_through_the_context_and_never_fail() {
+        use crate::pass::PassManager;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
+    %2 = arith.addi %0, %1 : core.i32
+    func.return %2
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    %1 = func.call %0 {callee = @add} : core.i32
+    func.return %1
+  }
+}"#,
+        );
+        let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        let passes = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&passes);
+        let mut pm = PassManager::new();
+        pm.add_pass(CheckValueIntegrity { boundary: "test" })
+            .add_pass(CheckCallArity);
+        pm.with_instrumentation(move |_ctx, name, _op| seen.borrow_mut().push(name.to_owned()));
+
+        pm.run(&mut ctx, root, &mut AnalysisCache::new())
+            .expect("the checks never fail the run");
+
+        assert_eq!(
+            *passes.borrow(),
+            ["check-value-integrity", "check-call-arity"]
+        );
+        let diagnostics = ctx.diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(
+            diagnostics[0].message.contains("1 argument(s), expected 2"),
+            "{}",
+            diagnostics[0].message
+        );
+    }
+
+    #[test]
     fn call_arity_is_checked_against_module_callees() {
         // (case, input, fragments of the single expected diagnostic; empty
         // when the module must pass)
