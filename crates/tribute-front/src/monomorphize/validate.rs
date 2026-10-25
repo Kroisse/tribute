@@ -1,10 +1,12 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
 use super::{MonomorphizeMetadata, collect::is_concrete_type};
 use crate::ast::{
-    Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, Type, TypeScheme, TypedRef,
+    Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps, Type,
+    TypeScheme, TypedRef,
 };
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::SymbolPath;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -23,6 +25,22 @@ pub enum InstanceErrorKind {
 pub struct InstanceError {
     pub node: NodeId,
     pub kind: InstanceErrorKind,
+}
+
+impl InstanceError {
+    /// The source diagnostic of this error, at the reference whose instance
+    /// is invalid.
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> Diagnostic {
+        Diagnostic::new(
+            format!(
+                "invalid specialization instance at {}: {:?}",
+                self.node, self.kind
+            ),
+            spans.get_or_default(self.node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+    }
 }
 
 fn substitute<'db>(

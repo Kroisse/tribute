@@ -33,6 +33,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::sync::LazyLock;
 
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration;
 use trunk_ir::context::IrContext;
 use trunk_ir::rewrite::Module as IrModule;
@@ -40,6 +41,7 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use crate::SortedMap;
 use crate::ast::{AbilityId, DeclTable, NodeId, SpanMaps, Type, TypeScheme, TypedRef};
+use crate::monomorphize::SpecializationOutput;
 
 pub use context::IrLoweringCtx;
 
@@ -104,6 +106,21 @@ fn is_supported_compiler_intrinsic(identity: &Symbol) -> bool {
 pub struct UnsupportedCompilerIntrinsic {
     pub node: NodeId,
     pub identity: Symbol,
+}
+
+impl UnsupportedCompilerIntrinsic {
+    /// The source diagnostic of this directive, at its declaration.
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> Diagnostic {
+        Diagnostic::new(
+            format!(
+                "unsupported compiler intrinsic directive `{}`",
+                self.identity
+            ),
+            spans.get_or_default(self.node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::Lowering,
+        )
+    }
 }
 
 /// Register supported compiler intrinsic directives by canonical source name.
@@ -173,7 +190,68 @@ pub struct TypedModule<'db> {
     pub merged_sources: Vec<String>,
 }
 
+/// What lowering reads besides the specialization result: the span maps of
+/// the merged sources, the runtime structs the root crate's preparation
+/// checked, and the other sources whose declarations specialization merged.
+#[derive(Default)]
+pub struct LoweringEnvironment<'db> {
+    pub span_map: SpanMaps<'db>,
+    pub runtime_types: runtime_items::RuntimeTypes,
+    pub merged_sources: Vec<String>,
+}
+
 impl<'db> TypedModule<'db> {
+    /// The lowering input of `specialized`, in the environment the root
+    /// crate's preparation supplies
+    /// (`new-plans/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
+    pub fn from_specialization(
+        db: &'db dyn salsa::Database,
+        specialized: SpecializationOutput<'db>,
+        environment: LoweringEnvironment<'db>,
+    ) -> Self {
+        let LoweringEnvironment {
+            span_map,
+            runtime_types,
+            merged_sources,
+        } = environment;
+        let declarations = specialized.declarations(db);
+        let expressions = specialized.expression_types(db);
+        Self {
+            ast: specialized.module(db).clone(),
+            local_instances: expressions.local_instances.clone(),
+            function_instances: expressions.function_instances.clone(),
+            span_map,
+            function_types: declarations.function_types.iter().cloned().collect(),
+            constructor_types: declarations
+                .constructor_types
+                .schemes
+                .iter()
+                .cloned()
+                .collect(),
+            specialized_enum_variants: declarations
+                .constructor_types
+                .specialized_enum_variants
+                .clone(),
+            node_types: expressions.node_types.clone(),
+            ability_definitions: crate::typeck::ability_definitions_from_schemas(
+                &declarations.ability_definitions,
+            ),
+            handler_operations: expressions.handler_operations.clone(),
+            perform_operations: expressions.perform_operations.clone(),
+            lambda_signatures: expressions.lambda_signatures.clone(),
+            exhaustive_cases: expressions.exhaustive_cases.iter().copied().collect(),
+            evidence_plans: expressions.evidence_plans.clone(),
+            well_known_types: declarations.well_known_types,
+            compiler_intrinsics: specialized
+                .compiler_intrinsics(db)
+                .iter()
+                .cloned()
+                .collect(),
+            runtime_types,
+            merged_sources,
+        }
+    }
+
     /// Lower this typed module to arena TrunkIR.
     ///
     /// This is the main entry point for AST-to-IR transformation.
