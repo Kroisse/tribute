@@ -212,11 +212,9 @@ own checks, so those checks cover only what the definition cannot express,
 such as symbol lookups, enclosing callables, and region contents.
 Debug builds also run `validate_op_schemas`, the declarative stages without the
 `#[verify]` hook, after every pipeline pass, reporting the pass that left an
-operation in violation. Wasm emission is the exception: after its upcast elision
-(below) the IR follows the backend's assignability rule rather than the declared
-schemas, so emission runs its cast passes without this check. A pass that
-retypes a value before target type conversion inserts
-`core.unrealized_conversion_cast` back to the type its uses declare.
+operation in violation. A pass that retypes a value before target type
+conversion inserts `core.unrealized_conversion_cast` back to the type its uses
+declare.
 `PatternApplicator` does this for a staged conversion with
 `with_auto_type_conversion(true)` and a `ConversionTarget`. It casts the
 operands only of operations the target declares illegal. Where it retypes a

@@ -70,13 +70,13 @@
 //!     │
 //!     ├─── After the Boundary Exit (emit_from_boundary_exit) ──┤
 //!     ▼ LowerTarget
-//!     ├─► [wasm]   lower_to_wasm
+//!     ├─► [wasm]   lower_to_wasm → cast legalization (reference upcasts as
+//!     │            wasm.ref_upcast) → reconcile → GC index assignment
 //!     └─► [native] entrypoint, clif lowering, RTTI/RC, cast legalization
 //!                  (◄── dump_native_ir_at_stage)
 //!     │
 //!     ▼ emission (outside the chain)
-//!     ├─► [wasm]   cast legalization + upcast elision → reconcile →
-//!     │            GC index assignment → emit
+//!     ├─► [wasm]   emit
 //!     └─► [native] validate_clif_ir (direct-call argument/result types) → emit
 //! ```
 //!
@@ -576,9 +576,18 @@ fn add_canonicalize_passes(pm: &mut PassManager) {
         .add_pass(trunk_ir::transforms::EliminateDeadCode::new());
 }
 
-/// Wasm lowering after the boundary exit, to wasm dialect operations.
+/// Wasm lowering after the boundary exit:
+/// 1. Lower the module to wasm dialect operations
+/// 2. Convert and reconcile unrealized conversion casts with the Wasm type
+///    converter, writing reference upcasts as `wasm.ref_upcast`
+/// 3. Assign the module-local indices of the WasmGC operations
+///    materialization introduced, and check that the module is ready for
+///    emission
 fn add_wasm_lowering_passes(pm: &mut PassManager) {
-    pm.add_pass(tribute_passes::wasm::lower::LowerToWasm);
+    pm.add_pass(tribute_passes::wasm::lower::LowerToWasm)
+        .add_pass(tribute_passes::wasm::lower::LegalizeUnrealizedCasts)
+        .add_pass(ReconcileUnrealizedCasts)
+        .add_pass(tribute_passes::wasm::lower::FinalizeWasmGcTypes);
 }
 
 /// Native lowering after the boundary exit: the native entrypoint, lowering
@@ -891,25 +900,9 @@ fn lower_and_emit_native(
     emit_native(ctx, m)
 }
 
-/// Emit the Wasm binary of a module lowered to wasm dialect operations.
-///
-/// Emission first legalizes the remaining `unrealized_conversion_cast`
-/// operations with the Wasm type converter, eliding WasmGC reference
-/// upcasts, reconciles the identities left behind, and assigns the
-/// module-local indices of the WasmGC operations materialization
-/// introduced. After the elision the IR follows the backend's assignability
-/// rule rather than the operations' declared schemas, so these passes run
-/// without the debug verifier, as part of emission.
+/// Emit the Wasm binary of a lowered module.
 fn emit_wasm(ctx: &mut IrContext, m: Module) -> WasmCompilationResult<WasmBinary> {
     let _span = tracing::info_span!("emit_module_to_wasm").entered();
-    let root =
-        core_dialect::Module::from_op(ctx, m.op()).expect("wasm emission requires a core.module");
-    let mut pm = PassManager::new();
-    pm.add_pass(tribute_passes::wasm::lower::LegalizeUnrealizedCasts)
-        .add_pass(ReconcileUnrealizedCasts)
-        .add_pass(tribute_passes::wasm::lower::FinalizeWasmGcTypes);
-    pm.run(ctx, root, &mut AnalysisCache::new())
-        .map_err(|error| CompilationError::ir_validation(error.to_string()))?;
     trunk_ir_wasm_backend::emit_module_to_wasm(ctx, m)
 }
 
