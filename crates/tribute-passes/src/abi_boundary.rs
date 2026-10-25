@@ -15,11 +15,12 @@ use itertools::Itertools;
 
 use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::pass::{Pass, pass_fn};
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::{SymbolTable, link_name};
@@ -197,14 +198,26 @@ pub fn check_boundary_exit(
 
 /// A module pass that runs [`check_boundary_exit`]. It verifies in every
 /// build, unlike the debug verifier of a [`trunk_ir::pass::PassManager`].
-pub fn check_boundary_exit_pass(target: TargetKind) -> impl Pass<Target = core::Module> {
-    pass_fn(
-        "check-boundary-exit",
-        move |ctx, module: core::Module, _| {
-            check_boundary_exit(ctx, module.into(), target)?;
-            Ok(())
-        },
-    )
+pub struct CheckBoundaryExit {
+    pub target: TargetKind,
+}
+
+impl Pass for CheckBoundaryExit {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-boundary-exit"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        check_boundary_exit(ctx, target.into(), self.target)?;
+        Ok(())
+    }
 }
 
 /// A violation found inside a type, relative to the site that uses the type.

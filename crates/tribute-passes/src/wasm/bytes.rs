@@ -9,9 +9,10 @@
 
 use tribute_ir::dialect::adt;
 use tribute_ir::runtime_layout::{BYTES, BYTES_DATA, LAYOUT_ATTR};
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core};
-use trunk_ir::pass::{Pass, pass_fn};
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{AttributeMap, TypeDataBuilder};
@@ -65,11 +66,24 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicEr
 }
 
 /// A module pass that runs [`lower`].
-pub fn lower_pass() -> impl Pass<Target = core::Module> {
-    pass_fn("wasm-bytes-intrinsics", |ctx, module: core::Module, _| {
-        lower(ctx, module.into())?;
+pub struct LowerBytesIntrinsics;
+
+impl Pass for LowerBytesIntrinsics {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "wasm-bytes-intrinsics"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        lower(ctx, target.into())?;
         Ok(())
-    })
+    }
 }
 
 /// Rewrite one bytes element read into reads of the bytes layout.

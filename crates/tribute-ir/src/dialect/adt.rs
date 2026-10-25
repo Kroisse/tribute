@@ -179,8 +179,9 @@ impl TypeAliasHint for Variant {
 
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::{Pass, pass_fn};
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -219,14 +220,24 @@ pub fn forward_struct_gets(ctx: &mut IrContext, root: Module) -> usize {
 }
 
 /// A module pass that runs [`forward_struct_gets`].
-pub fn forward_struct_gets_pass() -> impl Pass<Target = trunk_ir::dialect::core::Module> {
-    pass_fn(
-        "forward-struct-gets",
-        |ctx, module: trunk_ir::dialect::core::Module, _| {
-            forward_struct_gets(ctx, module.into());
-            Ok(())
-        },
-    )
+pub struct ForwardStructGets;
+
+impl Pass for ForwardStructGets {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "forward-struct-gets"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        forward_struct_gets(ctx, target.into());
+        Ok(())
+    }
 }
 
 struct ForwardStructGet {

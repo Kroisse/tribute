@@ -14,7 +14,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::pass::{Pass, PassError, PassManager, pass_fn};
+use trunk_ir::pass::{Pass, PassError, PassManager, PassRunResult, pass_fn};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
@@ -239,11 +239,24 @@ pub fn finalize_wasm_gc_types(ctx: &mut IrContext, module: Module) -> Result<(),
 }
 
 /// A module pass that runs [`lower_to_wasm`].
-pub fn lower_to_wasm_pass() -> impl Pass<Target = core::Module> {
-    pass_fn("lower-to-wasm", |ctx, m: core::Module, analyses| {
-        lower_to_wasm(ctx, m.into(), analyses)?;
+pub struct LowerToWasm;
+
+impl Pass for LowerToWasm {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "lower-to-wasm"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        lower_to_wasm(ctx, target.into(), analyses)?;
         Ok(())
-    })
+    }
 }
 
 /// A module pass that legalizes the `unrealized_conversion_cast` operations
@@ -252,29 +265,52 @@ pub fn lower_to_wasm_pass() -> impl Pass<Target = core::Module> {
 /// reference upcasts. [`trunk_ir::conversion::ReconcileUnrealizedCasts`] then
 /// folds the identities left behind, and the emission boundary in
 /// [`finalize_wasm_gc_types`] rejects any cast that remains.
-pub fn legalize_unrealized_casts_pass() -> impl Pass<Target = core::Module> {
-    pass_fn(
-        "legalize-wasm-unrealized-casts",
-        |ctx, m: core::Module, _| {
-            let tc = wasm_type_converter(ctx);
-            let result = PatternApplicator::new(tc)
-                .add_pattern(UnrealizedCastConversionPattern)
-                .add_pattern(ReferenceUpcastElisionPattern)
-                .apply_partial(ctx, Module::from(m));
-            if !result.reached_fixpoint {
-                warn!("wasm cast legalization did not reach a fixpoint");
-            }
-            Ok(())
-        },
-    )
+pub struct LegalizeUnrealizedCasts;
+
+impl Pass for LegalizeUnrealizedCasts {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "legalize-wasm-unrealized-casts"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        let tc = wasm_type_converter(ctx);
+        let result = PatternApplicator::new(tc)
+            .add_pattern(UnrealizedCastConversionPattern)
+            .add_pattern(ReferenceUpcastElisionPattern)
+            .apply_partial(ctx, Module::from(target));
+        if !result.reached_fixpoint {
+            warn!("wasm cast legalization did not reach a fixpoint");
+        }
+        Ok(())
+    }
 }
 
 /// A module pass that runs [`finalize_wasm_gc_types`].
-pub fn finalize_wasm_gc_types_pass() -> impl Pass<Target = core::Module> {
-    pass_fn("finalize-wasm-gc-types", |ctx, m: core::Module, _| {
-        finalize_wasm_gc_types(ctx, m.into())?;
+pub struct FinalizeWasmGcTypes;
+
+impl Pass for FinalizeWasmGcTypes {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "finalize-wasm-gc-types"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        finalize_wasm_gc_types(ctx, target.into())?;
         Ok(())
-    })
+    }
 }
 
 /// Verify the partial Wasm backend boundary.

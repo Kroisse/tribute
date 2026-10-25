@@ -416,10 +416,10 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
     let core_module = core_dialect::Module::from_op(ctx, module.op())
         .expect("wasm lowering requires a core.module");
     let mut pm = PassManager::new();
-    pm.add_pass(tribute_passes::wasm::lower::lower_to_wasm_pass())
-        .add_pass(tribute_passes::wasm::lower::legalize_unrealized_casts_pass())
+    pm.add_pass(tribute_passes::wasm::lower::LowerToWasm)
+        .add_pass(tribute_passes::wasm::lower::LegalizeUnrealizedCasts)
         .add_pass(ReconcileUnrealizedCasts)
-        .add_pass(tribute_passes::wasm::lower::finalize_wasm_gc_types_pass());
+        .add_pass(tribute_passes::wasm::lower::FinalizeWasmGcTypes);
     pm.run(ctx, core_module, &mut AnalysisCache::new())
         .map_err(wasm_lowering_failure)?;
 
@@ -681,7 +681,7 @@ fn debug_validate_value_integrity(ctx: &IrContext, m: Module, boundary: &str) {
 /// Forward known struct reads module-wide, then run canonicalization and DCE
 /// on every function.
 fn add_canonicalize_passes(pm: &mut PassManager) {
-    pm.add_pass(tribute_ir::dialect::adt::forward_struct_gets_pass())
+    pm.add_pass(tribute_ir::dialect::adt::ForwardStructGets)
         .nest::<func_dialect::Func>()
         .add_pass(trunk_ir::transforms::canonicalize_pass())
         .add_pass(trunk_ir::transforms::EliminateDeadCode::new());
@@ -740,14 +740,14 @@ fn enter_target_lowering(
     let mut pm = PassManager::new();
     // Drop unreachable functions first, so that no later pass lowers them.
     // Runtime functions stay until the target lowering has called them.
-    pm.add_pass(trunk_ir::transforms::global_dce::global_dce_pass(
-        tribute_ir::runtime_items::kept_alive(runtime),
-    ))
+    pm.add_pass(trunk_ir::transforms::global_dce::GlobalDce {
+        config: tribute_ir::runtime_items::kept_alive(runtime),
+    })
     // General function inlining. Single-block-only (no `cf` dialect
     // dependency), so it preserves the caller's block structure. That keeps
     // WASM lowering within the dialects it handles and lets the same pass
     // work on both backend paths.
-    .add_pass(trunk_ir::transforms::inline::inline_functions_pass());
+    .add_pass(trunk_ir::transforms::inline::InlineFunctions);
     // Fold what inlining exposed (struct reads of known constructions, box
     // round trips, constant selectors) before closure storage and evidence
     // lowering see the IR.
@@ -764,7 +764,7 @@ fn enter_target_lowering(
 fn lower_wasm_runtime_calls(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     // Complete the supported bytes intrinsic bridge inside the boundary; the
     // lowering consumes its verified compiler intrinsic identity.
-    run_module_pass(ctx, m, tribute_passes::wasm::bytes::lower_pass())
+    run_module_pass(ctx, m, tribute_passes::wasm::bytes::LowerBytesIntrinsics)
 }
 
 /// The native bytes intrinsic bridge, the target-specific stage that calls
@@ -775,7 +775,7 @@ fn lower_native_runtime_calls(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     run_module_pass(
         ctx,
         m,
-        tribute_passes::native::intrinsic_to_native::lower_pass(),
+        tribute_passes::native::intrinsic_to_native::LowerBytesIntrinsics,
     )
 }
 
@@ -809,7 +809,7 @@ fn finish_target_lowering(
     run_module_pass(
         ctx,
         m,
-        tribute_passes::closure_lower::finalize_closure_storage_layout_pass(),
+        tribute_passes::closure_lower::FinalizeClosureStorageLayout,
     )?;
     debug_validate_value_integrity(ctx, m, "after target evidence lowering");
 
@@ -817,13 +817,11 @@ fn finish_target_lowering(
     // so the casts left here only retype values for the target type
     // conversion.
     let mut pm = PassManager::new();
-    pm.add_pass(trunk_ir::transforms::global_dce::global_dce_pass(
-        Default::default(),
-    ));
+    pm.add_pass(trunk_ir::transforms::global_dce::GlobalDce {
+        config: Default::default(),
+    });
     add_canonicalize_passes(&mut pm);
-    pm.add_pass(tribute_passes::abi_boundary::check_boundary_exit_pass(
-        target,
-    ));
+    pm.add_pass(tribute_passes::abi_boundary::CheckBoundaryExit { target });
     pm.with_debug_verifier();
     pm.run(ctx, core_module(ctx, m), analyses)?;
     Ok(())
@@ -886,7 +884,7 @@ pub fn emit_native_from_boundary_exit(
 /// observes semantic closure types first; `LowerPreparedClosures` then consumes
 /// any remaining closure operations before whole-module storage finalization.
 fn add_target_closure_storage_passes(pm: &mut PassManager) {
-    pm.add_pass(tribute_passes::target_abi::physicalize_cps_callables_pass())
+    pm.add_pass(tribute_passes::target_abi::PhysicalizeCpsCallables)
         .add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
 }
 

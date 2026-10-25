@@ -16,11 +16,12 @@
 //! `scf_to_cf` has already lowered them — fall out of scope for v1 and
 //! return `InlineError::MultiBlockCallee`.
 
+use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::dialect::{core, func};
 use crate::ir_mapping::IrMapping;
 use crate::ops::DialectOp;
-use crate::pass::{Pass, pass_fn};
+use crate::pass::{Pass, PassRunResult};
 use crate::refs::{OpRef, RegionRef, ValueRef};
 
 // =========================================================================
@@ -1495,9 +1496,22 @@ mod pass {
 }
 
 /// A module pass that runs [`inline_functions`].
-pub fn inline_functions_pass() -> impl Pass<Target = core::Module> {
-    pass_fn("inline-functions", |ctx, module: core::Module, analyses| {
-        inline_functions(ctx, module.into(), analyses);
+pub struct InlineFunctions;
+
+impl Pass for InlineFunctions {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "inline-functions"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        inline_functions(ctx, target.into(), analyses);
         Ok(())
-    })
+    }
 }

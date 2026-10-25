@@ -21,7 +21,7 @@ use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::dialect::{core, func};
 use crate::ops::DialectOp;
-use crate::pass::{Pass, pass_fn};
+use crate::pass::{Pass, PassRunResult};
 use crate::refs::OpRef;
 use crate::rewrite::Module;
 use crate::symbol::SymbolPath;
@@ -219,11 +219,26 @@ mod prop_tests;
 
 /// A module pass that runs [`eliminate_dead_functions_with_config`] with
 /// `config`.
-pub fn global_dce_pass(config: GlobalDceConfig) -> impl Pass<Target = core::Module> {
-    pass_fn("global-dce", move |ctx, module: core::Module, analyses| {
-        eliminate_dead_functions_with_config(ctx, module.into(), config.clone(), analyses);
+pub struct GlobalDce {
+    pub config: GlobalDceConfig,
+}
+
+impl Pass for GlobalDce {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "global-dce"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        eliminate_dead_functions_with_config(ctx, target.into(), self.config.clone(), analyses);
         Ok(())
-    })
+    }
 }
 
 #[cfg(test)]
