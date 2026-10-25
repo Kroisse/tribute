@@ -1326,6 +1326,29 @@ fn main() -> Nil { Nil }
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// The instantiation is spelled with the caller's parameter names inside
+/// function types too.
+#[salsa_test]
+fn diag_polymorphic_recursion_through_a_function_type(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn thunks(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> thunks(n - 1, fn() { x })
+    }
+}
+
+fn main() -> Nil { let _ = thunks(2, 7) }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 /// Recursion that keeps the caller's type parameters, permutes them, uses
 /// unrelated arguments, or reaches a non-recursive helper at a larger type
 /// specializes to finitely many instances.

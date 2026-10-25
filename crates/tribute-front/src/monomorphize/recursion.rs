@@ -155,3 +155,90 @@ fn mentions_bound_var<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool 
         | TypeKind::Error => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{AbilityId, AbilityInstance, RowVar, TypeDefId};
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::Symbol;
+
+    #[salsa_test]
+    fn strict_containment_looks_through_every_type_form(db: &salsa::DatabaseImpl) {
+        let var = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let int = Type::new(db, TypeKind::Int);
+        let local = Type::new(
+            db,
+            TypeKind::LocalBoundVar {
+                scope: NodeId::from_raw(0),
+                index: 0,
+            },
+        );
+        let pure = AbilityRow::pure(db);
+        let row_of = |arg| {
+            AbilityRow::new(
+                db,
+                vec![AbilityInstance {
+                    ability_id: AbilityId::source(db, SymbolPath::new(["State"])),
+                    args: vec![arg],
+                }],
+                Some(RowVar { id: 1 }),
+            )
+        };
+        let func = |params, result, effect| {
+            Type::new(
+                db,
+                TypeKind::Func {
+                    params,
+                    result,
+                    effect,
+                },
+            )
+        };
+        let continuation = |arg, result, effect| {
+            Type::new(
+                db,
+                TypeKind::Continuation {
+                    arg,
+                    result,
+                    effect,
+                },
+            )
+        };
+        let named = |args| {
+            Type::new(
+                db,
+                TypeKind::Named {
+                    id: TypeDefId::synthetic(db, SymbolPath::new(["Pair"])),
+                    name: Symbol::new("Pair"),
+                    args,
+                },
+            )
+        };
+        let cases = [
+            (var, false),
+            (int, false),
+            (local, false),
+            (Type::new(db, TypeKind::Error), false),
+            (named(vec![int]), false),
+            (named(vec![var]), true),
+            (Type::new(db, TypeKind::Tuple(vec![int, var])), true),
+            (func(vec![var], int, pure), true),
+            (func(vec![int], var, pure), true),
+            (func(vec![int], int, row_of(var)), true),
+            (func(vec![local], int, row_of(int)), false),
+            (continuation(var, int, pure), true),
+            (continuation(int, var, pure), true),
+            (continuation(int, int, row_of(var)), true),
+            (continuation(int, int, row_of(int)), false),
+        ];
+        for (ty, expected) in cases {
+            assert_eq!(
+                strictly_contains_bound_var(db, ty),
+                expected,
+                "{:?}",
+                ty.kind(db)
+            );
+        }
+    }
+}
