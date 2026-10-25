@@ -30,7 +30,7 @@ core.module @test {
       tribute_control.return %1
   }
   tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
-  tribute_control.func @main['a0, body 'a1]() -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @read_state['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_int) captures [] {
           %1 = tribute_control.perform {ability = @ability_2_5_State_3_int, op_name = "get", operation_kind = "op"} : core.i32
           %2 = arith.const {value = 1} : core.i32
@@ -38,7 +38,7 @@ core.module @test {
           %4 = tribute_control.perform %3 {ability = @ability_2_5_State_3_int, op_name = "set", operation_kind = "op"} : core.nil
           tribute_control.return %1
       }
-      %5 = tribute_control.call %0 {callee = @run_with_state, row_args = [{tail = 1}]} : core.i32
+      %5 = tribute_control.call %0 {callee = @run_with_state, row_args = [{tail = 0}]} : core.i32
       tribute_control.return %5
   }
   ability.decl {sym_name = "ability_2_5_State_3_int"} {

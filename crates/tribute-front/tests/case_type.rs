@@ -51,8 +51,8 @@ fn test_case_int_literal(db: &salsa::DatabaseImpl) {
 fn sign(x: Int) -> Int {
     case x {
         -1 -> -100
-        0 -> 0
-        _ -> 100
+        0i -> +0
+        _ -> +100
     }
 }
 "#,

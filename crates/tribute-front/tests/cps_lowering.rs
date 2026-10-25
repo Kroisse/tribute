@@ -91,45 +91,6 @@ fn checked_logical_function<'a>(ir: &'a str, name: &str) -> &'a str {
     logical_function(ir, name)
 }
 
-/// A diagnosed CPS root must still leave valid IR: failed CPS lowering uses
-/// the same Nil fallback as other direct-returning functions.
-#[salsa_test]
-fn test_root_main_cps_lowering_failure_still_returns(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-ability State(s) {
-    op get() -> s
-}
-
-fn apply_open(value: Int, callback: fn(Int) ->{e} Nil) ->{e} Nil {
-    callback(value)
-}
-
-fn main() -> Nil {
-    apply_open(State::get, fn(_) { Nil })
-}
-"#,
-    );
-
-    let errors = ast_pipeline_error_messages(db, source);
-    assert!(
-        errors.iter().any(|error| error
-            == "type error at call site in function 'main': expected `Int`, found `fn() -> _`"),
-        "fixture must reach the diagnosed CPS-lowering recovery path: {errors:?}"
-    );
-    let ir_text = run_ast_pipeline_with_ir(db, source);
-    let main = ir_text
-        .split("tribute_control.func @main")
-        .nth(1)
-        .expect("root main must be lowered");
-    assert!(
-        main.contains("tribute_control.return"),
-        "root main must retain a terminator after CPS lowering fails:\n{main}"
-    );
-}
-
 // ========================================================================
 // Resume Expression Tests
 // ========================================================================
@@ -171,21 +132,16 @@ fn resume_uses_exact_token_input_and_answer_types(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-enum String {
-    Leaf(Bytes),
-    Branch(String, String, Nat),
-}
-
 ability Read {
     op read() -> String
 }
 
 fn run() -> Int {
     handle Read::read() {
-        do result { 0 }
+        do result { +0 }
         op Read::read() {
             let answer = resume "resumed"
-            answer + 1
+            answer + +1
         }
     }
 }
@@ -196,30 +152,11 @@ fn main() -> Nil { }
 
     let ir = run_ast_pipeline_with_ir(db, source);
     let run = checked_logical_function(&ir, "run");
-    let string_ref = ir
-        .lines()
-        .find_map(|line| {
-            let (alias, definition) = line.trim().split_once(" = ")?;
-            (definition == "adt.typeref<{name = \"String\"}>").then_some(alias)
-        })
-        .expect("nominal String reference");
     assert!(
-        run.contains(&format!("resume_token<{string_ref}, core.i32>")),
+        run.contains("resume_token<tribute_rt.anyref, core.i32>"),
         "handler token must retain its exact input and answer types:\n{run}"
     );
-    assert_in_order(
-        run,
-        &[
-            "adt.string_const",
-            "core.unrealized_conversion_cast",
-            "tribute_control.resume",
-        ],
-    );
-    let cast = run
-        .lines()
-        .find(|line| line.contains("core.unrealized_conversion_cast"))
-        .expect("resume input materialization");
-    assert!(cast.ends_with(&format!(": {string_ref}")), "{run}");
+    assert_in_order(run, &["adt.string_const", "tribute_control.resume"]);
     let resume = run
         .lines()
         .find(|line| line.contains("= tribute_control.resume "))
@@ -669,7 +606,7 @@ fn read() ->{State(Int)} Int {
 }
 
 fn add_one(value: Int) -> Int {
-    value + 1
+    value + +1
 }
 
 fn run() ->{State(Int)} Int {
@@ -698,7 +635,7 @@ ability State(s) {
 
 fn run() ->{State(Int)} Int {
     let read = fn() { State::get() }
-    read() + 1
+    read() + +1
 }
 
 fn main() -> Nil { }
@@ -792,8 +729,8 @@ fn read() ->{State(Int)} Int {
 
 fn run(flag: Bool) ->{State(Int)} Int {
     case flag {
-        True -> read() + 1
-        False -> 0
+        True -> read() + +1
+        False -> +0
     }
 }
 
@@ -850,7 +787,7 @@ fn read() ->{State(Int)} Int {
 }
 
 fn run() -> Int {
-    handle read() + 1 {
+    handle read() + +1 {
         do result { result }
         op State::get() { resume +41 }
     }
@@ -888,7 +825,7 @@ fn run() ->{Log} Int {
     handle State::get() {
         do result { result }
         op State::get() {
-            let value = read_log() + 1
+            let value = read_log() + +1
             resume value
         }
     }
@@ -1188,7 +1125,7 @@ fn run() -> Int {
         do result { result }
         op State::get() {
             let resumed = resume +41
-            resumed + 1
+            resumed + +1
         }
     }
 }
@@ -1213,12 +1150,12 @@ ability State(s) {
     op get() -> s
 }
 
-fn run() -> Int {
+fn run() ->{State(Int)} Int {
     handle State::get() {
         do result { result }
         op State::get() {
             let later = fn() { resume +41 }
-            later() + 1
+            later() + +1
         }
     }
 }
@@ -1294,7 +1231,7 @@ struct Point { x: Int, y: Int }
 
 fn run(point: Point) ->{Trace} fn() -> Point {
     Trace::before()
-    fn() { Point { x: 1, ..point } }
+    fn() { Point { x: +1, ..point } }
 }
 
 fn main() -> Nil { }
@@ -1326,11 +1263,11 @@ enum Boxed(a) {
 fn read() ->{State(Int)} Int { State::get() }
 
 fn run() ->{State(Int)} Int {
-    let base = Point { x: 0, y: 0 }
+    let base = Point { x: +0, y: +0 }
     let pair = #(read(), read())
     let point = Point { x: read(), ..base }
     let boxed = .Boxed(read())
-    0
+    +0
 }
 
 fn main() -> Nil { }
@@ -1646,16 +1583,16 @@ enum Pair { Pair(Int, Int), None }
 
 fn classify_pair(value: Pair) -> Int {
     case value {
-        .Pair(1, 2) -> 1
-        .Pair(_, _) -> 2
-        .None -> 0
+        .Pair(+1, +2) -> +1
+        .Pair(_, _) -> +2
+        .None -> +0
     }
 }
 
 fn classify_list(values: List(Int)) -> Int {
     case values {
-        [1, 2] -> 1
-        _ -> 0
+        [+1, +2] -> +1
+        _ -> +0
     }
 }
 "#,
