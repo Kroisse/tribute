@@ -280,7 +280,7 @@ ast_to_ir: IR lowering
 그대로 쓴다. [Class 변수](#row-변수의-convention-class)에 따른 특수화는 이 과정이 아니라
 source-logical IR의 pass가 맡는다. 도달하지 않는 generic
 template은 허용하되, 도달하는 함수 인스턴스나 ability 인자가 미해결이면 타입 erasure
-전에 거부한다.
+전에 거부한다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
 
 ### Row 변수의 convention class
 

@@ -1378,6 +1378,7 @@ fn main() -> Nil {
     );
     let result = compile_with_diagnostics(db, source);
     assert!(result.diagnostics.is_empty(), "{:#?}", result.diagnostics);
+    assert!(result.produced_module);
 }
 
 /// A nested datatype is not polymorphic recursion of a function; the
