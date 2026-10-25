@@ -92,7 +92,7 @@ pub(super) fn validate<'db>(
         let mut nodes = Vec::new();
         func.body.for_each(|node| nodes.push(node));
         for expr in nodes {
-            if let Some(op) = metadata.perform_operations.get(&expr.id)
+            if let Some(op) = metadata.expressions.perform_operations.get(&expr.id)
                 && op.ability_args.iter().any(|ty| {
                     substitute(db, *ty, &arguments).is_none_or(|ty| !is_concrete_type(db, ty))
                 })
@@ -104,7 +104,7 @@ pub(super) fn validate<'db>(
             }
             if let ExprKind::Handle { handlers, .. } = expr.kind.as_ref() {
                 for arm in handlers {
-                    if let Some(op) = metadata.handler_operations.get(&arm.id)
+                    if let Some(op) = metadata.expressions.handler_operations.get(&arm.id)
                         && op.ability_args.iter().any(|ty| {
                             substitute(db, *ty, &arguments)
                                 .is_none_or(|ty| !is_concrete_type(db, ty))
@@ -128,7 +128,7 @@ pub(super) fn validate<'db>(
                 node: expr.id,
                 kind,
             };
-            let Some(instance) = metadata.function_instances.get(&expr.id) else {
+            let Some(instance) = metadata.expressions.function_instances.get(&expr.id) else {
                 errors.push(fail(InstanceErrorKind::MissingInstance));
                 continue;
             };
