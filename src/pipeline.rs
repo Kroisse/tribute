@@ -259,6 +259,7 @@ pub enum NativePipelineStage {
 }
 
 // AST-based pipeline imports
+use tribute_front::ast::SpanMaps;
 use tribute_front::ast_to_ir;
 use tribute_front::astgen::ParsedAst;
 use tribute_front::monomorphize::{SpecializationInput, SpecializationOutput};
@@ -310,10 +311,10 @@ fn checked_prelude<'db>(
     let resolved = ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env, span_map);
 
     // Typecheck with independent TypeContext (all UniVars resolved)
-    let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
+    let checker = ast_typeck::TypeChecker::new(db, span_map);
     let (result, exports) = checker.check_prelude(&resolved);
 
-    let typed = ast_typeck::TypeCheckOutput::from_check(db, result, span_map.clone());
+    let typed = ast_typeck::TypeCheckOutput::from_check(db, result);
     Some((typed, exports))
 }
 
@@ -392,7 +393,7 @@ pub fn prepare_frontend_for_lowering<'db>(
 fn prepare_frontend_details<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
-    _source: SourceCst,
+    source: SourceCst,
 ) -> Option<PreparedFrontend<'db>> {
     // Type checking reads package std's declarations without copying them.
     // Specialization takes them as one table with the user's, and std's
@@ -402,7 +403,7 @@ fn prepare_frontend_details<'db>(
     if let Some(prelude) = prelude {
         input = input.merge_bodies(db, prelude);
     }
-    let span_map = input.span_map().clone();
+    let span_map = frontend_spans(db, source);
 
     let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(input.module()) {
         Ok(registered) => registered,
@@ -473,6 +474,13 @@ fn prepare_frontend_details<'db>(
     })
 }
 
+/// The span maps of a user source and of package std, which locate the
+/// nodes of the module merged from both.
+fn frontend_spans(db: &dyn salsa::Database, source: SourceCst) -> SpanMaps<'_> {
+    let prelude = parse_prelude(db).map(|(parsed, _)| parsed.span_map(db));
+    SpanMaps::new(ast_query::span_map(db, source).into_iter().chain(prelude))
+}
+
 fn merge_and_lower_to_ir_with<'db, M>(
     db: &'db dyn salsa::Database,
     typed: &ast_typeck::TypeCheckOutput<'db>,
@@ -490,7 +498,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             ast: typed.module(db).clone(),
             local_instances: typed.expression_types(db).local_instances.clone(),
             function_instances: typed.expression_types(db).function_instances.clone(),
-            span_map: typed.span_map(db).clone(),
+            span_map: frontend_spans(db, source),
             function_types: typed
                 .declarations(db)
                 .function_types
@@ -1579,7 +1587,7 @@ pub fn parse_and_lower_ast<'db>(
         ast_resolve::resolve_with_env(db, user_ast, user_env, &dependencies, span_map);
 
     // Phase 4: Type checking against package std
-    let mut checker = ast_typeck::TypeChecker::new(db, span_map.clone());
+    let mut checker = ast_typeck::TypeChecker::new(db, span_map);
     if let Some(p_exports) = prelude_exports(db) {
         checker.depend_on(&p_exports);
     }
@@ -1592,11 +1600,7 @@ pub fn parse_and_lower_ast<'db>(
         result.node_types.len()
     );
 
-    Some(ast_typeck::TypeCheckOutput::from_check(
-        db,
-        result,
-        span_map.clone(),
-    ))
+    Some(ast_typeck::TypeCheckOutput::from_check(db, result))
 }
 
 /// Run the shared pipeline for diagnostic collection only.

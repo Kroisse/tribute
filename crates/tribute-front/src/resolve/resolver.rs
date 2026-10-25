@@ -2332,8 +2332,7 @@ mod tests {
     #[salsa_test]
     fn test_resolve_local_variable(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let span_map = SpanMap::default();
-        let module = Resolver::new(db, env, &Dependencies::none(), &span_map);
+        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::empty());
         let mut resolver = FunctionResolver::new(&module);
 
         let param_name = Symbol::new("x");
@@ -2361,8 +2360,7 @@ mod tests {
     #[salsa_test]
     fn test_scope_isolation(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let span_map = SpanMap::default();
-        let module = Resolver::new(db, env, &Dependencies::none(), &span_map);
+        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::empty());
         let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
@@ -2394,8 +2392,7 @@ mod tests {
     #[salsa_test]
     fn test_nested_scopes(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let span_map = SpanMap::default();
-        let module = Resolver::new(db, env, &Dependencies::none(), &span_map);
+        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::empty());
         let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
@@ -2445,8 +2442,7 @@ mod tests {
         use crate::ast::{Pattern, PatternKind};
 
         let env = PackageEnv::new();
-        let span_map = SpanMap::default();
-        let module = Resolver::new(db, env, &Dependencies::none(), &span_map);
+        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::empty());
         let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 
@@ -2490,8 +2486,7 @@ mod tests {
         use crate::ast::{Pattern, PatternKind};
 
         let env = PackageEnv::new();
-        let span_map = SpanMap::default();
-        let module = Resolver::new(db, env, &Dependencies::none(), &span_map);
+        let module = Resolver::new(db, env, &Dependencies::none(), SpanMap::empty());
         let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 

@@ -70,8 +70,15 @@ marks its fields `#[tracked]`. Its identity then does not depend on their
 content, so the query keeps returning the same struct, and each field keeps its
 previous revision while its value compares equal. A query that reads only an
 unchanged field is not rerun. Never leave a field whose `Hash` follows an
-allocation, such as a pointer-hashed `SpanMap`, untracked: every run would then
+allocation, such as a pointer-hashed `Arc`, untracked: every run would then
 allocate a new struct, and everything that reads it would rerun.
+
+Derived data borrows what it is derived from instead of copying it into its
+own result. Source positions stay in the `SpanMap` of the parse that produced
+them: type checking and specialization results hold none, and a stage that
+needs the positions of several sources, such as lowering the module merged
+with package `std`, looks them up through `SpanMaps`, which borrows each
+source's map.
 
 ## Creating a Source Input
 

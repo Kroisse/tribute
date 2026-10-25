@@ -19,7 +19,7 @@ use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
 use super::row_binders::RowBinders;
 use crate::SortedMap;
-use crate::ast::{CtorId, LocalId, NodeId, RowVar, SpanMap, TypeKind, TypeScheme};
+use crate::ast::{CtorId, LocalId, NodeId, RowVar, SpanMaps, TypeKind, TypeScheme};
 
 /// The key component that tells nominal type origins apart.
 fn nominal_origin_key(origin: crate::ast::TypeOrigin) -> String {
@@ -77,8 +77,8 @@ pub struct IrLoweringCtx<'db> {
     pub path: PathRef,
     /// Paths of merged sources, keyed by the source hash of their nodes.
     source_paths: HashMap<u64, PathRef>,
-    /// Span map for looking up source locations.
-    span_map: SpanMap,
+    /// Span maps of the merged sources, for looking up source locations.
+    span_map: SpanMaps<'db>,
     /// Stack of scopes, each mapping LocalId to (name, SSA value).
     scopes: Vec<HashMap<LocalId, (Symbol, ValueRef)>>,
     local_callable_values: Vec<HashMap<(NodeId, crate::ast::Type<'db>, TypeRef), ValueRef>>,
@@ -147,7 +147,7 @@ impl<'db> IrLoweringCtx<'db> {
     pub fn new(
         db: &'db dyn salsa::Database,
         path: PathRef,
-        span_map: SpanMap,
+        span_map: SpanMaps<'db>,
         function_types: HashMap<SymbolPath, TypeScheme<'db>>,
         node_types: SortedMap<NodeId, crate::ast::Type<'db>>,
     ) -> Self {
@@ -994,7 +994,7 @@ mod tests {
         IrLoweringCtx::new(
             db,
             path,
-            crate::ast::SpanMap::default(),
+            crate::ast::SpanMaps::default(),
             HashMap::default(),
             SortedMap::default(),
         )
@@ -1114,7 +1114,7 @@ mod tests {
         let ctx = IrLoweringCtx::new(
             &db,
             path,
-            crate::ast::SpanMap::default(),
+            crate::ast::SpanMaps::default(),
             HashMap::default(),
             SortedMap::default(),
         );
@@ -1136,7 +1136,7 @@ mod tests {
         let mut ctx = IrLoweringCtx::new(
             &db,
             path,
-            crate::ast::SpanMap::default(),
+            crate::ast::SpanMaps::default(),
             HashMap::default(),
             SortedMap::default(),
         );
@@ -1337,7 +1337,7 @@ mod tests {
         let ctx = IrLoweringCtx::new(
             &db,
             path,
-            crate::ast::SpanMap::default(),
+            crate::ast::SpanMaps::default(),
             HashMap::default(),
             SortedMap::default(),
         );
@@ -1386,7 +1386,7 @@ mod tests {
         let ctx = IrLoweringCtx::new(
             &db,
             path,
-            crate::ast::SpanMap::default(),
+            crate::ast::SpanMaps::default(),
             ft,
             SortedMap::default(),
         );

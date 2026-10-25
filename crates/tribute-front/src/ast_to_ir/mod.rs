@@ -39,7 +39,7 @@ use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::SortedMap;
-use crate::ast::{AbilityId, DeclTable, NodeId, SpanMap, Type, TypeScheme, TypedRef};
+use crate::ast::{AbilityId, DeclTable, NodeId, SpanMaps, Type, TypeScheme, TypedRef};
 
 pub use context::IrLoweringCtx;
 
@@ -146,7 +146,8 @@ pub fn registered_compiler_intrinsics<V>(
 /// value, instead of passing parallel metadata collections positionally.
 pub struct TypedModule<'db> {
     pub ast: DeclTable<TypedRef<'db>>,
-    pub span_map: SpanMap,
+    /// The span maps of the module's merged sources.
+    pub span_map: SpanMaps<'db>,
     pub function_types: HashMap<SymbolPath, TypeScheme<'db>>,
     pub constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
     pub specialized_enum_variants: SortedMap<NodeId, TypeScheme<'db>>,
@@ -214,7 +215,7 @@ mod tests {
         let db = test_db();
         let mut ir = IrContext::new();
         let path = ir.intern_path("test.trb");
-        let span_map = SpanMap::default();
+        let span_map = SpanMaps::default();
         let ctx = IrLoweringCtx::new(
             &db,
             path,
@@ -263,7 +264,7 @@ mod tests {
         let mut ctx = IrLoweringCtx::new(
             &db,
             path,
-            SpanMap::default(),
+            SpanMaps::default(),
             HashMap::default(),
             SortedMap::default(),
         );
@@ -293,7 +294,7 @@ mod tests {
         let mut ctx = IrLoweringCtx::new(
             &db,
             path,
-            SpanMap::default(),
+            SpanMaps::default(),
             HashMap::default(),
             SortedMap::default(),
         );
@@ -322,7 +323,7 @@ mod tests {
         let db = test_db();
         let mut ir = IrContext::new();
         let path = ir.intern_path("test.trb");
-        let span_map = SpanMap::default();
+        let span_map = SpanMaps::default();
         let ctx = IrLoweringCtx::new(
             &db,
             path,
