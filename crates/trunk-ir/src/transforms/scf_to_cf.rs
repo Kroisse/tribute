@@ -39,7 +39,7 @@ use crate::analysis::AnalysisCache;
 use crate::context::{BlockArgData, BlockData, IrContext};
 use crate::dialect::{arith, cf, func, scf};
 use crate::ops::DialectOp;
-use crate::pass::{Pass, pass_fn};
+use crate::pass::{Pass, PassRunResult};
 use crate::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use crate::rewrite::Module;
 use crate::rewrite::helpers::{inline_region_blocks, split_block};
@@ -63,12 +63,25 @@ pub fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func, analyses: &mu
     lower_region(ctx, func.op_ref(), body, analyses);
 }
 
-/// Build a function-anchored SCF-to-CF lowering pass.
-pub fn scf_to_cf_pass() -> impl Pass<Target = func::Func> {
-    pass_fn("scf-to-cf-func", |ctx, target, analyses| {
+/// Function-anchored SCF-to-CF lowering.
+pub struct ScfToCf;
+
+impl Pass for ScfToCf {
+    type Target = func::Func;
+
+    fn name(&self) -> &'static str {
+        "scf-to-cf-func"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: func::Func,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         lower_scf_to_cf_func(ctx, target, analyses);
         Ok(())
-    })
+    }
 }
 
 /// Decisions for the original SCF operations, consumed after invalidation.
@@ -1070,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn scf_to_cf_pass_leaves_bodyless_func_unchanged() {
+    fn scf_to_cf_leaves_bodyless_func_unchanged() {
         let (mut ctx, loc) = test_ctx();
         let fn_ty = fn_type(&mut ctx);
         let func_data = OperationDataBuilder::new(loc, "func.func")
@@ -1082,7 +1095,7 @@ mod tests {
         let before = crate::printer::print_module(&ctx, module.op());
         let func = func::Func::from_op(&ctx, func_op).unwrap();
 
-        scf_to_cf_pass()
+        ScfToCf
             .run(&mut ctx, func, &mut Default::default())
             .unwrap();
 

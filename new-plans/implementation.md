@@ -783,7 +783,7 @@ flowchart TB
 | `global_dce` | module symbols | reachable symbols; module-wide |
 
 Case pattern lowering은 `ast_to_ir`의 일부이며 별도 pass가 아니다. Native의
-structured-to-CFG 변환은 `func.func`에 nested된 `scf_to_cf_pass()`가 소유한다.
+structured-to-CFG 변환은 `func.func`에 nested된 `ScfToCf` pass가 소유한다.
 
 `typecheck` solves function-local unification variables where constraints make
 them concrete and generalizes remaining polymorphic variables into stable

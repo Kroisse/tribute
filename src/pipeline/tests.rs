@@ -855,9 +855,18 @@ fn debug_use_chain_verifier_reports_offending_pass() {
         .expect("test input must parse a core.module");
 
     let mut pm = PassManager::new();
-    pm.add_pass(trunk_ir::pass::pass_fn(
-        "break-use-chain",
-        |ctx: &mut IrContext, module: core_dialect::Module, _analyses: &mut AnalysisCache| {
+    struct BreakUseChain;
+    impl trunk_ir::pass::Pass for BreakUseChain {
+        type Target = core_dialect::Module;
+        fn name(&self) -> &'static str {
+            "break-use-chain"
+        }
+        fn run(
+            &mut self,
+            ctx: &mut IrContext,
+            module: core_dialect::Module,
+            _analyses: &mut AnalysisCache,
+        ) -> trunk_ir::pass::PassRunResult {
             let module_block = ctx.region(module.body(ctx)).blocks[0];
             let func_op = ctx.block(module_block).ops[0];
             let func_region = ctx.op_region(func_op, 0).unwrap();
@@ -877,8 +886,10 @@ fn debug_use_chain_verifier_reports_offending_pass() {
             // exercise the graph-wide pass-manager verifier.
             let _old_operands = std::mem::take(&mut ctx.op_mut(add_op).operands);
             Ok(())
-        },
-    ));
+        }
+    }
+
+    pm.add_pass(BreakUseChain);
     pm.with_debug_verifier();
 
     let error = pm
@@ -913,9 +924,18 @@ fn debug_verifier_reports_schema_violations_after_a_pass() {
         .expect("test input must parse a core.module");
 
     let mut pm = PassManager::new();
-    pm.add_pass(trunk_ir::pass::pass_fn(
-        "break-schema",
-        |ctx: &mut IrContext, module: core_dialect::Module, _analyses: &mut AnalysisCache| {
+    struct BreakSchema;
+    impl trunk_ir::pass::Pass for BreakSchema {
+        type Target = core_dialect::Module;
+        fn name(&self) -> &'static str {
+            "break-schema"
+        }
+        fn run(
+            &mut self,
+            ctx: &mut IrContext,
+            module: core_dialect::Module,
+            _analyses: &mut AnalysisCache,
+        ) -> trunk_ir::pass::PassRunResult {
             let module_block = ctx.region(module.body(ctx)).blocks[0];
             let func_op = ctx.block(module_block).ops[0];
             let func_block = ctx.region(ctx.op_region(func_op, 0).unwrap()).blocks[0];
@@ -925,8 +945,10 @@ fn debug_verifier_reports_schema_violations_after_a_pass() {
             let i64_ty = trunk_ir::types::TypeDataBuilder::new("core.i64").intern(ctx);
             ctx.set_op_result_type(add_op, 0, i64_ty);
             Ok(())
-        },
-    ));
+        }
+    }
+
+    pm.add_pass(BreakSchema);
     pm.with_debug_verifier();
 
     let error = pm

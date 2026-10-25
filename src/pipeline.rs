@@ -683,7 +683,7 @@ fn debug_validate_value_integrity(ctx: &IrContext, m: Module, boundary: &str) {
 fn add_canonicalize_passes(pm: &mut PassManager) {
     pm.add_pass(tribute_ir::dialect::adt::ForwardStructGets)
         .nest::<func_dialect::Func>()
-        .add_pass(trunk_ir::transforms::canonicalize_pass())
+        .add_pass(trunk_ir::transforms::Canonicalize)
         .add_pass(trunk_ir::transforms::EliminateDeadCode::new());
 }
 
@@ -1047,7 +1047,7 @@ fn native_lowering_passes(
 
     // Lower structured control flow to CFG-based control flow.
     pm.nest::<func_dialect::Func>()
-        .add_pass(trunk_ir::transforms::scf_to_cf_pass());
+        .add_pass(trunk_ir::transforms::ScfToCf);
 
     pm.add_pass(LowerNativeOwnership {
         options: tribute_passes::native::optimization::ownership_plan_options(

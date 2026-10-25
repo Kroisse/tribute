@@ -14,7 +14,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::pass::{Pass, PassError, PassManager, PassRunResult, pass_fn};
+use trunk_ir::pass::{Pass, PassError, PassManager, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
@@ -110,113 +110,43 @@ pub fn lower_to_wasm(
 /// The Wasm lowering steps, in order.
 fn wasm_lowering_passes() -> PassManager {
     let mut pm = PassManager::new();
-    pm.add_pass(pass_fn(
-        "convert-builtin-layouts",
-        |ctx, m: core::Module, _| {
-            super::type_converter::convert_builtin_layouts(ctx, m.into());
-            Ok(())
-        },
-    ))
-    .add_pass(pass_fn("io-to-wasm", |ctx, m: core::Module, _| {
-        super::io::lower(ctx, m.into())?;
-        Ok(())
-    }))
-    // Pattern-based lowering (trunk-ir-wasm-backend).
-    .add_pass(pass_fn("arith-to-wasm", |ctx, m: core::Module, _| {
-        let tc = wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::arith_to_wasm::lower(ctx, m.into(), tc);
-        Ok(())
-    }))
-    .add_pass(pass_fn("scf-to-wasm", |ctx, m: core::Module, analyses| {
-        let tc = wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, m.into(), tc, analyses)?;
-        Ok(())
-    }))
-    // Convert function and indirect-call signatures before target lowering.
-    .add_pass(pass_fn("convert-signatures", |ctx, m: core::Module, _| {
-        super::convert_signatures::lower(ctx, m.into());
-        Ok(())
-    }))
-    .add_pass(pass_fn("func-to-wasm", |ctx, m: core::Module, _| {
-        let tc = wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, m.into(), tc);
-        Ok(())
-    }))
-    // Convert wasm.func signature types (e.g., adt.array<Marker> →
-    // wasm.arrayref). Runs after func_to_wasm creates the wasm.func operations
-    // and before emission reads their type attributes.
-    .add_pass(pass_fn(
-        "wasm-func-signature-conversion",
-        |ctx, m: core::Module, _| {
-            let tc = wasm_type_converter(ctx);
-            PatternApplicator::new(tc)
-                .add_pattern(WasmFuncSignatureConversionPattern)
-                .apply_partial(ctx, Module::from(m));
-            Ok(())
-        },
-    ))
-    // Lower tribute_rt operations (box_int, unbox_int). Runs before
-    // adt_to_wasm because float boxing emits adt operations that it converts.
-    .add_pass(pass_fn("tribute-rt-to-wasm", |ctx, m: core::Module, _| {
-        super::tribute_rt_to_wasm::lower(ctx, m.into());
-        Ok(())
-    }))
-    // Lower constants before adt_to_wasm so string constants can become the
-    // ordinary prelude String::Leaf variant.
-    .add_pass(pass_fn("const-to-wasm", |ctx, m: core::Module, _| {
-        let const_analysis = super::const_to_wasm::analyze_consts(ctx, m.into());
-        super::const_to_wasm::validate_for_wasm(ctx, m.into(), &const_analysis)?;
-        super::const_to_wasm::lower(ctx, m.into(), &const_analysis);
-        Ok(())
-    }))
-    // Convert all adt operations, including String::Leaf from const lowering,
-    // after declaring the runtime type descriptors they store.
-    .add_pass(pass_fn("adt-to-wasm", |ctx, m: core::Module, _| {
-        super::descriptors::declare(ctx, m.into());
-        let tc = wasm_type_converter(ctx);
-        crate::wasm::adt_to_wasm::lower(ctx, m.into(), tc);
-        Ok(())
-    }))
-    // Replace the evidence type with its GC array once no `adt` operation
-    // reads it, which leaves the casts `adt` lowering made to it as identities.
-    .add_pass(pass_fn(
-        "convert-evidence-arrays",
-        |ctx, m: core::Module, _| {
-            super::type_converter::convert_evidence_arrays(ctx, m.into());
-            Ok(())
-        },
-    ))
-    // Fold the round trips that array operands of parameters took through
-    // their `adt.array` type while signature conversion ran ahead of `adt`
-    // lowering.
-    .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
-    // Bind the prompt tag allocator that evidence resolution declared to its
-    // Wasm implementation.
-    .add_pass(pass_fn(
-        "bind-prompt-tag-runtime",
-        |ctx, m: core::Module, _| {
-            super::prompt_tag::bind_wasm_prompt_tag_runtime(ctx, m.into());
-            Ok(())
-        },
-    ))
-    .add_pass(pass_fn("intrinsic-to-wasm", |ctx, m: core::Module, _| {
-        super::intrinsic_to_wasm::lower(ctx, m.into());
-        Ok(())
-    }))
-    // Module-level operations via WasmLowerer (in-place).
-    .add_pass(pass_fn("wasm-lowerer", |ctx, m: core::Module, _| {
-        WasmLowerer::new().lower_module(ctx, m.into());
-        Ok(())
-    }))
-    // Replace user struct layouts with their structural GC types once no
-    // `adt` operation reads a nominal layout.
-    .add_pass(pass_fn(
-        "convert-struct-layouts",
-        |ctx, m: core::Module, _| {
-            super::struct_layouts::convert(ctx, m.into());
-            Ok(())
-        },
-    ));
+    pm.add_pass(ConvertBuiltinLayouts)
+        .add_pass(IoToWasm)
+        // Pattern-based lowering (trunk-ir-wasm-backend).
+        .add_pass(ArithToWasm)
+        .add_pass(ScfToWasm)
+        // Convert function and indirect-call signatures before target lowering.
+        .add_pass(ConvertSignatures)
+        .add_pass(FuncToWasm)
+        // Convert wasm.func signature types (e.g., adt.array<Marker> →
+        // wasm.arrayref). Runs after func_to_wasm creates the wasm.func operations
+        // and before emission reads their type attributes.
+        .add_pass(WasmFuncSignatureConversion)
+        // Lower tribute_rt operations (box_int, unbox_int). Runs before
+        // adt_to_wasm because float boxing emits adt operations that it converts.
+        .add_pass(TributeRtToWasm)
+        // Lower constants before adt_to_wasm so string constants can become the
+        // ordinary prelude String::Leaf variant.
+        .add_pass(ConstToWasm)
+        // Convert all adt operations, including String::Leaf from const lowering,
+        // after declaring the runtime type descriptors they store.
+        .add_pass(AdtToWasm)
+        // Replace the evidence type with its GC array once no `adt` operation
+        // reads it, which leaves the casts `adt` lowering made to it as identities.
+        .add_pass(ConvertEvidenceArrays)
+        // Fold the round trips that array operands of parameters took through
+        // their `adt.array` type while signature conversion ran ahead of `adt`
+        // lowering.
+        .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+        // Bind the prompt tag allocator that evidence resolution declared to its
+        // Wasm implementation.
+        .add_pass(BindPromptTagRuntime)
+        .add_pass(IntrinsicToWasm)
+        // Module-level operations via WasmLowerer (in-place).
+        .add_pass(LowerWasmModule)
+        // Replace user struct layouts with their structural GC types once no
+        // `adt` operation reads a nominal layout.
+        .add_pass(ConvertStructLayouts);
     pm.with_debug_verifier()
         .with_instrumentation(|ctx, name, op| {
             if let Some(module) = Module::new(ctx, op) {
@@ -224,6 +154,316 @@ fn wasm_lowering_passes() -> PassManager {
             }
         });
     pm
+}
+
+struct ConvertBuiltinLayouts;
+
+impl Pass for ConvertBuiltinLayouts {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "convert-builtin-layouts"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        super::type_converter::convert_builtin_layouts(ctx, target.into());
+        Ok(())
+    }
+}
+
+struct IoToWasm;
+
+impl Pass for IoToWasm {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "io-to-wasm"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        super::io::lower(ctx, target.into())?;
+        Ok(())
+    }
+}
+
+struct ArithToWasm;
+
+impl Pass for ArithToWasm {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "arith-to-wasm"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        let tc = wasm_type_converter(ctx);
+        trunk_ir_wasm_backend::passes::arith_to_wasm::lower(ctx, target.into(), tc);
+        Ok(())
+    }
+}
+
+struct ScfToWasm;
+
+impl Pass for ScfToWasm {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "scf-to-wasm"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        let tc = wasm_type_converter(ctx);
+        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, target.into(), tc, analyses)?;
+        Ok(())
+    }
+}
+
+struct ConvertSignatures;
+
+impl Pass for ConvertSignatures {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "convert-signatures"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        super::convert_signatures::lower(ctx, target.into());
+        Ok(())
+    }
+}
+
+struct FuncToWasm;
+
+impl Pass for FuncToWasm {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "func-to-wasm"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        let tc = wasm_type_converter(ctx);
+        trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, target.into(), tc);
+        Ok(())
+    }
+}
+
+struct WasmFuncSignatureConversion;
+
+impl Pass for WasmFuncSignatureConversion {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "wasm-func-signature-conversion"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        let tc = wasm_type_converter(ctx);
+        PatternApplicator::new(tc)
+            .add_pattern(WasmFuncSignatureConversionPattern)
+            .apply_partial(ctx, Module::from(target));
+        Ok(())
+    }
+}
+
+struct TributeRtToWasm;
+
+impl Pass for TributeRtToWasm {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "tribute-rt-to-wasm"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        super::tribute_rt_to_wasm::lower(ctx, target.into());
+        Ok(())
+    }
+}
+
+struct ConstToWasm;
+
+impl Pass for ConstToWasm {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "const-to-wasm"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        let const_analysis = super::const_to_wasm::analyze_consts(ctx, target.into());
+        super::const_to_wasm::validate_for_wasm(ctx, target.into(), &const_analysis)?;
+        super::const_to_wasm::lower(ctx, target.into(), &const_analysis);
+        Ok(())
+    }
+}
+
+struct AdtToWasm;
+
+impl Pass for AdtToWasm {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "adt-to-wasm"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        super::descriptors::declare(ctx, target.into());
+        let tc = wasm_type_converter(ctx);
+        crate::wasm::adt_to_wasm::lower(ctx, target.into(), tc);
+        Ok(())
+    }
+}
+
+struct ConvertEvidenceArrays;
+
+impl Pass for ConvertEvidenceArrays {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "convert-evidence-arrays"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        super::type_converter::convert_evidence_arrays(ctx, target.into());
+        Ok(())
+    }
+}
+
+struct BindPromptTagRuntime;
+
+impl Pass for BindPromptTagRuntime {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "bind-prompt-tag-runtime"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        super::prompt_tag::bind_wasm_prompt_tag_runtime(ctx, target.into());
+        Ok(())
+    }
+}
+
+struct IntrinsicToWasm;
+
+impl Pass for IntrinsicToWasm {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "intrinsic-to-wasm"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        super::intrinsic_to_wasm::lower(ctx, target.into());
+        Ok(())
+    }
+}
+
+struct LowerWasmModule;
+
+impl Pass for LowerWasmModule {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "wasm-lowerer"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        WasmLowerer::new().lower_module(ctx, target.into());
+        Ok(())
+    }
+}
+
+struct ConvertStructLayouts;
+
+impl Pass for ConvertStructLayouts {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "convert-struct-layouts"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        super::struct_layouts::convert(ctx, target.into());
+        Ok(())
+    }
 }
 
 /// Assign module-local GC indices after all type-conversion materialization.
