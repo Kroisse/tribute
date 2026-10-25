@@ -107,11 +107,22 @@ fn validate_operation(
     }
 }
 
-/// A `wasm.ref_upcast` must widen its operand without a runtime cast.
+/// A `wasm.ref_upcast` must satisfy its definition and widen its operand
+/// without a runtime cast.
 fn validate_ref_upcast(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
     let Ok(upcast) = wasm_dialect::RefUpcast::from_op(ctx, op) else {
         return;
     };
+    // The assignability check below reads the declared operand and result.
+    let violations = <wasm_dialect::RefUpcast as DialectOp>::DEF.verify(ctx, op);
+    if !violations.is_empty() {
+        errors.extend(
+            violations
+                .iter()
+                .map(|violation| format!("wasm.ref_upcast: {violation}")),
+        );
+        return;
+    }
     let operand = ctx.value_ty(upcast.r#ref(ctx));
     let result = upcast.result_ty(ctx);
     if !crate::is_wasm_physical_argument_assignable(ctx, operand, result) {
@@ -596,6 +607,22 @@ mod tests {
         validate("wasm.structref", "wasm.anyref").expect("structref widens to anyref");
         let error = validate("wasm.anyref", "wasm.structref").expect_err("a downcast needs a cast");
         assert!(error.to_string().contains("does not widen to"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_malformed_ref_upcast_before_reading_it() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @widen() -> core.nil {
+    %wide = wasm.ref_upcast : wasm.structref
+    wasm.return
+  }
+}"#,
+        );
+        let error = validate_wasm_ir(&ctx, module).expect_err("an upcast needs an operand");
+        assert!(error.to_string().contains("wasm.ref_upcast:"), "{error}");
     }
 
     #[test]
