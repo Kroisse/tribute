@@ -138,23 +138,45 @@ impl<K: Ord, V> FromIterator<(K, V)> for SortedMap<K, V> {
     }
 }
 
-/// Adds entries in any order with one merge of the sorted entries. An added
-/// entry replaces the stored one for its key, and when a key repeats among
-/// the added entries the last one wins, as with `HashMap::extend`.
+/// Adds entries in any order with one merge of the sorted entries, moving
+/// each run of stored entries between two added keys at once. An added entry
+/// replaces the stored one for its key, and when a key repeats among the
+/// added entries the last one wins, as with `HashMap::extend`.
 impl<K: Ord, V> Extend<(K, V)> for SortedMap<K, V> {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
-        let added: Self = iter.into_iter().collect();
-        if added.entries.is_empty() {
+        let mut added: Self = iter.into_iter().collect();
+        let (Some((first, _)), Some((last, _))) = (added.entries.first(), added.entries.last())
+        else {
+            return;
+        };
+        if self.entries.last().is_none_or(|(stored, _)| stored < first) {
+            self.entries.append(&mut added.entries);
+            return;
+        }
+        if self
+            .entries
+            .first()
+            .is_some_and(|(stored, _)| last < stored)
+        {
+            added.entries.append(&mut self.entries);
+            self.entries = added.entries;
             return;
         }
         let stored = std::mem::take(&mut self.entries);
         let mut merged = Vec::with_capacity(stored.len() + added.entries.len());
-        let mut stored = stored.into_iter().peekable();
+        let mut stored = stored.into_iter();
         for (key, value) in added.entries {
-            while let Some(entry) = stored.next_if(|(stored_key, _)| *stored_key < key) {
-                merged.push(entry);
+            let before = stored
+                .as_slice()
+                .partition_point(|(stored_key, _)| *stored_key < key);
+            merged.extend(stored.by_ref().take(before));
+            if stored
+                .as_slice()
+                .first()
+                .is_some_and(|(stored_key, _)| *stored_key == key)
+            {
+                stored.next();
             }
-            stored.next_if(|(stored_key, _)| *stored_key == key);
             merged.push((key, value));
         }
         merged.extend(stored);
