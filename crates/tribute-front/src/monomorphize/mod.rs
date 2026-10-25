@@ -112,7 +112,7 @@ impl<'db> SpecializationInput<'db> {
 /// from: the declaration table with the concrete instances added, the
 /// metadata substituted with it, and the compiler intrinsic identities.
 #[salsa::tracked]
-pub struct SpecializedFrontend<'db> {
+pub struct SpecializationOutput<'db> {
     pub module: DeclTable<TypedRef<'db>>,
     pub declarations: DeclarationTypeMetadata<'db>,
     pub expression_types: ExpressionTypeMetadata<'db>,
@@ -137,7 +137,7 @@ struct MonomorphizeMetadata<'db> {
 pub fn monomorphize_functions<'db>(
     db: &'db dyn salsa::Database,
     input: SpecializationInput<'db>,
-) -> Result<SpecializedFrontend<'db>, Vec<InstanceError>> {
+) -> Result<SpecializationOutput<'db>, Vec<InstanceError>> {
     let SpecializationInput {
         module,
         declarations,
@@ -161,7 +161,7 @@ pub fn monomorphize_functions<'db>(
             compiler_intrinsics,
         },
     )?;
-    Ok(SpecializedFrontend::new(
+    Ok(SpecializationOutput::new(
         db,
         module,
         DeclarationTypeMetadata {
@@ -245,9 +245,18 @@ fn monomorphize<'db>(
             metadata_origins,
             compiler_intrinsic_specializations,
         } = specializations;
+        let mut clones = MetadataClones::default();
         for (key, origins) in metadata_origins {
-            specialize_metadata(db, &mut metadata, &key, &origins);
+            clone_metadata(
+                db,
+                &metadata.expressions,
+                key.variant(),
+                &key.type_args,
+                &origins,
+                &mut clones,
+            );
         }
+        clones.add_to(&mut metadata.expressions);
         metadata
             .compiler_intrinsics
             .extend(compiler_intrinsic_specializations);
@@ -488,29 +497,64 @@ fn monomorphize<'db>(
     Ok((module, fn_types_vec, metadata))
 }
 
-fn specialize_metadata<'db>(
-    db: &'db dyn salsa::Database,
-    metadata: &mut MonomorphizeMetadata<'db>,
-    key: &InstanceKey<'db>,
-    origins: &HashSet<NodeId>,
-) {
-    clone_metadata(db, metadata, key.variant(), &key.type_args, origins);
+/// The metadata cloned for one round of instances. A clone reads only the
+/// nodes of the generic declaration it copies, which no clone writes, so the
+/// round's clones are added to each table at once.
+#[derive(Default)]
+struct MetadataClones<'db> {
+    node_types: Vec<(NodeId, Type<'db>)>,
+    function_instances: Vec<(NodeId, crate::typeck::FunctionInstance<'db>)>,
+    local_instances: Vec<(NodeId, crate::typeck::LocalCallableInstance<'db>)>,
+    handler_operations: Vec<(NodeId, InstantiatedHandlerOperation<'db>)>,
+    perform_operations: Vec<(NodeId, InstantiatedPerformOperation<'db>)>,
+    evidence_plans: Vec<(NodeId, Vec<crate::typeck::EvidenceStep<'db>>)>,
+    lambda_signatures: Vec<(NodeId, LambdaSignature<'db>)>,
+    exhaustive_cases: Vec<NodeId>,
 }
 
-/// Copy the metadata of `origins` to the nodes of the same identity with
+impl<'db> MetadataClones<'db> {
+    fn add_to(self, expressions: &mut ExpressionTypeMetadata<'db>) {
+        expressions.node_types.extend(self.node_types);
+        expressions
+            .function_instances
+            .extend(self.function_instances);
+        expressions.local_instances.extend(self.local_instances);
+        expressions
+            .handler_operations
+            .extend(self.handler_operations);
+        expressions
+            .perform_operations
+            .extend(self.perform_operations);
+        expressions.evidence_plans.extend(self.evidence_plans);
+        expressions.lambda_signatures.extend(self.lambda_signatures);
+        if !self.exhaustive_cases.is_empty() {
+            expressions.exhaustive_cases.extend(self.exhaustive_cases);
+            expressions.exhaustive_cases.sort();
+            expressions.exhaustive_cases.dedup();
+        }
+    }
+}
+
+/// Clone the metadata of `origins` to the nodes of the same identity with
 /// `variant`, with `type_args` substituted.
 fn clone_metadata<'db>(
     db: &'db dyn salsa::Database,
-    metadata: &mut MonomorphizeMetadata<'db>,
+    expressions: &ExpressionTypeMetadata<'db>,
     variant: std::num::NonZero<u64>,
     type_args: &[Type<'db>],
     origins: &HashSet<NodeId>,
+    clones: &mut MetadataClones<'db>,
 ) {
     let substitute = |ty| substitute_type(db, ty, type_args);
-    let expressions = &mut metadata.expressions;
-    clone_entries(&mut expressions.node_types, origins, variant, substitute);
     clone_entries(
-        &mut expressions.function_instances,
+        &expressions.node_types,
+        origins,
+        variant,
+        substitute,
+        &mut clones.node_types,
+    );
+    clone_entries(
+        &expressions.function_instances,
         origins,
         variant,
         |mut instance| {
@@ -527,9 +571,10 @@ fn clone_metadata<'db>(
                 .collect();
             instance
         },
+        &mut clones.function_instances,
     );
     clone_entries(
-        &mut expressions.local_instances,
+        &expressions.local_instances,
         origins,
         variant,
         |mut instance| {
@@ -545,9 +590,10 @@ fn clone_metadata<'db>(
             }
             instance
         },
+        &mut clones.local_instances,
     );
     clone_entries(
-        &mut expressions.handler_operations,
+        &expressions.handler_operations,
         origins,
         variant,
         |operation| InstantiatedHandlerOperation {
@@ -557,9 +603,10 @@ fn clone_metadata<'db>(
             params: operation.params.into_iter().map(substitute).collect(),
             result: substitute(operation.result),
         },
+        &mut clones.handler_operations,
     );
     clone_entries(
-        &mut expressions.perform_operations,
+        &expressions.perform_operations,
         origins,
         variant,
         |operation| InstantiatedPerformOperation {
@@ -569,48 +616,50 @@ fn clone_metadata<'db>(
             params: operation.params.into_iter().map(substitute).collect(),
             result: substitute(operation.result),
         },
+        &mut clones.perform_operations,
     );
-    clone_entries(&mut expressions.evidence_plans, origins, variant, |plan| {
-        plan.into_iter()
-            .map(|step| step.map_types(substitute))
-            .collect()
-    });
     clone_entries(
-        &mut expressions.lambda_signatures,
+        &expressions.evidence_plans,
+        origins,
+        variant,
+        |plan| {
+            plan.into_iter()
+                .map(|step| step.map_types(substitute))
+                .collect()
+        },
+        &mut clones.evidence_plans,
+    );
+    clone_entries(
+        &expressions.lambda_signatures,
         origins,
         variant,
         |signature| LambdaSignature {
             function_type: substitute(signature.function_type),
         },
+        &mut clones.lambda_signatures,
     );
-    let exhaustive = &mut expressions.exhaustive_cases;
-    let cloned: Vec<_> = origins
-        .iter()
-        .filter(|id| exhaustive.binary_search(id).is_ok())
-        .map(|id| id.with_variant(variant))
-        .collect();
-    exhaustive.extend(cloned);
-    exhaustive.sort();
-    exhaustive.dedup();
+    clones.exhaustive_cases.extend(
+        origins
+            .iter()
+            .filter(|id| expressions.exhaustive_cases.binary_search(id).is_ok())
+            .map(|id| id.with_variant(variant)),
+    );
 }
 
-/// Add to `table` the entry of each origin it holds, at the node with
+/// Add to `clones` the entry of each origin `table` holds, at the node with
 /// `variant`, as `clone` makes it from the origin's value.
 fn clone_entries<V: Clone>(
-    table: &mut SortedMap<NodeId, V>,
+    table: &SortedMap<NodeId, V>,
     origins: &HashSet<NodeId>,
     variant: std::num::NonZero<u64>,
     clone: impl Fn(V) -> V,
+    clones: &mut Vec<(NodeId, V)>,
 ) {
-    let cloned: Vec<_> = origins
-        .iter()
-        .filter_map(|id| {
-            table
-                .get(id)
-                .map(|value| (id.with_variant(variant), clone(value.clone())))
-        })
-        .collect();
-    table.extend(cloned);
+    clones.extend(origins.iter().filter_map(|id| {
+        table
+            .get(id)
+            .map(|value| (id.with_variant(variant), clone(value.clone())))
+    }));
 }
 
 fn substitute_type<'db>(
@@ -760,7 +809,16 @@ mod tests {
         let key = InstanceKey::of_types([int]);
         let origins = [origin].into_iter().collect::<HashSet<_>>();
 
-        specialize_metadata(&db, &mut metadata, &key, &origins);
+        let mut clones = MetadataClones::default();
+        clone_metadata(
+            &db,
+            &metadata.expressions,
+            key.variant(),
+            &key.type_args,
+            &origins,
+            &mut clones,
+        );
+        clones.add_to(&mut metadata.expressions);
 
         let clone = origin.with_variant(key.variant());
         assert_eq!(metadata.expressions.node_types.get(&clone), Some(&int));

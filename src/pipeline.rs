@@ -261,7 +261,7 @@ pub enum NativePipelineStage {
 // AST-based pipeline imports
 use tribute_front::ast_to_ir;
 use tribute_front::astgen::ParsedAst;
-use tribute_front::monomorphize::{SpecializationInput, SpecializedFrontend};
+use tribute_front::monomorphize::{SpecializationInput, SpecializationOutput};
 use tribute_front::query as ast_query;
 use tribute_front::resolve as ast_resolve;
 use tribute_front::resolve::PackageEnv;
@@ -374,7 +374,7 @@ fn merge_and_lower_to_ir<'db>(
 /// preparation supplies to lowering.
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 struct PreparedFrontend<'db> {
-    specialized: SpecializedFrontend<'db>,
+    specialized: SpecializationOutput<'db>,
     runtime_types: ast_to_ir::runtime_items::RuntimeTypes,
 }
 
@@ -385,7 +385,7 @@ pub fn prepare_frontend_for_lowering<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
-) -> Option<SpecializedFrontend<'db>> {
+) -> Option<SpecializationOutput<'db>> {
     prepare_frontend_details(db, typed, source).map(|prepared| prepared.specialized)
 }
 

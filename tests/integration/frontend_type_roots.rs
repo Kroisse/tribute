@@ -25,7 +25,7 @@ fn prepare_root<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
     root: Root,
-) -> tribute_front::monomorphize::SpecializedFrontend<'db> {
+) -> tribute_front::monomorphize::SpecializationOutput<'db> {
     let typed = parse_and_lower_ast(db, source).unwrap();
     let packet_decl = typed
         .module(db)
