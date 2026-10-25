@@ -50,10 +50,14 @@ on its declaration in
 
 The target [representation/ABI boundary](../../new-plans/ir.md#representationabi-경계)
 ends with an exit verification that rejects any violation in every build; later
-passes read only the physical contracts it checked. `pipeline::dump_ir`
-(`--dump-ir`) prints the module at that exit, and tests split a compilation
-there with `run_target_to_boundary_exit` and `emit_from_boundary_exit`. The
-stage order is in the top-of-file comment in [src/pipeline.rs](../../src/pipeline.rs).
+passes read only the physical contracts it checked. After the frontend, the
+pipeline is one ordered chain of stages that `stage_passes` in
+[src/pipeline.rs](../../src/pipeline.rs) builds; each entry point runs a
+contiguous range of it as one `PassManager`. `pipeline::dump_ir`
+(`--dump-ir`) runs the chain to that exit and prints the module, and tests
+split a compilation there with `run_target_to_boundary_exit` and
+`emit_from_boundary_exit`. The stage order is in the top-of-file comment in
+[src/pipeline.rs](../../src/pipeline.rs).
 
 ## `#[dialect]` Macro
 
@@ -206,11 +210,12 @@ declared shape. The `tribute_control` local validator and the native backend
 boundary (`validate_clif_ir`) run `OpDef::verify` the same way before their
 own checks, so those checks cover only what the definition cannot express,
 such as symbol lookups, enclosing callables, and region contents.
-Debug builds also run `validate_op_schemas`, the declarative stages without
-the `#[verify]` hook, after every pipeline pass, reporting the pass that left
-an operation in violation. A pass that retypes a value before target type
+Debug builds also run `validate_op_schemas`, the declarative stages without the
+`#[verify]` hook, after every pipeline pass, reporting the pass that left an
+operation in violation. A pass that retypes a value before target type
 conversion inserts `core.unrealized_conversion_cast` back to the type its uses
-declare. `PatternApplicator` does this for a staged conversion with
+declare.
+`PatternApplicator` does this for a staged conversion with
 `with_auto_type_conversion(true)` and a `ConversionTarget`. It casts the
 operands only of operations the target declares illegal. Where it retypes a
 block argument or a replaced result that an operation the target has no rule
