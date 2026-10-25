@@ -17,6 +17,10 @@ env:
   # set. Match Cargo.toml's dev profile, which the test profile shares, so
   # `cargo run` and `cargo test` in one job do not rebuild every dependency.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # setup-rust-toolchain runs `brew install bash` on macOS. On the
+  # self-hosted runner the Homebrew prefix belongs to another user, so a
+  # Homebrew API refresh fails to take its download lock and fails the step.
+  HOMEBREW_NO_AUTO_UPDATE: 1
 
 jobs:
   lint:
