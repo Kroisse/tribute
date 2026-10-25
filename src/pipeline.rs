@@ -738,9 +738,7 @@ impl StagedCompilation {
     /// Report the context's diagnostics and any failure to `db`, and return
     /// the arena session if every stage succeeded.
     fn report(self, db: &dyn salsa::Database) -> Option<(IrContext, Module)> {
-        for diag in self.context.diagnostics().iter() {
-            Diagnostic::from_ir(diag.clone(), CompilationPhase::Lowering).accumulate(db);
-        }
+        report_context_diagnostics(db, &self.context);
         match self.result {
             Ok(()) => Some((self.context, self.module)),
             Err(error) => {
@@ -979,9 +977,7 @@ pub fn dump_ir(
 /// Report the context's diagnostics and print the module, or return the
 /// run's failure.
 fn dump_staged(db: &dyn salsa::Database, staged: StagedCompilation) -> Result<String, DumpIrError> {
-    for diag in staged.context.diagnostics().iter() {
-        Diagnostic::from_ir(diag.clone(), CompilationPhase::Lowering).accumulate(db);
-    }
+    report_context_diagnostics(db, &staged.context);
     staged.result?;
     Ok(trunk_ir::printer::print_module(
         &staged.context,
@@ -1057,6 +1053,13 @@ pub fn compile_to_native_binary(
             report_emission_error(db, format!("Native compilation failed: {e}"));
             None
         }
+    }
+}
+
+/// Pass the diagnostics the stages reported to the context on to Salsa.
+fn report_context_diagnostics(db: &dyn salsa::Database, ctx: &IrContext) {
+    for diag in ctx.diagnostics().iter() {
+        Diagnostic::from_ir(diag.clone(), CompilationPhase::Lowering).accumulate(db);
     }
 }
 

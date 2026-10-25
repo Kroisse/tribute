@@ -684,7 +684,8 @@ typecheck는 source와 선언 환경을 입력으로 하는 모듈 단위 query�
 소유하고 각 pass는 자신이 선언한 입력·출력 invariant를 검증한다. Frontend 이후의
 pass는 순서가 고정된 하나의 단계 체인을 이루며, 각 진입점은 그 체인의 연속 구간을
 하나의 pass manager로 실행한다. 단계 사이에 pass manager 밖의 연결 코드를 두지
-않는다. 변환 전에 검증하는
+않는다. Wasm emission의 cast 정리는 체인이 끝난 뒤 emission 안에서 별도의 pass
+manager로 실행한다([Wasm Lowering](lowering.md#wasm-lowering)). 변환 전에 검증하는
 계약과 실패 시 mutation 보장도 pass 경계에 명시한다.
 
 패키지 `std`의 well-known type은 typechecking 결과의 별도 metadata로 보존한다.
