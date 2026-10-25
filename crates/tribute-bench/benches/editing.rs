@@ -23,7 +23,8 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use criterion::measurement::WallTime;
+use criterion::{BatchSize, BenchmarkGroup, Criterion, criterion_group, criterion_main};
 use salsa::Database;
 use tribute::compile_with_diagnostics;
 use tribute::parse_and_lower_ast;
@@ -44,8 +45,8 @@ fn frontend(session: &EditSession) {
     });
 }
 
-fn bench_edit(c: &mut Criterion, workload: &str, edit: &Edit) {
-    let mut group = c.benchmark_group(format!("editing/{workload}/{}", edit.name));
+fn bench_edit(group: &mut BenchmarkGroup<'_, WallTime>, workload: &str, edit: &Edit) {
+    let name = |stage: &str| format!("{workload}/{}/{stage}", edit.name);
     let session = RefCell::new(EditSession::new(edit));
     let toggle = || session.borrow_mut().toggle();
     let diagnostics = || {
@@ -59,8 +60,8 @@ fn bench_edit(c: &mut Criterion, workload: &str, edit: &Edit) {
         // Introducing an error stops before lowering and fixing it runs the
         // whole pipeline, so the two directions are timed apart: each
         // iteration starts from the other text, already compiled.
-        for (name, edited) in [("introduce", true), ("fix", false)] {
-            group.bench_function(format!("diagnostics/{name}"), |b| {
+        for (direction, edited) in [("introduce", true), ("fix", false)] {
+            group.bench_function(name(&format!("diagnostics/{direction}")), |b| {
                 b.iter_batched(
                     || {
                         session.borrow_mut().set_edited(!edited);
@@ -73,20 +74,20 @@ fn bench_edit(c: &mut Criterion, workload: &str, edit: &Edit) {
             });
         }
     } else {
-        group.bench_function("diagnostics", |b| {
+        group.bench_function(name("diagnostics"), |b| {
             b.iter_batched(toggle, |()| diagnostics(), BatchSize::PerIteration)
         });
     }
 
     if edit.name == STAGED_EDIT {
-        group.bench_function("frontend", |b| {
+        group.bench_function(name("frontend"), |b| {
             b.iter_batched(
                 toggle,
                 |()| frontend(&session.borrow()),
                 BatchSize::PerIteration,
             )
         });
-        group.bench_function("lowering", |b| {
+        group.bench_function(name("lowering"), |b| {
             b.iter_batched(
                 || {
                     toggle();
@@ -102,7 +103,7 @@ fn bench_edit(c: &mut Criterion, workload: &str, edit: &Edit) {
                 BatchSize::PerIteration,
             )
         });
-        group.bench_function("middle_end", |b| {
+        group.bench_function(name("middle_end"), |b| {
             b.iter_batched(
                 || {
                     toggle();
@@ -117,15 +118,16 @@ fn bench_edit(c: &mut Criterion, workload: &str, edit: &Edit) {
             )
         });
     }
-    group.finish();
 }
 
 fn editing(c: &mut Criterion) {
+    let mut group = c.benchmark_group("editing");
     for workload in workloads() {
         for edit in &workload.edits {
-            bench_edit(c, workload.name, edit);
+            bench_edit(&mut group, workload.name, edit);
         }
     }
+    group.finish();
 }
 
 fn config() -> Criterion {
