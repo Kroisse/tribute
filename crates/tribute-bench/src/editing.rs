@@ -207,6 +207,14 @@ impl EditSession {
         self.source.set_tree(&mut self.db).to(tree);
     }
 
+    /// Switch the source to the edit's `after` text if `edited`, else to its
+    /// `before` text, unless it holds that text already.
+    pub fn set_edited(&mut self, edited: bool) {
+        if self.is_edited() != edited {
+            self.toggle();
+        }
+    }
+
     /// Whether the source holds the edit's `after` text.
     pub fn is_edited(&self) -> bool {
         self.current == 1

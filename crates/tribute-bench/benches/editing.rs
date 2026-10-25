@@ -11,7 +11,9 @@
 //! tree-sitter parse, then times one stage:
 //!
 //! - `editing/<program>/<edit>/diagnostics`: `compile_with_diagnostics`, what
-//!   the language server runs after each edit.
+//!   the language server runs after each edit. An edit that introduces an
+//!   error is timed in each direction, `diagnostics/introduce` and
+//!   `diagnostics/fix`, since only fixing it reaches lowering.
 //! - For the `body` edit, its parts:
 //!   - `frontend`: parsing to the specialization result, which Salsa caches;
 //!   - `lowering`: lowering the cached frontend result to source-logical IR;
@@ -46,19 +48,35 @@ fn bench_edit(c: &mut Criterion, workload: &str, edit: &Edit) {
     let mut group = c.benchmark_group(format!("editing/{workload}/{}", edit.name));
     let session = RefCell::new(EditSession::new(edit));
     let toggle = || session.borrow_mut().toggle();
+    let diagnostics = || {
+        let session = session.borrow();
+        session
+            .db()
+            .attach(|db| compile_with_diagnostics(db, session.source()))
+    };
 
-    group.bench_function("diagnostics", |b| {
-        b.iter_batched(
-            toggle,
-            |()| {
-                let session = session.borrow();
-                session
-                    .db()
-                    .attach(|db| compile_with_diagnostics(db, session.source()))
-            },
-            BatchSize::PerIteration,
-        )
-    });
+    if edit.breaks {
+        // Introducing an error stops before lowering and fixing it runs the
+        // whole pipeline, so the two directions are timed apart: each
+        // iteration starts from the other text, already compiled.
+        for (name, edited) in [("introduce", true), ("fix", false)] {
+            group.bench_function(format!("diagnostics/{name}"), |b| {
+                b.iter_batched(
+                    || {
+                        session.borrow_mut().set_edited(!edited);
+                        diagnostics();
+                        session.borrow_mut().set_edited(edited);
+                    },
+                    |()| diagnostics(),
+                    BatchSize::PerIteration,
+                )
+            });
+        }
+    } else {
+        group.bench_function("diagnostics", |b| {
+            b.iter_batched(toggle, |()| diagnostics(), BatchSize::PerIteration)
+        });
+    }
 
     if edit.name == STAGED_EDIT {
         group.bench_function("frontend", |b| {
