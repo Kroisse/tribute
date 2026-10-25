@@ -147,7 +147,7 @@ pub struct BoundaryViolation {
 /// Operations, aliases, result types, block arguments and their attributes,
 /// and nested type parameters and attributes are all inspected. Referenced C
 /// declarations that `target` does not bind are reported last.
-pub fn verify_boundary_exit(
+fn verify_boundary_exit(
     ctx: &IrContext,
     module: Module,
     target: TargetKind,
@@ -183,7 +183,7 @@ pub struct BoundaryExitError {
 
 /// Reject a module whose representation/ABI boundary exit violates the
 /// contract for `target`.
-pub fn check_boundary_exit(
+fn check_boundary_exit(
     ctx: &IrContext,
     module: Module,
     target: TargetKind,
@@ -196,8 +196,9 @@ pub fn check_boundary_exit(
     }
 }
 
-/// A module pass that runs [`check_boundary_exit`]. It verifies in every
-/// build, unlike the debug verifier of a [`trunk_ir::pass::PassManager`].
+/// Reject a module whose representation/ABI boundary exit violates the
+/// contract for `target`. It verifies in every build, unlike the debug
+/// verifier of a [`trunk_ir::pass::PassManager`].
 pub struct CheckBoundaryExit {
     pub target: TargetKind,
 }

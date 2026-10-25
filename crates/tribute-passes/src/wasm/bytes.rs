@@ -61,11 +61,12 @@ pub fn bytes_struct_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Lower calls to the bytes element read intrinsic to `adt` operations on
 /// the Wasm bytes layout.
-pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicError> {
+fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicError> {
     bytes_intrinsic::lower_get_or_panic(ctx, module, lower_call)
 }
 
-/// A module pass that runs [`lower`].
+/// Lower calls to the bytes element read intrinsic to `adt` operations on
+/// the Wasm bytes layout.
 pub struct LowerBytesIntrinsics;
 
 impl Pass for LowerBytesIntrinsics {

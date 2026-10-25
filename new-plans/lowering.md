@@ -47,9 +47,9 @@ function creation or deletion, cross-function call rewrites, global DCE, and
 pipeline-boundary conversion checks.
 
 `PatternApplicator` and local region transforms support `func.func`-anchored
-application for these passes. For example, `canonicalize_pass()` and
+application for these passes. For example, `Canonicalize` and
 `EliminateDeadCode::<func::Func>::new()` run cleanup under one `func.func`
-scope, and `scf_to_cf_pass()` lowers structured control flow inside one
+scope, and `ScfToCf` lowers structured control flow inside one
 function.
 Module-wide entry points explicitly apply the same transform to all functions.
 Production scheduling uses nested function passes when the transform does not

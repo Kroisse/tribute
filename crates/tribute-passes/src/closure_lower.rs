@@ -700,14 +700,20 @@ fn rewrite_validated_closures_in_func(
 /// attributes, results, and block arguments before applying any update. The
 /// casts that kept lowered closure packs at their semantic closure type become
 /// identities and are removed.
-pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
+pub(crate) fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     let closure_struct = closure_struct_type_ref(ctx);
     substitute_module_types(ctx, module, move |ctx, ty| {
         closure::Closure::matches(ctx, ty).then_some(closure_struct)
     });
 }
 
-/// A module pass that runs [`finalize_closure_storage_layout`].
+/// Select the canonical `_closure` storage type after all semantic consumers
+/// have validated the exact convention-proven callable type.
+///
+/// The plan covers aliases, nested type parameters, type-bearing operation
+/// attributes, results, and block arguments before applying any update. The
+/// casts that kept lowered closure packs at their semantic closure type become
+/// identities and are removed.
 pub struct FinalizeClosureStorageLayout;
 
 impl Pass for FinalizeClosureStorageLayout {

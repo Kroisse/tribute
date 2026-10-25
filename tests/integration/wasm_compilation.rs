@@ -236,10 +236,14 @@ fn test_execute_dynamic_bytes_write_boundary() {
 }}"#
     );
     let module = trunk_ir::parser::parse_test_module(&mut ctx, &ir);
-    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default())
-        .expect("lower dynamic output to Wasm");
-    tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module)
-        .expect("finalize semantic WasmGC types");
+    let root =
+        <trunk_ir::dialect::core::Module as trunk_ir::ops::DialectOp>::from_op(&ctx, module.op())
+            .expect("core.module");
+    let mut pm = trunk_ir::pass::PassManager::new();
+    pm.add_pass(tribute_passes::wasm::lower::LowerToWasm)
+        .add_pass(tribute_passes::wasm::lower::FinalizeWasmGcTypes);
+    pm.run(&mut ctx, root, &mut Default::default())
+        .expect("lower dynamic output to Wasm and finalize its WasmGC types");
     let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
         .expect("emit dynamic output Wasm");
     let mut expected = left.into_bytes();
