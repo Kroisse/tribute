@@ -242,12 +242,11 @@ impl<'db> TypeChecker<'db> {
         self.env.db()
     }
 
-    /// Inject prelude's resolved type information before type checking.
-    ///
-    /// This makes prelude's types (Option, Some, None, etc.) available
-    /// to user code without sharing a ModuleTypeEnv, avoiding UniVar conflicts.
-    pub fn inject_prelude(&mut self, exports: &PreludeExports<'db>) {
-        self.env.inject_prelude(exports);
+    /// Check against the declarations package `std` exports, read through
+    /// the dependency table. They resolve without sharing a `ModuleTypeEnv`,
+    /// so no unification variable crosses the package boundary.
+    pub fn depend_on(&mut self, exports: &PreludeExports<'db>) {
+        self.env.depend_on(exports);
     }
 
     /// Type check a module.
@@ -259,7 +258,8 @@ impl<'db> TypeChecker<'db> {
 
     /// Type check the prelude module once.
     ///
-    /// Returns the typed prelude, and the exports that user modules inject:
+    /// Returns the typed prelude, and the exports that user modules read
+    /// through the dependency table:
     /// function types, constructors, and type definitions.
     pub fn check_prelude(
         mut self,
@@ -321,7 +321,7 @@ impl<'db> TypeChecker<'db> {
         let function_types = self.env.export_function_types();
         let constructor_types = self.env.export_constructor_types();
         let ability_definitions = self.env.export_ability_defs();
-        let well_known_types = self.env.well_known_types();
+        let well_known_types = self.env.own_well_known_types();
 
         self.exhaustive_cases.sort();
 
