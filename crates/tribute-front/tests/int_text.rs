@@ -209,9 +209,15 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output =
-        tribute_front::ast_to_ir::TypedModule::from_specialized(db, mono, Default::default())
-            .lower_to_ir(db, &mut ir, source.uri(db).as_str());
+    let output = tribute_front::ast_to_ir::TypedModule::from_specialization(
+        db,
+        mono,
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([parsed.span_map(db)]),
+            ..Default::default()
+        },
+    )
+    .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let ir_text = print_module(&ir, output.module.op());
     assert!(
         ir_text.contains("generic_intrinsic$Nat"),
@@ -247,9 +253,15 @@ fn lower_monomorphized_source(
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output =
-        tribute_front::ast_to_ir::TypedModule::from_specialized(db, mono, Default::default())
-            .lower_to_ir(db, &mut ir, source.uri(db).as_str());
+    let output = tribute_front::ast_to_ir::TypedModule::from_specialization(
+        db,
+        mono,
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([parsed.span_map(db)]),
+            ..Default::default()
+        },
+    )
+    .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     (ir, output)
 }
 
@@ -281,16 +293,22 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         &tribute_front::resolve::Dependencies::none(),
         span_map,
     );
-    let checked = tribute_front::typeck::typecheck_module(db, &resolved, parsed.span_map(db));
+    let checked = tribute_front::typeck::typecheck_module(db, &resolved, span_map);
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
         tribute_front::monomorphize::SpecializationInput::new(db, checked, None),
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output =
-        tribute_front::ast_to_ir::TypedModule::from_specialized(db, mono, Default::default())
-            .lower_to_ir(db, &mut ir, source.uri(db).as_str());
+    let output = tribute_front::ast_to_ir::TypedModule::from_specialization(
+        db,
+        mono,
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([span_map]),
+            ..Default::default()
+        },
+    )
+    .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let declarations =
         &tribute_ir::dialect::tribute_control::operation_declarations(&ir, output.module);
     assert_eq!(

@@ -20,7 +20,6 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use self::instance::InstanceKey;
 use crate::SortedMap;
-use crate::ast::SpanMap;
 use crate::ast::{
     AbilityRow, CtorId, Decl, DeclTable, FuncDefId, NodeId, Type, TypeScheme, TypedRef,
 };
@@ -41,7 +40,6 @@ pub struct SpecializationInput<'db> {
     declarations: DeclarationTypeMetadata<'db>,
     expressions: ExpressionTypeMetadata<'db>,
     compiler_intrinsics: SortedMap<NodeId, Symbol>,
-    span_map: SpanMap,
 }
 
 impl<'db> SpecializationInput<'db> {
@@ -63,13 +61,11 @@ impl<'db> SpecializationInput<'db> {
             declarations,
             expressions: checked.expression_types(db).clone(),
             compiler_intrinsics: SortedMap::default(),
-            span_map: checked.span_map(db),
         }
     }
 
     /// Specialize `dependency`'s bodies too: its declarations come first in
-    /// the module, and its per-expression metadata and source spans under
-    /// this module's.
+    /// the module, and its per-expression metadata under this module's.
     pub fn merge_bodies(
         mut self,
         db: &'db dyn salsa::Database,
@@ -81,7 +77,6 @@ impl<'db> SpecializationInput<'db> {
         self.expressions = self
             .expressions
             .after_dependency(dependency.expression_types(db));
-        self.span_map = self.span_map.merge(&dependency.span_map(db));
         self
     }
 
@@ -102,10 +97,6 @@ impl<'db> SpecializationInput<'db> {
     pub fn declarations(&self) -> &DeclarationTypeMetadata<'db> {
         &self.declarations
     }
-
-    pub fn span_map(&self) -> &SpanMap {
-        &self.span_map
-    }
 }
 
 /// The specialization result, the only input the lowering input is built
@@ -120,8 +111,6 @@ pub struct SpecializationOutput<'db> {
     /// declarations. This is specialization metadata, not source-provenance
     /// or ownership data.
     pub compiler_intrinsics: SortedMap<NodeId, Symbol>,
-    #[returns(clone)]
-    pub span_map: SpanMap,
 }
 
 /// The metadata specialization reads and extends.
@@ -143,7 +132,6 @@ pub fn monomorphize_functions<'db>(
         declarations,
         expressions,
         compiler_intrinsics,
-        span_map,
     } = input;
     let DeclarationTypeMetadata {
         function_types,
@@ -176,7 +164,6 @@ pub fn monomorphize_functions<'db>(
         },
         metadata.expressions,
         metadata.compiler_intrinsics,
-        span_map,
     ))
 }
 

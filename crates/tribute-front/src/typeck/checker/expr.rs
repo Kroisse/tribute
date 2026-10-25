@@ -4094,7 +4094,7 @@ mod tests {
 
     /// Helper to create a TypeChecker for testing.
     fn make_test_checker(db: &dyn salsa::Database) -> TypeChecker<'_> {
-        TypeChecker::new(db, SpanMap::default())
+        TypeChecker::new(db, SpanMap::empty())
     }
 
     /// Helper to create a FunctionInferenceContext for testing.

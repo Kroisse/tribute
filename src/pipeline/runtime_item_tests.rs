@@ -393,7 +393,8 @@ fn main() -> Nil { }
                 function_types: &function_types,
             };
             let errors = check_runtime(db, &inputs, RUNTIME, &[]).expect_err("rejected");
-            let diagnostic = errors[0].diagnostic(&typed.span_map(db));
+            let span_map = tribute_front::query::span_map(db, source).expect("parsed source");
+            let diagnostic = errors[0].diagnostic(&tribute_front::ast::SpanMaps::new([span_map]));
             assert_eq!(
                 diagnostic.inner.message,
                 "runtime `rt::inferred` must have an empty ability row, written `->{}`"

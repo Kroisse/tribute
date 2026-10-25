@@ -3135,7 +3135,7 @@ mod tests {
         let mut ctx = IrLoweringCtx::new(
             db,
             path,
-            crate::ast::SpanMap::default(),
+            crate::ast::SpanMaps::default(),
             HashMap::default(),
             SortedMap::default(),
         );

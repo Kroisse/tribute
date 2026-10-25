@@ -135,8 +135,9 @@ pub fn parsed_module(
 ///
 /// The SpanMap maps NodeId → Span for looking up source locations.
 /// Use together with `parsed_module` - both are derived from the same parse.
-#[salsa::tracked(returns(clone))]
-pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<SpanMap> {
+/// Like [`parsed_module`], this borrows the field of the cached
+/// [`parsed_ast`] result.
+pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<&SpanMap> {
     parsed_ast(db, source).map(|parsed| parsed.span_map(db))
 }
 

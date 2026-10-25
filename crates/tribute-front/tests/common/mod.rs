@@ -1,6 +1,8 @@
 //\! Shared test helpers for tribute-front integration tests.
 #![allow(dead_code)]
 
+pub mod execution_log;
+
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
@@ -58,14 +60,14 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
         db,
         prelude_ast,
         env.clone(),
-        prelude_span_map.clone(),
+        prelude_span_map,
     );
 
     // Type-check once for both the exports user modules depend on and the
     // declarations specialization looks up.
-    let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map.clone());
+    let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
     let (result, exports) = checker.check_prelude(&resolved_prelude);
-    let checked = tribute_front::typeck::TypeCheckOutput::from_check(db, result, prelude_span_map);
+    let checked = tribute_front::typeck::TypeCheckOutput::from_check(db, result);
 
     Some(PreludeData {
         exports,
@@ -79,7 +81,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
 fn resolve_with_prelude<'db>(
     db: &'db dyn salsa::Database,
     ast: &tribute_front::ast::Module<tribute_front::ast::UnresolvedName>,
-    span_map: tribute_front::ast::SpanMap,
+    span_map: &'db tribute_front::ast::SpanMap,
     prelude: Option<&PreludeData<'db>>,
 ) -> (
     DeclTable<ResolvedRef<'db>>,
@@ -89,8 +91,7 @@ fn resolve_with_prelude<'db>(
         .map(|p| tribute_front::resolve::Dependencies::std(p.env))
         .unwrap_or_default();
     let env = tribute_front::resolve::build_env(db, ast, &dependencies);
-    let resolved =
-        tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map.clone());
+    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map);
     let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
     if let Some(p) = prelude {
         checker.depend_on(&p.exports);
@@ -114,12 +115,9 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     // Load prelude for operator declarations (Int::(+) etc.)
     let prelude = load_prelude(db);
 
-    let (resolved, checker) = resolve_with_prelude(db, ast, span_map.clone(), prelude.as_ref());
-    let checked = tribute_front::typeck::TypeCheckOutput::from_check(
-        db,
-        checker.check_module(&resolved),
-        span_map.clone(),
-    );
+    let (resolved, checker) = resolve_with_prelude(db, ast, span_map, prelude.as_ref());
+    let checked =
+        tribute_front::typeck::TypeCheckOutput::from_check(db, checker.check_module(&resolved));
     // Specialization looks package std's declarations up but specializes only
     // the module under test, so its output holds no prelude bodies.
     let compiler_intrinsics = prelude
@@ -138,10 +136,13 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let specialized = tribute_front::monomorphize::monomorphize_functions(db, input)
         .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let module = tribute_front::ast_to_ir::TypedModule::from_specialized(
+    let module = tribute_front::ast_to_ir::TypedModule::from_specialization(
         db,
         specialized,
-        Default::default(),
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([span_map]),
+            ..Default::default()
+        },
     )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let validation = tribute_ir::dialect::tribute_control::validate(

@@ -99,7 +99,7 @@ fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::Database
         ),
     );
 
-    let checker = TypeChecker::new(db, SpanMap::default());
+    let checker = TypeChecker::new(db, SpanMap::empty());
     let mut collected = Vec::new();
     checker.collect_univars_from_deferred_resolutions(
         &deferred_resolutions,
