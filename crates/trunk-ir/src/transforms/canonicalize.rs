@@ -519,7 +519,7 @@ mod tests {
         // iteration with zero changes. Capping the budget at 1
         // forces the run to terminate as non-fixpoint with at
         // least one fold applied — the exact case
-        // `run_cleanup_passes` now logs about.
+        // `canonicalize_pass` logs about.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %z = arith.const {value = 0} : core.i32

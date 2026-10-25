@@ -11,12 +11,16 @@ use std::borrow::Cow;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
+use itertools::Itertools;
+
 use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::{SymbolTable, link_name};
@@ -164,6 +168,56 @@ pub fn verify_boundary_exit(
     verifier.check_runtime_bindings(&ops, &functions, target);
     verifier.check_root_entry(module, &functions);
     verifier.violations
+}
+
+/// The boundary exit violations of a module, reported together.
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display(
+    "{target:?} representation/ABI boundary exit violations: {}",
+    violations.iter().format("; ")
+)]
+pub struct BoundaryExitError {
+    pub target: TargetKind,
+    pub violations: Vec<BoundaryViolation>,
+}
+
+/// Reject a module whose representation/ABI boundary exit violates the
+/// contract for `target`.
+pub fn check_boundary_exit(
+    ctx: &IrContext,
+    module: Module,
+    target: TargetKind,
+) -> Result<(), BoundaryExitError> {
+    let violations = verify_boundary_exit(ctx, module, target);
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(BoundaryExitError { target, violations })
+    }
+}
+
+/// A module pass that runs [`check_boundary_exit`]. It verifies in every
+/// build, unlike the debug verifier of a [`trunk_ir::pass::PassManager`].
+pub struct CheckBoundaryExit {
+    pub target: TargetKind,
+}
+
+impl Pass for CheckBoundaryExit {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-boundary-exit"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        check_boundary_exit(ctx, target.into(), self.target)?;
+        Ok(())
+    }
 }
 
 /// A violation found inside a type, relative to the site that uses the type.

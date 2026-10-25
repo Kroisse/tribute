@@ -19,10 +19,12 @@ use tribute_ir::calling_convention::{
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, closure, effect, tribute_rt};
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::smallvec::smallvec;
@@ -692,6 +694,33 @@ pub fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(
         }
     }
     Ok(())
+}
+
+/// A module pass that physicalizes CPS callables: it runs
+/// [`lower_cps_signatures_to_physical`], [`compose_root_entry_bridge`], and
+/// [`compose_value_delimiters`] in order. The IR satisfies the operation
+/// schemas again only after all three, so they form one pass.
+pub struct PhysicalizeCpsCallables;
+
+impl Pass for PhysicalizeCpsCallables {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "physicalize-cps-callables"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        let module = Module::from(target);
+        lower_cps_signatures_to_physical(ctx, module)?;
+        compose_root_entry_bridge(ctx, module)?;
+        compose_value_delimiters(ctx, module)?;
+        Ok(())
+    }
 }
 
 /// The terminal `Done<R>` and `Dispatch<R>` of a completion cell: `Done`

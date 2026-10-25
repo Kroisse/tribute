@@ -1,6 +1,7 @@
 use super::*;
 use crate::link::link_native_binary;
 use crate::prelude::{prelude_dependencies, prelude_exports, prelude_module};
+use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
 use salsa_test_macros::salsa_test;
 use std::ops::ControlFlow;
@@ -53,7 +54,10 @@ fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
 #[test]
 fn source_logical_root_defers_closure_storage_until_target_finalization() {
     let (mut ctx, module) = source_logical_cps_root_module("func.unreachable");
-    enter_target_closure_storage_boundary(&mut ctx, module, &mut Default::default()).unwrap();
+    let root = core_module(&ctx, module);
+    let mut pm = PassManager::new();
+    add_target_closure_storage_passes(&mut pm);
+    pm.run(&mut ctx, root, &mut Default::default()).unwrap();
     let after_abi = trunk_ir::printer::print_module(&ctx, module.op());
     assert!(after_abi.contains("closure.closure"), "{after_abi}");
 
@@ -354,7 +358,7 @@ fn boundary_exit_enforcement_rejects_any_violation() {
         tribute_passes::abi_boundary::TargetKind::Native,
         tribute_passes::abi_boundary::TargetKind::Wasm,
     ] {
-        let error = enforce_boundary_exit(&ctx, module, target)
+        let error = tribute_passes::abi_boundary::check_boundary_exit(&ctx, module, target)
             .expect_err("a forbidden attribute must fail the boundary exit");
         assert!(
             error

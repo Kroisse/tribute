@@ -707,6 +707,27 @@ pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     });
 }
 
+/// A module pass that runs [`finalize_closure_storage_layout`].
+pub struct FinalizeClosureStorageLayout;
+
+impl Pass for FinalizeClosureStorageLayout {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "finalize-closure-storage-layout"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        finalize_closure_storage_layout(ctx, target.into());
+        Ok(())
+    }
+}
+
 /// Replace every type `substitute` maps, wherever it occurs in `module`:
 /// aliases, nested type parameters and attributes, type-bearing operation
 /// attributes, results, and block arguments. The plan is complete before any
