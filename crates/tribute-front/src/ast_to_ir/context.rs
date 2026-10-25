@@ -809,17 +809,6 @@ mod tests {
             ctx.convert_logical_type(&mut ir, AstType::new(&db, TypeKind::Error)),
             ctx.nil_type(&mut ir)
         );
-        let applied_forward = AstType::new(
-            &db,
-            TypeKind::App {
-                ctor: forward,
-                args: vec![int],
-            },
-        );
-        assert_eq!(
-            ctx.convert_logical_type(&mut ir, applied_forward),
-            ctx.adt_typeref(&mut ir, &nominal_name)
-        );
     }
 
     #[test]

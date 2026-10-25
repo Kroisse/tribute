@@ -229,20 +229,6 @@ pub fn rewrite_type<'db>(
             }
             Type::new(db, TypeKind::Tuple(new_elems))
         }
-        TypeKind::App { ctor, args } => {
-            let new_ctor = rewrite_type(db, *ctor, map);
-            let new_args: Vec<_> = args.iter().map(|a| rewrite_type(db, *a, map)).collect();
-            if new_ctor == *ctor && new_args == *args {
-                return ty;
-            }
-            Type::new(
-                db,
-                TypeKind::App {
-                    ctor: new_ctor,
-                    args: new_args,
-                },
-            )
-        }
         TypeKind::Continuation {
             arg,
             result,

@@ -38,10 +38,6 @@ fn type_contains<'db>(
         TypeKind::Tuple(elements) => elements
             .iter()
             .any(|element| type_contains(db, *element, predicate)),
-        TypeKind::App { ctor, args } => {
-            type_contains(db, *ctor, predicate)
-                || args.iter().any(|arg| type_contains(db, *arg, predicate))
-        }
         TypeKind::Continuation {
             arg,
             result,

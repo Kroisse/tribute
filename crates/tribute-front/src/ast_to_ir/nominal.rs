@@ -278,7 +278,6 @@ impl<'db> NominalTypes<'db> {
                     .collect::<Vec<_>>();
                 tribute_ir::dialect::tribute_control::logical_tuple_type(ir, &elements)
             }
-            TypeKind::App { ctor, .. } => self.convert_logical_type(ir, *ctor),
             TypeKind::Continuation { arg, result, .. } => {
                 let arg = self.convert_logical_type(ir, *arg);
                 let result = self.convert_logical_type(ir, *result);
@@ -324,11 +323,6 @@ impl<'db> NominalTypes<'db> {
                         .map(|element| self.logical_type_key(*element)),
                 );
                 logical_key("tuple", parts)
-            }
-            TypeKind::App { ctor, args } => {
-                let mut parts = vec![args.len().to_string(), self.logical_type_key(*ctor)];
-                parts.extend(args.iter().map(|arg| self.logical_type_key(*arg)));
-                logical_key("app", parts)
             }
             TypeKind::Continuation { arg, result, .. } => logical_key(
                 "resume",
@@ -392,14 +386,6 @@ impl<'db> NominalTypes<'db> {
                         .map(|element| self.source_type_key(*element, row_vars)),
                 );
                 logical_key("tuple", parts)
-            }
-            TypeKind::App { ctor, args } => {
-                let mut parts = vec![
-                    args.len().to_string(),
-                    self.source_type_key(*ctor, row_vars),
-                ];
-                parts.extend(args.iter().map(|arg| self.source_type_key(*arg, row_vars)));
-                logical_key("app", parts)
             }
             TypeKind::Continuation {
                 arg,
@@ -679,16 +665,6 @@ mod tests {
         let keys = [
             AstType::new(&db, TypeKind::Tuple(vec![nat, int])),
             AstType::new(&db, TypeKind::Tuple(vec![int, nat])),
-            AstType::new(
-                &db,
-                TypeKind::App {
-                    ctor: named(crate::ast::TypeDefId::synthetic(
-                        &db,
-                        trunk_ir::SymbolPath::new(["a", "Box"]),
-                    )),
-                    args: vec![nat],
-                },
-            ),
             AstType::new(
                 &db,
                 TypeKind::Continuation {

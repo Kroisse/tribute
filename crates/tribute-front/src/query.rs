@@ -490,9 +490,6 @@ fn explicit() ->{} Nil { Nil }
                 args.iter().any(|a| contains_univar(db, *a))
             }
             crate::ast::TypeKind::Tuple(elems) => elems.iter().any(|e| contains_univar(db, *e)),
-            crate::ast::TypeKind::App { ctor, args } => {
-                contains_univar(db, *ctor) || args.iter().any(|a| contains_univar(db, *a))
-            }
             crate::ast::TypeKind::Continuation {
                 arg,
                 result,

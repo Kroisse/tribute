@@ -50,12 +50,6 @@ impl fmt::Display for TypeKind<'_> {
             Self::BoundVar { index } => write!(f, "_{}", index),
             Self::LocalBoundVar { index, .. } => write!(f, "_local{}", index),
             Self::UniVar { .. } => f.write_str("_"),
-            Self::App { ctor, args } => {
-                let args = args
-                    .iter()
-                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                write!(f, "{}({args})", ctor.kind(db))
-            }
             Self::Continuation { arg, result, .. } => {
                 write!(f, "Continuation({} -> {})", arg.kind(db), result.kind(db))
             }

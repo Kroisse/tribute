@@ -114,29 +114,6 @@ impl<'db> TypeSolver<'db> {
             }
 
             (
-                &TypeKind::App {
-                    ctor: c1,
-                    args: ref a1,
-                },
-                &TypeKind::App {
-                    ctor: c2,
-                    args: ref a2,
-                },
-            ) => {
-                self.unify_types(c1, c2)?;
-                if a1.len() != a2.len() {
-                    return Err(SolveError::TypeMismatch {
-                        expected: t1,
-                        actual: t2,
-                    });
-                }
-                for (a1, a2) in a1.iter().zip(a2.iter()) {
-                    self.unify_types(*a1, *a2)?;
-                }
-                Ok(())
-            }
-
-            (
                 &TypeKind::Continuation {
                     arg: a1,
                     result: r1,
@@ -201,9 +178,6 @@ impl<'db> TypeSolver<'db> {
                     || self.occurs_in_ability_row(var, *effect)
             }
             TypeKind::Tuple(elements) => elements.iter().any(|e| self.occurs_in(var, *e)),
-            TypeKind::App { ctor, args } => {
-                self.occurs_in(var, *ctor) || args.iter().any(|a| self.occurs_in(var, *a))
-            }
             TypeKind::Continuation {
                 arg,
                 result,
@@ -313,14 +287,6 @@ impl<'db> TypeSolver<'db> {
                         .zip(p2.iter())
                         .all(|(x, y)| self.types_unifiable(*x, *y))
                     && self.types_unifiable(*r1, *r2)
-            }
-            (TypeKind::App { ctor: c1, args: a1 }, TypeKind::App { ctor: c2, args: a2 }) => {
-                self.types_unifiable(*c1, *c2)
-                    && a1.len() == a2.len()
-                    && a1
-                        .iter()
-                        .zip(a2.iter())
-                        .all(|(x, y)| self.types_unifiable(*x, *y))
             }
             (
                 TypeKind::Continuation {
