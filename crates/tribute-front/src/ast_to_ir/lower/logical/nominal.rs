@@ -1,5 +1,14 @@
 //! Nominal layouts and the logical types of signatures and expressions.
-use super::*;
+
+use rustc_hash::FxHashMap as HashMap;
+use trunk_ir::context::IrContext;
+use trunk_ir::refs::TypeRef;
+use trunk_ir::{Symbol, SymbolPath};
+
+use crate::SortedMap;
+use crate::ast::{CtorId, Decl, DeclEntry, Expr, FuncDecl, TypeKind, TypedRef};
+use crate::ast_to_ir::context::IrLoweringCtx;
+use crate::ast_to_ir::lower::{FuncSignature, IrBuilder};
 
 /// Register nominal layouts used exclusively by source-logical lowering.
 ///

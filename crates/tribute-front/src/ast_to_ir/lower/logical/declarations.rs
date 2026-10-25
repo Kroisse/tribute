@@ -1,6 +1,26 @@
 //! Declarations the logical module generates: ability operations, struct
 //! accessors, extern and prelude functions.
-use super::*;
+
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use salsa::Accumulator;
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_ir::dialect::tribute_control::{
+    CompilerIntrinsicDeclaration, OperationDeclaration, Row, RowBinder,
+};
+use tribute_ir::dialect::{adt, tribute_control};
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
+use trunk_ir::types::{Attribute, Location};
+use trunk_ir::{Symbol, SymbolPath};
+
+use crate::SortedMap;
+use crate::ast::{CtorId, Decl, DeclEntry, ExternFuncDecl, OpDeclKind, TypedRef};
+use crate::ast_to_ir::context::{IrLoweringCtx, LogicalGeneratedSignature};
+use crate::ast_to_ir::lower::{FuncSignature, IrBuilder};
+
+use super::callable::operation_kind_text;
+use super::{local_callables, op, result};
 
 pub(super) struct Declarations<'db> {
     // TypeRef is an arena index and therefore has deterministic total order only

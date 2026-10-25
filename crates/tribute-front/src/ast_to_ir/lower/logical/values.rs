@@ -1,6 +1,29 @@
 //! Values and patterns: expressions, constructors, aggregates, case chains,
 //! and bindings.
-use super::*;
+
+use rustc_hash::FxHashMap as HashMap;
+use tribute_ir::dialect::{adt, list, tribute_control};
+use trunk_ir::Symbol;
+use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::dialect::{arith, scf};
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
+use trunk_ir::types::{Attribute, Location};
+
+use crate::ast::{
+    AbilityRow, Arm, Expr, ExprKind, FieldInit, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind,
+    TypedRef,
+};
+use crate::ast_to_ir::context::IrLoweringCtx;
+use crate::ast_to_ir::lower::IrBuilder;
+
+use super::callable::{
+    CallPosition, RowArguments, attach_evidence_plan, ends_with_tail_call, lower_become,
+    lower_call, lower_function_ref, lower_handle, lower_lambda,
+};
+use super::declarations::Declarations;
+use super::local_callables;
+use super::nominal::expr_type_for_id;
 
 pub(super) fn lower_expr<'db>(
     builder: &mut IrBuilder<'_, 'db>,

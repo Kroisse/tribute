@@ -1,6 +1,27 @@
 //! Callables and control: functions, calls, `become`, lambdas, handlers,
 //! evidence plans, and row arguments.
-use super::*;
+
+use salsa::Accumulator;
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_ir::dialect::tribute_control;
+use tribute_ir::dialect::tribute_control::{OperationDeclaration, Row, RowBinder};
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
+use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
+use trunk_ir::types::{Attribute, Location};
+use trunk_ir::{Symbol, SymbolPath};
+
+use crate::ast::{
+    Decl, DeclEntry, Expr, ExprKind, FuncDecl, HandlerArm, HandlerKind, OpDeclKind, ResolvedRef,
+    TypeKind, TypedRef,
+};
+use crate::ast_to_ir::context::IrLoweringCtx;
+use crate::ast_to_ir::lower::{FuncSignature, IrBuilder};
+
+use super::declarations::{Declarations, PerformMetadata, ensure_prelude_declaration};
+use super::nominal::{expr_type, expr_type_for_id, function_signature};
+use super::values::{bind_pattern, lower_expr, lower_local_reference};
+use super::{local_callables, op, result};
 
 /// Whether lowering ended `block` with a source `become`. Such a block has
 /// already left its callable and takes no `return` or `yield`.

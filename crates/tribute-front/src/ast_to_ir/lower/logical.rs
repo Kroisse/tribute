@@ -4,33 +4,24 @@
 //! dialects; shared CPS construction belongs to `tribute-passes`.
 
 use rustc_hash::FxHashMap as HashMap;
-use rustc_hash::FxHashSet as HashSet;
-
-use salsa::Accumulator;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_ir::dialect::adt;
-use tribute_ir::dialect::{
-    list,
-    tribute_control::{self, CompilerIntrinsicDeclaration, OperationDeclaration, Row, RowBinder},
-};
-use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
-use trunk_ir::dialect::{arith, core, scf};
-use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{BlockRef, OpRef, PathRef, TypeRef, ValueRef};
+use tribute_ir::dialect::tribute_control;
+use trunk_ir::context::{BlockData, IrContext, OperationDataBuilder, RegionData};
+use trunk_ir::dialect::core;
+use trunk_ir::refs::{BlockRef, OpRef, PathRef, ValueRef};
 use trunk_ir::rewrite::Module as IrModule;
-use trunk_ir::types::{Attribute, Location};
+use trunk_ir::types::Location;
 use trunk_ir::{Symbol, SymbolPath};
 
-use crate::SortedMap;
-use crate::ast::{
-    AbilityRow, Arm, CtorId, Decl, DeclEntry, Expr, ExprKind, ExternFuncDecl, FieldInit, FuncDecl,
-    HandlerArm, HandlerKind, OpDeclKind, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind,
-    TypedRef,
-};
+use crate::ast::{Decl, DeclEntry, TypedRef};
+use crate::ast_to_ir::context::IrLoweringCtx;
+use crate::ast_to_ir::{FrontendIrModule, LoweringInput};
 
-use super::super::context::{IrLoweringCtx, LogicalGeneratedSignature};
-use super::super::{FrontendIrModule, LoweringInput};
-use super::{FuncSignature, IrBuilder};
+use callable::{lower_function, plan_local_callables, prescan_row_binders, row_effects};
+use declarations::{
+    Declarations, instance_operations, lower_extern, lower_struct_accessors,
+    prescan_source_functions, prescan_struct_accessor_signatures,
+};
+use nominal::{collect_logical_nominal_identities, prescan_logical_nominal_layouts};
 
 mod callable;
 mod declarations;
@@ -39,10 +30,6 @@ mod nominal;
 mod values;
 
 pub(super) use callable::emit_named_call;
-use callable::*;
-use declarations::*;
-use nominal::*;
-use values::*;
 
 fn op(
     ir: &mut IrContext,
@@ -217,7 +204,13 @@ fn lower_decl<'db>(
 
 #[cfg(test)]
 mod tests {
+    use super::callable::adapt_operation_arguments_or_recover;
     use super::*;
+    use crate::SortedMap;
+    use crate::ast_to_ir::lower::IrBuilder;
+    use tribute_core::diagnostic::Diagnostic;
+    use tribute_ir::dialect::adt;
+    use tribute_ir::dialect::tribute_control::OperationDeclaration;
     use trunk_ir::context::BlockData;
     use trunk_ir::location::Span;
 
