@@ -245,7 +245,7 @@ pub(crate) fn fold_ops_for_dialect(dialect: &'static str) -> impl Iterator<Item 
 /// or explicitly `let _ = ...` to opt out).
 #[must_use]
 #[derive(Debug, Clone, Copy)]
-pub struct CanonicalizeResult {
+struct CanonicalizeResult {
     pub iterations: usize,
     pub total_changes: usize,
     pub reached_fixpoint: bool,
@@ -265,7 +265,7 @@ fn result_from_apply(result: crate::rewrite::ApplyResult) -> CanonicalizeResult 
 }
 
 /// Run canonicalization to a fixed point within one rewrite scope.
-pub fn canonicalize<S: RewriteScope>(ctx: &mut IrContext, scope: S) -> CanonicalizeResult {
+fn canonicalize<S: RewriteScope>(ctx: &mut IrContext, scope: S) -> CanonicalizeResult {
     result_from_apply(canonicalize_applicator().apply_partial(ctx, scope))
 }
 

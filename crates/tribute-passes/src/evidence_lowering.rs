@@ -50,7 +50,7 @@ pub struct EvidenceRuntime {
 ///
 /// Run once on the module before [`LowerEvidence`]. A function no operation
 /// needs is not looked up, so a missing one fails only when used.
-pub fn prepare_evidence_runtime(
+pub(crate) fn prepare_evidence_runtime(
     ctx: &IrContext,
     module: Module,
 ) -> Result<EvidenceRuntime, RuntimeFunctionError> {
@@ -75,7 +75,7 @@ pub fn prepare_evidence_runtime(
 
 /// Lower evidence operations in one function body with the functions of
 /// `runtime`, from [`prepare_evidence_runtime`] on the containing module.
-pub fn lower_evidence_func(
+pub(crate) fn lower_evidence_func(
     ctx: &mut IrContext,
     func_op: func::Func,
     runtime: &EvidenceRuntime,
@@ -101,8 +101,8 @@ pub fn lower_evidence_func(
 }
 
 /// Lower evidence operations in every function of the module with the
-/// runtime functions [`prepare_evidence_runtime`] finds there, then remove the
-/// ability declarations, which nothing names afterwards.
+/// evidence runtime functions the module defines, then remove the ability
+/// declarations, which nothing names afterwards.
 pub struct LowerEvidence;
 
 impl Pass for LowerEvidence {

@@ -90,7 +90,7 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
 /// every step shares `analyses`. Each step reads only its input IR: a step
 /// that relies on a module-level resource, such as a data segment, an import,
 /// or linear memory, declares it in the IR.
-pub fn lower_to_wasm(
+pub(crate) fn lower_to_wasm(
     ctx: &mut IrContext,
     module: Module,
     analyses: &mut AnalysisCache,
@@ -467,7 +467,10 @@ impl Pass for ConvertStructLayouts {
 }
 
 /// Assign module-local GC indices after all type-conversion materialization.
-pub fn finalize_wasm_gc_types(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+pub(crate) fn finalize_wasm_gc_types(
+    ctx: &mut IrContext,
+    module: Module,
+) -> Result<(), ConversionError> {
     trunk_ir_wasm_backend::passes::wasm_gc_to_wasm::lower(ctx, module);
     PatternApplicator::new(TypeConverter::new())
         .with_target(wasm_emission_ready_target())
@@ -478,7 +481,14 @@ pub fn finalize_wasm_gc_types(ctx: &mut IrContext, module: Module) -> Result<(),
     Ok(())
 }
 
-/// A module pass that runs [`lower_to_wasm`].
+/// Run the full WASM lowering pipeline on arena IR.
+///
+/// The structured-control boundary check runs first, before any mutation.
+/// The lowering steps then run as passes of one [`PassManager`], so a debug
+/// build verifies IR invariants after every step that changed the IR, and
+/// every step shares the run's analyses. Each step reads only its input IR:
+/// a step that relies on a module-level resource, such as a data segment, an
+/// import, or linear memory, declares it in the IR.
 pub struct LowerToWasm;
 
 impl Pass for LowerToWasm {
@@ -504,7 +514,7 @@ impl Pass for LowerToWasm {
 /// result types, materializes real representation changes, and elides WasmGC
 /// reference upcasts. [`trunk_ir::conversion::ReconcileUnrealizedCasts`] then
 /// folds the identities left behind, and the emission boundary in
-/// [`finalize_wasm_gc_types`] rejects any cast that remains.
+/// [`FinalizeWasmGcTypes`] rejects any cast that remains.
 pub struct LegalizeUnrealizedCasts;
 
 impl Pass for LegalizeUnrealizedCasts {
@@ -532,7 +542,8 @@ impl Pass for LegalizeUnrealizedCasts {
     }
 }
 
-/// A module pass that runs [`finalize_wasm_gc_types`].
+/// Assign module-local GC indices after all type-conversion materialization,
+/// and reject any operation the Wasm emitter does not accept.
 pub struct FinalizeWasmGcTypes;
 
 impl Pass for FinalizeWasmGcTypes {

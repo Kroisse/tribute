@@ -41,13 +41,15 @@ use crate::dialect::{arith, cf, func, scf};
 use crate::ops::DialectOp;
 use crate::pass::{Pass, PassRunResult};
 use crate::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+#[cfg(test)]
 use crate::rewrite::Module;
 use crate::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::types::{Attribute, Location};
 use crate::walk::{WalkAction, walk_op};
 
 /// Lower all `scf` operations in a module to `cf` operations.
-pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module, analyses: &mut AnalysisCache) {
+#[cfg(test)]
+fn lower_scf_to_cf(ctx: &mut IrContext, module: Module, analyses: &mut AnalysisCache) {
     let body = match module.body(ctx) {
         Some(r) => r,
         None => return,
@@ -56,7 +58,7 @@ pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module, analyses: &mut Analy
 }
 
 /// Lower all `scf` operations in one function to `cf` operations.
-pub fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func, analyses: &mut AnalysisCache) {
+fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func, analyses: &mut AnalysisCache) {
     let Some(body) = func.body_if_present(ctx) else {
         return;
     };

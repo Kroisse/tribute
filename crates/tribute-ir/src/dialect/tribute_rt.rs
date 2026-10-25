@@ -398,15 +398,27 @@ mod tests {
 
     mod fold {
         use trunk_ir::IrContext;
+        use trunk_ir::dialect::{core, func};
+        use trunk_ir::ops::DialectOp;
         use trunk_ir::parser::parse_test_module;
+        use trunk_ir::pass::PassManager;
         use trunk_ir::printer::print_module;
-        use trunk_ir::transforms::canonicalize::canonicalize;
+        use trunk_ir::transforms::Canonicalize;
 
-        fn run(input: &str) -> (String, usize) {
+        /// Canonicalize every function; the flag tells whether the IR
+        /// changed.
+        fn run(input: &str) -> (String, bool) {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, input);
-            let changes = canonicalize(&mut ctx, module).total_changes;
-            (print_module(&ctx, module.op()), changes)
+            let before = print_module(&ctx, module.op());
+            let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+            let mut pm = PassManager::new();
+            pm.nest::<func::Func>().add_pass(Canonicalize);
+            pm.run(&mut ctx, root, &mut Default::default())
+                .expect("canonicalize");
+            let after = print_module(&ctx, module.op());
+            let changed = after != before;
+            (after, changed)
         }
 
         #[test]
@@ -417,7 +429,7 @@ mod tests {
                 ("box_float", "unbox_float", "core.f64"),
                 ("box_bool", "unbox_bool", "core.i1"),
             ] {
-                let (text, changes) = run(&format!(
+                let (text, changed) = run(&format!(
                     r#"core.module @test {{
   func.func @f(%x: {ty}) -> {ty} {{
     %b = tribute_rt.{boxed} %x : tribute_rt.anyref
@@ -426,46 +438,46 @@ mod tests {
   }}
 }}"#
                 ));
-                assert!(changes >= 1, "{unboxed}");
+                assert!(changed, "{unboxed}");
                 assert!(!text.contains(unboxed), "{unboxed}: {text}");
             }
         }
 
         #[test]
         fn unbox_of_a_different_box_kind_is_not_folded() {
-            let (text, changes) = run(r#"core.module @test {
+            let (text, changed) = run(r#"core.module @test {
   func.func @f(%x: core.i64) -> core.f64 {
     %b = tribute_rt.box_int %x : tribute_rt.anyref
     %u = tribute_rt.unbox_float %b : core.f64
     func.return %u
   }
 }"#);
-            assert_eq!(changes, 0);
+            assert!(!changed);
             assert!(text.contains("unbox_float"));
         }
 
         #[test]
         fn unbox_of_a_mistyped_box_is_not_folded() {
-            let (text, changes) = run(r#"core.module @test {
+            let (text, changed) = run(r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
     %b = tribute_rt.box_int %x : tribute_rt.anyref
     %u = tribute_rt.unbox_int %b : core.i64
     func.return %u
   }
 }"#);
-            assert_eq!(changes, 0);
+            assert!(!changed);
             assert!(text.contains("unbox_int"));
         }
 
         #[test]
         fn unbox_of_a_block_argument_is_not_folded() {
-            let (text, changes) = run(r#"core.module @test {
+            let (text, changed) = run(r#"core.module @test {
   func.func @f(%b: tribute_rt.anyref) -> core.i64 {
     %u = tribute_rt.unbox_int %b : core.i64
     func.return %u
   }
 }"#);
-            assert_eq!(changes, 0);
+            assert!(!changed);
             assert!(text.contains("unbox_int"));
         }
     }

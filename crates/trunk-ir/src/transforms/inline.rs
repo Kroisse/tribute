@@ -297,7 +297,7 @@ pub struct InlineResult {
 /// same phase (e.g. a future canonicalize) can share the cached call
 /// graph. See [`crate::analysis`] module docs for the orchestration
 /// convention.
-pub fn inline_functions(
+fn inline_functions(
     ctx: &mut IrContext,
     module: Module,
     am: &mut crate::analysis::AnalysisCache,
@@ -326,7 +326,7 @@ pub fn inline_functions(
 /// wrapper chain (e.g. `a → b → c → … → leaf`) can therefore require
 /// as many outer iterations as its depth, which the loop handles
 /// rather than returning a silent partial result.
-pub fn inline_functions_with_config(
+fn inline_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: InlineConfig,
@@ -375,7 +375,7 @@ pub fn inline_functions_with_config(
 /// N times over, splicing a potentially large callee body into every
 /// caller.
 ///
-/// [`inline_functions_with_config`] handles this by rebuilding the
+/// [`InlineFunctions`] handles this by rebuilding the
 /// graph between applicator iterations. Other orchestrators that
 /// compose [`InlineCallSite`] with additional patterns should either
 /// do the same (rebuild + re-register) or accept the caveat that the
@@ -1495,7 +1495,9 @@ mod pass {
     }
 }
 
-/// A module pass that runs [`inline_functions`].
+/// Run one round of function inlining over the module with the default
+/// configuration. The run's analyses provide the [`CallGraph`], which is
+/// invalidated iff at least one call site was rewritten.
 pub struct InlineFunctions;
 
 impl Pass for InlineFunctions {

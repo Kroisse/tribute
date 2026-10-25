@@ -109,7 +109,7 @@ struct RootFrameContract {
 ///
 /// Validation and conversion planning finish before existing IR is mutated, so
 /// rejected modules remain textually unchanged.
-pub fn lower_cps_signatures_to_physical(
+pub(crate) fn lower_cps_signatures_to_physical(
     ctx: &mut IrContext,
     module: Module,
 ) -> Result<(), TargetAbiError> {
@@ -420,10 +420,7 @@ fn validate_root_entry(
 /// worker's convention-specific inputs. Nothing in the module references the
 /// wrapper, so target entry generation adapts it in place and never reads the
 /// source calling convention.
-pub fn compose_root_entry_bridge(
-    ctx: &mut IrContext,
-    module: Module,
-) -> Result<(), TargetAbiError> {
+fn compose_root_entry_bridge(ctx: &mut IrContext, module: Module) -> Result<(), TargetAbiError> {
     let cps_root = validate_root_entry(ctx, module, ContractPhase::Physical)?;
     let Some(module_block) = module.first_block(ctx) else {
         return Ok(());
@@ -580,7 +577,7 @@ fn build_cps_root_call(
 /// Runs after physicalization, like the root bridge: the body and the frame
 /// members have empty results, so the body is entered by an ordinary call
 /// that returns when its proper tail chain ends.
-pub fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), TargetAbiError> {
+fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), TargetAbiError> {
     let Some(module_block) = module.first_block(ctx) else {
         return Ok(());
     };
@@ -696,10 +693,10 @@ pub fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(
     Ok(())
 }
 
-/// A module pass that physicalizes CPS callables: it runs
-/// [`lower_cps_signatures_to_physical`], [`compose_root_entry_bridge`], and
-/// [`compose_value_delimiters`] in order. The IR satisfies the operation
-/// schemas again only after all three, so they form one pass.
+/// Physicalize CPS callables: lower their signatures to the physical
+/// contract, compose the root entry bridge, and compose the value
+/// delimiters, in that order. The IR satisfies the operation schemas again
+/// only after all three, so they form one pass.
 pub struct PhysicalizeCpsCallables;
 
 impl Pass for PhysicalizeCpsCallables {

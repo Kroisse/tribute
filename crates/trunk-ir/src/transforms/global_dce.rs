@@ -57,7 +57,8 @@ pub struct GlobalDceResult {
 }
 
 /// Eliminate unreachable functions from a module using default configuration.
-pub fn eliminate_dead_functions(
+#[cfg(test)]
+fn eliminate_dead_functions(
     ctx: &mut IrContext,
     module: Module,
     analyses: &mut AnalysisCache,
@@ -67,7 +68,7 @@ pub fn eliminate_dead_functions(
 
 /// Eliminate unreachable functions with custom configuration, using the
 /// [`SymbolTable`] and [`CallGraph`] cached in `analyses`.
-pub fn eliminate_dead_functions_with_config(
+fn eliminate_dead_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: GlobalDceConfig,
@@ -217,8 +218,9 @@ fn compute_reachable(graph: &CallGraph, roots: HashSet<OpRef>) -> HashSet<OpRef>
 #[cfg(test)]
 mod prop_tests;
 
-/// A module pass that runs [`eliminate_dead_functions_with_config`] with
-/// `config`.
+/// Remove the function definitions unreachable from the module's roots and
+/// from `config`'s extra entry points, using the [`SymbolTable`] and
+/// [`CallGraph`] cached in the run's analyses.
 pub struct GlobalDce {
     pub config: GlobalDceConfig,
 }

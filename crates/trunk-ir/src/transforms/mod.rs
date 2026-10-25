@@ -13,15 +13,11 @@ pub mod scf_control_flow;
 pub mod scf_to_cf;
 
 pub use call_graph::{CallGraph, build_call_graph, recursive_functions, tarjan_scc};
-pub use canonicalize::{Canonicalize, CanonicalizeResult, canonicalize};
+pub use canonicalize::Canonicalize;
 pub use dce::{DceConfig, DceResult, EliminateDeadCode, eliminate_dead_code};
 pub use global_dce::{
-    GlobalDceConfig, GlobalDceResult, eliminate_dead_definitions,
-    eliminate_dead_definitions_with_config, eliminate_dead_functions,
-    eliminate_dead_functions_with_config, reachable_definitions_with_config,
+    GlobalDce, GlobalDceConfig, GlobalDceResult, eliminate_dead_definitions,
+    eliminate_dead_definitions_with_config, reachable_definitions_with_config,
 };
-pub use inline::{
-    InlineConfig, InlineError, InlineResult, inline_functions, inline_functions_with_config,
-    inline_single_call,
-};
-pub use scf_to_cf::{ScfToCf, lower_scf_to_cf, lower_scf_to_cf_func};
+pub use inline::{InlineConfig, InlineError, InlineFunctions, InlineResult, inline_single_call};
+pub use scf_to_cf::ScfToCf;

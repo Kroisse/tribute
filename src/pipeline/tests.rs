@@ -11,6 +11,18 @@ use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectType;
 use trunk_ir::walk::{WalkAction, walk_region};
 
+/// Run one module pass on `module`, without a verifier.
+fn run_pass(
+    ctx: &mut IrContext,
+    module: Module,
+    pass: impl trunk_ir::pass::Pass<Target = core_dialect::Module> + 'static,
+) -> PassResult {
+    let root = core_module(ctx, module);
+    let mut pm = PassManager::new();
+    pm.add_pass(pass);
+    pm.run(ctx, root, &mut AnalysisCache::new())
+}
+
 /// The declaration of `entry` with its qualified name, if it has one.
 fn declaration_with_name<'a, 'db>(
     entry: &'a tribute_front::ast::DeclEntry<tribute_front::ast::TypedRef<'db>>,
@@ -61,7 +73,12 @@ fn source_logical_root_defers_closure_storage_until_target_finalization() {
     let after_abi = trunk_ir::printer::print_module(&ctx, module.op());
     assert!(after_abi.contains("closure.closure"), "{after_abi}");
 
-    tribute_passes::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
+    run_pass(
+        &mut ctx,
+        module,
+        tribute_passes::closure_lower::FinalizeClosureStorageLayout,
+    )
+    .unwrap();
 
     let physical = trunk_ir::printer::print_module(&ctx, module.op());
     assert!(!physical.contains("closure.closure"), "{physical}");
@@ -358,8 +375,12 @@ fn boundary_exit_enforcement_rejects_any_violation() {
         tribute_passes::abi_boundary::TargetKind::Native,
         tribute_passes::abi_boundary::TargetKind::Wasm,
     ] {
-        let error = tribute_passes::abi_boundary::check_boundary_exit(&ctx, module, target)
-            .expect_err("a forbidden attribute must fail the boundary exit");
+        let error = run_pass(
+            &mut ctx,
+            module,
+            tribute_passes::abi_boundary::CheckBoundaryExit { target },
+        )
+        .expect_err("a forbidden attribute must fail the boundary exit");
         assert!(
             error
                 .to_string()
@@ -2228,8 +2249,7 @@ fn types_surviving_wasm_lowering(
         .expect("shared pipeline must succeed")
         .expect("fixture must lower");
     run_wasm_target_pipeline(&mut ctx, module).expect("Wasm boundary");
-    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut AnalysisCache::new())
-        .expect("Wasm lowering");
+    run_pass(&mut ctx, module, tribute_passes::wasm::lower::LowerToWasm).expect("Wasm lowering");
 
     let mut sites = std::collections::BTreeSet::new();
     for (name, ty) in ctx.type_aliases().iter().cloned() {
@@ -2369,8 +2389,7 @@ fn wasm_lowering_carries_only_preserved_language_metadata(db: &salsa::DatabaseIm
         .expect("shared pipeline must succeed")
         .expect("fixture must lower");
     run_wasm_target_pipeline(&mut ctx, module).expect("Wasm boundary");
-    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut AnalysisCache::new())
-        .expect("Wasm lowering");
+    run_pass(&mut ctx, module, tribute_passes::wasm::lower::LowerToWasm).expect("Wasm lowering");
 
     // Wasm lowering copies operation attributes without interpreting
     // them, so what it carries is exactly what the boundary let through.

@@ -24,7 +24,7 @@ use crate::bytes_intrinsic::{self, BytesIntrinsicError};
 const GET_OR_PANIC_FN: &str = "__tribute_bytes_get_or_panic";
 
 /// Lower calls to the bytes intrinsic to calls to the native runtime.
-pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicError> {
+fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicError> {
     let mut lowered = false;
     bytes_intrinsic::lower_get_or_panic(ctx, module, |ctx, call| {
         lowered = true;
@@ -36,7 +36,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicEr
     Ok(())
 }
 
-/// A module pass that runs [`lower`].
+/// Lower calls to the bytes intrinsic to calls to the native runtime.
 pub struct LowerBytesIntrinsics;
 
 impl Pass for LowerBytesIntrinsics {
