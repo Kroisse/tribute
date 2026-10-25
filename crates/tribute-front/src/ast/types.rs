@@ -124,14 +124,6 @@ pub enum TypeKind<'db> {
     /// Tuple type.
     Tuple(Vec<Type<'db>>),
 
-    /// Type application (for higher-kinded types).
-    App {
-        /// The type constructor (e.g., `List`)
-        ctor: Type<'db>,
-        /// The type arguments
-        args: Vec<Type<'db>>,
-    },
-
     /// Continuation type for effect handlers.
     ///
     /// Represents a captured continuation that can be resumed with a value.
@@ -409,37 +401,18 @@ impl<'db> TypeSchemeBuilder<'db> {
 pub struct TypeParam {
     /// Optional name for the type parameter (for error messages).
     pub name: Option<Symbol>,
-    /// Optional kind constraint (for higher-kinded types).
-    pub kind: Option<Kind>,
 }
 
 impl TypeParam {
-    /// Create an unnamed type parameter with default kind.
+    /// Create an unnamed type parameter.
     pub fn anonymous() -> Self {
-        Self {
-            name: None,
-            kind: None,
-        }
+        Self { name: None }
     }
 
-    /// Create a named type parameter with default kind.
+    /// Create a named type parameter.
     pub fn named(name: Symbol) -> Self {
-        Self {
-            name: Some(name),
-            kind: None,
-        }
+        Self { name: Some(name) }
     }
-}
-
-/// Kind (type of types) for higher-kinded type support.
-///
-/// Currently simple, can be extended for full higher-kinded polymorphism.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Kind {
-    /// The kind of concrete types (e.g., Int, Bool, List(Int)).
-    Type,
-    /// Function kind: `* -> *` for type constructors like `List`.
-    Arrow(Box<Kind>, Box<Kind>),
 }
 
 /// The ability row of a function type: the ability instances a function may
@@ -531,12 +504,6 @@ pub fn collect_row_vars<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Vec
                 }
                 collect_type(db, *result, vars);
                 collect_row(db, *effect, vars);
-            }
-            TypeKind::App { ctor, args } => {
-                collect_type(db, *ctor, vars);
-                for arg in args {
-                    collect_type(db, *arg, vars);
-                }
             }
             TypeKind::Continuation {
                 arg,

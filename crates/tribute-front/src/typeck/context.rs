@@ -81,8 +81,6 @@ pub fn parameter_type_matches<'db>(
             TypeKind::Func { params: actual, .. },
         ) => declared.len() == actual.len(),
         (TypeKind::Tuple(declared), TypeKind::Tuple(actual)) => declared.len() == actual.len(),
-        (TypeKind::App { ctor, .. }, _) => parameter_type_matches(db, *ctor, actual),
-        (_, TypeKind::App { ctor, .. }) => parameter_type_matches(db, declared, *ctor),
         (TypeKind::Named { id: left, .. }, TypeKind::Named { id: right, .. }) => left == right,
         (left, right) => {
             left.primitive_name().is_some() && left.primitive_name() == right.primitive_name()
@@ -1149,12 +1147,17 @@ mod tests {
 
     /// Test helper: create a Named type from a string.
     fn named<'db>(db: &'db dyn salsa::Database, name: &str) -> Type<'db> {
+        applied(db, name, vec![])
+    }
+
+    /// Test helper: the synthetic nominal type `name` applied to `args`.
+    fn applied<'db>(db: &'db dyn salsa::Database, name: &str, args: Vec<Type<'db>>) -> Type<'db> {
         Type::new(
             db,
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(db, trunk_ir::SymbolPath::new([name])),
                 name: Symbol::new(name),
-                args: vec![],
+                args,
             },
         )
     }
@@ -1182,15 +1185,7 @@ mod tests {
         let bool = Type::new(&db, TypeKind::Bool);
         let foo = named(&db, "Foo");
         let bar = named(&db, "Bar");
-        let app = |ctor, arg| {
-            Type::new(
-                &db,
-                TypeKind::App {
-                    ctor,
-                    args: vec![arg],
-                },
-            )
-        };
+        let app = |name, arg| applied(&db, name, vec![arg]);
         let id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
         let unknown = Type::new(&db, TypeKind::UniVar { id });
         let variable = Type::new(&db, TypeKind::BoundVar { index: 0 });
@@ -1200,15 +1195,15 @@ mod tests {
         assert!(!super::parameter_type_matches(&db, foo, bar));
         assert!(super::parameter_type_matches(
             &db,
-            app(foo, int),
-            app(foo, bool)
+            app("Foo", int),
+            app("Foo", bool)
         ));
-        assert!(super::parameter_type_matches(&db, app(foo, int), foo));
-        assert!(super::parameter_type_matches(&db, foo, app(foo, int)));
+        assert!(super::parameter_type_matches(&db, app("Foo", int), foo));
+        assert!(super::parameter_type_matches(&db, foo, app("Foo", int)));
         assert!(!super::parameter_type_matches(
             &db,
-            app(foo, int),
-            app(bar, int)
+            app("Foo", int),
+            app("Bar", int)
         ));
         assert!(super::parameter_type_matches(&db, int, int));
         assert!(!super::parameter_type_matches(&db, int, bool));

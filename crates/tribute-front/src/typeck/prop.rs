@@ -152,10 +152,6 @@ pub(crate) enum TypeShape {
         effect: RowShape,
     },
     Tuple(Vec<TypeShape>),
-    App {
-        ctor: Box<TypeShape>,
-        args: Vec<TypeShape>,
-    },
     Continuation {
         arg: Box<TypeShape>,
         result: Box<TypeShape>,
@@ -212,10 +208,6 @@ impl TypeShape {
                 effect: effect.build(db),
             },
             TypeShape::Tuple(elements) => TypeKind::Tuple(build_all(db, elements)),
-            TypeShape::App { ctor, args } => TypeKind::App {
-                ctor: ctor.build(db),
-                args: build_all(db, args),
-            },
             TypeShape::Continuation {
                 arg,
                 result,
@@ -245,10 +237,6 @@ impl TypeShape {
                 params.iter().for_each(|param| param.visit(f));
                 result.visit(f);
                 effect.visit_types(f);
-            }
-            TypeShape::App { ctor, args } => {
-                ctor.visit(f);
-                args.iter().for_each(|arg| arg.visit(f));
             }
             TypeShape::Continuation {
                 arg,
@@ -348,13 +336,6 @@ impl TypeShape {
                     }
                 }
                 TypeShape::Tuple(elements) => TypeShape::Tuple(all(elements, n)),
-                TypeShape::App { ctor, args } => {
-                    let ctor = Box::new(go(ctor, n, with));
-                    TypeShape::App {
-                        ctor,
-                        args: all(args, n),
-                    }
-                }
                 TypeShape::Continuation {
                     arg,
                     result,
@@ -393,10 +374,6 @@ impl TypeShape {
             TypeShape::Tuple(elements) => {
                 TypeShape::Tuple(elements.iter().map(|element| element.map(f)).collect())
             }
-            TypeShape::App { ctor, args } => TypeShape::App {
-                ctor: Box::new(ctor.map(f)),
-                args: args.iter().map(|arg| arg.map(f)).collect(),
-            },
             TypeShape::Continuation {
                 arg,
                 result,
@@ -544,8 +521,8 @@ pub(crate) struct TypeGen {
     pub row_vars: u64,
     /// Whether the `Error` type appears.
     pub error: bool,
-    /// Whether `App` and `Continuation` appear.
-    pub higher_kinded: bool,
+    /// Whether `Continuation` appears.
+    pub continuations: bool,
     /// Whether rows hold function types as effect arguments.
     pub row_functions: bool,
     /// Whether a row holds at most one instance of each ability.
@@ -553,7 +530,7 @@ pub(crate) struct TypeGen {
 }
 
 impl TypeGen {
-    /// Fully resolved first-order-kinded types: closed rows, no variables,
+    /// Fully resolved types: closed rows, no variables,
     /// no `Error`.
     pub(crate) const GROUND: Self = Self {
         depth: 3,
@@ -561,7 +538,7 @@ impl TypeGen {
         bound_vars: 0,
         row_vars: 0,
         error: false,
-        higher_kinded: false,
+        continuations: false,
         row_functions: true,
         unique_abilities: false,
     };
@@ -582,9 +559,9 @@ impl TypeGen {
         Self { error, ..self }
     }
 
-    pub(crate) const fn higher_kinded(self, higher_kinded: bool) -> Self {
+    pub(crate) const fn continuations(self, continuations: bool) -> Self {
         Self {
-            higher_kinded,
+            continuations,
             ..self
         }
     }
@@ -719,15 +696,7 @@ pub(crate) fn type_shape(cfg: TypeGen) -> BoxedStrategy<TypeShape> {
             let tuple = proptest::collection::vec(inner.clone(), 2..=3).prop_map(TypeShape::Tuple);
             let mut options: Vec<(u32, BoxedStrategy<TypeShape>)> =
                 vec![(3, named.boxed()), (3, func.boxed()), (2, tuple.boxed())];
-            if cfg.higher_kinded {
-                let app = (
-                    inner.clone(),
-                    proptest::collection::vec(inner.clone(), 1..=2),
-                )
-                    .prop_map(|(ctor, args)| TypeShape::App {
-                        ctor: Box::new(ctor),
-                        args,
-                    });
+            if cfg.continuations {
                 let continuation =
                     (inner.clone(), inner.clone(), row).prop_map(|(arg, result, effect)| {
                         TypeShape::Continuation {
@@ -736,7 +705,6 @@ pub(crate) fn type_shape(cfg: TypeGen) -> BoxedStrategy<TypeShape> {
                             effect,
                         }
                     });
-                options.push((1, app.boxed()));
                 options.push((1, continuation.boxed()));
             }
             proptest::strategy::Union::new_weighted(options)
@@ -846,15 +814,6 @@ fn generalize_children(shape: &TypeShape, sharing: Sharing) -> BoxedStrategy<Typ
             .boxed(),
         TypeShape::Tuple(elements) => generalize_all(&elements, sharing)
             .prop_map(TypeShape::Tuple)
-            .boxed(),
-        TypeShape::App { ctor, args } => (
-            generalize_inner(&ctor, sharing),
-            generalize_all(&args, sharing),
-        )
-            .prop_map(|(ctor, args)| TypeShape::App {
-                ctor: Box::new(ctor),
-                args,
-            })
             .boxed(),
         TypeShape::Continuation {
             arg,
@@ -1021,16 +980,6 @@ pub(crate) fn types_equiv<'db>(
         }
         (TypeKind::Tuple(left), TypeKind::Tuple(right)) => all(left, right),
         (
-            TypeKind::App {
-                ctor: left_ctor,
-                args: left_args,
-            },
-            TypeKind::App {
-                ctor: right_ctor,
-                args: right_args,
-            },
-        ) => types_equiv(db, *left_ctor, *right_ctor, relation) && all(left_args, right_args),
-        (
             TypeKind::Continuation {
                 arg: left_arg,
                 result: left_result,
@@ -1094,8 +1043,8 @@ mod tests {
         /// Shape equality is interned-type equality.
         #[test]
         fn shapes_build_equal_types_iff_equal(
-            left in type_shape(TypeGen::GROUND.univars(2).row_vars(2).higher_kinded(true)),
-            right in type_shape(TypeGen::GROUND.univars(2).row_vars(2).higher_kinded(true)),
+            left in type_shape(TypeGen::GROUND.univars(2).row_vars(2).continuations(true)),
+            right in type_shape(TypeGen::GROUND.univars(2).row_vars(2).continuations(true)),
         ) {
             let db = salsa::DatabaseImpl::new();
             prop_assert_eq!(left == right, left.build(&db) == right.build(&db));

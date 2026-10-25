@@ -326,12 +326,6 @@ pub(super) fn row_effects<'db>(
                     visit(db, *arg, found);
                 }
             }
-            TypeKind::App { ctor, args } => {
-                visit(db, *ctor, found);
-                for arg in args {
-                    visit(db, *arg, found);
-                }
-            }
             TypeKind::Func {
                 params,
                 result,

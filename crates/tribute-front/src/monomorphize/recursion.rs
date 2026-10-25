@@ -128,9 +128,6 @@ fn mentions_bound_var<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool 
         TypeKind::Named { args, .. } | TypeKind::Tuple(args) => {
             args.iter().any(|arg| mentions_bound_var(db, *arg))
         }
-        TypeKind::App { ctor, args } => {
-            mentions_bound_var(db, *ctor) || args.iter().any(|arg| mentions_bound_var(db, *arg))
-        }
         TypeKind::Func {
             params,
             result,

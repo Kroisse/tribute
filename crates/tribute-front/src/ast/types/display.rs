@@ -94,14 +94,6 @@ fn write_kind<'db>(
         }
         TypeKind::LocalBoundVar { index, .. } => write!(f, "_local{}", index),
         TypeKind::UniVar { .. } => f.write_str("_"),
-        TypeKind::App { ctor, args } => {
-            write!(
-                f,
-                "{}({})",
-                ctor.display_with_params(db, params),
-                list(db, args, params)
-            )
-        }
         TypeKind::Continuation { arg, result, .. } => write!(
             f,
             "Continuation({} -> {})",

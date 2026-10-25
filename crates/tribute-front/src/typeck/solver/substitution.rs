@@ -91,14 +91,6 @@ impl<'db> TypeSubst<'db> {
                     .collect();
                 Type::new(db, TypeKind::Tuple(elements))
             }
-            TypeKind::App { ctor, args } => {
-                let ctor = self.apply_with_rows(db, *ctor, row_subst);
-                let args = args
-                    .iter()
-                    .map(|a| self.apply_with_rows(db, *a, row_subst))
-                    .collect();
-                Type::new(db, TypeKind::App { ctor, args })
-            }
             TypeKind::Continuation {
                 arg,
                 result,
@@ -339,30 +331,6 @@ impl<'db> TypeSubst<'db> {
                         .collect(),
                 ),
             ),
-            TypeKind::App { ctor, args } => Type::new(
-                db,
-                TypeKind::App {
-                    ctor: self.replace_univars_with_bound_and_local(
-                        db,
-                        *ctor,
-                        row_subst,
-                        var_to_index,
-                        local_vars,
-                    ),
-                    args: args
-                        .iter()
-                        .map(|arg| {
-                            self.replace_univars_with_bound_and_local(
-                                db,
-                                *arg,
-                                row_subst,
-                                var_to_index,
-                                local_vars,
-                            )
-                        })
-                        .collect(),
-                },
-            ),
             TypeKind::Continuation {
                 arg,
                 result,
@@ -446,12 +414,6 @@ impl<'db> TypeSubst<'db> {
             TypeKind::Tuple(elems) => {
                 for e in elems {
                     self.collect_univars_from_type(db, *e, row_subst, out);
-                }
-            }
-            TypeKind::App { ctor, args } => {
-                self.collect_univars_from_type(db, *ctor, row_subst, out);
-                for a in args {
-                    self.collect_univars_from_type(db, *a, row_subst, out);
                 }
             }
             TypeKind::Continuation {
