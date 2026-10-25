@@ -832,7 +832,7 @@ mod tests {
         let module = input.module(db);
         let span_map = SpanMap::default();
         let resolved = resolve::resolve_module(db, module, &span_map);
-        let output = typeck::typecheck_module(db, &resolved, span_map);
+        let output = typeck::typecheck_module(db, &resolved, span_map.clone());
         format!(
             "{:#?}\n{:#?}",
             output.module(db),

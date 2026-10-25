@@ -84,7 +84,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
 fn resolve_with_prelude<'db>(
     db: &'db dyn salsa::Database,
     ast: &tribute_front::ast::Module<tribute_front::ast::UnresolvedName>,
-    span_map: &tribute_front::ast::SpanMap,
+    span_map: &'db tribute_front::ast::SpanMap,
     prelude: Option<&PreludeData<'db>>,
 ) -> (
     DeclTable<ResolvedRef<'db>>,
