@@ -29,7 +29,7 @@ pub fn rewrite_module<'db>(
     db: &'db dyn salsa::Database,
     module: &mut DeclTable<TypedRef<'db>>,
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &crate::SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     rewrite_decls(db, &mut module.entries, rewrite_map, instances);
 }
@@ -39,7 +39,7 @@ pub fn rewrite_decls<'db>(
     db: &'db dyn salsa::Database,
     decls: &mut [DeclEntry<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &crate::SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     for entry in decls {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
@@ -111,7 +111,7 @@ pub fn rewrite_field_function_refs<'db>(
     db: &'db dyn salsa::Database,
     module: &mut DeclTable<TypedRef<'db>>,
     type_rewrite_map: &TypeRewriteMap<'db>,
-    instances: &mut HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &mut crate::SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     for entry in &mut module.entries {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {

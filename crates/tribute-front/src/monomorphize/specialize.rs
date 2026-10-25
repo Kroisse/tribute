@@ -79,7 +79,7 @@ pub(super) fn generate_specializations<'db>(
     module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
     function_types: &[(SymbolPath, TypeScheme<'db>)],
-    compiler_intrinsics: &HashMap<NodeId, Symbol>,
+    compiler_intrinsics: &crate::SortedMap<NodeId, Symbol>,
 ) -> GeneratedSpecializations<'db> {
     let func_decls = collect_func_decls(module);
     let extern_functions = collect_extern_function_decls(module);
@@ -911,7 +911,7 @@ mod tests {
             &module,
             &instantiations,
             &function_types,
-            &HashMap::default(),
+            &crate::SortedMap::default(),
         );
 
         assert_eq!(specializations.specialized_declarations.len(), 2);

@@ -213,106 +213,50 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         ),
         parsed.span_map(db).clone(),
     );
-    let typed = checked.module(db).clone();
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
-        typed,
-        checked
+        tribute_front::monomorphize::SpecializationInput::new(db, checked, None),
+    )
+    .expect("checked instances must specialize");
+    let mut ir = IrContext::new();
+    let output = tribute_front::ast_to_ir::TypedModule {
+        ast: mono.module(db).clone(),
+        span_map: mono.span_map(db),
+        function_types: mono
             .declarations(db)
             .function_types
             .iter()
             .cloned()
             .collect(),
-        tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: checked
-                .declarations(db)
-                .constructor_types
-                .schemes
-                .iter()
-                .cloned()
-                .collect(),
-            specialized_enum_variants: checked
-                .declarations(db)
-                .constructor_types
-                .specialized_enum_variants
-                .iter()
-                .cloned()
-                .collect(),
-            local_instances: checked
-                .expression_types(db)
-                .local_instances
-                .iter()
-                .cloned()
-                .collect(),
-            evidence_plans: checked
-                .expression_types(db)
-                .evidence_plans
-                .iter()
-                .cloned()
-                .collect(),
-            function_instances: checked
-                .expression_types(db)
-                .function_instances
-                .iter()
-                .cloned()
-                .collect(),
-            node_types: checked
-                .expression_types(db)
-                .node_types
-                .iter()
-                .cloned()
-                .collect(),
-            handler_operations: checked
-                .expression_types(db)
-                .handler_operations
-                .iter()
-                .cloned()
-                .collect(),
-            perform_operations: checked
-                .expression_types(db)
-                .perform_operations
-                .iter()
-                .cloned()
-                .collect(),
-            lambda_signatures: checked
-                .expression_types(db)
-                .lambda_signatures
-                .iter()
-                .cloned()
-                .collect(),
-            exhaustive_cases: checked
-                .expression_types(db)
-                .exhaustive_cases
-                .iter()
-                .copied()
-                .collect(),
-            compiler_intrinsics: HashMap::default(),
-        },
-    )
-    .expect("checked instances must specialize");
-    let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule {
-        ast: mono.module,
-        span_map: checked.span_map(db),
-        function_types: mono.function_types.into_iter().collect(),
-        constructor_types: mono.metadata.constructor_types,
-        specialized_enum_variants: mono
-            .metadata
-            .specialized_enum_variants
-            .into_iter()
+        constructor_types: mono
+            .declarations(db)
+            .constructor_types
+            .schemes
+            .iter()
+            .cloned()
             .collect(),
-        node_types: mono.metadata.node_types.into_iter().collect(),
-        local_instances: mono.metadata.local_instances.into_iter().collect(),
-        function_instances: mono.metadata.function_instances.into_iter().collect(),
+        specialized_enum_variants: mono
+            .declarations(db)
+            .constructor_types
+            .specialized_enum_variants
+            .clone(),
+        node_types: mono.expression_types(db).node_types.clone(),
+        local_instances: mono.expression_types(db).local_instances.clone(),
+        function_instances: mono.expression_types(db).function_instances.clone(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
-            &checked.declarations(db).ability_definitions,
+            &mono.declarations(db).ability_definitions,
         ),
-        handler_operations: mono.metadata.handler_operations.into_iter().collect(),
-        perform_operations: mono.metadata.perform_operations.into_iter().collect(),
-        lambda_signatures: mono.metadata.lambda_signatures.into_iter().collect(),
-        exhaustive_cases: mono.metadata.exhaustive_cases,
-        evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
-        well_known_types: checked.declarations(db).well_known_types,
+        handler_operations: mono.expression_types(db).handler_operations.clone(),
+        perform_operations: mono.expression_types(db).perform_operations.clone(),
+        lambda_signatures: mono.expression_types(db).lambda_signatures.clone(),
+        exhaustive_cases: mono
+            .expression_types(db)
+            .exhaustive_cases
+            .iter()
+            .copied()
+            .collect(),
+        evidence_plans: mono.expression_types(db).evidence_plans.clone(),
+        well_known_types: mono.declarations(db).well_known_types,
         compiler_intrinsics: HashMap::default(),
         runtime_types: Default::default(),
         merged_sources: Vec::new(),
@@ -347,106 +291,50 @@ fn lower_monomorphized_source(
         ),
         parsed.span_map(db).clone(),
     );
-    let typed = checked.module(db).clone();
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
-        typed,
-        checked
+        tribute_front::monomorphize::SpecializationInput::new(db, checked, None),
+    )
+    .expect("checked instances must specialize");
+    let mut ir = IrContext::new();
+    let output = tribute_front::ast_to_ir::TypedModule {
+        ast: mono.module(db).clone(),
+        span_map: mono.span_map(db),
+        function_types: mono
             .declarations(db)
             .function_types
             .iter()
             .cloned()
             .collect(),
-        tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: checked
-                .declarations(db)
-                .constructor_types
-                .schemes
-                .iter()
-                .cloned()
-                .collect(),
-            specialized_enum_variants: checked
-                .declarations(db)
-                .constructor_types
-                .specialized_enum_variants
-                .iter()
-                .cloned()
-                .collect(),
-            local_instances: checked
-                .expression_types(db)
-                .local_instances
-                .iter()
-                .cloned()
-                .collect(),
-            evidence_plans: checked
-                .expression_types(db)
-                .evidence_plans
-                .iter()
-                .cloned()
-                .collect(),
-            function_instances: checked
-                .expression_types(db)
-                .function_instances
-                .iter()
-                .cloned()
-                .collect(),
-            node_types: checked
-                .expression_types(db)
-                .node_types
-                .iter()
-                .cloned()
-                .collect(),
-            handler_operations: checked
-                .expression_types(db)
-                .handler_operations
-                .iter()
-                .cloned()
-                .collect(),
-            perform_operations: checked
-                .expression_types(db)
-                .perform_operations
-                .iter()
-                .cloned()
-                .collect(),
-            lambda_signatures: checked
-                .expression_types(db)
-                .lambda_signatures
-                .iter()
-                .cloned()
-                .collect(),
-            exhaustive_cases: checked
-                .expression_types(db)
-                .exhaustive_cases
-                .iter()
-                .copied()
-                .collect(),
-            compiler_intrinsics: HashMap::default(),
-        },
-    )
-    .expect("checked instances must specialize");
-    let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule {
-        ast: mono.module,
-        span_map: checked.span_map(db),
-        function_types: mono.function_types.into_iter().collect(),
-        constructor_types: mono.metadata.constructor_types,
-        specialized_enum_variants: mono
-            .metadata
-            .specialized_enum_variants
-            .into_iter()
+        constructor_types: mono
+            .declarations(db)
+            .constructor_types
+            .schemes
+            .iter()
+            .cloned()
             .collect(),
-        node_types: mono.metadata.node_types.into_iter().collect(),
-        local_instances: mono.metadata.local_instances.into_iter().collect(),
-        function_instances: mono.metadata.function_instances.into_iter().collect(),
+        specialized_enum_variants: mono
+            .declarations(db)
+            .constructor_types
+            .specialized_enum_variants
+            .clone(),
+        node_types: mono.expression_types(db).node_types.clone(),
+        local_instances: mono.expression_types(db).local_instances.clone(),
+        function_instances: mono.expression_types(db).function_instances.clone(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
-            &checked.declarations(db).ability_definitions,
+            &mono.declarations(db).ability_definitions,
         ),
-        handler_operations: mono.metadata.handler_operations.into_iter().collect(),
-        perform_operations: mono.metadata.perform_operations.into_iter().collect(),
-        lambda_signatures: mono.metadata.lambda_signatures.into_iter().collect(),
-        exhaustive_cases: mono.metadata.exhaustive_cases,
-        evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
-        well_known_types: checked.declarations(db).well_known_types,
+        handler_operations: mono.expression_types(db).handler_operations.clone(),
+        perform_operations: mono.expression_types(db).perform_operations.clone(),
+        lambda_signatures: mono.expression_types(db).lambda_signatures.clone(),
+        exhaustive_cases: mono
+            .expression_types(db)
+            .exhaustive_cases
+            .iter()
+            .copied()
+            .collect(),
+        evidence_plans: mono.expression_types(db).evidence_plans.clone(),
+        well_known_types: mono.declarations(db).well_known_types,
         compiler_intrinsics: HashMap::default(),
         runtime_types: Default::default(),
         merged_sources: Vec::new(),
