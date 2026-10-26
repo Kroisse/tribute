@@ -45,8 +45,10 @@
 //!     │   evidence plan can make target lowering call them) → dce →
 //!     │   specialize_convention_classes → eliminate_unreferenced_source_functions
 //!     │                                    ◄── compile_specialized_frontend
+//!     ▼ CheckFnArms
+//!     │   check_fn_arm_calls (calls in `fn` arms that reach a `Cps` callee)
+//!     │                                    ◄── compile_with_diagnostics
 //!     ▼ LegalizeCps
-//!     │   check_fn_arm_calls (calls in `fn` arms that reach a `Cps` callee) →
 //!     │   tribute_control_to_cps → lower_continuation_frames →
 //!     │   lower_closure_lambda → intrinsic/list/io lowering
 //!     │                                    ◄── run_through_cps_lowering
@@ -55,7 +57,6 @@
 //!     │                                    ◄── run_shared_middle_end,
 //!     │                                        compile_ast (all functions)
 //!     ▼ CheckArity (warnings into the context's diagnostics)
-//!     │                                    ◄── compile_with_diagnostics
 //!     ├─── Representation/ABI Boundary (run_target_to_boundary_exit) ──┤
 //!     ▼ EnterTarget
 //!     │   global DCE (unreachable functions skip target lowering; runtime
@@ -199,6 +200,9 @@ enum Stage {
     /// (artifact compiles only), specialize convention classes, and remove
     /// unreferenced functions again.
     Specialize,
+    /// Reject the calls in `fn` arms that reach a `Cps` callee: the last
+    /// source diagnostic, where diagnostics-only compilation stops.
+    CheckFnArms,
     /// Legalize source-logical callable/control IR into CPS with explicit
     /// evidence, and lower the intrinsics it leaves.
     LegalizeCps,
@@ -302,8 +306,11 @@ fn stage_passes(mut config: StageConfig, stages: RangeInclusive<Stage>) -> PassM
         }
     }
 
-    if stages.contains(&Stage::LegalizeCps) {
+    if stages.contains(&Stage::CheckFnArms) {
         pm.add_pass(tribute_passes::check_fn_arm_calls::CheckFnArmCalls);
+    }
+
+    if stages.contains(&Stage::LegalizeCps) {
         if cfg!(debug_assertions) {
             pm.add_pass(tribute_passes::check_convention_classes::CheckConventionClasses);
         }
@@ -645,11 +652,11 @@ pub fn run_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrCon
 
 /// Run the stages [`compile_with_diagnostics`] runs after the frontend, on
 /// every function of a frontend result, reachable or not.
-pub fn check_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrContext, Module)> {
+pub fn run_diagnostic_stages(frontend: FrontendCompilation) -> PassResult<(IrContext, Module)> {
     run_stages_from_frontend(
         frontend,
         StageConfig::shared(SourceFunctions::All),
-        Stage::Specialize..=Stage::CheckArity,
+        Stage::Specialize..=Stage::CheckFnArms,
     )
     .into_result()
 }
@@ -947,19 +954,20 @@ fn report_pass_error(db: &dyn salsa::Database, error: &PassError) {
     .accumulate(db);
 }
 
-/// Run the shared pipeline for diagnostic collection only.
+/// Run the stages up to the last source diagnostic, for diagnostic collection
+/// only. The stages after it report only internal failures.
 ///
 /// This is a `#[salsa::tracked]` function so that diagnostics accumulated
 /// during compilation can be collected via `compile_ast_tracked::accumulated`.
-/// Returns whether the shared pipeline produced a module.
+/// Returns whether those stages produced a module.
 #[salsa::tracked(returns(copy))]
 fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) -> bool {
-    // Run the shared pipeline; diagnostics are accumulated as side effects
+    // Diagnostics are accumulated as side effects
     run_stages_from_source(
         db,
         source,
         StageConfig::shared(SourceFunctions::All),
-        Stage::Specialize..=Stage::CheckArity,
+        Stage::Specialize..=Stage::CheckFnArms,
     )
     .and_then(|staged| staged.report(db))
     .is_some()
@@ -969,8 +977,7 @@ fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) -> bool {
 ///
 /// Runs the shared pipeline on every function of the program, reachable or
 /// not, and returns arena IR. Does NOT run target-specific passes
-/// (WASM/native), making it suitable for diagnostic-only compilation
-/// ("none" target).
+/// (WASM/native).
 pub fn compile_ast(
     db: &dyn salsa::Database,
     source: SourceCst,

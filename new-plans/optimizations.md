@@ -36,7 +36,8 @@ Prelude 전체와 모든 struct의 필드 함수가 source-logical IR로 내려�
 단계가 도달 불가능한 함수를 변환하지 않게 한다. 이 DCE는 source-logical 함수 정의
 operation을 함수로 보고 같은 root와 참조 규칙을 따른다. 본문 없는 선언은 지우지
 않는다. Shared CPS가 등록된 compiler intrinsic을 그 선언과 대조하기 때문이다. 진단만
-내는 컴파일은 이 DCE를 건너뛰어, 도달 불가능한 함수도 shared 단계의 검사를 받는다.
+내는 컴파일은 이 DCE를 건너뛰어, 도달 불가능한 함수도 class 특수화를 거친다. 이
+컴파일은 shared CPS 전에 멈춘다([진단 전용 컴파일](implementation.md#프론트엔드-단계-경계와-정보-소유권)).
 
 Target lowering은 도달 가능한 함수에만 적용한다. Shared middle-end가 새로 만든
 함수가 있으므로, target pipeline은 다른 변환보다 먼저 global DCE를 다시
