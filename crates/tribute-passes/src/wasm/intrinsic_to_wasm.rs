@@ -84,7 +84,7 @@ pub const BYTES_RANGE_EQUAL: &str = "__tribute_bytes_range_equal";
 pub const BYTES_SLICE_OR_PANIC: &str = "__tribute_bytes_slice_or_panic";
 
 /// Bind calls to the `extern "C"` bytes helpers to WasmGC operations.
-pub fn lower(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     let symbols = Rc::new(SymbolTable::collect(ctx, module));
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(BytesLenPattern(Rc::clone(&symbols)))

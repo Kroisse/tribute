@@ -7,7 +7,7 @@
 //! fields are therefore one GC type, whatever their source names. Builtin layouts keep their identifier and reserved index.
 //!
 //! `adt_to_wasm` builds variant types here. After every `adt` operation is
-//! lowered, [`convert`] replaces each user `adt.struct` with its
+//! lowered, `convert` replaces each user `adt.struct` with its
 //! `wasm_gc.struct` wherever it occurs. An `adt.typeref` becomes the
 //! structural type of the struct it names, or the abstract struct reference
 //! when it names an enum, whose variants have different types.
@@ -66,7 +66,7 @@ pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: StringRef) -> Op
 
 /// Replace each user `adt.struct` in `module` with its `wasm_gc.struct`, and
 /// each `adt.typeref` with the type of the layout it names.
-pub fn convert(ctx: &mut IrContext, module: Module) {
+pub(crate) fn convert(ctx: &mut IrContext, module: Module) {
     crate::closure_lower::substitute_module_types(ctx, module, |ctx, ty| {
         if ctx.get_type(ty).name == tribute_ir::dialect::adt::Typeref::NAME {
             return Some(reference_type(ctx, ty));

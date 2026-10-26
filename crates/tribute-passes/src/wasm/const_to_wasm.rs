@@ -114,7 +114,7 @@ fn walk_ops_in_region(
 }
 
 /// Analyze a module to collect the distinct string/bytes constant payloads.
-pub fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
+pub(crate) fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
     let mut collector = ConstCollector::new();
 
     // Walk all operations in module body (recursively into nested regions)
@@ -137,7 +137,7 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
 ///
 /// This runs after primitive type normalization, so source-level
 /// `tribute_rt.anyref` results must already be represented as `wasm.anyref`.
-pub fn validate_for_wasm(
+pub(crate) fn validate_for_wasm(
     ctx: &IrContext,
     module: Module,
     analysis: &ConstAnalysis,
@@ -176,7 +176,7 @@ pub fn validate_for_wasm(
 /// Declares a passive `wasm.data` segment for every payload in `analysis`
 /// that the module does not already carry, then lowers the constants to
 /// reference those segments.
-pub fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysis) {
+pub(crate) fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysis) {
     let segments = Rc::new(declare_data_segments(ctx, module, &analysis.contents));
 
     let applicator = PatternApplicator::new(TypeConverter::new())
