@@ -738,7 +738,8 @@ binder를 공유하며, entry마다 그 binder에 class를 하나씩 고정한�
 중첩되지 않는다.
 
 `instantiate`는 type의 row만 치환하며 convention이나 entry를 고르지 않는다. 한 람다
-식은 `tribute_control.lambda` 하나이고, 사용처마다 따로 만들지 않는다. 쓰이지 않는
+식은 `tribute_control.lambda` 하나이고, 사용처마다 따로 만들지 않는다. Class
+특수화가 [entry 본문](#callable-entry) 규칙으로 값을 나눌 때만 복사본이 생긴다. 쓰이지 않는
 람다는 양화할 사용이 없으므로 그 변수는 `body`다. 다른 `let`의 값으로 람다를 다시
 묶는 별칭은 람다가 아닌 값이다. 별칭 자리에서 람다를 한 번 인스턴스화하며, 별칭의
 지역 scheme이 양화한 변수는 `body`다. 별칭을 통한 호출도 자기 convention의 entry를
@@ -807,10 +808,16 @@ row의 class다. Row를 양화하지 않는 람다는 사용이 하나의 class�
 - 람다가 양화한 `local` binder 가운데 람다 자신의 row에 나타나는 것은 class `c`로
   읽는다. Row의 class는 그 tail들의 class를 합친 값이므로 tail마다 `c` 이하이고,
   더 강한 class로 읽은 callable 인자도 그 class의 entry를 가진다(아래 채우기).
-- 자기 row에 나타나지 않고 입력이나 결과의 callable type에만 나타나는 binder는,
-  class `c`를 고르는 사용들이 그 binder에 모두 같은 class를 넘기면 그 class로
-  읽는다. 넘기는 class가 엇갈리면 `Cps`로 읽는다.
+- 자기 row에 나타나지 않고 입력이나 결과의 callable type에만 나타나는 binder는
+  class `c`를 고르는 사용들이 그 binder에 넘기는 class로 읽는다.
 - 둘러싼 인스턴스의 binder는 그 인스턴스가 고정한 class로 읽는다.
+
+같은 class `c`를 고르는 사용들이 둘째 경우의 binder에 서로 다른 class를 넘기면, 본문
+하나로는 그 사용들을 받을 수 없다. 본문이 그 binder의 row로 만드는 closure는 만든
+쪽의 class를 생성 class로 가지므로, 더 강한 class로 합쳐 읽으면 그 closure를 더 약한
+class로 보는 쪽이 trap entry에 닿는다. 이때 class 특수화는 넘기는 class 조합마다
+람다를 값 하나씩으로 나누고, 각 사용을 자기 조합의 값에 연결한다. 나눈 값은 각자
+capture 목록과 entry table을 가진다.
 
 람다의 capture 목록은 하나이며, 모든 본문이 실제 사용하는 외부 SSA 값과 일치한다.
 Capture는 closure 하나에 한 번만 담긴다.
