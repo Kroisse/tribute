@@ -247,7 +247,9 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
 - 인스턴스 안에서 `let`에 묶인 람다를 그 `instantiate`들이 고르는 class 조합마다
   복제하고 각 `instantiate`를 자기 조합의 복사본으로 연결한다. 본문 순서로 처음
   나오는 `instantiate`의 조합이 원래 람다를 갖고, 다른 조합의 복사본은 원래 람다
-  바로 뒤에 놓인다. 복사본과 그 안에서 row를 양화하는 람다는 정의의 binder 목록
+  바로 뒤에 놓인다. 다시 연결한 `instantiate`가 다른 람다의 본문 안에 있으면 그
+  람다의 capture도 본문의 외부 참조와 같게 고친다. 복사본은 capture 순서에서 원래
+  람다의 자리를 잇는다. 복사본과 그 안에서 row를 양화하는 람다는 정의의 binder 목록
   끝에 새 `local` binder를 받는다. 복사본 안의 `instantiate`가 바깥 람다에 새 조합을
   넘길 수 있으므로, 복제할 람다가 없을 때까지 지역 class를 다시 정하고 복제한다.
   `instantiate`의 row가 다른 람다의 binder를 가리키면 그 람다들이 모두 조합 하나씩만
