@@ -329,10 +329,14 @@ variant 하나, 또는 `adt.array` 타입)마다 하나의
 서로 다른 할당 descriptor이므로 layout마다 RTTI 선언과 release 함수를 가진다. Closure
 layout을 native 표현으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과 그
 layout의 RTTI 선언을 함께 바꾼다. Native closure 객체는 RC header 뒤 payload offset
-0에 code pointer를 두고 그 뒤에 capture를 자연 정렬로 둔다. Code pointer는 해제하지
-않는 unmanaged 필드이고, capture의 해제 여부는 plan의 managed 판정을 따른다. Base와
-capture layout이 code 필드를 같은 offset에 두므로 base에서 capture layout으로의
-cast는 pointer를 바꾸지 않는다. RTTI 생성은 선언이 모든 할당 descriptor를 정확히
+0에 [entry table](ir.md#callable-entry)의 주소를 두고 그 뒤에 capture를 자연 정렬로
+둔다. Entry table은 entry 함수 목록마다 하나인 읽기 전용 `clif.data`이며, entry
+번호마다 pointer 크기 칸 하나에 그 entry 함수의 주소를 `clif.func_reloc`로 적는다.
+채우지 않는 칸은 공용 trap entry의 주소다. Table 주소는 해제하지 않는 unmanaged
+필드이고, capture의 해제 여부는 plan의 managed 판정을 따른다. 간접 호출은 table
+주소를 읽고 entry 번호의 칸을 읽어 그 주소를 호출한다. Base와 capture layout이
+table 필드를 같은 offset에 두므로 base에서 capture layout으로의 cast는 pointer를
+바꾸지 않는다. RTTI 생성은 선언이 모든 할당 descriptor를 정확히
 한 번씩 이름 붙이는지 검사한 뒤, descriptor별 release 함수, index마다 release 함수
 주소와 descriptor 내용을 담는 RTTI table(`clif.data`와 재배치), table을 통해 해제를 디스패치하는
 `__tribute_deep_release`를 IR에 선언한다. `struct_to_mem`은 struct와 variant field

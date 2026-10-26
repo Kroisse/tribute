@@ -66,7 +66,8 @@ in verifier tests and are rejected by whole-IR validation.
 The source-logical callable type is independently owned as
 `tribute_control.func_sig`. It uses the same flat input-first storage and
 mandatory u32 delimiters, but its validated API requires exactly one source
-result (including `core.nil` and `core.never`) and owns the Direct,
+result (including `core.nil` and `core.never`). It carries no calling
+convention: definitions, lambda entries, and indirect transfers own the Direct,
 EvidenceDirect, and Cps convention metadata. Its codec retains the qualified
 type identity, so source arrow text is never interned as `func.func_sig`;
 malformed raw source signatures are rejected before conversion mutates IR.

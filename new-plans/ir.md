@@ -499,12 +499,10 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
 
 - A `core.module` owns the top-level region for a compilation unit.
 - `core.unrealized_conversion_cast` is temporary conversion glue and must not
-  remain at target emission boundaries. 두 타입이 모두 `tribute_control.func_sig`이면
-  [convention이 정해진 뒤](#convention과-class-특수화) calling convention을 바꿀 수
-  없으며, pre-CPS whole-IR 검증에서 이를 거부한다.
-  이 cast는 callable adapter를 생성하지 않는다. Named callable의 convention 강화는
-  declaration provenance가 있는 `tribute_control.func_ref`로 표현하고 shared
-  legalization에서 실제 adapter를 생성해야 한다.
+  remain at target emission boundaries. Callable 값의 type은 convention을 갖지
+  않으므로 이 cast는 callable의 호출 방식을 바꾸지 않으며 callable adapter를
+  생성하지 않는다. 한 callable 값을 다른 convention으로 부르는 일은 그 값의
+  [entry](#callable-entry)가 맡는다.
 - `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.const`는
   nil을 만들지 않는다.
 - Operation과 type의 이름은 `<dialect>.<name>` 텍스트 하나로 표기한다. Dialect
@@ -586,15 +584,15 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 `func.*`, `closure.*`, `func.func_sig`는 physical 표현이므로 이 경계에 나타나지
 않는다.
 
-논리 callable type은
-`tribute_control.func_sig<(Params...) -> Result, {tribute.calling_convention = "K"}>`이다.
-Convention 속성은 [class 특수화](#convention과-class-특수화)가 쓰며, 그 전의 type에는
-없다.
+논리 callable type은 `tribute_control.func_sig<(Params...) -> Result>`이며
+calling convention을 갖지 않는다. 한 callable 값은 여러 convention으로 호출될 수
+있으므로 convention은 값의 type이 아니라 정의, 람다의 [entry](#callable-entry),
+간접 이전 operation에 둔다([convention과 class 특수화](#convention과-class-특수화)).
 It uses flat `[inputs..., results...]` storage with mandatory `num_inputs` and
 `num_results` u32 delimiters; its source-owned validated API requires exactly
-one result. `Result`와 `Params`는 source-logical type이다. Convention `K`는
-keyword 문자열 `"direct"`, `"evidence_direct"`, `"cps"` 가운데 하나이며, 이 문자열이
-convention의 유일한 저장 형식이다. 정수나 다른 값은 잘못된 convention이다. Convention은
+one result. `Result`와 `Params`는 source-logical type이다. Convention은 keyword 문자열
+`"direct"`, `"evidence_direct"`, `"cps"` 가운데 하나이며, 이 문자열이 convention의
+유일한 저장 형식이다. 정수나 다른 값은 잘못된 convention이다. Convention은
 [CPS 전략](cps-effects.md#row와-호출-규약)이 [ability row](#ability-row)에서 계산한
 값이며 body에서 추론하지 않는다. Legalization은 이를 기존
 `CallableAbi`와 physical `func.func_sig`, `closure.closure` 및
@@ -657,8 +655,8 @@ non-resumptive case를 식별해야 하므로 `Never`용 `anyref` placeholder는
 가진다.
 
 ```text
-tribute_control.func_sig<(T) -> R, {tribute.calling_convention = "cps",
-    ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}>
+tribute_control.func_sig<(T) -> R,
+    {ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}>
 ```
 
 - **값:** `instances`는
@@ -668,10 +666,9 @@ tribute_control.func_sig<(T) -> R, {tribute.calling_convention = "cps",
   row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬한다. 같은
   instance가 두 번 나오면 두 번 둔다. Evidence 선택이 instance의 위치 수를 세기
   때문이다.
-- **정체성:** signature의 정체성은 입력, 결과, row의 조합이고,
-  [class 특수화](#convention과-class-특수화) 뒤에는 convention도 포함한다. 같은 row도
-  인스턴스가 고정한 class에 따라 convention이 다를 수 있다
-  ([cps-effects.md](cps-effects.md#row와-호출-규약)).
+- **정체성:** signature의 정체성은 입력, 결과, row의 조합이다. Convention은
+  signature에 들어가지 않는다. 같은 row도 인스턴스가 고정한 class에 따라 다른
+  convention으로 불릴 수 있다([cps-effects.md](cps-effects.md#row와-호출-규약)).
 - **범위:** row는 source-logical 경계 안에만 있다. CPS legalization은
   `func.func_sig`를 만들 때 row를 버리고 [`instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)를
   피연산자로 대체하며, representation/ABI 경계의 출구는 row와 아래 속성들을 거부한다.
@@ -690,16 +687,16 @@ binder의 종류를 나타내는 문자열이다.
 
 양화된 binder(`param`, `ability_arg`)가 scheme의 binder 순서로 먼저 오며, 그 위치가
 row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 뒤에 온다. Class 특수화가
-람다를 복사하면 복사본의 `local` binder는 목록 끝에 붙으므로, 한 정의의 인스턴스들은
-양화된 binder만 공유하고 나머지 binder 목록은 서로 다를 수 있다. 속성이 없으면
+람다의 entry 본문을 만들 때 그 본문 안에서 row를 양화하는 람다는 새 `local` binder를
+목록 끝에 받으므로, 한 정의의 인스턴스들은 양화된 binder만 공유하고 나머지 binder
+목록은 서로 다를 수 있다. 속성이 없으면
 binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 드러내지
 않으므로 따로 표시한다.
 
 Tail의 class는 binder 종류에 따라 읽는다. `param`은 그 인스턴스가 고정한 class,
-`ability_arg`와 `body`는 `Cps`다. `local`의 class는 그것을 소유한 람다 복사본이
-고정한 class이며, class 특수화 뒤 그 람다의 callable type에 convention으로
-나타난다. 값이 람다가
-아닌 binding은 한 번 계산되어 표현이 하나이므로, 그 지역 scheme의 변수는 class를
+`ability_arg`와 `body`는 `Cps`다. `local`의 class는 그것을 소유한 람다의 entry마다
+다르며, 그 entry의 [convention 배정](#callable-entry)이 정한다. 값이 람다가 아닌
+binding은 한 번 계산되어 entry 집합이 하나이므로, 그 지역 scheme의 변수는 class를
 고르지 않는 `body`다.
 
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
@@ -731,8 +728,8 @@ tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에 넣�
 `tribute_control.lambda`는 `quantified_rows` 속성에 자기가 양화하는 `local` binder의
 index를 인스턴스화 순서로 적는다. 이 binder는 둘러싼 `func`의 binder이며 람다가 새
 binder를 만들지는 않는다. 모든 `local` binder는 정확히 한 람다가 소유하고,
-`quantified_rows`의 원소는 모두 `local` binder다. 일반화된 binding을 class마다 복사한
-람다는 복사본마다 자기 binder를 소유한다.
+`quantified_rows`의 원소는 모두 `local` binder다. 람다의 entry 본문들은 같은
+binder를 공유하며, entry마다 그 binder에 class를 하나씩 고정한다.
 
 이런 람다의 모든 사용은 [`tribute_control.instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)를
 거친다. 호출뿐 아니라 인자로 넘기거나 다른 값에 담는 사용도 같다. 다른 지역 람다의
@@ -740,12 +737,12 @@ binder를 만들지는 않는다. 모든 `local` binder는 정확히 한 람다�
 소유한 binder를 가리킬 수 있다. Binder 번호는 정의 하나에서 평평하므로 scope가
 중첩되지 않는다.
 
-Frontend가 사용처마다 그 사용의 type으로 따로 만든 람다는 row를 양화하지 않는다.
-그 람다의 type에는 인스턴스화된 row만 있으므로 header와 `instantiate`가 없고, 지역
-scheme이 양화한 변수는 `body`다. 쓰이지 않는 람다도 양화할 사용이 없으므로 그
-변수는 `body`다. 다른 `let`의 값으로 람다를 다시 묶는
-별칭은 람다가 아닌 값이다. 별칭 자리에서 람다를 한 번 인스턴스화하며, 별칭의 지역
-scheme이 양화한 변수는 `body`다.
+`instantiate`는 type의 row만 치환하며 convention이나 entry를 고르지 않는다. 한 람다
+식은 `tribute_control.lambda` 하나이고, 사용처마다 따로 만들지 않는다. 쓰이지 않는
+람다는 양화할 사용이 없으므로 그 변수는 `body`다. 다른 `let`의 값으로 람다를 다시
+묶는 별칭은 람다가 아닌 값이다. 별칭 자리에서 람다를 한 번 인스턴스화하며, 별칭의
+지역 scheme이 양화한 변수는 `body`다. 별칭을 통한 호출도 자기 convention 배정의
+entry를 읽으므로, 별칭은 entry 선택을 막지 않는다.
 
 #### Row 인자와 치환
 
@@ -758,8 +755,8 @@ Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_a
 [convention class](cps-effects.md#row-변수의-convention-class) 규칙이 정한다.
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
 type 안의 모든 `func_sig`(자기 자신 포함)에서 tail이 양화된 binder `t`인 row
-`(I, t)`를 `(I ⊎ args[t].instances, args[t].tail)`로 바꾸고 정렬한다. Convention과
-다른 속성은 바꾸지 않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
+`(I, t)`를 `(I ⊎ args[t].instances, args[t].tail)`로 바꾸고 정렬한다. 다른 속성은 바꾸지
+않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
 만든다([layout 이름](#compiler-generated-tuple-layout)). `call_indirect`와
 `tail_call_indirect`의 callee type은 이미 caller의 binder로 쓰여 있으므로 row 인자가
 없다.
@@ -770,40 +767,85 @@ row 인자가 `quantified_rows`의 `i`번째 binder를 대체하며, 치환 규�
 #### Convention과 class 특수화
 
 Source-logical IR은 convention에 대해 두 상태를 가진다. Frontend가 내보내는 IR에서는
-어떤 `func_sig`도 `tribute.calling_convention`을 갖지 않는다. CPS 전략의
-[class 특수화 pass](cps-effects.md#class-특수화-pass)가 class 인스턴스와 지역 람다
-복사본을 만들고, 정의, 람다, 값과 block 인자의 타입, 참조의 결과, `ability.operation`의
-타입, tuple layout의 원소까지 모든 `func_sig`에 convention을 쓴다. 상태는 module
-전체의 성질이다. Module이 도달하는 `func_sig` 가운데 일부만 convention을 가지면
-invalid이고, convention이 없는 `func_sig`가 하나라도 있으면 convention이 없는 상태다.
-Legalization은 convention을 가진 상태만 받는다.
+정의, 람다, 간접 이전 어디에도 convention이 없다. CPS 전략의
+[class 특수화 pass](cps-effects.md#class-특수화-pass)가 class 인스턴스를 만들고 다음에
+convention을 쓴다.
+
+- `tribute_control.func`는 자기 convention을 가진다. 인스턴스마다 하나다.
+- `tribute_control.lambda`는 [entry](#callable-entry)마다 convention 배정과 본문을
+  가진다.
+- `call_indirect`와 `tail_call_indirect`는 callee를 부르는 convention 배정을 가진다.
+- `func_ref`는 entry마다 그 entry로 들어갈 대상 인스턴스를 가진다.
+
+상태는 module 전체의 성질이다. 위 자리 가운데 일부만 convention을 가지면 invalid이고,
+하나라도 없으면 convention이 없는 상태다. Legalization은 convention을 가진 상태만
+받는다. Callable 값의 type(`func_sig`)은 두 상태 모두에서 convention이 없다.
 
 Convention에 관한 규칙은 convention을 가진 상태에서만 적용한다.
 
-- `func_ref`의 결과 convention은 대상보다 약하지 않다.
-- `core.unrealized_conversion_cast`는 callable의 convention을 바꾸지 않는다.
-- `tail_call`과 `tail_call_indirect`의 callee convention은 감싼 callable보다 강하지
-  않다.
-- 정의와 람다의 convention, signature 안 callable type의 convention은
-  [CPS 전략](cps-effects.md#row와-호출-규약)이 그 row와 인스턴스의 class에서 계산한
-  값이다. 추론된 row인 정의는 [위 규칙](#추론된-row)을 따른다.
+- `tail_call`의 callee 인스턴스와 `tail_call_indirect`의 바깥 convention은 감싼
+  callable(정의, 또는 그 이전을 담은 entry)보다 강하지 않다.
+- 정의의 convention과 entry의 convention 배정은 [CPS 전략](cps-effects.md#row와-호출-규약)이
+  그 row와 인스턴스의 class에서 계산한 값이다. 추론된 row인 정의는
+  [위 규칙](#추론된-row)을 따른다.
 
-Type의 일치를 요구하는 규칙은 두 상태에서 같다. `call_indirect`의 operand와 결과,
-`instantiate`의 결과, `return`의 operand는 convention을 가진 상태에서 convention까지
-일치한다.
+Type의 일치를 요구하는 규칙은 두 상태에서 같고, convention을 비교하지 않는다.
+
+#### Callable entry
+
+**Convention 배정.** Callable type의 convention 배정은 그 type이 도달하는 `func_sig`
+위치마다 convention 하나를 둔 목록이다. 위치는 type 자신이 첫째이고, 나머지는 입력과
+결과, 중첩된 callable type, tuple layout의 원소를 앞에서부터 깊이 우선으로 센다.
+첫째 위치의 convention이 그 배정의 **바깥 convention**이며 물리 ABI(hidden
+parameter)는 이것만으로 정해진다. 나머지 위치는 본문이 callable 인자를 어떤
+convention으로 부르고 어떤 class 인스턴스를 참조하는지를 정한다. 배정을 tail이
+아니라 위치로 세는 것은 row 인자가 서로 다른 binder에 같은 row를 넘길 수 있어
+tail의 개수가 보는 쪽마다 다르기 때문이다. 위치는 row 치환으로 바뀌지 않는다.
+
+**Entry.** Callable 값은 entry의 집합이다. Entry는 convention 배정 하나와, 그 배정으로
+들어왔을 때 실행할 물리 callable 하나의 쌍이다. 간접 이전은 자기가 가진 배정의
+entry로 들어가며, 실행 중에 entry를 고르지 않는다.
+
+- 람다는 class 특수화가 정한 배정마다 entry를 가진다. 람다가 양화한 `local` binder가
+  tail인 위치의 class는 entry마다 배정에서 읽고, 둘러싼 인스턴스의 binder가 tail인
+  위치의 class는 그 인스턴스가 고정한 값이다. 이렇게 정한 class 조합마다 본문이
+  하나 있고, 조합이 같고 바깥 convention만 더 강한 배정의 entry는 그 본문을
+  [값 delimiter](cps-effects.md#값-delimiter)로 부르는 adapter다.
+- 람다의 capture 목록은 하나이며, 모든 entry 본문이 실제 사용하는 외부 SSA 값과
+  일치한다. Capture는 closure 하나에 한 번만 담긴다.
+- `func_ref`는 배정마다 그 배정의 class 인자가 고르는 대상의 class 인스턴스를
+  entry로 둔다. 인스턴스의 convention이 배정의 바깥 convention과 다르면 그 entry는
+  [`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다.
+
+**도달하는 배정.** Callable type에서 row를 지운 것을 그 type의 **shape**라 한다.
+Shape의 도달하는 배정은 프로그램 전체에서 그 shape의 값을 부르는 모든 간접 이전이
+가진 배정의 집합이다. 프로그램 전체 컴파일을 전제로 하므로 이 집합은 compile 하나에서
+정해진다. 한 shape의 closure는 모두 같은 entry 번호 공간을 쓴다. 번호는 도달하는
+배정을 convention 순서의 사전식으로 정렬한 위치다.
+
+**채우기.** 어떤 값이 놓이는 자리의 배정은, 그 값을 만든 인스턴스가 고정한 위치마다
+그 class보다 약하지 않다. Class는 row의 tail에서 계산하고, 값이 tail의 정체를 잃는
+자리(별칭, class 없는 tail)는 `Cps`로만 읽기 때문이다. 그래서 closure는 도달하는
+배정 가운데 이 조건을 만족하는 배정마다 entry를 채운다. 조건을 만족하지 않는 배정의
+칸은 실행되지 않으며 공용 trap entry를 가리킨다.
+
+**Entry table.** Closure 값은 entry table 참조 하나와 capture로 이루어진다
+([closure 저장 layout](#closure-저장-layout)). Entry table은 closure를 만드는 code
+대상(람다, `func_ref`의 대상과 class 인자)마다 정적으로 하나이고, 칸마다 entry
+하나를 가리킨다. Table은 생성 뒤 바뀌지 않으며 managed 참조를 담지 않는다.
 
 ### 사용자 정의 어셈블리 형식
 
 `tribute_control.func`와 `tribute_control.lambda`만 custom parse/print를 요구한다.
-Convention이 없는 callable type이면 convention 표기를 생략한다. 간결한 convention 문법은
-`convention(direct)`,
-`convention(evidence_direct)`, `convention(cps)`이며 각각 callable type의
-`tribute.calling_convention = "direct"`, `"evidence_direct"`, `"cps"`로 round
-trip한다. Parser는 signature와 keyword로 `tribute_control.func_sig`을 만들고
-convention을 type에만 저장한다.
-출력기도 type attribute만 읽으며 body에서 추론하거나 operation에 중복
-attribute를 쓰지 않는다. 추가 operation attribute에
-`tribute.calling_convention`을 다시 적으면 parser 또는 verifier가 거부한다.
+Convention이 없는 상태에서는 convention 표기를 생략한다. `func`의 간결한 convention
+문법은 `convention(direct)`, `convention(evidence_direct)`, `convention(cps)`이며 그
+operation의 convention으로 round trip한다. Callable type에는 convention을 쓰지 않는다.
+출력기는 body에서 convention을 추론하지 않는다.
+
+`lambda`는 convention이 없는 상태에서 본문 하나를 가진다. Class 특수화 뒤에는
+`captures [...]` 뒤에 `entries`와 entry 목록을 쓰며, entry마다 convention 배정을
+`[direct, cps]`처럼 위치 순서로 적고 그 본문을 쓴다. 바깥 convention만 다른 adapter
+entry는 `[cps, cps] = [direct, cps]`처럼 자기가 부르는 entry의 배정을 적고 본문이 없다.
 
 ```text
 tribute_control.func @f(%x: T) -> R convention(cps)
@@ -813,14 +855,19 @@ tribute_control.func @f(%x: T) -> R convention(cps)
 
 tribute_control.func @decl(%x: T) -> R convention(direct)
 
-%f = tribute_control.lambda(%x: T) -> R convention(cps)
+%f = tribute_control.lambda(%x: T) -> R
     captures [%captured] attributes {debug_name = "apply"} {
   ...
 }
 
-%g = tribute_control.lambda() -> R convention(direct)
-    captures [] {
-  ...
+%g = tribute_control.lambda(%k: !K) -> R captures [] entries {
+  [direct, direct] {
+    ...
+  }
+  [direct, cps] {
+    ...
+  }
+  [cps, direct] = [direct, direct]
 }
 ```
 
@@ -828,10 +875,10 @@ tribute_control.func @decl(%x: T) -> R convention(direct)
 추가 attribute와 선택적 body를 출력한다. Body가 있으면 entry block label을
 생략하고 signature parameter를 entry argument로 복원하며 declaration은 body가
 없다. `lambda` 형식은 `closure.lambda`처럼 SSA result, 분해된 source
-parameter/result, convention, 명시적 `captures [...]`, 선택적 추가
-attribute와 body를 출력하고 entry label을 생략한다. `captures [...]`는 capture가
-없어도 `captures []`로 항상 출력하며 canonical 순서는 convention, captures,
-선택적 attributes, body다.
+parameter/result, 명시적 `captures [...]`, 선택적 추가 attribute와 body 또는 entry
+목록을 출력하고 entry label을 생략한다. `captures [...]`는 capture가 없어도
+`captures []`로 항상 출력하며 canonical 순서는 captures, 선택적 attributes, body
+또는 `entries`다.
 
 Row binder는 위치로 이름을 붙여 `'a0`, `'a1`, …로 쓴다. `func`는 symbol 바로 뒤의
 `[...]`에 binder를 순서대로 선언한다. 종류가 `param`이 아니면 이름 앞에 `ability_arg`,
@@ -846,7 +893,7 @@ binder 이름을 나열할 뿐이며, 종류나 합집합을 쓰지 않고 위�
 않는다. 이 표기가 `quantified_rows` 속성을 대신한다.
 
 ```text
-%step = tribute_control.lambda['a1](%m: core.i32) -> core.i32 row(| 'a1) convention(direct)
+%step = tribute_control.lambda['a1](%m: core.i32) -> core.i32 row(| 'a1)
     captures [] {
   ...
 }
@@ -1077,14 +1124,18 @@ continuation, and handler closures. It must not expose Marker field indices,
 handler-table storage layout, closure field positions, or backend function
 pointer representation.
 
-`closure.*` represents closure allocation and projection. Convention-proven
-`closure.closure` keeps its exact callable type through shared effect lowering
-and target-ABI validation. Only after that validation may target lowering choose
-the closure storage layouts, rewriting every type-bearing surface coherently.
+`closure.*` represents closure allocation and projection. `closure.closure`
+names the closure's shape, which carries no convention; each `closure.new`
+names one entry function per entry number, and each closure transfer names the
+convention assignment it enters through ([callable entry](#callable-entry)).
+The shape and the entries keep their exact types through shared effect
+lowering and target-ABI validation. Only after that validation may target
+lowering choose the closure storage layouts, rewriting every type-bearing
+surface coherently.
 Until then a lowered storage pack keeps its exact closure type through an
 unrealized cast, which becomes an upcast to the closure base layout when the
 storage layout is selected; this is not semantic type equivalence. A closure
-is one object holding its code reference and its captured values; the
+is one object holding its entry table reference and its captured values; the
 [closure 저장 layout](#closure-저장-layout) section defines the operations,
 layouts, and casts.
 
@@ -1196,7 +1247,7 @@ type map이나 type interner에만 존재하는 layout은 게시된 정의가 �
 <a id="compiler-generated-tuple-layout"></a>
 
 Compiler-generated tuple layout의 이름은 원소의 logical type에서 정해지는 함수이며,
-원소가 callable type이면 그 [row](#ability-row)와, 있으면 convention을 포함한다. 그래서 row만
+원소가 callable type이면 그 [row](#ability-row)를 포함한다. 그래서 row만
 다른 두 tuple은 다른 layout이고, [row 치환](#row-인자와-치환)은 원소를 치환한 layout을
 같은 함수로 다시 만든다. 이 함수는 IR 계층이 소유하며 frontend와 pass가 함께 쓴다.
 
@@ -1244,8 +1295,9 @@ references, returns, tail calls, and unreachable control flow.
 attribute로 exact `func.func_sig` contract를 가지며, callee가 erased pointer나 table
 index로 바뀐 뒤에도 이 contract를 보존한다. 인자 목록과 `func.call_indirect`의 결과
 목록은 signature의 입력·결과 목록과 정확히 일치해야 한다. Callee 타입이
-`func.func_sig`이거나 `closure.closure`에 담긴 `func.func_sig`이면 signature와 같아야
-한다. `tribute.calling_convention`이 붙은 indirect transfer는 verifier가 convention과도
+`func.func_sig`이면 signature와 같아야 한다. Callee가 closure이면 signature는 그
+closure shape와 이전이 가진 convention 배정에서 유도한 entry의 signature다.
+`tribute.calling_convention`이 붙은 indirect transfer는 verifier가 convention과도
 대조한다. Physical operand type, symbol, ABI string 또는 storage shape로 signature를
 재구성하지 않는다.
 Backend indirect-call operation도 runtime-queried `IndirectCallLike` operation
@@ -1699,7 +1751,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 
 | `layout` | 붙는 타입 | 뜻 |
 | --- | --- | --- |
-| `"closure"` | closure base `adt.struct` | 함수 참조 필드 하나로 이루어진 closure 값의 공통 저장. Capture 없는 closure의 저장이기도 하다 |
+| `"closure"` | closure base `adt.struct` | entry table 참조 필드 하나로 이루어진 closure 값의 공통 저장. Capture 없는 closure의 저장이기도 하다 |
 | `"closure_captures"` | closure capture `adt.struct` | closure base의 필드 뒤에 capture를 순서대로 둔 closure 저장. `closure_base`가 그 base다 |
 | `"bytes"` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
 | `"bytes_data"` | Wasm bytes backing `adt.array<core.i8>` | `Bytes`가 가리키는 byte 배열 |
@@ -1710,7 +1762,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
 - 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
   타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
-  `adt.struct<_closure(code: core.ptr), {layout = "closure"}>`.
+  `adt.struct<_closure(entries: core.ptr), {layout = "closure"}>`.
 - 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
@@ -1797,38 +1849,42 @@ descriptor로만 구별된다.
 
 ### Closure 저장 layout
 
-Closure 값은 code 참조와 capture한 값을 함께 담은 객체 하나다. 별도의
-environment 객체를 두지 않으며, closure를 만드는 일은 할당 하나이고 capture를
-읽는 일은 closure의 필드 접근 하나다. Closure의 의미적 타입은 capture와 무관하게
+Closure 값은 [entry table](#callable-entry) 참조와 capture한 값을 함께 담은 객체
+하나다. 별도의 environment 객체를 두지 않으며, closure를 만드는 일은 할당 하나이고
+capture를 읽는 일은 closure의 필드 접근 하나다. Closure의 의미적 타입은 capture와 무관하게
 `closure.closure<S>` 하나이고, capture마다 다른 layout은 저장 표현에만 있다.
 
 #### Shared IR 표현
 
-- `closure.new @f(%c0, %c1, ...)`는 code 함수 `@f`와 capture 값을 순서대로 받아
-  closure를 만든다. Capture 목록은 비어 있을 수 있다. Environment를 따로 받지
-  않는다.
-- Code 함수의 environment 입력은 그 closure 자신이다. 입력의 타입은
-  `closure.new` 결과의 exact closure 타입이고, 위치는 기록된 environment index가
-  정한다. 이 입력의 ownership 계약은 다른 물리 입력과 같다
+- `closure.new`는 entry 함수 목록과 capture 값을 순서대로 받아 closure를 만든다.
+  Entry 함수 목록은 그 closure shape의 entry 번호 순서이며, 채우지 않는 칸은 공용
+  trap entry다. 같은 목록을 가진 `closure.new`들은 entry table 하나를 공유한다.
+  Capture 목록은 비어 있을 수 있다. Environment를 따로 받지 않는다.
+- Entry 함수의 environment 입력은 그 closure 자신이다. 입력의 타입은
+  `closure.new` 결과의 closure 타입이고, 위치는 그 entry의 바깥 convention이 정한
+  environment index다. 이 입력의 ownership 계약은 다른 물리 입력과 같다
   ([출구에서 확정되는 물리 계약](#출구에서-확정되는-물리-계약)).
-- Code 함수는 environment 입력에서 capture를 `closure.unpack`으로만 읽는다.
-  `closure.unpack %self`의 결과 타입 목록은 capture 타입 목록이며, code 함수를
+- Entry 함수는 environment 입력에서 capture를 `closure.unpack`으로만 읽는다.
+  `closure.unpack %self`의 결과 타입 목록은 capture 타입 목록이며, entry 함수를
   참조하는 모든 `closure.new`의 operand 타입 목록과 정확히 같아야 한다. Whole-IR
-  검증은 이 일치를 code 함수와 그 참조에서 확인하며 struct 이름이나 필드 모양으로
-  대신하지 않는다. Capture가 없는 code 함수는 `closure.unpack`을 갖지 않는다.
-- `closure.func`는 closure의 code 참조를 읽는다. Closure 호출은 code 참조를 호출하고
+  검증은 이 일치를 entry 함수와 그 참조에서 확인하며 struct 이름이나 필드 모양으로
+  대신하지 않는다. Capture가 없는 entry 함수는 `closure.unpack`을 갖지 않는다.
+- `closure.entry`는 closure의 entry table에서 entry 번호 하나의 함수 참조를 읽는다.
+  Closure 호출은 자기 convention 배정의 entry 번호로 그 참조를 읽어 호출하고
   closure 값 자체를 environment 입력으로 넘긴다. Environment를 따로 꺼내는
   projection은 없다.
-- Lambda lifting, CPS continuation(`Done`, `Dispatch`, resume), `func_ref` adapter,
+- Lambda lifting, CPS continuation(`Done`, `Dispatch`, resume), `func_ref` entry,
   target 진입 bridge가 만드는 frame closure를 포함한 모든 closure 생성은
-  `closure.new` 하나로 표현한다. 여러 closure가 공유하는 가변 상태는 managed cell
-  참조를 capture해서 표현하며, closure의 필드는 생성 뒤 바뀌지 않는다.
+  `closure.new` 하나로 표현한다. Compiler가 만드는 closure도 같은 entry 번호 규칙을
+  따르며, 한 convention으로만 불리는 closure는 그 배정의 칸 하나만 채운다. 여러
+  closure가 공유하는 가변 상태는 managed cell 참조를 capture해서 표현하며,
+  closure의 필드는 생성 뒤 바뀌지 않는다.
 
 #### Layout
 
 Closure 저장 layout은 두 종류다.
 
-- **Closure base**(`layout = "closure"`)는 code 필드 하나를 가진다. 모든 closure
+- **Closure base**(`layout = "closure"`)는 entry table 필드 하나를 가진다. 모든 closure
   값의 저장 타입이며, closure를 저장하거나 전달하는 위치(signature, block 인자,
   `ContinuationFrame<R>`의 필드, evidence runtime의 `Dispatch`)는 이 타입을 쓴다. Capture가
   없는 closure는 이 layout으로 할당한다.
@@ -1847,14 +1903,14 @@ Closure 저장 layout은 두 종류다.
   `closure_base`로만 정하고, 필드 모양이 prefix처럼 보인다는 사실에서 추론하지
   않는다.
 - Capture layout의 identity는 base와 capture 필드 타입 목록이다. Capture 타입 목록이
-  같은 두 code 함수는 같은 layout을 쓴다. 필드 이름과 struct 이름은 canonical
+  같은 두 closure는 같은 layout을 쓴다. 필드 이름과 struct 이름은 canonical
   생성자가 정하며 의미를 갖지 않는다.
-- Code 필드의 타입은 target이 정하는 함수 참조 표현이다. Target은 closure가
-  호출자에게 보이는 exact signature `S`마다 base를 정한다. 모든 `S`에 base 하나를
-  쓸 수도 있고 `S`마다 다른 base를 둘 수도 있다. `S`마다 base를 두고
-  code 필드를 typed 함수 참조로 표현하면, code 함수의 environment 입력이 다시 그
-  base이므로 base와 code 함수 타입은 서로를 가리킨다. 이 재귀는 `adt.typeref`로
-  끊는다.
+- Entry table 필드의 타입은 target이 정하는 정적 table 참조 표현이다. 이 필드는
+  managed 참조가 아니며 해제하지 않는다. Target은 closure shape `S`마다 base를
+  정한다. 모든 `S`에 base 하나를 쓸 수도 있고 `S`마다 다른 base를 둘 수도 있다.
+  `S`마다 base를 두고 entry를 typed 함수 참조로 표현하면, entry 함수의 environment
+  입력이 다시 그 base이므로 base와 entry 함수 타입은 서로를 가리킨다. 이 재귀는
+  `adt.typeref`로 끊는다.
 - Capture layout의 `closure_base`는 `closure.new` 결과 타입의 `S`에서 고른 base다.
 
 #### Storage 확정
@@ -1862,8 +1918,11 @@ Closure 저장 layout은 두 종류다.
 [Representation/ABI 경계](#representationabi-경계)의 closure operation lowering과
 storage 확정은 다음 변환을 함께 적용한다.
 
-- `closure.new`는 code 참조와 capture를 필드로 가진 할당 하나가 된다. 결과는 capture
-  layout에서 base로의 upcast다.
+- `closure.new`는 entry table 참조와 capture를 필드로 가진 할당 하나가 된다. 결과는
+  capture layout에서 base로의 upcast다. Entry table은 entry 함수 목록마다 정적
+  data 하나로 한 번 만든다.
+- `closure.entry`는 base의 entry table 필드를 읽고 그 table에서 entry 번호의 칸을
+  읽는 일이 된다. 간접 호출은 closure 필드 하나와 table 칸 하나를 읽는다.
 - `closure.unpack`은 environment 입력을 base에서 정확한 capture layout으로 바꾸는
   cast 하나와 capture 필드 읽기가 된다. 이 cast는 `closure.*` dialect 설명의 복원
   규칙을 따르며, Wasm에서는 `ref.cast`, native에서는 pointer 그대로다.
@@ -2002,7 +2061,7 @@ Duplicate, malformed, or non-callable declarations are errors.
 
 Callable region ownership comes from a dialect-registered operation interface,
 not unqualified operation names. `func.func` exposes its explicit function type;
-`closure.lambda` exposes the function type inside its result closure type. The
+`closure.lambda` exposes the function type of each of its entries. The
 nearest registered owner is authoritative, including when its signature is
 malformed. Shared validation does not infer a lambda signature from an attribute
 or an outer function, and does not select a physical CPS ABI.
