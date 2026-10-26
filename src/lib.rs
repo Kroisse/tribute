@@ -19,6 +19,7 @@ pub use tribute_front::SourceCst;
 pub use tribute_front::{ParsedCst, parse_cst};
 
 pub mod database;
+mod frontend;
 pub mod link;
 pub mod pipeline;
 pub mod prelude;
