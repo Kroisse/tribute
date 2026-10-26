@@ -240,8 +240,8 @@ fn test_execute_dynamic_bytes_write_boundary() {
         <trunk_ir::dialect::core::Module as trunk_ir::ops::DialectOp>::from_op(&ctx, module.op())
             .expect("core.module");
     let mut pm = trunk_ir::pass::PassManager::new();
-    pm.add_pass(tribute_passes::wasm::lower::LowerToWasm)
-        .add_pass(tribute_passes::wasm::lower::FinalizeWasmGcTypes);
+    tribute_passes::wasm::lower::add_lowering_passes(&mut pm);
+    pm.add_pass(tribute_passes::wasm::lower::FinalizeWasmGcTypes);
     pm.run(&mut ctx, root, &mut Default::default())
         .expect("lower dynamic output to Wasm and finalize its WasmGC types");
     let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)

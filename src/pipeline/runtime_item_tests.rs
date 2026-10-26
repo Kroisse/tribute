@@ -6,7 +6,9 @@
 //! own item set.
 
 use super::*;
+use crate::frontend::frontend_spans;
 use rustc_hash::FxHashMap as HashMap;
+use tribute_front::ast_to_ir;
 use tribute_front::ast_to_ir::runtime_items::{RuntimeInputs, RuntimeItemErrorKind, check_runtime};
 use tribute_ir::runtime_items::{RuntimeFunction, RuntimeItem, RuntimeItemKind, runtime_type};
 use tribute_passes::abi_boundary::TargetKind;

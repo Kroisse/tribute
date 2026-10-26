@@ -1,11 +1,15 @@
 use super::*;
+use crate::frontend::merge_and_lower_to_ir;
 use crate::link::link_native_binary;
 use crate::prelude::{prelude_dependencies, prelude_exports, prelude_module};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
 use salsa_test_macros::salsa_test;
 use std::ops::ControlFlow;
+use tribute_front::monomorphize::SpecializationOutput;
+use tribute_front::resolve as ast_resolve;
 use tribute_front::resolve::PackageEnv;
+use tribute_front::typeck as ast_typeck;
 use trunk_ir::SymbolPath;
 use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectType;
@@ -2266,7 +2270,11 @@ fn types_surviving_wasm_lowering(
         tribute_passes::abi_boundary::TargetKind::Wasm,
     )
     .expect("Wasm boundary");
-    run_pass(&mut ctx, module, tribute_passes::wasm::lower::LowerToWasm).expect("Wasm lowering");
+    let root = core_module(&ctx, module);
+    let mut pm = PassManager::new();
+    tribute_passes::wasm::lower::add_lowering_passes(&mut pm);
+    pm.run(&mut ctx, root, &mut AnalysisCache::new())
+        .expect("Wasm lowering");
 
     let mut sites = std::collections::BTreeSet::new();
     for (name, ty) in ctx.type_aliases().iter().cloned() {
@@ -2411,7 +2419,11 @@ fn wasm_lowering_carries_only_preserved_language_metadata(db: &salsa::DatabaseIm
         tribute_passes::abi_boundary::TargetKind::Wasm,
     )
     .expect("Wasm boundary");
-    run_pass(&mut ctx, module, tribute_passes::wasm::lower::LowerToWasm).expect("Wasm lowering");
+    let root = core_module(&ctx, module);
+    let mut pm = PassManager::new();
+    tribute_passes::wasm::lower::add_lowering_passes(&mut pm);
+    pm.run(&mut ctx, root, &mut AnalysisCache::new())
+        .expect("Wasm lowering");
 
     // Wasm lowering copies operation attributes without interpreting
     // them, so what it carries is exactly what the boundary let through.
