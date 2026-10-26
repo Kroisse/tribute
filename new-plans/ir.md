@@ -1798,10 +1798,10 @@ Struct 이름과 필드 이름은 타입 이름공간의 이름이며 symbol tab
 ```text
 adt.struct<Point(x: core.i32, y: core.i32)>
 adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<{name = "Node"}>)>
-adt.struct<_closure(code: core.ptr), {layout = "closure"}>
-adt.struct<_closure_captures(code: core.ptr, _0: core.i32),
+adt.struct<_closure(entries: core.ptr), {layout = "closure"}>
+adt.struct<_closure_captures(entries: core.ptr, _0: core.i32),
   {layout = "closure_captures",
-   closure_base = adt.struct<_closure(code: core.ptr), {layout = "closure"}>}>
+   closure_base = adt.struct<_closure(entries: core.ptr), {layout = "closure"}>}>
 adt.struct<Empty()>
 ```
 

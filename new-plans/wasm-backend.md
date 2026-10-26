@@ -360,7 +360,7 @@ user-defined type은 그 뒤에 배치된다:
 | 0 | `BoxedF64` |
 | 1 | `BytesArray` |
 | 2 | `BytesStruct` |
-| 3 | `_closure { code: i32 }`, 모든 closure 값의 base |
+| 3 | `_closure { entries: i32 }`, 모든 closure 값의 base |
 | 4 | `Described { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
 | 5+ | user-defined structs, arrays, variants, closure capture layouts |
 
