@@ -2,7 +2,7 @@
 //!
 //! Evidence lowering itself is shared by the targets
 //! ([`crate::evidence_lowering`]). After the boundary exit,
-//! [`bind_wasm_prompt_tag_runtime`] gives the prompt tag allocator
+//! `bind_wasm_prompt_tag_runtime` gives the prompt tag allocator
 //! `__tribute_next_tag` its Wasm implementation.
 
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -22,7 +22,7 @@ pub const NEXT_TAG: &str = "__tribute_next_tag";
 ///
 /// Runs after Wasm dialect lowering has converted the declaration's
 /// signature; the implementation adopts it.
-pub fn bind_wasm_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
+pub(crate) fn bind_wasm_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
     let Some(block) = module.first_block(ctx) else {
         return;
     };

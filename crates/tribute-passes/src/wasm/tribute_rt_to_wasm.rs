@@ -89,7 +89,7 @@ fn create_i31_unbox(
 }
 
 /// Lower tribute_rt dialect to wasm dialect.
-pub fn lower(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(BoxIntPattern)
         .add_pattern(UnboxIntPattern)

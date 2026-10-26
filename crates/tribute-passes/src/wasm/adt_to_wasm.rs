@@ -12,7 +12,7 @@
 //! A user struct or variant value carries its runtime type descriptor
 //! number as an `i32` first field, so its source fields start at index 1.
 //! The number comes from the module's `tribute_rtti.layout` declarations
-//! ([`super::descriptors::declare`]), which this pass erases. Builtin layouts
+//! (`descriptors::declare`), which this pass erases. Builtin layouts
 //! have no descriptor field.
 //!
 //! ## Variant Operations
@@ -49,7 +49,7 @@
 //!
 //! GC operations first lower to `wasm_gc`, which identifies GC types by
 //! `TypeRef`. Struct operations keep their user `adt.struct` layout until
-//! [`super::struct_layouts::convert`] replaces it with its structural type. A
+//! `struct_layouts::convert` replaces it with its structural type. A
 //! module-wide pass assigns the explicit indices required by indexed `wasm`
 //! operations before emission.
 
@@ -139,7 +139,7 @@ fn descriptor_operand(
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+pub(crate) fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     let numbers = tribute_rtti::Layout::declared_indices(ctx, module);
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern {

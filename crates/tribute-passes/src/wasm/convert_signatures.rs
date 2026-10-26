@@ -24,7 +24,7 @@ use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConver
 /// Convert function and indirect-call signatures to their Wasm types.
 ///
 /// This pass should run early in the WASM pipeline, before target operation lowering.
-pub fn lower(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     let type_converter = crate::wasm::type_converter::wasm_type_converter(ctx);
 
     // The operations whose signatures this pass converts follow their

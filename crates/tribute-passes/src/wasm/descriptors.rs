@@ -28,7 +28,7 @@ pub fn has_descriptor_field(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 /// Declare the module's user allocation descriptors in allocation order.
-pub fn declare(ctx: &mut IrContext, module: Module) {
+pub(crate) fn declare(ctx: &mut IrContext, module: Module) {
     let mut descriptors = Vec::new();
     let mut seen = HashSet::default();
     if let Some(body) = module.body(ctx) {

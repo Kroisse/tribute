@@ -58,7 +58,7 @@ fn walk_ops(ctx: &IrContext, region: RegionRef, callback: &mut impl FnMut(&IrCon
     }
 }
 
-pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+pub(crate) fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
     if has_write(ctx, module) {
         let location = ctx.op(module.op()).location;
         let block = module
