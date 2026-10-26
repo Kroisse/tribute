@@ -244,22 +244,16 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
   apply_twice + [Direct]           → apply_twice$9D
   ```
 
-- 인스턴스 안의 람다마다 [entry](ir.md#callable-entry)를 정한다. 람다가 놓이는
-  shape의 [도달하는 배정](ir.md#callable-entry) 가운데 채우기 조건을 만족하는
-  배정마다 entry 하나를 두고, class 조합이 같은 배정끼리 본문 하나를 공유한다.
-  본문은 그 조합의 class로 다시 읽은 람다 본문의 복사이며, 그 안에서 row를 양화하는
-  람다는 정의의 binder 목록 끝에 새 `local` binder를 받는다. 람다 op, 결과 값,
-  capture 목록, `instantiate`는 하나로 남으므로 사용처를 다시 연결하지 않는다.
-  Capture 목록은 모든 entry 본문의 외부 참조와 같게 다시 계산한다. Entry 본문 안의
-  사용처가 바깥 람다에 새 조합을 요구할 수 있으므로, 새 entry가 없을 때까지 지역
-  class를 다시 정한다.
-- 도달하는 배정은 모든 인스턴스의 간접 이전에서 모은다. 간접 이전의 배정은 그
-  이전을 담은 인스턴스와 entry의 class 표로 callee type의 각 위치를 읽은 값이다. 새
-  entry가 새 간접 이전을 만들 수 있으므로 인스턴스, entry, 도달하는 배정을 함께
-  고정점으로 정한다. Class 값이 셋이고 위치 수가 type마다 유한하므로 고정점에
-  도달한다.
-- `func_ref`마다 도달하는 배정에 대해 대상의 class 인스턴스를 정하고, 그 인스턴스를
-  인스턴스 수집에 더한다.
+- 인스턴스 안의 람다마다 [entry](ir.md#callable-entry)를 정한다. 람다 자신의 row가
+  요구하는 convention 이상의 convention마다 entry 하나를 두고, 그 convention으로
+  다시 읽은 class 조합이 같은 entry끼리 본문 하나를 공유한다. 본문은 그 조합의
+  class로 다시 읽은 람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는 정의의
+  binder 목록 끝에 새 `local` binder를 받는다. 람다 op, 결과 값, capture 목록,
+  `instantiate`는 하나로 남으므로 사용처를 다시 연결하지 않는다. Capture 목록은 모든
+  entry 본문의 외부 참조와 같게 다시 계산한다. 람다마다 entry는 셋을 넘지 않으므로
+  다른 람다의 entry를 기다리지 않는다.
+- `func_ref`마다 entry의 대상 인스턴스를 `row_args`의 class 인자로 정하고, 그
+  인스턴스를 인스턴스 수집에 더한다.
 - 정의, entry, 간접 이전에 convention을 쓴다. 값과 block 인자의 타입, 참조의 결과,
   `ability.operation`의 타입, tuple layout의 원소, nominal layout의 필드는 convention을
   갖지 않는다. [추론된 row](ir.md#추론된-row)인 정의 자신의 convention은 tail이 class
@@ -283,13 +277,13 @@ Class 특수화가 convention을 정한 뒤, 적법화 전에 `fn` handler arm�
 - 한 정의에서 복제된 인스턴스 여럿이 같은 호출에서 위반하면 그 호출을 한 번 보고한다. 특수화가 정의마다 만드는 class가
   모두 `Cps`인 인스턴스는 그 class로 참조될 때만 검사한다.
 - Callee의 convention은 특수화가 쓴 값을 읽는다. 직접 호출은 callee 정의의
-  convention을, 간접 호출은 그 이전이 가진 배정의 바깥 convention을 쓴다. Row의 tail을 다시
+  convention을, 간접 호출은 그 이전이 가진 convention을 쓴다. Row의 tail을 다시
   읽지 않으므로, row를 생략한 순수 정의의 `Direct` worker 호출은 위반이 아니다.
 - `Cps` callee 호출은 arm 안의 `handle` body 밖에서는 위반이다. `handle` body 안에서는
   그 호출의 row에서 둘러싼 `handle`들이 처리하는 label을 뺀 나머지의 class를 인스턴스의
   class 표로 계산하고, 그 class가 `Cps`이면 위반이다.
-- Arm 안의 lambda 본문은 검사하지 않는다. Lambda는 호출될 때 그 호출이 가진 배정으로
-  검사된다. 안쪽 `fn` arm은 따로 검사하고, 안쪽 `handle`의 completion과 `op` arm은 바깥
+- Arm 안의 lambda 본문은 검사하지 않는다. Lambda는 호출될 때 그 호출이 가진
+  convention으로 검사된다. 안쪽 `fn` arm은 따로 검사하고, 안쪽 `handle`의 completion과 `op` arm은 바깥
   arm의 일부로 검사한다.
 
 위반은 그 호출의 source 위치를 가진 컴파일 에러다. 진단은 arm이 처리하는 operation과,
@@ -427,8 +421,8 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
 계산한 뒤 함께 rewrite한다:
 
 - `tribute_control.func`는 `func.func`와 physical `func.func_sig`를 만든다.
-- `tribute_control.lambda`는 physical `closure.lambda`와 그 shape의
-  `closure.closure`를 만든다. `closure.lambda`는 entry마다 본문과 entry 번호를
+- `tribute_control.lambda`는 physical `closure.lambda`와 convention 없는
+  `closure.closure`를 만든다. `closure.lambda`는 entry마다 본문이나 adapter를
   가지며, 각 entry의 signature에는 그 바깥 convention의 `CallableAbi` hidden
   parameter가 있지만 environment는 없다. 기존 closure lowering이 entry마다
   environment를 interpose한다.
@@ -441,9 +435,9 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   physical `func.call`과 `func.call_indirect`가 된다. `Cps` call은 suffix를
   담은 `ContinuationFrame<R>`를 전달하고 named target에는 `func.tail_call`, dynamic target에는
   `func.tail_call_indirect`를 쓴다. Evidence, ContinuationFrame과 environment는 `CallableAbi`
-  순서로 삽입한다. `call_indirect`의 convention은 그 이전이 가진 배정의 바깥
-  convention이며, 변환된 `func.call_indirect`는 callee shape와 그 배정에서 유도한
-  entry의 exact `signature`와 entry 번호를 싣는다. environment는 여기서 아직
+  순서로 삽입한다. `call_indirect`의 convention은 그 이전이 가진 convention이며,
+  변환된 `func.call_indirect`는 callee type과 그 convention에서 유도한 entry의 exact
+  `signature`를 싣는다. environment는 여기서 아직
   interpose하지 않는다.
 - `tribute_control.return`은 `Direct`/`EvidenceDirect`에서 `func.return`이 된다.
   `Cps`에서는 `ability.exit`로 ContinuationFrame의 `Done<R>`에 `value`를 이전하며 뒤에
@@ -471,7 +465,7 @@ entry 함수의 최종 parameter 순서는 `Direct`에서 `environment, source..
 environment를 삽입한다.
 
 Closure의 environment index는 entry마다 그 바깥 convention이 정한다. 간접 이전은
-자기 배정의 바깥 convention에서 index를 얻고, entry 함수는 그 index를
+자기 convention에서 index를 얻고, entry 함수는 그 index를
 `tribute.closure_environment_index`로 기록한다. 일반 callable과 생성된
 continuation은 `CallableAbi`가 정한 Evidence와 ContinuationFrame entry parameter를 사용한다.
 따라서 producer가
@@ -509,9 +503,8 @@ Legalization 출구 검증과 물리화 입구는 module 전체의 convention을
 
 - 이 interface를 구현하지 않는 operation에 붙은 convention
 - Keyword가 아닌 convention 값
-- Closure transfer의 convention과 그 transfer가 가진 배정의 바깥 convention이 다른
-  경우, `closure.lambda`나 `closure.new`의 entry 함수의 convention과 그 entry 번호의
-  배정이 다른 경우. Closure type은 convention을 기록하지 않는다.
+- `closure.lambda`나 `closure.new`의 entry 함수의 convention이 그 칸의 convention과
+  다른 경우. Closure type은 convention을 기록하지 않는다.
 
 같은 legalization에서 각 `tribute_control.perform`을 typecheck된
 `operation_kind`에 따라 변환한다. `"fn"`은 suffix를 capture하지 않고
@@ -621,7 +614,7 @@ location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가
 추상 frame 표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph의
 lambda를 추출하지만
-`closure.new`, `closure.entry`, `closure.unpack`과 closure shape type은
+`closure.new`, `closure.entry`, `closure.unpack`과 `closure.closure` type은
 target ABI validation까지 유지한다. `lower_ability_call`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
 target pipeline의 closure storage finalization과 Native/Wasm evidence pass가
@@ -1177,7 +1170,7 @@ ast_to_ir (tribute_control callable/control + ordinary value IR, convention 없�
 추상 frame 표면, logical `ability.*` dispatch 표면이다. `lower_continuation_frames`의
 출력에는 추상 frame 표면 대신 nominal frame layout, frame closure, `effect.dispatch_cps`,
 `ability.handle_dispatch`가 있다. Shared ability/evidence pass와 strict target
-ABI validation은 `closure.closure` shape type과 closure transfer의 배정을 그대로
+ABI validation은 `closure.closure` type과 closure transfer의 convention을 그대로
 소비한다. 그 뒤 경계 안에서 closure operation과 모든 type-bearing storage
 surface를 [closure 저장 layout](ir.md#closure-저장-layout)으로 함께 바꾸고 target evidence/runtime
 lowering이 이를 소비한다. 경계 이후의 proper tail transfer lowering은 이 layout을

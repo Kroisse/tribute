@@ -492,8 +492,8 @@ layout들로 이루어진다.
 - Closure base(`layout = "closure"`)는 예약 index 3의 `{ entries: i32 }`이며 final이
   아니다. Entries 필드는 immutable이며 closure function table 안의
   [entry table](ir.md#callable-entry) 시작 index다. 한 entry 함수 목록은 function
-  table에서 연속한 칸을 차지하고, entry 번호 `i`의 함수는 시작 index에 `i`를 더한
-  칸에 있다. 채우지 않는 칸은 공용 trap entry다.
+  table에서 `Direct`, `EvidenceDirect`, `Cps` 순서로 연속한 세 칸을 차지한다. 채울
+  수 없는 칸은 공용 trap entry다.
 - 사용자 `adt.struct`를 `wasm_gc.struct`로 바꾸는 단계가 capture layout
   (`layout = "closure_captures"`)도 `wasm_gc.struct`로 바꾼다. 필드는 base의 entries
   필드 뒤에 capture의 Wasm 저장 표현을 순서대로 두고, `closure_base`가 가리키는
@@ -505,11 +505,11 @@ layout들로 이루어진다.
 - Entry 함수는 environment 입력으로 base 참조를 받아 자기 capture layout으로
   `ref.cast`한 뒤 capture를 `struct.get`으로 읽는다. Capture 없는 closure의 entry
   함수는 base 객체를 그대로 받고 cast하지 않는다.
-- Closure 호출은 base에서 entries 필드를 읽고 entry 번호를 더한 function table
+- Closure 호출은 base에서 entries 필드를 읽고 convention의 칸 번호를 더한 function table
   index를 호출하며, closure 참조 자체를 environment 인자로 넘긴다. Ordinary
   호출은 `call_indirect`, proper tail transfer는 `return_call_indirect`이며 exact
   `wasm.func_sig`를 명시한다.
-- Entry를 typed 함수 참조로 표현하는 경우에는 base를 closure shape `S`마다 두고,
+- Entry를 typed 함수 참조로 표현하는 경우에는 base를 closure의 callable type `S`마다 두고,
   entry table을 entry마다 typed 함수 참조 필드를 가진 immutable GC struct로 둔다.
   `$closure_S`는 `{ entries: (ref $entries_S) }`이고, 각 entry 함수 타입의
   environment 입력이 `$closure_S`이므로 타입들은 서로를 가리킨다. 모든 GC 타입이
