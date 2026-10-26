@@ -805,19 +805,18 @@ Type의 일치를 요구하는 규칙은 두 상태에서 같고, convention을 
 row의 class다. Row를 양화하지 않는 람다는 사용이 하나의 class만 고르므로 본문이
 하나다. Class `c`의 본문은 람다를 다음처럼 다시 읽은 것이다.
 
-- 람다가 양화한 `local` binder 가운데 람다 자신의 row에 나타나는 것은 class `c`로
-  읽는다. Row의 class는 그 tail들의 class를 합친 값이므로 tail마다 `c` 이하이고,
-  더 강한 class로 읽은 callable 인자도 그 class의 entry를 가진다(아래 채우기).
-- 자기 row에 나타나지 않고 입력이나 결과의 callable type에만 나타나는 binder는
-  class `c`를 고르는 사용들이 그 binder에 넘기는 class로 읽는다.
+- 람다가 양화한 `local` binder는 class `c`를 고르는 사용들이 그 binder에 넘기는
+  row의 class로 읽는다. 람다 자신의 row에 나타나는지와 관계없다.
 - 둘러싼 인스턴스의 binder는 그 인스턴스가 고정한 class로 읽는다.
 
-같은 class `c`를 고르는 사용들이 둘째 경우의 binder에 서로 다른 class를 넘기면, 본문
-하나로는 그 사용들을 받을 수 없다. 본문이 그 binder의 row로 만드는 closure는 만든
-쪽의 class를 생성 class로 가지므로, 더 강한 class로 합쳐 읽으면 그 closure를 더 약한
-class로 보는 쪽이 trap entry에 닿는다. 이때 class 특수화는 넘기는 class 조합마다
-람다를 값 하나씩으로 나누고, 각 사용을 자기 조합의 값에 연결한다. 나눈 값은 각자
-capture 목록과 entry table을 가진다.
+같은 class `c`를 고르는 사용들이 양화한 binder에 서로 다른 class 조합을 넘기면, 본문
+하나로는 그 사용들을 받을 수 없다. 본문이 그 binder의 row로 만드는 closure는 본문이
+읽은 class를 생성 class로 가지므로, 더 강한 class로 합쳐 읽으면 그 closure를 더 약한
+class로 보는 쪽이 trap entry에 닿는다. Binder가 람다 자신의 row에 있어도 그 row의
+다른 ability 때문에 `c`가 binder의 class보다 강할 수 있으므로 같다. 이때 class
+특수화는 넘기는 class 조합마다 람다를 값 하나씩으로 나누고, 각 사용을 자기 조합의
+값에 연결한다. 나눈 값은 각자 capture 목록과 entry table을 가진다. 한 값 안에서는
+같은 class를 고르는 사용들이 같은 조합을 넘기므로 본문은 class마다 하나다.
 
 람다의 capture 목록은 하나이며, 모든 본문이 실제 사용하는 외부 SSA 값과 일치한다.
 Capture는 closure 하나에 한 번만 담긴다.

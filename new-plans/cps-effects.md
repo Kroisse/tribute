@@ -250,8 +250,8 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
   binder 목록 끝에 새 `local` binder를 받는다. 아래처럼 값을 나누지 않는 한 람다
   op, 결과 값, capture 목록, `instantiate`는 하나로 남으므로 사용처를 다시 연결하지
   않는다. Capture 목록은 모든
-  본문의 외부 참조와 같게 다시 계산한다. 같은 class를 고르는 사용들이 입력이나
-  결과에만 나타나는 binder에 서로 다른 class를 넘기면
+  본문의 외부 참조와 같게 다시 계산한다. 같은 class를 고르는 사용들이 양화한
+  binder에 서로 다른 class 조합을 넘기면
   ([entry 본문](ir.md#callable-entry)), 넘기는 조합마다 람다를 복제해 값을 나누고
   각 사용을 자기 조합의 복사본으로 연결한다. 본문 순서로 처음 나오는 사용의 조합이
   원래 람다를 갖고, 다른 조합의 복사본은 원래 람다 바로 뒤에 놓인다. 다시 연결한
