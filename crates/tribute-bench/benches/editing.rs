@@ -17,8 +17,9 @@
 //! - For the `body` edit, its parts:
 //!   - `frontend`: parsing to the specialization result, which Salsa caches;
 //!   - `lowering`: lowering the cached frontend result to source-logical IR;
-//!   - `ir_checks`: the stages after lowering that diagnostics run, class
-//!     specialization and the `fn` arm call check, over every function.
+//!   - `ir_checks`: the stages after lowering that diagnostics run: class
+//!     specialization over every function, then the `fn` arm call check over
+//!     the instances the roots reach.
 
 use std::cell::RefCell;
 use std::time::Duration;
