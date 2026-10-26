@@ -827,7 +827,10 @@ Shape의 도달하는 배정은 프로그램 전체에서 그 shape의 값을 �
 그 class보다 약하지 않다. Class는 row의 tail에서 계산하고, 값이 tail의 정체를 잃는
 자리(별칭, class 없는 tail)는 `Cps`로만 읽기 때문이다. 그래서 closure는 도달하는
 배정 가운데 이 조건을 만족하는 배정마다 entry를 채운다. 조건을 만족하지 않는 배정의
-칸은 실행되지 않으며 공용 trap entry를 가리킨다.
+칸은 공용 trap entry를 가리킨다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든
+간접 이전의 배정은 그 이전을 담은 인스턴스와 entry의 class 표로 callee type을 읽은
+값과 같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만 드러나는
+위반, 곧 위 성질이 성립하지 않는 경우를 실행 중에 멈추게 하는 안전망이다.
 
 **Entry table.** Closure 값은 entry table 참조 하나와 capture로 이루어진다
 ([closure 저장 layout](#closure-저장-layout)). Entry table은 closure를 만드는 code

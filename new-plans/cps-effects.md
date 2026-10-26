@@ -380,11 +380,11 @@ arm의 `scf.yield`)를 arm 안으로 복제해 이어 legalize하고, tail call�
 뒤에 operation이 남지 않는다. Suffix에 넘길 evidence와 `ContinuationFrame<R>`는
 arm이 감싼 callable의 것을 그대로 쓴다.
 
-`Direct`/`EvidenceDirect` callable을 값으로 쓰려고 만드는 `func_ref` adapter는
-target이 platform `abi`를 유지하지 않고 target 결과가 adapter 결과와 같으면
+`func_ref`가 `Direct`/`EvidenceDirect` entry마다 만드는 entry 함수는
+target이 platform `abi`를 유지하지 않고 target 결과가 entry 결과와 같으면
 target을 `func.tail_call`로 부른다. 이 경우 callable value를 통한 `become`은
-adapter frame을 남기지 않는다. Platform `abi` target의 adapter는 일반 호출 뒤
-반환하므로 adapter frame 하나가 남는다.
+entry frame을 남기지 않는다. Platform `abi` target의 entry 함수는 일반 호출 뒤
+반환하므로 entry frame 하나가 남는다.
 
 `become`이 아닌 `Direct`/`EvidenceDirect` 호출은 꼬리 위치에 있어도 legalization이
 `func.call`과 `func.call_indirect`로 만든다. Target lowering은 최적화로 이 호출을
@@ -464,8 +464,8 @@ vector는 비어 있어야 한다.
 안에서 소비되며, 경계 이후에는 signature의 `call_conv`와 proper-tail operation만
 남는다.
 
-기존 `CallableAbi::interpose_environment`에 따라 extracted lambda와 `func_ref`
-adapter의 최종 parameter 순서는 `Direct`에서 `environment, source...`,
+기존 `CallableAbi::interpose_environment`에 따라 extracted lambda entry와 `func_ref`
+entry 함수의 최종 parameter 순서는 `Direct`에서 `environment, source...`,
 `EvidenceDirect`에서 `evidence, environment, source...`, `Cps`에서
 `evidence, environment, ContinuationFrame<R>, source...`다. `call_indirect`도 같은 순서로
 environment를 삽입한다.
@@ -488,8 +488,9 @@ order와 일치하고, slot의 type은 그 closure의 exact closure type이어�
 한다([closure 저장 layout](ir.md#closure-저장-layout)). Type이나 arity로 slot을
 추측하지 않는다. 이 function-level provenance의 마지막 독자는 물리화 검증이다.
 
-생성한 physical definition, lambda, adapter, direct/indirect call에는 logical
-type의 convention을 기존 `tribute.calling_convention` attribute로 복사한다.
+생성한 physical definition, lambda entry, `func_ref` entry 함수, direct/indirect
+call에는 그 정의, entry, 이전이 가진 convention을 기존
+`tribute.calling_convention` attribute로 복사한다.
 Metadata/type/symbol 불일치는 conversion failure이며 hidden operand를 추측하지
 않는다. TrunkIR의 `TypeConverter`, function signature conversion, dialect
 builder를 재사용하되 `tribute_control` 전용 graph pattern은
