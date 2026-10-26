@@ -742,8 +742,11 @@ binder를 공유하며, entry마다 그 binder에 class를 하나씩 고정한�
 특수화가 [entry 본문](#callable-entry) 규칙으로 값을 나눌 때만 복사본이 생긴다. 쓰이지 않는
 람다는 양화할 사용이 없으므로 그 변수는 `body`다. 다른 `let`의 값으로 람다를 다시
 묶는 별칭은 람다가 아닌 값이다. 별칭 자리에서 람다를 한 번 인스턴스화하며, 별칭의
-지역 scheme이 양화한 변수는 `body`다. 별칭을 통한 호출도 자기 convention의 entry를
-읽으므로, 별칭은 entry 선택을 막지 않는다.
+지역 scheme이 양화한 변수는 `body`다. 람다가 아닌 binding의 사용은 `instantiate`를
+거치지 않으므로, 타입 검사가 사용마다 그 scheme을 새로 인스턴스화하더라도 IR의 값
+type에는 그 `body` binder가 그대로 남는다. 그래서 별칭이나 일반화된 계산 결과를 통한
+간접 이전은 그 자리를 `Cps`로 읽고, 별칭 자리의 인스턴스화도 `Cps`를 고르므로 값은
+그 entry를 가진다.
 
 #### Row 인자와 치환
 
