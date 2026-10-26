@@ -23,7 +23,7 @@ use tribute_ir::dialect::tribute_control::{self, FuncSig, Row, RowArgs, RowBinde
 use trunk_ir::context::IrContext;
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::Attribute;
 use trunk_ir::{Symbol, SymbolPath};
@@ -165,6 +165,67 @@ fn insert_after(ctx: &mut IrContext, anchor: OpRef, op: OpRef) {
         Some(next) => ctx.insert_op_before(block, next, op),
         None => ctx.push_op(block, op),
     }
+}
+
+/// Keep the captures of every lambda between `instantiate` and the region
+/// that defines `original` and `copy` equal to its body's external references
+/// after `instantiate` moved from `original` to `copy`. The copy takes the
+/// original's place in the capture order, next to it while the body still
+/// uses both.
+fn recapture(ctx: &mut IrContext, instantiate: OpRef, original: ValueRef, copy: ValueRef) {
+    let ValueDef::OpResult(lambda, _) = ctx.value_def(original) else {
+        return;
+    };
+    let defining = region_of(ctx, lambda);
+    let mut op = instantiate;
+    while let Some(region) = region_of(ctx, op).filter(|&region| Some(region) != defining) {
+        let Some(parent) = ctx.region(region).parent_op else {
+            return;
+        };
+        if tribute_control::Lambda::matches(ctx, parent) {
+            let used = |ctx: &IrContext, value| {
+                ctx.uses(value)
+                    .iter()
+                    .any(|use_| is_within(ctx, use_.user, region))
+            };
+            let mut captures = ctx.op_operands(parent).to_vec();
+            let at = captures.iter().position(|&value| value == original);
+            if !captures.contains(&copy) && used(ctx, copy) {
+                captures.insert(at.map_or(captures.len(), |at| at + 1), copy);
+            }
+            if !used(ctx, original) {
+                captures.retain(|&value| value != original);
+            }
+            for index in (0..ctx.op_operands(parent).len()).rev() {
+                ctx.remove_op_operand(parent, index as u32);
+            }
+            for value in captures {
+                ctx.push_op_operand(parent, value);
+            }
+        }
+        op = parent;
+    }
+}
+
+/// The region whose block holds `op`.
+fn region_of(ctx: &IrContext, op: OpRef) -> Option<RegionRef> {
+    ctx.op(op)
+        .parent_block
+        .and_then(|block| ctx.block(block).parent_region)
+}
+
+/// Whether `op` is nested in `region`.
+fn is_within(ctx: &IrContext, mut op: OpRef, region: RegionRef) -> bool {
+    while let Some(parent) = region_of(ctx, op) {
+        if parent == region {
+            return true;
+        }
+        let Some(owner) = ctx.region(parent).parent_op else {
+            return false;
+        };
+        op = owner;
+    }
+    false
 }
 
 /// A let-bound lambda in one round of copying: its instantiations grouped by
@@ -315,9 +376,11 @@ impl Instance<'_> {
                 let copy = self.copy_lambda(ctx, lambda.op);
                 insert_after(ctx, anchor, copy);
                 anchor = copy;
+                let original = ctx.op_results(lambda.op)[0];
                 let result = ctx.op_results(copy)[0];
                 for &instantiate in uses {
                     ctx.set_op_operand(instantiate, 0, result);
+                    recapture(ctx, instantiate, original, result);
                 }
             }
         }
