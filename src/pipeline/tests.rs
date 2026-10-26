@@ -1,11 +1,15 @@
 use super::*;
+use crate::frontend::merge_and_lower_to_ir;
 use crate::link::link_native_binary;
 use crate::prelude::{prelude_dependencies, prelude_exports, prelude_module};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
 use salsa_test_macros::salsa_test;
 use std::ops::ControlFlow;
+use tribute_front::monomorphize::SpecializationOutput;
+use tribute_front::resolve as ast_resolve;
 use tribute_front::resolve::PackageEnv;
+use tribute_front::typeck as ast_typeck;
 use trunk_ir::SymbolPath;
 use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectType;
